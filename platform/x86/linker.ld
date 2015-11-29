@@ -8,7 +8,7 @@
  */
 
 
-ENTRY(start) /* entry point for the kernel */
+ENTRY(start32) /* entry point for the kernel */
 
 SECTIONS {
     . = 1M; /* start from 1MB load point */

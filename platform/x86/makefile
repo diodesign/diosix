@@ -25,7 +25,7 @@ grubcfg_in_isofs := $(isofs)/boot/grub/
 asm_src := $(wildcard asm/*.s)
 asm_obj := $(patsubst asm/%.s, $(build)/%.o, $(asm_src))
 
-.PHONY: all clean run iso
+.PHONY: all clean run iso debug
 
 # rules for building various components
 
@@ -35,7 +35,10 @@ clean:
 	@rm -r $(build) $(release)
 
 run: $(iso)
-	@qemu-system-x86_64 -curses -cdrom $(iso)
+	@qemu-system-x86_64 -curses -cdrom $(iso) -no-reboot
+
+debug: $(iso)
+	@qemu-system-x86_64 -curses -s -S -cdrom $(iso) -no-reboot
 
 iso: $(iso)
 
