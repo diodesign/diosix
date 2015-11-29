@@ -13,9 +13,9 @@ Check out [the wiki for documentation](https://github.com/diodesign/diosix/wiki)
 
 These are the tools I've got installed on Debian "Jessie" GNU/Linux server for building diosix; other versions of the software are probably fine, too:
 
-* `grub-mkrescue 2.02`
 * `GNU ld 2.25`
 * `GNU make 4.0`
+* `grub-mkrescue 2.02`
 * `nasm 2.11.05`
 * `multirust 0.7.0` (for installing Rust)
 * `qemu 2.1.2` (for testing)
@@ -54,7 +54,7 @@ To fire up the ISO image in QEMU:
 make run
 ```
 
-If I haven't broken the kernel, the emulator will start up in your ncurses-friendly terminal and boot the tiny operating system.
+If I haven't broken the kernel, the emulator will start up in your ncurses-friendly terminal, and boot the tiny operating system.
 You'll have to kill QEMU to end the emulation. This bit is a little awkward, so I'll be improving this part.
 Finally, `make clean` removes the debris left behind by the build process.
 
