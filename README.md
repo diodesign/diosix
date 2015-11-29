@@ -17,7 +17,9 @@ These are the tools I've got installed on Debian "Jessie" GNU/Linux server for b
 * `GNU ld 2.25`
 * `GNU make 4.0`
 * `nasm 2.11.05`
+* `multirust 0.7.0` (for installing Rust)
 * `qemu 2.1.2` (for testing)
+* `rustc 1.6.0-nightly`
 * `vim` ;-)
 
 To build the software, open a terminal, check out the source code in the usual way, and change into its directory:
@@ -33,6 +35,12 @@ Then pick a hardware platform to build a kernel for. Let's start with 64-bit x86
 cd platform/x86
 ```
 
+Next, make sure you're using a suitable Rust toolchain: you'll need a nightly build as we need features not present in the stable edition:
+
+```
+multirust override nightly
+```
+
 Now build a bootable ISO image suitable for burning to a CD/DVD or throwing at an emulator or hypervisor to test:
 
 ```
@@ -40,13 +48,15 @@ make iso
 ```
 
 The ISO should be saved in the platform's release directory - in this case: `diosix/release/x86/boot.iso`.
-To fire up the ISO image in QEMU, just run...
+To fire up the ISO image in QEMU:
 
 ```
 make run
 ```
 
-...and the emulator will start up in your ncurses-friendly terminal. You'll have to kill QEMU to end the emulation. This bit is a little awkward, so I'll be improving this part. Finally, `make clean` removes the debris left behind by the build process.
+If I haven't broken the kernel, the emulator will start up in your ncurses-friendly terminal and boot the tiny operating system.
+You'll have to kill QEMU to end the emulation. This bit is a little awkward, so I'll be improving this part.
+Finally, `make clean` removes the debris left behind by the build process.
 
 ### Screenshot
 

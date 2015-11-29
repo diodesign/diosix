@@ -1,0 +1,8 @@
+[package]
+name = "diosix"
+version = "0.0.1"
+authors = ["Chris Williams <diodesign@gmail.com>"]
+
+[lib]
+crate-type = ["staticlib"]
+

@@ -5,6 +5,7 @@
 #
 
 arch 		:= x86
+target		:= x86_64-unknown-linux-gnu
 
 # set up directories to find stuff
 release		:= ../../release/$(arch)
@@ -21,11 +22,14 @@ grubcfg 	:= grub.cfg
 kernel_in_isofs	 := $(isofs)/boot/
 grubcfg_in_isofs := $(isofs)/boot/grub/
 
+# where cargo hides our kernel's rust code library
+libkernel	 := ../../target/$(target)/debug/libdiosix.a
+
 # source code - find .s files in asm/ and map them to object files in build tree
 asm_src := $(wildcard asm/*.s)
 asm_obj := $(patsubst asm/%.s, $(build)/%.o, $(asm_src))
 
-.PHONY: all clean run iso debug
+.PHONY: all clean cargo run iso debug
 
 # rules for building various components
 
@@ -49,8 +53,11 @@ $(iso): $(kernel) $(grubcfg)
 	@cp $(grubcfg) $(grubcfg_in_isofs)/grub.cfg
 	@grub-mkrescue -o $(iso) $(isofs) 2> /dev/null
 
-$(kernel): $(asm_obj) $(ldscript)
-	@ld -n -T $(ldscript) -o $(kernel) $(asm_obj)
+$(kernel): cargo $(libkernel) $(asm_obj) $(ldscript)
+	@ld -n -T $(ldscript) -o $(kernel) $(asm_obj) $(libkernel)
+
+cargo:
+	@cargo build --target $(target)
 
 $(build)/%.o: asm/%.s
 	@mkdir -p $(build)
