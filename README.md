@@ -1,6 +1,6 @@
 # diosix
 A lightweight and secure 64-bit multiprocessor microkernel operating system written in Rust for x86, ARM and MIPS systems.
-This is a work in progrss, starting from scratch after [previously writing](https://github.com/diodesign/diosix-legacy)
+This is a work in progress, starting from scratch after [previously writing](https://github.com/diodesign/diosix-legacy)
 a working microkernel for 32-bit SMP x86 computers in C and assembly.
 
 I learned a lot from that first iteration, and this is the second iteration, codenamed Menchi. Crucially,
@@ -11,33 +11,33 @@ Check out [the wiki for documentation](https://github.com/diodesign/diosix/wiki)
 
 ### Building
 
-These are the tools I've got installed on Debian GNU/Linux for building diosix; other versions of the software are probably fine, too:
+These are the tools I've got installed on Debian "Jessie" GNU/Linux server for building diosix; other versions of the software are probably fine, too:
 
 * `nasm 2.11.05`
 * `make 4.0`
-* `grub-mkrescue 2.02~beta2-22`
+* `grub-mkrescue 2.02`
 * `qemu 2.1.2` (for testing)
 
-Check out the source code in the usual way and change into its directory
+Check out the source code in the usual way and change into its directory:
 
 ```
 git clone https://github.com/diodesign/diosix.git
 cd diosix
 ```
 
-Then pick a hardware platform to build a kernel for. Let's start with x86, a standard PC machine. Change into its direcroy.
+Then pick a hardware platform to build a kernel for. Let's start with x86, a standard PC machine. Change into its directory:
 
 ```
 cd platform/x86
 ```
 
-Build a bootable ISO image suitable for burning to a CD/DVD or throwing at an emulator or hypervisor to test.
+Build a bootable ISO image suitable for burning to a CD/DVD or throwing at an emulator or hypervisor to test:.
 
 ```
 make iso
 ```
 
-The ISO should be saved in the platform's release directory,in this case, `diosix/release/x86/boot.iso`.
+The ISO should be saved in the platform's release directory, in this case, `diosix/release/x86/boot.iso`.
 To fire up the ISO image in QEMU, just run...
 
 ```
@@ -55,4 +55,8 @@ Here's a very early build of diosix booting on x86.
 ### Contact
 
 Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have any questions or want to get involved.
+
+### Copyright and license
+
+(c) Chris Williams and contributors, 2015. See LICENSE for source code and binary distribution and use.
 
