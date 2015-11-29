@@ -12,7 +12,7 @@ addons:
     - nasm
     - grub-common
 
-script: make -C platform/x86 iso
+script: make -C platform/x86
 
 branches:
   only:
