@@ -1,4 +1,7 @@
 # diosix
+
+[![Build Status](https://travis-ci.org/diodesign/diosix.svg?branch=master)](https://travis-ci.org/diodesign/diosix)
+
 This is a lightweight and secure 64-bit multiprocessor microkernel operating system written in Rust for x86, ARM and MIPS systems.
 It's a work in progress: I'm starting from scratch after [previously writing](https://github.com/diodesign/diosix-legacy)
 a working microkernel for 32-bit SMP x86 computers in C and assembly.

@@ -10,7 +10,6 @@ addons:
   apt:
     packages:
     - nasm
-    - grub-common
 
 script: make -C platform/x86
 
