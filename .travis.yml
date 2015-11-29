@@ -2,10 +2,17 @@
 # diosix's CI script
 #
 language: rust
+sudo: false
 rust:
   - nightly
 
-script: make -C platform/x86
+addons:
+  apt:
+    packages:
+    - nasm
+    - grub-common
+
+script: make -C platform/x86 iso
 
 branches:
   only:
