@@ -69,7 +69,10 @@ Here's a very early build of diosix booting on x86.
 Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have any questions or want to get involved.
 You can also find me, diodesign, on [Freenode IRC](https://freenode.net/irc_servers.shtml) in the #osdev channel, or [on Twitter](https://twitter.com/diodesign).
 
-### Copyright and license
+### Copyright, license, and thanks
 
-(c) Chris Williams and contributors, 2015. See LICENSE for source code and binary distribution and use.
+&copy; Chris Williams and contributors, 2015. See LICENSE for source code and binary distribution and use.
+
+With thanks to Philipp Oppermann for his guide to [linking Rust code](http://os.phil-opp.com/setup-rust.html) to low-level bare-metal assembly,
+and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
 
