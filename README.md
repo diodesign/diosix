@@ -13,9 +13,10 @@ Check out [the wiki for documentation](https://github.com/diodesign/diosix/wiki)
 
 These are the tools I've got installed on Debian "Jessie" GNU/Linux server for building diosix; other versions of the software are probably fine, too:
 
-* `nasm 2.11.05`
-* `make 4.0`
 * `grub-mkrescue 2.02`
+* `GNU ld 2.25`
+* `GNU make 4.0`
+* `nasm 2.11.05`
 * `qemu 2.1.2` (for testing)
 * `vim` ;-)
 
