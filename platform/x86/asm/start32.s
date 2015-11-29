@@ -33,6 +33,7 @@ start32:
   call test_multiboot_present
   call test_cpuid_present
   call test_x86_64_present
+  call test_sse_present
 
 ; acknowledge we've got this far
   mov edx, boot_tests_complete_msg
@@ -120,6 +121,35 @@ test_x86_64_present:
   mov edx, boot_error_no_64bit
   jmp boot_early_error
 
+
+; test_sse_present
+;
+; Test that the processor can handle SSE instructions, and if so,
+; enable them. If not, bail out - Rust likes to bake in SSE code
+;
+test_sse_present:
+  mov eax, 1
+  cpuid		    ; get basic CPU features in edx and ecx
+  test edx, 1 << 25 ; bit 25 = 1 if SSE support present 
+  jz .missing_SSE
+
+  ; switch on SSE instructions so we don't get hit by undefined
+  ; instruction exceptions later on
+  mov eax, cr0
+  and ax, 0xfffb    ; clear CR0 bit 2 = hardware FPU present
+  or ax, 2	    ; set bit 1 = monitor coprocessor
+  mov cr0, eax
+  
+  ; enable OSFXSR (support for FXSAVE and FXRSTOR instructions),
+  ; and OSXMMEXCPT (unmasked SSE exceptions) in CR4
+  mov eax, cr4
+  or ax, 3 << 9	    ; set bits 9 (OSFXSR) and 10 (OSXMMEXCPT) in CR4
+  mov cr4, eax
+  ret
+
+.missing_SSE:
+  mov edx, boot_error_no_sse
+  jmp boot_early_error
 
 ; --------------------- set up paging ---------------------
 
@@ -283,17 +313,21 @@ boot_video_writeln:
 
 boot_welcome_msg:
   db "Hey, it's diosix! Performing preflight checks...",0
+
 boot_tests_complete_msg:
   db "[x86] Congrats, this system is good to boot.",0
+
 boot_mmu_init_msg:
   db "[x86] Paging and GDT set up. Entering 64-bit mode...",0
 
 boot_error_no_multiboot:
   db "Oh no. The boot loader isn't Multiboot 2 compatible.",0
+
 boot_error_no_cpuid:
-  db "Oh no. This machine's processor is too old for this kernel.",0
+boot_error_no_sse:
 boot_error_no_64bit:
-  db "Oh no. This machine's processor doesn't support 64-bit mode.",0
+  db "Oh no. This machine's processor is too old for this kernel.",0
+
 boot_error_halting:
   db "Sorry! Can't go any further - halting boot process.",0
 

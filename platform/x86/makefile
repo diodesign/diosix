@@ -29,7 +29,7 @@ libkernel	 := ../../target/$(target)/debug/libdiosix.a
 asm_src := $(wildcard asm/*.s)
 asm_obj := $(patsubst asm/%.s, $(build)/%.o, $(asm_src))
 
-.PHONY: all clean cargo run iso debug
+.PHONY: all clean cargo run iso gdb
 
 # rules for building various components
 
@@ -42,7 +42,7 @@ clean:
 run: $(iso)
 	@qemu-system-x86_64 -curses -cdrom $(iso) -no-reboot
 
-debug: $(iso)
+gdb: $(iso)
 	@qemu-system-x86_64 -curses -s -S -cdrom $(iso) -no-reboot
 
 iso: $(iso)
@@ -55,10 +55,10 @@ $(iso): $(kernel) $(grubcfg)
 	@grub-mkrescue -o $(iso) $(isofs) 2> /dev/null
 
 $(kernel): cargo $(libkernel) $(asm_obj) $(ldscript)
-	@ld -n -T $(ldscript) -o $(kernel) $(asm_obj) $(libkernel)
+	@ld --gc-sections -n -T $(ldscript) -o $(kernel) $(asm_obj) $(libkernel)
 
 cargo:
-	@cargo build --target $(target)
+	@cargo rustc --target $(target) -- -Z no-landing-pads -C no-redzone
 
 $(build)/%.o: asm/%.s
 	@mkdir -p $(build)

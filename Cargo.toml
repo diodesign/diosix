@@ -6,3 +6,6 @@ authors = ["Chris Williams <diodesign@gmail.com>"]
 [lib]
 crate-type = ["staticlib"]
 
+[dependencies]
+rlibc = "0.1.4"
+

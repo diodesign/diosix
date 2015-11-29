@@ -16,8 +16,9 @@ SECTIONS {
     /* ensure the boot section is right at the start for the boot loader to find */
     .boot :
     {
-        /* ensure that the multiboot header is at the beginning */
-        *(.multiboot_head)
+        /* ensure that the multiboot header is at the beginning and that the
+	 * linker doesn't strip it away with --gc-sections */
+        KEEP(*(.multiboot_head))
     }
 
     /* the section that contains our kernel code */
