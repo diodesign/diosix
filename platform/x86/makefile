@@ -37,6 +37,7 @@ all: $(kernel)
 
 clean:
 	@rm -r $(build) $(release)
+	@cargo clean
 
 run: $(iso)
 	@qemu-system-x86_64 -curses -cdrom $(iso) -no-reboot
