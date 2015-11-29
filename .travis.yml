@@ -1,0 +1,13 @@
+#
+# diosix's CI script
+# C seems to be low maintenance enough to match this asm/Rust project
+#
+language: c
+sudo: false
+
+script:
+    - make -C platform/x86 iso
+
+branches:
+  only:
+    - master
