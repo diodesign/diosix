@@ -59,7 +59,13 @@ make run
 ```
 
 If I haven't broken the kernel, the emulator will start up in your ncurses-friendly terminal, and boot the tiny operating system.
-You'll have to kill QEMU to end the emulation. This bit is a little awkward, so I'll be improving this part.
+You'll have to kill QEMU to end the emulation. This bit is a little awkward, so I'll be improving this part. If you want to see
+the kernel's detailed debugging output via the serial port, boot QEMU headless and the serial port will be logged to the terminal.
+
+```
+make run-headless
+```
+
 Finally, `make clean` removes the debris left behind by the build process.
 
 ### Screenshot
