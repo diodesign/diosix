@@ -3,6 +3,8 @@
 #
 # Makefile for x86 machines
 #
+# Maintainer: Chris Williams (diosix.org)
+#
 
 arch 		:= x86
 target		:= x86_64-unknown-linux-gnu
@@ -40,10 +42,10 @@ clean:
 	@cargo clean
 
 run: $(iso)
-	@qemu-system-x86_64 -curses -cdrom $(iso) -no-reboot
+	@timeout --preserve-status --foreground 10s qemu-system-x86_64 -curses -cdrom $(iso) -no-reboot
 
 run-headless: $(iso)
-	@qemu-system-x86_64 -nographic -cdrom $(iso) -no-reboot
+	@timeout --preserve-status --foreground 10s qemu-system-x86_64 -nographic -cdrom $(iso) -no-reboot
 
 gdb: $(iso)
 	@qemu-system-x86_64 -nographic -s -S -cdrom $(iso) -no-reboot

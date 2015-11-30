@@ -34,11 +34,8 @@ start64:
 ; enter the Rust-level kernel
   call kmain
 
-; perform quick and dirty shutdown or just halt
-; TODO: don't use this in production.
-  mov rax, 0x2000
-  mov rdx, 0xb004
-  out dx, ax
+; nowhere else to go
+  cli
   hlt
 
 
