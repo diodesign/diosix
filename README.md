@@ -59,7 +59,8 @@ make run
 ```
 
 If I haven't broken the kernel, the emulator will start up in your ncurses-friendly terminal, and boot the tiny operating system.
-You'll have to kill QEMU to end the emulation. This bit is a little awkward, so I'll be improving this part. If you want to see
+QEMU will be automatically killed after a timeout period, typically 10 seconds. This is because the kernel cannot, right now, power off the 
+system; an ACPI driver to handle power management will eventually be written, and until then we have to kill QEMU manually. If you want to see
 the kernel's detailed debugging output via the serial port, boot QEMU headless and the serial port will be logged to the terminal.
 
 ```
