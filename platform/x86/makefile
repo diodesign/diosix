@@ -29,7 +29,7 @@ libkernel	 := ../../target/$(target)/debug/libdiosix.a
 asm_src := $(wildcard asm/*.s)
 asm_obj := $(patsubst asm/%.s, $(build)/%.o, $(asm_src))
 
-.PHONY: all clean cargo run iso gdb
+.PHONY: all clean cargo run run-headless iso gdb
 
 # rules for building various components
 
@@ -42,8 +42,11 @@ clean:
 run: $(iso)
 	@qemu-system-x86_64 -curses -cdrom $(iso) -no-reboot
 
+run-headless: $(iso)
+	@qemu-system-x86_64 -nographic -cdrom $(iso) -no-reboot
+
 gdb: $(iso)
-	@qemu-system-x86_64 -curses -s -S -cdrom $(iso) -no-reboot
+	@qemu-system-x86_64 -nographic -s -S -cdrom $(iso) -no-reboot
 
 iso: $(iso)
 

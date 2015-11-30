@@ -14,8 +14,9 @@ Check out [the wiki for documentation](https://github.com/diodesign/diosix/wiki)
 
 ### Building
 
-These are the tools I've got installed on Debian "Jessie" GNU/Linux server for building diosix; other versions of the software are probably fine, too:
+These are the tools I've got installed on a Debian "Jessie" GNU/Linux server for building diosix; other versions of the software are probably fine, too:
 
+* `cargo 0.7.0-nightly`
 * `GNU ld 2.25`
 * `GNU make 4.0`
 * `grub-mkrescue 2.02`
