@@ -62,8 +62,8 @@ $(iso): $(kernel) $(grubcfg)
 $(kernel): cargo $(libkernel) $(asm_obj) $(ldscript)
 	@ld --gc-sections -n -T $(ldscript) -o $(kernel) $(asm_obj) $(libkernel)
 
-cargo:
-	@cargo rustc --target $(target) -- -Z no-landing-pads -C no-redzone
+cargo: $(rust_src) $(kernel_src)
+	@cargo rustc --target $(target) -- -Z no-landing-pads -C no-redzone -C target-feature=-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-3dnow,-3dnowa,-avx,-avx2
 
 $(build)/%.o: asm/%.s
 	@mkdir -p $(build)

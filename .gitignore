@@ -4,4 +4,5 @@
 *.o
 *.bin
 *.iso
+*.lock
 

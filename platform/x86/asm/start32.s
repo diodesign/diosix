@@ -5,7 +5,9 @@
 ; Maintainer: Chris Williams <diodesign@gmail.com>
 ;
 
-global start32
+global gdt.kdata	; make sure other code can see this segment
+global start32		; so the bootloader can find us
+
 extern start64
 
 section .text
@@ -364,7 +366,7 @@ boot_video_line_nr:
   resb 1
 
 boot_stack_bottom:
-  resb 64
+  resb 128
 boot_stack_top:
 
 ; -----------------------------------------------------------------------------
