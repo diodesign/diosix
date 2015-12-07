@@ -7,6 +7,7 @@
  *
  */
 
+use ::hardware::swis;
 use ::hardware::pic;
 use ::hardware::exceptions;
 use errors::KernelInternalError;
@@ -62,6 +63,7 @@ pub fn init() -> Result<(), KernelInternalError>
 {
     try!(exceptions::init());
     try!(pic::init());
+    try!(swis::init());
 
     kprintln!("[x86] using boot interrupt table at {:p} (idtr: {:p})", unsafe{&boot_idt}, &boot_idtr);
 
@@ -92,7 +94,7 @@ pub fn set_boot_idt_gate(vector: usize, handler: unsafe extern "C" fn()) -> Resu
     /* bail out if vector isn't sane */
     if vector > MAX_IDT_ENTRY
     {
-        kprintln!("[x86] BUG! set_idt_gate() called with vector {}", vector);
+        kprintln!("[x86] BUG! set_idt_gate() called with bad vector {}", vector);
         return Err(KernelInternalError::BadIndex);
     }
 
@@ -111,6 +113,41 @@ pub fn set_boot_idt_gate(vector: usize, handler: unsafe extern "C" fn()) -> Resu
         entry.offset_middle = ((handler_addr & 0xffff0000) >> 16) as u16;
         entry.offset_high = ((handler_addr & 0xffffffff00000000) >> 32) as u32;
         entry.reserved_zero_word = 0;
+    }
+
+    Ok(())
+}
+
+/* enable_gate_user_access
+ *
+ * Grant access to given gate from userspace, allowing normal
+ * applications to trigger the interrupt. Use to convert interrupt
+ * gates into SWIs (software interrupts)
+ * => vector = interrupt to convert
+ * <= returns error on failure
+ */
+pub fn enable_gate_user_access(vector: usize) -> Result<(), KernelInternalError>
+{
+    /* bail out if vector isn't sane */
+    if vector > MAX_IDT_ENTRY
+    {
+        kprintln!("[x86] BUG! enable_gate_user_access() called with bad vector {}", vector);
+        return Err(KernelInternalError::BadIndex);
+    }
+
+    /* this bit is unsafe because we're fiddling with a global mutable variable.
+     * see set_boot_idt_gate() */
+    unsafe
+    {
+        let entry = &mut boot_idt[vector];
+        /* check this entry is sane - the present bit (b7) must be set to show it's initialized */
+        if (entry.flags & 0x80) == 0
+        {
+            kprintln!("[x86] BUG! enable_gate_user_access() called with non-present vector {}", vector);
+            return Err(KernelInternalError::BadIndex);
+        }
+
+        entry.flags = entry.flags | 0x60; /* allow ring-3 to trigger this interrupt */
     }
 
     Ok(())

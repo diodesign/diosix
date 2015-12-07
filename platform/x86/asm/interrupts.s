@@ -89,6 +89,9 @@ interrupt_entry 63 ; spurious int
   %assign ioapic_irq ioapic_irq+1
 %endrep
 
+; create an entry point for software interrupts (SWI)
+interrupt_entry 127 ; 0x7f
+
 ; interrupt_to_kernel
 ;
 ; Prepare the environment for calling a Rust kernel

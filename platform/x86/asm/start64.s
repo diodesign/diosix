@@ -36,6 +36,8 @@ start64:
 
 ; try firing an interrupt
   int 0x3
+  int 0x4
+  int 0x7f
 
 ; nowhere else to go
   cli

@@ -10,5 +10,6 @@
 mod io;
 mod pic;
 mod exceptions;
+mod swis;
 pub mod interrupts;
 
