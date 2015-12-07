@@ -36,8 +36,11 @@ start64:
 
 ; try firing an interrupt
   int 0x3
+  mov rax, 0x0a640a6f0a6f0a47
   int 0x4
+  mov rcx, 0xb8000 + (4 * 160)
   int 0x7f
+  mov qword [rcx], rax
 
 ; nowhere else to go
   cli
