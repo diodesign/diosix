@@ -14,6 +14,11 @@ use errors::KernelInternalError;
 
 const MAX_IDT_ENTRY: usize = 255;
 
+/* define flags in the IDT entries */
+const INT_GATE_PRESENT: u8 = 1 << 7; /* gate is present */
+const INT_GATE_TYPE:    u8 = 14; /* 80386+ non-16-bit interrupt gate */
+const INT_GATE_USER_OK: u8 = 3 << 5; /* allow ring 3 to trigger this gate */
+
 extern
 {
     static kernel_cs: u64; /* kernel code selector */
@@ -109,7 +114,7 @@ pub fn set_boot_idt_gate(vector: usize, handler: unsafe extern "C" fn()) -> Resu
         entry.offset_low = (handler_addr & 0xffff) as u16; /* leave just lowest 16 bits */
         entry.gdt_select = kernel_cs as u16;
         entry.reserved_zero_byte = 0;
-        entry.flags = 0x8e; /* present, interrupt gate, only kernel or hw can trigger */
+        entry.flags = INT_GATE_PRESENT | INT_GATE_TYPE; /* present, interrupt gate, only kernel or hw can trigger */
         entry.offset_middle = ((handler_addr & 0xffff0000) >> 16) as u16;
         entry.offset_high = ((handler_addr & 0xffffffff00000000) >> 32) as u32;
         entry.reserved_zero_word = 0;
@@ -141,13 +146,13 @@ pub fn enable_gate_user_access(vector: usize) -> Result<(), KernelInternalError>
     {
         let entry = &mut boot_idt[vector];
         /* check this entry is sane - the present bit (b7) must be set to show it's initialized */
-        if (entry.flags & 0x80) == 0
+        if (entry.flags & INT_GATE_PRESENT) == 0
         {
             kprintln!("[x86] BUG! enable_gate_user_access() called with non-present vector {}", vector);
             return Err(KernelInternalError::BadIndex);
         }
 
-        entry.flags = entry.flags | 0x60; /* allow ring-3 to trigger this interrupt */
+        entry.flags = entry.flags | INT_GATE_USER_OK; /* allow ring-3 to trigger this interrupt */
     }
 
     Ok(())
@@ -163,6 +168,6 @@ pub fn enable_gate_user_access(vector: usize) -> Result<(), KernelInternalError>
 #[no_mangle]
 pub extern "C" fn kernel_interrupt_handler(stack: interrupted_thread_registers)
 {
-    kprintln!("interrupt! {}", stack.interrupt_number);
+    kprintln!("[x86] interrupt incoming: {}", stack.interrupt_number);
 }
 
