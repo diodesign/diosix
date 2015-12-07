@@ -349,7 +349,7 @@ boot_early_error:
   hlt
 
 ; -----------------------------------------------------------------------------
-; reserve a tiny stack while bringing up the system,
+; reserve a single-page stack while bringing up the system,
 ; page tables, and variables for writing to the screen
 section .bss
 
@@ -363,12 +363,12 @@ boot_pdp_table:
 boot_pd_table:
   resb 4096	; reserve 4KB for page directory aka level 2 page table
 
+boot_stack_bottom:
+  resb 4096
+boot_stack_top:
+
 boot_video_line_nr:
   resb 1
-
-boot_stack_bottom:
-  resb 1024
-boot_stack_top:
 
 ; -----------------------------------------------------------------------------
 ; define our 64-bit GDT
