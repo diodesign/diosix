@@ -6,6 +6,7 @@
 ;
 
 global gdt.kdata	; make sure other code can see this segment
+global kernel_cs	; make sure the rust kernel can see this
 global start32		; so the bootloader can find us
 
 extern start64
@@ -366,7 +367,7 @@ boot_video_line_nr:
   resb 1
 
 boot_stack_bottom:
-  resb 128
+  resb 1024
 boot_stack_top:
 
 ; -----------------------------------------------------------------------------
@@ -391,4 +392,7 @@ gdt:
 gdtptr:
   dw $ - gdt - 1 ; size of the GDT - 1
   dq gdt	 ; pointer to the GDT
+
+kernel_cs:
+  dq gdt.kcode	 ; export code selector as a static variable
 

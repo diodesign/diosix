@@ -34,6 +34,9 @@ start64:
 ; enter the Rust-level kernel
   call kmain
 
+; try firing an interrupt
+  int 0x3
+
 ; nowhere else to go
   cli
   hlt

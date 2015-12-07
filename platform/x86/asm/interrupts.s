@@ -6,6 +6,8 @@
 ;
 
 global initialize_interrupts
+global boot_idtr
+global boot_idt
 
 extern gdt.kdata
 extern kernel_interrupt_handler
@@ -31,6 +33,61 @@ bits 64
     push byte %1		; push the interrupt number
     jmp interrupt_to_kernel
 %endmacro
+
+; create interrupt entry points for CPU exceptions
+interrupt_entry 		0  ; divide-by-zero
+interrupt_entry 		1  ; debug
+interrupt_entry 		2  ; NMI
+interrupt_entry 		3  ; breakpoint
+interrupt_entry 		4  ; overflow
+interrupt_entry 		5  ; bound range exceeded
+interrupt_entry 		6  ; invalid opcode
+interrupt_entry 		7  ; device not available
+interrupt_entry_with_error   	8  ; double fault 
+
+interrupt_entry_with_error   	10 ; invalid TSS
+interrupt_entry_with_error   	11 ; segment not present
+interrupt_entry_with_error   	12 ; stack-segment fault
+interrupt_entry_with_error   	13 ; general protection fault
+interrupt_entry_with_error   	14 ; page fault
+
+interrupt_entry 		16 ; x87 FPU exception
+interrupt_entry_with_error 	17 ; alignment check
+interrupt_entry 		18 ; machine check
+interrupt_entry 		19 ; SIMD FPU exception
+interrupt_entry 		20 ; virtualization fault
+
+; create interrupt entry points for reserved exceptions
+%assign exception 21
+%rep 9
+  interrupt_entry exception
+  %assign exception exception+1
+%endrep
+
+interrupt_entry_with_error 	30 ; security fault
+
+; create 16 entry points for legacy IRQs
+%assign irq 32
+%rep 16
+  interrupt_entry irq
+  %assign irq irq+1
+%endrep
+
+; create interrupt entry points for APIC IRQs
+interrupt_entry 48 ; timer
+interrupt_entry 49 ; lint0
+interrupt_entry 50 ; lint1
+interrupt_entry 51 ; pcint
+interrupt_entry 53 ; thermal sensor
+interrupt_entry 54 ; error
+interrupt_entry 63 ; spurious int
+
+; create interrupt entry points for IOAPIC IRQs
+%assign ioapic_irq 64
+%rep 24
+  interrupt_entry ioapic_irq
+  %assign ioapic_irq ioapic_irq+1
+%endrep
 
 ; interrupt_to_kernel
 ;
@@ -60,7 +117,7 @@ interrupt_to_kernel:
   push r15
   
   mov ax, ds
-  push ax			; preserve ds
+  push rax			; preserve ds
 
   mov ax, gdt.kdata		; kernel data segment
   mov ds, ax			; select this segment
@@ -70,7 +127,7 @@ interrupt_to_kernel:
   mov rdi, rsp			; give Rust kernel visibility to interrupted state
   call kernel_interrupt_handler
 
-  pop ax
+  pop rax
   mov ds, ax
   mov ss, ax
   mov es, ax
@@ -95,13 +152,16 @@ interrupt_to_kernel:
   add rsp, 16			; fix up the stack for the two 64-bit words pushed on entry
   iretq
 
-section .bss
+section .rodata
 
 ; pointer to the interrupt descriptor table
-idtr:
-  resb 10
+boot_idtr:
+  dw (16 * 256) - 1		; size of the IDT in bytes - 1
+  dq boot_idt
+
+section .bss
 
 ; the interrupt descriptor table, 256 16-byte entries 
-idt:
+boot_idt:
   resb 16 * 256
 

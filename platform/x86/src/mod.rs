@@ -9,5 +9,6 @@
 
 mod io;
 mod pic;
+mod exceptions;
 pub mod interrupts;
 

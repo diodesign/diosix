@@ -38,7 +38,7 @@ asm_obj := $(patsubst asm/%.s, $(build)/%.o, $(asm_src))
 all: $(kernel)
 
 clean:
-	@rm -r $(build) $(release)
+	@rm -rf $(build) $(release)
 	@cargo clean
 
 run: $(iso)
