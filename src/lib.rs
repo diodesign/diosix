@@ -49,4 +49,4 @@ extern fn panic_fmt(args: ::core::fmt::Arguments, file: &'static str, line: usiz
 }
 
 #[lang = "eh_personality"] extern fn eh_personality() {} /* defined internally for panic()s but not needed */
-#[lang="stack_exhausted"] extern fn stack_exhausted() {}
+#[lang = "stack_exhausted"] extern fn stack_exhausted() {}
