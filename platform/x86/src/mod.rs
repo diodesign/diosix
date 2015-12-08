@@ -11,5 +11,6 @@ mod io;
 mod pic;
 mod exceptions;
 mod swis;
+pub mod physmem;
 pub mod interrupts;
 

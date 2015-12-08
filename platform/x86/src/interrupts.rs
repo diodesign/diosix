@@ -16,8 +16,8 @@ const MAX_IDT_ENTRY: usize = 255;
 
 /* define flags in the IDT entries */
 const INT_GATE_PRESENT: u8 = 1 << 7; /* gate is present */
-const INT_GATE_TYPE:    u8 = 14; /* 80386+ non-16-bit interrupt gate */
 const INT_GATE_USER_OK: u8 = 3 << 5; /* allow ring 3 to trigger this gate */
+const INT_GATE_TYPE:    u8 = 14;     /* full-fat 32-bit/64-bit interrupt gate */
 
 extern
 {
@@ -49,7 +49,7 @@ pub struct interrupted_thread_registers
 struct idt_entry
 {
     offset_low: u16,        /* bits 0 to 15 of handler address */
-    gdt_select: u16,        /* GDT selector for the handler code */
+    gdt_select: u16,        /* GDT code selector for the handler code */
     reserved_zero_byte: u8, /* must be zero */
     flags: u8,              /* type and attribute bits */
     offset_middle: u16,     /* bits 16 to 31 of handler address */
@@ -110,13 +110,13 @@ pub fn set_boot_idt_gate(vector: usize, handler: unsafe extern "C" fn()) -> Resu
      * during system startup, so therefore no races. */
     unsafe
     {
-        let entry = &mut boot_idt[vector];     
-        entry.offset_low = (handler_addr & 0xffff) as u16; /* leave just lowest 16 bits */
-        entry.gdt_select = kernel_cs as u16;
+        let entry           = &mut boot_idt[vector];     
+        entry.offset_low    = (handler_addr & 0xffff) as u16;   /* use lowest 16 bits of handler address */
+        entry.gdt_select    = kernel_cs as u16;                 /* use kernel's code selector for handler */
         entry.reserved_zero_byte = 0;
-        entry.flags = INT_GATE_PRESENT | INT_GATE_TYPE; /* present, interrupt gate, only kernel or hw can trigger */
-        entry.offset_middle = ((handler_addr & 0xffff0000) >> 16) as u16;
-        entry.offset_high = ((handler_addr & 0xffffffff00000000) >> 32) as u32;
+        entry.flags         = INT_GATE_PRESENT | INT_GATE_TYPE; /* present, interrupt gate, only kernel or hw can trigger */
+        entry.offset_middle = ((handler_addr & 0xffff0000) >> 16) as u16; /* bits 16-31 of the handler address */
+        entry.offset_high   = ((handler_addr & 0xffffffff00000000) >> 32) as u32; /* top 32 bits of handler address */
         entry.reserved_zero_word = 0;
     }
 

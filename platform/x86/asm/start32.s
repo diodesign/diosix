@@ -5,9 +5,11 @@
 ; Maintainer: Chris Williams <diodesign@gmail.com>
 ;
 
-global gdt.kdata	; make sure other code can see this segment
-global kernel_cs	; make sure the rust kernel can see this
-global start32		; so the bootloader can find us
+global gdt.kdata	   ; make sure other code can see this segment
+global kernel_cs	   ; make sure the rust kernel can see this
+global start32		   ; so the bootloader can find us
+
+global multiboot_phys_addr ; phys address of multiboot structure
 
 extern start64
 
@@ -26,6 +28,9 @@ bits 32
 start32:
 ; give us a stack to play with
   mov esp, boot_stack_top
+
+; preserve pointer to physical address of multiboot structure
+  mov [multiboot_phys_addr], ebx
 
 ; clear the screen and let the user know we're alive
   call boot_video_cls
@@ -366,6 +371,9 @@ boot_pd_table:
 boot_stack_bottom:
   resb 4096
 boot_stack_top:
+
+multiboot_phys_addr:
+  resb 4
 
 boot_video_line_nr:
   resb 1

@@ -37,6 +37,10 @@ pub extern fn kmain()
 
     /* initialize interrupts so we can catch exceptions at this early stage */
     hardware::interrupts::init().ok().expect("failed during interrupt init");
+
+    /* initialize physical memory then the heap, so we can start allocating
+     * dynamic structures */
+    hardware::physmem::init().ok().expect("failed during physical mem init");
 }
 
 /* handle panics by writing to the debug log and bailing out */
@@ -50,3 +54,4 @@ extern fn panic_fmt(args: ::core::fmt::Arguments, file: &'static str, line: usiz
 
 #[lang = "eh_personality"] extern fn eh_personality() {} /* defined internally for panic()s but not needed */
 #[lang = "stack_exhausted"] extern fn stack_exhausted() {}
+
