@@ -168,6 +168,20 @@ pub fn enable_gate_user_access(vector: usize) -> Result<(), KernelInternalError>
 #[no_mangle]
 pub extern "C" fn kernel_interrupt_handler(stack: interrupted_thread_registers)
 {
-    kprintln!("[x86] interrupt incoming: {}", stack.interrupt_number);
+    if stack.interrupt_number < 32
+    {
+        let rip: u64 = stack.rip;
+        let cr2: u64;
+
+        unsafe
+        {
+            asm!("mov %cr2, %rax" : "={rax}"(cr2));
+        }
+
+        kprintln!("[x86] CPU exception {}: rip = {:x} fault addr (cr2) = {:x}", stack.interrupt_number, rip, cr2);
+        panic!("Unhandled exception");
+    }
+    
+    kprintln!("[x86] interrupt fired: {}", stack.interrupt_number);
 }
 
