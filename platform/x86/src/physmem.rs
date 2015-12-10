@@ -154,9 +154,10 @@ const PAGE_STACK_START: usize = 4 * 1024 * 1024; /* start page stack at 4MB mark
 /* physical memory map
  *
  * System is booted using 2MB pages to identity map lowest 1GB of physical
- * memory into lowest 1GB of kernel virtual memory.
+ * memory into lowest 1GB of kernel virtual memory. This is what the
+ * physical + virtual memory map will look for the kernel.
  *
- * --- 0MB -------------------------------------------------------------------
+ * --- zero ------------------------------------------------------------------
  *  Nasty low-level legacy x86 stuff.
  * --- 1MB -------------------------------------------------------------------
  *  Kernel loaded here with multiboot modules.
@@ -171,10 +172,29 @@ const PAGE_STACK_START: usize = 4 * 1024 * 1024; /* start page stack at 4MB mark
 pub fn init() -> Result<(), KernelInternalError>
 {
     kprintln!("[x86] initializing physical memory");
+    let mut mem_total = 0;
 
-    multiboot::list_tags();
+    /* enumerate through the physical memory regions */
+    try!(multiboot::MEMORYMAP.lock().init());
+    let mut mem_map = multiboot::MEMORYMAP.lock();
+    loop
+    {
+        match mem_map.enumerate()
+        {
+            Some(region) => match region.mem_type
+                            {
+                                multiboot::MEM_REGION_USABLE =>
+                                    {
+                                        kprintln!("... RAM region found at 0x{:x}, size {}KB", region.base_addr, region.length >> 10);
+                                        mem_total = mem_total + region.length;
+                                    },
+                                _ => {}
+                            },
+            None => break,
+        }
+    }
 
-    kprintln!("... done");
+    kprintln!("... done, {}MB total physical memory available.", mem_total >> 20);
 
     Ok(())
 }
