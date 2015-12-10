@@ -14,9 +14,22 @@ header_start:
     ; checksum
     dd 0x100000000 - (0xe85250d6 + 0 + (header_end - header_start))
 
+.request_info_tag_start:
+    ; request information from the boot loader
+    dw 1	; type: Multiboot information request
+    dw 0	; flags: ALl information must be supplied
+    dd .request_info_tag_end - .request_info_tag_start ; size of this tag in bytes
+    
+    ; array of info types we want to know about. the boot loader
+    ; will fail to start us if it cannot provide any of the requested
+    ; info - so be warned.
+    dd 6	; memory map information
+    dd 0	; end of list
+.request_info_tag_end:
+
     ; terminating tag
-    dw 0    ; type
-    dw 0    ; flags
-    dd 8    ; size
+    dw 0    	; type must be zero to terminate the list
+    dw 0    	; flags ignored
+    dd 8    	; size must be 8
 header_end:
 

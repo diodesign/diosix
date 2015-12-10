@@ -34,13 +34,9 @@ start64:
 ; enter the Rust-level kernel
   call kmain
 
-; try firing an interrupt
-  int 0x3
-  mov rax, 0x0a640a6f0a6f0a47
-  int 0x4
-  mov rcx, 0xb8000 + (4 * 160)
-  int 0x7f
-  mov qword [rcx], rax
+; write 'Halt' to 5th line of video
+  mov rax, 0x0a740a6c0a610a48
+  mov qword [0xb8000 + (4 * 160)], rax
 
 ; nowhere else to go
   cli

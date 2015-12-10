@@ -12,10 +12,7 @@ use core::ptr;
 use spin::Mutex;
 use errors::KernelInternalError;
 
-extern
-{
-    static multiboot_phys_addr: u64;
-}
+use ::hardware::multiboot;
 
 /* create a system-wide physical stack with a locking mechanism. */
 pub static PAGESTACK: Mutex<PageStack> = Mutex::new(PageStack
@@ -173,24 +170,11 @@ const PAGE_STACK_START: usize = 4 * 1024 * 1024; /* start page stack at 4MB mark
 
 pub fn init() -> Result<(), KernelInternalError>
 {
-    kprintln!("[x86] initializing physical memory (multiboot at {:p})", &multiboot_phys_addr);
+    kprintln!("[x86] initializing physical memory");
 
-    kprintln!("[x86] testing the page stack");
-    try!(PAGESTACK.lock().set_limit(10));
+    multiboot::list_tags();
 
-    try!(PAGESTACK.lock().push(0x1122334411223000));
-    try!(PAGESTACK.lock().push(0x5566778855667000));
-    try!(PAGESTACK.lock().push(0x4141414100000000));
-    try!(PAGESTACK.lock().push(0xc0c0c0c0c0c0c000));
-    try!(PAGESTACK.lock().push(0xaabbaabbaabba000));
-
-    kprintln!("... popped {:x}", try!(PAGESTACK.lock().pop()));
-    kprintln!("... popped {:x}", try!(PAGESTACK.lock().pop()));
-    kprintln!("... popped {:x}", try!(PAGESTACK.lock().pop()));
-    kprintln!("... popped {:x}", try!(PAGESTACK.lock().pop()));
-    kprintln!("... popped {:x}", try!(PAGESTACK.lock().pop()));
-    
-    kprintln!("... finished popping");
+    kprintln!("... done");
 
     Ok(())
 }

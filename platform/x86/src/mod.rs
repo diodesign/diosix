@@ -11,6 +11,7 @@ mod io;
 mod pic;
 mod exceptions;
 mod swis;
+mod multiboot;
 pub mod physmem;
 pub mod interrupts;
 

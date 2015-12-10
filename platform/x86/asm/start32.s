@@ -373,7 +373,7 @@ boot_stack_bottom:
 boot_stack_top:
 
 multiboot_phys_addr:
-  resb 4
+  resb 8	; this will be loaded as a 64-bit value by the rust kernel
 
 boot_video_line_nr:
   resb 1
