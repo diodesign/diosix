@@ -12,6 +12,7 @@ ENTRY(start32) /* entry point for the kernel */
 
 SECTIONS {
     . = 1M; /* start from 1MB load point */
+    __kernel_start = .;
 
     /* ensure the boot section is right at the start for the boot loader to find */
     .boot :
@@ -21,9 +22,18 @@ SECTIONS {
         KEEP(*(.multiboot_head))
     }
 
-    /* the section that contains our kernel code */
-    .text :
+    /* the section that contains our kernel code and read-only data */
+    .text : ALIGN(0x1000)
     {
         *(.text)
+	*(.rodata*)
     }
+
+    .bss : ALIGN(0x1000)
+    {
+      *(COMMON)
+      *(.bss)
+    }
+
+    __kernel_end = ALIGN(0x1000);
 }

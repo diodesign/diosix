@@ -17,7 +17,7 @@ header_start:
 .request_info_tag_start:
     ; request information from the boot loader
     dw 1	; type: Multiboot information request
-    dw 0	; flags: ALl information must be supplied
+    dw 0	; flags: All information must be supplied
     dd .request_info_tag_end - .request_info_tag_start ; size of this tag in bytes
     
     ; array of info types we want to know about. the boot loader

@@ -5,13 +5,16 @@
 ; Maintainer: Chris Williams <diodesign@gmail.com>
 ;
 
-global gdt.kdata	   ; make sure other code can see this segment
-global kernel_cs	   ; make sure the rust kernel can see this
-global start32		   ; so the bootloader can find us
+global gdt.kdata	   ; make sure other code can see kernel's data segment
+global kernel_cs	   ; make sure the rust kernel can see kernel's code segment
+global start32		   ; entry point for the kernel from the boot loader
+global kernel_start_addr, kernel_end_addr
 
 global multiboot_phys_addr ; phys address of multiboot structure
 
 extern start64
+extern __kernel_start
+extern __kernel_end
 
 section .text
 bits 32
@@ -31,6 +34,13 @@ start32:
 
 ; preserve pointer to physical address of multiboot structure
   mov [multiboot_phys_addr], ebx
+
+; preserve kernel start and end addresses, calculated by the linker
+; and stashed in memory for the rust kernel to find
+  mov ebx, __kernel_start
+  mov [kernel_start_addr], ebx
+  mov ebx, __kernel_end
+  mov [kernel_end_addr], ebx
 
 ; clear the screen and let the user know we're alive
   call boot_video_cls
@@ -371,6 +381,14 @@ boot_pd_table:
 boot_stack_bottom:
   resb 4096
 boot_stack_top:
+
+; somewhere to stash a copy of start and end addresses of the kernel,
+; according to the linker.
+kernel_start_addr:
+  resb 8
+
+kernel_end_addr:
+  resb 8
 
 multiboot_phys_addr:
   resb 8	; this will be loaded as a 64-bit value by the rust kernel
