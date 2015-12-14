@@ -143,8 +143,9 @@ pub fn init() -> Result<(), KernelInternalError>
     paging::BOOTPGTABL.lock().load();
     kprintln!("[x86] boot CPU now using mapped physical memory");
     
-    /* get the physical page stack code using the upper kernel area */
+    /* get the physical page stack and paging code using the upper kernel area */
     pgstack::SYSTEMSTACK.lock().set_kernel_translation_offset(KERNEL_VIRTUAL_UPPER_BASE);
+    paging::BOOTPGTABL.lock().set_kernel_translation_offset(KERNEL_VIRTUAL_UPPER_BASE);
 
     Ok(())
 }

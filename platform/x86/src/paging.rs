@@ -22,10 +22,10 @@ extern
     static boot_pml4_ptr: usize;
 }
 
-const PG_PRESENT:        usize = 1 << 0; /* set to make this page entry valid */
+    const PG_PRESENT:    usize = 1 << 0; /* set to make this page entry valid */
 pub const PG_WRITEABLE:  usize = 1 << 1; /* set this bit to make page writeable */
 pub const PG_USER_ALLOW: usize = 1 << 2; /* set this bit to allow access from userspace */
-const PG_2M_PAGE:        usize = 1 << 7; /* set to indicate a 2M page */
+    const PG_2M_PAGE:    usize = 1 << 7; /* set to indicate a 2M page */
 pub const PG_GLOBAL:     usize = 1 << 8; /* set to indicate this is a global page */
 pub const PG_NOEXECUTE:  usize = 1 << 63; /* set to forbid execution in this page */
 
@@ -40,11 +40,18 @@ const PG_TBL_INDEX_MASK: usize = 0b111111111; /* indexes are 9-bits wide (0-511)
  * (the nx bit) are flags. this is mask just leaves the address from the entry. */
 const TABLE_ADDR_MASK: usize = !(0b111111111111 | PG_NOEXECUTE);
 
-pub static BOOTPGTABL: Mutex<PageTable> = Mutex::new(PageTable{pml4: 0});
+pub static BOOTPGTABL: Mutex<PageTable> = Mutex::new(PageTable{pml4: 0, virtual_translation_offset: 0});
 
 pub struct PageTable
 {
     pml4: usize, /* physical address of the pml4 */
+
+    /* Allow the kernel to dereference physical addresses, which are mapped
+     * into the kernel's upper virtual memory space. this value is zero at boot
+     * but changed during system initialization in physmem.rs.
+     * see PageStack in pgstack.rs for more details on this.
+     */
+    virtual_translation_offset: usize,
 }
 
 impl PageTable
@@ -56,6 +63,31 @@ impl PageTable
         self.pml4 = boot_pml4_ptr;
     }
 
+    /* set_kernel_translation_offset
+     *
+     * Allow PageTable to access physical memory from the kernel's upper virtual space.
+     * see PageStack for more info.
+     * => offset = value added to physical addresses to translate them into kernel virtual
+     *             adddresses.
+     */ 
+    pub fn set_kernel_translation_offset(&mut self, offset: usize)
+    {
+        self.virtual_translation_offset = offset;
+    }
+
+    /* phys_to_kernel_virt
+     *
+     * Convert a physical RAM address to a kernel virtual address.
+     * See PageStack for more info.
+     * => phys = physical address to translate
+     * <= returns kernel virtual address
+     */
+    fn phys_to_kernel_virt(&self, phys: usize) -> usize
+    {
+        phys + self.virtual_translation_offset
+    }
+
+    /* calculate address of an element in a table */
     fn table_entry_addr(&self, base: usize, index: usize) -> usize
     {
         base + (index * size_of::<usize>())
@@ -72,7 +104,9 @@ impl PageTable
     {
         /* find the PML4 table entry that points to the PDP table we need.
          * a PML4 table is an array of 512 64-bit words. */
-        let pml4 = unsafe{ &*((self.pml4) as *mut [usize; 512]) };
+        let pml4_virt_base = self.phys_to_kernel_virt(self.pml4);
+        let pml4 = unsafe{ &*(pml4_virt_base as *mut [usize; 512]) };
+
         let pml4_index = (virt >> PML4_INDEX_SHIFT) & PG_TBL_INDEX_MASK;
 
         /* when a PDP table is deallocated, the entry in the PML4 pointing to it must
@@ -84,14 +118,14 @@ impl PageTable
             let pdp: usize = try!(pgstack::SYSTEMSTACK.lock().pop());
 
             /* zero the new PDP table so its entries are all marked not present */
-            unsafe{ memset(pdp as *mut u8, 0, physmem::SMALL_PAGE_SIZE) };
+            unsafe{ memset(self.phys_to_kernel_virt(pdp) as *mut u8, 0, physmem::SMALL_PAGE_SIZE) };
             
             /* mark the PDP table as r/w and user-accessible to keep all options open.
-             * these flags can be controlled at the lowest level of the paging structure. */
+             * these flags can be overridden at the lowest level of the paging structure. */
             let pml4_entry: usize = pdp | PG_PRESENT | PG_WRITEABLE | PG_USER_ALLOW;
 
             /* write new PDP entry in the PML4 table */
-            unsafe{ ptr::write(self.table_entry_addr(self.pml4, pml4_index) as *mut _, pml4_entry) };
+            unsafe{ ptr::write(self.table_entry_addr(pml4_virt_base, pml4_index) as *mut _, pml4_entry) };
         }
 
         /* extract the PDP table address from the PML4 */
@@ -110,7 +144,9 @@ impl PageTable
         /* find the PDP table entry that points to the PD table we need.
          * a PDP table is an array of 512 64-bit words. */
         let pdp_base = try!(self.get_pdp(virt));
-        let pdp = unsafe{ &*((pdp_base) as *mut [usize; 512]) };
+        let pdp_virt_base = self.phys_to_kernel_virt(pdp_base);
+        let pdp = unsafe{ &*((pdp_virt_base) as *mut [usize; 512]) };
+
         let pdp_index = (virt >> PDP_INDEX_SHIFT) & PG_TBL_INDEX_MASK;
 
         /* when a PD table is deallocated, the entry in the PDP pointing to it must
@@ -122,14 +158,14 @@ impl PageTable
             let pd: usize = try!(pgstack::SYSTEMSTACK.lock().pop());
 
             /* zero the new PDP table so its entries are all marked not present */
-            unsafe{ memset(pd as *mut u8, 0, physmem::SMALL_PAGE_SIZE) };
+            unsafe{ memset(self.phys_to_kernel_virt(pd) as *mut u8, 0, physmem::SMALL_PAGE_SIZE) };
             
             /* mark the PDP table as r/w and user-accessible to keep all options open.
              * these flags can be controlled at the lowest level of the paging structure. */
             let pdp_entry: usize = pd | PG_PRESENT | PG_WRITEABLE | PG_USER_ALLOW;
 
             /* write new PD entry in the PDP table */
-            unsafe{ ptr::write(self.table_entry_addr(pdp_base, pdp_index) as *mut _, pdp_entry) };
+            unsafe{ ptr::write(self.table_entry_addr(pdp_virt_base, pdp_index) as *mut _, pdp_entry) };
         }
 
         /* extract the PDP table address from the PML4 */
@@ -176,7 +212,8 @@ impl PageTable
 
         /* get the page directory (level 1) for this 2M page */
         let pd_base: usize = try!(self.get_pd(virt));
-        let pd = unsafe{ &*((pd_base) as *mut [usize; 512]) };
+        let pd_virt_base: usize = self.phys_to_kernel_virt(pd_base);
+        let pd = unsafe{ &*((pd_virt_base) as *mut [usize; 512]) };
 
         let pd_index: usize = (virt >> PD_INDEX_SHIFT) & PG_TBL_INDEX_MASK;
 
@@ -189,7 +226,7 @@ impl PageTable
 
         /* update 2MB page entry in the page dirctory */
         let pd_entry: usize = phys | PG_2M_PAGE | PG_PRESENT | nx | (flags & PG_2M_FLAGS);
-        unsafe{ ptr::write(self.table_entry_addr(pd_base, pd_index) as *mut _, pd_entry) };
+        unsafe{ ptr::write(self.table_entry_addr(pd_virt_base, pd_index) as *mut _, pd_entry) };
 
         Ok(())
     }
@@ -207,5 +244,4 @@ impl PageTable
         }
     }
 }
-
 
