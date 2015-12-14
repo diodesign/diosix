@@ -181,7 +181,5 @@ pub extern "C" fn kernel_interrupt_handler(stack: interrupted_thread_registers)
         kprintln!("[x86] CPU exception {}: rip = {:x} fault addr (cr2) = {:x}", stack.interrupt_number, rip, cr2);
         panic!("Unhandled exception");
     }
-    
-    kprintln!("[x86] interrupt fired: {}", stack.interrupt_number);
 }
 

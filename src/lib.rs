@@ -38,8 +38,7 @@ pub extern fn kmain()
     /* initialize interrupts so we can catch exceptions at this early stage */
     hardware::interrupts::init().ok().expect("failed during interrupt init");
 
-    /* initialize physical memory then the heap, so we can start allocating
-     * dynamic structures */
+    /* initialize physical memory */
     hardware::physmem::init().ok().expect("failed during physical mem init");
 }
 
