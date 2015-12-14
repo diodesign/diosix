@@ -15,7 +15,8 @@ mod pic;
 mod exceptions;
 mod swis;
 mod multiboot;
-mod pages;
+mod pgstack;
+mod paging;
 
 /* can be called from the portable kernel */
 pub mod physmem;

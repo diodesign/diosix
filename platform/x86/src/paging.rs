@@ -14,6 +14,7 @@ use core::mem::size_of;
 use spin::Mutex;
 use core::ptr;
 
+use ::hardware::pgstack;
 use ::hardware::physmem;
 
 extern
@@ -25,7 +26,8 @@ const PG_PRESENT:        usize = 1 << 0; /* set to make this page entry valid */
 pub const PG_WRITEABLE:  usize = 1 << 1; /* set this bit to make page writeable */
 pub const PG_USER_ALLOW: usize = 1 << 2; /* set this bit to allow access from userspace */
 const PG_2M_PAGE:        usize = 1 << 7; /* set to indicate a 2M page */
-const PG_NOEXECUTE:      usize = 1 << 63; /* set to forbid execution from this page */
+pub const PG_GLOBAL:     usize = 1 << 8; /* set to indicate this is a global page */
+pub const PG_NOEXECUTE:  usize = 1 << 63; /* set to forbid execution in this page */
 
 const PG_2M_FLAGS:       usize = (1 << 13) - 1; /* flags that can be set in a 2MB entry (bits 0-12) */
 
@@ -79,10 +81,10 @@ impl PageTable
         {
             /* no table allocated, so we need to grab a physical page to hold
              * a new PDP table for the PML4 to point to */
-            let pdp: usize = try!(physmem::PAGESTACK.lock().pop());
+            let pdp: usize = try!(pgstack::SYSTEMSTACK.lock().pop());
 
             /* zero the new PDP table so its entries are all marked not present */
-            unsafe{ memset(pdp as *mut u8, 0, physmem::PHYS_PAGE_SIZE) };
+            unsafe{ memset(pdp as *mut u8, 0, physmem::SMALL_PAGE_SIZE) };
             
             /* mark the PDP table as r/w and user-accessible to keep all options open.
              * these flags can be controlled at the lowest level of the paging structure. */
@@ -117,10 +119,10 @@ impl PageTable
         {
             /* no table allocated, so we need to grab a physical page to hold
              * a new PDP table for the PML4 to point to */
-            let pd: usize = try!(physmem::PAGESTACK.lock().pop());
+            let pd: usize = try!(pgstack::SYSTEMSTACK.lock().pop());
 
             /* zero the new PDP table so its entries are all marked not present */
-            unsafe{ memset(pd as *mut u8, 0, physmem::PHYS_PAGE_SIZE) };
+            unsafe{ memset(pd as *mut u8, 0, physmem::SMALL_PAGE_SIZE) };
             
             /* mark the PDP table as r/w and user-accessible to keep all options open.
              * these flags can be controlled at the lowest level of the paging structure. */
@@ -169,8 +171,8 @@ impl PageTable
 
         /* ensure the virtual and physical addresses are sane: they must be aligned 
          * to a 2MB boundary. */
-        if virt % physmem::PHYS_2M_PAGE_SIZE != 0 { return Err(KernelInternalError::BadVirtPgAddress); }
-        if phys % physmem::PHYS_2M_PAGE_SIZE != 0 { return Err(KernelInternalError::BadPhysPgAddress); }
+        if virt % physmem::LARGE_PAGE_SIZE != 0 { return Err(KernelInternalError::BadVirtPgAddress); }
+        if phys % physmem::LARGE_PAGE_SIZE != 0 { return Err(KernelInternalError::BadPhysPgAddress); }
 
         /* get the page directory (level 1) for this 2M page */
         let pd_base: usize = try!(self.get_pd(virt));
@@ -190,6 +192,19 @@ impl PageTable
         unsafe{ ptr::write(self.table_entry_addr(pd_base, pd_index) as *mut _, pd_entry) };
 
         Ok(())
+    }
+
+    /* load
+     *
+     * Load the page tables into the CPU. Note: any pages marked global are not affected
+     * by this push.
+     */
+    pub fn load(&self)
+    {
+        unsafe
+        {
+            asm!("mov %cr3, %rax" : : "{rax}"(self.pml4));
+        }
     }
 }
 
