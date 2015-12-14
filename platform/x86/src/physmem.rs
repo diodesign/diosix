@@ -227,3 +227,37 @@ fn map_phys_region(base: usize, size: usize) -> Result<(), KernelInternalError>
     Ok(())
 }
 
+/* ---- easy access to pages of physical memory --------------------- */
+
+/* get_page
+ *
+ * Grab a physical 4K page from the stack, translate its base address to
+ * a kernel virtual address, and give it to the caller.
+ * <= virtual address of page base, or an error code
+ */
+pub fn get_page() -> Result<usize, KernelInternalError>
+{
+    let page_base = try!(pgstack::SYSTEMSTACK.lock().pop());
+    Ok(page_base + KERNEL_VIRTUAL_UPPER_BASE)
+}
+
+/* return_page
+ *
+ * Convert a kernel virtual address into a physical 4K page base address,
+ * and return the page to the system for reuse.
+ * => virtual address of page to return
+ * <= error code on failure
+ */
+pub fn return_page(virt: usize) -> Result<(), KernelInternalError>
+{
+    /* sanity check */
+    if virt < KERNEL_VIRTUAL_UPPER_BASE
+    {
+        return Err(KernelInternalError::BadVirtPgAddress);
+    }
+
+    let virt = virt - KERNEL_VIRTUAL_UPPER_BASE;
+    try!(pgstack::SYSTEMSTACK.lock().push(virt));
+    Ok(())
+}
+

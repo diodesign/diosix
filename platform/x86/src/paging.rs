@@ -105,13 +105,15 @@ impl PageTable
         /* find the PML4 table entry that points to the PDP table we need.
          * a PML4 table is an array of 512 64-bit words. */
         let pml4_virt_base = self.phys_to_kernel_virt(self.pml4);
-        let pml4 = unsafe{ &*(pml4_virt_base as *mut [usize; 512]) };
+        let pml4_index = ((virt >> PML4_INDEX_SHIFT) & PG_TBL_INDEX_MASK) * size_of::<usize>();
 
-        let pml4_index = (virt >> PML4_INDEX_SHIFT) & PG_TBL_INDEX_MASK;
+        let mut pml4: *mut usize = ptr::null_mut();
+        pml4 = (pml4_virt_base + pml4_index) as *mut _;
 
         /* when a PDP table is deallocated, the entry in the PML4 pointing to it must
          * be zero. this indicates no table is longer allocated. */
-        if pml4[pml4_index] == 0
+        let mut pml4_entry: usize = unsafe{ *pml4 };
+        if pml4_entry == 0
         {
             /* no table allocated, so we need to grab a physical page to hold
              * a new PDP table for the PML4 to point to */
@@ -122,14 +124,14 @@ impl PageTable
             
             /* mark the PDP table as r/w and user-accessible to keep all options open.
              * these flags can be overridden at the lowest level of the paging structure. */
-            let pml4_entry: usize = pdp | PG_PRESENT | PG_WRITEABLE | PG_USER_ALLOW;
+            pml4_entry = pdp | PG_PRESENT | PG_WRITEABLE | PG_USER_ALLOW;
 
             /* write new PDP entry in the PML4 table */
-            unsafe{ ptr::write(self.table_entry_addr(pml4_virt_base, pml4_index) as *mut _, pml4_entry) };
+            unsafe{ *pml4 = pml4_entry };
         }
 
         /* extract the PDP table address from the PML4 */
-        Ok(pml4[pml4_index] & TABLE_ADDR_MASK)
+        Ok(pml4_entry & TABLE_ADDR_MASK)
     }
 
     /* get_pd
@@ -145,13 +147,15 @@ impl PageTable
          * a PDP table is an array of 512 64-bit words. */
         let pdp_base = try!(self.get_pdp(virt));
         let pdp_virt_base = self.phys_to_kernel_virt(pdp_base);
-        let pdp = unsafe{ &*((pdp_virt_base) as *mut [usize; 512]) };
-
-        let pdp_index = (virt >> PDP_INDEX_SHIFT) & PG_TBL_INDEX_MASK;
+        let pdp_index = ((virt >> PDP_INDEX_SHIFT) & PG_TBL_INDEX_MASK) * size_of::<usize>();
+        
+        let mut pdp: *mut usize = ptr::null_mut();
+        pdp = (pdp_virt_base + pdp_index) as *mut _;
 
         /* when a PD table is deallocated, the entry in the PDP pointing to it must
          * be zero. this indicates no table is longer allocated. */
-        if pdp[pdp_index] == 0
+        let mut pdp_entry: usize = unsafe{ *pdp };
+        if pdp_entry == 0
         {
             /* no table allocated, so we need to grab a physical page to hold
              * a new PDP table for the PML4 to point to */
@@ -162,14 +166,14 @@ impl PageTable
             
             /* mark the PDP table as r/w and user-accessible to keep all options open.
              * these flags can be controlled at the lowest level of the paging structure. */
-            let pdp_entry: usize = pd | PG_PRESENT | PG_WRITEABLE | PG_USER_ALLOW;
+            pdp_entry = pd | PG_PRESENT | PG_WRITEABLE | PG_USER_ALLOW;
 
             /* write new PD entry in the PDP table */
-            unsafe{ ptr::write(self.table_entry_addr(pdp_virt_base, pdp_index) as *mut _, pdp_entry) };
+            unsafe{ *pdp = pdp_entry };
         }
 
         /* extract the PDP table address from the PML4 */
-        Ok(pdp[pdp_index] & TABLE_ADDR_MASK)
+        Ok(pdp_entry & TABLE_ADDR_MASK)
     }
     
     /* nx_bit
@@ -213,20 +217,22 @@ impl PageTable
         /* get the page directory (level 1) for this 2M page */
         let pd_base: usize = try!(self.get_pd(virt));
         let pd_virt_base: usize = self.phys_to_kernel_virt(pd_base);
-        let pd = unsafe{ &*((pd_virt_base) as *mut [usize; 512]) };
+        let pd_index: usize = ((virt >> PD_INDEX_SHIFT) & PG_TBL_INDEX_MASK) * size_of::<usize>();
 
-        let pd_index: usize = (virt >> PD_INDEX_SHIFT) & PG_TBL_INDEX_MASK;
+        let mut pd: *mut usize = ptr::null_mut();
+        pd = (pd_virt_base + pd_index) as *mut _;
+        let mut pd_entry = unsafe{ *pd };
 
         /* check to make sure the PD entry for this virtual address
          * is not in use by a 4K table */
-        if pd[pd_index] & PG_2M_PAGE == 0 && pd[pd_index] != 0
+        if pd_entry & PG_2M_PAGE == 0 && pd_entry != 0
         {
             return Err(KernelInternalError::Pg4KTablePresent);
         }
 
         /* update 2MB page entry in the page dirctory */
-        let pd_entry: usize = phys | PG_2M_PAGE | PG_PRESENT | nx | (flags & PG_2M_FLAGS);
-        unsafe{ ptr::write(self.table_entry_addr(pd_virt_base, pd_index) as *mut _, pd_entry) };
+        pd_entry = phys | PG_2M_PAGE | PG_PRESENT | nx | (flags & PG_2M_FLAGS);
+        unsafe{ *pd = pd_entry };
 
         Ok(())
     }
