@@ -191,7 +191,7 @@ impl PageStack
         Ok(pg_addr)
     }
 
-    /* ptr_to_addr
+    /* ptr_to_kernel_addr
      *
      * Calculate the kernel virtual address of the stack entry for the current ptr
      * so it can be used to access that particular stack entry.

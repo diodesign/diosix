@@ -98,7 +98,7 @@ impl PageTable
      * Find the base address of the PDP (level 3) table responsible for the given virtual address.
      * if no PDP table is found, one is allocated, cleaned and its base pointer returned.
      * => virt = virtual address to examine
-     * <= base address of the pdp table, or an error code on failure.
+     * <= base physical address of the pdp table, or an error code on failure.
      */
     fn get_pdp(&self, virt: usize) -> Result<usize, KernelInternalError>
     {
@@ -137,7 +137,7 @@ impl PageTable
      * Find the base address of the PD (level 2) table responsible for the given virtual address.
      * if no PD table is found, one is allocated, cleaned and its base pointer returned.
      * => virt = virtual address to examine
-     * <= base address of the pdp table, or an error code on failure.
+     * <= base physical address of the pdp table, or an error code on failure.
      */
     fn get_pd(&self, virt: usize) -> Result<usize, KernelInternalError>
     {

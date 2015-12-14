@@ -34,14 +34,21 @@ start64:
 ; enter the Rust-level kernel
   call kmain
 
-; write 'Halt' to 5th line of video
-  mov rax, 0x0a740a6c0a610a48
-  mov qword [0xb8000 + (4 * 160)], rax
+; write 'Halt' to 5th line of video using the high
+; kernel virtual space
+  mov rax, 0x0c740c6c0c610c48
+  mov rbx, [.kernel_virtual_base]
+  add rbx, 0xb8000 + (4 * 160)
+  mov qword [rbx], rax
 
 ; nowhere else to go
   cli
   hlt
+  jmp $
 
+; kernel's virtual base address
+.kernel_virtual_base:
+  dq 0xffff800000000000
 
 ; serial_init
 ; 
