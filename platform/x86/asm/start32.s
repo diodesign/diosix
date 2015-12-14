@@ -9,11 +9,16 @@ global gdt.kdata	   ; make sure other code can see kernel's data segment
 global kernel_cs	   ; make sure the rust kernel can see kernel's code segment
 global start32		   ; entry point for the kernel from the boot loader
 global kernel_start_addr, kernel_end_addr
+
+; make page tables visible to other code
 global boot_pml4_ptr
+global boot_pd_table, boot_pt0_table, boot_pt1_table
 
 global multiboot_phys_addr ; phys address of multiboot structure
 
 extern start64
+
+; linker symbols
 extern __kernel_start
 extern __kernel_end
 
@@ -382,6 +387,12 @@ boot_pdp_table:
 
 boot_pd_table:
   resb 4096	; reserve 4KB for page directory aka level 2 page table
+
+boot_pt0_table:
+  resb 4096	; reserve 4KB for a page table aka level 1 page table
+
+boot_pt1_table:
+  resb 4096	; reserve 4KB for a page table aka level 1 page table
 
 boot_stack_bottom:
   resb 4096

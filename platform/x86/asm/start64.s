@@ -7,7 +7,20 @@
 
 global start64
 global serial_write_byte
-extern kmain
+global tidy_boot_pg_tables
+
+extern kmain	; kernel entry point
+
+; linker symbols
+extern __kernel_ro_start
+extern __kernel_ro_end
+extern __kernel_rw_start
+extern __kernel_rw_end
+
+; page tables
+extern boot_pd_table
+extern boot_pt0_table
+extern boot_pt1_table
 
 section .text
 bits 64
@@ -37,7 +50,7 @@ start64:
 ; write 'Halt' to 5th line of video using the high
 ; kernel virtual space
   mov rax, 0x0c740c6c0c610c48
-  mov rbx, [.kernel_virtual_base]
+  mov rbx, [kernel_virtual_base]
   add rbx, 0xb8000 + (4 * 160)
   mov qword [rbx], rax
 
@@ -46,9 +59,107 @@ start64:
   hlt
   jmp $
 
-; kernel's virtual base address
-.kernel_virtual_base:
+; -------------------------------------------------------------------
+
+; define kernel's virtual base address
+kernel_virtual_base:
   dq 0xffff800000000000
+
+; nx bit - bit 63
+nx_bit:
+  dq 1 << 63
+
+; -------------------------------------------------------------------
+
+; tidy_boot_pg_tables
+;
+; Tidy up the boot page page tables by clearing out all page
+; entries from 4M to 1024M, then mapping the kernel code, read-only
+; data and bss scratch space in using 4KB pages.
+;
+; Safe to call from Rust - preserves all registers
+;
+tidy_boot_pg_tables:
+  push rax
+  push rbx
+  push rcx
+  push rdx
+
+; clear the 4M-1GB entries in the page directory. that's entry 2 to
+; 511. we don't need them any more - the kernel's mapped all physical
+; memory into the upper virtual space.
+  xor rax, rax
+  mov ebx, 2
+.clear_2m_pg_loop:
+  mov qword [boot_pd_table + ebx * 8], rax
+  inc ebx
+  cmp ebx, 512
+  jb .clear_2m_pg_loop
+
+; the first 2MB of kernel virtual memory will be described by
+; boot_pt0_table. the next 2MB of virtual memory will be described
+; by boot_pt1_table. both are placed consecutively in memory so
+; we can treat them as a contiguous 1024 x 64-bit array.
+
+; identity map the kernel's components to their physical
+; addresses.
+
+; first create mappings for the read-only part of the kernel.
+; in future the rodata should be non-execute but it's not a major
+; problem as long as it's not writeable.
+  mov rax, __kernel_ro_start
+  shr rax, 12
+  and rax, 0x3ff		; turn start address into table index
+  mov rbx, __kernel_ro_end
+  shr rax, 12
+  and rbx, 0x3ff		; turn end address into table index
+
+  mov rcx, __kernel_ro_start	; this should be page aligned
+  or rcx, 0x101			; present, read-only, kernel-only, global
+.setup_kernel_4k_ro_pg:
+  mov qword [boot_pt0_table + eax * 8], rcx
+  add rcx, 4096
+  inc eax
+  cmp eax, ebx
+  jb .setup_kernel_4k_ro_pg
+
+; next, create mappings for the writeable section of the kernel
+  mov rax, __kernel_rw_start
+  shr rax, 12
+  and rax, 0x3ff		; turn start address into table index
+  mov rbx, __kernel_rw_end
+  shr rax, 12
+  and rbx, 0x3ff		; turn end address into table index
+
+  mov rcx, __kernel_rw_start	; this should be page aligned
+  or rcx, 0x103			; present, read-write, kernel-only, global
+  mov rdx, [nx_bit]
+  or rcx, rdx			; prevent execution in the writeable area
+.setup_kernel_4k_rw_pg:
+  mov qword [boot_pt0_table + eax * 8], rcx
+  add rcx, 4096
+  inc eax
+  cmp eax, ebx
+  jb .setup_kernel_4k_rw_pg
+
+; now point the PD table entries for the 0-4M range at the above
+; two page tables
+  mov rax, boot_pd_table
+  mov rbx, boot_pt0_table
+  or rbx, 0x3			; present, read-write, use a 4K PT
+  mov [rax], rbx
+  
+  mov rbx, boot_pt1_table
+  or rbx, 0x3
+  mov [rax + 8], rbx
+
+  pop rdx
+  pop rcx
+  pop rbx
+  pop rax
+  ret
+
+; -------------------------------------------------------------------
 
 ; serial_init
 ; 

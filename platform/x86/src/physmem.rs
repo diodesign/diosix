@@ -20,6 +20,7 @@ extern
 {
     static kernel_start_addr: usize;
     static kernel_end_addr: usize;
+    fn tidy_boot_pg_tables();
 }
 
 /* physical memory map
@@ -118,7 +119,11 @@ pub fn init() -> Result<(), KernelInternalError>
                         {
                             kprintln!("... ... RAM region found at 0x{:x}, size {} KB", region.base_addr, region.length >> 10);
 
-                            /* second pass: add the pages to the stack + map into the kernel */
+                            /* second pass: add the pages to the stack and then map the pages into
+                             * the kernel's upper virtual address space. map_phys_region() will try
+                             * to obtain pages from the physical page stack, so use that after
+                             * map_phys_region()
+                             */
                             mem_stacked = mem_stacked + add_phys_region(region.base_addr as usize, region.length as usize).ok().unwrap_or(0);
                             try!(map_phys_region(region.base_addr as usize, region.length as usize));
                         }
@@ -138,14 +143,17 @@ pub fn init() -> Result<(), KernelInternalError>
         }
     }
     kprintln!("... done, {} MB RAM available ({} bytes reserved for kernel use)", mem_total >> 20, mem_total - mem_stacked);
-
-    /* tell the CPU we're good to go with the new mappings */
-    paging::BOOTPGTABL.lock().load();
-    kprintln!("[x86] boot CPU now using mapped physical memory");
     
     /* get the physical page stack and paging code using the upper kernel area */
     pgstack::SYSTEMSTACK.lock().set_kernel_translation_offset(KERNEL_VIRTUAL_UPPER_BASE);
     paging::BOOTPGTABL.lock().set_kernel_translation_offset(KERNEL_VIRTUAL_UPPER_BASE);
+
+    /* throw out all the redundant mappings, leaving just the kernel code, read-only data
+     * and its bss scratch space mapped in the first 4MB of virtual memory. */
+    unsafe{ tidy_boot_pg_tables(); }
+
+    /* tell the CPU we're good to go with the new mappings */
+    paging::BOOTPGTABL.lock().load();
 
     Ok(())
 }
