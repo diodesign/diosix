@@ -10,9 +10,16 @@
 #![feature(no_std, lang_items, core_str_ext, const_fn, asm)]
 #![no_std]
 
-/* bring in the kernel debugging features, provides kprintln! and kprint! */
+/* turn off some of the warnings that fire false positives */
+#![allow(unused_assignments, unused_imports)]
+
+/* provides kprintln! and kprint! */
 #[macro_use]
 mod debug;
+
+/* provides kalloc! and kfree! */
+#[macro_use]
+mod heap;
 
 mod errors;
 
@@ -40,6 +47,12 @@ pub extern fn kmain()
 
     /* initialize physical memory */
     hardware::physmem::init().ok().expect("failed during physical mem init");
+    
+    /* initialize the kernel's private dynamic memory allocator */
+    heap::init().ok().expect("failed during heap mem init");
+
+    let ptr = kalloc!(20).ok().expect("failed in alloc");
+    kalloc_debug!();
 }
 
 /* handle panics by writing to the debug log and bailing out */

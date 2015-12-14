@@ -146,11 +146,11 @@ tidy_boot_pg_tables:
 ; two page tables
   mov rax, boot_pd_table
   mov rbx, boot_pt0_table
-  or rbx, 0x3			; present, read-write, use a 4K PT
+  or rbx, 0x3			; present, read-write, kernel-only use a 4K PT
   mov [rax], rbx
   
   mov rbx, boot_pt1_table
-  or rbx, 0x3
+  or rbx, 0x3			; ditto
   mov [rax + 8], rbx
 
   pop rdx

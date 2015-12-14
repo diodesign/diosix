@@ -87,12 +87,6 @@ impl PageTable
         phys + self.virtual_translation_offset
     }
 
-    /* calculate address of an element in a table */
-    fn table_entry_addr(&self, base: usize, index: usize) -> usize
-    {
-        base + (index * size_of::<usize>())
-    }
-
     /* get_pdp
      *
      * Find the base address of the PDP (level 3) table responsible for the given virtual address.

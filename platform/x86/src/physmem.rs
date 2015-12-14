@@ -202,9 +202,9 @@ fn add_phys_region(base: usize, size: usize) -> Result<usize, KernelInternalErro
 /* map_phys_region
  *
  * Map a region of physical memory into the kernel's upper virtual space
- * using the boot page tables and 2MB pages. the pages must be kernel only,
+ * using the boot page tables and whole 2MB pages. the pages must be kernel only,
  * read/write and non executable. base will be aligned down to a 2M boundary
- * if it is not already aligned. this calls 
+ * if it is not already aligned. the size will be rounded up to the next 2MB multiple.
  * => base = lowest physical address of region
  *    size = number of bytes in the region
  * <= returns error code on failure.
@@ -213,6 +213,11 @@ fn map_phys_region(base: usize, size: usize) -> Result<(), KernelInternalError>
 {
     let align_diff = base % LARGE_PAGE_SIZE;
     let base = base - align_diff; /* bring base down to a 2M page boundary */
+    let size = size + align_diff; /* fix up size with extra bytes after alignment */
+
+    /* fix up size so it rounds up to the next multiple of 2M */
+    let size_diff = LARGE_PAGE_SIZE - (size % LARGE_PAGE_SIZE);
+    let size = size + size_diff;
 
     let total_pages = size / LARGE_PAGE_SIZE;
     let flags = paging::PG_WRITEABLE | paging::PG_GLOBAL;

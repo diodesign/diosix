@@ -150,10 +150,7 @@ impl PageStack
             
         /* calculate the virtual address we need to write to in the stack,
          * write to it, and increment the stack pointer */
-        unsafe
-        {
-            ptr::write(self.ptr_to_kernel_addr() as *mut _, phys_addr);
-        }
+        unsafe{ ptr::write(self.ptr_to_kernel_addr() as *mut _, phys_addr); }
 
         self.ptr = self.ptr + 1;
         Ok(())
@@ -178,15 +175,9 @@ impl PageStack
         self.ptr = self.ptr - 1;
         let ptr_addr = self.ptr_to_kernel_addr();
         
-        let pg_addr = unsafe
-        {
-            ptr::read(ptr_addr as *mut _)
-        };
+        let pg_addr = unsafe{ ptr::read(ptr_addr as *mut _) };
 
-        unsafe
-        {
-            ptr::write(ptr_addr as *mut _, 0);
-        }
+        unsafe{ ptr::write(ptr_addr as *mut _, 0); }
 
         Ok(pg_addr)
     }

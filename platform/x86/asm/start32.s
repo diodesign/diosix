@@ -208,14 +208,14 @@ init_paging:
   ; writeable bits, and clear the others. Then point to
   ; this table from the first entry in the level 4 table
   mov eax, boot_pdp_table
-  or eax, 0x3 ; present, writeable, non-usermode
+  or eax, 0x7 ; present, writeable, user-allowed
   mov [boot_pml4_table], eax
 
   ; get the address of the level 2 page directory table,
   ; mark it as present and writeable, and point to it
   ; from the first entry of the level 3 table
   mov eax, boot_pd_table
-  or eax, 0x3
+  or eax, 0x7
   mov [boot_pdp_table], eax
 
   ; that's the easy bit done, linking tables to each other.
@@ -229,7 +229,7 @@ init_paging:
 .map_2m_page:
   mov eax, (2 * 1024 * 1024)
   mul ebx	; eax = 2MB * index
-  or eax, 0x83  ; present, writeable, 'huge' 2MB page
+  or eax, 0x83  ; present, writeable, kernel-only 'huge' 2MB page
   mov [boot_pd_table + ebx * 8], eax
   inc ebx
   cmp ebx, 512

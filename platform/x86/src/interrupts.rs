@@ -170,7 +170,11 @@ pub extern "C" fn kernel_interrupt_handler(stack: interrupted_thread_registers)
 {
     if stack.interrupt_number < 32
     {
-        let rip: u64 = stack.rip;
+        let rip = stack.rip;
+        let rax = stack.rax;
+        let rbx = stack.rbx;
+        let rcx = stack.rcx;
+        let err = stack.error_code;
         let cr2: u64;
 
         unsafe
@@ -178,7 +182,12 @@ pub extern "C" fn kernel_interrupt_handler(stack: interrupted_thread_registers)
             asm!("mov %cr2, %rax" : "={rax}"(cr2));
         }
 
-        kprintln!("[x86] CPU exception {}: rip = {:x} fault addr (cr2) = {:x}", stack.interrupt_number, rip, cr2);
+        kprintln!("[x86] CPU exception {}: rip = {:x} fault addr = {:x}", stack.interrupt_number, rip, cr2);
+        kprintln!("      rax = {:x}", rax);
+        kprintln!("      rbx = {:x}", rbx);
+        kprintln!("      rcx = {:x}", rcx);
+        kprintln!("      err = {:x}", err);
+       
         panic!("Unhandled exception");
     }
 }
