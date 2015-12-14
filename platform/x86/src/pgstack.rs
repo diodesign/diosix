@@ -188,7 +188,6 @@ impl PageStack
             ptr::write(ptr_addr as *mut _, 0);
         }
 
-        kprintln!("--> popped {:x} off page stack", pg_addr);
         Ok(pg_addr)
     }
 
