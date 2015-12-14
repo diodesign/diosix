@@ -9,6 +9,7 @@ global gdt.kdata	   ; make sure other code can see kernel's data segment
 global kernel_cs	   ; make sure the rust kernel can see kernel's code segment
 global start32		   ; entry point for the kernel from the boot loader
 global kernel_start_addr, kernel_end_addr
+global boot_pml4_ptr
 
 global multiboot_phys_addr ; phys address of multiboot structure
 
@@ -35,12 +36,13 @@ start32:
 ; preserve pointer to physical address of multiboot structure
   mov [multiboot_phys_addr], ebx
 
-; preserve kernel start and end addresses, calculated by the linker
-; and stashed in memory for the rust kernel to find
+; stash important addresses for the rust kernel to find
   mov ebx, __kernel_start
   mov [kernel_start_addr], ebx
   mov ebx, __kernel_end
   mov [kernel_end_addr], ebx
+  mov ebx, boot_pml4_table
+  mov [boot_pml4_ptr], ebx
 
 ; clear the screen and let the user know we're alive
   call boot_video_cls
@@ -233,15 +235,18 @@ init_paging:
   mov eax, boot_pml4_table
   mov cr3, eax
 
-  ; enable PAE (bit 5 in CR4)
+  ; enable PAE (bit 5 in CR4) and global pages (bit 7)
   mov eax, cr4
   or eax, 1 << 5
+  or eax, 1 << 7
   mov cr4, eax
 
   ; enable long mode (bit 8 of the EFER MSR)
+  ; and no-execute security (bit 11)
   mov ecx, 0xc0000080
   rdmsr
   or eax, 1 << 8
+  or eax, 1 << 11
   wrmsr
 
   ; flip the main switch: bit 31 in CR0
@@ -381,6 +386,10 @@ boot_pd_table:
 boot_stack_bottom:
   resb 4096
 boot_stack_top:
+
+; stash a pointer to the boot PML4 table
+boot_pml4_ptr:
+  resb 8
 
 ; somewhere to stash a copy of start and end addresses of the kernel,
 ; according to the linker.

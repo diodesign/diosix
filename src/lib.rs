@@ -33,7 +33,7 @@ extern crate spin;
 pub extern fn kmain()
 {
     /* display boot banner */
-    kprintln!("diosix {} 'menchi' now running", env!("CARGO_PKG_VERSION"));
+    kprintln!("\ndiosix {} 'menchi' now running\n", env!("CARGO_PKG_VERSION"));
 
     /* initialize interrupts so we can catch exceptions at this early stage */
     hardware::interrupts::init().ok().expect("failed during interrupt init");

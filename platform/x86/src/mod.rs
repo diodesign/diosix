@@ -7,12 +7,15 @@
  *
  */
 
+use rlibc::memset;
+
 /* x86-specific routines */
 mod io;
 mod pic;
 mod exceptions;
 mod swis;
 mod multiboot;
+mod pages;
 
 /* can be called from the portable kernel */
 pub mod physmem;

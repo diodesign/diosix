@@ -12,14 +12,24 @@ use core::ptr;
 use spin::Mutex;
 use errors::KernelInternalError;
 
+use ::hardware::pages;
 use ::hardware::multiboot;
 
-const PHYS_PAGE_SIZE: usize = 4096; /* size of one physical page frame */
+extern
+{
+    static kernel_start_addr: usize;
+    static kernel_end_addr: usize;
+}
+
+pub const PHYS_PAGE_SIZE: usize = 4096; /* size of a standard 4K physical page frame */
+pub const PHYS_2M_PAGE_SIZE: usize = 2 * 1024 * 1024; /* size of 2M phys page */
+
+const PAGE_STACK_PHYS_START: usize = 4 * 1024 * 1024; /* start page stack at 4MB mark in physical memory */
 
 /* create a system-wide physical stack with a locking mechanism. */
 pub static PAGESTACK: Mutex<PageStack> = Mutex::new(PageStack
                                                     {
-                                                        base: PAGE_STACK_START,
+                                                        base: PAGE_STACK_PHYS_START,
                                                         ptr: 0,
                                                         max_ptr: 0,
                                                         size: 0,
@@ -99,7 +109,7 @@ impl PageStack
         /* make sure the physical address given is sane - it must
          * be aligned to the nearest 4K, thus the lowest 12 bits
          * must be clear. */
-        if (phys_addr & 0xfff) != 0
+        if phys_addr & (PHYS_PAGE_SIZE - 1) != 0
         {
             return Err(KernelInternalError::BadPhysPgAddress);
         }
@@ -164,7 +174,6 @@ impl PageStack
  * Start stack at first 4MB. Consider a sub-stack per CPU core?
  *
  */
-const PAGE_STACK_START: usize = 4 * 1024 * 1024; /* start page stack at 4MB mark */
 
 /* physical memory map
  *
@@ -190,24 +199,24 @@ const PAGE_STACK_START: usize = 4 * 1024 * 1024; /* start page stack at 4MB mark
  * the upper part of the kernel's virtual address space
  *
  * --- zero ------------------------------------------------------------------
- *  1GB of lower kernel space:
- *  lowest 1GB of physical memory, including kernel + page stack.
- *  note: init() below will mark any areas outside the kernel + page stack.
- * --- 1GB   (0x0000000040000000) --------------------------------------------
+ *  lower kernel space:
+ *  booted with the lowest 1GB of physical memory mapped in here. init()
+ *  below changes that so just the lowest 4MB is mapped in.
+ * --- (0x0000000000400000) --------------------------------------------------
  *  userspace
- * --- 128TB (0x00007fffffffffff) --------------------------------------------
+ * --- (0x00007fffffffffff) --------------------------------------------------
  *  dead space - using it will trigger an exception
- * --------- (0xffff800000000000) --------------------------------------------
- *  128TB of upper kernel space:
- *  all of physical memory mapped from here
- * --- end   (0xffffffffffffffff) --------------------------------------------
+ * --- (0xffff800000000000) --------------------------------------------------
+ *  upper kernel space:
+ *  mirror all of physical memory, starting from zero from here.
+ *  this gives the kernel 128TB of space to play with.
+ * --- (0xffffffffffffffff) --------------------------------------------
  */
 
-extern
-{
-    static kernel_start_addr: usize;
-    static kernel_end_addr: usize;
-}
+/* base of kernel's upper virtual address space area.
+ * seems perverse defining this here. maybe move it later? */
+const KERNEL_VIRTUAL_UPPER_BASE: usize = 0xffff800000000000;
+
 
 /* init
  *
@@ -215,8 +224,9 @@ extern
  * 1. find out how much physical RAM is available.
  * 2. build physical page frame stack, ensuring to protect kernel + page stack.
  * 3. map physical memory into kernel's upper virtual memory area using boot tables.
- * 4. punch out unneeded page table entries in the lower kernel area, leave just kernel + page stack.
- * 5. fix up page table entries for kernel (r-x), bss (rw-) and page stack (rw-).
+ * 4. load the new table structure into the CPU
+ * 5. adjust physical page stack base address so we access it from the upper kernel space
+ * 6. clear out the lower kernel space save for the first 4MB.
  *
  * <= returns error code on failure.
  */
@@ -225,6 +235,10 @@ pub fn init() -> Result<(), KernelInternalError>
     kprintln!("[x86] initializing physical memory");
     kprintln!("... kernel at {:x} to {:x} ({} KB)",
               kernel_start_addr, kernel_end_addr, (kernel_end_addr - kernel_start_addr) >> 10); 
+
+    /* set up a page table structure using the boot page tables. the boot tables will serve as a
+     * template for future page structures. */
+    pages::BOOTPGTABL.lock().use_boot_pml4();
     
     let mut mem_total: usize = 0; /* total physical memory available */
     let mut mem_stacked: usize = 0; /* total we were able to stack - should be the same as mem_total */
@@ -258,8 +272,9 @@ pub fn init() -> Result<(), KernelInternalError>
                         else
                         {
                             /* second pass: add the pages to the stack + map into the kernel */
-                            kprintln!("... RAM region found at 0x{:x}, size {} KB", region.base_addr, region.length >> 10);
+                            kprintln!("... ... RAM region found at 0x{:x}, size {} KB", region.base_addr, region.length >> 10);
                             mem_stacked = mem_stacked + add_phys_region(region.base_addr as usize, region.length as usize).ok().unwrap_or(0);
+                            try!(map_phys_region(region.base_addr as usize, region.length as usize));
                         }
                     },
                     _ => {}
@@ -285,8 +300,7 @@ pub fn init() -> Result<(), KernelInternalError>
 /* add_phys_region
  *
  * Break up a region of physical RAM into 4K pages and add each frame
- * to the physical page stack. Also map the pages into the kernel's
- * upper virtual memory area, using the boot tables, in 2MB blocks.
+ * to the physical page stack.
  * => base = lowest physical address of region
  *    size = number of bytes in the region
  * <= number of bytes stacked, or an error code on failure.
@@ -299,7 +313,7 @@ fn add_phys_region(base: usize, size: usize) -> Result<usize, KernelInternalErro
     for page_nr in 0..total_pages
     {
         let page_base = base + (page_nr * PHYS_PAGE_SIZE);
-        
+
         /* check this physical page isn't already in use by
          * the physical memory holding the kernel text, rodata
          * and bss sections, and not the page stack.
@@ -322,5 +336,33 @@ fn add_phys_region(base: usize, size: usize) -> Result<usize, KernelInternalErro
     }
 
     Ok(stacked)
+}
+
+/* map_phys_region
+ *
+ * Map a region of physical memory into the kernel's upper virtual space
+ * using the boot page tables and 2MB pages. the pages must be kernel only,
+ * read/write and non executable. base will be aligned down to a 2M boundary
+ * if it is not already aligned. this calls 
+ * => base = lowest physical address of region
+ *    size = number of bytes in the region
+ * <= returns error code on failure.
+ */
+fn map_phys_region(base: usize, size: usize) -> Result<(), KernelInternalError>
+{
+    let align_diff = base % PHYS_2M_PAGE_SIZE;
+    let base = base - align_diff; /* bring base down to a 2M page boundary */
+
+    let total_pages = size / PHYS_2M_PAGE_SIZE;
+    let flags = pages::PG_WRITEABLE;
+
+    for page_nr in 0..total_pages
+    {
+        let addr = base + (page_nr * PHYS_2M_PAGE_SIZE);
+        try!(pages::BOOTPGTABL.lock().map_2m_page(addr + KERNEL_VIRTUAL_UPPER_BASE,
+                                                  addr, flags));
+    }
+
+    Ok(())
 }
 
