@@ -19,7 +19,7 @@ SECTIONS {
       __kernel_ro_start = ALIGN(0x1000);
       KEEP(*(.multiboot_head)) /* keep our multiboot header at the start */
       
-      *(.text)
+      *(.text*)
       *(.rodata*)
       __kernel_ro_end = ALIGN(0x1000);
     }

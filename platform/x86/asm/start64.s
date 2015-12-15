@@ -111,7 +111,7 @@ tidy_boot_pg_tables:
   shr rax, 12
   and rax, 0x3ff		; turn start address into table index
   mov rbx, __kernel_ro_end
-  shr rax, 12
+  shr rbx, 12
   and rbx, 0x3ff		; turn end address into table index
 
   mov rcx, __kernel_ro_start	; this should be page aligned
@@ -128,7 +128,7 @@ tidy_boot_pg_tables:
   shr rax, 12
   and rax, 0x3ff		; turn start address into table index
   mov rbx, __kernel_rw_end
-  shr rax, 12
+  shr rbx, 12
   and rbx, 0x3ff		; turn end address into table index
 
   mov rcx, __kernel_rw_start	; this should be page aligned

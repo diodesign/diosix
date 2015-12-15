@@ -395,7 +395,7 @@ boot_pt1_table:
   resb 4096	; reserve 4KB for a page table aka level 1 page table
 
 boot_stack_bottom:
-  resb 4096
+  resb 2 * 4096	; reserve 2 x 4KB pages for the stack
 boot_stack_top:
 
 ; stash a pointer to the boot PML4 table
