@@ -14,6 +14,9 @@ global kernel_start_addr, kernel_end_addr
 global boot_pml4_ptr
 global boot_pd_table, boot_pt0_table, boot_pt1_table
 
+; needed to check for stack overflow
+global boot_stack_bottom
+
 global multiboot_phys_addr ; phys address of multiboot structure
 
 extern start64
@@ -395,7 +398,7 @@ boot_pt1_table:
   resb 4096	; reserve 4KB for a page table aka level 1 page table
 
 boot_stack_bottom:
-  resb 2 * 4096	; reserve 2 x 4KB pages for the stack
+  resb 2 * 4096	; reserve 2 x 4KB pages for the kernel stack
 boot_stack_top:
 
 ; stash a pointer to the boot PML4 table

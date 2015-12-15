@@ -22,6 +22,9 @@ extern boot_pd_table
 extern boot_pt0_table
 extern boot_pt1_table
 
+; needed to check for stack overflow
+extern boot_stack_bottom
+
 section .text
 bits 64
 
@@ -55,6 +58,7 @@ start64:
   mov qword [rbx], rax
 
 ; nowhere else to go
+halt:
   cli
   hlt
   jmp $
@@ -68,6 +72,12 @@ kernel_virtual_base:
 ; nx bit - bit 63
 nx_bit:
   dq 1 << 63
+
+; stack overflow detected - write Stck in red to screen and halt
+halt_stack_overflow:
+  mov rax, 0x0c6b0c630c740c53
+  mov qword [0xb8000 + (3 * 160)], rax
+  jmp halt
 
 ; -------------------------------------------------------------------
 
@@ -84,6 +94,19 @@ tidy_boot_pg_tables:
   push rbx
   push rcx
   push rdx
+
+; the page tables sit right below the boot stack. if the stack
+; grows too far, we'll crash over the page tables. this happens
+; with a 4K stack. 8K appears to give the kernel enough space.
+; bail out early if there's a sign that the stack has gone
+; past boot_stack_bottom
+  mov rax, boot_stack_bottom
+  sub rax, 8		; check 64-bit word below the stack
+  cmp qword [rax], 0	; should be zero
+  jne halt_stack_overflow
+  sub rax, 8		; check next word
+  cmp qword [rax], 0	; should also be zero
+  jne halt_stack_overflow
 
 ; clear the 4M-1GB entries in the page directory. that's entry 2 to
 ; 511. we don't need them any more - the kernel's mapped all physical
