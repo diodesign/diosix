@@ -100,6 +100,9 @@ tidy_boot_pg_tables:
 ; with a 4K stack. 8K appears to give the kernel enough space.
 ; bail out early if there's a sign that the stack has gone
 ; past boot_stack_bottom
+;
+; TODO: use a guard page instead
+;
   mov rax, boot_stack_bottom
   sub rax, 8		; check 64-bit word below the stack
   cmp qword [rax], 0	; should be zero
