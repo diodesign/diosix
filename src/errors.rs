@@ -16,6 +16,9 @@ pub enum KernelInternalError
     BadTag, /* can't find tagged-data from bootloader */
     BadVirtPgAddress, /* bad virtual page addres (not aligned to page boundary) */
 
+    HeapBadAllocReq, /* can't allocate requested block (probably too big) */
+    HeapCorruption, /* heap is in an inconsistent state (fix it up?) */
+
     NoPhysPgAvailable, /* no physical page addresses available */
 
     Pg4KTablePresent, /* a 4KB page table is present (colliding with 2M page map request) */

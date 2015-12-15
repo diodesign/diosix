@@ -48,11 +48,15 @@ pub extern fn kmain()
     /* initialize physical memory */
     hardware::physmem::init().ok().expect("failed during physical mem init");
     
-    /* initialize the kernel's private dynamic memory allocator */
-    heap::init().ok().expect("failed during heap mem init");
-
-    let ptr = kalloc!(20).ok().expect("failed in alloc");
-    kalloc_debug!();
+    let mut size = 0;
+    loop
+    {
+        size = (size % 100) + 20;
+        let ptr = kalloc!(size).ok().expect("failed in alloc");
+        kprintln!("--> requested {} bytes, got {:p}", size, ptr);
+        kalloc_debug!();
+        kprintln!("");
+    }
 }
 
 /* handle panics by writing to the debug log and bailing out */
