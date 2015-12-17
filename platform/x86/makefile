@@ -48,7 +48,7 @@ run-headless: $(iso)
 	@timeout --preserve-status --foreground 10s qemu-system-x86_64 -nographic -cdrom $(iso) -no-reboot
 
 gdb: $(iso)
-	@qemu-system-x86_64 -nographic -s -cdrom $(iso) -no-reboot
+	@qemu-system-x86_64 -nographic -s -S -cdrom $(iso) -no-reboot
 
 iso: $(iso)
 

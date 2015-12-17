@@ -91,9 +91,9 @@ macro_rules! kalloc
     ($size:expr) => ($crate::heap::KERNEL.lock().alloc($size))
 }
 
-macro_rules! kalloc_debug
+macro_rules! kfree
 {
-    () => ($crate::heap::KERNEL.lock().debug_stats())
+    ($addr:expr) => ($crate::heap::KERNEL.lock().free($addr))
 }
 
 impl Heap
@@ -112,7 +112,7 @@ impl Heap
          * which gives us a count of usable blocks in the memory area. */
         let block_count = self.add_raw_mem_to_free(free_block, ::hardware::physmem::SMALL_PAGE_SIZE);
         self.free_pool_blocks = self.free_pool_blocks + block_count;
-
+        
         Ok(())
     }
 
@@ -154,7 +154,7 @@ impl Heap
                     /* sanity check */
                     if (*found).magic != BLOCK_MAGIC_FREE
                     {
-                        kprintln!("[mem] BUG! Non-free heap block {:p} in free pool", found);
+                        kprintln!("[mem] BUG! Non-free heap block {:p} in free pool (magic = {:x})", found, (*found).magic);
                         return Err(KernelInternalError::HeapCorruption);
                     }
 
@@ -178,17 +178,6 @@ impl Heap
         /* if we're still drawing dead, then bail out - the request is probably too big */
         if found == BLOCK_NULL_PTR { return Err(KernelInternalError::HeapBadAllocReq); }
 
-        /* we may have to split a group of blocks: snap off the unneeded part of the 
-         * group and put it back into the free pool with a new header. the current
-         * header is going to be repurposed for the allocated block(s). */
-        if found_blocks > blocks_req
-        {
-            let split_addr = (found as usize) + HEADER_SIZE + (blocks_req * BLOCK_SIZE);
-            self.free_pool_blocks = self.free_pool_blocks - found_blocks;
-            let added_blocks = self.add_raw_mem_to_free(split_addr, (found_blocks - blocks_req) * BLOCK_SIZE);
-            self.free_pool_blocks = self.free_pool_blocks + added_blocks;
-        }
-
         /* detach the found group of block(s) from the free list */
         unsafe
         {
@@ -210,7 +199,7 @@ impl Heap
             let mut next = (*found).next;
             if next != BLOCK_NULL_PTR
             {
-                (*next).previous = (*found).previous;
+                (*next).previous = previous;
                 (*found).next = BLOCK_NULL_PTR;
             }
 
@@ -219,6 +208,17 @@ impl Heap
             (*found).blocks = blocks_req;
         }
 
+        /* we may have to split a group of blocks: snap off the unneeded part of the 
+         * group and put it back into the free pool with a new header. the current
+         * header has been repurposed for the allocated block(s). */
+        if found_blocks > blocks_req
+        {
+            let split_addr = (found as usize) + HEADER_SIZE + (blocks_req * BLOCK_SIZE);
+            self.free_pool_blocks = self.free_pool_blocks - found_blocks;
+            let added_blocks = self.add_raw_mem_to_free(split_addr, (found_blocks - blocks_req) * BLOCK_SIZE);
+            self.free_pool_blocks = self.free_pool_blocks + added_blocks;
+        }
+        
         /* the easy part: update the accounting */
         self.blocks_in_use = self.blocks_in_use + blocks_req;
         self.allocations_in_use = self.allocations_in_use + 1;
@@ -226,7 +226,55 @@ impl Heap
         self.total_bytes_requested = self.total_bytes_requested + size;
 
         /* skip over the header when handing back a pointer */
+        self.debug_stats(DebugOutput::Silent, DebugCheckPoint::Alloc);
         Ok(((found as usize) + HEADER_SIZE) as *mut _)
+    }
+
+    pub fn free(&mut self, addr: *mut u8) -> Result<(), KernelInternalError>
+    {
+        /* sanity checks */
+        if addr == 0 as *mut _ { return Err(KernelInternalError::HeapBadFreeReq); }
+
+        let header: *mut HeapAllocation = ((addr as usize) - HEADER_SIZE) as *mut _;
+        let mut block_count = 0;
+
+        unsafe
+        {
+            if (*header).magic != BLOCK_MAGIC_IN_USE
+            {
+                kprintln!("[mem] BUG! free() called with bad pointer {:p}", addr);
+                return Err(KernelInternalError::HeapBadFreeReq);
+            
+            }
+
+            block_count = (*header).blocks;
+            
+            /* decouple it from the list */
+            if (*header).next != BLOCK_NULL_PTR
+            {
+                let mut next = (*header).next;
+                (*next).previous = (*header).previous;
+            }
+            
+            if (*header).previous != BLOCK_NULL_PTR
+            {
+                let mut previous = (*header).previous;
+                (*previous).next = (*header).next;
+            }
+
+        }
+
+        /* then just treat it as a block of raw memory that needs freeing */
+        let size = (block_count * BLOCK_SIZE) + HEADER_SIZE;
+        let blocks_freed = self.add_raw_mem_to_free(header as usize, size);
+
+        /* update accounting */
+        self.blocks_in_use = self.blocks_in_use - block_count;
+        self.allocations_in_use = self.allocations_in_use - 1;
+        self.free_pool_blocks = self.free_pool_blocks + blocks_freed;
+
+        self.debug_stats(DebugOutput::Silent, DebugCheckPoint::Free);
+        Ok(())
     }
 
     /* add_raw_mem_to_free
@@ -255,63 +303,119 @@ impl Heap
             (*new).blocks = usable_blocks;
             (*new).magic = BLOCK_MAGIC_FREE;
 
-            /* attach to head of the free list */
-            self.free = new;
-
             /* make old head of the list point back to this new block */
-            if (*new).next != BLOCK_NULL_PTR
+            if self.free != BLOCK_NULL_PTR
             {
-                let mut old_head = (*new).next;
+                let mut old_head = self.free;
                 (*old_head).previous = new;
             }
+            
+            /* attach to head of the free list */
+            self.free = new;
         }
 
+        self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
         return usable_blocks;
     }
 
-    pub fn debug_stats(&self)
+
+    pub fn debug_stats(&self, output: DebugOutput, checkpoint: DebugCheckPoint)
     {
-        if self.total_alloc_requests == 0
+        if output == DebugOutput::Verbose
         {
-            kprintln!("[mem] kernel heap statistics: nothing to report");
-            return;
+            if self.total_alloc_requests == 0
+            {
+                kprintln!("[mem] kernel heap statistics: nothing to report");
+                return;
+            }
+
+            let checkpoint_text = match checkpoint
+            {
+                DebugCheckPoint::Alloc     => "alloc()",
+                DebugCheckPoint::Free      => "free()",
+                DebugCheckPoint::AddRawMem => "add_raw_mem_to_free()",
+                DebugCheckPoint::Request   => "by kernel request",
+            };
+
+            kprintln!("------- debug checkpoint triggered in heap.rs {} -------------", checkpoint_text);
+            kprintln!("[mem] kernel heap statistics:");
+            
+            kprintln!("... {} bytes in {} allocations, {} blocks in use, plus {} bytes overhead",
+                      self.blocks_in_use * BLOCK_SIZE, self.allocations_in_use, self.blocks_in_use,
+                      HEADER_SIZE * self.allocations_in_use);
+            
+            kprintln!("... {} bytes in free pool in {} blocks",
+                      self.free_pool_blocks * BLOCK_SIZE, self.free_pool_blocks);
+           
+            kprintln!("... {} allocation requests in total, {} bytes requested, average request size is {} bytes",
+                      self.total_alloc_requests, self.total_bytes_requested,
+                      self.total_bytes_requested / self.total_alloc_requests);
         }
 
-        kprintln!("[mem] kernel heap statistics:");
-        
-        kprintln!("... {} bytes in {} allocations, {} blocks in use, plus {} bytes overhead",
-                  self.blocks_in_use * BLOCK_SIZE, self.allocations_in_use, self.blocks_in_use,
-                  HEADER_SIZE * self.allocations_in_use);
-        
-        kprintln!("... {} bytes in free pool in {} blocks",
-                  self.free_pool_blocks * BLOCK_SIZE, self.free_pool_blocks);
-       
-        kprintln!("... {} allocation rquests, {} bytes requested, average request size is {} bytes",
-                  self.total_alloc_requests, self.total_bytes_requested,
-                  self.total_bytes_requested / self.total_alloc_requests);
-
         /* walk the free list */
-        kprintln!("[mem] kernel heap free pool:");
+        if output == DebugOutput::Verbose
+        {
+            kprintln!("[mem] kernel heap free pool:");
+        }
         let mut block = self.free;
         loop
         {
             if block == BLOCK_NULL_PTR { break; }
             unsafe
             {
-                kprint!("... {} blocks [{:x} <--- {:x} --> {:x}] ",
-                          (*block).blocks, (*block).previous as usize, block as usize, (*block).next as usize);
+                if output == DebugOutput::Verbose
+                {
+                    kprint!("... {} blocks [{:x} <--- {:x} --> {:x}] ",
+                              (*block).blocks, (*block).previous as usize, block as usize, (*block).next as usize);
+                }
+
                 if (*block).magic == BLOCK_MAGIC_FREE
                 {
-                    kprintln!("[good magic]");
+                    if output == DebugOutput::Verbose
+                    {
+                        kprintln!("[good magic]");
+                    }
                 }
                 else
                 {
-                    kprintln!("[BAD MAGIC]");
+                    if output == DebugOutput::Verbose
+                    {
+                        kprintln!("[BAD MAGIC]");
+                    }
+                    else
+                    {
+                        self.debug_stats(DebugOutput::Verbose, checkpoint);
+                        panic!("block magic is bad");
+                    }
                 }
 
+                if (*block).previous == BLOCK_NULL_PTR && block != self.free
+                {
+                    if output == DebugOutput::Silent   
+                    {
+                        self.debug_stats(DebugOutput::Verbose, checkpoint);
+                        panic!("block group previous pointer is NULL but is not free list head");
+                    }
+                }
+                
                 block = (*block).next;
             }
         }
     }
+}
+
+pub enum DebugCheckPoint
+{
+    AddRawMem,
+    Free,
+    Alloc,
+    Request,
+}
+
+#[derive(PartialEq)]
+pub enum DebugOutput
+{
+    Silent,
+    Verbose
 }
 
