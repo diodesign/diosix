@@ -61,7 +61,7 @@ make run
 If I haven't broken the kernel, the emulator will start up in your ncurses-friendly terminal, and boot the tiny operating system.
 QEMU will be automatically killed after a timeout period, typically 10 seconds. This is because the kernel cannot, right now, power off the 
 system; an ACPI driver to handle power management will eventually be written, and until then we have to kill QEMU manually. If you want to see
-the kernel's detailed debugging output via the serial port, boot QEMU headless and the serial port will be logged to the terminal.
+the kernel's detailed debugging output via the serial port, boot QEMU headless, and the serial port will be logged to the terminal.
 
 ```
 make run-headless
@@ -75,9 +75,13 @@ Here's a very early build of diosix booting on x86.
 
 ![Screenshot of QEMU running diosix](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-1.png)
 
+And here's the kernel's debugging output after its physical and virtual memory allocator was implemented – this output can be seen by running `make run-headless`.
+
+![Screenshot of QEMU running diosix](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-mem-1.png)
+
 ### Contact
 
-Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have any questions or want to get involved.
+Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have any questions, want to get involved, have source to contribute, or found a security flaw.
 You can also find me, diodesign, on [Freenode IRC](https://freenode.net/irc_servers.shtml) in the #osdev channel, or [on Twitter](https://twitter.com/diodesign).
 
 ### Copyright, license, and thanks
