@@ -48,7 +48,7 @@ pub extern fn kmain()
     /* initialize physical memory */
     hardware::physmem::init().ok().expect("failed during physical mem init");
     
-    kprint!("\nSoak testing dynamic memory manager... ");
+    kprintln!("\nSoak testing dynamic memory manager... ");
     for outer in 0..1024
     {   
         for inner in 1..4
@@ -58,8 +58,7 @@ pub extern fn kmain()
             kfree!(ptr).ok().expect("failed in dealloc");
         }
     }
-    kprintln!("done");
-    heap::KERNEL.lock().debug_stats(heap::DebugOutput::Verbose, heap::DebugCheckPoint::Request);
+    kprintln!("...done");
 }
 
 /* handle panics by writing to the debug log and bailing out */

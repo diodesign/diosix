@@ -18,7 +18,6 @@ pub enum KernelInternalError
 
     HeapBadAllocReq, /* can't allocate requested memory (probably too big) */
     HeapBadFreeReq, /* can't deallocate memory (probably passed a bad pointer) */
-    HeapCorruption, /* heap is in an inconsistent state (fix it up?) */
 
     NoPhysPgAvailable, /* no physical page addresses available */
 

@@ -54,6 +54,7 @@ pub static KERNEL: Mutex<Heap> = Mutex::new(Heap
                                         blocks_in_use:         0,
                                         allocations_in_use:    0,
                                         free_pool_blocks:      0,
+                                        total_mergers:         0,
                                         total_bytes_requested: 0,
                                         total_alloc_requests:  0,
                                     });
@@ -70,8 +71,9 @@ pub struct Heap
 
     /* diagnostic stats so we can calculate the
      * average size of the kernel's allocs. */
+    total_mergers: usize, /* running total of block merging attempts */
     total_bytes_requested: usize, /* running total of bytes allocated */
-    total_alloc_requests: usize, /* running total of allocatio requests */
+    total_alloc_requests: usize, /* running total of allocation requests */
 }
 
 /* change HEADER_SIZE if you change this structure */
@@ -116,6 +118,34 @@ impl Heap
         Ok(())
     }
 
+    /* find_first_fit_free
+     *
+     * Find the first group of block(s) in the free pool that can fulfill
+     * the given allocation size.
+     * => blocks_req = minimum number of blocks needed
+     * <= pointer to free group or None
+     */
+    fn find_first_fit_free(&self, blocks_req: usize) -> Option<*mut HeapAllocation>
+    {
+        let mut search = self.free;
+
+        /* inspect the free list for a suitable block or group of blocks */
+        loop
+        {
+            /* give up when we hit a null pointer */
+            if search == BLOCK_NULL_PTR { return None; }
+        
+            unsafe
+            {
+                /* is this allocation of free block(s) big enough for the request? */
+                if (*search).blocks >= blocks_req { return Some(search); }
+
+                /* try the next block if the group of free block(s) wasn't big enough */
+                search = (*search).next;
+            }
+        }
+    }
+
     /* alloc
      *
      * Allocate some memory for the kernel. This code is written defensively,
@@ -135,48 +165,28 @@ impl Heap
             blocks_req = blocks_req + 1; /* round up to nearest whole block */
         }
 
-        /* start search for suitable group of free block(s) to fulfill request */
-        let mut found = self.free; /* search forward through the free list */
-        let mut found_blocks = 0; /* size of found block */
-
-        /* make two passes: first time looking at the free pool, and
-         * second time after priming the pool with new blocks */
-        for attempts in 0..2
+        /* start search for suitable group of free block(s) to fulfill request.
+         * try to find a first fit, then merge adjacent blocks to create larger
+         * blocks and try to find a fit, and finally, fill up the free pool
+         * with blocks, and try again */
+        let mut found = match self.find_first_fit_free(blocks_req)
         {
-            /* inspect the free list for a suitable block or group of blocks */
-            loop
+            Some(ptr) => ptr,
+            None => match self.merge_adjacent_free(blocks_req)
             {
-                /* give up when we hit a null pointer */
-                if found == BLOCK_NULL_PTR { break; }
-            
-                unsafe
+                Some(ptr) => ptr,
+                None =>
                 {
-                    /* sanity check */
-                    if (*found).magic != BLOCK_MAGIC_FREE
-                    {
-                        kprintln!("[mem] BUG! Non-free heap block {:p} in free pool (magic = {:x})", found, (*found).magic);
-                        return Err(KernelInternalError::HeapCorruption);
-                    }
-
-                    /* is this allocation of free block(s) big enough for the request? */
-                    found_blocks = (*found).blocks;
-                    if found_blocks >= blocks_req { break; }
-
-                    /* try the next block if the group of free block(s) wasn't big enough */
-                    found = (*found).next;
+                    try!(self.top_up_free_pool());
+                    self.find_first_fit_free(blocks_req).unwrap_or(BLOCK_NULL_PTR)
                 }
             }
+        };
 
-            /* end the search if we've found a suitable group of block(s) */
-            if found != BLOCK_NULL_PTR { break; }
-
-            /* if we're still here, reflll the pool and try again */
-            try!(self.top_up_free_pool());
-            found = self.free;
-        }
-
-        /* if we're still drawing dead, then bail out - the request is probably too big */
+        /* if we're still drawing dead, then bail out - but we really shouldn't fail here */
         if found == BLOCK_NULL_PTR { return Err(KernelInternalError::HeapBadAllocReq); }
+
+        let found_blocks = unsafe{ (*found).blocks };
 
         /* detach the found group of block(s) from the free list */
         unsafe
@@ -277,6 +287,70 @@ impl Heap
         Ok(())
     }
 
+    /* merge_adjacent_free
+     *
+     * Attempt to merge adjacent free blocks together so larger
+     * allocations can be fulfilled without having to refill the
+     * free pool. Also points out merged block groups that could
+     * fulfill a given request.
+     * => blocks_req = number of adjacent blocks needed right now
+     * <= pointer to group of block(s) that could fulfill request (post merge)
+     *    or None if not
+     */
+    fn merge_adjacent_free(&mut self, blocks_req: usize) -> Option<*mut HeapAllocation>
+    {
+        let mut largest_block_count = blocks_req;
+        let mut largest_block = None;
+
+        let mut merger = self.free;
+        loop
+        {
+            if merger == BLOCK_NULL_PTR { return largest_block; }
+
+            unsafe
+            {
+                let prey = (*merger).next;
+                if prey == BLOCK_NULL_PTR { break; }
+                
+                /* do some filthy math to see if the groups are next to each other */
+                if merger as usize + HEADER_SIZE + ((*prey).blocks * BLOCK_SIZE) == prey as usize
+                {
+                    kprintln!("merge_adjacent_free: merging {:p} ({} blocks) with {:p} ({} blocks)",
+                              merger, (*merger).blocks, prey, (*prey).blocks);
+
+                    /* we have a winner! merge the two */
+                    (*merger).blocks = (*prey).blocks + (HEADER_SIZE / BLOCK_SIZE);
+                    (*merger).next = (*prey).next;
+                    
+                    /* make sure the next block group after the prey points back to the merger */
+                    if (*merger).next != BLOCK_NULL_PTR
+                    {
+                        let mut next_prey = (*merger).next;
+                        (*next_prey).previous = merger;
+                    }
+
+                    if (*merger).blocks >= largest_block_count
+                    {
+                        largest_block_count = (*merger).blocks;
+                        largest_block = Some(merger);
+                    }
+
+                    /* keep a track of how much this merging process is used */
+                    self.total_mergers = self.total_mergers + 1;
+                }
+                else
+                {
+                    /* if block groups aren't adjacent, move onto the next one */
+                    merger = (*merger).next;
+                }
+
+            }
+        }
+
+        self.debug_stats(DebugOutput::Silent, DebugCheckPoint::MergeAdjacent);
+        largest_block
+    }
+
     /* add_raw_mem_to_free
      *
      * Add a headerless-block (or group of them) to the free pool.
@@ -289,7 +363,7 @@ impl Heap
      */
     fn add_raw_mem_to_free(&mut self, ptr: usize, size: usize) -> usize
     {
-        let mut new = ptr as *mut HeapAllocation;
+        let new = ptr as *mut HeapAllocation;
         let usable_blocks = (size - HEADER_SIZE) / BLOCK_SIZE;
 
         /* don't put an empty space into the free pool */
@@ -297,21 +371,72 @@ impl Heap
 
         unsafe
         {
-            /* add a header */
-            (*new).next = self.free;
-            (*new).previous = BLOCK_NULL_PTR;
-            (*new).blocks = usable_blocks;
+            /* do some common setup */
             (*new).magic = BLOCK_MAGIC_FREE;
+            (*new).blocks = usable_blocks;
 
-            /* make old head of the list point back to this new block */
-            if self.free != BLOCK_NULL_PTR
+            /* is the list is empty? if so, just whack in this new block */
+            if self.free == BLOCK_NULL_PTR
             {
-                let mut old_head = self.free;
-                (*old_head).previous = new;
+                (*new).next = BLOCK_NULL_PTR;
+                (*new).previous = BLOCK_NULL_PTR;
+                self.free = new;
+
+                self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
+                return usable_blocks;
             }
             
-            /* attach to head of the free list */
-            self.free = new;
+            /* keep the free list in order of memory address, low to high,
+             * to aid the process of merging adjacent blocks. */
+
+            /* is the raw memory below the head of the free list?
+             * if so, add the new free block to the head of the list. */
+            if ptr < self.free as usize
+            {
+                (*(self.free)).previous = new;
+                (*new).next = self.free;
+                (*new).previous = BLOCK_NULL_PTR;
+                self.free = new;
+
+                self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
+                return usable_blocks;
+            }
+
+            /* scan the list until we can find a spot to slot inside */
+            let mut search = self.free;
+            loop
+            {
+                /* search can't be a NULL pointer by this point and new must be 
+                 * greater than search. */
+                if (*search).next == BLOCK_NULL_PTR
+                {
+                    /* we've hit the end of the list */
+                    (*new).previous = search;
+                    (*new).next = BLOCK_NULL_PTR;
+                    (*search).next = new;
+
+                    self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
+                    return usable_blocks;
+                }
+
+                /* stop here if new block is lower in memory than the next in the list */
+                if ptr < (*search).next as usize
+                {
+                    /* insert new in between search and search.next */
+                    (*new).previous = search;
+                    (*new).next = (*search).next;
+
+                    let next = (*search).next;
+                    (*next).previous = new;
+                    (*search).next = new;
+
+                    self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
+                    return usable_blocks;
+                }
+
+                /* try next group of block(s) in the free list */
+                search = (*search).next;
+            }
         }
 
         self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
@@ -335,6 +460,7 @@ impl Heap
                 DebugCheckPoint::Free      => "free()",
                 DebugCheckPoint::AddRawMem => "add_raw_mem_to_free()",
                 DebugCheckPoint::Request   => "by kernel request",
+                DebugCheckPoint::MergeAdjacent => "merge_adjacent_free()",
             };
 
             kprintln!("------- debug checkpoint triggered in heap.rs {} -------------", checkpoint_text);
@@ -344,8 +470,8 @@ impl Heap
                       self.blocks_in_use * BLOCK_SIZE, self.allocations_in_use, self.blocks_in_use,
                       HEADER_SIZE * self.allocations_in_use);
             
-            kprintln!("... {} bytes in free pool in {} blocks",
-                      self.free_pool_blocks * BLOCK_SIZE, self.free_pool_blocks);
+            kprintln!("... {} bytes in free pool in {} blocks after {} mergers",
+                      self.free_pool_blocks * BLOCK_SIZE, self.free_pool_blocks, self.total_mergers);
            
             kprintln!("... {} allocation requests in total, {} bytes requested, average request size is {} bytes",
                       self.total_alloc_requests, self.total_bytes_requested,
@@ -409,6 +535,7 @@ pub enum DebugCheckPoint
     AddRawMem,
     Free,
     Alloc,
+    MergeAdjacent,
     Request,
 }
 
