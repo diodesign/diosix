@@ -53,7 +53,6 @@ pub static KERNEL: Mutex<Heap> = Mutex::new(Heap
                                         free:                  BLOCK_NULL_PTR,
                                         blocks_in_use:         0,
                                         allocations_in_use:    0,
-                                        free_pool_blocks:      0,
                                         total_mergers:         0,
                                         total_bytes_requested: 0,
                                         total_alloc_requests:  0,
@@ -66,7 +65,6 @@ pub struct Heap
 
     /* usage stats - not including allocations' headers */
     blocks_in_use: usize, /* blocks in use right now */
-    free_pool_blocks: usize, /* blocks sitting in the free pool */
     allocations_in_use: usize, /* number of allocations */
 
     /* diagnostic stats so we can calculate the
@@ -112,8 +110,7 @@ impl Heap
        
         /* the page is headerless, so add it using add_raw_mem_to_free(),
          * which gives us a count of usable blocks in the memory area. */
-        let block_count = self.add_raw_mem_to_free(free_block, ::hardware::physmem::SMALL_PAGE_SIZE);
-        self.free_pool_blocks = self.free_pool_blocks + block_count;
+        self.add_raw_mem_to_free(free_block, ::hardware::physmem::SMALL_PAGE_SIZE);
         
         Ok(())
     }
@@ -224,9 +221,7 @@ impl Heap
         if found_blocks > blocks_req
         {
             let split_addr = (found as usize) + HEADER_SIZE + (blocks_req * BLOCK_SIZE);
-            self.free_pool_blocks = self.free_pool_blocks - found_blocks;
-            let added_blocks = self.add_raw_mem_to_free(split_addr, (found_blocks - blocks_req) * BLOCK_SIZE);
-            self.free_pool_blocks = self.free_pool_blocks + added_blocks;
+            self.add_raw_mem_to_free(split_addr, (found_blocks - blocks_req) * BLOCK_SIZE);
         }
         
         /* the easy part: update the accounting */
@@ -253,8 +248,7 @@ impl Heap
             if (*header).magic != BLOCK_MAGIC_IN_USE
             {
                 kprintln!("[mem] BUG! free() called with bad pointer {:p}", addr);
-                return Err(KernelInternalError::HeapBadFreeReq);
-            
+                return Err(KernelInternalError::HeapBadFreeReq);    
             }
 
             block_count = (*header).blocks;
@@ -276,12 +270,11 @@ impl Heap
 
         /* then just treat it as a block of raw memory that needs freeing */
         let size = (block_count * BLOCK_SIZE) + HEADER_SIZE;
-        let blocks_freed = self.add_raw_mem_to_free(header as usize, size);
+        self.add_raw_mem_to_free(header as usize, size);
 
         /* update accounting */
         self.blocks_in_use = self.blocks_in_use - block_count;
         self.allocations_in_use = self.allocations_in_use - 1;
-        self.free_pool_blocks = self.free_pool_blocks + blocks_freed;
 
         self.debug_stats(DebugOutput::Silent, DebugCheckPoint::Free);
         Ok(())
@@ -359,15 +352,14 @@ impl Heap
      * to the caller to update the heap's accounting.
      * => ptr = address of start of block(s)
      *    size = number of bytes in group
-     * <= number of usable blocks in size
      */
-    fn add_raw_mem_to_free(&mut self, ptr: usize, size: usize) -> usize
+    fn add_raw_mem_to_free(&mut self, ptr: usize, size: usize)
     {
         let new = ptr as *mut HeapAllocation;
         let usable_blocks = (size - HEADER_SIZE) / BLOCK_SIZE;
 
         /* don't put an empty space into the free pool */
-        if size == 0 { return 0; }
+        if size == 0 { return; }
 
         unsafe
         {
@@ -383,7 +375,7 @@ impl Heap
                 self.free = new;
 
                 self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
-                return usable_blocks;
+                return;
             }
             
             /* keep the free list in order of memory address, low to high,
@@ -399,7 +391,7 @@ impl Heap
                 self.free = new;
 
                 self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
-                return usable_blocks;
+                return;
             }
 
             /* scan the list until we can find a spot to slot inside */
@@ -416,7 +408,7 @@ impl Heap
                     (*search).next = new;
 
                     self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
-                    return usable_blocks;
+                    return;
                 }
 
                 /* stop here if new block is lower in memory than the next in the list */
@@ -431,7 +423,7 @@ impl Heap
                     (*search).next = new;
 
                     self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
-                    return usable_blocks;
+                    return;
                 }
 
                 /* try next group of block(s) in the free list */
@@ -440,7 +432,6 @@ impl Heap
         }
 
         self.debug_stats(DebugOutput::Silent, DebugCheckPoint::AddRawMem);
-        return usable_blocks;
     }
 
 
@@ -470,8 +461,20 @@ impl Heap
                       self.blocks_in_use * BLOCK_SIZE, self.allocations_in_use, self.blocks_in_use,
                       HEADER_SIZE * self.allocations_in_use);
             
+            /* count up free blocks */
+            let mut free_pool_blocks = 0;
+            let mut count = self.free;
+            unsafe
+            {
+                loop
+                {
+                    if count == BLOCK_NULL_PTR { break; }
+                    free_pool_blocks = free_pool_blocks + (*count).blocks;
+                    count = (*count).next;
+                }
+            }
             kprintln!("... {} bytes in free pool in {} blocks after {} mergers",
-                      self.free_pool_blocks * BLOCK_SIZE, self.free_pool_blocks, self.total_mergers);
+                      free_pool_blocks * BLOCK_SIZE, free_pool_blocks, self.total_mergers);
            
             kprintln!("... {} allocation requests in total, {} bytes requested, average request size is {} bytes",
                       self.total_alloc_requests, self.total_bytes_requested,

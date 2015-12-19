@@ -59,6 +59,7 @@ pub extern fn kmain()
         }
     }
     kprintln!("...done");
+    heap::KERNEL.lock().debug_stats(heap::DebugOutput::Verbose, heap::DebugCheckPoint::Request);
 }
 
 /* handle panics by writing to the debug log and bailing out */
