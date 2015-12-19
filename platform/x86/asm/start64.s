@@ -39,6 +39,18 @@ start64:
   mov rax, 0x0a650a6e0a6f0a44
   mov qword [0xb8000 + (3 * 160)], rax
 
+; sense if we've got hardware virtualization in the CPU
+  mov eax, 1
+  cpuid
+  bt ecx, 5
+  jnc no_vmx
+
+; virtualization hardware support detected - make a note on-screen
+  mov rax, 0x0e740e720e690e56
+  mov qword [0xb8000 + (4 * 160)], rax
+
+no_vmx:
+
 ; enable the COM1 serial port for kernel debugging.
 ; it's easier to capture and analyze debugging info from
 ; the serial port than reading numbers off a screen.
@@ -54,7 +66,7 @@ start64:
 ; kernel virtual space
   mov rax, 0x0c740c6c0c610c48
   mov rbx, [kernel_virtual_base]
-  add rbx, 0xb8000 + (4 * 160)
+  add rbx, 0xb8000 + (5 * 160)
   mov qword [rbx], rax
 
 ; nowhere else to go
@@ -76,7 +88,7 @@ nx_bit:
 ; stack overflow detected - write Stck in red to screen and halt
 halt_stack_overflow:
   mov rax, 0x0c6b0c630c740c53
-  mov qword [0xb8000 + (3 * 160)], rax
+  mov qword [0xb8000 + (5 * 160)], rax
   jmp halt
 
 ; -------------------------------------------------------------------
