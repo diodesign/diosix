@@ -77,7 +77,7 @@ Here's a very early build of diosix booting on x86.
 
 And here's the kernel's debugging output after its physical and virtual memory allocator was implemented – this output can be seen by running `make run-headless`.
 
-![Screenshot of QEMU running diosix](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-mem-1.png)
+![Screenshot of QEMU running diosix](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-mem-2.png)
 
 ### Contact
 
