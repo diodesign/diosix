@@ -33,7 +33,10 @@ extern
 #[repr(C, packed)]
 pub struct interrupted_thread_registers
 {
-    ds: u64,
+    /* this structure must be aligned to a 16-byte boundary.
+     * an extra alignment quad-word is inserted to achieve that.
+     * the interrupt landing point always zeroes alignment. */
+    alignment: u64, ds: u64,
 
     r15: u64, r14: u64, r13: u64, r12: u64, r11: u64,
     r10: u64,  r9: u64,  r8: u64, rdi: u64, rsi: u64,
@@ -170,11 +173,6 @@ pub extern "C" fn kernel_interrupt_handler(stack: interrupted_thread_registers)
 {
     if stack.interrupt_number < 32
     {
-        let rip = stack.rip;
-        let rax = stack.rax;
-        let rbx = stack.rbx;
-        let rcx = stack.rcx;
-        let err = stack.error_code;
         let cr2: u64;
 
         unsafe
@@ -182,11 +180,11 @@ pub extern "C" fn kernel_interrupt_handler(stack: interrupted_thread_registers)
             asm!("mov %cr2, %rax" : "={rax}"(cr2));
         }
 
-        kprintln!("[x86] CPU exception {}: rip = {:x} fault addr = {:x}", stack.interrupt_number, rip, cr2);
-        kprintln!("      rax = {:x}", rax);
-        kprintln!("      rbx = {:x}", rbx);
-        kprintln!("      rcx = {:x}", rcx);
-        kprintln!("      err = {:x}", err);
+        kprintln!("[x86] CPU exception {}: rip = {:x} fault addr = {:x}", stack.interrupt_number, stack.rip, cr2);
+        kprintln!("      rax = {:x}", stack.rax);
+        kprintln!("      rbx = {:x}", stack.rbx);
+        kprintln!("      rcx = {:x}", stack.rcx);
+        kprintln!("      err = {:x}", stack.error_code);
        
         panic!("Unhandled exception");
     }

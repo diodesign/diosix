@@ -121,6 +121,7 @@ interrupt_to_kernel:
   
   mov ax, ds
   push rax			; preserve ds
+  push 0			; align this point in the stack to 16-byte boundary
 
   mov ax, gdt.kdata		; kernel data segment
   mov ds, ax			; select this segment
@@ -130,6 +131,7 @@ interrupt_to_kernel:
   mov rdi, rsp			; give Rust kernel visibility to interrupted state
   call kernel_interrupt_handler
 
+  pop rax			; discard the stack alignment word
   pop rax
   mov ds, ax
   mov ss, ax
