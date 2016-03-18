@@ -140,11 +140,15 @@ test_x86_64_present:
   mov eax, 0x80000000	; check to see if we can probe extended functions
   cpuid
   cmp eax, 0x80000001	; if eax isn't >0x80000000 then no extended functions
-  jb .no_x86_64		; and no extended functions means no long mode
+  jb .no_ext_features	; and no extended functions means no long mode
   mov eax, 0x80000001   ; get the supported extended functions bitmask
+  cpuid
   test edx, 1 << 29	; check if bit 29 (long mode) is set
   jz .no_x86_64		; if not, then it isn't available so bail out
   ret			; if yes, then let's go
+.no_ext_features:
+  mov edx, boot_error_no_ext_features
+  jmp boot_early_error
 .no_x86_64:
   mov edx, boot_error_no_64bit
   jmp boot_early_error
@@ -355,9 +359,13 @@ boot_error_no_multiboot:
   db "Oh no. The boot loader isn't Multiboot 2 compatible.",0
 
 boot_error_no_cpuid:
+  db "Oh no. This machine's processor is too old for this kernel [CPUID]",0
 boot_error_no_sse:
+  db "Oh no. This machine's processor is too old for this kernel [NO SSE]",0
+boot_error_no_ext_features:
+  db "Oh no. This machine's processor is too old for this kernel [NO EXT]",0
 boot_error_no_64bit:
-  db "Oh no. This machine's processor is too old for this kernel.",0
+  db "Oh no. This machine's processor is too old for this kernel [NO X64]",0
 
 boot_error_halting:
   db "Sorry! Can't go any further - halting boot process.",0
