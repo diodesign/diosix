@@ -139,13 +139,13 @@ pub fn init() -> Result<(), KernelInternalError>
         {
             let pages: usize = mem_total / SMALL_PAGE_SIZE; /* convert bytes into 4k pages */
             kprintln!("... found {} physical pages", pages);
-            try!(pgstack::SYSTEMSTACK.lock().set_limit(pages));
+            try!(pgstack::set_limit(pages));
         }
     }
     kprintln!("... done, {} MB RAM available ({} bytes reserved for kernel use)", mem_total >> 20, mem_total - mem_stacked);
     
     /* get the physical page stack and paging code using the upper kernel area */
-    pgstack::SYSTEMSTACK.lock().set_kernel_translation_offset(KERNEL_VIRTUAL_UPPER_BASE);
+    pgstack::set_kernel_translation_offset(KERNEL_VIRTUAL_UPPER_BASE);
     paging::BOOTPGTABL.lock().set_kernel_translation_offset(KERNEL_VIRTUAL_UPPER_BASE);
 
     /* throw out all the redundant mappings, leaving just the kernel code, read-only data
@@ -184,13 +184,12 @@ fn add_phys_region(base: usize, size: usize) -> Result<usize, KernelInternalErro
             continue;
         }
 
-        let mut stack = pgstack::SYSTEMSTACK.lock();
-        if stack.check_collision(page_base) == true
+        if pgstack::check_collision(page_base) == true
         {
             continue;
         }
 
-        if stack.push(page_base).is_ok() == true
+        if pgstack::push(page_base).is_ok() == true
         {
             stacked = stacked + SMALL_PAGE_SIZE;
         }
@@ -242,7 +241,7 @@ fn map_phys_region(base: usize, size: usize) -> Result<(), KernelInternalError>
  */
 pub fn get_page() -> Result<usize, KernelInternalError>
 {
-    let page_base = try!(pgstack::SYSTEMSTACK.lock().pop());
+    let page_base = try!(pgstack::pop());
     Ok(page_base + KERNEL_VIRTUAL_UPPER_BASE)
 }
 
@@ -262,7 +261,7 @@ pub fn return_page(virt: usize) -> Result<(), KernelInternalError>
     }
 
     let virt = virt - KERNEL_VIRTUAL_UPPER_BASE;
-    try!(pgstack::SYSTEMSTACK.lock().push(virt));
+    try!(pgstack::push(virt));
     Ok(())
 }
 

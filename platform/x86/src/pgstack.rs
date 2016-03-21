@@ -14,19 +14,42 @@ use errors::KernelInternalError;
 
 use ::hardware::physmem;
 
-const PAGE_STACK_PHYS_START: usize = 4 * 1024 * 1024; /* start page stack at 4MB mark in physical memory */
+/* two stacks are used to manage physical page allocations.
+ * the low stack is 0-1GB and the high stack is 1GB+.
+ * there are two stacks because during early kernel init, just the first 1GB of phys mem is mapped
+ * in. this memory is needed to initialize the rest of the system. any allocations must therefore
+ * come off the low stack - the pages referenced by the high stack are not available.
+ * STACK_SPLIT_PHYS_ADDR  defines that split. in future, page stacks could be split by NUMA regions */
+const STACK_SPLIT_PHYS_ADDR: usize = 1 * 1024 * 1024 * 1024;
 
-/* create a system-wide physical stack with a locking mechanism. */
-pub static SYSTEMSTACK: Mutex<PageStack> = Mutex::new(PageStack
-                                           {
-                                                base: PAGE_STACK_PHYS_START,
-                                                ptr: 0,
-                                                max_ptr: 0,
-                                                size: 0,
-                                                virtual_translation_offset: 0,
-                                           });
+/* start page stack at 4MB mark in physical memory. the high stack follows immediately after the
+ * low stack */
+const PTR_SIZE: usize = 8; /* Rust won't let me use size_of::<usize>() here because it's not defined as aconst */
+const LOW_PAGE_STACK_PHYS_START: usize = 4 * 1024 * 1024;
+const HIGH_PAGE_STACK_PHYS_START: usize = LOW_PAGE_STACK_PHYS_START + 
+                                          ((STACK_SPLIT_PHYS_ADDR / physmem::SMALL_PAGE_SIZE) * PTR_SIZE);
 
-/* page stack design notes
+/* create a system-wide stack for lowest 1GB of phys RAM with a locking mechanism. */
+static LOWSTACK: Mutex<PageStack> = Mutex::new(PageStack
+                                    {
+                                        base: LOW_PAGE_STACK_PHYS_START,
+                                        ptr: 0,
+                                        max_ptr: 0,
+                                        size: 0,
+                                        virtual_translation_offset: 0,
+                                    });
+
+/* create a system-wide stack for >1GB of phys RAM with a locking mechanism. */
+static HIGHSTACK: Mutex<PageStack> = Mutex::new(PageStack
+                                     {
+                                        base: HIGH_PAGE_STACK_PHYS_START,
+                                        ptr: 0,
+                                        max_ptr: 0,
+                                        size: 0,
+                                        virtual_translation_offset: 0,
+                                     });
+
+/* individual page stack design notes
  *
  * Each 1GB of physical RAM takes up 2MB of RAM: 262,144 x 8-byte pointers.
  * Each stacked pointer is the base address of a 4K physical page frame.
@@ -192,5 +215,76 @@ impl PageStack
     {
         self.phys_to_kernel_virt(self.base + (self.ptr * size_of::<usize>()))
     }
+}
+
+/* ----------------------------------------------------------------------- */
+
+/* veneer of functions to provide access to LOWSTACK and HIGHSTACK.
+ * check the function definitions in PageStack for full details of their use. */
+
+/* set the kernel phys->virt translation offset for the stacks */
+pub fn set_kernel_translation_offset(offset: usize)
+{
+    /* will always succeed - it's just integer math */
+    LOWSTACK.lock().set_kernel_translation_offset(offset);
+    HIGHSTACK.lock().set_kernel_translation_offset(offset);
+}
+
+/* set limits for the page stacks: limit = max number of stack entries */
+pub fn set_limit(limit: usize) -> Result<(), KernelInternalError>
+{
+    let page_split = STACK_SPLIT_PHYS_ADDR / physmem::SMALL_PAGE_SIZE;
+    let mut lower: usize = 0;
+    let mut upper: usize = 0;
+
+    if limit > page_split
+    {
+        lower = page_split;
+        upper = limit - page_split;
+    }
+    else
+    {
+        lower = limit;
+    }
+
+    try!(LOWSTACK.lock().set_limit(lower));
+    try!(HIGHSTACK.lock().set_limit(upper));
+    Ok(())
+}
+
+/* returns true if the given physical address is occupied by a page stack */
+pub fn check_collision(addr: usize) -> bool
+{
+    if LOWSTACK.lock().check_collision(addr) == true
+    {
+        /* don't bother checking HIGHSTACK if LOWSTACK collides */
+        return true;
+    }
+
+    return HIGHSTACK.lock().check_collision(addr);
+}
+
+/* push a 4K physical page base address onto the correct stack */
+pub fn push(phys_addr: usize) -> Result<(), KernelInternalError>
+{
+    /* make sure we return the page to the correct stack */
+    if phys_addr < STACK_SPLIT_PHYS_ADDR
+    {
+        try!(LOWSTACK.lock().push(phys_addr));
+        return Ok(());
+    }
+
+    try!(HIGHSTACK.lock().push(phys_addr));
+    Ok(())
+}
+
+/* pop a 4K page's base physical address off the stack */
+pub fn pop() -> Result<usize, KernelInternalError>
+{
+    /* try the low stack then the high stack */
+    let res = LOWSTACK.lock().pop();
+    if res.is_ok() == true { return res; }
+
+    return HIGHSTACK.lock().pop();
 }
 

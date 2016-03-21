@@ -111,7 +111,7 @@ impl PageTable
         {
             /* no table allocated, so we need to grab a physical page to hold
              * a new PDP table for the PML4 to point to */
-            let pdp: usize = try!(pgstack::SYSTEMSTACK.lock().pop());
+            let pdp: usize = try!(pgstack::pop());
 
             /* zero the new PDP table so its entries are all marked not present */
             unsafe{ memset(self.phys_to_kernel_virt(pdp) as *mut u8, 0, physmem::SMALL_PAGE_SIZE) };
@@ -153,7 +153,7 @@ impl PageTable
         {
             /* no table allocated, so we need to grab a physical page to hold
              * a new PDP table for the PML4 to point to */
-            let pd: usize = try!(pgstack::SYSTEMSTACK.lock().pop());
+            let pd: usize = try!(pgstack::pop());
 
             /* zero the new PDP table so its entries are all marked not present */
             unsafe{ memset(self.phys_to_kernel_virt(pd) as *mut u8, 0, physmem::SMALL_PAGE_SIZE) };
