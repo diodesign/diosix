@@ -23,5 +23,5 @@ Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have
 
 &copy; Chris Williams and contributors, 2018. See LICENSE for source code and binary distribution and use.
 
-With thanks to Philipp Oppermann for his guide to [linking Rust code](https://os.phil-opp.com/) to low-level bare-metal assembly, and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
+With thanks to Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/), [David Craven](https://github.com/dvc94ch) and everyone else who helped port Rust to RISC-V, and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
 
