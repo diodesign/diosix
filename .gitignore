@@ -1,8 +1,19 @@
+
+# stop this sort of cruft ending up in the repo
 *~
 *.swp
 *.swo
 *.o
 *.bin
 *.iso
+
+# ignore Cargo metadata
 *.lock
+
+# ignore compiler output directories
+/target/
+
+# ignore rustfmt stuff
+**/*.rs.bk
+
 

@@ -1,12 +1,20 @@
 [package]
 name = "diosix"
-version = "0.0.1"
+version = "2.0.0"
 authors = ["Chris Williams <diodesign@gmail.com>"]
+build = "build.rs"
 
-[lib]
-crate-type = ["staticlib"]
+# list of available platform targets - I can't see any other way of doing this
+# select the machine you want to build for with cargo --features <name>
+[features]
+sifive_e = []
+spike = []
 
-[dependencies]
-rlibc = "0.1.4"
-spin = "0.3.4"
+[build-dependencies]
+regex = "1"
 
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
