@@ -6,6 +6,7 @@
 *.o
 *.bin
 *.iso
+*.out
 
 # ignore Cargo metadata
 *.lock
@@ -15,5 +16,3 @@
 
 # ignore rustfmt stuff
 **/*.rs.bk
-
-

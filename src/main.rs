@@ -5,7 +5,7 @@
  * See LICENSE for usage and copying.
  */
 
-#![feature(panic_implementation)]
+#![feature(panic_handler)]
 #![no_std]
 #![no_main]
 
@@ -29,7 +29,7 @@ fn serial_write(s: &str)
 }
 
 /* we're on our own here, so we need to provide these */
-#[panic_implementation]
+#[panic_handler]
 #[no_mangle]
 pub fn panic(_info: &PanicInfo) -> !
 {
