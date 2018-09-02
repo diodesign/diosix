@@ -9,11 +9,17 @@ I learned a lot from that first iteration, and this is the second iteration of d
 it will be written [in Rust](https://www.rust-lang.org/), a C/C++-like programming language that has a fierce emphasis
 on guaranteed memory safety, threads without data races, and other security features. I chose [RISC-V](https://riscv.org/) because it's interesting new ground to explore, whereas there are countless x86 and Arm operating system kernels out there.
 
-Check out [the wiki for documentation](https://github.com/diodesign/diosix/wiki) on how it all works internally.
-
 ### Branches
 
 All current development work is done in `master`. The `x86` branch holds an early port of the Rust microkernel to Intel-compatible PC systems. The `x86hypervisor` branch holds an early attempt to build hypervisor features into the `x86` branch. You're welcome to update these so they catch up with `master`, however my focus will be on the RISC-V port.
+
+### Building
+
+You can use `Cargo` to build the kernel. For example...
+
+`cargo build --target riscv32imac-unknown-none-elf --features sifive_e`
+
+...will build for a 32-bit RISC-V CPU on a SiFive E-series system.
 
 ### Contact
 
@@ -23,5 +29,5 @@ Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have
 
 &copy; Chris Williams and contributors, 2018. See LICENSE for source code and binary distribution and use.
 
-With thanks to Philipp Oppermann for his guide to [linking Rust code](https://os.phil-opp.com/) to low-level bare-metal assembly, and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
+With thanks to Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/), [David Craven](https://github.com/dvc94ch) and everyone else who helped port Rust to RISC-V, and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
 
