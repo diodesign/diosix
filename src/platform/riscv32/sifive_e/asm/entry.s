@@ -3,7 +3,8 @@
 # (c) Chris Williams, 2018.
 # See LICENSE for usage and copying.
 
-.section .text
+# _start *must* be the first routine in this file
+.section .entry
 .global _start
 
 # physical memory map on initialization

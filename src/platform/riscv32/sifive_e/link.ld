@@ -2,29 +2,22 @@
 
 ENTRY(_start)
 
-MEMORY
-{
-  FLASH(rx) : ORIGIN = 0x20000000, LENGTH = 512M
-  RAM(rwx) : ORIGIN = 0x80000000, LENGTH = 128K
-}
-
 SECTIONS
 {
   /* execution starts at 0x20400000 */
-  . = ORIGIN(FLASH) + 0x400000;
+  . = 0x20400000;
 
   /* this is in read-only flash */
-  .text :
+  .text : ALIGN(0x1000)
   {
-    *(.text.start)
-    *(.text*)
+    *(.entry) /* must be first */
+    *(.text)
     *(.rodata*)
   }
 
-  . = ORIGIN(RAM);
-
+  . = 0x80000000;
   /* read-write stuff goes here */
-  .bss :
+  .bss : ALIGN(0x1000)
   {
     *(.data)
     *(.bss)

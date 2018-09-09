@@ -15,7 +15,7 @@ use core::panic::PanicInfo;
 #[no_mangle]
 pub extern "C" fn kmain() -> !
 {
-  serial_write("hello, world!");
+  serial_write("hello, world from bare metal RISC-V land!!!\n");
   loop {}
 }
 
