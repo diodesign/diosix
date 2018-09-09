@@ -17,7 +17,8 @@ If you're building for a 32-bit RISC-V system, make sure you've cross-compiled a
 
 Here's a list of steps to create your RISC-V Rust cross-compiler toolchain on a Debian-like system, which I recommend running in a container or virtual machine to avoid polluting your main environment:
 
-```sudo apt-get update
+```
+sudo apt-get update
 sudo apt-get install flex bison m4 sed texinfo
 mkdir $HOME/cross
 mkdir $HOME/src
@@ -34,13 +35,15 @@ rustup target install riscv32imac-unknown-none-elf
 
 Make sure your paths are set up to find Rust and Cargo – I use this in my `~/.bashrc`:
 
-```source $HOME/.cargo/env
+```
+source $HOME/.cargo/env
 export PATH=$PATH:$HOME/cross/bin
 ```
 
 Then you should be ready to clone `diosix`...
 
-```cd $HOME/src
+```
+cd $HOME/src
 git clone https://github.com/diodesign/diosix.git
 cd diosix
 ```
