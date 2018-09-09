@@ -51,7 +51,7 @@ fn main()
   }
   else
   {
-    println!("Unknown target {}", target_triple);
+    println!("Unknown target {}. Use --target to select a CPU type", target_triple);
     exit(1);
   }
 
@@ -71,7 +71,7 @@ fn main()
   }
   else
   {
-    println!("Cannot determine target machine");
+    println!("Cannot determine target machine. Use --features to select a device");
     exit(1);
   }
 

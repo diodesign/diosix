@@ -1,10 +1,6 @@
-# Find the linker for 32-bit RISC-V targets
+# Find the linker for 32-bit RISC-V SiFive-E targets
 [target.riscv32imac-unknown-none-elf]
-rustflags = [ "-Z", "pre-link-arg=-nostartfiles" ]
+rustflags = [ "-Z", "pre-link-arg=-nostartfiles",
+              "-C", "link-arg=-Tsrc/platform/riscv32/sifive_e/link.ld" ]
 linker = "riscv32-elf-ld"
 ar = "riscv32-elf-ar"
-
-# Find the right linker script for 32-bit SiFive E-series hardware
-[target.'cfg(target_machine = "sifive_e")']
-rustflags = [ "-C", "link-arg=-Tsrc/platform/riscv32/sifive_e/link.ld",
-              "-C", "soft-float" ]

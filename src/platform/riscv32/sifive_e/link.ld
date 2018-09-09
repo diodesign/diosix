@@ -2,29 +2,31 @@
 
 ENTRY(_start)
 
+MEMORY
+{
+  FLASH(rx) : ORIGIN = 0x20000000, LENGTH = 512M
+  RAM(rwx) : ORIGIN = 0x80000000, LENGTH = 128K
+}
+
 SECTIONS
 {
-  . = 0x20400000; /* boot ROM jumps here */
+  /* execution starts at 0x20400000 */
+  . = ORIGIN(FLASH) + 0x400000;
 
   /* this is in read-only flash */
-  .text : ALIGN(0x1000)
+  .text :
   {
-    *(.text._start)
+    *(.text.start)
     *(.text*)
     *(.rodata*)
   }
 
-  /* this is in read-only flash */
-  .data : ALIGN(0x1000)
+  . = ORIGIN(RAM);
+
+  /* read-write stuff goes here */
+  .bss :
   {
     *(.data)
-  }
-
-  /* RAM starts here */
-  . = 0x80000000 /*
-  .bss : ALIGN(0x1000)
-  {
-    *(COMMON)
     *(.bss)
   }
 

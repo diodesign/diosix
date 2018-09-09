@@ -3,12 +3,17 @@ name = "diosix"
 version = "2.0.0"
 authors = ["Chris Williams <diodesign@gmail.com>"]
 build = "build.rs"
+publish = false
 
-# list of available platform targets - I can't see any other way of doing this
+# list of available platform targets - I can't see any other way of doing this.
 # select the machine you want to build for with cargo --features <name>
 [features]
 sifive_e = []
 spike = []
+
+[[bin]]
+name = "kernel"
+path = "src/kernel/main.rs"
 
 [build-dependencies]
 regex = "1"
