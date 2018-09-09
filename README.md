@@ -1,5 +1,7 @@
 # diosix
 
+[![Build Status](https://travis-ci.org/diodesign/diosix.svg?branch=master)](https://travis-ci.org/diodesign/diosix)
+
 This is a lightweight and secure multiprocessor microkernel operating system written in Rust for 32-bit and 64-bit RISC-V systems.
 
 It is a work in progress: I'm starting from scratch after [previously writing](https://github.com/diodesign/diosix-legacy)

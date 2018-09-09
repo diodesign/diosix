@@ -23,7 +23,7 @@ install:
 before_script:
   rustup target install riscv32imac-unknown-none-elf
 
-script: build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e
+script: ./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e
 
 branches:
   only:
