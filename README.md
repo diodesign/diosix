@@ -9,6 +9,14 @@ I learned a lot from that first iteration, and this is the second iteration of d
 it will be written [in Rust](https://www.rust-lang.org/), a C/C++-like programming language that has a fierce emphasis
 on guaranteed memory safety, threads without data races, and other security features. I chose [RISC-V](https://riscv.org/) because it's interesting new ground to explore, whereas there are countless x86 and Arm operating system kernels out there.
 
+### Dependencies
+
+If you're building for a 32-bit RISC-V system, make sure you've cross-compiled and installed the latest RISC-V port (v2.30) of [GNU binutils](https://github.com/riscv/riscv-binutils-gdb). I set it up using `./configure --prefix $HOME/cross --target riscv32-elf` and add `$HOME/cross/bin` to the `PATH` variable in my `.bashrc`. You'll need `build-essential`, `flex`, `bison`, `m4`, `sed`, and `texinfo` installed to compile this package on a Debian-like host. Then, you'll need to [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build host's architecture (likely x86_64) and you must install the `riscv32imac-unknown-none-elf` target, too.
+
+Make sure your paths are set up to find Rust and Cargo – then you should be ready to clone `diosix` and follow the instructions below. If you get stuck, check the `.travis.yml` file for a list of build instructions.
+
+(Currently, Rust only supports 32-bit RISC-V.)
+
 ### Building and running
 
 You must use the supplied `build.sh` script, which sets up Cargo to compile, assemble, and link the project. Its syntax is:

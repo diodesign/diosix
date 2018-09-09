@@ -9,8 +9,8 @@ rust:
 cache: cargo
 
 install:
-  - sudo apt-get update -qq
-  - sudo apt-get install flex bison m4 sed texinfo
+  - sudo apt-get -qq update
+  - sudo apt-get -qq install flex bison m4 sed texinfo
   - mkdir $HOME/cross
   - git clone -b riscv-binutils-2.30 https://github.com/riscv/riscv-binutils-gdb.git
   - cd riscv-binutils-gdb
@@ -21,7 +21,7 @@ install:
   - cd ..
 
 before_script:
-  rustup toolchain install riscv32imac-unknown-none-elf
+  rustup target install riscv32imac-unknown-none-elf
 
 script: build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e
 
