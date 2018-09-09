@@ -35,17 +35,39 @@ case $SETTING in
 esac
 done
 
-# break the build triple into an array so we can get the CPU architecture
-IFS='-' read -r -a TRIPLE_ARRAY <<< ${TRIPLE}
-
-# sanity check
-if [[ ${TRIPLE} == "" || ${PLATFORM} == "" || ${TRIPLE_ARRAY[0]} == "" ]]; then
-  echo "syntax: ./build.sh --triple [build triple] --platform [target platform]"
+# sanity chacks...
+if [[ $TRIPLE == "" || $PLATFORM == "" ]]; then
+  echo "Usage: build.sh --triple [build triple] --platform [target platform]"
   exit 1
-fi;
+fi
+
+# ...and also tidy up triples to CPU_ARCH directory
+case $TRIPLE in
+  riscv32*)
+  CPU_ARCH=riscv32
+  ;;
+  riscv64*)
+  CPU_ARCH=riscv64
+  ;;
+  *)
+  echo "[-] Bad build triple '${TRIPLE}'"
+  exit 1
+esac
+
+case $PLATFORM in
+  sifive_e*)
+  echo "[+] Building for ${CPU_ARCH} SiFive-E series"
+  ;;
+  spike*)
+  echo "[+] Building for ${CPU_ARCH} Spike emulator"
+  ;;
+  *)
+  echo "[-] Bad platform '${PLATFORM}'"
+  exit 1
+esac
 
 # we can't do this from cargo, have to set it outside the toolchain
-set RUSTFLAGS = "-C link-arg=-Tsrc/platform/${TRIPLE_ARRAY[0]}/${PLATFORM}/link.ld"
+export RUSTFLAGS="-C link-arg=-Tsrc/platform/${CPU_ARCH}/${PLATFORM}/link.ld"
 
 # invoke the compiler toolchain
-cargo build --release --target ${TRIPLE} --features ${PLATFORM}
+cargo build --release --target $TRIPLE --features $PLATFORM

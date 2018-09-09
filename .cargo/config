@@ -1,6 +1,5 @@
 # Find the linker for 32-bit RISC-V SiFive-E targets
 [target.riscv32imac-unknown-none-elf]
-rustflags = [ "-Z", "pre-link-arg=-nostartfiles",
-              "-C", "link-arg=-Tsrc/platform/riscv32/sifive_e/link.ld" ]
+rustflags = [ "-Z", "pre-link-arg=-nostartfiles" ]
 linker = "riscv32-elf-ld"
 ar = "riscv32-elf-ar"
