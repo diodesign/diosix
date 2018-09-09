@@ -13,25 +13,54 @@ on guaranteed memory safety, threads without data races, and other security feat
 
 ### Dependencies
 
-If you're building for a 32-bit RISC-V system, make sure you've cross-compiled and installed the latest RISC-V port (v2.30) of [GNU binutils](https://github.com/riscv/riscv-binutils-gdb). I set it up using `./configure --prefix $HOME/cross --target riscv32-elf` and add `$HOME/cross/bin` to the `PATH` variable in my `.bashrc`. You'll need `build-essential`, `flex`, `bison`, `m4`, `sed`, and `texinfo` installed to compile this package on a Debian-like host. Then, you'll need to [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build host's architecture (likely x86_64) and you must install the `riscv32imac-unknown-none-elf` target, too.
+If you're building for a 32-bit RISC-V system, make sure you've cross-compiled and installed the latest RISC-V port (v2.30) of [GNU binutils](https://github.com/riscv/riscv-binutils-gdb) as the kernel requires this toolkit to build. Then, you'll need to use [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build host's architecture (likely x86_64) and you must install the `riscv32imac-unknown-none-elf` target, too. (Currently, Rust only supports 32-bit RISC-V.)
 
-Make sure your paths are set up to find Rust and Cargo – then you should be ready to clone `diosix` and follow the instructions below. If you get stuck, check the `.travis.yml` file for a list of build instructions.
+Here's a list of steps to create your RISC-V Rust cross-compiler toolchain on a Debian-like system, which I recommend running in a container or virtual machine to avoid polluting your main environment:
 
-(Currently, Rust only supports 32-bit RISC-V.)
+`sudo apt-get update
+sudo apt-get install flex bison m4 sed texinfo
+mkdir $HOME/cross
+mkdir $HOME/src
+cd $HOME/src
+git clone -b riscv-binutils-2.30 https://github.com/riscv/riscv-binutils-gdb.git
+cd riscv-binutils-gdb
+./configure --prefix $HOME/cross --target=riscv32-elf
+make
+make install
+rustup toolchain install nightly
+rustup default nightly
+rustup target install riscv32imac-unknown-none-elf`
+
+Make sure your paths are set up to find Rust and Cargo – I use this in my `~/.bashrc`:
+
+`source $HOME/.cargo/env
+export PATH=$PATH:$HOME/cross/bin`
+
+Then you should be ready to clone `diosix`...
+
+`cd $HOME/src
+git clone https://github.com/diodesign/diosix.git
+cd diosix`
+
+...and follow the instructions below to build and run it.
 
 ### Building and running
 
 You must use the supplied `build.sh` script, which sets up Cargo to compile, assemble, and link the project. Its syntax is:
 
-`build.sh --triple [build triple] --platform [target platform]`
+`./build.sh --triple [build triple] --platform [target platform]`
 
 Supported triples and platforms are listed in the file. The kernel executable can be found in `target/triple/release/kernel` for the given build triple. For example,
 
-`build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e`
+`./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e`
 
 ...will build for a 32-bit RISC-V CPU on a SiFive E-series system. Then you can try running it using Qemu:
 
 `qemu-system-riscv32 -machine sifive_e -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic`
+
+And a screenshot of that command running, printing "hello, world" to the virtual serial port:
+
+[![Screenshot of diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32.png)
 
 ### Branches
 
