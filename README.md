@@ -58,7 +58,7 @@ You must use the supplied `build.sh` script, which sets up Cargo to compile, ass
 
 Supported triples and platforms are listed in the file. The kernel executable can be found in `target/triple/release/kernel` for the given build triple. For example,
 
-`./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e`
+`./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e300`
 
 ...will build for a 32-bit RISC-V CPU on a SiFive Freedom E300-series system. Then you can try running it using Qemu:
 
