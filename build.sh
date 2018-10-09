@@ -61,6 +61,9 @@ case $PLATFORM in
   exit 1
 esac
 
+# copy correct Cargo manifest in place
+cp Cargo.toml.${PLATFORM} Cargo.toml
+
 # we can't do this from cargo, have to set it outside the toolchain
 export RUSTFLAGS="-C link-arg=-Tsrc/platform/${CPU_ARCH}/${PLATFORM}/link.ld"
 

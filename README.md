@@ -13,7 +13,7 @@ on guaranteed memory safety, threads without data races, and other security feat
 
 ### Dependencies
 
-If you're building for a 32-bit RISC-V system, make sure you've cross-compiled and installed the latest RISC-V port (v2.30) of [GNU binutils](https://github.com/riscv/riscv-binutils-gdb) as the kernel requires this toolkit to build. Then, you'll need to use [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build host's architecture (likely x86_64) and you must install the `riscv32imac-unknown-none-elf` target, too. (Currently, Rust only supports 32-bit RISC-V.)
+If you're building for a 32-bit RISC-V system, make sure you've cross-compiled and installed the latest RISC-V port (v2.30) of [GNU binutils](https://github.com/riscv/riscv-binutils-gdb) as the kernel requires this toolkit to build. Then, you'll need to use [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build host's architecture (likely x86_64) and you must install the `riscv32imac-unknown-none-elf` target, too. (Currently, Rust only supports 32-bit RISC-V. As soon as 64-bit support appears, I'll target that as well.)
 
 Here's a list of steps to create your RISC-V Rust cross-compiler toolchain on a Debian-like system, which I recommend running in a container or virtual machine to avoid polluting your main environment:
 
@@ -79,6 +79,8 @@ Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have
 
 ### Copyright, license, and thanks
 
-&copy; Chris Williams and contributors, 2018. See LICENSE for source code and binary distribution and use.
+Copyright &copy; Chris Williams and contributors, 2018. See LICENSE for source code and binary distribution and use.
+
+src/contrib/hermit-dtb: Copyright &copy; 2018 Colin Finck, RWTH Aachen University.
 
 With thanks to Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/), [David Craven](https://github.com/dvc94ch) and everyone else who helped port Rust to RISC-V, and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).

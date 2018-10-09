@@ -1,0 +1,37 @@
+# Cargo manifest for the SiFive U35 SoC platform
+
+[package]
+name = "diosix"
+version = "2.0.0"
+authors = ["Chris Williams <diodesign@gmail.com>"]
+license = "MIT"
+build = "build.rs"
+publish = false
+
+# list of available platform targets - I can't see any other way of doing this.
+# select the machine you want to build for with cargo --features <name>
+#
+# sifive_u34 = 32-bit SiFive U34-compatible system-on-chip hardware
+#
+[features]
+sifive_u34 = []
+
+[[bin]]
+name = "kernel"
+path = "src/kernel/main.rs"
+
+# map platform-specific code to the crate 'platform' so tha it can be used
+# by the kernel via a uniform API. the kernel shouldn't need to worry about
+# the platform it's specifically running on - all low-level functions will be
+# handed off to the crate identified as 'platform'
+[dependencies]
+platform = { path = "src/platform/riscv32/sifive_u34" }
+
+[build-dependencies]
+regex = "1"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
