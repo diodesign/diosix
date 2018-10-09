@@ -61,9 +61,9 @@ fn main()
 
   /* determine machine target from build system's environment variables */
   let mut target_machine = String::new();
-  if env::var("CARGO_FEATURE_SIFIVE_E").is_ok() == true
+  if env::var("CARGO_FEATURE_SIFIVE_E300").is_ok() == true
   {
-    target_machine.push_str("sifive_e");
+    target_machine.push_str("sifive_e300");
   }
   else if env::var("CARGO_FEATURE_SPIKE").is_ok() == true
   {
@@ -140,7 +140,7 @@ fn assemble(output_dir: &String, path: &str,
   archive_file.push_str(".a");
 
   /* now let's try to assemble the thing - this is where errors become fatal */
-  Command::new(as_exec).arg("-fpic").arg("-march").arg(arch).arg("-mabi").arg(abi)
+  Command::new(as_exec).arg("-march").arg(arch).arg("-mabi").arg(abi)
                        .arg("-o").arg(&object_file).arg(path)
                        .status().expect(format!("Failed to assemble {}", path).as_str());
   Command::new(ar_exec).arg("crus").arg(archive_file).arg(object_file)

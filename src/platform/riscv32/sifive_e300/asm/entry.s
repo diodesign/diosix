@@ -7,11 +7,15 @@
 .section .entry
 .global _start
 
+# handy for debugging with qemu -d in_asm
+.global infinite_loop
+
 # physical memory map on initialization
 # 0x20000000 - 0x3FFFFFFF: 512M of flash
-# 0x80000000 - 0x8001FFFF: 128K of RAM
+# 0x80000000 - 0x80003FFF: 16K of RAM
 
-.equ KERNEL_STACK_TOP, 0x80020000
+# run the stack down from the top of RAM
+.equ KERNEL_STACK_TOP, 0x80004000
 
 # the boot ROM drops us here with nothing setup
 # this code is assumed to be loaded and running at 0x20400000
@@ -19,12 +23,11 @@
 #
 # => a0 = hart ID
 #    a1 = pointer to device tree
-# <= never returns
-#
+# <= nothing else for kernel to do
 _start:
   li sp, KERNEL_STACK_TOP
   call kmain
 
-# infinite loop if we somehow end up here
-loop:
-  j loop
+# nowhere else to go, so: infinite loop
+infinite_loop:
+  j infinite_loop

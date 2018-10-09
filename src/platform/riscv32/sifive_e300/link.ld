@@ -1,4 +1,4 @@
-/* kernel's ELF layout for SiFive E-series hardware */
+/* kernel's ELF layout for SiFive E300-series hardware */
 
 ENTRY(_start)
 
@@ -11,7 +11,7 @@ SECTIONS
   .text : ALIGN(0x1000)
   {
     *(.entry) /* must be first */
-    *(.text)
+    *(.text*)
     *(.rodata*)
   }
 

@@ -8,7 +8,7 @@ publish = false
 # list of available platform targets - I can't see any other way of doing this.
 # select the machine you want to build for with cargo --features <name>
 [features]
-sifive_e = []
+sifive_e300 = []
 spike = []
 
 [[bin]]

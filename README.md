@@ -60,7 +60,7 @@ Supported triples and platforms are listed in the file. The kernel executable ca
 
 `./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e`
 
-...will build for a 32-bit RISC-V CPU on a SiFive E-series system. Then you can try running it using Qemu:
+...will build for a 32-bit RISC-V CPU on a SiFive Freedom E300-series system. Then you can try running it using Qemu:
 
 `qemu-system-riscv32 -machine sifive_e -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic`
 

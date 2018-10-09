@@ -1,4 +1,6 @@
 #!/bin/bash
+#
+# (c) Chris Williams, 2018. See LICENSE for usage and copying terms.
 
 # setup the build environment for the given target. we can't do this
 # entirely from within cargo due to crucial missing features.
@@ -13,7 +15,7 @@
 # riscv32imac-unknown-none-elf (32bit RISC-V integer-only with atomics)
 #
 # supported target platforms:
-# sifive_e (SiFive-E series)
+# sifive_e (SiFive-E300 series)
 # spike (Spike emulator)
 
 # process command line arguments
@@ -55,8 +57,8 @@ case $TRIPLE in
 esac
 
 case $PLATFORM in
-  sifive_e*)
-  echo "[+] Building for ${CPU_ARCH} SiFive-E series"
+  sifive_e300*)
+  echo "[+] Building for ${CPU_ARCH} SiFive Freedom E300 series"
   ;;
   spike*)
   echo "[+] Building for ${CPU_ARCH} Spike emulator"
