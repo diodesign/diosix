@@ -1,4 +1,4 @@
-# kernel low-level serial output code
+# kernel low-level serial output code for SiFive U34 hardware series
 #
 # (c) Chris Williams, 2018.
 # See LICENSE for usage and copying.

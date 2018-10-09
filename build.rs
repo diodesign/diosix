@@ -15,10 +15,9 @@
    riscv32imac-unknown-none-elf
 
    acceptable machines (selected as --features to cargo):
-   sifive_e (SiFive E-series boards)
-   spike (Spike emulator)
+   sifive_u34 (SiFive E-series boards)
 
-   eg: cargo build --target riscv32imac-unknown-none-elf --features spike
+   eg: cargo build --target riscv32imac-unknown-none-elf --features sifive_u34
 */
 
 use std::process::Command;
@@ -43,12 +42,6 @@ fn main()
     target_arch.push_str("rv32imac");
     target_abi.push_str("ilp32");
   }
-  else if target_triple.starts_with("riscv64") == true
-  {
-    target_cpu.push_str("riscv64");
-    target_arch.push_str("rv64g");
-    target_abi.push_str("lp64q");
-  }
   else
   {
     println!("Unknown target {}. Use --target to select a CPU type", target_triple);
@@ -61,13 +54,9 @@ fn main()
 
   /* determine machine target from build system's environment variables */
   let mut target_machine = String::new();
-  if env::var("CARGO_FEATURE_SIFIVE_E300").is_ok() == true
+  if env::var("CARGO_FEATURE_SIFIVE_U34").is_ok() == true
   {
-    target_machine.push_str("sifive_e300");
-  }
-  else if env::var("CARGO_FEATURE_SPIKE").is_ok() == true
-  {
-    target_machine.push_str("spike");
+    target_machine.push_str("sifive_u34");
   }
   else
   {

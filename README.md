@@ -56,15 +56,16 @@ You must use the supplied `build.sh` script, which sets up Cargo to compile, ass
 
 `./build.sh --triple [build triple] --platform [target platform]`
 
-Supported triples and platforms are listed in the file. The kernel executable can be found in `target/triple/release/kernel` for the given build triple. For example,
+Supported triples and platforms are listed in the `build.sh` file. The compiled kernel executable can be found in `target/triple/release/kernel` for the given build triple. So, for example,
 
-`./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e300`
+`./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_u34`
 
-...will build for a 32-bit RISC-V CPU on a SiFive Freedom E300-series system. Then you can try running it using Qemu:
+...will build a kernel for a 32-bit RISC-V CPU in a SiFive Freedom U34-compatible system. Then you can try running it using Qemu:
 
-`qemu-system-riscv32 -machine sifive_e -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic`
+`qemu-system-riscv32 -machine sifive_u -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic`
 
-And a screenshot of that command running, printing "hello, world" to the virtual serial port:
+Right now, the kernel assumes 16MB or more of DRAM is present. Qemu defaults to 128MB.
+Here's a screenshot of the kernel printing "hello, world" to the virtual serial port:
 
 [![Screenshot of diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32.png)
 

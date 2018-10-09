@@ -9,14 +9,13 @@
 
 # syntax: ./build.sh --triple [build triple] --platform [target platform]
 #
-# eg: ./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_e
+# eg: ./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_u34
 #
 # supported build triples:
 # riscv32imac-unknown-none-elf (32bit RISC-V integer-only with atomics)
 #
 # supported target platforms:
-# sifive_e (SiFive-E300 series)
-# spike (Spike emulator)
+# sifive_u34 (SiFive-U34 RV32 series)
 
 # process command line arguments
 while [[ $# -gt 0 ]]
@@ -48,23 +47,17 @@ case $TRIPLE in
   riscv32*)
   CPU_ARCH=riscv32
   ;;
-  riscv64*)
-  CPU_ARCH=riscv64
-  ;;
   *)
-  echo "[-] Bad build triple '${TRIPLE}'"
+  echo "[-] Unsupported build triple '${TRIPLE}'"
   exit 1
 esac
 
 case $PLATFORM in
-  sifive_e300*)
-  echo "[+] Building for ${CPU_ARCH} SiFive Freedom E300 series"
-  ;;
-  spike*)
-  echo "[+] Building for ${CPU_ARCH} Spike emulator"
+  sifive_u34)
+  echo "[+] Building for ${CPU_ARCH} SiFive Freedom U34 series"
   ;;
   *)
-  echo "[-] Bad platform '${PLATFORM}'"
+  echo "[-] Unsupported platform '${PLATFORM}'"
   exit 1
 esac
 
