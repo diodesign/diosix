@@ -64,10 +64,9 @@ Supported triples and platforms are listed in the `build.sh` file. The compiled 
 
 `qemu-system-riscv32 -machine sifive_u -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic`
 
-Right now, the kernel assumes 16MB or more of DRAM is present. Qemu defaults to 128MB.
-Here's a screenshot of the kernel printing "hello, world" to the virtual serial port:
+Right now, the kernel assumes 16MB or more of DRAM is present. Qemu defaults to 128MB. Here's a screenshot of the kernel booting on an emulated SiFive U34 system, and writing some debug out to the virtual serial port:
 
-[![Screenshot of diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32.png)
+[![Screenshot of diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32_sifive_u34.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32_sifive_u34.png)
 
 ### Branches
 
