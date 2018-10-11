@@ -33,10 +33,12 @@
 # we assume we have 16MB or more of DRAM fitted. this means the kernel and
 # and its initialization payload is expected to fit within this space.
 #
-# => a0 = hart ID
+# => a0 = hart ID - although this is not supposed to be an SMP system
 #    a1 = pointer to device tree
 # <= nothing else for kernel to do
 _start:
+  bge a0, 1, infinite_loop        # all cores but hart 0 are parked
+
   li sp, KERNEL_BOOT_STACK_TOP
   call kmain
 
