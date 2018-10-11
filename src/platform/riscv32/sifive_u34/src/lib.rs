@@ -12,7 +12,7 @@ extern crate hermit_dtb;
    => device_tree_buf = pointer to device tree in kernel-accessible RAM
    <= number of bytes in system memory, or None for failure
 */
-pub fn get_ram_size(device_tree_buf: &u8) -> Option<usize>
+pub fn get_ram_size(device_tree_buf: &u8) -> Option<u64>
 {
   let dev_tree = match unsafe { hermit_dtb::Dtb::from_raw(device_tree_buf) }
   {
@@ -26,10 +26,19 @@ pub fn get_ram_size(device_tree_buf: &u8) -> Option<usize>
     None => return None
   };
 
-  /* reconstruct memory params from bytes */
-  let mem_size = (mem_params[15] as usize) << 0  |
-                 (mem_params[14] as usize) << 8  |
-                 (mem_params[13] as usize) << 16 |
-                 (mem_params[12] as usize) << 24;
+  /* reconstruct memory params from bytes in the DT array. the format is:
+     bytes  contents
+     0-3    DRAM base address (upper 32 bits)
+     4-7    DRAM base address (lower 32 bits)
+     8-11   DRAM size (upper 32 bits)
+     12-15  DRAM size (lower 32 bits) */
+  let mem_size =  (mem_params[15] as u64) << 0  |
+                  (mem_params[14] as u64) << 8  |
+                  (mem_params[13] as u64) << 16 |
+                  (mem_params[12] as u64) << 24 |
+                  (mem_params[11] as u64) << 32 |
+                  (mem_params[10] as u64) << 40 |
+                  (mem_params[ 9] as u64) << 48 |
+                  (mem_params[ 8] as u64) << 56;
   return Some(mem_size);
 }
