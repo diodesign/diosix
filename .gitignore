@@ -11,6 +11,7 @@
 
 # ignore Cargo metadata
 *.lock
+Cargo.toml
 
 # ignore compiler output directories
 /target/
