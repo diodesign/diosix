@@ -16,6 +16,7 @@
 #
 # supported target platforms:
 # sifive_u34 (SiFive-U34 RV32 series)
+# qemu_virt (Qemu Virt hardware environment)
 
 # process command line arguments
 while [[ $# -gt 0 ]]
@@ -56,13 +57,16 @@ case $PLATFORM in
   sifive_u34)
   echo "[+] Building for ${CPU_ARCH} SiFive Freedom U34 series"
   ;;
+  qemu_virt)
+  echo "[+] Building for ${CPU_ARCH} Qemu Virt environment"
+  ;;
   *)
   echo "[-] Unsupported platform '${PLATFORM}'"
   exit 1
 esac
 
-# copy correct Cargo manifest in place
-cp Cargo.toml.${PLATFORM} Cargo.toml
+# build correct Cargo manifest from common settings and platform config
+cat cargoes/Cargo.toml.common cargoes/Cargo.toml.${PLATFORM} > Cargo.toml
 
 # we can't do this from cargo, have to set it outside the toolchain
 export RUSTFLAGS="-C link-arg=-Tsrc/platform/${CPU_ARCH}/${PLATFORM}/link.ld"

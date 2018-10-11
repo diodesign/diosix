@@ -1,0 +1,20 @@
+[package]
+name = "diosix"
+version = "2.0.0"
+authors = ["Chris Williams <diodesign@gmail.com>"]
+license = "MIT"
+build = "build.rs"
+publish = false
+
+[[bin]]
+name = "kernel"
+path = "src/kernel/main.rs"
+
+[build-dependencies]
+regex = "1"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

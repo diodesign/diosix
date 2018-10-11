@@ -58,6 +58,10 @@ fn main()
   {
     target_machine.push_str("sifive_u34");
   }
+  if env::var("CARGO_FEATURE_QEMU_VIRT").is_ok() == true
+  {
+    target_machine.push_str("qemu_virt");
+  }
   else
   {
     println!("Cannot determine target machine. Use --features to select a device");

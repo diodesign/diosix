@@ -1,0 +1,7 @@
+# Cargo manifest for the SiFive U34 SoC platform
+
+[features]
+sifive_u34 = []
+
+[dependencies]
+platform = { path = "src/platform/riscv32/sifive_u34" }
