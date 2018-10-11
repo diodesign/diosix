@@ -1,4 +1,4 @@
-/* kernel's ELF layout for RV32 SiFive U34-series hardware
+/* kernel's ELF layout for RV32 Qemu Virt hardware environment
  * (c) Chris Williams, 2018.
  * See LICENSE for usage and copying.
  */
