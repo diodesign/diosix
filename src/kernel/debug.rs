@@ -13,6 +13,8 @@ use core::fmt;
 extern
 {
   fn platform_serial_write_byte(byte: u8);
+  pub fn platform_acquire_debug_spin_lock();
+  pub fn platform_release_debug_spin_lock();
 }
 
 /* create macros for kernel-only kprintln and kprint debug output routines */
@@ -27,7 +29,12 @@ macro_rules! kprint
   ($($arg:tt)*) =>
   ({
     use core::fmt::Write;
-    unsafe { $crate::debug::SERIALPORT.write_fmt(format_args!($($arg)*)).unwrap(); }
+    unsafe
+    {
+      $crate::platform_acquire_debug_spin_lock();
+      $crate::debug::SERIALPORT.write_fmt(format_args!($($arg)*)).unwrap();
+      $crate::platform_release_debug_spin_lock();
+    }
   });
 }
 
@@ -47,8 +54,8 @@ impl fmt::Write for SerialWriter
 /* write a string out to the platform's serial port */
 pub fn serial_write_string(s: &str)
 {
-  for c in s.bytes()
-  {
-    unsafe { platform_serial_write_byte(c); }
-  }
+    for c in s.bytes()
+    {
+      unsafe { platform_serial_write_byte(c); }
+    }
 }

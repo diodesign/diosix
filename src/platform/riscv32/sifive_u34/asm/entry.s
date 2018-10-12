@@ -7,9 +7,6 @@
 .section .entry
 .global _start
 
-# handy for debugging with qemu -d in_asm
-.global infinite_loop
-
 # hardware physical memory map
 # 0x00000000, size: 0x100:     Debug ROM/data
 # 0x00001000, size: 0x11000:   Boot ROM
@@ -33,12 +30,12 @@
 # we assume we have 16MB or more of DRAM fitted. this means the kernel and
 # and its initialization payload is expected to fit within this space.
 #
-# => a0 = hart ID - although this is not supposed to be an SMP system
+# => a0 = hart ID. Only boot CPU core 0. Park all other cores permanently
 #    a1 = pointer to device tree
 # <= nothing else for kernel to do
 _start:
-  addi  t0, x0, 1                   # get ready to select hart id > 0
-  bge   a0, t0, infinite_loop        # all cores but hart 0 are parked
+  addi  t0, x0, 1                 # get ready to select hart id > 0
+  bge   a0, t0, infinite_loop     # all cores but hart 0 are parked
 
   li sp, KERNEL_BOOT_STACK_TOP
   call kmain
