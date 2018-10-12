@@ -7,15 +7,15 @@ This is a lightweight and secure multiprocessor microkernel operating system wri
 It is a work in progress: I'm starting from scratch after [previously writing](https://github.com/diodesign/diosix-legacy)
 a working microkernel for 32-bit SMP x86 computers in C and assembly.
 
-I learned a lot from that first iteration, and this is the second iteration of diosix. Crucially,
+I learned a lot from that first foray, and this is the second iteration of diosix. Crucially,
 it will be written [in Rust](https://www.rust-lang.org/), a C/C++-like programming language that has a fierce emphasis
-on guaranteed memory safety, threads without data races, and other security features. I chose [RISC-V](https://riscv.org/) because it's interesting new ground to explore, whereas there are countless x86 and Arm operating system kernels out there.
+on guaranteed memory safety, threads without data races, and other security features. I chose [RISC-V](https://riscv.org/) because it's an interesting new ground to explore, whereas there are countless x86 and Arm operating system kernels out there.
 
 ### Dependencies
 
-If you're building for a 32-bit RISC-V system, make sure you've cross-compiled and installed the latest RISC-V port (v2.30) of [GNU binutils](https://github.com/riscv/riscv-binutils-gdb) as the kernel requires this toolkit to build. Then, you'll need to use [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build host's architecture (likely x86_64) and you must install the `riscv32imac-unknown-none-elf` target, too. (Currently, Rust only supports 32-bit RISC-V. As soon as 64-bit support appears, I'll target that as well.)
+To build for a 32-bit RISC-V diosix system, make sure you've cross-compiled and installed the latest RISC-V port (v2.30) of [GNU binutils](https://github.com/riscv/riscv-binutils-gdb) as the kernel requires this toolkit. You'll next need to use [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build host's architecture (likely x86_64) and you must install the `riscv32imac-unknown-none-elf` target, too. (Currently, Rust only supports 32-bit RISC-V. As soon as 64-bit support appears, I'll target that as well.)
 
-Here's a list of steps to create your RISC-V Rust cross-compiler toolchain on a Debian-like system, which I recommend running in a container or virtual machine to avoid polluting your main environment:
+If in doubt, here's a list of steps to create your RISC-V Rust cross-compiler toolchain for diosix on a Debian-like system, which I recommend running in a container or virtual machine to avoid polluting your main environment:
 
 ```
 sudo apt-get update
@@ -58,15 +58,21 @@ You must use the supplied `build.sh` script, which sets up Cargo to compile, ass
 
 Supported triples and platforms are listed in the `build.sh` file. The compiled kernel executable can be found in `target/triple/release/kernel` for the given build triple. So, for example,
 
-`./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_u34`
+```
+./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_u34
+qemu-system-riscv32 -machine sifive_u -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic
+```
 
-...will build a kernel for a 32-bit RISC-V CPU in a SiFive Freedom U34-compatible system. Then you can try running it using Qemu:
+...will build a kernel for a 32-bit RISC-V CPU in a SiFive Freedom U34-compatible system, and run it in Qemu. To build and run diosix on Qemu's multi-processor Virt hardware environment, try:
 
-`qemu-system-riscv32 -machine sifive_u -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic`
+```
+./build.sh --triple riscv32imac-unknown-none-elf --platform qemu32_virt
+qemu-system-riscv32 -machine virt -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic -smp 4
+```
 
-Right now, the kernel assumes 16MB or more of DRAM is present. Qemu defaults to 128MB. Here's a screenshot of the kernel booting on an emulated SiFive U34 system, and writing some debug out to the virtual serial port:
+Right now, the kernel assumes 16MB or more of DRAM is present. Qemu defaults to 128MB. Here's a screenshot of the kernel booting in a 32-bit quad-core Qemu Virt hardware environment, and writing some debug out to the virtual serial port:
 
-[![Screenshot of diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32_sifive_u34.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32_sifive_u34.png)
+[![Screenshot of SMP diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/smp.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/smp.png)
 
 ### Branches
 
