@@ -1,4 +1,4 @@
-# Find the linker for 32-bit RISC-V SiFive-U targets
+# Find the linker for 32-bit RISC-V targets
 [target.riscv32imac-unknown-none-elf]
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles" ]
 linker = "riscv32-elf-ld"
