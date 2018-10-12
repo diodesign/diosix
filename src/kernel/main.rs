@@ -26,8 +26,7 @@ mod debug;
 #[no_mangle]
 pub extern "C" fn kmain(cpu_id_nr: u32, device_tree_buf: &u8)
 {
-  kprintln!("\nBooting diosix {} on CPU core {}, device tree at {:p}",
-            env!("CARGO_PKG_VERSION"), cpu_id_nr, device_tree_buf);
+  kprintln!("\nBooting diosix {} on CPU {}", env!("CARGO_PKG_VERSION"), cpu_id_nr);
 
   /* check we have enough DRAM installed... */
   let dram_size = match platform::get_ram_size(device_tree_buf)

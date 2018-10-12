@@ -37,7 +37,8 @@
 #    a1 = pointer to device tree
 # <= nothing else for kernel to do
 _start:
-  bge a0, 1, infinite_loop        # all cores but hart 0 are parked
+  addi  t0, x0, 1                   # get ready to select hart id > 0
+  bge   a0, t0, infinite_loop        # all cores but hart 0 are parked
 
   li sp, KERNEL_BOOT_STACK_TOP
   call kmain

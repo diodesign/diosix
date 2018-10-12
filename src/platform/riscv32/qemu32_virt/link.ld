@@ -7,8 +7,8 @@ ENTRY(_start)
 
 SECTIONS
 {
-  /* execution starts at 0x80000000, DRAM base */
-  . = 0x80000000;
+  /* execution starts at 0x80001000, DRAM base */
+  . = 0x80001000;
 
   /* this is in read-write physical RAM */
   .text : ALIGN(0x1000)

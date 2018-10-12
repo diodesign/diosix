@@ -1,4 +1,5 @@
-# Cargo manifest for the SiFive U34 SoC platform
+
+# Cargo manifest for the 32-bit SiFive U34 SoC platform
 
 [features]
 sifive_u34 = []

@@ -25,7 +25,7 @@ before_script:
 
 script:
   - ./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_u34
-  - ./build.sh --triple riscv32imac-unknown-none-elf --platform qemu_virt
+  - ./build.sh --triple riscv32imac-unknown-none-elf --platform qemu32_virt
 
 branches:
   only:

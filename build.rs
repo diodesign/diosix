@@ -58,9 +58,9 @@ fn main()
   {
     target_machine.push_str("sifive_u34");
   }
-  else if env::var("CARGO_FEATURE_QEMU_VIRT").is_ok() == true
+  else if env::var("CARGO_FEATURE_QEMU32_VIRT").is_ok() == true
   {
-    target_machine.push_str("qemu_virt");
+    target_machine.push_str("qemu32_virt");
   }
   else
   {

@@ -21,13 +21,17 @@
 # 0x80000000: DRAM base (default 128MB, min 16MB)
 
 # kernel DRAM layout, before device tree is probed
-# 0x80000000: kernel load + start address
+# 0x80000000: Page zero
+#             0 = global CPU spin lock (32b)
+#             4 = debug spin lock (32b)
+# 0x80001000: kernel load + start address
 # 0x81000000: kernel boot stack (16MB mark)
 
-.equ KERNEL_BOOT_STACK_TOP, 0x81000000
+.equ KERNEL_CPU_SPIN_LOCK,    0x80000000
+.equ KERNEL_BOOT_STACK_TOP,   0x81000000
 
 # the boot ROM drops us here with nothing setup
-# this code is assumed to be loaded and running at 0x80000000
+# this code is assumed to be loaded and running at 0x80001000
 # set up a stack and call the main kernel code.
 # we assume we have 16MB or more of DRAM fitted. this means the kernel and
 # and its initialization payload is expected to fit within this space.
@@ -36,9 +40,13 @@
 #    a1 = pointer to device tree
 # <= nothing else for kernel to do
 _start:
+
+
   li sp, KERNEL_BOOT_STACK_TOP
   call kmain
 
 # nowhere else to go, so: infinite loop
 infinite_loop:
   j infinite_loop
+
+#

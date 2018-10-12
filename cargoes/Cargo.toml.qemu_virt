@@ -1,7 +1,0 @@
-# Cargo manifest for the Qemu Virt environment
-
-[features]
-qemu_virt = []
-
-[dependencies]
-platform = { path = "src/platform/riscv32/qemu_virt" }

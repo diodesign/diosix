@@ -57,7 +57,7 @@ case $PLATFORM in
   sifive_u34)
   echo "[+] Building for ${CPU_ARCH} SiFive Freedom U34 series"
   ;;
-  qemu_virt)
+  qemu32_virt)
   echo "[+] Building for ${CPU_ARCH} Qemu Virt environment"
   ;;
   *)
