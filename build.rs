@@ -16,6 +16,7 @@
 
    acceptable machines (selected as --features to cargo):
    sifive_u34 (SiFive E-series boards)
+   qemu32_virt (32-bit Qemu Virt hardware environment)
 
    eg: cargo build --target riscv32imac-unknown-none-elf --features sifive_u34
 */
