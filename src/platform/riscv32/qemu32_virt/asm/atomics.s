@@ -28,7 +28,7 @@ acquire_attempt:
 # Release a simple lock that we've already held
 # => a0 = memory address of spin lock to release
 release_spin_lock:
-  amoswap.w.rl x0, x0, (a0)     # release lock by atomically writing 0 to it
+  amoswap.w.rl  x0, x0, (a0)    # release lock by atomically writing 0 to it
   ret
 
 # Acquire a spin lock to write to the serial debug port
