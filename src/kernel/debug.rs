@@ -15,9 +15,26 @@ extern
   fn platform_serial_write_byte(byte: u8);
   pub fn platform_acquire_debug_spin_lock();
   pub fn platform_release_debug_spin_lock();
+  pub fn platform_get_cpu_id() -> usize;
 }
 
-/* create macros for kernel-only kprintln and kprint debug output routines */
+/* top level debug macros - harmless logging */
+#[macro_export]
+macro_rules! klog
+{
+  ($fmt:expr) => (kprintln!("[CPU {}] {}", $crate::debug::platform_get_cpu_id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[CPU {}] ", $fmt), $crate::debug::platform_get_cpu_id(), $($arg)*));
+}
+
+/* bad news: bug detection, failures, etc */
+#[macro_export]
+macro_rules! kalert
+{
+  ($fmt:expr) => (kprintln!("[CPU {}] ALERT: {}", $crate::debug::platform_get_cpu_id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[CPU {}] ALERT: ", $fmt), $crate::debug::platform_get_cpu_id(), $($arg)*));
+}
+
+/* low-level macros for kernel-only kprintln and kprint debug output routines */
 macro_rules! kprintln
 {
   ($fmt:expr) => (kprint!(concat!($fmt, "\n")));
@@ -31,9 +48,9 @@ macro_rules! kprint
     use core::fmt::Write;
     unsafe
     {
-      $crate::platform_acquire_debug_spin_lock();
+      $crate::debug::platform_acquire_debug_spin_lock();
       $crate::debug::SERIALPORT.write_fmt(format_args!($($arg)*)).unwrap();
-      $crate::platform_release_debug_spin_lock();
+      $crate::debug::platform_release_debug_spin_lock();
     }
   });
 }

@@ -18,44 +18,44 @@
 # => a0 = memory address of spin lock to acquire
 # <= returns when lock acquired, blocks otherwise
 acquire_spin_lock:
-  addi          t0, x0, 1       # writing 1 to the lock will acquire it...
-  amoswap.w.aq  t0, t0, (a0)    # atomically exchange t0 and (a0)
-
-  # if lock was held then try again; otherwise, return and unblock
-  bnez          t0, acquire_spin_lock
-  ret
+  li    t0, 1                   # writing 1 to the lock will acquire it
+acquire_attempt:
+  amoswap.w.aq t0, t0, (a0)     # atomically swap t0 and word at a0
+  bnez  t0, acquire_attempt     # if lock was already held, then try again
+  ret                           # return on success
 
 # release_spin_lock
 # Release a simple lock that we've already held
 # => a0 = memory address of spin lock to release
 release_spin_lock:
-  amoswap.w.rl  x0, x0, (a0)    # release lock by atomically writing 0 to it
+  amoswap.w.rl x0, x0, (a0)     # release lock by atomically writing 0 to it
+  ret
 
 # Acquire a spin lock to write to the serial debug port
 # Blocks until we're clear to write to the serial port
 platform_acquire_debug_spin_lock:
-  # stack return address
+  # preserve return address
   addi  sp, sp, -4
-  sw    ra, 0(sp)
+  sw    ra, (sp)
 
   li    a0, KERNEL_DEBUG_SPIN_LOCK
   call  acquire_spin_lock
 
   # restore return address
-  lw    ra, 0(sp)
+  lw    ra, (sp)
   addi  sp, sp, 4
   ret
 
 # Release a spin lock after writing to the serial debug port
 platform_release_debug_spin_lock:
-  # stack return address
+  # preserve return address
   addi  sp, sp, -4
-  sw    ra, 0(sp)
+  sw    ra, (sp)
 
   li    a0, KERNEL_DEBUG_SPIN_LOCK
   call  release_spin_lock
 
   # restore return address
-  lw    ra, 0(sp)
+  lw    ra, (sp)
   addi  sp, sp, 4
   ret

@@ -51,32 +51,21 @@ _start:
   li    sp, KERNEL_BOOT_STACK_TOP
   sub   sp, sp, t1    # subtract per-cpu stack offset from top of stack
 
-  # get all cores to zero page zero. we need to clear the locks in this area
-  # and we can't have just one core do that while the others run off and start
-  # using the page's variables and locks...
-  # page zero is a 4KB (4096 byte) page of read-write DRAM.
-  li    t0, 4096
-  li    t1, KERNEL_PAGE_ZERO_BASE
-clear_page_zero:
-  addi  t0, t0, -4
-  add   t2, t1, t0
-  sw    x0, (t2)
-  bne   t0, x0, clear_page_zero
-
   # CPU core 0 is allowed to boot the kernel. All other cores are placed in
-  # the waiting room, where the scheduler will feed them work. If CPU core 0
-  # is broken, then the system won't boot (TODO?)
-  beq   a0, x0, boot_kernel
+  # the waiting room, where the scheduler will feed them work
+  bne   a0, x0, wait_for_work
 
-  # if we're still here then we're not CPU core 0, so start waiting
-  la    t0, kwait
+  # if we're still here then we're CPU core 0, so continue booting the system
+  # prepare to jump to the main kernel code
+  la    t0, kmain
 
-call_kernel:
+enter_kernel:
   jalr  ra, t0, 0
 
 infinite_loop:
   j     infinite_loop   # fall through to loop rather than crash
 
-boot_kernel:
-  la    t0, kmain
-  j     call_kernel
+# prepare to jump to the kernel's waiting room for CPU cores
+wait_for_work:
+  la    t0, kwait
+  j     enter_kernel

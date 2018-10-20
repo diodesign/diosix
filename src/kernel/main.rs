@@ -16,8 +16,6 @@ extern crate platform;
 /* get us some kind of debug output, typically to a serial port */
 #[macro_use]
 mod debug;
-use debug::platform_acquire_debug_spin_lock;
-use debug::platform_release_debug_spin_lock;
 
 /* kmain
    The selected boot CPU core branches here when ready.
@@ -26,9 +24,9 @@ use debug::platform_release_debug_spin_lock;
    <= return to halt kernel on this core
 */
 #[no_mangle]
-pub extern "C" fn kmain(cpu_id_nr: u32, device_tree_buf: &u8)
+pub extern "C" fn kmain(_cpu_id_nr: u32, device_tree_buf: &u8)
 {
-  kprintln!("Booting diosix {} on CPU {}", env!("CARGO_PKG_VERSION"), cpu_id_nr);
+  klog!("Booting diosix {}", env!("CARGO_PKG_VERSION"));
 
   /* check we have enough DRAM installed... */
   let dram_size = match platform::get_ram_size(device_tree_buf)
@@ -36,12 +34,12 @@ pub extern "C" fn kmain(cpu_id_nr: u32, device_tree_buf: &u8)
     Some(s) => s,
     None =>
     {
-      kprintln!("FAIL: Insufficient RAM or could not determine RAM size");
+      kalert!("Insufficient RAM or could not determine RAM size");
       return;
     }
   };
 
-  kprintln!("System RAM: {} bytes\n", dram_size);
+  klog!("System RAM: {} bytes", dram_size);
 }
 
 /* kwait
@@ -51,10 +49,9 @@ pub extern "C" fn kmain(cpu_id_nr: u32, device_tree_buf: &u8)
    <= return to halt kernel on this core
 */
 #[no_mangle]
-pub extern "C" fn kwait(cpu_id_nr: u32)
+pub extern "C" fn kwait(_cpu_id_nr: u32)
 {
-  kprintln!("CPU core {} alive and waiting", cpu_id_nr);
-
+  klog!("CPU core alive and waiting");
   loop{}
 }
 
@@ -64,13 +61,13 @@ pub extern "C" fn kwait(cpu_id_nr: u32)
 #[no_mangle]
 pub fn panic(_info: &PanicInfo) -> !
 {
-  kprintln!("WTF: Panic handler reached!");
+  kalert!("Panic handler reached!");
   loop {}
 }
 
 #[no_mangle]
 pub extern "C" fn abort() -> !
 {
-  kprintln!("WTF: Abort handler reached!");
+  kalert!("Abort handler reached!");
   loop {}
 }

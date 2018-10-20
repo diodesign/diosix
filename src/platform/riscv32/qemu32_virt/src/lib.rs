@@ -8,6 +8,9 @@
 #![no_std]
 extern crate hermit_dtb;
 
+/* minimum amount of RAM allowed before boot */
+const MIN_RAM_SIZE: u64 = 16 * 1024 * 1024;
+
 /* get_ram_size
    => device_tree_buf = pointer to device tree in kernel-accessible RAM
    <= number of bytes in system memory, or None for failure
@@ -40,5 +43,10 @@ pub fn get_ram_size(device_tree_buf: &u8) -> Option<u64>
                   (mem_params[10] as u64) << 40 |
                   (mem_params[ 9] as u64) << 48 |
                   (mem_params[ 8] as u64) << 56;
+
+  if mem_size < MIN_RAM_SIZE
+  {
+    return None;
+  }
   return Some(mem_size);
 }
