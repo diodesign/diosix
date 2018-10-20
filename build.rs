@@ -134,11 +134,20 @@ fn assemble(output_dir: &String, path: &str,
   archive_file.push_str(".a");
 
   /* now let's try to assemble the thing - this is where errors become fatal */
-  Command::new(as_exec).arg("-march").arg(arch).arg("-mabi").arg(abi)
+  if Command::new(as_exec).arg("-march").arg(arch).arg("-mabi").arg(abi)
                        .arg("-o").arg(&object_file).arg(path)
-                       .status().expect(format!("Failed to assemble {}", path).as_str());
-  Command::new(ar_exec).arg("crus").arg(archive_file).arg(object_file)
-                       .status().expect(format!("Failed to archive {}", path).as_str());
+                       .status().expect(format!("Failed to assemble {}", path).as_str())
+                       .code() != Some(0)
+  {
+    panic!("Assembler rejected {}", path);
+  }
+
+  if Command::new(ar_exec).arg("crus").arg(archive_file).arg(object_file)
+                       .status().expect(format!("Failed to archive {}", path).as_str())
+                       .code() != Some(0)
+  {
+    panic!("Archiver rejected {}", path);
+  }
 
   /* tell cargo where to find the goodies */
   println!("cargo:rustc-link-search=native={}", output_dir);
