@@ -29,6 +29,16 @@ use std::fs;
 extern crate regex;
 use regex::Regex;
 
+/* shared context of this build run */
+struct Context
+{
+  output_dir: String,  /* where we're outputting object code on the host */
+  as_exec: String,     /* path to host's GNU assembler executable */
+  ar_exec: String,     /* path to host's GNU archiver executable */
+  arch: String,        /* target CPU architecture */
+  abi: String          /* target CPU ABI for this kernel */
+}
+
 fn main()
 {
   /* first, determine which CPU we're building for from target triple */
@@ -71,10 +81,33 @@ fn main()
 
   let output_dir = env::var("OUT_DIR").unwrap();
 
+  /* create a shared context describing this build */
+  let context = Context
+  {
+    output_dir: output_dir,
+    as_exec: gnu_as,
+    ar_exec: gnu_ar,
+    arch: target_arch,
+    abi: target_abi
+  };
+
   /* tell cargo to rebuild just these files change:
-     linker scripts and any files in the platform's assembly code directory */
+     linker scripts and any files in the platform's assembly code directories.
+     also: assemble and link them */
   println!("cargo:rerun-if-changed=src/platform/{}/{}/link.ld", target_cpu, target_machine);
-  match fs::read_dir(format!("src/platform/{}/{}/asm", target_cpu, target_machine))
+  slurp_directory(format!("src/platform/{}/{}/asm", target_cpu, target_machine), &context);
+  slurp_directory(format!("src/platform/{}/common/asm", target_cpu), &context);
+}
+
+/* slurp_directory
+   Run through a directory of assembly source code, add each .s file to the project
+   and assemble it using the given tools
+   => slurp_from = path of directory to absorb
+      context = build context
+*/
+fn slurp_directory(slurp_from: String, context: &Context)
+{
+  match fs::read_dir(slurp_from)
   {
     Ok(directory) => for file in directory
     {
@@ -88,8 +121,7 @@ fn main()
             if metadata.is_file() == true
             {
               println!("cargo:rerun-if-changed={}",file.path().to_str().unwrap());
-              assemble(&output_dir, file.path().to_str().unwrap(),
-                       &gnu_as, &gnu_ar, &target_arch, &target_abi);
+              assemble(file.path().to_str().unwrap(), context);
             }
           }
         },
@@ -102,13 +134,10 @@ fn main()
 
 /* assemble
    Attempt to assemble a given source file, which must be a .s file
-   => output_dir = where to assemble our code
-      path = path to .s file to assemble
-      as_exec, ar_exec = assember and archive executable names,
-      arch, abi = CPU architecture and ABI strings to pass to assembler
+   => path = path to .s file to assemble
+      context = build context
 */
-fn assemble(output_dir: &String, path: &str,
-            as_exec: &String, ar_exec: &String, arch: &String, abi: &String)
+fn assemble(path: &str, context: &Context)
 {
   /* create name from .s source file's path - extract just the leafname and drop the
      file extension. so extract 'start' from 'src/platform/blah/asm/start.s' */
@@ -123,33 +152,39 @@ fn assemble(output_dir: &String, path: &str,
   let leafname = &(matches.unwrap())["leaf"];
 
   /* build pathnames for the assembled .o and .a files */
-  let mut object_file = output_dir.clone();
+  let mut object_file = context.output_dir.clone();
   object_file.push_str("/");
   object_file.push_str(leafname);
   object_file.push_str(".o");
 
-  let mut archive_file = output_dir.clone();
+  let mut archive_file = context.output_dir.clone();
   archive_file.push_str("/lib");
   archive_file.push_str(leafname);
   archive_file.push_str(".a");
 
+  /* keep rust's borrow checker happy */
+  let as_exec = &context.as_exec;
+  let ar_exec = &context.ar_exec;
+  let abi     = &context.abi;
+  let arch    = &context.arch;
+
   /* now let's try to assemble the thing - this is where errors become fatal */
   if Command::new(as_exec).arg("-march").arg(arch).arg("-mabi").arg(abi)
-                       .arg("-o").arg(&object_file).arg(path)
-                       .status().expect(format!("Failed to assemble {}", path).as_str())
-                       .code() != Some(0)
+                          .arg("-o").arg(&object_file).arg(path)
+                          .status().expect(format!("Failed to assemble {}", path).as_str())
+                          .code() != Some(0)
   {
     panic!("Assembler rejected {}", path);
   }
 
   if Command::new(ar_exec).arg("crus").arg(archive_file).arg(object_file)
-                       .status().expect(format!("Failed to archive {}", path).as_str())
-                       .code() != Some(0)
+                          .status().expect(format!("Failed to archive {}", path).as_str())
+                          .code() != Some(0)
   {
     panic!("Archiver rejected {}", path);
   }
 
   /* tell cargo where to find the goodies */
-  println!("cargo:rustc-link-search=native={}", output_dir);
+  println!("cargo:rustc-link-search=native={}", context.output_dir);
   println!("cargo:rustc-link-lib=static={}", leafname);
 }

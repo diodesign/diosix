@@ -1,4 +1,4 @@
-# kernel low-level atomic primitives
+# kernel low-level atomic primitives for RV32G targets
 #
 # (c) Chris Williams, 2018.
 # See LICENSE for usage and copying.
@@ -7,8 +7,8 @@
 .global platform_acquire_debug_spin_lock
 .global platform_release_debug_spin_lock
 
-# include page zero locations
-.include "src/platform/riscv32/qemu32_virt/asm/page_zero.s"
+# include kernel constants, such as stack and lock locations
+.include "src/platform/riscv32/common/asm/consts.s"
 
 # See section 7.3 of https://content.riscv.org/wp-content/uploads/2017/05/riscv-spec-v2.2.pdf
 # for a description of RISC-V's atomic operations.

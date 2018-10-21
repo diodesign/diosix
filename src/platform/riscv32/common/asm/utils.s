@@ -1,4 +1,4 @@
-# kernel low-level utility code for Qemu Virt hardware environment
+# kernel low-level utility code for RV32G targets
 #
 # (c) Chris Williams, 2018.
 # See LICENSE for usage and copying.

@@ -7,6 +7,9 @@
 .section .entry
 .global _start
 
+# include kernel constants, such as stack and lock locations
+.include "src/platform/riscv32/common/asm/consts.s"
+
 # hardware physical memory map
 # 0x00000000, size: 0x100:     Debug ROM/data
 # 0x00001000, size: 0x11000:   Boot ROM
@@ -20,9 +23,9 @@
 
 # kernel DRAM layout, before device tree is probed
 # 0x80000000: kernel load + start address
-# 0x81000000: kernel boot stack (16MB mark)
-
-.equ KERNEL_BOOT_STACK_TOP, 0x81000000
+# 0x80fff000: top of kernel boot stacks
+# 0x80fff000: base of locks and variables page
+# 0x81000000: top of kernel boot memory
 
 # the boot ROM drops us here with nothing setup
 # this code is assumed to be loaded and running at 0x80000000
@@ -42,4 +45,5 @@ _start:
 
 # nowhere else to go, so: infinite loop
 infinite_loop:
+  wfi
   j infinite_loop

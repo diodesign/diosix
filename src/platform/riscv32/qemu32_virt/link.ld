@@ -7,10 +7,10 @@ ENTRY(_start)
 
 SECTIONS
 {
-  /* execution starts at 0x80001000, DRAM base */
-  . = 0x80001000;
+  /* execution starts at 0x80000000, DRAM base */
+  . = 0x80000000;
 
-  /* this is in read-write physical RAM */
+  /* code and read-only data in read-write physical RAM */
   .text : ALIGN(0x1000)
   {
     *(.entry) /* must be first */
@@ -18,7 +18,7 @@ SECTIONS
     *(.rodata*)
   }
 
-  /* read-write stuff goes here */
+  /* read-write data goes here */
   .bss : ALIGN(0x1000)
   {
     *(.data)
