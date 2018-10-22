@@ -36,7 +36,7 @@ fn exception(irq: IRQ)
   {
     (true, PrivilegeMode::Kernel) =>
     {
-      kalert!("Fatal exception in kernel: {}", irq.debug_cause());
+      kalert!("Fatal exception in kernel: {} at 0x{:x}", irq.debug_cause(), irq.pc);
       loop {}
     },
     (_, _) => () /* ignore everything else */
