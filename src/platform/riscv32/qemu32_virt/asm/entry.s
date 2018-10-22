@@ -26,13 +26,15 @@
 # 0x80fdf000: kernel boot stack bottom
 #      \......... 128KB of 8 * 16KB per-CPU core boot stacks
 #                 Each CPU core has its own boot stack, descending one by one
-#                 from the top of the kernel boot stack.
+#                 from the top of the kernel boot stack. Each boot stack is
+#                 split in two halves - top 8KB half is normal operation
+#                 stack. The lower 8KB is for the interrupt/exception handler.
 # 0x80fff000: kernel boot stack top
 # 0x80fff000: base of locks and variables page
 # 0x81000000: top of kernel boot memory
 
 # the boot ROM drops us here with nothing setup
-# this code is assumed to be loaded and running at 0x80001000
+# this code is assumed to be loaded and running at 0x80000000
 # set up a per-CPU core stack and call the main kernel code.
 # interrupts and exceptions are disabled within this space.
 # we assume we have 16MB or more of DRAM fitted. this means the kernel and
@@ -47,14 +49,12 @@ _start:
   sll   t1, a0, t0    # t1 = (hart id) << 14
   li    sp, KERNEL_BOOT_STACK_TOP
   sub   sp, sp, t1    # subtract per-cpu stack offset from top of stack
+  li    t0, KERNEL_BOOT_IRQ_STACK_OFFSET
+  sub   t0, sp, t0        # calculate top of exception handler stack
+  csrrw x0, mscratch, t0  # store in mscratch
 
-  # point core at default machine-level exception/interrupt handler
-  la    t0, irq_machine_handler
-  csrrw x0, mtvec, t0
-
-  # enable interrupts: set bit 3 in mstatus to enable machine irqs (MIE)
-  li    t0, 1 << 3
-  csrrs x0, mstatus, t0
+  # set up early exception handling
+  call  irq_early_init
 
   # CPU core 0 is allowed to boot the kernel. All other cores are placed in
   # the waiting room, where the scheduler will feed them work
@@ -62,6 +62,9 @@ _start:
 
   # if we're still here then we're CPU core 0, so continue booting the system.
   # prepare to jump to the main kernel code
+
+  # call kmain with devicetree in a0
+  add   a0, a1, x0
   la    t0, kmain
 
 enter_kernel:

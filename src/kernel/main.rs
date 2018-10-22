@@ -8,23 +8,22 @@
 /* let the compiler know we're on our own here in bare-metal world */
 #![no_std]
 #![no_main]
-use core::panic::PanicInfo;
 
 /* this will bring in all the hardware-specific code */
 extern crate platform;
 
-/* get us some kind of debug output, typically to a serial port */
 #[macro_use]
-mod debug;
+mod debug;      /* get us some kind of debug output, typically to a serial port */
+mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
+mod abort;      /* implement abort() and panic() handlers */
 
 /* kmain
-   The selected boot CPU core branches here when ready.
-   => cpu_id_nr = CPU core ID we're running on
-      device_tree_buf = phys RAM pointer to device tree describing the hardware
+   The boot CPU core branches here when ready.
+   => device_tree_buf = phys RAM pointer to device tree describing the hardware
    <= return to halt kernel on this core
 */
 #[no_mangle]
-pub extern "C" fn kmain(_cpu_id_nr: u32, device_tree_buf: &u8)
+pub extern "C" fn kmain(device_tree_buf: &u8)
 {
   klog!("Booting diosix {}", env!("CARGO_PKG_VERSION"));
 
@@ -40,34 +39,16 @@ pub extern "C" fn kmain(_cpu_id_nr: u32, device_tree_buf: &u8)
   };
 
   klog!("System RAM: {} bytes", dram_size);
+  loop {}
 }
 
 /* kwait
-   Non-boot CPU cores arrive here when ready to await work to do.
-   => cpu_id_nr = CPU core ID we're running on
-      device_tree_buf = phys RAM pointer to device tree describing the hardware
+   Non-boot CPU cores arrive here when ready to do some work.
    <= return to halt kernel on this core
 */
 #[no_mangle]
-pub extern "C" fn kwait(_cpu_id_nr: u32)
+pub extern "C" fn kwait()
 {
   klog!("CPU core alive and waiting");
   loop{}
-}
-
-
-/* we need to provide these */
-#[panic_handler]
-#[no_mangle]
-pub fn panic(_info: &PanicInfo) -> !
-{
-  kalert!("Panic handler reached!");
-  loop {}
-}
-
-#[no_mangle]
-pub extern "C" fn abort() -> !
-{
-  kalert!("Abort handler reached!");
-  loop {}
 }

@@ -5,4 +5,4 @@ authors = ["Chris Williams <diodesign@gmail.com>"]
 license = "MIT"
 
 [dependencies]
-hermit-dtb = { path = "../../../contrib/hermit-dtb" }
+common = { path = "../common" }

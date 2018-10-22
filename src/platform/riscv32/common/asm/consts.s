@@ -17,3 +17,7 @@
 
 # top of the CPU boot stacks sits right under the lock+vars page
 .equ KERNEL_BOOT_STACK_TOP,       KERNEL_LOCK_PAGE
+
+# each stack is 16KB, top 8KBB for normal operation.
+# lower 8KB for the exception handler.
+.equ KERNEL_BOOT_IRQ_STACK_OFFSET, 8 * 1024

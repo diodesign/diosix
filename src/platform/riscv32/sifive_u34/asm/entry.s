@@ -23,7 +23,8 @@
 
 # kernel DRAM layout, before device tree is probed
 # 0x80000000: kernel load + start address
-# 0x80fff000: top of kernel boot stacks
+# 0x80fff000: top of kernel 16KB boot stack. Top 8KB is for normal operation.
+#             Lower 8KB is for the interrupt/exception handler.
 # 0x80fff000: base of locks and variables page
 # 0x81000000: top of kernel boot memory
 
@@ -37,11 +38,22 @@
 #    a1 = pointer to device tree
 # <= nothing else for kernel to do
 _start:
-  addi  t0, x0, 1                 # get ready to select hart id > 0
-  bge   a0, t0, infinite_loop     # all cores but hart 0 are parked
+  # this is supposed to be a single CPU system. Park all cores but ID 0
+  li      t0, 1
+  bge     a0, t0, infinite_loop
 
-  li sp, KERNEL_BOOT_STACK_TOP
-  call kmain
+  # prepare the boot stack and interrupt stack, stored in mscratch
+  li      sp, KERNEL_BOOT_STACK_TOP
+  li      t0, KERNEL_BOOT_IRQ_STACK_OFFSET
+  sub     t0, sp, t0            # calculate top of exception stack
+  csrrw   x0, mscratch, t0      # store in mscratch
+
+  # set up early exception handling
+  call    irq_early_init
+
+  # call kmain with devicetree in a0
+  add     a0, a1, x0
+  call    kmain
 
 # nowhere else to go, so: infinite loop
 infinite_loop:

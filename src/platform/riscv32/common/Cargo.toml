@@ -1,8 +1,8 @@
 [package]
-name = "platform"
+name = "common"
 version = "0.1.0"
 authors = ["Chris Williams <diodesign@gmail.com>"]
 license = "MIT"
 
 [dependencies]
-common = { path = "../common" }
+hermit-dtb = { path = "../../../contrib/hermit-dtb" }
