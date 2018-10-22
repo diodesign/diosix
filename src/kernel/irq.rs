@@ -5,20 +5,47 @@
  * See LICENSE for usage and copying.
  */
 
+/* platform-specific code must implement all this */
 use platform;
+use platform::common::IRQType;
+use platform::common::IRQContext;
+use platform::common::PrivilegeMode;
+use platform::common::IRQ;
 
-/* entry point for software exceptions. call down into platform-specific handlers */
+/* kernel_irq_handler
+   entry point for hardware interrupts and software exceptions, collectively known as IRQs.
+   call down into platform-specific handlers
+   => context = platform-specific context of the IRQ
+*/
 #[no_mangle]
-pub extern "C" fn kernel_exception_handler()
+pub extern "C" fn kernel_irq_handler(context: IRQContext)
 {
-  klog!("Exception received");
-  platform::exception_handler();
+  let irq = platform::common::irq::dispatch(context);
+
+  match irq.irq_type
+  {
+    IRQType::Exception => exception(irq),
+    IRQType::Interrupt => interrupt(irq),
+  };
 }
 
-/* entry point for hardware interrupts. call down into platform-specific handlers */
-#[no_mangle]
-pub extern "C" fn kernel_interrupt_handler()
+/* handle software exception */
+fn exception(irq: IRQ)
 {
-  klog!("Interrupt received");
-  platform::interrupt_handler();
+  match (irq.fatal, irq.privilege_mode)
+  {
+    (true, PrivilegeMode::Kernel) =>
+    {
+      kalert!("Fatal exception in kernel: {}", irq.debug_cause());
+      loop {}
+    },
+    (_, _) => () /* ignore everything else */
+  }
+}
+
+/* handle hardware interrupt */
+fn interrupt(_irq: platform::common::IRQ)
+{
+  kalert!("Hardware interrupt");
+  loop {}
 }

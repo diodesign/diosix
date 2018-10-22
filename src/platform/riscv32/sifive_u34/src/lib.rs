@@ -17,15 +17,3 @@ pub fn get_ram_size(device_tree_buf: &u8) -> Option<u64>
 {
   common::devicetree::get_ram_size(device_tree_buf)
 }
-
-/* Handle synchronous exception triggered by programming error */
-pub fn exception_handler()
-{
-  common::irq::exception_handler();
-}
-
-/* Handle async or synchronous interrupt triggered during program execution */
-pub fn interrupt_handler()
-{
-  common::irq::interrupt_handler();
-}

@@ -32,8 +32,8 @@ irq_early_init:
   lw  x\reg, (\reg * 4)(sp)
 .endm
 
-# during interrupts and exceptions, stack 31 of 32 registers (skip x0)
-.equ  IRQ_REGISTER_FRAME_SIZE,   (31 * 4)
+# during interrupts and exceptions, reserve space for 32 registers
+.equ  IRQ_REGISTER_FRAME_SIZE,   (32 * 4)
 
 .align 4
 # Entry point for machine-level handler of interrupts and exceptions
@@ -42,40 +42,39 @@ irq_machine_handler:
   # get exception handler stack from mscratch by swapping it for current sp
   csrrw sp, mscratch, sp
 
-  # preserve all 32 registers bar two: x0 (zero) and x2 (sp)
-  # in the IRQ handler stack. Pointless stacking zero,
-  # and x2 is held mscratch
+  # save space to preserve all 32 GP registers
   addi  sp, sp, -(IRQ_REGISTER_FRAME_SIZE)
 
-  # skip x0 (zero), save x1, skip and x2 (sp) as it's in mscratch right now,
-  # then stack the remaining 29 registers (x3 to x31)
-  PUSH_REG 1
-  .set reg, 3
-  .rept 29
+  # skip x0 (zero), stack all 31 other registers
+  .set reg, 1
+  .rept 31
     PUSH_REG %reg
     .set reg, reg + 1
   .endr
 
-  # time to call the platform's higher-level IRQ handler. gather up
-  # the cause and location in memory of the exception or interrupt
-  addi  a0, sp, IRQ_REGISTER_FRAME_SIZE
-  csrrs a1, mcause, x0
-  csrrs a2, mepc, x0
+  # gather up the cause and location in memory of the exception or interrupt,
+  # and store on the IRQ handler's stack
+  addi   sp, sp, -12
+  csrrs t0, mcause, x0
+  csrrs t1, mepc, x0
+  csrrs t2, mtval, x0
+  sw    t0, 0(sp)
+  sw    t1, 4(sp)
+  sw    t2, 8(sp)
 
-  # if the top bit is set then a1 (mcause) is negative and this means
-  # we're dealing with a hardware interrupt
-  blt   a1, x0, handle_hardware_interrupt
-  # if not, this is an exception
-  call  kernel_exception_handler
+  # pass current sp to exception/hw handler as a pointer. this'll allow
+  # the higher-level kernel access the context of the IRQ
+  add   a0, sp, x0
+  call  kernel_irq_handler
 
-irq_machine_handler_outro:
-  # restore stacked 29 registers (x31 to x3) then x1
+  # fix up the stack from the cause and epc pushes
+  # then restore all 31 stacked registers, skipping zero (x0)
+  addi  sp, sp, 12
   .set reg, 31
-  .rept 29
+  .rept 31
     PULL_REG %reg
     .set reg, reg - 1
   .endr
-  PULL_REG 1
 
   # fix up exception handler sp
   addi  sp, sp, IRQ_REGISTER_FRAME_SIZE
@@ -83,10 +82,3 @@ irq_machine_handler_outro:
   # swap exception sp for original sp, and return
   csrrw sp, mscratch, sp
   mret
-
-handle_hardware_interrupt:
-  # get rid of the top bit in a1
-  sll   a1, a1, 1
-  srl   a1, a1, 1
-  call  kernel_interrupt_handler
-  j     irq_machine_handler_outro
