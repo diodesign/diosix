@@ -17,6 +17,9 @@ mod debug;      /* get us some kind of debug output, typically to a serial port 
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod abort;      /* implement abort() and panic() handlers */
 
+pub use abort::abort;
+pub use irq::kernel_irq_handler;
+
 /* kmain
    The boot CPU core branches here when ready.
    => device_tree_buf = phys RAM pointer to device tree describing the hardware
