@@ -17,7 +17,7 @@ whereas there are countless x86 and Arm operating system kernels out there.
 
 ### Running and building
 
-See the `BUILDING.md` file for instructions on how to how build and run this project.
+See the [building instructions](BUILDING.md) for step-by-step guides to compiling and running this project.
 Here's a screenshot of the kernel booting in a 32-bit quad-core Qemu Virt hardware environment,
 and writing some debug out to the virtual serial port:
 
@@ -39,17 +39,18 @@ Here's a non-complete todo list:
 * Bring-up for RV32
 * Bring-up for RV64
 * Kernel level:
- * Physical page management
- * Exception handling
- * Interrupt handling
- * CPU core scheduling
- * Environment management
+    * Physical page management
+    * Exception handling
+    * Interrupt handling
+    * CPU core scheduling
+    * Environment management
 * Supervisor level:
- * Virtual page management
- * Exception handling
- * Interrupt handling
- * CPU core scheduling
- * Process management
+    * Virtual page management
+    * Exception handling
+    * Interrupt handling
+    * CPU core scheduling
+    * ELF executable parsing and loading
+    * Process management
 
 ### Branches
 
