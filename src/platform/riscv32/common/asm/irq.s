@@ -8,6 +8,7 @@
 .altmacro
 
 .section .text
+
 .global irq_early_init
 
 # set up boot interrupt handling on this core so we can catch
@@ -52,24 +53,26 @@ irq_machine_handler:
     .set reg, reg + 1
   .endr
 
-  # gather up the cause and location in memory of the exception or interrupt,
-  # and store on the IRQ handler's stack
-  addi   sp, sp, -12
-  csrrs t0, mcause, x0
-  csrrs t1, mepc, x0
-  csrrs t2, mtval, x0
+  # gather up the cause, faulting instruction address, memory address relevant to the exception or interrupt,
+  # and previous environment's stack pointer, and store on the IRQ handler's stack
+  addi   sp, sp, -16
+  csrrs t0, mcause, x0      #
+  csrrs t1, mepc, x0        # just read from these special registers
+  csrrs t2, mtval, x0       # don't modify their contents, esp mscratch
+  csrrs t3, mscratch, x0    #
   sw    t0, 0(sp)
   sw    t1, 4(sp)
   sw    t2, 8(sp)
+  sw    t3, 12(sp)
 
   # pass current sp to exception/hw handler as a pointer. this'll allow
   # the higher-level kernel access the context of the IRQ
   add   a0, sp, x0
   call  kernel_irq_handler
 
-  # fix up the stack from the cause and epc pushes
+  # fix up the stack from the cause, epc, etc pushes
   # then restore all 31 stacked registers, skipping zero (x0)
-  addi  sp, sp, 12
+  addi  sp, sp, 16
   .set reg, 31
   .rept 31
     PULL_REG %reg

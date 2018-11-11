@@ -59,6 +59,7 @@ pub fn dispatch(context: ::IRQContext) -> ::IRQ
     irq_type: cause_type,
     cause: cause,
     privilege_mode: ::PrivilegeMode::Kernel,
-    pc: context.epc
+    pc: context.epc as usize,
+    sp: context.sp as usize
   }
 }

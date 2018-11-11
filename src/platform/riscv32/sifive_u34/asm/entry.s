@@ -8,6 +8,7 @@
 .global _start
 
 # include kernel constants, such as stack and lock locations
+# also defines _KERNEL_TOP_PAGE_INIT
 .include "src/platform/riscv32/common/asm/consts.s"
 
 # hardware physical memory map
@@ -19,20 +20,13 @@
 # 0x10013000, size: 0x1000:    UART 0
 # 0x10023000, size: 0x1000:    UART 1
 # 0x100900FC, size: 0x2000:    Cadence GEM ethernet controller
-# 0x80000000: DRAM base (default 128MB, max 8GB, min 16MB)
-
-# kernel DRAM layout, before device tree is probed
-# 0x80000000: kernel load + start address
-# 0x80fff000: top of kernel 16KB boot stack. Top 8KB is for normal operation.
-#             Lower 8KB is for the interrupt/exception handler.
-# 0x80fff000: base of locks and variables page
-# 0x81000000: top of kernel boot memory
+# 0x80000000: DRAM base (default 128MB, min 16MB) <-- kernel + entered loaded here
+#
+# see consts.s for CPU stack + top page of variables location
 
 # the boot ROM drops us here with nothing setup
 # this code is assumed to be loaded and running at 0x80000000
 # set up a stack and call the main kernel code.
-# we assume we have 16MB or more of DRAM fitted. this means the kernel and
-# and its initialization payload is expected to fit within this space.
 #
 # => a0 = hart ID. Only boot CPU core 0. Park all other cores permanently
 #    a1 = pointer to device tree
@@ -42,13 +36,23 @@ _start:
   li      t0, 1
   bge     a0, t0, infinite_loop
 
-  # prepare the boot stack and interrupt stack, stored in mscratch
-  li      sp, KERNEL_BOOT_STACK_TOP
-  li      t0, KERNEL_BOOT_IRQ_STACK_OFFSET
-  sub     t0, sp, t0            # calculate top of exception stack
-  csrrw   x0, mscratch, t0      # store in mscratch
+  # stick this in the back pocket
+  la      t6, __kernel_top_page_base
 
-  # set up early exception handling
+  # only one CPU on this system
+  li      t0, 1
+  addi    t1, t6, KERNEL_CPUS_ALIVE
+  sw      t0, (t1)
+
+  # set up a 16KB CPU core stack, descending downwords. the 16KB stack space is 2 * 8KB areas.
+  # top 8KB for running boot code, bottom 8KB for exception/interrupt handling
+  la      sp, __kernel_cpu_stack_top
+  li      t0, KERNEL_BOOT_IRQ_STACK_OFFSET
+  sub     t0, sp, t0            # calculate top of exception/interrupt stack
+  csrrw   x0, mscratch, t0      # store irq stack top in mscratch
+
+  # set up top page and early exception handling
+  _KERNEL_TOP_PAGE_INIT
   call    irq_early_init
 
   # call kmain with devicetree in a0

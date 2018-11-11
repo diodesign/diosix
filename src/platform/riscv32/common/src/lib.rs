@@ -9,6 +9,7 @@
 
 /* expose architecture common code to platform-specific code */
 pub mod devicetree;
+pub mod physmem;
 pub mod irq;
 
 /* define common structures */
@@ -57,7 +58,8 @@ pub struct IRQ
   pub privilege_mode: PrivilegeMode,  /* privilege level of the running environment */
   pub irq_type: IRQType,              /* type of the IRQ - sw or hw generated */
   pub cause: IRQCause,                /* cause of this interruption */
-  pub pc: u32,                        /* where in memory this IRQ occured */
+  pub pc: usize,                      /* where in memory this IRQ occured */
+  pub sp: usize                       /* stack pointer for interrupted environment */
 }
 
 impl IRQ
@@ -103,5 +105,6 @@ pub struct IRQContext
 {
   cause: u32, epc: u32, /* cause code and PC when IRQ fired */
   mtval: u32,           /* IRQ specific information */
+  sp: u32,              /* stack pointer in interrupted envionment */
   registers: [u32; 32]  /* all 32 registers stacked */
 }

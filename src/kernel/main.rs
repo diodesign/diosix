@@ -16,6 +16,7 @@ extern crate platform;
 mod debug;      /* get us some kind of debug output, typically to a serial port */
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod abort;      /* implement abort() and panic() handlers */
+mod physmem;    /* manage physical memory */
 
 /* kmain
    The boot CPU core branches here when ready.
@@ -25,21 +26,18 @@ mod abort;      /* implement abort() and panic() handlers */
 #[no_mangle]
 pub extern "C" fn kmain(device_tree_buf: &u8)
 {
-  klog!("Booting diosix {}", env!("CARGO_PKG_VERSION"));
+  klog!("Welcome to diosix {}", env!("CARGO_PKG_VERSION"));
 
-  /* check we have enough DRAM installed... */
-  let dram_size = match platform::get_ram_size(device_tree_buf)
+  /* set up the physical memory managemenwt */
+  match physmem::init(device_tree_buf)
   {
-    Some(s) => s,
+    Some(s) => klog!("Total physical memory avilable: {} MiB ({} bytes)", s / 1024 / 1024, s),
     None =>
     {
-      kalert!("Insufficient RAM or could not determine RAM size");
+      kalert!("Insufficient physical memory, halting.");
       return;
     }
   };
-
-  klog!("System RAM: {} bytes", dram_size);
-  loop {}
 }
 
 /* kwait
@@ -50,5 +48,4 @@ pub extern "C" fn kmain(device_tree_buf: &u8)
 pub extern "C" fn kwait()
 {
   klog!("CPU core alive and waiting");
-  loop{}
 }

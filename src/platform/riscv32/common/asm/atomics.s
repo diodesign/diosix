@@ -4,8 +4,8 @@
 # See LICENSE for usage and copying.
 
 .section .text
-.global platform_acquire_debug_spin_lock
-.global platform_release_debug_spin_lock
+.global platform_acquire_spin_lock
+.global platform_release_spin_lock
 
 # include kernel constants, such as stack and lock locations
 .include "src/platform/riscv32/common/asm/consts.s"
@@ -17,7 +17,8 @@
 # Acquire a simple lock or spin while waiting
 # => a0 = memory address of spin lock to acquire
 # <= returns when lock acquired, blocks otherwise
-acquire_spin_lock:
+# Corrupts t0
+platform_acquire_spin_lock:
   li    t0, 1                   # writing 1 to the lock will acquire it
 acquire_attempt:
   amoswap.w.aq t0, t0, (a0)     # atomically swap t0 and word at a0
@@ -27,35 +28,6 @@ acquire_attempt:
 # release_spin_lock
 # Release a simple lock that we've already held
 # => a0 = memory address of spin lock to release
-release_spin_lock:
+platform_release_spin_lock:
   amoswap.w.rl  x0, x0, (a0)    # release lock by atomically writing 0 to it
-  ret
-
-# Acquire a spin lock to write to the serial debug port
-# Blocks until we're clear to write to the serial port
-platform_acquire_debug_spin_lock:
-  # preserve return address
-  addi  sp, sp, -4
-  sw    ra, (sp)
-
-  li    a0, KERNEL_DEBUG_SPIN_LOCK
-  call  acquire_spin_lock
-
-  # restore return address
-  lw    ra, (sp)
-  addi  sp, sp, 4
-  ret
-
-# Release a spin lock after writing to the serial debug port
-platform_release_debug_spin_lock:
-  # preserve return address
-  addi  sp, sp, -4
-  sw    ra, (sp)
-
-  li    a0, KERNEL_DEBUG_SPIN_LOCK
-  call  release_spin_lock
-
-  # restore return address
-  lw    ra, (sp)
-  addi  sp, sp, 4
   ret
