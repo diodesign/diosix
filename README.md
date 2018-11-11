@@ -17,7 +17,7 @@ whereas there are countless x86 and Arm operating system kernels out there.
 
 ### Running and building
 
-See the [building instructions](BUILDING.md) for step-by-step guides to compiling and running this project.
+See the [build instructions](BUILDING.md) for step-by-step guides to compiling and running this project.
 Here's a screenshot of the kernel booting in a 32-bit quad-core Qemu Virt hardware environment,
 and writing some debug out to the virtual serial port:
 
