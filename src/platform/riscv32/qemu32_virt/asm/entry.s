@@ -21,7 +21,7 @@
 # 0x10001000, size: 0x1000:    Virtual IO
 # 0x80000000: DRAM base (default 128MB, min 16MB) <-- kernel + entered loaded here
 #
-# see consts.s for CPU stack + top page of variables locations
+# see consts.s for top page of global variables locations and other memory layout decisions
 
 # the boot ROM drops us here with nothing setup
 # this code is assumed to be loaded and running at 0x80000000
@@ -40,15 +40,22 @@ _start:
   addi     t1, t6, KERNEL_CPUS_ALIVE
   amoadd.w x0, t0, (t1)
 
-  # set up a 16KB per-CPU core stack, calculated from top of the kernel boot stack, descending downwords.
-  # CPU 0 takes first 16KB from the top down, then CPU 1, CPU 2, etc. the 16KB stack space is 2 * 8KB areas.
-  # top 8KB for running boot code, bottom 8KB for exception/interrupt handling
+  # set up a ~16KB per-CPU core stack, calculated from top of the kernel boot stack,
+  # descending downwords. CPU 0 takes first 16KB from the top down, then CPU 1, CPU 2, etc.
+  # the ~16KB stack space is 2 * 8KB areas.
+  # top 8KB is for exception/interrupt handling, lower 8KB for startup code.
+  # when startup is over, the IRQ stack can fall down into the full 16KB space.
+  #
+  # it's not quite 16KB, though. sitting above the top of the stack are a few per-CPU variables.
+  # mscratch always points to the top of the IRQ stack.
   slli  t0, a0, 14        # t0 = (hart id) << 14 = (hart ID) * 16 * 1024
-  la    sp, __kernel_cpu_stack_top
-  sub   sp, sp, t0        # subtract per-cpu stack offset from top of stack
-  li    t0, KERNEL_BOOT_IRQ_STACK_OFFSET
-  sub   t0, sp, t0        # calculate top of IRQ handler stack with the 16KB reserved for this core
-  csrrw x0, mscratch, t0  # store exception/interrupt handler stack in mscratch
+  la    t1, __kernel_cpu_stack_top
+  sub   t1, t1, t0        # calculate top of the per-CPU stack area
+  li    t2, KERNEL_BOOT_STACK_OFFSET
+  sub   sp, t1, t2        # assign boot stack, 8KiB down from the top
+  # drop the IRQ stack down a few bytes to make room for variables
+  addi  t1, t1, -(KERNEL_PER_CPU_VAR_SPACE)
+  csrrw x0, mscratch, t1  # store IRQ handler stack in mscratch
 
   # set up early exception/interrupt handling
   call  irq_early_init

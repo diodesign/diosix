@@ -22,7 +22,7 @@
 # 0x100900FC, size: 0x2000:    Cadence GEM ethernet controller
 # 0x80000000: DRAM base (default 128MB, min 16MB) <-- kernel + entered loaded here
 #
-# see consts.s for CPU stack + top page of variables location
+# see consts.s for top page of global variables locations and other memory layout decisions
 
 # the boot ROM drops us here with nothing setup
 # this code is assumed to be loaded and running at 0x80000000
@@ -45,11 +45,13 @@ _start:
   sw      t0, (t1)
 
   # set up a 16KB CPU core stack, descending downwords. the 16KB stack space is 2 * 8KB areas.
-  # top 8KB for running boot code, bottom 8KB for exception/interrupt handling
-  la      sp, __kernel_cpu_stack_top
-  li      t0, KERNEL_BOOT_IRQ_STACK_OFFSET
-  sub     t0, sp, t0            # calculate top of exception/interrupt stack
-  csrrw   x0, mscratch, t0      # store irq stack top in mscratch
+  # top 8KB for exception/interrupt handling and per-CPU variables, bottom 8KB for startup.
+  # when startup is over, then the IRQ stack can claim the boot area
+  la      t0, __kernel_cpu_stack_top
+  li      t1, KERNEL_BOOT_STACK_OFFSET
+  sub     sp, t0, t1
+  addi    t0, t0, -(KERNEL_PER_CPU_VAR_SPACE)
+  csrrw   x0, mscratch, t0 # store irq stack top in mscratch
 
   # set up top page and early exception handling
   _KERNEL_TOP_PAGE_INIT

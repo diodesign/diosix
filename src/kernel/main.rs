@@ -19,7 +19,7 @@ mod heap;  /* manage machine kernel's heap memory */
 mod irq;   /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem; /* manage physical memory */
 
-/* funciton naming note: machine kernel entry points start with a k, such as kmain,
+/* function naming note: machine kernel entry points start with a k, such as kmain,
 kwait, kirq_handler. supervisor kernel entry points start with an s, such as smain.
 generally, kernel = machine/hypervisor kernel, supervisor = supervisor kernel. */
 
@@ -55,6 +55,9 @@ pub extern "C" fn kmain(device_tree_buf: &u8)
             return;
         }
     };
+
+    /* test kernel heap */
+
 }
 
 /* kwait
