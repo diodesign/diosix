@@ -7,8 +7,8 @@
 
 /* platform-specific code must implement all this */
 use platform;
-use platform::common::IRQType;
 use platform::common::IRQContext;
+use platform::common::IRQType;
 use platform::common::PrivilegeMode;
 use platform::common::IRQ;
 
@@ -20,32 +20,39 @@ use platform::common::IRQ;
 #[no_mangle]
 pub extern "C" fn kirq_handler(context: IRQContext)
 {
-  let irq = platform::common::irq::dispatch(context);
+    let irq = platform::common::irq::dispatch(context);
 
-  match irq.irq_type
-  {
-    IRQType::Exception => exception(irq),
-    IRQType::Interrupt => interrupt(irq),
-  };
+    match irq.irq_type
+    {
+        IRQType::Exception => exception(irq),
+        IRQType::Interrupt => interrupt(irq),
+    };
 }
 
 /* handle software exception */
 fn exception(irq: IRQ)
 {
-  match (irq.fatal, irq.privilege_mode)
-  {
-    (true, PrivilegeMode::Kernel) =>
+    match (irq.fatal, irq.privilege_mode)
     {
-      kalert!("Fatal exception in kernel: {} at 0x{:x}, stack 0x{:x}", irq.debug_cause(), irq.pc, irq.sp);
-      loop {}
-    },
-    (_, _) => () /* ignore everything else */
-  }
+        (true, PrivilegeMode::Kernel) =>
+        {
+            kalert!(
+                "Fatal exception in kernel: {} at 0x{:x}, stack 0x{:x}",
+                irq.debug_cause(),
+                irq.pc,
+                irq.sp
+            );
+            loop
+            {}
+        }
+        (_, _) => (), /* ignore everything else */
+    }
 }
 
 /* handle hardware interrupt */
 fn interrupt(_irq: platform::common::IRQ)
 {
-  kalert!("Hardware interrupt");
-  loop {}
+    kalert!("Hardware interrupt");
+    loop
+    {}
 }

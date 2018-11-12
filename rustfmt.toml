@@ -1,0 +1,7 @@
+# Diosix coding style
+#
+# Pretty much follows Rust style, but with braces and blocks always on newlines
+
+control_brace_style = "AlwaysNextLine"
+brace_style = "AlwaysNextLine"
+ignore = [ "src/contrib" ]

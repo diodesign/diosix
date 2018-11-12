@@ -6,7 +6,7 @@
  */
 
 /* notes: the physical memory manager's job is to allocate memory
-   on a per-page basis to supervisor-level code. */
+on a per-page basis to supervisor-level code. */
 
 /* platform-specific code must implement all this */
 use platform;
@@ -22,5 +22,5 @@ use platform;
 */
 pub fn init(device_tree_buf: &u8) -> Option<usize>
 {
-  return platform::common::physmem::init(device_tree_buf)
+    return platform::common::physmem::init(device_tree_buf);
 }

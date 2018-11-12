@@ -11,13 +11,15 @@ use core::panic::PanicInfo;
 #[panic_handler]
 pub fn panic(_info: &PanicInfo) -> !
 {
-  kalert!("Panic handler reached!");
-  loop {}
+    kalert!("Panic handler reached!");
+    loop
+    {}
 }
 
 #[no_mangle]
 pub extern "C" fn abort() -> !
 {
-  kalert!("Abort handler reached!");
-  loop {}
+    kalert!("Abort handler reached!");
+    loop
+    {}
 }

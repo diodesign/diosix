@@ -10,12 +10,11 @@
 use core::fmt;
 
 /* tell the compiler the platform-specific serial port code is elsewhere */
-extern
-{
-  fn platform_serial_write_byte(byte: u8);
-  pub fn platform_acquire_debug_spin_lock();
-  pub fn platform_release_debug_spin_lock();
-  pub fn platform_get_cpu_id() -> usize;
+extern "C" {
+    fn platform_serial_write_byte(byte: u8);
+    pub fn platform_acquire_debug_spin_lock();
+    pub fn platform_release_debug_spin_lock();
+    pub fn platform_get_cpu_id() -> usize;
 }
 
 /* top level debug macros - harmless logging */
@@ -57,15 +56,15 @@ macro_rules! kprint
 
 /* create a generic global serial port */
 pub struct SerialWriter;
-pub static mut SERIALPORT: SerialWriter = SerialWriter{};
+pub static mut SERIALPORT: SerialWriter = SerialWriter {};
 
 impl fmt::Write for SerialWriter
 {
-  fn write_str(&mut self, s: &str) -> ::core::fmt::Result
-  {
-    serial_write_string(s);
-    Ok(())
-  }
+    fn write_str(&mut self, s: &str) -> ::core::fmt::Result
+    {
+        serial_write_string(s);
+        Ok(())
+    }
 }
 
 /* write a string out to the platform's serial port */
@@ -73,6 +72,8 @@ pub fn serial_write_string(s: &str)
 {
     for c in s.bytes()
     {
-      unsafe { platform_serial_write_byte(c); }
+        unsafe {
+            platform_serial_write_byte(c);
+        }
     }
 }
