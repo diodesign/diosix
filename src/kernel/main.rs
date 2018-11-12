@@ -1,4 +1,4 @@
-/* diosix high-level kernel main entry code
+/* diosix machine/hypervisor kernel main entry code
  *
  * (c) Chris Williams, 2018.
  *
@@ -17,9 +17,22 @@ mod debug;      /* get us some kind of debug output, typically to a serial port 
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod abort;      /* implement abort() and panic() handlers */
 mod physmem;    /* manage physical memory */
+mod heap;       /* manage heap of machine kernel memory */
+
+/* funciton naming note: machine kernel entry points start with a k, such as kmain,
+   kwait, kirq_handler. supervisor kernel entry points start with an s, such as smain.
+   generally, kernel = machine/hypervisor kernel, supervisor = supervisor kernel. */
+
+/* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
+   stick to usize as much as possible */
 
 /* kmain
    The boot CPU core branches here when ready.
+   This code runs at the machine/hypervisor level, with physical memory access.
+   Its job is to create environments in which supervisor kernels run. Thus the kernel is
+   split into two halves: a machine/hv lower half, and an upper half supervisor that
+   manages user-mode code.
+
    => device_tree_buf = phys RAM pointer to device tree describing the hardware
    <= return to halt kernel on this core
 */

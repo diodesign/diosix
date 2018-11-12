@@ -1,4 +1,4 @@
-/* diosix top-level code for handling hardware interrupts and software exceptions
+/* diosix machine kernel code for handling hardware interrupts and software exceptions
  *
  * (c) Chris Williams, 2018.
  *
@@ -18,7 +18,7 @@ use platform::common::IRQ;
    => context = platform-specific context of the IRQ
 */
 #[no_mangle]
-pub extern "C" fn kernel_irq_handler(context: IRQContext)
+pub extern "C" fn kirq_handler(context: IRQContext)
 {
   let irq = platform::common::irq::dispatch(context);
 

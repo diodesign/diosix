@@ -11,7 +11,7 @@ extern crate hermit_dtb;
    => device_tree_buf = pointer to device tree in kernel-accessible RAM
    <= number of bytes in system memory, or None for failure
 */
-pub fn get_ram_size(device_tree_buf: &u8) -> Option<u64>
+pub fn get_ram_size(device_tree_buf: &u8) -> Option<usize>
 {
   let dev_tree = match unsafe { hermit_dtb::Dtb::from_raw(device_tree_buf) }
   {
@@ -25,7 +25,7 @@ pub fn get_ram_size(device_tree_buf: &u8) -> Option<u64>
     None => return None
   };
 
-  /* reconstruct memory params from bytes in the DT array. the format is:
+  /* reconstruct memory size from bytes in the DT array. the format is:
      bytes  contents
      0-3    DRAM base address (upper 32 bits)
      4-7    DRAM base address (lower 32 bits)
@@ -39,5 +39,13 @@ pub fn get_ram_size(device_tree_buf: &u8) -> Option<u64>
                   (mem_params[10] as u64) << 40 |
                   (mem_params[ 9] as u64) << 48 |
                   (mem_params[ 8] as u64) << 56;
-  return Some(mem_size);
+
+  /* if memory size is too big for system usize then truncate. RV32/SV32 code can
+     only handle up to 4GiB of physical RAM anyway, and this is RV32-specific code */
+  if mem_size > <usize>::max_value() as u64
+  {
+      return Some(<usize>::max_value());
+  }
+
+  return Some(mem_size as usize);
 }

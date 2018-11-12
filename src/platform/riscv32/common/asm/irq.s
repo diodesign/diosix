@@ -68,7 +68,7 @@ irq_machine_handler:
   # pass current sp to exception/hw handler as a pointer. this'll allow
   # the higher-level kernel access the context of the IRQ
   add   a0, sp, x0
-  call  kernel_irq_handler
+  call  kirq_handler
 
   # fix up the stack from the cause, epc, etc pushes
   # then restore all 31 stacked registers, skipping zero (x0)
