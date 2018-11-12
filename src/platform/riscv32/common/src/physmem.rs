@@ -27,7 +27,8 @@ enum PhysMemStackLimit
 /* we need this code from the assembly files */
 extern "C" {
     fn platform_physmem_set_ram_size(size: usize);
-    fn platform_physmem_get_kernel_area() -> (usize, usize);
+    fn platform_physmem_get_kernel_start() -> usize;
+    fn platform_physmem_get_kernel_end() -> usize;
     fn platform_pgstack_push(addr: usize, action: PhysMemStackLimit) -> PhysMemResult;
 }
 
@@ -55,7 +56,8 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
 
     /* get the physical start and end addresses of the entire kernel: its code, data,
     CPU stack(s), static global variables, and payload */
-    let (phys_kernel_start, phys_kernel_end) = unsafe { platform_physmem_get_kernel_area() };
+    let phys_kernel_start = unsafe { platform_physmem_get_kernel_start() };
+    let phys_kernel_end = unsafe { platform_physmem_get_kernel_end() };
 
     /* calculate maximum footprint of memory required to hold kernel and payload code and data,
     and CPU stack(s) and physical page stack(s). it's assumed this is held in a contiguous

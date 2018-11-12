@@ -5,7 +5,8 @@
 
 .section .text
 .global platform_physmem_set_ram_size
-.global platform_physmem_get_kernel_area
+.global platform_physmem_get_kernel_start
+.global platform_physmem_get_kernel_end
 .global platform_pgstack_push
 .global platform_pgstack_pull
 
@@ -20,11 +21,15 @@ platform_physmem_set_ram_size:
   sw    a0, (t0)
   ret
 
-# return in a0 the start of the kernel and its payload in physical RAM, and in
-# in a1, the end, rounded up to the next 4KB boundary
-platform_physmem_get_kernel_area:
+# return in a0 the start of the kernel, its static structures and payload in physical RAM,
+# as defined by the linker script
+platform_physmem_get_kernel_start:
   la    a0, __kernel_start
-  la    a1, __kernel_end
+  ret
+# return in a0, the end of the kernel, its static structures and payload in physical RAM
+# as defined by the linker script
+platform_physmem_get_kernel_end:
+  la    a0, __kernel_end
   ret
 
 # push a page onto the physical page stack
