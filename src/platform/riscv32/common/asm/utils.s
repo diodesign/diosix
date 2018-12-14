@@ -6,6 +6,9 @@
 .section .text
 .global platform_get_cpu_id
 
+# include kernel constants, such as stack and lock locations
+.include "src/platform/riscv32/common/asm/consts.s"
+
 # Look up the running core's ID
 # <= a0 = CPU core / hart ID
 platform_get_cpu_id:

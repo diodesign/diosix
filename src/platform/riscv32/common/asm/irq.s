@@ -13,6 +13,7 @@
 
 # set up boot interrupt handling on this core so we can catch
 # exceptions while the system is initializating
+# <= corrupts t0
 irq_early_init:
   # point core at default machine-level exception/interrupt handler
   la    t0, irq_machine_handler

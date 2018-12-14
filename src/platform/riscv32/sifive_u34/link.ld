@@ -1,1 +1,1 @@
-../common/link-nonsmp.ld
+../common/link.ld

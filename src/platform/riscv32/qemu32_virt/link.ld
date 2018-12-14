@@ -1,1 +1,1 @@
-../common/link-smp.ld
+../common/link.ld

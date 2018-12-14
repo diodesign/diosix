@@ -1,4 +1,4 @@
-/* kernel's ELF layout for common SMP RV32 hardware
+/* kernel's ELF layout for common RV32 hardware
  *
  * Only requirement is that physical RAM starts at 0x80000000, where the kernel is loaded and entered
  *
@@ -32,17 +32,12 @@ SECTIONS
   /* read-write special reserved memory here */
   .reserved : ALIGN(0x1000)
   {
-    /* reserve pages for 16KB per-CPU stacks, max 8 CPU cores */
-    __kernel_cpu_stack_base = .;
-    __kernel_cpu_stack_top = __kernel_cpu_stack_base + (16 * 1024 * 8);
-
-    /* reserve a page in memory for the kernel's variables + locks */
-    __kernel_top_page_base = __kernel_cpu_stack_top;
-
-    /* start of physical page stacks, growing upwards */
-    __kernel_pg_stack_base = __kernel_top_page_base + 0x1000;
+    /* reserve 4KB page in memory for the kernel's global variables + locks */
+    __kernel_globals_page_base = .;
+    __kernel_globals_page_top = __kernel_globals_page_base + (4 * 1024);
 
     /* end of fixed kernel components */
-    __kernel_end = __kernel_pg_stack_base;
-  }
+    __kernel_end = __kernel_globals_page_top;
+    . = __kernel_end;
+  } =0x00 /* initialize this area with zeroes */
 }

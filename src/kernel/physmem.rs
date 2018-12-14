@@ -1,12 +1,13 @@
-/* diosix top-level code for handling physical memory
+/* diosix machine kernel physical memory management
  *
+ * This allocates physical memory to CPU cores to use for private stacks + heaps
+ * It also allocates contiguous physical memory to supervisor kernels
+ * 
  * (c) Chris Williams, 2018.
  *
  * See LICENSE for usage and copying.
  */
 
-/* notes: the physical memory manager's job is to allocate memory
-on a per-page basis to supervisor-level code. */
 
 /* platform-specific code must implement all this */
 use platform;

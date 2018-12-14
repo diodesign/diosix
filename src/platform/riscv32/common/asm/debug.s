@@ -18,7 +18,7 @@ platform_acquire_debug_spin_lock:
   addi  sp, sp, -4
   sw    ra, (sp)
 
-  la    t0, __kernel_top_page_base
+  la    t0, __kernel_globals_page_base
   addi  a0, t0, KERNEL_DEBUG_SPIN_LOCK
   call  platform_acquire_spin_lock
 
@@ -36,7 +36,7 @@ platform_release_debug_spin_lock:
   addi  sp, sp, -4
   sw    ra, (sp)
 
-  la    t0, __kernel_top_page_base
+  la    t0, __kernel_globals_page_base
   addi  a0, t0, KERNEL_DEBUG_SPIN_LOCK
   call  platform_release_spin_lock
 
