@@ -72,8 +72,9 @@ qemu-system-riscv32 -machine sifive_u -kernel target/riscv32imac-unknown-none-el
 ```
 
 ...will build a kernel for a 32-bit RISC-V CPU in a SiFive Freedom U34-compatible system in the
-aforementioned directory, and run it in Qemu. To build and run diosix on Qemu's multi-processor Virt
-hardware environment, try:
+aforementioned directory, and run it in Qemu. Press `Ctrl-A` then `c` to escape to the Qemu monitor, then `q` to quit.
+
+To build and run diosix on Qemu's multi-processor Virt hardware environment, try:
 
 ```
 ./build.sh --triple riscv32imac-unknown-none-elf --platform qemu32_virt
