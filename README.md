@@ -29,6 +29,7 @@ The commands to build and run this code:
 ./build.sh --triple riscv32imac-unknown-none-elf --platform qemu32_virt
 qemu-system-riscv32 -machine virt -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic -smp 8
 ```
+Press `Ctrl-A` then `c` to escape to the Qemu monitor, then `q` to quit.
 
 ### Todo
 
