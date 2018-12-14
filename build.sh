@@ -7,7 +7,7 @@
 # see this thread for more information:
 # https://users.rust-lang.org/t/does-target-cfg-in-cargo-config-not-support-user-supplied-features/20275
 
-# syntax: ./build.sh --triple [build triple] --platform [target platform]
+# syntax: ./build.sh [--debug] --triple [build triple] --platform [target platform]
 #
 # eg: ./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_u34
 #
@@ -17,6 +17,10 @@
 # supported target platforms:
 # sifive_u34 (SiFive-U34 RV32 series)
 # qemu_virt (Qemu Virt hardware environment)
+#
+# Debug mode: --debug switches to a debug build, otherwise a release build is created
+# as well as adding extra debug info to the kernel executable, --debug also enables kdebug!() output
+#
 
 # process command line arguments
 while [[ $# -gt 0 ]]
@@ -34,12 +38,16 @@ case $SETTING in
     shift # past argument
     shift # past value
     ;;
+    -d|--debug)
+    DEBUG_MODE="(DEBUG ENABLED)"
+    shift # past argument
+    ;;
 esac
 done
 
 # sanity chacks...
 if [[ $TRIPLE == "" || $PLATFORM == "" ]]; then
-  echo "Usage: build.sh --triple [build triple] --platform [target platform]"
+  echo "Usage: build.sh [--debug] --triple [build triple] --platform [target platform]"
   exit 1
 fi
 
@@ -55,10 +63,10 @@ esac
 
 case $PLATFORM in
   sifive_u34)
-  echo "[+] Building for ${CPU_ARCH} SiFive Freedom U34 series"
+  echo "[+] Building for ${CPU_ARCH} SiFive Freedom U34 series ${DEBUG_MODE}"
   ;;
   qemu32_virt)
-  echo "[+] Building for ${CPU_ARCH} Qemu Virt environment"
+  echo "[+] Building for ${CPU_ARCH} Qemu Virt environment ${DEBUG_MODE}"
   ;;
   *)
   echo "[-] Unsupported platform '${PLATFORM}'"
@@ -71,5 +79,10 @@ cat cargoes/Cargo.toml.common cargoes/Cargo.toml.${PLATFORM} > Cargo.toml
 # we can't do this from cargo, have to set it outside the toolchain
 export RUSTFLAGS="-C link-arg=-Tsrc/platform/${CPU_ARCH}/${PLATFORM}/link.ld"
 
-# invoke the compiler toolchain
-cargo build --release --target $TRIPLE --features $PLATFORM
+# invoke the compiler toolchain, enabling debug mode if required
+if [[ -z $DEBUG_MODE ]]
+then
+  cargo build --release --target $TRIPLE --features $PLATFORM
+else
+  cargo build --target $TRIPLE --features $PLATFORM
+fi

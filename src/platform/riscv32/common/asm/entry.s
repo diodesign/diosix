@@ -57,32 +57,32 @@ _start:
   add       t4, t2, t1
   add       t4, t4, t3
   # t4 = top of the stack, t2 = stack size, t1 = stack base from slab base
-  csrrw x0, mscratch, t4
+  csrrw     x0, mscratch, t4
 
   # use the lower half of the exception stack to bring up the environment
   # set the boot stack pointer to halfway down the IRQ stack
-  srli  t1, t2, 1
-  sub   sp, t4, t1
+  srli      t1, t2, 1
+  sub       sp, t4, t1
 
   # set up early exception/interrupt handling (corrupts t0)
-  call  irq_early_init
+  call      irq_early_init
 
-  # the first core out of the gate (a0 = 0) gets to be the boot cpu
-  beqz  a0, is_boot_cpu
+  # the first core out of the gate (a0 will equal 0) gets to be the boot cpu
+  beqz      a0, is_boot_cpu
   # we're not first so set a0 to false
-  li    a0, 0
+  li        a0, 0
 
   # call kmain with boot CPU flag in a0 and devicetree in a1
 enter_kernel:
-  la    t0, kmain
-  jalr  ra, t0, 0
+  la        t0, kmain
+  jalr      ra, t0, 0
 
 # fall through to loop rather than crash into random instructions/data
 infinite_loop:
   wfi
-  j     infinite_loop
+  j         infinite_loop
 
 is_boot_cpu:
   # set a0 to true to indicate this is the boot CPU
-  li    a0, 1
-  j     enter_kernel
+  li        a0, 1
+  j         enter_kernel

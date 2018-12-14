@@ -18,20 +18,38 @@ extern "C" {
     pub fn platform_get_cpu_id() -> usize;
 }
 
-/* top level debug macros - harmless logging */
+/* top level debug macros */
+/* useful messages */
 #[macro_export]
 macro_rules! klog
 {
-  ($fmt:expr) => (kprintln!("[CPU {}] {}", $crate::debug::platform_get_cpu_id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[CPU {}] ", $fmt), $crate::debug::platform_get_cpu_id(), $($arg)*));
+  ($fmt:expr) => (kprintln!("[-] CPU {}: {}", ::debug::platform_get_cpu_id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[-] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
 }
 
 /* bad news: bug detection, failures, etc */
 #[macro_export]
 macro_rules! kalert
 {
-  ($fmt:expr) => (kprintln!("[CPU {}] ALERT: {}", $crate::debug::platform_get_cpu_id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[CPU {}] ALERT: ", $fmt), $crate::debug::platform_get_cpu_id(), $($arg)*));
+  ($fmt:expr) => (kprintln!("[!] CPU {}: ALERT: {}", ::debug::platform_get_cpu_id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[!] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
+}
+
+/* only output if debug build is enabled */
+#[macro_export]
+#[cfg(debug_assertions)]
+macro_rules! kdebug
+{
+  ($fmt:expr) => (kprintln!("[?] CPU {}: {}", ::debug::platform_get_cpu_id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[?] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
+}
+
+#[macro_export]
+#[cfg(not(debug_assertions))]
+macro_rules! kdebug
+{
+  ($fmt:expr) => ();
+  ($fmt:expr, $($arg:tt)*) => ();
 }
 
 /* use this to stop rust optimizing away loops and other code */

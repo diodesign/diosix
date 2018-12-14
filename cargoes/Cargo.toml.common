@@ -15,6 +15,17 @@ regex = "1"
 
 [profile.dev]
 panic = "abort"
+debug-assertions = true
+debug = true
+overflow-checks = true
+opt-level = 0
+incremental = true
 
 [profile.release]
 panic = "abort"
+debug-assertions = false
+debug = false
+overflow-checks = false
+opt-level = 3
+incremental = false
+

@@ -9,9 +9,17 @@ use core::panic::PanicInfo;
 
 /* we need to provide these */
 #[panic_handler]
-pub fn panic(_info: &PanicInfo) -> !
+pub fn panic(info: &PanicInfo) -> !
 {
-    kalert!("Panic handler reached!");
+    kalert!("Rust runtime panicked unexpectedly");
+    match info.location()
+    {
+        Some(location) =>
+        {
+            kalert!("... crashed in {}: {}", location.file(), location.line())
+        },
+        None => kalert!("... crash location unknown")
+    };
     loop
     {}
 }
@@ -19,7 +27,7 @@ pub fn panic(_info: &PanicInfo) -> !
 #[no_mangle]
 pub extern "C" fn abort() -> !
 {
-    kalert!("Abort handler reached!");
+    kalert!("Rust runtime hit the abort button");
     loop
     {}
 }
