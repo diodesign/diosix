@@ -42,8 +42,11 @@ _start:
   addi      t1, t0, KERNEL_CPU_CORE_COUNT
   li        t2, 1
   amoadd.w  t3, t2, (t1)
-  # t3 = counter just before we incremented it. use this as a multiplier
-  # from the end of the kernel, using shifts to keep things easy
+  # t3 = counter just before we incremented it
+  # preserve t3 in a0, as we'll use it to determine whether we're the boot CPU or not
+  add       a0, t3, x0
+  
+  # use t3 this as a multiplier from the end of the kernel, using shifts to keep things easy
   slli      t3, t3, KERNEL_CPU_SLAB_SHIFT
   la        t1, __kernel_end
   add       t3, t3, t1
@@ -65,7 +68,13 @@ _start:
   # set up early exception/interrupt handling (corrupts t0)
   call  irq_early_init
 
-  # call kmain with CPU ID in a0 and devicetree in a1
+  # the first core out of the gate (a0 = 0) gets to be the boot cpu
+  beqz  a0, is_boot_cpu
+  # we're not first so set a0 to false
+  li    a0, 0
+
+  # call kmain with boot CPU flag in a0 and devicetree in a1
+enter_kernel:
   la    t0, kmain
   jalr  ra, t0, 0
 
@@ -73,3 +82,8 @@ _start:
 infinite_loop:
   wfi
   j     infinite_loop
+
+is_boot_cpu:
+  # set a0 to true to indicate this is the boot CPU
+  li    a0, 1
+  j     enter_kernel

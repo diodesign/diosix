@@ -31,12 +31,10 @@
 .equ KERNEL_CPU_HEAP_AREA_SIZE,     (KERNEL_CPU_SLAB_SIZE - KERNEL_CPU_STACK_SIZE - KERNEL_CPU_PRIVATE_PAGE_SIZE)
 .equ KERNEL_CPU_HEAP_BASE,          (KENREL_CPU_PRIVATE_PAGE_BASE + KERNEL_CPU_PRIVATE_PAGE_SIZE)
 
-# offsets into __kernel_globals_page_base area of core global kernel variables
+# offsets into __kernel_globals_page_base area of core global kernel variables that we can't allocate in rust
 # it's worth keeping hot variables, like locks, in separate cache lines
 # debug output lock
-.equ KERNEL_DEBUG_SPIN_LOCK,        (0 * 4)
+.equ KERNEL_DEBUG_SPIN_LOCK,        (10 * 4)
 
-# number of bytes of physical memory, total
-.equ KERNEL_PHYS_MEMORY_SIZE,       (100 * 4)
 # number of CPUs awake at boot
 .equ KERNEL_CPU_CORE_COUNT,         (101 * 4)

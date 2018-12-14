@@ -32,7 +32,7 @@ SECTIONS
   /* read-write special reserved memory here */
   .reserved : ALIGN(0x1000)
   {
-    /* reserve 4KB page in memory for the kernel's global variables + locks */
+    /* reserve 4KB page in memory for the kernel's global variables */
     __kernel_globals_page_base = .;
     __kernel_globals_page_top = __kernel_globals_page_base + (4 * 1024);
 

@@ -33,6 +33,13 @@ macro_rules! kalert
   ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[CPU {}] ALERT: ", $fmt), $crate::debug::platform_get_cpu_id(), $($arg)*));
 }
 
+/* use this to stop rust optimizing away loops and other code */
+#[macro_export]
+macro_rules! keep_me
+{
+  () => (kprint!(""));
+}
+
 /* low-level macros for kernel-only kprintln and kprint debug output routines */
 macro_rules! kprintln
 {

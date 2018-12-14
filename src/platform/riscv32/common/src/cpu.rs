@@ -6,9 +6,8 @@
  */
 
 /* initialize this processor core. this is called by any core, boot CPU or not
-=> cpu_nr = CPU ID number (0 = boot CPU)
 <= return true for success, or false for failure */
-pub fn init(cpu_nr: usize) -> bool
+pub fn init() -> bool
 {
     return true;
 }

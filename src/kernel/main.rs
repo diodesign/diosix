@@ -27,30 +27,44 @@ generally, kernel = machine/hypervisor kernel, supervisor = supervisor kernel. *
 stick to usize as much as possible */
 
 /* kmain
-   This code runs at the machine/hypervisor level, with physical memory access.
-   Its job is to create environments in which supervisor kernels run. FWIW, the kernel is
-   split into two halves: a machine/hv lower half, and an upper half supervisor that
-   manages user-mode code. This code here is that lower half.
+   This code runs at the machine/hypervisor level, with full physical memory access.
+   Its job is to create environments in which supervisor kernels run. Thus, the standard diosix
+   kernel is split into two halves: a machine/hv lower half, and an upper half supervisor that
+   manages user-mode code. This code here is starts that lower half.
+   If we want to run a Linux or BSD-like environment, the upper half will be a Linux or BSD
+   compatibility layer. The hypervisor allocates regions of memory and CPU time to supervisor
+   kernels, which run applications in their own environments.
 
    Assumes all CPUs enter this function during startup.
    The boot CPU is chosen to initialize the system in pre-SMP mode.
    If we're on a single CPU core then everything should run OK.
 
-   => cpu_nr  = CPU ID number. 0 = boot CPU
+   => is_boot_cpu = true if we're chosen to be the boot CPU, or false for every other CPU core
       device_tree_buf = phys RAM pointer to device tree describing the hardware
    <= return to halt kernel on this core
 */
 #[no_mangle]
-pub extern "C" fn kmain(cpu_nr: usize, device_tree_buf: &u8)
+pub extern "C" fn kmain(is_boot_cpu: bool, device_tree_buf: &u8)
 {
-    /* make the boot CPU setup physical memory etc for other cores to come online */
-    if cpu_nr == 0
+    /* make the boot CPU setup physical memory etc for other cores to come online. 
+    when the boot CPU is done, it should allow cores to exit cpu::int() */
+    if is_boot_cpu == true
     {
-        pre_smp_init(device_tree_buf);
+        klog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree_buf);
+        if pre_smp_init(device_tree_buf) == false 
+        {
+            /* bail out on error */
+            return;
+        }
+
+        /* everything's set up for all cores to run so unblock any waiting in cpu::init() */
+        klog!("Warming up all CPU cores");
+        cpu::unblock_smp();
     }
 
-    /* set up all processor cores, including the boot CPU */
-    match cpu::init(cpu_nr)
+    /* set up all processor cores, including the boot CPU. all CPU cores will block in cpu::init()
+    until released by the boot CPU, allowing physical memory and other global resources to be prepared */
+    match cpu::init()
     {
         true => klog!("CPU core initialized"),
         false =>
@@ -61,11 +75,10 @@ pub extern "C" fn kmain(cpu_nr: usize, device_tree_buf: &u8)
     }
 }
 
-/* perform any preflight checks and initialize the kernel prior to SMP */
-fn pre_smp_init(device_tree: &u8)
+/* have the boot cpu perform any preflight checks and initialize the kernel prior to SMP.
+   <= return true on success, or false for failure */
+fn pre_smp_init(device_tree: &u8) -> bool
 {
-    klog!("Welcome to diosix {} ... using device tree at 0x{:x}", env!("CARGO_PKG_VERSION"), device_tree);
-
     /* set up the physical memory management */
     match physmem::init(device_tree)
     {
@@ -73,7 +86,9 @@ fn pre_smp_init(device_tree: &u8)
         None =>
         {
             kalert!("Physical memory failure: too little RAM, or config error");
-            return;
+            return false;
         }
     };
+
+    return true;
 }
