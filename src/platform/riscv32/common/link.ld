@@ -29,15 +29,6 @@ SECTIONS
     *(.bss)
   }
 
-  /* read-write special reserved memory here */
-  .reserved : ALIGN(0x1000)
-  {
-    /* reserve 4KB page in memory for the kernel's global variables */
-    __kernel_globals_page_base = .;
-    __kernel_globals_page_top = __kernel_globals_page_base + (4 * 1024);
-
-    /* end of fixed kernel components */
-    __kernel_end = __kernel_globals_page_top;
-    . = __kernel_end;
-  } =0x00 /* initialize this area with zeroes */
+  /* set aligned end to the kernel */
+  __kernel_end = ALIGN(0x1000);
 }

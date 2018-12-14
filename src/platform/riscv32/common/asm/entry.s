@@ -36,10 +36,10 @@
 _start:
   # each core should grab a slab of memory starting from the end of the kernel.
   # in order to scale to many cores, not waste too much memory, and to cope with non-linear
-  # CPU ID / hart ID, each core will take memory using the follwing atomic counter.
-  # in other words, memory is allocated on a first come, first served basis
-  la        t0, __kernel_globals_page_base
-  addi      t1, t0, KERNEL_CPU_CORE_COUNT
+  # CPU ID / hart ID, each core will take memory using an atomic counter in the first word
+  # of available RAM.  thus, memory is allocated on a first come, first served basis.
+  # this counter is temporarily and should be forgotten about once in kmain()
+  la        t1, __kernel_end
   li        t2, 1
   amoadd.w  t3, t2, (t1)
   # t3 = counter just before we incremented it
@@ -48,7 +48,6 @@ _start:
   
   # use t3 this as a multiplier from the end of the kernel, using shifts to keep things easy
   slli      t3, t3, KERNEL_CPU_SLAB_SHIFT
-  la        t1, __kernel_end
   add       t3, t3, t1
   # t3 = base of this CPU's private memory slab
 

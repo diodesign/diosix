@@ -8,12 +8,13 @@
  */
 
 use core::fmt;
+use lock::Spinlock;
+
+pub static mut DEBUG_LOCK: Spinlock = Spinlock { value: 0 };
 
 /* tell the compiler the platform-specific serial port code is elsewhere */
 extern "C" {
     fn platform_serial_write_byte(byte: u8);
-    pub fn platform_acquire_debug_spin_lock();
-    pub fn platform_release_debug_spin_lock();
     pub fn platform_get_cpu_id() -> usize;
 }
 
@@ -52,12 +53,11 @@ macro_rules! kprint
   ($($arg:tt)*) =>
   ({
     use core::fmt::Write;
-    unsafe
-    {
-      $crate::debug::platform_acquire_debug_spin_lock();
-      $crate::debug::SERIALPORT.write_fmt(format_args!($($arg)*)).unwrap();
-      $crate::debug::platform_release_debug_spin_lock();
-    }
+
+    unsafe { $crate::debug::DEBUG_LOCK.execute(|| {
+        $crate::debug::SERIALPORT.write_fmt(format_args!($($arg)*)).unwrap();
+      }
+    )};
   });
 }
 

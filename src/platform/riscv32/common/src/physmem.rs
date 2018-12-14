@@ -14,9 +14,9 @@ extern "C"
     fn platform_physmem_get_kernel_end() -> usize;
 }
 
-/* minimum amount of RAM allowed before boot (32MiB). this is a sanity check for
+/* minimum amount of RAM allowed before boot (4MiB). this is a sanity check for
 the hardware environment, and can be changed later */
-const MIN_RAM_SIZE: usize = 32 * 1024 * 1024;
+const MIN_RAM_SIZE: usize = 4 * 1024 * 1024;
 
 /* assumes RAM starts at 0x80000000 */
 const PHYS_RAM_BASE: usize = 0x80000000;

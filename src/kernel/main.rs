@@ -18,6 +18,7 @@ mod abort; /* implement abort() and panic() handlers */
 mod irq; /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem; /* manage physical memory */
 mod cpu; /* manage CPU cores */
+mod lock; /* multi-threading locking primitives */
 
 /* function naming note: machine kernel entry points start with a k, such as kmain,
 kirq_handler. supervisor kernel entry points start with an s, such as smain.
@@ -40,7 +41,7 @@ stick to usize as much as possible */
    If we're on a single CPU core then everything should run OK.
 
    => is_boot_cpu = true if we're chosen to be the boot CPU, or false for every other CPU core
-      device_tree_buf = phys RAM pointer to device tree describing the hardware
+      device_tree_buf = pointer to device tree describing the hardware
    <= return to halt kernel on this core
 */
 #[no_mangle]
