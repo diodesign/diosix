@@ -12,7 +12,7 @@ after [previously writing](https://github.com/diodesign/diosix-legacy) a working
 I learned a lot from that foray, and so this is the second iteration of diosix. Crucially,
 it will be written [in Rust](https://www.rust-lang.org/), a C/C++-like programming language that has a fierce emphasis
 on guaranteed memory safety, threads without data races, and other security features.
-I chose [RISC-V](https://riscv.org/) because it's an interesting new ground to explore,
+I chose [RISC-V](https://riscv.org/) because it's interesting new ground to explore,
 whereas there are countless x86 and Arm operating system kernels out there.
 
 ### Running and building
