@@ -18,16 +18,16 @@ whereas there are countless x86 and Arm operating system kernels out there.
 ### Running and building
 
 See the [build instructions](BUILDING.md) for step-by-step guides to compiling and running this project.
-Here's a screenshot of the kernel booting in a 32-bit quad-core Qemu Virt hardware environment,
+Here's a screenshot of the kernel booting in a 32-bit octo-core Qemu Virt hardware environment,
 and writing some debug out to the virtual serial port:
 
-[![Screenshot of SMP diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/smp.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/smp.png)
+[![Screenshot of SMP diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32-qemu_virt-smp.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/diosix-early-riscv32-qemu_virt-smp.png)
 
 The commands to build and run this code:
 
 ```
 ./build.sh --triple riscv32imac-unknown-none-elf --platform qemu32_virt
-qemu-system-riscv32 -machine virt -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic -smp 4
+qemu-system-riscv32 -machine virt -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic -smp 8
 ```
 
 ### Todo
@@ -67,4 +67,4 @@ Copyright &copy; Chris Williams and contributors, 2018. See LICENSE for source c
 
 src/contrib/hermit-dtb: Copyright &copy; 2018 Colin Finck, RWTH Aachen University.
 
-With thanks to Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/), [David Craven](https://github.com/dvc94ch) and everyone else who helped port Rust to RISC-V, and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
+With thanks to [David Craven](https://github.com/dvc94ch) and everyone else who helped port Rust to RISC-V, the RISC-V world for designing the CPUs and writing the emulators in the first place, Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/), and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
