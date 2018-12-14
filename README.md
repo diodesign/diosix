@@ -39,18 +39,19 @@ Here's a non-complete todo list:
 * Bring-up for RV32
 * Bring-up for RV64
 * Kernel level:
-    * Physical page management
+    * Physical RAM region management
     * Exception handling
     * Interrupt handling
     * CPU core scheduling
-    * Environment management
+    * Supervisor environment management
 * Supervisor level:
+    * Physical RAM page management
     * Virtual page management
     * Exception handling
     * Interrupt handling
     * CPU core scheduling
     * ELF executable parsing and loading
-    * Process management
+    * User environment management
 
 ### Branches
 
