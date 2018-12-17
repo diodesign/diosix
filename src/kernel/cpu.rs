@@ -20,6 +20,7 @@ static mut SMP_GREEN_LIGHT: bool = false;
 #[repr(C)]
 pub struct Core
 {
+    /* each CPU core gets its own heap that it can share, but it must manage */
     pub heap: heap::Heap,
 }
 

@@ -9,6 +9,7 @@
 #![no_std]
 #![no_main]
 
+/* we need all this to plug our heap allocator into the Rust language */
 #![feature(alloc_error_handler)]
 #![feature(alloc)]
 extern crate alloc;
@@ -17,9 +18,9 @@ use alloc::boxed::Box;
 /* this will bring in all the hardware-specific code */
 extern crate platform;
 
+/* and now for all our non-hw specific code */
 #[macro_use]
 mod debug; /* get us some kind of debug output, typically to a serial port */
-#[macro_use]
 mod heap; /* per-CPU private heap management */
 mod abort; /* implement abort() and panic() handlers */
 mod irq; /* handle hw interrupts and sw exceptions, collectively known as IRQs */
@@ -27,9 +28,13 @@ mod physmem; /* manage physical memory */
 mod cpu; /* manage CPU cores */
 mod lock; /* multi-threading locking primitives */
 
-mod error; /* list of kernel error codes */
+/* list of kernel error codes */
+mod error;
 use error::Cause;
 
+/* tell Rust to use ourr kAllocator to allocate and free heap memory.
+while we'll keep track of physical memory, we'll let Rust perform essential
+tasks, such as freeing memory when it's no longer needed, pointer checking, etc */
 #[global_allocator]
 static KERNEL_HEAP: heap::kAllocator = heap::kAllocator;
 
@@ -127,9 +132,10 @@ fn pre_smp_init(device_tree: &u8) -> Result<(), Cause>
     return Ok(());
 }
 
+/* mandatory error handler for memory allocations */
 #[alloc_error_handler]
-fn kalloc_error(_: core::alloc::Layout) -> !
+fn kalloc_error(attempt: core::alloc::Layout) -> !
 {
-    kalert!("allocation error");
-    loop {}
+    kalert!("alloc_error_handler: Failed to allocate/free {} bytes. Halting...", attempt.size());
+    loop {} /* it would be nice to be able to not die here :( */
 }

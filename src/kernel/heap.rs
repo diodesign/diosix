@@ -5,15 +5,19 @@
  * See LICENSE for usage and copying.
  */
 
-/* kalloc/kfree macros will get noisy otherwise */
-#![allow(unused_unsafe)]
-
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
 
 use core::mem;
 use core::result::Result;
 use error::Cause;
+
+/* get some help from underlying platform */
+extern "C"
+{
+    fn platform_cpu_heap_base() -> *mut HeapBlock;
+    fn platform_cpu_heap_size() -> usize;
+}
 
 /* CPUs get their own private heaps to manage. Crucially, these memory
 blocks can be used by other CPUs. Any CPU can free any block by marking
@@ -25,8 +29,21 @@ to do much active allocation so it's OK to keep it really simple for now.
 
 This should avoid any locks and data races, and any contention. */
 
-/* plug our allocator into the language's API so that things like Box 
-allocate memory from the kernel heap */
+/* different states each recognized heap block can be in */
+#[derive(PartialEq, Debug)]
+#[repr(C)]
+enum HeapMagic
+{
+    Free = 0x0deadded,
+    InUse = 0x0d10c0de
+}
+
+/* to avoid fragmentation, allocate in block sizes of this multiple, including header */
+const HEAP_BLOCK_SIZE: usize = 64;
+
+/* follow Rust's heap allocator API so we can drop our per-CPU allocator in and use things
+like Box. We allow the Rust toolchain to track and check pointers and object lifetimes,
+while we'll manage the underlying physical memory used by the heap. */
 pub struct kAllocator;
 
 unsafe impl GlobalAlloc for kAllocator
@@ -34,7 +51,6 @@ unsafe impl GlobalAlloc for kAllocator
     unsafe fn alloc(&self, layout: Layout) -> *mut u8
     {
         let bytes = layout.size();
-        klog!("kAllocator: allocating {} bytes...", bytes);
         match unsafe { (*<::cpu::Core>::this()).heap.alloc::<u8>(bytes) }
         {
             Ok(p) => p,
@@ -48,7 +64,6 @@ unsafe impl GlobalAlloc for kAllocator
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
     {
-        klog!("kAllocator: freeing {:p}", ptr);
         match unsafe { (*<::cpu::Core>::this()).heap.free::<u8>(ptr) }
         {
             Err(e) =>
@@ -60,37 +75,7 @@ unsafe impl GlobalAlloc for kAllocator
     }
 }
 
-/* get some help from underlying platform */
-extern "C"
-{
-    fn platform_cpu_heap_base() -> *mut HeapBlock;
-    fn platform_cpu_heap_size() -> usize;
-}
-
-/* define some handy macros */
-/* wrap a nice interface around the default per-CPU kernel heap
-   kalloc!(type of object, number of objects) returns pointer to memory or error code
-   kfree!(type of object, pointer to memory) */
-macro_rules! kalloc
-{
-    ($type:ty, $count:expr) => (unsafe { (*<::cpu::Core>::this()).heap.alloc::<$type>($count)? } )
-}
-macro_rules! kfree
-{
-    ($type:ty, $addr:ident) => (unsafe { (*<::cpu::Core>::this()).heap.free::<$type>($addr)? } )
-}
-
-#[derive(PartialEq, Debug)]
-#[repr(C)]
-enum HeapMagic
-{
-    Free = 0x0deadded,
-    InUse = 0x0d10c0de
-}
-
-/* to avoid fragmentation, allocate in block sizes of this multiple, including header */
-const HEAP_BLOCK_SIZE: usize = 64;
-
+/* describe the layout of a per-CPU heap block */
 #[repr(C)]
 struct HeapBlock
 {
@@ -103,6 +88,10 @@ struct HeapBlock
     /* block contents follows... */
 }
 
+/* this is our own internal API for the per-CPU kernel heap. use high-level abstractions, such as Box,
+rather than this directly, though, so we get all the safety measures and lifetime checking. however,
+kallocator is built on top of Heap, which is why each CPU core has its own Heap. the rest of the kernel
+uses the per-CPU Heaps via kallocator. */
 #[repr(C)]
 pub struct Heap
 {
