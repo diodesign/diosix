@@ -8,6 +8,9 @@
 /* kalloc/kfree macros will get noisy otherwise */
 #![allow(unused_unsafe)]
 
+use core::alloc::{GlobalAlloc, Layout};
+use core::ptr::null_mut;
+
 use core::mem;
 use core::result::Result;
 use error::Cause;
@@ -22,6 +25,41 @@ to do much active allocation so it's OK to keep it really simple for now.
 
 This should avoid any locks and data races, and any contention. */
 
+/* plug our allocator into the language's API so that things like Box 
+allocate memory from the kernel heap */
+pub struct kAllocator;
+
+unsafe impl GlobalAlloc for kAllocator
+{
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8
+    {
+        let bytes = layout.size();
+        klog!("kAllocator: allocating {} bytes...", bytes);
+        match unsafe { (*<::cpu::Core>::this()).heap.alloc::<u8>(bytes) }
+        {
+            Ok(p) => p,
+            Err(e) =>
+            {
+                kalert!("kAllocator: request for {} bytes failed ({:?})", bytes, e);
+                null_mut() /* yeesh */
+            }
+        }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
+    {
+        klog!("kAllocator: freeing {:p}", ptr);
+        match unsafe { (*<::cpu::Core>::this()).heap.free::<u8>(ptr) }
+        {
+            Err(e) =>
+            {
+                kalert!("kAllocator: request to free {:p} failed ({:?})", ptr, e)
+            },
+            _ => ()
+        }
+    }
+}
+
 /* get some help from underlying platform */
 extern "C"
 {
@@ -30,10 +68,12 @@ extern "C"
 }
 
 /* define some handy macros */
-/* wrap a nice interface around the default per-CPU kernel heap */
+/* wrap a nice interface around the default per-CPU kernel heap
+   kalloc!(type of object, number of objects) returns pointer to memory or error code
+   kfree!(type of object, pointer to memory) */
 macro_rules! kalloc
 {
-    ($type:ty) => (unsafe { (*<::cpu::Core>::this()).heap.alloc::<$type>()? } )
+    ($type:ty, $count:expr) => (unsafe { (*<::cpu::Core>::this()).heap.alloc::<$type>($count)? } )
 }
 macro_rules! kfree
 {
@@ -119,16 +159,23 @@ impl Heap
     }
 
     /* allocate memory for the given object type. the returned pointer skips
-    the heap block header, just like malloc() on other platforms.
-    => T = type to allocate memory for
+    the heap block header, pointing to the available space,
+    just like malloc() on other platforms.
+    => T = type of object to allocate memory for
+       num = number of objects to allocate for
     <= pointer to memory, or error code */
-    pub fn alloc<T>(&mut self) -> Result<*mut T, Cause>
+    pub fn alloc<T>(&mut self, num: usize) -> Result<*mut T, Cause>
     {
+        if num == 0
+        {
+            return Err(Cause::HeapBadSize);
+        }
+
         let mut done = false;
 
         /* calculate size of block required, including header, rounded up to
         nearest whole heap block multiple */
-        let mut size_req = mem::size_of::<T>() + mem::size_of::<HeapBlock>();
+        let mut size_req = (mem::size_of::<T>() * num) + mem::size_of::<HeapBlock>();
         size_req = ((size_req / HEAP_BLOCK_SIZE) + 1) * HEAP_BLOCK_SIZE;
 
         /* scan all blocks for first free fit */
@@ -195,37 +242,6 @@ impl Heap
         return Result::Err(Cause::HeapNoFreeMem);
     }
 
-    /* output debug stats for this heap */
-    pub fn debug(&mut self)
-    {
-        let mut blocks = 0;
-        let mut inuse = 0;
-        let mut free = 0;
-
-        let mut block = self.block_list_head;
-        {
-            unsafe
-            {
-                loop
-                {
-                    blocks = blocks + 1;
-                    match (*block).magic
-                    {
-                        HeapMagic::Free => free = free + (*block).size,
-                        HeapMagic::InUse => inuse = inuse + (*block).size
-                    };
-                    match (*block).next
-                    {
-                        Some(n) => block = n,
-                        None => break,
-                    };
-                }
-            }
-        }
-
-        klog!("heap: {} blocks present. {} bytes in use, {} bytes free", blocks, inuse, free);
-    }
-
     /* pass once over the heap and try to merge adjacent blocks
     <= size of the lagrest block seen, in bytes including header */
     fn consolidate(&mut self) -> usize
@@ -290,3 +306,4 @@ impl Heap
         return largest_merged_block;
     }
 }
+

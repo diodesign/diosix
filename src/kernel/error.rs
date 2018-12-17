@@ -13,7 +13,8 @@ pub enum Cause
     HeapNotInUse,
     HeapBadBlock,
     HeapNoFreeMem,
+    HeapBadSize,
 
     /* physical memory */
-    BadPhysMemConfig,
+    PhysMemBadConfig,
 }

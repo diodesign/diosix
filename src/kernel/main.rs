@@ -9,6 +9,11 @@
 #![no_std]
 #![no_main]
 
+#![feature(alloc_error_handler)]
+#![feature(alloc)]
+extern crate alloc;
+use alloc::boxed::Box;
+
 /* this will bring in all the hardware-specific code */
 extern crate platform;
 
@@ -24,6 +29,9 @@ mod lock; /* multi-threading locking primitives */
 
 mod error; /* list of kernel error codes */
 use error::Cause;
+
+#[global_allocator]
+static KERNEL_HEAP: heap::kAllocator = heap::kAllocator;
 
 /* function naming note: machine kernel entry points start with a k, such as kmain,
 kirq_handler. supervisor kernel entry points start with an s, such as smain.
@@ -48,7 +56,6 @@ pub extern "C" fn kentry(is_boot_cpu: bool, device_tree_buf: &u8)
         Ok(()) => klog!("Exited kmain without error. That's all, folks."),
         Err(e) => kalert!("Exited kmain with error: {:?}", e)
     };
-
     /* for now, fall back to infinite loop. In future, try to recover */
 }
 
@@ -86,38 +93,17 @@ fn kmain(is_boot_cpu: bool, device_tree_buf: &u8) -> Result<(), Cause>
     resources to be prepared before being used */
     cpu::Core::init();
 
-    match heap_test()
+    struct mytest
     {
-        Ok(()) => klog!("heap test completed"),
-        Err(e) => klog!("heap tests failed: {:?}", e)
-    };
-
-    Ok(()) /* return to infinite loop */
-}
-
-fn heap_test() -> Result<(), Cause>
-{
-    struct HeapTestData
-    {
-        array: [u8; 777]
+        x: u32,
+        y: u8,
+        z: usize
     }
 
-    unsafe { (*<::cpu::Core>::this()).heap.debug(); }
-    let p3 = kalloc!(HeapTestData);
-    let p2 = kalloc!(HeapTestData);
-    let p1 = kalloc!(HeapTestData);
-    let p0 = kalloc!(HeapTestData);
-    unsafe { (*<::cpu::Core>::this()).heap.debug(); }
+    let boxed: Box<mytest> = Box::new(mytest { x: 444, y: 77, z: 888 } );
+    klog!("boxed x y z  = {} {} {}", boxed.x, boxed.y, boxed.z);
 
-    kfree!(HeapTestData, p1);
-    kfree!(HeapTestData, p2);
-    unsafe { (*<::cpu::Core>::this()).heap.debug(); }
-    
-    kfree!(HeapTestData, p0);
-    kfree!(HeapTestData, p3);
-    unsafe { (*<::cpu::Core>::this()).heap.debug(); }
-
-    Ok(())
+    Ok(()) /* return to infinite loop */
 }
 
 /* have the boot CPU perform any preflight checks and initialize the kernel prior to SMP.
@@ -132,11 +118,18 @@ fn pre_smp_init(device_tree: &u8) -> Result<(), Cause>
         None =>
         {
             kalert!("Physical memory failure: too little RAM, or config error");
-            return Err(Cause::BadPhysMemConfig);
+            return Err(Cause::PhysMemBadConfig);
         }
     };
 
     /* everything's set up for all cores to run so unblock any waiting in cpu::init() */
     cpu::unblock_smp();
     return Ok(());
+}
+
+#[alloc_error_handler]
+fn kalloc_error(_: core::alloc::Layout) -> !
+{
+    kalert!("allocation error");
+    loop {}
 }
