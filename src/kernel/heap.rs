@@ -10,6 +10,7 @@
 
 use core::mem;
 use core::result::Result;
+use error::Cause;
 
 /* CPUs get their own private heaps to manage. Crucially, these memory
 blocks can be used by other CPUs. Any CPU can free any block by marking
@@ -29,26 +30,17 @@ extern "C"
 }
 
 /* define some handy macros */
-/* wrap a nice interface around the default KERNEL heap */
+/* wrap a nice interface around the default per-CPU kernel heap */
 macro_rules! kalloc
 {
-    ($type:ty) => (unsafe { (*<::cpu::Core>::this()).heap.alloc::<$type>().ok().expect("Kernel CPU heap alloc() failed") } )
+    ($type:ty) => (unsafe { (*<::cpu::Core>::this()).heap.alloc::<$type>()? } )
 }
-
 macro_rules! kfree
 {
-    ($type:ty, $addr:ident) => (unsafe { (*<::cpu::Core>::this()).heap.free::<$type>($addr).ok().expect("Kernel CPU heap free() failed") } )
+    ($type:ty, $addr:ident) => (unsafe { (*<::cpu::Core>::this()).heap.free::<$type>($addr)? } )
 }
 
-#[derive(Debug)]
-pub enum HeapError
-{
-    NotInUse,
-    BadBlock,
-    NoFreeMem
-}
-
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 #[repr(C)]
 enum HeapMagic
 {
@@ -102,7 +94,7 @@ impl Heap
     /* free a previously allocated block
     => to_free = pointer previously returned by alloc()
     <= success or failure code */
-    pub fn free<T>(&mut self, to_free: *mut T) -> Result<(), HeapError>
+    pub fn free<T>(&mut self, to_free: *mut T) -> Result<(), Cause>
     {
         /* convert this into a raw pointer so we can find the heap block header */
         let mut ptr = to_free as usize;
@@ -120,8 +112,8 @@ impl Heap
                     Ok(())
                 },
                 /* if it's not in use, or bad magic, then bail out */
-                HeapMagic::Free => Err(HeapError::NotInUse),
-                              _ => Err(HeapError::BadBlock)
+                HeapMagic::Free => Err(Cause::HeapNotInUse),
+                              _ => Err(Cause::HeapBadBlock)
             }
         }
     }
@@ -130,7 +122,7 @@ impl Heap
     the heap block header, just like malloc() on other platforms.
     => T = type to allocate memory for
     <= pointer to memory, or error code */
-    pub fn alloc<T>(&mut self) -> Result<*mut T, HeapError>
+    pub fn alloc<T>(&mut self) -> Result<*mut T, Cause>
     {
         let mut done = false;
 
@@ -179,15 +171,122 @@ impl Heap
                     }
                 }
 
-                /* make sure we don't run off the end of the list */
+                /* make sure we don't run off the end of the list.
+                also, attempt to consolidate neighboring blocks to make
+                more bytes available and reduce fragmentation. do this 
+                after we've tried searching for available blocks */
                 match (*search_block).next
                 {
-                    None => done = true,
+                    None => if self.consolidate() < HEAP_BLOCK_SIZE
+                    {
+                        /* if we can't squeeze any more bytes out then give up */
+                        done = true;
+                    }
+                    else
+                    {
+                        /* start the search over */
+                        search_block = self.block_list_head;
+                    },
                     Some(n) => search_block = n
                 };
             }
         }
 
-        return Result::Err(HeapError::NoFreeMem);
+        return Result::Err(Cause::HeapNoFreeMem);
+    }
+
+    /* output debug stats for this heap */
+    pub fn debug(&mut self)
+    {
+        let mut blocks = 0;
+        let mut inuse = 0;
+        let mut free = 0;
+
+        let mut block = self.block_list_head;
+        {
+            unsafe
+            {
+                loop
+                {
+                    blocks = blocks + 1;
+                    match (*block).magic
+                    {
+                        HeapMagic::Free => free = free + (*block).size,
+                        HeapMagic::InUse => inuse = inuse + (*block).size
+                    };
+                    match (*block).next
+                    {
+                        Some(n) => block = n,
+                        None => break,
+                    };
+                }
+            }
+        }
+
+        klog!("heap: {} blocks present. {} bytes in use, {} bytes free", blocks, inuse, free);
+    }
+
+    /* pass once over the heap and try to merge adjacent blocks
+    <= size of the lagrest block seen, in bytes including header */
+    fn consolidate(&mut self) -> usize
+    {
+        let mut largest_merged_block: usize = 0;
+
+        let mut block = self.block_list_head;
+        unsafe
+        {
+            /* can't merge if we're the last block in the list */
+            while (*block).next.is_some()
+            {
+                let next = (*block).next.unwrap();
+                if (*block).magic == HeapMagic::Free && (*next).magic == HeapMagic::Free
+                {
+                    let target_ptr = (block as usize) + (*block).size;
+                    if target_ptr == next as usize
+                    {
+                        /* we're adjacent, we're both free, and we can merge */
+                        let merged_size = (*block).size + (*next).size;
+                        if merged_size > largest_merged_block
+                        {
+                            largest_merged_block = merged_size;
+                        }
+                        (*block).size = merged_size;
+                        (*block).next = (*next).next;
+                    }
+                }
+                match (*block).next
+                {
+                    Some(n) => block = n,
+                    None => break,
+                };
+            }
+
+            /* catch corner case of there being two free blocks: the first on the
+            list is higher than the last block on the list, and they are both free */
+            if (*self.block_list_head).magic == HeapMagic::Free
+            {
+                match (*self.block_list_head).next
+                {
+                    Some(next) =>
+                    {
+                        if (*next).magic == HeapMagic::Free
+                        {
+                            if (next as usize) + (*next).size == self.block_list_head as usize
+                            {
+                                (*next).size = (*next).size + (*self.block_list_head).size;
+                                self.block_list_head = next;
+                                if (*next).size > largest_merged_block
+                                {
+                                    largest_merged_block = (*next).size;
+                                }
+                            }
+                        }
+                    },
+                    _ => ()
+                }
+            }
+        }
+
+        return largest_merged_block;
     }
 }

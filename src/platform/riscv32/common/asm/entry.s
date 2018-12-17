@@ -72,12 +72,13 @@ _start:
   # we're not first so set a0 to false
   li        a0, 0
 
-  # call kmain with boot CPU flag in a0 and devicetree in a1
+  # call kentry with boot CPU flag in a0 and devicetree in a1
 enter_kernel:
-  la        t0, kmain
+  la        t0, kentry
   jalr      ra, t0, 0
 
 # fall through to loop rather than crash into random instructions/data
+# kentry should not return
 infinite_loop:
   wfi
   j         infinite_loop

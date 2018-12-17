@@ -22,12 +22,35 @@ mod physmem; /* manage physical memory */
 mod cpu; /* manage CPU cores */
 mod lock; /* multi-threading locking primitives */
 
+mod error; /* list of kernel error codes */
+use error::Cause;
+
 /* function naming note: machine kernel entry points start with a k, such as kmain,
 kirq_handler. supervisor kernel entry points start with an s, such as smain.
 generally, kernel = machine/hypervisor kernel, supervisor = supervisor kernel. */
 
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 stick to usize as much as possible */
+
+/* kentry
+   This is the official entry point of the Rust-level machine/hypervsor kernel.
+   Call kmain, which is where all the real work happens, and catch any errors.
+   => parameters described in kmain, passed directly from the bootloader...
+   <= return to infinite loop */
+#[no_mangle]
+pub extern "C" fn kentry(is_boot_cpu: bool, device_tree_buf: &u8)
+{
+    /* kentry is a safety net for kmain. if kmain returns then someting went
+    wrong that we should recover from, or we note to the user that we hit 
+    an unimplemented section of the kernel. */
+    match kmain(is_boot_cpu, device_tree_buf)
+    {
+        Ok(()) => klog!("Exited kmain without error. That's all, folks."),
+        Err(e) => kalert!("Exited kmain with error: {:?}", e)
+    };
+
+    /* for now, fall back to infinite loop. In future, try to recover */
+}
 
 /* kmain
    This code runs at the machine/hypervisor level, with full physical memory access.
@@ -46,8 +69,7 @@ stick to usize as much as possible */
       device_tree_buf = pointer to device tree describing the hardware
    <= return to halt kernel on this core
 */
-#[no_mangle]
-pub extern "C" fn kmain(is_boot_cpu: bool, device_tree_buf: &u8)
+fn kmain(is_boot_cpu: bool, device_tree_buf: &u8) -> Result<(), Cause>
 {
     /* make the boot CPU setup physical memory etc before other cores to come online */
     if is_boot_cpu == true
@@ -55,7 +77,7 @@ pub extern "C" fn kmain(is_boot_cpu: bool, device_tree_buf: &u8)
         klog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree_buf);
         kdebug!("... Debugging enabled");
 
-        if pre_smp_init(device_tree_buf) == false { /* bail out on error */ return; }
+        pre_smp_init(device_tree_buf)?;
         klog!("Waking all CPUs");
     }
 
@@ -64,22 +86,44 @@ pub extern "C" fn kmain(is_boot_cpu: bool, device_tree_buf: &u8)
     resources to be prepared before being used */
     cpu::Core::init();
 
-    struct TestData
+    match heap_test()
     {
-        array: [u32; 100]
+        Ok(()) => klog!("heap test completed"),
+        Err(e) => klog!("heap tests failed: {:?}", e)
+    };
+
+    Ok(()) /* return to infinite loop */
+}
+
+fn heap_test() -> Result<(), Cause>
+{
+    struct HeapTestData
+    {
+        array: [u8; 777]
     }
 
-    let p = kalloc!(TestData);
-    klog!("allocated array from private heap at {:?}, first word = 0x{:x}", p, (*p).array[0]);
-    unsafe { (*p).array[0] = 0xc001c0d3; }
-    klog!("writing data: first word now = 0x{:x}. freeing...", (*p).array[0]);
-    kfree!(TestData, p);
+    unsafe { (*<::cpu::Core>::this()).heap.debug(); }
+    let p3 = kalloc!(HeapTestData);
+    let p2 = kalloc!(HeapTestData);
+    let p1 = kalloc!(HeapTestData);
+    let p0 = kalloc!(HeapTestData);
+    unsafe { (*<::cpu::Core>::this()).heap.debug(); }
+
+    kfree!(HeapTestData, p1);
+    kfree!(HeapTestData, p2);
+    unsafe { (*<::cpu::Core>::this()).heap.debug(); }
+    
+    kfree!(HeapTestData, p0);
+    kfree!(HeapTestData, p3);
+    unsafe { (*<::cpu::Core>::this()).heap.debug(); }
+
+    Ok(())
 }
 
 /* have the boot CPU perform any preflight checks and initialize the kernel prior to SMP.
    when the boot CPU is done, it should allow cores to exit cpu::int() by calling cpu::unblock_smp() 
-   <= return true on success, or false for failure */
-fn pre_smp_init(device_tree: &u8) -> bool
+   <= return success, or failure code */
+fn pre_smp_init(device_tree: &u8) -> Result<(), Cause>
 {
     /* set up the physical memory management */
     match physmem::init(device_tree)
@@ -88,11 +132,11 @@ fn pre_smp_init(device_tree: &u8) -> bool
         None =>
         {
             kalert!("Physical memory failure: too little RAM, or config error");
-            return false;
+            return Err(Cause::BadPhysMemConfig);
         }
     };
 
     /* everything's set up for all cores to run so unblock any waiting in cpu::init() */
     cpu::unblock_smp();
-    return true;
+    return Ok(());
 }
