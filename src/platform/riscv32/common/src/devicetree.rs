@@ -49,3 +49,24 @@ pub fn get_ram_size(device_tree_buf: &u8) -> Option<usize>
 
     return Some(mem_size as usize);
 }
+
+/* get_cpu_count
+   => device_tree_buf = pointer to device tree in kernel-accessible RAM
+   <= number of CPU cores in system, or None for failure
+*/
+pub fn get_cpu_count(device_tree_buf: &u8) -> Option<usize>
+{
+    let dev_tree = match unsafe { hermit_dtb::Dtb::from_raw(device_tree_buf) }
+    {
+        Some(x) => x,
+        None => return None,
+    };
+
+    let mut cpus = 0;
+    for node in dev_tree.enum_subnodes("/cpus")
+    {
+        cpus = cpus + 1;
+    }
+
+    return Some(cpus);
+}

@@ -18,22 +18,17 @@
 extern crate alloc;
 /* this will bring in all the hardware-specific code */
 extern crate platform;
-/* use an external tree library */
-extern crate ego_tree;
-use ego_tree::Tree;
 
 /* and now for all our non-hw specific code */
 #[macro_use]
 mod lock; /* multi-threading locking primitives */
 #[macro_use]
 mod debug; /* get us some kind of debug output, typically to a serial port */
-
 mod heap; /* per-CPU private heap management */
 mod abort; /* implement abort() and panic() handlers */
 mod irq; /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem; /* manage physical memory */
 mod cpu; /* manage CPU cores */
-
 /* list of kernel error codes */
 mod error;
 use error::Cause;
@@ -89,30 +84,24 @@ pub extern "C" fn kentry(is_boot_cpu: bool, device_tree_buf: &u8)
 */
 fn kmain(is_boot_cpu: bool, device_tree_buf: &u8) -> Result<(), Cause>
 {
-    /* make the boot CPU setup physical memory etc before other cores to come online */
+    /* set up each processor core with its own private heap pool and any other resources.
+    this uses physical memory assigned by the pre-kmain boot code */
+    cpu::Core::init();
+
+    /* delegate to boot CPU the welcome banner and initialization of global resources */
     if is_boot_cpu == true
     {
         klog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree_buf);
         kdebug!("... Debugging enabled");
-
-        pre_smp_init(device_tree_buf)?;
-        klog!("Waking all CPUs");
+        init_global(device_tree_buf)?;
     }
 
-    /* set up all processor cores, including the boot CPU. all CPU cores will block in cpu::init()
-    until released by the boot CPU in pre_smp_init(), allowing physical memory and other global
-    resources to be prepared before being used */
-    cpu::Core::init();
-
-
-    
     Ok(()) /* return to infinite loop */
 }
 
-/* have the boot CPU perform any preflight checks and initialize the kernel prior to SMP.
-   when the boot CPU is done, it should allow cores to exit cpu::int() by calling cpu::unblock_smp() 
+/* have the boot CPU initialize and unlock global structures and resources, such as the physical memory tree.
    <= return success, or failure code */
-fn pre_smp_init(device_tree: &u8) -> Result<(), Cause>
+fn init_global(device_tree: &u8) -> Result<(), Cause>
 {
     /* set up the physical memory management */
     match physmem::init(device_tree)
@@ -124,9 +113,6 @@ fn pre_smp_init(device_tree: &u8) -> Result<(), Cause>
             return Err(Cause::PhysMemBadConfig);
         }
     };
-
-    /* everything's set up for all cores to run so unblock any waiting in cpu::init() */
-    cpu::unblock_smp();
     return Ok(());
 }
 

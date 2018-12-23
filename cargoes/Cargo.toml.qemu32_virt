@@ -6,4 +6,3 @@ qemu32_virt = []
 
 [dependencies]
 platform = { path = "src/platform/riscv32/qemu32_virt" }
-ego-tree = { path = "src/contrib/ego-tree" }

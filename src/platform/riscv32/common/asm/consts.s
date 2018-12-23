@@ -19,6 +19,7 @@
 #   .   private heap space
 
 # describe per-CPU slab. each slab is 1 << 18 bytes in size = 256KB
+# update ../src/physmem.rs PHYS_MEM_PER_CPU if KERNEL_CPU_SLAB_SHIFT changes
 .equ KERNEL_CPU_SLAB_SHIFT,         (18)
 .equ KERNEL_CPU_SLAB_SIZE,          (1 << KERNEL_CPU_SLAB_SHIFT)
 .equ KERNEL_CPU_STACK_BASE,         (0)

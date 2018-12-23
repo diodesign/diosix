@@ -8,19 +8,18 @@
  * See LICENSE for usage and copying.
  */
 
-use lock::Spinlock;
+use lock::Mutex;
 
 /* platform-specific code must implement all this */
 use platform;
 
-static mut TREE_LOCK: Spinlock = kspinlock!();
+static mut PHYS_TREE: Option<Mutex<SupervisorPhysRegion>> = None;
 
-struct PhysMemTreeNode
+/* describe a supervisor kernel's physical memory region */
+struct SupervisorPhysRegion
 {
     base: usize,
-    size: usize,
-    // left: Option<Box<PhysMemTreeNode>>,
-    // right: Option<Box<PhysMemTreeNode>>,
+    size: usize
 }
 
 /* intiialize the physical memory management.
@@ -35,5 +34,11 @@ struct PhysMemTreeNode
 */
 pub fn init(device_tree_buf: &u8) -> Option<usize>
 {
-    return platform::common::physmem::init(device_tree_buf);
+    let phys_mem_size = match platform::common::physmem::init(device_tree_buf)
+    {
+        Some(s) => s,
+        None => return None
+    };
+
+    return Some(phys_mem_size);
 }

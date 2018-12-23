@@ -25,6 +25,10 @@ const PHYS_RAM_BASE: usize = 0x80000000;
 static mut PHYS_MEM_TOTAL: usize = 0;
 static mut PHYS_MEM_USABLE: usize = 0;
 
+/* each CPU has a fix memory overhead, allocated during boot */
+static PHYS_MEM_PER_CPU: usize = 1 << 18; /* see ../asm/const.s */
+static mut PHYS_CPU_COUNT: usize = 0;
+
 /* initialize global physical memory management - call only from boot CPU!
 => device_tree_buf = device tree to parse
 <= number of non-kernel bytes usable, or None for error */
@@ -36,6 +40,11 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
         Some(b) => b,
         None => return None
     };
+    let mut cpu_count = match devicetree::get_cpu_count(device_tree_buf)
+    {
+        Some(c) => c,
+        None => return None
+    };
 
     /* get the physical start and end addresses of the entire statically allocated kernel:
     its code, data, global variables, and payload */
@@ -43,7 +52,8 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
     let phys_kernel_end = unsafe { platform_physmem_get_kernel_end() };
 
     /* calculate kernel's maximum physical memory footprint in bytes */
-    let footprint = phys_kernel_end - phys_kernel_start;
+    let footprint = (phys_kernel_end - phys_kernel_start) +
+                    (cpu_count * PHYS_MEM_PER_CPU);
 
     /* enforce minimum and maximums for RAM. also if there isn't enough to hold the kernel
     and its structures and payload, then bail out. */
