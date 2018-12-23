@@ -67,5 +67,6 @@ Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have
 Copyright &copy; Chris Williams and contributors, 2018. See LICENSE for source code and binary distribution and use.
 
 src/contrib/hermit-dtb: Copyright &copy; 2018 Colin Finck, RWTH Aachen University.
+src/contrib/ego-tree: Copyright &copy; 2016, Curtis McEnroe <curtis@cmcenroe.me>.
 
 With thanks to [David Craven](https://github.com/dvc94ch) and everyone else who helped port Rust to RISC-V, the RISC-V world for designing the CPUs and writing the emulators in the first place, Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/), and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).

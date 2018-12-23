@@ -1,7 +1,5 @@
-/* diosix machine kernel's locking primitives
- *
- * Provided because, at time of writing, these were not available in no-std RV32 Rust
- * 
+/* diosix locking primitives
+ *  
  * (c) Chris Williams, 2018.
  *
  * See LICENSE for usage and copying.
@@ -13,14 +11,28 @@ extern "C" {
     fn platform_release_spin_lock(lock_var: &usize);
 }
 
+/* create an unlocked spinlock */
+#[macro_export]
+macro_rules! kspinlock
+{
+    () => (Spinlock { value: 0 });
+}
+
 pub struct Spinlock
 {
+    /* lock value: 0 = unlocked, anything else is locked */
     pub value: usize
 }
 
 /* very basic spin lock */
 impl Spinlock
 {
+    /* create a new spinlock */
+    pub fn new() -> Spinlock
+    {
+        Spinlock { value: 0 }
+    }
+
     /* execute the given closure as a critical section protected by the lock */
     pub fn execute(&self, f: impl Fn())
     {

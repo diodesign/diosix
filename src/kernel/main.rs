@@ -9,24 +9,30 @@
 #![no_std]
 #![no_main]
 
+/* quieten complaints about unused code */
+#![allow(dead_code)]
+
 /* we need all this to plug our heap allocator into the Rust language */
 #![feature(alloc_error_handler)]
 #![feature(alloc)]
 extern crate alloc;
-use alloc::boxed::Box;
-
 /* this will bring in all the hardware-specific code */
 extern crate platform;
+/* use an external tree library */
+extern crate ego_tree;
+use ego_tree::Tree;
 
 /* and now for all our non-hw specific code */
 #[macro_use]
+mod lock; /* multi-threading locking primitives */
+#[macro_use]
 mod debug; /* get us some kind of debug output, typically to a serial port */
+
 mod heap; /* per-CPU private heap management */
 mod abort; /* implement abort() and panic() handlers */
 mod irq; /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem; /* manage physical memory */
 mod cpu; /* manage CPU cores */
-mod lock; /* multi-threading locking primitives */
 
 /* list of kernel error codes */
 mod error;
@@ -98,16 +104,8 @@ fn kmain(is_boot_cpu: bool, device_tree_buf: &u8) -> Result<(), Cause>
     resources to be prepared before being used */
     cpu::Core::init();
 
-    struct mytest
-    {
-        x: u32,
-        y: u8,
-        z: usize
-    }
 
-    let boxed: Box<mytest> = Box::new(mytest { x: 444, y: 77, z: 888 } );
-    klog!("boxed x y z  = {} {} {}", boxed.x, boxed.y, boxed.z);
-
+    
     Ok(()) /* return to infinite loop */
 }
 

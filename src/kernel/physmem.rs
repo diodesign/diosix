@@ -8,11 +8,23 @@
  * See LICENSE for usage and copying.
  */
 
+use lock::Spinlock;
 
 /* platform-specific code must implement all this */
 use platform;
 
-/* intiialize the physical memory management
+static mut TREE_LOCK: Spinlock = kspinlock!();
+
+struct PhysMemTreeNode
+{
+    base: usize,
+    size: usize,
+    // left: Option<Box<PhysMemTreeNode>>,
+    // right: Option<Box<PhysMemTreeNode>>,
+}
+
+/* intiialize the physical memory management.
+   called once by the boot CPU core.
    Make no assumptions about the underlying hardware.
    the platform-specific code could set up per-CPU or
    per-NUMA domain page stacks, etc.

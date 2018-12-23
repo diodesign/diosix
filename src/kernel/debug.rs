@@ -10,7 +10,7 @@
 use core::fmt;
 use lock::Spinlock;
 
-pub static mut DEBUG_LOCK: Spinlock = Spinlock { value: 0 };
+pub static mut DEBUG_LOCK: Spinlock = kspinlock!();
 
 /* tell the compiler the platform-specific serial port code is elsewhere */
 extern "C" {

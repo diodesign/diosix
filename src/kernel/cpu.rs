@@ -5,12 +5,21 @@
  * See LICENSE for usage and copying.
  */
 
+/* CPUs get their own private heaps to manage. Crucially, allocated memory
+blocks can be shared by other CPUs. Any CPU can free any block, returning
+it to its owner's heap pool. When allocating, a CPU can only draw from
+its own heap, reusing any blocks freed by itself or other cores.
+
+The machine/hypervisor layer is unlikely to do much active allocation
+so it's OK to keep it really simple for now. */
 use heap;
 
 /* require some help from the underlying platform */
 extern "C"
 {
     fn platform_cpu_private_variables() -> *mut Core;
+    fn platform_cpu_heap_base() -> *mut heap::HeapBlock;
+    fn platform_cpu_heap_size() -> usize;
 }
 
 /* set to true to unblock SMP cores and allow them to initialize */
@@ -41,7 +50,7 @@ impl Core
         let cpu = Core::this();
 
         /* initialize private heap */
-        unsafe { (*cpu).heap.init(); }
+        unsafe { (*cpu).heap.init(platform_cpu_heap_base(), platform_cpu_heap_size()); }
     }
 
     /* return pointer to the calling CPU core's fixed private data structure */

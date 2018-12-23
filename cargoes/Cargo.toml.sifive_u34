@@ -6,3 +6,4 @@ sifive_u34 = []
 
 [dependencies]
 platform = { path = "src/platform/riscv32/sifive_u34" }
+ego-tree = { path = "src/contrib/ego-tree" }

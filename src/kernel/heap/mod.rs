@@ -1,5 +1,17 @@
-/* diosix machine kernel's per-CPU heap management
+/* diosix heap management
  *
+ * Simple heap manager that is lock-free for free()
+ * but requires a lock to alloc(), or only allow
+ * one allocator and multiple free()ers per heap.
+ * For exsmple: a per-CPU heap in which the owner
+ * CPU can allocate from its own heap pool, and
+ * share these pointers with any CPU, and any
+ * CPU can free back to the owner's heap pool.
+ *  
+ * Interfaces with Rust's global allocator API
+ * so things like vec! and Box work. Heap is
+ * the underlying engine for kAllocator.
+ * 
  * (c) Chris Williams, 2018.
  *
  * See LICENSE for usage and copying.
@@ -10,24 +22,7 @@ use core::ptr::null_mut;
 
 use core::mem;
 use core::result::Result;
-use error::Cause;
-
-/* get some help from underlying platform */
-extern "C"
-{
-    fn platform_cpu_heap_base() -> *mut HeapBlock;
-    fn platform_cpu_heap_size() -> usize;
-}
-
-/* CPUs get their own private heaps to manage. Crucially, these memory
-blocks can be used by other CPUs. Any CPU can free any block by marking
-it as free in its metadata. When allocating, a CPU can only draw from
-its own heap, reusing any blocks freed by itself or other cores.
-If it can't find any suitable free blocks, then it must allocate from
-its own heap's free area. The machine/hypervisor layer is unlikely
-to do much active allocation so it's OK to keep it really simple for now.
-
-This should avoid any locks and data races, and any contention. */
+use ::error::Cause;
 
 /* different states each recognized heap block can be in */
 #[derive(PartialEq, Debug)]
@@ -51,7 +46,7 @@ unsafe impl GlobalAlloc for kAllocator
     unsafe fn alloc(&self, layout: Layout) -> *mut u8
     {
         let bytes = layout.size();
-        match unsafe { (*<::cpu::Core>::this()).heap.alloc::<u8>(bytes) }
+        match (*<::cpu::Core>::this()).heap.alloc::<u8>(bytes)
         {
             Ok(p) => p,
             Err(e) =>
@@ -77,7 +72,7 @@ unsafe impl GlobalAlloc for kAllocator
 
 /* describe the layout of a per-CPU heap block */
 #[repr(C)]
-struct HeapBlock
+pub struct HeapBlock
 {
     /* heap is a single-link-list to keep it simple and safe */
     next: Option<*mut HeapBlock>,
@@ -89,9 +84,8 @@ struct HeapBlock
 }
 
 /* this is our own internal API for the per-CPU kernel heap. use high-level abstractions, such as Box,
-rather than this directly, though, so we get all the safety measures and lifetime checking. however,
-kallocator is built on top of Heap, which is why each CPU core has its own Heap. the rest of the kernel
-uses the per-CPU Heaps via kallocator. */
+rather than this directly, so we get all the safety measures and lifetime checking. think of kallocator
+as the API and Heap as the engine. kallocator is built on top of Heap, and each CPU core has its own Heap. */
 #[repr(C)]
 pub struct Heap
 {
@@ -104,14 +98,16 @@ pub struct Heap
 impl Heap
 {
     /* initialize this heap area. start off with one giant block
-    covering all of free space, from which other blocks will be carved */
-    pub fn init(&mut self)
+    covering all of free space, from which other blocks will be carved.
+    => start = pointer to start of heap area
+       size = size of available bytes in heap */
+    pub fn init(&mut self, start: *mut HeapBlock, size: usize)
     {
         /* here's our enormo free block */
         unsafe
         {
-            let block = platform_cpu_heap_base();
-            (*block).size = platform_cpu_heap_size();
+            let block = start;
+            (*block).size = size;
             (*block).next = None;
             (*block).magic = HeapMagic::Free;
 
