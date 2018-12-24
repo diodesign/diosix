@@ -39,9 +39,9 @@ const HEAP_BLOCK_SIZE: usize = 64;
 /* follow Rust's heap allocator API so we can drop our per-CPU allocator in and use things
 like Box. We allow the Rust toolchain to track and check pointers and object lifetimes,
 while we'll manage the underlying physical memory used by the heap. */
-pub struct kAllocator;
+pub struct Kallocator;
 
-unsafe impl GlobalAlloc for kAllocator
+unsafe impl GlobalAlloc for Kallocator
 {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8
     {
@@ -51,7 +51,7 @@ unsafe impl GlobalAlloc for kAllocator
             Ok(p) => p,
             Err(e) =>
             {
-                kalert!("kAllocator: request for {} bytes failed ({:?})", bytes, e);
+                kalert!("Kallocator: request for {} bytes failed ({:?})", bytes, e);
                 null_mut() /* yeesh */
             }
         }
@@ -59,11 +59,11 @@ unsafe impl GlobalAlloc for kAllocator
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
     {
-        match unsafe { (*<::cpu::Core>::this()).heap.free::<u8>(ptr) }
+        match (*<::cpu::Core>::this()).heap.free::<u8>(ptr)
         {
             Err(e) =>
             {
-                kalert!("kAllocator: request to free {:p} failed ({:?})", ptr, e)
+                kalert!("Kallocator: request to free {:p} failed ({:?})", ptr, e)
             },
             _ => ()
         }
@@ -137,8 +137,7 @@ impl Heap
                     Ok(())
                 },
                 /* if it's not in use, or bad magic, then bail out */
-                HeapMagic::Free => Err(Cause::HeapNotInUse),
-                              _ => Err(Cause::HeapBadBlock)
+                HeapMagic::Free => Err(Cause::HeapNotInUse)
             }
         }
     }

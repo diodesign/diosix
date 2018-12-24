@@ -48,8 +48,8 @@ macro_rules! kdebug
 #[cfg(not(debug_assertions))]
 macro_rules! kdebug
 {
-  ($fmt:expr) => ();
-  ($fmt:expr, $($arg:tt)*) => ();
+  ($fmt:expr) => ({});
+  ($fmt:expr, $($arg:tt)*) => ({});
 }
 
 /* use this to stop rust optimizing away loops and other code */

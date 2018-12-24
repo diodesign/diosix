@@ -14,7 +14,7 @@ SECTIONS
   . = 0x80000000;
   __kernel_start = .;
 
-  /* code and read-only data in physical RAM */
+  /* hypervisor kernel code and read-only data in physical RAM */
   .text : ALIGN(0x1000)
   {
     *(.entry) /* must be first */
@@ -22,11 +22,22 @@ SECTIONS
     *(.rodata*)
   }
 
-  /* read-write data goes here */
+  /* hypervisor kernel read-write stack data goes here */
   .bss : ALIGN(0x1000)
   {
     *(.data)
     *(.bss)
+  }
+
+  /* built-in supervisor kernel */
+  .supervisor : ALIGN(0x1000)
+  {
+    __supervisor_code_start = .;
+    *(.supervisortext*)
+    __supervisor_code_end = .;
+    __supervisor_data_start = .;
+    *(.supervisordata*)
+    __supervisor_data_end = .;
   }
 
   /* set aligned end to the kernel */

@@ -5,13 +5,20 @@
  * See LICENSE for usage and copying.
  */
 
+use core::intrinsics::transmute;
 use devicetree;
+use cpu;
 
 /* we need this code from the assembly files */
 extern "C"
 {
-    fn platform_physmem_get_kernel_start() -> usize;
-    fn platform_physmem_get_kernel_end() -> usize;
+    /* linker symbols */
+    static __kernel_start: u8;
+    static __kernel_end: u8;
+    static __supervisor_code_start: u8;
+    static __supervisor_code_end: u8;
+    static __supervisor_data_start: u8;
+    static __supervisor_data_end: u8;
 }
 
 /* minimum amount of RAM allowed before boot (4MiB). this is a sanity check for
@@ -21,15 +28,16 @@ const MIN_RAM_SIZE: usize = 4 * 1024 * 1024;
 /* assumes RAM starts at 0x80000000 */
 const PHYS_RAM_BASE: usize = 0x80000000;
 
-/* total bytes detected in the system, and total available */
+/* total bytes detected in the system, total available, and total used by hypervisor */
 static mut PHYS_MEM_TOTAL: usize = 0;
 static mut PHYS_MEM_USABLE: usize = 0;
+static mut PHYS_MEM_FOOTPRINT: usize = 0;
 
 /* each CPU has a fix memory overhead, allocated during boot */
 static PHYS_MEM_PER_CPU: usize = 1 << 18; /* see ../asm/const.s */
-static mut PHYS_CPU_COUNT: usize = 0;
 
 /* initialize global physical memory management - call only from boot CPU!
+   call after CPU management has initialized.
 => device_tree_buf = device tree to parse
 <= number of non-kernel bytes usable, or None for error */
 pub fn init(device_tree_buf: &u8) -> Option<usize>
@@ -40,7 +48,7 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
         Some(b) => b,
         None => return None
     };
-    let mut cpu_count = match devicetree::get_cpu_count(device_tree_buf)
+    let cpu_count = match cpu::nr_of_cores()
     {
         Some(c) => c,
         None => return None
@@ -48,8 +56,8 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
 
     /* get the physical start and end addresses of the entire statically allocated kernel:
     its code, data, global variables, and payload */
-    let phys_kernel_start = unsafe { platform_physmem_get_kernel_start() };
-    let phys_kernel_end = unsafe { platform_physmem_get_kernel_end() };
+    let phys_kernel_start: usize = unsafe { transmute(&__kernel_start) };
+    let phys_kernel_end : usize = unsafe { transmute(&__kernel_end) };
 
     /* calculate kernel's maximum physical memory footprint in bytes */
     let footprint = (phys_kernel_end - phys_kernel_start) +
@@ -71,7 +79,24 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
     {
         PHYS_MEM_TOTAL = total_phys_bytes;
         PHYS_MEM_USABLE = total_phys_bytes - footprint;
+        PHYS_MEM_FOOTPRINT = footprint;
     }
 
     return Some(total_phys_bytes - footprint);
+}
+
+/* return the (start address, end address) of the builtin supervisor kernel code in physical memory */
+pub fn builtin_supervisor_code() -> (usize, usize)
+{
+    let supervisor_start: usize = unsafe { transmute(&__supervisor_code_start) };
+    let supervisor_end: usize = unsafe { transmute(&__supervisor_code_end) };
+    return (supervisor_start, supervisor_end);
+}
+
+/* return the (start address, end address) of the builtin supervisor kernel code in physical memory */
+pub fn builtin_supervisor_data() -> (usize, usize)
+{
+    let supervisor_start: usize = unsafe { transmute(&__supervisor_data_start) };
+    let supervisor_end: usize = unsafe { transmute(&__supervisor_data_end) };
+    return (supervisor_start, supervisor_end);
 }

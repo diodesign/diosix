@@ -8,21 +8,31 @@
  * See LICENSE for usage and copying.
  */
 
-use lock::Mutex;
-
 /* platform-specific code must implement all this */
 use platform;
+use error::Cause;
 
-static mut PHYS_TREE: Option<Mutex<SupervisorPhysRegion>> = None;
-
-/* describe a supervisor kernel's physical memory region */
-struct SupervisorPhysRegion
+/* describe a physical memory region */
+pub struct PhysRegion
 {
     base: usize,
-    size: usize
+    end: usize
 }
 
-/* intiialize the physical memory management.
+/* return the regions covering the builtin supervisor kernel's
+executable code, and static data */
+pub fn builtin_supervisor_code() -> PhysRegion
+{
+    let (base, end) = platform::common::physmem::builtin_supervisor_code();
+    PhysRegion { base: base, end: end }
+}
+pub fn builtin_supervisor_data() -> PhysRegion
+{
+    let (base, end) = platform::common::physmem::builtin_supervisor_data();
+    PhysRegion { base: base, end: end }
+}
+
+/* intiialize the hypervisor's physical memory management.
    called once by the boot CPU core.
    Make no assumptions about the underlying hardware.
    the platform-specific code could set up per-CPU or
@@ -34,11 +44,13 @@ struct SupervisorPhysRegion
 */
 pub fn init(device_tree_buf: &u8) -> Option<usize>
 {
-    let phys_mem_size = match platform::common::physmem::init(device_tree_buf)
-    {
-        Some(s) => s,
-        None => return None
-    };
+    return platform::common::physmem::init(device_tree_buf);
+}
 
-    return Some(phys_mem_size);
+pub fn alloc(size: usize) -> Result<PhysRegion, Cause>
+{
+    Ok(PhysRegion
+    {
+        base: 0, end: size
+    })
 }

@@ -22,6 +22,13 @@ extern "C"
     fn platform_cpu_heap_size() -> usize;
 }
 
+/* initialize the CPU management code
+   <= return number of cores present, or None for failure */
+pub fn init(device_tree_buf: &u8) -> Option<usize>
+{
+    return platform::common::cpu::init(device_tree_buf);
+}
+
 /* describe a CPU core - this structure is stored in the per-CPU private variable space */
 #[repr(C)]
 pub struct Core

@@ -44,13 +44,13 @@ impl Spinlock
     }
 
     /* acquire the lock, or block until successful */
-    fn aquire(&self)
+    pub fn aquire(&self)
     {
         unsafe { platform_acquire_spin_lock(&(self.value)); }
     }
 
     /* release the lock */
-    fn release(&self)
+    pub fn release(&self)
     {
         unsafe { platform_release_spin_lock(&(self.value)); }
     }

@@ -17,4 +17,7 @@ pub enum Cause
 
     /* physical memory */
     PhysMemBadConfig,
+
+    /* CPU handling */
+    CPUBadConfig,
 }
