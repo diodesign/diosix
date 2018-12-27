@@ -58,7 +58,7 @@ unsafe fn atomic_store<T>(ptr: *mut T, value: T, order: Ordering) {
     }
 }
 
-/* implement atomic compare-and-swap: update *ptr if new value if it contained expected value,
+/* implement atomic compare-and-swap: update *ptr to new value if it contained expected value,
 and return the pre-update value. if the pre-update value equals the expected value then the update occurred */
 unsafe fn atomic_compare_exchange(ptr: *mut usize, expected: usize, new: usize, order: Ordering) -> usize
 {
