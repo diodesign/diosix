@@ -20,23 +20,22 @@ SECTIONS
     *(.entry) /* must be first */
     *(.text*)
     *(.rodata*)
+
+    /* builtin-supervisor's shared code */
+     __supervisor_shared_start = .;
+    *(.sshared*)
+    __supervisor_shared_end = .;
   }
 
   /* hypervisor kernel read-write stack data goes here */
   .bss : ALIGN(0x1000)
   {
-    *(.data)
-    *(.bss)
-  }
+    *(.data*)
+    *(.bss*)
 
-  /* built-in supervisor kernel */
-  .supervisor : ALIGN(0x1000)
-  {
-    __supervisor_code_start = .;
-    *(.supervisortext*)
-    __supervisor_code_end = .;
+    /* builtin-supervisor's private static data */
     __supervisor_data_start = .;
-    *(.supervisordata*)
+    *(.sdata*)
     __supervisor_data_end = .;
   }
 

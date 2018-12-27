@@ -3,7 +3,9 @@
 # (c) Chris Williams, 2018.
 # See LICENSE for usage and copying.
 
-.section .text
+.section .sshared
+.align 4
+
 .global platform_acquire_spin_lock
 .global platform_release_spin_lock
 .global platform_compare_and_swap

@@ -25,8 +25,8 @@ use core::result::Result;
 use ::error::Cause;
 
 /* different states each recognized heap block can be in */
-#[derive(PartialEq, Debug)]
 #[repr(C)]
+#[derive(PartialEq, Debug)]
 enum HeapMagic
 {
     Free = 0x0deadded,
@@ -50,7 +50,7 @@ unsafe impl GlobalAlloc for Kallocator
         {
             Ok(p) => 
             {
-                klog!("heap: allocating {:p}, {} bytes", p, bytes);
+                kdebug!("heap: allocating {:p}, {} bytes", p, bytes);
                 p
             },
             Err(e) =>
@@ -63,7 +63,7 @@ unsafe impl GlobalAlloc for Kallocator
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
     {
-        klog!("heap: freeing {:p}", ptr);
+        kdebug!("heap: freeing {:p}", ptr);
         match (*<::cpu::Core>::this()).heap.free::<u8>(ptr)
         {
             Err(e) =>

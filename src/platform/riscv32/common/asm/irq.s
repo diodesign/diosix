@@ -8,6 +8,7 @@
 .altmacro
 
 .section .text
+.align 4
 
 .global irq_early_init
 

@@ -4,6 +4,8 @@
 # See LICENSE for usage and copying.
 
 .section .text
+.align 4
+
 .global platform_get_cpu_id
 .global platform_cpu_private_variables
 .global platform_cpu_heap_base

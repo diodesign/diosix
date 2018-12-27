@@ -10,6 +10,8 @@
 
 # _start *must* be the first routine in this file
 .section .entry
+.align 4
+
 .global _start
 
 # include kernel constants, such as global variable and lock locations

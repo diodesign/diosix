@@ -63,7 +63,7 @@ pub fn get_cpu_count(device_tree_buf: &u8) -> Option<usize>
     };
 
     let mut cpus = 0;
-    for node in dev_tree.enum_subnodes("/cpus")
+    for _node in dev_tree.enum_subnodes("/cpus")
     {
         cpus = cpus + 1;
     }

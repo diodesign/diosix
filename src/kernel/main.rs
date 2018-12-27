@@ -18,7 +18,7 @@
 #![feature(box_syntax)]
 extern crate alloc;
 
-/* allow us to use lazy statics and mutexes */
+/* allow hypervisor and supervisor to use lazy statics and mutexes */
 #[macro_use]
 extern crate lazy_static;
 extern crate spin;
@@ -101,9 +101,9 @@ fn kmain(is_boot_cpu: bool, device_tree_buf: &u8) -> Result<(), Cause>
     {
         /* initialize global resources */
         init_global(device_tree_buf)?;
-        
-        /* create root supervisor environment and linked list to store envs */
-        environment::create(0)?;
+
+        /* create root supervisor environment with 1MB of RAM and max 2 CPU cores */
+        let id = environment::create_from_builtin(1 * 1024 * 1024, 1)?;
     }
 
     Ok(()) /* return to infinite loop */
