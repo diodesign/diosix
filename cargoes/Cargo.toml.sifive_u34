@@ -6,3 +6,5 @@ sifive_u34 = []
 
 [dependencies]
 platform = { path = "src/platform/riscv32/sifive_u34" }
+lazy_static = { path = "src/contrib/lazy-static.rs" }
+spin = { path = "src/contrib/spin-rs" }

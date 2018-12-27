@@ -48,7 +48,11 @@ unsafe impl GlobalAlloc for Kallocator
         let bytes = layout.size();
         match (*<::cpu::Core>::this()).heap.alloc::<u8>(bytes)
         {
-            Ok(p) => p,
+            Ok(p) => 
+            {
+                klog!("heap: allocating {:p}, {} bytes", p, bytes);
+                p
+            },
             Err(e) =>
             {
                 kalert!("Kallocator: request for {} bytes failed ({:?})", bytes, e);
@@ -59,6 +63,7 @@ unsafe impl GlobalAlloc for Kallocator
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
     {
+        klog!("heap: freeing {:p}", ptr);
         match (*<::cpu::Core>::this()).heap.free::<u8>(ptr)
         {
             Err(e) =>

@@ -5,17 +5,17 @@
  * See LICENSE for usage and copying.
  */
 
-use physmem;
-use physmem::PhysRegion;
-use lock::{Mutex, Spinlock};
+use physmem::{self, PhysRegion};
+use spin::Mutex;
 use error::Cause;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
 
-/* maintain a linked list of supervisor environments.
-acquire ENVIRONMENTS_LOCK before accessing */
-static mut ENVIRONMENTS_LOCK: Spinlock = kspinlock!();
-static mut ENVIRONMENTS: Option<Box<LinkedList<Environment>>> = None;
+/* maintain a shared linked list of supervisor environments */
+lazy_static!
+{
+    static ref ENVIRONMENTS: Mutex<Box<LinkedList<Environment>>> = Mutex::new(box LinkedList::new());
+}
 
 /* create a new supervisor environment
    This uses the built-in supervisor. Once created, it ready to be scheduled.
@@ -24,21 +24,11 @@ static mut ENVIRONMENTS: Option<Box<LinkedList<Environment>>> = None;
 pub fn create(size: usize) -> Result<(), Cause>
 {
     let new_env = Environment::new(size)?;
-    unsafe
-    {
-        ENVIRONMENTS_LOCK.aquire();
+    let mut list = ENVIRONMENTS.lock();
+    list.push_front(new_env);
 
-        /* if the list doesn't exist then initialize it */
-        if ENVIRONMENTS.is_none() == true
-        {
-            ENVIRONMENTS = Some(box LinkedList::new());
-        }
+    klog!("added enviroment {:p}, ENVIRONMENTS = {:p}", *list, &ENVIRONMENTS);
 
-        let list = ENVIRONMENTS.as_mut().unwrap();
-        list.push_front(new_env);
-
-        ENVIRONMENTS_LOCK.release();
-    }
     Ok(())
 }
 

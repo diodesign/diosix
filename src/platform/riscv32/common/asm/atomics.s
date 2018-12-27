@@ -6,6 +6,9 @@
 .section .text
 .global platform_acquire_spin_lock
 .global platform_release_spin_lock
+.global platform_compare_and_swap
+.global platform_aq_compare_and_swap
+.global platform_cpu_wait
 
 # include kernel constants, such as stack and lock locations
 .include "src/platform/riscv32/common/asm/consts.s"
@@ -30,4 +33,40 @@ acquire_attempt:
 # => a0 = memory address of spin lock to release
 platform_release_spin_lock:
   amoswap.w.rl  x0, x0, (a0)    # release lock by atomically writing 0 to it
+  ret
+
+# platform_compare_and_swap
+# Atomically replace pointed-to word with new value if it equals the expected value.
+# return the value of the word prior to any update
+# => a0 = pointer to word to compare
+#    a1 = expected value of word
+#    a2 = new value of word 
+# <= a0 = pre-update value of word (if it equals expected value then update was made)
+platform_compare_and_swap:
+  lr.w      t0, (a0)                        # atomically fetch current value
+  bne       t0, a1, cas_fail                # if it's not expected then bail out
+  sc.w      t1, a2, (a0)                    # store new value and release address
+  bnez      t1, platform_compare_and_swap   # if atomic store failed (t1 != 0) then try again
+  add       a0, a1, x0                      # return expected pre-store contents of word
+  ret
+
+# same as platform_compare_and_swap but enforces aquire memory ordering.
+# acquire ordering means no following memory ops can be observed to take place
+# before the lr completes, ie: don't reorder post-lr mem ops before the lr
+platform_aq_compare_and_swap:
+  lr.w.aq   t0, (a0)
+  bne       t0, a1, cas_fail
+  sc.w      t1, a2, (a0)
+  bnez      t1, platform_aq_compare_and_swap
+  add       a0, a1, x0
+  ret
+
+# return non-expected value 
+cas_fail:
+  add   a0, t0, x0                      # return unexpected pre-store contents of word
+  ret
+
+# platform_cpu_wait aka must-keep NOP
+platform_cpu_wait:
+  add   x0, a0, x0
   ret

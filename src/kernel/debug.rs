@@ -15,6 +15,7 @@ pub static mut DEBUG_LOCK: Spinlock = kspinlock!();
 /* tell the compiler the platform-specific serial port code is elsewhere */
 extern "C" {
     fn platform_serial_write_byte(byte: u8);
+    pub fn platform_cpu_wait();
     pub fn platform_get_cpu_id() -> usize;
 }
 
@@ -56,7 +57,7 @@ macro_rules! kdebug
 #[macro_export]
 macro_rules! keep_me
 {
-  () => (kprint!(""));
+  () => (unsafe { platform_cpu_wait() /* NOP */ });
 }
 
 /* low-level macros for kernel-only kprintln and kprint debug output routines */

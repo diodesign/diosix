@@ -1,11 +1,9 @@
-/* diosix locking primitives
+/* diosix spinlock primitives
  *  
  * (c) Chris Williams, 2018.
  *
  * See LICENSE for usage and copying.
  */
-
-use core::cell::UnsafeCell;
 
 /* platform library to implement this */
 extern "C" {
@@ -44,62 +42,14 @@ impl Spinlock
     }
 
     /* acquire the lock, or block until successful */
-    pub fn aquire(&self)
+    fn aquire(&self)
     {
         unsafe { platform_acquire_spin_lock(&(self.value)); }
     }
 
     /* release the lock */
-    pub fn release(&self)
+    fn release(&self)
     {
         unsafe { platform_release_spin_lock(&(self.value)); }
-    }
-}
-
-/* Use this to ensure a struct is only accessed exclusively. not to be used
-on high-contention data. it's first come, first served with no guaranteeded acquisition */
-pub struct Mutex<T: ?Sized>
-{
-    spinlock: Spinlock,
-    contents: UnsafeCell<T>
-}
-
-/* this is what youu'll use to access the locked data */
-pub struct MutexGuard<'a, T: ?Sized + 'a>
-{
-    spinlock: &'a Spinlock,
-    contents: &'a mut T,
-}
-
-impl<T> Mutex<T>
-{
-    pub const fn new(contents: T) -> Mutex<T>
-    {
-        Mutex
-        {
-            spinlock: kspinlock!(),
-            contents: UnsafeCell::new(contents)
-        }
-    }
-
-    /* lock the structure so no one else can use it, and then return references
-    so we can access/modify its contents */
-    pub fn lock(&self) -> MutexGuard<T>
-    {
-        unsafe { platform_acquire_spin_lock(&(self.spinlock.value)); }
-        MutexGuard
-        {
-            spinlock: &self.spinlock,
-            contents: unsafe { &mut *self.contents.get() },
-        }
-    }
-}
-
-/* handle destruction of the mutex by unlocking it */
-impl<'a, T: ?Sized> Drop for MutexGuard<'a, T>
-{
-    fn drop(&mut self)
-    {
-        unsafe { platform_release_spin_lock(&(self.spinlock.value)); }
     }
 }

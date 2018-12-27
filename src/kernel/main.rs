@@ -18,6 +18,11 @@
 #![feature(box_syntax)]
 extern crate alloc;
 
+/* allow us to use lazy statics and mutexes */
+#[macro_use]
+extern crate lazy_static;
+extern crate spin;
+
 /* this will bring in all the hardware-specific code */
 extern crate platform;
 
