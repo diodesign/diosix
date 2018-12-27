@@ -66,9 +66,9 @@ Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have
 
 Copyright &copy; Chris Williams and contributors, 2018. See LICENSE for distribution and use of source code and binaries. A few software components have been imported, modified under license where needed to run within the diosix kernel context, and placed in the `src/contrib` directory. See the included licences for more details on usage. With thanks to:
 
-src/contrib/hermit-dtb: Copyright &copy; 2018 Colin Finck, RWTH Aachen University.
-src/contrib/lazy-static.rs: Copyright 2016 lazy-static.rs Developers. Copyright &copy; 2010 The Rust Project Developers.
-src/contrib/spin-rs: Copyright &copy; 2014 Mathijs van de Nes.
-src/contrib/spin-rs/src/atomic.rs: Reimplements Rust's MIT-licensed [core::sync::atomic](https://github.com/rust-lang/rust/blob/master/src/libcore/sync/atomic.rs) API. See Rust's [copyright](https://github.com/rust-lang/rust/blob/master/COPYRIGHT) documentation for more information.
+- src/contrib/hermit-dtb: Copyright &copy; 2018 Colin Finck, RWTH Aachen University.
+- src/contrib/lazy-static.rs: Copyright 2016 lazy-static.rs Developers. Copyright &copy; 2010 The Rust Project Developers.
+- src/contrib/spin-rs: Copyright &copy; 2014 Mathijs van de Nes.
+- src/contrib/spin-rs/src/atomic.rs: Reimplements Rust's MIT-licensed [core::sync::atomic](https://github.com/rust--lang/rust/blob/master/src/libcore/sync/atomic.rs) API. See Rust's [copyright](https://github.com/rust-lang/rust/blob/master/COPYRIGHT) documentation for more information.
 
 And thanks to [David Craven](https://github.com/dvc94ch), [Alex Bradbury](https://github.com/asb), and everyone else who helped bring together Rust, LLVM, and RISC-V; the RISC-V world for designing the CPU cores and system-on-chips, and writing the emulators in the first place; Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/); and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
