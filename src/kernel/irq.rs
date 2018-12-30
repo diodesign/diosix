@@ -7,15 +7,16 @@
 
 /* platform-specific code must implement all this */
 use platform;
-use platform::common::IRQContext;
-use platform::common::IRQType;
-use platform::common::PrivilegeMode;
-use platform::common::IRQ;
+use platform::common::irq::IRQContext;
+use platform::common::irq::IRQType;
+use platform::common::irq::IRQ;
+use platform::common::cpu::PrivilegeMode;
 
 /* kernel_irq_handler
    entry point for hardware interrupts and software exceptions, collectively known as IRQs.
    call down into platform-specific handlers
    => context = platform-specific context of the IRQ
+   <= returns flag word describing IRQ
 */
 #[no_mangle]
 pub extern "C" fn kirq_handler(context: IRQContext)
@@ -50,7 +51,7 @@ fn exception(irq: IRQ)
 }
 
 /* handle hardware interrupt */
-fn interrupt(_irq: platform::common::IRQ)
+fn interrupt(_irq: platform::common::irq::IRQ)
 {
     kalert!("Hardware interrupt");
     loop

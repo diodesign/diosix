@@ -39,13 +39,13 @@ _start:
   # each core should grab a slab of memory starting from the end of the kernel.
   # in order to scale to many cores, not waste too much memory, and to cope with non-linear
   # CPU ID / hart ID, each core will take memory using an atomic counter in the first word
-  # of available RAM.  thus, memory is allocated on a first come, first served basis.
+  # of available RAM. thus, memory is allocated on a first come, first served basis.
   # this counter is temporarily and should be forgotten about once in kmain()
   la        t1, __kernel_end
   li        t2, 1
   amoadd.w  t3, t2, (t1)
   # t3 = counter just before we incremented it
-  # preserve t3 in a0, as we'll use it to determine whether we're the boot CPU or not
+  # preserve t3 in a0
   add       a0, t3, x0
   
   # use t3 this as a multiplier from the end of the kernel, using shifts to keep things easy
@@ -69,18 +69,13 @@ _start:
   # set up early exception/interrupt handling (corrupts t0)
   call      irq_early_init
 
-  # the first core out of the gate (a0 will equal 0) gets to be the boot cpu
-  beqz      a0, is_boot_cpu
-  # we're not first so set a0 to false
-  li        a0, 0
-
-  # call kentry with boot CPU flag in a0 and devicetree in a1
+# call kentry with runtime-assigned CPU ID number in a0 and devicetree in a1
 enter_kernel:
   la        t0, kentry
   jalr      ra, t0, 0
 
 # fall through to loop rather than crash into random instructions/data
-# kentry should not return
+# wait for interrupts to come in and service them
 infinite_loop:
   wfi
   j         infinite_loop

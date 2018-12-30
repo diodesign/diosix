@@ -24,7 +24,7 @@ extern "C" {
 #[macro_export]
 macro_rules! klog
 {
-  ($fmt:expr) => (kprintln!("[-] CPU {}: {}", ::debug::platform_get_cpu_id(), $fmt));
+  ($fmt:expr) => (kprintln!("[-] CPU {}: {}", ::cpu::Core::id(), $fmt));
   ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[-] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
 }
 
@@ -32,7 +32,7 @@ macro_rules! klog
 #[macro_export]
 macro_rules! kalert
 {
-  ($fmt:expr) => (kprintln!("[!] CPU {}: ALERT: {}", ::debug::platform_get_cpu_id(), $fmt));
+  ($fmt:expr) => (kprintln!("[!] CPU {}: ALERT: {}", ::cpu::Core::id(), $fmt));
   ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[!] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
 }
 
@@ -41,7 +41,7 @@ macro_rules! kalert
 #[cfg(debug_assertions)]
 macro_rules! kdebug
 {
-  ($fmt:expr) => (kprintln!("[?] CPU {}: {}", ::debug::platform_get_cpu_id(), $fmt));
+  ($fmt:expr) => (kprintln!("[?] CPU {}: {}", ::cpu::Core::id(), $fmt));
   ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[?] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
 }
 

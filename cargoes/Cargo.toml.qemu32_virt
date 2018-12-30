@@ -8,3 +8,4 @@ qemu32_virt = []
 platform = { path = "src/platform/riscv32/qemu32_virt" }
 lazy_static = { path = "src/contrib/lazy-static.rs" }
 spin = { path = "src/contrib/spin-rs" }
+hashmap_core = { path = "src/contrib/hashmap_core" }

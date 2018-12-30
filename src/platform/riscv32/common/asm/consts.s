@@ -5,6 +5,9 @@
 
 .equ PAGE_SIZE, (4096)
 
+# during interrupts and exceptions, reserve space for 32 registers
+.equ  IRQ_REGISTER_FRAME_SIZE,   (32 * 4)
+
 # the kernel is laid out as follows in physical memory on bootup
 # (all addresses should be 4KB word aligned, and defined in the target ld script)
 #   __kernel_start = base of kernel

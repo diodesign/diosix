@@ -1,0 +1,16 @@
+[package]
+name = "hashmap_core"
+version = "0.1.9"
+authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
+description = "Implementation of HashMap and HashSet for no_std environments."
+documentation = "https://docs.rs/hashmap_core/"
+license = "Apache-2.0/MIT"
+repository = "https://github.com/Amanieu/hashmap_core"
+readme = "README.md"
+keywords = ["hashmap", "hashset", "no_std", "hash", "fnv"]
+
+[features]
+# workaround for some cargo deficiency
+disable = []
+
+[dependencies]

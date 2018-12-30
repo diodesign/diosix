@@ -11,6 +11,10 @@
 .align 4
 
 .global irq_early_init
+.global platform_set_supervisor_return
+
+# include kernel constants, such as stack and lock locations
+.include "src/platform/riscv32/common/asm/consts.s"
 
 # set up boot interrupt handling on this core so we can catch
 # exceptions while the system is initializating
@@ -20,8 +24,28 @@ irq_early_init:
   la    t0, irq_machine_handler
   csrrw x0, mtvec, t0
 
+  # delegate usernode syscalls (ecall) to the supervisor level.
+  # we'll just handle supervisor-to-usermode calls. there are no
+  # hypervisor-to-hypervisor ecalls.
+  li    t0, 1 << 8        # bit 8 = usermode ecall (as per mcause)
+  csrrw x0, medeleg, t0
+
   # enable interrupts: set bit 3 in mstatus to enable machine irqs (MIE)
+  # since all hardware interrupts are disabled, we're only enabling
+  # exceptions at this point.
   li    t0, 1 << 3
+  csrrs x0, mstatus, t0
+  ret
+
+# set the machine-level flags necessary to return to supervisor mode
+# rather than machine mode. context for the supervisor mode is loaded
+# elsewhere
+platform_set_supervisor_return:
+  # set 'previous' privilege level to supervisor by clearing bit 12
+  # and setting bit 11 in mstatus, defining MPP[12:11] as b01 = 1 for supervisor
+  li    t0, 1 << 12
+  csrrc x0, mstatus, t0
+  li    t0, 1 << 11
   csrrs x0, mstatus, t0
   ret
 
@@ -35,18 +59,15 @@ irq_early_init:
   lw  x\reg, (\reg * 4)(sp)
 .endm
 
-# during interrupts and exceptions, reserve space for 32 registers
-.equ  IRQ_REGISTER_FRAME_SIZE,   (32 * 4)
-
 .align 4
 # Entry point for machine-level handler of interrupts and exceptions
 # interrupts are automatically disabled on entry.
 # right now, IRQs are non-reentrant. if an IRQ handler is interrupted, the previous one will
 # be discarded. do not enable hardware interrupts. any exceptions will be unfortunate.
 irq_machine_handler:
-  # get exception handler stack from mscratch by swapping it for current sp
+  # get exception handler stack from mscratch by swapping it for interruted code's sp
   csrrw  sp, mscratch, sp
-  # now: sp = top of IRQ stack. mscratch = prev environment's sp
+  # now: sp = top of IRQ stack. mscratch = interrupted code's sp
 
   # save space to preserve all 32 GP registers
   addi  sp, sp, -(IRQ_REGISTER_FRAME_SIZE)
@@ -57,23 +78,31 @@ irq_machine_handler:
     .set reg, reg + 1
   .endr
 
-  # right now mscratch is corrupt with the prev environment's sp.
-  # this means kernel functions relying on it will break unless it is restored.
+  # right now mscratch is corrupt with the interrupted code's sp.
+  # this means kernel functions relying on mscratch will break unless it is restored.
   # calculate original mscratch value into s11, and swap with mscratch
   addi  s11, sp, IRQ_REGISTER_FRAME_SIZE
   csrrw s11, mscratch, s11
-  # now: s11 = prev environment's sp. mscratch = top of IRQ stack
+  # now: s11 = interrupted code's sp. mscratch = top of IRQ stack
 
-  # gather up the cause, faulting instruction address, memory address relevant to the exception or interrupt,
-  # and previous environment's stack pointer, and store on the IRQ handler's stack
+  # gather up the cause, faulting/triggering instruction address, memory address
+  # relevant to the exception or interrupt, and previous environment's stack pointer,
+  # and store on the IRQ handler's stack
   addi  sp, sp, -16
   csrrs t0, mcause, x0
   csrrs t1, mepc, x0
   csrrs t2, mtval, x0
+  # riscv sets epc to the address of the syscall instruction, if this was a syscall.
+  # in which case, we need to advance epc 4 bytes to next instruction.
+  # otherwise, we're going into a loop
+  li    t3, 9           # mcause = 9 for environment call from supervisor-to-hypervisor
+  bne   t3, t0, cont    # ... all usermode ecalls are handled at the supervisor level
+  addi  t1, t1, 4       # ... and the hypervisor doesn't make ecalls into itself
+cont:
   sw    t0, 0(sp)       # mcause
   sw    t1, 4(sp)       # mepc
   sw    t2, 8(sp)       # mtval
-  sw    s11, 12(sp)     # prev environment's sp
+  sw    s11, 12(sp)     # interrupted code's sp
 
   # pass current sp to exception/hw handler as a pointer. this'll allow
   # the higher-level kernel access the context of the IRQ.
@@ -81,9 +110,9 @@ irq_machine_handler:
   add   a0, sp, x0
   call  kirq_handler
 
-  # swap back mscratch so prev environment's sp can be restored
+  # swap back mscratch so interrupted code's sp can be restored
   csrrw s11, mscratch, s11
-  # now: mscratch = prev environment's sp. s11 = top of IRQ stack
+  # now: mscratch = interrupted code's sp. s11 = top of IRQ stack
 
   # fix up the stack from the cause, epc, etc pushes
   addi  sp, sp, 16
@@ -97,6 +126,6 @@ irq_machine_handler:
   # fix up exception handler sp
   addi  sp, sp, IRQ_REGISTER_FRAME_SIZE
 
-  # swap top of IRQ sp for prev environment's sp, and return
+  # swap top of IRQ sp for interrupted code's sp, and return
   csrrw sp, mscratch, sp
   mret

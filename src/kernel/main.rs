@@ -1,4 +1,4 @@
-/* diosix machine/hypervisor kernel main entry code
+/* diosix hypervisor kernel main entry code
  *
  * (c) Chris Williams, 2018.
  *
@@ -11,12 +11,16 @@
 
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
+#![allow(improper_ctypes)]
 
 /* we need this to plug our custom heap allocator into the Rust language */
 #![feature(alloc_error_handler)]
 #![feature(alloc)]
 #![feature(box_syntax)]
 extern crate alloc;
+
+/* needed for lookup tables of stuff */
+extern crate hashmap_core;
 
 /* allow hypervisor and supervisor to use lazy statics and mutexes */
 #[macro_use]
@@ -36,21 +40,22 @@ mod abort; /* implement abort() and panic() handlers */
 mod irq; /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem; /* manage physical memory */
 mod cpu; /* manage CPU cores */
+mod scheduler;
+use scheduler::Priority;
 /* manage supervisor environments */
 mod environment;
 /* list of kernel error codes */
 mod error;
 use error::Cause;
 
+/* and our builtin supervisor kernel, which runs in its own environment(s) */
+mod supervisor;
+
 /* tell Rust to use ourr kAllocator to allocate and free heap memory.
 while we'll keep track of physical memory, we'll let Rust perform essential
 tasks, such as freeing memory when it's no longer needed, pointer checking, etc */
 #[global_allocator]
 static KERNEL_HEAP: heap::Kallocator = heap::Kallocator;
-
-/* function naming note: hypervisor kernel entry points start with a k, such as kmain,
-kirq_handler. supervisor entry points start with an s, such as smain.
-generally, kernel = machine/hypervisor kernel, supervisor = supervisor kernel. */
 
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 stick to usize as much as possible */
@@ -59,54 +64,65 @@ stick to usize as much as possible */
    This is the official entry point of the Rust-level machine/hypervsor kernel.
    Call kmain, which is where all the real work happens, and catch any errors.
    => parameters described in kmain, passed directly from the bootloader...
-   <= return to infinite loop */
+   <= return to infinite loop, awaiting inerrupts */
 #[no_mangle]
-pub extern "C" fn kentry(is_boot_cpu: bool, device_tree_buf: &u8)
-{
-    /* kentry is a safety net for kmain. if kmain returns then someting went
-    wrong that we should recover from, or we note to the user that we hit 
-    an unimplemented section of the kernel. */
-    match kmain(is_boot_cpu, device_tree_buf)
-    {
-        Ok(()) => kdebug!("Exited kmain without error. That's all, folks."),
-        Err(e) => kalert!("Exited kmain with error: {:?}", e)
-    };
-    /* for now, fall back to infinite loop. In future, try to recover */
-}
-
-/* kmain
-   This code runs at the machine/hypervisor level, with full physical memory access.
-   Its job is to create sandboxed environments in which supervisors run. There
-   is a built-in supervisor in the supervisor directory. The hypervisor allocates regions of
-   memory and CPU time to supervisors, which run applications in their own environments.
-
-   Assumes all CPUs enter this function during startup.
-   The boot CPU is chosen to initialize the system in pre-SMP mode.
-   If we're on a single CPU core then everything should run OK.
-
-   => is_boot_cpu = true if we're chosen to be the boot CPU, or false for every other CPU core
-      device_tree_buf = pointer to device tree describing the hardware
-   <= return to halt kernel on this core
-*/
-fn kmain(is_boot_cpu: bool, device_tree_buf: &u8) -> Result<(), Cause>
+pub extern "C" fn kentry(cpu_nr: usize, device_tree_buf: &u8)
 {
     /* set up each processor core with its own private heap pool and any other resources.
     this uses physical memory assigned by the pre-kmain boot code. this should be called
     first to set up every core, including the boot CPU, which then sets up the global
     resouces. all non-boot CPUs should wait until global resources are ready. */
-    cpu::Core::init();
+    cpu::Core::init(cpu_nr);
 
+    /* heap and debugging set up. let's rock and roll */
+    match kmain(cpu_nr, device_tree_buf)
+    {
+        Err(e) => kalert!("kmain bailed out with error: {:?}", e),
+        _ => () /* continue waiting for an IRQ to come in, otherwise */
+    };
+}
+
+/* kmain
+   This code runs at the machine/hypervisor level, with full physical memory access.
+   Its job is to initialize CPU cores so sandboxed environments in which supervisors run
+   can be created and scheduled. There is a built-in supervisor in the supervisor
+   directory. The hypervisor allocates regions of memory and CPU time to
+   supervisors, which run applications in their own environments.
+
+   Assumes all CPUs enter this function during startup.
+   The boot CPU is chosen to initialize the system in pre-SMP mode.
+   If we're on a single CPU core then everything should run OK.
+
+   => cpu_nr = arbitrary ID number assigned by boot code, separate from hardware ID number.
+               0 = boot CPU core.
+      device_tree_buf = pointer to device tree describing the hardware
+   <= return to infinite loop, waiting for interrupts
+*/
+fn kmain(cpu_nr: usize, device_tree_buf: &u8) -> Result<(), Cause>
+{
     /* delegate to boot CPU the welcome banner and set up global resources */
-    if is_boot_cpu == true
+    if cpu_nr == 0 /* boot CPU is zeroth core */
     {
         /* initialize global resources */
         init_global(device_tree_buf)?;
 
-        /* create root supervisor environment with 1MB of RAM and max 2 CPU cores */
-        let id = environment::create_from_builtin(1 * 1024 * 1024, 1)?;
+        /* create root supervisor environment with 4MB of RAM and max CPU cores */
+        let root_mem = 4 * 1024 * 1024;
+        let root_name = "root";
+        let root_max_vcpu = 2;
+        environment::create_from_builtin(root_name, root_mem, root_max_vcpu)?;
+
+        /* create a virtual CPU thread for the root environment, starting it in sentry() with
+        top of allocated memory as the stack pointer */
+        scheduler::create_thread(root_name, supervisor::main::entry, root_mem, Priority::High);
     }
 
-    Ok(()) /* return to infinite loop */
+    /* attach scheduler to timer and enable timer */
+
+    /* initialization complete. if we make it this far then fall through to infinite loop
+    waiting for a timer interrupt to come in. when it does fire, this stack will be flattened,
+    a thread loaded up to run, and this boot thread will disappear like tears in the rain. */
+    Ok(())
 }
 
 /* welcome the user and have the boot CPU initialize global structures and resources.
