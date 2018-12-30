@@ -73,6 +73,7 @@ pub extern "C" fn kentry(cpu_nr: usize, device_tree_buf: &u8)
     first to set up every core, including the boot CPU, which then sets up the global
     resouces. all non-boot CPUs should wait until global resources are ready. */
     cpu::Core::init(cpu_nr);
+    klog!("CPU core available and initialized");
 
     /* heap and debugging set up. let's rock and roll */
     match kmain(cpu_nr, device_tree_buf)

@@ -90,9 +90,9 @@ mode will land us in the new context */
 pub fn context_switch(next: Thread)
 {
     let id = Core::id();
-    match THREADS.lock().remove_entry(&id)
+    match THREADS.lock().remove(&id)
     {
-        Some((_, current_thread)) =>
+        Some(current_thread) =>
         {
             /* if we're running a thread, copy its state */
             platform::common::cpu::save_supervisor_state(current_thread.get_state_as_ref());

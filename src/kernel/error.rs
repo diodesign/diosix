@@ -21,4 +21,7 @@ pub enum Cause
 
     /* CPU handling */
     CPUBadConfig,
+
+    /* environments */
+    EnvironmentAlreadyExists,
 }

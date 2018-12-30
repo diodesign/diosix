@@ -9,16 +9,17 @@ use physmem::{self, Region, Permissions::*};
 use spin::Mutex;
 use error::Cause;
 use alloc::boxed::Box;
-use alloc::collections::linked_list::LinkedList;
+use hashmap_core::map::HashMap;
+use hashmap_core::map::Entry::Occupied;
 use alloc::string::String;
 
 pub type EnvironmentName = String;
 
-/* maintain a shared linked list of supervisor environments and ID counter */
+/* maintain a shared table of supervisor environments */
 lazy_static!
 {
     /* acquire ENVIRONMENTS lock before accessing any environments */
-    static ref ENVIRONMENTS: Mutex<Box<LinkedList<Environment>>> = Mutex::new(box LinkedList::new());
+    static ref ENVIRONMENTS: Mutex<Box<HashMap<String, Environment>>> = Mutex::new(box HashMap::new());
 }
 
 /* create a new supervisor environment using the builtin supervisor kernel
@@ -44,19 +45,30 @@ pub fn create_from_builtin(name: &str, size: usize, cpus: usize) -> Result<(), C
    <= OK for success or an error code */
 fn create(name: &str, ram: Region, code: Region, data: Region, cpus: usize) -> Result<(), Cause>
 {
-    let new_env = Environment::new(name, ram, code, data, cpus)?;
+    let new_env = Environment::new(ram, code, data, cpus)?;
 
     klog!("Created {} supervisor environment: CPUs {} RAM 0x{:x}-0x{:x} code 0x{:x}-0x{:x} data 0x{:x}-0x{:x}",
             name, cpus, ram.base, ram.end, code.base, code.end, data.base, data.end);
 
-    ENVIRONMENTS.lock().push_front(new_env);
-    Ok(())
+    let name_string = String::from(name);
+    let mut table = ENVIRONMENTS.lock();
+
+    /* check to see if this environment already exists */
+    match table.entry(name_string)
+    {
+        Occupied(_) => Err(Cause::EnvironmentAlreadyExists),
+        _ =>
+        {
+            /* insert our new environment */
+            table.insert(String::from(name), new_env);
+            Ok(())
+        }
+    }
 }
 
 /* describe a supervisor environment */
 struct Environment
 {
-    name: EnvironmentName,
     cpus: usize, /* max number of CPU threads executing in this environment */
     ram: Region, /* general purpose RAM area */
     code: Region, /* supervisor kernel read-execute-only area */
@@ -66,17 +78,15 @@ struct Environment
 impl Environment
 {
     /* create a new supervisor kernel environment
-    => name = name of this environment, used as a future identifier
-       ram = region of physical memory the environment can for general purpose RAM
+    => ram = region of physical memory the environment can for general purpose RAM
        code = region of physical memory holding the supervisor's executable code
        data = region of physical memory holding the supervisor's static data
        cpus = maximum number of virtual CPU threads this environment can request
     <= environment object, or error code */
-    pub fn new(name: &str, ram: Region, code: Region, data: Region, cpus: usize) -> Result<Environment, Cause>
+    pub fn new(ram: Region, code: Region, data: Region, cpus: usize) -> Result<Environment, Cause>
     {
         Ok(Environment
         {
-            name: EnvironmentName::from(name),
             cpus: cpus,
             ram: ram,
             code: code,
