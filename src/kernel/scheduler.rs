@@ -1,4 +1,4 @@
-/* diosix virtual CPU scheduler for supervisor environments
+/* diosix virtual CPU scheduler for containers
  *
  * (c) Chris Williams, 2018.
  *
@@ -8,7 +8,7 @@
 use spin::Mutex;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
-use environment::EnvironmentName;
+use container::ContainerName;
 use platform::common::cpu::SupervisorState;
 use ::cpu;
 
@@ -16,11 +16,11 @@ type Ticks = usize;
 
 /* maintain a simple two-level round-robin scheduler. we can make it more fancy later.
 the hypervisor tries to dish out CPU time fairly among evironments, and let the
-supervisors work out how best to allocate their time to userspace code.
-picking the next environment to run should be O(1) or as close as possible to it.
+container supervisors work out how best to allocate their time to userspace code.
+picking the next virtual CPU thread to run should be O(1) or as close as possible to it.
 
-if a High priority environment is waiting to run, then schedule it, unless a Normal
-envionment hasn't been run within a particular timeframe and a Normal environment is
+if a High priority container is waiting to run, then schedule it, unless a Normal
+container hasn't been run within a particular timeframe and a Normal container is
 waiting. if no High is waiting, then run a Normal. if no High or Normal is waiting, then
 wait unil work comes along. */
 #[derive(Copy, Clone)]
@@ -43,13 +43,13 @@ lazy_static!
     static ref NORM_PRIO_TICKS: Mutex<Box<Ticks>> = Mutex::new(box (0 as Ticks));
 }
 
-/* the scheduler is focused on virtual CPU threads within environments. a thread object is either
+/* the scheduler is focused on virtual CPU threads within containers. a thread object is either
 in a waiting queue awaiting CPU time, or is runnng and held in a physical cpu Core struct.
 if you remove a thread object from the queue and don't place it back in a queue or Core structure,
 then the thread will be dropped, deallocated and destroyed. */
 pub struct Thread
 {
-    environment: EnvironmentName,
+    container: ContainerName,
     priority: Priority,
     state: SupervisorState
 }
@@ -60,16 +60,16 @@ impl Thread
     pub fn get_state_as_ref(&self) -> &SupervisorState { &self.state }
 }
 
-/* create a new virtual CPU thread for an environment
-   => env_name = name of the environment
+/* create a new virtual CPU thread for a container
+   => name = name of the container
       entry = pointer to thread's start address
       stack = stack pointer value to use
       priority = thread priority */
-pub fn create_thread(env_name: &str, entry: fn () -> (), stack: usize, priority: Priority)
+pub fn create_thread(name: &str, entry: fn () -> (), stack: usize, priority: Priority)
 {
     let new_thread = Thread
     {
-        environment: EnvironmentName::from(env_name),
+        container: ContainerName::from(name),
         priority: priority,
         state: platform::common::cpu::supervisor_state_from(entry, stack)
     };

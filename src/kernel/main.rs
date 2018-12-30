@@ -42,13 +42,13 @@ mod physmem; /* manage physical memory */
 mod cpu; /* manage CPU cores */
 mod scheduler;
 use scheduler::Priority;
-/* manage supervisor environments */
-mod environment;
+/* manage containers */
+mod container;
 /* list of kernel error codes */
 mod error;
 use error::Cause;
 
-/* and our builtin supervisor kernel, which runs in its own environment(s) */
+/* and our builtin supervisor kernel, which runs in its own container(s) */
 mod supervisor;
 
 /* tell Rust to use ourr kAllocator to allocate and free heap memory.
@@ -85,10 +85,10 @@ pub extern "C" fn kentry(cpu_nr: usize, device_tree_buf: &u8)
 
 /* kmain
    This code runs at the machine/hypervisor level, with full physical memory access.
-   Its job is to initialize CPU cores so sandboxed environments in which supervisors run
-   can be created and scheduled. There is a built-in supervisor in the supervisor
-   directory. The hypervisor allocates regions of memory and CPU time to
-   supervisors, which run applications in their own environments.
+   Its job is to initialize CPU cores and other resources so that containers can be
+   created that contain supervisor kernels that manage their own userspaces, in which
+   applications run. The hypervisor ensures containers of apps are kept apart using
+   hardware protections.
 
    Assumes all CPUs enter this function during startup.
    The boot CPU is chosen to initialize the system in pre-SMP mode.
@@ -107,13 +107,13 @@ fn kmain(cpu_nr: usize, device_tree_buf: &u8) -> Result<(), Cause>
         /* initialize global resources */
         init_global(device_tree_buf)?;
 
-        /* create root supervisor environment with 4MB of RAM and max CPU cores */
+        /* create root container with 4MB of RAM and max CPU cores */
         let root_mem = 4 * 1024 * 1024;
         let root_name = "root";
         let root_max_vcpu = 2;
-        environment::create_from_builtin(root_name, root_mem, root_max_vcpu)?;
+        container::create_from_builtin(root_name, root_mem, root_max_vcpu)?;
 
-        /* create a virtual CPU thread for the root environment, starting it in sentry() with
+        /* create a virtual CPU thread for the root container, starting it in sentry() with
         top of allocated memory as the stack pointer */
         scheduler::create_thread(root_name, supervisor::main::entry, root_mem, Priority::High);
     }

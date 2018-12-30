@@ -86,7 +86,7 @@ irq_machine_handler:
   # now: s11 = interrupted code's sp. mscratch = top of IRQ stack
 
   # gather up the cause, faulting/triggering instruction address, memory address
-  # relevant to the exception or interrupt, and previous environment's stack pointer,
+  # relevant to the exception or interrupt, and interrupted code's stack pointer,
   # and store on the IRQ handler's stack
   addi  sp, sp, -16
   csrrs t0, mcause, x0

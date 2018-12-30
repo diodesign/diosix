@@ -1,4 +1,4 @@
-# kernel low-level serial output code for Qemu Virt hardware environment
+# kernel low-level serial output code for Qemu Virt hardware platform
 #
 # (c) Chris Williams, 2018.
 # See LICENSE for usage and copying.

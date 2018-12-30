@@ -22,7 +22,7 @@ extern "C"
 }
 
 /* minimum amount of RAM allowed before boot (4MiB). this is a sanity check for
-the hardware environment, and can be changed later. also the hardware allows up
+the hardware configuration, and can be changed later. also the hardware allows up
 to 2GB of physical RAM. don't go over this. */
 const MIN_RAM_SIZE: usize = 4 * 1024 * 1024;
 const MAX_RAM_SIZE: usize = 2 * 1024 * 1024 * 1024;

@@ -1,4 +1,4 @@
-/* diosix supervisor environment management
+/* diosix container management
  *
  * (c) Chris Williams, 2018.
  *
@@ -13,20 +13,20 @@ use hashmap_core::map::HashMap;
 use hashmap_core::map::Entry::Occupied;
 use alloc::string::String;
 
-pub type EnvironmentName = String;
+pub type ContainerName = String;
 
-/* maintain a shared table of supervisor environments */
+/* maintain a shared table of containers */
 lazy_static!
 {
-    /* acquire ENVIRONMENTS lock before accessing any environments */
-    static ref ENVIRONMENTS: Mutex<Box<HashMap<String, Environment>>> = Mutex::new(box HashMap::new());
+    /* acquire CONTAINERS lock before accessing any containers */
+    static ref CONTAINERS: Mutex<Box<HashMap<String, Container>>> = Mutex::new(box HashMap::new());
 }
 
-/* create a new supervisor environment using the builtin supervisor kernel
-   => name = text string identifying this environment
-      size = minimum amount of RAM, in bytes, for this environment
+/* create a new container using the builtin supervisor kernel
+   => name = text string identifying this container
+      size = minimum amount of RAM, in bytes, for this container
       cpus = max number of virtual CPU threads that can be used
-   <= OK with environment reference for success or an error code */
+   <= OK for success or an error code */
 pub fn create_from_builtin(name: &str, size: usize, cpus: usize) -> Result<(), Cause>
 {
     let ram = physmem::alloc_region(size, ReadWrite)?;  /* read-write general-purpose RAM */
@@ -35,57 +35,56 @@ pub fn create_from_builtin(name: &str, size: usize, cpus: usize) -> Result<(), C
     Ok(create(name, ram, code, data, cpus)?)
 }
 
-/* create a new supervisor environment
+/* create a new container
    Once created, it is ready to be scheduled.
-   => name = text identifier string for this environment
-      ram = region of physical RAM reserved for this environment
+   => name = text identifier string for this container
+      ram = region of physical RAM reserved for this container
       code = physical memory region holding supervisor's code
       data = physical memory region holding supervisor's static data
-      cpus = maximum number of virtual CPU threads running through environment
+      cpus = maximum number of virtual CPU threads running through container
    <= OK for success or an error code */
 fn create(name: &str, ram: Region, code: Region, data: Region, cpus: usize) -> Result<(), Cause>
 {
-    let new_env = Environment::new(ram, code, data, cpus)?;
+    let new_container = Container::new(ram, code, data, cpus)?;
 
-    klog!("Created {} supervisor environment: CPUs {} RAM 0x{:x}-0x{:x} code 0x{:x}-0x{:x} data 0x{:x}-0x{:x}",
+    klog!("Created {} container: CPUs {} RAM 0x{:x}-0x{:x} code 0x{:x}-0x{:x} data 0x{:x}-0x{:x}",
             name, cpus, ram.base, ram.end, code.base, code.end, data.base, data.end);
 
     let name_string = String::from(name);
-    let mut table = ENVIRONMENTS.lock();
+    let mut table = CONTAINERS.lock();
 
-    /* check to see if this environment already exists */
+    /* check to see if this container already exists */
     match table.entry(name_string)
     {
-        Occupied(_) => Err(Cause::EnvironmentAlreadyExists),
+        Occupied(_) => Err(Cause::ContainerAlreadyExists),
         _ =>
         {
-            /* insert our new environment */
-            table.insert(String::from(name), new_env);
+            /* insert our new container */
+            table.insert(String::from(name), new_container);
             Ok(())
         }
     }
 }
 
-/* describe a supervisor environment */
-struct Environment
+struct Container
 {
-    cpus: usize, /* max number of CPU threads executing in this environment */
+    cpus: usize, /* max number of CPU threads executing in this container */
     ram: Region, /* general purpose RAM area */
     code: Region, /* supervisor kernel read-execute-only area */
     data: Region /* supervisor kernel static data area */
 }
 
-impl Environment
+impl Container
 {
-    /* create a new supervisor kernel environment
-    => ram = region of physical memory the environment can for general purpose RAM
+    /* create a new container
+    => ram = region of physical memory the container can for general purpose RAM
        code = region of physical memory holding the supervisor's executable code
        data = region of physical memory holding the supervisor's static data
-       cpus = maximum number of virtual CPU threads this environment can request
-    <= environment object, or error code */
-    pub fn new(ram: Region, code: Region, data: Region, cpus: usize) -> Result<Environment, Cause>
+       cpus = maximum number of virtual CPU threads this container can request
+    <= container object, or error code */
+    pub fn new(ram: Region, code: Region, data: Region, cpus: usize) -> Result<Container, Cause>
     {
-        Ok(Environment
+        Ok(Container
         {
             cpus: cpus,
             ram: ram,

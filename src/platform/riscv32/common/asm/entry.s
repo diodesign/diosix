@@ -61,7 +61,7 @@ _start:
   # t4 = top of the stack, t2 = stack size, t1 = stack base from slab base
   csrrw     x0, mscratch, t4
 
-  # use the lower half of the exception stack to bring up the environment
+  # use the lower half of the exception stack to bring up the hypervisor
   # set the boot stack pointer to halfway down the IRQ stack
   srli      t1, t2, 1
   sub       sp, t4, t1

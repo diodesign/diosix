@@ -52,12 +52,12 @@ pub enum IRQCause
 /* describe IRQ in high-level, portable terms */
 pub struct IRQ
 {
-    pub fatal: bool, /* true if this IRQ means current environment must stop */
-    pub privilege_mode: ::cpu::PrivilegeMode, /* privilege level of the running environment */
+    pub fatal: bool, /* true if this IRQ means current container must stop */
+    pub privilege_mode: ::cpu::PrivilegeMode, /* privilege level of the running container */
     pub irq_type: IRQType, /* type of the IRQ - sw or hw generated */
     pub cause: IRQCause, /* cause of this interruption */
     pub pc: usize,   /* where in memory this IRQ occured */
-    pub sp: usize,   /* stack pointer for interrupted environment */
+    pub sp: usize,   /* stack pointer for interrupted container */
 }
 
 impl IRQ

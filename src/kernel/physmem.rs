@@ -1,6 +1,6 @@
 /* diosix machine kernel physical memory management
  *
- * Allocate/free memory for supervisor environments
+ * Allocate/free memory for container supervisors
  * 
  * (c) Chris Williams, 2018.
  *
@@ -97,7 +97,7 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
     return Some(available_bytes);
 }
 
-/* allocate a region of available physical memory for supervisor environment use
+/* allocate a region of available physical memory for container supervisor use
    => size = number of bytes in region
    <= Region structure for the space, or an error code */
 pub fn alloc_region(size: usize, access: Permissions) -> Result<Region, Cause>
@@ -108,8 +108,8 @@ pub fn alloc_region(size: usize, access: Permissions) -> Result<Region, Cause>
     /* block until linked list is set up */
     loop { if REGIONS.lock().len() > 0 { break; } }
 
-    /* carve up the available ram for environments. this approach is a little crude
-    but may do for now. it means environments can't grow */
+    /* carve up the available ram for containers. this approach is a little crude
+    but may do for now. it means containers can't grow */
     let mut regions = REGIONS.lock();
     for region in regions.iter_mut()
     {
