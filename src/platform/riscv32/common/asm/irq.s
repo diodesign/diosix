@@ -53,7 +53,7 @@ irq_early_init:
 # right now, IRQs are non-reentrant. if an IRQ handler is interrupted, the previous one will
 # be discarded. do not enable hardware interrupts. any exceptions will be unfortunate.
 irq_machine_handler:
-  # get exception handler stack from mscratch by swapping it for interruted code's sp
+  # get exception handler stack from mscratch by swapping it for interrupted code's sp
   csrrw  sp, mscratch, sp
   # now: sp = top of IRQ stack. mscratch = interrupted code's sp
 
@@ -106,7 +106,7 @@ cont:
   # fix up the stack from the cause, epc, etc pushes
   addi  sp, sp, 16
 
-  # then restore all 31 stacked registers, skipping zero (x0) and sp (x2)
+  # then restore all stacked registers, skipping zero (x0) and sp (x2)
   .set reg, 31
   .rept 29
     PULL_REG %reg

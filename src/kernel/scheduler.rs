@@ -9,7 +9,7 @@ use error::Cause;
 use spin::Mutex;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
-use container::ContainerName;
+use container::{self, ContainerName};
 use platform::common::cpu::SupervisorState;
 
 
@@ -104,20 +104,28 @@ impl Thread
 /* create a new virtual CPU thread for a container
    => name = name of the container
       entry = pointer to thread's start address
-      stack = stack pointer value to use
-      priority = thread priority */
-pub fn create_thread(name: &str, entry: extern "C" fn () -> (), stack: usize, priority: Priority)
+      stack = stack pointer value to use, relative to allocated phys RAM
+      priority = thread priority
+    <= OK for success, or error code */
+pub fn create_thread(name: &str, entry: extern "C" fn () -> (), stack: usize, priority: Priority) -> Result<(), Cause>
 {
-    klog!("creating new thread, entry = {:p} stack = {:x}", entry, stack);
+    let phys_ram = match container::get_phys_ram(name)
+    {
+        Some(r) => r,
+        None => return Err(Cause::ContainerBadName)
+    };
+
+    klog!("creating new thread, entry = {:p} stack = {:x}", entry, phys_ram.base + stack);
     let new_thread = Thread
     {
         container: ContainerName::from(name),
         priority: priority,
-        state: platform::common::cpu::supervisor_state_from(entry, stack)
+        state: platform::common::cpu::supervisor_state_from(entry, phys_ram.base + stack)
     };
 
     /* add thread to correct priority queue */
     queue_thread(new_thread);
+    Ok(())
 }
 
 /* run the given thread by switching to its supervisor context.

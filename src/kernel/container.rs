@@ -22,6 +22,20 @@ lazy_static!
     static ref CONTAINERS: Mutex<Box<HashMap<String, Container>>> = Mutex::new(box HashMap::new());
 }
 
+/* lookup the phys RAM region of a container from its name
+   <= physical memory region, or None for no such container */
+pub fn get_phys_ram(name: &str) -> Option<Region>
+{
+    let name_string = String::from(name);
+    let mut table = CONTAINERS.lock();
+    /* check to see if this container already exists */
+    match table.entry(name_string)
+    {
+        Occupied(c) =>  return Some(c.get().phys_ram()),
+        _ => None
+    }   
+}
+
 /* create a new container using the builtin supervisor kernel
    => name = text string identifying this container
       size = minimum amount of RAM, in bytes, for this container
@@ -92,4 +106,7 @@ impl Container
             data: data
         })
     }
+
+    /* describe the physical RAM region of this container */
+    pub fn phys_ram(&self) -> Region { self.ram }
 }
