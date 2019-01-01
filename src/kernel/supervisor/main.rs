@@ -6,7 +6,8 @@
  */
 
 #[link_section = ".sshared"]
-pub fn entry()
+#[no_mangle]
+pub extern "C" fn sentry()
 {
     /* hello world! */
     loop {}

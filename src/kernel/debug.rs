@@ -27,12 +27,12 @@ macro_rules! klog
   ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[-] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
 }
 
-/* bad news: bug detection, failures, etc */
+/* bad news: bug detection, failures, etc. will bust spinlock to force output */
 #[macro_export]
 macro_rules! kalert
 {
-  ($fmt:expr) => (kprintln!("[!] CPU {}: ALERT: {}", ::cpu::Core::id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[!] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
+  ($fmt:expr) => (kprintln!("[!] CPU {}: {}", ::cpu::Core::id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[-] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
 }
 
 /* only output if debug build is enabled */
@@ -44,6 +44,7 @@ macro_rules! kdebug
   ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[?] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
 }
 
+/* silence debug if disabled */
 #[macro_export]
 #[cfg(not(debug_assertions))]
 macro_rules! kdebug

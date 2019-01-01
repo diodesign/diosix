@@ -12,11 +12,12 @@ use alloc::collections::linked_list::LinkedList;
 use container::ContainerName;
 use platform::common::cpu::SupervisorState;
 
-/* one tick represents one scheduling period rather than a clock tick */
-type Ticks = usize;
 
-/* initialize preemptive scheduling system's timer. this is used to interrupt the running
-virtual CPU thread so another can be run next
+/* initialize preemptive scheduling system's timer
+this is used to interrupt the running virtual CPU thread so another can be run next.
+the timer interrupts periodically, typically 100 or 1000 times a second. the time
+between each interrupt is a timeslice. a timeslice can span many hardware timer ticks
+but we're interested in whole numbers of timeslices.
 <= return OK for success, or an error code */
 pub fn init(device_tree_buf: &u8) -> Result<(), Cause>
 {
@@ -36,10 +37,22 @@ pub fn start()
 /* handle the timer kicking off an interrupt */
 pub fn timer_irq()
 {
+    /* whatever was running has had enough time, now we'll pick something else to run */
+    match dequeue_thread()
+    {
+        /* we've found a thread to run, so switch to that */
+        Some(next) =>
+        {
+            klog!("running virtual CPU thread {:p}", &next);
+            run_thread(next);
+        },
+        _ => { klog!("tick"); } /* nothing to run so return to current thread */
+    }
+
+    /* tell the timer system to call us back soon */
     let now: u64 = platform::common::timer::now();
     let next: u64 = now + 20000000;
     platform::common::timer::next(next);
-    klog!("timer tick");
 }
 
 /* maintain a simple two-level round-robin scheduler. we can make it more fancy later.
@@ -59,7 +72,7 @@ pub enum Priority
 }
 
 /* prevent CPU time starvation: allow a normal thread to run after this number of timer ticks */
-const NORM_PRIO_TICKS_MAX: Ticks = 10;
+const NORM_PRIO_TIMESLICES_MAX: u64 = 10;
 
 lazy_static!
 {
@@ -67,8 +80,8 @@ lazy_static!
     all threads in _PRIO_THREADS are waiting to run. running threads should be in the running list */
     static ref HIGH_PRIO_WAITING: Mutex<Box<LinkedList<Thread>>> = Mutex::new(box LinkedList::new());
     static ref NORM_PRIO_WAITING: Mutex<Box<LinkedList<Thread>>> = Mutex::new(box LinkedList::new());
-    /* number of ticks since a normal priority thread was run */
-    static ref NORM_PRIO_TICKS: Mutex<Box<Ticks>> = Mutex::new(box (0 as Ticks));
+    /* number of timeslices since a normal priority thread was run */
+    static ref NORM_PRIO_TIMESLICES: Mutex<Box<u64>> = Mutex::new(box (0 as u64));
 }
 
 /* the scheduler is focused on virtual CPU threads within containers. a thread object is either
@@ -93,8 +106,9 @@ impl Thread
       entry = pointer to thread's start address
       stack = stack pointer value to use
       priority = thread priority */
-pub fn create_thread(name: &str, entry: fn () -> (), stack: usize, priority: Priority)
+pub fn create_thread(name: &str, entry: extern "C" fn () -> (), stack: usize, priority: Priority)
 {
+    klog!("creating new thread, entry = {:p} stack = {:x}", entry, stack);
     let new_thread = Thread
     {
         container: ContainerName::from(name),
@@ -107,19 +121,18 @@ pub fn create_thread(name: &str, entry: fn () -> (), stack: usize, priority: Pri
 }
 
 /* run the given thread by switching to its supervisor context.
-this also zeroes NORM_PRIO_TICKS if this is a normal priority thread. */
+this also updates NORM_PRIO_TICKS and if the physical CPU was already running a
+thread, that thread is queued up in the waiting list */
 pub fn run_thread(to_run: Thread)
 {
-    /* if we're about to run a normal thread, then reset ticks since a normal thread ran */
+    /* if we're about to run a normal thread, then reset ticks since a normal thread ran.
+    if we're running a non-normal thread, then increase the count. */
+    let mut timeslices = NORM_PRIO_TIMESLICES.lock();
     match to_run.priority
     {
-        Priority::Normal =>
-        {
-            let mut ticks = NORM_PRIO_TICKS.lock();
-            **ticks = 0;
-        },
-        _ => ()
-    }
+        Priority::Normal => **timeslices = 0,
+        Priority::High => **timeslices = **timeslices + 1
+    };
 
     ::cpu::context_switch(to_run);
 }
@@ -142,8 +155,8 @@ prevent CPU time starvation. Returns selected thread or None for no other thread
 pub fn dequeue_thread() -> Option<Thread>
 {
     /* has a normal thread been waiting for ages? */
-    let ticks = NORM_PRIO_TICKS.lock();
-    if **ticks > NORM_PRIO_TICKS_MAX
+    let timeslices = NORM_PRIO_TIMESLICES.lock();
+    if **timeslices > NORM_PRIO_TIMESLICES_MAX
     {
         match NORM_PRIO_WAITING.lock().pop_front()
         {

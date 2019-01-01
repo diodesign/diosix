@@ -59,9 +59,10 @@ irq_machine_handler:
 
   # save space to preserve all 32 GP registers
   addi  sp, sp, -(IRQ_REGISTER_FRAME_SIZE)
-  # skip x0 (zero), stack all 31 other registers
-  .set reg, 1
-  .rept 31
+  # skip x0 (zero) and x2 (sp), stack all other registers
+  PUSH_REG 1
+  .set reg, 3
+  .rept 29
     PUSH_REG %reg
     .set reg, reg + 1
   .endr
@@ -104,12 +105,14 @@ cont:
 
   # fix up the stack from the cause, epc, etc pushes
   addi  sp, sp, 16
-  # then restore all 31 stacked registers, skipping zero (x0)
+
+  # then restore all 31 stacked registers, skipping zero (x0) and sp (x2)
   .set reg, 31
-  .rept 31
+  .rept 29
     PULL_REG %reg
     .set reg, reg - 1
   .endr
+  PULL_REG 1
 
   # fix up exception handler sp
   addi  sp, sp, IRQ_REGISTER_FRAME_SIZE

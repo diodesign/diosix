@@ -75,14 +75,6 @@ stick to usize as much as possible */
 #[no_mangle]
 pub extern "C" fn kentry(cpu_nr: usize, device_tree_buf: &u8)
 {
-    /* set up each processor core with its own private heap pool and any other resources.
-    this uses physical memory assigned by the pre-kmain boot code. this should be called
-    first to set up every core, including the boot CPU, which then sets up the global
-    resouces. all non-boot CPUs should wait until global resources are ready. */
-    cpu::Core::init(cpu_nr);
-    klog!("CPU core available and initialized");
-
-    /* heap and debugging set up. let's rock and roll */
     match kmain(cpu_nr, device_tree_buf)
     {
         Err(e) => kalert!("kmain bailed out with error: {:?}", e),
@@ -108,6 +100,13 @@ pub extern "C" fn kentry(cpu_nr: usize, device_tree_buf: &u8)
 */
 fn kmain(cpu_nr: usize, device_tree_buf: &u8) -> Result<(), Cause>
 {
+    /* set up each processor core with its own private heap pool and any other resources.
+    this uses physical memory assigned by the pre-kmain boot code. init() should be called
+    first to set up every core, including the boot CPU, which then sets up the global
+    resouces. all non-boot CPUs should wait until global resources are ready. */
+    cpu::Core::init(cpu_nr);
+    klog!("CPU core available and initialized");
+
     /* delegate to boot CPU the welcome banner and set up global resources */
     if cpu_nr == 0 /* boot CPU is zeroth core */
     {
@@ -118,11 +117,9 @@ fn kmain(cpu_nr: usize, device_tree_buf: &u8) -> Result<(), Cause>
         /* allow other cores to continue */
         *(INIT_DONE.lock()) = true;
     }
-    else
-    {
-        /* non-boot cores must wait for early initialization to complete */
-        while *(INIT_DONE.lock()) != true {}
-    }
+
+    /* non-boot cores must wait for early initialization to complete */
+    while *(INIT_DONE.lock()) != true {}
 
     /* enable timer on this CPU core to sstart cheduling threads */
     scheduler::start();
@@ -180,7 +177,7 @@ fn init_root_container() -> Result<(), Cause>
 
     /* create a virtual CPU thread for the root container, starting it in sentry() with
     top of allocated memory as the stack pointer */
-    scheduler::create_thread(root_name, supervisor::main::entry, root_mem, Priority::High);
+    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem, Priority::High);
     Ok(())
 }
 

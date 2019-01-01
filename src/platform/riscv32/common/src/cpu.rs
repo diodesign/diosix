@@ -47,12 +47,12 @@ pub struct SupervisorState
     satp: Reg,
     /* standard register set */
     registers: [Reg; 32],
-    pc: fn () -> ()
+    pc: extern "C" fn () -> ()
 }
 
 
 /* craft a blank supervisor CPU state using the given entry and stack pointers */
-pub fn supervisor_state_from(entry: fn () -> (), stack: usize) -> SupervisorState
+pub fn supervisor_state_from(entry: extern "C" fn () -> (), stack: usize) -> SupervisorState
 {
     SupervisorState
     {
