@@ -6,21 +6,15 @@
 .section .text
 .align 4
 
-.global platform_get_cpu_id
 .global platform_cpu_private_variables
 .global platform_cpu_heap_base
 .global platform_cpu_heap_size
 .global platform_save_supervisor_state
 .global platform_load_supervisor_state
+.global platform_set_supervisor_return
 
 # include kernel constants, such as stack and lock locations
 .include "src/platform/riscv32/common/asm/consts.s"
-
-# Look up the running core's hardwre-assigned ID
-# <= a0 = CPU core / hart ID
-platform_get_cpu_id:
-  csrrc a0, mhartid, x0
-  ret
 
 # return pointer to this CPU's private variables
 # <= a0 = pointer to kernel's CPU structure
@@ -142,4 +136,16 @@ to_stack_copy_loop:
   addi  t2, t2, -1
   bnez  t2, to_stack_copy_loop
 
+  ret
+
+# set the machine-level flags necessary to return to supervisor mode
+# rather than machine mode. context for the supervisor mode is loaded
+# elsewhere
+platform_set_supervisor_return:
+  # set 'previous' privilege level to supervisor by clearing bit 12
+  # and setting bit 11 in mstatus, defining MPP[12:11] as b01 = 1 for supervisor
+  li    t0, 1 << 12
+  csrrc x0, mstatus, t0
+  li    t0, 1 << 11
+  csrrs x0, mstatus, t0
   ret

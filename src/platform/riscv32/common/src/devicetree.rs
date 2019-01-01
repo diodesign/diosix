@@ -70,3 +70,24 @@ pub fn get_cpu_count(device_tree_buf: &u8) -> Option<usize>
 
     return Some(cpus);
 }
+
+/* get the builtin CPU timer's frequency, which is fixed in hardware
+   => device_tree_buf = pointer to device tree in kernel-accessible RAM
+   <= timer frequency, or None for failure
+*/
+pub fn get_timebase_freq(device_tree_buf: &u8) -> Option<usize>
+{
+    let dev_tree = match unsafe { hermit_dtb::Dtb::from_raw(device_tree_buf) }
+    {
+        Some(x) => x,
+        None => return None,
+    };
+
+    let freq = match dev_tree.get_property("/cpus", "timebase-frequency")
+    {
+        Some(f) => (f[0] as u32) | ((f[1] as u32) << 8) | ((f[2] as u32) << 16) | ((f[3] as u32) << 24),
+        None => return None,
+    };
+
+    return Some(freq as usize);
+}

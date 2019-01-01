@@ -5,14 +5,33 @@
  * See LICENSE for usage and copying.
  */
 
+use error::Cause;
 use spin::Mutex;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
 use container::ContainerName;
 use platform::common::cpu::SupervisorState;
-use ::cpu;
 
+/* one tick represents one scheduling period rather than a clock tick */
 type Ticks = usize;
+
+/* initialize preemptive scheduling system's timer. this is used to interrupt the running
+virtual CPU thread so another can be run next
+<= return OK for success, or an error code */
+pub fn init(device_tree_buf: &u8) -> Result<(), Cause>
+{
+    match platform::common::timer::init(device_tree_buf)
+    {
+        true => Ok(()),
+        false => Err(Cause::SchedTimerBadConfig)
+    }
+}
+
+/* activate hardware timer and start running threads */
+pub fn start()
+{
+    platform::common::timer::start();
+}
 
 /* maintain a simple two-level round-robin scheduler. we can make it more fancy later.
 the hypervisor tries to dish out CPU time fairly among evironments, and let the
@@ -93,7 +112,7 @@ pub fn run_thread(to_run: Thread)
         _ => ()
     }
 
-    cpu::context_switch(to_run);
+    ::cpu::context_switch(to_run);
 }
 
 /* add the given thread to the appropriate waiting queue. put it to the back

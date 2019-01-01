@@ -24,4 +24,7 @@ pub enum Cause
 
     /* containers */
     ContainerAlreadyExists,
+
+    /* scheduler and timer */
+    SchedTimerBadConfig
 }

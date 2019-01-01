@@ -12,3 +12,4 @@ pub mod devicetree;
 pub mod irq;
 pub mod physmem;
 pub mod cpu;
+pub mod timer;

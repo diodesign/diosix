@@ -26,6 +26,7 @@ extern crate hashmap_core;
 #[macro_use]
 extern crate lazy_static;
 extern crate spin;
+use spin::Mutex;
 
 /* this will bring in all the hardware-specific code */
 extern crate platform;
@@ -51,11 +52,17 @@ use error::Cause;
 /* and our builtin supervisor kernel, which runs in its own container(s) */
 mod supervisor;
 
-/* tell Rust to use ourr kAllocator to allocate and free heap memory.
+/* tell Rust to use our kAllocator to allocate and free heap memory.
 while we'll keep track of physical memory, we'll let Rust perform essential
 tasks, such as freeing memory when it's no longer needed, pointer checking, etc */
 #[global_allocator]
 static KERNEL_HEAP: heap::Kallocator = heap::Kallocator;
+
+/* set to true to allow physical CPU cores to start running supervisor code */
+lazy_static!
+{
+    static ref INIT_DONE: Mutex<bool> = Mutex::new(false);
+}
 
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 stick to usize as much as possible */
@@ -104,25 +111,31 @@ fn kmain(cpu_nr: usize, device_tree_buf: &u8) -> Result<(), Cause>
     /* delegate to boot CPU the welcome banner and set up global resources */
     if cpu_nr == 0 /* boot CPU is zeroth core */
     {
-        /* initialize global resources */
+        /* initialize global resources and root container */
         init_global(device_tree_buf)?;
+        init_root_container()?;
 
-        /* create root container with 4MB of RAM and max CPU cores */
-        let root_mem = 4 * 1024 * 1024;
-        let root_name = "root";
-        let root_max_vcpu = 2;
-        container::create_from_builtin(root_name, root_mem, root_max_vcpu)?;
-
-        /* create a virtual CPU thread for the root container, starting it in sentry() with
-        top of allocated memory as the stack pointer */
-        scheduler::create_thread(root_name, supervisor::main::entry, root_mem, Priority::High);
+        /* allow other cores to continue */
+        *(INIT_DONE.lock()) = true;
+    }
+    else
+    {
+        /* non-boot cores must wait for early initialization to complete */
+        loop
+        {
+            if *(INIT_DONE.lock()) == true
+            {
+                break;
+            }
+        }
     }
 
-    /* attach scheduler to timer and enable timer */
+    /* enable timer on this CPU core to sstart cheduling threads */
+    scheduler::start();
 
     /* initialization complete. if we make it this far then fall through to infinite loop
     waiting for a timer interrupt to come in. when it does fire, this stack will be flattened,
-    a thread loaded up to run, and this boot thread will disappear like tears in the rain. */
+    a virtual CPU loaded up to run, and this boot thread will disappear like tears in the rain. */
     Ok(())
 }
 
@@ -152,12 +165,29 @@ fn init_global(device_tree: &u8) -> Result<(), Cause>
         }
     };
 
+    scheduler::init(device_tree)?;
+
     /* say hello */
     klog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree);
     klog!("Available RAM: {} MiB ({} bytes), CPU cores: {}", ram_size / 1024 / 1024, ram_size, cpus);
     kdebug!("... Debugging enabled");
 
     return Ok(());
+}
+
+/* create the root container */
+fn init_root_container() -> Result<(), Cause>
+{
+    /* create root container with 4MB of RAM and max CPU cores */
+    let root_mem = 4 * 1024 * 1024;
+    let root_name = "root";
+    let root_max_vcpu = 2;
+    container::create_from_builtin(root_name, root_mem, root_max_vcpu)?;
+
+    /* create a virtual CPU thread for the root container, starting it in sentry() with
+    top of allocated memory as the stack pointer */
+    scheduler::create_thread(root_name, supervisor::main::entry, root_mem, Priority::High);
+    Ok(())
 }
 
 /* mandatory error handler for memory allocations */

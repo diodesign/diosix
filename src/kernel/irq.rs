@@ -22,6 +22,7 @@ use platform::common::cpu::PrivilegeMode;
 pub extern "C" fn kirq_handler(context: IRQContext)
 {
     let irq = platform::common::irq::dispatch(context);
+    klog!("IRQ!");
 
     match irq.irq_type
     {
@@ -38,15 +39,23 @@ fn exception(irq: IRQ)
         (true, PrivilegeMode::Kernel) =>
         {
             kalert!(
-                "Fatal exception in kernel: {} at 0x{:x}, stack 0x{:x}",
-                irq.debug_cause(),
-                irq.pc,
-                irq.sp
-            );
-            loop
-            {}
+                "Fatal exception in hypervisor: {} at 0x{:x}, stack 0x{:x}",
+                irq.debug_cause(), irq.pc, irq.sp);
+            loop {}
+        },
+        (false, PrivilegeMode::Kernel) =>
+        {
+
+        },
+
+        /* fail on everything else */
+        (fatal, priviledge) =>
+        {
+            kalert!(
+                "Unhandled IRQ (fatal = {}, priv = {:?}): {} at 0x{:x}, stack 0x{:x}",
+                fatal, priviledge, irq.debug_cause(), irq.pc, irq.sp);
+            loop {}
         }
-        (_, _) => (), /* ignore everything else */
     }
 }
 

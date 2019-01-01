@@ -11,7 +11,7 @@
 .align 4
 
 .global irq_early_init
-.global platform_set_supervisor_return
+.global irq_machine_handler
 
 # include kernel constants, such as stack and lock locations
 .include "src/platform/riscv32/common/asm/consts.s"
@@ -34,18 +34,6 @@ irq_early_init:
   # since all hardware interrupts are disabled, we're only enabling
   # exceptions at this point.
   li    t0, 1 << 3
-  csrrs x0, mstatus, t0
-  ret
-
-# set the machine-level flags necessary to return to supervisor mode
-# rather than machine mode. context for the supervisor mode is loaded
-# elsewhere
-platform_set_supervisor_return:
-  # set 'previous' privilege level to supervisor by clearing bit 12
-  # and setting bit 11 in mstatus, defining MPP[12:11] as b01 = 1 for supervisor
-  li    t0, 1 << 12
-  csrrc x0, mstatus, t0
-  li    t0, 1 << 11
   csrrs x0, mstatus, t0
   ret
 
@@ -93,8 +81,8 @@ irq_machine_handler:
   csrrs t1, mepc, x0
   csrrs t2, mtval, x0
   # riscv sets epc to the address of the syscall instruction, if this was a syscall.
-  # in which case, we need to advance epc 4 bytes to next instruction.
-  # otherwise, we're going into a loop
+  # in which case, we need to advance epc 4 bytes to the next instruction.
+  # otherwise, we're going into a loop when we return 
   li    t3, 9           # mcause = 9 for environment call from supervisor-to-hypervisor
   bne   t3, t0, cont    # ... all usermode ecalls are handled at the supervisor level
   addi  t1, t1, 4       # ... and the hypervisor doesn't make ecalls into itself

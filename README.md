@@ -2,7 +2,7 @@
 
 [![Build Status](https://travis-ci.org/diodesign/diosix.svg?branch=master)](https://travis-ci.org/diodesign/diosix) [![Gitter chat](https://badges.gitter.im/gitterHQ/gitter.png)](https://gitter.im/diosix/Lobby)
 
-This is a lightweight, secure, and multithreaded multiprocessor hypervisor-microkernel
+This is a lightweight, secure, multithreaded, and multiprocessor container-based hypervisor-microkernel
 operating system written in Rust for 32-bit and 64-bit RISC-V systems.
 
 It is a work in progress: I'm starting from scratch
@@ -72,4 +72,4 @@ Copyright &copy; Chris Williams and contributors, 2018. See LICENSE for distribu
 - src/contrib/spin-rs: Copyright &copy; 2014 Mathijs van de Nes.
 - src/contrib/spin-rs/src/atomic.rs: Reimplements Rust's MIT-licensed [core::sync::atomic](https://github.com/rust-lang/rust/blob/master/src/libcore/sync/atomic.rs) API. Original implementation: Copyright &copy; The Rust Project Developers.
 
-And thanks to [David Craven](https://github.com/dvc94ch), [Alex Bradbury](https://github.com/asb), and everyone else who helped bring together Rust, LLVM, and RISC-V; the RISC-V world for designing the CPU cores and system-on-chips, and writing the emulators in the first place; Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/); and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
+And thanks to [David Craven](https://github.com/dvc94ch), [Alex Bradbury](https://github.com/asb), and everyone else who brought Rust, LLVM, and RISC-V together; the RISC-V world for designing the CPU cores and system-on-chips in the first place; [Michael Clark](https://github.com/michaeljclark) and everyone else who worked on [Qemu](https://github.com/riscv/riscv-qemu) and other RISC-V emulators; Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/); and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).

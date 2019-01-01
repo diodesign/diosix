@@ -19,7 +19,7 @@ extern "C"
 static mut CPU_CORE_COUNT: Option<usize> = None;
 
 /* levels of privilege accepted by the kernel */
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum PrivilegeMode
 {
     Kernel,     /* machine-mode kernel */

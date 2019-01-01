@@ -16,7 +16,6 @@ pub static mut DEBUG_LOCK: Spinlock = kspinlock!();
 extern "C" {
     fn platform_serial_write_byte(byte: u8);
     pub fn platform_cpu_wait();
-    pub fn platform_get_cpu_id() -> usize;
 }
 
 /* top level debug macros */
@@ -25,7 +24,7 @@ extern "C" {
 macro_rules! klog
 {
   ($fmt:expr) => (kprintln!("[-] CPU {}: {}", ::cpu::Core::id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[-] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[-] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
 }
 
 /* bad news: bug detection, failures, etc */
@@ -33,7 +32,7 @@ macro_rules! klog
 macro_rules! kalert
 {
   ($fmt:expr) => (kprintln!("[!] CPU {}: ALERT: {}", ::cpu::Core::id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[!] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[!] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
 }
 
 /* only output if debug build is enabled */
@@ -42,7 +41,7 @@ macro_rules! kalert
 macro_rules! kdebug
 {
   ($fmt:expr) => (kprintln!("[?] CPU {}: {}", ::cpu::Core::id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[?] CPU {}: ", $fmt), ::debug::platform_get_cpu_id(), $($arg)*));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[?] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
 }
 
 #[macro_export]
