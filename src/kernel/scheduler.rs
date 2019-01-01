@@ -46,8 +46,12 @@ pub fn timer_irq()
             klog!("running virtual CPU thread {:p}", &next);
             run_thread(next);
         },
-        _ => { klog!("tick"); } /* nothing to run so return to current thread */
-    }
+        _ =>
+        {
+            /* nothing to run so return to current thread */
+            klog!("continuing with thread");
+        }
+    };
 
     /* tell the timer system to call us back soon */
     let now: u64 = platform::common::timer::now();
@@ -64,7 +68,7 @@ if a High priority container is waiting to run, then schedule it, unless a Norma
 container hasn't been run within a particular timeframe and a Normal container is
 waiting. if no High is waiting, then run a Normal. if no High or Normal is waiting, then
 wait unil work comes along. */
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Priority
 {
     High,
@@ -115,7 +119,6 @@ pub fn create_thread(name: &str, entry: extern "C" fn () -> (), stack: usize, pr
         None => return Err(Cause::ContainerBadName)
     };
 
-    klog!("creating new thread, entry = {:p} stack = {:x}", entry, phys_ram.base + stack);
     let new_thread = Thread
     {
         container: ContainerName::from(name),
@@ -124,6 +127,7 @@ pub fn create_thread(name: &str, entry: extern "C" fn () -> (), stack: usize, pr
     };
 
     /* add thread to correct priority queue */
+    klog!("creating thread, entry {:p} stack {:x}", entry, phys_ram.base + stack);
     queue_thread(new_thread);
     Ok(())
 }
