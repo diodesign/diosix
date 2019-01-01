@@ -1,4 +1,4 @@
-/* diosix scheduler timer control
+/* diosix hardwae timer control for scheduler
  *
  * (c) Chris Williams, 2018.
  *
@@ -35,7 +35,19 @@ pub fn init(device_tree_buf: &u8) -> bool
 pub fn start()
 {
     /* zero means trigger timer right away */
-    unsafe { platform_timer_target(0); }
+    next(0);
     /* and throw the switch... */
     unsafe { platform_timer_irq_enable(); }
+}
+
+/* return the current incremental timer value */
+pub fn now() -> u64
+{
+    unsafe { platform_timer_now() }
+}
+
+/* set the new timer interrupt target value */
+pub fn next(target: u64)
+{
+    unsafe { platform_timer_target(target); }
 }

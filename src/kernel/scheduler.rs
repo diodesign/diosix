@@ -33,6 +33,15 @@ pub fn start()
     platform::common::timer::start();
 }
 
+/* handle the timer kicking off an interrupt */
+pub fn timer_irq()
+{
+    let now: u64 = platform::common::timer::now();
+    let next: u64 = now + 20000000;
+    platform::common::timer::next(next);
+    klog!("timer tick");
+}
+
 /* maintain a simple two-level round-robin scheduler. we can make it more fancy later.
 the hypervisor tries to dish out CPU time fairly among evironments, and let the
 container supervisors work out how best to allocate their time to userspace code.

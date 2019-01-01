@@ -6,6 +6,7 @@
  */
 
 #![no_std]
+#![feature(asm)]
 
 /* expose architecture common code to platform-specific code */
 pub mod devicetree;

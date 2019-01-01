@@ -53,7 +53,7 @@ pub enum IRQCause
 pub struct IRQ
 {
     pub fatal: bool, /* true if this IRQ means current container must stop */
-    pub privilege_mode: ::cpu::PrivilegeMode, /* privilege level of the running container */
+    pub privilege_mode: ::cpu::PrivilegeMode, /* privilege level of the interrupted code */
     pub irq_type: IRQType, /* type of the IRQ - sw or hw generated */
     pub cause: IRQCause, /* cause of this interruption */
     pub pc: usize,   /* where in memory this IRQ occured */
@@ -165,4 +165,23 @@ pub fn dispatch(context: IRQContext) -> IRQ
         pc: context.epc as usize,
         sp: context.sp as usize,
     }
+}
+
+/* clear an interrupt condition so we can return without the IRQ firing immediately. */
+pub fn acknowledge(irq: IRQ)
+{
+    /* clear the appropriate pending bit in mip */
+    let bit = match irq.cause
+    {
+        IRQCause::UserSWI               => 0,
+        IRQCause::SupervisorSWI         => 1,
+        IRQCause::UserTimer             => 4,
+        IRQCause::SupervisorTimer       => 5,
+        IRQCause::UserInterrupt         => 8,
+        IRQCause::SupervisorInterrupt   => 9,
+        _ => return
+    };
+
+    /* 0x344 = mip aka macine interrupting pending */
+    unsafe { asm!("csrrc x0, 0x344, $0" :: "r"(1 << bit) :: "volatile"); }
 }

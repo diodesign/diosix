@@ -1,4 +1,4 @@
-# kernel low-level per-CPU core timer control
+# diosix kernel low-level per-CPU core timer control
 #
 #
 # (c) Chris Williams, 2018.
@@ -29,14 +29,14 @@
 # => (a0, a1) = trigger on this 64-bit timer value 
 platform_timer_target:
   # safely update the 64-bit timer target register with 32-bit writes
-  li      t0, -1
   li      t1, mtimecmp
   csrrc   t2, mhartid, x0
   slli    t2, t2, 3         # t2 = hartid * 8
   add     t1, t1, t2        # t1 = mtimecmp + hartid * 8
-  sw      t0, 0(t1)
-  sw      a1, 4(t1)
-  sw      a0, 0(t1)
+  li      t0, -1            # manuals recommend setting all high bits first
+  sw      t0, 4(t1)
+  sw      a0, 0(t1)         # then write low word
+  sw      a1, 4(t1)         # then the high word
   ret
 
 # return the CPU timer's latest value
@@ -47,7 +47,7 @@ platform_timer_now:
   lw  a0, 0(t0)
   ret
 
-# enablet he per-CPU incremental timer
+# enable the per-CPU incremental timer
 platform_timer_irq_enable:
   li      t0, 1 << 7    # bit 7 = machine timer enable
   csrrs   x0, mie, t0

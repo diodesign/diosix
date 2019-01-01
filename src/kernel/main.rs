@@ -121,13 +121,7 @@ fn kmain(cpu_nr: usize, device_tree_buf: &u8) -> Result<(), Cause>
     else
     {
         /* non-boot cores must wait for early initialization to complete */
-        loop
-        {
-            if *(INIT_DONE.lock()) == true
-            {
-                break;
-            }
-        }
+        while *(INIT_DONE.lock()) != true {}
     }
 
     /* enable timer on this CPU core to sstart cheduling threads */

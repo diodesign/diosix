@@ -5,11 +5,11 @@
  * See LICENSE for usage and copying.
  */
 
+use scheduler;
+
 /* platform-specific code must implement all this */
 use platform;
-use platform::common::irq::IRQContext;
-use platform::common::irq::IRQType;
-use platform::common::irq::IRQ;
+use platform::common::irq::{self, IRQContext, IRQType, IRQCause, IRQ};
 use platform::common::cpu::PrivilegeMode;
 
 /* kernel_irq_handler
@@ -22,7 +22,6 @@ use platform::common::cpu::PrivilegeMode;
 pub extern "C" fn kirq_handler(context: IRQContext)
 {
     let irq = platform::common::irq::dispatch(context);
-    klog!("IRQ!");
 
     match irq.irq_type
     {
@@ -45,24 +44,34 @@ fn exception(irq: IRQ)
         },
         (false, PrivilegeMode::Kernel) =>
         {
-
+            kalert!(
+                "Unhandled exception in hypervisor: {} at 0x{:x}, stack 0x{:x}",
+                irq.debug_cause(), irq.pc, irq.sp);
         },
 
         /* fail on everything else */
-        (fatal, priviledge) =>
+        (_, priviledge) =>
         {
             kalert!(
-                "Unhandled IRQ (fatal = {}, priv = {:?}): {} at 0x{:x}, stack 0x{:x}",
-                fatal, priviledge, irq.debug_cause(), irq.pc, irq.sp);
-            loop {}
+                "Unhandled fatal exception (priv = {:?}): {} at 0x{:x}, stack 0x{:x}",
+                priviledge, irq.debug_cause(), irq.pc, irq.sp);
         }
     }
 }
 
 /* handle hardware interrupt */
-fn interrupt(_irq: platform::common::irq::IRQ)
+fn interrupt(irq: IRQ)
 {
-    kalert!("Hardware interrupt");
-    loop
-    {}
+    match irq.cause
+    {
+        /* handle our scheduler's timer */
+        IRQCause::KernelTimer =>
+        {
+            scheduler::timer_irq();
+        },
+        _ => { klog!("Unhandled harwdare interrupt: {}", irq.debug_cause()); }
+    }
+
+    /* clear the interrupt condition */
+    irq::acknowledge(irq);
 }
