@@ -37,25 +37,26 @@ pub fn start()
 /* handle the timer kicking off an interrupt */
 pub fn timer_irq()
 {
+    /* run through queued threads */
+    {
+        let queue = HIGH_PRIO_WAITING.lock();
+        for q in queue.iter()
+        {
+            klog!("queued: {:p}", q);
+        }
+    }
+
     /* whatever was running has had enough time, now we'll pick something else to run */
     match dequeue_thread()
     {
         /* we've found a thread to run, so switch to that */
-        Some(next) =>
-        {
-            klog!("running virtual CPU thread {:p}", &next);
-            run_thread(next);
-        },
-        _ =>
-        {
-            /* nothing to run so return to current thread */
-            klog!("continuing with thread");
-        }
+        Some(next) => run_thread(next),
+        _ => () /* nothing to run so return to current thread */
     };
 
     /* tell the timer system to call us back soon */
     let now: u64 = platform::common::timer::now();
-    let next: u64 = now + 20000000;
+    let next: u64 = now + 10000000;
     platform::common::timer::next(next);
 }
 
@@ -127,7 +128,6 @@ pub fn create_thread(name: &str, entry: extern "C" fn () -> (), stack: usize, pr
     };
 
     /* add thread to correct priority queue */
-    klog!("creating thread, entry {:p} stack {:x}", entry, phys_ram.base + stack);
     queue_thread(new_thread);
     Ok(())
 }

@@ -44,11 +44,16 @@ fn exception(irq: IRQ)
         },
         (false, PrivilegeMode::Kernel) =>
         {
-            kalert!(
-                "Unhandled exception in hypervisor: {} at 0x{:x}, stack 0x{:x}",
-                irq.debug_cause(), irq.pc, irq.sp);
+            match irq.cause
+            {
+                IRQCause::SupervisorEnvironmentCall =>
+                {
+                    klog!("environment call from supervisor");
+                    loop {}
+                },
+                _ => ()
+            }
         },
-
         /* fail on everything else */
         (_, priviledge) =>
         {

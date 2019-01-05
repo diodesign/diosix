@@ -9,6 +9,6 @@
 #[no_mangle]
 pub extern "C" fn sentry()
 {
-    /* hello world! */
+    unsafe { asm!("ecall"); }
     loop {}
 }

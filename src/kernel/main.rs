@@ -9,6 +9,7 @@
 #![no_std]
 #![no_main]
 
+#![feature(asm)]
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 #![allow(improper_ctypes)]
