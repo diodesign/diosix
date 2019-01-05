@@ -24,7 +24,6 @@
 # <= returns when lock acquired, blocks otherwise
 # Corrupts t0
 platform_acquire_spin_lock:
-  ret
   li    t0, 1                   # writing 1 to the lock will acquire it
 acquire_attempt:
   amoswap.w.aq t0, t0, (a0)     # atomically swap t0 and word at a0
