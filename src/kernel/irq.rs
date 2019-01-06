@@ -22,7 +22,6 @@ use platform::common::cpu::PrivilegeMode;
 pub extern "C" fn kirq_handler(context: IRQContext)
 {
     let irq = platform::common::irq::dispatch(context);
-
     match irq.irq_type
     {
         IRQType::Exception => exception(irq),
@@ -49,7 +48,6 @@ fn exception(irq: IRQ)
                 IRQCause::SupervisorEnvironmentCall =>
                 {
                     klog!("environment call from supervisor");
-                    loop {}
                 },
                 _ => ()
             }

@@ -61,18 +61,19 @@ platform_save_supervisor_state:
   csrrs t1, stval, x0
   csrrs t2, satp, x0
   csrrs t3, mepc, x0    # preserve pc of interrupted code 
+  move  t4, s11         # preserve sp of interrupted code (stashed in s11)
   sw    t0, 28(a0)
   sw    t1, 32(a0)
   sw    t2, 36(a0)
   sw    t3, 40(a0)
+  sw    t4, 44(a0)
 
   # copy registers from the IRQ stack
-  addi  t0, a0, 44
+  addi  t0, a0, 48
   csrrs t1, mscratch, x0
   addi  t1, t1, -(IRQ_REGISTER_FRAME_SIZE)
   # t0 = base of register save block, t1 = base of IRQ saved registers
   # skip over x0
-  addi  t0, t0, 4
   addi  t1, t1, 4
   # stack remaining 31 registers
   li    t2, 31
@@ -112,18 +113,19 @@ platform_load_supervisor_state:
   lw    t1, 32(a0)
   lw    t2, 36(a0)
   lw    t3, 40(a0)
+  lw    t4, 44(a0)
   csrrw x0, scause, t0
   csrrw x0, stval, t1
   csrrw x0, satp, t2
   csrrw x0, mepc, t3      # restore pc of next thread to run
+  move  s11, t4           # restore sp of next thread (stashed in s11)
 
   # copy registers to the IRQ stack
-  addi  t0, a0, 40
+  addi  t0, a0, 48
   csrrs t1, mscratch, x0
   addi  t1, t1, -(IRQ_REGISTER_FRAME_SIZE)
   # t0 = base of register save block, t1 = base of IRQ saved registers
   # skip over x0
-  addi  t0, t0, 4
   addi  t1, t1, 4
   # copy remaining 31 registers
   li    t2, 31

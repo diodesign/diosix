@@ -179,9 +179,9 @@ fn init_root_container() -> Result<(), Cause>
     /* create a virtual CPU thread for the root container, starting it in sentry() with
     top of allocated memory as the stack pointer */
     scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
-    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x1000, Priority::High)?;
-    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x2000, Priority::High)?;
-    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x3000, Priority::High)?;
+    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
+    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
+    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
     Ok(())
 }
 

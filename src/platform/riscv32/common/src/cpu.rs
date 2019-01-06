@@ -46,8 +46,9 @@ pub struct SupervisorState
     stval: Reg,
     satp: Reg,
     pc: extern "C" fn () -> (),
-    /* standard register set */
-    registers: [Reg; 32],
+    sp: Reg,
+    /* standard register set (skip x0) */
+    registers: [Reg; 31],
 }
 
 /* craft a blank supervisor CPU state using the given entry and stack pointers */
@@ -66,11 +67,8 @@ pub fn supervisor_state_from(entry: extern "C" fn () -> (), stack: usize) -> Sup
         stval: 0,
         satp: 0,
         pc: entry,
-        /* x2 = stack, all other values = 0 */
-        registers: [0, 0, stack as Reg, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0]
+        sp: stack,
+        registers: [0; 31]
     }
 }
 

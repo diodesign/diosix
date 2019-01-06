@@ -8,7 +8,7 @@
 use error::Cause;
 use spin::Mutex;
 use alloc::boxed::Box;
-use alloc::collections::linked_list::LinkedList;
+use alloc::collections::vec_deque::VecDeque;
 use container::{self, ContainerName};
 use platform::common::cpu::SupervisorState;
 
@@ -37,21 +37,16 @@ pub fn start()
 /* handle the timer kicking off an interrupt */
 pub fn timer_irq()
 {
-    /* run through queued threads */
-    {
-        let queue = HIGH_PRIO_WAITING.lock();
-        for q in queue.iter()
-        {
-            klog!("queued: {:p}", q);
-        }
-    }
-
     /* whatever was running has had enough time, now we'll pick something else to run */
     match dequeue_thread()
     {
         /* we've found a thread to run, so switch to that */
-        Some(next) => run_thread(next),
-        _ => () /* nothing to run so return to current thread */
+        Some(next) =>
+        {
+            klog!("running next thread: {:x}", next.timestamp);
+            run_thread(next);
+        },
+        _ => { klog!("continuing with current thread"); }  /* nothing to run so return to current thread */
     };
 
     /* tell the timer system to call us back soon */
@@ -83,8 +78,8 @@ lazy_static!
 {
     /* acquire HIGH_PRIO_THREADS, LOW_PRIO_THREADS etc lock before accessing any threads.
     all threads in _PRIO_THREADS are waiting to run. running threads should be in the running list */
-    static ref HIGH_PRIO_WAITING: Mutex<Box<LinkedList<Thread>>> = Mutex::new(box LinkedList::new());
-    static ref NORM_PRIO_WAITING: Mutex<Box<LinkedList<Thread>>> = Mutex::new(box LinkedList::new());
+    static ref HIGH_PRIO_WAITING: Mutex<Box<VecDeque<Thread>>> = Mutex::new(box VecDeque::new());
+    static ref NORM_PRIO_WAITING: Mutex<Box<VecDeque<Thread>>> = Mutex::new(box VecDeque::new());
     /* number of timeslices since a normal priority thread was run */
     static ref NORM_PRIO_TIMESLICES: Mutex<Box<u64>> = Mutex::new(box (0 as u64));
 }
@@ -97,7 +92,8 @@ pub struct Thread
 {
     container: ContainerName,
     priority: Priority,
-    state: SupervisorState
+    state: SupervisorState,
+    timestamp: u64
 }
 
 impl Thread
@@ -124,7 +120,8 @@ pub fn create_thread(name: &str, entry: extern "C" fn () -> (), stack: usize, pr
     {
         container: ContainerName::from(name),
         priority: priority,
-        state: platform::common::cpu::supervisor_state_from(entry, phys_ram.base + stack)
+        state: platform::common::cpu::supervisor_state_from(entry, phys_ram.base + stack),
+        timestamp: platform::common::timer::now()
     };
 
     /* add thread to correct priority queue */
@@ -153,6 +150,7 @@ pub fn run_thread(to_run: Thread)
 so that other threads get a chance to run */
 pub fn queue_thread(to_queue: Thread)
 {
+    klog!("queuing thread {:x}", to_queue.timestamp);
     let mut list = match to_queue.priority
     {
         Priority::High => HIGH_PRIO_WAITING.lock(),
@@ -174,7 +172,7 @@ pub fn dequeue_thread() -> Option<Thread>
         {
             Some(t) => return Some(t),
             None => ()
-        }
+        };
     }
 
     /* check the high priority queue for anything waiting.

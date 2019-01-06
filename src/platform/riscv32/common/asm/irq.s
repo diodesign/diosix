@@ -78,16 +78,23 @@ irq_machine_handler:
   # relevant to the exception or interrupt, and interrupted code's stack pointer,
   # and store on the IRQ handler's stack
   addi  sp, sp, -16
+  # for syscalls, riscv sets epc to the address of the syscall instruction.
+  # in which case, we need to advance epc 4 bytes to the next instruction.
+  # otherwise, we're going into a loop when we return. do this now because the syscall
+  # could schedule in another thread, so incrementing epc after kirq_handler
+  # may break a newly scheduled thread. we increment mepc directly so that if another
+  # thread isn't scheduled in, epc will be correct.
+  #
+  # note: mepc, sp (via s11) and stacked regs are updated by the context switch code
   csrrs t0, mcause, x0
   csrrs t1, mepc, x0
+  li    t2, 9             # mcause = 9 for environment call from supervisor-to-hypervisor
+  bne   t0, t2, continue  # ... all usermode ecalls are handled at the supervisor level
+  addi  t1, t1, 4         # ... and the hypervisor doesn't make ecalls into itself
+  csrrw x0, mepc, t1
+
+continue:
   csrrs t2, mtval, x0
-  # riscv sets epc to the address of the syscall instruction, if this was a syscall.
-  # in which case, we need to advance epc 4 bytes to the next instruction.
-  # otherwise, we're going into a loop when we return 
-  li    t3, 9           # mcause = 9 for environment call from supervisor-to-hypervisor
-  bne   t3, t0, cont    # ... all usermode ecalls are handled at the supervisor level
-  addi  t1, t1, 4       # ... and the hypervisor doesn't make ecalls into itself
-cont:
   sw    t0, 0(sp)       # mcause
   sw    t1, 4(sp)       # mepc
   sw    t2, 8(sp)       # mtval
@@ -103,7 +110,8 @@ cont:
   csrrw s11, mscratch, s11
   # now: mscratch = interrupted code's sp. s11 = top of IRQ stack
 
-  # fix up the stack from the cause, epc, etc pushes
+  # fix up the stack from the cause, epc, sp, etc pushes
+  # the context switching code updates stacked registers, mepc and sp (via s11)
   addi  sp, sp, 16
 
   # then restore all stacked registers, skipping zero (x0) and sp (x2)

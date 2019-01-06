@@ -109,5 +109,5 @@ pub fn context_switch(next: Thread)
 
     /* prepare next thread to run when we leave this IRQ context */
     platform::common::cpu::load_supervisor_state(next.get_state_as_ref());
-    THREADS.lock().insert(id, next);
+    THREADS.lock().insert(id, next); /* add to the running threads list */
 }

@@ -10,5 +10,5 @@
 pub extern "C" fn sentry()
 {
     unsafe { asm!("ecall"); }
-    loop {}
+    loop { }
 }
