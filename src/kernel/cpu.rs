@@ -17,7 +17,8 @@ use scheduler::{self, Thread};
 use platform::common::cpu::SupervisorState;
 use alloc::boxed::Box;
 use spin::Mutex;
-use hashmap_core::map::HashMap;
+use hashmap_core::map::{HashMap, Entry};
+use container::{self, ContainerID};
 
 /* require some help from the underlying platform */
 extern "C"
@@ -77,10 +78,30 @@ impl Core
         }
     }
 
+    /* return ID of container of the thread this CPU core is running, or None for none */
+    pub fn container() -> Option<ContainerID>
+    {
+        match THREADS.lock().entry(Core::id())
+        {
+            Entry::Vacant(_) => None,
+            Entry::Occupied(value) =>
+            {
+                Some(value.get().container())
+            }
+        }
+    }
+
     /* return pointer to the calling CPU core's fixed private data structure */
-    pub fn this() -> *mut Core { return unsafe { platform_cpu_private_variables() } }
+    pub fn this() -> *mut Core
+    { 
+        unsafe { platform_cpu_private_variables() }
+    }
+
     /* return boot-assigned ID number */
-    pub fn id() -> usize { unsafe { (*Core::this()).id } }
+    pub fn id() -> usize
+    {
+        unsafe { (*Core::this()).id }
+    }
 }
 
 /* save current thread's context, if we're running one, and load next thread's context.
@@ -89,14 +110,24 @@ and overwrites the context with the next thread's context, so returning to super
 mode will land us in the new context */
 pub fn context_switch(next: Thread)
 {
+    let next_container = next.container();
     let id = Core::id();
+
     match THREADS.lock().remove(&id)
     {
         Some(current_thread) =>
         {
-            /* if we're running a thread, copy its state */
-            platform::common::cpu::save_supervisor_state(current_thread.get_state_as_ref());
-            /* and queue it on the waiting list */
+            /* if we're running a thread, preserve its state */
+            platform::common::cpu::save_supervisor_state(current_thread.state_as_ref());
+
+            /* if we're switching to a thread in another container then replace the
+            hardware access permissions */
+            if current_thread.container() != next_container
+            {
+                container::enforce(next_container);
+            }
+
+            /* queue current thread on the waiting list */
             scheduler::queue_thread(current_thread);
         },
         None =>
@@ -104,10 +135,12 @@ pub fn context_switch(next: Thread)
             /* if we were not running a thread then ensure we return to supervisor mode
             rather than hypervisor mode */
             platform::common::cpu::prep_supervisor_return();
+            /* and enforce its hardware access permissions */
+            container::enforce(next_container);
         }
     }
 
     /* prepare next thread to run when we leave this IRQ context */
-    platform::common::cpu::load_supervisor_state(next.get_state_as_ref());
+    platform::common::cpu::load_supervisor_state(next.state_as_ref());
     THREADS.lock().insert(id, next); /* add to the running threads list */
 }

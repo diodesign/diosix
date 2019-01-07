@@ -53,7 +53,7 @@ use error::Cause;
 /* and our builtin supervisor kernel, which runs in its own container(s) */
 mod supervisor;
 
-/* tell Rust to use our kAllocator to allocate and free heap memory.
+/* tell Rust to use our Kallocator to allocate and free heap memory.
 while we'll keep track of physical memory, we'll let Rust perform essential
 tasks, such as freeing memory when it's no longer needed, pointer checking, etc */
 #[global_allocator]
@@ -178,9 +178,6 @@ fn init_root_container() -> Result<(), Cause>
 
     /* create a virtual CPU thread for the root container, starting it in sentry() with
     top of allocated memory as the stack pointer */
-    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
-    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
-    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
     scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
     Ok(())
 }

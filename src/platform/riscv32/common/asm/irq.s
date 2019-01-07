@@ -114,7 +114,7 @@ continue:
   # the context switching code updates stacked registers, mepc and sp (via s11)
   addi  sp, sp, 16
 
-  # then restore all stacked registers, skipping zero (x0) and sp (x2)
+  # restore all stacked registers, skipping zero (x0) and sp (x2)
   .set reg, 31
   .rept 29
     PULL_REG %reg

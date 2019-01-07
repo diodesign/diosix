@@ -9,6 +9,8 @@
 #![feature(asm)]
 
 /* expose architecture common code to platform-specific code */
+#[macro_use]
+pub mod csr;
 pub mod devicetree;
 pub mod irq;
 pub mod physmem;

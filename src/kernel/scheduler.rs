@@ -9,7 +9,7 @@ use error::Cause;
 use spin::Mutex;
 use alloc::boxed::Box;
 use alloc::collections::vec_deque::VecDeque;
-use container::{self, ContainerName};
+use container::{self, ContainerID};
 use platform::common::cpu::SupervisorState;
 
 
@@ -37,16 +37,12 @@ pub fn start()
 /* handle the timer kicking off an interrupt */
 pub fn timer_irq()
 {
-    /* whatever was running has had enough time, now we'll pick something else to run */
+    /* whatever was running has had enough time. now we'll pick something else to run */
     match dequeue_thread()
     {
         /* we've found a thread to run, so switch to that */
-        Some(next) =>
-        {
-            klog!("running next thread: {:x}", next.timestamp);
-            run_thread(next);
-        },
-        _ => { klog!("continuing with current thread"); }  /* nothing to run so return to current thread */
+        Some(next) => run_thread(next),
+        _ => ()  /* nothing to run so return to current thread */
     };
 
     /* tell the timer system to call us back soon */
@@ -90,16 +86,24 @@ if you remove a thread object from the queue and don't place it back in a queue 
 then the thread will be dropped, deallocated and destroyed. */
 pub struct Thread
 {
-    container: ContainerName,
+    container: ContainerID,
     priority: Priority,
-    state: SupervisorState,
-    timestamp: u64
+    state: SupervisorState
 }
 
 impl Thread
 {
     /* return reference to thread's physical CPU state */
-    pub fn get_state_as_ref(&self) -> &SupervisorState { &self.state }
+    pub fn state_as_ref(&self) -> &SupervisorState
+    {
+        &self.state
+    }
+    
+    /* return copy of thread container's name */
+    pub fn container(&self) -> ContainerID
+    {
+        self.container.clone()
+    }
 }
 
 /* create a new virtual CPU thread for a container
@@ -118,10 +122,9 @@ pub fn create_thread(name: &str, entry: extern "C" fn () -> (), stack: usize, pr
 
     let new_thread = Thread
     {
-        container: ContainerName::from(name),
+        container: ContainerID::from(name),
         priority: priority,
-        state: platform::common::cpu::supervisor_state_from(entry, phys_ram.base + stack),
-        timestamp: platform::common::timer::now()
+        state: platform::common::cpu::supervisor_state_from(entry, phys_ram.base() + stack)
     };
 
     /* add thread to correct priority queue */
@@ -150,7 +153,6 @@ pub fn run_thread(to_run: Thread)
 so that other threads get a chance to run */
 pub fn queue_thread(to_queue: Thread)
 {
-    klog!("queuing thread {:x}", to_queue.timestamp);
     let mut list = match to_queue.priority
     {
         Priority::High => HIGH_PRIO_WAITING.lock(),
