@@ -18,6 +18,9 @@ extern "C"
 /* write once during initialization, read many after */
 static mut CPU_CORE_COUNT: Option<usize> = None;
 
+/* bit mask of CPU features */
+pub type CPUFeatures = u64;
+
 /* levels of privilege accepted by the kernel */
 #[derive(Copy, Clone, Debug)]
 pub enum PrivilegeMode
@@ -111,6 +114,11 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
         }
         None => return None
     }
+}
+
+pub fn features_mask() -> CPUFeatures
+{
+    return 0;
 }
 
 /* return number of CPU cores present in the system,

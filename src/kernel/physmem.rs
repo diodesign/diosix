@@ -14,6 +14,11 @@ use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
 use platform::common::physmem;
 
+/* standardize types for passing around physical RAM addresses */
+pub type PhysMemSize = usize;
+pub type PhysMemBase = usize;
+pub type PhysMemEnd  = usize;
+
 lazy_static!
 {
     /* acquire REGIONS lock before accessing any physical RAM regions */
@@ -34,8 +39,8 @@ pub enum RegionUse
 #[derive(Copy, Clone)]
 pub struct Region
 {
-    base: usize,
-    end: usize,
+    base: PhysMemBase,
+    end: PhysMemEnd,
     usage: RegionUse
 }
 
@@ -63,9 +68,9 @@ impl Region
     }
 
     /* return and change attributes */
-    pub fn base(&self) -> usize { self.base }
-    pub fn end(&self) -> usize { self.end }
-    pub fn increase_base(&mut self, size: usize) { self.base = self.base + size; }
+    pub fn base(&self) -> PhysMemBase { self.base }
+    pub fn end(&self) -> PhysMemEnd { self.end }
+    pub fn increase_base(&mut self, size: PhysMemSize) { self.base = self.base + size; }
 }
 
 /* return the regions covering the builtin supervisor kernel's
@@ -86,7 +91,7 @@ pub fn builtin_supervisor_data() -> Region
    => device_tree_buf = pointer to device tree to parse
    <= number of bytes available, or None for failure
 */
-pub fn init(device_tree_buf: &u8) -> Option<usize>
+pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
 {
     /* let the underlying platform code work out how much RAM we have to play with */
     let available_bytes = match platform::common::physmem::init(device_tree_buf)
@@ -113,7 +118,7 @@ pub fn init(device_tree_buf: &u8) -> Option<usize>
    => size = number of bytes in region
       usage = what the region will be used for
    <= Region structure for the space, or an error code */
-pub fn alloc_region(size: usize, usage: RegionUse) -> Result<Region, Cause>
+pub fn alloc_region(size: PhysMemSize, usage: RegionUse) -> Result<Region, Cause>
 {
     /* set to Some when we've found a suitable region */
     let mut area: Option<Region> = None;

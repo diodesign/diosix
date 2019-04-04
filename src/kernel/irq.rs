@@ -37,8 +37,8 @@ fn exception(irq: IRQ)
         (true, PrivilegeMode::Kernel) =>
         {
             kalert!(
-                "Fatal exception in hypervisor: {} at 0x{:x}, stack 0x{:x}",
-                irq.debug_cause(), irq.pc, irq.sp);
+                "Fatal exception in hypervisor: {:?} at 0x{:x}, stack 0x{:x}",
+                irq.cause, irq.pc, irq.sp);
             loop {}
         },
         (false, PrivilegeMode::Kernel) =>
@@ -56,8 +56,8 @@ fn exception(irq: IRQ)
         (_, priviledge) =>
         {
             kalert!(
-                "Unhandled fatal exception (priv = {:?}): {} at 0x{:x}, stack 0x{:x}",
-                priviledge, irq.debug_cause(), irq.pc, irq.sp);
+                "Unhandled fatal exception (priv {:?}): {:?} at 0x{:x}, stack 0x{:x}",
+                priviledge, irq.cause, irq.pc, irq.sp);
         }
     }
 }
@@ -72,7 +72,7 @@ fn interrupt(irq: IRQ)
         {
             scheduler::timer_irq();
         },
-        _ => { klog!("Unhandled harwdare interrupt: {}", irq.debug_cause()); }
+        _ => { klog!("Unhandled harwdare interrupt: {:?}", irq.cause) }
     }
 
     /* clear the interrupt condition */

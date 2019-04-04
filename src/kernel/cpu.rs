@@ -12,35 +12,43 @@ its own heap, reusing any blocks freed by itself or other cores.
 
 The machine/hypervisor layer is unlikely to do much active allocation
 so it's OK to keep it really simple for now. */
+
 use heap;
-use scheduler::{self, Thread};
-use platform::common::cpu::SupervisorState;
+use scheduler::ScheduleQueues;
+use platform::common::cpu::{SupervisorState, features_mask, CPUFeatures};
 use alloc::boxed::Box;
 use spin::Mutex;
 use hashmap_core::map::{HashMap, Entry};
 use container::{self, ContainerID};
+use physmem::PhysMemSize;
+use thread::Thread;
+
+pub type CPUId = usize;
+pub type CPUCount = CPUId;
+
+pub const BOOT_CPUID: CPUId = 0;
 
 /* require some help from the underlying platform */
 extern "C"
 {
     fn platform_cpu_private_variables() -> *mut Core;
     fn platform_cpu_heap_base() -> *mut heap::HeapBlock;
-    fn platform_cpu_heap_size() -> usize;
+    fn platform_cpu_heap_size() -> PhysMemSize;
     fn platform_save_supervisor_state(state: &SupervisorState);
     fn platform_load_supervisor_state(state: &SupervisorState);
 }
 
-/* link a running thread to its CPU core.
-    we can't store this in Core because it upsets Rust's borrow checker: you can't
-    deallocate Thread from a raw struct pointer. Rust won't let you hurt yourself. */
+/* map running threads to their CPU cores. 
+   we can't store these in Core structs because it upsets Rust's borrow checker: you can't
+   deallocate Thread from a raw struct pointer. Rust won't let you hurt yourself. */
 lazy_static!
 {
-    static ref THREADS: Mutex<Box<HashMap<usize, Thread>>> = Mutex::new(box HashMap::new());
+    static ref THREADS: Mutex<Box<HashMap<CPUId, Thread>>> = Mutex::new(box HashMap::new());
 }
 
 /* initialize the CPU management code
    <= return number of cores present, or None for failure */
-pub fn init(device_tree_buf: &u8) -> Option<usize>
+pub fn init(device_tree_buf: &u8) -> Option<CPUCount>
 {
     return platform::common::cpu::init(device_tree_buf);
 }
@@ -52,9 +60,17 @@ pub struct Core
     /* every physical CPU core has a hardware-assigned ID number that may be non-linear,
     while the startup code assigns each core a linear ID number from zero. we keep a copy of that
     linear, runtime-assigned ID here. the hardware-assigned ID is not used in the portable code */
-    id: usize,
+    id: CPUId,
+
+    /* platform-defined bitmask of ISA features this core provides. if a thread has a features bit set that
+    is unset in a core's feature bitmask, the thread will not be allowed to run on that core */
+    features: CPUFeatures,
+
     /* each CPU core gets its own heap that it can share, but it must manage */
-    pub heap: heap::Heap
+    pub heap: heap::Heap,
+
+    /* each CPU gets its own set of supervisor thread schedule queues */
+    queues: ScheduleQueues
 }
 
 impl Core
@@ -64,17 +80,19 @@ impl Core
     => id = boot-assigned CPU core ID. this is separate from the hardware-asigned
             ID number, which may be non-linear. the runtime-generated core ID will
             run from zero to N-1 where N is the number of available cores */
-    pub fn init(id: usize)
+    pub fn init(id: CPUId)
     {
         /* the pre-kmain startup code has allocated space for per-CPU core variables.
         this function returns a pointer to that structure */
         let cpu = Core::this();
 
-        /* stash our runtime-assigned CPU id and set up our heap */
+        /* initialize this CPU core */
         unsafe
         {
             (*cpu).id = id;
+            (*cpu).features = features_mask();
             (*cpu).heap.init(platform_cpu_heap_base(), platform_cpu_heap_size());
+            (*cpu).queues = ScheduleQueues::new();
         }
     }
 
@@ -98,9 +116,27 @@ impl Core
     }
 
     /* return boot-assigned ID number */
-    pub fn id() -> usize
+    pub fn id() -> CPUId
     {
         unsafe { (*Core::this()).id }
+    }
+
+    /* return features bitmask */
+    pub fn features() -> CPUFeatures
+    {
+        unsafe { (*Core::this()).features }
+    }
+
+    /* return a thread awaiting to run on this CPU core */
+    pub fn dequeue() -> Option<Thread>
+    {
+        unsafe { (*Core::this()).queues.dequeue() }
+    }
+
+    /* move a thread onto this CPU's queue of threads */
+    pub fn queue(to_queue: Thread)
+    {
+        unsafe { (*Core::this()).queues.queue(to_queue) }
     }
 }
 
@@ -128,7 +164,7 @@ pub fn context_switch(next: Thread)
             }
 
             /* queue current thread on the waiting list */
-            scheduler::queue_thread(current_thread);
+            Core::queue(current_thread);
         },
         None =>
         {

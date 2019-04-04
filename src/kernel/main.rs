@@ -19,6 +19,7 @@
 #![feature(alloc)]
 #![feature(box_syntax)]
 extern crate alloc;
+use alloc::string::String;
 
 /* needed for lookup tables of stuff */
 extern crate hashmap_core;
@@ -42,8 +43,11 @@ mod abort; /* implement abort() and panic() handlers */
 mod irq; /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem; /* manage physical memory */
 mod cpu; /* manage CPU cores */
+use cpu::{CPUId, BOOT_CPUID};
+/* manage threads and scheduiling */
+mod thread;
+use thread::Priority;
 mod scheduler;
-use scheduler::Priority;
 /* manage containers */
 mod container;
 /* list of kernel error codes */
@@ -74,12 +78,12 @@ stick to usize as much as possible */
    => parameters described in kmain, passed directly from the bootloader...
    <= return to infinite loop, awaiting inerrupts */
 #[no_mangle]
-pub extern "C" fn kentry(cpu_nr: usize, device_tree_buf: &u8)
+pub extern "C" fn kentry(cpu_nr: CPUId, device_tree_buf: &u8)
 {
     match kmain(cpu_nr, device_tree_buf)
     {
         Err(e) => kalert!("kmain bailed out with error: {:?}", e),
-        _ => () /* continue waiting for an IRQ to come in, otherwise */
+        _ => () /* continue waiting for an IRQ to come in */
     };
 }
 
@@ -94,35 +98,38 @@ pub extern "C" fn kentry(cpu_nr: usize, device_tree_buf: &u8)
    The boot CPU is chosen to initialize the system in pre-SMP mode.
    If we're on a single CPU core then everything should run OK.
 
-   => cpu_nr = arbitrary ID number assigned by boot code, separate from hardware ID number.
-               0 = boot CPU core.
+   => cpu_nr = arbitrary CPU core ID number assigned by boot code,
+               separate from hardware ID number.
+               BootCPUId = boot CPU core.
       device_tree_buf = pointer to device tree describing the hardware
    <= return to infinite loop, waiting for interrupts
 */
-fn kmain(cpu_nr: usize, device_tree_buf: &u8) -> Result<(), Cause>
+fn kmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
 {
     /* set up each processor core with its own private heap pool and any other resources.
     this uses physical memory assigned by the pre-kmain boot code. init() should be called
     first to set up every core, including the boot CPU, which then sets up the global
     resouces. all non-boot CPUs should wait until global resources are ready. */
     cpu::Core::init(cpu_nr);
-    klog!("CPU core available and initialized");
 
-    /* delegate to boot CPU the welcome banner and set up global resources */
-    if cpu_nr == 0 /* boot CPU is zeroth core */
+    match cpu_nr
     {
-        /* initialize global resources and root container */
-        init_global(device_tree_buf)?;
-        init_root_container()?;
+        /* delegate to boot CPU the welcome banner and set up global resources */
+        BOOT_CPUID => 
+        {
+            /* initialize global resources and root container */
+            init_globals(device_tree_buf)?;
+            init_root_container()?;
 
-        /* allow other cores to continue */
-        *(INIT_DONE.lock()) = true;
+            /* allow other cores to continue */
+            *(INIT_DONE.lock()) = true;
+        },
+
+        /* non-boot cores must wait here for early initialization to complete */
+        _ => while *(INIT_DONE.lock()) != true {}
     }
 
-    /* non-boot cores must wait for early initialization to complete */
-    while *(INIT_DONE.lock()) != true {}
-
-    /* enable timer on this CPU core to sstart cheduling threads */
+    /* enable timer on this CPU core to start scheduling and running threads */
     scheduler::start();
 
     /* initialization complete. if we make it this far then fall through to infinite loop
@@ -133,7 +140,7 @@ fn kmain(cpu_nr: usize, device_tree_buf: &u8) -> Result<(), Cause>
 
 /* welcome the user and have the boot CPU initialize global structures and resources.
    <= return success, or failure code */
-fn init_global(device_tree: &u8) -> Result<(), Cause>
+fn init_globals(device_tree: &u8) -> Result<(), Cause>
 {
     /* set up CPU management. discover how many CPUs we have */
     let cpus = match cpu::init(device_tree)
@@ -161,7 +168,7 @@ fn init_global(device_tree: &u8) -> Result<(), Cause>
 
     /* say hello */
     klog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree);
-    klog!("Available RAM: {} MiB ({} bytes), CPU cores: {}", ram_size / 1024 / 1024, ram_size, cpus);
+    klog!("Available physical RAM: {} MiB ({} bytes), physical CPU cores: {}", ram_size / 1024 / 1024, ram_size, cpus);
     kdebug!("... Debugging enabled");
 
     return Ok(());
@@ -170,15 +177,16 @@ fn init_global(device_tree: &u8) -> Result<(), Cause>
 /* create the root container */
 fn init_root_container() -> Result<(), Cause>
 {
-    /* create root container with 4MB of RAM and max CPU cores */
+    /* create root container with 4MB of RAM and max CPU cores using builtin supervisor kernel */
     let root_mem = 4 * 1024 * 1024;
-    let root_name = "root";
+    let root_name = String::from("root");
     let root_max_vcpu = 4;
-    container::create_from_builtin(root_name, root_mem, root_max_vcpu)?;
+    container::create_from_builtin(root_name.clone(), root_mem, root_max_vcpu)?;
 
     /* create a virtual CPU thread for the root container, starting it in sentry() with
-    top of allocated memory as the stack pointer */
-    scheduler::create_thread(root_name, supervisor::main::sentry, root_mem - 0x0000, Priority::High)?;
+    top of allocated memory as the stack pointer.. the scheduler will assign a physical CPU core
+    to the thread */
+    thread::Thread::create(root_name, supervisor::main::sentry, root_mem, Priority::High)?;
     Ok(())
 }
 

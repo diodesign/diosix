@@ -5,13 +5,14 @@
  * See LICENSE for usage and copying.
  */
 
-use physmem::{self, Region, RegionUse::*};
+use physmem::{self, Region, PhysMemSize, RegionUse::*};
 use spin::Mutex;
 use error::Cause;
 use alloc::boxed::Box;
 use hashmap_core::map::HashMap;
 use hashmap_core::map::Entry::Occupied;
 use alloc::string::String;
+use cpu::CPUCount;
 
 pub type ContainerID = String;
 
@@ -27,7 +28,7 @@ lazy_static!
       size = minimum amount of RAM, in bytes, for this container
       cpus = max number of virtual CPU threads that can be used
    <= OK for success or an error code */
-pub fn create_from_builtin(name: &str, size: usize, cpus: usize) -> Result<(), Cause>
+pub fn create_from_builtin(name: ContainerID, size: PhysMemSize, cpus: CPUCount) -> Result<(), Cause>
 {
     let ram = physmem::alloc_region(size, ContainerRAM)?;  /* read-write general-purpose RAM */
     let code = physmem::builtin_supervisor_code();      /* read-execute-only (.sshared section) */
@@ -43,7 +44,7 @@ pub fn create_from_builtin(name: &str, size: usize, cpus: usize) -> Result<(), C
       data = physical memory region holding supervisor's static data
       cpus = maximum number of virtual CPU threads running through container
    <= OK for success or an error code */
-fn create(name: &str, ram: Region, code: Region, data: Region, cpus: usize) -> Result<(), Cause>
+fn create(name: ContainerID, ram: Region, code: Region, data: Region, cpus: CPUCount) -> Result<(), Cause>
 {
     let new_container = Container::new(ram, code, data, cpus)?;
 
@@ -51,14 +52,14 @@ fn create(name: &str, ram: Region, code: Region, data: Region, cpus: usize) -> R
             name, cpus, ram.base(), ram.end(), code.base(), code.end(), data.base(), data.end());
 
     /* check to see if this container already exists */
-    let mut table = CONTAINERS.lock();
-    match table.entry(String::from(name))
+    let mut containers = CONTAINERS.lock();
+    match containers.entry(name.clone())
     {
         Occupied(_) => Err(Cause::ContainerAlreadyExists),
         _ =>
         {
             /* insert our new container */
-            table.insert(String::from(name), new_container);
+            containers.insert(String::from(name), new_container);
             Ok(())
         }
     }
@@ -66,7 +67,7 @@ fn create(name: &str, ram: Region, code: Region, data: Region, cpus: usize) -> R
 
 struct Container
 {
-    cpus: usize, /* max number of CPU threads executing in this container */
+    cpus: CPUCount, /* max number of CPU threads executing in this container */
     ram: Region, /* general purpose RAM area */
     code: Region, /* supervisor kernel read-execute-only area */
     data: Region /* supervisor kernel static data area */
@@ -80,7 +81,7 @@ impl Container
        data = region of physical memory holding the supervisor's static data
        cpus = maximum number of virtual CPU threads this container can request
     <= container object, or error code */
-    pub fn new(ram: Region, code: Region, data: Region, cpus: usize) -> Result<Container, Cause>
+    pub fn new(ram: Region, code: Region, data: Region, cpus: CPUCount) -> Result<Container, Cause>
     {
         Ok(Container
         {
@@ -93,16 +94,23 @@ impl Container
 
     /* describe the physical RAM region of this container */
     pub fn phys_ram(&self) -> Region { self.ram }
+
+    /* enforce physical ram protections for this container on this CPU core,
+    replacing any previous protections, leaving just this container as the only
+    valid supervisor-level physical RAM areas */
+    pub fn enforce(&self)
+    {
+        self.ram.protect();
+        self.code.protect();
+        self.data.protect();
+    }
 }
 
 /* lookup the phys RAM region of a container from its name
    <= physical memory region, or None for no such container */
-pub fn get_phys_ram(name: &str) -> Option<Region>
+pub fn get_phys_ram(name: ContainerID) -> Option<Region>
 {
-    let name_string = String::from(name);
-    let mut table = CONTAINERS.lock();
-    /* check to see if this container already exists */
-    match table.entry(name_string)
+    match CONTAINERS.lock().entry(name)
     {
         Occupied(c) =>  return Some(c.get().phys_ram()),
         _ => None
@@ -115,14 +123,11 @@ any previous access resitractions, leaving just accessible regions
 safe for this incoming container. return true for success, false for failure */
 pub fn enforce(name: ContainerID) -> bool
 {
-    let mut table = CONTAINERS.lock();
-    match table.entry(name)
+    match CONTAINERS.lock().entry(name)
     {
         Occupied(c) => 
         {
-            c.get().ram.protect();
-            c.get().code.protect();
-            c.get().data.protect();
+            c.get().enforce();
             true
         },
         _ => false

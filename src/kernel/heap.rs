@@ -19,10 +19,10 @@
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
-
 use core::mem;
 use core::result::Result;
 use ::error::Cause;
+use physmem::PhysMemSize;
 
 /* different states each recognized heap block can be in */
 #[repr(C)]
@@ -82,7 +82,7 @@ pub struct HeapBlock
     /* heap is a single-link-list to keep it simple and safe */
     next: Option<*mut HeapBlock>,
     /* size of this block *including* header */
-    size: usize,
+    size: PhysMemSize,
     /* define block state using magic words */
     magic: HeapMagic
     /* block contents follows... */
@@ -97,7 +97,7 @@ pub struct Heap
     /* pointer to list of in-use and freed blocks */
     block_list_head: *mut HeapBlock,
     /* stash a copy of the block header size here */
-    block_header_size: usize
+    block_header_size: PhysMemSize
 }
 
 impl Heap
@@ -106,7 +106,7 @@ impl Heap
     covering all of free space, from which other blocks will be carved.
     => start = pointer to start of heap area
        size = size of available bytes in heap */
-    pub fn init(&mut self, start: *mut HeapBlock, size: usize)
+    pub fn init(&mut self, start: *mut HeapBlock, size: PhysMemSize)
     {
         /* here's our enormo free block */
         unsafe
@@ -233,9 +233,9 @@ impl Heap
 
     /* pass once over the heap and try to merge adjacent blocks
     <= size of the lagrest block seen, in bytes including header */
-    fn consolidate(&mut self) -> usize
+    fn consolidate(&mut self) -> PhysMemSize
     {
-        let mut largest_merged_block: usize = 0;
+        let mut largest_merged_block: PhysMemSize = 0;
 
         let mut block = self.block_list_head;
         unsafe
