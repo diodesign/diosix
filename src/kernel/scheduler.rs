@@ -50,12 +50,12 @@ pub fn timer_irq()
     match GLOBAL_QUEUES.lock().dequeue()
     {
         /* we've found a thread to run, so switch to that */
-        Some(orphan) => Core::queue(orphan),
+        Some(orphan) => context_switch(orphan),
 
         /* otherwise, try to take a thread waiting for this CPU core and run it */
         _ => match Core::dequeue()
         {
-            Some(thread) => Core::queue(thread), /* waiting thread found, queuing now */
+            Some(thread) => context_switch(thread), /* waiting thread found, queuing now */
             _ => () /* nothing waiting */
         }
     };

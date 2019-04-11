@@ -163,7 +163,7 @@ pub fn context_switch(next: Thread)
                 container::enforce(next_container);
             }
 
-            /* queue current thread on the waiting list */
+            /* queue the current thread on the waiting list */
             Core::queue(current_thread);
         },
         None =>
