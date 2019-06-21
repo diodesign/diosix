@@ -7,8 +7,8 @@
 
 use error::Cause;
 use container::{get_phys_ram, ContainerID};
-use platform::common::cpu::{supervisor_state_from, SupervisorState};
-use physmem::PhysMemBase;
+use platform::cpu::{supervisor_state_from, SupervisorState};
+use platform::physmem::PhysMemBase;
 use scheduler;
 
 #[derive(Copy, Clone, Debug)]

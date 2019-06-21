@@ -17,15 +17,20 @@ install:
   - ./configure --prefix $HOME/cross --target=riscv32-elf
   - make
   - make install
+  - make clean
+  - ./configure --prefix $HOME/cross --target=riscv64-elf
+  - make
+  - make install
   - export PATH=$PATH:$HOME/cross/bin
   - cd ..
 
 before_script:
   rustup target install riscv32imac-unknown-none-elf
+  rustup target install riscv64gc-unknown-none-elf
 
 script:
-  - ./build.sh --triple riscv32imac-unknown-none-elf --platform sifive_u34
-  - ./build.sh --triple riscv32imac-unknown-none-elf --platform qemu32_virt
+  - cargo build --target riscv32imac-unknown-none-elf
+  - cargo build --target riscv64gc-unknown-none-elf
 
 branches:
   only:

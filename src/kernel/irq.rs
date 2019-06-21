@@ -1,6 +1,6 @@
 /* diosix machine kernel code for handling hardware interrupts and software exceptions
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -9,8 +9,8 @@ use scheduler;
 
 /* platform-specific code must implement all this */
 use platform;
-use platform::common::irq::{self, IRQContext, IRQType, IRQCause, IRQ};
-use platform::common::cpu::PrivilegeMode;
+use platform::irq::{self, IRQContext, IRQType, IRQCause, IRQ};
+use platform::cpu::PrivilegeMode;
 
 /* kernel_irq_handler
    entry point for hardware interrupts and software exceptions, collectively known as IRQs.
@@ -21,7 +21,7 @@ use platform::common::cpu::PrivilegeMode;
 #[no_mangle]
 pub extern "C" fn kirq_handler(context: IRQContext)
 {
-    let irq = platform::common::irq::dispatch(context);
+    let irq = platform::irq::dispatch(context);
     match irq.irq_type
     {
         IRQType::Exception => exception(irq),

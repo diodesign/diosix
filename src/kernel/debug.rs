@@ -2,19 +2,26 @@
  *
  * By default we write all debug information out to the serial port
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
 
 use core::fmt;
 use lock::Spinlock;
+use platform::serial;
+use error::Cause;
+
+lazy_static!
+{
+    static ref SERIAL_PHYS_BASE: Mutex<Box<usize>> = Mutex::new(box 0x0);
+}
 
 pub static mut DEBUG_LOCK: Spinlock = kspinlock!();
 
 /* tell the compiler the platform-specific serial port code is elsewhere */
 extern "C" {
-    fn platform_serial_write_byte(byte: u8);
+    fn platform_serial_write_byte(byte: u8, addr: usize);
     pub fn platform_cpu_wait();
 }
 
@@ -96,10 +103,31 @@ impl fmt::Write for SerialWriter
 /* write a string out to the platform's serial port */
 pub fn serial_write_string(s: &str)
 {
+    let addr = SERIAL_PHYS_BASE.lock().unwrap();
+
     for c in s.bytes()
     {
         unsafe {
-            platform_serial_write_byte(c);
+            platform_serial_write_byte(c, addr);
         }
     }
+}
+
+/* initialize the debugging output system
+   device_tree => hardware device tree to locate serial device
+   <= returns error coe, or OK
+*/
+pub fn init(device_tree: &u8) -> Result<(), Cause>
+{
+  /* get address of the serial port hardware */
+  let addr = match platform::serial::init(device_tree)
+  {
+    Some(addr) => addr,
+    None => return Cause::DebugFailure
+  };
+
+  /* and keep a copy of it */
+  let mut base = SERIAL_PHYS_BASE.lock().unwrap();
+  *base = addr;
+  Ok(())
 }

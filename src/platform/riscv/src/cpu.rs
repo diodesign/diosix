@@ -1,6 +1,6 @@
-/* diosix RV32 CPU core management
+/* diosix RV32/RV64 CPU core management
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */

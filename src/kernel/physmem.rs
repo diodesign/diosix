@@ -2,7 +2,7 @@
  *
  * Allocate/free memory for container supervisors
  * 
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -12,12 +12,7 @@ use spin::Mutex;
 use error::Cause;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
-use platform::common::physmem;
-
-/* standardize types for passing around physical RAM addresses */
-pub type PhysMemSize = usize;
-pub type PhysMemBase = usize;
-pub type PhysMemEnd  = usize;
+use platform::physmem::{self, PhysMemBase, PhysMemEnd};
 
 lazy_static!
 {
@@ -77,39 +72,50 @@ impl Region
 executable code, and static data */
 pub fn builtin_supervisor_code() -> Region
 {
-    let (base, end) = platform::common::physmem::builtin_supervisor_code();
+    let (base, end) = platform::physmem::builtin_supervisor_code();
     Region { base: base, end: end, usage: RegionUse::SupervisorCode }
 }
 pub fn builtin_supervisor_data() -> Region
 {
-    let (base, end) = platform::common::physmem::builtin_supervisor_data();
+    let (base, end) = platform::physmem::builtin_supervisor_data();
     Region { base: base, end: end, usage: RegionUse::SupervisorData }
 }
 
 /* intiialize the hypervisor's physical memory management.
    called once by the boot CPU core.
    => device_tree_buf = pointer to device tree to parse
-   <= number of bytes available, or None for failure
+   <= total number of bytes available, or 0 for failure
 */
-pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
+pub fn init(device_tree_buf: &u8) -> PhysMemSize
 {
-    /* let the underlying platform code work out how much RAM we have to play with */
-    let available_bytes = match platform::common::physmem::init(device_tree_buf)
-    {
-        Some(s) => s,
-        None => return None
-    };
-    let (start, end) = platform::common::physmem::allocatable_ram();
+    /* keep a running total of the number of bytes to play with */
+    let mut available_bytes = 0;
 
-    /* create a free/unused region covering all of available phys RAM
-    from which future container physical RAM allocations will be drawn */
+    /* gather up all physical RaM areas from which future
+    container physical RAM allocations will be drawn.
+    this list is built from available physical RAM: it must not include
+    any RAM areas already in use by the kernel, peripherals, etc.
+    the undelying platform code needs to exclude those off-limits areas.
+    in other words, available_ram() must only return fully usable RAM areas */
     let mut regions = REGIONS.lock();
-    regions.push_front(Region
+
+    match physmem::available_ram(device_tree_buf)
     {
-        base: start,
-        end: end,
-        usage: RegionUse::Unused
-    });
+        Some(iter) => for area in iter
+        {
+            klog!("physical memory area found: {:x} {}", area.base, area.size);
+
+            regions.push_front(Region
+            {
+                base: area.base,
+                end: area.base + area.size,
+                usage: RegionUse::Unused
+            });
+
+            available_bytes = available_bytes + area.size;
+        },
+        None => return None
+    }
 
     return Some(available_bytes);
 }

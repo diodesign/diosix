@@ -1,11 +1,8 @@
-# kernel common low-level entry points for RV32G platforms (Qemu Virt, SiFive U34)
+# diosix kernel common low-level entry points for RV32G/RV64G platforms
 #
-# Assumes we're loaded and entered at 0x80000000
-# with a0 = CPU/Hart ID number, a1 -> device tree
+# Assumes a0 = CPU/Hart ID number, a1 -> device tree
 #
-# Works with SMP and UMP. Assumes non-NUMA memory layout
-#
-# (c) Chris Williams, 2018.
+# (c) Chris Williams, 2019.
 # See LICENSE for usage and copying.
 
 # _start *must* be the first routine in this file
@@ -14,17 +11,20 @@
 
 .global _start
 
-# include kernel constants, such as global variable and lock locations
+# kernel constants, such as global variable and lock locations
 # check this file for static kernel data layout
-.include "src/platform/riscv32/common/asm/consts.s"
+.include "src/platform/riscv/asm/consts.s"
 
-# hardware physical memory map
+# typical hardware physical memory map
 # 0x00000000, size: 0x100:     Debug ROM/data
 # 0x00001000, size: 0x11000:   Boot ROM
 # 0x00100000, size: 0x1000:    Hardware test area
 # 0x02000000, size: 0x10000:   CLINT (Core Local Interruptor)
 # 0x0c000000, size: 0x4000000: PLIC (Platform Level Interrupt Controller)
-# 0x80000000: DRAM base (default 128MB, max 2GB) <-- kernel + entered loaded here
+# 0x80000000: DRAM base <-- kernel + entered loaded here
+#
+# different hardware platforms will place peripherals in different areas.
+# check the device tree upon boot for exact phys memory locations
 #
 # see consts.s for top page of global variables locations and other memory layout decisions
 

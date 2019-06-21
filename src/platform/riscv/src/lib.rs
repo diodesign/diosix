@@ -1,6 +1,6 @@
-/* RISC-V 32-bit common hardware-specific code
+/* diosix RV32G/RV64G common hardware-specific code
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -11,8 +11,9 @@
 /* expose architecture common code to platform-specific code */
 #[macro_use]
 pub mod csr;
+pub mod physmem;
 pub mod devicetree;
 pub mod irq;
-pub mod physmem;
 pub mod cpu;
 pub mod timer;
+pub mod serial;

@@ -9,7 +9,7 @@
  * ie: new, load, store, and compare_and_swap. load and store are handled by intrinsics,
  * leaving us to implement atomic compare-and-swap.
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  * See diosix LICENSE for usage and copying
  * 
  * Based on Rust's libcore core::sync::atomic API define here:

@@ -12,7 +12,7 @@
  * so things like vec! and Box work. Heap is
  * the underlying engine for kAllocator.
  * 
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -22,7 +22,7 @@ use core::ptr::null_mut;
 use core::mem;
 use core::result::Result;
 use ::error::Cause;
-use physmem::PhysMemSize;
+use platform::physmem::{barrier, PhysMemSize};
 
 /* different states each recognized heap block can be in */
 #[repr(C)]
@@ -135,9 +135,10 @@ impl Heap
         {
             match (*block).magic
             {
-                /* assume writes are atomic... */
                 HeapMagic::InUse =>
                 {
+                    /* assume writes are atomic. place a memory barrier to avoid any release ordering issues */
+                    barrier();
                     (*block).magic = HeapMagic::Free;
                     Ok(())
                 },

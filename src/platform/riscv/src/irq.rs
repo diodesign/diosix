@@ -1,6 +1,6 @@
-/* RISC-V 32-bit common exception/interrupt hardware-specific code
+/* diosix RV32G/RV64G common exception/interrupt hardware-specific code
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */

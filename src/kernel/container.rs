@@ -1,11 +1,12 @@
 /* diosix container management
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
 
-use physmem::{self, Region, PhysMemSize, RegionUse::*};
+use platform::physmem::PhysMemSize;
+use physmem::{Region, RegionUse::*};
 use spin::Mutex;
 use error::Cause;
 use alloc::boxed::Box;

@@ -1,6 +1,6 @@
 /* diosix high-level kernel panic and abort code
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */

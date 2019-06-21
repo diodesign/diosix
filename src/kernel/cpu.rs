@@ -1,6 +1,6 @@
 /* diosix machine kernel's physical CPU core management
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -15,12 +15,12 @@ so it's OK to keep it really simple for now. */
 
 use heap;
 use scheduler::ScheduleQueues;
-use platform::common::cpu::{SupervisorState, features_mask, CPUFeatures};
+use platform::cpu::{SupervisorState, features_mask, CPUFeatures};
 use alloc::boxed::Box;
 use spin::Mutex;
 use hashmap_core::map::{HashMap, Entry};
 use container::{self, ContainerID};
-use physmem::PhysMemSize;
+use platform::physmem::PhysMemSize;
 use thread::Thread;
 
 pub type CPUId = usize;
@@ -50,7 +50,7 @@ lazy_static!
    <= return number of cores present, or None for failure */
 pub fn init(device_tree_buf: &u8) -> Option<CPUCount>
 {
-    return platform::common::cpu::init(device_tree_buf);
+    return platform::cpu::init(device_tree_buf);
 }
 
 /* describe a physical CPU core - this structure is stored in the per-CPU private variable space */
@@ -82,6 +82,8 @@ impl Core
             run from zero to N-1 where N is the number of available cores */
     pub fn init(id: CPUId)
     {
+        /* NOTE: avoid calling klog/kdebug here as debug channels have not been initialized yet */
+
         /* the pre-kmain startup code has allocated space for per-CPU core variables.
         this function returns a pointer to that structure */
         let cpu = Core::this();
@@ -154,7 +156,7 @@ pub fn context_switch(next: Thread)
         Some(current_thread) =>
         {
             /* if we're running a thread, preserve its state */
-            platform::common::cpu::save_supervisor_state(current_thread.state_as_ref());
+            platform::cpu::save_supervisor_state(current_thread.state_as_ref());
 
             /* if we're switching to a thread in another container then replace the
             hardware access permissions */
@@ -170,13 +172,13 @@ pub fn context_switch(next: Thread)
         {
             /* if we were not running a thread then ensure we return to supervisor mode
             rather than hypervisor mode */
-            platform::common::cpu::prep_supervisor_return();
+            platform::cpu::prep_supervisor_return();
             /* and enforce its hardware access permissions */
             container::enforce(next_container);
         }
     }
 
     /* prepare next thread to run when we leave this IRQ context */
-    platform::common::cpu::load_supervisor_state(next.state_as_ref());
+    platform::cpu::load_supervisor_state(next.state_as_ref());
     THREADS.lock().insert(id, next); /* add to the running threads list */
 }

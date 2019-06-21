@@ -1,6 +1,6 @@
 /* diosix supervisor kernel entry code and main loop
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */

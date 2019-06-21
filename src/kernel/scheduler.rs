@@ -26,7 +26,7 @@ pub fn init(device_tree_buf: &u8) -> Result<(), Cause>
     /* set up a periodic timer that we can use to pause and restart threads
     once they've had enough CPU time. pass along the device tree so the
     platform-specific code can find the necessary hardware timer */
-    match platform::common::timer::init(device_tree_buf)
+    match platform::timer::init(device_tree_buf)
     {
         true => Ok(()),
         false => Err(Cause::SchedTimerBadConfig)
@@ -37,7 +37,7 @@ pub fn init(device_tree_buf: &u8) -> Result<(), Cause>
 to start running software threads */
 pub fn start()
 {
-    platform::common::timer::start();
+    platform::timer::start();
 }
 
 /* a thread has been running for one timeslice, triggering a timer interrupt.
@@ -61,9 +61,9 @@ pub fn timer_irq()
     };
 
     /* tell the timer system to call us back soon */
-    let now: u64 = platform::common::timer::now();
+    let now: u64 = platform::timer::now();
     let next: u64 = now + 10000000;
-    platform::common::timer::next(next);
+    platform::timer::next(next);
 }
 
 /* queue thread in global wait list */
