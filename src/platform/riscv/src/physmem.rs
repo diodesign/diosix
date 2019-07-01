@@ -41,7 +41,7 @@ pub enum AccessPermissions
 }
 
 /* there are a maximum number of physical memory regions */
-const PHYS_PMP_MAX_REGIONS: usize = 8;
+const PHYS_PMP_MAX_REGIONS: usize = 15;
 /* PMP access flags */
 const PHYS_PMP_READ: usize  = 1 << 0;
 const PHYS_PMP_WRITE: usize = 1 << 1;
@@ -199,7 +199,7 @@ fn kernel_footprint(cpu_count: usize) -> (PhysMemBase, PhysMemEnd)
 /* create a per-CPU physical memory region and apply access permissions to it. if the region already exists, overwrite it.
 each region is a RISC-V physical memory protection (PMP) area. we pair up PMP addresses in TOR (top of range) mode. eg, region 0
 uses pmp0cfg and pmp1cfg in pmpcfg0 for start and end, region 1 uses pmp1cfg and pmp2cfg in pmpcfg0.
-   => regionid = ID number of the region to create or update
+   => regionid = ID number of the region to create or update, from 0 to PHYS_PMP_MAX_REGIONS (typically 8)
       base, end = start and end addresses of region
       access = access permissions for the region
    <= true for success, or false for failure */
@@ -215,25 +215,45 @@ pub fn protect(regionid: usize, base: usize, end: usize, access: AccessPermissio
         AccessPermissions::NoAccess => 0
     };
 
-    /* select the appropriate pmpcfg bits from the region ID */
-    let pmpcfg_reg = regionid >> 1;
-    let shift = ((regionid - (pmpcfg_reg << 1)) << 4) + 8;
-    
+    /* select the appropriate pmpcfg register and bits from the region ID
+       if we're on RV32 then there are 4 PMP regions (0-3, 4-7 etc) per 32-bit configuration word.
+       if we're on RV64 then there are 8 PMP regions (0-7, 7-15) per 64-bit configuration word.
+
+       pmpcfg_reg = N, as in: alter control register pmpcfgN to manipulate the given region
+       shift = number of bits to shift left to access region in the pmpcfgN control register */    
+    let (pmpcfg_reg, shift) = if cfg!(target_os = "riscv32")
+    {
+        /* divide the region ID by 4 (shift right twice) to convert regions 0-3 to pmpcfg0, 4-7 to pmpcfg1 etc
+           then calculate shift position of the region ID in the resulting pmpcfgN register 
+           (by multiplying by 8 or shifting left 3) */
+        (regionid >> 2, (regionid - ((regionid >> 2) << 2)) << 3)
+    }
+    else /* assumes RV128 isn't available yet */
+    {
+        /* divide the region ID by 8 (shift right thrice) then multiply by 2 (shift left once) to
+           select pmpcfg0 or 2. then calculate shift offset into the selected register */
+        ((regionid >> 3) << 1, (regionid - ((regionid >> 3) << 3)) << 3)
+    };
+
     /* only update the access bits for the end address, leaving the base access bits at zero.
     according to the specification, only the end address access bits are checked */
     let mask = 0xff << shift;
     let cfgbits = read_pmpcfg(pmpcfg_reg) & !mask;
     write_pmpcfg(pmpcfg_reg, cfgbits | (accessbits << shift));
 
-    /* program in the base and end addesses */
-    write_pmpaddr(regionid * 2, base);
-    write_pmpaddr((regionid * 2) + 1, end);
+    /* program in the base and end addesses. shift left 1 to multiply by two.
+    there are a pair of PMP addresses per region: the base and the end address */
+    write_pmpaddr(regionid << 1, base);
+    write_pmpaddr((regionid << 1) + 1, end);
 
     return true;
 }
 
-/* read the value of the given PMP configuration register (pmpcfg0-3).
-warning: silently fails with a zero on bad read */
+/* read_pmpcfg (32-bit)
+   Read the 32-bit value of the given PMP configuration register (pmpcfg0-3)
+   => register = selects N out of pmpcfgN, where N = 0 to 3
+   <= value of the CSR, or 0 for can't read. Warning: this fails silently, therefore */
+#[cfg(target_arch = "riscv32")]
 fn read_pmpcfg(register: usize) -> usize
 {
     match register
@@ -246,8 +266,28 @@ fn read_pmpcfg(register: usize) -> usize
     }
 }
 
-/* write value to the given PMP configuration register (pmpcfg0-3). warning: silently fails */
-fn write_pmpcfg(register: usize, value: usize)
+/* read_pmpcfg (64-bit)
+   Read the 64-bit value of the given PMP configuration register (pmpcfg0 or 2)
+   => register = selects N out of pmpcfgN, where N = 0 or 2
+   <= value of the CSR, or 0 for can't read. Warning: this fails silently, therefore */
+#[cfg(target_arch = "riscv64")]
+fn read_pmpcfg(register: usize) -> usize
+{
+    /* we must conditionally compile this because pmpcfg1 and pmpcfg3 aren't defined for riscv64 */
+    match register
+    {
+        0 => read_csr!(pmpcfg0),
+        2 => read_csr!(pmpcfg2),
+        _ => 0
+    }
+}
+
+/* write_pmpcfg (32-bit)
+   Write value to the given PMP configuration register (pmpcfg0-3). Warning: silently fails
+   => register = selects N out of pmpcfgN, where N = 0 to 3
+      value = 32-bit value to write */
+#[cfg(target_arch = "riscv32")]
+fn write_pmpcfg32(register: usize, value: usize)
 {
     match register
     {
@@ -259,7 +299,23 @@ fn write_pmpcfg(register: usize, value: usize)
     };
 }
 
-/* write value to the given PMP address register (pmpaddr0-15). warning: silently fails */
+/* write_pmpcfg (64-bit)
+   Write 64-bit value to the given PMP configuration register (pmpcfg0 or 2). Warning: silently fails
+   => register = selects N out of pmpcfgN, where N = 0 or 2
+      value = 32-bit value to write */
+#[cfg(target_arch = "riscv64")]
+fn write_pmpcfg(register: usize, value: usize)
+{
+    /* we must conditionally compile this because pmpcfg1 and pmpcfg3 aren't defined for riscv64 */
+    match register
+    {
+        0 => write_csr!(pmpcfg0, value),
+        2 => write_csr!(pmpcfg2, value),
+        _ => ()
+    };
+}
+
+/* write value to the given PMP address register 0-15 (pmpaddr0-15). warning: silently fails */
 fn write_pmpaddr(register: usize, value: usize)
 {
     match register
