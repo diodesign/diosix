@@ -287,7 +287,7 @@ fn read_pmpcfg(register: usize) -> usize
    => register = selects N out of pmpcfgN, where N = 0 to 3
       value = 32-bit value to write */
 #[cfg(target_arch = "riscv32")]
-fn write_pmpcfg32(register: usize, value: usize)
+fn write_pmpcfg(register: usize, value: usize)
 {
     match register
     {

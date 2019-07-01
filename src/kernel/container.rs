@@ -6,7 +6,7 @@
  */
 
 use platform::physmem::PhysMemSize;
-use physmem::{Region, RegionUse::*};
+use physmem::{self, Region, RegionUse::*};
 use spin::Mutex;
 use error::Cause;
 use alloc::boxed::Box;

@@ -4,12 +4,12 @@ target = "riscv64gc-unknown-none-elf"
 
 # Find the linker for 32-bit RISC-V targets
 [target.riscv32imac-unknown-none-elf]
-rustflags = [ "-Z", "pre-link-arg=-nostartfiles" ]
+rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform/riscv/link.ld" ]
 linker = "riscv32-elf-ld"
 ar = "riscv32-elf-ar"
 
 # Find the linker for 64-bit RISC-V targets
 [target.riscv64gc-unknown-none-elf]
-rustflags = [ "-Z", "pre-link-arg=-nostartfiles" ]
+rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform/riscv/link.ld" ]
 linker = "riscv64-elf-ld"
 ar = "riscv64-elf-ar"

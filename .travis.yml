@@ -12,12 +12,13 @@ install:
   - sudo apt-get -qq update
   - sudo apt-get -qq install flex bison m4 sed texinfo
   - mkdir $HOME/cross
-  - git clone -b riscv-binutils-2.30 https://github.com/riscv/riscv-binutils-gdb.git
+  - git clone -b riscv-binutils-2.32 https://github.com/riscv/riscv-binutils-gdb.git
   - cd riscv-binutils-gdb
   - ./configure --prefix $HOME/cross --target=riscv32-elf
   - make
   - make install
   - make clean
+  - find . -type f -name "config.cache" -exec rm {} \;
   - ./configure --prefix $HOME/cross --target=riscv64-elf
   - make
   - make install

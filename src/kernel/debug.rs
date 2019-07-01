@@ -9,8 +9,9 @@
 
 use core::fmt;
 use lock::Spinlock;
-use platform::serial;
 use error::Cause;
+use spin::Mutex;
+use alloc::boxed::Box;
 
 lazy_static!
 {
@@ -103,14 +104,14 @@ impl fmt::Write for SerialWriter
 /* write a string out to the platform's serial port */
 pub fn serial_write_string(s: &str)
 {
-    let addr = SERIAL_PHYS_BASE.lock().unwrap();
+  let addr = SERIAL_PHYS_BASE.lock();
 
-    for c in s.bytes()
-    {
-        unsafe {
-            platform_serial_write_byte(c, addr);
-        }
-    }
+  for c in s.bytes()
+  {
+      unsafe {
+          platform_serial_write_byte(c, **addr);
+      }
+  }
 }
 
 /* initialize the debugging output system
@@ -123,11 +124,11 @@ pub fn init(device_tree: &u8) -> Result<(), Cause>
   let addr = match platform::serial::init(device_tree)
   {
     Some(addr) => addr,
-    None => return Cause::DebugFailure
+    None => return Err(Cause::DebugFailure)
   };
 
   /* and keep a copy of it */
-  let mut base = SERIAL_PHYS_BASE.lock().unwrap();
-  *base = addr;
+  let mut base = SERIAL_PHYS_BASE.lock();
+  **base = addr;
   Ok(())
 }

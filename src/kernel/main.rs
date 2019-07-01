@@ -8,15 +8,15 @@
 /* let the compiler know we're on our own here in bare-metal world */
 #![no_std]
 #![no_main]
-
 #![feature(asm)]
+
+/* disable annoying warnings */
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 #![allow(improper_ctypes)]
 
-/* we need this to plug our custom heap allocator into the Rust language */
+/* plug our custom heap allocator into the Rust language: Box, etc*/
 #![feature(alloc_error_handler)]
-#![feature(alloc)]
 #![feature(box_syntax)]
 extern crate alloc;
 use alloc::string::String;

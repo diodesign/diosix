@@ -12,7 +12,7 @@ use spin::Mutex;
 use error::Cause;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
-use platform::physmem::{self, PhysMemBase, PhysMemEnd};
+use platform::physmem::{self, PhysMemBase, PhysMemEnd, PhysMemSize};
 
 lazy_static!
 {
@@ -86,7 +86,7 @@ pub fn builtin_supervisor_data() -> Region
    => device_tree_buf = pointer to device tree to parse
    <= total number of bytes available, or 0 for failure
 */
-pub fn init(device_tree_buf: &u8) -> PhysMemSize
+pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
 {
     /* keep a running total of the number of bytes to play with */
     let mut available_bytes = 0;
