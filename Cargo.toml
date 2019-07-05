@@ -36,6 +36,12 @@ lazy_static = { path = "src/contrib/lazy-static.rs" }
 spin = { path = "src/contrib/spin-rs" }
 hashmap_core = { path = "src/contrib/hashmap_core" }
 
+[target.riscv64imac-unknown-none-elf.dependencies]
+platform = { path = "src/platform/riscv/" }
+lazy_static = { path = "src/contrib/lazy-static.rs" }
+spin = { path = "src/contrib/spin-rs" }
+hashmap_core = { path = "src/contrib/hashmap_core" }
+
 [target.riscv64gc-unknown-none-elf.dependencies]
 platform = { path = "src/platform/riscv/" }
 lazy_static = { path = "src/contrib/lazy-static.rs" }

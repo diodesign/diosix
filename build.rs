@@ -15,6 +15,7 @@
 
    Acceptable targets:
    * riscv32imac-unknown-none-elf
+   * riscv64imac-unknown-none-elf
    * riscv64gc-unknown-none-elf
 
    eg: cargo build --target riscv32imac-unknown-none-elf
@@ -53,6 +54,14 @@ impl Target
                 platform: String::from("riscv"),
                 width: 32,
                 abi: String::from("ilp32")
+            },
+            "riscv64imac" => Target
+            {
+                cpu_arch: String::from("rv64imac"),
+                gnu_prefix: String::from("riscv64"),
+                platform: String::from("riscv"),
+                width: 64,
+                abi: String::from("lp64")
             },
             "riscv64gc" => Target
             {

@@ -35,6 +35,8 @@ cd
 rustup toolchain install nightly
 rustup default nightly
 rustup target install riscv32imac-unknown-none-elf
+rustup target install riscv64imac-unknown-none-elf
+rustup target install riscv64gc-unknown-none-elf
 ```
 
 You're almost ready to build diosix. Next, to make sure your paths are always set up to find Rust and Cargo, add two lines
@@ -70,6 +72,7 @@ defining the required CPU architecture, in the form:
 
 So far, diosix supports the following CPU architure targets:
 * `riscv32imac-unknown-none-elf`
+* `riscv64imac-unknown-none-elf`
 * `riscv64gc-unknown-none-elf`
 
 Once built, the compiled kernel executable can be found in `target/<CPU architecture>/release/kernel` for the given

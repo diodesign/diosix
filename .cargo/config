@@ -1,14 +1,20 @@
 # set a default build triple 
 [build]
-target = "riscv64gc-unknown-none-elf"
+target = "riscv32imac-unknown-none-elf"
 
-# Find the linker for 32-bit RISC-V targets
+# Find the linker for 32-bit RISC-V (IMAC) targets
 [target.riscv32imac-unknown-none-elf]
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform/riscv/link.ld" ]
 linker = "riscv32-elf-ld"
 ar = "riscv32-elf-ar"
 
-# Find the linker for 64-bit RISC-V targets
+# Find the linker for 64-bit RISC-V (IMAC) targets
+[target.riscv64imac-unknown-none-elf]
+rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform/riscv/link.ld" ]
+linker = "riscv64-elf-ld"
+ar = "riscv64-elf-ar"
+
+# Find the linker for 64-bit RISC-V (GC) targets
 [target.riscv64gc-unknown-none-elf]
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform/riscv/link.ld" ]
 linker = "riscv64-elf-ld"

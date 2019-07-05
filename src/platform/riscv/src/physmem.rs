@@ -97,7 +97,7 @@ impl Iterator for RAMAreaIter
             self.pos = self.kernel_area.base + self.kernel_area.size as PhysMemBase;
         }
 
-        /* determine whether we're outside a kernel area */
+        /* determine whether we're below the kernel area */
         if self.pos < self.kernel_area.base
         {
             /* we're below the kernel: round up from wherever we are to the kernel area base */
@@ -111,9 +111,10 @@ impl Iterator for RAMAreaIter
             return Some(area);
         }
 
+        /* or if we're above or in the kernel area */
         if self.pos >= self.kernel_area.base + self.kernel_area.size as PhysMemBase
         {
-            /* we're clear of the kernel round up to end of ram */
+            /* we're clear of the kernel, so round up to end of ram */
             let area = RAMArea
             {
                 base: self.pos,
