@@ -76,24 +76,31 @@ impl Iterator for RAMAreaIter
 {
     type Item = RAMArea;
 
+    /* return a physical RAM area or None to end iteration */
     fn next(&mut self) -> Option<RAMArea>
     {
+        /* if for some reason the iterator starts below phys RAM, bring it up to sanity */
+        if self.pos < self.total_area.base
+        {
+            self.pos = self.total_area.base
+        }
+
+        /* catch the iterator escaping the physical RAM area, or if there's no phys RAM */
+        if self.pos >= self.total_area.base + self.total_area.size as PhysMemBase
+        {
+            return None;
+        }
+
         /* if we're in the kernel area then round us up to the end of the kernel area */
         if self.pos >= self.kernel_area.base && self.pos < self.kernel_area.base + self.kernel_area.size as PhysMemBase
         {
             self.pos = self.kernel_area.base + self.kernel_area.size as PhysMemBase;
         }
 
-        /* catch the iterator escaping the physical RAM area */
-        if self.pos < self.total_area.base || self.pos >= self.total_area.base + self.total_area.size as PhysMemBase
-        {
-            return None; 
-        }
-
         /* determine whether we're outside a kernel area */
         if self.pos < self.kernel_area.base
         {
-            /* round up from wherever we are to the kernel area base */
+            /* we're below the kernel: round up from wherever we are to the kernel area base */
             let area = RAMArea
             {
                 base: self.pos,
@@ -110,13 +117,13 @@ impl Iterator for RAMAreaIter
             let area = RAMArea
             {
                 base: self.pos,
-                size: (self.kernel_area.base - self.pos) as PhysMemSize
+                size: ((self.total_area.base + self.total_area.size) - self.pos) as PhysMemSize
             };
-            self.pos = self.kernel_area.base + self.kernel_area.size as PhysMemBase;
+            self.pos = self.total_area.base + self.total_area.size as PhysMemBase;
             return Some(area);
         }
 
-        /* we shouldn't fall through to here? */
+        /* if we fall through to here then stop the iterator */
         return None;
     }
 }

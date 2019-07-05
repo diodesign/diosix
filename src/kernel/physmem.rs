@@ -84,7 +84,7 @@ pub fn builtin_supervisor_data() -> Region
 /* intiialize the hypervisor's physical memory management.
    called once by the boot CPU core.
    => device_tree_buf = pointer to device tree to parse
-   <= total number of bytes available, or 0 for failure
+   <= total number of bytes available, or None for failure
 */
 pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
 {
@@ -99,11 +99,11 @@ pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
     in other words, available_ram() must only return fully usable RAM areas */
     let mut regions = REGIONS.lock();
 
-    match physmem::available_ram(device_tree_buf)
+    match platform::physmem::available_ram(device_tree_buf)
     {
         Some(iter) => for area in iter
         {
-            klog!("physical memory area found: {:x} {}", area.base, area.size);
+            klog!("Physical memory area found at {:x}, {} bytes ({} MB)", area.base, area.size, area.size >> 20);
 
             regions.push_front(Region
             {
