@@ -17,3 +17,4 @@ pub mod irq;
 pub mod cpu;
 pub mod timer;
 pub mod serial;
+pub mod test;

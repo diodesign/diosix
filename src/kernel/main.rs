@@ -15,6 +15,11 @@
 #![allow(unused_unsafe)]
 #![allow(improper_ctypes)]
 
+/* provide a framework for unit testing */
+#![feature(custom_test_frameworks)]
+#![test_runner(crate::run_tests)]
+#![reexport_test_harness_main = "ktests"] /* entry point for tests */
+
 /* plug our custom heap allocator into the Rust language: Box, etc*/
 #![feature(alloc_error_handler)]
 #![feature(box_syntax)]
@@ -82,6 +87,11 @@ stick to usize as much as possible */
 #[no_mangle]
 pub extern "C" fn kentry(cpu_nr: CPUId, device_tree_buf: &u8)
 {
+    /* carry out tests if that's what we're here for */
+    #[cfg(test)]
+    ktests();
+
+    /* if not then start the system as normal */
     match kmain(cpu_nr, device_tree_buf)
     {
         Err(e) => match e
@@ -209,4 +219,18 @@ fn kalloc_error(attempt: core::alloc::Layout) -> !
 {
     kalert!("alloc_error_handler: Failed to allocate/free {} bytes. Halting...", attempt.size());
     loop {} /* it would be nice to be able to not die here :( */
+}
+
+/* perform all unit tests required */
+#[cfg(test)]
+fn run_tests(unit_tests: &[&dyn Fn()])
+{
+    /* run each test one by one */
+    for test in unit_tests
+    {
+        test();
+    }
+
+    /* exit cleanly once tests are complete */
+    platform::test::end(Ok(0));
 }
