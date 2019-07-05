@@ -58,7 +58,7 @@ The `master` branch contains the latest bleeding-edge code that people can work 
 
 ### Contact
 
-Feel free to [email the project lead](mailto:diodesign@tuta.io), Chris Williams, if you have any questions, want to get involved, have source to contribute, or have [found a security flaw](SECURITY.md). You can also find Chris online in [various forums](https://discordapp.com/invite/rust-lang) as well as [on Twitter](https://twitter.com/diodesign). Ultimately, you can submit pull requests or issues on GitHub. Please bear in mind the project's (code of conduct)[CODE_OF_CONDUCT.md] if you wish to participate.
+Feel free to [email the project lead](mailto:diodesign@tuta.io), Chris Williams, if you have any questions, want to get involved, have source to contribute, or have [found a security flaw](SECURITY.md). You can also find Chris online in [various forums](https://discordapp.com/invite/rust-lang) as well as [on Twitter](https://twitter.com/diodesign). Ultimately, you can submit pull requests or issues on GitHub. Please bear in mind the project's [code of conduct](CODE_OF_CONDUCT.md) if you wish to participate.
 
 ### Copyright, license, and thanks
 
