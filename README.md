@@ -58,7 +58,7 @@ The `master` branch contains the latest bleeding-edge code that people can work 
 
 ### Contact
 
-Feel free to [email me](mailto:diodesign@gmail.com), Chris Williams, if you have any questions, want to get involved, have source to contribute, or found a security flaw. You can also find me, diodesign, on [on Twitter](https://twitter.com/diodesign). Ultimately, you can submit pull requests or issues on GitHub.
+Feel free to [email me](mailto:diodesign@tuta.io), Chris Williams, if you have any questions, want to get involved, have source to contribute, or found a security flaw. You can also find me, diodesign, on [on Twitter](https://twitter.com/diodesign). Ultimately, you can submit pull requests or issues on GitHub.
 
 ### Copyright, license, and thanks
 

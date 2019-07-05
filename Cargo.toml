@@ -1,7 +1,7 @@
 [package]
 name = "diosix"
 version = "2.0.0"
-authors = ["Chris Williams <diodesign@gmail.com>"]
+authors = ["Chris Williams <diodesign@tuta.io>"]
 license = "MIT"
 build = "build.rs"
 publish = false
