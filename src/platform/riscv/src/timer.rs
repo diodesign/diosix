@@ -5,8 +5,6 @@
  * See LICENSE for usage and copying.
  */
 
-use devicetree;
-
 extern "C"
 {
     fn platform_timer_target(target: u64);
@@ -20,7 +18,7 @@ static mut CPU_TIMER_FREQ: usize = 0;
 /* initialize timer for preemptive scheduler */ 
 pub fn init(device_tree_buf: &u8) -> bool
 {
-    match devicetree::get_timebase_freq(device_tree_buf)
+    match crate::devicetree::get_timebase_freq(device_tree_buf)
     {
         Some(f) =>
         {

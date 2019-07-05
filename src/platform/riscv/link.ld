@@ -6,6 +6,7 @@
  * See LICENSE for usage and copying.
  */
 
+OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
 SECTIONS

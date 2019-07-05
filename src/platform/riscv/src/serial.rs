@@ -5,10 +5,8 @@
  * See LICENSE for usage and copying.
  */
 
-use devicetree;
-
 /* initialize timer for preemptive scheduler */ 
 pub fn init(device_tree_buf: &u8) -> Option<usize>
 {
-    devicetree::get_uart_base(device_tree_buf)
+    crate::devicetree::get_uart_base(device_tree_buf)
 }

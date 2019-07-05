@@ -7,7 +7,7 @@
 
 extern crate hermit_dtb;
 
-use physmem::RAMArea;
+use crate::physmem::RAMArea;
 
 /* get_ram_area
    Get the system RAM area's base address and size in bytes. Assumes there is a single RAM block.

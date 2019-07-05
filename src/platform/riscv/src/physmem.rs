@@ -6,7 +6,6 @@
  */
 
 use core::intrinsics::transmute;
-use devicetree;
 
 /* we need this code from the assembly files */
 extern "C"
@@ -139,7 +138,7 @@ pub fn available_ram(device_tree_buf: &u8) -> Option<RAMAreaIter>
 {
     /* at the end of the kernel footprint is the per-cpu heaps in one long contiguous block.
     take this into account so the memory isn't reused for other allocations */
-    let cpu_count = match devicetree::get_cpu_count(device_tree_buf)
+    let cpu_count = match crate::devicetree::get_cpu_count(device_tree_buf)
     {
         Some(c) => c,
         None => return None
@@ -150,7 +149,7 @@ pub fn available_ram(device_tree_buf: &u8) -> Option<RAMAreaIter>
     let phys_kernel_size = (phys_kernel_end - phys_kernel_start) as PhysMemSize;
 
     /* assumes RISC-V systems sport a single block of physical RAM for software use */
-    let all_phys_ram = match devicetree::get_ram_area(device_tree_buf)
+    let all_phys_ram = match crate::devicetree::get_ram_area(device_tree_buf)
     {
         Some(a) => a,
         None => return None

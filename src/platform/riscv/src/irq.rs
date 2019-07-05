@@ -54,7 +54,7 @@ pub enum IRQCause
 pub struct IRQ
 {
     pub fatal: bool, /* true if this IRQ means current container must stop */
-    pub privilege_mode: ::cpu::PrivilegeMode, /* privilege level of the interrupted code */
+    pub privilege_mode: crate::cpu::PrivilegeMode, /* privilege level of the interrupted code */
     pub irq_type: IRQType, /* type of the IRQ - sw or hw generated */
     pub cause: IRQCause, /* cause of this interruption */
     pub pc: usize,   /* where in memory this IRQ occured */
@@ -127,7 +127,7 @@ pub fn dispatch(context: IRQContext) -> IRQ
         fatal: fatal,
         irq_type: cause_type,
         cause: cause,
-        privilege_mode: ::cpu::PrivilegeMode::Kernel,
+        privilege_mode: crate::cpu::PrivilegeMode::Kernel,
         pc: context.epc as usize,
         sp: context.sp as usize,
     }

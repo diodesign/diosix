@@ -8,8 +8,8 @@ or feedback to add, please submit a pull request.
 To build diosix for 64-bit and/or 32-bit RISC-V systems, make sure you've cross-compiled and installed the latest RISC-V port of
 [GNU binutils](https://github.com/riscv/riscv-binutils-gdb) as the kernel requires this toolkit. You'll next need to
 use [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build
-host's architecture (likely x86_64) and you must install the `riscv32imac-unknown-none-elf` and `riscv64gc-unknown-none-elf`
-targets, too.
+host's architecture (likely x86_64), and you must install at least one of the following RISC-V targets:
+`riscv32imac-unknown-none-elf`, `riscv64imac-unknown-none-elf`, and/or `riscv64gc-unknown-none-elf`.
 
 If in doubt, below is a list of steps to create your 64-bit and 32-bit RISC-V Rust cross-compiler toolchain for diosix on a GNU/Linux
 Debian-like system. It compiles the toolchain, first for 32-bit then for 64-bit RISC-V, within a subdirectory called `src` in your

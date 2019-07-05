@@ -6,7 +6,6 @@
  */
 
 #[allow(dead_code)] 
-use devicetree;
 
 extern "C"
 {
@@ -105,7 +104,7 @@ pub fn prep_supervisor_return()
    <= number of CPU cores in tree, or None for parse error */
 pub fn init(device_tree_buf: &u8) -> Option<usize>
 {
-    match devicetree::get_cpu_count(device_tree_buf)
+    match crate::devicetree::get_cpu_count(device_tree_buf)
     {
         Some(c) =>
         {
