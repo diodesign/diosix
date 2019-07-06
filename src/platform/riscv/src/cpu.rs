@@ -126,3 +126,15 @@ pub fn nr_of_cores() -> Option<usize>
 {
     return unsafe { CPU_CORE_COUNT };
 }
+
+/* return the privilege level of the code running before we entereed the machine level */
+pub fn previous_privilege() -> PrivilegeMode
+{
+    /* previous priv level is in bts 11-12 of mstatus */
+    match (read_csr!(mstatus) >> 11) & 0b11
+    {
+        0 => PrivilegeMode::User,
+        1 => PrivilegeMode::Supervisor,
+        _ => PrivilegeMode::Kernel
+    }
+}

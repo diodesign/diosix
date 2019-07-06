@@ -27,7 +27,7 @@ pub enum RegionUse
     SupervisorCode = 0, /* read-execute-only area of the supervisor kernel */
     SupervisorData = 1, /* read-write data area of the supervisor kernel */
     ContainerRAM   = 2, /* read-write area for the container to use */
-    Unused         = 4  /* unallocated */
+    Unused         = 3  /* unallocated */
 }
 
 /* describe a physical memory region */

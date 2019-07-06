@@ -47,8 +47,46 @@ source $HOME/.cargo/env
 export PATH=$PATH:$HOME/cross/bin
 ```
 
-Close your terminal and open a new one to load the changes.
-Now you're ready to clone the source code for `diosix` to compile it. Follow these instructions...
+Close your terminal, and open a new one, to load the changes.
+
+### Setting up your runtime environment
+
+If you plan to run diosix on physical hardware then you can skip this part, and instead build diosix as needed and
+copy it to the hardware platform of your choice and run it there. If you want to test and develop diosix in
+[Qemu](https://www.qemu.org/), an emulator that is handy for debggging, then read on.
+
+You can install Qemu from your prefered system package manager, although you may have to build it yourself
+to include 32-bit and 64-bit RISC-V support. To do so, in a quick and easy way, clone the Qemu source code,
+configure it to support RISC-V system emulation, build it, and add the resulting binaries to your path.
+First, in your terminal, change directory to where you'd like to build Qemu, then follow these instructions:
+
+```
+sudo apt-get install git libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
+cd $HOME/src
+git clone git://git.qemu-project.org/qemu.git
+./configure --target-list=riscv32-softmmu,riscv64-softmmu
+make
+```
+
+Then make sure the resulting Qemu binaries, `$HOME/src/qemu/riscv32-softmmu/qemu-system-riscv32`
+and `$HOME/src/qemu/riscv64-softmmu/qemu-system-riscv64` are in your `$PATH`. For example, you could add the
+following paths to your shell's `.rc` file:
+
+```
+export PATH=$PATH:$HOME/src/qemu/riscv32-softmmu
+export PATH=$PATH:$HOME/src/qemu/riscv64-softmmu
+```
+
+Exit the terminal, and reopen it, to pick up the changes. Now you're all set with a build and runtime environment.
+
+### Building and running diosix
+
+diosix is designed to detect the type of hardware it is running on when booted, and utilize it as needed,
+whether it's emulated hardware, such as with Qemu, or on real hardware, such as a SiFive board. All you need
+to do is build diosix for the correct CPU architecture. All the hardware needs to do is pass a device-tree
+structure to the kernel so it can discover attached peripherals, controllers, and memory.
+
+To get started, clone the `diosix` source into an appropriate place, and enter the code:
 
 ```
 cd $HOME/src
@@ -56,17 +94,8 @@ git clone https://github.com/diodesign/diosix.git
 cd diosix
 ```
 
-...and follow the instructions below to build and run it.
-
-### Building and running
-
-diosix is designed to detect the type of hardware it is running on when booted, and utilize it as needed,
-whether it's emulated hardware, such as with Qemu, or on real hardware, such as a SiFive board. All you need
-to do is build diosix for the correct CPU architecture. All the hardware needs to do is pass a device-tree
-structure to the kernel.
-
-To compile the operating system for a specific CPU architecture, run Rust's `cargo` with the `--target` paramter
-defining the required CPU architecture, in the form:
+By default, `riscv32imac-unknown-none-elf` is the default CPU architecture. To compile for a specific
+CPU architecture, run Rust's `cargo` with the `--target` paramter defining the required CPU architecture, in the form:
 
 `cargo build --release --target <CPU architecture>`
 
@@ -84,7 +113,7 @@ qemu-system-riscv32 -machine virt -kernel target/riscv32imac-unknown-none-elf/re
 ```
 
 ...will build diosix for machines powered by 32-bit RISC-V CPUs (those with support for IMAC features, specifically),
-and run it in the Qemu emulator. Press `Ctrl-a` then `c` to escape to the Qemu monitor, then `q` to quit. To do the same on
+and run it in the Qemu emulator. Press `Ctrl-a` then `c` to escape to the Qemu monitor, then `q` to quit. To do the same for
 64-bit RISC-V, try:
 
 ```
@@ -95,6 +124,3 @@ qemu-system-riscv64 -machine virt -kernel target/riscv64gc-unknown-none-elf/rele
 To change the amount of memory allocated to diosix in Qemu, add a `-m <RAM size>` paramter to the command line, eg `-m 256M` to boot diosix
 with 256MB of physical RAM. To change the number of CPU cores available, add a `-smp <N>` paramter to the command line, eg `-smp 4` to boot diosix
 with 4 separate CPU cores alocated. Check out the Qemu manual for more settings.
-
-Note that Qemu has separate qemu-system executables for 32-bit and 64-bit RISC-V emulation. If you don't have Qemu on your system,
-then install it from your prefered system package manager, or build it yourself: see the instructionson its website, [qemu.org](https://www.qemu.org/).

@@ -32,32 +32,26 @@ pub extern "C" fn kirq_handler(context: IRQContext)
 /* handle software exception */
 fn exception(irq: IRQ)
 {
-    match (irq.fatal, irq.privilege_mode)
+    match (irq.fatal, irq.privilege_mode, irq.cause)
     {
-        (true, PrivilegeMode::Kernel) =>
+        /* catch non-fatal supervisor-level exceptions */
+        (false, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
+        {
+            klog!("Environment call from supervisor")
+        },
+        /* catch everything else, halting if fatal */
+        (fatal, priviledge, cause) =>
         {
             kalert!(
-                "Fatal exception in hypervisor: {:?} at 0x{:x}, stack 0x{:x}",
-                irq.cause, irq.pc, irq.sp);
-            loop {}
-        },
-        (false, PrivilegeMode::Kernel) =>
-        {
-            match irq.cause
+                "Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}",
+                priviledge, cause, irq.pc, irq.sp);
+
+            /* stop here if we hit an unhandled fatal exception */
+            if fatal == true
             {
-                IRQCause::SupervisorEnvironmentCall =>
-                {
-                    klog!("environment call from supervisor");
-                },
-                _ => ()
+                kalert!("Halting after unhandled fatal exception");
+                loop {}
             }
-        },
-        /* fail on everything else */
-        (_, priviledge) =>
-        {
-            kalert!(
-                "Unhandled fatal exception (priv {:?}): {:?} at 0x{:x}, stack 0x{:x}",
-                priviledge, irq.cause, irq.pc, irq.sp);
         }
     }
 }

@@ -30,3 +30,15 @@ macro_rules! write_csr
         }
     };
 }
+
+/* clear_csr(csr name, mask of bits to clear) updates csr by clearing bits selected by mask */
+macro_rules! clear_csr
+{
+    ($csr:expr, $value:expr) =>
+    {
+        unsafe
+        {
+            asm!(concat!("csrrc x0, ", stringify!($csr), ", $0") :: "r"($value) :: "volatile");
+        }
+    };
+}

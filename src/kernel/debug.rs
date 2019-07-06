@@ -40,7 +40,7 @@ macro_rules! klog
 macro_rules! kalert
 {
   ($fmt:expr) => (kprintln!("[!] CPU {}: {}", ::cpu::Core::id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[-] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
+  ($fmt:expr, $($arg:tt)*) => (kprintln!(concat!("[!] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
 }
 
 /* only output if debug build is enabled */
