@@ -10,8 +10,6 @@
 pub extern "C" fn sentry()
 {
     unsafe { asm!("ecall"); }
-    // unsafe { let var = 0x90000000 as *mut usize; *var = *var + 1; }
-    unsafe { asm!("ecall"); }
 
     loop { }
 }
