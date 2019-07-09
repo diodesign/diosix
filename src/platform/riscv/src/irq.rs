@@ -1,6 +1,6 @@
-/* RISC-V 32-bit common exception/interrupt hardware-specific code
+/* diosix RV32G/RV64G common exception/interrupt hardware-specific code
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -13,7 +13,7 @@ pub enum IRQType
     Interrupt, /* hardware-generated interrupt */
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum IRQCause
 {
     /* software interrupt generated from user, supervisor or kernel mode */
@@ -54,7 +54,7 @@ pub enum IRQCause
 pub struct IRQ
 {
     pub fatal: bool, /* true if this IRQ means current container must stop */
-    pub privilege_mode: ::cpu::PrivilegeMode, /* privilege level of the interrupted code */
+    pub privilege_mode: crate::cpu::PrivilegeMode, /* privilege level of the interrupted code */
     pub irq_type: IRQType, /* type of the IRQ - sw or hw generated */
     pub cause: IRQCause, /* cause of this interruption */
     pub pc: usize,   /* where in memory this IRQ occured */
@@ -68,11 +68,11 @@ Note: register x2 is normally sp but in this case contains the
 #[repr(C)]
 pub struct IRQContext
 {
-    cause: u32,
-    epc: u32,             /* cause code and PC when IRQ fired */
-    mtval: u32,           /* IRQ specific information */
-    sp: u32,              /* stack pointer in interrupted envionment */
-    registers: [u32; 32], /* all 32 registers stacked */
+    cause: usize,
+    epc: usize,             /* cause code and PC when IRQ fired */
+    mtval: usize,           /* IRQ specific information */
+    sp: usize,              /* stack pointer in interrupted envionment */
+    registers: [usize; 32], /* all 32 registers stacked */
 }
 
 /* dispatch
@@ -83,14 +83,24 @@ pub struct IRQContext
 */
 pub fn dispatch(context: IRQContext) -> IRQ
 {
+    /* top most bit of mcause sets what caused the IRQ: hardware or software interrupt */
+    let cause_shift = if cfg!(target_arch = "riscv32")
+    {
+        31
+    }
+    else /* assumes RV128 not supported */
+    {
+        63
+    };
+
     /* convert RISC-V cause codes into generic codes for the kernel.
     the top bit of the cause code is set for interrupts and clear for execeptions */
-    let cause_type = match context.cause >> 31
+    let cause_type = match context.cause >> cause_shift
     {
         0 => IRQType::Exception,
         _ => IRQType::Interrupt,
     };
-    let cause_mask = (1 << 31) - 1;
+    let cause_mask = (1 << cause_shift) - 1;
     let (fatal, cause) = match (cause_type, context.cause & cause_mask)
     {
         /* exceptions - some are labeled fatal */
@@ -127,7 +137,7 @@ pub fn dispatch(context: IRQContext) -> IRQ
         fatal: fatal,
         irq_type: cause_type,
         cause: cause,
-        privilege_mode: ::cpu::PrivilegeMode::Kernel,
+        privilege_mode: crate::cpu::previous_privilege(),
         pc: context.epc as usize,
         sp: context.sp as usize,
     }
@@ -148,6 +158,6 @@ pub fn acknowledge(irq: IRQ)
         _ => return
     };
 
-    /* 0x344 = mip aka macine interrupting pending */
-    unsafe { asm!("csrrc x0, 0x344, $0" :: "r"(1 << bit) :: "volatile"); }
+    /* clear the pending interrupt */
+    clear_csr!(mip, 1 << bit);
 }

@@ -1,6 +1,6 @@
 /* diosix machine kernel code for handling hardware interrupts and software exceptions
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -9,8 +9,8 @@ use scheduler;
 
 /* platform-specific code must implement all this */
 use platform;
-use platform::common::irq::{self, IRQContext, IRQType, IRQCause, IRQ};
-use platform::common::cpu::PrivilegeMode;
+use platform::irq::{self, IRQContext, IRQType, IRQCause, IRQ};
+use platform::cpu::PrivilegeMode;
 
 /* kernel_irq_handler
    entry point for hardware interrupts and software exceptions, collectively known as IRQs.
@@ -21,7 +21,7 @@ use platform::common::cpu::PrivilegeMode;
 #[no_mangle]
 pub extern "C" fn kirq_handler(context: IRQContext)
 {
-    let irq = platform::common::irq::dispatch(context);
+    let irq = platform::irq::dispatch(context);
     match irq.irq_type
     {
         IRQType::Exception => exception(irq),
@@ -32,32 +32,26 @@ pub extern "C" fn kirq_handler(context: IRQContext)
 /* handle software exception */
 fn exception(irq: IRQ)
 {
-    match (irq.fatal, irq.privilege_mode)
+    match (irq.fatal, irq.privilege_mode, irq.cause)
     {
-        (true, PrivilegeMode::Kernel) =>
+        /* catch non-fatal supervisor-level exceptions */
+        (false, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
+        {
+            klog!("Environment call from supervisor")
+        },
+        /* catch everything else, halting if fatal */
+        (fatal, priviledge, cause) =>
         {
             kalert!(
-                "Fatal exception in hypervisor: {:?} at 0x{:x}, stack 0x{:x}",
-                irq.cause, irq.pc, irq.sp);
-            loop {}
-        },
-        (false, PrivilegeMode::Kernel) =>
-        {
-            match irq.cause
+                "Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}",
+                priviledge, cause, irq.pc, irq.sp);
+
+            /* stop here if we hit an unhandled fatal exception */
+            if fatal == true
             {
-                IRQCause::SupervisorEnvironmentCall =>
-                {
-                    klog!("environment call from supervisor");
-                },
-                _ => ()
+                kalert!("Halting after unhandled fatal exception");
+                loop {}
             }
-        },
-        /* fail on everything else */
-        (_, priviledge) =>
-        {
-            kalert!(
-                "Unhandled fatal exception (priv {:?}): {:?} at 0x{:x}, stack 0x{:x}",
-                priviledge, irq.cause, irq.pc, irq.sp);
         }
     }
 }

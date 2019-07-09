@@ -1,6 +1,6 @@
 /* diosix high-level kernel panic and abort code
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -11,15 +11,26 @@ use core::panic::PanicInfo;
 #[panic_handler]
 pub fn panic(info: &PanicInfo) -> !
 {
-    kalert!("Rust runtime panicked unexpectedly");
-    match info.location()
+    if cfg!(test)
     {
-        Some(location) =>
+        /* signal to test environment we failed */
+        platform::test::end(Err(1));
+    }
+    else
+    {
+        /* try to inform the user what went wrong */
+        kalert!("Rust runtime panicked unexpectedly");
+        match info.location()
         {
-            kalert!("... crashed in {}: {}", location.file(), location.line())
-        },
-        None => kalert!("... crash location unknown")
-    };
+            Some(location) =>
+            {
+                kalert!("... crashed in {}: {}", location.file(), location.line())
+            },
+            None => kalert!("... crash location unknown")
+        };
+    }
+
+    /* just halt here */
     loop
     {}
 }
