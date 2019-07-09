@@ -1,12 +1,11 @@
-/* diosix RV32 CPU core management
+/* diosix RV32/RV64 CPU core management
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
 
 #[allow(dead_code)] 
-use devicetree;
 
 extern "C"
 {
@@ -105,7 +104,7 @@ pub fn prep_supervisor_return()
    <= number of CPU cores in tree, or None for parse error */
 pub fn init(device_tree_buf: &u8) -> Option<usize>
 {
-    match devicetree::get_cpu_count(device_tree_buf)
+    match crate::devicetree::get_cpu_count(device_tree_buf)
     {
         Some(c) =>
         {
@@ -126,4 +125,16 @@ or None for CPU cores not yet counted. */
 pub fn nr_of_cores() -> Option<usize>
 {
     return unsafe { CPU_CORE_COUNT };
+}
+
+/* return the privilege level of the code running before we entereed the machine level */
+pub fn previous_privilege() -> PrivilegeMode
+{
+    /* previous priv level is in bts 11-12 of mstatus */
+    match (read_csr!(mstatus) >> 11) & 0b11
+    {
+        0 => PrivilegeMode::User,
+        1 => PrivilegeMode::Supervisor,
+        _ => PrivilegeMode::Kernel
+    }
 }

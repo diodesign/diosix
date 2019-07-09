@@ -1,12 +1,18 @@
-# machine kernel memory locations and layout for common RV32G targets
+# diosix machine kernel memory locations and layout for common RV32G/RV64G targets
 #
-# (c) Chris Williams, 2018.
+# (c) Chris Williams, 2018-19.
 # See LICENSE for usage and copying.
 
 .equ PAGE_SIZE, (4096)
 
-# during interrupts and exceptions, reserve space for 32 registers
-.equ  IRQ_REGISTER_FRAME_SIZE,   (32 * 4)
+# during interrupts and exceptions, reserve space for 32 registers, 32 or 64 bits wide
+.if ptrwidth == 32
+.equ  IRQ_REGISTER_FRAME_SIZE,   (32 * 4)   # RV32
+.elseif ptrwidth == 64
+.equ  IRQ_REGISTER_FRAME_SIZE,   (32 * 8)   # rV64
+.else
+.error "Unsupported pointer width"
+.endif
 
 # the kernel is laid out as follows in physical memory on bootup
 # (all addresses should be 4KB word aligned, and defined in the target ld script)

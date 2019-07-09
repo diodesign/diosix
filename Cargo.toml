@@ -1,0 +1,49 @@
+[package]
+name = "diosix"
+version = "2.0.0"
+authors = ["Chris Williams <diodesign@tuta.io>"]
+license = "MIT"
+build = "build.rs"
+publish = false
+
+[[bin]]
+name = "kernel"
+path = "src/kernel/main.rs"
+
+[build-dependencies]
+regex = "1"
+
+[profile.dev]
+panic = "abort"
+debug-assertions = true
+debug = true
+overflow-checks = true
+opt-level = 0
+incremental = true
+
+[profile.release]
+panic = "abort"
+debug-assertions = false
+debug = false
+overflow-checks = false
+opt-level = 3
+incremental = false
+
+# supported build targets - don't forget to update .cargo with details for the linker and runner 
+[target.riscv32imac-unknown-none-elf.dependencies]
+platform = { path = "src/platform/riscv/" }
+lazy_static = { path = "src/contrib/lazy-static.rs" }
+spin = { path = "src/contrib/spin-rs" }
+hashmap_core = { path = "src/contrib/hashmap_core" }
+
+[target.riscv64imac-unknown-none-elf.dependencies]
+platform = { path = "src/platform/riscv/" }
+lazy_static = { path = "src/contrib/lazy-static.rs" }
+spin = { path = "src/contrib/spin-rs" }
+hashmap_core = { path = "src/contrib/hashmap_core" }
+
+[target.riscv64gc-unknown-none-elf.dependencies]
+platform = { path = "src/platform/riscv/" }
+lazy_static = { path = "src/contrib/lazy-static.rs" }
+spin = { path = "src/contrib/spin-rs" }
+hashmap_core = { path = "src/contrib/hashmap_core" }

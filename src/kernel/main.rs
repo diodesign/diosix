@@ -1,6 +1,6 @@
 /* diosix hypervisor kernel main entry code
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -8,15 +8,20 @@
 /* let the compiler know we're on our own here in bare-metal world */
 #![no_std]
 #![no_main]
-
 #![feature(asm)]
+
+/* disable annoying warnings */
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 #![allow(improper_ctypes)]
 
-/* we need this to plug our custom heap allocator into the Rust language */
+/* provide a framework for unit testing */
+#![feature(custom_test_frameworks)]
+#![test_runner(crate::run_tests)]
+#![reexport_test_harness_main = "ktests"] /* entry point for tests */
+
+/* plug our custom heap allocator into the Rust language: Box, etc*/
 #![feature(alloc_error_handler)]
-#![feature(alloc)]
 #![feature(box_syntax)]
 extern crate alloc;
 use alloc::string::String;
@@ -72,6 +77,8 @@ lazy_static!
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 stick to usize as much as possible */
 
+/* NOTE: Do not call any klog/kdebug macros until debug has been initialized */
+
 /* kentry
    This is the official entry point of the Rust-level machine/hypervsor kernel.
    Call kmain, which is where all the real work happens, and catch any errors.
@@ -80,9 +87,22 @@ stick to usize as much as possible */
 #[no_mangle]
 pub extern "C" fn kentry(cpu_nr: CPUId, device_tree_buf: &u8)
 {
+    /* carry out tests if that's what we're here for */
+    #[cfg(test)]
+    ktests();
+
+    /* if not then start the system as normal */
     match kmain(cpu_nr, device_tree_buf)
     {
-        Err(e) => kalert!("kmain bailed out with error: {:?}", e),
+        Err(e) => match e
+        {
+            /* if debug failed to initialize then we're probbaly toast on this hardware,
+            so fail to infinite loop - unless there's some other foolproof way to signal
+            early failure to the user for all platforms */
+            Cause::DebugFailure => (),
+            /* we made debug initialization OK so let the user know where it all went wrong */
+            _ => kalert!("kmain bailed out with error: {:?}", e),
+        },
         _ => () /* continue waiting for an IRQ to come in */
     };
 }
@@ -117,6 +137,9 @@ fn kmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
         /* delegate to boot CPU the welcome banner and set up global resources */
         BOOT_CPUID => 
         {
+            /* enable the use of klog/kdebug */
+            debug::init(device_tree_buf)?;
+
             /* initialize global resources and root container */
             init_globals(device_tree_buf)?;
             init_root_container()?;
@@ -159,7 +182,7 @@ fn init_globals(device_tree: &u8) -> Result<(), Cause>
         Some(s) => s,
         None =>
         {
-            kalert!("Physical memory failure: too little RAM, or config error");
+            kalert!("Physical memory failure: too little RAM, or device tree error");
             return Err(Cause::PhysMemBadConfig);
         }
     };
@@ -169,7 +192,7 @@ fn init_globals(device_tree: &u8) -> Result<(), Cause>
     /* say hello */
     klog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree);
     klog!("Available physical RAM: {} MiB ({} bytes), physical CPU cores: {}", ram_size / 1024 / 1024, ram_size, cpus);
-    kdebug!("... Debugging enabled");
+    kdebug!("Debugging enabled");
 
     return Ok(());
 }
@@ -196,4 +219,24 @@ fn kalloc_error(attempt: core::alloc::Layout) -> !
 {
     kalert!("alloc_error_handler: Failed to allocate/free {} bytes. Halting...", attempt.size());
     loop {} /* it would be nice to be able to not die here :( */
+}
+
+/* perform all unit tests required */
+#[cfg(test)]
+fn run_tests(unit_tests: &[&dyn Fn()])
+{
+    /* run each test one by one */
+    for test in unit_tests
+    {
+        test();
+    }
+
+    /* exit cleanly once tests are complete */
+    platform::test::end(Ok(0));
+}
+
+#[test_case]
+fn test_assertion()
+{
+    assert_eq!(42, 42);
 }

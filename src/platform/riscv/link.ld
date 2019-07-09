@@ -1,11 +1,12 @@
-/* kernel's ELF layout for common RV32 hardware
+/* diosix ELF layout for common RV32/RV64 hardware
  *
  * Only requirement is that physical RAM starts at 0x80000000, where the kernel is loaded and entered
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  * See LICENSE for usage and copying.
  */
 
+OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
 SECTIONS

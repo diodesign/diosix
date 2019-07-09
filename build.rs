@@ -6,28 +6,75 @@
  * For example: building a RISC-V kernel on an X86-64 server requires a toolchain that
  * can output code for both architectures, and outputs X86-64 by default.
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
 
-/* acceptable targets (selected using --target to cargo):
-   riscv32imac-unknown-none-elf
+/* To build diosix for a particular target, call cargo build with --target <target>
 
-   acceptable machines (selected as --features to cargo):
-   sifive_u34 (SiFive E-series boards)
-   qemu32_virt (32-bit Qemu Virt hardware environment)
+   Acceptable targets:
+   * riscv32imac-unknown-none-elf
+   * riscv64imac-unknown-none-elf
+   * riscv64gc-unknown-none-elf
 
-   eg: cargo build --target riscv32imac-unknown-none-elf --features sifive_u34
+   eg: cargo build --target riscv32imac-unknown-none-elf
+
+   The boot code should detect and use whatever hardware is present.
 */
 
 use std::env;
 use std::fs;
-use std::process::exit;
 use std::process::Command;
 
 extern crate regex;
 use regex::Regex;
+
+/* describe a build target from its user-supplied triple */
+struct Target
+{
+    pub cpu_arch: String,    /* define the CPU architecture to generate code for */
+    pub gnu_prefix: String,  /* locate the GNU as and ar tools */ 
+    pub platform: String,    /* locate the platform directory */
+    pub width: usize,        /* pointer width in bits */
+    pub abi: String          /* define the ABI for this target */
+}
+
+impl Target
+{
+    /* create a target object from a full build triple string, taking the CPU arch from the first part of the triple  */
+    pub fn new(triple: String) -> Target
+    {
+        match triple.split('-').next().expect("Badly formatted target triple").as_ref()
+        {
+            "riscv32imac" => Target
+            {
+                cpu_arch: String::from("rv32imac"),
+                gnu_prefix: String::from("riscv32"),
+                platform: String::from("riscv"),
+                width: 32,
+                abi: String::from("ilp32")
+            },
+            "riscv64imac" => Target
+            {
+                cpu_arch: String::from("rv64imac"),
+                gnu_prefix: String::from("riscv64"),
+                platform: String::from("riscv"),
+                width: 64,
+                abi: String::from("lp64")
+            },
+            "riscv64gc" => Target
+            {
+                cpu_arch: String::from("rv64gc"),
+                gnu_prefix: String::from("riscv64"),
+                platform: String::from("riscv"),
+                width: 64,
+                abi: String::from("lp64")
+            },
+            unknown_target => panic!("Unknown target '{}'", &unknown_target)
+        }
+    }
+}
 
 /* shared context of this build run */
 struct Context
@@ -35,76 +82,29 @@ struct Context
     output_dir: String, /* where we're outputting object code on the host */
     as_exec: String,    /* path to host's GNU assembler executable */
     ar_exec: String,    /* path to host's GNU archiver executable */
-    arch: String,       /* target CPU architecture */
-    abi: String,        /* target CPU ABI for this kernel */
+    target: Target      /* describe the build target */
 }
 
 fn main()
 {
-    /* first, determine which CPU we're building for from target triple */
-    let target_triple = env::var("TARGET").unwrap();
-    let mut target_cpu = String::new();
-    let mut target_arch = String::new();
-    let mut target_abi = String::new();
-
-    if target_triple.starts_with("riscv32") == true
-    {
-        target_cpu.push_str("riscv32");
-        target_arch.push_str("rv32imac");
-        target_abi.push_str("ilp32");
-    }
-    else
-    {
-        println!(
-            "Unknown target {}. Use --target to select a CPU type",
-            target_triple
-        );
-        exit(1);
-    }
-
-    /* generate filenames for as and ar from CPU target */
-    let gnu_as = String::from(format!("{}-elf-as", target_cpu));
-    let gnu_ar = String::from(format!("{}-elf-ar", target_cpu));
-
-    /* determine machine target from build system's environment variables */
-    let mut target_machine = String::new();
-    if env::var("CARGO_FEATURE_SIFIVE_U34").is_ok() == true
-    {
-        target_machine.push_str("sifive_u34");
-    }
-    else if env::var("CARGO_FEATURE_QEMU32_VIRT").is_ok() == true
-    {
-        target_machine.push_str("qemu32_virt");
-    }
-    else
-    {
-        println!("Cannot determine target machine. Use --features to select a device");
-        exit(1);
-    }
-
-    let output_dir = env::var("OUT_DIR").unwrap();
+    /* determine which CPU and platform we're building for from target triple */
+    let target = Target::new(env::var("TARGET").expect("Missing target triple, use --target with cargo"));
+    let platform = target.platform.clone();
 
     /* create a shared context describing this build */
-    let context = Context {
-        output_dir: output_dir,
-        as_exec: gnu_as,
-        ar_exec: gnu_ar,
-        arch: target_arch,
-        abi: target_abi,
+    let context = Context
+    {
+        output_dir: env::var("OUT_DIR").expect("No output directory specified"),
+        as_exec: String::from(format!("{}-elf-as", target.gnu_prefix)),
+        ar_exec: String::from(format!("{}-elf-ar", target.gnu_prefix)),
+        target: target
     };
 
     /* tell cargo to rebuild just these files change:
     linker scripts and any files in the platform's assembly code directories.
     also: assemble and link them */
-    println!(
-        "cargo:rerun-if-changed=src/platform/{}/{}/link.ld",
-        target_cpu, target_machine
-    );
-    slurp_directory(
-        format!("src/platform/{}/{}/asm", target_cpu, target_machine),
-        &context,
-    );
-    slurp_directory(format!("src/platform/{}/common/asm", target_cpu), &context);
+    println!("cargo:rerun-if-changed=src/platform/{}/link.ld", platform);
+    slurp_directory(format!("src/platform/{}/asm", platform), &context);
 }
 
 /* slurp_directory
@@ -181,8 +181,9 @@ fn assemble(path: &str, context: &Context)
     /* keep rust's borrow checker happy */
     let as_exec = &context.as_exec;
     let ar_exec = &context.ar_exec;
-    let abi = &context.abi;
-    let arch = &context.arch;
+    let arch = &context.target.cpu_arch;
+    let abi = &context.target.abi;
+    let width = &context.target.width;
 
     /* now let's try to assemble the thing - this is where errors become fatal */
     if Command::new(as_exec)
@@ -190,6 +191,8 @@ fn assemble(path: &str, context: &Context)
         .arg(arch)
         .arg("-mabi")
         .arg(abi)
+        .arg("--defsym")
+        .arg(format!("ptrwidth={}", width))
         .arg("-o")
         .arg(&object_file)
         .arg(path)

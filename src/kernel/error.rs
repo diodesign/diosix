@@ -1,6 +1,6 @@
 /* diosix error codes
  *
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
@@ -9,6 +9,9 @@
 #[derive(Debug)]
 pub enum Cause
 {
+    /* debug */
+    DebugFailure,
+
     /* heap */
     HeapNotInUse,
     HeapBadBlock,

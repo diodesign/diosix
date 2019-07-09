@@ -1,6 +1,6 @@
 /* diosix spinlock primitives
  *  
- * (c) Chris Williams, 2018.
+ * (c) Chris Williams, 2019.
  *
  * See LICENSE for usage and copying.
  */
