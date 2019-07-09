@@ -7,18 +7,15 @@ operating system written in Rust for 32-bit and 64-bit RISC-V systems.
 
 ### Rationale
 
-It is a work in progress: I'm starting from scratch
+Diosix is a work in progress: I'm starting from scratch
 after [previously writing](https://github.com/diodesign/diosix-legacy) a working microkernel for
 32-bit SMP x86 computers in C and assembly.
 
 I learned a lot from that foray, and so this is the second iteration of diosix. Crucially,
 it will be written [in Rust](https://www.rust-lang.org/), a C/C++-like programming language that has a fierce emphasis
-on performance, guaranteed memory safety, threads without data races, and other security features.
-I chose [RISC-V](https://riscv.org/) because it's interesting new ground to explore,
+on performance, memory safety, threads without data races, and other security features.
+I chose [RISC-V](https://riscv.org/) because it is interesting new ground to explore,
 whereas there are countless x86 and Arm operating system kernels out there.
-For one thing, highly capable RISC-V cores can fit in FPGAs, paving the way for
-systems that have the freedom to boot truly open-source custom CPUs, peripheral controllers,
-hypervisors, kernels, and operating systems as required.
 
 For one thing, highly capable RISC-V cores can fit in FPGAs, paving the way for
 systems that have the freedom to boot truly open-source custom CPUs, peripheral controllers,
