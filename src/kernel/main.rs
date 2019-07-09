@@ -234,3 +234,9 @@ fn run_tests(unit_tests: &[&dyn Fn()])
     /* exit cleanly once tests are complete */
     platform::test::end(Ok(0));
 }
+
+#[test_case]
+fn test_assertion()
+{
+    assert_eq!(42, 42);
+}

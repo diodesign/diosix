@@ -20,21 +20,25 @@ hypervisors, kernels, and operating systems as required.
 
 ### Running and building
 
+Here's a screenshot of the hypervisor-microkernel booting in a quad-core 64-bit RISC-V Qemu Virt hardware environment
+with the default 128MB of physical RAM. It starts up a default supervisor-level container, and writes some debug out to the
+virtual serial port, including logging a hypercall to the hypervisor from the supervisor within its container via CPU core 2:
+
+[![Screenshot of SMP diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/riscv64-smp-qemu-early.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/riscv64-smp-qemu-early.png)
+
+The command to build this code for 64-bit RISC-V, once you've installed the necessary toolchain, and run it in Qemu is simply:
+
+```
+cargo run --release
+```
+
+Press `Ctrl-a` then `c` to escape to the Qemu monitor, then `q` to quit. To build and run diosix within a 32-bit RISC-V environment, try:
+
+```
+cargo run --release --target riscv32imac-unknown-none-elf
+```
+
 See the [build instructions](BUILDING.md) for step-by-step guides to compiling and running this project.
-
-Here's a screenshot of the hypervisor-microkernel booting in a dual-core 32-bit RISC-V Qemu Virt hardware environment
-with 256MB of physical RAM. It starts up a default supervisor-level container, and writes some debug out to the
-virtual serial port, including logging a hypercall to the hypervisor from the supervisor within its container:
-
-[![Screenshot of SMP diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/riscv32-smp-qemu-early.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/riscv32-smp-qemu-early.png)
-
-The commands to build and run this code, once you've installed the necessary toolchain, are:
-
-```
-cargo build --release --target riscv32imac-unknown-none-elf
-qemu-system-riscv32 -machine virt -kernel target/riscv32imac-unknown-none-elf/release/kernel -nographic -smp 2 -m 256M
-```
-Press `Ctrl-a` then `c` to escape to the Qemu monitor, then `q` to quit.
 
 ### Todo
 
@@ -70,4 +74,4 @@ Copyright &copy; Chris Williams and contributors, 2018-2019. See LICENSE for dis
 - src/contrib/spin-rs: Copyright &copy; 2014 Mathijs van de Nes.
 - src/contrib/spin-rs/src/atomic.rs: Reimplements Rust's MIT-licensed [core::sync::atomic](https://github.com/rust-lang/rust/blob/master/src/libcore/sync/atomic.rs) API. Original implementation: Copyright &copy; The Rust Project Developers.
 
-And thanks to [David Craven](https://github.com/dvc94ch), [Alex Bradbury](https://github.com/asb), and everyone else who brought Rust, LLVM, and RISC-V together; the RISC-V world for designing the CPU cores and system-on-chips in the first place; [Michael Clark](https://github.com/michaeljclark) and everyone else who worked on [Qemu](https://github.com/riscv/riscv-qemu) and other RISC-V emulators; Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/); and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
+And thanks to [David Craven](https://github.com/dvc94ch), [Alex Bradbury](https://github.com/asb), [Vadim Kaushan](https://github.com/Disasm), and everyone else who brought Rust, LLVM, and RISC-V together; the RISC-V world for designing the CPU cores and system-on-chips in the first place; [Michael Clark](https://github.com/michaeljclark) and everyone else who worked on [Qemu](https://github.com/riscv/riscv-qemu) and other RISC-V emulators; Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/); and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).

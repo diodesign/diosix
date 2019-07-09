@@ -29,7 +29,7 @@ overflow-checks = false
 opt-level = 3
 incremental = false
 
-# supported build targets - don't forget to update .cargo with details for the linker 
+# supported build targets - don't forget to update .cargo with details for the linker and runner 
 [target.riscv32imac-unknown-none-elf.dependencies]
 platform = { path = "src/platform/riscv/" }
 lazy_static = { path = "src/contrib/lazy-static.rs" }
