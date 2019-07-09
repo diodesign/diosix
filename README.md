@@ -52,7 +52,7 @@ Here's a non-complete todo list, some of which is partially done:
 * Introduce unit tests
 * Bring-up for RV32
 * Bring-up for RV64
-* Hyprevisor-kernel level:
+* Hypervisor-kernel level:
     * Physical RAM region management
     * Exception handling
     * Interrupt handling
