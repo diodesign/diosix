@@ -31,8 +31,8 @@ install:
   - cd qemu
   - ./configure --target-list=riscv32-softmmu,riscv64-softmmu
   - make -s
-  - export PATH=$PATH:$HOME/qemu/riscv32-softmmu/qemu-system-riscv32
-  - export PATH=$PATH:$HOME/qemu/riscv64-softmmu/qemu-system-riscv64
+  - export PATH=$PATH:$HOME/qemu/riscv32-softmmu
+  - export PATH=$PATH:$HOME/qemu/riscv64-softmmu
   - cd $TRAVIS_BUILD_DIR
 
 before_script:
