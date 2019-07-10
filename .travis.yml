@@ -40,9 +40,7 @@ before_script:
   - rustup target install riscv64gc-unknown-none-elf
 
 script:
-  - cargo build --release --target riscv32imac-unknown-none-elf
-  - cargo build --release --target riscv64imac-unknown-none-elf
-  - cargo build --release --target riscv64gc-unknown-none-elf
+  - cd $HOME/diodesign/diosix
   - cargo test --release --target riscv32imac-unknown-none-elf
   - cargo test --release --target riscv64imac-unknown-none-elf
   - cargo test --release --target riscv64gc-unknown-none-elf
