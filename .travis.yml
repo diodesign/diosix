@@ -29,7 +29,7 @@ install:
   - sudo apt-get -qq install git libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
   - git clone -q -b master https://github.com/qemu/qemu.git
   - cd qemu
-  - ./configure -q --target-list=riscv32-softmmu,riscv64-softmmu
+  - ./configure --target-list=riscv32-softmmu,riscv64-softmmu
   - make -s
   - export PATH=$PATH:$HOME/qemu/riscv32-softmmu/qemu-system-riscv32
   - export PATH=$PATH:$HOME/qemu/riscv64-softmmu/qemu-system-riscv64
