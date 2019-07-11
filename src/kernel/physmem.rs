@@ -103,7 +103,7 @@ pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
     {
         Some(iter) => for area in iter
         {
-            klog!("Physical memory area found at {:x}, {} bytes ({} MB)", area.base, area.size, area.size >> 20);
+            klog!("Physical memory area found at 0x{:x}, size: {} bytes ({} MB)", area.base, area.size, area.size >> 20);
 
             regions.push_front(Region
             {

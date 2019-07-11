@@ -15,13 +15,14 @@ so it's OK to keep it really simple for now. */
 
 use heap;
 use scheduler::ScheduleQueues;
-use platform::cpu::{SupervisorState, features_mask, CPUFeatures};
+use platform::cpu::{SupervisorState, CPUFeatures};
 use alloc::boxed::Box;
 use spin::Mutex;
 use hashmap_core::map::{HashMap, Entry};
 use container::{self, ContainerID};
 use platform::physmem::PhysMemSize;
 use thread::Thread;
+use alloc::string::String;
 
 pub type CPUId = usize;
 pub type CPUCount = CPUId;
@@ -92,7 +93,7 @@ impl Core
         unsafe
         {
             (*cpu).id = id;
-            (*cpu).features = features_mask();
+            (*cpu).features = platform::cpu::features();
             (*cpu).heap.init(platform_cpu_heap_base(), platform_cpu_heap_size());
             (*cpu).queues = ScheduleQueues::new();
         }
@@ -127,6 +128,18 @@ impl Core
     pub fn features() -> CPUFeatures
     {
         unsafe { (*Core::this()).features }
+    }
+
+    /* return string describing this core */
+    pub fn describe() -> String
+    {
+        let mut descr = String::new();
+        for s in platform::cpu::describe()
+        {
+            descr.push_str(s);
+        }
+
+        return descr;
     }
 
     /* return a thread awaiting to run on this CPU core */

@@ -123,3 +123,14 @@ The commands used to invoke Qemu are in `.cargo/config` in the diosix root folde
 To change the amount of memory allocated to diosix in Qemu, add a `-m <RAM size>` paramter to the command line, eg `-m 256M` to boot diosix
 with 256MB of physical RAM. To change the number of CPU cores available, add a `-smp <N>` paramter to the command line, eg `-smp 8` to boot diosix
 with 8 separate CPU cores alocated. Check out the Qemu manual for more settings.
+
+### Testing diosix
+
+To perform the built-in unit tests, replace `run` for `test` in the above `cargo run` commands, eg:
+
+```
+cargo run --release --target riscv32imac-unknown-none-elf
+cargo run --release --target riscv64gc-unknown-none-elf
+```
+
+Unit testing is in its early stages. Feel free to help expand the test cases!

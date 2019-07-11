@@ -40,14 +40,14 @@ extern crate platform;
 
 /* and now for all our non-hw specific code */
 #[macro_use]
-mod lock; /* multi-threading locking primitives */
+mod lock;       /* multi-threading locking primitives */
 #[macro_use]
-mod debug; /* get us some kind of debug output, typically to a serial port */
-mod heap; /* per-CPU private heap management */
-mod abort; /* implement abort() and panic() handlers */
-mod irq; /* handle hw interrupts and sw exceptions, collectively known as IRQs */
-mod physmem; /* manage physical memory */
-mod cpu; /* manage CPU cores */
+mod debug;      /* get us some kind of debug output, typically to a serial port */
+mod heap;       /* per-CPU private heap management */
+mod abort;      /* implement abort() and panic() handlers */
+mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
+mod physmem;    /* manage physical memory */
+mod cpu;        /* manage CPU cores */
 use cpu::{CPUId, BOOT_CPUID};
 /* manage threads and scheduiling */
 mod thread;
@@ -151,6 +151,9 @@ fn kmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
         /* non-boot cores must wait here for early initialization to complete */
         _ => while *(INIT_DONE.lock()) != true {}
     }
+
+    /* acknowledge we're alive and well, and report CPU core features */
+    klog!("Core alive! Type: {}", cpu::Core::describe());
 
     /* enable timer on this CPU core to start scheduling and running threads */
     scheduler::start();
