@@ -34,10 +34,19 @@ pub fn init(device_tree_buf: &u8) -> Result<(), Cause>
 }
 
 /* activate preemptive multitasking. each CPU core should call this
-to start running software threads */
+to start running software threads. CPU cores that can't run user and supervisor-level
+code aren't allowed to join the scheduler: these cores are likely auxiliary or
+management CPUs that have to park waiting for interrupts */
 pub fn start()
 {
-    platform::timer::start();
+    if platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::User) == true
+    {
+        platform::timer::start();
+    }
+    else
+    {
+        klog!("Not joining the scheduler, awaiting IRQs");
+    }
 }
 
 /* a thread has been running for one timeslice, triggering a timer interrupt.

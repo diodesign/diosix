@@ -22,6 +22,10 @@ const EXTENSIONS: &'static [&'static str] = &["a", "b", "c", "d", "e", "f", "g",
                                               "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
                                               "u", "v", "w", "x", "y", "z"];
 
+/* flags within CPUFeatures, derived from misa */
+const CPUFEATURES_SUPERVISOR_MODE: usize = 1 << 18; /* supervisor mode is implemented */
+const CPUFEATURES_USER_MODE: usize       = 1 << 20; /* user mode is implemented */
+
 /* levels of privilege accepted by the kernel */
 #[derive(Copy, Clone, Debug)]
 pub enum PrivilegeMode
@@ -126,6 +130,23 @@ pub fn features() -> CPUFeatures
     return read_csr!(misa) as CPUFeatures;
 }
 
+/* check that this CPU core has sufficient features to run code at the given privilege level
+   => required = privilege level required
+   <= return true if CPU can run code at the required privilege, false if not */
+pub fn features_priv_check(required: PrivilegeMode) -> bool
+{
+    let cpu = read_csr!(misa);
+
+    /* all RISC-V cores provide machine (kernel) mode. Diosix requires supervisor mode for user mode */
+    match (required, cpu & CPUFEATURES_SUPERVISOR_MODE != 0, cpu & CPUFEATURES_USER_MODE != 0)
+    {
+        (    PrivilegeMode::Kernel,    _,    _) => true,
+        (PrivilegeMode::Supervisor, true,    _) => true,
+        (      PrivilegeMode::User, true, true) => true,
+        _ => false
+    }
+}
+
 /* provide an iterator that lists descriptive strings about this CPU core */
 pub fn describe() -> CPUDescriptionIter
 {
@@ -180,9 +201,9 @@ impl Iterator for CPUDescriptionIter
                 check anyway for diagnostic purposes */
                 Some(match self.misa >> width_shift
                 {
-                    1 => "32-bit RISC-V, extensions: ",
-                    2 => "64-bit RISC-V, extensions: ",
-                    _ => "Unsupported RISC-V, extensions: "
+                    1 => "32-bit RISC-V, ext: ",
+                    2 => "64-bit RISC-V, ext: ",
+                    _ => "Unsupported RISC-V, ext: "
                 })
             },
             CPUDescriptionState::Extension(index) =>

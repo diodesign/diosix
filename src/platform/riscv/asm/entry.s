@@ -79,8 +79,3 @@ enter_kernel:
 infinite_loop:
   wfi
   j         infinite_loop
-
-is_boot_cpu:
-  # set a0 to true to indicate this is the boot CPU
-  li        a0, 1
-  j         enter_kernel
