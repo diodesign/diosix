@@ -129,8 +129,8 @@ with 8 separate CPU cores alocated. Check out the Qemu manual for more settings.
 To perform the built-in unit tests, replace `run` for `test` in the above `cargo run` commands, eg:
 
 ```
-cargo run --release --target riscv32imac-unknown-none-elf
-cargo run --release --target riscv64gc-unknown-none-elf
+cargo test --release --target riscv32imac-unknown-none-elf
+cargo test --release --target riscv64gc-unknown-none-elf
 ```
 
-Unit testing is in its early stages. Feel free to help expand the test cases!
+These will complete with an exit code of 0 for success, or a failure code if a test failed. Unit testing is in its early stages. Feel free to help expand the test cases!
