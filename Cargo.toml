@@ -7,11 +7,11 @@ build = "build.rs"
 publish = false
 
 [[bin]]
-name = "kernel"
-path = "src/kernel/main.rs"
+name = "hypervisor"
+path = "src/hypervisor/main.rs"
 
 [build-dependencies]
-regex = "1"
+regex = "1.1.9"
 
 [profile.dev]
 panic = "abort"
@@ -29,21 +29,29 @@ overflow-checks = false
 opt-level = 3
 incremental = false
 
+# fixed dependencies
+[dependencies.spin]
+version = "0.5"
+
+[dependencies.hashbrown]
+version = "0.5.0"
+features = [ "nightly" ]
+
+[dependencies.lazy_static]
+version = "1.3.0"
+features = [ "spin_no_std" ]
+
+[dependencies.goblin]
+version = "0.0.23"
+default-features = false
+features = [ "elf32", "elf64" ]
+
 # supported build targets - don't forget to update .cargo with details for the linker and runner 
 [target.riscv32imac-unknown-none-elf.dependencies]
 platform = { path = "src/platform/riscv/" }
-lazy_static = { path = "src/contrib/lazy-static.rs" }
-spin = { path = "src/contrib/spin-rs" }
-hashmap_core = { path = "src/contrib/hashmap_core" }
 
 [target.riscv64imac-unknown-none-elf.dependencies]
 platform = { path = "src/platform/riscv/" }
-lazy_static = { path = "src/contrib/lazy-static.rs" }
-spin = { path = "src/contrib/spin-rs" }
-hashmap_core = { path = "src/contrib/hashmap_core" }
 
 [target.riscv64gc-unknown-none-elf.dependencies]
 platform = { path = "src/platform/riscv/" }
-lazy_static = { path = "src/contrib/lazy-static.rs" }
-spin = { path = "src/contrib/spin-rs" }
-hashmap_core = { path = "src/contrib/hashmap_core" }

@@ -16,18 +16,18 @@ pub enum IRQType
 #[derive(Debug, Copy, Clone)]
 pub enum IRQCause
 {
-    /* software interrupt generated from user, supervisor or kernel mode */
+    /* software interrupt generated from user, supervisor or hypervisor mode */
     UserSWI,
     SupervisorSWI,
-    KernelSWI,
-    /* hardware timer generated for user, supervisor or kernel mode */
+    HypervisorSWI,
+    /* hardware timer generated for user, supervisor or hypervisor mode */
     UserTimer,
     SupervisorTimer,
-    KernelTimer,
-    /* external hw interrupt generated for user, supervisor or kernel mode */
+    HypervisorTimer,
+    /* external hw interrupt generated for user, supervisor or hypervisor mode */
     UserInterrupt,
     SupervisorInterrupt,
-    KernelInterrupt,
+    HypervisorInterrupt,
 
     /* common CPU faults */
     InstructionAlignment,
@@ -45,7 +45,7 @@ pub enum IRQCause
     /* other ways to call down from user to supervisor, etc */
     UserEnvironmentCall,
     SupervisorEnvironmentCall,
-    KernelEnvironmentCall,
+    HypervisorEnvironmentCall,
 
     Unknown, /* unknown, undefined, or reserved type */
 }
@@ -53,12 +53,12 @@ pub enum IRQCause
 /* describe IRQ in high-level, portable terms */
 pub struct IRQ
 {
-    pub fatal: bool, /* true if this IRQ means current container must stop */
+    pub fatal: bool, /* true if this IRQ means current supervisor must stop */
     pub privilege_mode: crate::cpu::PrivilegeMode, /* privilege level of the interrupted code */
     pub irq_type: IRQType, /* type of the IRQ - sw or hw generated */
     pub cause: IRQCause, /* cause of this interruption */
     pub pc: usize,   /* where in memory this IRQ occured */
-    pub sp: usize,   /* stack pointer for interrupted container */
+    pub sp: usize,   /* stack pointer for interrupted supervisor */
 }
 
 /* Hardware-specific data from low-level IRQ handler.
@@ -77,9 +77,9 @@ pub struct IRQContext
 
 /* dispatch
    Handle incoming IRQs: software exceptions and hardware interrupts
-   for the high-level kernel.
+   for the high-level hypervisor.
    => context = context from the low-level code that picked up the IRQ
-   <= return high-level description of the IRQ for the portable kernel
+   <= return high-level description of the IRQ for the portable hypervisor
 */
 pub fn dispatch(context: IRQContext) -> IRQ
 {
@@ -93,7 +93,7 @@ pub fn dispatch(context: IRQContext) -> IRQ
         63
     };
 
-    /* convert RISC-V cause codes into generic codes for the kernel.
+    /* convert RISC-V cause codes into generic codes for the hypervisor.
     the top bit of the cause code is set for interrupts and clear for execeptions */
     let cause_type = match context.cause >> cause_shift
     {
@@ -114,7 +114,7 @@ pub fn dispatch(context: IRQContext) -> IRQ
         (IRQType::Exception, 7) => (true, IRQCause::StoreAccess),
         (IRQType::Exception, 8) => (false, IRQCause::UserEnvironmentCall),
         (IRQType::Exception, 9) => (false, IRQCause::SupervisorEnvironmentCall),
-        (IRQType::Exception, 11) => (false, IRQCause::KernelEnvironmentCall),
+        (IRQType::Exception, 11) => (false, IRQCause::HypervisorEnvironmentCall),
         (IRQType::Exception, 12) => (false, IRQCause::InstructionPageFault),
         (IRQType::Exception, 13) => (false, IRQCause::LoadPageFault),
         (IRQType::Exception, 15) => (false, IRQCause::StorePageFault),
@@ -122,17 +122,17 @@ pub fn dispatch(context: IRQContext) -> IRQ
         /* interrupts - none are fatal */
         (IRQType::Interrupt, 0) => (false, IRQCause::UserSWI),
         (IRQType::Interrupt, 1) => (false, IRQCause::SupervisorSWI),
-        (IRQType::Interrupt, 3) => (false, IRQCause::KernelSWI),
+        (IRQType::Interrupt, 3) => (false, IRQCause::HypervisorSWI),
         (IRQType::Interrupt, 4) => (false, IRQCause::UserTimer),
         (IRQType::Interrupt, 5) => (false, IRQCause::SupervisorTimer),
-        (IRQType::Interrupt, 7) => (false, IRQCause::KernelTimer),
+        (IRQType::Interrupt, 7) => (false, IRQCause::HypervisorTimer),
         (IRQType::Interrupt, 8) => (false, IRQCause::UserInterrupt),
         (IRQType::Interrupt, 9) => (false, IRQCause::SupervisorInterrupt),
-        (IRQType::Interrupt, 11) => (false, IRQCause::KernelInterrupt),
+        (IRQType::Interrupt, 11) => (false, IRQCause::HypervisorInterrupt),
         (_, _) => (false, IRQCause::Unknown),
     };
 
-    /* return structure describing this exception to the high-level kernel */
+    /* return structure describing this exception to the high-level hypervisor */
     IRQ {
         fatal: fatal,
         irq_type: cause_type,

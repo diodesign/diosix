@@ -11,7 +11,7 @@ use crate::physmem::RAMArea;
 
 /* get_ram_area
    Get the system RAM area's base address and size in bytes. Assumes there is a single RAM block.
-   => device_tree_buf = pointer to device tree in kernel-accessible RAM
+   => device_tree_buf = pointer to device tree in hypervisor-accessible RAM
    <= number of bytes in system memory, or None for failure
 */
 pub fn get_ram_area(device_tree_buf: &u8) -> Option<RAMArea>
@@ -60,7 +60,7 @@ pub fn get_ram_area(device_tree_buf: &u8) -> Option<RAMArea>
 }
 
 /* get_cpu_count
-   => device_tree_buf = pointer to device tree in kernel-accessible RAM
+   => device_tree_buf = pointer to device tree in hypervisor-accessible RAM
    <= number of CPU cores in system, or None for failure
 */
 pub fn get_cpu_count(device_tree_buf: &u8) -> Option<usize>
@@ -84,7 +84,7 @@ pub fn get_cpu_count(device_tree_buf: &u8) -> Option<usize>
 }
 
 /* get the builtin CPU timer's frequency, which is fixed in hardware
-   => device_tree_buf = pointer to device tree in kernel-accessible RAM
+   => device_tree_buf = pointer to device tree in hypervisor-accessible RAM
    <= timer frequency, or None for failure
 */
 pub fn get_timebase_freq(device_tree_buf: &u8) -> Option<usize>

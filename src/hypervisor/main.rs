@@ -1,4 +1,4 @@
-/* diosix hypervisor kernel main entry code
+/* diosix hypervisor main entry code
  *
  * (c) Chris Williams, 2019.
  *
@@ -18,7 +18,7 @@
 /* provide a framework for unit testing */
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::run_tests)]
-#![reexport_test_harness_main = "ktests"] /* entry point for tests */
+#![reexport_test_harness_main = "hvtests"] /* entry point for tests */
 
 /* plug our custom heap allocator into the Rust language: Box, etc*/
 #![feature(alloc_error_handler)]
@@ -26,21 +26,22 @@
 extern crate alloc;
 use alloc::string::String;
 
-/* needed for lookup tables of stuff */
-extern crate hashmap_core;
+/* needed for fast lookup tables of stuff */
+extern crate hashbrown;
 
-/* allow hypervisor and supervisor to use lazy statics and mutexes */
+/* needed for elf passing */
+extern crate goblin;
+
+/* needed for lazyily-allocated static variables, and atomic ops */
 #[macro_use]
 extern crate lazy_static;
 extern crate spin;
-use spin::Mutex;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /* this will bring in all the hardware-specific code */
 extern crate platform;
 
 /* and now for all our non-hw specific code */
-#[macro_use]
-mod lock;       /* multi-threading locking primitives */
 #[macro_use]
 mod debug;      /* get us some kind of debug output, typically to a serial port */
 mod heap;       /* per-CPU private heap management */
@@ -48,25 +49,23 @@ mod abort;      /* implement abort() and panic() handlers */
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem;    /* manage physical memory */
 mod cpu;        /* manage CPU cores */
-use cpu::{CPUId, BOOT_CPUID};
-/* manage threads and scheduiling */
-mod thread;
-use thread::Priority;
+mod vcore;      /* virtual CPU core management and scheduling */
 mod scheduler;
-/* manage containers */
-mod container;
-/* list of kernel error codes */
+mod capsule;    /* manage capsules */
+mod loader;     /* parse and load supervisor binaries */
+
+use cpu::{CPUId, BOOT_CPUID};
+use vcore::Priority;
+
+/* list of error codes */
 mod error;
 use error::Cause;
-
-/* and our builtin supervisor kernel, which runs in its own container(s) */
-mod supervisor;
 
 /* tell Rust to use our Kallocator to allocate and free heap memory.
 while we'll keep track of physical memory, we'll let Rust perform essential
 tasks, such as freeing memory when it's no longer needed, pointer checking, etc */
 #[global_allocator]
-static KERNEL_HEAP: heap::Kallocator = heap::Kallocator;
+static HV_HEAP: heap::HVallocator = heap::HVallocator;
 
 /* set to true to allow physical CPU cores to start running supervisor code */
 lazy_static!
@@ -77,22 +76,22 @@ lazy_static!
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 stick to usize as much as possible */
 
-/* NOTE: Do not call any klog/kdebug macros until debug has been initialized */
+/* NOTE: Do not call any hvlog/hvdebug macros until debug has been initialized */
 
-/* kentry
-   This is the official entry point of the Rust-level machine/hypervsor kernel.
-   Call kmain, which is where all the real work happens, and catch any errors.
-   => parameters described in kmain, passed directly from the bootloader...
-   <= return to infinite loop, awaiting inerrupts */
+/* hventry
+   This is the official entry point of the Rust-level hypervisor.
+   Call hvmain, which is where all the real work happens, and catch any errors.
+   => parameters described in hvmain, passed directly from the bootloader...
+   <= return to infinite loop, awaiting interrupts */
 #[no_mangle]
-pub extern "C" fn kentry(cpu_nr: CPUId, device_tree_buf: &u8)
+pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_buf: &u8)
 {
     /* carry out tests if that's what we're here for */
     #[cfg(test)]
-    ktests();
+    hvtests();
 
     /* if not then start the system as normal */
-    match kmain(cpu_nr, device_tree_buf)
+    match hvmain(cpu_nr, device_tree_buf)
     {
         Err(e) => match e
         {
@@ -101,22 +100,22 @@ pub extern "C" fn kentry(cpu_nr: CPUId, device_tree_buf: &u8)
             early failure to the user for all platforms */
             Cause::DebugFailure => (),
             /* we made debug initialization OK so let the user know where it all went wrong */
-            _ => kalert!("kmain bailed out with error: {:?}", e),
+            _ => hvalert!("hvmain bailed out with error: {:?}", e),
         },
         _ => () /* continue waiting for an IRQ to come in */
     };
 }
 
-/* kmain
-   This code runs at the machine/hypervisor level, with full physical memory access.
-   Its job is to initialize CPU cores and other resources so that containers can be
-   created that contain supervisor kernels that manage their own userspaces, in which
-   applications run. The hypervisor ensures containers of apps are kept apart using
+/* hvmain
+   This code runs at the hypervisor level, with full physical memory access.
+   Its job is to initialize physical CPU cores and other resources so that capsules can be
+   created in which supervisors run that manage their own userspaces, in which
+   applications run. The hypervisor ensures capsules are kept apart using
    hardware protections.
 
-   Assumes all CPUs enter this function during startup.
+   Assumes all physical CPU cores enter this function during startup.
    The boot CPU is chosen to initialize the system in pre-SMP mode.
-   If we're on a single CPU core then everything should run OK.
+   If we're on a single CPU core then everything should still run OK.
 
    => cpu_nr = arbitrary CPU core ID number assigned by boot code,
                separate from hardware ID number.
@@ -124,10 +123,10 @@ pub extern "C" fn kentry(cpu_nr: CPUId, device_tree_buf: &u8)
       device_tree_buf = pointer to device tree describing the hardware
    <= return to infinite loop, waiting for interrupts
 */
-fn kmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
+fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
 {
-    /* set up each processor core with its own private heap pool and any other resources.
-    this uses physical memory assigned by the pre-kmain boot code. init() should be called
+    /* set up each physical processor core with its own private heap pool and any other resources.
+    this uses physical memory assigned by the pre-hvmain boot code. init() should be called
     first to set up every core, including the boot CPU, which then sets up the global
     resouces. all non-boot CPUs should wait until global resources are ready. */
     cpu::Core::init(cpu_nr);
@@ -137,12 +136,12 @@ fn kmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
         /* delegate to boot CPU the welcome banner and set up global resources */
         BOOT_CPUID => 
         {
-            /* enable the use of klog/kdebug */
+            /* enable the use of hvlog/hvdebug */
             debug::init(device_tree_buf)?;
 
-            /* initialize global resources and root container */
+            /* initialize global resources and boot capsule */
             init_globals(device_tree_buf)?;
-            init_root_container()?;
+            init_boot_capsule()?;
 
             /* allow other cores to continue */
             *(INIT_DONE.lock()) = true;
@@ -153,9 +152,9 @@ fn kmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
     }
 
     /* acknowledge we're alive and well, and report CPU core features */
-    klog!("Core alive! Type: {}", cpu::Core::describe());
+    hvlog!("Physical CPU core awake, type: {}", cpu::Core::describe());
 
-    /* enable timer on this CPU core to start scheduling and running threads */
+    /* enable timer on this physical CPU core to start scheduling and running virtual cores */
     scheduler::start();
 
     /* initialization complete. if we make it this far then fall through to infinite loop
@@ -174,7 +173,7 @@ fn init_globals(device_tree: &u8) -> Result<(), Cause>
         Some(c) => c,
         None =>
         {
-            kalert!("CPU management failure: can't extract core count from config");
+            hvalert!("Physical CPU management failure: can't extract core count from config");
             return Err(Cause::CPUBadConfig);
         }
     };
@@ -185,7 +184,7 @@ fn init_globals(device_tree: &u8) -> Result<(), Cause>
         Some(s) => s,
         None =>
         {
-            kalert!("Physical memory failure: too little RAM, or device tree error");
+            hvalert!("Physical memory failure: too little RAM, or device tree error");
             return Err(Cause::PhysMemBadConfig);
         }
     };
@@ -193,26 +192,20 @@ fn init_globals(device_tree: &u8) -> Result<(), Cause>
     scheduler::init(device_tree)?;
 
     /* say hello */
-    klog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree);
-    klog!("Available physical RAM: {} MiB ({} bytes), physical CPU cores: {}", ram_size / 1024 / 1024, ram_size, cpus);
-    kdebug!("Debugging enabled");
+    hvlog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree);
+    hvlog!("Available physical RAM: {} MiB, physical CPU cores: {}", ram_size / 1024 / 1024, ram_size, cpus);
+    hvdebug!("Debugging enabled");
 
     return Ok(());
 }
 
-/* create the root container */
-fn init_root_container() -> Result<(), Cause>
+/* create the boot capsule, from which all other capsules spawn */
+fn init_boot_capsule() -> Result<(), Cause>
 {
-    /* create root container with 4MB of RAM and max CPU cores using builtin supervisor kernel */
-    let root_mem = 4 * 1024 * 1024;
-    let root_name = String::from("root");
-    let root_max_vcpu = 4;
-    container::create_from_builtin(root_name.clone(), root_mem, root_max_vcpu)?;
-
-    /* create a virtual CPU thread for the root container, starting it in sentry() with
-    top of allocated memory as the stack pointer.. the scheduler will assign a physical CPU core
-    to the thread */
-    thread::Thread::create(root_name, supervisor::main::sentry, root_mem, Priority::High)?;
+    /* create a boot capsule with 64MB of RAM and one virtual core */
+    let mem = 64 * 1024 * 1024;
+    let cpus = 1;
+    capsule::create_boot_capsule(mem, cpus)?;
     Ok(())
 }
 
@@ -220,7 +213,7 @@ fn init_root_container() -> Result<(), Cause>
 #[alloc_error_handler]
 fn kalloc_error(attempt: core::alloc::Layout) -> !
 {
-    kalert!("alloc_error_handler: Failed to allocate/free {} bytes. Halting...", attempt.size());
+    hvalert!("alloc_error_handler: Failed to allocate/free {} bytes. Halting...", attempt.size());
     loop {} /* it would be nice to be able to not die here :( */
 }
 

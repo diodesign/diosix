@@ -26,9 +26,14 @@ pub enum Cause
     CPUBadConfig,
 
     /* containers */
-    ContainerAlreadyExists,
-    ContainerBadName,
+    CapsuleIDExhaustion,
+    CapsuleBadID,
 
     /* scheduler and timer */
-    SchedTimerBadConfig
+    SchedTimerBadConfig,
+    
+    /* supervisor binary loading */
+    LoaderSupervisorTooLarge,
+    LoaderUnrecognizedSupervisor,
+    LoaderAccessFail
 }

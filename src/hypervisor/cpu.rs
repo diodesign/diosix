@@ -1,4 +1,4 @@
-/* diosix machine kernel's physical CPU core management
+/* diosix hypervisor's physical CPU core management
  *
  * (c) Chris Williams, 2019.
  *
@@ -10,20 +10,19 @@ blocks can be shared by other CPUs. Any CPU can free any block, returning
 it to its owner's heap pool. When allocating, a CPU can only draw from
 its own heap, reusing any blocks freed by itself or other cores.
 
-The machine/hypervisor layer is unlikely to do much active allocation
+The hypervisor layer is unlikely to do much active allocation
 so it's OK to keep it really simple for now. */
 
 use heap;
 use scheduler::ScheduleQueues;
 use platform::cpu::{SupervisorState, CPUFeatures};
-use alloc::boxed::Box;
 use spin::Mutex;
-use hashmap_core::map::{HashMap, Entry};
-use container::{self, ContainerID};
+use hashbrown::hash_map::{HashMap, Entry};
+use capsule::{self, CapsuleID};
 use platform::physmem::PhysMemSize;
-use thread::Thread;
-use alloc::string::String;
+use vocre::VirtualCore;
 
+/* physical CPU core IDs and count */
 pub type CPUId = usize;
 pub type CPUCount = CPUId;
 
@@ -39,12 +38,11 @@ extern "C"
     fn platform_load_supervisor_state(state: &SupervisorState);
 }
 
-/* map running threads to their CPU cores. 
-   we can't store these in Core structs because it upsets Rust's borrow checker: you can't
-   deallocate Thread from a raw struct pointer. Rust won't let you hurt yourself. */
+/* map running virtual CPU cores to physical CPU cores. 
+   we can't store these in Core structs because it upsets Rust's borrow checker */
 lazy_static!
 {
-    static ref THREADS: Mutex<Box<HashMap<CPUId, Thread>>> = Mutex::new(box HashMap::new());
+    static ref VCORES: Mutex<HashMap<CPUId, VirtualCore>> = Mutex::new(HashMap::new());
 }
 
 /* initialize the CPU management code
@@ -63,29 +61,28 @@ pub struct Core
     linear, runtime-assigned ID here. the hardware-assigned ID is not used in the portable code */
     id: CPUId,
 
-    /* platform-defined bitmask of ISA features this core provides. if a thread has a features bit set that
-    is unset in a core's feature bitmask, the thread will not be allowed to run on that core */
+    /* platform-defined bitmask of ISA features this core provides. if a virtual core has a features bit set that
+    is unset in a physical core's feature bitmask, the virtual core will not be allowed to run on that physical core */
     features: CPUFeatures,
 
-    /* each CPU core gets its own heap that it can share, but it must manage */
+    /* each physical CPU core gets its own heap that it can share, but it must manage */
     pub heap: heap::Heap,
 
-    /* each CPU gets its own set of supervisor thread schedule queues */
+    /* each physical CPU gets its own set of queues of virtual CPU cores to schedule */
     queues: ScheduleQueues
 }
 
 impl Core
 {
-    /* intiialize a CPU core. Prepare it for running supervisor code.
-    blocks until cleared to continue by the boot CPU
-    => id = boot-assigned CPU core ID. this is separate from the hardware-asigned
+    /* intiialize a physical CPU core. Prepare it for running supervisor code.
+    => id = diosix-assigned CPU core ID at boot time. this is separate from the hardware-asigned
             ID number, which may be non-linear. the runtime-generated core ID will
             run from zero to N-1 where N is the number of available cores */
     pub fn init(id: CPUId)
     {
-        /* NOTE: avoid calling klog/kdebug here as debug channels have not been initialized yet */
+        /* NOTE: avoid calling hvlog/hvdebug here as debug channels have not been initialized yet */
 
-        /* the pre-kmain startup code has allocated space for per-CPU core variables.
+        /* the pre-hvmain startup code has allocated space for per-CPU core variables.
         this function returns a pointer to that structure */
         let cpu = Core::this();
 
@@ -99,15 +96,15 @@ impl Core
         }
     }
 
-    /* return ID of container of the thread this CPU core is running, or None for none */
-    pub fn container() -> Option<ContainerID>
+    /* return ID of capsule of the virtual CPU core this physical CPU core is running, or None for none */
+    pub fn capsule() -> Option<CapsuleID>
     {
-        match THREADS.lock().entry(Core::id())
+        match VCORES.lock().entry(Core::id())
         {
             Entry::Vacant(_) => None,
             Entry::Occupied(value) =>
             {
-                Some(value.get().container())
+                Some(value.get().capsule())
             }
         }
     }
@@ -142,56 +139,58 @@ impl Core
         return descr;
     }
 
-    /* return a thread awaiting to run on this CPU core */
-    pub fn dequeue() -> Option<Thread>
+    /* return a virtual CPU core awaiting to run on this physical CPU core */
+    pub fn dequeue() -> Option<VirtualCore>
     {
         unsafe { (*Core::this()).queues.dequeue() }
     }
 
-    /* move a thread onto this CPU's queue of threads */
-    pub fn queue(to_queue: Thread)
+    /* move a virtual CPU core onto this physical CPU's queue of virtual cores to run */
+    pub fn queue(to_queue: VirtualCore)
     {
         unsafe { (*Core::this()).queues.queue(to_queue) }
     }
 }
 
-/* save current thread's context, if we're running one, and load next thread's context.
+/* save current virtual CPU core's context, if we're running one, and load next virtual core's context.
 this should be called from an IRQ context as it preserves the interrupted code's context
-and overwrites the context with the next thread's context, so returning to supervisor
+and overwrites the context with the next virtual core's context, so returning to supervisor
 mode will land us in the new context */
-pub fn context_switch(next: Thread)
+pub fn context_switch(next: VirtualCore)
 {
-    let next_container = next.container();
+    let next_capsule = next.capsule();
     let id = Core::id();
 
-    match THREADS.lock().remove(&id)
+    /* find what this physical core was running, if anything */
+    match VCORES.lock().remove(&id)
     {
-        Some(current_thread) =>
+        Some(current_vcore) =>
         {
-            /* if we're running a thread, preserve its state */
-            platform::cpu::save_supervisor_state(current_thread.state_as_ref());
+            /* if we're running a virtual CPU core, preserve its state */
+            platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
 
-            /* if we're switching to a thread in another container then replace the
-            hardware access permissions */
-            if current_thread.container() != next_container
+            /* if we're switching to a virtual CPU core in another capsule then replace the
+            current hardware access permissions so that we're only allowing access to the RAM assigned
+            to the next capsule to run */
+            if current_vcore.capsule() != next_capsule
             {
-                container::enforce(next_container);
+                capsule::enforce(next_capsule);
             }
 
-            /* queue the current thread on the waiting list */
-            Core::queue(current_thread);
+            /* queue the current virtual core on the waiting list */
+            Core::queue(current_vcore);
         },
         None =>
         {
-            /* if we were not running a thread then ensure we return to supervisor mode
+            /* if we were not running a virtual CPU core then ensure we return to supervisor mode
             rather than hypervisor mode */
             platform::cpu::prep_supervisor_return();
             /* and enforce its hardware access permissions */
-            container::enforce(next_container);
+            capsule::enforce(next_capsule);
         }
     }
 
-    /* prepare next thread to run when we leave this IRQ context */
+    /* prepare next virtual core to run when we leave this IRQ context */
     platform::cpu::load_supervisor_state(next.state_as_ref());
-    THREADS.lock().insert(id, next); /* add to the running threads list */
+    VCORES.lock().insert(id, next); /* add to the running virtual cores list */
 }

@@ -39,9 +39,9 @@ const HEAP_BLOCK_SIZE: usize = 64;
 /* follow Rust's heap allocator API so we can drop our per-CPU allocator in and use things
 like Box. We allow the Rust toolchain to track and check pointers and object lifetimes,
 while we'll manage the underlying physical memory used by the heap. */
-pub struct Kallocator;
+pub struct HVallocator;
 
-unsafe impl GlobalAlloc for Kallocator
+unsafe impl GlobalAlloc for HVallocator
 {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8
     {
@@ -50,12 +50,12 @@ unsafe impl GlobalAlloc for Kallocator
         {
             Ok(p) => 
             {
-                kdebug!("heap: allocating {:p}, {} bytes", p, bytes);
+                hvdebug!("heap: allocating {:p}, {} bytes", p, bytes);
                 p
             },
             Err(e) =>
             {
-                kalert!("Kallocator: request for {} bytes failed ({:?})", bytes, e);
+                hvalert!("HVallocator: request for {} bytes failed ({:?})", bytes, e);
                 null_mut() /* yeesh */
             }
         }
@@ -63,12 +63,12 @@ unsafe impl GlobalAlloc for Kallocator
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
     {
-        kdebug!("heap: freeing {:p}", ptr);
+        hvdebug!("heap: freeing {:p}", ptr);
         match (*<::cpu::Core>::this()).heap.free::<u8>(ptr)
         {
             Err(e) =>
             {
-                kalert!("Kallocator: request to free {:p} failed ({:?})", ptr, e)
+                hvalert!("HVallocator: request to free {:p} failed ({:?})", ptr, e)
             },
             _ => ()
         }
@@ -88,7 +88,7 @@ pub struct HeapBlock
     /* block contents follows... */
 }
 
-/* this is our own internal API for the per-CPU kernel heap. use high-level abstractions, such as Box,
+/* this is our own internal API for the per-CPU hypervisor heap. use high-level abstractions, such as Box,
 rather than this directly, so we get all the safety measures and lifetime checking. think of kallocator
 as the API and Heap as the engine. kallocator is built on top of Heap, and each CPU core has its own Heap. */
 #[repr(C)]

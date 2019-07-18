@@ -26,11 +26,13 @@
 use std::env;
 use std::fs;
 use std::process::Command;
+use std::fs::metadata;
 
 extern crate regex;
 use regex::Regex;
 
 /* describe a build target from its user-supplied triple */
+#[derive(Clone)]
 struct Target
 {
     pub cpu_arch: String,    /* define the CPU architecture to generate code for */
@@ -97,8 +99,23 @@ fn main()
         output_dir: env::var("OUT_DIR").expect("No output directory specified"),
         as_exec: String::from(format!("{}-elf-as", target.gnu_prefix)),
         ar_exec: String::from(format!("{}-elf-ar", target.gnu_prefix)),
-        target: target
+        target: target.clone()
     };
+
+    let boot_supervisor_location = String::from(format!("boot/{}/vmlinux", target.gnu_prefix));
+    let initrd_location = String::from(format!("boot/{}/rootfs.cpio.gz", target.gnu_prefix));
+
+    /* check we have a supervisor and initrd to boot */
+    match metadata(&boot_supervisor_location)
+    {
+        Err(e) => panic!("Expected boot supervisor at {}, can't find it (error: {:?})", boot_supervisor_location, e),
+        _ => ()
+    }
+    match metadata(&initrd_location)
+    {
+        Err(e) => panic!("Expected initrd at {}, can't find it (error: {:?})", initrd_location, e),
+        _ => ()
+    }
 
     /* tell cargo to rebuild just these files change:
     linker scripts and any files in the platform's assembly code directories.

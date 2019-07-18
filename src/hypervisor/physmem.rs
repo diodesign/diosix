@@ -1,6 +1,6 @@
-/* diosix machine kernel physical memory management
+/* diosix hypervisor physical memory management
  *
- * Allocate/free memory for container supervisors
+ * Allocate/free memory for supervisors
  * 
  * (c) Chris Williams, 2019.
  *
@@ -12,22 +12,21 @@ use spin::Mutex;
 use error::Cause;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
-use platform::physmem::{self, PhysMemBase, PhysMemEnd, PhysMemSize};
+use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize};
+use capsule;
 
 lazy_static!
 {
     /* acquire REGIONS lock before accessing any physical RAM regions */
-    static ref REGIONS: Mutex<Box<LinkedList<Region>>> = Mutex::new(box LinkedList::new());
+    static ref REGIONS: Mutex<LinkedList<Region>> = Mutex::new(LinkedList::new());
 }
 
-/* describe a region's use so the right access permissions can be assigned */
-#[derive(Copy, Clone, Debug)]
-pub enum RegionUse
+/* describe a physical memory region's state */
+#[derive(Copy, Clone)]
+struct RegionState
 {
-    SupervisorCode = 0, /* read-execute-only area of the supervisor kernel */
-    SupervisorData = 1, /* read-write data area of the supervisor kernel */
-    ContainerRAM   = 2, /* read-write area for the container to use */
-    Unused         = 3  /* unallocated */
+    InUse,  /* allocated to a capsule */
+    Free    /* available to allocate to a capsule */
 }
 
 /* describe a physical memory region */
@@ -36,49 +35,40 @@ pub struct Region
 {
     base: PhysMemBase,
     end: PhysMemEnd,
-    usage: RegionUse
+    state: RegionState
 }
 
 impl Region
 {
-    /* enforce this region's access permissions, overwriting previous
-    protections for the same usage type. this KISS approach should stop
-    us losing track of regions and ensure scheduled containers always
-    replace previous containers' access */
-    pub fn protect(&self)
+    /* allow the currently running supervisor to access this region of physical memory.
+       return true for success, or false if request failed */
+    pub fn grant_access(&self) -> bool
     {
-        let perms = match self.usage
+        return if self.state == RegionState::InUse
         {
-            RegionUse::SupervisorCode => physmem::AccessPermissions::ReadExecute,
-            RegionUse::SupervisorData => physmem::AccessPermissions::ReadWrite,
-            RegionUse::ContainerRAM   => physmem::AccessPermissions::ReadWrite,
-            RegionUse::Unused =>
-            {
-                kalert!("Enforcing access permissions on unused region?");
-                physmem::AccessPermissions::NoAccess
-            }
-        };
-
-        physmem::protect(self.usage as usize, self.base, self.end, perms);
+            platform::physmem::grant_access(self.base, self.end);
+            true
+        }
+        else
+        {
+            hvalert!("Can't grant access to a non-in-use physical RAM region (base 0x{:x} size {:x})",
+                     self.base, self.end - self.base);
+            false;
+        }
     }
 
-    /* return and change attributes */
+    /* return or change attributes */
     pub fn base(&self) -> PhysMemBase { self.base }
     pub fn end(&self) -> PhysMemEnd { self.end }
+    pub fn size(&self) -> PhysMemSize { self.end - self.base }
     pub fn increase_base(&mut self, size: PhysMemSize) { self.base = self.base + size; }
 }
 
-/* return the regions covering the builtin supervisor kernel's
-executable code, and static data */
-pub fn builtin_supervisor_code() -> Region
+/* return the physical RAM region covering the boot supervisor */
+pub fn boot_supervisor() -> Region
 {
-    let (base, end) = platform::physmem::builtin_supervisor_code();
-    Region { base: base, end: end, usage: RegionUse::SupervisorCode }
-}
-pub fn builtin_supervisor_data() -> Region
-{
-    let (base, end) = platform::physmem::builtin_supervisor_data();
-    Region { base: base, end: end, usage: RegionUse::SupervisorData }
+    let (base, end) = platform::physmem::boot_supervisor();
+    Region { base: base, end: end }
 }
 
 /* intiialize the hypervisor's physical memory management.
@@ -91,10 +81,10 @@ pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
     /* keep a running total of the number of bytes to play with */
     let mut available_bytes = 0;
 
-    /* gather up all physical RaM areas from which future
-    container physical RAM allocations will be drawn.
+    /* gather up all physical RAM areas from which future
+    capsule physical RAM allocations will be drawn.
     this list is built from available physical RAM: it must not include
-    any RAM areas already in use by the kernel, peripherals, etc.
+    any RAM areas already in use by the hypervisor, peripherals, etc.
     the undelying platform code needs to exclude those off-limits areas.
     in other words, available_ram() must only return fully usable RAM areas */
     let mut regions = REGIONS.lock();
@@ -103,13 +93,13 @@ pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
     {
         Some(iter) => for area in iter
         {
-            klog!("Physical memory area found at 0x{:x}, size: {} bytes ({} MB)", area.base, area.size, area.size >> 20);
+            hvlog!("Physical memory area found at 0x{:x}, size: {} bytes ({} MB)", area.base, area.size, area.size >> 20);
 
             regions.push_front(Region
             {
                 base: area.base,
                 end: area.base + area.size,
-                usage: RegionUse::Unused
+                state: RegionState::Free
             });
 
             available_bytes = available_bytes + area.size;
@@ -120,7 +110,7 @@ pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
     return Some(available_bytes);
 }
 
-/* allocate a region of available physical memory for container use
+/* allocate a region of available physical memory for capsule use
    => size = number of bytes in region
       usage = what the region will be used for
    <= Region structure for the space, or an error code */
@@ -129,14 +119,14 @@ pub fn alloc_region(size: PhysMemSize, usage: RegionUse) -> Result<Region, Cause
     /* set to Some when we've found a suitable region */
     let mut area: Option<Region> = None;
 
-    /* carve up the available ram for containers. this approach is a little crude
-    but may do for now. it means containers can't grow */
+    /* carve up the available ram for capsules. this approach is a little crude
+    but may do for now. it means capsules can't grow */
     let mut regions = REGIONS.lock();
     for region in regions.iter_mut()
     {
         match region.usage
         {
-            RegionUse::Unused =>
+            RegionState::Free =>
             {
                 if (region.end() - region.base()) >= size
                 {
@@ -147,7 +137,7 @@ pub fn alloc_region(size: PhysMemSize, usage: RegionUse) -> Result<Region, Cause
                     {
                         base: region.base(),
                         end: region.base() + size,
-                        usage: usage
+                        state: RegionState::InUse
                     });
                     region.increase_base(size);
                     break;

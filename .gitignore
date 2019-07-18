@@ -1,9 +1,9 @@
-
 # stop this sort of cruft ending up in the repo
 *~
 *.swp
 *.swo
 *.o
+*.a
 *.bin
 *.iso
 *.out
@@ -14,6 +14,9 @@
 
 # ignore compiler output directories
 /target/
+
+# ignore boot supervisor binaries */
+/boot/
 
 # ignore rustfmt stuff
 **/*.rs.bk

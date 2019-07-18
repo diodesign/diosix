@@ -1,4 +1,4 @@
-/* diosix machine kernel code for handling hardware interrupts and software exceptions
+/* diosix hypervisor code for handling hardware interrupts and software exceptions
  *
  * (c) Chris Williams, 2019.
  *
@@ -9,17 +9,17 @@ use scheduler;
 
 /* platform-specific code must implement all this */
 use platform;
-use platform::irq::{self, IRQContext, IRQType, IRQCause, IRQ};
+use platform::irq::{IRQContext, IRQType, IRQCause, IRQ};
 use platform::cpu::PrivilegeMode;
 
-/* kernel_irq_handler
+/* hypervisor_irq_handler
    entry point for hardware interrupts and software exceptions, collectively known as IRQs.
    call down into platform-specific handlers
    => context = platform-specific context of the IRQ
    <= returns flag word describing IRQ
 */
 #[no_mangle]
-pub extern "C" fn kirq_handler(context: IRQContext)
+pub extern "C" fn hypervisor_irq_handler(context: IRQContext)
 {
     let irq = platform::irq::dispatch(context);
     match irq.irq_type
@@ -37,19 +37,19 @@ fn exception(irq: IRQ)
         /* catch non-fatal supervisor-level exceptions */
         (false, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            klog!("Environment call from supervisor")
+            hvlog!("Environment call from supervisor")
         },
         /* catch everything else, halting if fatal */
         (fatal, priviledge, cause) =>
         {
-            kalert!(
+            hvalert!(
                 "Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}",
                 priviledge, cause, irq.pc, irq.sp);
 
             /* stop here if we hit an unhandled fatal exception */
             if fatal == true
             {
-                kalert!("Halting after unhandled fatal exception");
+                hvalert!("Halting after unhandled fatal exception");
                 loop {}
             }
         }
@@ -62,13 +62,13 @@ fn interrupt(irq: IRQ)
     match irq.cause
     {
         /* handle our scheduler's timer */
-        IRQCause::KernelTimer =>
+        IRQCause::HypervisorTimer =>
         {
             scheduler::timer_irq();
         },
-        _ => { klog!("Unhandled harwdare interrupt: {:?}", irq.cause) }
+        _ => { hvlog!("Unhandled harwdare interrupt: {:?}", irq.cause) }
     }
 
     /* clear the interrupt condition */
-    irq::acknowledge(irq);
+    platform::irq::acknowledge(irq);
 }

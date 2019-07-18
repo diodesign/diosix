@@ -1,12 +1,12 @@
 # Building and running diosix
 
-Here's a gentle guide to creating a build environment for diosix, and running the kernel. If you have any updates
+Here's a gentle guide to creating a build environment for diosix, and running the hypervisor. If you have any updates
 or feedback to add, please submit a pull request.
 
 ### Setting up your build environment
 
 To build diosix for 64-bit and/or 32-bit RISC-V systems, make sure you've cross-compiled and installed the latest RISC-V port of
-[GNU binutils](https://github.com/riscv/riscv-binutils-gdb) as the kernel requires this toolkit. You'll next need to
+[GNU binutils](https://github.com/riscv/riscv-binutils-gdb) as the hypervisor requires this toolkit. You'll next need to
 use [rustup](https://rustup.rs/) to install the `nightly` toolchain of Rust. The default target must be the build
 host's architecture (likely x86_64), and you must install at least one of the following RISC-V targets:
 `riscv32imac-unknown-none-elf`, `riscv64imac-unknown-none-elf`, and/or `riscv64gc-unknown-none-elf`.
@@ -84,7 +84,7 @@ Exit the terminal, and reopen it, to pick up the changes. Now you're all set wit
 diosix is designed to detect the type of hardware it is running on when booted, and utilize it as needed,
 whether it's emulated hardware, such as with Qemu, or on real hardware, such as a SiFive board. All you need
 to do is build diosix for the correct CPU architecture. All the hardware needs to do is pass a device-tree
-structure to the kernel so it can discover attached peripherals, controllers, and memory.
+structure to the hypervisor so it can discover attached peripherals, controllers, and memory.
 
 To get started, clone the `diosix` source into an appropriate place, such as `~/src` and enter the code. Here's one way of doing that:
 
@@ -104,7 +104,7 @@ So far, diosix supports the following CPU architure targets:
 * `riscv64imac-unknown-none-elf`
 * `riscv64gc-unknown-none-elf`
 
-Once built, the compiled kernel executable can be found in `target/<CPU architecture>/release/kernel` for the given
+Once built, the compiled hypervisor executable can be found in `target/<CPU architecture>/release/hypervisor` for the given
 `<CPU architecture>`. If `qemu-system-riscv32` and `qemu-system-riscv32` are in your run path, you can build and
 run diosix with one command. To build or rebuild diosix for 32-bit RISC-V targets and run it in Qemu, use the following:
 

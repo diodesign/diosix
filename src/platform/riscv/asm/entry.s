@@ -1,4 +1,4 @@
-# diosix kernel common low-level entry points for RV32G/RV64G platforms
+# diosix hypervisor common low-level entry points for RV32G/RV64G platforms
 #
 # Assumes a0 = CPU/Hart ID number, a1 -> device tree
 #
@@ -11,8 +11,8 @@
 
 .global _start
 
-# kernel constants, such as global variable and lock locations
-# check this file for static kernel data layout
+# hypervisor constants, such as global variable and lock locations
+# check this file for static hypervisor data layout
 .include "src/platform/riscv/asm/consts.s"
 
 # typical hardware physical memory map
@@ -21,7 +21,7 @@
 # 0x00100000, size: 0x1000:    Hardware test area
 # 0x02000000, size: 0x10000:   CLINT (Core Local Interruptor)
 # 0x0c000000, size: 0x4000000: PLIC (Platform Level Interrupt Controller)
-# 0x80000000: DRAM base <-- kernel + entered loaded here
+# 0x80000000: DRAM base <-- hypervisor + entered loaded here
 #
 # different hardware platforms will place peripherals in different areas.
 # check the device tree upon boot for exact phys memory locations
@@ -36,26 +36,26 @@
 #    a1 = pointer to device tree
 # <= never returns
 _start:
-  # each core should grab a slab of memory starting from the end of the kernel.
+  # each core should grab a slab of memory starting from the end of the hypervisor.
   # in order to scale to many cores, not waste too much memory, and to cope with non-linear
   # CPU ID / hart ID, each core will take memory using an atomic counter in the first word
   # of available RAM. thus, memory is allocated on a first come, first served basis.
   # this counter is temporarily and should be forgotten about once in kmain()
-  la        t1, __kernel_end
+  la        t1, __hypervisor_end
   li        t2, 1
   amoadd.w  t3, t2, (t1)
   # t3 = counter just before we incremented it
   # preserve t3 in a0
   add       a0, t3, x0
   
-  # use t3 this as a multiplier from the end of the kernel, using shifts to keep things easy
-  slli      t3, t3, KERNEL_CPU_SLAB_SHIFT
+  # use t3 this as a multiplier from the end of the hypervisor, using shifts to keep things easy
+  slli      t3, t3, HV_CPU_SLAB_SHIFT
   add       t3, t3, t1
   # t3 = base of this CPU's private memory slab
 
   # write the top of the exception / interrupt stack to mscratch
-  li        t1, KERNEL_CPU_STACK_BASE
-  li        t2, KERNEL_CPU_STACK_SIZE
+  li        t1, HV_CPU_STACK_BASE
+  li        t2, HV_CPU_STACK_SIZE
   add       t4, t2, t1
   add       t4, t4, t3
   # t4 = top of the stack, t2 = stack size, t1 = stack base from slab base
@@ -69,9 +69,15 @@ _start:
   # set up early exception/interrupt handling (corrupts t0)
   call      irq_early_init
 
+  # initialize basic settings
+  # trap WFI so we can auto-yield to other capsules
+  li        t1, 1
+  slli      t2, t1, 21        # set bit 21 = TW (timewout wait)
+  csrrs     x0, mstatus, t2
+
 # call kentry with runtime-assigned CPU ID number in a0 and devicetree in a1
-enter_kernel:
-  la        t0, kentry
+enter_hypervisor:
+  la        t0, hventry
   jalr      ra, t0, 0
 
 # fall through to loop rather than crash into random instructions/data

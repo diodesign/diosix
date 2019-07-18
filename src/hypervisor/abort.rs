@@ -1,4 +1,4 @@
-/* diosix high-level kernel panic and abort code
+/* diosix high-level hypervisor panic and abort code
  *
  * (c) Chris Williams, 2019.
  *
@@ -19,14 +19,14 @@ pub fn panic(info: &PanicInfo) -> !
     else
     {
         /* try to inform the user what went wrong */
-        kalert!("Rust runtime panicked unexpectedly");
+        hvalert!("Rust runtime panicked unexpectedly");
         match info.location()
         {
             Some(location) =>
             {
-                kalert!("... crashed in {}: {}", location.file(), location.line())
+                hvalert!("... crashed in {}: {}", location.file(), location.line())
             },
-            None => kalert!("... crash location unknown")
+            None => hvalert!("... crash location unknown")
         };
     }
 
@@ -38,7 +38,7 @@ pub fn panic(info: &PanicInfo) -> !
 #[no_mangle]
 pub extern "C" fn abort() -> !
 {
-    kalert!("Rust runtime hit the abort button");
+    hvalert!("Rust runtime hit the abort button");
     loop
     {}
 }

@@ -11,12 +11,10 @@ use core::intrinsics::transmute;
 extern "C"
 {
     /* linker symbols */
-    static __kernel_start: u8;
-    static __kernel_end: u8;
-    static __supervisor_shared_start: u8;
-    static __supervisor_shared_end: u8;
-    static __supervisor_data_start: u8;
-    static __supervisor_data_end: u8;
+    static __hypervisor_start: u8;
+    static __hypervisor_end: u8;
+    static __boot_supervisor_start: u8;
+    static __boot_supervisor_end: u8;
 }
 
 /* place a memory barrier that ensures all RAM and MMIO read and write operations
@@ -29,6 +27,17 @@ pub fn barrier()
         asm!("fence iorw, iorw" :::: "volatile");
     }
 }
+
+/* force a full TLB flush, needed after altering PMP and SATP CSRs */
+#[inline(always)]
+pub fn tlb_flush()
+{
+    unsafe
+    {
+        asm!("sfence.vma x0,x0, x0" :::: "volatile");
+    }
+}
+
 
 /* allowed physical memory access permissions */
 #[derive(Debug)]
@@ -63,12 +72,12 @@ pub struct RAMArea
     pub size: PhysMemSize
 }
 
-/* allow the higher level kernel to iterate over physical RAM, adding available blocks to its
-allocator pool and skipping the kernel's footprint of code, data and boot payload */
+/* allow the hardware-independent code to iterate over physical RAM, adding available blocks to its
+allocator pool and skipping the hypervisor's footprint of code, data and boot payload */
 pub struct RAMAreaIter
 {
     total_area: RAMArea, /* describes the entire physical RAM block */
-    kernel_area: RAMArea, /* describes RAM reserved by the kernel */
+    hypervisor_area: RAMArea, /* describes RAM reserved by the hypervisor */
     pos: PhysMemBase /* current possition of the iterator into the total_area block */
 }
 
@@ -91,30 +100,30 @@ impl Iterator for RAMAreaIter
             return None;
         }
 
-        /* if we're in the kernel area then round us up to the end of the kernel area */
-        if self.pos >= self.kernel_area.base && self.pos < self.kernel_area.base + self.kernel_area.size as PhysMemBase
+        /* if we're in the hypervisor area then round us up to the end of the hypervisor area */
+        if self.pos >= self.hypervisor_area.base && self.pos < self.hypervisor_area.base + self.hypervisor_area.size as PhysMemBase
         {
-            self.pos = self.kernel_area.base + self.kernel_area.size as PhysMemBase;
+            self.pos = self.hypervisor_area.base + self.hypervisor_area.size as PhysMemBase;
         }
 
-        /* determine whether we're below the kernel area */
-        if self.pos < self.kernel_area.base
+        /* determine whether we're below the hypervisor area */
+        if self.pos < self.hypervisor_area.base
         {
-            /* we're below the kernel: round up from wherever we are to the kernel area base */
+            /* we're below the hypervisor: round up from wherever we are to the hypervisor area base */
             let area = RAMArea
             {
                 base: self.pos,
-                size: (self.kernel_area.base - self.pos) as PhysMemSize
+                size: (self.hypervisor_area.base - self.pos) as PhysMemSize
             };
-            /* skip to the end of the kernel area */
-            self.pos = self.kernel_area.base + self.kernel_area.size as PhysMemBase;
+            /* skip to the end of the hypervisor area */
+            self.pos = self.hypervisor_area.base + self.hypervisor_area.size as PhysMemBase;
             return Some(area);
         }
 
-        /* or if we're above or in the kernel area */
-        if self.pos >= self.kernel_area.base + self.kernel_area.size as PhysMemBase
+        /* or if we're above or in the hypervisor area */
+        if self.pos >= self.hypervisor_area.base + self.hypervisor_area.size as PhysMemBase
         {
-            /* we're clear of the kernel, so round up to end of ram */
+            /* we're clear of the hypervisor, so round up to end of ram */
             let area = RAMArea
             {
                 base: self.pos,
@@ -131,13 +140,13 @@ impl Iterator for RAMAreaIter
 
 /* obtain available physical memory details from system device tree. this assumes RISC-V systems have a single
    block of physical RAM. If this changes, then we need to add support for that. break up this block of physical RAM
-   into one or more areas, skipping any physical RAM being used to store for the kernel, its data structures
+   into one or more areas, skipping any physical RAM being used to store for the hypervisor, its data structures
    and boot payload to ensure this memory isn't reused for allocations.
 => device_tree_buf = device tree to parse
 <= iterator that describes the available blocks of physical RAM, or None for failure */
 pub fn available_ram(device_tree_buf: &u8) -> Option<RAMAreaIter>
 {
-    /* at the end of the kernel footprint is the per-cpu heaps in one long contiguous block.
+    /* at the end of the hypervisor footprint is the per-cpu heaps in one long contiguous block.
     take this into account so the memory isn't reused for other allocations */
     let cpu_count = match crate::devicetree::get_cpu_count(device_tree_buf)
     {
@@ -145,9 +154,9 @@ pub fn available_ram(device_tree_buf: &u8) -> Option<RAMAreaIter>
         None => return None
     };
 
-    /* we'll assume the kernel, data, code, peer-CPU heaps, and its boot payload are in a contiguous block of physical RAM */
-    let (phys_kernel_start, phys_kernel_end) = kernel_footprint(cpu_count);
-    let phys_kernel_size = (phys_kernel_end - phys_kernel_start) as PhysMemSize;
+    /* we'll assume the hypervisor, data, code, per-CPU heaps, and its boot payload are in a contiguous block of physical RAM */
+    let (phys_hypervisor_start, phys_hypervisor_end) = hypervisor_footprint(cpu_count);
+    let phys_hypervisor_size = (phys_hypervisor_end - phys_hypervisor_start) as PhysMemSize;
 
     /* assumes RISC-V systems sport a single block of physical RAM for software use */
     let all_phys_ram = match crate::devicetree::get_ram_area(device_tree_buf)
@@ -157,56 +166,44 @@ pub fn available_ram(device_tree_buf: &u8) -> Option<RAMAreaIter>
     
     };
 
-    /* return an iterator the higher level kernel can run through. this cuts the physical RAM
-    block up into sections that do not contain the kernel footprint */
+    /* return an iterator the higher level hypervisor can run through. this cuts the physical RAM
+    block up into sections that do not contain the hypervisor footprint */
     return Some(RAMAreaIter
     {
         pos: all_phys_ram.base,
         total_area: all_phys_ram,
-        kernel_area: RAMArea
+        hypervisor_area: RAMArea
         {
-            base: phys_kernel_start, 
-            size: phys_kernel_size
+            base: phys_hypervisor_start, 
+            size: phys_hypervisor_size
         }
     });
 }
 
-/* return the (start address, end address) of the shared supervisor kernel code in physical memory.
-shared in that there is code common to the supervisor and kernel that can be shared. in effect,
-this shared code appears in the supervisor's read-only code region but can be used by the hypervisor, too. */
-pub fn builtin_supervisor_code() -> (PhysMemBase, PhysMemEnd)
+/* return the (start address, end address) of the boot supervisor in physical memory */
+pub fn boot_supervisor() -> (PhysMemBase, PhysMemEnd)
 {
     /* derived from the .sshared linker section */
-    let supervisor_start: PhysMemBase = unsafe { transmute(&__supervisor_shared_start) };
-    let supervisor_end: PhysMemEnd = unsafe { transmute(&__supervisor_shared_end) };
+    let supervisor_start: PhysMemBase = unsafe { transmute(&__boot_supervisor_start) };
+    let supervisor_end: PhysMemEnd = unsafe { transmute(&__boot_supervisor_end) };
     return (supervisor_start, supervisor_end);
 }
 
-/* return the (start address, end address) of the builtin supervisor's private static read-write data
-in physical memory */
-pub fn builtin_supervisor_data() -> (PhysMemBase, PhysMemEnd)
-{
-    /* derived from the .sdata linker section */
-    let supervisor_start: PhysMemBase = unsafe { transmute(&__supervisor_data_start) };
-    let supervisor_end: PhysMemEnd = unsafe { transmute(&__supervisor_data_end) };
-    return (supervisor_start, supervisor_end);
-}
-
-/* return the (start address, end address) of the whole kernel's code and data in physical memory,
-including the builtin supervisor and fixed per-CPU core private memory areas
+/* return the (start address, end address) of the whole hypervisor's code and data in physical memory,
+including the boot supervisor and fixed per-CPU core private memory areas
 => cpu_count = number of CPU cores
-<= base and end addresses of the kernel footprint */
-fn kernel_footprint(cpu_count: usize) -> (PhysMemBase, PhysMemEnd)
+<= base and end addresses of the hypervisor footprint */
+fn hypervisor_footprint(cpu_count: usize) -> (PhysMemBase, PhysMemEnd)
 {
     /* derived from the .sshared linker section */
-    let kernel_start: PhysMemBase = unsafe { transmute(&__kernel_start) };
-    let kernel_end: PhysMemEnd = unsafe { transmute::<_, PhysMemEnd>(&__kernel_end) } + (cpu_count * PHYS_MEM_PER_CPU) as PhysMemEnd;
-    return (kernel_start, kernel_end);
+    let hypervisor_start: PhysMemBase = unsafe { transmute(&__hypervisor_start) };
+    let hypervisor_end: PhysMemEnd = unsafe { transmute::<_, PhysMemEnd>(&__hypervisor_end) } + (cpu_count * PHYS_MEM_PER_CPU) as PhysMemEnd;
+    return (hypervisor_start, hypervisor_end);
 }
 
-/* create a per-CPU physical memory region and apply access permissions to it. if the region already exists, overwrite it.
-each region is a RISC-V physical memory protection (PMP) area. we pair up PMP addresses in TOR (top of range) mode. eg, region 0
-uses pmp0cfg and pmp1cfg in pmpcfg0 for start and end, region 1 uses pmp1cfg and pmp2cfg in pmpcfg0.
+/* define a per-CPU physical memory region and apply access permissions to it. if the region already exists, overwrite it.
+each region is a pair of RISC-V physical memory protection (PMP) area. we pair up PMP addresses in TOR (top of range) mode.
+eg, region 0 uses pmp0cfg and pmp1cfg in pmpcfg0 for start and end, region 1 uses pmp1cfg and pmp2cfg in pmpcfg0.
    => regionid = ID number of the region to create or update, from 0 to PHYS_PMP_MAX_REGIONS (typically 8).
                  Remember: one region is a pair of PMP entries
       base, end = start and end addresses of region
