@@ -8,15 +8,13 @@
  */
 
 use core::fmt;
-use lock::Spinlock;
 use error::Cause;
 use spin::Mutex;
-use alloc::boxed::Box;
 
 lazy_static!
 {
     static ref SERIAL_PHYS_BASE: Mutex<usize> = Mutex::new(0x0);
-    static ref DEBUG_LOCK: Mutex<bool> = Mutex::new(false);
+    pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new(false);
 }
 
 /* tell the compiler the platform-specific serial port code is elsewhere */
@@ -34,7 +32,7 @@ macro_rules! hvlog
   ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[-] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
 }
 
-/* bad news: bug detection, failures, etc. will bust spinlock to force output */
+/* bad news: bug detection, failures, etc. */
 #[macro_export]
 macro_rules! hvalert
 {
@@ -108,7 +106,7 @@ pub fn serial_write_string(s: &str)
   for c in s.bytes()
   {
       unsafe {
-          platform_serial_write_byte(c, **addr);
+          platform_serial_write_byte(c, *addr);
       }
   }
 }
@@ -128,6 +126,6 @@ pub fn init(device_tree: &u8) -> Result<(), Cause>
 
   /* and keep a copy of it */
   let mut base = SERIAL_PHYS_BASE.lock();
-  **base = addr;
+  *base = addr;
   Ok(())
 }

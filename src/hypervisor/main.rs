@@ -24,19 +24,18 @@
 #![feature(alloc_error_handler)]
 #![feature(box_syntax)]
 extern crate alloc;
-use alloc::string::String;
 
 /* needed for fast lookup tables of stuff */
 extern crate hashbrown;
 
 /* needed for elf passing */
-extern crate goblin;
+extern crate xmas_elf;
 
 /* needed for lazyily-allocated static variables, and atomic ops */
 #[macro_use]
 extern crate lazy_static;
 extern crate spin;
-use core::sync::atomic::{AtomicBool, Ordering};
+use spin::Mutex;
 
 /* this will bring in all the hardware-specific code */
 extern crate platform;
@@ -55,7 +54,6 @@ mod capsule;    /* manage capsules */
 mod loader;     /* parse and load supervisor binaries */
 
 use cpu::{CPUId, BOOT_CPUID};
-use vcore::Priority;
 
 /* list of error codes */
 mod error;
@@ -193,7 +191,7 @@ fn init_globals(device_tree: &u8) -> Result<(), Cause>
 
     /* say hello */
     hvlog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree);
-    hvlog!("Available physical RAM: {} MiB, physical CPU cores: {}", ram_size / 1024 / 1024, ram_size, cpus);
+    hvlog!("Available physical RAM: {} MiB, physical CPU cores: {}", ram_size / 1024 / 1024, cpus);
     hvdebug!("Debugging enabled");
 
     return Ok(());

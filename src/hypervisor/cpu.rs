@@ -20,7 +20,8 @@ use spin::Mutex;
 use hashbrown::hash_map::{HashMap, Entry};
 use capsule::{self, CapsuleID};
 use platform::physmem::PhysMemSize;
-use vocre::VirtualCore;
+use vcore::VirtualCore;
+use alloc::string::String;
 
 /* physical CPU core IDs and count */
 pub type CPUId = usize;

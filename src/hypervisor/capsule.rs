@@ -6,12 +6,12 @@
  */
 
 use platform::physmem::PhysMemSize;
-use physmem::{self, Region, RegionUse::*};
+use physmem::{self, Region};
+use vcore::{self, Priority};
 use spin::Mutex;
 use error::Cause;
 use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::Occupied;
-use cpu::CPUCount;
 use loader;
 
 pub type CapsuleID = usize;
@@ -35,10 +35,10 @@ lazy_static!
    <= OK for success or an error code */
 pub fn create_boot_capsule(size: PhysMemSize, cpus: usize) -> Result<(), Cause>
 {
-    let ram = physmem::alloc_region(size, CapsuleRAM)?;
+    let ram = physmem::alloc_region(size)?;
     let capsule = create(ram)?;
 
-    let supervisor = boot_supervisor();
+    let supervisor = physmem::boot_supervisor();
     let entry = loader::load(ram, supervisor)?;
 
     /* create virtual CPU cores for the capsule as required */
@@ -54,7 +54,7 @@ pub fn create_boot_capsule(size: PhysMemSize, cpus: usize) -> Result<(), Cause>
    by assigning it virtual CPU cores.
    => ram = region of physical RAM reserved for this capsule
    <= CapsuleID for this new capsule, or an error code */
-fn create(ram: Region) -> Result<(CapsuleID), Cause>
+fn create(ram: Region) -> Result<CapsuleID, Cause>
 {
     let new_capsule = Capsule::new(ram)?;
 
@@ -62,22 +62,22 @@ fn create(ram: Region) -> Result<(CapsuleID), Cause>
     let mut overflowed_already = false;
     loop
     {
-        let id = CAPSULE_ID_NEXT.get_mut().unwrap();
-        let (new_id, overflow) = *id.overflowing_add(1);
+        let mut id = CAPSULE_ID_NEXT.lock();
+        let (new_id, overflow) = id.overflowing_add(1);
         *id = new_id;
 
-        /* check to see if this capsule already exists */s
+        /* check to see if this capsule already exists */
         let mut capsules = CAPSULES.lock();
         match capsules.entry(new_id)
         {
-            Vacant(_) =>
+            hashbrown::hash_map::Entry::Vacant(_) =>
             {
                 /* insert our new capsule */
-                capsules.insert(String::from(name), new_capsule);
+                capsules.insert(new_id, new_capsule);
                 hvlog!("Created capsule: ID {}, RAM 0x{:x}-0x{:x}", new_id, ram.base(), ram.end());
 
                 /* we're all done here */
-                Ok(())
+                return Ok(new_id);
             },
             _ => () /* try again */
         };
@@ -111,7 +111,6 @@ impl Capsule
     {
         Ok(Capsule
         {
-            cpus: cpus,
             ram: ram
         })
     }
@@ -145,14 +144,8 @@ pub fn enforce(id: CapsuleID) -> bool
     {
         Occupied(c) => 
         {
-            match c.get().get_phys_ram()
-            {
-                Some(r) =>
-                {
-                    r.grant_access();
-                    true
-                },
-                _ => false
+            c.get().phys_ram().grant_access();
+            return true
         },
         _ => false
     }

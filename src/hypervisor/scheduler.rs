@@ -9,7 +9,7 @@ use error::Cause;
 use spin::Mutex;
 use alloc::collections::vec_deque::VecDeque;
 use vcore::{VirtualCore, Priority};
-use cpu::Core;
+use cpu::{self, Core};
 
 pub type TimesliceCount = u64;
 

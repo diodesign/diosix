@@ -2,20 +2,20 @@
 
 [![Build Status](https://travis-ci.org/diodesign/diosix.svg?branch=master)](https://travis-ci.org/diodesign/diosix)
 
-This is a lightweight, secure, multiprocessor hypervisor written in Rust for 32-bit and 64-bit RISC-V systems.
+This is a lightweight and secure multiprocessor hypervisor for 32-bit and 64-bit [RISC-V](https://riscv.org/) systems.
 
 ### Rationale
 
 Diosix 2.0 is a work in progress. It is written [in Rust](https://www.rust-lang.org/), which is
-a C/C++-like programming language that has a fierce emphasis on performance, memory and thread safety,
-and other security features. It also targets [RISC-V](https://riscv.org/).
+a C/C++-like systems programming language that has a fierce emphasis on performance, memory and thread safety,
+and other security features.
 
 Perhaps in the near future, it will be possible to build a completely open-source package containing
 everything needed to configure an FPGA-based system with RISC-V cores and peripherals, then boot a full
 stack of software, all on-demand and customized for a particular task.
 
-An [earlier iteration](https://github.com/diodesign/diosix-legacy) of diosix was a working microkernel,
-written in C and assembly, primarily for 32-bit SMP x86 computers.
+An [earlier iteration](https://github.com/diodesign/diosix-legacy) of diosix was a working microkernel operating system,
+written in C and assembly, primarily for 32-bit SMP x86 and Arm-powered computers.
 
 ### Running and building
 

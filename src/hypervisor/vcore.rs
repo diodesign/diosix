@@ -8,7 +8,6 @@
 use error::Cause;
 use capsule::CapsuleID;
 use platform::cpu::{SupervisorState, Entry};
-use platform::physmem::PhysMemBase;
 use scheduler;
 
 #[derive(Copy, Clone, Debug)]
@@ -40,17 +39,11 @@ impl VirtualCore
           entry = pointer to where to begin execution 
           priority = virtual core's priority
        <= OK for success, or error code */
-    pub fn create(capsule: CapsuleID, core: VirtualCoreID, entry: Entry, priority: Priority) -> Result<(), Cause>
+    pub fn create(capsuleid: CapsuleID, core: VirtualCoreID, entry: Entry, priority: Priority) -> Result<(), Cause>
     {
-        let phys_ram = match capsule::get_phys_ram(id.clone())
-        {
-            Some(r) => r,
-            None => return Err(Cause::CapsuleBadName)
-        };
-
         let new_vcore = VirtualCore
         {
-            capsule: capsule,
+            capsule: capsuleid,
             core: core,
             priority: priority,
             state: platform::cpu::supervisor_state_from(entry)

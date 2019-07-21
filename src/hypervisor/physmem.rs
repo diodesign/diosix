@@ -10,10 +10,8 @@
 use platform;
 use spin::Mutex;
 use error::Cause;
-use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
-use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize};
-use capsule;
+use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions};
 
 lazy_static!
 {
@@ -23,7 +21,7 @@ lazy_static!
 
 /* describe a physical memory region's state */
 #[derive(Copy, Clone)]
-struct RegionState
+pub enum RegionState
 {
     InUse,  /* allocated to a capsule */
     Free    /* available to allocate to a capsule */
@@ -44,16 +42,19 @@ impl Region
        return true for success, or false if request failed */
     pub fn grant_access(&self) -> bool
     {
-        return if self.state == RegionState::InUse
+        match self.state
         {
-            platform::physmem::grant_access(self.base, self.end);
-            true
-        }
-        else
-        {
-            hvalert!("Can't grant access to a non-in-use physical RAM region (base 0x{:x} size {:x})",
-                     self.base, self.end - self.base);
-            false;
+            RegionState::InUse =>
+            {
+                platform::physmem::protect(0, self.base, self.end, AccessPermissions::ReadWriteExecute);
+                true
+            },
+            RegionState::Free =>   
+            {
+                hvalert!("Can't grant access to a non-in-use physical RAM region (base 0x{:x} size {:x})",
+                        self.base, self.end - self.base);
+                false
+            }
         }
     }
 
@@ -64,11 +65,12 @@ impl Region
     pub fn increase_base(&mut self, size: PhysMemSize) { self.base = self.base + size; }
 }
 
-/* return the physical RAM region covering the boot supervisor */
+/* return the physical RAM region covering the entirely of the boot supervisor.
+this is to ensure the physical RAM storing the supervisor isn't reallocated */
 pub fn boot_supervisor() -> Region
 {
     let (base, end) = platform::physmem::boot_supervisor();
-    Region { base: base, end: end }
+    Region { base: base, end: end, state: RegionState::InUse }
 }
 
 /* intiialize the hypervisor's physical memory management.
@@ -112,9 +114,8 @@ pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
 
 /* allocate a region of available physical memory for capsule use
    => size = number of bytes in region
-      usage = what the region will be used for
    <= Region structure for the space, or an error code */
-pub fn alloc_region(size: PhysMemSize, usage: RegionUse) -> Result<Region, Cause>
+pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
 {
     /* set to Some when we've found a suitable region */
     let mut area: Option<Region> = None;
@@ -124,11 +125,11 @@ pub fn alloc_region(size: PhysMemSize, usage: RegionUse) -> Result<Region, Cause
     let mut regions = REGIONS.lock();
     for region in regions.iter_mut()
     {
-        match region.usage
+        match region.state
         {
             RegionState::Free =>
             {
-                if (region.end() - region.base()) >= size
+                if region.size() >= size
                 {
                     /* free area is large enough for this requested region.
                     carve out an inuse region from start of free region,

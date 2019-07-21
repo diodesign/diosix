@@ -46,6 +46,7 @@ pub enum AccessPermissions
     Read,
     ReadWrite,
     ReadExecute,
+    ReadWriteExecute,
     NoAccess
 }
 
@@ -221,6 +222,7 @@ pub fn protect(region_id: usize, base: usize, end: usize, access: AccessPermissi
         AccessPermissions::Read => PHYS_PMP_READ,
         AccessPermissions::ReadWrite => PHYS_PMP_READ | PHYS_PMP_WRITE,
         AccessPermissions::ReadExecute => PHYS_PMP_READ | PHYS_PMP_EXEC,
+        AccessPermissions::ReadWriteExecute => PHYS_PMP_READ | PHYS_PMP_WRITE | PHYS_PMP_EXEC,
         AccessPermissions::NoAccess => 0
     };
 
