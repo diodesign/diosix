@@ -65,8 +65,7 @@ impl Region
     pub fn increase_base(&mut self, size: PhysMemSize) { self.base = self.base + size; }
 }
 
-/* return the physical RAM region covering the entirely of the boot supervisor.
-this is to ensure the physical RAM storing the supervisor isn't reallocated */
+/* return the physical RAM region covering the entirely of the boot capsule's supervisor */
 pub fn boot_supervisor() -> Region
 {
     let (base, end) = platform::physmem::boot_supervisor();
@@ -95,7 +94,7 @@ pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
     {
         Some(iter) => for area in iter
         {
-            hvlog!("Physical memory area found at 0x{:x}, size: {} bytes ({} MB)", area.base, area.size, area.size >> 20);
+            hvdebug!("Physical memory area found at 0x{:x}, size: {} bytes ({} MB)", area.base, area.size, area.size >> 20);
 
             regions.push_front(Region
             {

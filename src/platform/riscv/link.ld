@@ -15,7 +15,6 @@ SECTIONS
   . = 0x80000000;
   __hypervisor_start = .;
 
-  /* hypervisor code and read-only data in physical RAM */
   .text : ALIGN(0x1000)
   {
     *(.entry) /* must be first */
@@ -23,23 +22,15 @@ SECTIONS
     *(.rodata*)
   }
 
-  /* hypervisor read-write stack data goes here */
-  .bss : ALIGN(0x1000)
+  .data : ALIGN(0x1000)
   {
     *(.data*)
-    *(.bss*)
   }
 
-  /* include boot supervisor and initrd payload */
-  .payload : ALIGN(0x1000)
+  /* this needs to be zeroed */
+  .bss : ALIGN(0x1000)
   {
-    __boot_supervisor_start = .;
-    *(.bootsupervisor*)
-    __boot_supervisor_end = .;
-
-    __initrd_start = .;
-    *(.initrd*)
-    __initrd_end = .;
+    *(.bss*)
   }
 
   /* set aligned end to the hypervisor */

@@ -10,11 +10,13 @@ use core::intrinsics::transmute;
 /* we need this code from the assembly files */
 extern "C"
 {
-    /* linker symbols */
+    /* hypervisor linker symbols */
     static __hypervisor_start: u8;
     static __hypervisor_end: u8;
-    static __boot_supervisor_start: u8;
-    static __boot_supervisor_end: u8;
+
+    /* boot capsule's supervisor linker symbols */
+    static _binary_supervisor_start: u8;
+    static _binary_supervisor_end: u8;
 }
 
 /* place a memory barrier that ensures all RAM and MMIO read and write operations
@@ -181,17 +183,17 @@ pub fn available_ram(device_tree_buf: &u8) -> Option<RAMAreaIter>
     });
 }
 
-/* return the (start address, end address) of the boot supervisor in physical memory */
+/* return the (start address, end address) of the boot capsule's supervisor in physical memory */
 pub fn boot_supervisor() -> (PhysMemBase, PhysMemEnd)
 {
-    /* derived from the .sshared linker section */
-    let supervisor_start: PhysMemBase = unsafe { transmute(&__boot_supervisor_start) };
-    let supervisor_end: PhysMemEnd = unsafe { transmute(&__boot_supervisor_end) };
-    return (supervisor_start, supervisor_end);
+    let start: PhysMemBase = unsafe { transmute(&_binary_supervisor_start) };
+    let end: PhysMemEnd = unsafe { transmute(&_binary_supervisor_end) };
+    return (start, end);
 }
 
 /* return the (start address, end address) of the whole hypervisor's code and data in physical memory,
-including the boot supervisor and fixed per-CPU core private memory areas
+   this must include the boot capsule supervisor and fixed per-CPU core private memory areas.
+   note! the boot capsule supervisor is linked within the hypervisor's final executable. 
 => cpu_count = number of CPU cores
 <= base and end addresses of the hypervisor footprint */
 fn hypervisor_footprint(cpu_count: usize) -> (PhysMemBase, PhysMemEnd)

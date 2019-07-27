@@ -74,7 +74,7 @@ fn create(ram: Region) -> Result<CapsuleID, Cause>
             {
                 /* insert our new capsule */
                 capsules.insert(new_id, new_capsule);
-                hvlog!("Created capsule: ID {}, RAM 0x{:x}-0x{:x}", new_id, ram.base(), ram.end());
+                hvlog!("Created capsule: ID {}, physical RAM base 0x{:x}, size {} MiB", new_id, ram.base(), ram.size() / 1024 / 1024);
 
                 /* we're all done here */
                 return Ok(new_id);

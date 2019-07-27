@@ -26,10 +26,13 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
         Ok(elf) => elf,
         Err(s) =>
         {
-            hvlog!("Failed to parse supervisor ELF: {}", s);
+            hvlog!("Failed to parse supervisor ELF (source physical RAM base 0x{:x}, size {} MiB): {}", source.base(), source.size() / 1024 / 1024, s);
             return Err(Cause::LoaderUnrecognizedSupervisor);
         }
     };
+
+    let (target_base, target_end)  = (target.base() as u64, target.end() as u64);
+    let source_base = source.base() as u64;
 
     let mut entry = None;
     let mut ph_index = 0;
@@ -44,25 +47,25 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
                     Ok(xmas_elf::program::Type::Load) =>
                     {
                         /* sanity check: target must be able to hold supervisor */
-                        if (target.base() as u64 + ph.offset() + ph.file_size()) > target.end() as u64
+                        if (target_base + ph.offset() + ph.file_size()) > target_end
                         {
                             return Err(Cause::LoaderSupervisorTooLarge);
                         } 
 
                         hvlog!("loading ELF program area: 0x{:x} size 0x{:x} into 0x{:x}",
-                               ph.offset() + source.base() as u64, ph.file_size(), ph.physical_addr() + target.base() as u64);
+                               ph.offset() + source_base, ph.file_size(), ph.physical_addr() + target_base);
                         unsafe
                         {
                             /* definition is: copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize) */
-                            core::intrinsics::copy_nonoverlapping::<u8>((ph.offset() + source.base() as u64) as *const u8,
-                                                                        (ph.physical_addr() + target.base() as u64) as *mut u8,
+                            core::intrinsics::copy_nonoverlapping::<u8>((ph.offset() + source_base) as *const u8,
+                                                                        (ph.physical_addr() + target_base) as *mut u8,
                                                                         ph.file_size() as usize);
                         }
 
                         /* assume entry point is the first address loaded: can't query xmas-elf for it :-( */
                         if ph_index == 0
                         {
-                            entry = Some(ph.offset() + target.base() as u64);
+                            entry = Some(ph.offset() + target_base);
                         }
                     },
                     _ => ()
