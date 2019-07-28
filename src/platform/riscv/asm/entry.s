@@ -40,7 +40,7 @@ _start:
   # in order to scale to many cores, not waste too much memory, and to cope with non-linear
   # CPU ID / hart ID, each core will take memory using an atomic counter in the first word
   # of available RAM. thus, memory is allocated on a first come, first served basis.
-  # this counter is temporarily and should be forgotten about once in kmain()
+  # this counter is temporarily and should be forgotten about once in hvmain()
   la        t1, __hypervisor_end
   li        t2, 1
   amoadd.w  t3, t2, (t1)
@@ -75,10 +75,10 @@ _start:
   slli      t2, t1, 21        # set bit 21 = TW (timewout wait)
   csrrs     x0, mstatus, t2
 
-# call kentry with runtime-assigned CPU ID number in a0 and devicetree in a1
+# call hwentry with runtime-assigned CPU ID number in a0 and devicetree in a1
 enter_hypervisor:
   la        t0, hventry
-  jalr      ra, t0, 0
+  jalr      ra, t0, 0  
 
 # fall through to loop rather than crash into random instructions/data
 # wait for interrupts to come in and service them

@@ -15,24 +15,26 @@ SECTIONS
   . = 0x80000000;
   __hypervisor_start = .;
 
-  .text : ALIGN(0x1000)
+  .text : ALIGN(0x8)
   {
     *(.entry) /* must be first */
     *(.text*)
     *(.rodata*)
   }
 
-  .data : ALIGN(0x1000)
+  .data : ALIGN(0x8)
   {
     *(.data*)
   }
 
   /* this needs to be zeroed */
-  .bss : ALIGN(0x1000)
+  __bss_start = .;
+  .bss : ALIGN(0x8)
   {
-    *(.bss*)
+    *(.*bss*)
   }
+  __bss_end = ALIGN(0x8);
 
-  /* set aligned end to the hypervisor */
+  /* set aligned end to the hypervisor, round up to nearest page boundary */
   __hypervisor_end = ALIGN(0x1000);
 }

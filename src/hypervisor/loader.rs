@@ -83,7 +83,7 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
         None => return Err(Cause::LoaderBadEntry),
         Some(e) => 
         {
-            hvlog!("Supervior kernel entry = 0x{:x}", e);
+            hvlog!("Supervisor kernel entry: 0x{:x}", e);
             return Ok(unsafe { core::intrinsics::transmute(e) });
         }
     }

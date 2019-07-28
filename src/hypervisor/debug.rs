@@ -79,8 +79,14 @@ macro_rules! hvprint
     use core::fmt::Write;
 
     {
-      $crate::debug::DEBUG_LOCK.lock();
+      /* we do this little lock dance to ensure the lock isn't immediately dropped by rust */
+      let mut lock = $crate::debug::DEBUG_LOCK.lock();
+      *lock = true;
+
       unsafe { $crate::debug::SERIALPORT.write_fmt(format_args!($($arg)*)).unwrap(); }
+      
+      *lock = false;
+      drop(lock);
     }
   });
 }
