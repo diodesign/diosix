@@ -110,8 +110,11 @@ fn main()
     /* provide a supervisor kernel for the first capsule to run. this should contain an executable
     that unpacks a basic filesystem and then loads more files as needed from storage.
     its job is to manage all child capsules, which should also be loaded as needed from storage.
-    the boot capsule's supervisor is expected in boot/arch/supervisor where arch = riscv32, riscv64, etc */
-    let boot_files = String::from(format!("boot/{}", target.gnu_prefix));
+
+    the boot capsule's supervisor is expected in boot/binaries/cpu/supervisor
+    where cpu = target CPU architectures, such as riscv32imac, riscv64gc, etc */
+    
+    let boot_files = String::from(format!("boot/binaries/{}", target.cpu_arch));
     let boot_supervisor_name = String::from("supervisor");
     let boot_supervisor = format!("{}/{}", boot_files, boot_supervisor_name);
 

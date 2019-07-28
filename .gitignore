@@ -7,6 +7,7 @@
 *.bin
 *.iso
 *.out
+*.elf
 .DS_Store
 
 # ignore Cargo metadata
@@ -16,7 +17,7 @@
 /target/
 
 # ignore boot supervisor binaries */
-/boot/
+/boot/binaries/
 
 # ignore rustfmt stuff
 **/*.rs.bk

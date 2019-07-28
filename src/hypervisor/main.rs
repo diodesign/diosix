@@ -200,8 +200,8 @@ fn init_globals(device_tree: &u8) -> Result<(), Cause>
 /* create the boot capsule, from which all other capsules spawn */
 fn init_boot_capsule() -> Result<(), Cause>
 {
-    /* create a boot capsule with 64MB of RAM and one virtual core */
-    let mem = 64 * 1024 * 1024;
+    /* create a boot capsule with 128MB of RAM and one virtual core */
+    let mem = 128 * 1024 * 1024;
     let cpus = 1;
     capsule::create_boot_capsule(mem, cpus)?;
     Ok(())
