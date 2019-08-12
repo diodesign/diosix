@@ -1,6 +1,8 @@
 #
 # diosix's CI script
 #
+# Due to Travis CI constraints, this script just checks the RV64GC target builds and passes tests
+#
 dist: xenial
 sudo: required
 language: rust
@@ -12,18 +14,13 @@ notifications:
 
 install:
   - sudo apt-get -qq update
-  - sudo apt-get -qq install flex bison m4 sed texinfo
+  - sudo apt-get -qq install flex bison m4 sed texinfo git
   #
   # build the GNU binary tools
   #
-  - mkdir $HOME/cross
+  - mkdir -p $HOME/cross
   - git clone -q -b riscv-binutils-2.32 https://github.com/riscv/riscv-binutils-gdb.git
   - cd riscv-binutils-gdb
-  - ./configure -q --prefix $HOME/cross --target=riscv32-elf
-  - make -s
-  - make -s install
-  - make -s clean
-  - find . -type f -name "config.cache" -exec rm {} \;
   - ./configure -q --prefix $HOME/cross --target=riscv64-elf
   - make -s
   - make -s install
@@ -32,12 +29,11 @@ install:
   # build qemu to run the tests
   #
   - cd $HOME
-  - sudo apt-get -qq install git libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
+  - sudo apt-get -qq install libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
   - git clone -q -b master https://github.com/qemu/qemu.git
   - cd qemu
-  - ./configure --target-list=riscv32-softmmu,riscv64-softmmu
+  - ./configure --target-list=riscv64-softmmu
   - make -s
-  - export PATH=$PATH:$HOME/qemu/riscv32-softmmu
   - export PATH=$PATH:$HOME/qemu/riscv64-softmmu
   #
   # build linux using buildroot for the hypervior to boot
@@ -45,22 +41,6 @@ install:
   - cd $HOME
   - git clone https://github.com/buildroot/buildroot.git
   - cd buildroot
-  # 
-  # build riscv32imac
-  #
-  - cp $TRAVIS_BUILD_DIR/boot/buildroot/riscv32imac.config .config
-  - make -s
-  - mkdir -p $TRAVIS_BUILD_DIR/boot/binaries/riscv32imac/
-  - cp output/images/vmlinux $TRAVIS_BUILD_DIR/boot/binaries/riscv32imac/supervisor
-  - make clean
-  # 
-  # build riscv64imac
-  #
-  - cp $TRAVIS_BUILD_DIR/boot/buildroot/riscv64imac.config .config
-  - make -s
-  - mkdir -p $TRAVIS_BUILD_DIR/boot/binaries/riscv64imac/
-  - cp output/images/vmlinux $TRAVIS_BUILD_DIR/boot/binaries/riscv64imac/supervisor
-  - make clean
   # 
   # build riscv64gc
   #
@@ -74,13 +54,9 @@ install:
   - cd $TRAVIS_BUILD_DIR
 
 before_script:
-  - rustup target install riscv32imac-unknown-none-elf
-  - rustup target install riscv64imac-unknown-none-elf
   - rustup target install riscv64gc-unknown-none-elf
 
 script:
-  - cargo test --release --target riscv32imac-unknown-none-elf
-  - cargo test --release --target riscv64imac-unknown-none-elf
   - cargo test --release --target riscv64gc-unknown-none-elf
 
 branches:
