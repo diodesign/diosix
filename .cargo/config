@@ -7,18 +7,18 @@ target = "riscv64gc-unknown-none-elf"
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform/riscv/link.ld" ]
 linker = "riscv32-elf-ld"
 ar = "riscv32-elf-ar"
-runner = "qemu-system-riscv32 -nographic -machine virt -smp 4 -m 512M -kernel"
+runner = "qemu-system-riscv32 -bios none -nographic -machine virt -smp 4 -m 512M -kernel"
 
 # Find the linker for 64-bit RISC-V (IMAC) targets
 [target.riscv64imac-unknown-none-elf]
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform/riscv/link.ld" ]
 linker = "riscv64-elf-ld"
 ar = "riscv64-elf-ar"
-runner = "qemu-system-riscv64 -nographic -machine virt -smp 4 -m 512M -kernel"
+runner = "qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel"
 
 # Find the linker for 64-bit RISC-V (GC) targets
 [target.riscv64gc-unknown-none-elf]
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform/riscv/link.ld" ]
 linker = "riscv64-elf-ld"
 ar = "riscv64-elf-ar"
-runner = "qemu-system-riscv64 -nographic -machine virt -smp 4 -m 512M -kernel"
+runner = "qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel"

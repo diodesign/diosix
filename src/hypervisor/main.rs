@@ -150,7 +150,7 @@ fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
     }
 
     /* acknowledge we're alive and well, and report CPU core features */
-    hvlog!("Physical CPU core awake, type: {}", cpu::Core::describe());
+    hvlog!("Physical CPU core ready to roll, type: {}", cpu::Core::describe());
 
     /* enable timer on this physical CPU core to start scheduling and running virtual cores */
     scheduler::start();

@@ -84,7 +84,7 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
         Some(e) => 
         {
             hvlog!("Supervisor kernel entry: 0x{:x}", e);
-            return Ok(unsafe { core::intrinsics::transmute(e) });
+            return Ok(unsafe { core::intrinsics::transmute(e as usize) });
         }
     }
 }

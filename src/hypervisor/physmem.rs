@@ -72,7 +72,7 @@ pub fn boot_supervisor() -> Region
     Region { base: base, end: end, state: RegionState::InUse }
 }
 
-/* intiialize the hypervisor's physical memory management.
+/* initialize the hypervisor's physical memory management.
    called once by the boot CPU core.
    => device_tree_buf = pointer to device tree to parse
    <= total number of bytes available, or None for failure
@@ -86,7 +86,7 @@ pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
     capsule physical RAM allocations will be drawn.
     this list is built from available physical RAM: it must not include
     any RAM areas already in use by the hypervisor, peripherals, etc.
-    the undelying platform code needs to exclude those off-limits areas.
+    the underlying platform code needs to exclude those off-limits areas.
     in other words, available_ram() must only return fully usable RAM areas */
     let mut regions = REGIONS.lock();
 

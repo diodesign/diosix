@@ -13,6 +13,9 @@ notifications:
 install:
   - sudo apt-get -qq update
   - sudo apt-get -qq install flex bison m4 sed texinfo
+  #
+  # build the GNU binary tools
+  #
   - mkdir $HOME/cross
   - git clone -q -b riscv-binutils-2.32 https://github.com/riscv/riscv-binutils-gdb.git
   - cd riscv-binutils-gdb
@@ -25,6 +28,9 @@ install:
   - make -s
   - make -s install
   - export PATH=$PATH:$HOME/cross/bin
+  #
+  # build qemu to run the tests
+  #
   - cd $HOME
   - sudo apt-get -qq install git libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
   - git clone -q -b master https://github.com/qemu/qemu.git
@@ -33,6 +39,38 @@ install:
   - make -s
   - export PATH=$PATH:$HOME/qemu/riscv32-softmmu
   - export PATH=$PATH:$HOME/qemu/riscv64-softmmu
+  #
+  # build linux using buildroot for the hypervior to boot
+  #
+  - cd $HOME
+  - git clone https://github.com/buildroot/buildroot.git
+  - cd buildroot
+  # 
+  # build riscv32imac
+  #
+  - cp $TRAVIS_BUILD_DIR/boot/buildroot/riscv32imac.config .config
+  - make
+  - mkdir -p $TRAVIS_BUILD_DIR/boot/binaries/riscv32imac/
+  - cp output/images/vmlinux $TRAVIS_BUILD_DIR/boot/binaries/riscv32imac/supervisor
+  - make clean
+  # 
+  # build riscv64imac
+  #
+  - cp $TRAVIS_BUILD_DIR/boot/buildroot/riscv64imac.config .config
+  - make
+  - mkdir -p $TRAVIS_BUILD_DIR/boot/binaries/riscv64imac/
+  - cp output/images/vmlinux $TRAVIS_BUILD_DIR/boot/binaries/riscv64imac/supervisor
+  - make clean
+  # 
+  # build riscv64gc
+  #
+  - cp $TRAVIS_BUILD_DIR/boot/buildroot/riscv64gc.config .config
+  - make
+  - mkdir -p $TRAVIS_BUILD_DIR/boot/binaries/riscv64gc/
+  - cp output/images/vmlinux $TRAVIS_BUILD_DIR/boot/binaries/riscv64gc/supervisor
+  #
+  # return to diosix
+  #
   - cd $TRAVIS_BUILD_DIR
 
 before_script:
