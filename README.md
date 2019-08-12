@@ -48,7 +48,7 @@ $ cargo run --release
 
 ## Next on the todo list <a name="todo"></a>
 
-As stated above, Diosix can load a Linux kernel into a virtualized environment called the boot capsule, and start executing it. However, this kernel will soon crash. This is because Diosix needs to describe to Linux the environment it was loaded into, and transparently trap and virtualize any attempts by the kernel to access hardware peripherals. Without this support, the loaded kernel will fail in the dark and crash.
+As stated above, Diosix can load a Linux kernel into a virtualized environment called the boot capsule, and start executing it. However, this kernel will soon crash. This is because Diosix needs to describe to Linux the environment it was loaded into, and transparently trap and virtualize any attempts by the kernel to access hardware peripherals. Without this support, the loaded kernel will flail in the dark and crash.
 
 Therefore, the immediate todo list is as follows:
 1. Implement a device tree generator to describe to the Linux kernel its virtualized environment.

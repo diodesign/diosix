@@ -49,7 +49,7 @@ install:
   # build riscv32imac
   #
   - cp $TRAVIS_BUILD_DIR/boot/buildroot/riscv32imac.config .config
-  - make
+  - make -s
   - mkdir -p $TRAVIS_BUILD_DIR/boot/binaries/riscv32imac/
   - cp output/images/vmlinux $TRAVIS_BUILD_DIR/boot/binaries/riscv32imac/supervisor
   - make clean
@@ -57,7 +57,7 @@ install:
   # build riscv64imac
   #
   - cp $TRAVIS_BUILD_DIR/boot/buildroot/riscv64imac.config .config
-  - make
+  - make -s
   - mkdir -p $TRAVIS_BUILD_DIR/boot/binaries/riscv64imac/
   - cp output/images/vmlinux $TRAVIS_BUILD_DIR/boot/binaries/riscv64imac/supervisor
   - make clean
@@ -65,7 +65,7 @@ install:
   # build riscv64gc
   #
   - cp $TRAVIS_BUILD_DIR/boot/buildroot/riscv64gc.config .config
-  - make
+  - make -s
   - mkdir -p $TRAVIS_BUILD_DIR/boot/binaries/riscv64gc/
   - cp output/images/vmlinux $TRAVIS_BUILD_DIR/boot/binaries/riscv64gc/supervisor
   #

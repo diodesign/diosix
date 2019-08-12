@@ -67,9 +67,9 @@ Finally, for this stage, you need to update your `PATH` environment variable so 
 export PATH=$PATH:$HOME/cross/bin
 ```
 
-This change to `PATH` will remain in effect until you close your terminal shell session. To ensure the Binutils executable files can be located and used in future shell sessions, you need to update your shell's configuration so that it automatically defines `PATH` as described above when you open a new session. There are a number of ways to do this; to keep it simple, these instructions will update your shell's `rc` file. If you wish to delve into this further, [this guide](https://shreevatsa.wordpress.com/2008/03/30/zshbash-startup-files-loading-order-bashrc-zshrc-etc/) explains which specific configuration files to update and why.
+This change to `PATH` will remain in effect until you close your terminal shell session. To ensure the Binutils executable files can be located and used in future shell sessions, you need to update your shell's configuration so that it automatically defines `PATH` as described above when you open a new session. There are a number of ways to do this; to keep it simple, these instructions will update your shell's `rc` file. If you wish to delve into this further, [this blogpost](https://shreevatsa.wordpress.com/2008/03/30/zshbash-startup-files-loading-order-bashrc-zshrc-etc/) explains which specific configuration files to update and why.
 
-As stated above, this guide will keep it simple. If you use Bash, you should update `.bashrc`, and if you use Zsh, you should update `.zshrc`. Both files are located in your home directory. If you use another shell, check its manual for the location of its configuration file. Open `.bashrc`, `.zshrc`, or whichever configuration file is appropriate for you, in a text editor, and insert the following line to the end of the file:
+As stated above, this toolchain-building guide will keep it simple. If you use Bash, you should update `.bashrc`, and if you use Zsh, you should update `.zshrc`. Both files are located in your home directory. If you use another shell, check its manual for the location of its configuration file. Open `.bashrc`, `.zshrc`, or whichever configuration file is appropriate for you, in a text editor, and insert the following line at the end of the file:
 
 ```
 export PATH=$PATH:$HOME/cross/bin
