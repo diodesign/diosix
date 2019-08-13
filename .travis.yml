@@ -12,38 +12,62 @@ notifications:
 
 install:
   - sudo apt-get -qq update
-  - sudo apt-get -qq install flex bison m4 sed texinfo
-  - mkdir $HOME/cross
+  - sudo apt-get -qq install flex bison m4 sed texinfo git wget
+  #
+  # build the GNU binary tools for 64-bit RISC-V targets
+  #
+  - mkdir -p $HOME/cross
   - git clone -q -b riscv-binutils-2.32 https://github.com/riscv/riscv-binutils-gdb.git
   - cd riscv-binutils-gdb
-  - ./configure -q --prefix $HOME/cross --target=riscv32-elf
-  - make -s
-  - make -s install
-  - make -s clean
-  - find . -type f -name "config.cache" -exec rm {} \;
   - ./configure -q --prefix $HOME/cross --target=riscv64-elf
   - make -s
   - make -s install
+  #
+  # build the GNU binary tools for 32-bit RISC-V targets
+  #
+  - make -s clean
+  - find . -type f -name "config.cache" -exec rm {} \;
+  - ./configure -q --prefix $HOME/cross --target=riscv32-elf
+  - make -s
+  - make -s install
   - export PATH=$PATH:$HOME/cross/bin
+  #
+  # build Qemu to run the tests
+  #
   - cd $HOME
-  - sudo apt-get -qq install git libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
+  - sudo apt-get -qq install libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
   - git clone -q -b master https://github.com/qemu/qemu.git
   - cd qemu
-  - ./configure --target-list=riscv32-softmmu,riscv64-softmmu
+  - ./configure --target-list=riscv64-softmmu,riscv32-softmmu
   - make -s
-  - export PATH=$PATH:$HOME/qemu/riscv32-softmmu
   - export PATH=$PATH:$HOME/qemu/riscv64-softmmu
+  - export PATH=$PATH:$HOME/qemu/riscv32-softmmu
+  #
+  # return to diosix
+  #
   - cd $TRAVIS_BUILD_DIR
+  #
+  # Obtain pre-built boot capsule supervisor binaries
+  # We can't build them here as Buildroot will blow through Travis CI's 50-minute run-time limitation
+  #
+  - mkdir -p boot/binaries/riscv64gc
+  - mkdir -p boot/binaries/riscv64imac
+  - mkdir -p boot/binaries/riscv32imac
+  - wget https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64gc/supervisor -O boot/binaries/riscv64gc/supervisor
+  - wget https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64imac/supervisor -O boot/binaries/riscv64imac/supervisor
+  - wget https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv32imac/supervisor -O boot/binaries/riscv32imac/supervisor
 
+# install 64-bit and 32-bit RISC-V Rust toolchain targets
 before_script:
-  - rustup target install riscv32imac-unknown-none-elf
-  - rustup target install riscv64imac-unknown-none-elf
   - rustup target install riscv64gc-unknown-none-elf
+  - rustup target install riscv64imac-unknown-none-elf
+  - rustup target install riscv32imac-unknown-none-elf
 
+# Run Diosix's built-in tests
 script:
-  - cargo test --release --target riscv32imac-unknown-none-elf
-  - cargo test --release --target riscv64imac-unknown-none-elf
   - cargo test --release --target riscv64gc-unknown-none-elf
+  - cargo test --release --target riscv64imac-unknown-none-elf
+  - cargo test --release --target riscv32imac-unknown-none-elf
 
 branches:
   only:

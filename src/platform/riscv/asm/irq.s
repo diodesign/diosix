@@ -1,4 +1,4 @@
-# kernel low-level interrupt/exception code for RV32G/RV64G targets
+# hypervisor low-level interrupt/exception code for RV32G/RV64G targets
 #
 # Note: No support for F/D floating point (yet)!
 #
@@ -13,7 +13,7 @@
 .global irq_early_init
 .global irq_machine_handler
 
-# kernel constants, such as stack and lock locations
+# hypervisor constants, such as stack and lock locations
 .include "src/platform/riscv/asm/consts.s"
 
 # set up boot interrupt handling on this core so we can catch
@@ -76,7 +76,7 @@ irq_machine_handler:
   .endr
 
   # right now mscratch is corrupt with the interrupted code's sp.
-  # this means kernel functions relying on mscratch will break unless it is restored.
+  # this means hypervisor functions relying on mscratch will break unless it is restored.
   # calculate original mscratch value into s11, and swap with mscratch
   addi  s11, sp, IRQ_REGISTER_FRAME_SIZE
   csrrw s11, mscratch, s11
@@ -95,9 +95,9 @@ irq_machine_handler:
   # in which case, we need to advance epc 4 bytes to the next instruction.
   # (all instructions are 4 bytes long, for RV32 and RV64)
   # otherwise, we're going into a loop when we return. do this now because the syscall
-  # could schedule in another thread, so incrementing epc after kirq_handler
-  # may break a newly scheduled thread. we increment mepc directly so that if another
-  # thread isn't scheduled in, epc will be correct.
+  # could schedule in another context, so incrementing epc after kirq_handler
+  # may break a newly scheduled context. we increment mepc directly so that if another
+  # context isn't scheduled in, epc will be correct.
   #
   # note: mepc, sp (via s11) and stacked regs are updated by the context switch code
   csrrs t0, mcause, x0
@@ -122,10 +122,10 @@ continue:
 .endif
 
   # pass current sp to exception/hw handler as a pointer. this'll allow
-  # the higher-level kernel access the context of the IRQ.
+  # the higher-level hypervisor access the context of the IRQ.
   # it musn't corrupt s11, a callee-saved register
   add   a0, sp, x0
-  call  kirq_handler
+  call  hypervisor_irq_handler
 
   # swap back mscratch so interrupted code's sp can be restored
   csrrw s11, mscratch, s11
@@ -152,4 +152,5 @@ continue:
 
   # swap top of IRQ sp for interrupted code's sp, and return
   csrrw sp, mscratch, sp
+  # i will return. i will have my revenge!
   mret

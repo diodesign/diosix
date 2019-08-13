@@ -1,4 +1,4 @@
-/* diosix RV32/RV64 CPU core management
+/* diosix RV32/RV64 physical CPU core management
  *
  * (c) Chris Williams, 2019.
  *
@@ -26,16 +26,17 @@ const EXTENSIONS: &'static [&'static str] = &["a", "b", "c", "d", "e", "f", "g",
 const CPUFEATURES_SUPERVISOR_MODE: usize = 1 << 18; /* supervisor mode is implemented */
 const CPUFEATURES_USER_MODE: usize       = 1 << 20; /* user mode is implemented */
 
-/* levels of privilege accepted by the kernel */
+/* levels of privilege accepted by the hypervisor */
 #[derive(Copy, Clone, Debug)]
 pub enum PrivilegeMode
 {
-    Kernel,     /* machine-mode kernel */
-    Supervisor, /* supervisor aka guest kernel */
-    User,       /* usermode */
+    Hypervisor, /* machine-mode hypervisor */
+    Supervisor, /* supervisor */
+    User        /* usermode */
 }
 
 pub type Reg = usize;
+pub type Entry = extern "C" fn () -> ();
 
 /* describe the CPU state for supervisor-level code */
 #[derive(Copy, Clone)]
@@ -53,14 +54,14 @@ pub struct SupervisorState
     scause: Reg,
     stval: Reg,
     satp: Reg,
-    pc: extern "C" fn () -> (),
+    pc: Entry,
     sp: Reg,
     /* standard register set (skip x0) */
     registers: [Reg; 31],
 }
 
-/* craft a blank supervisor CPU state using the given entry and stack pointers */
-pub fn supervisor_state_from(entry: extern "C" fn () -> (), stack: usize) -> SupervisorState
+/* craft a blank supervisor CPU state using the given entry pointers */
+pub fn supervisor_state_from(entry: Entry) -> SupervisorState
 {
     SupervisorState
     {
@@ -75,7 +76,7 @@ pub fn supervisor_state_from(entry: extern "C" fn () -> (), stack: usize) -> Sup
         stval: 0,
         satp: 0,
         pc: entry,
-        sp: stack,
+        sp: 0,
         registers: [0; 31]
     }
 }
@@ -137,10 +138,10 @@ pub fn features_priv_check(required: PrivilegeMode) -> bool
 {
     let cpu = read_csr!(misa);
 
-    /* all RISC-V cores provide machine (kernel) mode. Diosix requires supervisor mode for user mode */
+    /* all RISC-V cores provide machine (hypervisor) mode. Diosix requires supervisor mode for user mode */
     match (required, cpu & CPUFEATURES_SUPERVISOR_MODE != 0, cpu & CPUFEATURES_USER_MODE != 0)
     {
-        (    PrivilegeMode::Kernel,    _,    _) => true,
+        (PrivilegeMode::Hypervisor,    _,    _) => true,
         (PrivilegeMode::Supervisor, true,    _) => true,
         (      PrivilegeMode::User, true, true) => true,
         _ => false
@@ -273,6 +274,6 @@ pub fn previous_privilege() -> PrivilegeMode
     {
         0 => PrivilegeMode::User,
         1 => PrivilegeMode::Supervisor,
-        _ => PrivilegeMode::Kernel
+        _ => PrivilegeMode::Hypervisor
     }
 }

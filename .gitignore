@@ -1,12 +1,13 @@
-
 # stop this sort of cruft ending up in the repo
 *~
 *.swp
 *.swo
 *.o
+*.a
 *.bin
 *.iso
 *.out
+*.elf
 .DS_Store
 
 # ignore Cargo metadata
@@ -14,6 +15,9 @@
 
 # ignore compiler output directories
 /target/
+
+# ignore boot supervisor binaries */
+/boot/binaries/
 
 # ignore rustfmt stuff
 **/*.rs.bk

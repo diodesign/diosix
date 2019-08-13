@@ -1,80 +1,88 @@
-# diosix
-
 [![Build Status](https://travis-ci.org/diodesign/diosix.svg?branch=master)](https://travis-ci.org/diodesign/diosix)
 
-This is a lightweight, secure, multithreaded, and multiprocessor container-based hypervisor-microkernel
-operating system written in Rust for 32-bit and 64-bit RISC-V systems.
+## Table of contents
 
-### Rationale
+1. [Introduction](#intro)
+1. [Building and running Diosix](#buildrun)
+1. [Next on the todo list](#todo)
+1. [Further documentation](#wiki)
+1. [Development branches](#branches)
+1. [Contact, security issue reporting, and code of conduct](#contact)
+1. [Copyright, license, and thanks](#copyright)
 
-Diosix is a work in progress: I'm starting from scratch
-after [previously writing](https://github.com/diodesign/diosix-legacy) a working microkernel for
-32-bit SMP x86 computers in C and assembly.
+## Introduction <a name="intro"></a>
 
-I learned a lot from that foray, and so this is the second iteration of diosix. Crucially,
-it will be written [in Rust](https://www.rust-lang.org/), a C/C++-like programming language that has a fierce emphasis
-on performance, memory safety, threads without data races, and other security features.
-I chose [RISC-V](https://riscv.org/) because it is interesting new ground to explore,
-whereas there are countless x86 and Arm operating system kernels out there.
+Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor hypervisor for 32-bit and 64-bit [RISC-V](https://riscv.org/) systems. It is written [in Rust](https://www.rust-lang.org/), which is a C/C++-like systems programming language fiercely focused on memory and thread safety as well as performance and reliability.
 
-For one thing, highly capable RISC-V cores can fit in FPGAs, paving the way for
-systems that have the freedom to boot truly open-source custom CPUs, peripheral controllers,
-hypervisors, kernels, and operating systems as required.
+The ultimate goal is to build fully open-source packages containing everything needed to configure FPGA-based systems with RISC-V cores and peripheral controllers, and boot a stack of software customized for a particular task, all generated on demand if necessary. This software should also run on supported ASICs and system-on-chips.
 
-### Running and building
+Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux kernel and minimal filesystem into a virtualized environment called a capsule, and begin executing it.  
 
-Below is a screenshot of the hypervisor-microkernel booting in a quad-core 64-bit RISC-V Qemu Virt hardware environment
-with the default 128MB of physical RAM. It starts up a very basic supervisor-level container, and writes some debug out to the
-virtual serial port, including logging a hypercall from the supervisor within its container via CPU core 2:
+## Building and running <a name="buildrun"></a>
 
-[![Screenshot of SMP diosix in Qemu](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/riscv64-smp-qemu-boot.png)](https://raw.githubusercontent.com/diodesign/diosix/screenshots/docs/screenshots/riscv64-smp-qemu-boot.png)
+To build and run Diosix, you need to follow a few steps, which are documented here:
 
-The command to build this code for 64-bit RISC-V, once you've installed the necessary toolchain, and run it in Qemu is simply:
+1. [Building the toolchain](docs/toolchain.md)
+1. [Using Buildroot to build a bootable Linux kernel](docs/buildroot.md)
+1. [Building and using Qemu to test the hypervisor](docs/qemu.md)
+1. [Building and running the hypervisor](docs/building.md)
 
-```
-cargo run --release
-```
-
-Press `Ctrl-a` then `c` to escape to the Qemu monitor, then `q` to quit. To build and run diosix within a 32-bit RISC-V environment, try:
+Once you have everything in place, you can run Diosix in Qemu, or on real hardware, to start a Linux-based virtual environment. Below is debug output from the hypervisor bringing up a four-core 64-bit RISC-V system with 512MiB of RAM within the Qemu emulator, using a device tree to ascertain the hardware's configuration, loading a Linux kernel and its bundled filesystem into a virtualized environment, and executing it:
 
 ```
-cargo run --release --target riscv32imac-unknown-none-elf
+$ cargo run --release
+   Compiling diosix v2.0.0 (/home/build/src/diosix)
+    Finished release [optimized] target(s) in 2.50s
+     Running `qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel target/riscv64gc-unknown-none-elf/release/hypervisor`
+[-] CPU 0: Welcome to diosix 2.0.0 ... using device tree at 0x1020
+[-] CPU 0: Available physical RAM: 498 MiB, physical CPU cores: 4
+[-] CPU 0: Created capsule: ID 1, physical RAM base 0x80d95000, size 128 MiB
+[-] CPU 0: loading ELF program area: 0x8000f7b0 size 0x1e620 into 0x80d95000
+[-] CPU 0: loading ELF program area: 0x8002e7b0 size 0xa2c0bc into 0x80db4000
+[-] CPU 0: Supervisor kernel entry: 0x80d96000
+[-] CPU 0: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
+[-] CPU 3: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
+[-] CPU 2: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
+[-] CPU 1: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
 ```
 
-See the [build instructions](BUILDING.md) for step-by-step guides to compiling and running this project.
+## Next on the todo list <a name="todo"></a>
 
-### Todo
+As stated above, Diosix can load a Linux kernel into a virtualized environment called the boot capsule, and start executing it. However, this kernel will soon crash. This is because Diosix needs to describe to Linux the environment it was loaded into, and transparently trap and virtualize any attempts by the kernel to access hardware peripherals. Without this support, the loaded kernel will flail in the dark and crash.
 
-There are a number of goals to hit before this can be considered a useful kernel and operating system.
-Here's a non-complete todo list, some of which is partially done:
+Therefore, the immediate todo list is as follows:
+1. Implement a device tree generator to describe to the Linux kernel its virtualized environment.
+1. Virtualize hardware access attempts by the Linux kernel.
+1. Once Linux is booting successfully, develop user-land and hypervisor-level code that can launch and manage further virtualized environments.
 
-* Update wiki with relevant documentation
-* Introduce unit tests
-* Bring-up for RV32
-* Bring-up for RV64
-* Hypervisor-kernel level:
-    * Physical RAM region management
-    * Exception handling
-    * Interrupt handling
-    * CPU core scheduling
-    * Supervisor environment management
+The boot capsule is expected to provide a user interface through which more capsules containing applications can be loaded from storage and executed. On embedded devices or servers, the boot capsule could start services and programs automatically. In any case, capsules are isolated from each other, preventing one from interfering with one another.
 
-### Branches
+Diosix does not require a RISC-V CPU with the hypervisor ISA enabled to achieve this, though it will support that functionality as soon as it stabilizes. In the meantime, the hypervisor uses the processor cores' physical memory protection feature to enforce the separation of capsules. Eventually, Diosix will use the hypervisor ISA and fall back to physical memory protection if needed.
 
-The `master` branch contains the latest bleeding-edge code that people can work on and develop further; it should at least build, though it may crash. It is not for production use. Releases will be worked on in designated release branches. The `x86` branch holds an early port of the Rust microkernel for Intel-compatible PC systems. The `x86hypervisor` branch holds an early attempt to build hypervisor features into the `x86` branch. You're welcome to update these so they catch up with `master`, however my focus will be on the RISC-V port. Other branches contain experimental work that may not even build.
+## Further documentation <a name="wiki"></a>
 
-### Contact
+The above documentation describes the process of building and running Diosix. For more details on how it works under the hood, please consult the project's [work-in-progress wiki](https://github.com/diodesign/diosix/wiki).
 
-Feel free to [email the project lead](mailto:diodesign@tuta.io), Chris Williams, if you have any questions, want to get involved, have source to contribute, or have [found a security flaw](SECURITY.md). You can also find Chris online in [various forums](https://discordapp.com/invite/rust-lang) as well as [on Twitter](https://twitter.com/diodesign). Ultimately, you can submit pull requests or issues on GitHub. Please observe the project's [code of conduct](CODE_OF_CONDUCT.md) if you wish to participate.
+## Development branches <a name="branches"></a>
 
-### Copyright, license, and thanks
+The `master` branch contains the latest bleeding-edge code that people can work on and develop further; it should at least build, though it may crash. It is not for production use. Releases will be worked on in designated release branches. 
 
-Copyright &copy; Chris Williams and contributors, 2018-2019. See LICENSE for distribution and use of source code and binaries. A few software components have been imported, modified under license where needed to run within the diosix kernel context, and placed in the `src/contrib` directory. See the included licences for more details on usage. With thanks to:
+The `x86` branch holds an early port of the Rust microkernel for Intel-compatible PC systems. The `x86hypervisor` branch holds an early attempt to build hypervisor features into the `x86` branch. You're welcome to update these so they catch up with `master`, however the focus for now will be on the RISC-V port. Other branches contain work-in-progress experimental work that may not even build.
+
+## Contact, security issue reporting, and code of conduct <a name="contact"></a>
+
+Please do [email](mailto:diodesign@tuta.io) project lead Chris Williams if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or issues via GitHub, though please consider disclosing security-related matters privately. Please also observe the project's [code of conduct](docs/code_of_conduct.md) if you wish to participate.
+
+## Copyright, license, and thanks <a name="copyright"></a>
+
+Copyright &copy; Chris Williams and contributors, 2018-2019. See [LICENSE](LICENSE) for distribution and use of source code and binaries.
+
+One or more software components have been imported, modified under license where needed to run within the Diosix kernel context, and placed in the `src/contrib` directory. See the included licenses for more details on usage. With thanks to:
 
 - src/contrib/hermit-dtb: Copyright &copy; 2018 Colin Finck, RWTH Aachen University.
-- src/contrib/lazy-static.rs: Copyright 2016 lazy-static.rs Developers. Copyright &copy; 2010 The Rust Project Developers.
-- src/contrib/hashmap_core: Copyright &copy; 2016 The Rust Project Developers.
-- src/contrib/spin-rs: Copyright &copy; 2014 Mathijs van de Nes.
-- src/contrib/spin-rs/src/atomic.rs: Reimplements Rust's MIT-licensed [core::sync::atomic](https://github.com/rust-lang/rust/blob/master/src/libcore/sync/atomic.rs) API. Original implementation: Copyright &copy; The Rust Project Developers.
 
-And thanks to [David Craven](https://github.com/dvc94ch), [Alex Bradbury](https://github.com/asb), [Vadim Kaushan](https://github.com/Disasm), and everyone else who brought Rust, LLVM, and RISC-V together; the RISC-V world for designing the CPU cores and system-on-chips in the first place; [Michael Clark](https://github.com/michaeljclark) and everyone else who worked on [Qemu](https://github.com/riscv/riscv-qemu) and other RISC-V emulators; Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/); and to the OSdev community for its [notes and documentation](http://wiki.osdev.org/Main_Page).
+Many thanks to [David Craven](https://github.com/dvc94ch), [Alex Bradbury](https://github.com/asb), [Vadim Kaushan](https://github.com/Disasm), and everyone else who brought Rust, LLVM, and RISC-V together; the RISC-V world for designing the CPU cores and system-on-chips in the first place; [Michael Clark](https://github.com/michaeljclark) and everyone else who worked on [Qemu](https://github.com/riscv/riscv-qemu) and other RISC-V emulators; Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/); and to the OSdev community for its [notes and documentation](https://wiki.osdev.org/Main_Page).
+
+Also, thanks to the Rust language developers, the LLVM and GNU teams, Microsoft for GitHub and Visual Studio Code, the developers of various crates imported by this project, the worldwide [Linux kernel](https://kernel.org/) effort, and no doubt many other folks.
+
+Finally, if it is of interest: an [earlier iteration](https://github.com/diodesign/diosix-legacy) of Diosix exists. This is a working microkernel operating system, written in C and assembly, primarily for 32-bit SMP x86 and Arm-powered computers.

@@ -1,4 +1,4 @@
-# diosix RV32G/RV64G kernel low-level per-CPU core timer control
+# diosix RV32G/RV64G hypervisor low-level per-CPU core timer control
 #
 # (c) Chris Williams, 2019.
 #
@@ -13,7 +13,7 @@
 .global platform_timer_now
 .global platform_timer_irq_enable
 
-# kernel constants, such as stack and lock locations
+# hypervisor constants, such as stack and lock locations
 .include "src/platform/riscv/asm/consts.s"
 
 # special memory mapped registers for controlling per-CPU timers 

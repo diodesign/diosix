@@ -1,4 +1,4 @@
-# kernel low-level utility code for RV32G/RV64G targets
+# hypervisor low-level utility code for RV32G/RV64G targets
 #
 # (c) Chris Williams, 2019.
 # See LICENSE for usage and copying.
@@ -12,12 +12,18 @@
 .global platform_save_supervisor_state
 .global platform_load_supervisor_state
 .global platform_set_supervisor_return
+.global platform_cpu_wait
 
-# kernel constants, such as stack and lock locations
+# hypervisor constants, such as stack and lock locations
 .include "src/platform/riscv/asm/consts.s"
 
+# needed to prevent loops from being optimized away 
+platform_cpu_wait:
+  add x0, x0, x0
+  ret
+
 # return pointer to this CPU's private variables
-# <= a0 = pointer to kernel's CPU structure
+# <= a0 = pointer to hypervisor's CPU structure
 platform_cpu_private_variables:
   # get base of private variables from top of IRQ stack, held in mscratch
   csrrs a0, mscratch, x0
@@ -27,14 +33,14 @@ platform_cpu_private_variables:
 # <= a0 = pointer to heap base (corrupts t0)
 platform_cpu_heap_base:
   csrrs a0, mscratch, x0  # private vars start above CPU IRQ stack
-  li    t0, KERNEL_CPU_PRIVATE_VARS_SIZE
+  li    t0, HV_CPU_PRIVATE_VARS_SIZE
   add   a0, a0, t0
   ret
 
 # return total empty size of this CPU's heap area
 # <= a0 = heap size in bytes
 platform_cpu_heap_size:
-  li  a0, KERNEL_CPU_HEAP_AREA_SIZE
+  li  a0, HV_CPU_HEAP_AREA_SIZE
   ret
 
 # save contents of supervisor CSRs into memory, and registers stacked
@@ -168,8 +174,8 @@ platform_load_supervisor_state:
   csrrw x0, scause, t0
   csrrw x0, stval, t1
   csrrw x0, satp, t2
-  csrrw x0, mepc, t3      # restore pc of next thread to run
-  move  s11, t4           # restore sp of next thread (stashed in s11)
+  csrrw x0, mepc, t3      # restore pc of next context to run
+  move  s11, t4           # restore sp of next context (stashed in s11)
 
   # copy registers to the IRQ stack
 .if ptrwidth == 32

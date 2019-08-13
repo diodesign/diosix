@@ -1,4 +1,4 @@
-# diosix machine kernel memory locations and layout for common RV32G/RV64G targets
+# diosix hypervisor memory locations and layout for common RV32G/RV64G targets
 #
 # (c) Chris Williams, 2018-19.
 # See LICENSE for usage and copying.
@@ -11,16 +11,16 @@
 .elseif ptrwidth == 64
 .equ  IRQ_REGISTER_FRAME_SIZE,   (32 * 8)   # rV64
 .else
-.error "Unsupported pointer width"
+.error "Only 32-bit and 64-bit RISC-V supported (unexpected pointer width)"
 .endif
 
-# the kernel is laid out as follows in physical memory on bootup
+# the hypervisor is laid out as follows in physical memory on bootup
 # (all addresses should be 4KB word aligned, and defined in the target ld script)
-#   __kernel_start = base of kernel
+#   __hypervisor_start = base of hypervisor
 #   .
-#   . kernel text, read-only data, read-write data / bss
+#   . hypervisor text, read-only data, read-write data / bss
 #   .
-#   __kernel_end = top of the kernel's static footprint
+#   __hypervisor_end = top of the hypervisor's static footprint
 #   .
 #   . per-CPU slabs of physical memory: each CPU core has...
 #   .   exeception / interrupt stack
@@ -28,12 +28,12 @@
 #   .   private heap space
 
 # describe per-CPU slab. each slab is 1 << 18 bytes in size = 256KB
-# update ../src/physmem.rs PHYS_MEM_PER_CPU if KERNEL_CPU_SLAB_SHIFT changes
-.equ KERNEL_CPU_SLAB_SHIFT,         (18)
-.equ KERNEL_CPU_SLAB_SIZE,          (1 << KERNEL_CPU_SLAB_SHIFT)
-.equ KERNEL_CPU_STACK_BASE,         (0)
-.equ KERNEL_CPU_STACK_SIZE,         (32 * 1024)
-.equ KENREL_CPU_PRIVATE_VARS_BASE,  (KERNEL_CPU_STACK_BASE + KERNEL_CPU_STACK_SIZE)
-.equ KERNEL_CPU_PRIVATE_VARS_SIZE,  (PAGE_SIZE)
-.equ KERNEL_CPU_HEAP_BASE,          (KENREL_CPU_PRIVATE_PAGE_BASE + KENREL_CPU_PRIVATE_VARS_BASE)
-.equ KERNEL_CPU_HEAP_AREA_SIZE,     (KERNEL_CPU_SLAB_SIZE - KERNEL_CPU_STACK_SIZE - KERNEL_CPU_PRIVATE_VARS_SIZE)
+# update ../src/physmem.rs PHYS_MEM_PER_CPU if HV_CPU_SLAB_SHIFT changes
+.equ HV_CPU_SLAB_SHIFT,         (18)
+.equ HV_CPU_SLAB_SIZE,          (1 << HV_CPU_SLAB_SHIFT)
+.equ HV_CPU_STACK_BASE,         (0)
+.equ HV_CPU_STACK_SIZE,         (32 * 1024)
+.equ HV_CPU_PRIVATE_VARS_BASE,  (HV_CPU_STACK_BASE + HV_CPU_STACK_SIZE)
+.equ HV_CPU_PRIVATE_VARS_SIZE,  (PAGE_SIZE)
+.equ HV_CPU_HEAP_BASE,          (HV_CPU_PRIVATE_PAGE_BASE + HV_CPU_PRIVATE_VARS_BASE)
+.equ HV_CPU_HEAP_AREA_SIZE,     (HV_CPU_SLAB_SIZE - HV_CPU_STACK_SIZE - HV_CPU_PRIVATE_VARS_SIZE)
