@@ -10,7 +10,7 @@
 1. [Contact, security issue reporting, and code of conduct](#contact)
 1. [Copyright, license, and thanks](#copyright)
 
-## Introduction <a name="intro"></a>
+### Introduction <a name="intro"></a>
 
 Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor hypervisor for 32-bit and 64-bit [RISC-V](https://riscv.org/) systems. It is written [in Rust](https://www.rust-lang.org/), which is a C/C++-like systems programming language fiercely focused on memory and thread safety as well as performance and reliability.
 
@@ -18,7 +18,7 @@ The ultimate goal is to build fully open-source packages containing everything n
 
 Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux kernel and minimal filesystem into a virtualized environment called a capsule, and begin executing it.  
 
-## Building and running <a name="buildrun"></a>
+### Building and running <a name="buildrun"></a>
 
 To build and run Diosix, you need to follow a few steps, which are documented here:
 
@@ -46,7 +46,7 @@ $ cargo run --release
 [-] CPU 1: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
 ```
 
-## Next on the todo list <a name="todo"></a>
+### Next on the todo list <a name="todo"></a>
 
 As stated above, Diosix can load a Linux kernel into a virtualized environment called the boot capsule, and start executing it. However, this kernel will soon crash. This is because Diosix needs to describe to Linux the environment it was loaded into, and transparently trap and virtualize any attempts by the kernel to access hardware peripherals. Without this support, the loaded kernel will flail in the dark and crash.
 
@@ -59,21 +59,21 @@ The boot capsule is expected to provide a user interface through which more caps
 
 Diosix does not require a RISC-V CPU with the hypervisor ISA enabled to achieve this, though it will support that functionality as soon as it stabilizes. In the meantime, the hypervisor uses the processor cores' physical memory protection feature to enforce the separation of capsules. Eventually, Diosix will use the hypervisor ISA and fall back to physical memory protection if needed.
 
-## Further documentation <a name="wiki"></a>
+### Further documentation <a name="wiki"></a>
 
 The above documentation describes the process of building and running Diosix. For more details on how it works under the hood, please consult the project's [work-in-progress wiki](https://github.com/diodesign/diosix/wiki).
 
-## Development branches <a name="branches"></a>
+### Development branches <a name="branches"></a>
 
 The `master` branch contains the latest bleeding-edge code that people can work on and develop further; it should at least build, though it may crash. It is not for production use. Releases will be worked on in designated release branches. 
 
 The `x86` branch holds an early port of the Rust microkernel for Intel-compatible PC systems. The `x86hypervisor` branch holds an early attempt to build hypervisor features into the `x86` branch. You're welcome to update these so they catch up with `master`, however the focus for now will be on the RISC-V port. Other branches contain work-in-progress experimental work that may not even build.
 
-## Contact, security issue reporting, and code of conduct <a name="contact"></a>
+### Contact, security issue reporting, and code of conduct <a name="contact"></a>
 
 Please do [email](mailto:diodesign@tuta.io) project lead Chris Williams if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or issues via GitHub, though please consider disclosing security-related matters privately. Please also observe the project's [code of conduct](docs/code_of_conduct.md) if you wish to participate.
 
-## Copyright, license, and thanks <a name="copyright"></a>
+### Copyright, license, and thanks <a name="copyright"></a>
 
 Copyright &copy; Chris Williams and contributors, 2018-2019. See [LICENSE](LICENSE) for distribution and use of source code and binaries.
 
