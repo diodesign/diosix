@@ -34,10 +34,11 @@ This not only compiles the hypervisor, it also links with the boot capsule kerne
 Below is a list of supported targets, known as target triples in Rust jargon, and a brief description of the CPU architectures they support:
 
 | Target                         | Description                                 |
-| -------------------------------|---------------------------------------------|
+|:-------------------------------|:--------------------------------------------|
 | `riscv32imac-unknown-none-elf` | Basic 32-bit RISC-V cores (RV32IMAC)        |
 | `riscv64imac-unknown-none-elf` | Basic 64-bit RISC-V cores (RV64IMAC)        |
 | `riscv64gc-unknown-none-elf`   | Fully featured 64-bit RISC-V cores (RV64GC) |
+
 
 Use `cargo clean` to delete hypervisor builds, and their intermediate files, while leaving the source code untouched, so that the subsequent build occurs afresh. This command should not normally be necessary and is mentioned here for completeness. If a build unexpectedly fails, trying cleaning it out, and starting again with `cargo clean` followed by the desired `cargo build` command.
 

@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/diodesign/diosix.svg?branch=master)](https://travis-ci.org/diodesign/diosix)
+[![Build Status](https://travis-ci.org/diodesign/diosix.svg?branch=master)](https://travis-ci.org/diodesign/diosix) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/master/LICENSE) [![Language: Rust](https://img.shields.io/badge/Language-Rust-yellow.svg)](https://www.rust-lang.org/)
 
 ## Table of contents
 
@@ -71,11 +71,11 @@ The `x86` branch holds an early port of the Rust microkernel for Intel-compatibl
 
 ### Contact, security issue reporting, and code of conduct <a name="contact"></a>
 
-Please do [email](mailto:diodesign@tuta.io) project lead Chris Williams if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or issues via GitHub, though please consider disclosing security-related matters privately. Please also observe the project's [code of conduct](docs/code_of_conduct.md) if you wish to participate.
+Please do [email](mailto:diodesign@tuta.io) project lead Chris Williams if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or issues via GitHub, though please consider disclosing security-related matters privately. Please also observe the project's [code of conduct](docs/conduct.md) if you wish to participate.
 
 ### Copyright, license, and thanks <a name="copyright"></a>
 
-Copyright &copy; Chris Williams and contributors, 2018-2019. See [LICENSE](LICENSE) for distribution and use of source code and binaries.
+Copyright &copy; Chris Williams and contributors, 2018-2019. See [LICENSE](https://github.com/diodesign/diosix/blob/master/LICENSE) for distribution and use of source code and binaries.
 
 One or more software components have been imported, modified under license where needed to run within the Diosix kernel context, and placed in the `src/contrib` directory. See the included licenses for more details on usage. With thanks to:
 

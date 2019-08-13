@@ -9,10 +9,11 @@ A Linux-compatible kernel to run inside the boot capsule should be named `superv
 Here are some example target, and their boot capsule kernel paths:
 
 | Target                         | CPU architecture | Boot capsule kernel path               |
-| -------------------------------|------------------|----------------------------------------|
+|:-------------------------------|:-----------------|:---------------------------------------|
 | `riscv32imac-unknown-none-elf` | `riscv32imac`    | `boot/binaries/riscv32imac/supervisor` |
 | `riscv64imac-unknown-none-elf` | `riscv64imac`    | `boot/binaries/riscv64imac/supervisor` |
 | `riscv64gc-unknown-none-elf`   | `riscv64gc`      | `boot/binaries/riscv64gc/supervisor`   |
+
 
 Note that Diosix defaults to building for `riscv64gc-unknown-none-elf` so if you use the default target, you must provide a `supervisor` kernel for that CPU architecture.
 
