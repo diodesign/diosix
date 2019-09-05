@@ -14,7 +14,7 @@
 *.lock
 
 # ignore compiler output directories
-/target/
+target/
 
 # ignore boot supervisor binaries */
 /boot/binaries/

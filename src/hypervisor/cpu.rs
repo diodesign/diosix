@@ -13,14 +13,14 @@ its own heap, reusing any blocks freed by itself or other cores.
 The hypervisor layer is unlikely to do much active allocation
 so it's OK to keep it really simple for now. */
 
-use heap;
-use scheduler::ScheduleQueues;
+use super::heap;
+use super::scheduler::ScheduleQueues;
 use platform::cpu::{SupervisorState, CPUFeatures};
 use spin::Mutex;
 use hashbrown::hash_map::{HashMap, Entry};
-use capsule::{self, CapsuleID};
+use super::capsule::{self, CapsuleID};
 use platform::physmem::PhysMemSize;
-use vcore::VirtualCore;
+use super::vcore::VirtualCore;
 use alloc::string::String;
 
 /* physical CPU core IDs and count */

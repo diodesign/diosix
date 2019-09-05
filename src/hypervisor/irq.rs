@@ -5,7 +5,7 @@
  * See LICENSE for usage and copying.
  */
 
-use scheduler;
+use super::scheduler;
 
 /* platform-specific code must implement all this */
 use platform;
@@ -21,10 +21,11 @@ use platform::cpu::PrivilegeMode;
 #[no_mangle]
 pub extern "C" fn hypervisor_irq_handler(context: IRQContext)
 {
+    let debug_context = context;
     let irq = platform::irq::dispatch(context);
     match irq.irq_type
     {
-        IRQType::Exception => exception(irq),
+        IRQType::Exception => { hvlog!("Exception context: {:x?}", &debug_context); exception(irq) },
         IRQType::Interrupt => interrupt(irq),
     };
 }

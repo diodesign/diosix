@@ -6,13 +6,13 @@
  */
 
 use platform::physmem::PhysMemSize;
-use physmem::{self, Region};
-use vcore::{self, Priority};
+use super::physmem::{self, Region};
+use super::vcore::{self, Priority};
 use spin::Mutex;
-use error::Cause;
+use super::error::Cause;
 use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::Occupied;
-use loader;
+use super::loader;
 
 pub type CapsuleID = usize;
 

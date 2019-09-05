@@ -21,7 +21,7 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
 use core::mem;
 use core::result::Result;
-use ::error::Cause;
+use super::error::Cause;
 use platform::physmem::{barrier, PhysMemSize};
 
 /* different states each recognized heap block can be in */
@@ -46,7 +46,7 @@ unsafe impl GlobalAlloc for HVallocator
     unsafe fn alloc(&self, layout: Layout) -> *mut u8
     {
         let bytes = layout.size();
-        match (*<::cpu::Core>::this()).heap.alloc::<u8>(bytes)
+        match (*<super::cpu::Core>::this()).heap.alloc::<u8>(bytes)
         {
             Ok(p) => 
             {
@@ -64,7 +64,7 @@ unsafe impl GlobalAlloc for HVallocator
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
     {
         hvdebug!("heap: freeing {:p}", ptr);
-        match (*<::cpu::Core>::this()).heap.free::<u8>(ptr)
+        match (*<super::cpu::Core>::this()).heap.free::<u8>(ptr)
         {
             Err(e) =>
             {

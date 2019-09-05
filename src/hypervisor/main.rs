@@ -93,7 +93,7 @@ pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_buf: &u8)
     {
         Err(e) => match e
         {
-            /* if debug failed to initialize then we're probbaly toast on this hardware,
+            /* if debug failed to initialize then we're probably toast on this hardware,
             so fail to infinite loop - unless there's some other foolproof way to signal
             early failure to the user for all platforms */
             Cause::DebugFailure => (),

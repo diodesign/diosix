@@ -9,7 +9,7 @@
 
 use platform;
 use spin::Mutex;
-use error::Cause;
+use super::error::Cause;
 use alloc::collections::linked_list::LinkedList;
 use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions};
 
@@ -39,6 +39,7 @@ pub struct Region
 impl Region
 {
     /* allow the currently running supervisor to access this region of physical memory.
+       only allow access if the region is marked in use. 
        return true for success, or false if request failed */
     pub fn grant_access(&self) -> bool
     {
@@ -46,7 +47,7 @@ impl Region
         {
             RegionState::InUse =>
             {
-                platform::physmem::protect(0, self.base, self.end, AccessPermissions::ReadWriteExecute);
+                platform::physmem::protect(self.base, self.end, AccessPermissions::ReadWriteExecute);
                 true
             },
             RegionState::Free =>   

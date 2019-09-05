@@ -5,11 +5,11 @@
  * See LICENSE for usage and copying.
  */
 
-use error::Cause;
+use super::error::Cause;
 use spin::Mutex;
 use alloc::collections::vec_deque::VecDeque;
-use vcore::{VirtualCore, Priority};
-use cpu::{self, Core};
+use super::vcore::{VirtualCore, Priority};
+use super::cpu::{self, Core};
 
 pub type TimesliceCount = u64;
 

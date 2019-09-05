@@ -5,13 +5,14 @@ authors = ["Chris Williams <diodesign@tuta.io>"]
 license = "MIT"
 build = "build.rs"
 publish = false
+edition = "2018"
 
 [[bin]]
 name = "hypervisor"
 path = "src/hypervisor/main.rs"
 
 [build-dependencies]
-regex = "1.1.9"
+regex = "1.2.1"
 
 [profile.dev]
 panic = "abort"
@@ -34,11 +35,11 @@ incremental = false
 version = "0.5"
 
 [dependencies.hashbrown]
-version = "0.5.0"
+version = "0.6.0"
 features = [ "nightly" ]
 
 [dependencies.lazy_static]
-version = "1.3.0"
+version = "1.4.0"
 features = [ "spin_no_std" ]
 
 [dependencies.xmas-elf]

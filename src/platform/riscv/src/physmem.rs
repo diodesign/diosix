@@ -41,7 +41,7 @@ pub fn tlb_flush()
 }
 
 
-/* allowed physical memory access permissions */
+/* allowed physical memory access permissions for supervisor kernels */
 #[derive(Debug)]
 pub enum AccessPermissions
 {
@@ -204,6 +204,16 @@ fn hypervisor_footprint(cpu_count: usize) -> (PhysMemBase, PhysMemEnd)
     return (hypervisor_start, hypervisor_end);
 }
 
+/* Control currently running supervisor kernel's access to a region of physical memory. Either use PMP or CPU hypervisor extension,
+   depending on whatever is available, to enforce this. So far, just PMP is supported.
+   => base, end = start and end addresses of physical RAM region
+      access = access permissions for the region for the currently running supervisor kernel
+   <= true for success, or false for failure */
+pub fn protect(base: usize, end: usize, access: AccessPermissions) -> bool
+{
+    return pmp_protect(0, base, end, access);
+}
+
 /* define a per-CPU physical memory region and apply access permissions to it. if the region already exists, overwrite it.
 each region is a pair of RISC-V physical memory protection (PMP) area. we pair up PMP addresses in TOR (top of range) mode.
 eg, region 0 uses pmp0cfg and pmp1cfg in pmpcfg0 for start and end, region 1 uses pmp1cfg and pmp2cfg in pmpcfg0.
@@ -212,7 +222,7 @@ eg, region 0 uses pmp0cfg and pmp1cfg in pmpcfg0 for start and end, region 1 use
       base, end = start and end addresses of region
       access = access permissions for the region
    <= true for success, or false for failure */
-pub fn protect(region_id: usize, base: usize, end: usize, access: AccessPermissions) -> bool
+fn pmp_protect(region_id: usize, base: usize, end: usize, access: AccessPermissions) -> bool
 {
     /* here are two PMP entries to one diosix region: one for base address, one for the end address */
     let pmp_entry_base_id = region_id * 2;

@@ -8,7 +8,7 @@
  */
 
 use core::fmt;
-use error::Cause;
+use super::error::Cause;
 use spin::Mutex;
 
 lazy_static!
@@ -28,16 +28,16 @@ extern "C" {
 #[macro_export]
 macro_rules! hvlog
 {
-  ($fmt:expr) => (hvprintln!("[-] CPU {}: {}", ::cpu::Core::id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[-] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
+  ($fmt:expr) => (hvprintln!("[-] CPU {}: {}", $crate::cpu::Core::id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[-] CPU {}: ", $fmt), $crate::cpu::Core::id(), $($arg)*));
 }
 
 /* bad news: bug detection, failures, etc. */
 #[macro_export]
 macro_rules! hvalert
 {
-  ($fmt:expr) => (hvprintln!("[!] CPU {}: {}", ::cpu::Core::id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[!] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
+  ($fmt:expr) => (hvprintln!("[!] CPU {}: {}", $crate::cpu::Core::id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[!] CPU {}: ", $fmt), $crate::cpu::Core::id(), $($arg)*));
 }
 
 /* only output if debug build is enabled */
@@ -45,8 +45,8 @@ macro_rules! hvalert
 #[cfg(debug_assertions)]
 macro_rules! hvdebug
 {
-  ($fmt:expr) => (hvprintln!("[?] CPU {}: {}", ::cpu::Core::id(), $fmt));
-  ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[?] CPU {}: ", $fmt), ::cpu::Core::id(), $($arg)*));
+  ($fmt:expr) => (hvprintln!("[?] CPU {}: {}", $crate::cpu::Core::id(), $fmt));
+  ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[?] CPU {}: ", $fmt), $crate::cpu::Core::id(), $($arg)*));
 }
 
 /* silence debug if disabled */

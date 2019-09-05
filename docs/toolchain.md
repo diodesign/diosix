@@ -108,13 +108,13 @@ You should now be set. To make sure the Rust toolchain was installed correctly, 
 rustc --version
 ```
 
-This should display the version information for your Rust toolchain. If you get a file-not-found error, you need to add the toolchain to your `PATH` variable. Open your shell's configuration file, such as `.bashrc`, `.zshrc`, or similar as explained above, in a text editor, and insert the following line to the end of the file:
+This should display the version information for your Rust toolchain. If you get a file-not-found error, you need to add the toolchain to your `PATH` variable. Open your shell's configuration file, such as `.bashrc`, `.zshrc`, or similar as explained above, in a text editor, and insert the following line at the end of the file:
 
 ```
-export PATH=$HOME/.cargo/bin:$PATH
+source $HOME/.cargo/env
 ```
 
-Save and close the file in your editor, then close your terminal session, open a new one, and verify the above `rustc` command runs without any error.
+This will import the Rust toolchain's environment variables when you next open a shell session so that it can be located and run. Save and close the configuration file in your editor, then close your terminal session, open a new one, and verify the above `rustc` command runs without any error.
 
 Finally, you should keep Rust updated with the following command:
 

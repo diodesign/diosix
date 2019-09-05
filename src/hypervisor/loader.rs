@@ -5,9 +5,9 @@
  * See LICENSE for usage and copying.
  */
 
-use error::Cause;
+use super::error::Cause;
 use platform::cpu::Entry;
-use physmem::Region;
+use super::physmem::Region;
 use xmas_elf;
 
 /* the long-term plan is to support multiple binary formats,

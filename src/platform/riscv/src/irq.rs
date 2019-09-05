@@ -57,21 +57,21 @@ pub struct IRQ
     pub privilege_mode: crate::cpu::PrivilegeMode, /* privilege level of the interrupted code */
     pub irq_type: IRQType, /* type of the IRQ - sw or hw generated */
     pub cause: IRQCause, /* cause of this interruption */
-    pub pc: usize,   /* where in memory this IRQ occured */
+    pub pc: usize,   /* where in memory this IRQ occurred */
     pub sp: usize,   /* stack pointer for interrupted supervisor */
 }
 
 /* Hardware-specific data from low-level IRQ handler.
 Note: register x2 is normally sp but in this case contains the
-      top of the IRQ handler stack. Read the interrupted sp from
-      mscratch if needed... */
+      top of the IRQ handler stack */
 #[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct IRQContext
 {
     cause: usize,
     epc: usize,             /* cause code and PC when IRQ fired */
     mtval: usize,           /* IRQ specific information */
-    sp: usize,              /* stack pointer in interrupted envionment */
+    sp: usize,              /* stack pointer in interrupted environment */
     registers: [usize; 32], /* all 32 registers stacked */
 }
 

@@ -5,10 +5,10 @@
  * See LICENSE for usage and copying.
  */
 
-use error::Cause;
-use capsule::CapsuleID;
+use super::error::Cause;
+use super::capsule::CapsuleID;
 use platform::cpu::{SupervisorState, Entry};
-use scheduler;
+use super::scheduler;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Priority
