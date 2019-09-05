@@ -8,14 +8,14 @@
 /*!
 # RISC-V platform
 
-This platform crate is the diosix hypervisor's RISC-V-specific code: it starts up a system, and subsequently controls the hardware on behalf
+This platform crate is the Diosix hypervisor's RISC-V-specific code: it starts up a system, and subsequently controls the hardware on behalf
 of the portable portion of the hypervisor, which lives in the [hypervisor](https://github.com/diodesign/diosix/blob/master/src/hypervisor/)
 parent crate. This portable code should be free of hardware-specific routines and structures, and call down to a platform crate, such as this one,
 to carry out hardware-specific actions, such as accessing timers and the serial port.
  
-This platform crate is documented primarily to aid the porting of diosix to other processor architectures, for example: OpenPOWER.
+This platform crate is documented primarily to aid the porting of Diosix to other processor architectures, for example: OpenPOWER.
 If a platform crate implements the following public data structures and methods, it should integrate seamlessly with the portable hypervisor, and
-allow the hypervisor to run on hardware supported by the crate. A new platform crate effectively creates a hardware port of diosix.
+allow the hypervisor to run on hardware supported by the crate. A new platform crate effectively creates a hardware port of Diosix.
 
 The portable hypervisor links with a platform crate when it is built, and that crate is chosen by the [`build.rs`](https://github.com/diodesign/diosix/blob/master/build.rs)
 script from the `--target` parameter on the `cargo` command line. For example, selecting the target `riscv32imac-unknown-none-elf`
@@ -29,7 +29,7 @@ Feel free to drop the project lead a message if you have any questions. The next
 # Implementing your own platform crate
 
 The information below describes the interface that needs to be implemented between the portable hypervisor and a platform crate,
-and suggests steps to create a new platform crate. The documentation should help you effectively port diosix to more hardware. 
+and suggests steps to create a new platform crate. The documentation should help you effectively port Diosix to more hardware. 
 It is assumed you are comfortable writing low-level Rust and assembly code, and are familiar with stacks, interrupt handlers, linker scripts,
 bootloaders, Device Trees, and similar concepts.
 
@@ -42,7 +42,7 @@ This executable should be loaded into memory and executed by a bootloader.
 
 The linker script should define an entry point within the platform crate, and define locations in memory to load its various sections. These memory
 addresses are largely specific to the hardware being supported, and should be chosen carefully by the crate's author. The platform crate's code is
-the first diosix code to run when a system is booted, specifically at the aforementioned entry point.
+the first Diosix code to run when a system is booted, specifically at the aforementioned entry point.
 
 The crate's startup code, typically written in assembly language, should initialize one or more of the system's CPU cores, and assign them each a
 stack of memory, set up suitable interrupt and exception handlers, and enable interrupts and exceptions. These handlers should be located within the
@@ -81,7 +81,7 @@ leaves the definition and scheduling of workloads to the portable hypervisor: th
 
 Once a CPU core has called `hventry()`, the portable hypervisor has control of the core, and will direct the core to call down to the platform crate when
 hardware-specific actions are required. However, when an exception or interrupt occurs, the relevant exception or interrupt handler within the platform crate,
-specified by the startup code, will be called, passing control to the platform-specific crate. Note that the diosix project refers to software-generated exceptions
+specified by the startup code, will be called, passing control to the platform-specific crate. Note that the Diosix project refers to software-generated exceptions
 and hardware-generated interrupts generically as IRQs, though this naming convention may change if it proves too confusing.
 
 The IRQ handlers specified by the startup code must disable IRQs, if not already done so automatically by the CPU, and preserve the state of the interrupted
