@@ -1,6 +1,6 @@
 ## Building and running the hypervisor
 
-The good news is that once you have installed a [RISC-V Binutils and Rust toolchain](toolchain.md), built a boot capsule [kernel and filesystem](buildroot.md), and compiled a RISC-V-capable version of [Qemu](qemu.md), the remaining steps to run the Diosix hypervisor are simple. This is deliberately so that once all the various support components are in place, the hypervisor can be built, run, and tested with single commands to make development as smooth as possible.
+Once you have installed a [RISC-V Binutils and Rust toolchain](toolchain.md), built a boot capsule [kernel and filesystem](buildroot.md), and compiled a RISC-V-capable version of [Qemu](qemu.md), the remaining steps to run the Diosix hypervisor are straightforward. This is deliberately so that once all the various support components are in place, the hypervisor can be built, run, and tested with single commands to make development as smooth as possible.
 
 These instructions assume you know your way around a Linux or Unix-like system, are comfortable using your system's command-line interface, and are using a [Debian](https://www.debian.org/)-like GNU/Linux operating system. This guide also assumes you have followed the aforementioned processes to ensure you have a toolchain, boot capsule kernel, and Qemu build in place. By now you should have Git and Cargo installed.
 
@@ -29,7 +29,7 @@ To build the hypervisor for a particular CPU architecture, use `cargo build`, wi
 cargo build --release --target <target>
 ```
 
-This not only compiles the hypervisor, it also links with the boot capsule kernel, which should contain an initial filesystem, to form the single executable `target/<target>/release/hypervisor`. If a boot capsule kernel cannot be found, an error will be raised. If no `<target>` is supplied on the `cargo` command line, the default, `riscv64gc-unknown-none-elf`, is used. Essentially, this command generates a build of the hypervisor that can bring up systems, physical or emulated, that feature the chosen supported CPU architecture.
+This not only compiles the hypervisor, it also links the boot capsule kernel, which should contain an initial filesystem, to form the single executable `target/<target>/release/hypervisor`. If a boot capsule kernel cannot be found, an error will be raised. If no `<target>` is supplied on the `cargo` command line, the default, `riscv64gc-unknown-none-elf`, is used. Essentially, this command generates a build of the hypervisor that can bring up systems, physical or emulated, that use the chosen supported CPU architecture.
 
 Below is a list of supported targets, known as target triples in Rust jargon, and a brief description of the CPU architectures they support:
 
