@@ -114,7 +114,7 @@ This should display the version information for your Rust toolchain. If you get 
 source $HOME/.cargo/env
 ```
 
-This will import the Rust toolchain's environment variables when you next open a shell session so that it can be located and run. Save and close the configuration file in your editor, then close your terminal session, open a new one, and verify the above `rustc` command runs without any error.
+This command will define the Rust toolchain's environment variables when you next open a shell session, so that the toolchain can be located and executed as needed. Save and close the configuration file in your editor, then close your terminal session, open a new one, and verify the above `rustc` command runs without any error.
 
 Finally, you should keep Rust updated with the following command:
 
@@ -122,7 +122,7 @@ Finally, you should keep Rust updated with the following command:
 rustup update
 ```
 
-Run this once a week, or at least before pulling the latest Diosix source code via Git and building the project to ensure you have all the features needed to generate a working build of the hypervisor.
+Run this at least before pulling the latest Diosix source code via Git and building the project to ensure you have all the features needed to generate a working build of the hypervisor.
 
 ### Using a prebuilt GNU binutils package <a name="prebuilt"></a>
 
