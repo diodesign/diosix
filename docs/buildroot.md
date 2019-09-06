@@ -4,9 +4,9 @@ When the Diosix hypervisor brings up a system, it creates, and schedules to run,
 
 The boot capsule's kernel and initial filesystem must be provided at build time so that they are incorporated into the final hypervisor executable. A single executable, containing the hypervisor, and its boot capsule kernel and initial filesystem, is generated to simplify booting: the bootloader needs to load and run just one file from storage to get the system going.
 
-A Linux-compatible kernel to run inside the boot capsule should be named `supervisor` and placed in the directory path `boot/binaries/<architecture>/` within the root directory of the Diosix project by build time. The name `supervisor` was chosen because the executable runs in supervisor mode above the Diosix hypervisor. The `<architecture>` component of the path refers to the CPU architecture of the machine Diosix will bring up. If, for example, you are building Diosix for the target `riscv32imac-unknown-none-elf`, the CPU architecture is that string up the first `-`, ie: `riscv32imac`. See the [Diosix build guide](building.md) for the list of supported targets and CPU architectures.
+The Linux-compatible operating system kernel that will run inside the boot capsule should be named `supervisor` and placed in the directory path `boot/binaries/<architecture>/` within the root directory of the Diosix project. The name `supervisor` was chosen because the executable runs in supervisor mode above the Diosix hypervisor. The `<architecture>` component of the path refers to the CPU architecture of the machine this build of Diosix will bring up.
 
-Here are some example target, and their boot capsule kernel paths:
+Below is a table of targets and their corresponding CPU architecture and boot capsule kernel paths. See the [Diosix build guide](building.md) for the full list of supported CPU architectures.
 
 | Target                         | CPU architecture | Boot capsule kernel path               |
 |:-------------------------------|:-----------------|:---------------------------------------|
@@ -39,9 +39,9 @@ git clone https://github.com/buildroot/buildroot.git
 cd buildroot
 ```
 
-To build a Linux kernel for a particular CPU architecture, copy the supplied Buildroot configuration for that architecture into the Buildroot source code directory. The supplied configuration files are in the `boot/buildroot/` directory within the Diosix project's root directory. Next, tell Buildroot to begin compiling. When it is complete, ensure the directory structure to store the built kernel exists within the Diosix project, and copy the generated kernel, located at `output/images/vmlinux` in the Buildroot source code directory, to the `boot/binary/<architecture>/supervisor` path.
+To build a Linux kernel for a particular CPU architecture, copy the supplied Buildroot configuration file for that architecture into the Buildroot source code directory. The supplied configuration files are in the `boot/buildroot/` directory within the Diosix project's root directory. Next, tell Buildroot to begin compiling. When it is complete, ensure the directory structure to store the built kernel exists within the Diosix project, and copy the generated kernel, located at `output/images/vmlinux` in the Buildroot source code directory, to the `boot/binary/<architecture>/supervisor` path.
 
-Generically, and assuming Diosix is located at `src/diosix` in your home directory and your working directory is still the Buildroot source code directory, the commands needed are:
+Generically, and assuming Diosix is located at `src/diosix` in your home directory and your working directory is still the Buildroot source code directory, the commands needed to perform the above steps are:
 
 ```
 cp $HOME/src/diosix/boot/buildroot/<architecture>.config .config
@@ -59,7 +59,7 @@ mkdir -p $HOME/src/diosix/boot/binaries/riscv64gc
 cp output/images/vmlinux $HOME/src/diosix/boot/binaries/riscv64gc/supervisor
 ```
 
-Once you have built or provided one or more boot capsule kernels, and placed them in the correct path or paths in `boot/binaries`, you're ready to build and run Diosix.
+Once you have built or provided one or more boot capsule kernels, and placed them in the correct path or paths in `boot/binaries`, you are ready to build and run Diosix.
 
 ### A note on Linux kernel versions
 
