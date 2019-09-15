@@ -36,7 +36,7 @@ pub enum PrivilegeMode
 }
 
 pub type Reg = usize;
-pub type Entry = extern "C" fn () -> ();
+pub type Entry = usize;
 
 /* describe the CPU state for supervisor-level code */
 #[derive(Copy, Clone)]

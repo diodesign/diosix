@@ -16,7 +16,7 @@ though initially we'll support ELF */
 /* load a supervisor binary into memory as required
    => target = region of RAM to write into 
       source = region containing supervisor binary to parse
-   <= entry point if successful, or error code
+   <= entry point in physical RAM if successful, or error code
 */
 pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
 {
@@ -31,12 +31,17 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
         }
     };
 
+    /* the ELF binary defines the entry point as a virtual address. we'll be loading the ELF
+       somewhere in physical RAM. we have to translate that address to a physical one */
+    let mut entry_physical: Option<Entry> = None;
+    let entry_virtual = elf.header.pt2.entry_point();
+
+    /* we need to copy parts of the supervisor from the source to the target location in physical RAM */
     let (target_base, target_end)  = (target.base() as u64, target.end() as u64);
     let source_base = source.base() as u64;
 
-    let mut entry = None;
-    let mut ph_index = 0;
-    loop
+    /* loop through program headers in the binary */
+    for ph_index in 0..elf.header.pt2.ph_count()
     {
         match elf.program_header(ph_index)
         {
@@ -47,12 +52,20 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
                     Ok(xmas_elf::program::Type::Load) =>
                     {
                         /* sanity check: target must be able to hold supervisor */
-                        if (target_base + ph.offset() + ph.file_size()) > target_end
+                        if (target_base + ph.offset() + ph.mem_size()) > target_end
                         {
                             return Err(Cause::LoaderSupervisorTooLarge);
-                        } 
+                        }
 
-                        hvlog!("loading ELF program area: 0x{:x} size 0x{:x} into 0x{:x}",
+                        /* is this program header home to the entry point? if so, calculate the physical RAM address */
+                        if entry_virtual >= ph.virtual_addr() && entry_virtual < ph.virtual_addr() + ph.mem_size()
+                        {
+                            entry_physical = Some((((entry_virtual as u64) - ph.virtual_addr()) + target_base) as usize);
+                            hvlog!("Translated supervisor virtual entry point 0x{:x} to 0x{:x} in physical RAM",
+                                entry_virtual, entry_physical.unwrap());
+                        }
+
+                        hvlog!("Loading supervisor ELF program area: 0x{:x} size 0x{:x} into 0x{:x}",
                                ph.offset() + source_base, ph.file_size(), ph.physical_addr() + target_base);
                         unsafe
                         {
@@ -61,30 +74,17 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
                                                                         (ph.physical_addr() + target_base) as *mut u8,
                                                                         ph.file_size() as usize);
                         }
-
-                        /* assume entry point is the first address loaded: can't query xmas-elf for it :-( */
-                        if ph_index == 0
-                        {
-                            entry = Some(ph.offset() + target_base);
-                        }
                     },
                     _ => ()
                 }
             },
             _ => break
         };
-
-        ph_index = ph_index + 1;
     }
 
-    /* if we've not defined an entry point by now then bail out */
-    match entry
+    match entry_physical
     {
-        None => return Err(Cause::LoaderBadEntry),
-        Some(e) => 
-        {
-            hvlog!("Supervisor kernel entry: 0x{:x}", e);
-            return Ok(unsafe { core::intrinsics::transmute(e as usize) });
-        }
+        None => Err(Cause::LoaderBadEntry),
+        Some(entry) => Ok(entry)
     }
 }

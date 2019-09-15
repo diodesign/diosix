@@ -68,6 +68,48 @@ pub type PhysMemBase = usize;
 pub type PhysMemEnd  = usize;
 pub type PhysMemSize = usize;
 
+/* snapshot the physical RAM control registers for debugging purposes */
+#[derive(Debug, Copy, Clone)]
+pub struct PhysRAMState
+{
+    pmpcfg0: usize,
+    pmpcfg1: usize,
+    pmpcfg2: usize,
+    pmpcfg3: usize,
+
+    pmpaddr0: usize,
+    pmpaddr1: usize,
+    pmpaddr2: usize,
+    pmpaddr3: usize,
+
+    satp: usize,
+    sstatus: usize,
+    stvec: usize
+}
+
+impl PhysRAMState
+{
+    pub fn new() -> PhysRAMState
+    {
+        PhysRAMState
+        {
+            pmpcfg0: read_pmpcfg(0),
+            pmpcfg1: read_pmpcfg(1),
+            pmpcfg2: read_pmpcfg(2),
+            pmpcfg3: read_pmpcfg(3),
+
+            pmpaddr0: read_csr!(pmpaddr0),
+            pmpaddr1: read_csr!(pmpaddr1),
+            pmpaddr2: read_csr!(pmpaddr2),
+            pmpaddr3: read_csr!(pmpaddr3),
+
+            satp: read_csr!(satp),
+            sstatus: read_csr!(sstatus),
+            stvec: read_csr!(stvec)
+        }
+    }
+}
+
 /* describe a physical RAM area using its start address and size */
 pub struct RAMArea
 {
