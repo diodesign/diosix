@@ -25,13 +25,15 @@ Next, enter a directory in which to download the Qemu's source code, then fetch 
 
 ```
 mkdir -p $HOME/src
-git clone git://git.qemu-project.org/qemu.git
+git clone https://github.com/diodesign/qemu.git
 cd qemu
 ./configure --target-list=riscv32-softmmu,riscv64-softmmu
 make
 ```
 
-When this is complete, two Qemu executable files will have been built: `riscv32-softmmu/qemu-system-riscv32` for emulating 32-bit RISC-V systems, and `riscv64-softmmu/qemu-system-riscv64` for 64-bit RISC-V systems, both within the Qemu source directory. Diosix assumes it can find `qemu-system-riscv32` and `qemu-system-riscv64` in your `PATH` environment variable. To ensure these executable files can be located and used in future shell sessions, you need to update your shell's configuration files so that `PATH` automatically includes the location of these system emulators when you open a new session.
+Note: the above commands use a fork of Qemu maintained alongside the Diosix project to ensure any bug fixes and other patches not yet upstreamed are used with the hypervisor.
+
+Two Qemu executable files are built by the above compilation process: `riscv32-softmmu/qemu-system-riscv32` for emulating 32-bit RISC-V systems, and `riscv64-softmmu/qemu-system-riscv64` for 64-bit RISC-V systems, both within the Qemu source directory. Diosix assumes it can find `qemu-system-riscv32` and `qemu-system-riscv64` in your `PATH` environment variable. To ensure these executable files can be located and used in future shell sessions, you need to update your shell's configuration files so that `PATH` automatically includes the location of these system emulators when you open a new session.
 
 For a discussion on editing your shell's configuration files to update `PATH`, see the [toolchain](toolchain.md) documentation. For now, this guide will keep it simple. If you are using Bash as your shell, you need to edit `.bashrc` in your home directory, or `.zshrc` if you are using Zsh. If you use another shell, check its manual for the location of its configuration file.
 
