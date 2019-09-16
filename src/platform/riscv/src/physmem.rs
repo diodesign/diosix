@@ -36,7 +36,7 @@ pub fn tlb_flush()
 {
     unsafe
     {
-        asm!("sfence.vma x0,x0, x0" :::: "volatile");
+        asm!("sfence.vma x0,x0" :::: "volatile");
     }
 }
 
@@ -286,12 +286,14 @@ fn pmp_protect(region_id: usize, base: usize, end: usize, access: AccessPermissi
     /* do the end address's settings and make it TOR (top of range) */
     write_pmp_entry(pmp_entry_end_id, accessbits | PHYS_PMP_TOR);
 
-    /* program in the actual base and end addesses. there are a pair of PMP addresses
+    /* program in the actual base and end addresses. there are a pair of PMP addresses
     per region: the base and the end address. they are also shifted down two bits
     because that's exactly what the spec says. word alignment, right? */
     write_pmp_addr(pmp_entry_base_id, base >> 2);
     write_pmp_addr(pmp_entry_end_id, end >> 2);
 
+    /* force a reload of MMU data structures */
+    tlb_flush();
     return true;
 }
 

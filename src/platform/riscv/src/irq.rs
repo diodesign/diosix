@@ -107,7 +107,7 @@ pub fn dispatch(context: IRQContext) -> IRQ
         (IRQType::Exception, 0) => (true, IRQCause::InstructionAlignment),
         (IRQType::Exception, 1) => (true, IRQCause::InstructionAccess),
         (IRQType::Exception, 2) => (true, IRQCause::IllegalInstruction),
-        (IRQType::Exception, 3) => (false, IRQCause::Breakpoint),
+        (IRQType::Exception, 3) => (true, IRQCause::Breakpoint),
         (IRQType::Exception, 4) => (true, IRQCause::LoadAlignment),
         (IRQType::Exception, 5) => (true, IRQCause::LoadAccess),
         (IRQType::Exception, 6) => (true, IRQCause::StoreAlignment),

@@ -36,7 +36,7 @@ install:
   #
   - cd $HOME
   - sudo apt-get -qq install libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
-  - git clone -q -b master https://github.com/qemu/qemu.git
+  - git clone -q -b master https://github.com/diodesign/qemu.git
   - cd qemu
   - ./configure --target-list=riscv64-softmmu,riscv32-softmmu
   - make -s

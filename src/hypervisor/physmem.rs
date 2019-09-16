@@ -47,6 +47,7 @@ impl Region
         {
             RegionState::InUse =>
             {
+                hvlog!("Granting {:?} access to 0x{:x} - 0x{:x}", AccessPermissions::ReadWriteExecute, self.base, self.end);
                 platform::physmem::protect(self.base, self.end, AccessPermissions::ReadWriteExecute);
                 true
             },
