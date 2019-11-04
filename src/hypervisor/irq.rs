@@ -66,7 +66,7 @@ fn interrupt(irq: IRQ)
         {
             scheduler::timer_irq();
         },
-        _ => { hvlog!("Unhandled harwdare interrupt: {:?}", irq.cause) }
+        _ => { hvlog!("Unhandled hardware interrupt: {:?}", irq.cause) }
     }
 
     /* clear the interrupt condition */

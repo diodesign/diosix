@@ -26,7 +26,9 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
         Ok(elf) => elf,
         Err(s) =>
         {
-            hvlog!("Failed to parse supervisor ELF (source physical RAM base 0x{:x}, size {} MiB): {}", source.base(), source.size() / 1024 / 1024, s);
+            hvlog!("Failed to parse supervisor ELF (source physical RAM base 0x{:x}, size {} MiB): {}",
+                source.base(), source.size() / 1024 / 1024, s);
+
             return Err(Cause::LoaderUnrecognizedSupervisor);
         }
     };

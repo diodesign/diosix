@@ -71,15 +71,11 @@ The `x86` branch holds an early port of the Rust microkernel for Intel-compatibl
 
 ### Contact, security issue reporting, and code of conduct <a name="contact"></a>
 
-Please do [email](mailto:diodesign@tuta.io) project lead Chris Williams if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or issues via GitHub, though please consider disclosing security-related matters privately. Please also observe the project's [code of conduct](docs/conduct.md) if you wish to participate.
+Please [email](mailto:diosix@tuta.io) project lead Chris Williams if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or issues via GitHub, though please consider disclosing security-related matters privately. Please also observe the project's [code of conduct](docs/conduct.md) if you wish to participate.
 
 ### Copyright, license, and thanks <a name="copyright"></a>
 
-Copyright &copy; Chris Williams and contributors, 2018-2019. See [LICENSE](https://github.com/diodesign/diosix/blob/master/LICENSE) for distribution and use of source code and binaries.
-
-One or more software components have been imported, modified under license where needed to run within the Diosix kernel context, and placed in the `src/contrib` directory. See the included licenses for more details on usage. With thanks to:
-
-- src/contrib/hermit-dtb: Copyright &copy; 2018 Colin Finck, RWTH Aachen University.
+Copyright &copy; Chris Williams, 2018-2019. See [LICENSE](https://github.com/diodesign/diosix/blob/master/LICENSE) for distribution and use of source code and binaries.
 
 Many thanks to [David Craven](https://github.com/dvc94ch), [Alex Bradbury](https://github.com/asb), [Vadim Kaushan](https://github.com/Disasm), and everyone else who brought Rust, LLVM, and RISC-V together; the RISC-V world for designing the CPU cores and system-on-chips in the first place; [Michael Clark](https://github.com/michaeljclark) and everyone else who worked on [Qemu](https://github.com/riscv/riscv-qemu) and other RISC-V emulators; Philipp Oppermann for his guide to writing [kernel-level Rust code](https://os.phil-opp.com/); and to the OSdev community for its [notes and documentation](https://wiki.osdev.org/Main_Page).
 

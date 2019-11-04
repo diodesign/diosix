@@ -46,20 +46,13 @@ lazy_static!
     static ref VCORES: Mutex<HashMap<CPUId, VirtualCore>> = Mutex::new(HashMap::new());
 }
 
-/* initialize the CPU management code
-   <= return number of cores present, or None for failure */
-pub fn init(device_tree_buf: &u8) -> Option<CPUCount>
-{
-    return platform::cpu::init(device_tree_buf);
-}
-
 /* describe a physical CPU core - this structure is stored in the per-CPU private variable space */
 #[repr(C)]
 pub struct Core
 {
     /* every physical CPU core has a hardware-assigned ID number that may be non-linear,
     while the startup code assigns each core a linear ID number from zero. we keep a copy of that
-    linear, runtime-assigned ID here. the hardware-assigned ID is not used in the portable code */
+    linear runtime-assigned ID here. the hardware-assigned ID is not used in the portable code */
     id: CPUId,
 
     /* platform-defined bitmask of ISA features this core provides. if a virtual core has a features bit set that
@@ -128,17 +121,8 @@ impl Core
         unsafe { (*Core::this()).features }
     }
 
-    /* return string describing this core */
-    pub fn describe() -> String
-    {
-        let mut descr = String::new();
-        for s in platform::cpu::describe()
-        {
-            descr.push_str(s);
-        }
-
-        return descr;
-    }
+    /* return a structure describing this core */
+    pub fn describe() -> platform::cpu::CPUDescription { platform::cpu::CPUDescription::new() }
 
     /* return a virtual CPU core awaiting to run on this physical CPU core */
     pub fn dequeue() -> Option<VirtualCore>

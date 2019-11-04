@@ -1,15 +1,17 @@
 /* diosix heap management
  *
- * Simple heap manager that is lock-free for free()
- * but requires a lock to alloc(), or only allow
- * one allocator and multiple free()ers per heap.
- * For exsmple: a per-CPU heap in which the owner
- * CPU can allocate from its own heap pool, and
- * share these pointers with any CPU, and any
- * CPU can free back to the owner's heap pool.
- *  
- * Interfaces with Rust's global allocator API
- * so things like vec! and Box work. Heap is
+ * Simple heap manager. It allows one allocator and multiple
+ * free()ers per CPU heap. This means a CPU can allocate only from
+ * its own heap pool, and share these pointers with any CPU.
+ * Any CPU can free them back to the owner's heap pool when
+ * they are done with these allocations.
+ * 
+ * We use Rust's memory safety features to prevent any
+ * use-after-free(). Blocks are free()'d atomically
+ * preventing any races.
+ * 
+ * This code interfaces with Rust's global allocator API
+ * so things like vec! and Box just work. Heap is
  * the underlying engine for kAllocator.
  * 
  * (c) Chris Williams, 2019.
@@ -233,7 +235,7 @@ impl Heap
     }
 
     /* pass once over the heap and try to merge adjacent blocks
-    <= size of the lagrest block seen, in bytes including header */
+    <= size of the largest block seen, in bytes including header */
     fn consolidate(&mut self) -> PhysMemSize
     {
         let mut largest_merged_block: PhysMemSize = 0;

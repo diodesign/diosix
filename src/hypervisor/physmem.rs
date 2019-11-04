@@ -9,10 +9,22 @@
 
 use platform;
 use spin::Mutex;
-use super::error::Cause;
 use alloc::collections::linked_list::LinkedList;
 use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions};
+use super::error::Cause;
 
+/* return the physical RAM region covering the entirely of the boot capsule's supervisor */
+pub fn boot_supervisor() -> Region
+{
+    let (base, end) = platform::physmem::boot_supervisor();
+    Region { base: base, end: end, state: RegionState::InUse }
+}
+
+/* gather up all physical RAM areas from which future capsule physical
+RAM allocations will be drawn into the REGIONS list. this list is built from
+available physical RAM: it must *not* include any RAM areas already in use by
+the hypervisor, boot supervisor image, peripherals, etc. the underlying
+platform code needs to exclude those off-limits areas. */
 lazy_static!
 {
     /* acquire REGIONS lock before accessing any physical RAM regions */
@@ -38,7 +50,18 @@ pub struct Region
 
 impl Region
 {
-    /* allow the currently running supervisor to access this region of physical memory.
+    /* create a new region */
+    pub fn new(base: PhysMemBase, size: PhysMemSize, state: RegionState) -> Region
+    {
+        Region
+        {
+            base: base,
+            end: base + size,
+            state: state
+        }
+    }
+
+    /* allow the currently running supervisor kernel to access this region of physical memory.
        only allow access if the region is marked in use. 
        return true for success, or false if request failed */
     pub fn grant_access(&self) -> bool
@@ -67,50 +90,10 @@ impl Region
     pub fn increase_base(&mut self, size: PhysMemSize) { self.base = self.base + size; }
 }
 
-/* return the physical RAM region covering the entirely of the boot capsule's supervisor */
-pub fn boot_supervisor() -> Region
+/* add a region to the list */
+pub fn add_region(region: Region)
 {
-    let (base, end) = platform::physmem::boot_supervisor();
-    Region { base: base, end: end, state: RegionState::InUse }
-}
-
-/* initialize the hypervisor's physical memory management.
-   called once by the boot CPU core.
-   => device_tree_buf = pointer to device tree to parse
-   <= total number of bytes available, or None for failure
-*/
-pub fn init(device_tree_buf: &u8) -> Option<PhysMemSize>
-{
-    /* keep a running total of the number of bytes to play with */
-    let mut available_bytes = 0;
-
-    /* gather up all physical RAM areas from which future
-    capsule physical RAM allocations will be drawn.
-    this list is built from available physical RAM: it must not include
-    any RAM areas already in use by the hypervisor, peripherals, etc.
-    the underlying platform code needs to exclude those off-limits areas.
-    in other words, available_ram() must only return fully usable RAM areas */
-    let mut regions = REGIONS.lock();
-
-    match platform::physmem::available_ram(device_tree_buf)
-    {
-        Some(iter) => for area in iter
-        {
-            hvdebug!("Physical memory area found at 0x{:x}, size: {} bytes ({} MB)", area.base, area.size, area.size >> 20);
-
-            regions.push_front(Region
-            {
-                base: area.base,
-                end: area.base + area.size,
-                state: RegionState::Free
-            });
-
-            available_bytes = available_bytes + area.size;
-        },
-        None => return None
-    }
-
-    return Some(available_bytes);
+    REGIONS.lock().push_front(region);
 }
 
 /* allocate a region of available physical memory for capsule use

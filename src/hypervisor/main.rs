@@ -28,7 +28,7 @@ extern crate alloc;
 /* needed for fast lookup tables of stuff */
 extern crate hashbrown;
 
-/* needed for elf passing */
+/* needed for elf parsing */
 extern crate xmas_elf;
 
 /* needed for lazyily-allocated static variables, and atomic ops */
@@ -40,16 +40,20 @@ use spin::Mutex;
 /* this will bring in all the hardware-specific code */
 extern crate platform;
 
+/* this will bring in the device-tree-specific code */
+extern crate dtb;
+
 /* and now for all our non-hw specific code */
 #[macro_use]
 mod debug;      /* get us some kind of debug output, typically to a serial port */
+mod hardware;   /* parse device trees into hardware objects */
 mod heap;       /* per-CPU private heap management */
 mod abort;      /* implement abort() and panic() handlers */
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem;    /* manage physical memory */
 mod cpu;        /* manage CPU cores */
-mod vcore;      /* virtual CPU core management and scheduling */
-mod scheduler;
+mod vcore;      /* virtual CPU core management... */
+mod scheduler;  /* ...and scheduling */
 mod capsule;    /* manage capsules */
 mod loader;     /* parse and load supervisor binaries */
 
@@ -72,7 +76,7 @@ lazy_static!
 }
 
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
-stick to usize as much as possible */
+in future, we may support 16- or 128-bit, too. stick to usize as much as possible */
 
 /* NOTE: Do not call any hvlog/hvdebug macros until debug has been initialized */
 
@@ -91,15 +95,7 @@ pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_buf: &u8)
     /* if not then start the system as normal */
     match hvmain(cpu_nr, device_tree_buf)
     {
-        Err(e) => match e
-        {
-            /* if debug failed to initialize then we're probably toast on this hardware,
-            so fail to infinite loop - unless there's some other foolproof way to signal
-            early failure to the user for all platforms */
-            Cause::DebugFailure => (),
-            /* we made debug initialization OK so let the user know where it all went wrong */
-            _ => hvalert!("hvmain bailed out with error: {:?}", e),
-        },
+        Err(e) => hvalert!("hvmain bailed out with error: {:?}", e),
         _ => () /* continue waiting for an IRQ to come in */
     };
 }
@@ -107,7 +103,7 @@ pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_buf: &u8)
 /* hvmain
    This code runs at the hypervisor level, with full physical memory access.
    Its job is to initialize physical CPU cores and other resources so that capsules can be
-   created in which supervisors run that manage their own userspaces, in which
+   created in which supervisors run that manage their own user space, in which
    applications run. The hypervisor ensures capsules are kept apart using
    hardware protections.
 
@@ -118,15 +114,15 @@ pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_buf: &u8)
    => cpu_nr = arbitrary CPU core ID number assigned by boot code,
                separate from hardware ID number.
                BootCPUId = boot CPU core.
-      device_tree_buf = pointer to device tree describing the hardware
+      device_tree_buf = pointer to device tree describing the host hardware
    <= return to infinite loop, waiting for interrupts
 */
 fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
 {
     /* set up each physical processor core with its own private heap pool and any other resources.
-    this uses physical memory assigned by the pre-hvmain boot code. init() should be called
-    first to set up every core, including the boot CPU, which then sets up the global
-    resouces. all non-boot CPUs should wait until global resources are ready. */
+    each private pool uses physical memory assigned by the pre-hvmain boot code. init() should be called
+    first thing to set up each processor core, including the boot CPU, which then sets up the global
+    resources. all non-boot CPUs should wait until global resources are ready. */
     cpu::Core::init(cpu_nr);
 
     match cpu_nr
@@ -134,12 +130,17 @@ fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
         /* delegate to boot CPU the welcome banner and set up global resources */
         BOOT_CPUID => 
         {
-            /* enable the use of hvlog/hvdebug */
-            debug::init(device_tree_buf)?;
+            /* process device tree to create data structures representing system hardware,
+            allowing these peripherals to be accessed by subsequent routines. this should
+            also initialize any found hardware */
+            hardware::parse_and_init(device_tree_buf)?;
 
-            /* initialize global resources and boot capsule */
-            init_globals(device_tree_buf)?;
-            init_boot_capsule()?;
+            /* say hello via the debug port */
+            hvlog!("Welcome to diosix {}", env!("CARGO_PKG_VERSION"));
+            hvdebug!("Debugging enabled");
+
+            /* initialize boot capsule */
+            create_boot_capsule()?;
 
             /* allow other cores to continue */
             *(INIT_DONE.lock()) = true;
@@ -150,10 +151,10 @@ fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
     }
 
     /* acknowledge we're alive and well, and report CPU core features */
-    hvlog!("Physical CPU core ready to roll, type: {}", cpu::Core::describe());
+    hvlog!("Physical CPU core {:?} ready to roll", cpu::Core::describe());
 
     /* enable timer on this physical CPU core to start scheduling and running virtual cores */
-    scheduler::start();
+    scheduler::start()?;
 
     /* initialization complete. if we make it this far then fall through to infinite loop
     waiting for a timer interrupt to come in. when it does fire, this stack will be flattened,
@@ -161,44 +162,8 @@ fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
     Ok(())
 }
 
-/* welcome the user and have the boot CPU initialize global structures and resources.
-   <= return success, or failure code */
-fn init_globals(device_tree: &u8) -> Result<(), Cause>
-{
-    /* set up CPU management. discover how many CPUs we have */
-    let cpus = match cpu::init(device_tree)
-    {
-        Some(c) => c,
-        None =>
-        {
-            hvalert!("Physical CPU management failure: can't extract core count from config");
-            return Err(Cause::CPUBadConfig);
-        }
-    };
-
-    /* set up the physical memory management. find out available physical RAM */
-    let ram_size = match physmem::init(device_tree)
-    {
-        Some(s) => s,
-        None =>
-        {
-            hvalert!("Physical memory failure: too little RAM, or device tree error");
-            return Err(Cause::PhysMemBadConfig);
-        }
-    };
-
-    scheduler::init(device_tree)?;
-
-    /* say hello */
-    hvlog!("Welcome to diosix {} ... using device tree at {:p}", env!("CARGO_PKG_VERSION"), device_tree);
-    hvlog!("Available physical RAM: {} MiB, physical CPU cores: {}", ram_size / 1024 / 1024, cpus);
-    hvdebug!("Debugging enabled");
-
-    return Ok(());
-}
-
 /* create the boot capsule, from which all other capsules spawn */
-fn init_boot_capsule() -> Result<(), Cause>
+fn create_boot_capsule() -> Result<(), Cause>
 {
     /* create a boot capsule with 128MB of RAM and one virtual core */
     let mem = 128 * 1024 * 1024;

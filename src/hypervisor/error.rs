@@ -9,9 +9,6 @@
 #[derive(Debug)]
 pub enum Cause
 {
-    /* debug */
-    DebugFailure,
-
     /* heap */
     HeapNotInUse,
     HeapBadBlock,
@@ -19,18 +16,14 @@ pub enum Cause
     HeapBadSize,
 
     /* physical memory */
-    PhysMemBadConfig,
     PhysNotEnoughFreeRAM,
-
-    /* CPU handling */
-    CPUBadConfig,
 
     /* containers */
     CapsuleIDExhaustion,
     CapsuleBadID,
 
     /* scheduler and timer */
-    SchedTimerBadConfig,
+    SchedNoTimer,
     
     /* supervisor binary loading */
     LoaderSupervisorTooLarge,

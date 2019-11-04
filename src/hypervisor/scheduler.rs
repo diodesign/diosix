@@ -5,11 +5,13 @@
  * See LICENSE for usage and copying.
  */
 
-use super::error::Cause;
 use spin::Mutex;
 use alloc::collections::vec_deque::VecDeque;
+use crate::platform::devices::{Device, DeviceType, DeviceReturnData};
+use super::error::Cause;
 use super::vcore::{VirtualCore, Priority};
 use super::cpu::{self, Core};
+use super::hardware;
 
 pub type TimesliceCount = u64;
 
@@ -17,35 +19,51 @@ pub type TimesliceCount = u64;
 have been spent running high priority virtual cores */
 const HIGH_PRIO_TIMESLICES_MAX: TimesliceCount = 10;
 
-/* initialize preemptive scheduling system
-Call only once, and only by the boot cpu
-<= return OK for success, or an error code */
-pub fn init(device_tree_buf: &u8) -> Result<(), Cause>
+/* these are the global wait queues. while each physical CPU core gets its own pair
+of high-normal wait queues, virtual cores waiting to be assigned to a physical CPU sit in these global queues.
+when a physical CPU runs out of queues, it pulls one from these queues.
+when a physical CPU has too many virtual cores, it pushes one onto one of these wait lists */
+lazy_static!
 {
-    /* set up a periodic timer that we can use to pause and restart virtual cores
-    once they've had enough physical CPU time. pass along the device tree so the
-    platform-specific code can find the necessary hardware timer */
-    match platform::timer::init(device_tree_buf)
-    {
-        true => Ok(()),
-        false => Err(Cause::SchedTimerBadConfig)
-    }
+    static ref GLOBAL_QUEUES: Mutex<ScheduleQueues> = Mutex::new(ScheduleQueues::new());
+}
+
+/* queue a virtual core in global wait list */
+pub fn queue(to_queue: VirtualCore)
+{
+    GLOBAL_QUEUES.lock().queue(to_queue);
 }
 
 /* activate preemptive multitasking. each physical CPU core should call this
-to start running virtual CPU cores. Physical CPU cores that can't run user and supervisor-level
-code aren't allowed to join the scheduler: these cores are likely auxiliary or
-management CPUs that have to park waiting for interrupts */
-pub fn start()
+   to start running virtual CPU cores. Physical CPU cores that can't run user and supervisor-level
+   code aren't allowed to join the scheduler: these cores are likely auxiliary or
+   management CPUs that have to park waiting for interrupts
+   <= returns OK, or error code on failure */
+pub fn start() -> Result<(), Cause>
 {
     if platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::User) == true
     {
-        platform::timer::start();
+        /* this CPU core can run application code so start it scheduling */
+        match hardware::access(DeviceType::FixedTimer, | dev |
+        {
+            match dev
+            {
+                Device::FixedTimer(t) => t.start(),
+                _ => ()
+            };
+            DeviceReturnData::NoData
+        }) {
+            None => return Err(Cause::SchedNoTimer),
+            _ => return Ok(())
+        };
     }
     else
     {
-        hvlog!("Can't join the scheduler, awaiting IRQs");
+        /* this CPU core can't run application code: don't schedule it */
+        hvdebug!("Won't join the scheduler: unable to run application code");
     }
+
+    Ok(())
 }
 
 /* a virtual CPU core has been running for one timeslice, triggering a timer interrupt.
@@ -69,15 +87,15 @@ pub fn timer_irq()
     };
 
     /* tell the timer system to call us back soon */
-    let now: u64 = platform::timer::now();
-    let next: u64 = now + 10000000;
-    platform::timer::next(next);
-}
-
-/* queue virtual core in global wait list */
-pub fn queue(to_queue: VirtualCore)
-{
-    GLOBAL_QUEUES.lock().queue(to_queue);
+    hardware::access(DeviceType::FixedTimer, | dev |
+    {
+        match dev
+        {
+            Device::FixedTimer(t) => t.next(1000), /* see you in 1000 microseconds */
+            _ => ()
+        };
+        DeviceReturnData::NoData
+    });
 }
 
 /* maintain a simple two-level round-robin scheduler per physical CPU core. we can make it more fancy later.
@@ -89,15 +107,6 @@ pub struct ScheduleQueues
     high: VecDeque<VirtualCore>,
     low: VecDeque<VirtualCore>,
     high_timeslices: TimesliceCount
-}
-
-/* these are the global wait queues. while each physical CPU core gets its own pair
-of high-normal wait queues, virtual cores waiting to be assigned to a physical CPU sit in these global queues.
-when a physical CPU runs out of queues, it pulls one from these queues.
-when a physical CPU has too many virtual cores, it pushes one onto one of these wait lists */
-lazy_static!
-{
-    static ref GLOBAL_QUEUES: Mutex<ScheduleQueues> = Mutex::new(ScheduleQueues::new());
 }
 
 impl ScheduleQueues
