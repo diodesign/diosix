@@ -20,7 +20,7 @@ pub enum Priority
 /* virtual core ID unique to its capsule */
 pub type VirtualCoreID = usize;
 
-/* a virtual core is either in a waiting queue awaiting physical CPU time, or is runnng and held in a physical CPU core struct.
+/* a virtual core is either in a waiting queue awaiting physical CPU time, or is running and held in a physical CPU core struct.
 if you remove a virtual core object from the queue and don't place it back in a queue or Core structure,
 then the vcpu will be dropped, deallocated and destroyed. */
 pub struct VirtualCore
@@ -60,11 +60,9 @@ impl VirtualCore
         &self.state
     }
     
-    /* return copy of virtual CPU core capsule's ID */
-    pub fn capsule(&self) -> CapsuleID
-    {
-        self.capsule.clone()
-    }
+    /* return virtual CPU core capsule's ID */
+    pub fn capsule(&self) -> CapsuleID { self.capsule }
 
+    /* return virtual CPU core's priority */
     pub fn get_priority(&self) -> Priority { self.priority }
 }

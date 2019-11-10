@@ -7,17 +7,20 @@
 
 use spin::Mutex;
 use alloc::collections::vec_deque::VecDeque;
-use crate::platform::devices::{Device, DeviceType, DeviceReturnData};
 use super::error::Cause;
 use super::vcore::{VirtualCore, Priority};
 use super::cpu::{self, Core};
 use super::hardware;
+use super::capsule;
 
 pub type TimesliceCount = u64;
 
 /* prevent physical CPU time starvation: allow a normal virtual core to run after this number of timeslices
 have been spent running high priority virtual cores */
 const HIGH_PRIO_TIMESLICES_MAX: TimesliceCount = 10;
+
+/* number of microseconds a virtual core is allowed to run */
+const TIMESLICE_LENGTH: u64 = 1000;
 
 /* these are the global wait queues. while each physical CPU core gets its own pair
 of high-normal wait queues, virtual cores waiting to be assigned to a physical CPU sit in these global queues.
@@ -35,67 +38,60 @@ pub fn queue(to_queue: VirtualCore)
 }
 
 /* activate preemptive multitasking. each physical CPU core should call this
-   to start running virtual CPU cores. Physical CPU cores that can't run user and supervisor-level
-   code aren't allowed to join the scheduler: these cores are likely auxiliary or
-   management CPUs that have to park waiting for interrupts
+   to start running workloads - be them user/supervisor or management tasks
    <= returns OK, or error code on failure */
 pub fn start() -> Result<(), Cause>
 {
-    if platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::User) == true
-    {
-        /* this CPU core can run application code so start it scheduling */
-        match hardware::access(DeviceType::FixedTimer, | dev |
-        {
-            match dev
-            {
-                Device::FixedTimer(t) => t.start(),
-                _ => ()
-            };
-            DeviceReturnData::NoData
-        }) {
-            None => return Err(Cause::SchedNoTimer),
-            _ => return Ok(())
-        };
-    }
-    else
-    {
-        /* this CPU core can't run application code: don't schedule it */
-        hvdebug!("Won't join the scheduler: unable to run application code");
-    }
-
+    hardware::scheduler_timer_start();
     Ok(())
 }
 
-/* a virtual CPU core has been running for one timeslice, triggering a timer interrupt.
-this is the handler of that interrupt: find something else to run, if necessary,
-or return to whatever we were running... */
-pub fn timer_irq()
+/* find something else to run, if possible, or return to whatever we were running.
+   call this function when a virtual core's timeslice has expired, or it has crashed
+   or stopped running and we can't return to it
+   <= true = was able to switch to another workload, false for not */
+pub fn run_next() -> bool
 {
-    /* check to see if there's anything waiting to be picked up for this physical CPU queue from a global queue.
-    if so, then adopt it so it can get a chance to run */
-    match GLOBAL_QUEUES.lock().dequeue()
+    /* if this core can run supervisor-level code then find it some work to do */
+    if cpu::Core::smode_supported() == true
     {
-        /* we've found a virtual CPU core to run, so switch to that */
-        Some(orphan) => cpu::context_switch(orphan),
+        let mut found_another = true; /* assume we'll find something else to run */
 
-        /* otherwise, try to take a virtual CPU core waiting for this physical CPU core and run it */
-        _ => match Core::dequeue()
+        /* check to see if there's anything waiting to be picked up for this physical CPU from a global queue.
+        if so, then adopt it so it can get a chance to run */
+        match GLOBAL_QUEUES.lock().dequeue()
         {
-            Some(virtcore) => cpu::context_switch(virtcore), /* waiting virtual CPU core found, queuing now */
-            _ => () /* nothing waiting */
-        }
-    };
+            /* we've found a virtual CPU core to run, so switch to that */
+            Some(orphan) => cpu::context_switch(orphan),
 
-    /* tell the timer system to call us back soon */
-    hardware::access(DeviceType::FixedTimer, | dev |
-    {
-        match dev
-        {
-            Device::FixedTimer(t) => t.next(1000), /* see you in 1000 microseconds */
-            _ => ()
+            /* otherwise, try to take a virtual CPU core waiting for this physical CPU core and run it */
+            _ => match Core::dequeue()
+            {
+                Some(virtcore) => cpu::context_switch(virtcore), /* waiting virtual CPU core found, queuing now */
+                _ => found_another = false /* nothing else to run */
+            }
         };
-        DeviceReturnData::NoData
-    });
+
+        /* if we were able to find something else to run then start the clock on the next timeslice
+           and let the caller know we were successful */
+        if found_another == true
+        {
+            /* tell the timer system to call us back soon */
+            hardware::scheduler_timer_next(TIMESLICE_LENGTH);
+            return true;
+        }
+    }
+
+    /* do some housekeeping seeing as we can't run workloads, either
+       because there's nothing to run or because we can't */
+    housekeeping();
+    return false;
+}
+
+/* perform any housekeeping duties */
+fn housekeeping()
+{
+    hvdrain!(); /* drain the debug logs to the debug hardware port */
 }
 
 /* maintain a simple two-level round-robin scheduler per physical CPU core. we can make it more fancy later.

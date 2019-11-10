@@ -9,6 +9,9 @@
 #[derive(Debug)]
 pub enum Cause
 {
+    /* Devices */
+    BadDeviceTree,
+
     /* heap */
     HeapNotInUse,
     HeapBadBlock,
@@ -16,6 +19,7 @@ pub enum Cause
     HeapBadSize,
 
     /* physical memory */
+    PhysNoRAMFound,
     PhysNotEnoughFreeRAM,
 
     /* containers */

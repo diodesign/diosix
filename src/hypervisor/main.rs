@@ -40,9 +40,6 @@ use spin::Mutex;
 /* this will bring in all the hardware-specific code */
 extern crate platform;
 
-/* this will bring in the device-tree-specific code */
-extern crate dtb;
-
 /* and now for all our non-hw specific code */
 #[macro_use]
 mod debug;      /* get us some kind of debug output, typically to a serial port */
@@ -83,17 +80,18 @@ in future, we may support 16- or 128-bit, too. stick to usize as much as possibl
 /* hventry
    This is the official entry point of the Rust-level hypervisor.
    Call hvmain, which is where all the real work happens, and catch any errors.
-   => parameters described in hvmain, passed directly from the bootloader...
+   => cpu_nr = this boot-assigned CPU ID number
+      device_tree_ptr = pointer to start of device tree structure
    <= return to infinite loop, awaiting interrupts */
 #[no_mangle]
-pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_buf: &u8)
+pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_ptr: &u8)
 {
     /* carry out tests if that's what we're here for */
     #[cfg(test)]
     hvtests();
 
     /* if not then start the system as normal */
-    match hvmain(cpu_nr, device_tree_buf)
+    match hvmain(cpu_nr, device_tree_ptr)
     {
         Err(e) => hvalert!("hvmain bailed out with error: {:?}", e),
         _ => () /* continue waiting for an IRQ to come in */
@@ -110,14 +108,15 @@ pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_buf: &u8)
    Assumes all physical CPU cores enter this function during startup.
    The boot CPU is chosen to initialize the system in pre-SMP mode.
    If we're on a single CPU core then everything should still run OK.
+   Assumes hardware and exception interrupts are enabled.
 
    => cpu_nr = arbitrary CPU core ID number assigned by boot code,
                separate from hardware ID number.
                BootCPUId = boot CPU core.
-      device_tree_buf = pointer to device tree describing the host hardware
+      device_tree = ptr to memory containing device tree describing the host hardware
    <= return to infinite loop, waiting for interrupts
 */
-fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
+fn hvmain(cpu_nr: CPUId, device_tree: &u8) -> Result<(), Cause>
 {
     /* set up each physical processor core with its own private heap pool and any other resources.
     each private pool uses physical memory assigned by the pre-hvmain boot code. init() should be called
@@ -133,10 +132,13 @@ fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
             /* process device tree to create data structures representing system hardware,
             allowing these peripherals to be accessed by subsequent routines. this should
             also initialize any found hardware */
-            hardware::parse_and_init(device_tree_buf)?;
+            hardware::parse_and_init(device_tree)?;
+            hardware::debug_print();
+
+            physmem::init()?; /* register all the available physical RAM */
 
             /* say hello via the debug port */
-            hvlog!("Welcome to diosix {}", env!("CARGO_PKG_VERSION"));
+            hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
             hvdebug!("Debugging enabled");
 
             /* initialize boot capsule */
@@ -156,9 +158,9 @@ fn hvmain(cpu_nr: CPUId, device_tree_buf: &u8) -> Result<(), Cause>
     /* enable timer on this physical CPU core to start scheduling and running virtual cores */
     scheduler::start()?;
 
-    /* initialization complete. if we make it this far then fall through to infinite loop
-    waiting for a timer interrupt to come in. when it does fire, this stack will be flattened,
-    a virtual CPU loaded up to run, and this boot thread will disappear like tears in the rain. */
+    /* initialization complete. fall through to infinite loop waiting for a timer interrupt
+    to come in. when it does fire, this stack will be flattened, a virtual CPU loaded up to run,
+    and this boot thread will disappear like tears in the rain. */
     Ok(())
 }
 

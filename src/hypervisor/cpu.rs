@@ -21,7 +21,7 @@ use hashbrown::hash_map::{HashMap, Entry};
 use super::capsule::{self, CapsuleID};
 use platform::physmem::PhysMemSize;
 use super::vcore::VirtualCore;
-use alloc::string::String;
+// use alloc::string::String;
 
 /* physical CPU core IDs and count */
 pub type CPUId = usize;
@@ -59,11 +59,15 @@ pub struct Core
     is unset in a physical core's feature bitmask, the virtual core will not be allowed to run on that physical core */
     features: CPUFeatures,
 
-    /* each physical CPU core gets its own heap that it can share, but it must manage */
+    /* each physical CPU core gets its own heap that it can share, but it must manage its own */
     pub heap: heap::Heap,
 
     /* each physical CPU gets its own set of queues of virtual CPU cores to schedule */
-    queues: ScheduleQueues
+    queues: ScheduleQueues,
+
+    /* can this run guest operating systems? or is it a system management core? true if it can run
+    supervisor-mode code, false if not */
+    smode: bool
 }
 
 impl Core
@@ -87,6 +91,7 @@ impl Core
             (*cpu).features = platform::cpu::features();
             (*cpu).heap.init(platform_cpu_heap_base(), platform_cpu_heap_size());
             (*cpu).queues = ScheduleQueues::new();
+            (*cpu).smode = platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::Supervisor);
         }
     }
 
@@ -134,6 +139,13 @@ impl Core
     pub fn queue(to_queue: VirtualCore)
     {
         unsafe { (*Core::this()).queues.queue(to_queue) }
+    }
+
+    /* return true if able to run supervisor code. a system management core
+    that cannot or is not expected to run guest workloads should return false */
+    pub fn smode_supported() -> bool
+    {
+        unsafe { (*Core::this()).smode }
     }
 }
 

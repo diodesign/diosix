@@ -12,6 +12,7 @@ use spin::Mutex;
 use alloc::collections::linked_list::LinkedList;
 use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions};
 use super::error::Cause;
+use super::hardware;
 
 /* return the physical RAM region covering the entirely of the boot capsule's supervisor */
 pub fn boot_supervisor() -> Region
@@ -90,10 +91,22 @@ impl Region
     pub fn increase_base(&mut self, size: PhysMemSize) { self.base = self.base + size; }
 }
 
-/* add a region to the list */
-pub fn add_region(region: Region)
+/* initialize the physical memory system by registering all available RAM as allocatable regions */
+pub fn init() -> Result<(), Cause>
 {
-    REGIONS.lock().push_front(region);
+    match hardware::get_phys_ram_areas()
+    {
+        Some(ram_areas) => 
+        {
+            let mut regions = REGIONS.lock();
+            for area in ram_areas
+            {
+                regions.push_front(Region::new(area.base, area.size, RegionState::Free));
+            }
+            Ok(())
+        },
+        None => Err(Cause::PhysNoRAMFound)
+    }
 }
 
 /* allocate a region of available physical memory for capsule use

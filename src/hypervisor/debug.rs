@@ -7,13 +7,13 @@
 
 use core::fmt;
 use spin::Mutex;
-use super::error::Cause;
+use alloc::string::String;
 use super::hardware;
-use crate::platform::devices::{DeviceType, Device, DeviceReturnData};
 
 lazy_static!
 {
     pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new(false);
+    static ref DEBUG_QUEUE: Mutex<String> = Mutex::new(String::new());
 }
 
 /* top level debug macros */
@@ -69,11 +69,16 @@ macro_rules! hvprint
             *lock = true;
 
             unsafe { $crate::debug::CONSOLE.write_fmt(format_args!($($arg)*)).unwrap(); }
-      
+
             *lock = false;
             drop(lock);
         }
     });
+}
+
+macro_rules! hvdrain
+{
+    () => ($crate::debug::drain_queue());
 }
 
 /* create a generic debug console writer */
@@ -82,18 +87,21 @@ pub static mut CONSOLE: ConsoleWriter = ConsoleWriter {};
 
 impl fmt::Write for ConsoleWriter
 {
-    fn write_str(&mut self, s: &str) -> ::core::fmt::Result
+    fn write_str(&mut self, s: &str) -> core::fmt::Result
     {
-        hardware::access(DeviceType::DebugConsole, | dev | 
-        {
-            match dev
-            {
-                Device::DebugConsole(con) => con.write(s),
-                _ => ()
-            };
-            DeviceReturnData::NoData
-        });
-
+        /* queue debug output so it can be printed when free to do */
+        DEBUG_QUEUE.lock().push_str(s);
         Ok(())
+    }
+}
+
+/* attempt to empty queue out to the debug port */
+pub fn drain_queue()
+{
+    let mut queue = DEBUG_QUEUE.lock();
+
+    if hardware::write_debug_string(&queue) == true
+    {
+        queue.clear();
     }
 }

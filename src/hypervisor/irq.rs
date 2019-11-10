@@ -6,6 +6,8 @@
  */
 
 use super::scheduler;
+use super::capsule;
+use super::cpu;
 
 /* platform-specific code must implement all this */
 use platform;
@@ -37,8 +39,33 @@ fn exception(irq: IRQ)
         /* catch non-fatal supervisor-level exceptions */
         (false, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            hvlog!("Environment call from supervisor")
+            hvlog!("Environment call from supervisor");
         },
+
+        /* catch fatal supervisor-level exceptions */
+        (true, PrivilegeMode::Supervisor, cause) =>
+        {
+            hvalert!(
+                "Fatal exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}",
+                PrivilegeMode::Supervisor, cause, irq.pc, irq.sp);
+
+            /* terminate the capsule running on this core */
+            if let Some(c) = cpu::Core::capsule()
+            {
+                capsule::destroy(c);
+            }
+
+            /* force a context switch: keep searching for something
+               else to run. */
+            loop
+            {
+                if scheduler::run_next() == true
+                {
+                    break;
+                }
+            }
+        },
+
         /* catch everything else, halting if fatal */
         (fatal, privilege, cause) =>
         {
@@ -53,7 +80,7 @@ fn exception(irq: IRQ)
                 loop {}
             }
         }
-    }
+    };
 }
 
 /* handle hardware interrupt */
@@ -61,13 +88,10 @@ fn interrupt(irq: IRQ)
 {
     match irq.cause
     {
-        /* handle our scheduler's timer */
-        IRQCause::HypervisorTimer =>
-        {
-            scheduler::timer_irq();
-        },
-        _ => { hvlog!("Unhandled hardware interrupt: {:?}", irq.cause) }
-    }
+        /* handle our scheduler's timer by picking another thing to run, if possible */
+        IRQCause::HypervisorTimer => { scheduler::run_next(); }, 
+        _ => hvlog!("Unhandled hardware interrupt: {:?}", irq.cause)
+    };
 
     /* clear the interrupt condition */
     platform::irq::acknowledge(irq);

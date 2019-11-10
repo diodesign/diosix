@@ -6,13 +6,14 @@
  */
 
 use platform::physmem::PhysMemSize;
-use super::physmem::{self, Region};
-use super::vcore::{self, Priority};
 use spin::Mutex;
-use super::error::Cause;
 use hashbrown::hash_map::HashMap;
-use hashbrown::hash_map::Entry::Occupied;
+use hashbrown::hash_map::Entry::{Occupied, Vacant};
+use hashbrown::hash_set::HashSet;
 use super::loader;
+use super::error::Cause;
+use super::physmem::{self, Region};
+use super::vcore::{self, Priority, VirtualCoreID};
 
 pub type CapsuleID = usize;
 
@@ -33,18 +34,19 @@ lazy_static!
    => size = minimum amount of RAM, in bytes, for this capsule
       cpus = number of virtual CPU cores to allow
    <= OK for success or an error code */
-pub fn create_boot_capsule(size: PhysMemSize, cpus: usize) -> Result<(), Cause>
+pub fn create_boot_capsule(size: PhysMemSize, cpus: VirtualCoreID) -> Result<(), Cause>
 {
     let ram = physmem::alloc_region(size)?;
-    let capsule = create(ram)?;
+    let capid = create(ram)?;
 
     let supervisor = physmem::boot_supervisor();
     let entry = loader::load(ram, supervisor)?;
 
     /* create virtual CPU cores for the capsule as required */
-    for vcore in 0..cpus
+    for vcoreid in 0..cpus
     {
-        vcore::VirtualCore::create(capsule, vcore, entry, Priority::High)?;
+        vcore::VirtualCore::create(capid, vcoreid, entry, Priority::High)?;
+        CAPSULES.lock().get_mut(&capid).unwrap().add_vcore(vcoreid)
     }
     Ok(())
 }
@@ -70,11 +72,11 @@ fn create(ram: Region) -> Result<CapsuleID, Cause>
         let mut capsules = CAPSULES.lock();
         match capsules.entry(new_id)
         {
-            hashbrown::hash_map::Entry::Vacant(_) =>
+            Vacant(_) =>
             {
                 /* insert our new capsule */
                 capsules.insert(new_id, new_capsule);
-                hvlog!("Created capsule: ID {}, physical RAM base 0x{:x}, size {} MiB", new_id, ram.base(), ram.size() / 1024 / 1024);
+                hvlog!("Created capsule ID {}, physical RAM base 0x{:x}, size {} MiB", new_id, ram.base(), ram.size() / 1024 / 1024);
 
                 /* we're all done here */
                 return Ok(new_id);
@@ -97,9 +99,46 @@ fn create(ram: Region) -> Result<CapsuleID, Cause>
     }
 }
 
+/* mark a capsule as dying, meaning its virtual cores will be
+   gradually removed and when there are none left, its RAM
+   and any other resources will be deallocated.
+   => victim = ID of capsule to kill
+   <= Ok for success, or an error code
+*/
+pub fn destroy(victim: CapsuleID) -> Result<(), Cause>
+{
+    let mut capsules = CAPSULES.lock();
+    match capsules.entry(victim)
+    {
+        Occupied(mut c) =>
+        {
+            hvlog!("Terminating capsule ID {}", victim);
+            c.get_mut().set_state(CapsuleState::Dying);
+        },
+        Vacant(_) =>
+        {
+            hvalert!("Attempted to terminate non-existent capsule ID {}", victim);
+            return Err(Cause::CapsuleBadID);
+        }
+    };
+
+    Ok(())
+}
+
+/* describe a capsule's state: either alive and can run, or dying and
+must be destroyed */
+#[derive(Copy, Clone)]
+pub enum CapsuleState
+{
+    Alive,
+    Dying
+}
+
 struct Capsule
 {
-    ram: Region, /* general purpose RAM area */
+    vcores: HashSet<VirtualCoreID>,  /* set of virtual core IDs assigned to this capsule */
+    ram: Region,                     /* general purpose RAM area */
+    state: CapsuleState              /* state of this capsule */
 }
 
 impl Capsule
@@ -111,21 +150,58 @@ impl Capsule
     {
         Ok(Capsule
         {
-            ram: ram
+            vcores: HashSet::new(),
+            ram: ram,
+            state: CapsuleState::Alive
         })
     }
 
     /* describe the physical RAM region of this capsule */
     pub fn phys_ram(&self) -> Region { self.ram }
+
+    /* control the capsule's state */
+    pub fn set_state(&mut self, new: CapsuleState) { self.state = new; }
+
+    /* lookup the capsule's state */
+    pub fn get_state(&self) -> CapsuleState { self.state }
+
+    /* add a virtual core ID to the capsule */
+    pub fn add_vcore(&mut self, id: VirtualCoreID)
+    {
+        self.vcores.insert(id);
+    }
+
+    /* remove a virtual core ID from the capsule. returns true if that
+       ID was present in the registered list */
+    pub fn remove_vcore(&mut self, id: VirtualCoreID) -> bool
+    {
+        self.vcores.remove(&id)
+    }
+
+    /* return number of registered virtual cores */
+    pub fn count_vcores(&self) -> usize
+    {
+        self.vcores.len()
+    }
 }
 
-/* lookup the phys RAM region of a capsule from its name
+/* lookup the phys RAM region of a capsule from its ID
    <= physical memory region, or None for no such capsule */
 pub fn get_phys_ram(id: CapsuleID) -> Option<Region>
 {
     match CAPSULES.lock().entry(id)
     {
         Occupied(c) =>  return Some(c.get().phys_ram()),
+        _ => None
+    }   
+}
+
+/* get a capsule's state */
+pub fn get_state(id: CapsuleID) -> Option<CapsuleState>
+{
+    match CAPSULES.lock().entry(id)
+    {
+        Occupied(c) =>  return Some(c.get().get_state()),
         _ => None
     }   
 }

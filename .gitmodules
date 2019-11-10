@@ -1,6 +1,6 @@
 [submodule "src/platform-riscv"]
 	path = src/platform-riscv
 	url = https://github.com/diodesign/platform-riscv.git
-[submodule "src/dtb"]
-	path = src/dtb
-	url = https://github.com/diodesign/dtb.git
+[submodule "src/devicetree"]
+	path = src/devicetree
+	url = https://github.com/diodesign/devicetree.git

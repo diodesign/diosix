@@ -5,66 +5,157 @@
  * See LICENSE for usage and copying.
  */
 
-use spin::Mutex;
-use hashbrown::HashMap;
-use platform::devices::{self, DeviceType, Device, DeviceReturnData};
-use super::physmem::{self, Region, RegionState};
+use spin::{Mutex, MutexGuard};
+use platform::devices::Devices;
+use platform::physmem::RAMAreaIter;
 use super::error::Cause;
+use super::cpu;
 
 lazy_static!
 {
-    /* acquire HARDWARE lock before accessing any system hardware objects */
-    static ref HARDWARE: Mutex<HashMap<DeviceType, Device>> = Mutex::new(HashMap::new());
+    /* acquire HARDWARE lock before accessing any system hardware */
+    static ref HARDWARE: Mutex<Option<Devices>> = Mutex::new(None);
+
+    /* we might end up in a situation where a CPU core holds HARDWARE
+    but was interrupted or otherwise reentered. keep a track of the owner
+    of HARDWARE so that it can unlock the structure if needed */
+    static ref OWNER: Mutex<cpu::CPUId> = Mutex::new(cpu::Core::id());
 }
 
 /* parse_and_init
-   Parse a device tree structure and create a table of devices we can refer to.
-   also initialize any of the registered devices so they can be used.
-   => device_tree_buf = pointer to device tree in physical memory
+   Parse a device tree structure to create a base set of hardware devices.
+   also initialize the devices so they can be used.
+   => device_tree = pointer to device tree in physical memory
    <= return Ok for success, or error code on failure
 */
-pub fn parse_and_init(device_tree_buf: &u8) -> Result<(), Cause>
+pub fn parse_and_init(device_tree: &u8) -> Result<(), Cause>
 {
-    hvlog!("Registering basic abstracted hardware...");
-    for (dev_type, dev) in devices::enumerate(device_tree_buf)
+    match Devices::new(device_tree)
     {
-        hvlog!("--> {:?}: {:?}", &dev_type, &dev);
-
-        /* perform any high-level initialization */
-        match &dev
+        Some(d) =>
         {
-            /* add available RAM areas to the regions list */
-            Device::PhysicalRAM(areas) => for area in areas
-            {
-                let new_region = Region::new(area.base, area.size, RegionState::Free);
-                physmem::add_region(new_region);
-            },
-            _ => ()
-        };
-
-        HARDWARE.lock().insert(dev_type, dev);
-    }
-
-    Ok(())
+            *(HARDWARE.lock()) = Some(d);
+        },
+        None => return Err(Cause::BadDeviceTree)
+    };
+    return Ok(())
 }
 
-/* Lookup a device structure for a registered peripheral by device type
-   and execute a function to access it. we take this approach to avoid copying
-   data, and to avoid race conditions: while the HARDWARE lock is held, the
-   function can safely access the device. 
-   => dev_type = type of device to locate
-      operation = function or closure to execute to access the requested device
-   <= return data from function, or None if unable to find device 
-*/
-pub fn access(dev_type: DeviceType, operation: impl Fn(&Device) -> DeviceReturnData) -> Option<DeviceReturnData>
+#[derive(Copy, Clone)]
+enum LockAttempts
 {
-    /* ensure we hold the lock until the end of the function */
-    let locked = HARDWARE.lock();
+    Once,
+    Multiple
+}
 
-    let device = locked.get(&dev_type);
-    match device
+/* acquire a lock on HARDWARE. If this CPU core is supposed to be
+   holding it already, then bust the lock so that it and others can
+   access it again
+   => attempts = try just Once or Multiple times to acquire lock
+   <= Some MutexGuard containing the device structure, or None for unsuccessful */
+fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'static, core::option::Option<platform::devices::Devices>>>
+{
+    loop
     {
-        Some(d) => Some(operation(d)),
+        let mut owner = OWNER.lock();
+        if *owner == cpu::Core::id()
+        {
+            /* we apparently own HARDWARE already so acquire, or force unlock it and
+            acquire it again */
+            match HARDWARE.try_lock()
+            {
+                Some(hw) => return Some(hw),
+                None =>
+                {
+                    unsafe { HARDWARE.force_unlock(); }
+                }
+            };
+        }
+        else
+        {
+            /* we don't own HARDWARE so acquire: try once or multiple times
+            depending on attempts parameter */
+            match (HARDWARE.try_lock(), attempts)
+            {
+                (Some(hw), _) =>
+                {
+                    *owner = cpu::Core::id();
+                    return Some(hw);
+                },
+                (None, LockAttempts::Once) => return None,
+                (None, LockAttempts::Multiple) => ()
+            }
+        }
+    }
+}
+
+/* print a description of the system devices to the debug console */
+pub fn debug_print()
+{
+    let hw = acquire_hardware_lock(LockAttempts::Once);
+    if hw.is_none() == true
+    {
+        return;
+    }
+
+    match &*(hw.unwrap())
+    {
+        Some(hw) => hvlog!("Hardware environment:\n\n{:?}\n", hw),
+        None => ()        
+    };
+}
+
+/* routines to interact with the system's base devices */
+
+/* write the string msg out to the debug logging console.
+   if the system is busy then return immediately, don't block. 
+   <= true if able to write, false if not */
+pub fn write_debug_string(msg: &str) -> bool
+{
+    let hw = acquire_hardware_lock(LockAttempts::Once);
+    if hw.is_none() == true
+    {
+        return false;
+    }
+
+    match &*(hw.unwrap())
+    {
+        Some(d) =>
+        {
+            d.write_debug_string(msg);
+            true
+        },
+        None => false
+    }
+}
+
+/* return an iterator for the physical RAM areas we can use for any purpose,
+or None if we can't read the available memory */
+pub fn get_phys_ram_areas() -> Option<RAMAreaIter>
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => Some(d.get_phys_ram_areas()),
         None => None
     }
+}
+
+/* for this CPU core, enable scheduler timer interrupt and find a workload to run */
+pub fn scheduler_timer_start()
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => d.scheduler_timer_start(),
+        None => ()
+    };
+}
+
+/* tell the scheduler to interrupt this core in usecs microseconds */
+pub fn scheduler_timer_next(usecs: u64)
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => d.scheduler_timer_next(usecs),
+        None => ()
+    };
 }

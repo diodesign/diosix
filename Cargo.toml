@@ -32,7 +32,7 @@ incremental = false
 
 # fixed dependencies
 [dependencies.spin]
-version = "0.5"
+version = "0.5.2"
 
 [dependencies.hashbrown]
 version = "0.6.3"
@@ -44,9 +44,6 @@ features = [ "spin_no_std" ]
 
 [dependencies.xmas-elf]
 version = "0.7.0"
-
-[dependencies.dtb]
-path = "src/dtb"
 
 # supported build targets - don't forget to update .cargo with details for the linker and runner when adding new ports
 [target.riscv32imac-unknown-none-elf.dependencies]
