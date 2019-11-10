@@ -5,7 +5,7 @@
  * See LICENSE for usage and copying.
  */
 
-use spin::{Mutex, MutexGuard};
+use spin::Mutex;
 use platform::devices::Devices;
 use platform::physmem::RAMAreaIter;
 use super::error::Cause;

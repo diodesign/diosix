@@ -13,15 +13,15 @@ its own heap, reusing any blocks freed by itself or other cores.
 The hypervisor layer is unlikely to do much active allocation
 so it's OK to keep it really simple for now. */
 
+use spin::Mutex;
+use hashbrown::hash_map::{HashMap, self};
+use hashbrown::hash_set::{HashSet};
+use platform::physmem::PhysMemSize;
+use platform::cpu::{SupervisorState, CPUFeatures};
+use super::vcore::VirtualCore;
 use super::heap;
 use super::scheduler::ScheduleQueues;
-use platform::cpu::{SupervisorState, CPUFeatures};
-use spin::Mutex;
-use hashbrown::hash_map::{HashMap, Entry};
 use super::capsule::{self, CapsuleID};
-use platform::physmem::PhysMemSize;
-use super::vcore::VirtualCore;
-// use alloc::string::String;
 
 /* physical CPU core IDs and count */
 pub type CPUId = usize;
@@ -44,6 +44,7 @@ extern "C"
 lazy_static!
 {
     static ref VCORES: Mutex<HashMap<CPUId, VirtualCore>> = Mutex::new(HashMap::new());
+    static ref CPUS: Mutex<HashSet<CPUId>> = Mutex::new(HashSet::new());
 }
 
 /* describe a physical CPU core - this structure is stored in the per-CPU private variable space */
@@ -73,13 +74,11 @@ pub struct Core
 impl Core
 {
     /* intiialize a physical CPU core. Prepare it for running supervisor code.
-    => id = diosix-assigned CPU core ID at boot time. this is separate from the hardware-asigned
+    => id = diosix-assigned CPU core ID at boot time. this is separate from the hardware-assigned
             ID number, which may be non-linear. the runtime-generated core ID will
             run from zero to N-1 where N is the number of available cores */
     pub fn init(id: CPUId)
     {
-        /* NOTE: avoid calling hvlog/hvdebug here as debug channels have not been initialized yet */
-
         /* the pre-hvmain startup code has allocated space for per-CPU core variables.
         this function returns a pointer to that structure */
         let cpu = Core::this();
@@ -93,6 +92,9 @@ impl Core
             (*cpu).queues = ScheduleQueues::new();
             (*cpu).smode = platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::Supervisor);
         }
+
+        /* add core ID to list of cores */
+        CPUS.lock().insert(id);
     }
 
     /* return ID of capsule of the virtual CPU core this physical CPU core is running, or None for none */
@@ -100,10 +102,10 @@ impl Core
     {
         match VCORES.lock().entry(Core::id())
         {
-            Entry::Vacant(_) => None,
-            Entry::Occupied(value) =>
+            hash_map::Entry::Vacant(_) => None,
+            hash_map::Entry::Occupied(value) =>
             {
-                Some(value.get().capsule())
+                Some(value.get().get_capsule())
             }
         }
     }
@@ -155,7 +157,7 @@ and overwrites the context with the next virtual core's context, so returning to
 mode will land us in the new context */
 pub fn context_switch(next: VirtualCore)
 {
-    let next_capsule = next.capsule();
+    let next_capsule = next.get_capsule();
     let id = Core::id();
 
     /* find what this physical core was running, if anything */
@@ -163,13 +165,17 @@ pub fn context_switch(next: VirtualCore)
     {
         Some(current_vcore) =>
         {
+            hvlog!("switching from vcore {} capsule {} to vcore {} capsule {}",
+                    current_vcore.get_id(), current_vcore.get_capsule(),
+                    next.get_id(), next_capsule);
+
             /* if we're running a virtual CPU core, preserve its state */
             platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
 
             /* if we're switching to a virtual CPU core in another capsule then replace the
             current hardware access permissions so that we're only allowing access to the RAM assigned
             to the next capsule to run */
-            if current_vcore.capsule() != next_capsule
+            if current_vcore.get_capsule() != next_capsule
             {
                 capsule::enforce(next_capsule);
             }
@@ -179,6 +185,8 @@ pub fn context_switch(next: VirtualCore)
         },
         None =>
         {
+            hvlog!("running vcore {} capsule {}", next.get_id(), next_capsule);
+
             /* if we were not running a virtual CPU core then ensure we return to supervisor mode
             rather than hypervisor mode */
             platform::cpu::prep_supervisor_return();

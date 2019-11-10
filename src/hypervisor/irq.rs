@@ -39,7 +39,14 @@ fn exception(irq: IRQ)
         /* catch non-fatal supervisor-level exceptions */
         (false, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            hvlog!("Environment call from supervisor");
+            if let Some(c) = cpu::Core::capsule()
+            {
+                hvlog!("Environment call from supervisor-mode capsule ID {}", c);
+            }
+            else
+            {
+                hvalert!("BUG: Environment call from supervisor mode but no capsule found");
+            }
         },
 
         /* catch fatal supervisor-level exceptions */
@@ -52,18 +59,18 @@ fn exception(irq: IRQ)
             /* terminate the capsule running on this core */
             if let Some(c) = cpu::Core::capsule()
             {
-                capsule::destroy(c);
-            }
-
-            /* force a context switch: keep searching for something
-               else to run. */
-            loop
-            {
-                if scheduler::run_next() == true
+                if capsule::destroy(c).is_ok() != true
                 {
-                    break;
+                    hvalert!("BUG: Could not kill capsule ID {}", c);
                 }
             }
+            else
+            {
+                hvalert!("BUG: Exception in supervisor mode but no capsule found");
+            }
+
+            /* force a context switch */
+            scheduler::run_next(true);
         },
 
         /* catch everything else, halting if fatal */
@@ -89,7 +96,7 @@ fn interrupt(irq: IRQ)
     match irq.cause
     {
         /* handle our scheduler's timer by picking another thing to run, if possible */
-        IRQCause::HypervisorTimer => { scheduler::run_next(); }, 
+        IRQCause::HypervisorTimer => scheduler::run_next(false), 
         _ => hvlog!("Unhandled hardware interrupt: {:?}", irq.cause)
     };
 

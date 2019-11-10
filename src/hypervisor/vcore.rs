@@ -60,8 +60,11 @@ impl VirtualCore
         &self.state
     }
     
+    /* return this virtual core's ID within its capsule */
+    pub fn get_id(&self) -> VirtualCoreID { self.core }
+
     /* return virtual CPU core capsule's ID */
-    pub fn capsule(&self) -> CapsuleID { self.capsule }
+    pub fn get_capsule(&self) -> CapsuleID { self.capsule }
 
     /* return virtual CPU core's priority */
     pub fn get_priority(&self) -> Priority { self.priority }

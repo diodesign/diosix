@@ -11,7 +11,6 @@ use super::error::Cause;
 use super::vcore::{VirtualCore, Priority};
 use super::cpu::{self, Core};
 use super::hardware;
-use super::capsule;
 
 pub type TimesliceCount = u64;
 
@@ -46,46 +45,53 @@ pub fn start() -> Result<(), Cause>
     Ok(())
 }
 
-/* find something else to run, if possible, or return to whatever we were running.
+/* find something else to run, or return to whatever we were running if allowed.
    call this function when a virtual core's timeslice has expired, or it has crashed
-   or stopped running and we can't return to it
-   <= true = was able to switch to another workload, false for not */
-pub fn run_next() -> bool
+   or stopped running and we can't return to it.
+   => must_switch = set to true to never return without switching to a new thread */
+pub fn run_next(must_switch: bool)
 {
     /* if this core can run supervisor-level code then find it some work to do */
-    if cpu::Core::smode_supported() == true
+    if cpu::Core::smode_supported()
     {
-        let mut found_another = true; /* assume we'll find something else to run */
-
-        /* check to see if there's anything waiting to be picked up for this physical CPU from a global queue.
-        if so, then adopt it so it can get a chance to run */
-        match GLOBAL_QUEUES.lock().dequeue()
+        /* keep looping until we've found something to switch to if must_switch
+        is set to true */
+        loop
         {
-            /* we've found a virtual CPU core to run, so switch to that */
-            Some(orphan) => cpu::context_switch(orphan),
+            let mut something_found = true;
 
-            /* otherwise, try to take a virtual CPU core waiting for this physical CPU core and run it */
-            _ => match Core::dequeue()
+            /* check to see if there's anything waiting to be picked up for this
+            physical CPU from a global queue. if so, then adopt it so it can get a chance to run */
+            match GLOBAL_QUEUES.lock().dequeue()
             {
-                Some(virtcore) => cpu::context_switch(virtcore), /* waiting virtual CPU core found, queuing now */
-                _ => found_another = false /* nothing else to run */
-            }
-        };
+                /* we've found a virtual CPU core to run, so switch to that */
+                Some(orphan) => cpu::context_switch(orphan),
 
-        /* if we were able to find something else to run then start the clock on the next timeslice
-           and let the caller know we were successful */
-        if found_another == true
-        {
-            /* tell the timer system to call us back soon */
-            hardware::scheduler_timer_next(TIMESLICE_LENGTH);
-            return true;
+                /* otherwise, try to take a virtual CPU core waiting for this physical CPU core and run it */
+                _ => match Core::dequeue()
+                {
+                    Some(virtcore) => cpu::context_switch(virtcore), /* waiting virtual CPU core found, queuing now */
+                    _ => something_found = false /* nothing else to run */
+                }
+            }
+
+            if must_switch == false || (must_switch && something_found == true)
+            {
+                break;
+            }
+
+            /* do some housekeeping seeing as we can't run workloads, either
+            because there's nothing to run or because we can't */
+            housekeeping();
         }
     }
+    else
+    {
+        housekeeping(); /* can't run workloads so find something else to do */
+    }
 
-    /* do some housekeeping seeing as we can't run workloads, either
-       because there's nothing to run or because we can't */
-    housekeeping();
-    return false;
+    /* tell the timer system to call us back soon */
+    hardware::scheduler_timer_next(TIMESLICE_LENGTH);
 }
 
 /* perform any housekeeping duties */

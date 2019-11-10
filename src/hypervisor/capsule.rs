@@ -5,11 +5,12 @@
  * See LICENSE for usage and copying.
  */
 
-use platform::physmem::PhysMemSize;
 use spin::Mutex;
 use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::{Occupied, Vacant};
 use hashbrown::hash_set::HashSet;
+use platform::physmem::PhysMemSize;
+use platform::cpu::Entry;
 use super::loader;
 use super::error::Cause;
 use super::physmem::{self, Region};
@@ -45,9 +46,26 @@ pub fn create_boot_capsule(size: PhysMemSize, cpus: VirtualCoreID) -> Result<(),
     /* create virtual CPU cores for the capsule as required */
     for vcoreid in 0..cpus
     {
-        vcore::VirtualCore::create(capid, vcoreid, entry, Priority::High)?;
-        CAPSULES.lock().get_mut(&capid).unwrap().add_vcore(vcoreid)
+        create_and_add_vcore(capid, vcoreid, entry, Priority::High)?;
     }
+    Ok(())
+}
+
+/* create a virtual core and add it to the given capsule
+   => cid = capsule ID
+      vid = virtual core ID
+      entry = starting address for execution of this virtual core
+      prio = priority to run this virtual core
+   <= return Ok for success, or error code
+*/
+pub fn create_and_add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, prio: Priority) -> Result<(), Cause>
+{
+    vcore::VirtualCore::create(cid, vid, entry, prio)?;
+    match CAPSULES.lock().get_mut(&cid)
+    {
+        Some(c) => c.add_vcore(vid),
+        None => return Err(Cause::CapsuleBadID)
+    };
     Ok(())
 }
 
