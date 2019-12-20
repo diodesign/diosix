@@ -18,43 +18,48 @@ use hashbrown::hash_map::{HashMap, self};
 use hashbrown::hash_set::{HashSet};
 use platform::physmem::PhysMemSize;
 use platform::cpu::{SupervisorState, CPUFeatures};
-use super::vcore::VirtualCore;
-use super::heap;
+use super::vcore::{VirtualCore, VirtualCoreID, VirtualCoreCanonicalID};
 use super::scheduler::ScheduleQueues;
 use super::capsule::{self, CapsuleID};
+use super::message;
+use super::heap;
 
 /* physical CPU core IDs and count */
-pub type CPUId = usize;
-pub type CPUCount = CPUId;
+pub type PhysicalCoreID = usize;
+pub type PhysicalCoreCount = PhysicalCoreID;
 
-pub const BOOT_CPUID: CPUId = 0;
+pub const BOOT_PCORE_ID: PhysicalCoreID = 0;
 
 /* require some help from the underlying platform */
 extern "C"
 {
-    fn platform_cpu_private_variables() -> *mut Core;
+    fn platform_cpu_private_variables() -> &'static mut PhysicalCore;
     fn platform_cpu_heap_base() -> *mut heap::HeapBlock;
     fn platform_cpu_heap_size() -> PhysMemSize;
     fn platform_save_supervisor_state(state: &SupervisorState);
     fn platform_load_supervisor_state(state: &SupervisorState);
 }
 
-/* map running virtual CPU cores to physical CPU cores. 
-   we can't store these in Core structs because it upsets Rust's borrow checker */
 lazy_static!
 {
-    static ref VCORES: Mutex<HashMap<CPUId, VirtualCore>> = Mutex::new(HashMap::new());
-    static ref CPUS: Mutex<HashSet<CPUId>> = Mutex::new(HashSet::new());
+    /* map running virtual CPU cores to physical CPU cores, and vice-versa
+    we can't store these in Core structs because it upsets Rust's borrow checker.
+    note: PCORES keeps track of the last physical CPU core to run a given virtual
+    core. this is more of a hint than a concrete guarantee: the virtual core
+    may have been scheduled away, though it should be in the last physical
+    CPU core's scheduling queue. */
+    static ref VCORES: Mutex<HashMap<PhysicalCoreID, VirtualCore>> = Mutex::new(HashMap::new());
+    static ref PCORES: Mutex<HashMap<VirtualCoreCanonicalID, PhysicalCoreID>> = Mutex::new(HashMap::new());
 }
 
 /* describe a physical CPU core - this structure is stored in the per-CPU private variable space */
 #[repr(C)]
-pub struct Core
+pub struct PhysicalCore
 {
     /* every physical CPU core has a hardware-assigned ID number that may be non-linear,
     while the startup code assigns each core a linear ID number from zero. we keep a copy of that
     linear runtime-assigned ID here. the hardware-assigned ID is not used in the portable code */
-    id: CPUId,
+    id: PhysicalCoreID,
 
     /* platform-defined bitmask of ISA features this core provides. if a virtual core has a features bit set that
     is unset in a physical core's feature bitmask, the virtual core will not be allowed to run on that physical core */
@@ -71,61 +76,53 @@ pub struct Core
     smode: bool
 }
 
-impl Core
+impl PhysicalCore
 {
     /* intiialize a physical CPU core. Prepare it for running supervisor code.
     => id = diosix-assigned CPU core ID at boot time. this is separate from the hardware-assigned
             ID number, which may be non-linear. the runtime-generated core ID will
             run from zero to N-1 where N is the number of available cores */
-    pub fn init(id: CPUId)
+    pub fn init(id: PhysicalCoreID)
     {
         /* the pre-hvmain startup code has allocated space for per-CPU core variables.
         this function returns a pointer to that structure */
-        let cpu = Core::this();
+        let mut cpu = PhysicalCore::this();
 
-        /* initialize this CPU core */
-        unsafe
-        {
-            (*cpu).id = id;
-            (*cpu).features = platform::cpu::features();
-            (*cpu).heap.init(platform_cpu_heap_base(), platform_cpu_heap_size());
-            (*cpu).queues = ScheduleQueues::new();
-            (*cpu).smode = platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::Supervisor);
-        }
+        cpu.id = id;
+        cpu.features = platform::cpu::features();
+        cpu.smode = platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::Supervisor);
 
-        /* add core ID to list of cores */
-        CPUS.lock().insert(id);
-    }
+        let (heap_ptr, heap_size) = PhysicalCore::get_heap_config();
+        cpu.heap.init(heap_ptr, heap_size);
+      
+        cpu.queues = ScheduleQueues::new();
 
-    /* return ID of capsule of the virtual CPU core this physical CPU core is running, or None for none */
-    pub fn capsule() -> Option<CapsuleID>
-    {
-        match VCORES.lock().entry(Core::id())
-        {
-            hash_map::Entry::Vacant(_) => None,
-            hash_map::Entry::Occupied(value) =>
-            {
-                Some(value.get().get_capsule())
-            }
-        }
+        /* create a mailbox for messages from other cores */
+        message::create_mailbox(id);
     }
 
     /* return pointer to the calling CPU core's fixed private data structure */
-    pub fn this() -> *mut Core
-    { 
+    pub fn this() -> &'static mut PhysicalCore
+    {
         unsafe { platform_cpu_private_variables() }
     }
 
-    /* return boot-assigned ID number */
-    pub fn id() -> CPUId
+    /* return CPU heap base and size set aside by the pre-hvmain boot code */
+    fn get_heap_config() -> (*mut heap::HeapBlock, PhysMemSize)
     {
-        unsafe { (*Core::this()).id }
+        unsafe { (platform_cpu_heap_base(), platform_cpu_heap_size()) }
+    }
+
+    /* return boot-assigned ID number */
+    pub fn get_id() -> PhysicalCoreID
+    {
+        PhysicalCore::this().id
     }
 
     /* return features bitmask */
-    pub fn features() -> CPUFeatures
+    pub fn get_features() -> CPUFeatures
     {
-        unsafe { (*Core::this()).features }
+        PhysicalCore::this().features
     }
 
     /* return a structure describing this core */
@@ -134,20 +131,46 @@ impl Core
     /* return a virtual CPU core awaiting to run on this physical CPU core */
     pub fn dequeue() -> Option<VirtualCore>
     {
-        unsafe { (*Core::this()).queues.dequeue() }
+        PhysicalCore::this().queues.dequeue()
     }
 
     /* move a virtual CPU core onto this physical CPU's queue of virtual cores to run */
     pub fn queue(to_queue: VirtualCore)
     {
-        unsafe { (*Core::this()).queues.queue(to_queue) }
+        PhysicalCore::this().queues.queue(to_queue)
     }
 
     /* return true if able to run supervisor code. a system management core
     that cannot or is not expected to run guest workloads should return false */
     pub fn smode_supported() -> bool
     {
-        unsafe { (*Core::this()).smode }
+        PhysicalCore::this().smode
+    }
+
+    /* return ID of capsule of the virtual CPU core this physical CPU core is running, or None for none */
+    pub fn get_capsule_id() -> Option<CapsuleID>
+    {
+        if let Some(vcore) = VCORES.lock().get(&PhysicalCore::get_id())
+        {
+            Some(vcore.get_capsule_id())
+        }
+        else
+        {
+            None
+        }
+    }
+
+    /* return ID for the virtual core running on this CPU, if any */
+    pub fn get_virtualcore_id() -> Option<VirtualCoreID>
+    {
+        if let Some(vcore) = VCORES.lock().get(&PhysicalCore::get_id())
+        {
+            Some(vcore.get_id())
+        }
+        else
+        {
+            None
+        }
     }
 }
 
@@ -157,17 +180,17 @@ and overwrites the context with the next virtual core's context, so returning to
 mode will land us in the new context */
 pub fn context_switch(next: VirtualCore)
 {
-    let next_capsule = next.get_capsule();
-    let id = Core::id();
+    let next_capsule = next.get_capsule_id();
+    let id = PhysicalCore::get_id();
 
     /* find what this physical core was running, if anything */
     match VCORES.lock().remove(&id)
     {
         Some(current_vcore) =>
         {
-            hvlog!("switching from vcore {} capsule {} to vcore {} capsule {}",
-                    current_vcore.get_id(), current_vcore.get_capsule(),
-                    next.get_id(), next_capsule);
+            hvdebug!("Switching from vcore {} in capsule {} to vcore {} in capsule {}",
+                     current_vcore.get_id(), current_vcore.get_capsule_id(),
+                     next.get_id(), next_capsule);
 
             /* if we're running a virtual CPU core, preserve its state */
             platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
@@ -175,17 +198,17 @@ pub fn context_switch(next: VirtualCore)
             /* if we're switching to a virtual CPU core in another capsule then replace the
             current hardware access permissions so that we're only allowing access to the RAM assigned
             to the next capsule to run */
-            if current_vcore.get_capsule() != next_capsule
+            if current_vcore.get_capsule_id() != next_capsule
             {
                 capsule::enforce(next_capsule);
             }
 
             /* queue the current virtual core on the waiting list */
-            Core::queue(current_vcore);
+            PhysicalCore::queue(current_vcore);
         },
         None =>
         {
-            hvlog!("running vcore {} capsule {}", next.get_id(), next_capsule);
+            hvdebug!("Running vcore {} in capsule {}", next.get_id(), next_capsule);
 
             /* if we were not running a virtual CPU core then ensure we return to supervisor mode
             rather than hypervisor mode */
@@ -197,5 +220,15 @@ pub fn context_switch(next: VirtualCore)
 
     /* prepare next virtual core to run when we leave this IRQ context */
     platform::cpu::load_supervisor_state(next.state_as_ref());
-    VCORES.lock().insert(id, next); /* add to the running virtual cores list */
+
+    /* link virtual core and capsule to this physical CPU */
+    PCORES.lock().insert(VirtualCoreCanonicalID
+        {
+            vcoreid: next.get_id(),
+            capsuleid: next_capsule
+        },
+        id);
+
+    /*and add the virtual core to the running virtual cores list */
+    VCORES.lock().insert(id, next);
 }

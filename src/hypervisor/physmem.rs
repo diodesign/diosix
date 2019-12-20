@@ -71,7 +71,7 @@ impl Region
         {
             RegionState::InUse =>
             {
-                hvlog!("Granting {:?} access to 0x{:x} - 0x{:x}", AccessPermissions::ReadWriteExecute, self.base, self.end);
+                hvdebug!("Granting {:?} access to 0x{:x} - 0x{:x}", AccessPermissions::ReadWriteExecute, self.base, self.end);
                 platform::physmem::protect(self.base, self.end, AccessPermissions::ReadWriteExecute);
                 true
             },
@@ -155,4 +155,12 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
             Ok(a) /* return bonds of new region */
         }
     }
+}
+
+/* deallocate a region so that its physical RAM can be reallocated
+   => to_free = region to deallocate
+   <= Ok for success, or an error code for failure */
+pub fn dealloc_region(to_free: Region) -> Result<(), Cause>
+{
+    Err(Cause::NotImplemented)
 }

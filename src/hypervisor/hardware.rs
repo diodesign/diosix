@@ -9,7 +9,7 @@ use spin::Mutex;
 use platform::devices::Devices;
 use platform::physmem::RAMAreaIter;
 use super::error::Cause;
-use super::cpu;
+use super::pcore;
 
 lazy_static!
 {
@@ -19,7 +19,7 @@ lazy_static!
     /* we might end up in a situation where a CPU core holds HARDWARE
     but was interrupted or otherwise reentered. keep a track of the owner
     of HARDWARE so that it can unlock the structure if needed */
-    static ref OWNER: Mutex<cpu::CPUId> = Mutex::new(cpu::Core::id());
+    static ref OWNER: Mutex<pcore::PhysicalCoreID> = Mutex::new(pcore::PhysicalCore::get_id());
 }
 
 /* parse_and_init
@@ -36,7 +36,7 @@ pub fn parse_and_init(device_tree: &u8) -> Result<(), Cause>
         {
             *(HARDWARE.lock()) = Some(d);
         },
-        None => return Err(Cause::BadDeviceTree)
+        None => return Err(Cause::DeviceTreeBad)
     };
     return Ok(())
 }
@@ -58,7 +58,7 @@ fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'sta
     loop
     {
         let mut owner = OWNER.lock();
-        if *owner == cpu::Core::id()
+        if *owner == pcore::PhysicalCore::get_id()
         {
             /* we apparently own HARDWARE already so acquire, or force unlock it and
             acquire it again */
@@ -79,7 +79,7 @@ fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'sta
             {
                 (Some(hw), _) =>
                 {
-                    *owner = cpu::Core::id();
+                    *owner = pcore::PhysicalCore::get_id();
                     return Some(hw);
                 },
                 (None, LockAttempts::Once) => return None,

@@ -9,8 +9,21 @@
 #[derive(Debug)]
 pub enum Cause
 {
-    /* Devices */
-    BadDeviceTree,
+    /* misc */
+    NotImplemented,
+
+    /* devices */
+    DeviceTreeBad,
+
+    /* physical CPU cores */
+    PhysicalCoreBadID,
+
+    /* capsule services */
+    ServiceAlreadyRegistered,
+    ServiceNotAllowed,
+
+    /* messages */
+    MessageBadType,
 
     /* heap */
     HeapNotInUse,

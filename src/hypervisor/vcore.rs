@@ -20,13 +20,20 @@ pub enum Priority
 /* virtual core ID unique to its capsule */
 pub type VirtualCoreID = usize;
 
+/* pair a virtual core with its parent capsule using their ID numbers */
+#[derive(PartialEq, Eq, Hash)]
+pub struct VirtualCoreCanonicalID
+{
+    pub capsuleid: CapsuleID,
+    pub vcoreid: VirtualCoreID
+}
+
 /* a virtual core is either in a waiting queue awaiting physical CPU time, or is running and held in a physical CPU core struct.
 if you remove a virtual core object from the queue and don't place it back in a queue or Core structure,
 then the vcpu will be dropped, deallocated and destroyed. */
 pub struct VirtualCore
 {
-    capsule: CapsuleID,
-    core: VirtualCoreID,
+    id: VirtualCoreCanonicalID,
     priority: Priority,
     state: SupervisorState
 }
@@ -43,8 +50,11 @@ impl VirtualCore
     {
         let new_vcore = VirtualCore
         {
-            capsule: capsuleid,
-            core: core,
+            id: VirtualCoreCanonicalID
+            {
+                capsuleid: capsuleid,
+                vcoreid: core
+            },
             priority: priority,
             state: platform::cpu::supervisor_state_from(entry)
         };
@@ -61,10 +71,10 @@ impl VirtualCore
     }
     
     /* return this virtual core's ID within its capsule */
-    pub fn get_id(&self) -> VirtualCoreID { self.core }
+    pub fn get_id(&self) -> VirtualCoreID { self.id.vcoreid }
 
     /* return virtual CPU core capsule's ID */
-    pub fn get_capsule(&self) -> CapsuleID { self.capsule }
+    pub fn get_capsule_id(&self) -> CapsuleID { self.id.capsuleid }
 
     /* return virtual CPU core's priority */
     pub fn get_priority(&self) -> Priority { self.priority }

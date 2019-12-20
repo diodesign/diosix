@@ -7,7 +7,7 @@
 
 use super::scheduler;
 use super::capsule;
-use super::cpu;
+use super::pcore;
 
 /* platform-specific code must implement all this */
 use platform;
@@ -39,9 +39,9 @@ fn exception(irq: IRQ)
         /* catch non-fatal supervisor-level exceptions */
         (false, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            if let Some(c) = cpu::Core::capsule()
+            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
             {
-                hvlog!("Environment call from supervisor-mode capsule ID {}", c);
+                hvdebug!("Environment call from supervisor-mode capsule ID {}", c);
             }
             else
             {
@@ -57,7 +57,7 @@ fn exception(irq: IRQ)
                 PrivilegeMode::Supervisor, cause, irq.pc, irq.sp);
 
             /* terminate the capsule running on this core */
-            if let Some(c) = cpu::Core::capsule()
+            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
             {
                 if capsule::destroy(c).is_ok() != true
                 {
@@ -97,7 +97,7 @@ fn interrupt(irq: IRQ)
     {
         /* handle our scheduler's timer by picking another thing to run, if possible */
         IRQCause::HypervisorTimer => scheduler::run_next(false), 
-        _ => hvlog!("Unhandled hardware interrupt: {:?}", irq.cause)
+        _ => hvdebug!("Unhandled hardware interrupt: {:?}", irq.cause)
     };
 
     /* clear the interrupt condition */

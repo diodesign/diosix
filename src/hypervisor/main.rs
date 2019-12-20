@@ -20,7 +20,7 @@
 #![test_runner(crate::run_tests)]
 #![reexport_test_harness_main = "hvtests"] /* entry point for tests */
 
-/* plug our custom heap allocator into the Rust language: Box, etc*/
+/* plug our custom heap allocator into the Rust language: Box, etc */
 #![feature(alloc_error_handler)]
 #![feature(box_syntax)]
 extern crate alloc;
@@ -48,13 +48,15 @@ mod heap;       /* per-CPU private heap management */
 mod abort;      /* implement abort() and panic() handlers */
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod physmem;    /* manage physical memory */
-mod cpu;        /* manage CPU cores */
+mod pcore;      /* manage CPU cores */
 mod vcore;      /* virtual CPU core management... */
 mod scheduler;  /* ...and scheduling */
 mod capsule;    /* manage capsules */
 mod loader;     /* parse and load supervisor binaries */
+mod message;    /* send messages between physical cores */
+mod service;    /* allow capsules to register services */
 
-use cpu::{CPUId, BOOT_CPUID};
+use pcore::{PhysicalCoreID, BOOT_PCORE_ID};
 
 /* list of error codes */
 mod error;
@@ -75,8 +77,6 @@ lazy_static!
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 in future, we may support 16- or 128-bit, too. stick to usize as much as possible */
 
-/* NOTE: Do not call any hvlog/hvdebug macros until debug has been initialized */
-
 /* hventry
    This is the official entry point of the Rust-level hypervisor.
    Call hvmain, which is where all the real work happens, and catch any errors.
@@ -84,7 +84,7 @@ in future, we may support 16- or 128-bit, too. stick to usize as much as possibl
       device_tree_ptr = pointer to start of device tree structure
    <= return to infinite loop, awaiting interrupts */
 #[no_mangle]
-pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_ptr: &u8)
+pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, device_tree_ptr: &u8)
 {
     /* carry out tests if that's what we're here for */
     #[cfg(test)]
@@ -101,33 +101,34 @@ pub extern "C" fn hventry(cpu_nr: CPUId, device_tree_ptr: &u8)
 /* hvmain
    This code runs at the hypervisor level, with full physical memory access.
    Its job is to initialize physical CPU cores and other resources so that capsules can be
-   created in which supervisors run that manage their own user space, in which
+   created in which supervisors run that manage their own user spaces, in which
    applications run. The hypervisor ensures capsules are kept apart using
    hardware protections.
 
    Assumes all physical CPU cores enter this function during startup.
    The boot CPU is chosen to initialize the system in pre-SMP mode.
    If we're on a single CPU core then everything should still run OK.
-   Assumes hardware and exception interrupts are enabled.
+   Assumes hardware and exception interrupts are enabled and handlers
+   installed.
 
    => cpu_nr = arbitrary CPU core ID number assigned by boot code,
                separate from hardware ID number.
-               BootCPUId = boot CPU core.
+               BOOT_PCORE_ID = boot CPU core.
       device_tree = ptr to memory containing device tree describing the host hardware
    <= return to infinite loop, waiting for interrupts
 */
-fn hvmain(cpu_nr: CPUId, device_tree: &u8) -> Result<(), Cause>
+fn hvmain(cpu_nr: PhysicalCoreID, device_tree: &u8) -> Result<(), Cause>
 {
     /* set up each physical processor core with its own private heap pool and any other resources.
     each private pool uses physical memory assigned by the pre-hvmain boot code. init() should be called
     first thing to set up each processor core, including the boot CPU, which then sets up the global
     resources. all non-boot CPUs should wait until global resources are ready. */
-    cpu::Core::init(cpu_nr);
+    pcore::PhysicalCore::init(cpu_nr);
 
     match cpu_nr
     {
         /* delegate to boot CPU the welcome banner and set up global resources */
-        BOOT_CPUID => 
+        BOOT_PCORE_ID => 
         {
             /* process device tree to create data structures representing system hardware,
             allowing these peripherals to be accessed by subsequent routines. this should
@@ -142,7 +143,7 @@ fn hvmain(cpu_nr: CPUId, device_tree: &u8) -> Result<(), Cause>
             hvdebug!("Debugging enabled");
 
             /* initialize boot capsule */
-            create_boot_capsule()?;
+            capsule::create_boot_capsule()?;
 
             /* allow other cores to continue */
             *(INIT_DONE.lock()) = true;
@@ -153,7 +154,7 @@ fn hvmain(cpu_nr: CPUId, device_tree: &u8) -> Result<(), Cause>
     }
 
     /* acknowledge we're alive and well, and report CPU core features */
-    hvlog!("Physical CPU core {:?} ready to roll", cpu::Core::describe());
+    hvlog!("Physical CPU core {:?} ready to roll", pcore::PhysicalCore::describe());
 
     /* enable timer on this physical CPU core to start scheduling and running virtual cores */
     scheduler::start()?;
@@ -161,16 +162,6 @@ fn hvmain(cpu_nr: CPUId, device_tree: &u8) -> Result<(), Cause>
     /* initialization complete. fall through to infinite loop waiting for a timer interrupt
     to come in. when it does fire, this stack will be flattened, a virtual CPU loaded up to run,
     and this boot thread will disappear like tears in the rain. */
-    Ok(())
-}
-
-/* create the boot capsule, from which all other capsules spawn */
-fn create_boot_capsule() -> Result<(), Cause>
-{
-    /* create a boot capsule with 128MB of RAM and one virtual core */
-    let mem = 128 * 1024 * 1024;
-    let cpus = 1;
-    capsule::create_boot_capsule(mem, cpus)?;
     Ok(())
 }
 

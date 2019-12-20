@@ -23,8 +23,9 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
 use core::mem;
 use core::result::Result;
-use super::error::Cause;
 use platform::physmem::{barrier, PhysMemSize};
+use super::error::Cause;
+use super::pcore;
 
 /* different states each recognized heap block can be in */
 #[repr(C)]
@@ -48,13 +49,9 @@ unsafe impl GlobalAlloc for HVallocator
     unsafe fn alloc(&self, layout: Layout) -> *mut u8
     {
         let bytes = layout.size();
-        match (*<super::cpu::Core>::this()).heap.alloc::<u8>(bytes)
+        match (*<super::pcore::PhysicalCore>::this()).heap.alloc::<u8>(bytes)
         {
-            Ok(p) => 
-            {
-                hvdebug!("heap: allocating {:p}, {} bytes", p, bytes);
-                p
-            },
+            Ok(p) => p,
             Err(e) =>
             {
                 hvalert!("HVallocator: request for {} bytes failed ({:?})", bytes, e);
@@ -65,8 +62,7 @@ unsafe impl GlobalAlloc for HVallocator
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
     {
-        hvdebug!("heap: freeing {:p}", ptr);
-        match (*<super::cpu::Core>::this()).heap.free::<u8>(ptr)
+        match (*<super::pcore::PhysicalCore>::this()).heap.free::<u8>(ptr)
         {
             Err(e) =>
             {
@@ -107,7 +103,7 @@ impl Heap
     /* initialize this heap area. start off with one giant block
     covering all of free space, from which other blocks will be carved.
     => start = pointer to start of heap area
-       size = size of available bytes in heap */
+       size = number of available bytes in heap */
     pub fn init(&mut self, start: *mut HeapBlock, size: PhysMemSize)
     {
         /* here's our enormo free block */
