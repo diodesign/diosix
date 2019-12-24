@@ -12,11 +12,11 @@
 
 ### Introduction <a name="intro"></a>
 
-Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor hypervisor for 32-bit and 64-bit [RISC-V](https://riscv.org/) systems. It is written [in Rust](https://www.rust-lang.org/), which is a C/C++-like systems programming language fiercely focused on memory and thread safety as well as performance and reliability.
+Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor for 32-bit and 64-bit [RISC-V](https://riscv.org/) systems. It is written [in Rust](https://www.rust-lang.org/), which is a C/C++-like systems programming language focused on memory and thread safety as well as performance and reliability.
 
 The ultimate goal is to build fully open-source packages containing everything needed to configure FPGA-based systems with RISC-V cores and peripheral controllers, and boot a stack of software customized for a particular task, all generated on demand if necessary. This software should also run on supported ASICs and system-on-chips.
 
-Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux kernel and minimal filesystem into a virtualized environment called a capsule, and begin executing it.  
+Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux kernel and minimal filesystem into a virtualized environment called a capsule, and begin executing it.
 
 ### Building and running <a name="buildrun"></a>
 
@@ -30,20 +30,29 @@ To build and run Diosix, you need to follow a few steps, which are documented he
 Once you have everything in place, you can run Diosix in Qemu, or on real hardware, to start a Linux-based virtual environment. Below is debug output from the hypervisor bringing up a four-core 64-bit RISC-V system with 512MiB of RAM within the Qemu emulator, using a device tree to ascertain the hardware's configuration, loading a Linux kernel and its bundled filesystem into a virtualized environment, and executing it:
 
 ```
-$ cargo run --release
-   Compiling diosix v2.0.0 (/home/build/src/diosix)
-    Finished release [optimized] target(s) in 2.50s
-     Running `qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel target/riscv64gc-unknown-none-elf/release/hypervisor`
-[-] CPU 0: Welcome to diosix 2.0.0 ... using device tree at 0x1020
-[-] CPU 0: Available physical RAM: 498 MiB, physical CPU cores: 4
-[-] CPU 0: Created capsule: ID 1, physical RAM base 0x80d95000, size 128 MiB
-[-] CPU 0: loading ELF program area: 0x8000f7b0 size 0x1e620 into 0x80d95000
-[-] CPU 0: loading ELF program area: 0x8002e7b0 size 0xa2c0bc into 0x80db4000
-[-] CPU 0: Supervisor kernel entry: 0x80d96000
-[-] CPU 0: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
-[-] CPU 3: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
-[-] CPU 2: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
-[-] CPU 1: Physical CPU core ready to roll, type: 64-bit RISC-V, ext: acdfimsu
+$ cargo run
+    Finished dev [unoptimized + debuginfo] target(s) in 12.33s
+     Running `qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel target/riscv64gc-unknown-none-elf/debug/hypervisor`
+[-] CPU 0: Hardware environment:
+
+ * Debug console (serial port) at 0x10000000
+ * 512 MiB of physical RAM available at 0x80000000
+ * 10000000 Hz fixed timer(s) using CLINT at 0x2000000
+ * 4 physical CPU cores
+
+[-] CPU 0: Welcome to diosix 2.0.0
+[?] CPU 0: Debugging enabled
+[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x80dcc000 in physical RAM
+[?] CPU 0: Loading supervisor ELF program area: 0x80046208 size 0x1e620 into 0x80dcc000
+[?] CPU 0: Loading supervisor ELF program area: 0x80065208 size 0xa2c0bc into 0x80deb000
+[-] CPU 0: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[-] CPU 1: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[-] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[-] CPU 2: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 0: Running vcore 0 in capsule 1
+[?] CPU 0: Granting ReadWriteExecute access to 0x80dcc000, 134217728 bytes
+[!] CPU 0: Fatal exception in Supervisor: Breakpoint at 0x80dce8c8, stack 0x816f1ff0
+[?] CPU 0: Tearing down capsule
 ```
 
 ### Next on the todo list <a name="todo"></a>

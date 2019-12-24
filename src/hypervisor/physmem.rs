@@ -1,6 +1,8 @@
 /* diosix hypervisor physical memory management
  *
- * Allocate/free memory for supervisors
+ * Allocate/free regions of memory for supervisors.
+ * these regions can be used in 1:1 mappings or used
+ * as RAM backing for virtual memory.
  * 
  * (c) Chris Williams, 2019.
  *
@@ -9,7 +11,7 @@
 
 use platform;
 use spin::Mutex;
-use alloc::collections::linked_list::LinkedList;
+use alloc::vec::Vec;
 use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions};
 use super::error::Cause;
 use super::hardware;
@@ -18,90 +20,176 @@ use super::hardware;
 pub fn boot_supervisor() -> Region
 {
     let (base, end) = platform::physmem::boot_supervisor();
-    Region { base: base, end: end, state: RegionState::InUse }
+    Region { base: base, size: end - base }
 }
 
-/* gather up all physical RAM areas from which future capsule physical
-RAM allocations will be drawn into the REGIONS list. this list is built from
-available physical RAM: it must *not* include any RAM areas already in use by
-the hypervisor, boot supervisor image, peripherals, etc. the underlying
-platform code needs to exclude those off-limits areas. */
-lazy_static!
-{
-    /* acquire REGIONS lock before accessing any physical RAM regions */
-    static ref REGIONS: Mutex<LinkedList<Region>> = Mutex::new(LinkedList::new());
-}
-
-/* describe a physical memory region's state */
-#[derive(Copy, Clone)]
-pub enum RegionState
-{
-    InUse,  /* allocated to a capsule */
-    Free    /* available to allocate to a capsule */
-}
+/* to avoid fragmentation, round up physical memory region allocations into whole numbers of these bytes.
+this only applies when creating regions with alloc_region() */
+const PHYS_RAM_REGION_MIN_SIZE: PhysMemSize = 64 * 1024 * 1024; /* 64MB ought to be enough for anyone */
 
 /* describe a physical memory region */
 #[derive(Copy, Clone)]
 pub struct Region
 {
     base: PhysMemBase,
-    end: PhysMemEnd,
-    state: RegionState
+    size: PhysMemSize,
 }
 
 impl Region
 {
     /* create a new region */
-    pub fn new(base: PhysMemBase, size: PhysMemSize, state: RegionState) -> Region
+    pub fn new(base: PhysMemBase, size: PhysMemSize) -> Region
     {
         Region
         {
             base: base,
-            end: base + size,
-            state: state
+            size: size
         }
     }
 
-    /* allow the currently running supervisor kernel to access this region of physical memory.
-       only allow access if the region is marked in use. 
-       return true for success, or false if request failed */
-    pub fn grant_access(&self) -> bool
+    /* allow the currently running supervisor kernel to access this region of physical memory */
+    pub fn grant_access(&self)
     {
-        match self.state
-        {
-            RegionState::InUse =>
-            {
-                hvdebug!("Granting {:?} access to 0x{:x} - 0x{:x}", AccessPermissions::ReadWriteExecute, self.base, self.end);
-                platform::physmem::protect(self.base, self.end, AccessPermissions::ReadWriteExecute);
-                true
-            },
-            RegionState::Free =>   
-            {
-                hvalert!("Can't grant access to a non-in-use physical RAM region (base 0x{:x} size {:x})",
-                        self.base, self.end - self.base);
-                false
-            }
-        }
+        hvdebug!("Granting {:?} access to 0x{:x}, {} bytes", AccessPermissions::ReadWriteExecute, self.base, self.size);
+        platform::physmem::protect(self.base, self.base + self.size, AccessPermissions::ReadWriteExecute);
     }
 
     /* return or change attributes */
     pub fn base(&self) -> PhysMemBase { self.base }
-    pub fn end(&self) -> PhysMemEnd { self.end }
-    pub fn size(&self) -> PhysMemSize { self.end - self.base }
-    pub fn increase_base(&mut self, size: PhysMemSize) { self.base = self.base + size; }
+    pub fn end(&self) -> PhysMemEnd { self.base + self.size }
+    pub fn size(&self) -> PhysMemSize { self.size }
+
+    /* cut the region into two portions, at the 'count' byte mark. return two regions: the lower and upper
+    portions of the split region, or a failure code */
+    pub fn split(&self, count: PhysMemSize) -> Result<(Region, Region), Cause>
+    {
+        /* sanity check */
+        if count > self.size
+        {
+            return Err(Cause::PhysRegionSplitOutOfBounds);
+        }
+
+        let lower = Region::new(self.base, count);
+        let upper = Region::new(self.base + count, self.size - count);
+        Ok((lower, upper))
+    }
+}
+
+/* gather up all physical RAM areas from which future capsule physical
+RAM allocations will be drawn into the REGIONS list. this list is built from
+available physical RAM: it must *not* include any RAM areas already in use by
+the hypervisor, boot supervisor image, peripherals, etc. the underlying
+platform code needs to exclude those off-limits areas.
+
+this list must also be sorted, by base address, lowest first. this is so that
+adjoining regions can be merged into one. this list also contains only free
+and available regions. if a region is in use, it must be removed from the list. */
+lazy_static!
+{
+    /* acquire REGIONS lock before accessing any physical RAM regions */
+    static ref REGIONS: Mutex<SortedRegions> = Mutex::new(SortedRegions::new());
+}
+
+/* implement a sorted list of regions */
+struct SortedRegions
+{
+    regions: Vec<Region>
+}
+
+impl SortedRegions
+{
+    /* create an empty list */
+    pub fn new() -> SortedRegions
+    {
+        SortedRegions
+        {
+            regions: Vec::new()
+        }
+    }
+
+    /* find a region that has a size equal to or greater than the required size.
+       if one is found, remove the region and return it. if one can't be found,
+       return None. */
+    pub fn find(&mut self, required_size: PhysMemSize) -> Result<Region, Cause>
+    {
+        for index in 0..self.regions.len()
+        {
+            if self.regions[index].size() >= required_size
+            {
+                /* remove from the list and return */
+                return Ok(self.regions.remove(index));
+            }
+        }
+
+        Err(Cause::PhysRegionNoMatch) /* can't find a region large enough */
+    }
+
+    /* insert a region into the list, sorted by base addresses, lowest first */
+    pub fn insert(&mut self, to_insert: Region) -> Result<(), Cause>
+    {
+        /* ignore zero-size inserts */
+        if to_insert.size() == 0
+        {
+            return Ok(())
+        }
+
+        for index in 0..self.regions.len()
+        {
+            if to_insert.end() <= self.regions[index].base()
+            {
+                self.regions.insert(index, to_insert);
+                return Ok(())
+            }
+
+            /* check to make sure we're not adding a region that will collide with another */
+            if to_insert.base() >= self.regions[index].base() && to_insert.base() < self.regions[index].end()
+            {
+                return Err(Cause::PhysRegionCollision);
+            }
+        }
+
+        /* insert at the end */
+        self.regions.push(to_insert);
+        Ok(())
+    }
+
+    /* merge all adjoining free regions. this requires the list to be sorted by base address ascending */
+    pub fn merge(&mut self)
+    {
+        let mut cursor = 0;
+        loop
+        {
+            /* prevent search from going out of bounds */
+            if (cursor + 1) >= self.regions.len()
+            {
+                break;
+            }
+
+            if self.regions[cursor].end() == self.regions[cursor + 1].base()
+            {
+                /* absorb the next region's size into this region */
+                self.regions[cursor].size = self.regions[cursor].size() + self.regions.remove(cursor + 1).size();
+            }
+            else
+            {
+                /* move onto next region */
+                cursor = cursor + 1;
+            }
+        }
+    }
 }
 
 /* initialize the physical memory system by registering all available RAM as allocatable regions */
 pub fn init() -> Result<(), Cause>
 {
+    let mut regions = REGIONS.lock();
     match hardware::get_phys_ram_areas()
     {
         Some(ram_areas) => 
         {
-            let mut regions = REGIONS.lock();
             for area in ram_areas
             {
-                regions.push_front(Region::new(area.base, area.size, RegionState::Free));
+                regions.insert(Region::new(area.base, area.size));
             }
             Ok(())
         },
@@ -109,58 +197,54 @@ pub fn init() -> Result<(), Cause>
     }
 }
 
+/* perform housekeeping duties on idle physical CPU cores */
+macro_rules! physmemhousekeeper
+{
+    () => ($crate::physmem::coalesce_regions());
+}
+
+pub fn coalesce_regions()
+{
+    REGIONS.lock().merge();
+}
+
 /* allocate a region of available physical memory for capsule use
-   => size = number of bytes in region
+   => size = number of bytes in region, rounded up to next multiple of PHYS_RAM_REGION_MIN_SIZE
    <= Region structure for the space, or an error code */
 pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
 {
-    /* set to Some when we've found a suitable region */
-    let mut area: Option<Region> = None;
+    /* round up to a multiple of the minimum size of a region to avoid fragmentation */
+    let adjusted_size = match size % PHYS_RAM_REGION_MIN_SIZE
+    {
+        0 => size,
+        r => (size - r) + PHYS_RAM_REGION_MIN_SIZE
+    };
 
-    /* carve up the available ram for capsules. this approach is a little crude
-    but may do for now. it means capsules can't grow */
     let mut regions = REGIONS.lock();
-    for region in regions.iter_mut()
+    match regions.find(adjusted_size) // find will remove found region if successful 
     {
-        match region.state
+        Ok(found) => 
         {
-            RegionState::Free =>
+            /* split the found region into two parts: the lower portion for the newly
+            allocated region, and the remaining upper portion which is returned to the free list */
+            match found.split(adjusted_size)
             {
-                if region.size() >= size
+                Ok((lower, upper)) =>
                 {
-                    /* free area is large enough for this requested region.
-                    carve out an inuse region from start of free region,
-                    and adjust free region's size. */
-                    area = Some(Region
-                    {
-                        base: region.base(),
-                        end: region.base() + size,
-                        state: RegionState::InUse
-                    });
-                    region.increase_base(size);
-                    break;
-                }
-            },
-            _ => {} /* skip in-use regions */
-        }
-    }
-
-    /* handle whether we found a suitable area or not */
-    match area
-    {
-        None => return Err(Cause::PhysNotEnoughFreeRAM),
-        Some(a) =>
-        {
-            regions.push_front(a);
-            Ok(a) /* return bonds of new region */
-        }
+                    regions.insert(upper);
+                    Ok(lower)
+                },
+                Err(e) => Err(e)
+            }
+        },
+        Err(e) => Err(Cause::PhysNotEnoughFreeRAM)
     }
 }
 
 /* deallocate a region so that its physical RAM can be reallocated
    => to_free = region to deallocate
    <= Ok for success, or an error code for failure */
-pub fn dealloc_region(to_free: Region) -> Result<(), Cause>
+pub fn dealloc_region(mut to_free: Region) -> Result<(), Cause>
 {
-    Err(Cause::NotImplemented)
+    REGIONS.lock().insert(to_free)
 }

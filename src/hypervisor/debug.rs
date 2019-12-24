@@ -76,7 +76,7 @@ macro_rules! hvprint
     });
 }
 
-macro_rules! hvdrain
+macro_rules! debughousekeeper
 {
     () => ($crate::debug::drain_queue());
 }

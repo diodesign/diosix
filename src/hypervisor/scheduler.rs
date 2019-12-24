@@ -120,7 +120,9 @@ pub fn run_next(must_switch: bool)
 /* perform any housekeeping duties */
 fn housekeeping()
 {
-    hvdrain!(); /* drain the debug logs to the debug hardware port */
+    /* hook into housekeeping functions here with suitable macros */
+    debughousekeeper!(); /* drain the debug logs to the debug hardware port */
+    physmemhousekeeper!(); /* tidy up any physical memory structures */
 
     /* if the global queues are empty then work out which physical CPU core
     has the most number of virtual cores and is therefore the busiest */

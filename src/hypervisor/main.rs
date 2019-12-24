@@ -47,7 +47,9 @@ mod hardware;   /* parse device trees into hardware objects */
 mod heap;       /* per-CPU private heap management */
 mod abort;      /* implement abort() and panic() handlers */
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
-mod physmem;    /* manage physical memory */
+#[macro_use]
+mod physmem;    /* manage host physical memory */
+mod virtmem;    /* manage capsule virtual memory */
 mod pcore;      /* manage CPU cores */
 mod vcore;      /* virtual CPU core management... */
 mod scheduler;  /* ...and scheduling */
@@ -62,9 +64,9 @@ use pcore::{PhysicalCoreID, BOOT_PCORE_ID};
 mod error;
 use error::Cause;
 
-/* tell Rust to use our Kallocator to allocate and free heap memory.
-while we'll keep track of physical memory, we'll let Rust perform essential
-tasks, such as freeing memory when it's no longer needed, pointer checking, etc */
+/* tell Rust to use our HVallocator to allocate and free heap memory.
+although we'll keep track of physical memory, we'll let Rust perform essential
+tasks, such as dropping objects when it's no longer needed, borrow checking, etc */
 #[global_allocator]
 static HV_HEAP: heap::HVallocator = heap::HVallocator;
 

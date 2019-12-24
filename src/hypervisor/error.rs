@@ -21,6 +21,7 @@ pub enum Cause
     /* capsule services */
     ServiceAlreadyRegistered,
     ServiceNotAllowed,
+    ServiceNotFound,
 
     /* messages */
     MessageBadType,
@@ -31,9 +32,15 @@ pub enum Cause
     HeapNoFreeMem,
     HeapBadSize,
 
-    /* physical memory */
+    /* host physical memory */
     PhysNoRAMFound,
     PhysNotEnoughFreeRAM,
+    PhysRegionCollision,
+    PhysRegionNoMatch,
+    PhysRegionSplitOutOfBounds,
+
+    /* capsule virtual memory */
+    VirtMemPhysNotSet,
 
     /* containers */
     CapsuleIDExhaustion,

@@ -81,7 +81,11 @@ pub fn register(sid: ServiceID, cid: CapsuleID) -> Result<(), Cause>
    <= Ok for success, or an error code for failure */
 pub fn deregister(sid: ServiceID) -> Result<(), Cause>
 {
-    Err(Cause::NotImplemented)
+    match SERVICES.lock().remove(&sid)
+    {
+        None => Err(Cause::ServiceNotFound),
+        _ => Ok(())
+    }
 }
 
 /* send the given message msg to a registered service */
