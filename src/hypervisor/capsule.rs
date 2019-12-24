@@ -314,6 +314,9 @@ pub fn map_memory(cid: CapsuleID, to_map: Mapping) -> Result<(), Cause>
 */
 pub fn enforce(id: CapsuleID) -> bool
 {
+    /* this is a filthy hardcode hack that I hate but it's needed for now */
+    let mut index = 0;
+
     match CAPSULES.lock().entry(id)
     {
         Occupied(c) => 
@@ -322,7 +325,13 @@ pub fn enforce(id: CapsuleID) -> bool
             {
                 if let Some(r) = mapping.get_physical()
                 {
-                    r.grant_access(); 
+                    if index > 0
+                    {
+                        panic!("TODO / FIXME: Capsules can't have more than one physical RAM region");
+                    }
+
+                    r.grant_access();
+                    index = index + 1;
                 }
             }
             return true
