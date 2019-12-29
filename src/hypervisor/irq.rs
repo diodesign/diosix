@@ -5,6 +5,8 @@
  * See LICENSE for usage and copying.
  */
 
+ #[macro_use]
+use super::debug;
 use super::scheduler;
 use super::capsule;
 use super::pcore;
@@ -76,14 +78,13 @@ fn exception(irq: IRQ)
         /* catch everything else, halting if fatal */
         (fatal, privilege, cause) =>
         {
-            hvalert!(
-                "Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}",
-                privilege, cause, irq.pc, irq.sp);
+            hvalert!("Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}, fatal = {:?}",
+                privilege, cause, irq.pc, irq.sp, fatal);
+            debughousekeeper!(); // flush the debug output 
 
             /* stop here if we hit an unhandled fatal exception */
             if fatal == true
             {
-                hvalert!("Halting after unhandled fatal exception");
                 loop {}
             }
         }

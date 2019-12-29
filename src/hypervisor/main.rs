@@ -23,6 +23,7 @@
 /* plug our custom heap allocator into the Rust language: Box, etc */
 #![feature(alloc_error_handler)]
 #![feature(box_syntax)]
+#[macro_use]
 extern crate alloc;
 
 /* needed for fast lookup tables of stuff */
@@ -30,6 +31,9 @@ extern crate hashbrown;
 
 /* needed for elf parsing */
 extern crate xmas_elf;
+
+/* needed for device tree parsing and manipulation */
+extern crate devicetree;
 
 /* needed for lazyily-allocated static variables, and atomic ops */
 #[macro_use]
@@ -83,17 +87,17 @@ in future, we may support 16- or 128-bit, too. stick to usize as much as possibl
    This is the official entry point of the Rust-level hypervisor.
    Call hvmain, which is where all the real work happens, and catch any errors.
    => cpu_nr = this boot-assigned CPU ID number
-      device_tree_ptr = pointer to start of device tree structure
+      dtb = pointer to start of device tree blob structure
    <= return to infinite loop, awaiting interrupts */
 #[no_mangle]
-pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, device_tree_ptr: &u8)
+pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBlob)
 {
     /* carry out tests if that's what we're here for */
     #[cfg(test)]
     hvtests();
 
     /* if not then start the system as normal */
-    match hvmain(cpu_nr, device_tree_ptr)
+    match hvmain(cpu_nr, dtb)
     {
         Err(e) => hvalert!("hvmain bailed out with error: {:?}", e),
         _ => () /* continue waiting for an IRQ to come in */
@@ -116,10 +120,10 @@ pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, device_tree_ptr: &u8)
    => cpu_nr = arbitrary CPU core ID number assigned by boot code,
                separate from hardware ID number.
                BOOT_PCORE_ID = boot CPU core.
-      device_tree = ptr to memory containing device tree describing the host hardware
+      dtb = ptr to memory containing device tree blob describing the host hardware
    <= return to infinite loop, waiting for interrupts
 */
-fn hvmain(cpu_nr: PhysicalCoreID, device_tree: &u8) -> Result<(), Cause>
+fn hvmain(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBlob) -> Result<(), Cause>
 {
     /* set up each physical processor core with its own private heap pool and any other resources.
     each private pool uses physical memory assigned by the pre-hvmain boot code. init() should be called
@@ -135,7 +139,7 @@ fn hvmain(cpu_nr: PhysicalCoreID, device_tree: &u8) -> Result<(), Cause>
             /* process device tree to create data structures representing system hardware,
             allowing these peripherals to be accessed by subsequent routines. this should
             also initialize any found hardware */
-            hardware::parse_and_init(device_tree)?;
+            hardware::parse_and_init(dtb)?;
             hardware::debug_print();
 
             physmem::init()?; /* register all the available physical RAM */

@@ -6,6 +6,7 @@
  */
 
 use spin::Mutex;
+use devicetree;
 use platform::devices::Devices;
 use platform::physmem::RAMAreaIter;
 use super::error::Cause;
@@ -28,9 +29,9 @@ lazy_static!
    => device_tree = pointer to device tree in physical memory
    <= return Ok for success, or error code on failure
 */
-pub fn parse_and_init(device_tree: &u8) -> Result<(), Cause>
+pub fn parse_and_init(dtb: &devicetree::DeviceTreeBlob) -> Result<(), Cause>
 {
-    match Devices::new(device_tree)
+    match Devices::new(dtb)
     {
         Some(d) =>
         {

@@ -14,7 +14,11 @@ path = "src/hypervisor/main.rs"
 [build-dependencies]
 regex = "1.3.1"
 
-# fixed dependencies
+# local dependencies
+[dependencies]
+devicetree = { path = "src/devicetree" }
+
+# external dependencies
 [dependencies.spin]
 version = "0.5.2"
 
