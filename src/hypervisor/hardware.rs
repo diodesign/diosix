@@ -38,7 +38,11 @@ pub fn parse_and_init(dtb: &devicetree::DeviceTreeBlob) -> Result<(), Cause>
             hvdebug!("Discovered hardware:\n{:?}", d);
             *(HARDWARE.lock()) = Some(d);
         },
-        None => return Err(Cause::DeviceTreeBad)
+        None =>
+        {
+            hvalert!("Failed to parse device tree");
+            return Err(Cause::DeviceTreeBad)
+        }
     };
     return Ok(())
 }
