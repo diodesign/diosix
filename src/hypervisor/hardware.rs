@@ -35,6 +35,7 @@ pub fn parse_and_init(dtb: &devicetree::DeviceTreeBlob) -> Result<(), Cause>
     {
         Some(d) =>
         {
+            hvdebug!("Discovered hardware:\n{:?}", d);
             *(HARDWARE.lock()) = Some(d);
         },
         None => return Err(Cause::DeviceTreeBad)
@@ -51,7 +52,7 @@ enum LockAttempts
 
 /* acquire a lock on HARDWARE. If this CPU core is supposed to be
    holding it already, then bust the lock so that it and others can
-   access it again
+   access it again. See notes above for OWNER.
    => attempts = try just Once or Multiple times to acquire lock
    <= Some MutexGuard containing the device structure, or None for unsuccessful */
 fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'static, core::option::Option<platform::devices::Devices>>>
@@ -88,22 +89,6 @@ fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'sta
             }
         }
     }
-}
-
-/* print a description of the system devices to the debug console */
-pub fn debug_print()
-{
-    let hw = acquire_hardware_lock(LockAttempts::Once);
-    if hw.is_none() == true
-    {
-        return;
-    }
-
-    match &*(hw.unwrap())
-    {
-        Some(hw) => hvlog!("Hardware environment:\n\n{:?}\n", hw),
-        None => ()        
-    };
 }
 
 /* routines to interact with the system's base devices */

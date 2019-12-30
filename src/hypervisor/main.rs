@@ -140,7 +140,6 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBlob) -> Result<()
             allowing these peripherals to be accessed by subsequent routines. this should
             also initialize any found hardware */
             hardware::parse_and_init(dtb)?;
-            hardware::debug_print();
 
             physmem::init()?; /* register all the available physical RAM */
 

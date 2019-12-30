@@ -148,7 +148,7 @@ impl SortedRegions
             }
         }
 
-        /* insert at the end */
+        /* insert at the end: region greater than all others */
         self.regions.push(to_insert);
         Ok(())
     }
