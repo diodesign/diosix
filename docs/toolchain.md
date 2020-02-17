@@ -34,7 +34,7 @@ Step into `src`, use Git to checkout the RISC-V port of Binutils, and step into 
 
 ```
 cd $HOME/src
-git clone https://github.com/riscv/riscv-binutils-gdb.git
+git clone https://github.com/riscv/riscv-binutils-gdb.git -b riscv-binutils-2.33.1
 cd riscv-binutils-gdb
 ```
 

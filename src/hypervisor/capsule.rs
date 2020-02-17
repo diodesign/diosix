@@ -5,14 +5,23 @@
  * See LICENSE for usage and copying.
  */
 
-use platform::physmem::PhysMemSize;
-use super::physmem::{self, Region};
-use super::vcore::{self, Priority};
 use spin::Mutex;
-use super::error::Cause;
 use hashbrown::hash_map::HashMap;
-use hashbrown::hash_map::Entry::Occupied;
+use hashbrown::hash_map::Entry::{Occupied, Vacant};
+use hashbrown::hash_set::HashSet;
+use alloc::vec::Vec;
+use platform::physmem::PhysMemSize;
+use platform::virtmem::VirtMemBase;
+use platform::cpu::Entry;
 use super::loader;
+use super::error::Cause;
+use super::physmem::{self, Region};
+use super::virtmem::Mapping;
+use super::vcore::{self, Priority, VirtualCoreID};
+use super::service::ServiceID;
+use super::pcore::PhysicalCore;
+use super::service;
+use super::message;
 
 pub type CapsuleID = usize;
 
@@ -29,34 +38,163 @@ lazy_static!
     static ref CAPSULES: Mutex<HashMap<CapsuleID, Capsule>> = Mutex::new(HashMap::new());
 }
 
-/* create a new capsule for the boot supervisor
-   => size = minimum amount of RAM, in bytes, for this capsule
-      cpus = number of virtual CPU cores to allow
-   <= OK for success or an error code */
-pub fn create_boot_capsule(size: PhysMemSize, cpus: usize) -> Result<(), Cause>
+struct Capsule
 {
-    let ram = physmem::alloc_region(size)?;
-    let capsule = create(ram)?;
+    restart: bool,                          /* true to auto-restart on death */
+    vcores: HashSet<VirtualCoreID>,         /* set of virtual core IDs assigned to this capsule */
+    memory: Vec<Mapping>,                   /* map capsule supervisor virtual addresses to host physical addresses */
+    allowed_services: HashSet<ServiceID>    /* set of services this capsule is allowed to provide */
+}
 
-    let supervisor = physmem::boot_supervisor();
-    let entry = loader::load(ram, supervisor)?;
+impl Capsule
+{
+    /* create a new empty capsule using the current capsule on this physical CPU core.
+    => auto_restart_flag = tue to auto-restart on death by the hypervisor (eg, for the boot capsule)
+    <= capsule object, or error code */
+    pub fn new(auto_restart_flag: bool) -> Result<Capsule, Cause>
+    {
+        Ok(Capsule
+        {
+            restart: auto_restart_flag,
+            vcores: HashSet::new(),
+            memory: Vec::new(),
+            allowed_services: HashSet::new(),
+        })
+    }
+
+    /* add a mapping to this capsule */
+    pub fn set_memory_mapping(&mut self, to_add: Mapping)
+    {
+        self.memory.push(to_add);
+    }
+
+    /* get a copy of the capsule's memory mappings */
+    pub fn get_memory_mappings(&self) -> Vec<Mapping> { self.memory.clone() }
+
+    /* boot capsules are auto-restarted by the hypervisor */
+    pub fn set_auto_restart(&mut self, flag: bool)
+    {
+        self.restart = flag;
+    }
+
+    /* returns true if this will auto-restart, or false if not */
+    pub fn will_auto_restart(&self) -> bool
+    {
+        self.restart
+    }
+
+    /* add a virtual core ID to the capsule */
+    pub fn add_vcore(&mut self, id: VirtualCoreID)
+    {
+        self.vcores.insert(id);
+    }
+
+    /* remove a virtual core ID from the capsule. returns true if that
+       ID was present in the registered list */
+    pub fn remove_vcore(&mut self, id: VirtualCoreID) -> bool
+    {
+        self.vcores.remove(&id)
+    }
+
+    /* return number of registered virtual cores */
+    pub fn count_vcores(&self) -> usize
+    {
+        self.vcores.len()
+    }
+
+    /* allow capsule to register service sid */
+    pub fn allow_service(&mut self, sid: ServiceID)
+    {
+        self.allowed_services.insert(sid);
+    }
+
+    /* check whether this capsule is allowed to register the given service
+        <= true if allowed, false if not */
+    pub fn check_service(&self, sid: ServiceID) -> bool
+    {
+        self.allowed_services.contains(&sid)
+    }
+}
+
+/* handle the destruction of a capsule */
+impl Drop for Capsule
+{
+    fn drop(&mut self)
+    {
+        hvdebug!("Tearing down capsule");
+        
+        /* free up memory... */
+        for mapping in self.memory.clone()
+        {
+            if let Some(r) = mapping.get_physical()
+            {
+                physmem::dealloc_region(r);
+            }
+        }
+
+        /* ...and services held by this capsule */
+        for sid in self.allowed_services.iter()
+        {
+            service::deregister(*sid);
+        }
+    }
+}
+
+/* create the boot capsule, from which all other capsules spawn */
+pub fn create_boot_capsule() -> Result<(), Cause>
+{
+    /* create an auto-restarting capsule */
+    let capid = create(true)?;
+
+    /* reserve 128MB of physical RAM for the capsule */
+    let size = 128 * 1024 * 1024;
+    let cpus = 1;
+    let ram = physmem::alloc_region(size)?;
+
+    /* map that physical memory into the capsule */
+    let mut mapping = Mapping::new();
+    mapping.set_physical(ram);
+    mapping.identity_mapping()?;
+    map_memory(capid, mapping)?;
+
+    /* parse + copy the boot capsule's binary into its physical memory */
+    let phys_binary_location = physmem::boot_supervisor();
+    let entry = loader::load(ram, phys_binary_location)?;
 
     /* create virtual CPU cores for the capsule as required */
-    for vcore in 0..cpus
+    for vcoreid in 0..cpus
     {
-        vcore::VirtualCore::create(capsule, vcore, entry, Priority::High)?;
+        create_and_add_vcore(capid, vcoreid, entry, Priority::High)?;
     }
     Ok(())
 }
 
-/* create a new blank capsule
-   Once created, it needs to be given a supervisor image, at least. then it is ready to be scheduled
-   by assigning it virtual CPU cores.
-   => ram = region of physical RAM reserved for this capsule
-   <= CapsuleID for this new capsule, or an error code */
-fn create(ram: Region) -> Result<CapsuleID, Cause>
+/* create a virtual core and add it to the given capsule
+   => cid = capsule ID
+      vid = virtual core ID
+      entry = starting address for execution of this virtual core
+      prio = priority to run this virtual core
+   <= return Ok for success, or error code
+*/
+pub fn create_and_add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, prio: Priority) -> Result<(), Cause>
 {
-    let new_capsule = Capsule::new(ram)?;
+    vcore::VirtualCore::create(cid, vid, entry, prio)?;
+    match CAPSULES.lock().get_mut(&cid)
+    {
+        Some(c) => c.add_vcore(vid),
+        None => return Err(Cause::CapsuleBadID)
+    };
+    Ok(())
+}
+
+/* create a new blank capsule
+   Once created, it needs to be given a supervisor image, at least.
+   then it is ready to be scheduled by assigning it virtual CPU cores.
+   => auto_restart = true to be auto-restarted by hypervisor
+   <= CapsuleID for this new capsule, or an error code */
+fn create(auto_restart: bool) -> Result<CapsuleID, Cause>
+{
+    let new_capsule = Capsule::new(auto_restart)?;
 
     /* assign a new ID (in the unlikely event the given ID is already in-use, try again) */
     let mut overflowed_already = false;
@@ -70,11 +208,10 @@ fn create(ram: Region) -> Result<CapsuleID, Cause>
         let mut capsules = CAPSULES.lock();
         match capsules.entry(new_id)
         {
-            hashbrown::hash_map::Entry::Vacant(_) =>
+            Vacant(_) =>
             {
                 /* insert our new capsule */
                 capsules.insert(new_id, new_capsule);
-                hvlog!("Created capsule: ID {}, physical RAM base 0x{:x}, size {} MiB", new_id, ram.base(), ram.size() / 1024 / 1024);
 
                 /* we're all done here */
                 return Ok(new_id);
@@ -97,37 +234,74 @@ fn create(ram: Region) -> Result<CapsuleID, Cause>
     }
 }
 
-struct Capsule
+/* mark a capsule as dying, meaning its virtual cores will be
+   gradually removed and when there are none left, its RAM
+   and any other resources will be deallocated.
+   => cid = ID of capsule to kill
+   <= Ok for success, or an error code
+*/
+pub fn destroy(cid: CapsuleID) -> Result<(), Cause>
 {
-    ram: Region, /* general purpose RAM area */
-}
-
-impl Capsule
-{
-    /* create a new capsule
-    => ram = region of physical memory the capsule can for general purpose RAM
-    <= capsule object, or error code */
-    pub fn new(ram: Region) -> Result<Capsule, Cause>
+    if let Some(victim) = CAPSULES.lock().remove(&cid)
     {
-        Ok(Capsule
-        {
-            ram: ram
-        })
+        drop(victim); // see above implementation of drop for Capsule
+        Ok(())
     }
-
-    /* describe the physical RAM region of this capsule */
-    pub fn phys_ram(&self) -> Region { self.ram }
+    else
+    {
+        Err(Cause::CapsuleBadID)
+    }
 }
 
-/* lookup the phys RAM region of a capsule from its name
-   <= physical memory region, or None for no such capsule */
-pub fn get_phys_ram(id: CapsuleID) -> Option<Region>
+/* allow a given capsule to offer a given service. if the capsule was already allowed the
+   service then this returns without error.
+    => cid = capsule ID
+       sid = service ID
+    <= Ok for success, or an error code */
+pub fn allow_service(cid: CapsuleID, sid: ServiceID) -> Result<(), Cause>
 {
-    match CAPSULES.lock().entry(id)
+    match CAPSULES.lock().entry(cid)
     {
-        Occupied(c) =>  return Some(c.get().phys_ram()),
-        _ => None
-    }   
+        Occupied(mut c) =>
+        {
+            c.get_mut().allowed_services.insert(sid);
+            Ok(())
+        },
+        Vacant(_) => Err(Cause::CapsuleBadID)
+    }
+}
+
+/* check whether a capsule is allowed to run the given service
+    => cid = capsule ID to check
+       sid = service ID to check
+    <= Some true if the capsule exists and is allowed, or Some false
+        if the capsule exists and is not allowed, or None if
+        the capsule doesn't exist */
+pub fn is_service_allowed(cid: CapsuleID, sid: ServiceID) -> Option<bool>
+{
+    match CAPSULES.lock().entry(cid)
+    {
+        Occupied(c) => Some(c.get().check_service(sid)),
+        Vacant(_) => None
+    }
+}
+
+/* add a memory mapping to a capsule
+   cid = ID of capsule to add the mapping to
+   to_map = memory mapping object to add
+   Ok for success, or an error code
+*/
+pub fn map_memory(cid: CapsuleID, to_map: Mapping) -> Result<(), Cause>
+{
+    if let Occupied(mut c) = CAPSULES.lock().entry(cid)
+    {
+        c.get_mut().set_memory_mapping(to_map);
+        return Ok(());
+    }
+    else
+    {
+        return Err(Cause::CapsuleBadID);
+    }
 }
 
 /* enforce hardware security restrictions for the given capsule.
@@ -140,11 +314,26 @@ pub fn get_phys_ram(id: CapsuleID) -> Option<Region>
 */
 pub fn enforce(id: CapsuleID) -> bool
 {
+    /* this is a filthy hardcode hack that I hate but it's needed for now */
+    let mut index = 0;
+
     match CAPSULES.lock().entry(id)
     {
         Occupied(c) => 
         {
-            c.get().phys_ram().grant_access();
+            for mapping in c.get().get_memory_mappings()
+            {
+                if let Some(r) = mapping.get_physical()
+                {
+                    if index > 0
+                    {
+                        panic!("TODO / FIXME: Capsules can't have more than one physical RAM region");
+                    }
+
+                    r.grant_access();
+                    index = index + 1;
+                }
+            }
             return true
         },
         _ => false

@@ -21,17 +21,15 @@ sudo apt update
 sudo apt -y install build-essential git libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
 ```
 
-Next, enter a directory in which to download the Qemu's source code, then fetch the code and build it. These commands will use `src` within your home directory, and build just 32-bit and 64-bit RISC-V system emulators:
+Next, enter a directory in which to download the Qemu's source code, then fetch the latest code and build it. These commands will use `src` within your home directory, and build just 32-bit and 64-bit RISC-V system emulators:
 
 ```
 mkdir -p $HOME/src
-git clone https://github.com/diodesign/qemu.git
+git clone -b master https://github.com/qemu/qemu.git
 cd qemu
 ./configure --target-list=riscv32-softmmu,riscv64-softmmu
 make
 ```
-
-Note: the above commands use a fork of Qemu maintained alongside the Diosix project to ensure any bug fixes and other patches not yet upstreamed are used with the hypervisor.
 
 Two Qemu executable files are built by the above compilation process: `riscv32-softmmu/qemu-system-riscv32` for emulating 32-bit RISC-V systems, and `riscv64-softmmu/qemu-system-riscv64` for 64-bit RISC-V systems, both within the Qemu source directory. Diosix assumes it can find `qemu-system-riscv32` and `qemu-system-riscv64` in your `PATH` environment variable. To ensure these executable files can be located and used in future shell sessions, you need to update your shell's configuration files so that `PATH` automatically includes the location of these system emulators when you open a new session.
 

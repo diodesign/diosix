@@ -38,7 +38,7 @@ struct Target
     pub target: String,      /* full target name */
     pub cpu_arch: String,    /* define the CPU architecture to generate code for */
     pub gnu_prefix: String,  /* locate the GNU as and ar tools */ 
-    pub platform: String,    /* locate the platform directory */
+    pub platform: String,    /* locate the tail of the platform directory in src, eg riscv for src/platform-riscv */
     pub width: usize,        /* pointer width in bits */
     pub abi: String          /* define the ABI for this target */
 }
@@ -130,10 +130,10 @@ fn main()
     };
 
     /* tell cargo to rebuild if linker file changes */
-    println!("cargo:rerun-if-changed=src/platform/{}/link.ld", &target.platform);
+    println!("cargo:rerun-if-changed=src/platform-{}/link.ld", &target.platform);
 
     /* assemble the platform-specific assembly code */
-    assemble_directory(format!("src/platform/{}/asm", &target.platform), &mut context);
+    assemble_directory(format!("src/platform-{}/asm", &target.platform), &mut context);
 
     /* package up all the generated object files into an archive and link against it */
     link_archive(&mut context);
@@ -264,7 +264,7 @@ fn assemble_directory(slurp_from: String, context: &mut Context)
 fn assemble(path: &str, mut context: &mut Context)
 {
     /* create name from .s source file's path - extract just the leafname and drop the
-    file extension. so extract 'start' from 'src/platform/blah/asm/start.s' */
+    file extension. so extract 'start' from 'src/platform-blah/asm/start.s' */
     let re = Regex::new(r"(([A-Za-z0-9_]+)(/))+(?P<leaf>[A-Za-z0-9]+)(\.s)").unwrap();
     let matches = re.captures(&path);
     if matches.is_none() == true

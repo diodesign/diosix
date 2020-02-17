@@ -9,8 +9,23 @@
 #[derive(Debug)]
 pub enum Cause
 {
-    /* debug */
-    DebugFailure,
+    /* misc */
+    NotImplemented,
+
+    /* devices */
+    DeviceTreeBad,
+
+    /* physical CPU cores */
+    PhysicalCoreBadID,
+    PhysicalCoreCountUnknown,
+
+    /* capsule services */
+    ServiceAlreadyRegistered,
+    ServiceNotAllowed,
+    ServiceNotFound,
+
+    /* messages */
+    MessageBadType,
 
     /* heap */
     HeapNotInUse,
@@ -18,19 +33,22 @@ pub enum Cause
     HeapNoFreeMem,
     HeapBadSize,
 
-    /* physical memory */
-    PhysMemBadConfig,
+    /* host physical memory */
+    PhysNoRAMFound,
     PhysNotEnoughFreeRAM,
+    PhysRegionCollision,
+    PhysRegionNoMatch,
+    PhysRegionSplitOutOfBounds,
 
-    /* CPU handling */
-    CPUBadConfig,
+    /* capsule virtual memory */
+    VirtMemPhysNotSet,
 
     /* containers */
     CapsuleIDExhaustion,
     CapsuleBadID,
 
     /* scheduler and timer */
-    SchedTimerBadConfig,
+    SchedNoTimer,
     
     /* supervisor binary loading */
     LoaderSupervisorTooLarge,

@@ -1,15 +1,17 @@
 /* diosix heap management
  *
- * Simple heap manager that is lock-free for free()
- * but requires a lock to alloc(), or only allow
- * one allocator and multiple free()ers per heap.
- * For exsmple: a per-CPU heap in which the owner
- * CPU can allocate from its own heap pool, and
- * share these pointers with any CPU, and any
- * CPU can free back to the owner's heap pool.
- *  
- * Interfaces with Rust's global allocator API
- * so things like vec! and Box work. Heap is
+ * Simple heap manager. It allows one allocator and multiple
+ * free()ers per CPU heap. This means a CPU can allocate only from
+ * its own heap pool, and share these pointers with any CPU.
+ * Any CPU can free them back to the owner's heap pool when
+ * they are done with these allocations.
+ * 
+ * We use Rust's memory safety features to prevent any
+ * use-after-free(). Blocks are free()'d atomically
+ * preventing any races.
+ * 
+ * This code interfaces with Rust's global allocator API
+ * so things like vec! and Box just work. Heap is
  * the underlying engine for kAllocator.
  * 
  * (c) Chris Williams, 2019.
@@ -21,8 +23,9 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
 use core::mem;
 use core::result::Result;
-use super::error::Cause;
 use platform::physmem::{barrier, PhysMemSize};
+use super::error::Cause;
+use super::pcore;
 
 /* different states each recognized heap block can be in */
 #[repr(C)]
@@ -46,13 +49,9 @@ unsafe impl GlobalAlloc for HVallocator
     unsafe fn alloc(&self, layout: Layout) -> *mut u8
     {
         let bytes = layout.size();
-        match (*<super::cpu::Core>::this()).heap.alloc::<u8>(bytes)
+        match (*<super::pcore::PhysicalCore>::this()).heap.alloc::<u8>(bytes)
         {
-            Ok(p) => 
-            {
-                hvdebug!("heap: allocating {:p}, {} bytes", p, bytes);
-                p
-            },
+            Ok(p) => p,
             Err(e) =>
             {
                 hvalert!("HVallocator: request for {} bytes failed ({:?})", bytes, e);
@@ -63,8 +62,7 @@ unsafe impl GlobalAlloc for HVallocator
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout)
     {
-        hvdebug!("heap: freeing {:p}", ptr);
-        match (*<super::cpu::Core>::this()).heap.free::<u8>(ptr)
+        match (*<super::pcore::PhysicalCore>::this()).heap.free::<u8>(ptr)
         {
             Err(e) =>
             {
@@ -105,7 +103,7 @@ impl Heap
     /* initialize this heap area. start off with one giant block
     covering all of free space, from which other blocks will be carved.
     => start = pointer to start of heap area
-       size = size of available bytes in heap */
+       size = number of available bytes in heap */
     pub fn init(&mut self, start: *mut HeapBlock, size: PhysMemSize)
     {
         /* here's our enormo free block */
@@ -233,7 +231,7 @@ impl Heap
     }
 
     /* pass once over the heap and try to merge adjacent blocks
-    <= size of the lagrest block seen, in bytes including header */
+    <= size of the largest block seen, in bytes including header */
     fn consolidate(&mut self) -> PhysMemSize
     {
         let mut largest_merged_block: PhysMemSize = 0;

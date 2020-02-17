@@ -26,7 +26,9 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
         Ok(elf) => elf,
         Err(s) =>
         {
-            hvlog!("Failed to parse supervisor ELF (source physical RAM base 0x{:x}, size {} MiB): {}", source.base(), source.size() / 1024 / 1024, s);
+            hvalert!("Failed to parse supervisor ELF (source physical RAM base 0x{:x}, size {} MiB): {}",
+                     source.base(), source.size() / 1024 / 1024, s);
+
             return Err(Cause::LoaderUnrecognizedSupervisor);
         }
     };
@@ -61,12 +63,12 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
                         if entry_virtual >= ph.virtual_addr() && entry_virtual < ph.virtual_addr() + ph.mem_size()
                         {
                             entry_physical = Some((((entry_virtual as u64) - ph.virtual_addr()) + target_base) as usize);
-                            hvlog!("Translated supervisor virtual entry point 0x{:x} to 0x{:x} in physical RAM",
-                                entry_virtual, entry_physical.unwrap());
+                            hvdebug!("Translated supervisor virtual entry point 0x{:x} to 0x{:x} in physical RAM",
+                                     entry_virtual, entry_physical.unwrap());
                         }
 
-                        hvlog!("Loading supervisor ELF program area: 0x{:x} size 0x{:x} into 0x{:x}",
-                               ph.offset() + source_base, ph.file_size(), ph.physical_addr() + target_base);
+                        hvdebug!("Loading supervisor ELF program area: 0x{:x} size 0x{:x} into 0x{:x}",
+                                 ph.offset() + source_base, ph.file_size(), ph.physical_addr() + target_base);
                         unsafe
                         {
                             /* definition is: copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize) */

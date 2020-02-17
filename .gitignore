@@ -10,9 +10,6 @@
 *.elf
 .DS_Store
 
-# ignore Cargo metadata
-*.lock
-
 # ignore compiler output directories
 target/
 

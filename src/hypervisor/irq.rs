@@ -5,7 +5,11 @@
  * See LICENSE for usage and copying.
  */
 
+ #[macro_use]
+use super::debug;
 use super::scheduler;
+use super::capsule;
+use super::pcore;
 
 /* platform-specific code must implement all this */
 use platform;
@@ -37,23 +41,54 @@ fn exception(irq: IRQ)
         /* catch non-fatal supervisor-level exceptions */
         (false, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            hvlog!("Environment call from supervisor")
+            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+            {
+                hvdebug!("Environment call from supervisor-mode capsule ID {}", c);
+            }
+            else
+            {
+                hvalert!("BUG: Environment call from supervisor mode but no capsule found");
+            }
         },
+
+        /* catch fatal supervisor-level exceptions */
+        (true, PrivilegeMode::Supervisor, cause) =>
+        {
+            hvalert!(
+                "Fatal exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}",
+                PrivilegeMode::Supervisor, cause, irq.pc, irq.sp);
+
+            /* terminate the capsule running on this core */
+            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+            {
+                if capsule::destroy(c).is_ok() != true
+                {
+                    hvalert!("BUG: Could not kill capsule ID {}", c);
+                }
+            }
+            else
+            {
+                hvalert!("BUG: Exception in supervisor mode but no capsule found");
+            }
+
+            /* force a context switch */
+            scheduler::run_next(true);
+        },
+
         /* catch everything else, halting if fatal */
         (fatal, privilege, cause) =>
         {
-            hvalert!(
-                "Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}",
-                privilege, cause, irq.pc, irq.sp);
+            hvalert!("Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}, fatal = {:?}",
+                privilege, cause, irq.pc, irq.sp, fatal);
+            debughousekeeper!(); // flush the debug output 
 
             /* stop here if we hit an unhandled fatal exception */
             if fatal == true
             {
-                hvalert!("Halting after unhandled fatal exception");
                 loop {}
             }
         }
-    }
+    };
 }
 
 /* handle hardware interrupt */
@@ -61,13 +96,10 @@ fn interrupt(irq: IRQ)
 {
     match irq.cause
     {
-        /* handle our scheduler's timer */
-        IRQCause::HypervisorTimer =>
-        {
-            scheduler::timer_irq();
-        },
-        _ => { hvlog!("Unhandled harwdare interrupt: {:?}", irq.cause) }
-    }
+        /* handle our scheduler's timer by picking another thing to run, if possible */
+        IRQCause::HypervisorTimer => scheduler::run_next(false), 
+        _ => hvdebug!("Unhandled hardware interrupt: {:?}", irq.cause)
+    };
 
     /* clear the interrupt condition */
     platform::irq::acknowledge(irq);

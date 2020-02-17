@@ -26,7 +26,7 @@ cd diosix
 To build the hypervisor for a particular CPU architecture, use `cargo build`, with `<target>` specifying the architecture you wish to support:
 
 ```
-cargo build --release --target <target>
+cargo build --target <target>
 ```
 
 This not only compiles the hypervisor, it also links the boot capsule kernel, which should contain an initial filesystem, to form the single executable `target/<target>/release/hypervisor`. If a boot capsule kernel cannot be found, an error will be raised. If no `<target>` is supplied on the `cargo` command line, the default, `riscv64gc-unknown-none-elf`, is used. Essentially, this command generates a build of the hypervisor that can bring up systems, physical or emulated, that use the chosen supported CPU architecture.
@@ -47,7 +47,7 @@ Use `cargo clean` to delete hypervisor builds, and their intermediate files, whi
 To go straight to running the hypervisor within the Qemu emulator, use `cargo run` with a given `<target>`:
 
 ```
-cargo run --release --target <target>
+cargo run --target <target>
 ```
 
 This will automatically build the hypervisor, as described above, if one has not been compiled yet. The hypervisor will run within a Qemu Virt-type system with 512MiB of RAM and four CPU cores, with the terminal connected to the emulated hardware's serial port for debugging and communication. Press `control-a` followed by `c` to open the Qemu command console, and then type `q` and hit `enter` to end the emulation. See Diosix's [Qemu documentation](qemu.md) for more information on using the emulator.
@@ -55,7 +55,7 @@ This will automatically build the hypervisor, as described above, if one has not
 Finally, to run Diosix's built-in tests, using Qemu, use, with `<target>` specifying the CPU architecture:
 
 ```
-cargo test --release --target <target>
+cargo test --target <target>
 ```
 
 This will terminate silently with no error, and an exit code of 0, if all tests pass, or a failure code if a test fails. These automated tests are in their infancy; any contributed tests will be most welcome.
