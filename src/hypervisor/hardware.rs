@@ -1,14 +1,15 @@
 /* diosix abstracted hardware manager
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020
  *
  * See LICENSE for usage and copying.
  */
 
+use alloc::vec::Vec;
 use spin::Mutex;
 use devicetree;
 use platform::devices::Devices;
-use platform::physmem::RAMAreaIter;
+use platform::physmem::RAMArea;
 use super::error::Cause;
 use super::pcore;
 
@@ -31,20 +32,16 @@ lazy_static!
 */
 pub fn parse_and_init(dtb: &devicetree::DeviceTreeBlob) -> Result<(), Cause>
 {
-    match Devices::new(dtb)
+    if let Ok(dt) = Devices::new(dtb)
     {
-        Some(d) =>
-        {
-            hvdebug!("Discovered hardware:\n{:?}", d);
-            *(HARDWARE.lock()) = Some(d);
-        },
-        None =>
-        {
-            hvalert!("Failed to parse device tree");
-            return Err(Cause::DeviceTreeBad)
-        }
-    };
-    return Ok(())
+        /* hvdebug!("Devices:\n{:x?}\n\n", dt); */ /* uncomment to see parsed device tree */
+        *(HARDWARE.lock()) = Some(dt);
+        return Ok(())
+    }
+    else
+    {
+        return Err(Cause::DeviceTreeBad);
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -119,9 +116,19 @@ pub fn write_debug_string(msg: &str) -> bool
     }
 }
 
-/* return an iterator for the physical RAM areas we can use for any purpose,
+/* return number of discovered logical CPU cores, or None if value unavailable */
+pub fn get_nr_cpu_cores() -> Option<usize>
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => Some(d.get_nr_cpu_cores()),
+        None => None
+    }
+}
+
+/* return a list of the physical RAM chunks present in the system,
 or None if we can't read the available memory */
-pub fn get_phys_ram_areas() -> Option<RAMAreaIter>
+pub fn get_phys_ram_chunks() -> Option<Vec<platform::physmem::RAMArea>>
 {
     match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
     {

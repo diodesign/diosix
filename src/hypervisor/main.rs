@@ -145,7 +145,7 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBlob) -> Result<()
 
             /* say hello via the debug port */
             hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-            hvdebug!("Debugging enabled");
+            hvdebug!("Debugging enabled, {} CPU cores found", hardware::get_nr_cpu_cores().unwrap_or(0));
 
             /* initialize boot capsule */
             capsule::create_boot_capsule()?;
@@ -159,7 +159,7 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBlob) -> Result<()
     }
 
     /* acknowledge we're alive and well, and report CPU core features */
-    hvlog!("Physical CPU core {:?} ready to roll", pcore::PhysicalCore::describe());
+    hvdebug!("Physical CPU core {:?} ready to roll", pcore::PhysicalCore::describe());
 
     /* enable timer on this physical CPU core to start scheduling and running virtual cores */
     scheduler::start()?;

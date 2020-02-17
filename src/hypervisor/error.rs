@@ -17,6 +17,7 @@ pub enum Cause
 
     /* physical CPU cores */
     PhysicalCoreBadID,
+    PhysicalCoreCountUnknown,
 
     /* capsule services */
     ServiceAlreadyRegistered,

@@ -12,7 +12,7 @@
 use platform;
 use spin::Mutex;
 use alloc::vec::Vec;
-use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions};
+use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions, validate_ram};
 use super::error::Cause;
 use super::hardware;
 
@@ -179,22 +179,36 @@ impl SortedRegions
     }
 }
 
-/* initialize the physical memory system by registering all available RAM as allocatable regions */
+/* initialize the physical memory system by registering all physical RAM available for use as allocatable regions */
 pub fn init() -> Result<(), Cause>
 {
-    let mut regions = REGIONS.lock();
-    match hardware::get_phys_ram_areas()
+    /* we need to know the CPU count so that any memory preallocated or reserved for the cores can be skipped */
+    let nr_cpu_cores = match hardware::get_nr_cpu_cores()
     {
-        Some(ram_areas) => 
+        Some(c) => c,
+        None => return Err(Cause::PhysicalCoreCountUnknown)
+    };
+
+    /* the device tree defines chunks of memory that may or may not be entirely available for use */
+    let chunks = match hardware::get_phys_ram_chunks()
+    {
+        Some(c) => c,
+        None => return Err(Cause::PhysNoRAMFound)
+    };
+
+    /* iterate over the physical memory chunks... */
+    let mut regions = REGIONS.lock();
+    for chunk in chunks
+    {
+        /* ...and let validate_ram break each chunk in sections we can safely use */
+        for section in validate_ram(nr_cpu_cores, chunk)
         {
-            for area in ram_areas
-            {
-                regions.insert(Region::new(area.base, area.size));
-            }
-            Ok(())
-        },
-        None => Err(Cause::PhysNoRAMFound)
+            hvdebug!("Enabling RAM region 0x{:x}, size {} MB", section.base, section.size / 1024 / 1024);
+            regions.insert(Region::new(section.base, section.size));
+        }
     }
+
+    Ok(())
 }
 
 /* perform housekeeping duties on idle physical CPU cores */
