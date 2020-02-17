@@ -31,27 +31,21 @@ Once you have everything in place, you can run Diosix in Qemu, or on real hardwa
 
 ```
 $ cargo run
-    Finished dev [unoptimized + debuginfo] target(s) in 12.33s
+    Finished dev [unoptimized + debuginfo] target(s) in 0.02s
      Running `qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel target/riscv64gc-unknown-none-elf/debug/hypervisor`
-[-] CPU 0: Hardware environment:
-
- * Debug console (serial port) at 0x10000000
- * 512 MiB of physical RAM available at 0x80000000
- * 10000000 Hz fixed timer(s) using CLINT at 0x2000000
- * 4 physical CPU cores
-
+[?] CPU 0: Enabling RAM region 0x80ded000, size 498 MB
 [-] CPU 0: Welcome to diosix 2.0.0
-[?] CPU 0: Debugging enabled
-[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x80dcc000 in physical RAM
-[?] CPU 0: Loading supervisor ELF program area: 0x80046208 size 0x1e620 into 0x80dcc000
-[?] CPU 0: Loading supervisor ELF program area: 0x80065208 size 0xa2c0bc into 0x80deb000
-[-] CPU 0: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[-] CPU 1: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[-] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[-] CPU 2: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 0: Debugging enabled, 4 CPU cores found
+[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x80ded000 in physical RAM
+[?] CPU 0: Loading supervisor ELF program area: 0x80066fb8 size 0x1e620 into 0x80ded000
+[?] CPU 0: Loading supervisor ELF program area: 0x80085fb8 size 0xa2c0bc into 0x80e0c000
+[?] CPU 0: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 1: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 2: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 0: Running vcore 0 in capsule 1
-[?] CPU 0: Granting ReadWriteExecute access to 0x80dcc000, 134217728 bytes
-[!] CPU 0: Fatal exception in Supervisor: Breakpoint at 0x80dce8c8, stack 0x816f1ff0
+[?] CPU 0: Granting ReadWriteExecute access to 0x80ded000, 134217728 bytes
+[!] CPU 0: Fatal exception in Supervisor: Breakpoint at 0x80def8c8, stack 0x81712ff0
 [?] CPU 0: Tearing down capsule
 ```
 
