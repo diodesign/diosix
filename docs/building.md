@@ -8,6 +8,7 @@ These instructions assume you know your way around a Linux or Unix-like system, 
 
 1. [Getting started](#start)
 1. [Building the hypervisor](#build)
+1. [Common errors](#errors)
 1. [Running the hypervisor, including tests](#run)
 
 ### Getting started <a name="start"></a>
@@ -41,6 +42,21 @@ Below is a list of supported targets, known as target triples in Rust jargon, an
 
 
 Use `cargo clean` to delete hypervisor builds, and their intermediate files, while leaving the source code untouched, so that the subsequent build occurs afresh. This command should not normally be necessary and is mentioned here for completeness. If a build unexpectedly fails, trying cleaning it out, and starting again with `cargo clean` followed by the desired `cargo build` command.
+
+### 'Expected boot capsule supervisor ... can't find it' <a name="errors"></a>
+
+If you encounter this error after running `cargo build`, the Diosix build system could not find a guest kernel and filesystem binary in its `boot/binaries` directory to boot.
+
+Follow the instructions to build a Linux guest [kernel and filesystem](buildroot.md), or use a [prebuilt](https://github.com/diodesign/diosix/tree/boot-binaries/boot/binaries) kernel and filesystem. Ensure the combined kernel and filesystem binary is stored at `boot/binaries/<arch>/supervisor` where `<arch>` is the architecture targeted in this build, such as `riscv32imac`, `riscv64imac`, or `riscv64gc`.
+
+For example, if you are missing `boot/binaries/riscv64gc/supervisor`, run these commands:
+
+```
+mkdir -p boot/binaries/riscv64gc
+wget -O boot/binaries/riscv64gc/supervisor https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64gc/supervisor
+```
+
+Then re-run `cargo build`. Note: these prebuilt kernel and filesystem binaries are for testing purposes only. They are not frequently updated. It is highly recommended you follow the instructions to build fresh kernel and filesystem binaries.
 
 ### Running the hypervisor, including tests <a name="run"></a>
 
