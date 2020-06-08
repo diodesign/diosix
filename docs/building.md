@@ -17,7 +17,7 @@ First, open a terminal, and fetch the latest Diosix source code, and enter its d
 ```
 mkdir -p $HOME/src
 cd $HOME/src
-git clone https://github.com/diodesign/diosix.git
+git clone --recurse-submodules https://github.com/diodesign/diosix.git
 cd diosix
 ```
 
