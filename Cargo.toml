@@ -12,7 +12,7 @@ name = "hypervisor"
 path = "src/hypervisor/main.rs"
 
 [build-dependencies]
-regex = "1.3.1"
+regex = "1.3.7"
 
 # local dependencies
 [dependencies]
@@ -23,7 +23,7 @@ devicetree = { path = "src/devicetree" }
 version = "0.5.2"
 
 [dependencies.hashbrown]
-version = "0.6.3"
+version = "0.7.2"
 features = [ "nightly" ]
 
 [dependencies.lazy_static]

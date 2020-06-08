@@ -4,3 +4,6 @@
 [submodule "src/devicetree"]
 	path = src/devicetree
 	url = https://github.com/diodesign/devicetree.git
+[submodule "src/byterider"]
+	path = src/byterider
+	url = https://github.com/diodesign/byterider.git
