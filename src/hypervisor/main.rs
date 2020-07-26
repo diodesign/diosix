@@ -1,6 +1,6 @@
 /* diosix hypervisor main entry code
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -23,8 +23,10 @@
 /* plug our custom heap allocator into the Rust language: Box, etc */
 #![feature(alloc_error_handler)]
 #![feature(box_syntax)]
-#[macro_use]
 extern crate alloc;
+
+/* needed to convert raw dtb pointer into a slice */
+use core::slice;
 
 /* needed for fast lookup tables of stuff */
 extern crate hashbrown;
@@ -87,19 +89,25 @@ in future, we may support 16- or 128-bit, too. stick to usize as much as possibl
    This is the official entry point of the Rust-level hypervisor.
    Call hvmain, which is where all the real work happens, and catch any errors.
    => cpu_nr = this boot-assigned CPU ID number
-      dtb = pointer to start of device tree blob structure
+      dtb_ptr = pointer to start of device tree blob structure
+      dtb_len = 32-bit big-endian length of the device tree blob
    <= return to infinite loop, awaiting interrupts */
 #[no_mangle]
-pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBlob)
+pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32)
 {
     /* carry out tests if that's what we're here for */
     #[cfg(test)]
     hvtests();
 
+    /* convert the dtb pointer into a slice: get this unsafe operation out of
+    the way here so the rest of the hypervisor can parse the blob in
+    a safe manner, assuming dtb_len is valid */
+    let dtb = unsafe { slice::from_raw_parts(dtb_ptr, u32::from_be(dtb_len) as usize) };
+
     /* if not then start the system as normal */
     match hvmain(cpu_nr, dtb)
     {
-        Err(e) => hvalert!("hvmain bailed out with error: {:?}", e),
+        Err(e) => hvalert!("Hypervisor failed to start. Reason: {:?}", e),
         _ => () /* continue waiting for an IRQ to come in */
     };
 }
@@ -120,10 +128,10 @@ pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBl
    => cpu_nr = arbitrary CPU core ID number assigned by boot code,
                separate from hardware ID number.
                BOOT_PCORE_ID = boot CPU core.
-      dtb = ptr to memory containing device tree blob describing the host hardware
+      dtb = byte slice containing device tree blob describing the host hardware
    <= return to infinite loop, waiting for interrupts
 */
-fn hvmain(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBlob) -> Result<(), Cause>
+fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
 {
     /* set up each physical processor core with its own private heap pool and any other resources.
     each private pool uses physical memory assigned by the pre-hvmain boot code. init() should be called
@@ -172,9 +180,10 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &devicetree::DeviceTreeBlob) -> Result<()
 
 /* mandatory error handler for memory allocations */
 #[alloc_error_handler]
-fn kalloc_error(attempt: core::alloc::Layout) -> !
+fn hvalloc_error(attempt: core::alloc::Layout) -> !
 {
-    hvalert!("alloc_error_handler: Failed to allocate/free {} bytes. Halting...", attempt.size());
+    let heap = &(*<pcore::PhysicalCore>::this()).heap;
+    hvalert!("hvalloc_error: Failed to allocate/free {} bytes. Heap: {:?}", attempt.size(), heap);
     loop {} /* it would be nice to be able to not die here :( */
 }
 

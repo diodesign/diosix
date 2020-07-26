@@ -1,12 +1,12 @@
 /* diosix capsule-provided service management
 
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
 
 use spin::Mutex;
-use hashbrown::hash_map::{self, HashMap, Entry};
+use hashbrown::hash_map::{HashMap, Entry};
 use alloc::collections::vec_deque::VecDeque;
 use super::message;
 use super::error::Cause;

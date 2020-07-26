@@ -1,17 +1,16 @@
 /* diosix hypervisor's system for passing messages between physical CPU cores and services
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
 
 use spin::Mutex;
 use alloc::collections::vec_deque::VecDeque;
-use hashbrown::hash_map::{self, HashMap};
+use hashbrown::hash_map::HashMap;
 use super::error::Cause;
 use super::service::{self, ServiceID};
 use super::capsule::CapsuleID;
-use super::vcore::VirtualCoreID;
 use super::pcore::{PhysicalCoreID, PhysicalCore};
 
 /* here's how message passing works, depending on the target:
@@ -149,7 +148,7 @@ pub fn send(msg: Message) -> Result<(), Cause>
         },
 
         /* send to a service */
-        Recipient::Service(sid) =>
+        Recipient::Service(_) =>
         {
             return service::send(msg);
         }

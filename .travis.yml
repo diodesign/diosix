@@ -17,9 +17,9 @@ install:
   # build the GNU binary tools for 64-bit RISC-V targets
   #
   - mkdir -p $HOME/cross
-  - git clone -q -b riscv-binutils-2.32 https://github.com/riscv/riscv-binutils-gdb.git
-  - cd riscv-binutils-gdb
-  - ./configure -q --prefix $HOME/cross --target=riscv64-elf
+  - git clone -q https://sourceware.org/git/binutils-gdb.git
+  - cd binutils-gdb
+  - ./configure -q --prefix $HOME/cross --target=riscv64-linux --disable-unit-tests
   - make -s
   - make -s install
   #
@@ -27,7 +27,7 @@ install:
   #
   - make -s clean
   - find . -type f -name "config.cache" -exec rm {} \;
-  - ./configure -q --prefix $HOME/cross --target=riscv32-elf
+  - ./configure -q --prefix $HOME/cross --target=riscv32-linux --disable-unit-tests
   - make -s
   - make -s install
   - export PATH=$PATH:$HOME/cross/bin

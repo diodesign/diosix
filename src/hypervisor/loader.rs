@@ -1,6 +1,6 @@
 /* diosix high-level hypervisor loader code for supervisor
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -53,7 +53,7 @@ pub fn load(target: Region, source: Region) -> Result<Entry, Cause>
                 {
                     Ok(xmas_elf::program::Type::Load) =>
                     {
-                        /* sanity check: target must be able to hold supervisor */
+                        /* check: target must be able to hold supervisor */
                         if (target_base + ph.offset() + ph.mem_size()) > target_end
                         {
                             return Err(Cause::LoaderSupervisorTooLarge);

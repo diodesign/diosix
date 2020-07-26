@@ -6,7 +6,7 @@
  * For example: building a RISC-V kernel on an X86-64 server requires a toolchain that
  * can output code for both architectures, and outputs X86-64 by default.
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -102,12 +102,21 @@ fn main()
     /* create a shared context describing this build */
     let mut context = Context
     {
+        /* we use -linux- because Rust by default, with no workable opt-out, forces* the
+        generation of EH frames (for exception unwinding) in ELF binaries. RISC-V binutils
+        doesn't support EH frames for bare-metal targets so we'll have to piggyback on
+        the Linux toolchain. It's no big deal because we ultimately act like a Linux kernel
+        anyway so that we're accepted by hardware firmware bootloaders.
+        
+        * https://github.com/rust-lang/rust/pull/73564
+        */
+
         output_dir: env::var("OUT_DIR").expect("No output directory specified"),
         objects: HashSet::new(),
-        as_exec: String::from(format!("{}-elf-as", target.gnu_prefix)),
-        ar_exec: String::from(format!("{}-elf-ar", target.gnu_prefix)),
-        ld_exec: String::from(format!("{}-elf-ld", target.gnu_prefix)),
-        objcopy_exec: String::from(format!("{}-elf-objcopy", target.gnu_prefix)),
+        as_exec: String::from(format!("{}-linux-as", target.gnu_prefix)),
+        ar_exec: String::from(format!("{}-linux-ar", target.gnu_prefix)),
+        ld_exec: String::from(format!("{}-linux-ld", target.gnu_prefix)),
+        objcopy_exec: String::from(format!("{}-linux-objcopy", target.gnu_prefix)),
         target: &target
     };
 

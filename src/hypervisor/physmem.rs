@@ -4,7 +4,7 @@
  * these regions can be used in 1:1 mappings or used
  * as RAM backing for virtual memory.
  * 
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -63,7 +63,7 @@ impl Region
     portions of the split region, or a failure code */
     pub fn split(&self, count: PhysMemSize) -> Result<(Region, Region), Cause>
     {
-        /* sanity check */
+        /* check the split mark is within bounds */
         if count > self.size
         {
             return Err(Cause::PhysRegionSplitOutOfBounds);
@@ -204,7 +204,7 @@ pub fn init() -> Result<(), Cause>
         for section in validate_ram(nr_cpu_cores, chunk)
         {
             hvdebug!("Enabling RAM region 0x{:x}, size {} MB", section.base, section.size / 1024 / 1024);
-            regions.insert(Region::new(section.base, section.size));
+            regions.insert(Region::new(section.base, section.size))?;
         }
     }
 
@@ -245,20 +245,20 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
             {
                 Ok((lower, upper)) =>
                 {
-                    regions.insert(upper);
+                    regions.insert(upper)?;
                     Ok(lower)
                 },
                 Err(e) => Err(e)
             }
         },
-        Err(e) => Err(Cause::PhysNotEnoughFreeRAM)
+        Err(_) => Err(Cause::PhysNotEnoughFreeRAM)
     }
 }
 
 /* deallocate a region so that its physical RAM can be reallocated
    => to_free = region to deallocate
    <= Ok for success, or an error code for failure */
-pub fn dealloc_region(mut to_free: Region) -> Result<(), Cause>
+pub fn dealloc_region(to_free: Region) -> Result<(), Cause>
 {
     REGIONS.lock().insert(to_free)
 }

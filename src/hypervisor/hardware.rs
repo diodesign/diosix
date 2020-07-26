@@ -1,15 +1,13 @@
 /* diosix abstracted hardware manager
  *
- * (c) Chris Williams, 2019-2020
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
 
 use alloc::vec::Vec;
 use spin::Mutex;
-use devicetree;
 use platform::devices::Devices;
-use platform::physmem::RAMArea;
 use super::error::Cause;
 use super::pcore;
 
@@ -27,14 +25,13 @@ lazy_static!
 /* parse_and_init
    Parse a device tree structure to create a base set of hardware devices.
    also initialize the devices so they can be used.
-   => device_tree = pointer to device tree in physical memory
+   => device_tree = byte slice containing the device tree in physical memory
    <= return Ok for success, or error code on failure
 */
-pub fn parse_and_init(dtb: &devicetree::DeviceTreeBlob) -> Result<(), Cause>
+pub fn parse_and_init(dtb: &[u8]) -> Result<(), Cause>
 {
     if let Ok(dt) = Devices::new(dtb)
     {
-        /* hvdebug!("Devices:\n{:x?}\n\n", dt); */ /* uncomment to see parsed device tree */
         *(HARDWARE.lock()) = Some(dt);
         return Ok(())
     }

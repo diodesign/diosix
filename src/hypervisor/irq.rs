@@ -1,12 +1,10 @@
 /* diosix hypervisor code for handling hardware interrupts and software exceptions
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
 
- #[macro_use]
-use super::debug;
 use super::scheduler;
 use super::capsule;
 use super::pcore;

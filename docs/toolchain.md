@@ -30,18 +30,18 @@ mkdir -p $HOME/src
 mkdir -p $HOME/cross
 ```
 
-Step into `src`, use Git to checkout the RISC-V port of Binutils, and step into the source code directory:
+Step into `src`, use Git to checkout the upstream Binutils source, and step into the source code directory:
 
 ```
 cd $HOME/src
-git clone https://github.com/riscv/riscv-binutils-gdb.git -b riscv-binutils-2.33.1
-cd riscv-binutils-gdb
+git clone https://sourceware.org/git/binutils-gdb.git
+cd binutils-gdb
 ```
 
 Next, configure Binutils to produce a set of tools for 32-bit RISC-V processors, and then build and install those tools in the aforementioned `cross` directory:
 
 ```
-./configure --prefix $HOME/cross --target=riscv32-elf
+./configure --prefix $HOME/cross --target=riscv32-linux --disable-unit-tests
 make
 make install
 ```
@@ -56,7 +56,7 @@ find . -type f -name "config.cache" -exec rm {} \;
 And configure Binutils to produce a set of tools for 64-bit RISC-V processors, and then build and install those tools in the `cross` directory:
 
 ```
-./configure --prefix $HOME/cross --target=riscv64-elf
+./configure --prefix $HOME/cross --target=riscv64-linux --disable-unit-tests
 make
 make install
 ```

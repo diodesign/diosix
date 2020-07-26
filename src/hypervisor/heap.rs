@@ -1,8 +1,7 @@
 /* diosix heap management
  *
- * Simple heap manager. It allows one allocator and multiple
- * free()ers per CPU heap. This means a CPU can allocate only from
- * its own heap pool, and share these pointers with any CPU.
+ * Simple heap manager. A CPU can allocate only from its own
+ * heap pool, though it can share these pointers with any CPU.
  * Any CPU can free them back to the owner's heap pool when
  * they are done with these allocations.
  * 
@@ -12,9 +11,9 @@
  * 
  * This code interfaces with Rust's global allocator API
  * so things like vec! and Box just work. Heap is
- * the underlying engine for kAllocator.
+ * the underlying engine for HVallocator.
  * 
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -22,10 +21,10 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
 use core::mem;
+use core::fmt;
 use core::result::Result;
 use platform::physmem::{barrier, PhysMemSize};
 use super::error::Cause;
-use super::pcore;
 
 /* different states each recognized heap block can be in */
 #[repr(C)]
@@ -95,7 +94,56 @@ pub struct Heap
     /* pointer to list of in-use and freed blocks */
     block_list_head: *mut HeapBlock,
     /* stash a copy of the block header size here */
-    block_header_size: PhysMemSize
+    block_header_size: PhysMemSize,
+}
+
+impl fmt::Debug for Heap
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result
+    {
+        let mut free_total = 0;
+        let mut alloc_total = 0;
+        let mut largest_free = 0;
+        let mut largest_alloc = 0;
+
+        let mut done = false;
+        let mut block = self.block_list_head;
+        unsafe
+        {
+            while !done
+            {
+                let size = (*block).size;
+                match (*block).magic
+                {
+                    HeapMagic::InUse =>
+                    {
+                        alloc_total = alloc_total + size;
+                        if size > largest_alloc
+                        {
+                            largest_alloc = size;
+                        }
+                    },
+                    HeapMagic::Free =>
+                    {
+                        free_total = free_total + size;
+                        if size > largest_free
+                        {
+                            largest_free = size;
+                        }
+                    }
+                };
+
+                match (*block).next
+                {
+                    None => done = true,
+                    Some(b) => block = b
+                };
+            }
+        }
+
+        write!(f, "size: {} alloc'd {} free {} largest alloc'd {} largest free {}",
+            alloc_total + free_total, alloc_total, free_total, largest_alloc, largest_free)
+    }
 }
 
 impl Heap
@@ -294,4 +342,3 @@ impl Heap
         return largest_merged_block;
     }
 }
-

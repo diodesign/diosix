@@ -1,6 +1,6 @@
 /* diosix hypervisor's physical CPU core management
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -14,8 +14,7 @@ The hypervisor layer is unlikely to do much active allocation
 so it's OK to keep it really simple for now. */
 
 use spin::Mutex;
-use hashbrown::hash_map::{HashMap, self};
-use hashbrown::hash_set::{HashSet};
+use hashbrown::hash_map::HashMap;
 use platform::physmem::PhysMemSize;
 use platform::cpu::{SupervisorState, CPUFeatures};
 use super::vcore::{VirtualCore, VirtualCoreID, VirtualCoreCanonicalID};

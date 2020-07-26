@@ -3,14 +3,14 @@
  * This is, for now, really really simple.
  * Making it fairer and adaptive to workloads is the ultimate goal.
  * 
- * (c) Chris Williams, 2018-2019
+ * (c) Chris Williams, 2018-2020.
  *
  * See LICENSE for usage and copying.
  */
 
 use spin::Mutex;
 use alloc::collections::vec_deque::VecDeque;
-use hashbrown::hash_map::{HashMap, self};
+use hashbrown::hash_map::HashMap;
 use super::error::Cause;
 use super::vcore::{VirtualCore, Priority};
 use super::pcore::{self, PhysicalCore, PhysicalCoreID};
@@ -148,7 +148,11 @@ fn housekeeping()
             {
                 let m = message::Message::new(message::Recipient::send_to_pcore(pid),
                                                 message::MessageContent::DisownQueuedVirtualCore);
-                message::send(m);
+                match message::send(m)
+                {
+                    Err(e) => hvalert!("Failed to message physical CPU {} during load balancing: {:?}", pid, e),
+                    Ok(()) => ()
+                };
             }
         }
     }

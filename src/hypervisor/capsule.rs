@@ -1,6 +1,6 @@
 /* diosix capsule management
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -10,18 +10,14 @@ use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::{Occupied, Vacant};
 use hashbrown::hash_set::HashSet;
 use alloc::vec::Vec;
-use platform::physmem::PhysMemSize;
-use platform::virtmem::VirtMemBase;
 use platform::cpu::Entry;
 use super::loader;
 use super::error::Cause;
-use super::physmem::{self, Region};
+use super::physmem;
 use super::virtmem::Mapping;
 use super::vcore::{self, Priority, VirtualCoreID};
 use super::service::ServiceID;
-use super::pcore::PhysicalCore;
 use super::service;
-use super::message;
 
 pub type CapsuleID = usize;
 
@@ -121,21 +117,29 @@ impl Drop for Capsule
 {
     fn drop(&mut self)
     {
-        hvdebug!("Tearing down capsule");
+        hvdebug!("Tearing down capsule {:p}", &self);
         
         /* free up memory... */
         for mapping in self.memory.clone()
         {
             if let Some(r) = mapping.get_physical()
             {
-                physmem::dealloc_region(r);
+                match physmem::dealloc_region(r)
+                {
+                    Err(e) => hvalert!("Error during capsule {:p} teardown: {:?}", &self, e),
+                    Ok(_) => ()
+                };
             }
         }
 
         /* ...and services held by this capsule */
         for sid in self.allowed_services.iter()
         {
-            service::deregister(*sid);
+            match service::deregister(*sid)
+            {
+                Err(e) => hvalert!("Failed to deregister service during teardown of capsule {:p}: {:?}", &self, e),
+                Ok(()) => ()
+            };
         }
     }
 }

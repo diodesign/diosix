@@ -1,13 +1,11 @@
 /* diosix capsule virtual memory management
  * 
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
 
-use hashbrown::hash_map::HashMap;
-use hashbrown::hash_map::Entry::{Occupied, Vacant};
-use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize};
+use platform::physmem::PhysMemBase;
 use platform::virtmem::VirtMemBase;
 use super::physmem::Region;
 use super::error::Cause;

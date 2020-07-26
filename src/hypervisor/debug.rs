@@ -1,6 +1,6 @@
 /* diosix debug console output code
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -8,6 +8,7 @@
 use core::fmt;
 use spin::Mutex;
 use alloc::string::String;
+use platform;
 use super::hardware;
 
 lazy_static!
@@ -89,8 +90,16 @@ impl fmt::Write for ConsoleWriter
 {
     fn write_str(&mut self, s: &str) -> core::fmt::Result
     {
-        /* queue debug output so it can be printed when free to do */
-        DEBUG_QUEUE.lock().push_str(s);
+        if cfg!(feature = "qemuprint")
+        {
+            /* force the usage of the emergency Qemu serial port for debugging */
+            platform::qprint!("{}", s);
+        }
+        else
+        {
+            /* queue debug output so it can be printed when free to do */
+            DEBUG_QUEUE.lock().push_str(s);
+        }
         Ok(())
     }
 }
