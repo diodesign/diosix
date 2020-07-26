@@ -39,9 +39,9 @@ fn exception(irq: IRQ)
         /* catch non-fatal supervisor-level exceptions */
         (false, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+            if let Some(_c) = pcore::PhysicalCore::get_capsule_id()
             {
-                hvdebug!("Environment call from supervisor-mode capsule ID {}", c);
+                hvdebug!("Environment call from supervisor-mode capsule ID {}", _c);
             }
             else
             {
