@@ -1,4 +1,4 @@
-name: Docker-based CI - Build and test Diosix
+name: Build and tests
 
 on:
   push:
@@ -14,8 +14,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: Build test environment's Docker image
+    - name: Build Diosix-on-Qemu Docker image
       run: docker build . --file Dockerfile --tag diosix:testenv
     - name: Run unit tests within Docker container
       run: docker run --rm -ti diosix:testenv
-      
