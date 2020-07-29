@@ -5,7 +5,6 @@
 1. [Introduction](#intro)
 1. [Quickstart](#quickstart)
 1. [Next on the todo list](#todo)
-1. [Further documentation](#wiki)
 1. [Development branches](#branches)
 1. [Contact, security issue reporting, and code of conduct](#contact)
 1. [Copyright, license, and thanks](#copyright)
@@ -33,7 +32,7 @@ Next, build a Docker image, with the tag `testenv`, that contains all the necess
 docker build . --file Dockerfile --tag diosix:testenv
 ```
 
-When the image is successfully built, you can boot Diosix using the Qemu emulator inside a temporary container using:
+When the image is successfully built, use it to boot Diosix using the Qemu emulator within a temporary container:
 
 ```
 docker run --rm diosix:testenv cargo run
@@ -61,22 +60,25 @@ Compiling diosix v2.0.0 (/build/diosix)
 [?] CPU 0: Tearing down capsule 0x80cdb000
 ```
 
-There are other ways to invoke Diosix:
+There are other ways to invoke Diosix. For example, to start the hypervisor within an interactive environment, run:
 
-- Run `docker run --rm -ti diosix:testenv cargo run` to create an interactive environment.
-    - Press `Control-a` then `c` to enter the Qemu monitor.
-    - Run the monitor command `info registers -a` to list the state of all CPU cores.
-    - Run the monitor command `quit` to end the session.
-    - Instructions on how to use this monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
-- Run `docker run --rm diosix:testenv` to perform the runtime unit tests.
-    - This command should complete with the exit code 0 indicating all tests passed.
-- Append `--target riscv32imac-unknown-none-elf` to the above commands to run Diosix on a 32-bit RISC-V host.
-    - For example, `docker run --rm diosix:testenv cargo run --target riscv32imac-unknown-none-elf`
-    - By default, Diosix builds for 64-bit RISC-V targets.
-- Append `--release` to the above commands to build and run a non-debug, less-verbose version of Diosix.
-    - For example, `docker run --rm  diosix:testenv cargo run --release`
+```
+docker run --rm -ti diosix:testenv cargo run
+```
 
-To build and run Diosix from scratch, you need to follow these steps:
+Press `Control-a` then `c` to enter Qemu's debugging monitor. Run the monitor command `info registers -a` to list the CPU core states. Use `quit` to end the session. Further instructions on how to use this monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
+
+To perform the runtime unit tests, run:
+
+```
+docker run --rm diosix:testenv
+```
+
+This command should complete with the exit code 0 indicating all tests passed.
+
+Append `--target riscv32imac-unknown-none-elf` to the above `docker` commands to run Diosix on a 32-bit RISC-V Qemu host. Append `--release` to build and run an optimized, non-debug, less-verbose version of Diosix.
+
+To build and run Diosix from scratch, follow these steps:
 
 1. [Building the toolchain](docs/toolchain.md)
 1. [Using Buildroot to build a bootable Linux guest OS](docs/buildroot.md)
@@ -95,10 +97,6 @@ Therefore, the immediate todo list is as follows:
 The boot capsule is expected to provide a user interface through which more capsules containing applications can be loaded from storage and executed. On embedded devices or servers, the boot capsule could start services and programs automatically. In any case, capsules are isolated from each other, preventing one from interfering with one another.
 
 Diosix does not require a RISC-V CPU with the hypervisor ISA enabled to achieve this, though it will support that functionality as soon as it stabilizes. In the meantime, the hypervisor uses the processor cores' physical memory protection feature to enforce the separation of capsules. Eventually, Diosix will use the hypervisor ISA and fall back to physical memory protection if needed.
-
-### Further documentation <a name="wiki"></a>
-
-The above documentation describes the process of building and running Diosix. For more details on how it works under the hood, please consult the project's [work-in-progress wiki](https://github.com/diodesign/diosix/wiki).
 
 ### Development branches <a name="branches"></a>
 
