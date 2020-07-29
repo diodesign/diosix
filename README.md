@@ -1,28 +1,27 @@
-[![Build and test](https://github.com/diodesign/diosix/workflows/Build%20and%20test/badge.svg)](https://github.com/diodesign/diosix/actions?query=workflow%3A%22Build+and+test%22) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/master/LICENSE) [![Publish Docker image of a Diosix release](https://github.com/diodesign/diosix/workflows/Publish%20Docker%20image%20of%20a%20Diosix%20release/badge.svg)](https://github.com/diodesign/diosix/packages) [![Language: Rust](https://img.shields.io/badge/language-rust-yellow.svg)](https://www.rust-lang.org/) ![Platform: riscv32, riscv64](https://img.shields.io/badge/platform-riscv32%20%7C%20riscv64-lightgray.svg)
+[![Build and test](https://github.com/diodesign/diosix/workflows/Build%20and%20test/badge.svg)](https://github.com/diodesign/diosix/actions?query=workflow%3A%22Build+and+test%22) [![Diosix Docker image](https://github.com/diodesign/diosix/workflows/Diosix%20Docker%20image/badge.svg)](https://github.com/diodesign/diosix/packages) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/master/LICENSE) [![Language: Rust](https://img.shields.io/badge/language-rust-yellow.svg)](https://www.rust-lang.org/) ![Platform: riscv32, riscv64](https://img.shields.io/badge/platform-riscv32%20%7C%20riscv64-lightgray.svg)
 
 ## Table of contents
 
 1. [Introduction](#intro)
 1. [Quickstart](#quickstart)
-1. [Building from scratch](#quickstart)
+1. [Building a container environment and using Qemu](#container)
+1. [Building from scratch](#fromscratch)
 1. [Contact, security issue reporting, and code of conduct](#contact)
 1. [Copyright, license, and thanks](#copyright)
 
 ### Introduction <a name="intro"></a>
 
-Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor for 32-bit and 64-bit [RISC-V](https://riscv.org/) computers. It is written [in Rust](https://www.rust-lang.org/), which is a C/C++-like systems programming language focused on memory and thread safety as well as performance and reliability.
-
-The ultimate goal is to build fully open-source packages that configure FPGA-based systems with custom RISC-V cores and peripheral controllers to run software stacks designed for particular tasks, all generated on demand if necessary. This software should also run on supported system-on-chips.
+Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor written [in Rust](https://www.rust-lang.org/) for 32-bit and 64-bit [RISC-V](https://riscv.org/) computers. A long-term goal is to build open-source Diosix packages that configure FPGAs with custom RISC-V cores and peripheral controllers to accelerate specific tasks, on the fly if necessary. This software should also run on supported system-on-chips.
 
 Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux guest OS with minimal filesystem into a virtualized environment called a capsule, and begin executing it. The next step is to provide the guest a Device Tree Blob describing its virtualized environment so that it can successfully boot.
 
 ### Quickstart <a name="quickstart"></a>
 
-You can run Diosix within a convenient containerized environment. These instructions assume you are comfortable using Docker and the command-line interface on a Linux-like system.
+You can run Diosix in a convenient containerized environment. These instructions assume you are comfortable using Docker and the command-line interface on a Linux-like system.
 
 First, you must authenticate with the GitHub Packages system. If you have not yet done so, [create a personal access token](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token) that grants read-only access to GitHub Packages, and [pass this token](https://docs.github.com/en/packages/using-github-packages-with-your-projects-ecosystem/configuring-docker-for-use-with-github-packages#authenticating-to-github-packages) to Docker.
 
-Then, fetch the container image of the [latest release](https://github.com/diodesign/diosix/releases) from GitHub:
+Then, fetch the Docker container image of the [latest release](https://github.com/diodesign/diosix/releases) from GitHub:
 
 ```
 docker pull docker.pkg.github.com/diodesign/diosix/wip:prealpha-dtb-safe-parse1
@@ -56,7 +55,11 @@ Compiling diosix v2.0.0 (/build/diosix)
 [?] CPU 0: Tearing down capsule 0x80cdb000
 ```
 
-Press `Control-c` to exit. If you do not wish to use GitHub Packages, you can build and run the container from the Diosix source code. Navigate to a suitable directory, and use these commands to fetch, build, and run a contaimer image tagged `diosix:testenv`:
+Press `Control-c` to exit.
+
+### Building a container environment and using Qemu <a name="container"></a>
+
+If you do not want to use GitHub Packages, you can build the container environment from the Diosix source code. Navigate to a suitable directory, and use these commands to fetch, build, and run a Docker contaimer tagged `diosix:testenv`:
 
 ```
 git clone --recurse-submodules https://github.com/diodesign/diosix.git
@@ -65,17 +68,17 @@ docker build . --file Dockerfile --tag diosix:testenv
 docker run --rm diosix:testenv cargo run
 ```
 
-To start the hypervisor within an interactive environment, add `-ti` after `docker run --rm`, eg:
+Press `Control-c` to exit. To start the hypervisor within an interactive debugging environment, add `-ti` after `docker run --rm`, eg:
 
 ```
 docker run --rm -ti diosix:testenv cargo run
 ```
 
-Press `Control-a` then `c` to enter Qemu’s debugging monitor. Run the monitor command `info registers -a` to list the CPU core states. Use `quit` to end the session. Further instructions on how to use this monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
+Press `Control-a` then `c` to enter Qemu’s debugging monitor. Run the monitor command `info registers -a` to list the CPU core states. Use `quit` to end the emulation and the container. Instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
 
 ### Building from scratch <a name="fromscratch"></a>
 
-To build and run Diosix from scratch, use these steps:
+To build and run Diosix completely from scratch, without any containerization, follow use these steps:
 
 1. [Building the toolchain](docs/toolchain.md)
 1. [Using Buildroot to build a bootable Linux guest OS](docs/buildroot.md)

@@ -1,4 +1,4 @@
-name: Publish Docker image of a Diosix release
+name: Diosix Docker image
 on:
   release:
     types: [published]
