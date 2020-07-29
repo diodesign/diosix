@@ -4,8 +4,8 @@
 
 1. [Introduction](#intro)
 1. [Quickstart](#quickstart)
-1. [Building a container environment and using Qemu](#container)
-1. [Building from scratch](#fromscratch)
+1. [Build a container environment](#container)
+1. [Build from scratch](#fromscratch)
 1. [Contact, security issue reporting, and code of conduct](#contact)
 1. [Copyright, license, and thanks](#copyright)
 
@@ -57,7 +57,7 @@ Compiling diosix v2.0.0 (/build/diosix)
 
 Press `Control-c` to exit.
 
-### Building a container environment and using Qemu <a name="container"></a>
+### Build a container environment <a name="container"></a>
 
 If you do not want to use GitHub Packages, you can build the container environment from the Diosix source code. Navigate to a suitable directory, and use these commands to fetch, build, and run a Docker contaimer tagged `diosix:testenv`:
 
@@ -76,7 +76,7 @@ docker run --rm -ti diosix:testenv cargo run
 
 Press `Control-a` then `c` to enter Qemu’s debugging monitor. Run the monitor command `info registers -a` to list the CPU core states. Use `quit` to end the emulation and the container. Instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
 
-### Building from scratch <a name="fromscratch"></a>
+### Build from scratch <a name="fromscratch"></a>
 
 To build and run Diosix completely from scratch, without any containerization, follow use these steps:
 
