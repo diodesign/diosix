@@ -1,0 +1,20 @@
+name: Publish Docker image of a Diosix release
+on:
+  release:
+    types: [published]
+jobs:
+  push_to_registry:
+    name: Push Docker image of Diosix release to GitHub Packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v2
+      - name: Push to GitHub Packages
+        uses: docker/build-push-action@v1
+        with:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: docker.pkg.github.com
+          repository: diodesign/diosix/wip
+          tag_with_ref: true
+          tag_with_sha: true
