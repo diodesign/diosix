@@ -1,4 +1,4 @@
-## Using Buildroot to build a bootable Linux kernel
+## Using Buildroot to build a bootable Linux guest operating system
 
 When the Diosix hypervisor brings up a system, it creates, and schedules to run, a virtualized environment called the boot capsule that contains an operating system kernel and an initial filesystem of software. This boot capsule is expected to complete the system initialization, and provide a user interface for starting more capsules from storage memory. These capsules are expected to run applications on behalf of the user. For embedded devices and servers, the boot capsule could automatically start services and applications in capsules from storage. The capsules are isolated from each other by the hypervisor for security and reliability purposes.
 

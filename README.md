@@ -1,9 +1,9 @@
-![Build and test](https://github.com/diodesign/diosix/workflows/Build%20and%20tests/badge.svg) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/master/LICENSE) [![Language: Rust](https://img.shields.io/badge/language-rust-yellow.svg)](https://www.rust-lang.org/)
+[![Build and test](https://github.com/diodesign/diosix/workflows/Build%20and%20test/badge.svg)](https://github.com/diodesign/diosix/actions?query=workflow%3A%22Build+and+test%22) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/master/LICENSE) [![Language: Rust](https://img.shields.io/badge/language-rust-yellow.svg)](https://www.rust-lang.org/) [![Platform: riscv32, riscv64](https://img.shields.io/badge/platform-riscv32%20%7C%20riscv64-lightgray.svg)]
 
 ## Table of contents
 
 1. [Introduction](#intro)
-1. [Building and running Diosix](#buildrun)
+1. [Quickstart](#quickstart)
 1. [Next on the todo list](#todo)
 1. [Further documentation](#wiki)
 1. [Development branches](#branches)
@@ -12,46 +12,80 @@
 
 ### Introduction <a name="intro"></a>
 
-Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor for 32-bit and 64-bit [RISC-V](https://riscv.org/) systems. It is written [in Rust](https://www.rust-lang.org/), which is a C/C++-like systems programming language focused on memory and thread safety as well as performance and reliability.
+Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor for 32-bit and 64-bit [RISC-V](https://riscv.org/) computers. It is written [in Rust](https://www.rust-lang.org/), which is a C/C++-like systems programming language focused on memory and thread safety as well as performance and reliability.
 
-The ultimate goal is to build fully open-source packages containing everything needed to configure FPGA-based systems with RISC-V cores and peripheral controllers, and boot a stack of software customized for a particular task, all generated on demand if necessary. This software should also run on supported ASICs and system-on-chips.
+The ultimate goal is to build fully open-source packages that configure FPGA-based systems with custom RISC-V cores and peripheral controllers to run software stacks designed for particular tasks, all generated on demand if necessary. This software should also run on supported system-on-chips.
 
-Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux kernel and minimal filesystem into a virtualized environment called a capsule, and begin executing it.
+Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux guest OS with minimal filesystem into a virtualized environment called a capsule, and begin executing it.
 
-### Building and running <a name="buildrun"></a>
+### Quickstart <a name="quickstart"></a>
 
-To build and run Diosix, you need to follow a few steps, which are documented here:
-
-1. [Building the toolchain](docs/toolchain.md)
-1. [Using Buildroot to build a bootable Linux kernel](docs/buildroot.md)
-1. [Building and using Qemu to test the hypervisor](docs/qemu.md)
-1. [Building and running the hypervisor](docs/building.md)
-
-Once you have everything in place, you can run Diosix in Qemu, or on real hardware, to start a Linux-based virtual environment. Below is debug output from the hypervisor bringing up a four-core 64-bit RISC-V system with 512MiB of RAM within the Qemu emulator, using a device tree to ascertain the hardware's configuration, loading a Linux kernel and its bundled filesystem into a virtualized environment, and executing it:
+You can build and run Diosix within a convenient containerized environment. These instructions assume you are comfortable using Docker and the command-line interface on a Linux-like system. First, open a terminal, navigate to a suitable directory, and check out the Diosix source code:
 
 ```
-$ cargo run
-    Finished dev [unoptimized + debuginfo] target(s) in 0.02s
+git clone --recurse-submodules https://github.com/diodesign/diosix.git
+cd diosix
+```
+
+Next, build a Docker image, with the tag `testenv`, that contains all the necessary toolchains, guest OS binaries, and source code to build and run Diosix:
+
+```
+docker build . --file Dockerfile --tag diosix:testenv
+```
+
+When the image is successfully built, you can boot Diosix using the Qemu emulator inside a temporary container using:
+
+```
+docker run --rm diosix:testenv cargo run
+```
+
+Press `Control-C` to exit. The output should appear similar to the following, indicating Diosix running on quad-core 64-bit RISC-V machine with 512MiB of RAM:
+
+```
+Compiling diosix v2.0.0 (/build/diosix)
+    Finished dev [unoptimized + debuginfo] target(s) in 41.20s
      Running `qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel target/riscv64gc-unknown-none-elf/debug/hypervisor`
-[?] CPU 0: Enabling RAM region 0x80ded000, size 498 MB
+[?] CPU 0: Enabling RAM region 0x80ed4000, size 497 MB
 [-] CPU 0: Welcome to diosix 2.0.0
 [?] CPU 0: Debugging enabled, 4 CPU cores found
-[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x80ded000 in physical RAM
-[?] CPU 0: Loading supervisor ELF program area: 0x80066fb8 size 0x1e620 into 0x80ded000
-[?] CPU 0: Loading supervisor ELF program area: 0x80085fb8 size 0xa2c0bc into 0x80e0c000
+[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x80ed4000 in physical RAM
+[?] CPU 0: Loading supervisor ELF program area: 0x8004dc00 size 0x1e620 into 0x80ed4000
+[?] CPU 0: Loading supervisor ELF program area: 0x8006cc00 size 0xa2c0bc into 0x80ef3000
 [?] CPU 0: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 1: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 2: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 0: Running vcore 0 in capsule 1
-[?] CPU 0: Granting ReadWriteExecute access to 0x80ded000, 134217728 bytes
-[!] CPU 0: Fatal exception in Supervisor: Breakpoint at 0x80def8c8, stack 0x81712ff0
-[?] CPU 0: Tearing down capsule
+[?] CPU 0: Granting ReadWriteExecute access to 0x80ed4000, 134217728 bytes
+[!] CPU 0: Fatal exception in Supervisor: Breakpoint at 0x80ed68c8, stack 0x817f9ff0
+[?] CPU 0: Tearing down capsule 0x80cdb000
 ```
+
+There are other ways to invoke Diosix:
+
+- Run `docker run --rm -ti diosix:testenv cargo run` to create an interactive environment.
+    - Press `Control-a` then `c` to enter the Qemu monitor.
+    - Run the monitor command `info registers -a` to list the state of all CPU cores.
+    - Run the monitor command `quit` to end the session.
+    - Instructions on how to use this monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
+- Run `docker run --rm diosix:testenv` to perform the runtime unit tests.
+    - This command should complete with the exit code 0 indicating all tests passed.
+- Append `--target riscv32imac-unknown-none-elf` to the above commands to run Diosix on a 32-bit RISC-V host.
+    - For example, `docker run --rm diosix:testenv cargo run --target riscv32imac-unknown-none-elf`
+    - By default, Diosix builds for 64-bit RISC-V targets.
+- Append `--release` to the above commands to build and run a non-debug, less-verbose version of Diosix.
+    - For example, `docker run --rm  diosix:testenv cargo run --release`
+
+To build and run Diosix from scratch, you need to follow these steps:
+
+1. [Building the toolchain](docs/toolchain.md)
+1. [Using Buildroot to build a bootable Linux guest OS](docs/buildroot.md)
+1. [Building and using Qemu to test the hypervisor](docs/qemu.md)
+1. [Building and running the hypervisor](docs/building.md)
 
 ### Next on the todo list <a name="todo"></a>
 
-As stated above, Diosix can load a Linux kernel into a virtualized environment called the boot capsule, and start executing it. However, this kernel will soon crash. This is because Diosix needs to describe to Linux the environment it was loaded into, and transparently trap and virtualize any attempts by the kernel to access hardware peripherals. Without this support, the loaded kernel will flail in the dark and crash.
+As stated above, Diosix can load a Linux kernel into a virtualized environment called the boot capsule, and start executing it. However, this kernel will soon crash. This is because Diosix needs to describe to Linux the environment it was loaded into, and transparently trap and virtualize any attempts by this guest kernel to access hardware peripherals.
 
 Therefore, the immediate todo list is as follows:
 1. Implement a device tree generator to describe to the Linux kernel its virtualized environment.
@@ -68,9 +102,9 @@ The above documentation describes the process of building and running Diosix. Fo
 
 ### Development branches <a name="branches"></a>
 
-The `master` branch contains the latest bleeding-edge code that people can work on and develop further; it should at least build, though it may crash. It is not for production use. Releases will be worked on in designated release branches. 
+The `master` branch contains the latest bleeding-edge code that people can work on and develop further; it should at least build, though it may crash. It is not for production use. Official releases will be worked on in designated release branches. Work-in-progress releases may be created from tagged `master` commits.
 
-The `x86` branch holds an early port of the Rust microkernel for Intel-compatible PC systems. The `x86hypervisor` branch holds an early attempt to build hypervisor features into the `x86` branch. You're welcome to update these so they catch up with `master`, however the focus for now will be on the RISC-V port. Other branches contain work-in-progress experimental work that may not even build.
+The `x86` branch holds an early port of the Diosix microkernel for Intel-compatible PC systems. The `x86hypervisor` branch holds an early attempt to build hypervisor features into the `x86` branch. You're welcome to update these so they catch up with `master`, however the focus for now will be on the RISC-V port. Other branches contain work-in-progress experimental work that may not even build.
 
 ### Contact, security issue reporting, and code of conduct <a name="contact"></a>
 
