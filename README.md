@@ -38,7 +38,7 @@ When the image is successfully built, use it to boot Diosix on the Qemu emulator
 docker run --rm diosix:testenv cargo run
 ```
 
-Press `Control-C` to exit. The output should appear similar to the following, indicating Diosix running on quad-core 64-bit RISC-V machine with 512MiB of RAM:
+Press `Control-c` to exit. The output should appear similar to the following, indicating Diosix running on quad-core 64-bit RISC-V machine with 512MiB of RAM:
 
 ```
 Compiling diosix v2.0.0 (/build/diosix)
