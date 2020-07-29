@@ -32,7 +32,7 @@ Next, build a Docker image, with the tag `testenv`, that contains all the necess
 docker build . --file Dockerfile --tag diosix:testenv
 ```
 
-When the image is successfully built, use it to boot Diosix using the Qemu emulator within a temporary container:
+When the image is successfully built, use it to boot Diosix on the Qemu emulator within a temporary container:
 
 ```
 docker run --rm diosix:testenv cargo run
