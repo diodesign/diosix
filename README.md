@@ -26,13 +26,13 @@ First, you must authenticate with GitHub Packages. If you have not yet done so, 
 Next, fetch a prebuilt Diosix Docker container image from GitHub. Available images are listed [here](https://github.com/diodesign/diosix/releases). For example, to fetch the latest release, run:
 
 ```
-docker pull docker.pkg.github.com/diodesign/diosix/wip:prealpha-dtb-safe-parse1
+docker pull docker.pkg.github.com/diodesign/diosix/wip:lightweight-docker
 ```
 
 Use this image to create a temporary container, within which the Qemu emulator boots Diosix:
 
 ```
-docker run --rm docker.pkg.github.com/diodesign/diosix/wip:prealpha-dtb-safe-parse1
+docker run --rm docker.pkg.github.com/diodesign/diosix/wip:lightweight-docker
 ```
 
 The output from the hypervisor should appear similar to the following, indicating Diosix running on a quad-core 64-bit RISC-V machine with 512MiB of RAM:
