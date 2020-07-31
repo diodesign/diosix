@@ -108,7 +108,7 @@ And so on. Run the command `quit` to end the emulation and the container. Instru
 
 ### Build Diosix from scratch <a name="fromscratch"></a>
 
-To build and run Diosix completely from scratch, without any containerization, follow use these steps:
+To build and run Diosix completely from scratch, without any containerization, follow these steps:
 
 1. [Building the toolchain](docs/toolchain.md)
 1. [Using Buildroot to build a bootable Linux guest OS](docs/buildroot.md)
