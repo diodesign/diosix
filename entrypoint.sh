@@ -7,12 +7,9 @@
 #
 set -e
 
+# locate rust toolchain
 source $HOME/.cargo/env
-export PATH=$PATH:/build/qemu/riscv64-softmmu
-export PATH=$PATH:/build/qemu/riscv32-softmmu
-export PATH=$PATH:/build/cross/bin
 
-# run the supplied command
+# run the supplied command in the diosix context
 cd /build/diosix
 exec $@
-

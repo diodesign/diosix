@@ -28,6 +28,7 @@ use std::fs;
 use std::process::Command;
 use std::fs::metadata;
 use std::collections::HashSet;
+use std::vec::Vec;
 
 extern crate regex;
 use regex::Regex;
@@ -90,7 +91,7 @@ pub struct Context<'a>
     as_exec: String,          /* path to target's GNU assembler executable */
     ar_exec: String,          /* path to target's GNU archiver executable */
     ld_exec: String,          /* path to target's GNU linker executable */
-    objcopy_exec: String,     /* path to the target's GNU objcopy executable */
+    oc_exec: String,          /* path to the target's GNU objcopy executable */
     target: &'a Target        /* describe the build target */
 }
 
@@ -102,21 +103,38 @@ fn main()
     /* create a shared context describing this build */
     let mut context = Context
     {
-        /* we use -linux- because Rust by default, with no workable opt-out, forces* the
-        generation of EH frames (for exception unwinding) in ELF binaries. RISC-V binutils
-        doesn't support EH frames for bare-metal targets so we'll have to piggyback on
-        the Linux toolchain. It's no big deal because we ultimately act like a Linux kernel
-        anyway so that we're accepted by hardware firmware bootloaders.
-        
-        * https://github.com/rust-lang/rust/pull/73564
-        */
+        /*
+        when we're building from scratch on Linux, the toolchain binaries have -linux- in their filenames
+        when we're building in a container using pre-built tools, the binaries use -linux-gnu-
 
+        we list both to cope gracefully with different environments
+        */
         output_dir: env::var("OUT_DIR").expect("No output directory specified"),
         objects: HashSet::new(),
-        as_exec: String::from(format!("{}-linux-as", target.gnu_prefix)),
-        ar_exec: String::from(format!("{}-linux-ar", target.gnu_prefix)),
-        ld_exec: String::from(format!("{}-linux-ld", target.gnu_prefix)),
-        objcopy_exec: String::from(format!("{}-linux-objcopy", target.gnu_prefix)),
+
+        as_exec: find_executable(
+            vec![
+                String::from(format!("{}-linux-as", target.gnu_prefix)),
+                String::from(format!("{}-linux-gnu-as", target.gnu_prefix))
+                ]),
+
+        ar_exec: find_executable(
+            vec![
+                String::from(format!("{}-linux-ar", target.gnu_prefix)),
+                String::from(format!("{}-linux-gnu-ar", target.gnu_prefix))
+                ]),
+
+        ld_exec: find_executable(
+            vec![
+                String::from(format!("{}-linux-ld", target.gnu_prefix)),
+                String::from(format!("{}-linux-gnu-ld", target.gnu_prefix))
+                ]),
+
+        oc_exec: find_executable(
+            vec![
+                String::from(format!("{}-linux-objcopy", target.gnu_prefix)),
+                String::from(format!("{}-linux-gnu-objcopy", target.gnu_prefix))
+                ]),
         target: &target
     };
 
@@ -146,6 +164,26 @@ fn main()
 
     /* package up all the generated object files into an archive and link against it */
     link_archive(&mut context);
+}
+
+/* Take a list of executables and return the first that exists and executes.
+   Panic if none of the executables exists on disk
+   => list = list of executable filenames
+   <= first filename in the list that exists on disk
+*/ 
+fn find_executable(list: Vec<String>) -> String
+{
+    for filename in &list
+    {
+        /* this is the easiest way to check a program will run
+        as it takes $PATH into account */
+        if Command::new(&filename).output().is_ok() == true
+        {
+            return filename.to_string()
+        }
+    }
+
+   panic!("Couldn't find executable '{}' nor its alternatives", list[0]);
 }
 
 /* Turn a binary file into a .o object file to link with hypervisor. 
@@ -196,7 +234,8 @@ fn package_binary(binary_dir: &String, component: &String, mut context: &mut Con
     let symbol_prefix = format!("_binary_{}_{}_", &binary_dir.replace("/", "_").replace(".", "_"), &component);
     let renamed_prefix = format!("_binary_{}_", &component);
 
-    let rename = Command::new(&context.objcopy_exec)
+    /* select correct executable */
+    let rename = Command::new(&context.oc_exec)
         .arg("--redefine-sym")
         .arg(format!("{}start={}start", &symbol_prefix, &renamed_prefix))
         .arg("--redefine-sym")

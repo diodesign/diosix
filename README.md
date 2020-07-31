@@ -1,13 +1,15 @@
-[![Build and test](https://github.com/diodesign/diosix/workflows/Build%20and%20test/badge.svg)](https://github.com/diodesign/diosix/actions?query=workflow%3A%22Build+and+test%22) [![Diosix Docker image](https://github.com/diodesign/diosix/workflows/Diosix%20Docker%20image/badge.svg)](https://github.com/diodesign/diosix/packages) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/master/LICENSE) [![Language: Rust](https://img.shields.io/badge/language-rust-yellow.svg)](https://www.rust-lang.org/) ![Platform: riscv32, riscv64](https://img.shields.io/badge/platform-riscv32%20%7C%20riscv64-lightgray.svg)
+[![Build and test](https://github.com/diodesign/diosix/workflows/Build%20and%20test/badge.svg)](https://github.com/diodesign/diosix/actions?query=workflow%3A%22Build+and+test%22) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/master/LICENSE) [![Language: Rust](https://img.shields.io/badge/language-rust-yellow.svg)](https://www.rust-lang.org/) ![Platform: riscv32, riscv64](https://img.shields.io/badge/platform-riscv32%20%7C%20riscv64-lightgray.svg)
 
 ## Table of contents
 
 1. [Introduction](#intro)
-1. [Quickstart](#quickstart)
-1. [Build a container environment](#container)
-1. [Build from scratch](#fromscratch)
+1. [Quickstart using Docker](#quickstart)
+1. [Quickstart using Google Cloud Run](#cloudrun)
+1. [Build a Diosix Docker container](#container)
+1. [Access the Qemu monitor](#qemumonitor)
+1. [Build Diosix from scratch](#fromscratch)
 1. [Contact, security issue reporting, and code of conduct](#contact)
-1. [Copyright, license, and thanks](#copyright)
+1. [Copyright, distribution, and license](#copyright)
 
 ### Introduction <a name="intro"></a>
 
@@ -15,25 +17,25 @@ Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-met
 
 Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux guest OS with minimal filesystem into a virtualized environment called a capsule, and begin executing it. The next step is to provide the guest a Device Tree Blob describing its virtualized environment so that it can successfully boot.
 
-### Quickstart <a name="quickstart"></a>
+### Quickstart using Docker <a name="quickstart"></a>
 
 You can run Diosix in a convenient containerized environment. These instructions assume you are comfortable using Docker and the command-line interface on a Linux-like system.
 
-First, you must authenticate with the GitHub Packages system. If you have not yet done so, [create a personal access token](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token) that grants read-only access to GitHub Packages, and [pass this token](https://docs.github.com/en/packages/using-github-packages-with-your-projects-ecosystem/configuring-docker-for-use-with-github-packages#authenticating-to-github-packages) to Docker.
+First, you must authenticate with GitHub Packages. If you have not yet done so, [create a personal access token](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token) that grants read-only access to GitHub Packages, and [pass this token](https://docs.github.com/en/packages/using-github-packages-with-your-projects-ecosystem/configuring-docker-for-use-with-github-packages#authenticating-to-github-packages) to Docker.
 
-Then, fetch the Docker container image of the [latest release](https://github.com/diodesign/diosix/releases) from GitHub:
+Next, fetch a prebuilt Diosix Docker container image from GitHub. Available images are listed [here](https://github.com/diodesign/diosix/releases). For example, to fetch the latest release, run:
 
 ```
 docker pull docker.pkg.github.com/diodesign/diosix/wip:prealpha-dtb-safe-parse1
 ```
 
-Next, use the image to boot Diosix within a temporary container using the Qemu emulator:
+Use this image to create a temporary container, within which the Qemu emulator boots Diosix:
 
 ```
-docker run --rm docker.pkg.github.com/diodesign/diosix/wip:prealpha-dtb-safe-parse1 cargo run
+docker run --rm docker.pkg.github.com/diodesign/diosix/wip:prealpha-dtb-safe-parse1
 ```
 
-The output should appear similar to the following, indicating Diosix running on a quad-core 64-bit RISC-V machine with 512MiB of RAM:
+The output from the hypervisor should appear similar to the following, indicating Diosix running on a quad-core 64-bit RISC-V machine with 512MiB of RAM:
 
 ```
 Compiling diosix v2.0.0 (/build/diosix)
@@ -57,26 +59,54 @@ Compiling diosix v2.0.0 (/build/diosix)
 
 Press `Control-c` to exit.
 
-### Build a container environment <a name="container"></a>
+### Quickstart using Google Cloud Run <a name="cloudrun"></a>
 
-If you do not want to use GitHub Packages, you can build the container environment from the Diosix source code. Navigate to a suitable directory, and use these commands to fetch, build, and run a Docker contaimer tagged `diosix:testenv`:
+To build and run Diosix in Google Cloud from the latest source code, click the button below.
+
+[![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run)
+
+Press `Control-c` to exit. Note that you will be [billed](https://cloud.google.com/run/pricing) by Google for any resources used to build and run this container beyond your free allowance. The Google Cloud Run documentation is [here](https://cloud.google.com/run).
+
+### Build a Diosix Docker container <a name="container"></a>
+
+If you do not wish to use GitHub Packages nor Google Cloud Run, you can build and run the container environment from the latest Diosix source code entirely on your own system. Navigate to a suitable directory, and use these commands to fetch, build, and run a Diosix Docker contaimer tagged `diosix:latest`:
 
 ```
 git clone --recurse-submodules https://github.com/diodesign/diosix.git
 cd diosix
-docker build . --file Dockerfile --tag diosix:testenv
-docker run --rm diosix:testenv cargo run
+docker build . --file Dockerfile --tag diosix
+docker run --rm diosix:latest
 ```
 
-Press `Control-c` to exit. To start the hypervisor within an interactive debugging environment, add `-ti` after `docker run --rm`, eg:
+Press `Control-c` to exit.
+
+### Access the Qemu monitor <a name="qemumonitor"></a>
+
+The Qemu emulator provides a terminal-based monitor that can be used to inspect and debug the running hypervisor and its guest operating systems. To start the hypervisor within this interactive debugging environment, add the `-ti` switch to the `docker run` command used to launch Diosix.
+
+For example:
 
 ```
-docker run --rm -ti diosix:testenv cargo run
+docker run -ti --rm diosix:latest cargo run
 ```
 
-Press `Control-a` then `c` to enter Qemu’s debugging monitor. Run the monitor command `info registers -a` to list the CPU core states. Use `quit` to end the emulation and the container. Instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
+Press `Control-a` then `c` to enter Qemu’s debugging monitor. Run the monitor command `info registers -a` to list the CPU core states. You should see something similar to the following:
 
-### Build from scratch <a name="fromscratch"></a>
+```
+QEMU 5.0.91 monitor - type 'help' for more information
+(qemu) info registers -a
+
+CPU#0
+ pc       000000008000004c
+ mhartid  0000000000000000
+ mstatus  0000000000000088
+ mip      0000000000000000
+ mie      0000000000000080
+```
+
+And so on. Run the command `quit` to end the emulation and the container. Instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
+
+### Build Diosix from scratch <a name="fromscratch"></a>
 
 To build and run Diosix completely from scratch, without any containerization, follow use these steps:
 
@@ -89,6 +119,6 @@ To build and run Diosix completely from scratch, without any containerization, f
 
 Please send an [email](mailto:diosix@tuta.io) if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or raise issues via GitHub, though please consider disclosing security-related matters privately. Please also observe the project's [code of conduct](docs/conduct.md) if you wish to participate.
 
-### Copyright, license, and thanks <a name="copyright"></a>
+### Copyright, distribution, and license <a name="copyright"></a>
 
 Copyright &copy; Chris Williams, 2018-2020. See [LICENSE](https://github.com/diodesign/diosix/blob/master/LICENSE) for distribution and use of source code and binaries.
