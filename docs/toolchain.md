@@ -41,7 +41,7 @@ cd binutils-gdb
 Next, configure Binutils to produce a set of tools for 32-bit RISC-V processors, and then build and install those tools in the aforementioned `cross` directory:
 
 ```
-./configure --prefix $HOME/cross --target=riscv32-linux --disable-unit-tests
+./configure --prefix $HOME/cross --target=riscv32-linux-gnu --disable-unit-tests
 make
 make install
 ```
@@ -56,7 +56,7 @@ find . -type f -name "config.cache" -exec rm {} \;
 And configure Binutils to produce a set of tools for 64-bit RISC-V processors, and then build and install those tools in the `cross` directory:
 
 ```
-./configure --prefix $HOME/cross --target=riscv64-linux --disable-unit-tests
+./configure --prefix $HOME/cross --target=riscv64-linux-gnu --disable-unit-tests
 make
 make install
 ```

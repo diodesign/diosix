@@ -18,7 +18,7 @@ COPY ./entrypoint.sh /
 # Define where we'll work
 WORKDIR /build
 
-# Install Rust, import pre-built guest OS images
+# Install Rust, import pre-built guest OS image
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y \
 	&& . $HOME/.cargo/env \
 	&& rustup target install riscv64gc-unknown-none-elf \

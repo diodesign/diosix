@@ -103,38 +103,12 @@ fn main()
     /* create a shared context describing this build */
     let mut context = Context
     {
-        /*
-        when we're building from scratch on Linux, the toolchain binaries have -linux- in their filenames
-        when we're building in a container using pre-built tools, the binaries use -linux-gnu-
-
-        we list both to cope gracefully with different environments
-        */
         output_dir: env::var("OUT_DIR").expect("No output directory specified"),
         objects: HashSet::new(),
-
-        as_exec: find_executable(
-            vec![
-                String::from(format!("{}-linux-as", target.gnu_prefix)),
-                String::from(format!("{}-linux-gnu-as", target.gnu_prefix))
-                ]),
-
-        ar_exec: find_executable(
-            vec![
-                String::from(format!("{}-linux-ar", target.gnu_prefix)),
-                String::from(format!("{}-linux-gnu-ar", target.gnu_prefix))
-                ]),
-
-        ld_exec: find_executable(
-            vec![
-                String::from(format!("{}-linux-ld", target.gnu_prefix)),
-                String::from(format!("{}-linux-gnu-ld", target.gnu_prefix))
-                ]),
-
-        oc_exec: find_executable(
-            vec![
-                String::from(format!("{}-linux-objcopy", target.gnu_prefix)),
-                String::from(format!("{}-linux-gnu-objcopy", target.gnu_prefix))
-                ]),
+        as_exec: String::from(format!("{}-linux-gnu-as", target.gnu_prefix)),
+        ar_exec: String::from(format!("{}-linux-gnu-ar", target.gnu_prefix)),
+        ld_exec: String::from(format!("{}-linux-gnu-ld", target.gnu_prefix)),
+        oc_exec: String::from(format!("{}-linux-gnu-objcopy", target.gnu_prefix)),
         target: &target
     };
 
@@ -164,26 +138,6 @@ fn main()
 
     /* package up all the generated object files into an archive and link against it */
     link_archive(&mut context);
-}
-
-/* Take a list of executables and return the first that exists and executes.
-   Panic if none of the executables exists on disk
-   => list = list of executable filenames
-   <= first filename in the list that exists on disk
-*/ 
-fn find_executable(list: Vec<String>) -> String
-{
-    for filename in &list
-    {
-        /* this is the easiest way to check a program will run
-        as it takes $PATH into account */
-        if Command::new(&filename).output().is_ok() == true
-        {
-            return filename.to_string()
-        }
-    }
-
-   panic!("Couldn't find executable '{}' nor its alternatives", list[0]);
 }
 
 /* Turn a binary file into a .o object file to link with hypervisor. 
