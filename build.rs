@@ -28,7 +28,6 @@ use std::fs;
 use std::process::Command;
 use std::fs::metadata;
 use std::collections::HashSet;
-use std::vec::Vec;
 
 extern crate regex;
 use regex::Regex;
