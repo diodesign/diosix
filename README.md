@@ -26,13 +26,13 @@ First, you must authenticate with GitHub Packages. If you have not yet done so, 
 Next, fetch a prebuilt Diosix Docker container image from GitHub. Available images are listed [here](https://github.com/diodesign/diosix/releases). For example, to fetch the latest release, run:
 
 ```
-docker pull docker.pkg.github.com/diodesign/diosix/wip:lightweight-docker
+docker pull docker.pkg.github.com/diodesign/diosix/wip:lightweight-docker-1
 ```
 
-Use this image to create a temporary container, within which the Qemu emulator boots Diosix:
+Ceate and run a temporary container that boots Diosix within the Qemu emulator:
 
 ```
-docker run --rm docker.pkg.github.com/diodesign/diosix/wip:lightweight-docker
+docker run --rm docker.pkg.github.com/diodesign/diosix/wip:lightweight-docker-1
 ```
 
 The output from the hypervisor should appear similar to the following, indicating Diosix running on a quad-core 64-bit RISC-V machine with 512MiB of RAM:
@@ -65,17 +65,17 @@ To build and run Diosix in Google Cloud from the latest source code, click the b
 
 [![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run)
 
-Press `Control-c` to exit. Note that you will be [billed](https://cloud.google.com/run/pricing) by Google for any resources used to build and run this container beyond your free allowance. The Google Cloud Run documentation is [here](https://cloud.google.com/run).
+Press `Control-c` to exit. Note you will be [billed](https://cloud.google.com/run/pricing) by Google for any resources used to build and run this container beyond your free allowance. Google Cloud Run documentation is [here](https://cloud.google.com/run).
 
 ### Build a Diosix Docker container <a name="container"></a>
 
-If you do not wish to use GitHub Packages nor Google Cloud Run, you can build and run the container environment from the latest Diosix source code entirely on your own system. Navigate to a suitable directory, and use these commands to fetch, build, and run a Diosix Docker contaimer tagged `diosix:latest`:
+If you do not wish to use GitHub Packages nor Google Cloud Run, you can build and run the container environment from the latest Diosix source code. Navigate to a suitable directory, and use these commands to fetch, build, and run a Diosix Docker contaimer tagged `diosix`:
 
 ```
 git clone --recurse-submodules https://github.com/diodesign/diosix.git
 cd diosix
 docker build . --file Dockerfile --tag diosix
-docker run --rm diosix:latest
+docker run --rm diosix
 ```
 
 Press `Control-c` to exit.
@@ -87,10 +87,10 @@ The Qemu emulator provides a terminal-based monitor that can be used to inspect 
 For example:
 
 ```
-docker run -ti --rm diosix:latest cargo run
+docker run -ti --rm diosix cargo run
 ```
 
-Press `Control-a` then `c` to enter Qemu’s debugging monitor. Run the monitor command `info registers -a` to list the CPU core states. You should see something similar to the following:
+Press `Control-a` then `c` to enter Qemu’s debugging monitor. Run the monitor command `info registers -a` to list the CPU core states. You should see output similar to the following:
 
 ```
 QEMU 5.0.91 monitor - type 'help' for more information
@@ -104,7 +104,7 @@ CPU#0
  mie      0000000000000080
 ```
 
-And so on. Run the command `quit` to end the emulation and the container. Instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
+Run the monitor command `quit` to end the emulation and the container. Instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
 
 ### Build Diosix from scratch <a name="fromscratch"></a>
 

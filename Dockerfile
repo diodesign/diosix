@@ -6,7 +6,7 @@
 #
 
 # Establish base OS
-FROM debian:stable
+FROM debian:unstable
 
 # Bring in the necessary tools
 RUN apt update
