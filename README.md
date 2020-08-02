@@ -63,7 +63,7 @@ Press `Control-c` to exit.
 
 To build and run Diosix in Google Cloud from the latest source code, click the button below.
 
-[![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run)
+[![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/diodesign/diosix)
 
 Press `Control-c` to exit. Note you will be [billed](https://cloud.google.com/run/pricing) by Google for any resources used to build and run this container beyond your free allowance. Google Cloud Run documentation is [here](https://cloud.google.com/run).
 
