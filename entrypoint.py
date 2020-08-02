@@ -21,6 +21,8 @@ global command_result
 from flask import Flask
 
 if __name__ == "__main__":
+    print('{} {} {}', os.environ.get('K_SERVICE'), os.environ.get('K_REVISION'), os.environ.get('K_CONFIGURATION'))
+
     if (os.environ.get('K_SERVICE')) != '':
         print('Running HTTP service for Google Cloud')
         # app = Flask(__name__)
