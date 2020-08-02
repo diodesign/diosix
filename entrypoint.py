@@ -20,15 +20,13 @@ global command_result
 
 from flask import Flask
 
-# for Google Cloud Run
-@app.route('/')
-def ContainerService():
-    return 'Container built. Use docker images and docker run in the Google Cloud shell to run this container.\n'
-
 if __name__ == "__main__":
     if (os.environ.get('K_SERVICE')) != '':
         print('Running HTTP service for Google Cloud')
         app = Flask(__name__)
+        @app.route('/')
+        def ContainerService():
+            return 'Container built. Use docker images and docker run in the Google Cloud shell to run this container.\n'
         app.run(debug=True,host='0.0.0.0',port=int(os.environ.get('PORT', 8080)))
     else:
         print('Running locally')
