@@ -19,7 +19,6 @@ import sys
 global command_result
 
 from flask import Flask
-app = Flask(__name__)
 
 # for Google Cloud Run
 @app.route('/')
@@ -29,6 +28,7 @@ def ContainerService():
 if __name__ == "__main__":
     if (os.environ.get('K_SERVICE')) != '':
         print('Running HTTP service for Google Cloud')
+        app = Flask(__name__)
         app.run(debug=True,host='0.0.0.0',port=int(os.environ.get('PORT', 8080)))
     else:
         print('Running locally')
