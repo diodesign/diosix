@@ -76,7 +76,7 @@ To build Diosix in Google Cloud from its latest source code, click the button be
 
 [![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/diodesign/diosix)
 
-The Google Cloud Shell will open, and prompt you on which Google Cloud project and region to use. It will then build Diosix, and provide a URL to the resulting container's HTTP server. Visiting this URL will confirm the container was successfully built. To boot Diosix within this container, in the Google Cloud Shell, run:
+The Google Cloud Shell will open and prompt you on which Google Cloud project and region to use. It will then build Diosix, and provide a URL to the resulting container's HTTP server. Visiting this URL will confirm the container was successfully built. To boot Diosix within this container, in the Google Cloud Shell, run:
 
 ```
 docker images
