@@ -4,8 +4,7 @@
 #
 # On Google Cloud Run: Creates HTTP server on port 8080
 # or whatever was specified using the PORT system variable.
-# Use this to signal the build was successful and the container\
-# can be run via the command line.
+# Outputs via the HTTP port. This requires K_SERVICE to be set.
 #
 # On all other environments: Log to stdout
 #
@@ -29,8 +28,10 @@ def ContainerService():
 
 if __name__ == "__main__":
     if (os.environ.get('K_SERVICE')) != '':
+        print('Running HTTP service for Google Cloud')
         app.run(debug=True,host='0.0.0.0',port=int(os.environ.get('PORT', 8080)))
     else:
+        print('Running locally')
         stream = os.popen('. $HOME/.cargo/env && cd /build/diosix && {}'.format(' '.join(sys.argv[1:])))
         output = stream.read()
         output
