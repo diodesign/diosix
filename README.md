@@ -68,7 +68,7 @@ CPU#0
  mstatus  0000000000000088
 ```
 
-Run the monitor command `quit` to exit the emulation and the container. Further instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
+Run the monitor command `quit` to exit the emulation and the container. Further instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/systgit pem/monitor.html).
 
 ### Quickstart using Google Cloud Run <a name="cloudrun"></a>
 
@@ -88,7 +88,7 @@ gcr.io/refreshing-park-100423/diosix   latest              3aba4a35e78e        4
 To boot the hypervisor in this container in the Cloud Shell, run:
 
 ```
-docker run --rm -ti `docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "(gcr\.io\/){1}([a-z0-9\-]+)\/(diosix:latest){1}"`
+docker run --rm -ti `docker images | grep -o -E "(gcr\.io\/){1}([a-z0-9\-]+)\/(diosix){1}"`
 ```
 
 The output should be similar to:
