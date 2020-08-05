@@ -68,7 +68,7 @@ CPU#0
  mstatus  0000000000000088
 ```
 
-Run the monitor command `quit` to exit the emulation and the container. Further instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/systgit pem/monitor.html).
+Run the monitor command `quit` to shut down the emulation and the container. Further instructions on how to use Qemu's monitor [are here](https://www.qemu.org/docs/master/system/monitor.html).
 
 ### Quickstart using Google Cloud Run <a name="cloudrun"></a>
 
@@ -101,7 +101,7 @@ The output should be similar to:
 [?] CPU 0: Debugging enabled, 4 CPU cores found
 ```
 
-Press `Control-a` then `c` to escape to the Qemu monitor. Run the monitor command `quit` to shutdown the emulator and the container.
+Press `Control-a` then `c` to escape to the Qemu monitor. Run the monitor command `quit` to shut down the emulator and the container.
 
 Note: you will be [billed](https://cloud.google.com/run/pricing) by Google for any resources used to build and run this container beyond your free allowance. The Google Cloud Run documentation is [here](https://cloud.google.com/run).
 
