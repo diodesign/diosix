@@ -1,1 +1,6 @@
 theme: jekyll-theme-dinky
+markdown: gfm
+show_downloads: no
+
+author: Chris Williams
+description: Homepage for the Diosix project
