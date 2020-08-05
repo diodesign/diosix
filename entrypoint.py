@@ -16,9 +16,10 @@
 import os
 import sys
 
-global command_result
-
 from flask import Flask
+
+# the paths to load the Cargo config and select the diosix directory are derived from the Dockerfile
+# this python isn't the most elegant -- feel free to fix up and send a pull request
 
 if __name__ == "__main__":
     if not os.environ.get('K_SERVICE'):

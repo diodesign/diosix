@@ -72,28 +72,23 @@ Run the monitor command `quit` to exit the emulation and the container. Further 
 
 ### Quickstart using Google Cloud Run <a name="cloudrun"></a>
 
-To build Diosix in Google Cloud from its latest source code, click the button below.
+To build and run Diosix in Google Cloud using Google Cloud Run, click the button below.
 
 [![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/diodesign/diosix)
 
-The Google Cloud Shell will open and prompt you on which Google Cloud project and region to use. It will then build Diosix, and provide a URL to the resulting container's HTTP server. Visiting this URL will confirm the container was successfully built. To boot Diosix within this container, in the Google Cloud Shell, run:
+The Google Cloud Shell will open and ask you to select which Google Cloud project and region to use for these next steps. Google Cloud Run will then build a container image from the latest Diosix source code, and run it. In this environment, the container will not boot the hypervisor, and instead will start a web server that serves a page confirming it was built successfully. Google Cloud Run will provide, in the Google Cloud Shell, a HTTPS URL to that server.
 
-```
-docker images
-```
-
-This should produce an output similar to:
+In the Cloud Shell, run `docker images` to see the newly built container. The output should be similar to:
 
 ```
 REPOSITORY                             TAG                 IMAGE ID            CREATED             SIZE
-gcr.io/refreshing-park-100423/diosix   latest              0188ab69c926        18 minutes ago      2.15GB
-debian                                 unstable            6dffb2284dce        11 days ago         119MB
+gcr.io/refreshing-park-100423/diosix   latest              3aba4a35e78e        43 minutes ago      2.15GB
 ```
 
-To run the Diosix container image created by Google Cloud Run, take the `gcr.io` repository path shown in the above command's output, and pass it to `docker run`. In other words, run the command below but substitute `gcr.io/refreshing-park-100423/diosix` for the repository provided by the above `docker images` command:
+To boot the hypervisor in this container in the Cloud Shell, run:
 
 ```
-docker run -ti --rm gcr.io/refreshing-park-100423/diosix
+docker run --rm -ti `docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "(gcr\.io\/){1}([a-z0-9\-]+)\/(diosix:latest){1}"`
 ```
 
 The output should be similar to:
@@ -106,9 +101,9 @@ The output should be similar to:
 [?] CPU 0: Debugging enabled, 4 CPU cores found
 ```
 
-Press `Control-a` then `c` to escape to the Qemu monitor. Run the monitor command `quit` to exit the emulator and the container.
+Press `Control-a` then `c` to escape to the Qemu monitor. Run the monitor command `quit` to shutdown the emulator and the container.
 
-Note you will be [billed](https://cloud.google.com/run/pricing) by Google for any resources used to build and run this container beyond your free allowance. The Google Cloud Run documentation is [here](https://cloud.google.com/run).
+Note: you will be [billed](https://cloud.google.com/run/pricing) by Google for any resources used to build and run this container beyond your free allowance. The Google Cloud Run documentation is [here](https://cloud.google.com/run).
 
 ### Build a Diosix Docker container <a name="container"></a>
 
