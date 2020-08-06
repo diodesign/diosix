@@ -81,7 +81,7 @@ fn exception(irq: IRQ)
             debughousekeeper!(); // flush the debug output 
 
             /* stop here if we hit an unhandled fatal exception */
-            if fatal == true
+            // if fatal == true
             {
                 loop {}
             }
