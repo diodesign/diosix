@@ -122,6 +122,7 @@ fn housekeeping()
 {
     /* hook into housekeeping functions here with suitable macros */
     debughousekeeper!(); /* drain the debug logs to the debug hardware port */
+    heaphousekeeper!(); /* return any unused regions of physical memory */
     physmemhousekeeper!(); /* tidy up any physical memory structures */
 
     /* if the global queues are empty then work out which physical CPU core

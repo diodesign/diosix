@@ -351,10 +351,30 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
     }
 }
 
-/* deallocate a region so that its physical RAM can be reallocated
+/* deallocate a region so that its physical RAM can be reallocated.
+   only accept samll regions that are multiples of PHYS_RAM_SMALL_REGION_MIN_SIZE
+   and large regions that are multiples of PHYS_RAM_LARGE_REGION_MIN_SIZE
    => to_free = region to deallocate
    <= Ok for success, or an error code for failure */
 pub fn dealloc_region(to_free: Region) -> Result<(), Cause>
 {
+    let size = to_free.size();
+
+    /* police the size of the region */
+    if size < PHYS_RAM_LARGE_REGION_MIN_SIZE
+    {
+        if size % PHYS_RAM_SMALL_REGION_MIN_SIZE != 0
+        {
+            return Err(Cause::PhysRegionSmallNotMultiple);
+        }
+    }
+    else
+    {
+        if size % PHYS_RAM_LARGE_REGION_MIN_SIZE != 0
+        {
+            return Err(Cause::PhysRegionLargeNotMultiple);
+        }
+    }
+
     REGIONS.lock().insert(to_free)
 }

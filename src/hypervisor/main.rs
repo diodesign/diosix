@@ -50,6 +50,7 @@ extern crate platform;
 #[macro_use]
 mod debug;      /* get us some kind of debug output, typically to a serial port */
 mod hardware;   /* parse device trees into hardware objects */
+#[macro_use]
 mod heap;       /* per-CPU private heap management */
 mod abort;      /* implement abort() and panic() handlers */
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */

@@ -33,18 +33,19 @@ use core::mem;
 use core::fmt;
 use core::result::Result;
 use platform::physmem::{barrier, PhysMemSize, PhysMemBase};
-use super::physmem::alloc_region;
+use super::physmem::{self, alloc_region};
 use super::error::Cause;
 
 /* different states each recognized heap block can be in */
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 enum HeapMagic
 {
-    Free = 0x0deadded,
-    InUse = 0x0d10c0de
+    Free   = 0x0deadded,
+    InUse  = 0x0d10c0de
 }
 
 /* source of a heap block */
+#[derive(PartialEq, Debug, Clone, Copy)]
 enum HeapSource
 {
     Fixed,      /* allocated during startup by platform code */
@@ -162,6 +163,12 @@ impl fmt::Debug for Heap
         write!(f, "size: {} alloc'd {} free {} largest alloc'd {} largest free {}",
             alloc_total + free_total, alloc_total, free_total, largest_alloc, largest_free)
     }
+}
+
+/* clean up heap list by returning chunks of free temporary physical RAM */
+macro_rules! heaphousekeeper
+{
+    () => ((*<super::pcore::PhysicalCore>::this()).heap.return_unused();)
 }
 
 impl Heap
@@ -358,6 +365,66 @@ impl Heap
         }
 
         return Result::Err(Cause::HeapNoFreeMem);
+    }
+
+    /* deallocate any free temporary physical memory regions that are no longer needed */
+    pub fn return_unused(&mut self)
+    {
+        /* ensure all blocks are gathered up */
+        loop
+        {
+            if self.consolidate() < HEAP_BLOCK_SIZE
+            {
+                break;
+            }
+        }
+
+        /* search for unused physical memory blocks to return */
+        let mut block = self.block_list_head;
+        let mut prev_block: Option<*mut HeapBlock> = None;
+        unsafe
+        {
+            loop
+            {
+                match ((*block).source, (*block).magic)
+                {
+                    /* remove physical region from single-linked list if successfully deallocated.
+                    the physical memory manager will avoid fragmentation by rejecting regions that
+                    are not multiples of prefered region sizes */
+                    (HeapSource::Temporary, HeapMagic::Free) =>
+                    {
+                        let region = physmem::Region::new(block as PhysMemBase, (*block).size);
+                        if physmem::dealloc_region(region).is_ok()
+                        {
+                            hvdebug!("Returning heap block {:p}, size {}, to physical memory pool",
+                            block, (*block).size);
+
+                            /* delink the block - do not touch the contents of the
+                            deallocated block: it's back in the pool and another CPU core
+                            could grab it at any time. After dealloc_region() returns Ok,
+                            it's gone as far as this core is concerned. */
+                            match prev_block
+                            {
+                                Some(b) => (*b).next = (*block).next,
+                                None => ()
+                            };
+                        }
+                    },
+
+                    (_, _) => ()
+                }
+
+                match (*block).next
+                {
+                    Some(n) =>
+                    {
+                        prev_block = Some(block);
+                        block = n;
+                    }
+                    None => break
+                };
+            }
+        }
     }
 
     /* pass once over the heap and try to merge adjacent free blocks

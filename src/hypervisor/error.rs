@@ -40,6 +40,8 @@ pub enum Cause
     PhysRegionNoMatch,
     PhysRegionSplitOutOfBounds,
     PhysRegionRegionAlignmentFailure,
+    PhysRegionSmallNotMultiple,
+    PhysRegionLargeNotMultiple,
 
     /* capsule virtual memory */
     VirtMemPhysNotSet,
