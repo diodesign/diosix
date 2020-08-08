@@ -5,6 +5,15 @@
  * Any CPU can free them back to the owner's heap pool when
  * they are done with these allocations.
  * 
+ * Thus this code is *single threaded* per individual CPU core
+ * 
+ * Each CPU heap is primed with a small amount of fixed
+ * physical RAM, defined by the platform code. When this
+ * fixed pool runs low, the heap code requests a temporary
+ * block of memory from the physical memory manager. 
+ * this block is added as a free block to the heap and
+ * subsequently allocated from.
+ *  
  * We use Rust's memory safety features to prevent any
  * use-after-free(). Blocks are free()'d atomically
  * preventing any races.
@@ -23,11 +32,11 @@ use core::ptr::null_mut;
 use core::mem;
 use core::fmt;
 use core::result::Result;
-use platform::physmem::{barrier, PhysMemSize};
+use platform::physmem::{barrier, PhysMemSize, PhysMemBase};
+use super::physmem::alloc_region;
 use super::error::Cause;
 
 /* different states each recognized heap block can be in */
-#[repr(C)]
 #[derive(PartialEq, Debug)]
 enum HeapMagic
 {
@@ -35,8 +44,15 @@ enum HeapMagic
     InUse = 0x0d10c0de
 }
 
+/* source of a heap block */
+enum HeapSource
+{
+    Fixed,      /* allocated during startup by platform code */
+    Temporary   /* allocated dynamically from physical memory pool */
+}
+
 /* to avoid fragmentation, allocate in block sizes of this multiple, including header */
-const HEAP_BLOCK_SIZE: usize = 64;
+const HEAP_BLOCK_SIZE: usize = 128;
 
 /* follow Rust's heap allocator API so we can drop our per-CPU allocator in and use things
 like Box. We allow the Rust toolchain to track and check pointers and object lifetimes,
@@ -81,7 +97,9 @@ pub struct HeapBlock
     /* size of this block *including* header */
     size: PhysMemSize,
     /* define block state using magic words */
-    magic: HeapMagic
+    magic: HeapMagic,
+    /* define the source of the memory */
+    source: HeapSource
     /* block contents follows... */
 }
 
@@ -150,6 +168,8 @@ impl Heap
 {
     /* initialize this heap area. start off with one giant block
     covering all of free space, from which other blocks will be carved.
+    this initial block is assuemd to be a fixed platform-allocated area
+    of physical memory.
     => start = pointer to start of heap area
        size = number of available bytes in heap */
     pub fn init(&mut self, start: *mut HeapBlock, size: PhysMemSize)
@@ -161,15 +181,38 @@ impl Heap
             (*block).size = size;
             (*block).next = None;
             (*block).magic = HeapMagic::Free;
+            (*block).source = HeapSource::Fixed;
 
             self.block_header_size = mem::size_of::<HeapBlock>();
             self.block_list_head = block;
         }
     }
 
+    /* insert a free temporary physical memory block at the head of the list
+    => base = base address of the memory block to add
+       size = total size of the block, including header that will be automatically added
+    <= OK or error code */
+    pub fn insert_free(&mut self, base: PhysMemBase, size: PhysMemSize) -> Result<(), Cause>
+    {
+        unsafe
+        {
+            /* craft free block from scratch */
+            let block = base as *mut HeapBlock;
+            (*block).size = size;
+            (*block).next = Some(self.block_list_head);
+            (*block).magic = HeapMagic::Free;
+            (*block).source = HeapSource::Temporary;
+
+            /* add the free block to the start of the list */
+            self.block_list_head = block;
+        }
+
+        Ok(())
+    }
+
     /* free a previously allocated block
     => to_free = pointer previously returned by alloc()
-    <= success or failure code */
+    <= OK or failure code */
     pub fn free<T>(&mut self, to_free: *mut T) -> Result<(), Cause>
     {
         /* convert this into a raw pointer so we can find the heap block header */
@@ -208,10 +251,11 @@ impl Heap
         }
 
         let mut done = false;
+        let mut extended = false;
 
         /* calculate size of block required, including header, rounded up to
         nearest whole heap block multiple */
-        let mut size_req = (mem::size_of::<T>() * num) + mem::size_of::<HeapBlock>();
+        let mut size_req = (mem::size_of::<T>() * num) + self.block_header_size;
         size_req = ((size_req / HEAP_BLOCK_SIZE) + 1) * HEAP_BLOCK_SIZE;
 
         /* scan all blocks for first free fit */
@@ -262,8 +306,46 @@ impl Heap
                 {
                     None => if self.consolidate() < HEAP_BLOCK_SIZE
                     {
-                        /* if we can't squeeze any more bytes out then give up */
-                        done = true;
+                        if extended == false
+                        {
+                            /* if we can't squeeze any more bytes out of the list
+                            then grab a chunk of available RAM from the physical
+                            memory manager and add it to the free list */
+                            let region = match alloc_region(size_req)
+                            {
+                                Ok(r) => r,
+                                Err(e) =>
+                                {
+                                    /* give up and bail out if there's no more physical memory */
+                                    hvdebug!("Failed to extend heap by {} bytes: {:?}", size_req, e);
+                                    return Result::Err(Cause::HeapNoFreeMem);
+                                }
+                            };
+
+                            hvdebug!("Extending heap by {} bytes (needed {}), base: 0x{:x}",
+                            region.size(), size_req, region.base());
+
+                            if self.insert_free(region.base(), region.size()).is_ok()
+                            {
+                                extended = true;
+
+                                /* start the search over, starting with the new block */
+                                search_block = self.block_list_head;
+                            }
+                            else
+                            {
+                                /* if we couldn't insert free block, give up */
+                                done = true;
+                            }
+                        }
+                        else
+                        {
+                            /* can't squeeze any more out of list and we've tried allocating more
+                            physical memory. give up at this point, though we shouldn't really
+                            end up here */
+                            hvdebug!("Giving up allocating {} bytes", size_req);
+                            done = true;
+                        }
                     }
                     else
                     {
@@ -278,7 +360,7 @@ impl Heap
         return Result::Err(Cause::HeapNoFreeMem);
     }
 
-    /* pass once over the heap and try to merge adjacent blocks
+    /* pass once over the heap and try to merge adjacent free blocks
     <= size of the largest block seen, in bytes including header */
     fn consolidate(&mut self) -> PhysMemSize
     {

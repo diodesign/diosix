@@ -78,10 +78,11 @@ fn exception(irq: IRQ)
         {
             hvalert!("Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}, fatal = {:?}",
                 privilege, cause, irq.pc, irq.sp, fatal);
+            hvalert!("Halting");
             debughousekeeper!(); // flush the debug output 
 
             /* stop here if we hit an unhandled fatal exception */
-            if fatal == true
+            // if fatal == true
             {
                 loop {}
             }

@@ -139,6 +139,10 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
     resources. all non-boot CPUs should wait until global resources are ready. */
     pcore::PhysicalCore::init(cpu_nr);
 
+    /* note that pre-physmem::init(), CPU cores rely on their pre-hventry()-assigned
+    heap space. after physmem::init(), CPU cores can extend their heaps using physical memory.
+    the hypervisor will become stuck pre-physmem::init() if it goes beyond its assigned heap space. */
+
     match cpu_nr
     {
         /* delegate to boot CPU the welcome banner and set up global resources */
@@ -154,6 +158,7 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
             /* say hello via the debug port */
             hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
             hvdebug!("Debugging enabled, {} CPU cores found", hardware::get_nr_cpu_cores().unwrap_or(0));
+            debughousekeeper!();
 
             /* initialize boot capsule */
             capsule::create_boot_capsule()?;
@@ -184,6 +189,7 @@ fn hvalloc_error(attempt: core::alloc::Layout) -> !
 {
     let heap = &(*<pcore::PhysicalCore>::this()).heap;
     hvalert!("hvalloc_error: Failed to allocate/free {} bytes. Heap: {:?}", attempt.size(), heap);
+    debughousekeeper!();
     loop {} /* it would be nice to be able to not die here :( */
 }
 

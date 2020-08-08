@@ -1,6 +1,6 @@
 /* diosix error codes
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -39,6 +39,7 @@ pub enum Cause
     PhysRegionCollision,
     PhysRegionNoMatch,
     PhysRegionSplitOutOfBounds,
+    PhysRegionRegionAlignmentFailure,
 
     /* capsule virtual memory */
     VirtMemPhysNotSet,

@@ -1,8 +1,25 @@
 /* diosix hypervisor physical memory management
  *
- * Allocate/free regions of memory for supervisors.
- * these regions can be used in 1:1 mappings or used
- * as RAM backing for virtual memory.
+ * allocate/free contiguous regions of physical memory.
+ * these regions are categorized into two groups,
+ * depending on the region size.
+ *
+ * large: >= PHYS_RAM_LARGE_REGION_MIN_SIZE
+ * large regions are sized in multiples of
+ * PHYS_RAM_LARGE_REGION_MIN_SIZE and are allocated
+ * from the top of free region blocks, descending.
+ * these are aimed at large blocks of contiguous
+ * memory for guest supervisor OSes.
+ * 
+ * small: < PHYS_RAM_LARGE_REGION_MIN_SIZE
+ * small regions are sized in multiples of
+ * PHYS_RAM_SMALL_REGION_MIN_SIZE and are allocated
+ * from the bottom of free region blocks, ascending
+ * these are aimed at small blocks of memory
+ * for the hypervisor's private per-CPU heaps.
+ * 
+ * this arrangement is to avoid large and small
+ * allocations fragmenting free region blocks
  * 
  * (c) Chris Williams, 2019-2020.
  *
@@ -23,9 +40,22 @@ pub fn boot_supervisor() -> Region
     Region { base: base, size: end - base }
 }
 
-/* to avoid fragmentation, round up physical memory region allocations into whole numbers of these bytes.
-this only applies when creating regions with alloc_region() */
-const PHYS_RAM_REGION_MIN_SIZE: PhysMemSize = 64 * 1024 * 1024; /* 64MB ought to be enough for anyone */
+/* to avoid fragmentation, round up physical memory region allocations into multiples of these totals,
+depending on the region type. this only applies when creating regions with alloc_region() */
+const PHYS_RAM_LARGE_REGION_MIN_SIZE: PhysMemSize = 64 * 1024 * 1024; /* 64MB ought to be enough for anyone */
+const PHYS_RAM_SMALL_REGION_MIN_SIZE: PhysMemSize =  1 * 1024 * 1024; /* smaller blocks are multiples of 1MB in size */
+
+/* ensure large region bases are aligned down to multiples of this value
+   note: region minimum size must be a non-zero multiple of region base alignment */
+const PHYS_RAM_LARGE_REGION_ALIGNMENT: PhysMemSize = 4 * 1024 * 1024; /* 4MB alignment */
+
+/* define whether to split a region N bytes from the top or from the bottom */
+#[derive(Clone, Copy, Debug)]
+pub enum RegionSplit
+{
+    FromBottom,
+    FromTop
+}
 
 /* describe a physical memory region */
 #[derive(Copy, Clone)]
@@ -59,9 +89,12 @@ impl Region
     pub fn end(&self) -> PhysMemEnd { self.base + self.size }
     pub fn size(&self) -> PhysMemSize { self.size }
 
-    /* cut the region into two portions, at the 'count' byte mark. return two regions: the lower and upper
-    portions of the split region, or a failure code */
-    pub fn split(&self, count: PhysMemSize) -> Result<(Region, Region), Cause>
+    /* split the region into two portions, lower and upper, and return the two portions
+    => count = split the region this number of bytes into the block
+       measure_from = FromBottom: count is number of bytes from bottom of the block, ascending
+                      FromTop: count is number of bytes from the top of the block, descending
+    <= return two portions as regions, lower and upper, or a failure code */
+    pub fn split(&self, count: PhysMemSize, measure_from: RegionSplit) -> Result<(Region, Region), Cause>
     {
         /* check the split mark is within bounds */
         if count > self.size
@@ -69,15 +102,27 @@ impl Region
             return Err(Cause::PhysRegionSplitOutOfBounds);
         }
 
-        let lower = Region::new(self.base, count);
-        let upper = Region::new(self.base + count, self.size - count);
-        Ok((lower, upper))
+        /* return (lower, upper) */
+        Ok(match measure_from
+        {
+            RegionSplit::FromBottom =>
+            (
+                Region::new(self.base, count),
+                Region::new(self.base + count, self.size - count)
+            ),
+            
+            RegionSplit::FromTop =>
+            (
+                Region::new(self.base, self.size - count),
+                Region::new(self.base + self.size - count, count)
+            ),
+        })
     }
 }
 
-/* gather up all physical RAM areas from which future capsule physical
+/* gather up all physical RAM areas from which future capsule and heap physical
 RAM allocations will be drawn into the REGIONS list. this list is built from
-available physical RAM: it must *not* include any RAM areas already in use by
+available, free physical RAM: it must *not* include any RAM areas already in use by
 the hypervisor, boot supervisor image, peripherals, etc. the underlying
 platform code needs to exclude those off-limits areas.
 
@@ -109,7 +154,7 @@ impl SortedRegions
 
     /* find a region that has a size equal to or greater than the required size.
        if one is found, remove the region and return it. if one can't be found,
-       return None. */
+       return an error code. */
     pub fn find(&mut self, required_size: PhysMemSize) -> Result<Region, Cause>
     {
         for index in 0..self.regions.len()
@@ -222,33 +267,84 @@ pub fn coalesce_regions()
     REGIONS.lock().merge();
 }
 
-/* allocate a region of available physical memory for capsule use
-   => size = number of bytes in region, rounded up to next multiple of PHYS_RAM_REGION_MIN_SIZE
+/* allocate a region of available physical memory for guest capsule or hypervisor heap use.
+   capsules should use large regions, and the heap should use small, ideally. 
+   => size = number of bytes for the region, which will be rounded up to next multiple of:
+     PHYS_RAM_LARGE_REGION_MIN_SIZE if the size >= PHYS_RAM_LARGE_REGION_MIN_SIZE (large type)
+     PHYS_RAM_SMALL_REGION_MIN_SIZE if the size < PHYS_RAM_LARGE_REGION_MIN_SIZE (small type)
+
+     note, large type regions will have a base address aligned down to PHYS_RAM_LARGE_REGION_ALIGNMENT
+     this is so that guests that require 2MB or 4MB kernel alignment (eg RV64GC Linux) work as expected
+     see: https://patchwork.kernel.org/patch/10868465/
+     this code assumes the top of physically available RAM is aligned to PHYS_RAM_LARGE_REGION_ALIGNMENT
+
    <= Region structure for the space, or an error code */
 pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
 {
-    /* round up to a multiple of the minimum size of a region to avoid fragmentation */
-    let adjusted_size = match size % PHYS_RAM_REGION_MIN_SIZE
+    /* determine where to split the free region block, and the region type */
+    let (split_from, region_multiple) = if size >= PHYS_RAM_LARGE_REGION_MIN_SIZE
+    {
+        (RegionSplit::FromTop, PHYS_RAM_LARGE_REGION_MIN_SIZE)
+    }
+    else
+    {
+        (RegionSplit::FromBottom, PHYS_RAM_SMALL_REGION_MIN_SIZE)
+    };
+
+    /* round up to a multiple of the minimum size of a region type to avoid fragmentation */
+    let adjusted_size = match size % region_multiple
     {
         0 => size,
-        r => (size - r) + PHYS_RAM_REGION_MIN_SIZE
+        d => (size - d) + region_multiple
     };
 
     let mut regions = REGIONS.lock();
-    match regions.find(adjusted_size) // find will remove found region if successful 
+    match regions.find(adjusted_size) // find will remove found region from free list if successful 
     {
         Ok(found) => 
         {
-            /* split the found region into two parts: the lower portion for the newly
-            allocated region, and the remaining upper portion which is returned to the free list */
-            match found.split(adjusted_size)
+            /* split the found region into two parts: one portion for the newly
+            allocated region, and the remaining portion is returned to the free list.
+            adjusted_size defines whwre in the region the split point occurs.
+            split_from defines whether adjusted_size is measured from the top or
+            bottom of the region block */
+            match (found.split(adjusted_size, split_from), split_from)
             {
-                Ok((lower, upper)) =>
+                /* split so that the lower portion is allocated, and the upper portion is returned to the free list */
+                (Ok((lower, upper)), RegionSplit::FromBottom) =>
                 {
                     regions.insert(upper)?;
                     Ok(lower)
                 },
-                Err(e) => Err(e)
+
+                /* split so that the upper portion is allocated, and the lower portion is returned to the free list */
+                (Ok((lower, upper)), RegionSplit::FromTop) =>
+                {
+                    /* bring the base of the upper portion down to alignment mark */
+                    let aligned_upper = match upper.base % PHYS_RAM_LARGE_REGION_ALIGNMENT
+                    {
+                        0 => Region::new(upper.base, upper.size),
+                        d => Region::new(upper.base - d, upper.size + d)
+                    };
+
+                    /* fail out if upper portion crashes through the lower portion base after alignment */
+                    if lower.size < aligned_upper.size - upper.size
+                    {
+                        return Err(Cause::PhysRegionRegionAlignmentFailure)
+                    }
+
+                    /* adjust the size of the lower portion if the upper portion was aligned down */
+                    let adjusted_lower = match aligned_upper.size - upper.size
+                    {
+                        0 => lower,
+                        d => Region::new(lower.base, lower.size - d)
+                    };
+
+                    regions.insert(adjusted_lower)?;
+                    Ok(aligned_upper)
+                },
+
+                (Err(e), _) => Err(e)
             }
         },
         Err(_) => Err(Cause::PhysNotEnoughFreeRAM)
