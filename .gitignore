@@ -21,3 +21,6 @@ target/
 
 # ignore IDE stuff for now
 .vscode
+
+# ignore Cargo metadata
+Cargo.lock
