@@ -76,9 +76,9 @@ To build and run Diosix in Google Cloud using Google Cloud Run, click the button
 
 [![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/diodesign/diosix)
 
-The Google Cloud Shell will open and ask you to select which Google Cloud project and region to use for these next steps. Google Cloud Run will then build a container image from the latest Diosix source code, and run it. In this environment, the container will not boot the hypervisor, and instead will start a web server that serves a page confirming it was built successfully. Google Cloud Run will provide, in the Google Cloud Shell, a HTTPS URL to that server.
+The Google Cloud Shell will open and ask you to select which Google Cloud project and region to use for these next steps. When selected, Google Cloud Run will then build a container image from the latest Diosix source code, and run it. In this environment, the container will not boot the hypervisor, and instead will start a web server that serves a page confirming the container was built successfully. Google Cloud Run will provide, in the Google Cloud Shell, a HTTPS URL to that server.
 
-In the Cloud Shell, run `docker images` to see the newly built container. The output should be similar to:
+In the Cloud Shell, run `docker images` to see the newly built container image. The output should be similar to:
 
 ```
 REPOSITORY                             TAG                 IMAGE ID            CREATED             SIZE
@@ -116,7 +116,7 @@ docker build . --file Dockerfile --tag diosix
 docker run -ti --rm diosix
 ```
 
-Press `Control-a` and `c` to escape to the emulator. Run the monitor command `quit` to exit the simulation and destroy the container.
+Press `Control-a` and `c` to escape to the emulator. Run the monitor command `quit` to exit the simulation and the container.
 
 ### Build Diosix from scratch <a name="fromscratch"></a>
 
