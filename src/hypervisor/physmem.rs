@@ -77,6 +77,23 @@ impl Region
         }
     }
 
+    /* wipe the contents of a region with zeros */
+    pub fn zero(&self)
+    {
+        let block = self.base;
+        let step = core::mem::size_of::<usize>();
+        hvdebug!("Clearing physical RAM region 0x{:x}, {} bytes total, {} bytes at a time. Please wait...", self.base, self. size, step);
+        debughousekeeper!();
+
+        for index in 0..(self.size / step)
+        {
+            unsafe
+            {
+                *((block + (index * step)) as *mut usize) = 0;
+            }
+        }
+    }
+
     /* allow the currently running supervisor kernel to access this region of physical memory */
     pub fn grant_access(&self)
     {
@@ -314,6 +331,7 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
                 (Ok((lower, upper)), RegionSplit::FromBottom) =>
                 {
                     regions.insert(upper)?;
+                    lower.zero();
                     Ok(lower)
                 },
 
@@ -341,6 +359,7 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
                     };
 
                     regions.insert(adjusted_lower)?;
+                    aligned_upper.zero();
                     Ok(aligned_upper)
                 },
 

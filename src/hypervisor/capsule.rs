@@ -150,8 +150,8 @@ pub fn create_boot_capsule() -> Result<(), Cause>
     /* create an auto-restarting capsule */
     let capid = create(true)?;
 
-    /* reserve 128MB of physical RAM for the capsule */
-    let size = 128 * 1024 * 1024;
+    /* reserve 64MB of physical RAM for the capsule */
+    let size = 64 * 1024 * 1024;
     let cpus = 1;
     let ram = physmem::alloc_region(size)?;
 

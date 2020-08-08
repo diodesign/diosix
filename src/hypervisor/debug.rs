@@ -22,8 +22,8 @@ lazy_static!
 #[macro_export]
 macro_rules! hvlog
 {
-    ($fmt:expr) => (hvprintln!("[-] CPU {}: {}", $crate::pcore::PhysicalCore::get_id(), $fmt));
-    ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[-] CPU {}: ", $fmt), $crate::pcore::PhysicalCore::get_id(), $($arg)*));
+    ($fmt:expr) => (hvprintln!("[+] CPU {}: {}", $crate::pcore::PhysicalCore::get_id(), $fmt));
+    ($fmt:expr, $($arg:tt)*) => (hvprintln!(concat!("[+] CPU {}: ", $fmt), $crate::pcore::PhysicalCore::get_id(), $($arg)*));
 }
 
 /* bad news: bug detection, failures, etc. */
