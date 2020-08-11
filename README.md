@@ -101,7 +101,7 @@ The output should be similar to:
 [?] CPU 0: Debugging enabled, 4 CPU cores found
 ```
 
-Press `Control-a` then `c` to escape to the Qemu monitor. Run the monitor command `quit` to shut down the emulator and the container.
+Press `Control-a` then `x` to exit the emulator and shut down the container.
 
 Note: you will be [billed](https://cloud.google.com/run/pricing) by Google for any resources used to build and run this container beyond your free allowance. The Google Cloud Run documentation is [here](https://cloud.google.com/run).
 
@@ -116,7 +116,7 @@ docker build . --file Dockerfile --tag diosix
 docker run -ti --rm diosix
 ```
 
-Press `Control-a` and `c` to escape to the emulator. Run the monitor command `quit` to exit the simulation and the container.
+Press `Control-a` and `x` to exit to the emulator and shut down the container.
 
 ### Build Diosix from scratch <a name="fromscratch"></a>
 
