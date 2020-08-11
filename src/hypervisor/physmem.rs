@@ -85,11 +85,23 @@ impl Region
         hvdebug!("Clearing physical RAM region 0x{:x}, {} bytes total, {} bytes at a time. Please wait...", self.base, self. size, step);
         debughousekeeper!();
 
-        for index in 0..(self.size / step)
+        /* deal with the whole number of step bytes */
+        for index in 0..(self.size / step) as usize
         {
             unsafe
             {
                 *((block + (index * step)) as *mut usize) = 0;
+            }
+        }
+
+        /* finish off any leftover bytes */
+        let diff = self.size % step;
+        let end = self.size - diff;
+        for index in 0..diff
+        {
+            unsafe
+            {
+                *((block + end + index) as *mut u8) = 0;
             }
         }
     }
