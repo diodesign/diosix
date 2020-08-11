@@ -159,7 +159,6 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
             /* say hello via the debug port */
             hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
             hvdebug!("Debugging enabled, {} CPU cores found", hardware::get_nr_cpu_cores().unwrap_or(0));
-            debughousekeeper!();
 
             /* initialize boot capsule */
             capsule::create_boot_capsule()?;

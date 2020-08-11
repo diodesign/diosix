@@ -37,7 +37,7 @@ use super::hardware;
 pub fn boot_supervisor() -> Region
 {
     let (base, end) = platform::physmem::boot_supervisor();
-    Region { base: base, size: end - base }
+    Region { base: base, size: end - base, hygiene: RegionHygiene::DontClean }
 }
 
 /* to avoid fragmentation, round up physical memory region allocations into multiples of these totals,
@@ -57,51 +57,80 @@ pub enum RegionSplit
     FromTop
 }
 
+/* define whether a region is dirty or clean: if it's allocated then it's
+assumed to be dirty. if it's not been allocated yet, or has been zeroed,
+it's considered clean. this is to ensure regions don't leak data when
+reallocated and also aren't unnecessarily zeroed */
+#[derive(Clone, Copy, Debug)]
+pub enum RegionHygiene
+{
+    DontClean, /* don't zero this region */
+    Clean,  /* region hasn't been allocated, or has been zeroed */
+    Dirty   /* region has been allocated and not been zeroed */
+}
+
 /* describe a physical memory region */
 #[derive(Copy, Clone)]
 pub struct Region
 {
     base: PhysMemBase,
     size: PhysMemSize,
+    hygiene: RegionHygiene
 }
 
 impl Region
 {
     /* create a new region */
-    pub fn new(base: PhysMemBase, size: PhysMemSize) -> Region
+    pub fn new(base: PhysMemBase, size: PhysMemSize, hygiene: RegionHygiene) -> Region
     {
         Region
         {
             base: base,
-            size: size
+            size: size,
+            hygiene: hygiene
         }
     }
 
-    /* wipe the contents of a region with zeros */
-    pub fn zero(&self)
+    /* scrub a region with zeroes, if necessary, then mark it as dirty.
+    this is to ensure untouched regions can be used straight away whereas
+    previously allocated regions are wiped before re-use */
+    pub fn clean_then_dirty(&mut self)
     {
-        let block = self.base;
-        let step = core::mem::size_of::<usize>();
-        hvdebug!("Clearing physical RAM region 0x{:x}, {} bytes total, {} bytes at a time. Please wait...", self.base, self. size, step);
-        debughousekeeper!();
-
-        /* deal with the whole number of step bytes */
-        for index in 0..(self.size / step) as usize
+        match self.hygiene
         {
-            unsafe
+            RegionHygiene::DontClean =>
             {
-                *((block + (index * step)) as *mut usize) = 0;
-            }
-        }
+                hvalert!("BUG: Tried to clean {:?} region 0x{:x} size: {} bytes", self.hygiene, self.base, self.size);
+                return;
+            },
+            RegionHygiene::Clean => self.hygiene = RegionHygiene::Dirty,
+            RegionHygiene::Dirty =>
+            {
+                let block = self.base;
+                let step = core::mem::size_of::<usize>();
+                hvdebug!("Clearing physical RAM region 0x{:x}, {} bytes total", self.base, self. size);
+        
+                /* deal with the whole number of step bytes */
+                for index in 0..(self.size / step) as usize
+                {
+                    unsafe
+                    {
+                        *((block + (index * step)) as *mut usize) = 0;
+                    }
+                }
+        
+                /* finish off any leftover bytes */
+                let diff = self.size % step;
+                let end = self.size - diff;
+                for index in 0..diff
+                {
+                    unsafe
+                    {
+                        *((block + end + index) as *mut u8) = 0;
+                    }
+                }
 
-        /* finish off any leftover bytes */
-        let diff = self.size % step;
-        let end = self.size - diff;
-        for index in 0..diff
-        {
-            unsafe
-            {
-                *((block + end + index) as *mut u8) = 0;
+                self.hygiene = RegionHygiene::Dirty;
             }
         }
     }
@@ -118,7 +147,8 @@ impl Region
     pub fn end(&self) -> PhysMemEnd { self.base + self.size }
     pub fn size(&self) -> PhysMemSize { self.size }
 
-    /* split the region into two portions, lower and upper, and return the two portions
+    /* split the region into two portions, lower and upper, and return the two portions.
+    maintain the region's hygiene.
     => count = split the region this number of bytes into the block
        measure_from = FromBottom: count is number of bytes from bottom of the block, ascending
                       FromTop: count is number of bytes from the top of the block, descending
@@ -136,14 +166,14 @@ impl Region
         {
             RegionSplit::FromBottom =>
             (
-                Region::new(self.base, count),
-                Region::new(self.base + count, self.size - count)
+                Region::new(self.base, count, self.hygiene),
+                Region::new(self.base + count, self.size - count, self.hygiene)
             ),
             
             RegionSplit::FromTop =>
             (
-                Region::new(self.base, self.size - count),
-                Region::new(self.base + self.size - count, count)
+                Region::new(self.base, self.size - count, self.hygiene),
+                Region::new(self.base + self.size - count, count, self.hygiene)
             ),
         })
     }
@@ -274,11 +304,13 @@ pub fn init() -> Result<(), Cause>
     let mut regions = REGIONS.lock();
     for chunk in chunks
     {
-        /* ...and let validate_ram break each chunk in sections we can safely use */
+        /* ...and let validate_ram break each chunk in sections we can safely use.
+        assume the RAM is clean: the firmware or boot code should have wiped it,
+        or it should contain random values */
         for section in validate_ram(nr_cpu_cores, chunk)
         {
             hvdebug!("Enabling RAM region 0x{:x}, size {} MB", section.base, section.size / 1024 / 1024);
-            regions.insert(Region::new(section.base, section.size))?;
+            regions.insert(Region::new(section.base, section.size, RegionHygiene::Clean))?;
         }
     }
 
@@ -340,10 +372,10 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
             match (found.split(adjusted_size, split_from), split_from)
             {
                 /* split so that the lower portion is allocated, and the upper portion is returned to the free list */
-                (Ok((lower, upper)), RegionSplit::FromBottom) =>
+                (Ok((mut lower, upper)), RegionSplit::FromBottom) =>
                 {
                     regions.insert(upper)?;
-                    lower.zero();
+                    lower.clean_then_dirty();
                     Ok(lower)
                 },
 
@@ -351,10 +383,10 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
                 (Ok((lower, upper)), RegionSplit::FromTop) =>
                 {
                     /* bring the base of the upper portion down to alignment mark */
-                    let aligned_upper = match upper.base % PHYS_RAM_LARGE_REGION_ALIGNMENT
+                    let mut aligned_upper = match upper.base % PHYS_RAM_LARGE_REGION_ALIGNMENT
                     {
-                        0 => Region::new(upper.base, upper.size),
-                        d => Region::new(upper.base - d, upper.size + d)
+                        0 => Region::new(upper.base, upper.size, found.hygiene),
+                        d => Region::new(upper.base - d, upper.size + d, found.hygiene)
                     };
 
                     /* fail out if upper portion crashes through the lower portion base after alignment */
@@ -367,11 +399,11 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
                     let adjusted_lower = match aligned_upper.size - upper.size
                     {
                         0 => lower,
-                        d => Region::new(lower.base, lower.size - d)
+                        d => Region::new(lower.base, lower.size - d, found.hygiene)
                     };
 
                     regions.insert(adjusted_lower)?;
-                    aligned_upper.zero();
+                    aligned_upper.clean_then_dirty();
                     Ok(aligned_upper)
                 },
 

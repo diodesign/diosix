@@ -102,11 +102,11 @@ pub fn run_next(must_switch: bool)
             {
                 break;
             }
-
-            /* do some housekeeping seeing as we can't run workloads, either
-            because there's nothing to run or because we can't */
-            housekeeping();
         }
+
+        /* do some housekeeping seeing as we can't run workloads, either
+        because there's nothing to run or because we can't */
+        housekeeping();
     }
     else
     {

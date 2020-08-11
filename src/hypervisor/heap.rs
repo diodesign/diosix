@@ -33,7 +33,7 @@ use core::mem;
 use core::fmt;
 use core::result::Result;
 use platform::physmem::{barrier, PhysMemSize, PhysMemBase};
-use super::physmem::{self, alloc_region};
+use super::physmem::{self, alloc_region, RegionHygiene};
 use super::error::Cause;
 
 /* different states each recognized heap block can be in */
@@ -393,10 +393,10 @@ impl Heap
                     are not multiples of prefered region sizes */
                     (HeapSource::Temporary, HeapMagic::Free) =>
                     {
-                        let region = physmem::Region::new(block as PhysMemBase, (*block).size);
+                        let region = physmem::Region::new(block as PhysMemBase, (*block).size, RegionHygiene::Dirty);
                         if physmem::dealloc_region(region).is_ok()
                         {
-                            hvdebug!("Returning heap block {:p}, size {}, to physical memory pool",
+                            hvdebug!("Returning heap block {:p} size {} to physical memory pool",
                             block, (*block).size);
 
                             /* delink the block - do not touch the contents of the

@@ -37,23 +37,22 @@ docker run -ti --rm docker.pkg.github.com/diodesign/diosix/wip:lightweight-docke
 The output from the hypervisor should be similar to the following, indicating Diosix running on a quad-core 64-bit RISC-V machine with 512MiB of RAM:
 
 ```
-Compiling diosix v2.0.0 (/build/diosix)
-    Finished dev [unoptimized + debuginfo] target(s) in 41.20s
+   Compiling diosix v2.0.0 (/home/chris/Documents/src/rust/diosix)
+    Finished dev [unoptimized + debuginfo] target(s) in 0.64s
      Running `qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel target/riscv64gc-unknown-none-elf/debug/hypervisor`
-[?] CPU 0: Enabling RAM region 0x80ed4000, size 497 MB
-[-] CPU 0: Welcome to diosix 2.0.0
+[?] CPU 0: Enabling RAM region 0x80dd6000, size 498 MB
+[+] CPU 0: Welcome to diosix 2.0.0
 [?] CPU 0: Debugging enabled, 4 CPU cores found
-[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x80ed4000 in physical RAM
-[?] CPU 0: Loading supervisor ELF program area: 0x8004dc00 size 0x1e620 into 0x80ed4000
-[?] CPU 0: Loading supervisor ELF program area: 0x8006cc00 size 0xa2c0bc into 0x80ef3000
+[?] CPU 0: Clearing physical RAM region 0x9c000000, 67108864 bytes total. Please wait...
+[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x9c000000 in physical RAM
+[?] CPU 0: Loading supervisor ELF program area: 0x8004fa68 size 0x1e620 into 0x9c000000
+[?] CPU 0: Loading supervisor ELF program area: 0x8006ea68 size 0xa2c0bc into 0x9c01f000
 [?] CPU 0: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 1: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 2: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[?] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 0: Running vcore 0 in capsule 1
-[?] CPU 0: Granting ReadWriteExecute access to 0x80ed4000, 134217728 bytes
-[!] CPU 0: Fatal exception in Supervisor: Breakpoint at 0x80ed68c8, stack 0x817f9ff0
-[?] CPU 0: Tearing down capsule 0x80cdb000
+[?] CPU 0: Granting ReadWriteExecute access to 0x9c000000, 67108864 bytes
 ```
 
 Press `Control-a` then `c` to escape to the Qemu monitor. Run the monitor command `info registers -a` to list the CPU core states. You should see output similar to the following:
