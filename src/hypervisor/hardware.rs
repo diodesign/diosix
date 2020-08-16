@@ -8,6 +8,7 @@
 use alloc::vec::Vec;
 use spin::Mutex;
 use platform::devices::Devices;
+use platform::physmem::{PhysMemBase, PhysMemSize};
 use super::error::Cause;
 use super::pcore;
 
@@ -25,6 +26,7 @@ lazy_static!
 /* parse_and_init
    Parse a device tree structure to create a base set of hardware devices.
    also initialize the devices so they can be used.
+   call before using acquire_hardware_lock() to access HARDWARE.
    => device_tree = byte slice containing the device tree in physical memory
    <= return Ok for success, or error code on failure
 */
@@ -50,7 +52,8 @@ enum LockAttempts
 
 /* acquire a lock on HARDWARE. If this CPU core is supposed to be
    holding it already, then bust the lock so that it and others can
-   access it again. See notes above for OWNER.
+   access it again. Use this function to safely access HARDWARE.
+   HARDWARE may be held by a CPU core across IRQs. See notes above for OWNER.
    => attempts = try just Once or Multiple times to acquire lock
    <= Some MutexGuard containing the device structure, or None for unsuccessful */
 fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'static, core::option::Option<platform::devices::Devices>>>
@@ -92,7 +95,8 @@ fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'sta
 /* routines to interact with the system's base devices */
 
 /* write the string msg out to the debug logging console.
-   if the system is busy then return immediately, don't block. 
+   if the system is busy then return immediately, don't block.
+   => msg = string to write out
    <= true if able to write, false if not */
 pub fn write_debug_string(msg: &str) -> bool
 {
@@ -152,4 +156,23 @@ pub fn scheduler_timer_next(usecs: u64)
         Some(d) => d.scheduler_timer_next(usecs),
         None => ()
     };
+}
+
+/* clone the system's base device tree blob structure so it can be passed
+to guest capsules. the platform code should customize the tree to ensure
+peripherals are virtualized. the platform code therefore controls what
+hardware is provided. the hypervisor sets how many CPUs and RAM are available.
+the rest is decided by the platform code.
+   => cpus = number of virtual CPU cores in this capsule
+      mem_base = base physical address of the contiguous system RAM
+      mem_size = number of bytes available in the system RAM
+   <= returns 
+*/
+pub fn clone_dtb_for_capsule(cpus: usize, base: PhysMemBase, mem: PhysMemSize) -> Result<Vec<u8>, Cause>
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => Ok(d.spawn_virtual_environment(cpus, base, mem)),
+        None => Err(Cause::CantCloneDevices)
+    }
 }

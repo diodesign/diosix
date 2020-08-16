@@ -135,6 +135,31 @@ impl Region
         }
     }
 
+    /* fill the end of a region with an array of bytes. thus if the array is 10 bytes long,
+    the final 10 bytes of the region will be filled from that array, ascending
+    => bytes = array to write into the region
+    <= physical address for start of array in the region, or error code */
+    pub fn fill_end(&self, bytes: Vec<u8>) -> Result<PhysMemBase, Cause>
+    {
+        let array_size = bytes.len();
+
+        /* ensure we've got enough space to accomdate the array */
+        if self.size < array_size
+        {
+            return Err(Cause::PhysRegionTooSmall)
+        }
+
+        for index in 0..array_size
+        {
+            unsafe
+            {
+                *(((self.base + self.size) - (array_size - index)) as *mut u8) = bytes[index];
+            }
+        }
+
+        Ok((self.base + self.size) - array_size)
+    }
+    
     /* allow the currently running supervisor kernel to access this region of physical memory */
     pub fn grant_access(&self)
     {
