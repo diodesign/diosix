@@ -7,3 +7,6 @@
 [submodule "src/byterider"]
 	path = src/byterider
 	url = https://github.com/diodesign/byterider.git
+[submodule "src/qemuprint"]
+	path = src/qemuprint
+	url = https://github.com/diodesign/qemuprint.git
