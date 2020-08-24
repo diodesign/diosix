@@ -162,7 +162,7 @@ pub fn create_boot_capsule() -> Result<(), Cause>
     /* create device tree blob for the virtual hardware available to the guest
     capsule and copy into the end of the region's physical RAM.
     a zero-length DTB indicates something went wrong */
-    let guest_dtb = hardware::clone_dtb_for_capsule(cpus, ram.base(), ram.size())?;
+    let guest_dtb = hardware::clone_dtb_for_capsule(cpus, 0, ram.base(), ram.size())?;
     if guest_dtb.len() == 0
     {
         return Err(Cause::BootDeviceTreeBad);

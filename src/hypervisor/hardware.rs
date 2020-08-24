@@ -164,15 +164,20 @@ peripherals are virtualized. the platform code therefore controls what
 hardware is provided. the hypervisor sets how many CPUs and RAM are available.
 the rest is decided by the platform code.
    => cpus = number of virtual CPU cores in this capsule
+      boot_cpu_id = ID of system's boot CPU (typically 0)
       mem_base = base physical address of the contiguous system RAM
       mem_size = number of bytes available in the system RAM
    <= returns 
 */
-pub fn clone_dtb_for_capsule(cpus: usize, base: PhysMemBase, mem: PhysMemSize) -> Result<Vec<u8>, Cause>
+pub fn clone_dtb_for_capsule(cpus: usize, boot_cpu_id: u32, base: PhysMemBase, mem: PhysMemSize) -> Result<Vec<u8>, Cause>
 {
     match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
     {
-        Some(d) => Ok(d.spawn_virtual_environment(cpus, base, mem)),
+        Some(d) => match d.spawn_virtual_environment(cpus, boot_cpu_id, base, mem)
+        {
+            Some(v) => Ok(v),
+            None => Err(Cause::DeviceTreeBad)
+        },
         None => Err(Cause::CantCloneDevices)
     }
 }
