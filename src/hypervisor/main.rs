@@ -52,7 +52,7 @@ mod debug;      /* get us some kind of debug output, typically to a serial port 
 mod hardware;   /* parse device trees into hardware objects */
 #[macro_use]
 mod heap;       /* per-CPU private heap management */
-mod abort;      /* implement abort() and panic() handlers */
+mod panic;      /* implement panic() handlers */
 mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 #[macro_use]
 mod physmem;    /* manage host physical memory */
@@ -83,6 +83,13 @@ lazy_static!
     static ref INIT_DONE: Mutex<bool> = Mutex::new(false);
 }
 
+/* a physical CPU core obtaining this lock when it is false must create the boot capsule
+and set the flag to true. any other core obtaining it as true must release the lock */
+lazy_static!
+{
+    static ref BOOT_CAPSULE_CREATED: Mutex<bool> = Mutex::new(false);
+}
+
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 in future, we may support 16- or 128-bit, too. stick to usize as much as possible */
 
@@ -105,10 +112,14 @@ pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u
     a safe manner, assuming dtb_len is valid */
     let dtb = unsafe { slice::from_raw_parts(dtb_ptr, u32::from_be(dtb_len) as usize) };
 
-    /* if not then start the system as normal */
+    /* if not performing tests, start the system as normal */
     match hvmain(cpu_nr, dtb)
     {
-        Err(e) => hvalert!("Hypervisor failed to start. Reason: {:?}", e),
+        Err(e) =>
+        {
+            hvalert!("Hypervisor failed to start. Reason: {:?}", e);
+            debughousekeeper!(); /* attempt to flush queued debug to output */
+        },
         _ => () /* continue waiting for an IRQ to come in */
     };
 }
@@ -125,6 +136,10 @@ pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u
    If we're on a single CPU core then everything should still run OK.
    Assumes hardware and exception interrupts are enabled and handlers
    installed.
+
+   Also assumes all CPU cores are compatible ISA-wise. There is provision
+   for marking some cores as more powerful than others for systems with
+   a mix of performance and efficiency CPU cores.
 
    => cpu_nr = arbitrary CPU core ID number assigned by boot code,
                separate from hardware ID number.
@@ -146,7 +161,9 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
 
     match cpu_nr
     {
-        /* delegate to boot CPU the welcome banner and set up global resources */
+        /* delegate to boot CPU the welcome banner and set up global resources.
+        note: the platform code should ensure whichever CPU core is assigned
+        BOOT_PCORE_ID as its cpu_nr can initialize the hypervisor */
         BOOT_PCORE_ID => 
         {
             /* process device tree to create data structures representing system hardware,
@@ -160,9 +177,6 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
             hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
             hvdebug!("Debugging enabled, {} CPU cores found", hardware::get_nr_cpu_cores().unwrap_or(0));
 
-            /* initialize boot capsule */
-            capsule::create_boot_capsule()?;
-
             /* allow other cores to continue */
             *(INIT_DONE.lock()) = true;
         },
@@ -173,6 +187,29 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
 
     /* acknowledge we're alive and well, and report CPU core features */
     hvdebug!("Physical CPU core {:?} ready to roll", pcore::PhysicalCore::describe());
+
+    /* the hypervisor can't make any assumptions about the underlying hardware.
+    the boot capsule's device tree is derived from the host's device tree, modified
+    to virtualize the peripherals. the virtual CPU cores that will run the capsule
+    are based on the physical CPU core that creates it. ensure a suitable physical
+    CPU core creates the boot capsule. this is more straightforward than the hypervisor
+    getting stuck into trying to specify a hypothetical CPU core */
+    if pcore::PhysicalCore::smode_supported() == true
+    {
+        match BOOT_CAPSULE_CREATED.try_lock()
+        {
+            Some(mut flag) => match *flag
+            {
+                false =>
+                {
+                    capsule::create_boot_capsule()?;
+                    *flag = true;
+                },
+                true => ()
+            },
+            None => ()
+        }
+    }
 
     /* enable timer on this physical CPU core to start scheduling and running virtual cores */
     scheduler::start()?;

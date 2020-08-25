@@ -8,6 +8,7 @@
 use super::error::Cause;
 use super::capsule::CapsuleID;
 use platform::cpu::{SupervisorState, Entry};
+use platform::physmem::PhysMemBase;
 use super::scheduler;
 
 #[derive(Copy, Clone, Debug)]
@@ -43,10 +44,12 @@ impl VirtualCore
     /* create a virtual CPU core for a supervisor capsule
        => capsule = ID of the capsule
           core = virtual core ID within the capsule
-          entry = pointer to where to begin execution 
+          entry = pointer to where to begin execution
+          dtb = physical address of the device tree blob
+                describing the virtual CPU's hardware environment
           priority = virtual core's priority
        <= OK for success, or error code */
-    pub fn create(capsuleid: CapsuleID, core: VirtualCoreID, entry: Entry, priority: Priority) -> Result<(), Cause>
+    pub fn create(capsuleid: CapsuleID, core: VirtualCoreID, entry: Entry, dtb: PhysMemBase, priority: Priority) -> Result<(), Cause>
     {
         let new_vcore = VirtualCore
         {
@@ -56,7 +59,7 @@ impl VirtualCore
                 vcoreid: core
             },
             priority: priority,
-            state: platform::cpu::supervisor_state_from(entry)
+            state: platform::cpu::init_supervisor_state(core, entry, dtb)
         };
 
         /* add virtual CPU core to the global waiting list queue */

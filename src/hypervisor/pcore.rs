@@ -125,7 +125,7 @@ impl PhysicalCore
     }
 
     /* return a structure describing this core */
-    pub fn describe() -> platform::cpu::CPUDescription { platform::cpu::CPUDescription::new() }
+    pub fn describe() -> platform::cpu::CPUDescription { platform::cpu::CPUDescription }
 
     /* return a virtual CPU core awaiting to run on this physical CPU core */
     pub fn dequeue() -> Option<VirtualCore>

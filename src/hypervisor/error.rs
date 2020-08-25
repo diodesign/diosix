@@ -14,6 +14,8 @@ pub enum Cause
 
     /* devices */
     DeviceTreeBad,
+    CantCloneDevices,
+    BootDeviceTreeBad,
 
     /* physical CPU cores */
     PhysicalCoreBadID,
@@ -36,6 +38,7 @@ pub enum Cause
     /* host physical memory */
     PhysNoRAMFound,
     PhysNotEnoughFreeRAM,
+    PhysRegionTooSmall,
     PhysRegionCollision,
     PhysRegionNoMatch,
     PhysRegionSplitOutOfBounds,

@@ -11,6 +11,7 @@ use hashbrown::hash_map::Entry::{Occupied, Vacant};
 use hashbrown::hash_set::HashSet;
 use alloc::vec::Vec;
 use platform::cpu::Entry;
+use platform::physmem::PhysMemBase;
 use super::loader;
 use super::error::Cause;
 use super::physmem;
@@ -18,6 +19,7 @@ use super::virtmem::Mapping;
 use super::vcore::{self, Priority, VirtualCoreID};
 use super::service::ServiceID;
 use super::service;
+use super::hardware;
 
 pub type CapsuleID = usize;
 
@@ -150,17 +152,32 @@ pub fn create_boot_capsule() -> Result<(), Cause>
     /* create an auto-restarting capsule */
     let capid = create(true)?;
 
+    /* assign one virtual CPU core to the boot capsule */
+    let cpus = 1;
+
     /* reserve 64MB of physical RAM for the capsule */
     let size = 64 * 1024 * 1024;
-    let cpus = 1;
     let ram = physmem::alloc_region(size)?;
+
+    /* create device tree blob for the virtual hardware available to the guest
+    capsule and copy into the end of the region's physical RAM.
+    a zero-length DTB indicates something went wrong */
+    let guest_dtb = hardware::clone_dtb_for_capsule(cpus, 0, ram.base(), ram.size())?;
+    if guest_dtb.len() == 0
+    {
+        return Err(Cause::BootDeviceTreeBad);
+    }
+
+    let guest_dtb_size = guest_dtb.len();
+    let guest_dtb_base = ram.fill_end(guest_dtb)?;
+    hvdebug!("Copied boot capsule DTB to 0x{:x}, {} bytes", guest_dtb_base, guest_dtb_size);
 
     /* map that physical memory into the capsule */
     let mut mapping = Mapping::new();
     mapping.set_physical(ram);
     mapping.identity_mapping()?;
     map_memory(capid, mapping)?;
-
+    
     /* parse + copy the boot capsule's binary into its physical memory */
     let phys_binary_location = physmem::boot_supervisor();
     let entry = loader::load(ram, phys_binary_location)?;
@@ -168,7 +185,7 @@ pub fn create_boot_capsule() -> Result<(), Cause>
     /* create virtual CPU cores for the capsule as required */
     for vcoreid in 0..cpus
     {
-        create_and_add_vcore(capid, vcoreid, entry, Priority::High)?;
+        create_and_add_vcore(capid, vcoreid, entry, guest_dtb_base, Priority::High)?;
     }
     Ok(())
 }
@@ -177,12 +194,14 @@ pub fn create_boot_capsule() -> Result<(), Cause>
    => cid = capsule ID
       vid = virtual core ID
       entry = starting address for execution of this virtual core
+      dtb = physical address of the device tree blob describing
+            the virtual hardware environment
       prio = priority to run this virtual core
    <= return Ok for success, or error code
 */
-pub fn create_and_add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, prio: Priority) -> Result<(), Cause>
+pub fn create_and_add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dtb: PhysMemBase, prio: Priority) -> Result<(), Cause>
 {
-    vcore::VirtualCore::create(cid, vid, entry, prio)?;
+    vcore::VirtualCore::create(cid, vid, entry, dtb, prio)?;
     match CAPSULES.lock().get_mut(&cid)
     {
         Some(c) => c.add_vcore(vid),

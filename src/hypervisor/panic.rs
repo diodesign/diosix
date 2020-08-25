@@ -1,6 +1,6 @@
-/* diosix high-level hypervisor panic and abort code
+/* diosix high-level hypervisor panic code
  *
- * (c) Chris Williams, 2019.
+ * (c) Chris Williams, 2019-2020.
  *
  * See LICENSE for usage and copying.
  */
@@ -31,14 +31,6 @@ pub fn panic(info: &PanicInfo) -> !
     }
 
     /* just halt here */
-    loop
-    {}
-}
-
-#[no_mangle]
-pub extern "C" fn abort() -> !
-{
-    hvalert!("Rust runtime hit the abort button");
-    loop
-    {}
+    debughousekeeper!();
+    loop {}
 }
