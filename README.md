@@ -14,7 +14,7 @@
 
 Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor written [in Rust](https://www.rust-lang.org/) for 32-bit and 64-bit [RISC-V](https://riscv.org/) computers. A long-term goal is to build open-source Diosix packages that configure FPGAs with custom RISC-V cores and peripheral controllers to accelerate specific tasks, on the fly if necessary. This software should also run on supported system-on-chips.
 
-Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux guest OS with minimal filesystem into a virtualized environment called a capsule, and begin executing it. The next step is to provide the guest a Device Tree Blob describing its virtualized environment so that it can successfully boot.
+Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux guest OS with minimal filesystem into a virtualized environment called a capsule, pass this guest kernel a Device Tree structure describing its virtualized environment, and begin executing it.
 
 ### Quickstart using Docker <a name="quickstart"></a>
 
