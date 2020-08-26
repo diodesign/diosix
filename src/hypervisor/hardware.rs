@@ -169,11 +169,11 @@ the rest is decided by the platform code.
       mem_size = number of bytes available in the system RAM
    <= returns 
 */
-pub fn clone_dtb_for_capsule(cpus: usize, boot_cpu_id: u32, base: PhysMemBase, mem: PhysMemSize) -> Result<Vec<u8>, Cause>
-{
+pub fn clone_dtb_for_capsule(cpus: usize, boot_cpu_id: u32, mem_base: PhysMemBase, mem_size: PhysMemSize) -> Result<Vec<u8>, Cause>
+{    
     match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
     {
-        Some(d) => match d.spawn_virtual_environment(cpus, boot_cpu_id, base, mem)
+        Some(d) => match d.spawn_virtual_environment(cpus, boot_cpu_id, mem_base, mem_size)
         {
             Some(v) => Ok(v),
             None => Err(Cause::DeviceTreeBad)

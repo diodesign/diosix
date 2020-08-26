@@ -47,6 +47,7 @@ fn exception(irq: IRQ)
             {
                 hvalert!("BUG: Environment call from supervisor mode but no capsule found");
             }
+            debughousekeeper!(); /* ensure these messages go out on UMP systems */
         },
 
         /* catch fatal supervisor-level exceptions */
@@ -68,6 +69,7 @@ fn exception(irq: IRQ)
             {
                 hvalert!("BUG: Exception in supervisor mode but no capsule found");
             }
+            debughousekeeper!(); /* ensure these messages go out on UMP systems */
 
             /* force a context switch */
             scheduler::run_next(true);
@@ -95,7 +97,7 @@ fn interrupt(irq: IRQ)
 {
     match irq.cause
     {
-        /* handle our scheduler's timer by picking another thing to run, if possible */
+        /* handle our scheduler's timer by picking something thing to run, if possible */
         IRQCause::HypervisorTimer => scheduler::run_next(false), 
         _ => hvdebug!("Unhandled hardware interrupt: {:?}", irq.cause)
     };

@@ -98,8 +98,10 @@ pub fn run_next(must_switch: bool)
                 }
             }
 
-            if must_switch == false || (must_switch && something_found == true)
+            if must_switch == false || something_found == true
             {
+                /* either it's ok to exit without a ctx switch,
+                or we found something anyway */
                 break;
             }
         }
