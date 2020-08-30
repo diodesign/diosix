@@ -37,6 +37,11 @@ extern crate xmas_elf;
 /* needed for device tree parsing and manipulation */
 extern crate devicetree;
 
+/* pass the feature qemudebug to be able to write direct to the emulator's stdout
+via the macro qemuprint::println!() */
+#[cfg(feature = "qemudebug")]
+extern crate qemuprint;
+
 /* needed for lazyily-allocated static variables, and atomic ops */
 #[macro_use]
 extern crate lazy_static;
@@ -175,7 +180,7 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
 
             /* say hello via the debug port */
             hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-            hvdebug!("Debugging enabled, {} CPU cores found", hardware::get_nr_cpu_cores().unwrap_or(0));
+            hvdebug!("Debugging enabled, {} CPU core(s) found", hardware::get_nr_cpu_cores().unwrap_or(0));
 
             /* allow other cores to continue */
             *(INIT_DONE.lock()) = true;
@@ -216,7 +221,8 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
 
     /* initialization complete. fall through to infinite loop waiting for a timer interrupt
     to come in. when it does fire, this stack will be flattened, a virtual CPU loaded up to run,
-    and this boot thread will disappear like tears in the rain. */
+    and this boot thread will disappear. thus, the call to start() should be the last thing
+    this boot thread does */
     Ok(())
 }
 

@@ -56,15 +56,14 @@ enum LockAttempts
    HARDWARE may be held by a CPU core across IRQs. See notes above for OWNER.
    => attempts = try just Once or Multiple times to acquire lock
    <= Some MutexGuard containing the device structure, or None for unsuccessful */
-fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'static, core::option::Option<platform::devices::Devices>>>
+fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'static, Option<platform::devices::Devices>>>
 {
     loop
     {
         let mut owner = OWNER.lock();
         if *owner == pcore::PhysicalCore::get_id()
         {
-            /* we apparently own HARDWARE already so acquire, or force unlock it and
-            acquire it again */
+            /* we apparently own HARDWARE already so acquire, or force unlock it and acquire it again */
             match HARDWARE.try_lock()
             {
                 Some(hw) => return Some(hw),
@@ -76,8 +75,7 @@ fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'sta
         }
         else
         {
-            /* we don't own HARDWARE so acquire: try once or multiple times
-            depending on attempts parameter */
+            /* we don't own HARDWARE so acquire: try once or multiple times depending on attempts parameter */
             match (HARDWARE.try_lock(), attempts)
             {
                 (Some(hw), _) =>
@@ -138,7 +136,7 @@ pub fn get_phys_ram_chunks() -> Option<Vec<platform::physmem::RAMArea>>
     }
 }
 
-/* for this CPU core, enable scheduler timer interrupt and find a workload to run */
+/* for this CPU core, enable scheduler timer interrupt */
 pub fn scheduler_timer_start()
 {
     match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
@@ -156,6 +154,18 @@ pub fn scheduler_timer_next(usecs: u64)
         Some(d) => d.scheduler_timer_next(usecs),
         None => ()
     };
+}
+
+/* return the timer's current value in microseconds, or None for no timer
+this is a clock-on-the-wall value in that it always incremements and does
+not reset. the underlying platform code can do what it needs to implement this */
+pub fn scheduler_timer_now() -> Option<u64>
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => d.scheduler_timer_now(),
+        None => None
+    }
 }
 
 /* clone the system's base device tree blob structure so it can be passed

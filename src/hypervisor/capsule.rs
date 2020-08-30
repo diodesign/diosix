@@ -20,6 +20,7 @@ use super::vcore::{self, Priority, VirtualCoreID};
 use super::service::ServiceID;
 use super::service;
 use super::hardware;
+use super::pcore;
 
 pub type CapsuleID = usize;
 
@@ -274,6 +275,22 @@ pub fn destroy(cid: CapsuleID) -> Result<(), Cause>
     {
         Err(Cause::CapsuleBadID)
     }
+}
+
+/* destroy() the currently running capsule */
+pub fn destroy_current() -> Result<(), Cause>
+{
+    if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+    {
+        if let Err(e) = destroy(c)
+        {
+            hvalert!("BUG: Could not kill currently running capsule ID {} ({:?})", c, e);
+        }
+
+        return Ok(())
+    }
+
+    Err(Cause::CapsuleBadID)
 }
 
 /* allow a given capsule to offer a given service. if the capsule was already allowed the

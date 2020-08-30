@@ -51,6 +51,15 @@ lazy_static!
     static ref PCORES: Mutex<HashMap<VirtualCoreCanonicalID, PhysicalCoreID>> = Mutex::new(HashMap::new());
 }
 
+/* when performing an action on behalf of a less-privileged mode, using information from
+that mode, know who to blame for any faults -- the less-privileged mode */
+#[derive(Clone, Copy)]
+pub enum Blame
+{
+    Supervisor,
+    Hypervisor
+}
+
 /* describe a physical CPU core - this structure is stored in the per-CPU private variable space */
 #[repr(C)]
 pub struct PhysicalCore
@@ -72,7 +81,10 @@ pub struct PhysicalCore
 
     /* can this run guest operating systems? or is it a system management core? true if it can run
     supervisor-mode code, false if not */
-    smode: bool
+    smode: bool,
+
+    /* the next fault that comes in will be blamed on this privilege mode */
+    blame: Blame
 }
 
 impl PhysicalCore
@@ -98,6 +110,8 @@ impl PhysicalCore
 
         /* create a mailbox for messages from other cores */
         message::create_mailbox(id);
+
+        cpu.blame = Blame::Hypervisor; /* blame hypervisor by default */
     }
 
     /* return pointer to the calling CPU core's fixed private data structure */
@@ -171,6 +185,10 @@ impl PhysicalCore
             None
         }
     }
+
+    /* allow us to define who to blame when a fault comes in */
+    pub fn blame(to_blame: Blame) { PhysicalCore::this().blame = to_blame; }
+    pub fn blame_who() -> Blame { PhysicalCore::this().blame }
 }
 
 /* save current virtual CPU core's context, if we're running one, and load next virtual core's context.
@@ -228,6 +246,6 @@ pub fn context_switch(next: VirtualCore)
         },
         id);
 
-    /*and add the virtual core to the running virtual cores list */
+    /* and add the virtual core to the running virtual cores list */
     VCORES.lock().insert(id, next);
 }

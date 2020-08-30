@@ -14,9 +14,13 @@ path = "src/hypervisor/main.rs"
 [build-dependencies]
 regex = "1.3.7"
 
+[features]
+qemudebug = [ "qemuprint" ]
+
 # local dependencies
 [dependencies]
 devicetree = { path = "src/devicetree" }
+qemuprint = { path = "src/qemuprint", optional = true }
 
 # external dependencies
 [dependencies.spin]

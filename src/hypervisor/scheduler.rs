@@ -24,7 +24,16 @@ have been spent running high priority virtual cores */
 const HIGH_PRIO_TIMESLICES_MAX: TimesliceCount = 10;
 
 /* number of microseconds a virtual core is allowed to run */
-const TIMESLICE_LENGTH: u64 = 50000;
+const TIMESLICE_LENGTH: u64 = 50 * 1000; /* 50 milliseconds */
+
+/* number of microseconds a system maintence core (one that can't run supervisor code) must wait
+before looking for fixed work to do. also the length in between application cores can
+attempt to perform housekeeping */
+const MAINTENANCE_LENGTH: u64 = 5 * 1000000; /* five seconds */
+
+/* a physical core will perform background housekeeping after this
+many number of searches for a virtual core to run in a row without success */
+const HOUSEKEEP_AFTER: usize = 1024;
 
 /* these are the global wait queues. while each physical CPU core gets its own pair
 of high-normal wait queues, virtual cores waiting to be assigned to a physical CPU sit in these global queues.
@@ -34,6 +43,14 @@ lazy_static!
 {
     static ref GLOBAL_QUEUES: Mutex<ScheduleQueues> = Mutex::new(ScheduleQueues::new());
     static ref WORKLOAD: Mutex<HashMap<PhysicalCoreID, usize>> = Mutex::new(HashMap::new());
+    static ref LAST_HOUSEKEEP_CHECK: Mutex<u64> = Mutex::new(0);
+}
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum SearchMode
+{
+    MustFind, /* when searching for something to run, keep looping until successful */
+    CheckOnce /* search just once for something else to run, return to environment otherwise */
 }
 
 /* queue a virtual core in global wait list */
@@ -55,9 +72,13 @@ pub fn start() -> Result<(), Cause>
    call this function when a virtual core's timeslice has expired, or it has crashed
    or stopped running and we can't return to it. this function will return regardless
    if this physical CPU core is unable to run virtual cores.
-   => must_switch = set to true to not return without switching to another virtual core */
-pub fn run_next(must_switch: bool)
+   => search_mode = define whether or not to continue searching for another
+   virtual core to run, or check once to see if something else is waiting */
+pub fn run_next(search_mode: SearchMode)
 {
+    /* check to see if any housekeeping is needed */
+    housekeeping();
+
     /* if this core can run supervisor-level code then find it some work to do */
     if pcore::PhysicalCore::smode_supported()
     {
@@ -98,31 +119,63 @@ pub fn run_next(must_switch: bool)
                 }
             }
 
-            if must_switch == false || something_found == true
+            /* if we've found something, or only searching once, exit the search loop */
+            if something_found == true || search_mode == SearchMode::CheckOnce
             {
-                /* either it's ok to exit without a ctx switch,
-                or we found something anyway */
                 break;
             }
         }
 
-        /* do some housekeeping seeing as we can't run workloads, either
-        because there's nothing to run or because we can't */
-        housekeeping();
+        /* tell the timer system to call us back soon */
+        hardware::scheduler_timer_next(TIMESLICE_LENGTH);
     }
     else
     {
-        housekeeping(); /* can't run workloads so find something else to do */
+        hardware::scheduler_timer_next(MAINTENANCE_LENGTH); /* we'll be back some time later */
     }
-
-    /* tell the timer system to call us back soon */
-    hardware::scheduler_timer_next(TIMESLICE_LENGTH);
 }
 
-/* perform any housekeeping duties */
+/* perform any housekeeping duties defined by the various parts of the system */
 fn housekeeping()
 {
-    /* hook into housekeeping functions here with suitable macros */
+    /* don't busy wait for housekeeping lock: check once and move on */
+    let mut last_check = match LAST_HOUSEKEEP_CHECK.try_lock()
+    {
+        Some(value) => value,
+        None => return
+    };
+
+    /* only perform housekeeping once every MAINTENANCE_LENGTH microseconds */
+    match hardware::scheduler_timer_now()
+    {
+        Some(time_now) =>
+        {
+            /* wait until we're at least MAINTENANCE_LENGTH into boot */
+            if time_now > MAINTENANCE_LENGTH
+            {
+                if time_now - *last_check < MAINTENANCE_LENGTH
+                {
+                    /* not enough MAINTENANCE_LENGTH time has passed */
+                    return;
+                }
+                /* mark when we last performed housekeeping */
+                *last_check = time_now;
+            }
+            else
+            {
+                /* flush debug and bail out */
+                debughousekeeper!();
+                return;
+            }
+        },
+        None =>
+        {
+            /* no timer. output debug and bail out */
+            debughousekeeper!();
+            return;
+        }
+    }
+
     debughousekeeper!(); /* drain the debug logs to the debug hardware port */
     heaphousekeeper!(); /* return any unused regions of physical memory */
     physmemhousekeeper!(); /* tidy up any physical memory structures */
