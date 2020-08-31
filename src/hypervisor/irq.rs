@@ -8,7 +8,6 @@
 use super::scheduler;
 use super::capsule;
 use super::pcore;
-use super::hardware;
 
 /* platform-specific code must implement all this */
 use platform;
@@ -62,9 +61,23 @@ fn exception(irq: IRQ, context: &mut IRQContext)
         /* catch environment calls from supervisor mode */
         (_, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            if let Some(_c) = pcore::PhysicalCore::get_capsule_id()
+            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
             {
-                hvdebug!("Environment call from supervisor-mode capsule ID {}", _c);
+                // hvdebug!("Environment call from supervisor-mode capsule ID {} at 0x{:x}", c, irq.pc - 4);
+                /* match context.registers[17]
+                {
+                    0 => hvdebug!("Environment call at 0x{:x}: sbi_set_timer", irq.pc),
+                    1 => hvdebug!("Environment call at 0x{:x}: sbi_console_putchar", irq.pc),
+                    2 => hvdebug!("Environment call at 0x{:x}: sbi_console_putchar", irq.pc),
+                    3 => hvdebug!("Environment call at 0x{:x}: sbi_clear_ipi", irq.pc),
+                    4 => hvdebug!("Environment call at 0x{:x}: sbi_send_ipi", irq.pc),
+                    5 => hvdebug!("Environment call at 0x{:x}: sbi_remote_fence_i", irq.pc),
+                    6 => hvdebug!("Environment call at 0x{:x}: sbi_remote_sfence_vma", irq.pc),
+                    7 => hvdebug!("Environment call at 0x{:x}: sbi_remote_sfence_vma_asid", irq.pc),
+                    8 => hvdebug!("Environment call at 0x{:x}: sbi_shutdown", irq.pc),
+                    v => hvdebug!("Environment call at 0x{:x}: Unknown {}", irq.pc, v)
+                } */
+                context.registers[10] = 0;
             }
             else
             {
