@@ -23,6 +23,7 @@
 /* plug our custom heap allocator into the Rust language: Box, etc */
 #![feature(alloc_error_handler)]
 #![feature(box_syntax)]
+#[macro_use]
 extern crate alloc;
 
 /* needed to convert raw dtb pointer into a slice */

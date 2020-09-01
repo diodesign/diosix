@@ -61,22 +61,35 @@ fn exception(irq: IRQ, context: &mut IRQContext)
         /* catch environment calls from supervisor mode */
         (_, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+            if let Some(_c) = pcore::PhysicalCore::get_capsule_id()
             {
-                // hvdebug!("Environment call from supervisor-mode capsule ID {} at 0x{:x}", c, irq.pc - 4);
-                /* match context.registers[17]
+                // hvdebug!("Environment call from supervisor-mode capsule ID {} at 0x{:x}", _c, irq.pc - 4);
+                hvdebug!("Environment call at 0x{:x}: {}", irq.pc, 
+                match (context.registers[17], context.registers[16])
                 {
-                    0 => hvdebug!("Environment call at 0x{:x}: sbi_set_timer", irq.pc),
-                    1 => hvdebug!("Environment call at 0x{:x}: sbi_console_putchar", irq.pc),
-                    2 => hvdebug!("Environment call at 0x{:x}: sbi_console_putchar", irq.pc),
-                    3 => hvdebug!("Environment call at 0x{:x}: sbi_clear_ipi", irq.pc),
-                    4 => hvdebug!("Environment call at 0x{:x}: sbi_send_ipi", irq.pc),
-                    5 => hvdebug!("Environment call at 0x{:x}: sbi_remote_fence_i", irq.pc),
-                    6 => hvdebug!("Environment call at 0x{:x}: sbi_remote_sfence_vma", irq.pc),
-                    7 => hvdebug!("Environment call at 0x{:x}: sbi_remote_sfence_vma_asid", irq.pc),
-                    8 => hvdebug!("Environment call at 0x{:x}: sbi_shutdown", irq.pc),
-                    v => hvdebug!("Environment call at 0x{:x}: Unknown {}", irq.pc, v)
-                } */
+                    /* legacy SBI calls */
+                    (0, _) => format!("sbi_set_timer"),
+                    (1, _) => format!("sbi_console_putchar"),
+                    (2, _) => format!("sbi_console_putchar"),
+                    (3, _) => format!("sbi_clear_ipi"),
+                    (4, _) => format!("sbi_send_ipi"),
+                    (5, _) => format!("sbi_remote_fence_i"),
+                    (6, _) => format!("sbi_remote_sfence_vma"),
+                    (7, _) => format!("sbi_remote_sfence_vma_asid"),
+                    (8, _) => format!("sbi_shutdown"),
+
+                    /* base SBI calls */
+                    (0x10, 0) => format!("sbi_get_sbi_spec_version"),
+                    (0x10, 1) => format!("sbi_get_sbi_impl_id"),
+                    (0x10, 2) => format!("sbi_get_sbi_impl_version"),
+                    (0x10, 3) => format!("sbi_probe_extension"),
+                    (0x10, 4) => format!("sbi_get_mvendorid"),
+                    (0x10, 5) => format!("sbi_get_marchid"),
+                    (0x10, 6) => format!("sbi_get_mimpid"),
+
+                    (ext, func) => format!("unknown 0x{:x}:0x{:x}", ext, func)
+                });
+                
                 context.registers[10] = 0;
             }
             else
