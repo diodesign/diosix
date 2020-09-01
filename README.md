@@ -37,21 +37,28 @@ docker run -ti --rm docker.pkg.github.com/diodesign/diosix/wip:lightweight-docke
 The output from the hypervisor should be similar to the following, indicating Diosix running on a quad-core 64-bit RISC-V machine with 512MiB of RAM:
 
 ```
-   Compiling diosix v2.0.0 (/home/chris/Documents/src/rust/diosix)
-    Finished dev [unoptimized + debuginfo] target(s) in 8.39s
+    Finished dev [unoptimized + debuginfo] target(s) in 1.08s
      Running `qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel target/riscv64gc-unknown-none-elf/debug/hypervisor`
-[?] CPU 0: Enabling RAM region 0x80dd6000, size 498 MB
+[?] CPU 0: Enabling RAM region 0x80f3b000, size 496 MB
 [+] CPU 0: Welcome to diosix 2.0.0
-[?] CPU 0: Debugging enabled, 4 CPU cores found
-[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x9c000000 in physical RAM
-[?] CPU 0: Loading supervisor ELF program area: 0x8004fec8 size 0x1e620 into 0x9c000000
-[?] CPU 0: Loading supervisor ELF program area: 0x8006eec8 size 0xa2c0bc into 0x9c01f000
+[?] CPU 0: Debugging enabled, 4 CPU core(s) found
 [?] CPU 0: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 2: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 1: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[?] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[?] CPU 0: Running vcore 0 in capsule 1
-[?] CPU 0: Granting ReadWriteExecute access to 0x9c000000, 67108864 bytes
+[?] CPU 0: Copied boot capsule DTB to 0x9ffffd4c, 692 bytes
+[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x9c000000 in physical RAM
+[?] CPU 0: Loading supervisor ELF program area: 0x8006f368 size 0x234f2 into 0x9c000000
+[?] CPU 0: Loading supervisor ELF program area: 0x80093368 size 0x1d5ca8 into 0x9c024000
+[?] CPU 0: Loading supervisor ELF program area: 0x80269368 size 0x66209e into 0x9c200000
+[?] CPU 0: Loading supervisor ELF program area: 0x808cc368 size 0x21e8a4 into 0x9ca00000
+[?] CPU 0: Loading supervisor ELF program area: 0x80aeb368 size 0x2430 into 0x9ce00000
+[?] CPU 0: Loading supervisor ELF program area: 0x80aee368 size 0x6de3c into 0x9d000000
+[?] CPU 1: Running vcore 0 in capsule 1
+[?] CPU 1: Granting ReadWriteExecute access to 0x9c000000, 67108864 bytes
+[?] CPU 1: Environment call at 0xffffffe00020492c: sbi_get_sbi_spec_version
+[?] CPU 1: Environment call at 0xffffffe0002045b2: sbi_probe_extension
+[?] CPU 1: Environment call at 0xffffffe00020442c: sbi_set_timer
 ```
 
 Press `Control-a` then `c` to escape to the Qemu monitor. Run the monitor command `info registers -a` to list the CPU core states. You should see output similar to the following:
