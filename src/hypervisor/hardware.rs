@@ -136,6 +136,23 @@ pub fn get_phys_ram_chunks() -> Option<Vec<platform::physmem::RAMArea>>
     }
 }
 
+/* return total amount of physical RAM present in the system */
+pub fn get_phys_ram_total() -> Option<usize>
+{
+    if let Some(areas) = get_phys_ram_chunks()
+    {
+        let mut total = 0;
+        for area in areas
+        {
+            total = total + area.size;
+        }
+
+        return Some(total);
+    }
+
+    None
+}
+
 /* for this CPU core, enable scheduler timer interrupt */
 pub fn scheduler_timer_start()
 {

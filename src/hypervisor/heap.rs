@@ -321,10 +321,10 @@ impl Heap
                             let region = match alloc_region(size_req)
                             {
                                 Ok(r) => r,
-                                Err(e) =>
+                                Err(_e) =>
                                 {
                                     /* give up and bail out if there's no more physical memory */
-                                    hvdebug!("Failed to extend heap by {} bytes: {:?}", size_req, e);
+                                    hvdebug!("Failed to extend heap by {} bytes: {:?}", size_req, _e);
                                     return Result::Err(Cause::HeapNoFreeMem);
                                 }
                             };

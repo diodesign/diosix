@@ -169,9 +169,7 @@ pub fn create_boot_capsule() -> Result<(), Cause>
         return Err(Cause::BootDeviceTreeBad);
     }
 
-    let guest_dtb_size = guest_dtb.len();
     let guest_dtb_base = ram.fill_end(guest_dtb)?;
-    hvdebug!("Copied boot capsule DTB to 0x{:x}, {} bytes", guest_dtb_base, guest_dtb_size);
 
     /* map that physical memory into the capsule */
     let mut mapping = Mapping::new();

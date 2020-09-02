@@ -205,10 +205,6 @@ pub fn context_switch(next: VirtualCore)
     {
         Some(current_vcore) =>
         {
-            hvdebug!("Switching from vcore {} in capsule {} to vcore {} in capsule {}",
-                     current_vcore.get_id(), current_vcore.get_capsule_id(),
-                     next.get_id(), next_capsule);
-
             /* if we're running a virtual CPU core, preserve its state */
             platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
 
@@ -225,8 +221,6 @@ pub fn context_switch(next: VirtualCore)
         },
         None =>
         {
-            hvdebug!("Running vcore {} in capsule {}", next.get_id(), next_capsule);
-
             /* if we were not running a virtual CPU core then ensure we return to supervisor mode
             rather than hypervisor mode */
             platform::cpu::prep_supervisor_return();

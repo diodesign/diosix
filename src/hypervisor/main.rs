@@ -23,6 +23,8 @@
 /* plug our custom heap allocator into the Rust language: Box, etc */
 #![feature(alloc_error_handler)]
 #![feature(box_syntax)]
+#[allow(unused_imports)]
+#[macro_use]
 extern crate alloc;
 
 /* needed to convert raw dtb pointer into a slice */
@@ -178,9 +180,39 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
 
             physmem::init()?; /* register all the available physical RAM */
 
-            /* say hello via the debug port */
+            const KILOBYTE: usize = 1024;
+            const MEGABYTE: usize = KILOBYTE * KILOBYTE;
+            const GIGABYTE: usize = KILOBYTE * MEGABYTE;
+
+            /* say hello via the debug port with some information */
             hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-            hvdebug!("Debugging enabled, {} CPU core(s) found", hardware::get_nr_cpu_cores().unwrap_or(0));
+            hvdebug!("Debugging enabled, {}, {} RAM found",
+                /* report number of CPU cores found */
+                match hardware::get_nr_cpu_cores()
+                {
+                    None | Some(0) => format!("no CPU cores"),
+                    Some(1) => format!("1 CPU core"),
+                    Some(c) => format!("{} CPU cores", c)
+                },
+
+                /* count up total system RAM using GiB / MiB / KiB */
+                match hardware::get_phys_ram_total()
+                {
+                    Some(t) => if t >= GIGABYTE
+                    {
+                        format!("{} GiB", t / GIGABYTE)
+                    }
+                    else if t >= MEGABYTE
+                    {
+                        format!("{} MiB", t / MEGABYTE)
+                    }
+                    else
+                    {
+                        format!("{} KiB", t / KILOBYTE)
+                    },
+
+                    None => format!("no")
+                });
 
             /* allow other cores to continue */
             *(INIT_DONE.lock()) = true;

@@ -163,7 +163,6 @@ impl Region
     /* allow the currently running supervisor kernel to access this region of physical memory */
     pub fn grant_access(&self)
     {
-        hvdebug!("Granting {:?} access to 0x{:x}, {} bytes", AccessPermissions::ReadWriteExecute, self.base, self.size);
         platform::physmem::protect(self.base, self.base + self.size, AccessPermissions::ReadWriteExecute);
     }
 
@@ -334,7 +333,6 @@ pub fn init() -> Result<(), Cause>
         or it should contain random values */
         for section in validate_ram(nr_cpu_cores, chunk)
         {
-            hvdebug!("Enabling RAM region 0x{:x}, size {} MB", section.base, section.size / 1024 / 1024);
             regions.insert(Region::new(section.base, section.size, RegionHygiene::Clean))?;
         }
     }

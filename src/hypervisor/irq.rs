@@ -62,14 +62,14 @@ fn exception(irq: IRQ, context: &mut IRQContext)
         /* catch environment calls from supervisor mode */
         (_, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+            if let Some(_c) = pcore::PhysicalCore::get_capsule_id()
             {
                 if let Some(action) = syscalls::handler(context)
                 {
                     match action
                     {
                         syscalls::Action::Terminate => terminate_running_capsule(),
-                        _ => hvdebug!("Capsule {}: Unhandled syscall: {:x?} at 0x{:x}", c, action, irq.pc)
+                        _ => hvalert!("Capsule {}: Unhandled syscall: {:x?} at 0x{:x}", _c, action, irq.pc)
                     }
                 }
             }
