@@ -14,6 +14,7 @@ use platform;
 use platform::irq::{IRQContext, IRQType, IRQCause, IRQSeverity, IRQ};
 use platform::cpu::PrivilegeMode;
 use platform::instructions;
+use platform::syscalls;
 
 /* hypervisor_irq_handler
    entry point for hardware interrupts and software exceptions, collectively known as IRQs.
@@ -61,36 +62,16 @@ fn exception(irq: IRQ, context: &mut IRQContext)
         /* catch environment calls from supervisor mode */
         (_, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            if let Some(_c) = pcore::PhysicalCore::get_capsule_id()
+            if let Some(c) = pcore::PhysicalCore::get_capsule_id()
             {
-                // hvdebug!("Environment call from supervisor-mode capsule ID {} at 0x{:x}", _c, irq.pc - 4);
-                hvdebug!("Environment call at 0x{:x}: {}", irq.pc, 
-                match (context.registers[17], context.registers[16])
+                if let Some(action) = syscalls::handler(context)
                 {
-                    /* legacy SBI calls */
-                    (0, _) => format!("sbi_set_timer"),
-                    (1, _) => format!("sbi_console_putchar"),
-                    (2, _) => format!("sbi_console_putchar"),
-                    (3, _) => format!("sbi_clear_ipi"),
-                    (4, _) => format!("sbi_send_ipi"),
-                    (5, _) => format!("sbi_remote_fence_i"),
-                    (6, _) => format!("sbi_remote_sfence_vma"),
-                    (7, _) => format!("sbi_remote_sfence_vma_asid"),
-                    (8, _) => format!("sbi_shutdown"),
-
-                    /* base SBI calls */
-                    (0x10, 0) => format!("sbi_get_sbi_spec_version"),
-                    (0x10, 1) => format!("sbi_get_sbi_impl_id"),
-                    (0x10, 2) => format!("sbi_get_sbi_impl_version"),
-                    (0x10, 3) => format!("sbi_probe_extension"),
-                    (0x10, 4) => format!("sbi_get_mvendorid"),
-                    (0x10, 5) => format!("sbi_get_marchid"),
-                    (0x10, 6) => format!("sbi_get_mimpid"),
-
-                    (ext, func) => format!("unknown 0x{:x}:0x{:x}", ext, func)
-                });
-                
-                context.registers[10] = 0;
+                    match action
+                    {
+                        syscalls::Action::Terminate => terminate_running_capsule(),
+                        _ => hvdebug!("Capsule {}: Unhandled syscall: {:x?} at 0x{:x}", c, action, irq.pc)
+                    }
+                }
             }
             else
             {
@@ -171,12 +152,18 @@ fn fatal_exception(irq: &IRQ)
         irq.privilege_mode, irq.cause, irq.pc, irq.sp);
 
     /* terminate the capsule running on this core */
+    terminate_running_capsule();
+
+    /* force a context switch to find another virtual core to run */
+    scheduler::run_next(scheduler::SearchMode::MustFind);
+}
+
+/* terminate the capsule running on this core */
+fn terminate_running_capsule()
+{
     match capsule::destroy_current()
     {
         Err(e) => hvalert!("Failed to kill running capsule ({:?})", e),
         _ => ()
     }
-
-    /* force a context switch to find another virtual core to run */
-    scheduler::run_next(scheduler::SearchMode::MustFind);
 }
