@@ -11,6 +11,7 @@
 use spin::Mutex;
 use alloc::collections::vec_deque::VecDeque;
 use hashbrown::hash_map::HashMap;
+use platform::timer::TimerValue;
 use super::error::Cause;
 use super::vcore::{VirtualCore, Priority};
 use super::pcore::{self, PhysicalCore, PhysicalCoreID};
@@ -23,17 +24,17 @@ pub type TimesliceCount = u64;
 have been spent running high priority virtual cores */
 const HIGH_PRIO_TIMESLICES_MAX: TimesliceCount = 10;
 
-/* number of microseconds a virtual core is allowed to run */
-const TIMESLICE_LENGTH: u64 = 50 * 1000; /* 50 milliseconds */
+/* max how long a virtual core is allowed to run before a scheduling decision is made */
+const TIMESLICE_LENGTH: TimerValue = TimerValue::Milliseconds(50);
 
-/* number of microseconds a system maintence core (one that can't run supervisor code) must wait
+/* define the shortest time between now and another interrupt and rescheduling decision.
+this is to stop supervisor kernels spamming the scheduling system with lots of short reschedulings */
+const TIMESLICE_MIN_LENGTH: TimerValue = TimerValue::Milliseconds(5);
+
+/* duration a system maintence core (one that can't run supervisor code) must wait
 before looking for fixed work to do. also the length in between application cores can
 attempt to perform housekeeping */
-const MAINTENANCE_LENGTH: u64 = 5 * 1000000; /* five seconds */
-
-/* a physical core will perform background housekeeping after this
-many number of searches for a virtual core to run in a row without success */
-const HOUSEKEEP_AFTER: usize = 1024;
+const MAINTENANCE_LENGTH: TimerValue = TimerValue::Seconds(5);
 
 /* these are the global wait queues. while each physical CPU core gets its own pair
 of high-normal wait queues, virtual cores waiting to be assigned to a physical CPU sit in these global queues.
@@ -43,7 +44,14 @@ lazy_static!
 {
     static ref GLOBAL_QUEUES: Mutex<ScheduleQueues> = Mutex::new(ScheduleQueues::new());
     static ref WORKLOAD: Mutex<HashMap<PhysicalCoreID, usize>> = Mutex::new(HashMap::new());
-    static ref LAST_HOUSEKEEP_CHECK: Mutex<u64> = Mutex::new(0);
+    static ref LAST_HOUSEKEEP_CHECK: Mutex<TimerValue> = Mutex::new(TimerValue::Exact(0));
+}
+
+/* keep track of scheduling accounting for a CPU core */
+#[derive(Clone, Copy, Debug)]
+pub struct Accounting
+{
+
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -66,6 +74,96 @@ pub fn start() -> Result<(), Cause>
 {
     hardware::scheduler_timer_start();
     Ok(())
+}
+
+/* a timer interrupt has come in -- make a decision */
+pub fn ping()
+{
+    let time_now = hardware::scheduler_get_timer_now();
+    let frequency = hardware::scheduler_get_timer_frequency();
+    if time_now.is_none() || frequency.is_none()
+    {
+        /* check to see if anything needs to run and bail out if
+        no timer hardware can be found (and yet we're still getting IRQs?) */
+        run_next(SearchMode::CheckOnce);
+        return;   
+    }
+
+    /* get down to the exact timer values */
+    let frequency = frequency.unwrap();
+    let time_now = time_now.unwrap().to_exact(frequency);
+    match pcore::PhysicalCore::this().get_timer_sched_last()
+    {
+        Some(v) =>
+        {
+            /* check to see if we've reached the end of this physical CPU core's
+            time slice. a virtual code has the pcore for TIMESLICE_LENGTH of time
+            before a mandatory scheduling decision is made */
+            let last_scheduled_at = v.to_exact(frequency);
+            if time_now - last_scheduled_at > TIMESLICE_LENGTH.to_exact(frequency)
+            {
+                /* it's been a while since we last made a decision, so force one now */
+                run_next(SearchMode::CheckOnce);
+                pcore::PhysicalCore::this().set_timer_sched_last(Some(TimerValue::Exact(time_now)));
+            }
+        },
+
+        /* if not we've not scheduled anything yet, find something to run */
+        None =>
+        {
+            run_next(SearchMode::MustFind);
+            pcore::PhysicalCore::this().set_timer_sched_last(Some(TimerValue::Exact(time_now)));
+        }
+    }
+}
+
+/* force a rescheduling decision at or after this timer value.
+   this value is assumed to be user-controlled so it will be checked.
+   Supervisor kernel timer IRQs can be raised at these rescheduling points.
+   => target = trigger a scheduling decision when the system clock-on-the-wall
+               timer passes this value in microseconds */
+pub fn reschedule_at(target: TimerValue)
+{
+    let frequency = hardware::scheduler_get_timer_frequency();
+    if frequency.is_none()
+    {
+        return;   
+    }
+
+    /* get down to the exact timer values */
+    let frequency = frequency.unwrap();
+    let target = target.to_exact(frequency);
+
+    match pcore::PhysicalCore::this().get_timer_sched_last()
+    {
+        /* get when exactly this core is next going to get a timer IRQ */
+        Some(last_scheduled) =>
+        {
+            let last_scheduled = last_scheduled.to_exact(frequency);
+            let minimum = TIMESLICE_MIN_LENGTH.to_exact(frequency);
+            let timeslice_length = TIMESLICE_LENGTH.to_exact(frequency);
+
+            /* only allow rescheduling within current physicaal core timeslice */
+            if target > last_scheduled && (target - last_scheduled) < timeslice_length
+            {
+                /* stop the supervisor from storming us with a lot of
+                rapid, short timer IRQs. set a minimum time gap between IRQs */
+                if target - last_scheduled > minimum
+                {
+                    hardware::scheduler_timer_at(TimerValue::Exact(target));
+                }
+                else
+                {
+                    hardware::scheduler_timer_at(TIMESLICE_MIN_LENGTH);
+                }
+            }
+        },
+        None =>
+        {
+            /* no timer IRQ scheduled, so schedule one */
+            hardware::scheduler_timer_at(TimerValue::Exact(target));
+        }
+    }
 }
 
 /* find something else to run, or return to whatever we were running if allowed.
@@ -127,11 +225,11 @@ pub fn run_next(search_mode: SearchMode)
         }
 
         /* tell the timer system to call us back soon */
-        hardware::scheduler_timer_next(TIMESLICE_LENGTH);
+        hardware::scheduler_timer_next_in(TIMESLICE_LENGTH);
     }
     else
     {
-        hardware::scheduler_timer_next(MAINTENANCE_LENGTH); /* we'll be back some time later */
+        hardware::scheduler_timer_next_in(MAINTENANCE_LENGTH); /* we'll be back some time later */
     }
 }
 
@@ -145,21 +243,25 @@ fn housekeeping()
         None => return
     };
 
-    /* only perform housekeeping once every MAINTENANCE_LENGTH microseconds */
-    match hardware::scheduler_timer_now()
+    /* only perform housekeeping once every MAINTENANCE_LENGTH-long period */
+    match (hardware::scheduler_get_timer_now(), hardware::scheduler_get_timer_frequency())
     {
-        Some(time_now) =>
+        (Some(time_now), Some(frequency)) =>
         {
+            let time_now = time_now.to_exact(frequency);
+            let last_check_value = (*last_check).to_exact(frequency);
+            let maintence_length = MAINTENANCE_LENGTH.to_exact(frequency);
+
             /* wait until we're at least MAINTENANCE_LENGTH into boot */
-            if time_now > MAINTENANCE_LENGTH
+            if time_now > maintence_length
             {
-                if time_now - *last_check < MAINTENANCE_LENGTH
+                if time_now - last_check_value < maintence_length
                 {
                     /* not enough MAINTENANCE_LENGTH time has passed */
                     return;
                 }
                 /* mark when we last performed housekeeping */
-                *last_check = time_now;
+                *last_check = TimerValue::Exact(time_now);
             }
             else
             {
@@ -168,7 +270,7 @@ fn housekeeping()
                 return;
             }
         },
-        None =>
+        (_, _) =>
         {
             /* no timer. output debug and bail out */
             debughousekeeper!();

@@ -7,9 +7,10 @@
 
 use super::error::Cause;
 use super::capsule::CapsuleID;
+use super::scheduler;
 use platform::cpu::{SupervisorState, Entry};
 use platform::physmem::PhysMemBase;
-use super::scheduler;
+use platform::timer;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Priority
@@ -36,7 +37,8 @@ pub struct VirtualCore
 {
     id: VirtualCoreCanonicalID,
     priority: Priority,
-    state: SupervisorState
+    state: SupervisorState,
+    timer_irq_at: Option<timer::TimerValue>
 }
 
 impl VirtualCore
@@ -59,7 +61,8 @@ impl VirtualCore
                 vcoreid: core
             },
             priority: priority,
-            state: platform::cpu::init_supervisor_state(core, entry, dtb)
+            state: platform::cpu::init_supervisor_state(core, entry, dtb),
+            timer_irq_at: None
         };
 
         /* add virtual CPU core to the global waiting list queue */
@@ -81,4 +84,17 @@ impl VirtualCore
 
     /* return virtual CPU core's priority */
     pub fn get_priority(&self) -> Priority { self.priority }
+
+    /* define value the next timer IRQ should fire for this core.
+    measured as value of the clock-on-the-wall for the system, or None for no IRQ */
+    pub fn set_timer_irq_at(&mut self, target: Option<timer::TimerValue>)
+    {
+        self.timer_irq_at = target;
+    }
+
+    /* return timer value after which a per-CPU timer IRQ will fire for this core, or None for no IRQ */
+    pub fn get_timer_irq_at(&mut self) -> Option<timer::TimerValue>
+    {
+        self.timer_irq_at
+    }
 }

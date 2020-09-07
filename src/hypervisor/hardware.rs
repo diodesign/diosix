@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 use spin::Mutex;
 use platform::devices::Devices;
 use platform::physmem::{PhysMemBase, PhysMemSize};
+use platform::timer;
 use super::error::Cause;
 use super::pcore;
 
@@ -163,24 +164,59 @@ pub fn scheduler_timer_start()
     };
 }
 
-/* tell the scheduler to interrupt this core in usecs microseconds */
-pub fn scheduler_timer_next(usecs: u64)
+/* tell the scheduler to interrupt this core
+when duration number of timer ticks or sub-seconds passes */
+pub fn scheduler_timer_next_in(duration: timer::TimerValue)
 {
     match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
     {
-        Some(d) => d.scheduler_timer_next(usecs),
+        Some(d) => d.scheduler_timer_next_in(duration),
         None => ()
     };
+}
+
+/* tell the scheduler to interrupt this core when the system clock equals
+target value in ticks or sub-seconds as its current value */
+pub fn scheduler_timer_at(target: timer::TimerValue)
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => d.scheduler_timer_at(target),
+        None => ()
+    };
+}
+    
+
+/* get when the scheduler timer IRQ is next set to fire on this core.
+this is a clock-on-the-wall value: it's a number of ticks or
+sub-seconds since the timer started, not the duration to the next IRQ */
+pub fn scheduler_get_timer_next_at() -> Option<timer::TimerValue>
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => d.scheduler_get_timer_next_at(),
+        None => None
+    }
+}
+
+/* get the CPU's timer frequency in Hz */
+pub fn scheduler_get_timer_frequency() -> Option<u64>
+{
+    match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
+    {
+        Some(d) => d.scheduler_get_timer_frequency(),
+        None => None
+    }
 }
 
 /* return the timer's current value in microseconds, or None for no timer
 this is a clock-on-the-wall value in that it always incremements and does
 not reset. the underlying platform code can do what it needs to implement this */
-pub fn scheduler_timer_now() -> Option<u64>
+pub fn scheduler_get_timer_now() -> Option<timer::TimerValue>
 {
     match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
     {
-        Some(d) => d.scheduler_timer_now(),
+        Some(d) => d.scheduler_get_timer_now(),
         None => None
     }
 }

@@ -8,13 +8,15 @@
 use super::scheduler;
 use super::capsule;
 use super::pcore;
+use super::hardware;
 
 /* platform-specific code must implement all this */
 use platform;
 use platform::irq::{IRQContext, IRQType, IRQCause, IRQSeverity, IRQ};
 use platform::cpu::PrivilegeMode;
-use platform::instructions;
+use platform::instructions::{self, EmulationResult};
 use platform::syscalls;
+use platform::timer;
 
 /* hypervisor_irq_handler
    entry point for hardware interrupts and software exceptions, collectively known as IRQs.
@@ -44,86 +46,71 @@ fn exception(irq: IRQ, context: &mut IRQContext)
 {
     match (irq.severity, irq.privilege_mode, irq.cause)
     {
-        /* catch supervisor-mode illegal instructions that we may be able to emulate */
-        (_, PrivilegeMode::Supervisor, IRQCause::IllegalInstruction) =>
+        /* catch illegal instructions we may be able to emulate */
+        (_, _, IRQCause::IllegalInstruction) =>
         {
-            /* make sure any faults are resolved as the supervisor, not us */
-            pcore::PhysicalCore::blame(pcore::Blame::Supervisor);
-            if instructions::emulate(irq.privilege_mode, context) != instructions::EmulationResult::Success
+            match instructions::emulate(irq.privilege_mode, context)
             {
-                /* if we can't handle the instruction,
-                kill the capsule and force a context switch */
-                fatal_exception(&irq);
-            }
+                EmulationResult::Success => (), /* nothing more to do, return */
+                EmulationResult::Yield =>
+                {
+                    /* instruction was some kind of sleep or pause operation.
+                    try to find something else to run in the meantime */
+                    scheduler::run_next(scheduler::SearchMode::CheckOnce);
+                },
 
-            pcore::PhysicalCore::blame(pcore::Blame::Hypervisor);
+                /* if we can't handle the instruction,
+                kill the capsule and force a context switch.
+                TODO: is killing the whole capsule a little extreme? */
+                _ => fatal_exception(&irq)
+            }
         },
 
         /* catch environment calls from supervisor mode */
         (_, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
-            if let Some(_c) = pcore::PhysicalCore::get_capsule_id()
+            if let Some(action) = syscalls::handler(context)
             {
-                if let Some(action) = syscalls::handler(context)
+                match action
                 {
-                    match action
+                    syscalls::Action::Terminate => terminate_running_capsule(),
+                    syscalls::Action::TimerIRQAt(target) =>
                     {
-                        syscalls::Action::Terminate => terminate_running_capsule(),
-                        _ => hvalert!("Capsule {}: Unhandled syscall: {:x?} at 0x{:x}", _c, action, irq.pc)
+                        /* mark this virtual core as awaiting a timer IRQ and
+                        schedule a timer interrupt in anticipation */
+                        pcore::PhysicalCore::set_virtualcore_timer_target(Some(target));
+                        scheduler::reschedule_at(target);
+                    },
+                    _ => if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+                    {
+                        hvalert!("Capsule {}: Unhandled syscall: {:x?} at 0x{:x}", c, action, irq.pc);
+                    }
+                    else
+                    {
+                        hvdebug!("Unhandled syscall: {:x?} at 0x{:x} in unknown capsule", action, irq.pc);
                     }
                 }
-            }
-            else
-            {
-                hvalert!("BUG: Environment call from supervisor mode but no capsule found");
-            }
-        },
-
-        /* catch fatal supervisor-level exceptions: kill the capsule, find something else to run */
-        (IRQSeverity::Fatal, PrivilegeMode::Supervisor, _) => fatal_exception(&irq),
-
-        /* catch hypervisor-level illegal instructions we might be able to emulate */
-        (_, PrivilegeMode::Hypervisor, IRQCause::IllegalInstruction) =>
-        {
-            /* if we can't handle the instruction, then we die here */
-            if instructions::emulate(irq.privilege_mode, context) != instructions::EmulationResult::Success
-            {
-                hvalert!("Unhandled illegal instrution in {:?} at 0x{:x}, stack 0x{:x}",
-                    irq.privilege_mode, irq.pc, irq.sp);
-                debughousekeeper!(); // flush the debug output
-                loop {}
             }
         },
 
         /* catch everything else, halting if fatal */
         (severity, privilege, cause) =>
         {
-            match pcore::PhysicalCore::blame_who()
+            /* if an unhandled fatal exception reaches us here from the supervisor or user mode,
+            kill the capsule. if the hypervisor can't handle its own fatal exception, give up */
+            match privilege
             {
-                /* did we fault trying to do something for the supervisor? */
-                pcore::Blame::Supervisor =>
+                PrivilegeMode::Supervisor | PrivilegeMode::User => if severity == IRQSeverity::Fatal
                 {
-                    /* reset any blame back to the hypervisor */
-                    pcore::PhysicalCore::blame(pcore::Blame::Hypervisor);
-
-                    hvalert!("Unhandled exception in {:?} as supervisor: {:?} at 0x{:x}, stack 0x{:x}, severity: {:?}",
-                        privilege, cause, irq.pc, irq.sp, severity);
+                    /* TODO: is it wise to blow away the whole capsule for a user exception?
+                    the supervisor should really catch its user-level faults */
                     fatal_exception(&irq);
                 },
-
-                /* or did we fault trying to do something for ourselves? */
-                pcore::Blame::Hypervisor =>
+                PrivilegeMode::Machine => if severity == IRQSeverity::Fatal
                 {
-                    hvalert!("Unhandled exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}, severity: {:?}",
-                        privilege, cause, irq.pc, irq.sp, severity);
-
-                    /* stop here if we hit an unhandled fatal exception */
-                    if severity == IRQSeverity::Fatal
-                    {
-                        hvalert!("Halting hypervisor on this physical core");
-                        debughousekeeper!(); // flush the debug output
-                        loop {}
-                    }
+                    hvalert!("Halting physical CPU core for {:?} at 0x{:x}, stack 0x{:x}", cause, irq.pc, irq.sp);
+                    debughousekeeper!(); // flush the debug output
+                    loop {}
                 }
             }
         }
@@ -135,8 +122,30 @@ fn interrupt(irq: IRQ, _: &mut IRQContext)
 {
     match irq.cause
     {
-        /* handle our scheduler's timer by picking something thing to run, if possible */
-        IRQCause::HypervisorTimer => scheduler::run_next(scheduler::SearchMode::CheckOnce), 
+        IRQCause::MachineTimer =>
+        {
+            /* make a scheduling decision */
+            scheduler::ping();
+
+            /* is the virtual core we're about to run awaiting a timer IRQ? */
+            if let Some(target) = pcore::PhysicalCore::get_virtualcore_timer_target()
+            {
+                match (hardware::scheduler_get_timer_now(), hardware::scheduler_get_timer_frequency())
+                {
+                    (Some(t), Some(f)) =>
+                    {
+                        let current = t.to_exact(f);
+                        if current >= target.to_exact(f)
+                        {
+                            /* create a pending timer IRQ for the supervisor kernel and clear the target */
+                            timer::trigger_supervisor_irq();
+                            pcore::PhysicalCore::set_virtualcore_timer_target(None);
+                        }
+                    },
+                    (_, _) => ()
+                }
+            }
+        },
         _ => hvdebug!("Unhandled hardware interrupt: {:?}", irq.cause)
     }
 
@@ -147,9 +156,7 @@ fn interrupt(irq: IRQ, _: &mut IRQContext)
 /* kill the running capsule, alert the user, and then find something else to run */
 fn fatal_exception(irq: &IRQ)
 {
-    hvalert!(
-        "Fatal exception in {:?}: {:?} at 0x{:x}, stack 0x{:x}",
-        irq.privilege_mode, irq.cause, irq.pc, irq.sp);
+    hvalert!("Terminating running capsule for {:?} at 0x{:x}, stack 0x{:x}", irq.cause, irq.pc, irq.sp);
 
     /* terminate the capsule running on this core */
     terminate_running_capsule();

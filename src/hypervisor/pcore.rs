@@ -17,6 +17,7 @@ use spin::Mutex;
 use hashbrown::hash_map::HashMap;
 use platform::physmem::PhysMemSize;
 use platform::cpu::{SupervisorState, CPUFeatures};
+use platform::timer;
 use super::vcore::{VirtualCore, VirtualCoreID, VirtualCoreCanonicalID};
 use super::scheduler::ScheduleQueues;
 use super::capsule::{self, CapsuleID};
@@ -51,15 +52,6 @@ lazy_static!
     static ref PCORES: Mutex<HashMap<VirtualCoreCanonicalID, PhysicalCoreID>> = Mutex::new(HashMap::new());
 }
 
-/* when performing an action on behalf of a less-privileged mode, using information from
-that mode, know who to blame for any faults -- the less-privileged mode */
-#[derive(Clone, Copy)]
-pub enum Blame
-{
-    Supervisor,
-    Hypervisor
-}
-
 /* describe a physical CPU core - this structure is stored in the per-CPU private variable space */
 #[repr(C)]
 pub struct PhysicalCore
@@ -83,8 +75,8 @@ pub struct PhysicalCore
     supervisor-mode code, false if not */
     smode: bool,
 
-    /* the next fault that comes in will be blamed on this privilege mode */
-    blame: Blame
+    /* set when this physical core CPU core last ran a scheduling decision */
+    timer_sched_last: Option<timer::TimerValue>
 }
 
 impl PhysicalCore
@@ -102,6 +94,7 @@ impl PhysicalCore
         cpu.id = id;
         cpu.features = platform::cpu::features();
         cpu.smode = platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::Supervisor);
+        cpu.timer_sched_last = None;
 
         let (heap_ptr, heap_size) = PhysicalCore::get_heap_config();
         cpu.heap.init(heap_ptr, heap_size);
@@ -110,8 +103,6 @@ impl PhysicalCore
 
         /* create a mailbox for messages from other cores */
         message::create_mailbox(id);
-
-        cpu.blame = Blame::Hypervisor; /* blame hypervisor by default */
     }
 
     /* return pointer to the calling CPU core's fixed private data structure */
@@ -173,8 +164,29 @@ impl PhysicalCore
         }
     }
 
+    /* update the running virtual core's timer IRQ target. we have to do this here because
+    the virtual core is held in a locked data structure. leaving this function relocks
+    the structure. it's unsafe to access the vcore struct */
+    pub fn set_virtualcore_timer_target(target: Option<timer::TimerValue>)
+    {
+        if let Some(vcore) = VCORES.lock().get_mut(&(PhysicalCore::this().id))
+        {
+            vcore.set_timer_irq_at(target);
+        }
+    }
+
+    /* get the virtual core's timer IRQ target */
+    pub fn get_virtualcore_timer_target() -> Option<timer::TimerValue>
+    {
+        if let Some(vcore) = VCORES.lock().get_mut(&(PhysicalCore::this().id))
+        {
+            return vcore.get_timer_irq_at();
+        }
+        None
+    }
+
     /* return ID for the virtual core running on this CPU, if any */
-    pub fn get_virtualcore_id() -> Option<VirtualCoreID>
+    pub fn get_virtualcore_id(&self) -> Option<VirtualCoreID>
     {
         if let Some(vcore) = VCORES.lock().get(&PhysicalCore::get_id())
         {
@@ -186,9 +198,17 @@ impl PhysicalCore
         }
     }
 
-    /* allow us to define who to blame when a fault comes in */
-    pub fn blame(to_blame: Blame) { PhysicalCore::this().blame = to_blame; }
-    pub fn blame_who() -> Blame { PhysicalCore::this().blame }
+    /* set the exact per-CPU timer value of the last time this physical core make a scheduling decision */
+    pub fn set_timer_sched_last(&mut self, value: Option<timer::TimerValue>)
+    {
+        self.timer_sched_last = value;
+    }
+
+    /* get the exact per-CPU timer value of the last time this physical core make a scheduling decision */
+    pub fn get_timer_sched_last(&mut self) -> Option<timer::TimerValue>
+    {
+        self.timer_sched_last
+    }
 }
 
 /* save current virtual CPU core's context, if we're running one, and load next virtual core's context.
