@@ -92,19 +92,48 @@ pub fn ping()
     /* get down to the exact timer values */
     let frequency = frequency.unwrap();
     let time_now = time_now.unwrap().to_exact(frequency);
+
     match pcore::PhysicalCore::this().get_timer_sched_last()
     {
         Some(v) =>
         {
+            let timeslice_length = TIMESLICE_LENGTH.to_exact(frequency);
+
             /* check to see if we've reached the end of this physical CPU core's
             time slice. a virtual code has the pcore for TIMESLICE_LENGTH of time
             before a mandatory scheduling decision is made */
-            let last_scheduled_at = v.to_exact(frequency);
-            if time_now - last_scheduled_at > TIMESLICE_LENGTH.to_exact(frequency)
+            let mut last_scheduled_at = v.to_exact(frequency);
+            if time_now - last_scheduled_at >= timeslice_length
             {
                 /* it's been a while since we last made a decision, so force one now */
                 run_next(SearchMode::CheckOnce);
                 pcore::PhysicalCore::this().set_timer_sched_last(Some(TimerValue::Exact(time_now)));
+                last_scheduled_at = time_now;
+            }
+
+            /* check to make sure timer target is correct for whatever virtual core we're about
+            to run. run_next() may have set a new timer irq target, or changed the virtual core
+            we're running. there may be a supervisor-level timer IRQ upcoming.
+            make sure the physical core timer target value is appropriate. */
+            if let Some(timer_target) = hardware::scheduler_get_timer_next_at()
+            {
+                let mut timer_target = timer_target.to_exact(frequency);
+
+                /* avoid skipping over any pending supervisor timer IRQ: reduce latency between
+                capsule timer interrupts being raised and capsule cores scheduled to pick up said IRQs */
+                if let Some(supervisor_target) = pcore::PhysicalCore::get_virtualcore_timer_target()
+                {
+                    timer_target = supervisor_target.to_exact(frequency);
+                }
+
+                /* if the target is already behind us, discard it and interrupt at end of this timeslice.
+                   if the target is too far ahead, curtail it to the end of this timeslice */
+                if timer_target <= time_now || timer_target > last_scheduled_at + timeslice_length
+                {
+                    timer_target = last_scheduled_at + timeslice_length;
+                }
+
+                hardware::scheduler_timer_at(TimerValue::Exact(timer_target));
             }
         },
 
@@ -113,55 +142,6 @@ pub fn ping()
         {
             run_next(SearchMode::MustFind);
             pcore::PhysicalCore::this().set_timer_sched_last(Some(TimerValue::Exact(time_now)));
-        }
-    }
-}
-
-/* force a rescheduling decision at or after this timer value.
-   this value is assumed to be user-controlled so it will be checked.
-   Supervisor kernel timer IRQs can be raised at these rescheduling points.
-   => target = trigger a scheduling decision when the system clock-on-the-wall
-               timer passes this value in microseconds */
-pub fn reschedule_at(target: TimerValue)
-{
-    let frequency = hardware::scheduler_get_timer_frequency();
-    if frequency.is_none()
-    {
-        return;   
-    }
-
-    /* get down to the exact timer values */
-    let frequency = frequency.unwrap();
-    let target = target.to_exact(frequency);
-
-    match pcore::PhysicalCore::this().get_timer_sched_last()
-    {
-        /* get when exactly this core is next going to get a timer IRQ */
-        Some(last_scheduled) =>
-        {
-            let last_scheduled = last_scheduled.to_exact(frequency);
-            let minimum = TIMESLICE_MIN_LENGTH.to_exact(frequency);
-            let timeslice_length = TIMESLICE_LENGTH.to_exact(frequency);
-
-            /* only allow rescheduling within current physicaal core timeslice */
-            if target > last_scheduled && (target - last_scheduled) < timeslice_length
-            {
-                /* stop the supervisor from storming us with a lot of
-                rapid, short timer IRQs. set a minimum time gap between IRQs */
-                if target - last_scheduled > minimum
-                {
-                    hardware::scheduler_timer_at(TimerValue::Exact(target));
-                }
-                else
-                {
-                    hardware::scheduler_timer_at(TIMESLICE_MIN_LENGTH);
-                }
-            }
-        },
-        None =>
-        {
-            /* no timer IRQ scheduled, so schedule one */
-            hardware::scheduler_timer_at(TimerValue::Exact(target));
         }
     }
 }
@@ -224,7 +204,7 @@ pub fn run_next(search_mode: SearchMode)
             }
         }
 
-        /* tell the timer system to call us back soon */
+        /* we've got a virtual core to run. tell the timer system to call us back soon */
         hardware::scheduler_timer_next_in(TIMESLICE_LENGTH);
     }
     else
@@ -277,6 +257,8 @@ fn housekeeping()
             return;
         }
     }
+
+    hvdebug!("Housekeeping...");
 
     debughousekeeper!(); /* drain the debug logs to the debug hardware port */
     heaphousekeeper!(); /* return any unused regions of physical memory */

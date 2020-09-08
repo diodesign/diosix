@@ -79,7 +79,7 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                         /* mark this virtual core as awaiting a timer IRQ and
                         schedule a timer interrupt in anticipation */
                         pcore::PhysicalCore::set_virtualcore_timer_target(Some(target));
-                        scheduler::reschedule_at(target);
+                        hardware::scheduler_timer_at(target);
                     },
                     _ => if let Some(c) = pcore::PhysicalCore::get_capsule_id()
                     {
@@ -124,33 +124,38 @@ fn interrupt(irq: IRQ, _: &mut IRQContext)
     {
         IRQCause::MachineTimer =>
         {
-            /* make a scheduling decision */
+            /* make a scheduling decision and raise any supervior-level timer IRQs*/
             scheduler::ping();
-
-            /* is the virtual core we're about to run awaiting a timer IRQ? */
-            if let Some(target) = pcore::PhysicalCore::get_virtualcore_timer_target()
-            {
-                match (hardware::scheduler_get_timer_now(), hardware::scheduler_get_timer_frequency())
-                {
-                    (Some(t), Some(f)) =>
-                    {
-                        let current = t.to_exact(f);
-                        if current >= target.to_exact(f)
-                        {
-                            /* create a pending timer IRQ for the supervisor kernel and clear the target */
-                            timer::trigger_supervisor_irq();
-                            pcore::PhysicalCore::set_virtualcore_timer_target(None);
-                        }
-                    },
-                    (_, _) => ()
-                }
-            }
+            check_supervisor_timer_irq();
         },
         _ => hvdebug!("Unhandled hardware interrupt: {:?}", irq.cause)
     }
 
     /* clear the interrupt condition */
     platform::irq::acknowledge(irq);
+}
+
+/* is the virtual core we're about to run awaiting a timer IRQ?
+if so, and if its timer target value has been passed, generate a pending timer IRQ */
+fn check_supervisor_timer_irq()
+{
+    if let Some(target) = pcore::PhysicalCore::get_virtualcore_timer_target()
+    {
+        match (hardware::scheduler_get_timer_now(), hardware::scheduler_get_timer_frequency())
+        {
+            (Some(time), Some(freq)) =>
+            {
+                let current = time.to_exact(freq);
+                if current >= target.to_exact(freq)
+                {
+                    /* create a pending timer IRQ for the supervisor kernel and clear the target */
+                    timer::trigger_supervisor_irq();
+                    pcore::PhysicalCore::set_virtualcore_timer_target(None);
+                }
+            },
+            (_, _) => ()
+        }
+    }
 }
 
 /* kill the running capsule, alert the user, and then find something else to run */
