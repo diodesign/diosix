@@ -99,7 +99,7 @@ impl fmt::Write for ConsoleWriter
 pub fn drain_queue()
 {
     let mut queue = DEBUG_QUEUE.lock();
-    if queue.len() > 0 && hardware::write_debug_string(&queue) == true
+    if hardware::write_debug_string(&queue) == true
     {
         queue.clear();
     }

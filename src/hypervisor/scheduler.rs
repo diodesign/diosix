@@ -47,13 +47,6 @@ lazy_static!
     static ref LAST_HOUSEKEEP_CHECK: Mutex<TimerValue> = Mutex::new(TimerValue::Exact(0));
 }
 
-/* keep track of scheduling accounting for a CPU core */
-#[derive(Clone, Copy, Debug)]
-pub struct Accounting
-{
-
-}
-
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SearchMode
 {
@@ -154,7 +147,7 @@ pub fn ping()
    virtual core to run, or check once to see if something else is waiting */
 pub fn run_next(search_mode: SearchMode)
 {
-    /* check to see if any housekeeping is needed */
+    /* check for housekeeping */
     housekeeping();
 
     /* if this core can run supervisor-level code then find it some work to do */
