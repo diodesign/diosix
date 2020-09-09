@@ -24,8 +24,8 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y \
 	&& rustup target install riscv64gc-unknown-none-elf \
 	&& git clone --recurse-submodules https://github.com/diodesign/diosix.git \
 	&& cd diosix \
-	&& mkdir -p boot/binaries/riscv64gc \
-	&& curl -L -o boot/binaries/riscv64gc/supervisor https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64gc/supervisor
+	&& mkdir -p boot/binaries/riscv64 \
+	&& curl -L -o boot/binaries/riscv64/supervisor https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64/supervisor
 
 # Define the environment in which we'll run commands
 ENTRYPOINT [ "/entrypoint.py" ]

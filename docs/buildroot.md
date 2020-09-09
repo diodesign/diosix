@@ -8,11 +8,11 @@ The Linux-compatible operating system kernel that will run inside the boot capsu
 
 Below is a table of targets and their corresponding CPU architecture and boot capsule kernel paths. See the [Diosix build guide](building.md) for the full list of supported CPU architectures.
 
-| Target                         | CPU architecture | Boot capsule kernel path               |
-|:-------------------------------|:-----------------|:---------------------------------------|
-| `riscv32imac-unknown-none-elf` | `riscv32imac`    | `boot/binaries/riscv32imac/supervisor` |
-| `riscv64imac-unknown-none-elf` | `riscv64imac`    | `boot/binaries/riscv64imac/supervisor` |
-| `riscv64gc-unknown-none-elf`   | `riscv64gc`      | `boot/binaries/riscv64gc/supervisor`   |
+| Target                         | CPU architecture | Boot capsule kernel path           |
+|:-------------------------------|:-----------------|:-----------------------------------|
+| `riscv32imac-unknown-none-elf` | `riscv32`        | `boot/binaries/riscv32/supervisor` |
+| `riscv64imac-unknown-none-elf` | `riscv64`        | `boot/binaries/riscv64/supervisor` |
+| `riscv64gc-unknown-none-elf`   | `riscv64`        | `boot/binaries/riscv64/supervisor` |
 
 
 Note that Diosix defaults to building for `riscv64gc-unknown-none-elf` so if you use the default target, you must provide a `supervisor` kernel for that CPU architecture.
@@ -50,17 +50,17 @@ mkdir -p $HOME/src/diosix/boot/binaries/<architecture>
 cp output/images/vmlinux $HOME/src/diosix/boot/binaries/<architecture>/supervisor
 ```
 
-Replace `<architecture>` above with a supported CPU architecture. For example, for the target `riscv64gc-unknown-none-elf` and architecture `riscv64gc`, use the following commands:
+Replace `<architecture>` above with a supported CPU architecture. For example, for the target `riscv64gc-unknown-none-elf` and architecture `riscv64`, use the following commands:
 
 ```
-cp $HOME/src/diosix/boot/buildroot/riscv64gc.config .config
+cp $HOME/src/diosix/boot/buildroot/riscv64.config .config
 make
-mkdir -p $HOME/src/diosix/boot/binaries/riscv64gc
-cp output/images/vmlinux $HOME/src/diosix/boot/binaries/riscv64gc/supervisor
+mkdir -p $HOME/src/diosix/boot/binaries/riscv64
+cp output/images/vmlinux $HOME/src/diosix/boot/binaries/riscv64/supervisor
 ```
 
 Once you have built or provided one or more boot capsule kernels, and placed them in the correct path or paths in `boot/binaries`, you are ready to build and run Diosix.
 
 ### A note on Linux kernel versions
 
-The supplied Buildroot configuration files specify the latest stable version of the Linux kernel for 64-bit RISC-V targets, version 5.2 at time of writing, and the latest long-term version, 4.19.66, for 32-bit RISC-V targets. This is due to broken support in the 5.x.x kernel series for 32-bit RISC-V targets.
+The supplied Buildroot configuration files specify the latest version of the Linux kernel for 64-bit RISC-V targets, version 5.4.58 at time of writing, and for 32-bit RISC-V targets, 5.4.61.

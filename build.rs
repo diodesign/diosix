@@ -35,7 +35,6 @@ use regex::Regex;
 /* describe a build target from its user-supplied triple */
 struct Target
 {
-    pub target: String,      /* full target name */
     pub cpu_arch: String,    /* define the CPU architecture to generate code for */
     pub gnu_prefix: String,  /* locate the GNU as and ar tools */ 
     pub platform: String,    /* locate the tail of the platform directory in src, eg riscv for src/platform-riscv */
@@ -52,7 +51,6 @@ impl Target
         {
             "riscv32imac" => Target
             {
-                target: String::from("riscv32imac"),
                 cpu_arch: String::from("rv32imac"),
                 gnu_prefix: String::from("riscv32"),
                 platform: String::from("riscv"),
@@ -61,7 +59,6 @@ impl Target
             },
             "riscv64imac" => Target
             {
-                target: String::from("riscv64imac"),
                 cpu_arch: String::from("rv64imac"),
                 gnu_prefix: String::from("riscv64"),
                 platform: String::from("riscv"),
@@ -70,7 +67,6 @@ impl Target
             },
             "riscv64gc" => Target
             {
-                target: String::from("riscv64gc"),
                 cpu_arch: String::from("rv64gc"),
                 gnu_prefix: String::from("riscv64"),
                 platform: String::from("riscv"),
@@ -112,13 +108,13 @@ fn main()
     };
 
     /* provide a supervisor kernel for the first capsule to run. this should contain an executable
-    that unpacks a basic filesystem and then loads more files as needed from storage.
+    that unpacks a basic filesystem into RAM, and then loads more files as needed from storage.
     its job is to manage all child capsules, which should also be loaded as needed from storage.
 
-    the boot capsule's supervisor is expected in boot/binaries/cpu/supervisor
-    where cpu = target CPU architectures, such as rv32imac, rv64gc, etc */
+    the boot capsule's supervisor is expected in boot/binaries/isa/supervisor
+    where isa = target CPU ISA, eg: riscv32 or riscv64 */
     
-    let boot_files = String::from(format!("boot/binaries/{}", target.target));
+    let boot_files = String::from(format!("boot/binaries/{}", target.gnu_prefix));
     let boot_supervisor_name = String::from("supervisor");
     let boot_supervisor = format!("{}/{}", boot_files, boot_supervisor_name);
 
