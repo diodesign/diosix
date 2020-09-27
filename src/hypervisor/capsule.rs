@@ -10,6 +10,7 @@ use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::{Occupied, Vacant};
 use hashbrown::hash_set::HashSet;
 use alloc::vec::Vec;
+use alloc::string::String;
 use platform::cpu::Entry;
 use platform::physmem::PhysMemBase;
 use super::loader;
@@ -42,7 +43,8 @@ struct Capsule
     restart: bool,                          /* true to auto-restart on death */
     vcores: HashSet<VirtualCoreID>,         /* set of virtual core IDs assigned to this capsule */
     memory: Vec<Mapping>,                   /* map capsule supervisor virtual addresses to host physical addresses */
-    allowed_services: HashSet<ServiceID>    /* set of services this capsule is allowed to provide */
+    allowed_services: HashSet<ServiceID>,   /* set of services this capsule is allowed to provide */
+    debug_buffer: String                    /* buffer to hold debug output until it's flushed */
 }
 
 impl Capsule
@@ -58,6 +60,7 @@ impl Capsule
             vcores: HashSet::new(),
             memory: Vec::new(),
             allowed_services: HashSet::new(),
+            debug_buffer: String::new()
         })
     }
 
@@ -289,6 +292,32 @@ pub fn destroy_current() -> Result<(), Cause>
     }
 
     Err(Cause::CapsuleBadID)
+}
+
+/* buffer a character from the guest kernel, and flush output if a newline */
+pub fn debug_write(cid: CapsuleID, character: char) -> Result<(), Cause>
+{
+    match CAPSULES.lock().entry(cid)
+    {
+        Occupied(mut capsule) =>
+        {
+            let c = capsule.get_mut();
+
+            if character != '\n'
+            {
+                /* buffer the character if we're not at a newline */
+                c.debug_buffer.push(character);
+            }
+            else
+            {
+                /* flush the buffer and reinitialize it */
+                hvdebug!("Capsule {}: {}", cid, c.debug_buffer);
+                c.debug_buffer = String::new();
+            }
+            Ok(())
+        },
+        Vacant(_) => Err(Cause::CapsuleBadID)
+    }
 }
 
 /* allow a given capsule to offer a given service. if the capsule was already allowed the

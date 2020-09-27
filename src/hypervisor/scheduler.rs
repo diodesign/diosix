@@ -251,8 +251,6 @@ fn housekeeping()
         }
     }
 
-    hvdebug!("Housekeeping...");
-
     debughousekeeper!(); /* drain the debug logs to the debug hardware port */
     heaphousekeeper!(); /* return any unused regions of physical memory */
     physmemhousekeeper!(); /* tidy up any physical memory structures */

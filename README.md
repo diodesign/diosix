@@ -37,28 +37,47 @@ docker run -ti --rm docker.pkg.github.com/diodesign/diosix/wip:lightweight-docke
 The output from the hypervisor should be similar to the following, indicating Diosix running on a quad-core 64-bit RISC-V machine with 512MiB of RAM:
 
 ```
-    Finished dev [unoptimized + debuginfo] target(s) in 1.08s
+   Compiling diosix v2.0.0 (/home/chris/Documents/src/rust/diosix)
+    Finished dev [unoptimized + debuginfo] target(s) in 0.37s
      Running `qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel target/riscv64gc-unknown-none-elf/debug/hypervisor`
-[?] CPU 0: Enabling RAM region 0x80f3b000, size 496 MB
 [+] CPU 0: Welcome to diosix 2.0.0
-[?] CPU 0: Debugging enabled, 4 CPU core(s) found
+[?] CPU 0: Debugging enabled, 4 CPU cores, 512 MiB RAM found
 [?] CPU 0: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[?] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[?] CPU 2: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
 [?] CPU 1: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
-[?] CPU 0: Copied boot capsule DTB to 0x9ffffd4c, 692 bytes
-[?] CPU 0: Translated supervisor virtual entry point 0xffffffe000000000 to 0x9c000000 in physical RAM
-[?] CPU 0: Loading supervisor ELF program area: 0x8006f368 size 0x234f2 into 0x9c000000
-[?] CPU 0: Loading supervisor ELF program area: 0x80093368 size 0x1d5ca8 into 0x9c024000
-[?] CPU 0: Loading supervisor ELF program area: 0x80269368 size 0x66209e into 0x9c200000
-[?] CPU 0: Loading supervisor ELF program area: 0x808cc368 size 0x21e8a4 into 0x9ca00000
-[?] CPU 0: Loading supervisor ELF program area: 0x80aeb368 size 0x2430 into 0x9ce00000
-[?] CPU 0: Loading supervisor ELF program area: 0x80aee368 size 0x6de3c into 0x9d000000
-[?] CPU 1: Running vcore 0 in capsule 1
-[?] CPU 1: Granting ReadWriteExecute access to 0x9c000000, 67108864 bytes
-[?] CPU 1: Environment call at 0xffffffe00020492c: sbi_get_sbi_spec_version
-[?] CPU 1: Environment call at 0xffffffe0002045b2: sbi_probe_extension
-[?] CPU 1: Environment call at 0xffffffe00020442c: sbi_set_timer
+[?] CPU 2: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 3: Physical CPU core RV64IMAFDC (Qemu/Unknown) ready to roll
+[?] CPU 1: Capsule 1: [    0.000000] Linux version 5.4.58 (chris@diosix-dev) (gcc version 9.3.0 (Buildroot 2020.08-642-ga2830f0dad)) #2 SMP Sun Sep 27 14:15:14 UTC 2020
+[?] CPU 1: Capsule 1: [    0.000000] earlycon: sbi0 at I/O port 0x0 (options '')
+[?] CPU 1: Capsule 1: [    0.000000] printk: bootconsole [sbi0] enabled
+[?] CPU 1: Capsule 1: [    0.000000] initrd not found or empty - disabling initrd
+[?] CPU 1: Capsule 1: [    0.000000] Zone ranges:
+[?] CPU 1: Capsule 1: [    0.000000]   DMA32    [mem 0x000000009c000000-0x000000009fffffff]
+[?] CPU 1: Capsule 1: [    0.000000]   Normal   empty
+[?] CPU 1: Capsule 1: [    0.000000] Movable zone start for each node
+[?] CPU 1: Capsule 1: [    0.000000] Early memory node ranges
+[?] CPU 1: Capsule 1: [    0.000000]   node   0: [mem 0x000000009c000000-0x000000009fffffff]
+[?] CPU 1: Capsule 1: [    0.000000] Initmem setup node 0 [mem 0x000000009c000000-0x000000009fffffff]
+[?] CPU 1: Capsule 1: [    0.000000] software IO TLB: Cannot allocate buffer
+[?] CPU 1: Capsule 1: [    0.000000] elf_hwcap is 0x112d
+[?] CPU 1: Capsule 1: [    0.000000] percpu: Embedded 17 pages/cpu s30680 r8192 d30760 u69632
+[?] CPU 1: Capsule 1: [    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 16160
+[?] CPU 1: Capsule 1: [    0.000000] Kernel command line: earlycon=sbi
+[?] CPU 1: Capsule 1: [    0.000000] Dentry cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[?] CPU 1: Capsule 1: [    0.000000] Inode-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[?] CPU 1: Capsule 1: [    0.000000] Sorting __ex_table...
+[?] CPU 1: Capsule 1: [    0.000000] mem auto-init: stack:off, heap alloc:off, heap free:off
+[?] CPU 1: Capsule 1: [    0.000000] Memory: 53740K/65536K available (6047K kernel code, 398K rwdata, 1983K rodata, 1973K init, 305K bss, 11796K reserved, 0K cma-reserved)
+[?] CPU 1: Capsule 1: [    0.000000] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+[?] CPU 1: Capsule 1: [    0.000000] rcu: Hierarchical RCU implementation.
+[?] CPU 1: Capsule 1: [    0.000000] rcu:       RCU restricting CPUs from NR_CPUS=8 to nr_cpu_ids=1.
+[?] CPU 1: Capsule 1: [    0.000000] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+[?] CPU 1: Capsule 1: [    0.000000] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=1
+[?] CPU 1: Capsule 1: [    0.000000] NR_IRQS: 0, nr_irqs: 0, preallocated irqs: 0
+[?] CPU 1: Capsule 1: [    0.000000] riscv_timer_init_dt: Registering clocksource cpuid [0] hartid [0]
+[?] CPU 1: Capsule 1: [    0.000000] clocksource: riscv_clocksource: mask: 0xffffffffffffffff max_cycles: 0x24e6a1710, max_idle_ns: 440795202120 ns
+[?] CPU 1: Capsule 1: [    0.000119] sched_clock: 64 bits at 10MHz, resolution 100ns, wraps every 4398046511100ns
+[?] CPU 1: Capsule 1: [    0.003873] Console: colour dummy device 80x25
+[?] CPU 1: Capsule 1: [    0.004776] printk: console [tty0] enabled
 ```
 
 Press `Control-a` then `c` to escape to the Qemu monitor. Run the monitor command `info registers -a` to list the CPU core states. You should see output similar to the following:

@@ -81,6 +81,16 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                         pcore::PhysicalCore::set_virtualcore_timer_target(Some(target));
                         hardware::scheduler_timer_at(target);
                     },
+
+                    /* stash debug output character into capsule's buffer */
+                    syscalls::Action::OutputChar(character) => if let Some(capsule_id) = pcore::PhysicalCore::get_capsule_id()
+                    {
+                        if let Err(e) = capsule::debug_write(capsule_id, character)
+                        {
+                            hvdebug!("Couldn't buffer debug byte {} from capsule {}: {:?}", character, capsule_id, e);
+                        }
+                    },
+
                     _ => if let Some(c) = pcore::PhysicalCore::get_capsule_id()
                     {
                         hvalert!("Capsule {}: Unhandled syscall: {:x?} at 0x{:x}", c, action, irq.pc);

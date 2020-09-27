@@ -39,12 +39,15 @@ git clone https://github.com/buildroot/buildroot.git
 cd buildroot
 ```
 
-To build a Linux kernel for a particular CPU architecture, copy the supplied Buildroot configuration file for that architecture into the Buildroot source code directory. The supplied configuration files are in the `boot/buildroot/` directory within the Diosix project's root directory. Next, tell Buildroot to begin compiling. When it is complete, ensure the directory structure to store the built kernel exists within the Diosix project, and copy the generated kernel, located at `output/images/vmlinux` in the Buildroot source code directory, to the `boot/binary/<architecture>/supervisor` path.
+To build a Linux kernel for a particular CPU architecture, copy the supplied Buildroot configuration file for that architecture into the Buildroot source code directory. The supplied configuration files are in the `boot/buildroot/` directory within the Diosix project's root directory. Also, copy across the `kernel_cmdline_config` file from the `boot/buildroot/` directory to the Buildroot source code directory. This file configures the Linux kernel to output system boot and early debug information via the SBI API, which is useful for diagnosing any errors or failures during guest operating system startup.
+
+Next, tell Buildroot to begin compiling. When it is complete, ensure the directory structure to store the built kernel exists within the Diosix project, and copy the generated kernel, located at `output/images/vmlinux` in the Buildroot source code directory, to the `boot/binary/<architecture>/supervisor` path.
 
 Generically, and assuming Diosix is located at `src/diosix` in your home directory and your working directory is still the Buildroot source code directory, the commands needed to perform the above steps are:
 
 ```
 cp $HOME/src/diosix/boot/buildroot/<architecture>.config .config
+cp $HOME/src/diosix/boot/buildroot/kernel_cmdline_config kernel_cmdline_config
 make
 mkdir -p $HOME/src/diosix/boot/binaries/<architecture>
 cp output/images/vmlinux $HOME/src/diosix/boot/binaries/<architecture>/supervisor
@@ -54,6 +57,7 @@ Replace `<architecture>` above with a supported CPU architecture. For example, f
 
 ```
 cp $HOME/src/diosix/boot/buildroot/riscv64.config .config
+cp $HOME/src/diosix/boot/buildroot/kernel_cmdline_config kernel_cmdline_config
 make
 mkdir -p $HOME/src/diosix/boot/binaries/riscv64
 cp output/images/vmlinux $HOME/src/diosix/boot/binaries/riscv64/supervisor
