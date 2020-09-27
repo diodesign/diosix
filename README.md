@@ -22,7 +22,7 @@ You can build and run Diosix in a convenient containerized environment. These in
 
 First, you must authenticate with GitHub Packages. If you have not yet done so, [create a personal access token](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token) that grants read-only access to GitHub Packages, and [pass this token](https://docs.github.com/en/packages/using-github-packages-with-your-projects-ecosystem/configuring-docker-for-use-with-github-packages#authenticating-to-github-packages) to Docker.
 
-Next, fetch a prebuilt Diosix Docker container image from GitHub. Available images are listed [here](https://github.com/diodesign/diosix/releases). For example, to fetch the latest released image, run:
+Next, fetch a [prebuilt](https://github.com/diodesign/diosix/releases) Diosix Docker container image from GitHub. For example, to fetch the latest released image, run:
 
 ```
 docker pull docker.pkg.github.com/diodesign/diosix/wip:sbi-earlycon
