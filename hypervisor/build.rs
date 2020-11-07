@@ -1,4 +1,4 @@
-/* build assembly language files and glue them to rust code
+/* build hypervisor's assembly language files and glue them to rust code
  *
  * Reminder: this runs on the host build system using the host's architecture.
  * Thus, a Rust toolchain that can build executables for the host arch must be installed, and
@@ -20,13 +20,12 @@
 
    eg: cargo build --target riscv32imac-unknown-none-elf
 
-   The boot code should detect and use whatever hardware is present.
+   The hypervisor will detect and use whatever hardware is present and supported.
 */
 
 use std::env;
 use std::fs;
 use std::process::Command;
-use std::fs::metadata;
 use std::collections::HashSet;
 
 extern crate regex;
@@ -85,8 +84,6 @@ pub struct Context<'a>
     objects: HashSet<String>, /* set of objects to link, referenced by their full path */
     as_exec: String,          /* path to target's GNU assembler executable */
     ar_exec: String,          /* path to target's GNU archiver executable */
-    ld_exec: String,          /* path to target's GNU linker executable */
-    oc_exec: String,          /* path to the target's GNU objcopy executable */
     target: &'a Target        /* describe the build target */
 }
 
@@ -102,27 +99,7 @@ fn main()
         objects: HashSet::new(),
         as_exec: String::from(format!("{}-linux-gnu-as", target.gnu_prefix)),
         ar_exec: String::from(format!("{}-linux-gnu-ar", target.gnu_prefix)),
-        ld_exec: String::from(format!("{}-linux-gnu-ld", target.gnu_prefix)),
-        oc_exec: String::from(format!("{}-linux-gnu-objcopy", target.gnu_prefix)),
         target: &target
-    };
-
-    /* provide a supervisor kernel for the first capsule to run. this should contain an executable
-    that unpacks a basic filesystem into RAM, and then loads more files as needed from storage.
-    its job is to manage all child capsules, which should also be loaded as needed from storage.
-
-    the boot capsule's supervisor is expected in boot/binaries/isa/supervisor
-    where isa = target CPU ISA, eg: riscv32 or riscv64 */
-    
-    let boot_files = String::from(format!("boot/binaries/{}", target.gnu_prefix));
-    let boot_supervisor_name = String::from("supervisor");
-    let boot_supervisor = format!("{}/{}", boot_files, boot_supervisor_name);
-
-    /* check we have a supervisor to boot, and if so, include them in the final linking process */
-    match metadata(&boot_supervisor)
-    {
-        Err(e) => panic!("Expected boot capsule supervisor at {}, can't find it (error: {:?})", boot_supervisor, e),
-        _ => package_binary(&boot_files, &boot_supervisor_name, &mut context)
     };
 
     /* tell cargo to rebuild if linker file changes */
@@ -135,85 +112,6 @@ fn main()
     link_archive(&mut context);
 }
 
-/* Turn a binary file into a .o object file to link with hypervisor. 
-   the following symbols will be defined pointing to the start and end
-   of the object when it is located in memory and its size in bytes:
-
-    _binary_component_start
-    _binary_component_end
-    _binary_component_size
-   
-   where component = name of component specified below
-
-   This allows the hypervisor code to find the binary file
-   in memory after the combined hypervisor executable is loaded into RAM.
-   => binary_dir = path to directory containing binary file to convert
-      component = leafname of the binary file within binary_dir,
-                  also used to reference file as per above
-      context => build context
-*/
-fn package_binary(binary_dir: &String, component: &String, mut context: &mut Context)
-{
-    /* generate path to output .o object file for this given binary */
-    let object_file = format!("{}/{}.o", &context.output_dir, &component);
-    let binary_file = format!("{}/{}", &binary_dir, &component);
-
-    /* generate an intemediate .o object file from the given binary file */
-    let result = Command::new(&context.ld_exec)
-        .arg("-r")
-        .arg("--format=binary")
-        .arg(&binary_file)
-        .arg("-o")
-        .arg(&object_file)
-        .output()
-        .expect(format!("Couldn't run command to convert {} into linkable object file", &binary_file).as_str());
-
-    if result.status.success() != true
-    {
-        panic!(format!("Conversion of {} to object {} failed:\n{}\n{}",
-            &binary_file, &object_file, String::from_utf8(result.stdout).unwrap(), String::from_utf8(result.stderr).unwrap()));
-    }
-
-    /* when we use ld, it defines the _start, _end, _size symbols using the full filename
-    of the binary file, which pollutes the symbol with the architecture and project layout, eg:
-    _binary_boot_riscv64_supervisor_start
-
-    rename the symbols so they can be accessed generically just by their component name.
-    we need to convert the '/' and '.' in the path to _ FIXME: this very Unix/Linux-y */
-    let symbol_prefix = format!("_binary_{}_{}_", &binary_dir.replace("/", "_").replace(".", "_"), &component);
-    let renamed_prefix = format!("_binary_{}_", &component);
-
-    /* select correct executable */
-    let rename = Command::new(&context.oc_exec)
-        .arg("--redefine-sym")
-        .arg(format!("{}start={}start", &symbol_prefix, &renamed_prefix))
-        .arg("--redefine-sym")
-        .arg(format!("{}end={}end", &symbol_prefix, &renamed_prefix))
-        .arg("--redefine-sym")
-        .arg(format!("{}size={}size", &symbol_prefix, &renamed_prefix))
-        .arg(&object_file)
-        .output()
-        .expect(format!("Couldn't run command to rename symbols for {}", &binary_file).as_str());
-
-    if rename.status.success() != true
-    {
-        panic!(format!("Symbol rename for {} in {} failed:\n{}\n{}",
-            &binary_file, &object_file, String::from_utf8(result.stdout).unwrap(), String::from_utf8(result.stderr).unwrap()));
-    }
-
-    register_object(&object_file, &mut context);
-}
-
-/* Add an object file, by its full path, to the list of objects to link with the hypervisor
-   To avoid object collisions and overwrites, bail out if the given object path was already taken */
-fn register_object(path: &String, context: &mut Context)
-{
-    if context.objects.insert(path.to_string()) == false
-    {
-        panic!("Cannot register object {} - an object already exists in that location", &path);
-    }
-}
-
 /* Run through a directory of .s assembly source code,
    add each .s file to the project, and assemble each file using the appropriate tools
    => slurp_from = path of directory to scan for .s files to assemble
@@ -221,36 +119,27 @@ fn register_object(path: &String, context: &mut Context)
 */
 fn assemble_directory(slurp_from: String, context: &mut Context)
 {
-    match fs::read_dir(slurp_from)
+    /* we'll just ignore empty/inaccessible directories */
+    if let Ok(directory) = fs::read_dir(slurp_from)
     {
-        Ok(directory) =>
+        for file in directory
         {
-            for file in directory
+            if let Ok(file) = file
             {
-                match file
+                /* assume everything in the asm directory can be assembled if it is a file */
+                if let Ok(metadata) = file.metadata()
                 {
-                    Ok(file) =>
+                    if metadata.is_file() == true
                     {
-                        /* assume everything in the asm directory can be assembled if it is a file */
-                        if let Ok(metadata) = file.metadata()
-                        {
-                            if metadata.is_file() == true
-                            {
-                                println!(
-                                    "cargo:rerun-if-changed={}",
-                                    file.path().to_str().unwrap()
-                                );
-                                assemble(file.path().to_str().unwrap(), context);
-                            }
-                        }
+                        println!(
+                            "cargo:rerun-if-changed={}",
+                            file.path().to_str().unwrap()
+                        );
+                        assemble(file.path().to_str().unwrap(), context);
                     }
-                    _ =>
-                    {} /* ignore empty/inaccessible directories */
                 }
             }
         }
-        _ =>
-        {} /* ignore empty/inaccessible directories */
     }
 }
 
@@ -296,6 +185,16 @@ fn assemble(path: &str, mut context: &mut Context)
     }
 
     register_object(&object_file, &mut context);
+}
+
+/* Add an object file, by its full path, to the list of objects to link with the hypervisor
+   To avoid object collisions and overwrites, bail out if the given object path was already taken */
+fn register_object(path: &String, context: &mut Context)
+{
+    if context.objects.insert(path.to_string()) == false
+    {
+        panic!("Cannot register object {} - an object already exists in that location", &path);
+    }
 }
 
 /* Create an archive containing all registered .o files and link with this archive */

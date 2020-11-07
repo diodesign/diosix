@@ -1,0 +1,15 @@
+[package]
+name = "diosix-services"
+version = "1.0.0"
+authors = ["Chris Williams <diosix@tuta.io>"]
+license = "MIT"
+build = "build.rs"
+publish = false
+edition = "2018"
+
+[[bin]]
+name = "gooey"
+path = "src/gooey/main.rs"
+
+[build-dependencies]
+regex = "1.4.1"

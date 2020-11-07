@@ -59,5 +59,8 @@ pub enum Cause
     /* supervisor binary loading */
     LoaderSupervisorTooLarge,
     LoaderUnrecognizedSupervisor,
-    LoaderBadEntry
+    LoaderBadEntry,
+
+    /* manifest errors */
+    ManifestBadFS
 }

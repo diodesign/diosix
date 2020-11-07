@@ -1,5 +1,5 @@
 #
-# diosix platform-specific linker settings
+# diosix hypervisor platform-specific linker settings
 #
 # (c) Chris Williams, 2019-2020.
 # See LICENSE for usage and copying.
@@ -16,18 +16,15 @@ target = "riscv64gc-unknown-none-elf"
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform-riscv/link.ld", "-C", "link-arg=--no-eh-frame-hdr" ]
 linker = "riscv32-linux-gnu-ld"
 ar = "riscv32-linux-gnu-ar"
-runner = "qemu-system-riscv32 -bios none -nographic -machine virt -smp 4 -m 512M -kernel"
 
 # Find the linker for 64-bit RISC-V (IMAC) targets
 [target.riscv64imac-unknown-none-elf]
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform-riscv/link.ld", "-C", "link-arg=--no-eh-frame-hdr" ]
 linker = "riscv64-linux-gnu-ld"
 ar = "riscv64-linux-gnu-ar"
-runner = "qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel"
 
 # Find the linker for 64-bit RISC-V (GC) targets
 [target.riscv64gc-unknown-none-elf]
 rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform-riscv/link.ld", "-C", "link-arg=--no-eh-frame-hdr" ]
 linker = "riscv64-linux-gnu-ld"
 ar = "riscv64-linux-gnu-ar"
-runner = "qemu-system-riscv64 -bios none -nographic -machine virt -smp 4 -m 512M -kernel"

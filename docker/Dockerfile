@@ -10,7 +10,7 @@ FROM debian:unstable
 
 # Bring in the necessary tools
 RUN apt update
-RUN apt -y install python3 python3-flask build-essential git curl binutils-riscv64-linux-gnu qemu-system-misc
+RUN apt -y install python3 python3-flask build-essential git curl binutils-riscv64-linux-gnu qemu-system-misc libssl-dev
 
 # Bring in the environment runtime script
 COPY ./entrypoint.py /
@@ -22,6 +22,7 @@ WORKDIR /build
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y \
 	&& . $HOME/.cargo/env \
 	&& rustup target install riscv64gc-unknown-none-elf \
+	&& cargo install --force cargo-make \
 	&& git clone --recurse-submodules https://github.com/diodesign/diosix.git \
 	&& cd diosix \
 	&& mkdir -p boot/binaries/riscv64 \

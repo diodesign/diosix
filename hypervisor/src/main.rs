@@ -39,6 +39,9 @@ extern crate xmas_elf;
 /* needed for device tree parsing and manipulation */
 extern crate devicetree;
 
+/* needed for parsing diosix manifest file-system (DMFS) images bundled with the hypervisor */
+extern crate dmfs;
+
 /* pass the feature qemudebug to be able to write direct to the emulator's stdout
 via the macro qemuprint::println!() */
 #[cfg(feature = "qemudebug")]
@@ -71,6 +74,7 @@ mod capsule;    /* manage capsules */
 mod loader;     /* parse and load supervisor binaries */
 mod message;    /* send messages between physical cores */
 mod service;    /* allow capsules to register services */
+mod manifest;   /* manage capsules loaded with the hypervisor */
 
 use pcore::{PhysicalCoreID, BOOT_PCORE_ID};
 
@@ -90,11 +94,12 @@ lazy_static!
     static ref INIT_DONE: Mutex<bool> = Mutex::new(false);
 }
 
-/* a physical CPU core obtaining this lock when it is false must create the boot capsule
-and set the flag to true. any other core obtaining it as true must release the lock */
+/* a physical CPU core obtaining this lock when it is false must walk the DMFS, create
+capsules required to run at boot time, and set the flag to true. any other core
+obtaining it as true must release the lock and move on */
 lazy_static!
 {
-    static ref BOOT_CAPSULE_CREATED: Mutex<bool> = Mutex::new(false);
+    static ref MANIFEST_BOOT_CAPS_CREATED: Mutex<bool> = Mutex::new(false);
 }
 
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
@@ -178,7 +183,8 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
             also initialize any found hardware */
             hardware::parse_and_init(dtb)?;
 
-            physmem::init()?; /* register all the available physical RAM */
+            /* register all the available physical RAM */
+            physmem::init()?;
 
             const KILOBYTE: usize = 1024;
             const MEGABYTE: usize = KILOBYTE * KILOBYTE;
@@ -226,20 +232,20 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
     hvdebug!("Physical CPU core {:?} ready to roll", pcore::PhysicalCore::describe());
 
     /* the hypervisor can't make any assumptions about the underlying hardware.
-    the boot capsule's device tree is derived from the host's device tree, modified
-    to virtualize the peripherals. the virtual CPU cores that will run the capsule
-    are based on the physical CPU core that creates it. ensure a suitable physical
-    CPU core creates the boot capsule. this is more straightforward than the hypervisor
-    getting stuck into trying to specify a hypothetical CPU core */
+    the boot-time capsules' device tree is derived from the host's device tree,
+    modified to virtualize the peripherals. the virtual CPU cores that will run the
+    capsule are based on the physical CPU core that creates it. ensure a suitable
+    physical CPU core creates the boot-time capsules. this is more straightforward
+    than the hypervisor trying to specify a hypothetical CPU core */
     if pcore::PhysicalCore::smode_supported() == true
     {
-        match BOOT_CAPSULE_CREATED.try_lock()
+        match MANIFEST_BOOT_CAPS_CREATED.try_lock()
         {
             Some(mut flag) => match *flag
             {
                 false =>
                 {
-                    capsule::create_boot_capsule()?;
+                    manifest::create_boot_capsules()?;
                     *flag = true;
                 },
                 true => ()
