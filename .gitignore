@@ -8,6 +8,7 @@
 *.iso
 *.out
 *.elf
+*.img
 .DS_Store
 
 # ignore compiler output directories

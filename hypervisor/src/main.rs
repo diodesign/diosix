@@ -10,10 +10,10 @@
 #![no_main]
 #![feature(asm)]
 
-/* disable annoying warnings */
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 #![allow(improper_ctypes)]
+#![feature(type_ascription)]
 
 /* provide a framework for unit testing */
 #![feature(custom_test_frameworks)]
@@ -82,6 +82,14 @@ use pcore::{PhysicalCoreID, BOOT_PCORE_ID};
 mod error;
 use error::Cause;
 
+/* bring in the built-in dmfs image */
+use core::intrinsics::transmute;
+extern "C"
+{
+    static _binary_dmfs_img_start: u8;
+    static _binary_dmfs_img_size: u8;
+}
+
 /* tell Rust to use our HVallocator to allocate and free heap memory.
 although we'll keep track of physical memory, we'll let Rust perform essential
 tasks, such as dropping objects when it's no longer needed, borrow checking, etc */
@@ -99,8 +107,15 @@ capsules required to run at boot time, and set the flag to true. any other core
 obtaining it as true must release the lock and move on */
 lazy_static!
 {
-    static ref MANIFEST_BOOT_CAPS_CREATED: Mutex<bool> = Mutex::new(false);
+    static ref MANIFEST_UNPACKED: Mutex<bool> = Mutex::new(false);
 }
+
+/* set to true if individual cores can sound off their presence and capabilities */
+lazy_static!
+{
+    static ref ROLL_CALL: Mutex<bool> = Mutex::new(false);
+}
+
 
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 in future, we may support 16- or 128-bit, too. stick to usize as much as possible */
@@ -119,13 +134,8 @@ pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u
     #[cfg(test)]
     hvtests();
 
-    /* convert the dtb pointer into a slice: get this unsafe operation out of
-    the way here so the rest of the hypervisor can parse the blob in
-    a safe manner, assuming dtb_len is valid */
-    let dtb = unsafe { slice::from_raw_parts(dtb_ptr, u32::from_be(dtb_len) as usize) };
-
     /* if not performing tests, start the system as normal */
-    match hvmain(cpu_nr, dtb)
+    match hvmain(cpu_nr, dtb_ptr: *const u8, dtb_len: u32)
     {
         Err(e) =>
         {
@@ -133,7 +143,7 @@ pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u
             debughousekeeper!(); /* attempt to flush queued debug to output */
         },
         _ => () /* continue waiting for an IRQ to come in */
-    };
+    }
 }
 
 /* hvmain
@@ -156,10 +166,11 @@ pub extern "C" fn hventry(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u
    => cpu_nr = arbitrary CPU core ID number assigned by boot code,
                separate from hardware ID number.
                BOOT_PCORE_ID = boot CPU core.
-      dtb = byte slice containing device tree blob describing the host hardware
+      dtb_ptr = pointer to device tree in memory from bootlaoder
+      dtb_len = 32-bit big endian size of the device tree
    <= return to infinite loop, waiting for interrupts
 */
-fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
+fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<(), Cause>
 {
     /* set up each physical processor core with its own private heap pool and any other resources.
     each private pool uses physical memory assigned by the pre-hvmain boot code. init() should be called
@@ -178,6 +189,9 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
         BOOT_PCORE_ID as its cpu_nr can initialize the hypervisor */
         BOOT_PCORE_ID => 
         {
+            /* convert the dtb pointer into a rust byte slice. assumes dtb_len is valid */
+            let dtb = unsafe { slice::from_raw_parts(dtb_ptr, u32::from_be(dtb_len) as usize) };
+
             /* process device tree to create data structures representing system hardware,
             allowing these peripherals to be accessed by subsequent routines. this should
             also initialize any found hardware */
@@ -185,40 +199,7 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
 
             /* register all the available physical RAM */
             physmem::init()?;
-
-            const KILOBYTE: usize = 1024;
-            const MEGABYTE: usize = KILOBYTE * KILOBYTE;
-            const GIGABYTE: usize = KILOBYTE * MEGABYTE;
-
-            /* say hello via the debug port with some information */
-            hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-            hvdebug!("Debugging enabled, {}, {} RAM found",
-                /* report number of CPU cores found */
-                match hardware::get_nr_cpu_cores()
-                {
-                    None | Some(0) => format!("no CPU cores"),
-                    Some(1) => format!("1 CPU core"),
-                    Some(c) => format!("{} CPU cores", c)
-                },
-
-                /* count up total system RAM using GiB / MiB / KiB */
-                match hardware::get_phys_ram_total()
-                {
-                    Some(t) => if t >= GIGABYTE
-                    {
-                        format!("{} GiB", t / GIGABYTE)
-                    }
-                    else if t >= MEGABYTE
-                    {
-                        format!("{} MiB", t / MEGABYTE)
-                    }
-                    else
-                    {
-                        format!("{} KiB", t / KILOBYTE)
-                    },
-
-                    None => format!("no")
-                });
+            describe_system();
 
             /* allow other cores to continue */
             *(INIT_DONE.lock()) = true;
@@ -228,31 +209,49 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
         _ => while *(INIT_DONE.lock()) != true {}
     }
 
-    /* acknowledge we're alive and well, and report CPU core features */
-    hvdebug!("Physical CPU core {:?} ready to roll", pcore::PhysicalCore::describe());
-
-    /* the hypervisor can't make any assumptions about the underlying hardware.
-    the boot-time capsules' device tree is derived from the host's device tree,
+    /* we're now ready to start creating capsules to run from the bundled DMFS image.
+    the hypervisor can't make any assumptions about the underlying hardware.
+    the device tree for these early capsules is derived from the host's device tree,
     modified to virtualize the peripherals. the virtual CPU cores that will run the
     capsule are based on the physical CPU core that creates it. ensure a suitable
     physical CPU core creates the boot-time capsules. this is more straightforward
     than the hypervisor trying to specify a hypothetical CPU core */
     if pcore::PhysicalCore::smode_supported() == true
     {
-        match MANIFEST_BOOT_CAPS_CREATED.try_lock()
+        match MANIFEST_UNPACKED.try_lock()
         {
             Some(mut flag) => match *flag
             {
                 false =>
                 {
-                    manifest::create_boot_capsules()?;
+                    /* convert the dmfs image pointer into a byte slice */
+                    let image = unsafe
+                    {
+                        slice::from_raw_parts
+                        (
+                            transmute(&_binary_dmfs_img_start),
+                            transmute(&_binary_dmfs_img_size)
+                        )
+                    };
+
+                    /* process the contents of the DMFS image, including
+                    printing to the debug port any messages and creating
+                    capsules to run system services and supplied guests */
+                    manifest::unpack(image)?;
                     *flag = true;
+
+                    /* allow all working cores to join the roll call */
+                    *(ROLL_CALL.lock()) = true;
                 },
                 true => ()
             },
             None => ()
         }
     }
+
+    /* once ROLL_CALL is set to true, acknowledge we're alive and well, and report CPU core features */
+    while *(ROLL_CALL.lock()) != true {}
+    hvdebug!("Physical CPU core {:?} ready to roll", pcore::PhysicalCore::describe());
 
     /* enable timer on this physical CPU core to start scheduling and running virtual cores */
     scheduler::start()?;
@@ -262,6 +261,45 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb: &[u8]) -> Result<(), Cause>
     and this boot thread will disappear. thus, the call to start() should be the last thing
     this boot thread does */
     Ok(())
+}
+
+/* dump system information to the user */
+fn describe_system()
+{
+    const KILOBYTE: usize = 1024;
+    const MEGABYTE: usize = KILOBYTE * KILOBYTE;
+    const GIGABYTE: usize = KILOBYTE * MEGABYTE;
+
+    /* say hello via the debug port with some information */
+    hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    hvdebug!("Debugging enabled, {}, {} RAM found",
+    
+    /* report number of CPU cores found */
+    match hardware::get_nr_cpu_cores()
+    {
+        None | Some(0) => format!("no CPU cores"),
+        Some(1) => format!("1 CPU core"),
+        Some(c) => format!("{} CPU cores", c)
+    },
+
+    /* count up total system RAM using GiB / MiB / KiB */
+    match hardware::get_phys_ram_total()
+    {
+        Some(t) => if t >= GIGABYTE
+        {
+            format!("{} GiB", t / GIGABYTE)
+        }
+        else if t >= MEGABYTE
+        {
+            format!("{} MiB", t / MEGABYTE)
+        }
+        else
+        {
+            format!("{} KiB", t / KILOBYTE)
+        },
+
+        None => format!("no")
+    });
 }
 
 /* mandatory error handler for memory allocations */

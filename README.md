@@ -12,7 +12,9 @@
 
 ### Introduction <a name="intro"></a>
 
-Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor written [in Rust](https://www.rust-lang.org/) for 32-bit and 64-bit [RISC-V](https://riscv.org/) computers. A long-term goal is to build open-source Diosix packages that configure FPGAs with custom RISC-V cores and peripheral controllers to accelerate specific tasks, on the fly if necessary. This software should also run on supported system-on-chips.
+Diosix 2.0 strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor written [in Rust](https://www.rust-lang.org/) for 32-bit and 64-bit [RISC-V](https://riscv.org/) computers. A short-term goal is to provide a means for running multiple operating systems simultaneously on a RISC-V system to aid development and debugging, and to provide a rich mix of environments on a host system.
+
+A long-term goal is to build open-source Diosix packages that configure FPGAs with custom RISC-V cores and peripheral controllers to accelerate specific tasks, on the fly if necessary, and run containerized workloads on those chips. This software stack should also run on dedicated system-on-chips.
 
 Right now, Diosix is a work in progress. It can bring up a RISC-V system, load a Linux guest OS with minimal filesystem into a virtualized environment called a capsule, pass this guest kernel a Device Tree structure describing its virtualized environment, and begin executing it.
 
@@ -153,7 +155,9 @@ To build and run Diosix completely from scratch, without any containerization, f
 
 ### Contact, security issue reporting, and code of conduct <a name="contact"></a>
 
-Please send an [email](mailto:diosix@tuta.io) if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or raise issues via GitHub, though please consider disclosing security-related matters privately. Please also observe the project's [code of conduct](docs/conduct.md) if you wish to participate.
+Please send an [email](mailto:diosix@tuta.io) if you have any questions or issues to raise, wish to get involved, have source to contribute, or have [found a security flaw](docs/security.md). You can, of course, submit pull requests or raise issues via GitHub, though please consider disclosing security-related matters privately. You're more than welcome to use the [discussion boards](https://github.com/diodesign/diosix/discussions/) to ask questions and suggest features.
+
+Please also observe the project's [code of conduct](docs/conduct.md) if you wish to participate.
 
 ### Copyright, distribution, and license <a name="copyright"></a>
 

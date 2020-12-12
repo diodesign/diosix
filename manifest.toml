@@ -1,0 +1,22 @@
+# Define the contents of a base system the hypervisor can boot
+#
+# This base system contains welcome banner(s) and system services
+# that are included in the hypervisor binary and unpacked at run-time
+#
+# Directory paths are relative to this manifest.toml file
+
+# these can be overridden by whatever's parsing this file, usually mkdmfs
+[defaults]
+arch = "riscv64gc-unknown-none-elf"
+quality = "debug"
+outfile = "target/dmfs.img"
+
+# define where to find the welcome banners
+[banners]
+path = "banners"
+welcome = "banners/welcome.txt"
+
+# define where to find the system services
+[services]
+path = "services"
+include = "gooey"

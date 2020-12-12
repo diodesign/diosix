@@ -85,9 +85,9 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                     /* stash debug output character into capsule's buffer */
                     syscalls::Action::OutputChar(character) => if let Some(capsule_id) = pcore::PhysicalCore::get_capsule_id()
                     {
-                        if let Err(e) = capsule::debug_write(capsule_id, character)
+                        if let Err(_e) = capsule::debug_write(capsule_id, character)
                         {
-                            hvdebug!("Couldn't buffer debug byte {} from capsule {}: {:?}", character, capsule_id, e);
+                            hvdebug!("Couldn't buffer debug byte {} from capsule {}: {:?}", character, capsule_id, _e);
                         }
                     },
 

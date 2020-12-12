@@ -13,14 +13,12 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use platform::cpu::Entry;
 use platform::physmem::PhysMemBase;
-use super::loader;
 use super::error::Cause;
 use super::physmem;
 use super::virtmem::Mapping;
 use super::vcore::{self, Priority, VirtualCoreID};
 use super::service::ServiceID;
 use super::service;
-use super::hardware;
 use super::pcore;
 
 pub type CapsuleID = usize;
@@ -148,48 +146,6 @@ impl Drop for Capsule
             };
         }
     }
-}
-
-/* create the boot capsule, from which all other capsules spawn */
-pub fn create_boot_capsule() -> Result<(), Cause>
-{
-    /* create an auto-restarting capsule */
-    let capid = create(true)?;
-
-    /* assign one virtual CPU core to the boot capsule */
-    let cpus = 1;
-
-    /* reserve 64MB of physical RAM for the capsule */
-    let size = 64 * 1024 * 1024;
-    let ram = physmem::alloc_region(size)?;
-
-    /* create device tree blob for the virtual hardware available to the guest
-    capsule and copy into the end of the region's physical RAM.
-    a zero-length DTB indicates something went wrong */
-    let guest_dtb = hardware::clone_dtb_for_capsule(cpus, 0, ram.base(), ram.size())?;
-    if guest_dtb.len() == 0
-    {
-        return Err(Cause::BootDeviceTreeBad);
-    }
-
-    let guest_dtb_base = ram.fill_end(guest_dtb)?;
-
-    /* map that physical memory into the capsule */
-    let mut mapping = Mapping::new();
-    mapping.set_physical(ram);
-    mapping.identity_mapping()?;
-    map_memory(capid, mapping)?;
-    
-    /* parse + copy the boot capsule's binary into its physical memory */
-    let phys_binary_location = physmem::boot_supervisor();
-    let entry = loader::load(ram, phys_binary_location)?;
-
-    /* create virtual CPU cores for the capsule as required */
-    for vcoreid in 0..cpus
-    {
-        create_and_add_vcore(capid, vcoreid, entry, guest_dtb_base, Priority::High)?;
-    }
-    Ok(())
 }
 
 /* create a virtual core and add it to the given capsule

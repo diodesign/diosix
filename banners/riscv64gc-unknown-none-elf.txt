@@ -1,0 +1,26 @@
+               `.-:+ossssssssssssssssssssssssssssy
+                     ./ssssssssssssssssssssssssssy
+                       `/ssssssssssssssssssssssssy
+yyyyyyyyyyyyys+:`        :sssssssssssssssssssssssy
+MMMMMMMMMMMMMMMMNh:       :ssssssssssssssssssssssy
+MMMMMMMMMMMMMMMMMMMs       +sssssssssssssssssssssy
+MMMMMMMMMMMMMMMMMMMM/      :sssssssssssssssssssss/
+MMMMMMMMMMMMMMMMMMMMy      .ssssssssssssssssssso- 
+MMMMMMMMMMMMMMMMMMMM/      :ssssssssssssssssss/`  
+MMMMMMMMMMMMMMMMMMMy       +sssssssssssssssso-    
+MMMMMMMMMMMMMMMMNd/       :ssssssssssssssss/`     
+MMMdddddddddhhs+-        :ssssssssssssssso-       
+MMN                    .+sssssssssssssss+`      `+
+MMM:                .-+ssssssssssssssso:       -hM
+MMMMy.         ..:/+ossssssssssssssss+.      `+NMM
+MMMMMNo`       -osssssssssssssssssso:       -hMMMM
+MMMMMMMm/       `/osssssssssssssss+.       +NMMMMM
+MMMMMMMMMh-       ./sssssssssssss:       .hMMMMMMM
+MMMMMMMMMMNy.       .+ssssssssso.       +NMMMMMMMM
+MMMMMMMMMMMMN+`       -ossssss:`      .hMMMMMMMMMM
+MMMMMMMMMMMMMMd:       `:ssso.       +NMMMMMMMMMMM
+MMMMMMMMMMMMMMMMh.       `//`      .hMMMMMMMMMMMMM
+MMMMMMMMMMMMMMMMMNs`              /NMMMMMMMMMMMMMM
+MMMMMMMMMMMMMMMMMMMN/           `hMMMMMMMMMMMMMMMM
+
+    INSTRUCTION SETS WANT TO BE FREE :: RV64GC

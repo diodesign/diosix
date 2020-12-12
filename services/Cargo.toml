@@ -3,13 +3,22 @@ name = "diosix-services"
 version = "1.0.0"
 authors = ["Chris Williams <diosix@tuta.io>"]
 license = "MIT"
-build = "build.rs"
+build = "../mason/build.rs"
 publish = false
 edition = "2018"
 
 [[bin]]
 name = "gooey"
-path = "src/gooey/main.rs"
+path = "gooey/src/main.rs"
 
 [build-dependencies]
 regex = "1.4.1"
+
+[target.riscv32imac-unknown-none-elf.dependencies]
+supervisor = { path = "supervisor-riscv" }
+
+[target.riscv64imac-unknown-none-elf.dependencies]
+supervisor = { path = "supervisor-riscv" }
+
+[target.riscv64gc-unknown-none-elf.dependencies]
+supervisor = { path = "supervisor-riscv" }

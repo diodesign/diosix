@@ -10,12 +10,18 @@
 [submodule "src/qemuprint"]
 	path = hypervisor/src/qemuprint
 	url = https://github.com/diodesign/qemuprint.git
-[submodule "src/dmfs"]
-	path = hypervisor/src/dmfs
-	url = https://github.com/diodesign/dmfs.git
 [submodule "src/gooey"]
 	path = services/src/gooey
 	url = https://github.com/diodesign/gooey.git
 [submodule "services/src/supervisor-riscv"]
 	path = services/src/supervisor-riscv
+	url = https://github.com/diodesign/supervisor-riscv.git
+[submodule "hypervisor/mason"]
+	path = mason
+	url = https://github.com/diodesign/mason.git
+[submodule "services/gooey"]
+	path = services/gooey
+	url = https://github.com/diodesign/gooey.git
+[submodule "services/supervisor-riscv"]
+	path = services/supervisor-riscv
 	url = https://github.com/diodesign/supervisor-riscv.git

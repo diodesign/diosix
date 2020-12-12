@@ -14,7 +14,7 @@
  * small: < PHYS_RAM_LARGE_REGION_MIN_SIZE
  * small regions are sized in multiples of
  * PHYS_RAM_SMALL_REGION_MIN_SIZE and are allocated
- * from the bottom of free region blocks, ascending
+ * from the bottom of free region blocks, ascending.
  * these are aimed at small blocks of memory
  * for the hypervisor's private per-CPU heaps.
  * 
@@ -32,13 +32,6 @@ use alloc::vec::Vec;
 use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions, validate_ram};
 use super::error::Cause;
 use super::hardware;
-
-/* return the physical RAM region covering the entirely of the boot capsule's supervisor */
-pub fn boot_supervisor() -> Region
-{
-    let (base, end) = platform::physmem::boot_supervisor();
-    Region { base: base, size: end - base, hygiene: RegionHygiene::DontClean }
-}
 
 /* to avoid fragmentation, round up physical memory region allocations into multiples of these totals,
 depending on the region type. this only applies when creating regions with alloc_region() */

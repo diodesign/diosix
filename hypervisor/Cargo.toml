@@ -1,9 +1,9 @@
 [package]
-name = "diosix"
-version = "2.0.0"
+name = "hypervisor"
+version = "0.0.1"
 authors = ["Chris Williams <diosix@tuta.io>"]
 license = "MIT"
-build = "build.rs"
+build = "../mason/build.rs"
 publish = false
 edition = "2018"
 
@@ -21,7 +21,7 @@ qemudebug = [ "qemuprint" ]
 [dependencies]
 devicetree = { path = "src/devicetree" }
 qemuprint = { path = "src/qemuprint", optional = true }
-dmfs = { path = "src/dmfs" }
+dmfs = { path = "../mkdmfs/dmfs" }
 
 # external dependencies
 [dependencies.spin]
