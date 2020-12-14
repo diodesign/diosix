@@ -57,14 +57,8 @@ quiet_sw   := if quiet == "yes" { "--quiet " } else { "" }
 verbose_sw := if quiet == "no" { "--verbose " } else { "" }
 cargo_sw   := quiet_sw + release_sw + "--target " + target
 
-# determine base architecture string
-base_arch := `echo {{target}} | grep -o -E "(riscv)" | head -n 1`
-
-# set the location of the hypervisor's arch-specific files
-platform_asm := "src/platform-{{target}}/asm"
-
-# set the location of the system services' arch-specific files
-services_asm := "supervisor-{{target}}/asm"
+# TODO/FIXME: substituting base_arch doesn't seem to work, so we'll hardwire it in for now
+# base_arch := `echo {{target}} | grep -o -E "(riscv)" | head -n 1`
 
 # set location of the dmfs image file
 dmfsimg := "target/dmfs.img"
@@ -82,7 +76,7 @@ dmfsimg := "target/dmfs.img"
 # build the hypervisor and ensure it has a boot file system to include
 @_hypervisor: _mkdmfs
     echo "{{buildmsg}} hypervisor"
-    cd hypervisor && MASON_FILES=../{{dmfsimg}} MASON_ASM_DIRS={{platform_asm}} cargo build {{cargo_sw}}
+    cd hypervisor && MASON_FILES=../{{dmfsimg}} MASON_ASM_DIRS=src/platform-`echo {{target}} | grep -o -E "(riscv)" | head -n 1`/asm cargo build {{cargo_sw}}
 
 # build and run the dmfs generator to include banners and system services.
 # mkdmfs is configured by manifest.toml in the project root directory.
@@ -95,9 +89,9 @@ dmfsimg := "target/dmfs.img"
     cd mkdmfs && cargo run {{quiet_sw}} -- -t {{target}} -q {{quality_sw}} {{verbose_sw}}
 
 # build the system services
-@_services:
+@_services: 
     echo "{{buildmsg}} system services"
-    cd services && MASON_ASM_DIRS={{services_asm}} cargo build {{cargo_sw}}
+    cd services && MASON_ASM_DIRS=supervisor-`echo {{target}} | grep -o -E "(riscv)" | head -n 1`/asm cargo build {{cargo_sw}}
 
 # make sure we've got the cross-compiler installed and setup
 @_rustup:
@@ -110,3 +104,4 @@ dmfsimg := "target/dmfs.img"
     cd hypervisor && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
     cd services && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
     cd mkdmfs && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+    rm {{dmfsimg}}

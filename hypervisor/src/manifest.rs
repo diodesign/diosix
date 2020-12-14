@@ -26,11 +26,13 @@ pub fn unpack(image: &[u8]) -> Result<(), Cause>
             ManifestObjectType::BootMsg =>
             {
                 let _msg = String::from_utf8_lossy(asset.get_contents());
-                hvdebug!("- - - - - - - - - \n{}", _msg);
+                hvdebug!("--- {} --- \n{}", asset.get_name(), _msg);
             },
             
-            _ => hvdebug!("Found {} ({}), {} bytes in manifest",
-                    asset.get_name(), asset.get_description(), asset.get_contents_size())
+            ManifestObjectType::SystemService => hvdebug!("Found service {} ({}), {} bytes in manifest",
+                    asset.get_name(), asset.get_description(), asset.get_contents_size()),
+
+            t => hvdebug!("Found object type {:?}", t)
         }
     }
 

@@ -224,20 +224,8 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
             {
                 false =>
                 {
-                    /* convert the dmfs image pointer into a byte slice */
-                    let image = unsafe
-                    {
-                        slice::from_raw_parts
-                        (
-                            transmute(&_binary_dmfs_img_start),
-                            transmute(&_binary_dmfs_img_size)
-                        )
-                    };
-
-                    /* process the contents of the DMFS image, including
-                    printing to the debug port any messages and creating
-                    capsules to run system services and supplied guests */
-                    manifest::unpack(image)?;
+                    /* process the manifest and mark it as handled */
+                    process_manifest()?;
                     *flag = true;
 
                     /* allow all working cores to join the roll call */
@@ -263,6 +251,25 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
     Ok(())
 }
 
+fn process_manifest() -> Result<(), Cause>
+{
+    /* convert the included dmfs image into a byte slice */
+    let image = unsafe
+    {
+        slice::from_raw_parts
+        (
+            transmute(&_binary_dmfs_img_start),
+            transmute(&_binary_dmfs_img_size)
+        )
+    };
+
+    /* process the contents of the DMFS image, including
+    printing to the debug port any messages and creating
+    capsules to run system services and supplied guests */
+    manifest::unpack(image)?;
+    Ok(())
+}
+
 /* dump system information to the user */
 fn describe_system()
 {
@@ -271,7 +278,7 @@ fn describe_system()
     const GIGABYTE: usize = KILOBYTE * MEGABYTE;
 
     /* say hello via the debug port with some information */
-    hvlog!("Welcome to {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    hvlog!("Welcome to diosix {}", env!("CARGO_PKG_VERSION"));
     hvdebug!("Debugging enabled, {}, {} RAM found",
     
     /* report number of CPU cores found */
