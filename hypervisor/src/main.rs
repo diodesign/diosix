@@ -278,9 +278,11 @@ fn describe_system()
     const GIGABYTE: usize = KILOBYTE * MEGABYTE;
 
     /* say hello via the debug port with some information */
-    hvlog!("Welcome to diosix {}", env!("CARGO_PKG_VERSION"));
-    hvdebug!("Debugging enabled, {}, {} RAM found",
+    hvdebug!("Diosix {} :: Debug enabled. {} and {} RAM found",
     
+    /* build version number */
+    env!("CARGO_PKG_VERSION"),
+
     /* report number of CPU cores found */
     match hardware::get_nr_cpu_cores()
     {

@@ -70,8 +70,12 @@ dmfsimg := "target/dmfs.img"
     {{emubin}} -bios none -nographic -machine virt -smp 4 -m 512M -kernel hypervisor/target/{{target}}/{{quality_sw}}/hypervisor
 
 # build diosix and its components
-@build: _rustup _hypervisor
+@build: _descr _rustup _hypervisor
     echo "{{builtmsg}}"
+
+# let the user know what's going to happen
+@_descr:
+    echo "{{buildmsg}} {{quality_sw}}-grade Diosix for {{target}}"
 
 # build the hypervisor and ensure it has a boot file system to include
 @_hypervisor: _mkdmfs
@@ -101,7 +105,7 @@ dmfsimg := "target/dmfs.img"
 # delete intermediate build files and update cargo dependencies to start afresh
 @clean:
     echo "{{cleanmsg}}"
-    cd hypervisor && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
-    cd services && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
-    cd mkdmfs && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
-    rm {{dmfsimg}}
+    -cd hypervisor && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+    -cd services && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+    -cd mkdmfs && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+    -rm {{dmfsimg}}

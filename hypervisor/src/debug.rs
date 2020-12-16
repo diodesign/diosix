@@ -51,6 +51,24 @@ macro_rules! hvdebug
     ($fmt:expr, $($arg:tt)*) => ({});
 }
 
+/* don't include any metadata */
+#[macro_export]
+#[cfg(debug_assertions)]
+macro_rules! hvdebugraw
+{
+    ($fmt:expr) => (hvprint!("{}", $fmt));
+    ($fmt:expr, $($arg:tt)*) => (hvprint!(concat!($fmt), $($arg)*));
+}
+
+/* silence debug if disabled */
+#[macro_export]
+#[cfg(not(debug_assertions))]
+macro_rules! hvdebugraw
+{
+    ($fmt:expr) => ({});
+    ($fmt:expr, $($arg:tt)*) => ({});
+}
+
 /* low-level macros for hypervisor-only hvprintln and hvprint debug output routines */
 macro_rules! hvprintln
 {

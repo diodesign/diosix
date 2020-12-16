@@ -26,7 +26,7 @@ pub fn unpack(image: &[u8]) -> Result<(), Cause>
             ManifestObjectType::BootMsg =>
             {
                 let _msg = String::from_utf8_lossy(asset.get_contents());
-                hvdebug!("--- {} --- \n{}", asset.get_name(), _msg);
+                hvdebugraw!("\n{}\n\n", _msg);
             },
             
             ManifestObjectType::SystemService => hvdebug!("Found service {} ({}), {} bytes in manifest",
