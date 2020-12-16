@@ -116,52 +116,26 @@ pub struct Heap
     block_header_size: PhysMemSize,
 }
 
+/* describe a heap by its totals */
+pub struct HeapStats
+{
+    pub free_total: usize,      /* total free space in bytes */
+    pub alloc_total: usize,     /* total bytes allocated */
+    pub largest_free: usize,    /* largest single free block in bytes */
+    pub largest_alloc: usize    /* largest allocated block in bytes */
+}
+
+/* pretty print the heap's stats */
 impl fmt::Debug for Heap
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result
     {
-        let mut free_total = 0;
-        let mut alloc_total = 0;
-        let mut largest_free = 0;
-        let mut largest_alloc = 0;
-
-        let mut done = false;
-        let mut block = self.block_list_head;
-        unsafe
-        {
-            while !done
-            {
-                let size = (*block).size;
-                match (*block).magic
-                {
-                    HeapMagic::InUse =>
-                    {
-                        alloc_total = alloc_total + size;
-                        if size > largest_alloc
-                        {
-                            largest_alloc = size;
-                        }
-                    },
-                    HeapMagic::Free =>
-                    {
-                        free_total = free_total + size;
-                        if size > largest_free
-                        {
-                            largest_free = size;
-                        }
-                    }
-                };
-
-                match (*block).next
-                {
-                    None => done = true,
-                    Some(b) => block = b
-                };
-            }
-        }
+        let stats = self.calculate_stats();
 
         write!(f, "size: {} alloc'd {} free {} largest alloc'd {} largest free {}",
-            alloc_total + free_total, alloc_total, free_total, largest_alloc, largest_free)
+            stats.alloc_total + stats.free_total,
+            stats.alloc_total, stats.free_total,
+            stats.largest_alloc, stats.largest_free)
     }
 }
 
@@ -489,5 +463,57 @@ impl Heap
         }
 
         return largest_merged_block;
+    }
+
+    /* generate a block of statistics describing the heap */
+    pub fn calculate_stats(&self) -> HeapStats
+    {
+        let mut free_total = 0;
+        let mut alloc_total = 0;
+        let mut largest_free = 0;
+        let mut largest_alloc = 0;
+
+        let mut done = false;
+        let mut block = self.block_list_head;
+        unsafe
+        {
+            while !done
+            {
+                let size = (*block).size;
+                match (*block).magic
+                {
+                    HeapMagic::InUse =>
+                    {
+                        alloc_total = alloc_total + size;
+                        if size > largest_alloc
+                        {
+                            largest_alloc = size;
+                        }
+                    },
+                    HeapMagic::Free =>
+                    {
+                        free_total = free_total + size;
+                        if size > largest_free
+                        {
+                            largest_free = size;
+                        }
+                    }
+                };
+
+                match (*block).next
+                {
+                    None => done = true,
+                    Some(b) => block = b
+                };
+            }
+        }
+
+        HeapStats
+        {
+            free_total: free_total,
+            alloc_total: alloc_total,
+            largest_alloc: largest_alloc,
+            largest_free: largest_free
+        }
     }
 }
