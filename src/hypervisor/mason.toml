@@ -1,0 +1,20 @@
+# Configure Mason to build non-Rust portions of the diosix hypervisor
+#
+# Directory paths are relative to this manifest.toml file
+
+[defaults]
+# include_files is a colon-separated list of arbitrary files
+# to include in the hypervisor's executable
+include_files = [ "../mkdmfs/target/dmfs.img" ]
+
+# Set up assembly code directories for supported architectures
+# asm_dirs is a colon-separated list of directories to scan
+# for assembly code to build and link to the hypervisor's executable
+[target.riscv32imac-unknown-none-elf]
+asm_dirs = [ "src/platform-riscv/asm" ]
+
+[target.riscv64imac-unknown-none-elf]
+asm_dirs = [ "src/platform-riscv/asm" ]
+
+[target.riscv64gc-unknown-none-elf]
+asm_dirs = [ "src/platform-riscv/asm" ]

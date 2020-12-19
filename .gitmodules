@@ -1,15 +1,12 @@
 [submodule "src/platform-riscv"]
-	path = hypervisor/src/platform-riscv
+	path = src/hypervisor/src/platform-riscv
 	url = https://github.com/diodesign/platform-riscv.git
 [submodule "src/devicetree"]
-	path = hypervisor/src/devicetree
+	path = src/hypervisor/src/devicetree
 	url = https://github.com/diodesign/devicetree.git
 [submodule "src/byterider"]
-	path = hypervisor/src/byterider
+	path = src/hypervisor/src/byterider
 	url = https://github.com/diodesign/byterider.git
-[submodule "src/qemuprint"]
-	path = hypervisor/src/qemuprint
-	url = https://github.com/diodesign/qemuprint.git
 [submodule "src/gooey"]
 	path = services/src/gooey
 	url = https://github.com/diodesign/gooey.git
@@ -17,11 +14,11 @@
 	path = services/src/supervisor-riscv
 	url = https://github.com/diodesign/supervisor-riscv.git
 [submodule "hypervisor/mason"]
-	path = mason
+	path = src/mason
 	url = https://github.com/diodesign/mason.git
 [submodule "services/gooey"]
-	path = services/gooey
+	path = src/services/src/gooey
 	url = https://github.com/diodesign/gooey.git
 [submodule "services/supervisor-riscv"]
-	path = services/supervisor-riscv
+	path = src/services/src/supervisor-riscv
 	url = https://github.com/diodesign/supervisor-riscv.git

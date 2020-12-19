@@ -9,14 +9,14 @@
 [defaults]
 arch = "riscv64gc-unknown-none-elf"
 quality = "debug"
-outfile = "target/dmfs.img"
+outfile = "src/mkdmfs/target/dmfs.img"
 
 # define where to find the welcome banners
 [banners]
-path = "banners"
-welcome = "banners/welcome.txt"
+path = "boot/banners"
+welcome = "boot/banners/welcome.txt"
 
 # define where to find the system services
 [services]
-path = "services"
-include = "gooey"
+path = "src/services"
+include = [ "gooey" ]

@@ -25,11 +25,19 @@
 # just quiet=no
 # just quiet=yes
 #
+# Set cpus to the number of CPU cores to run within qemu, eg:
+# just cpus=1
+#
+# Force debug text output via Qemu's serial port by setting qemuprint to yes, eg:
+# just qemuprint=yes
+#
 # The defaults are:
 # emubin    qemu-system-riscv64
 # target    riscv64gc-unknown-none-elf
 # quality   debug
 # quiet     yes
+# cpus      4
+# qemuprint no
 #
 # Author: Chris Williams <diodesign@tuta.io>
 # See LICENSE for usage and distribution
@@ -45,29 +53,26 @@ builtmsg  := msgprefix + "Diosix built and ready for use"
 qemumsg   := msgprefix + "Running Diosix in Qemu"
 
 # define defaults, these are overriden by the command line
-target  := "riscv64gc-unknown-none-elf"
-emubin  := "qemu-system-riscv64"
-quality := "debug"
-quiet   := "yes"
+target      := "riscv64gc-unknown-none-elf"
+emubin      := "qemu-system-riscv64"
+quality     := "debug"
+quiet       := "yes"
+cpus        := "4"
+qemuprint   := "no"
 
 # generate cargo switches
-quality_sw := if quality == "debug" { "debug" } else { "release" }
-release_sw := if quality == "release" { "--release " } else { "" }
-quiet_sw   := if quiet == "yes" { "--quiet " } else { "" }
-verbose_sw := if quiet == "no" { "--verbose " } else { "" }
-cargo_sw   := quiet_sw + release_sw + "--target " + target
-
-# TODO/FIXME: substituting base_arch doesn't seem to work, so we'll hardwire it in for now
-# base_arch := `echo {{target}} | grep -o -E "(riscv)" | head -n 1`
-
-# set location of the dmfs image file
-dmfsimg := "target/dmfs.img"
+quality_sw      := if quality == "debug" { "debug" } else { "release" }
+release_sw      := if quality == "release" { "--release " } else { "" }
+quiet_sw        := if quiet == "yes" { "--quiet " } else { "" }
+verbose_sw      := if quiet == "no" { "--verbose " } else { "" }
+qemuprint_sw    := if qemuprint == "yes" { "--features qemuprint" } else { "" }
+cargo_sw        := quiet_sw + release_sw + "--target " + target
 
 # the default recipe
 # build diosix with its components, and run it within qemu
 @qemu: build
     echo "{{qemumsg}}"
-    {{emubin}} -bios none -nographic -machine virt -smp 4 -m 512M -kernel hypervisor/target/{{target}}/{{quality_sw}}/hypervisor
+    {{emubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 512M -kernel src/hypervisor/target/{{target}}/{{quality_sw}}/hypervisor
 
 # build diosix and its components
 @build: _descr _rustup _hypervisor
@@ -75,12 +80,12 @@ dmfsimg := "target/dmfs.img"
 
 # let the user know what's going to happen
 @_descr:
-    echo "{{buildmsg}} {{quality_sw}}-grade Diosix for {{target}}"
+    echo "{{buildmsg}} {{quality_sw}}-grade Diosix for {{target}} systems"
 
 # build the hypervisor and ensure it has a boot file system to include
 @_hypervisor: _mkdmfs
     echo "{{buildmsg}} hypervisor"
-    cd hypervisor && MASON_FILES=../{{dmfsimg}} MASON_ASM_DIRS=src/platform-`echo {{target}} | grep -o -E "(riscv)" | head -n 1`/asm cargo build {{cargo_sw}}
+    cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}}
 
 # build and run the dmfs generator to include banners and system services.
 # mkdmfs is configured by manifest.toml in the project root directory.
@@ -89,13 +94,12 @@ dmfsimg := "target/dmfs.img"
 # the target directory stores the dmfs image file
 @_mkdmfs: _services
     echo "{{buildmsg}} dmfs image"
-    mkdir -p target
-    cd mkdmfs && cargo run {{quiet_sw}} -- -t {{target}} -q {{quality_sw}} {{verbose_sw}}
+    cd src/mkdmfs && cargo run {{quiet_sw}} -- -t {{target}} -q {{quality_sw}} {{verbose_sw}}
 
 # build the system services
 @_services: 
     echo "{{buildmsg}} system services"
-    cd services && MASON_ASM_DIRS=supervisor-`echo {{target}} | grep -o -E "(riscv)" | head -n 1`/asm cargo build {{cargo_sw}}
+    cd src/services && cargo build {{cargo_sw}}
 
 # make sure we've got the cross-compiler installed and setup
 @_rustup:
@@ -105,7 +109,6 @@ dmfsimg := "target/dmfs.img"
 # delete intermediate build files and update cargo dependencies to start afresh
 @clean:
     echo "{{cleanmsg}}"
-    -cd hypervisor && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
-    -cd services && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
-    -cd mkdmfs && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
-    -rm {{dmfsimg}}
+    -cd src/hypervisor && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+    -cd src/services && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+    -cd src/mkdmfs && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
