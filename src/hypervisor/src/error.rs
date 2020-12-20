@@ -12,6 +12,9 @@ pub enum Cause
     /* misc */
     NotImplemented,
 
+    /* debug */
+    DebugInitFailed,
+
     /* devices */
     DeviceTreeBad,
     CantCloneDevices,

@@ -8,6 +8,7 @@
 /* to avoid warnings about super::hardware when qemuprint is active */
 #![allow(unused_imports)]
 
+use super::error::Cause;
 use core::fmt;
 use spin::Mutex;
 use alloc::string::String;
@@ -16,14 +17,23 @@ use super::hardware;
 #[cfg(not(feature = "qemuprint"))]
 lazy_static!
 {
+    pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new(false);
     static ref DEBUG_QUEUE: Mutex<String> = Mutex::new(String::new());
 }
 
 /* initialize the debug queue -- call this before using it */
-pub fn init()
+pub fn init() -> Result<(), Cause>
 {
-    let mut queue = DEBUG_QUEUE.lock();
-    queue.clear();
+    match DEBUG_LOCK.try_lock()
+    {
+        Some(_dl) =>
+        {
+            let mut queue = DEBUG_QUEUE.lock();
+            queue.clear();
+            Ok(())
+        },
+        None => Err(Cause::DebugInitFailed)
+    }
 }
 
 /* top level debug macros */
@@ -92,7 +102,14 @@ macro_rules! hvprint
     ({
         use core::fmt::Write;
         {
+            /* we do this little lock dance to ensure the lock isn't immediately dropped by rust */
+            let mut lock = $crate::debug::DEBUG_LOCK.lock();
+            *lock = true;
+
             unsafe { $crate::debug::CONSOLE.write_fmt(format_args!($($arg)*)).unwrap(); }
+
+            *lock = false;
+            drop(lock);
         }
     });
 }
