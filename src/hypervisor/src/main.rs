@@ -189,9 +189,6 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
         BOOT_PCORE_ID as its cpu_nr can initialize the hypervisor */
         BOOT_PCORE_ID => 
         {
-            /* don't use hvprint routines until after this is called */
-            debug::init()?;
-
             /* convert the dtb pointer into a rust byte slice. assumes dtb_len is valid */
             let dtb = unsafe { slice::from_raw_parts(dtb_ptr, u32::from_be(dtb_len) as usize) };
 
