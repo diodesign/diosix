@@ -39,7 +39,11 @@ pub fn unpack(image: &[u8]) -> Result<(), Cause>
 
         match asset.get_type()
         {
-            ManifestObjectType::BootMsg => hvdebugraw!("\n{}\n\n", String::from_utf8_lossy(content)),           
+            ManifestObjectType::BootMsg =>
+            {
+                hvdebugraw!("\n{}\n\n", String::from_utf8_lossy(content));
+                debughousekeeper!(); /* ensure it's seen */
+            },
             ManifestObjectType::SystemService => match create_service_capsule(content)
             {
                 Ok(_) => hvdebug!("Created capsule for system service {}, {} bytes in manifest",

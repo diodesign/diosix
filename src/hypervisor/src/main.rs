@@ -209,8 +209,6 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
         _ => while *(INIT_DONE.lock()) != true {}
     }
 
-    hvdebug!("hello world????");
-
     /* we're now ready to start creating capsules to run from the bundled DMFS image.
     the hypervisor can't make any assumptions about the underlying hardware.
     the device tree for these early capsules is derived from the host's device tree,

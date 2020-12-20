@@ -304,9 +304,6 @@ impl Heap
                                 }
                             };
 
-                            hvdebug!("Extending heap by {} bytes (needed {}), base: 0x{:x}",
-                            region.size(), size_req, region.base());
-
                             if self.insert_free(region.base(), region.size()).is_ok()
                             {
                                 extended = true;
