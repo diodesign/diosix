@@ -47,7 +47,7 @@ fn exception(irq: IRQ, context: &mut IRQContext)
     match (irq.severity, irq.privilege_mode, irq.cause)
     {
         /* catch illegal instructions we may be able to emulate */
-        (_, _, IRQCause::IllegalInstruction) =>
+        (_, PrivilegeMode::Supervisor, IRQCause::IllegalInstruction) =>
         {
             match instructions::emulate(irq.privilege_mode, context)
             {

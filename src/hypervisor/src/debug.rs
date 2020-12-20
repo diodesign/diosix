@@ -13,10 +13,17 @@ use spin::Mutex;
 use alloc::string::String;
 use super::hardware;
 
+#[cfg(not(feature = "qemuprint"))]
 lazy_static!
 {
-    pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new(false);
     static ref DEBUG_QUEUE: Mutex<String> = Mutex::new(String::new());
+}
+
+/* initialize the debug queue -- call this before using it */
+pub fn init()
+{
+    let mut queue = DEBUG_QUEUE.lock();
+    queue.clear();
 }
 
 /* top level debug macros */
@@ -85,14 +92,7 @@ macro_rules! hvprint
     ({
         use core::fmt::Write;
         {
-            /* we do this little lock dance to ensure the lock isn't immediately dropped by rust */
-            let mut lock = $crate::debug::DEBUG_LOCK.lock();
-            *lock = true;
-
             unsafe { $crate::debug::CONSOLE.write_fmt(format_args!($($arg)*)).unwrap(); }
-
-            *lock = false;
-            drop(lock);
         }
     });
 }
@@ -108,10 +108,23 @@ pub static mut CONSOLE: ConsoleWriter = ConsoleWriter {};
 
 impl fmt::Write for ConsoleWriter
 {
+    #[cfg(not(feature = "qemuprint"))]
     fn write_str(&mut self, s: &str) -> core::fmt::Result
     {
-        /* queue debug output so it can be printed when free to do */
+        /* buffer debug output so it can be printed when free to do */
         DEBUG_QUEUE.lock().push_str(s);
+        Ok(())
+    }
+
+    #[cfg(feature = "qemuprint")]
+    fn write_str(&mut self, s: &str) -> core::fmt::Result
+    {
+        /* force debug output to Qemu's serial port. useful for early debugging */
+        for c in s.as_bytes()
+        {
+            /* FIXME: hardwired to the RISC-V Qemu serial port */
+            unsafe { *(0x10000000 as *mut u8) = *c };
+        }
         Ok(())
     }
 }
@@ -127,16 +140,5 @@ pub fn drain_queue()
     }
 }
 
-/* force debug output to Qemu's serial port. useful for early debugging */
 #[cfg(feature = "qemuprint")]
-pub fn drain_queue()
-{
-    let mut queue = DEBUG_QUEUE.lock();
-    for c in queue.as_bytes()
-    {
-        /* FIXME: hardwired to the RISC-V Qemu serial port */
-        unsafe { *(0x10000000 as *mut u8) = *c };
-    }
-
-    queue.clear();
-}
+pub fn drain_queue() { }

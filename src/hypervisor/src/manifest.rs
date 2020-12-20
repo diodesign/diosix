@@ -46,8 +46,8 @@ pub fn unpack(image: &[u8]) -> Result<(), Cause>
             },
             ManifestObjectType::SystemService => match create_service_capsule(content)
             {
-                Ok(_) => hvdebug!("Created capsule for system service {}, {} bytes in manifest",
-                            asset.get_name(), asset.get_contents_size()),
+                Ok(_) => hvdebug!("Created capsule for {}, {} bytes in manifest",
+                            asset.get_description(), asset.get_contents_size()),
                 Err(_e) => hvdebug!("Failed to create capsule for system service {}: {:?}", asset.get_name(), _e)
             },
 
