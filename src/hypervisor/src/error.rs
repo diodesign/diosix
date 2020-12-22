@@ -61,7 +61,11 @@ pub enum Cause
     
     /* supervisor binary loading */
     LoaderSupervisorTooLarge,
+    LoaderSupervisorFileSizeTooLarge,
+    LoaderSupervisorEntryOutOfRange,
     LoaderUnrecognizedSupervisor,
+    LoaderSupervisorBadImageOffset,
+    LoaderSupervisorBadPhysOffset,
     LoaderBadEntry,
 
     /* manifest errors */

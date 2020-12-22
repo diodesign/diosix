@@ -15,7 +15,7 @@ though initially we'll support ELF */
 
 /* load a supervisor binary into memory as required
    => target = region of RAM to write into 
-      source = slice containing supervisor binary to parse
+      source = slice containing supervisor binary image to parse
    <= entry point in physical RAM if successful, or error code
 */
 pub fn load(target: Region, source: &[u8]) -> Result<Entry, Cause>
@@ -38,7 +38,7 @@ pub fn load(target: Region, source: &[u8]) -> Result<Entry, Cause>
     let entry_virtual = elf.header.pt2.entry_point();
 
     /* we need to copy parts of the supervisor from the source to the target location in physical RAM */
-    let (target_base, target_end)  = (target.base() as u64, target.end() as u64);
+    let (target_base, target_end, target_size)  = (target.base() as u64, target.end() as u64, target.size() as u64);
 
     /* loop through program headers in the binary */
     for ph_index in 0..elf.header.pt2.ph_count()
@@ -51,23 +51,52 @@ pub fn load(target: Region, source: &[u8]) -> Result<Entry, Cause>
                 {
                     Ok(xmas_elf::program::Type::Load) =>
                     {
-                        /* check: target must be able to hold supervisor */
-                        if (target_base + ph.offset() + ph.mem_size()) > target_end
+                        /* reject executables with load area file sizes greater than mem sizes */
+                        if ph.file_size() > ph.mem_size()
                         {
-                            return Err(Cause::LoaderSupervisorTooLarge);
+                            return Err(Cause::LoaderSupervisorFileSizeTooLarge);
                         }
 
-                        /* is this program header home to the entry point? if so, calculate the physical RAM address */
+                        /* we're loading the header into an arbitrary-located block of physical RAM.
+                        we can't use the virtual address. we'll use the physical address as an offset
+                        from target_base. FIXME: is this correct? what else can we use? */
+                        let offset_into_image = ph.offset();
+                        let offset_into_target = ph.physical_addr();
+
+                        /* reject wild offsets and physical addresses */
+                        if (offset_into_image + ph.file_size()) > source.len() as u64
+                        {
+                            return Err(Cause::LoaderSupervisorBadImageOffset);
+                        }
+                        if (offset_into_target + ph.file_size()) > target_size
+                        {
+                            return Err(Cause::LoaderSupervisorBadPhysOffset);
+                        }
+
+                        /* is this program header home to the entry point? if so, calculate the physical RAM address.
+                           assumes the entry point is a virtual address. FIXME: is there a better way of handling this? */
                         if entry_virtual >= ph.virtual_addr() && entry_virtual < ph.virtual_addr() + ph.mem_size()
                         {
-                            entry_physical = Some((((entry_virtual as u64) - ph.virtual_addr()) + target_base) as usize);
+                            let addr = (entry_virtual - ph.virtual_addr()) + target_base + offset_into_target;
+                            if addr >= target_end
+                            {
+                                /* reject wild entry points */
+                                return Err(Cause::LoaderSupervisorEntryOutOfRange);
+                            }
+                            entry_physical = Some(addr as usize);
                         }
 
                         unsafe
                         {
+                            /* hvdebug!("ELF loader: offset into image {:x}, target {:x}; coping from src {:p} to dst {:p}, {} bytes",
+                                offset_into_image, offset_into_target,
+                                &source[ph.offset() as usize] as *const u8,
+                                (target_base + offset_into_target) as *mut u8,
+                                ph.file_size() as usize); */
+
                             /* definition is: copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize) */
-                            core::intrinsics::copy_nonoverlapping::<u8>(&source[ph.offset() as usize] as *const u8,
-                                                                        (ph.physical_addr() + target_base) as *mut u8,
+                            core::intrinsics::copy_nonoverlapping::<u8>(&source[offset_into_image as usize] as *const u8,
+                                                                        (target_base + offset_into_target) as *mut u8,
                                                                         ph.file_size() as usize);
                         }
                     },
