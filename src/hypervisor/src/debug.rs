@@ -55,7 +55,7 @@ macro_rules! hvdebug
     ($fmt:expr, $($arg:tt)*) => ({});
 }
 
-/* don't include any metadata */
+/* don't include any metadata nor add a newline */
 #[macro_export]
 #[cfg(debug_assertions)]
 macro_rules! hvdebugraw
@@ -87,9 +87,10 @@ macro_rules! hvprint
         use core::fmt::Write;
         {
             /* we do this little lock dance to ensure the lock isn't immediately dropped by rust */
-            let lock = $crate::debug::DEBUG_LOCK.lock();
+            let mut lock = $crate::debug::DEBUG_LOCK.lock();
+            *lock = true;
+
             unsafe { $crate::debug::CONSOLE.write_fmt(format_args!($($arg)*)).unwrap(); }
-            drop(lock);
         }
     });
 }
@@ -108,7 +109,6 @@ impl fmt::Write for ConsoleWriter
     #[cfg(not(feature = "qemuprint"))]
     fn write_str(&mut self, s: &str) -> core::fmt::Result
     {
-        /* buffer debug output so it can be printed when free to do */
         DEBUG_QUEUE.lock().push_str(s);
         Ok(())
     }
@@ -130,6 +130,9 @@ impl fmt::Write for ConsoleWriter
 #[cfg(not(feature = "qemuprint"))]
 pub fn drain_queue()
 {
+    let mut lock = DEBUG_LOCK.lock();
+    *lock = true;
+
     let mut queue = DEBUG_QUEUE.lock();
     if hardware::write_debug_string(&queue) == true
     {
