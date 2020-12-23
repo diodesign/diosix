@@ -15,7 +15,7 @@
 target/
 
 # ignore guest OS binaries
-guests/binaries/
+boot/guests/
 
 # ignore rustfmt stuff
 **/*.rs.bk
