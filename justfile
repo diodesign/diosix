@@ -6,10 +6,14 @@
 #
 # Build and run diosix in Qemu, using the defaults:
 # just
+# (or just qemu)
 #
 # Only build diosix using the defaults:
 # just build
 #
+# Run diosix's built-in tests using the defaults:
+# just test
+# 
 # Set target to the architecture you want to build for. Eg:
 # just target=riscv32imac-unknown-none-elf
 #
@@ -73,6 +77,12 @@ cargo_sw        := quiet_sw + release_sw + "--target " + target
 @qemu: build
     echo "{{qemumsg}}"
     {{emubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 512M -kernel src/hypervisor/target/{{target}}/{{quality_sw}}/hypervisor
+
+# run unit tests for each major component
+@test:
+    -cd src/hypervisor && cargo {{quiet_sw}} test
+    -cd src/services && cargo {{quiet_sw}} test
+    -cd src/mkdmfs && cargo {{quiet_sw}} test
 
 # build diosix and its components
 @build: _descr _rustup _hypervisor
