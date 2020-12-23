@@ -76,11 +76,11 @@ mod message;    /* send messages between physical cores */
 mod service;    /* allow capsules to register services */
 mod manifest;   /* manage capsules loaded with the hypervisor */
 
-use pcore::{PhysicalCoreID, BOOT_PCORE_ID};
-
 /* list of error codes */
 mod error;
 use error::Cause;
+
+use pcore::{PhysicalCoreID, BOOT_PCORE_ID};
 
 /* bring in the built-in dmfs image */
 use core::intrinsics::transmute;
@@ -273,35 +273,35 @@ fn describe_system()
 
     /* say hello via the debug port with some information */
     hvdebug!("Diosix {} :: Debug enabled. {} and {} RAM found",
-    
-    /* build version number */
-    env!("CARGO_PKG_VERSION"),
 
-    /* report number of CPU cores found */
-    match hardware::get_nr_cpu_cores()
-    {
-        None | Some(0) => format!("no CPU cores"),
-        Some(1) => format!("1 CPU core"),
-        Some(c) => format!("{} CPU cores", c)
-    },
+        /* build version number */
+        env!("CARGO_PKG_VERSION"),
 
-    /* count up total system RAM using GiB / MiB / KiB */
-    match hardware::get_phys_ram_total()
-    {
-        Some(t) => if t >= GIGABYTE
+        /* report number of CPU cores found */
+        match hardware::get_nr_cpu_cores()
         {
-            format!("{} GiB", t / GIGABYTE)
-        }
-        else if t >= MEGABYTE
-        {
-            format!("{} MiB", t / MEGABYTE)
-        }
-        else
-        {
-            format!("{} KiB", t / KILOBYTE)
+            None | Some(0) => format!("no CPU cores"),
+            Some(1) => format!("1 CPU core"),
+            Some(c) => format!("{} CPU cores", c)
         },
 
-        None => format!("no")
+        /* count up total system RAM using GiB / MiB / KiB */
+        match hardware::get_phys_ram_total()
+        {
+            Some(t) => if t >= GIGABYTE
+            {
+                format!("{} GiB", t / GIGABYTE)
+            }
+            else if t >= MEGABYTE
+            {
+                format!("{} MiB", t / MEGABYTE)
+            }
+            else
+            {
+                format!("{} KiB", t / KILOBYTE)
+            },
+
+            None => format!("no")
     });
 }
 
