@@ -1,7 +1,10 @@
 # Define the contents of a base system the hypervisor can boot
 #
-# This base system contains welcome banner(s) and system services
-# that are included in the hypervisor binary and unpacked at run-time
+# This base system contains welcome banner(s), system services,
+# and guests OSes that are bundled with the hypervisor binary
+# and unpacked at run-time
+#
+# See src/mkdmfs/src/main.rs for the file format
 #
 # Directory paths are relative to this manifest.toml file
 
@@ -20,3 +23,24 @@ welcome = "boot/banners/welcome.txt"
 [services]
 path = "src/services"
 include = [ "gooey" ]
+
+# define any guests that may join us during boot
+[guest.riscv64-linux-busybox]
+path = "boot/guests"
+url = "https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64/supervisor"
+description = "64-bit RISC-V Linux 5.4.58 with Busybox"
+
+[guest.riscv32-linux-busybox]
+path = "boot/guests"
+url = "https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv32/supervisor"
+description = "32-bit RISC-V Linux 5.4.61 with Busybox"
+
+# select guests to include for a given target
+[target.riscv64gc-unknown-none-elf]
+guests = [ "riscv64-linux-busybox" ]
+
+[target.riscv64imac-unknown-none-elf]
+guests = [ "riscv64-linux-busybox" ]
+
+[target.riscv32imac-unknown-none-elf]
+guests = [ "riscv32-linux-busybox" ]

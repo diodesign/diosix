@@ -42,13 +42,23 @@ pub fn unpack(image: &[u8]) -> Result<(), Cause>
             ManifestObjectType::BootMsg =>
             {
                 hvdebugraw!("\n{}\n\n", String::from_utf8_lossy(content));
-                debughousekeeper!(); /* ensure it's seen */
+                debughousekeeper!(); /* ensure the message is seen */
             },
+
             ManifestObjectType::SystemService => match create_service_capsule(content)
             {
                 Ok(_) => hvdebug!("Created capsule for {}, {} bytes in manifest",
                             asset.get_description(), asset.get_contents_size()),
                 Err(_e) => hvdebug!("Failed to create capsule for system service {}: {:?}", asset.get_name(), _e)
+            },
+
+            /* FIXME: we'll run all guest OSes straight away for now rather than waiting
+            for a system service to start them */
+            ManifestObjectType::GuestOS => match create_service_capsule(content)
+            {
+                Ok(_) => hvdebug!("Created capsule for {}, {} bytes in manifest",
+                            asset.get_description(), asset.get_contents_size()),
+                Err(_e) => hvdebug!("Failed to create capsule for guest OS {}: {:?}", asset.get_name(), _e)
             },
 
             _t => hvdebug!("Found manifest object type {:?}", _t)
