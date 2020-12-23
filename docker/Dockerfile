@@ -18,11 +18,12 @@ COPY ./entrypoint.py /
 # Define where we'll work
 WORKDIR /build
 
-# Build diosix
-RUN cargo install --force just \
+# Install necessary bits and pieces, and then build diosix
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y \
+    && . $HOME/.cargo/env \
+	&& cargo install --force just \
 	&& git clone --recurse-submodules https://github.com/diodesign/diosix.git \
-	&& just rustinstall \
-	&& . $HOME/.cargo/env \
+	&& cd diosix \
 	&& just build
 
 # Define the environment in which we'll run commands
