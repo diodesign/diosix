@@ -60,12 +60,18 @@ pub enum Cause
     SchedNoTimer,
     
     /* supervisor binary loading */
+    LoaderUnrecognizedCPUArch,
     LoaderSupervisorTooLarge,
     LoaderSupervisorFileSizeTooLarge,
     LoaderSupervisorEntryOutOfRange,
     LoaderUnrecognizedSupervisor,
     LoaderSupervisorBadImageOffset,
     LoaderSupervisorBadPhysOffset,
+    LoaderSupervisorBadDynamicArea,
+    LoaderSupervisorBadRelaEntrySize,
+    LoaderSupervisorRelaTableTooBig,
+    LoaderSupervisorBadRelaTblEntry,
+    LoaderSupervisorUnknownRelaType,
     LoaderBadEntry,
 
     /* manifest errors */
