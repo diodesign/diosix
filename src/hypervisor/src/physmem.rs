@@ -33,6 +33,9 @@ use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions,
 use super::error::Cause;
 use super::hardware;
 
+/* needed to convert a region into a slice */
+use core::slice;
+
 /* to avoid fragmentation, round up physical memory region allocations into multiples of these totals,
 depending on the region type. this only applies when creating regions with alloc_region() */
 const PHYS_RAM_LARGE_REGION_MIN_SIZE: PhysMemSize = 64 * 1024 * 1024; /* 64MB ought to be enough for anyone */
@@ -163,6 +166,18 @@ impl Region
     pub fn base(&self) -> PhysMemBase { self.base }
     pub fn end(&self) -> PhysMemEnd { self.base + self.size }
     pub fn size(&self) -> PhysMemSize { self.size }
+
+    /* represent the region as a word-size or byte-size slice
+    **use carefully** don't hold a slice over an IRQ, for example */
+    pub fn as_usize_slice(&self) -> &mut [usize]
+    {
+        unsafe { slice::from_raw_parts_mut(self.base as *mut usize, self.size) }
+    }
+    pub fn as_u8_slice(&self) -> &mut [u8]
+    {
+        unsafe { slice::from_raw_parts_mut(self.base as *mut u8, self.size) }
+    }
+
 
     /* split the region into two portions, lower and upper, and return the two portions.
     maintain the region's hygiene.
