@@ -122,3 +122,7 @@ cargo_sw        := quiet_sw + release_sw + "--target " + target
     -cd src/hypervisor && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
     -cd src/services && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
     -cd src/mkdmfs && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+
+# are we allowed one easter egg?
+@_incredible:
+    echo "No, you're incredible."
