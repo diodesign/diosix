@@ -30,8 +30,7 @@ xmas-elf = { git = "https://github.com/diodesign/xmas-elf.git", branch = "patch-
 
 # external dependencies
 [dependencies.spin]
-# don't use 0.7.0 for now: lots of undiagnosed trouble with mutexes
-version = "0.6.0"
+version = "0.7.0"
 
 [dependencies.hashbrown]
 version = "0.9.1"
