@@ -1,6 +1,6 @@
 /* diosix error codes
  *
- * (c) Chris Williams, 2019-2020.
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
@@ -37,6 +37,7 @@ pub enum Cause
     HeapBadBlock,
     HeapNoFreeMem,
     HeapBadSize,
+    HeapBadMagic,
 
     /* host physical memory */
     PhysNoRAMFound,
@@ -52,9 +53,10 @@ pub enum Cause
     /* capsule virtual memory */
     VirtMemPhysNotSet,
 
-    /* containers */
+    /* capsules */
     CapsuleIDExhaustion,
     CapsuleBadID,
+    CapsuleCannotRestart,
 
     /* scheduler and timer */
     SchedNoTimer,
@@ -75,5 +77,6 @@ pub enum Cause
     LoaderBadEntry,
 
     /* manifest errors */
-    ManifestBadFS
+    ManifestBadFS,
+    ManifestNoSuchAsset
 }

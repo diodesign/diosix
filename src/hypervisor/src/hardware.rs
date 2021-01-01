@@ -1,6 +1,6 @@
 /* diosix abstracted hardware manager
  *
- * (c) Chris Williams, 2019-2020.
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
@@ -15,13 +15,11 @@ use super::pcore;
 
 lazy_static!
 {
-    /* acquire HARDWARE lock before accessing any system hardware */
+    /* acquire HARDWARE before accessing any system hardware */
     static ref HARDWARE: Mutex<Option<Devices>> = Mutex::new(None);
 
-    /* we might end up in a situation where a CPU core holds HARDWARE
-    but was interrupted or otherwise reentered. keep a track of the owner
-    of HARDWARE so that it can unlock the structure if needed */
-    static ref OWNER: Mutex<pcore::PhysicalCoreID> = Mutex::new(pcore::PhysicalCore::get_id());
+    /* ID of the physical core that last obtained the HARDWARE lock */
+    static ref HARDWARE_PREV_OWNER: Mutex<Option<pcore::PhysicalCoreID>> = Mutex::new(None);
 }
 
 /* parse_and_init
@@ -51,39 +49,73 @@ enum LockAttempts
     Multiple
 }
 
-/* acquire a lock on HARDWARE. If this CPU core is supposed to be
+/* acquire a lock on HARDWARE. If this physical CPU core is supposed to be
    holding it already, then bust the lock so that it and others can
    access it again. Use this function to safely access HARDWARE.
-   HARDWARE may be held by a CPU core across IRQs. See notes above for OWNER.
    => attempts = try just Once or Multiple times to acquire lock
    <= Some MutexGuard containing the device structure, or None for unsuccessful */
-fn acquire_hardware_lock(attempts: LockAttempts) -> Option<spin::MutexGuard<'static, Option<platform::devices::Devices>>>
+fn acquire_hardware_lock(attempts_allowed: LockAttempts) -> Option<spin::MutexGuard<'static, Option<platform::devices::Devices>>>
 {
     loop
     {
-        let mut owner = OWNER.lock();
-        if *owner == pcore::PhysicalCore::get_id()
+        /* set to true if an attempt was made no matter how successful */
+        let mut attempt = false;
+
+        match HARDWARE.try_lock()
         {
-            /* we apparently own HARDWARE already so acquire, or force unlock it and acquire it again */
-            match HARDWARE.try_lock()
+            /* successfully obtained the hardware lock though we're racing
+            the None branch so don't assume we'll get HARDWARE_PREV_OWNER */
+            Some(lock) =>
             {
-                Some(hw) => return Some(hw),
-                None => unsafe { HARDWARE.force_unlock(); }
-            };
-        }
-        else
-        {
-            /* we don't own HARDWARE so acquire: try once or multiple times depending on attempts parameter */
-            match (HARDWARE.try_lock(), attempts)
-            {
-                (Some(hw), _) =>
+                /* try to get the HARDWARE_PREV_OWNER lock, too, or fail out */
+                if let Some(mut owner_lock) = HARDWARE_PREV_OWNER.try_lock()
                 {
-                    *owner = pcore::PhysicalCore::get_id();
-                    return Some(hw);
-                },
-                (None, LockAttempts::Once) => return None,
-                (None, LockAttempts::Multiple) => ()
+                    /* we own HARDWARE and HARDWARE_PREV_OWNER so safe to say,
+                    we can slap our ID on the owner and return the unlocked HARDWARE contents */
+                    *owner_lock = Some(pcore::PhysicalCore::get_id());
+                    return Some(lock);
+                }
+
+                /* this counts as an attempt */
+                attempt = true;
+            },
+
+            /* couldn't obtain the hardware lock, so decide whether
+            we rightfully own this lock, or need to wait for it to be released */
+            None =>
+            {
+                match HARDWARE_PREV_OWNER.try_lock()
+                {
+                    /* we couldn't get HARDWARE but we did get HARDWARE_PREV_OWNER */
+                    Some(owner_lock) => match *owner_lock
+                    {
+                        /* are we supposed to own HARDWARE? */
+                        Some(owner) => if owner == pcore::PhysicalCore::get_id()
+                        {
+                            /* we own this HARDWARE lock -- probably held across an IRQ/exception --
+                            so reclaim it while we still hold HARDWARE_PREV_OWNER */
+                            unsafe { HARDWARE.force_unlock(); }
+                            return Some(HARDWARE.lock());
+                        },
+
+                        /* not obtaining the hardware nor owner lock counts as an attempt */
+                        None => attempt = true
+                    },
+
+                    /* failing to get the previous owner counts as an attempt */
+                    None => attempt = true
+                }
             }
+        }
+
+        match attempts_allowed
+        {
+            LockAttempts::Once => if attempt == true
+            {
+                /* one strike and you're out */
+                return None;
+            },
+            LockAttempts::Multiple => ()
         }
     }
 }
@@ -227,16 +259,16 @@ the rest is decided by the platform code.
       boot_cpu_id = ID of system's boot CPU (typically 0)
       mem_base = base physical address of the contiguous system RAM
       mem_size = number of bytes available in the system RAM
-   <= returns 
+   <= returns dtb as a byte array, or an error code
 */
 pub fn clone_dtb_for_capsule(cpus: usize, boot_cpu_id: u32, mem_base: PhysMemBase, mem_size: PhysMemSize) -> Result<Vec<u8>, Cause>
-{    
+{
     match &*(acquire_hardware_lock(LockAttempts::Multiple).unwrap())
     {
         Some(d) => match d.spawn_virtual_environment(cpus, boot_cpu_id, mem_base, mem_size)
         {
-            Some(v) => Ok(v),
-            None => Err(Cause::DeviceTreeBad)
+            Some(v) => return Ok(v),
+            None => return Err(Cause::DeviceTreeBad)
         },
         None => Err(Cause::CantCloneDevices)
     }
