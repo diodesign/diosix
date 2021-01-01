@@ -21,7 +21,7 @@
  * this arrangement is to avoid large and small
  * allocations fragmenting free region blocks
  * 
- * (c) Chris Williams, 2019-2020.
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
@@ -53,16 +53,12 @@ pub enum RegionSplit
     FromTop
 }
 
-/* define whether a region is dirty or clean: if it's allocated then it's
-assumed to be dirty. if it's not been allocated yet, or has been zeroed,
-it's considered clean. this is to ensure regions don't leak data when
-reallocated and also aren't unnecessarily zeroed */
+/* define whether a region is dirty or clean */
 #[derive(Clone, Copy, Debug)]
 pub enum RegionHygiene
 {
     DontClean, /* don't zero this region */
-    Clean,  /* region hasn't been allocated, or has been zeroed */
-    Dirty   /* region has been allocated and not been zeroed */
+    CanClean 
 }
 
 /* describe a physical memory region */
@@ -87,47 +83,19 @@ impl Region
         }
     }
 
-    /* scrub a region with zeroes, if necessary, then mark it as dirty.
-    this is to ensure untouched regions can be used straight away whereas
-    previously allocated regions are wiped before re-use */
-    pub fn clean_then_dirty(&mut self)
+    /* scrub a whole region. FIXME: make this less inefficient! */
+    pub fn clean(&mut self)
     {
+        hvdebug!("Cleaning physical RAM region 0x{:x}, {} bytes", self.base, self.size);
+
         match self.hygiene
         {
             RegionHygiene::DontClean =>
             {
-                hvalert!("BUG: Tried to clean {:?} region 0x{:x} size: {} bytes", self.hygiene, self.base, self.size);
+                hvalert!("BUG: Tried to scrub don't-clean region 0x{:x}", self.base);
                 return;
             },
-            RegionHygiene::Clean => self.hygiene = RegionHygiene::Dirty,
-            RegionHygiene::Dirty =>
-            {
-                let block = self.base;
-                let step = core::mem::size_of::<usize>();
-                hvdebug!("Clearing physical RAM region 0x{:x}, {} bytes total", self.base, self. size);
-        
-                /* deal with the whole number of step bytes */
-                for index in 0..(self.size / step) as usize
-                {
-                    unsafe
-                    {
-                        *((block + (index * step)) as *mut usize) = 0;
-                    }
-                }
-        
-                /* finish off any leftover bytes */
-                let diff = self.size % step;
-                let end = self.size - diff;
-                for index in 0..diff
-                {
-                    unsafe
-                    {
-                        *((block + end + index) as *mut u8) = 0;
-                    }
-                }
-
-                self.hygiene = RegionHygiene::Dirty;
-            }
+            RegionHygiene::CanClean => self.as_u8_slice().fill(0x0)
         }
     }
 
@@ -177,7 +145,6 @@ impl Region
     {
         unsafe { slice::from_raw_parts_mut(self.base as *mut u8, self.size) }
     }
-
 
     /* split the region into two portions, lower and upper, and return the two portions.
     maintain the region's hygiene.
@@ -341,7 +308,7 @@ pub fn init() -> Result<(), Cause>
         or it should contain random values */
         for section in validate_ram(nr_cpu_cores, chunk)
         {
-            regions.insert(Region::new(section.base, section.size, RegionHygiene::Clean))?;
+            regions.insert(Region::new(section.base, section.size, RegionHygiene::CanClean))?;
         }
     }
 
@@ -406,7 +373,7 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
                 (Ok((mut lower, upper)), RegionSplit::FromBottom) =>
                 {
                     regions.insert(upper)?;
-                    lower.clean_then_dirty();
+                    lower.clean();
                     Ok(lower)
                 },
 
@@ -434,7 +401,7 @@ pub fn alloc_region(size: PhysMemSize) -> Result<Region, Cause>
                     };
 
                     regions.insert(adjusted_lower)?;
-                    aligned_upper.clean_then_dirty();
+                    aligned_upper.clean();
                     Ok(aligned_upper)
                 },
 
