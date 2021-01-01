@@ -1,10 +1,11 @@
 /* diosix capsule management
  *
- * (c) Chris Williams, 2019-2020.
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
 
+use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::{Occupied, Vacant};
@@ -20,13 +21,17 @@ use super::vcore::{self, Priority, VirtualCoreID};
 use super::service::ServiceID;
 use super::service;
 use super::pcore;
+use super::manifest;
 
 pub type CapsuleID = usize;
+
+/* arbitrarily allow up to CAPSULES_MAX capsules in the system */
+const CAPSULES_MAX: usize = 1000000;
 
 /* needed to assign system-wide unique capsule ID numbers */
 lazy_static!
 {
-    static ref CAPSULE_ID_NEXT: Mutex<CapsuleID> = Mutex::new(0);
+    static ref CAPSULE_ID_NEXT: AtomicUsize = AtomicUsize::new(0);
 }
 
 /* maintain a shared table of capsules */
@@ -36,9 +41,18 @@ lazy_static!
     static ref CAPSULES: Mutex<HashMap<CapsuleID, Capsule>> = Mutex::new(HashMap::new());
 }
 
+/* define who or what is responsible for restarting this capsule */
+#[derive(Debug)]
+pub enum RestartMethod
+{
+    FromManifest(String),   /* reload from the included manifest fs image */
+    FromSpawnService        /* tell the capsule spawning service to reload us */
+}
+
 struct Capsule
 {
-    restart: bool,                          /* true to auto-restart on death */
+    restart_on_crash: bool,                 /* true to auto-restart on unexpected death */
+    restart_method: RestartMethod,          /* how to restart this capsule */
     vcores: HashSet<VirtualCoreID>,         /* set of virtual core IDs assigned to this capsule */
     memory: Vec<Mapping>,                   /* map capsule supervisor virtual addresses to host physical addresses */
     allowed_services: HashSet<ServiceID>,   /* set of services this capsule is allowed to provide */
@@ -48,13 +62,14 @@ struct Capsule
 impl Capsule
 {
     /* create a new empty capsule using the current capsule on this physical CPU core.
-    => auto_restart_flag = tue to auto-restart on death by the hypervisor
+    => auto_restart_flag = tue to auto-restart on crash by the hypervisor
     <= capsule object, or error code */
-    pub fn new(auto_restart_flag: bool) -> Result<Capsule, Cause>
+    pub fn new(restart_on_crash: bool, restart_method: RestartMethod) -> Result<Capsule, Cause>
     {
         Ok(Capsule
         {
-            restart: auto_restart_flag,
+            restart_on_crash,
+            restart_method,
             vcores: HashSet::new(),
             memory: Vec::new(),
             allowed_services: HashSet::new(),
@@ -72,16 +87,19 @@ impl Capsule
     pub fn get_memory_mappings(&self) -> Vec<Mapping> { self.memory.clone() }
 
     /* boot capsules are auto-restarted by the hypervisor */
-    pub fn set_auto_restart(&mut self, flag: bool)
+    pub fn set_auto_crash_restart(&mut self, flag: bool)
     {
-        self.restart = flag;
+        self.restart_on_crash = flag;
     }
 
     /* returns true if this will auto-restart, or false if not */
-    pub fn will_auto_restart(&self) -> bool
+    pub fn will_auto_crash_restart(&self) -> bool
     {
-        self.restart
+        self.restart_on_crash
     }
+
+    /* returns restart method */
+    pub fn get_restart_method(&self) -> &RestartMethod { &self.restart_method }
 
     /* add a virtual core ID to the capsule */
     pub fn add_vcore(&mut self, id: VirtualCoreID)
@@ -157,7 +175,7 @@ impl Drop for Capsule
       prio = priority to run this virtual core
    <= return Ok for success, or error code
 */
-pub fn create_and_add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dtb: PhysMemBase, prio: Priority) -> Result<(), Cause>
+pub fn add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dtb: PhysMemBase, prio: Priority) -> Result<(), Cause>
 {
     vcore::VirtualCore::create(cid, vid, entry, dtb, prio)?;
     match CAPSULES.lock().get_mut(&cid)
@@ -171,47 +189,34 @@ pub fn create_and_add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dt
 /* create a new blank capsule
    Once created, it needs to be given a supervisor image, at least.
    then it is ready to be scheduled by assigning it virtual CPU cores.
-   => auto_restart = true to be auto-restarted by hypervisor
+   => auto_crash_restart = true to be auto-restarted by hypervisor if the capsule crashes
    <= CapsuleID for this new capsule, or an error code */
-pub fn create(auto_restart: bool) -> Result<CapsuleID, Cause>
+pub fn create(auto_crash_restart: bool, restart_method: RestartMethod) -> Result<CapsuleID, Cause>
 {
-    let new_capsule = Capsule::new(auto_restart)?;
-
-    /* assign a new ID (in the unlikely event the given ID is already in-use, try again) */
-    let mut overflowed_already = false;
+    /* repeatedly try to generate an available ID */
     loop
     {
-        let mut id = CAPSULE_ID_NEXT.lock();
-        let (new_id, overflow) = id.overflowing_add(1);
-        *id = new_id;
-
-        /* check to see if this capsule already exists */
+        /* bail out if we're at the limit */
         let mut capsules = CAPSULES.lock();
+        if capsules.len() > CAPSULES_MAX
+        {
+            return Err(Cause::CapsuleIDExhaustion);
+        }
+
+        /* get next ID and check to see if this capsule already exists */
+        let new_id = CAPSULE_ID_NEXT.fetch_add(1, Ordering::SeqCst);
         match capsules.entry(new_id)
         {
             Vacant(_) =>
             {
                 /* insert our new capsule */
-                capsules.insert(new_id, new_capsule);
+                capsules.insert(new_id, Capsule::new(auto_crash_restart, restart_method)?);
 
                 /* we're all done here */
                 return Ok(new_id);
             },
             _ => () /* try again */
         };
-
-        /* make sure we don't loop around forever hunting for a valid ID */
-        if overflow == true
-        {
-            /* has this overflow happened before? */
-            if overflowed_already == true
-            {
-                /* not the first time we overflowed, so give up */
-                return Err(Cause::CapsuleIDExhaustion);
-            }
-
-            overflowed_already = true;
-        }
     }
 }
 
@@ -234,7 +239,39 @@ pub fn destroy(cid: CapsuleID) -> Result<(), Cause>
     }
 }
 
-/* destroy() the currently running capsule */
+/* mark a capsule as not only dying, but also recreate it.
+   => cid = ID of capsule to restart
+   <= Ok for success, or an error code
+*/
+pub fn restart(cid: CapsuleID) -> Result<(), Cause>
+{
+    let mut lock = CAPSULES.lock();
+    if let Some(victim) = lock.remove(&cid)
+    {
+        match victim.get_restart_method()
+        {
+            RestartMethod::FromManifest(s) => match manifest::get_named_asset(&s.as_str())
+            {
+                Ok(a) =>
+                {
+                    drop(victim);
+                    drop(lock);
+                    manifest::load_asset(a)?;
+                },
+                Err(e) => return Err(e)
+            },
+            method => hvdebug!("Cannot restart capsule ID {} with method {:?}", cid, method)
+        }
+    }
+    else
+    {
+        return Err(Cause::CapsuleBadID)
+    }
+
+    return Ok(());
+}
+
+/* destroy the currently running capsule */
 pub fn destroy_current() -> Result<(), Cause>
 {
     if let Some(c) = pcore::PhysicalCore::get_capsule_id()
@@ -242,6 +279,22 @@ pub fn destroy_current() -> Result<(), Cause>
         if let Err(e) = destroy(c)
         {
             hvalert!("BUG: Could not kill currently running capsule ID {} ({:?})", c, e);
+        }
+
+        return Ok(())
+    }
+
+    Err(Cause::CapsuleBadID)
+}
+
+/* restart the currently running capsule */
+pub fn restart_current() -> Result<(), Cause>
+{
+    if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+    {
+        if let Err(e) = restart(c)
+        {
+            hvalert!("BUG: Could not restart currently running capsule ID {} ({:?})", c, e);
         }
 
         return Ok(())
