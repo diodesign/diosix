@@ -13,7 +13,7 @@ path = "src/gooey/src/main.rs"
 
 [build-dependencies]
 regex = "1.4.2"
-toml = "0.5.7"
+toml = "0.5.8"
 serde = "1.0.118"
 serde_derive = "1.0.118"
 
