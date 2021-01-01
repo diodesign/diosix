@@ -161,4 +161,4 @@ Please also observe the project's [code of conduct](docs/conduct.md) if you wish
 
 ### Copyright, distribution, and license <a name="copyright"></a>
 
-Copyright &copy; Chris Williams, 2018-2020. See [LICENSE](https://github.com/diodesign/diosix/blob/master/LICENSE) for distribution and use of source code and binaries.
+Copyright &copy; Chris Williams, 2018-2021. See [LICENSE](https://github.com/diodesign/diosix/blob/master/LICENSE) for distribution and use of source code and binaries.
