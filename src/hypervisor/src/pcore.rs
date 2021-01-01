@@ -1,6 +1,6 @@
 /* diosix hypervisor's physical CPU core management
  *
- * (c) Chris Williams, 2019-2020.
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
@@ -118,16 +118,10 @@ impl PhysicalCore
     }
 
     /* return boot-assigned ID number */
-    pub fn get_id() -> PhysicalCoreID
-    {
-        PhysicalCore::this().id
-    }
+    pub fn get_id() -> PhysicalCoreID { PhysicalCore::this().id }
 
     /* return features bitmask */
-    pub fn get_features() -> CPUFeatures
-    {
-        PhysicalCore::this().features
-    }
+    pub fn get_features() -> CPUFeatures { PhysicalCore::this().features }
 
     /* return a structure describing this core */
     pub fn describe() -> platform::cpu::CPUDescription { platform::cpu::CPUDescription }
