@@ -1,6 +1,6 @@
 /* diosix debug console output code
  *
- * (c) Chris Williams, 2019-2020.
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
@@ -86,9 +86,8 @@ macro_rules! hvprint
     ({
         use core::fmt::Write;
         {
-            /* we do this little lock dance to ensure the lock isn't immediately dropped by rust */
-            let mut lock = $crate::debug::DEBUG_LOCK.lock();
-            *lock = true;
+            let mut hvprint_lock = $crate::debug::DEBUG_LOCK.lock();
+            *hvprint_lock = true;
 
             unsafe { $crate::debug::CONSOLE.write_fmt(format_args!($($arg)*)).unwrap(); }
         }
@@ -130,13 +129,17 @@ impl fmt::Write for ConsoleWriter
 #[cfg(not(feature = "qemuprint"))]
 pub fn drain_queue()
 {
-    let mut lock = DEBUG_LOCK.lock();
-    *lock = true;
-
-    let mut queue = DEBUG_QUEUE.lock();
-    if hardware::write_debug_string(&queue) == true
+    /* don't block if we can't write at this time */
+    if let Some(mut debug_lock) = DEBUG_LOCK.try_lock()
     {
-        queue.clear();
+        *debug_lock = true;
+        if let Some(mut debug_queue) = DEBUG_QUEUE.try_lock()
+        {
+            if hardware::write_debug_string(&debug_queue) == true
+            {
+                debug_queue.clear();
+            }
+        }
     }
 }
 
