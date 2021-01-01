@@ -5,7 +5,7 @@
  * means guest kernels and system services 
  * It supports ELF and may support other formats in future.
  * 
- * (c) Chris Williams, 2019-2020.
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
@@ -217,6 +217,8 @@ pub fn load(target: Region, source: &[u8]) -> Result<Entry, Cause>
                                 {
                                     (Some(&o), Some(&i), Some(&a)) =>
                                     {
+                                        // hvdebug!("reloc: offset {:x}, addend {:x}", o, a);
+                                        
                                         /* different CPU architectures have different relocation rules.
                                         relocation type is in the lower byte of the info word */
                                         match (&cpu, (i & 0xff) as u8)

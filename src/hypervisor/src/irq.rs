@@ -1,6 +1,6 @@
 /* diosix hypervisor code for handling hardware interrupts and software exceptions
  *
- * (c) Chris Williams, 2019-2020.
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
@@ -69,11 +69,13 @@ fn exception(irq: IRQ, context: &mut IRQContext)
         /* catch environment calls from supervisor mode */
         (_, PrivilegeMode::Supervisor, IRQCause::SupervisorEnvironmentCall) =>
         {
+            /* determine what we need to do from the platform code's decoding */
             if let Some(action) = syscalls::handler(context)
             {
                 match action
                 {
                     syscalls::Action::Terminate => terminate_running_capsule(),
+                    syscalls::Action::Restart => restart_running_capsule(),
                     syscalls::Action::TimerIRQAt(target) =>
                     {
                         /* mark this virtual core as awaiting a timer IRQ and
@@ -116,11 +118,14 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                     the supervisor should really catch its user-level faults */
                     fatal_exception(&irq);
                 },
-                PrivilegeMode::Machine => if severity == IRQSeverity::Fatal
+                PrivilegeMode::Machine =>
                 {
-                    hvalert!("Halting physical CPU core for {:?} at 0x{:x}, stack 0x{:x}", cause, irq.pc, irq.sp);
-                    debughousekeeper!(); // flush the debug output
-                    loop {}
+                    if severity == IRQSeverity::Fatal
+                    {
+                        hvalert!("Halting physical CPU core for {:?} at 0x{:x}, stack 0x{:x}", cause, irq.pc, irq.sp);
+                        debughousekeeper!(); // flush the debug output
+                        loop {}
+                    }
                 }
             }
         }
@@ -186,6 +191,16 @@ fn terminate_running_capsule()
     match capsule::destroy_current()
     {
         Err(e) => hvalert!("Failed to kill running capsule ({:?})", e),
+        _ => hvdebug!("Terminated running capsule")
+    }
+}
+
+/* restart the running capsule, if possible */
+fn restart_running_capsule()
+{
+    match capsule::restart_current()
+    {
+        Err(e) => hvalert!("Failed to restart running capsule ({:?})", e),
         _ => ()
     }
 }
