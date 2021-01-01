@@ -1,6 +1,6 @@
 /* diosix hypervisor main entry code
- *
- * (c) Chris Williams, 2019-2020.
+ * 
+ * (c) Chris Williams, 2019-2021.
  *
  * See LICENSE for usage and copying.
  */
@@ -82,14 +82,6 @@ use error::Cause;
 
 use pcore::{PhysicalCoreID, BOOT_PCORE_ID};
 
-/* bring in the built-in dmfs image */
-use core::intrinsics::transmute;
-extern "C"
-{
-    static _binary_dmfs_img_start: u8;
-    static _binary_dmfs_img_size: u8;
-}
-
 /* tell Rust to use our HVallocator to allocate and free heap memory.
 although we'll keep track of physical memory, we'll let Rust perform essential
 tasks, such as dropping objects when it's no longer needed, borrow checking, etc */
@@ -115,7 +107,6 @@ lazy_static!
 {
     static ref ROLL_CALL: Mutex<bool> = Mutex::new(false);
 }
-
 
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
 in future, we may support 16- or 128-bit, too. stick to usize as much as possible */
@@ -247,20 +238,10 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
 
 fn process_manifest() -> Result<(), Cause>
 {
-    /* convert the included dmfs image into a byte slice */
-    let image = unsafe
-    {
-        slice::from_raw_parts
-        (
-            transmute(&_binary_dmfs_img_start),
-            transmute(&_binary_dmfs_img_size)
-        )
-    };
-
     /* process the contents of the DMFS image, including
     printing to the debug port any messages and creating
     capsules to run system services and supplied guests */
-    manifest::unpack(image)?;
+    manifest::unpack_at_boot()?;
     Ok(())
 }
 
