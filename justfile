@@ -35,13 +35,17 @@
 # Force debug text output via Qemu's serial port by setting qemuprint to yes, eg:
 # just qemuprint=yes
 #
+# Disable hypervisor's regular integrity checks by setting integritychecks to no, eg:
+# just integritychecks=no
+# 
 # The defaults are:
-# emubin    qemu-system-riscv64
-# target    riscv64gc-unknown-none-elf
-# quality   debug
-# quiet     yes
-# cpus      4
-# qemuprint no
+# emubin           qemu-system-riscv64
+# target           riscv64gc-unknown-none-elf
+# quality          debug
+# quiet            yes
+# cpus             4
+# qemuprint        no
+# integritychecks  yes
 #
 # Author: Chris Williams <diodesign@tuta.io>
 # See LICENSE for usage and distribution
@@ -57,12 +61,13 @@ builtmsg  := msgprefix + "Diosix built and ready for use"
 qemumsg   := msgprefix + "Running Diosix in Qemu"
 
 # define defaults, these are overriden by the command line
-target      := "riscv64gc-unknown-none-elf"
-emubin      := "qemu-system-riscv64"
-quality     := "debug"
-quiet       := "yes"
-cpus        := "4"
-qemuprint   := "no"
+target          := "riscv64gc-unknown-none-elf"
+emubin          := "qemu-system-riscv64"
+quality         := "debug"
+quiet           := "yes"
+cpus            := "4"
+qemuprint       := "no"
+integritychecks := "yes"
 
 # generate cargo switches
 quality_sw      := if quality == "debug" { "debug" } else { "release" }
@@ -71,6 +76,7 @@ quiet_sw        := if quiet == "yes" { "--quiet " } else { "" }
 verbose_sw      := if quiet == "no" { "--verbose " } else { "" }
 qemuprint_sw    := if qemuprint == "yes" { "--features qemuprint" } else { "" }
 cargo_sw        := quiet_sw + release_sw + "--target " + target
+integritychecks_sw := if integritychecks == "yes" { "--features integritychecks" } else { "" }
 
 # the default recipe
 # build diosix with its components, and run it within qemu
@@ -95,7 +101,7 @@ cargo_sw        := quiet_sw + release_sw + "--target " + target
 # build the hypervisor and ensure it has a boot file system to include
 @_hypervisor: _mkdmfs
     echo "{{buildmsg}} hypervisor"
-    cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}}
+    cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}} {{integritychecks_sw}}
 
 # build and run the dmfs generator to include banners and system services.
 # mkdmfs is configured by manifest.toml in the project root directory.
