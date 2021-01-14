@@ -99,8 +99,9 @@ pub fn unpack_at_boot() -> Result<(), Cause>
         match asset.get_type()
         {
             /* only unpack and process boot messages and system services at startup */
-            ManifestObjectType::BootMsg => load_asset(asset)?,
-            ManifestObjectType::SystemService => load_asset(asset)?,
+            ManifestObjectType::BootMsg => load_asset(asset, None)?,
+            ManifestObjectType::SystemService => load_asset(asset, None)?,
+            ManifestObjectType::GuestOS => load_asset(asset, None)?,
             _ => ()
         }
     }
@@ -109,8 +110,11 @@ pub fn unpack_at_boot() -> Result<(), Cause>
 }
 
 /* process the given asset, such as printing it to the debug output stream if it's a boot message
-   or parsing it and running it if it's an executable, from the given DMFS image */
-pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
+   or parsing it and running it if it's an executable, from the given DMFS image
+   => asset = manifest asset to parse and process into memory
+      capsule = ID of capsule to use for this asset, or None for create a new capsule.
+                this is ignored if the asset is not an executable */
+pub fn load_asset(asset: ManifestObject, _capsule: Option<capsule::CapsuleID>) -> Result<(), Cause>
 {
     let image = get_dmfs_image!();
     let content = match asset.get_contents()
