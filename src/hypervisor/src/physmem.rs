@@ -27,7 +27,7 @@
  */
 
 use platform;
-use spin::Mutex;
+use super::lock::Mutex;
 use alloc::vec::Vec;
 use platform::physmem::{PhysMemBase, PhysMemEnd, PhysMemSize, AccessPermissions, validate_ram};
 use super::error::Cause;
@@ -83,11 +83,11 @@ impl Region
         }
     }
 
-    /* scrub a whole region. FIXME: make this less inefficient! */
+    /* scrub a whole region. FIXME: make this fast and efficient!
+    Note: this only zeroes the region in release mode to avoid delays
+    in debugging/development with slow region zeroing */
     pub fn clean(&mut self)
     {
-        hvdebug!("Cleaning physical RAM region 0x{:x}, {} bytes", self.base, self.size);
-
         match self.hygiene
         {
             RegionHygiene::DontClean =>
@@ -95,7 +95,11 @@ impl Region
                 hvalert!("BUG: Tried to scrub don't-clean region 0x{:x}", self.base);
                 return;
             },
-            RegionHygiene::CanClean => self.as_u8_slice().fill(0x0)
+            RegionHygiene::CanClean =>
+            {
+                #[cfg(not(debug_assertions))]
+                self.as_u8_slice().fill(0x0);
+            }
         }
     }
 
