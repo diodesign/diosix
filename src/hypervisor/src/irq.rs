@@ -56,7 +56,7 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                 {
                     /* instruction was some kind of sleep or pause operation.
                     try to find something else to run in the meantime */
-                    scheduler::run_next(scheduler::SearchMode::CheckOnce);
+                    scheduler::ping();
                 },
 
                 /* if we can't handle the instruction,
@@ -74,8 +74,28 @@ fn exception(irq: IRQ, context: &mut IRQContext)
             {
                 match action
                 {
-                    syscalls::Action::Terminate => terminate_running_capsule(),
-                    syscalls::Action::Restart => restart_running_capsule(),
+                    syscalls::Action::Terminate => if let Err(_e) = capsule::destroy_current()
+                    {
+                        hvalert!("BUG: Failed to terminate currently running capsule ({:?})", _e);
+                        syscalls::failed(context, syscalls::ActionResult::Failed);
+                    }
+                    else
+                    {
+                        /* find something else to run, this virtual core is dead */
+                        scheduler::ping();
+                    },
+
+                    syscalls::Action::Restart => if let Err(_e) = capsule::restart_current()
+                    {
+                        hvalert!("BUG: Failed to restart currently running capsule ({:?})", _e);
+                        syscalls::failed(context, syscalls::ActionResult::Failed);
+                    }
+                    else
+                    {
+                        /* find something else to run, this virtual core is being replaced */
+                        scheduler::ping();
+                    },
+
                     syscalls::Action::TimerIRQAt(target) =>
                     {
                         /* mark this virtual core as awaiting a timer IRQ and
@@ -90,6 +110,7 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                         if let Err(_e) = capsule::debug_write(capsule_id, character)
                         {
                             hvdebug!("Couldn't buffer debug byte {} from capsule {}: {:?}", character, capsule_id, _e);
+                            syscalls::failed(context, syscalls::ActionResult::Failed);
                         }
                     },
 
@@ -122,7 +143,8 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                 {
                     if severity == IRQSeverity::Fatal
                     {
-                        hvalert!("Halting physical CPU core for {:?} at 0x{:x}, stack 0x{:x}", cause, irq.pc, irq.sp);
+                        hvalert!("Halting physical CPU core for {:?} at 0x{:x}, stack 0x{:x} integrity {:?}",
+                            cause, irq.pc, irq.sp, pcore::PhysicalCore::integrity_check());
                         debughousekeeper!(); // flush the debug output
                         loop {}
                     }
@@ -173,34 +195,63 @@ fn check_supervisor_timer_irq()
     }
 }
 
-/* kill the running capsule, alert the user, and then find something else to run */
+/* kill the running capsule, alert the user, and then find something else to run.
+   if the capsule is important enough to auto-restart-on-crash, try to revive it */
 fn fatal_exception(irq: &IRQ)
 {
-    hvalert!("Terminating running capsule for {:?} at 0x{:x}, stack 0x{:x}", irq.cause, irq.pc, irq.sp);
+    hvalert!("Terminating running capsule {} for {:?} at 0x{:x}, stack 0x{:x}",
+        match pcore::PhysicalCore::this().get_virtualcore_id()
+        {
+            Some(id) => format!("{}.{}", id.capsuleid, id.vcoreid),
+            None => format!("[unknown!]")
+        }, irq.cause, irq.pc, irq.sp);
 
-    /* terminate the capsule running on this core */
-    terminate_running_capsule();
+    let mut terminate = false; // when true, destroy the current capsule
+    let mut reschedule = false; // when true, we must find another vcore to run
 
-    /* force a context switch to find another virtual core to run */
-    scheduler::run_next(scheduler::SearchMode::MustFind);
-}
-
-/* terminate the capsule running on this core */
-fn terminate_running_capsule()
-{
-    match capsule::destroy_current()
+    match capsule::is_current_autorestart()
     {
-        Err(e) => hvalert!("Failed to kill running capsule ({:?})", e),
-        _ => hvdebug!("Terminated running capsule")
+        Some(true) =>
+        {
+            hvalert!("Restarting capsule due to auto-restart-on-crash flag");
+            if let Err(err) = capsule::restart_current()
+            {
+                hvalert!("Can't restart capsule ({:?}), letting it die instead", err);
+                terminate = true;
+            }
+            else
+            {
+                /* the current vcore is no longer running due to restart */
+                reschedule = true;
+            }
+        },
+        Some(false) => terminate = true,
+        None =>
+        {
+            hvalert!("BUG: fatal_exception() can't find the running capsule to kill");
+            return;
+        },
     }
-}
 
-/* restart the running capsule, if possible */
-fn restart_running_capsule()
-{
-    match capsule::restart_current()
+    if terminate == true
     {
-        Err(e) => hvalert!("Failed to restart running capsule ({:?})", e),
-        _ => ()
+        match capsule::destroy_current()
+        {
+            Err(e) => hvalert!("BUG: Failed to kill running capsule ({:?})", e),
+            _ =>
+            {
+                hvdebug!("Terminated running capsule");
+
+                /* the current vcore is no longer running due to restart */
+                reschedule = true;
+            }
+        }
+    }
+
+    if reschedule == true
+    {
+        /* force a context switch to find another virtual core to run
+        because this virtual core no long exists */
+        scheduler::ping();
     }
 }
