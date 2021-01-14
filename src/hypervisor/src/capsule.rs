@@ -6,7 +6,7 @@
  */
 
 use core::sync::atomic::{AtomicUsize, Ordering};
-use spin::Mutex;
+use super::lock::Mutex;
 use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::{Occupied, Vacant};
 use hashbrown::hash_set::HashSet;
@@ -21,7 +21,6 @@ use super::vcore::{self, Priority, VirtualCoreID};
 use super::service::ServiceID;
 use super::service;
 use super::pcore;
-use super::manifest;
 
 pub type CapsuleID = usize;
 
@@ -49,8 +48,17 @@ pub enum RestartMethod
     FromSpawnService        /* tell the capsule spawning service to reload us */
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum CapsuleState
+{
+    Valid,
+    Dying,
+    Restarting
+}
+
 struct Capsule
 {
+    state: CapsuleState,                    /* define whether this capsule is alive, dying or restarting */
     restart_on_crash: bool,                 /* true to auto-restart on unexpected death */
     restart_method: RestartMethod,          /* how to restart this capsule */
     vcores: HashSet<VirtualCoreID>,         /* set of virtual core IDs assigned to this capsule */
@@ -68,6 +76,7 @@ impl Capsule
     {
         Ok(Capsule
         {
+            state: CapsuleState::Valid,
             restart_on_crash,
             restart_method,
             vcores: HashSet::new(),
@@ -107,13 +116,12 @@ impl Capsule
         self.vcores.insert(id);
     }
 
-    /* remove a virtual core ID from the capsule. returns true if that
-       ID was present in the registered list */
-    pub fn remove_vcore(&mut self, id: VirtualCoreID) -> bool
+    /* remove a virtual core ID */
+    pub fn remove_vcore(&mut self, id: VirtualCoreID)
     {
-        self.vcores.remove(&id)
+        self.vcores.remove(&id);
     }
-
+    
     /* return number of registered virtual cores */
     pub fn count_vcores(&self) -> usize
     {
@@ -132,6 +140,37 @@ impl Capsule
     {
         self.allowed_services.contains(&sid)
     }
+
+    /* return this capsule's state */
+    pub fn get_state(&self) -> CapsuleState { self.state }
+
+    /* mark this capsule as dying. returns true if this is possible.
+    only valid or dying capsules can die */
+    pub fn set_state_dying(&mut self) -> bool
+    {
+        match self.state
+        {
+            CapsuleState::Dying => (),
+            CapsuleState::Valid => self.state = CapsuleState::Dying,
+            _ => return false
+        }
+
+        true
+    }
+
+    /* mark this capsule as restarting. returns true if this is possible.
+    only valid or restarting capsules can restart */
+    pub fn set_state_restarting(&mut self) -> bool
+    {
+        match self.state
+        {
+            CapsuleState::Restarting => (),
+            CapsuleState::Valid => self.state = CapsuleState::Restarting,
+            _ => return false
+        }
+
+        true
+    }
 }
 
 /* handle the destruction of a capsule */
@@ -139,8 +178,8 @@ impl Drop for Capsule
 {
     fn drop(&mut self)
     {
-        hvdebug!("Tearing down capsule {:p}", &self);
-        
+        hvdebug!("Capsule {:p} dying, releasing resources", &self);
+
         /* free up memory... */
         for mapping in self.memory.clone()
         {
@@ -159,7 +198,7 @@ impl Drop for Capsule
         {
             match service::deregister(*sid)
             {
-                Err(e) => hvalert!("Failed to deregister service during teardown of capsule {:p}: {:?}", &self, e),
+                Err(_e) => hvalert!("Failed to deregister service during teardown of capsule {:p}: {:?}", &self, _e),
                 Ok(()) => ()
             };
         }
@@ -220,18 +259,36 @@ pub fn create(auto_crash_restart: bool, restart_method: RestartMethod) -> Result
     }
 }
 
-/* mark a capsule as dying, meaning its virtual cores will be
-   gradually removed and when there are none left, its RAM
-   and any other resources will be deallocated.
-   => cid = ID of capsule to kill
-   <= Ok for success, or an error code
-*/
-pub fn destroy(cid: CapsuleID) -> Result<(), Cause>
+/* destroy the given virtualcore within the given capsule.
+   when the capsule is out of vcores, destroy it.
+   see destroy_current() for more details */
+pub fn destroy(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
 {
-    if let Some(victim) = CAPSULES.lock().remove(&cid)
+    /* make sure this capsule is dying */
+    let mut lock = CAPSULES.lock();
+    if let Some(victim) = lock.get_mut(&cid)
     {
-        drop(victim); // see above implementation of drop for Capsule
-        Ok(())
+        match victim.set_state_dying()
+        {
+            true =>
+            {
+                /* remove this current vcore ID from the capsule's
+                hash table */
+                victim.remove_vcore(vid);
+
+                /* are there any vcores remaining? */
+                if victim.count_vcores() == 0
+                {
+                    /* if not then remove this capsule
+                    from the hash table, which should
+                    trigger the final teardown via drop */
+                    lock.remove(&cid);
+                }
+
+                return Ok(());
+            },
+            false => return Err(Cause::CapsuleCantDie)
+        }
     }
     else
     {
@@ -239,68 +296,119 @@ pub fn destroy(cid: CapsuleID) -> Result<(), Cause>
     }
 }
 
-/* mark a capsule as not only dying, but also recreate it.
-   => cid = ID of capsule to restart
+/* mark the currently running capsule as dying,
+   or continue to kill off the capsule. each vcore
+   should call this when it realizes the capsule
+   is dying so that the current vcore can be removed.
+   it can be called multiple times per vcore.
+   when there are no vcores left, its RAM
+   and any other resources will be deallocated.
+   when the vcore count drops to zero, it will drop.
+   it's on the caller of destroy_capsule() to reschedule
+   another vcore to run.
    <= Ok for success, or an error code
 */
-pub fn restart(cid: CapsuleID) -> Result<(), Cause>
+pub fn destroy_current() -> Result<(), Cause>
 {
-    let mut lock = CAPSULES.lock();
-    if let Some(victim) = lock.remove(&cid)
+    let (cid, vid) = match pcore::PhysicalCore::this().get_virtualcore_id()
     {
-        match victim.get_restart_method()
+        Some(id) => (id.capsuleid, id.vcoreid),
+        None =>
         {
-            RestartMethod::FromManifest(s) => match manifest::get_named_asset(&s.as_str())
+            hvalert!("BUG: Can't find currently running capsule to destroy");
+            return Err(Cause::CapsuleBadID);
+        }
+    };
+
+    destroy(cid, vid)
+}
+
+/* remove the given virtual core from the capsule and mark it as restarting.
+   see restart_current() for more details */
+pub fn restart(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
+{
+    /* make sure this capsule is dying */
+    let mut lock = CAPSULES.lock();
+    if let Some(victim) = lock.get_mut(&cid)
+    {
+        match victim.set_state_restarting()
+        {
+            true =>
             {
-                Ok(a) =>
-                {
-                    drop(victim);
-                    drop(lock);
-                    manifest::load_asset(a)?;
-                },
-                Err(e) => return Err(e)
+                /* remove this current vcore ID from the capsule's
+                hash table */
+                victim.remove_vcore(vid);
+
+                return Ok(());
             },
-            method => hvdebug!("Cannot restart capsule ID {} with method {:?}", cid, method)
+
+            false => return Err(Cause::CapsuleCantRestart)
         }
     }
     else
     {
-        return Err(Cause::CapsuleBadID)
+        Err(Cause::CapsuleBadID)
     }
-
-    return Ok(());
 }
 
-/* destroy the currently running capsule */
-pub fn destroy_current() -> Result<(), Cause>
-{
-    if let Some(c) = pcore::PhysicalCore::get_capsule_id()
-    {
-        if let Err(e) = destroy(c)
-        {
-            hvalert!("BUG: Could not kill currently running capsule ID {} ({:?})", c, e);
-        }
-
-        return Ok(())
-    }
-
-    Err(Cause::CapsuleBadID)
-}
-
-/* restart the currently running capsule */
+/* recreate and restart the currently running capsule, if possible.
+   it can be called multiple times per vcore. each vcore should call
+   this within the capsule when it realizes the capsule is restarting.
+   when all vcores have call this function, the capsule will restart proper.
+   it's on the caller of restart_current() to reschedule another vcore to run.
+   <= Ok for success, or an error code
+*/
 pub fn restart_current() -> Result<(), Cause>
 {
-    if let Some(c) = pcore::PhysicalCore::get_capsule_id()
+    let (cid, vid) = match pcore::PhysicalCore::this().get_virtualcore_id()
     {
-        if let Err(e) = restart(c)
+        Some(id) => (id.capsuleid, id.vcoreid),
+        None =>
         {
-            hvalert!("BUG: Could not restart currently running capsule ID {} ({:?})", c, e);
+            hvalert!("BUG: Can't find currently running capsule to restart");
+            return Err(Cause::CapsuleBadID);
         }
+    };
 
-        return Ok(())
+    restart(cid, vid)
+}
+
+/* return the state of the given capsule, identified by ID, or None for not found */
+pub fn get_state(cid: CapsuleID) -> Option<CapsuleState>
+{
+    match CAPSULES.lock().entry(cid)
+    {
+        Occupied(capsule) => Some(capsule.get().state),
+        Vacant(_) => None
+    }
+}
+
+/* get the current capsule's state, or None if no running capsule */
+pub fn get_current_state() -> Option<CapsuleState>
+{
+    if let Some(cid) = pcore::PhysicalCore::get_capsule_id()
+    {
+        return get_state(cid);
     }
 
-    Err(Cause::CapsuleBadID)
+    None
+}
+
+/* return currently running capsule's auto-restart-on-crash flag as
+   Some(true) or Some(false) as appropriate, or None for no running capsule */
+pub fn is_current_autorestart() -> Option<bool>
+{
+    let cid = match pcore::PhysicalCore::get_capsule_id()
+    {
+        Some(id) => id,
+        None => return None
+    };
+
+    match CAPSULES.lock().entry(cid)
+    {
+        Occupied(capsule) => return Some(capsule.get().restart_on_crash),
+        Vacant(_) => None
+    }
 }
 
 /* buffer a character from the guest kernel, and flush output if a newline */
