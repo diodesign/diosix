@@ -13,14 +13,14 @@ its own heap, reusing any blocks freed by itself or other cores.
 The hypervisor layer is unlikely to do much active allocation
 so it's OK to keep it really simple for now. */
 
-use spin::Mutex;
+use super::lock::Mutex;
 use hashbrown::hash_map::HashMap;
 use platform::physmem::PhysMemSize;
 use platform::cpu::{SupervisorState, CPUFeatures};
 use platform::timer;
-use super::vcore::{VirtualCore, VirtualCoreID, VirtualCoreCanonicalID};
+use super::vcore::{VirtualCore, VirtualCoreCanonicalID};
 use super::scheduler::ScheduleQueues;
-use super::capsule::{self, CapsuleID};
+use super::capsule::{self, CapsuleID, CapsuleState};
 use super::message;
 use super::heap;
 
@@ -29,6 +29,7 @@ pub type PhysicalCoreID = usize;
 pub type PhysicalCoreCount = PhysicalCoreID;
 
 pub const BOOT_PCORE_ID: PhysicalCoreID = 0;
+const PCORE_MAGIC: usize = 0xc001c0de;
 
 /* require some help from the underlying platform */
 extern "C"
@@ -52,10 +53,15 @@ lazy_static!
     static ref PCORES: Mutex<HashMap<VirtualCoreCanonicalID, PhysicalCoreID>> = Mutex::new(HashMap::new());
 }
 
-/* describe a physical CPU core - this structure is stored in the per-CPU private variable space */
+/* describe a physical CPU core - this structure is stored in the per-CPU private variable space.
+   this is below the per-CPU machine-level stack */
 #[repr(C)]
 pub struct PhysicalCore
 {
+    /* this magic word is used to make sure the CPU's stack hasn't overflowed
+    and corrupted this adjacent structure */
+    magic: usize,
+
     /* every physical CPU core has a hardware-assigned ID number that may be non-linear,
     while the startup code assigns each core a linear ID number from zero. we keep a copy of that
     linear runtime-assigned ID here. the hardware-assigned ID is not used in the portable code */
@@ -91,6 +97,7 @@ impl PhysicalCore
         this function returns a pointer to that structure */
         let mut cpu = PhysicalCore::this();
 
+        cpu.magic = PCORE_MAGIC;
         cpu.id = id;
         cpu.features = platform::cpu::features();
         cpu.smode = platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::Supervisor);
@@ -109,6 +116,16 @@ impl PhysicalCore
     pub fn this() -> &'static mut PhysicalCore
     {
         unsafe { platform_cpu_private_variables() }
+    }
+
+    /* return Ok if magic hasn't been overwritten, or the overwrite value as an error code */
+    pub fn integrity_check() -> Result<(), usize>
+    {
+        match PhysicalCore::this().magic
+        {
+            PCORE_MAGIC => Ok(()),
+            other => Err(other)
+        }
     }
 
     /* return CPU heap base and size set aside by the pre-hvmain boot code */
@@ -163,7 +180,7 @@ impl PhysicalCore
     the structure. it's unsafe to access the vcore struct */
     pub fn set_virtualcore_timer_target(target: Option<timer::TimerValue>)
     {
-        if let Some(vcore) = VCORES.lock().get_mut(&(PhysicalCore::this().id))
+        if let Some(vcore) = VCORES.lock().get_mut(&(PhysicalCore::get_id()))
         {
             vcore.set_timer_irq_at(target);
         }
@@ -172,24 +189,33 @@ impl PhysicalCore
     /* get the virtual core's timer IRQ target */
     pub fn get_virtualcore_timer_target() -> Option<timer::TimerValue>
     {
-        if let Some(vcore) = VCORES.lock().get_mut(&(PhysicalCore::this().id))
+        if let Some(vcore) = VCORES.lock().get_mut(&(PhysicalCore::get_id()))
         {
             return vcore.get_timer_irq_at();
         }
         None
     }
 
-    /* return ID for the virtual core running on this CPU, if any */
-    pub fn get_virtualcore_id(&self) -> Option<VirtualCoreID>
+    /* return canonical ID for the virtual core running in the capsule on this CPU, if any */
+    pub fn get_virtualcore_id(&self) -> Option<VirtualCoreCanonicalID>
     {
-        if let Some(vcore) = VCORES.lock().get(&PhysicalCore::get_id())
+        let cid = match PhysicalCore::get_capsule_id()
         {
-            Some(vcore.get_id())
-        }
-        else
+            Some(id) => id,
+            None => return None
+        };
+
+        let vid = match VCORES.lock().get(&PhysicalCore::get_id())
         {
-            None
-        }
+            Some(vcore) => vcore.get_id(),
+            None => return None
+        };
+
+        Some(VirtualCoreCanonicalID
+        {
+            capsuleid: cid,
+            vcoreid: vid
+        })
     }
 
     /* set the exact per-CPU timer value of the last time this physical core make a scheduling decision */
@@ -212,26 +238,31 @@ mode will land us in the new context */
 pub fn context_switch(next: VirtualCore)
 {
     let next_capsule = next.get_capsule_id();
-    let id = PhysicalCore::get_id();
+    let pcore_id = PhysicalCore::get_id();
 
     /* find what this physical core was running, if anything */
-    match VCORES.lock().remove(&id)
+    match VCORES.lock().remove(&pcore_id)
     {
         Some(current_vcore) =>
         {
-            /* if we're running a virtual CPU core, preserve its state */
-            platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
+            let current_capsule = current_vcore.get_capsule_id();
 
             /* if we're switching to a virtual CPU core in another capsule then replace the
             current hardware access permissions so that we're only allowing access to the RAM assigned
             to the next capsule to run */
-            if current_vcore.get_capsule_id() != next_capsule
+            if current_capsule != next_capsule
             {
                 capsule::enforce(next_capsule);
             }
 
-            /* queue the current virtual core on the waiting list */
-            PhysicalCore::queue(current_vcore);
+            /* queue the current virtual core on the waiting list.
+               however, if the vcore's capsule is dying or restarting then
+               don't queue the core for later use, and drop it */
+            if capsule::get_state(current_capsule) == Some(CapsuleState::Valid)
+            {
+                platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
+                PhysicalCore::queue(current_vcore);
+            }
         },
         None =>
         {
@@ -246,14 +277,14 @@ pub fn context_switch(next: VirtualCore)
     /* prepare next virtual core to run when we leave this IRQ context */
     platform::cpu::load_supervisor_state(next.state_as_ref());
 
-    /* link virtual core and capsule to this physical CPU */
+    /* link next virtual core and capsule to this physical CPU */
     PCORES.lock().insert(VirtualCoreCanonicalID
         {
             vcoreid: next.get_id(),
             capsuleid: next_capsule
         },
-        id);
+        pcore_id);
 
     /* and add the virtual core to the running virtual cores list */
-    VCORES.lock().insert(id, next);
+    VCORES.lock().insert(pcore_id, next);
 }
