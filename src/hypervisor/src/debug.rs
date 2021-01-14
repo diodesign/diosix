@@ -10,7 +10,7 @@
 
 use super::error::Cause;
 use core::fmt;
-use spin::Mutex;
+use super::lock::Mutex;
 use alloc::string::String;
 use super::hardware;
 
@@ -129,17 +129,19 @@ impl fmt::Write for ConsoleWriter
 #[cfg(not(feature = "qemuprint"))]
 pub fn drain_queue()
 {
-    /* don't block if we can't write at this time */
-    if let Some(mut debug_lock) = DEBUG_LOCK.try_lock()
+    /* avoid blocking if we can't write at this time */
+    if DEBUG_LOCK.is_locked() == false
     {
-        *debug_lock = true;
-        if let Some(mut debug_queue) = DEBUG_QUEUE.try_lock()
+        let debug_lock = DEBUG_LOCK.lock();
+        let mut debug_queue = DEBUG_QUEUE.lock();
+        
+        if hardware::write_debug_string(&debug_queue) == true
         {
-            if hardware::write_debug_string(&debug_queue) == true
-            {
-                debug_queue.clear();
-            }
+            debug_queue.clear();
         }
+
+        drop(debug_queue);
+        drop(debug_lock);
     }
 }
 
