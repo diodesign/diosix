@@ -39,6 +39,10 @@ pub enum Cause
     HeapBadSize,
     HeapBadMagic,
 
+    /* virtual core management */
+    VirtualCoreBadID,
+    VirtualCoreAWOL,
+
     /* host physical memory */
     PhysNoRAMFound,
     PhysNotEnoughFreeRAM,
@@ -57,6 +61,8 @@ pub enum Cause
     CapsuleIDExhaustion,
     CapsuleBadID,
     CapsuleCannotRestart,
+    CapsuleCantDie,
+    CapsuleCantRestart,
 
     /* scheduler and timer */
     SchedNoTimer,
