@@ -5,7 +5,7 @@
  * See LICENSE for usage and copying.
  */
 
-use spin::Mutex;
+use super::lock::Mutex;
 use alloc::collections::vec_deque::VecDeque;
 use hashbrown::hash_map::HashMap;
 use super::error::Cause;
