@@ -40,14 +40,14 @@ use super::error::Cause;
 
 /* different states each recognized heap block can be in */
 #[derive(PartialEq, Debug, Clone, Copy)]
-enum HeapMagic
+enum HeapBlockMagic
 {
     Free     = 0x0deadded,
     InUse    = 0x0d10c0de,
     BadMagic = 0xabad1dea
 }
 
-impl HeapMagic
+impl HeapBlockMagic
 {
     pub fn from_usize(value: usize) -> Self
     {
@@ -121,12 +121,17 @@ pub struct HeapBlock
     /* block contents follows... */
 }
 
+/* used to perform integrity checks */
+const HEAP_MAGIC: usize = 0xcafed00d;
+
 /* this is our own internal API for the per-CPU hypervisor heap. use high-level abstractions, such as Box,
 rather than this directly, so we get all the safety measures and lifetime checking. think of kallocator
 as the API and Heap as the engine. kallocator is built on top of Heap, and each CPU core has its own Heap. */
 #[repr(C)]
 pub struct Heap
 {
+    /* magic to ensure heap structure hasn't been overwritten */
+    magic: usize,
     /* pointer to list of in-use and freed blocks */
     block_list_head: *mut HeapBlock,
     /* stash a copy of the block header size here */
@@ -149,10 +154,10 @@ impl fmt::Debug for Heap
     {
         let stats = self.calculate_stats();
 
-        write!(f, "size: {} alloc'd {} free {} largest alloc'd {} largest free {}",
+        write!(f, "size: {} alloc'd {} free {} largest alloc'd {} largest free {} magic 0x{:x}",
             stats.alloc_total + stats.free_total,
             stats.alloc_total, stats.free_total,
-            stats.largest_alloc, stats.largest_free)
+            stats.largest_alloc, stats.largest_free, self.magic)
     }
 }
 
@@ -178,9 +183,10 @@ impl Heap
             let block = start;
             (*block).size = size;
             (*block).next = None;
-            (*block).magic = AtomicUsize::new(HeapMagic::Free as usize);
+            (*block).magic = AtomicUsize::new(HeapBlockMagic::Free as usize);
             (*block).source = HeapSource::Fixed;
 
+            self.magic = HEAP_MAGIC;
             self.block_header_size = mem::size_of::<HeapBlock>();
             self.block_list_head = block;
         }
@@ -198,7 +204,7 @@ impl Heap
             let block = base as *mut HeapBlock;
             (*block).size = size;
             (*block).next = Some(self.block_list_head);
-            (*block).magic = AtomicUsize::new(HeapMagic::Free as usize);
+            (*block).magic = AtomicUsize::new(HeapBlockMagic::Free as usize);
             (*block).source = HeapSource::Temporary;
 
             /* add the free block to the start of the list */
@@ -222,16 +228,16 @@ impl Heap
         {
             /* we should be the only one writing to this metadata, though there
             will be readers, hence the split in reading and writing */
-            match HeapMagic::from_usize((*block).magic.load(Ordering::SeqCst))
+            match HeapBlockMagic::from_usize((*block).magic.load(Ordering::SeqCst))
             {
-                HeapMagic::InUse =>
+                HeapBlockMagic::InUse =>
                 {
-                    (*block).magic.store(HeapMagic::Free as usize, Ordering::SeqCst);
+                    (*block).magic.store(HeapBlockMagic::Free as usize, Ordering::SeqCst);
                     Ok(())
                 },
                 /* if it's not in use, or bad magic, then bail out */
-                HeapMagic::Free => Err(Cause::HeapNotInUse),
-                HeapMagic::BadMagic => Err(Cause::HeapBadMagic)
+                HeapBlockMagic::Free => Err(Cause::HeapNotInUse),
+                HeapBlockMagic::BadMagic => Err(Cause::HeapBadMagic)
             }
         }
     }
@@ -249,6 +255,16 @@ impl Heap
             return Err(Cause::HeapBadSize);
         }
 
+        /* perform integrity check */
+        #[cfg(feature = "integritychecks")]
+        {
+            if self.magic != HEAP_MAGIC
+            {
+                hvalert!("CPU private heap overwritten (0x{:x}). Halting!", self.magic);
+                loop {}
+            }
+        }
+
         let mut done = false;
         let mut extended = false;
 
@@ -263,13 +279,13 @@ impl Heap
         {
             while !done
             {
-                if HeapMagic::from_usize((*search_block).magic.load(Ordering::SeqCst)) == HeapMagic::Free && (*search_block).size >= size_req
+                if HeapBlockMagic::from_usize((*search_block).magic.load(Ordering::SeqCst)) == HeapBlockMagic::Free && (*search_block).size >= size_req
                 {
                     /* we've got a winner. if the found block is equal size, or only a few bytes
                     larger than the required size, then take the whole block */
                     if ((*search_block).size - size_req) < HEAP_BLOCK_SIZE
                     {
-                        (*search_block).magic.store(HeapMagic::InUse as usize, Ordering::SeqCst);
+                        (*search_block).magic.store(HeapBlockMagic::InUse as usize, Ordering::SeqCst);
                         let found_ptr = (search_block as usize) + self.block_header_size;
                         return Result::Ok(found_ptr as *mut T);
                     }
@@ -285,7 +301,7 @@ impl Heap
                         /* set metadata for newly allocated block */
                         let alloc_block = found_ptr as *mut HeapBlock;
                         (*alloc_block).next  = Some(self.block_list_head);
-                        (*alloc_block).magic.store(HeapMagic::InUse as usize, Ordering::SeqCst);
+                        (*alloc_block).magic.store(HeapBlockMagic::InUse as usize, Ordering::SeqCst);
                         (*alloc_block).size  = size_req;
 
                         /* point the head of the list at new block */
@@ -375,12 +391,12 @@ impl Heap
         {
             loop
             {
-                match ((*block).source, HeapMagic::from_usize((*block).magic.load(Ordering::SeqCst)))
+                match ((*block).source, HeapBlockMagic::from_usize((*block).magic.load(Ordering::SeqCst)))
                 {
                     /* remove physical region from single-linked list if successfully deallocated.
                     the physical memory manager will avoid fragmentation by rejecting regions that
                     are not multiples of prefered region sizes */
-                    (HeapSource::Temporary, HeapMagic::Free) =>
+                    (HeapSource::Temporary, HeapBlockMagic::Free) =>
                     {
                         let region = physmem::Region::new(block as PhysMemBase, (*block).size, RegionHygiene::CanClean);
                         if physmem::dealloc_region(region).is_ok()
@@ -429,8 +445,8 @@ impl Heap
             while (*block).next.is_some()
             {
                 let next = (*block).next.unwrap();
-                if HeapMagic::from_usize((*block).magic.load(Ordering::SeqCst)) == HeapMagic::Free &&
-                    HeapMagic::from_usize((*next).magic.load(Ordering::SeqCst)) == HeapMagic::Free
+                if HeapBlockMagic::from_usize((*block).magic.load(Ordering::SeqCst)) == HeapBlockMagic::Free &&
+                    HeapBlockMagic::from_usize((*next).magic.load(Ordering::SeqCst)) == HeapBlockMagic::Free
                 {
                     let target_ptr = (block as usize) + (*block).size;
                     if target_ptr == next as usize
@@ -454,13 +470,13 @@ impl Heap
 
             /* catch corner case of there being two free blocks: the first on the
             list is higher than the last block on the list, and they are both free */
-            if HeapMagic::from_usize((*self.block_list_head).magic.load(Ordering::SeqCst)) == HeapMagic::Free
+            if HeapBlockMagic::from_usize((*self.block_list_head).magic.load(Ordering::SeqCst)) == HeapBlockMagic::Free
             {
                 match (*self.block_list_head).next
                 {
                     Some(next) =>
                     {
-                        if HeapMagic::from_usize((*next).magic.load(Ordering::SeqCst)) == HeapMagic::Free
+                        if HeapBlockMagic::from_usize((*next).magic.load(Ordering::SeqCst)) == HeapBlockMagic::Free
                         {
                             if (next as usize) + (*next).size == self.block_list_head as usize
                             {
@@ -496,9 +512,9 @@ impl Heap
             while !done
             {
                 let size = (*block).size;
-                match HeapMagic::from_usize((*block).magic.load(Ordering::SeqCst))
+                match HeapBlockMagic::from_usize((*block).magic.load(Ordering::SeqCst))
                 {
-                    HeapMagic::InUse =>
+                    HeapBlockMagic::InUse =>
                     {
                         alloc_total = alloc_total + size;
                         if size > largest_alloc
@@ -506,7 +522,7 @@ impl Heap
                             largest_alloc = size;
                         }
                     },
-                    HeapMagic::Free =>
+                    HeapBlockMagic::Free =>
                     {
                         free_total = free_total + size;
                         if size > largest_free
@@ -514,7 +530,7 @@ impl Heap
                             largest_free = size;
                         }
                     },
-                    HeapMagic::BadMagic => hvdebug!("Bad magic for heap block {:p} during audit", block)
+                    HeapBlockMagic::BadMagic => hvdebug!("Bad magic for heap block {:p} during audit", block)
                 };
 
                 match (*block).next
