@@ -3,12 +3,12 @@
  * This is, for now, really really simple.
  * Making it fairer and adaptive to workloads is the ultimate goal.
  * 
- * (c) Chris Williams, 2018-2020.
+ * (c) Chris Williams, 2018-2021.
  *
  * See LICENSE for usage and copying.
  */
 
-use spin::Mutex;
+use super::lock::Mutex;
 use alloc::collections::vec_deque::VecDeque;
 use hashbrown::hash_map::HashMap;
 use platform::timer::TimerValue;
@@ -17,6 +17,7 @@ use super::vcore::{VirtualCore, Priority};
 use super::pcore::{self, PhysicalCore, PhysicalCoreID};
 use super::hardware;
 use super::message;
+use super::capsule::{self, CapsuleState};
 
 pub type TimesliceCount = u64;
 
@@ -69,7 +70,9 @@ pub fn start() -> Result<(), Cause>
     Ok(())
 }
 
-/* a timer interrupt has come in -- make a decision */
+/* make a decision on whether to run another virtual core,
+   or return to the currently running core (if possible).
+   ping() is called when a scheduler timer IRQ comes in */
 pub fn ping()
 {
     let time_now = hardware::scheduler_get_timer_now();
@@ -79,7 +82,7 @@ pub fn ping()
         /* check to see if anything needs to run and bail out if
         no timer hardware can be found (and yet we're still getting IRQs?) */
         run_next(SearchMode::CheckOnce);
-        return;   
+        return;
     }
 
     /* get down to the exact timer values */
@@ -91,17 +94,47 @@ pub fn ping()
         Some(v) =>
         {
             let timeslice_length = TIMESLICE_LENGTH.to_exact(frequency);
-
-            /* check to see if we've reached the end of this physical CPU core's
-            time slice. a virtual code has the pcore for TIMESLICE_LENGTH of time
-            before a mandatory scheduling decision is made */
             let mut last_scheduled_at = v.to_exact(frequency);
-            if time_now - last_scheduled_at >= timeslice_length
+
+            /* if the capsule we're running in is valid then perform a time slice check.
+               if it's not valid, ensure the capsule is torn down or restarted for this
+               virtual core. when all vcores are removed from the capsule, its
+               resources will be released and the capsule deleted */
+            let capsule_state = capsule::get_current_state();
+            match capsule_state
             {
-                /* it's been a while since we last made a decision, so force one now */
-                run_next(SearchMode::CheckOnce);
-                pcore::PhysicalCore::this().set_timer_sched_last(Some(TimerValue::Exact(time_now)));
-                last_scheduled_at = time_now;
+                Some(CapsuleState::Valid) =>
+                {
+                    /* check to see if we've reached the end of this physical CPU core's
+                    time slice. a virtual code has the pcore for TIMESLICE_LENGTH of time
+                    before a mandatory scheduling decision is made */
+                    if time_now - last_scheduled_at >= timeslice_length
+                    {
+                        /* it's been a while since we last made a decision, so force one now */
+                        run_next(SearchMode::CheckOnce);
+                        pcore::PhysicalCore::this().set_timer_sched_last(Some(TimerValue::Exact(time_now)));
+                        last_scheduled_at = time_now;
+                    }
+                },
+                _ =>
+                {
+                    /* it is safe to call destroy_current() and restart_current() multiple times
+                       per vcore until the capsule is dead or restarted */
+                    if let Err(_e) = match capsule_state
+                    {
+                        Some(CapsuleState::Dying) => capsule::destroy_current(),
+                        Some(CapsuleState::Restarting) => capsule::restart_current(),
+                        _ => Ok(())
+                    }
+                    {
+                        hvalert!("BUG: Capsule update failure {:?} in scheduler ({:?})", _e, capsule_state)
+                    }
+
+                    /* capsule we're running in is no longer valid so force a reschedule */
+                    run_next(SearchMode::MustFind);
+                    pcore::PhysicalCore::this().set_timer_sched_last(Some(TimerValue::Exact(time_now)));
+                    last_scheduled_at = time_now;
+                }
             }
 
             /* check to make sure timer target is correct for whatever virtual core we're about
@@ -145,7 +178,7 @@ pub fn ping()
    if this physical CPU core is unable to run virtual cores.
    => search_mode = define whether or not to continue searching for another
    virtual core to run, or check once to see if something else is waiting */
-pub fn run_next(search_mode: SearchMode)
+fn run_next(search_mode: SearchMode)
 {
     /* check for housekeeping */
     housekeeping();
@@ -153,8 +186,6 @@ pub fn run_next(search_mode: SearchMode)
     /* if this core can run supervisor-level code then find it some work to do */
     if pcore::PhysicalCore::smode_supported()
     {
-        /* keep looping until we've found something to switch to if must_switch
-        is set to true */
         loop
         {
             let mut something_found = true;
@@ -209,12 +240,23 @@ pub fn run_next(search_mode: SearchMode)
 /* perform any housekeeping duties defined by the various parts of the system */
 fn housekeeping()
 {
-    /* don't busy wait for housekeeping lock: check once and move on */
-    let mut last_check = match LAST_HOUSEKEEP_CHECK.try_lock()
+    /* perform integrity checks */
+    #[cfg(feature = "integritychecks")]
     {
-        Some(value) => value,
-        None => return
-    };
+        if let Err(val) = pcore::PhysicalCore::integrity_check()
+        {
+            hvalert!("CPU private stack overflowed (0x{:x}). Halting!", val);
+            loop {}
+        }
+    }
+
+    /* avoid blocking on the house keeping lock */
+    if LAST_HOUSEKEEP_CHECK.is_locked() == true
+    {
+        return;
+    }
+
+    let mut last_check = LAST_HOUSEKEEP_CHECK.lock();
 
     /* only perform housekeeping once every MAINTENANCE_LENGTH-long period */
     match (hardware::scheduler_get_timer_now(), hardware::scheduler_get_timer_frequency())
