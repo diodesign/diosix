@@ -47,11 +47,9 @@ via the macro qemuprint::println!() */
 #[cfg(feature = "qemudebug")]
 extern crate qemuprint;
 
-/* needed for lazyily-allocated static variables, and atomic ops */
+/* needed for lazyily-allocated static variables */
 #[macro_use]
 extern crate lazy_static;
-extern crate spin;
-use spin::Mutex;
 
 /* this will bring in all the hardware-specific code */
 extern crate platform;
@@ -75,6 +73,10 @@ mod loader;     /* parse and load supervisor binaries */
 mod message;    /* send messages between physical cores */
 mod service;    /* allow capsules to register services */
 mod manifest;   /* manage capsules loaded with the hypervisor */
+
+/* needed for exclusive locks */
+mod lock;
+use lock::Mutex;
 
 /* list of error codes */
 mod error;
