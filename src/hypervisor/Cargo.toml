@@ -19,6 +19,7 @@ serde_derive = "1.0.118"
 
 [features]
 qemuprint = [] # enable to force debug text through Qemu's serial port
+integritychecks = [] # enable to check integrity of per-CPU structures from overwrites */
 
 # local and special dependencies
 [dependencies]
@@ -29,9 +30,6 @@ dmfs = { path = "../mkdmfs/dmfs" }
 xmas-elf = { git = "https://github.com/diodesign/xmas-elf.git", branch = "patch-1" }
 
 # external dependencies
-[dependencies.spin]
-version = "0.7.0"
-
 [dependencies.hashbrown]
 version = "0.9.1"
 features = [ "nightly" ]
