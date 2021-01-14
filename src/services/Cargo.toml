@@ -17,6 +17,13 @@ toml = "0.5.8"
 serde = "1.0.118"
 serde_derive = "1.0.118"
 
+[dependencies.lazy_static]
+version = "1.4.0"
+features = [ "spin_no_std" ]
+
+[dependencies.spin]
+version = "0.7.0"
+
 [target.riscv32imac-unknown-none-elf.dependencies]
 supervisor = { path = "src/supervisor-riscv" }
 
