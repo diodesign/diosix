@@ -23,7 +23,7 @@ to access those underlying resources. */
 /* maintain a table of registered services */
 lazy_static!
 {
-    static ref SERVICES: Mutex<HashMap<ServiceID, Service>> = Mutex::new(HashMap::new());
+    static ref SERVICES: Mutex<HashMap<ServiceID, Service>> = Mutex::new("system service table", HashMap::new());
 }
 
 /* describe an individual service */
