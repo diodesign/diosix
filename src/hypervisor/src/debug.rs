@@ -16,8 +16,8 @@ use super::hardware;
 
 lazy_static!
 {
-    pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new(false);
-    static ref DEBUG_QUEUE: Mutex<String> = Mutex::new(String::new());
+    pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new("debug output", false);
+    static ref DEBUG_QUEUE: Mutex<String> = Mutex::new("debug queue", String::new());
 }
 
 /* top level debug macros */
@@ -132,16 +132,14 @@ pub fn drain_queue()
     /* avoid blocking if we can't write at this time */
     if DEBUG_LOCK.is_locked() == false
     {
-        let debug_lock = DEBUG_LOCK.lock();
+        let mut debug_lock = DEBUG_LOCK.lock();
+        *debug_lock = true;
+
         let mut debug_queue = DEBUG_QUEUE.lock();
-        
         if hardware::write_debug_string(&debug_queue) == true
         {
             debug_queue.clear();
         }
-
-        drop(debug_queue);
-        drop(debug_lock);
     }
 }
 
