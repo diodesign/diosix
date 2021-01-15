@@ -43,9 +43,9 @@ when a physical CPU runs out of queued virtual cores, it pulls one from these gl
 a physical CPU core can ask fellow CPUs to push virtual cores onto the global queues via messages */
 lazy_static!
 {
-    static ref GLOBAL_QUEUES: Mutex<ScheduleQueues> = Mutex::new(ScheduleQueues::new());
-    static ref WORKLOAD: Mutex<HashMap<PhysicalCoreID, usize>> = Mutex::new(HashMap::new());
-    static ref LAST_HOUSEKEEP_CHECK: Mutex<TimerValue> = Mutex::new(TimerValue::Exact(0));
+    static ref GLOBAL_QUEUES: Mutex<ScheduleQueues> = Mutex::new("global scheduler queue", ScheduleQueues::new());
+    static ref WORKLOAD: Mutex<HashMap<PhysicalCoreID, usize>> = Mutex::new("workload balancer", HashMap::new());
+    static ref LAST_HOUSEKEEP_CHECK: Mutex<TimerValue> = Mutex::new("housekeeper tracking", TimerValue::Exact(0));
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -89,17 +89,20 @@ pub fn ping()
     let frequency = frequency.unwrap();
     let time_now = time_now.unwrap().to_exact(frequency);
 
-    match pcore::PhysicalCore::this().get_timer_sched_last()
+    /* if the virtual core we're running is doomed, skip straight
+       to forcing a reschedule of another vcore */
+    match (pcore::PhysicalCore::this().get_timer_sched_last(),
+           pcore::PhysicalCore::this().is_vcore_doomed())
     {
-        Some(v) =>
+        (Some(v), false) =>
         {
             let timeslice_length = TIMESLICE_LENGTH.to_exact(frequency);
             let mut last_scheduled_at = v.to_exact(frequency);
 
             /* if the capsule we're running in is valid then perform a time slice check.
                if it's not valid, ensure the capsule is torn down or restarted for this
-               virtual core. when all vcores are removed from the capsule, its
-               resources will be released and the capsule deleted */
+               virtual core. when all vcores are removed from the capsule, it will either
+               be deleted or restarted, depending on its state */
             let capsule_state = capsule::get_current_state();
             match capsule_state
             {
@@ -163,8 +166,9 @@ pub fn ping()
             }
         },
 
-        /* if not we've not scheduled anything yet, find something to run */
-        None =>
+        /* if not we've not scheduled anything yet, or whatever we were running
+           is now invalid, we must find something (else) to run */
+        (None, _) | (_, true) =>
         {
             run_next(SearchMode::MustFind);
             pcore::PhysicalCore::this().set_timer_sched_last(Some(TimerValue::Exact(time_now)));
@@ -196,18 +200,19 @@ fn run_next(search_mode: SearchMode)
             {
                 /* we've found a virtual CPU core to run, so switch to that */
                 Some(orphan) =>
-                {
-                    let mut workloads =  WORKLOAD.lock();
+                {   
+                    let mut workloads = WORKLOAD.lock();
+                    let pcore_id = PhysicalCore::get_id();
 
                     /* increment counter of how many virtual cores this physical CPU core
                     has taken from the global queue */
-                    if let Some(count) = workloads.get_mut(&PhysicalCore::get_id())
+                    if let Some(count) = workloads.get_mut(&pcore_id)
                     {
                         *count = *count + 1;
                     }
                     else
                     {
-                        workloads.insert(PhysicalCore::get_id(), 1);
+                        workloads.insert(pcore_id, 1);
                     }
 
                     pcore::context_switch(orphan);
@@ -226,6 +231,9 @@ fn run_next(search_mode: SearchMode)
             {
                 break;
             }
+
+            /* still here? see if there's a capsule waiting to be restarted and give us something to do */
+            capsulehousekeeper!();
         }
 
         /* we've got a virtual core to run. tell the timer system to call us back soon */
@@ -296,6 +304,7 @@ fn housekeeping()
     debughousekeeper!(); /* drain the debug logs to the debug hardware port */
     heaphousekeeper!(); /* return any unused regions of physical memory */
     physmemhousekeeper!(); /* tidy up any physical memory structures */
+    capsulehousekeeper!(); /* restart capsules that crashed or rebooted */
 
     /* if the global queues are empty then work out which physical CPU core
     has the most number of virtual cores and is therefore the busiest */
@@ -304,7 +313,8 @@ fn housekeeping()
     {
         let mut highest_count = 0;
         let mut busiest_pcore: Option<PhysicalCoreID> = None;
-        for (&pcoreid, &vcore_count) in WORKLOAD.lock().iter()
+        let workloads = WORKLOAD.lock();
+        for (&pcoreid, &vcore_count) in workloads.iter()
         {
             if vcore_count > highest_count
             {
