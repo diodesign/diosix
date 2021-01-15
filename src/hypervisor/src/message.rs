@@ -31,7 +31,7 @@ use super::pcore::{PhysicalCoreID, PhysicalCore};
 /* maintain a mailbox of messages per physical CPU core */
 lazy_static!
 {
-    static ref MAILBOXES: Mutex<HashMap<PhysicalCoreID, VecDeque<Message>>> = Mutex::new(HashMap::new());
+    static ref MAILBOXES: Mutex<HashMap<PhysicalCoreID, VecDeque<Message>>> = Mutex::new("mailbox", HashMap::new());
 }
 
 /* create a mailbox for physical CPU core coreid */
