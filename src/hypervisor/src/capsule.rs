@@ -37,34 +37,69 @@ lazy_static!
 lazy_static!
 {
     /* acquire CAPSULES lock before accessing any capsules */
-    static ref CAPSULES: Mutex<HashMap<CapsuleID, Capsule>> = Mutex::new(HashMap::new());
+    static ref CAPSULES: Mutex<HashMap<CapsuleID, Capsule>> = Mutex::new("capsule ID table", HashMap::new());
+
+    /* set of capsules to restart */
+    static ref TO_RESTART: Mutex<HashSet<CapsuleID>> = Mutex::new("capsule restart list", HashSet::new());
 }
 
-/* define who or what is responsible for restarting this capsule */
-#[derive(Debug)]
-pub enum RestartMethod
+/* perform housekeeping duties on idle physical CPU cores */
+macro_rules! capsulehousekeeper
 {
-    FromManifest(String),   /* reload from the included manifest fs image */
-    FromSpawnService        /* tell the capsule spawning service to reload us */
+    () => ($crate::capsule::restart_awaiting());
+}
+
+/* empty the waiting list of capsules to restart and recreate their vcores */
+pub fn restart_awaiting()
+{
+    for cid in TO_RESTART.lock().drain()
+    {
+        if let Some(c) = CAPSULES.lock().get_mut(&cid)
+        {
+            /* capsule is ready to roll again, call this before injecting
+            virtual cores into the scheduling queues */
+            c.set_state_valid();
+
+            /* TODO: if the capsule is corrupt, it'll crash again. support
+            a hard reset if the capsule can't start */
+
+            for (vid, params) in c.iter_init()
+            {
+                if let Err(_e) = add_vcore(cid, *vid, params.entry, params.dtb, params.prio)
+                {
+                    hvalert!("Failed to restart capsule {} vcore {}: {:?}", cid, vid, _e);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum CapsuleState
 {
-    Valid,
-    Dying,
-    Restarting
+    Valid,      /* ok to run */
+    Dying,      /* remove vcores and kill when there are none left */
+    Restarting  /* remove vcores and recreate vcores with initial params */
+}
+
+/* record the initialization parameters for a virtual core
+   so it can be recreated and restarted */
+pub struct VcoreInit
+{
+    entry: Entry, 
+    dtb: PhysMemBase,
+    prio: Priority
 }
 
 struct Capsule
 {
-    state: CapsuleState,                    /* define whether this capsule is alive, dying or restarting */
-    restart_on_crash: bool,                 /* true to auto-restart on unexpected death */
-    restart_method: RestartMethod,          /* how to restart this capsule */
-    vcores: HashSet<VirtualCoreID>,         /* set of virtual core IDs assigned to this capsule */
-    memory: Vec<Mapping>,                   /* map capsule supervisor virtual addresses to host physical addresses */
-    allowed_services: HashSet<ServiceID>,   /* set of services this capsule is allowed to provide */
-    debug_buffer: String                    /* buffer to hold debug output until it's flushed */
+    state: CapsuleState,                     /* define whether this capsule is alive, dying or restarting */
+    restart_on_crash: bool,                  /* true to auto-restart on unexpected death */
+    vcores: HashSet<VirtualCoreID>,          /* set of virtual core IDs assigned to this capsule */
+    init: HashMap<VirtualCoreID, VcoreInit>, /* map of vcore IDs to vcore initialization paramters */
+    memory: Vec<Mapping>,                    /* map capsule supervisor virtual addresses to host physical addresses */
+    allowed_services: HashSet<ServiceID>,    /* set of services this capsule is allowed to provide */
+    debug_buffer: String                     /* buffer to hold debug output until it's flushed */
 }
 
 impl Capsule
@@ -72,14 +107,14 @@ impl Capsule
     /* create a new empty capsule using the current capsule on this physical CPU core.
     => auto_restart_flag = tue to auto-restart on crash by the hypervisor
     <= capsule object, or error code */
-    pub fn new(restart_on_crash: bool, restart_method: RestartMethod) -> Result<Capsule, Cause>
+    pub fn new(restart_on_crash: bool) -> Result<Capsule, Cause>
     {
         Ok(Capsule
         {
             state: CapsuleState::Valid,
             restart_on_crash,
-            restart_method,
             vcores: HashSet::new(),
+            init: HashMap::new(),
             memory: Vec::new(),
             allowed_services: HashSet::new(),
             debug_buffer: String::new()
@@ -107,16 +142,24 @@ impl Capsule
         self.restart_on_crash
     }
 
-    /* returns restart method */
-    pub fn get_restart_method(&self) -> &RestartMethod { &self.restart_method }
-
     /* add a virtual core ID to the capsule */
     pub fn add_vcore(&mut self, id: VirtualCoreID)
     {
         self.vcores.insert(id);
     }
 
-    /* remove a virtual core ID */
+    /* add a virtual core's initialization parameters to the capsule */
+    pub fn add_init(&mut self, vid: VirtualCoreID, entry: Entry, dtb: PhysMemBase, prio: Priority)
+    {
+        self.init.insert(vid, VcoreInit { entry, dtb, prio });
+    }
+
+    pub fn iter_init(&self) -> hashbrown::hash_map::Iter<'_, VirtualCoreID, VcoreInit>
+    {
+        self.init.iter()
+    }
+
+    /* remove a virtual core ID from the capsule's list */
     pub fn remove_vcore(&mut self, id: VirtualCoreID)
     {
         self.vcores.remove(&id);
@@ -171,6 +214,9 @@ impl Capsule
 
         true
     }
+
+    /* mark the capsule's state as valid */
+    pub fn set_state_valid(&mut self) { self.state = CapsuleState::Valid; }
 }
 
 /* handle the destruction of a capsule */
@@ -178,8 +224,6 @@ impl Drop for Capsule
 {
     fn drop(&mut self)
     {
-        hvdebug!("Capsule {:p} dying, releasing resources", &self);
-
         /* free up memory... */
         for mapping in self.memory.clone()
         {
@@ -219,7 +263,12 @@ pub fn add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dtb: PhysMemB
     vcore::VirtualCore::create(cid, vid, entry, dtb, prio)?;
     match CAPSULES.lock().get_mut(&cid)
     {
-        Some(c) => c.add_vcore(vid),
+        Some(c) =>
+        {
+            /* register the vcore ID and stash its init params */
+            c.add_vcore(vid);
+            c.add_init(vid, entry, dtb, prio);
+        },
         None => return Err(Cause::CapsuleBadID)
     };
     Ok(())
@@ -230,7 +279,7 @@ pub fn add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dtb: PhysMemB
    then it is ready to be scheduled by assigning it virtual CPU cores.
    => auto_crash_restart = true to be auto-restarted by hypervisor if the capsule crashes
    <= CapsuleID for this new capsule, or an error code */
-pub fn create(auto_crash_restart: bool, restart_method: RestartMethod) -> Result<CapsuleID, Cause>
+pub fn create(auto_crash_restart: bool) -> Result<CapsuleID, Cause>
 {
     /* repeatedly try to generate an available ID */
     loop
@@ -249,7 +298,7 @@ pub fn create(auto_crash_restart: bool, restart_method: RestartMethod) -> Result
             Vacant(_) =>
             {
                 /* insert our new capsule */
-                capsules.insert(new_id, Capsule::new(auto_crash_restart, restart_method)?);
+                capsules.insert(new_id, Capsule::new(auto_crash_restart)?);
 
                 /* we're all done here */
                 return Ok(new_id);
@@ -262,19 +311,21 @@ pub fn create(auto_crash_restart: bool, restart_method: RestartMethod) -> Result
 /* destroy the given virtualcore within the given capsule.
    when the capsule is out of vcores, destroy it.
    see destroy_current() for more details */
-pub fn destroy(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
+fn destroy(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
 {
     /* make sure this capsule is dying */
     let mut lock = CAPSULES.lock();
-    if let Some(victim) = lock.get_mut(&cid)
+    if let Some(victim) = CAPSULES.lock().get_mut(&cid)
     {
         match victim.set_state_dying()
         {
             true =>
             {
                 /* remove this current vcore ID from the capsule's
-                hash table */
+                hash table. also mark the vcore as doomed, meaning
+                it will be dropped when it's context switched out */
                 victim.remove_vcore(vid);
+                pcore::PhysicalCore::this().doom_vcore();
 
                 /* are there any vcores remaining? */
                 if victim.count_vcores() == 0
@@ -325,10 +376,11 @@ pub fn destroy_current() -> Result<(), Cause>
 
 /* remove the given virtual core from the capsule and mark it as restarting.
    see restart_current() for more details */
-pub fn restart(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
-{
-    /* make sure this capsule is dying */
+fn restart(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
+{ 
+    /* make sure this capsule is restarting */
     let mut lock = CAPSULES.lock();
+
     if let Some(victim) = lock.get_mut(&cid)
     {
         match victim.set_state_restarting()
@@ -336,8 +388,17 @@ pub fn restart(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
             true =>
             {
                 /* remove this current vcore ID from the capsule's
-                hash table */
+                hash table. also mark the vcore as doomed, meaning
+                it will be dropped when it's context switched out */
                 victim.remove_vcore(vid);
+                pcore::PhysicalCore::this().doom_vcore();
+
+                /* are there any vcores remaining? */
+                if victim.count_vcores() == 0
+                {
+                    /* no vcores left so add this capsule to the restart set */
+                    TO_RESTART.lock().insert(cid);
+                }
 
                 return Ok(());
             },
