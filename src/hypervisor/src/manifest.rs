@@ -99,9 +99,9 @@ pub fn unpack_at_boot() -> Result<(), Cause>
         match asset.get_type()
         {
             /* only unpack and process boot messages and system services at startup */
-            ManifestObjectType::BootMsg => load_asset(asset, None)?,
-            ManifestObjectType::SystemService => load_asset(asset, None)?,
-            ManifestObjectType::GuestOS => load_asset(asset, None)?,
+            ManifestObjectType::BootMsg => load_asset(asset)?,
+            ManifestObjectType::SystemService => load_asset(asset)?,
+            // ManifestObjectType::GuestOS => load_asset(asset)?,
             _ => ()
         }
     }
@@ -112,9 +112,8 @@ pub fn unpack_at_boot() -> Result<(), Cause>
 /* process the given asset, such as printing it to the debug output stream if it's a boot message
    or parsing it and running it if it's an executable, from the given DMFS image
    => asset = manifest asset to parse and process into memory
-      capsule = ID of capsule to use for this asset, or None for create a new capsule.
-                this is ignored if the asset is not an executable */
-pub fn load_asset(asset: ManifestObject, _capsule: Option<capsule::CapsuleID>) -> Result<(), Cause>
+*/
+pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
 {
     let image = get_dmfs_image!();
     let content = match asset.get_contents()
@@ -133,7 +132,7 @@ pub fn load_asset(asset: ManifestObject, _capsule: Option<capsule::CapsuleID>) -
         },
 
         /* run a system service and ensure it auto-restarts if it crashes */
-        ManifestObjectType::SystemService => match create_capsule_from_exec(true, asset.get_name(), content)
+        ManifestObjectType::SystemService => match create_capsule_from_exec(true, content)
         {
             Ok(_) => hvdebug!("Created capsule for {}, {} bytes in manifest",
                         asset.get_description(), asset.get_contents_size()),
@@ -141,7 +140,7 @@ pub fn load_asset(asset: ManifestObject, _capsule: Option<capsule::CapsuleID>) -
         },
 
         /* run an included guest OS */
-        ManifestObjectType::GuestOS => match create_capsule_from_exec(false, asset.get_name(), content)
+        ManifestObjectType::GuestOS => match create_capsule_from_exec(false, content)
         {
             Ok(_) => hvdebug!("Created guest OS capsule for {}: {}, {} bytes in manifest",
                         asset.get_name(), asset.get_description(), asset.get_contents_size()),
@@ -159,12 +158,10 @@ pub fn load_asset(asset: ManifestObject, _capsule: Option<capsule::CapsuleID>) -
       binary = slice containing the executable to parse and load
    <= Ok, or an error code
 */
-fn create_capsule_from_exec(auto_crash_restart: bool, name: String, binary: &[u8]) -> Result<(), Cause>
+fn create_capsule_from_exec(auto_crash_restart: bool, binary: &[u8]) -> Result<(), Cause>
 {
     /* create an auto-restarting capsule */
-    let capid = capsule::create(
-            auto_crash_restart,
-            capsule::RestartMethod::FromManifest(name))?;
+    let capid = capsule::create(auto_crash_restart)?;
 
     /* assign one virtual CPU core to the capsule */
     let cpus = 1;
