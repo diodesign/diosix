@@ -15,7 +15,7 @@ use super::error::Cause;
 lazy_static!
 {
     /* acquire HARDWARE before accessing any system hardware */
-    static ref HARDWARE: Mutex<Option<Devices>> = Mutex::new(None);
+    static ref HARDWARE: Mutex<Option<Devices>> = Mutex::new("hardware management", None);
 }
 
 /* parse_and_init
