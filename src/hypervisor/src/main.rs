@@ -57,18 +57,19 @@ extern crate platform;
 /* and now for all our non-hw specific code */
 #[macro_use]
 mod debug;      /* get us some kind of debug output, typically to a serial port */
-mod hardware;   /* parse device trees into hardware objects */
+#[macro_use]
+mod capsule;    /* manage capsules */
 #[macro_use]
 mod heap;       /* per-CPU private heap management */
-mod panic;      /* implement panic() handlers */
-mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 #[macro_use]
 mod physmem;    /* manage host physical memory */
+mod hardware;   /* parse device trees into hardware objects */
+mod panic;      /* implement panic() handlers */
+mod irq;        /* handle hw interrupts and sw exceptions, collectively known as IRQs */
 mod virtmem;    /* manage capsule virtual memory */
 mod pcore;      /* manage CPU cores */
 mod vcore;      /* virtual CPU core management... */
 mod scheduler;  /* ...and scheduling */
-mod capsule;    /* manage capsules */
 mod loader;     /* parse and load supervisor binaries */
 mod message;    /* send messages between physical cores */
 mod service;    /* allow capsules to register services */
@@ -93,7 +94,7 @@ static HV_HEAP: heap::HVallocator = heap::HVallocator;
 /* set to true to allow physical CPU cores to start running supervisor code */
 lazy_static!
 {
-    static ref INIT_DONE: Mutex<bool> = Mutex::new(false);
+    static ref INIT_DONE: Mutex<bool> = Mutex::new("system bring-up", false);
 }
 
 /* a physical CPU core obtaining this lock when it is false must walk the DMFS, create
@@ -101,13 +102,13 @@ capsules required to run at boot time, and set the flag to true. any other core
 obtaining it as true must release the lock and move on */
 lazy_static!
 {
-    static ref MANIFEST_UNPACKED: Mutex<bool> = Mutex::new(false);
+    static ref MANIFEST_UNPACKED: Mutex<bool> = Mutex::new("dmfs unpacked", false);
 }
 
 /* set to true if individual cores can sound off their presence and capabilities */
 lazy_static!
 {
-    static ref ROLL_CALL: Mutex<bool> = Mutex::new(false);
+    static ref ROLL_CALL: Mutex<bool> = Mutex::new("CPU roll call", false);
 }
 
 /* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
