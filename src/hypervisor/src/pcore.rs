@@ -20,7 +20,7 @@ use platform::cpu::{SupervisorState, CPUFeatures};
 use platform::timer;
 use super::vcore::{VirtualCore, VirtualCoreCanonicalID};
 use super::scheduler::ScheduleQueues;
-use super::capsule::{self, CapsuleID, CapsuleState};
+use super::capsule::{self, CapsuleID};
 use super::message;
 use super::heap;
 
@@ -49,8 +49,8 @@ lazy_static!
     core. this is more of a hint than a concrete guarantee: the virtual core
     may have been scheduled away, though it should be in the last physical
     CPU core's scheduling queue. */
-    static ref VCORES: Mutex<HashMap<PhysicalCoreID, VirtualCore>> = Mutex::new(HashMap::new());
-    static ref PCORES: Mutex<HashMap<VirtualCoreCanonicalID, PhysicalCoreID>> = Mutex::new(HashMap::new());
+    static ref VCORES: Mutex<HashMap<PhysicalCoreID, VirtualCore>> = Mutex::new("physical-virtual core table", HashMap::new());
+    static ref PCORES: Mutex<HashMap<VirtualCoreCanonicalID, PhysicalCoreID>> = Mutex::new("physical-virtual core ID table", HashMap::new());
 }
 
 /* describe a physical CPU core - this structure is stored in the per-CPU private variable space.
@@ -82,7 +82,12 @@ pub struct PhysicalCore
     smode: bool,
 
     /* set when this physical core CPU core last ran a scheduling decision */
-    timer_sched_last: Option<timer::TimerValue>
+    timer_sched_last: Option<timer::TimerValue>,
+
+    /* set to true when the vcore running on this physical core is doomed.
+       that means it's in a capsule that was restarted or killed and
+       must not be saved after a context switch */
+    vcore_doomed: bool
 }
 
 impl PhysicalCore
@@ -102,6 +107,7 @@ impl PhysicalCore
         cpu.features = platform::cpu::features();
         cpu.smode = platform::cpu::features_priv_check(platform::cpu::PrivilegeMode::Supervisor);
         cpu.timer_sched_last = None;
+        cpu.vcore_doomed = false;
 
         let (heap_ptr, heap_size) = PhysicalCore::get_heap_config();
         cpu.heap.init(heap_ptr, heap_size);
@@ -174,6 +180,17 @@ impl PhysicalCore
             None
         }
     }
+
+    /* mark the running vcore as doomed, meaning after it's context switched out,
+    drop it. this is useful when killing or restarting capsules, and
+    the current set of vcores needs to be flushed from the scheduling system */
+    pub fn doom_vcore(&mut self) { self.vcore_doomed = true; }
+
+    /* ensure the running vcore is not doomed */
+    pub fn approve_vcore(&mut self) { self.vcore_doomed = false; }
+
+    /* return true if vcore is doomed, ie: must be discarded */
+    pub fn is_vcore_doomed(&self) -> bool { self.vcore_doomed }
 
     /* update the running virtual core's timer IRQ target. we have to do this here because
     the virtual core is held in a locked data structure. leaving this function relocks
@@ -255,10 +272,9 @@ pub fn context_switch(next: VirtualCore)
                 capsule::enforce(next_capsule);
             }
 
-            /* queue the current virtual core on the waiting list.
-               however, if the vcore's capsule is dying or restarting then
-               don't queue the core for later use, and drop it */
-            if capsule::get_state(current_capsule) == Some(CapsuleState::Valid)
+            /* if the current virtual core isn't doomed, queue the vcore
+               on the waiting list. if it is doomed, drop it */
+            if PhysicalCore::this().is_vcore_doomed() == false
             {
                 platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
                 PhysicalCore::queue(current_vcore);
@@ -285,6 +301,10 @@ pub fn context_switch(next: VirtualCore)
         },
         pcore_id);
 
-    /* and add the virtual core to the running virtual cores list */
+    /* and add the virtual core to the running virtual cores set.
+       the previous vcore entry will be dropped */
     VCORES.lock().insert(pcore_id, next);
+
+    /* and ensure this switched-in vcore is not doomed */
+    PhysicalCore::this().approve_vcore();
 }
