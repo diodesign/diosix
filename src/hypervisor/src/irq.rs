@@ -251,7 +251,7 @@ fn fatal_exception(irq: &IRQ)
     if reschedule == true
     {
         /* force a context switch to find another virtual core to run
-        because this virtual core no long exists */
+        because this virtual core no longer exists */
         scheduler::ping();
     }
 }
