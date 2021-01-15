@@ -194,7 +194,7 @@ and available regions. if a region is in use, it must be removed from the list. 
 lazy_static!
 {
     /* acquire REGIONS lock before accessing any physical RAM regions */
-    static ref REGIONS: Mutex<SortedRegions> = Mutex::new(SortedRegions::new());
+    static ref REGIONS: Mutex<SortedRegions> = Mutex::new("RAM regions", SortedRegions::new());
 }
 
 /* implement a sorted list of regions */
