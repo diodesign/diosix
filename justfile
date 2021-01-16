@@ -6,7 +6,6 @@
 #
 # Build and run diosix in Qemu, using the defaults:
 # just
-# (or just qemu)
 #
 # Only build diosix using the defaults:
 # just build
@@ -37,7 +36,19 @@
 #
 # Disable hypervisor's regular integrity checks by setting integritychecks to no, eg:
 # just integritychecks=no
+#
+# Disable including services by setting services to no, eg:
+# just services=no
 # 
+# Disable including guest OSes by setting quests to no, eg:
+# just guests=no
+# 
+# Disable downlaoding guest OS images by setting guests-download to no, eg:
+# just guests-download=no
+# 
+# Disable building guest OSes using buildroot by setting guests-build to no, eg:
+# just guests-build=no 
+#
 # The defaults are:
 # emubin           qemu-system-riscv64
 # target           riscv64gc-unknown-none-elf
@@ -46,6 +57,10 @@
 # cpus             4
 # qemuprint        no
 # integritychecks  yes
+# services         yes
+# guests           yes
+# guests-download  yes
+# guests-build     yes
 #
 # Author: Chris Williams <diodesign@tuta.io>
 # See LICENSE for usage and distribution
@@ -68,6 +83,10 @@ quiet           := "yes"
 cpus            := "4"
 qemuprint       := "no"
 integritychecks := "yes"
+services        := "yes"
+guests          := "yes"
+guests-download := "yes"
+guests-build    := "yes"
 
 # generate cargo switches
 quality_sw      := if quality == "debug" { "debug" } else { "release" }
@@ -77,6 +96,10 @@ verbose_sw      := if quiet == "no" { "--verbose " } else { "" }
 qemuprint_sw    := if qemuprint == "yes" { "--features qemuprint" } else { "" }
 cargo_sw        := quiet_sw + release_sw + "--target " + target
 integritychecks_sw := if integritychecks == "yes" { "--features integritychecks" } else { "" }
+services_sw     := if services == "no" { "--skip-services" } else { "" }
+guests_sw       := if guests == "no" { "--skip-guests" } else { "" }
+downloads_sw    := if guests-download == "no" { "--skip-downloads" } else { "" }
+builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 
 # the default recipe
 # build diosix with its components, and run it within qemu
@@ -110,7 +133,7 @@ integritychecks_sw := if integritychecks == "yes" { "--features integritychecks"
 # the target directory stores the dmfs image file
 @_mkdmfs: _services
     echo "{{buildmsg}} dmfs image"
-    cd src/mkdmfs && cargo run {{quiet_sw}} -- -t {{target}} -q {{quality_sw}} {{verbose_sw}}
+    cd src/mkdmfs && cargo run {{quiet_sw}} -- -t {{target}} -q {{quality_sw}} {{verbose_sw}} {{services_sw}} {{guests_sw}} {{downloads_sw}} {{builds_sw}}
 
 # build the system services
 @_services: 
