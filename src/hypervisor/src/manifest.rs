@@ -101,7 +101,7 @@ pub fn unpack_at_boot() -> Result<(), Cause>
             /* only unpack and process boot messages and system services at startup */
             ManifestObjectType::BootMsg => load_asset(asset)?,
             ManifestObjectType::SystemService => load_asset(asset)?,
-            // ManifestObjectType::GuestOS => load_asset(asset)?,
+            ManifestObjectType::GuestOS => load_asset(asset)?,
             _ => ()
         }
     }
