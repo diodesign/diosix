@@ -570,12 +570,14 @@ pub fn enforce(id: CapsuleID) -> bool
             {
                 if let Some(r) = mapping.get_physical()
                 {
-                    if index > 0
+                    if index == 0
                     {
-                        panic!("TODO / FIXME: Capsules can't have more than one physical RAM region");
+                        r.grant_access();
                     }
-
-                    r.grant_access();
+                    else
+                    {
+                        hvalert!("BUG: Capsule {} has more than one physical RAM region", id);
+                    }
                     index = index + 1;
                 }
             }
