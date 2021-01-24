@@ -42,7 +42,7 @@ pub fn parse_and_init(dtb: &[u8]) -> Result<(), Cause>
 
 /* write the string msg out to the debug logging console.
    if the system is busy, return
-   => msg = string to write out
+   => msg = string to write out (not necessarily zero term'd)
    <= true if able to write, false if not */
 pub fn write_debug_string(msg: &str) -> bool
 {
@@ -61,6 +61,23 @@ pub fn write_debug_string(msg: &str) -> bool
         },
         None => false
     }
+}
+
+/* read a single character from the debuging console, or None if none.
+   this does not block */
+pub fn read_debug_char() -> Option<char>
+{
+    /* avoid blocking on a lock if we can */
+    if HARDWARE.is_locked() == true
+    {
+        return None;
+    }
+
+    match &*(HARDWARE.lock())
+    {
+        Some(d) => d.read_debug_char(),
+        None => None
+    }   
 }
 
 /* return number of discovered logical CPU cores, or None if value unavailable */
