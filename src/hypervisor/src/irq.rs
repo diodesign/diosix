@@ -107,10 +107,28 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                     /* stash debug output character into capsule's buffer */
                     syscalls::Action::OutputChar(character) => if let Some(capsule_id) = pcore::PhysicalCore::get_capsule_id()
                     {
-                        if let Err(_e) = capsule::debug_write(capsule_id, character)
+                        /* FIXME: improve this. don't allow linux to flood us with ^@ for some reason during boot */
+                        if character != '^' && character != '@'
                         {
-                            hvdebug!("Couldn't buffer debug byte {} from capsule {}: {:?}", character, capsule_id, _e);
-                            syscalls::failed(context, syscalls::ActionResult::Failed);
+                            if let Err(_e) = capsule::debug_write(capsule_id, character)
+                            {
+                                hvdebug!("Couldn't buffer debug byte {} from capsule {}: {:?}", character, capsule_id, _e);
+                                syscalls::failed(context, syscalls::ActionResult::Failed);
+                            }
+                        }
+                    },
+
+                    /* get a character from the user. TODO: improve the buffering of this input */
+                    syscalls::Action::InputChar =>
+                    {
+                        match hardware::read_debug_char()
+                        {
+                            Some(c) =>
+                            {
+                                hvprint!("{}", c);
+                                syscalls::result(context, c as usize);
+                            },
+                            None => syscalls::result(context, usize::MAX) /* -1 == nothing to read */
                         }
                     },
 
