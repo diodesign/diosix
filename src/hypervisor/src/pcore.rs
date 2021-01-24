@@ -279,6 +279,10 @@ pub fn context_switch(next: VirtualCore)
                 platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
                 PhysicalCore::queue(current_vcore);
             }
+            else
+            {
+                drop(current_vcore);
+            }
         },
         None =>
         {
