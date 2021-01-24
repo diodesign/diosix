@@ -37,7 +37,7 @@ description = "32-bit RISC-V Linux 5.4.61 with Busybox"
 
 # select guests to include for a given target
 [target.riscv64gc-unknown-none-elf]
-guests = [ "riscv64-linux-busybox" ]
+guests = [ "riscv64-linux-busybox", "riscv64-linux-busybox" ]
 
 [target.riscv64imac-unknown-none-elf]
 guests = [ "riscv64-linux-busybox" ]
