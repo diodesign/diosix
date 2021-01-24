@@ -166,8 +166,8 @@ fn create_capsule_from_exec(auto_crash_restart: bool, binary: &[u8]) -> Result<(
     /* assign one virtual CPU core to the capsule */
     let cpus = 1;
 
-    /* reserve 64MB of physical RAM for the capsule */
-    let size = 64 * 1024 * 1024;
+    /* reserve 128MB of physical RAM for the capsule */
+    let size = 128 * 1024 * 1024;
     let ram = physmem::alloc_region(size)?;
 
     /* create device tree blob for the virtual hardware available to the guest
