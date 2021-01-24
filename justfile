@@ -105,7 +105,7 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 # build diosix with its components, and run it within qemu
 @qemu: build
     echo "{{qemumsg}}"
-    {{emubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 512M -kernel src/hypervisor/target/{{target}}/{{quality_sw}}/hypervisor
+    {{emubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 1G -kernel src/hypervisor/target/{{target}}/{{quality_sw}}/hypervisor
 
 # run unit tests for each major component
 @test:
