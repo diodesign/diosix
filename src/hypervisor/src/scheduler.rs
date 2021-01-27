@@ -329,13 +329,15 @@ fn housekeeping()
         {
             if let Some(pid) = busiest_pcore
             {
-                let m = message::Message::new(message::Recipient::send_to_pcore(pid),
-                                                message::MessageContent::DisownQueuedVirtualCore);
-                match message::send(m)
+                if let Ok(m) = message::Message::new(message::Recipient::send_to_pcore(pid),
+                                                        message::MessageContent::DisownQueuedVirtualCore)
                 {
-                    Err(e) => hvalert!("Failed to message physical CPU {} during load balancing: {:?}", pid, e),
-                    Ok(()) => ()
-                };
+                    match message::send(m)
+                    {
+                        Err(e) => hvalert!("Failed to message physical CPU {} during load balancing: {:?}", pid, e),
+                        Ok(()) => ()
+                    };
+                }
             }
         }
     }
