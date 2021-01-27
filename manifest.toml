@@ -19,12 +19,17 @@ outfile = "src/mkdmfs/target/dmfs.img"
 path = "boot/banners"
 welcome = "boot/banners/welcome.txt"
 
-# define where to find the system services
+# define system services to include
 [services]
-path = "src/services"
 include = [ "gooey" ]
 
-# define any guests that may join us during boot
+# define each individual service
+[service.gooey]
+path = "src/services"
+description = "console interface"
+properties = [ "auto_crash_restart", "service_console", "console_write", "console_read" ]
+
+# define each guest that may join us during boot
 [guest.riscv64-linux-busybox]
 path = "boot/guests"
 url = "https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64/supervisor"
@@ -37,7 +42,7 @@ description = "32-bit RISC-V Linux 5.4.61 with Busybox"
 
 # select guests to include for a given target
 [target.riscv64gc-unknown-none-elf]
-guests = [ "riscv64-linux-busybox", "riscv64-linux-busybox" ]
+guests = [ "riscv64-linux-busybox" ]
 
 [target.riscv64imac-unknown-none-elf]
 guests = [ "riscv64-linux-busybox" ]
