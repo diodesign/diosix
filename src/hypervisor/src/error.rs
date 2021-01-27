@@ -26,6 +26,7 @@ pub enum Cause
 
     /* capsule services */
     ServiceAlreadyRegistered,
+    ServiceAlreadyOwner,
     ServiceNotAllowed,
     ServiceNotFound,
 
@@ -63,6 +64,7 @@ pub enum Cause
     CapsuleCannotRestart,
     CapsuleCantDie,
     CapsuleCantRestart,
+    CapsuleStdinEmpty,
 
     /* scheduler and timer */
     SchedNoTimer,
