@@ -9,6 +9,7 @@ use super::scheduler;
 use super::capsule;
 use super::pcore;
 use super::hardware;
+use super::error::Cause;
 
 /* platform-specific code must implement all this */
 use platform;
@@ -104,31 +105,33 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                         hardware::scheduler_timer_at(target);
                     },
 
-                    /* stash debug output character into capsule's buffer */
+                    /* output a character to the user from this capsule */
                     syscalls::Action::OutputChar(character) => if let Some(capsule_id) = pcore::PhysicalCore::get_capsule_id()
                     {
-                        /* FIXME: improve this. don't allow linux to flood us with ^@ for some reason during boot */
+                        /* FIXME: improve this. don't allow the linux kernel to flood us with ^@
+                           for some reason during boot when waiting for the network to reply with DHCP information */
                         if character != '^' && character != '@'
                         {
-                            if let Err(_e) = capsule::debug_write(capsule_id, character)
+                            if let Err(_e) = capsule::putc(capsule_id, character)
                             {
-                                hvdebug!("Couldn't buffer debug byte {} from capsule {}: {:?}", character, capsule_id, _e);
+                                hvdebug!("Couldn't buffer console byte {} from capsule {}: {:?}", character, capsule_id, _e);
                                 syscalls::failed(context, syscalls::ActionResult::Failed);
                             }
                         }
                     },
 
-                    /* get a character from the user. TODO: improve the buffering of this input */
-                    syscalls::Action::InputChar =>
+                    /* get a character from the user for this capsule */
+                    syscalls::Action::InputChar => if let Some(capsule_id) = pcore::PhysicalCore::get_capsule_id()
                     {
-                        match hardware::read_debug_char()
+                        match capsule::getc(capsule_id)
                         {
-                            Some(c) =>
+                            Ok(c) => syscalls::result(context, c as usize),
+                            Err(Cause::CapsuleStdinEmpty) => syscalls::result(context, usize::MAX), /* -1 == nothing to read */
+                            Err(_e) =>
                             {
-                                hvprint!("{}", c);
-                                syscalls::result(context, c as usize);
-                            },
-                            None => syscalls::result(context, usize::MAX) /* -1 == nothing to read */
+                                hvdebug!("Couldn't read console buffer from capsule {}: {:?}", capsule_id, _e);
+                                syscalls::failed(context, syscalls::ActionResult::Failed);
+                            }
                         }
                     },
 
