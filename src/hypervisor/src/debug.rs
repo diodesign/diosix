@@ -13,6 +13,8 @@ use core::fmt;
 use super::lock::Mutex;
 use alloc::string::String;
 use super::hardware;
+use super::service;
+use super::message;
 
 lazy_static!
 {
@@ -118,17 +120,27 @@ impl fmt::Write for ConsoleWriter
         /* force debug output to Qemu's serial port. useful for early debugging */
         for c in s.as_bytes()
         {
-            /* FIXME: hardwired to the RISC-V Qemu serial port */
-            unsafe { *(0x10000000 as *mut u8) = *c };
+            /* this is the serial port address in qemu's RISC-V emulation */
+            if cfg!(target_arch == "riscv64") || cfg!(target_arch == "riscv32")
+            {
+                unsafe { *(0x10000000 as *mut u8) = *c };
+            }
         }
         Ok(())
     }
 }
 
-/* attempt to empty queue out to the device-tree-defined debug port */
+/* if there's no user interface service, attempt to drain the
+   debug queue to the system debug interface */
 #[cfg(not(feature = "qemuprint"))]
 pub fn drain_queue()
 {
+    /* is a user interface available? if so, leave it to check the queue */
+    if service::is_registered(service::ServiceType::ConsoleInterface)
+    {
+        return;
+    }
+
     /* avoid blocking if we can't write at this time */
     if DEBUG_LOCK.is_locked() == false
     {
