@@ -18,13 +18,13 @@ use super::error::Cause;
 use super::physmem;
 use super::virtmem::Mapping;
 use super::vcore::{self, Priority, VirtualCoreID};
-use super::service::ServiceID;
-use super::service;
+use super::service::{self, ServiceType, SelectService};
 use super::pcore;
+use super::hardware;
 
 pub type CapsuleID = usize;
 
-/* arbitrarily allow up to CAPSULES_MAX capsules in the system */
+/* arbitrarily allow up to CAPSULES_MAX capsules in a system at any one time */
 const CAPSULES_MAX: usize = 1000000;
 
 /* needed to assign system-wide unique capsule ID numbers */
@@ -33,7 +33,7 @@ lazy_static!
     static ref CAPSULE_ID_NEXT: AtomicUsize = AtomicUsize::new(0);
 }
 
-/* maintain a shared table of capsules */
+/* maintain a shared table of capsules and linked data */
 lazy_static!
 {
     /* acquire CAPSULES lock before accessing any capsules */
@@ -41,6 +41,12 @@ lazy_static!
 
     /* set of capsules to restart */
     static ref TO_RESTART: Mutex<HashSet<CapsuleID>> = Mutex::new("capsule restart list", HashSet::new());
+
+    /* maintain collective input and output system console buffers for capsules.
+       the console system service capsule (ServiceConsole) will read from
+       STDOUT to display capsules' text, and will write to STDIN to inject characters into capsules */
+    static ref STDIN: Mutex<HashMap<CapsuleID, Vec<char>>> = Mutex::new("capsule STDIN table", HashMap::new());
+    static ref STDOUT: Mutex<HashMap<CapsuleID, Vec<char>>> = Mutex::new("capsule STDOUT table", HashMap::new());
 }
 
 /* perform housekeeping duties on idle physical CPU cores */
@@ -91,33 +97,90 @@ pub struct VcoreInit
     prio: Priority
 }
 
+#[derive(PartialEq, Eq, Hash, Debug)]
+enum CapsuleProperty
+{
+    AutoCrashRestart,   /* restart this capsule when it crashes */
+    ServiceConsole,     /* allow capsule to handle abstracted system console */
+    ConsoleWrite,       /* allow capsule to write out to the console */
+    ConsoleRead         /* allow capsule to read the console */
+}
+
+impl CapsuleProperty
+{
+    /* return true if this property allows the capsule to run the given service type */
+    pub fn match_service(&self, stype: ServiceType) -> bool
+    {
+        match (self, stype)
+        {
+            (CapsuleProperty::ServiceConsole, ServiceType::ConsoleInterface) => true,
+            (_, _) => false
+        }
+    }
+
+    /* convert a property string into an CapsuleProperty, or None if not possible */
+    pub fn string_to_property(property: &String) -> Option<CapsuleProperty>
+    {
+        /* restart the capsule if it crashes (as opposed to exits cleanly) */
+        if property.eq_ignore_ascii_case("auto_crash_restart")
+        {
+            return Some(CapsuleProperty::AutoCrashRestart);
+        }
+
+        /* console related properties */
+        if property.eq_ignore_ascii_case("service_console")
+        {
+            return Some(CapsuleProperty::ServiceConsole);
+        }
+        if property.eq_ignore_ascii_case("console_write")
+        {
+            return Some(CapsuleProperty::ConsoleWrite);
+        }
+        if property.eq_ignore_ascii_case("console_read")
+        {
+            return Some(CapsuleProperty::ConsoleRead);
+        }
+
+        None
+    }
+}
+
 struct Capsule
 {
     state: CapsuleState,                     /* define whether this capsule is alive, dying or restarting */
-    restart_on_crash: bool,                  /* true to auto-restart on unexpected death */
+    properties: HashSet<CapsuleProperty>,    /* set of properties and rights assigned to this capsule */
     vcores: HashSet<VirtualCoreID>,          /* set of virtual core IDs assigned to this capsule */
     init: HashMap<VirtualCoreID, VcoreInit>, /* map of vcore IDs to vcore initialization paramters */
     memory: Vec<Mapping>,                    /* map capsule supervisor virtual addresses to host physical addresses */
-    allowed_services: HashSet<ServiceID>,    /* set of services this capsule is allowed to provide */
-    debug_buffer: String                     /* buffer to hold debug output until it's flushed */
 }
 
 impl Capsule
 {
     /* create a new empty capsule using the current capsule on this physical CPU core.
-    => auto_restart_flag = tue to auto-restart on crash by the hypervisor
+    => properties = properties granted to this capsules, or None
     <= capsule object, or error code */
-    pub fn new(restart_on_crash: bool) -> Result<Capsule, Cause>
+    pub fn new(property_strings: Option<Vec<String>>) -> Result<Capsule, Cause>
     {
+        /* turn a possible list of property strings into list of official properties */
+        let mut properties = HashSet::new();
+        if let Some(property_strings) = property_strings
+        {
+            for string in property_strings
+            {
+                if let Some(prop) = CapsuleProperty::string_to_property(&string)
+                {
+                    properties.insert(prop);
+                }
+            }
+        }
+
         Ok(Capsule
         {
             state: CapsuleState::Valid,
-            restart_on_crash,
+            properties,
             vcores: HashSet::new(),
             init: HashMap::new(),
-            memory: Vec::new(),
-            allowed_services: HashSet::new(),
-            debug_buffer: String::new()
+            memory: Vec::new()
         })
     }
 
@@ -130,16 +193,10 @@ impl Capsule
     /* get a copy of the capsule's memory mappings */
     pub fn get_memory_mappings(&self) -> Vec<Mapping> { self.memory.clone() }
 
-    /* boot capsules are auto-restarted by the hypervisor */
-    pub fn set_auto_crash_restart(&mut self, flag: bool)
+    /* returns true if property is present for this capsule, or false if not */
+    pub fn has_property(&self, property: CapsuleProperty) -> bool
     {
-        self.restart_on_crash = flag;
-    }
-
-    /* returns true if this will auto-restart, or false if not */
-    pub fn will_auto_crash_restart(&self) -> bool
-    {
-        self.restart_on_crash
+        self.properties.contains(&property)
     }
 
     /* add a virtual core ID to the capsule */
@@ -171,21 +228,23 @@ impl Capsule
         self.vcores.len()
     }
 
-    /* allow capsule to register service sid */
-    pub fn allow_service(&mut self, sid: ServiceID)
-    {
-        self.allowed_services.insert(sid);
-    }
-
     /* check whether this capsule is allowed to register the given service
         <= true if allowed, false if not */
-    pub fn check_service(&self, sid: ServiceID) -> bool
+    pub fn can_offer_service(&self, stype: ServiceType) -> bool
     {
-        self.allowed_services.contains(&sid)
+        for property in &self.properties
+        {
+            if property.match_service(stype) == true
+            {
+                return true;
+            }
+        }
+
+        false
     }
 
     /* return this capsule's state */
-    pub fn get_state(&self) -> CapsuleState { self.state }
+    pub fn get_state(&self) -> &CapsuleState { &self.state }
 
     /* mark this capsule as dying. returns true if this is possible.
     only valid or dying capsules can die */
@@ -236,16 +295,6 @@ impl Drop for Capsule
                 };
             }
         }
-
-        /* ...and services held by this capsule */
-        for sid in self.allowed_services.iter()
-        {
-            match service::deregister(*sid)
-            {
-                Err(_e) => hvalert!("Failed to deregister service during teardown of capsule {:p}: {:?}", &self, _e),
-                Ok(()) => ()
-            };
-        }
     }
 }
 
@@ -277,9 +326,9 @@ pub fn add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dtb: PhysMemB
 /* create a new blank capsule
    Once created, it needs to be given a supervisor image, at least.
    then it is ready to be scheduled by assigning it virtual CPU cores.
-   => auto_crash_restart = true to be auto-restarted by hypervisor if the capsule crashes
+   => properties = array of properties to apply to this capsule, or None
    <= CapsuleID for this new capsule, or an error code */
-pub fn create(auto_crash_restart: bool) -> Result<CapsuleID, Cause>
+pub fn create(properties: Option<Vec<String>>) -> Result<CapsuleID, Cause>
 {
     /* repeatedly try to generate an available ID */
     loop
@@ -298,7 +347,7 @@ pub fn create(auto_crash_restart: bool) -> Result<CapsuleID, Cause>
             Vacant(_) =>
             {
                 /* insert our new capsule */
-                capsules.insert(new_id, Capsule::new(auto_crash_restart)?);
+                capsules.insert(new_id, Capsule::new(properties)?);
 
                 /* we're all done here */
                 return Ok(new_id);
@@ -330,8 +379,12 @@ fn destroy(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
                 /* are there any vcores remaining? */
                 if victim.count_vcores() == 0
                 {
-                    /* if not then remove this capsule
-                    from the hash table, which should
+                    /* if not then deregister any and all services
+                       belonging to this capsule */
+                    service::deregister(SelectService::AllServices, cid)?;
+                    
+                    /* next, remove this capsule
+                    from the global hash table, which should
                     trigger the final teardown via drop */
                     lock.remove(&cid);
                 }
@@ -455,8 +508,9 @@ pub fn get_current_state() -> Option<CapsuleState>
     None
 }
 
-/* return currently running capsule's auto-restart-on-crash flag as
-   Some(true) or Some(false) as appropriate, or None for no running capsule */
+/* Return Some(true) if capsule currently running on this physical core
+   is allowed to restart if it's crashed. Some(false) if not, or None
+   if this physical core isn't running a capsule */
 pub fn is_current_autorestart() -> Option<bool>
 {
     let cid = match pcore::PhysicalCore::get_capsule_id()
@@ -467,67 +521,103 @@ pub fn is_current_autorestart() -> Option<bool>
 
     match CAPSULES.lock().entry(cid)
     {
-        Occupied(capsule) => return Some(capsule.get().restart_on_crash),
+        Occupied(capsule) => return Some(capsule.get().has_property(CapsuleProperty::AutoCrashRestart)),
         Vacant(_) => None
-    }
-}
-
-/* buffer a character from the guest kernel, and flush output if a newline */
-pub fn debug_write(cid: CapsuleID, character: char) -> Result<(), Cause>
-{
-    match CAPSULES.lock().entry(cid)
-    {
-        Occupied(mut capsule) =>
-        {
-            let c = capsule.get_mut();
-
-            if character != '\n'
-            {
-                /* buffer the character if we're not at a newline */
-                c.debug_buffer.push(character);
-            }
-            else
-            {
-                /* flush the buffer and reinitialize it */
-                hvdebug!("Capsule {}: {}", cid, c.debug_buffer);
-                c.debug_buffer = String::new();
-            }
-            Ok(())
-        },
-        Vacant(_) => Err(Cause::CapsuleBadID)
-    }
-}
-
-/* allow a given capsule to offer a given service. if the capsule was already allowed the
-   service then this returns without error.
-    => cid = capsule ID
-       sid = service ID
-    <= Ok for success, or an error code */
-pub fn allow_service(cid: CapsuleID, sid: ServiceID) -> Result<(), Cause>
-{
-    match CAPSULES.lock().entry(cid)
-    {
-        Occupied(mut c) =>
-        {
-            c.get_mut().allowed_services.insert(sid);
-            Ok(())
-        },
-        Vacant(_) => Err(Cause::CapsuleBadID)
     }
 }
 
 /* check whether a capsule is allowed to run the given service
     => cid = capsule ID to check
-       sid = service ID to check
+       stype = service  to check
     <= Some true if the capsule exists and is allowed, or Some false
         if the capsule exists and is not allowed, or None if
         the capsule doesn't exist */
-pub fn is_service_allowed(cid: CapsuleID, sid: ServiceID) -> Option<bool>
+pub fn is_service_allowed(cid: CapsuleID, stype: ServiceType) -> Result<bool, Cause>
 {
     match CAPSULES.lock().entry(cid)
     {
-        Occupied(c) => Some(c.get().check_service(sid)),
-        Vacant(_) => None
+        Occupied(c) => Ok(c.get().can_offer_service(stype)),
+        Vacant(_) => Err(Cause::CapsuleBadID)
+    }
+}
+
+/* write a character to the user as the given capsule.
+   this will either be buffered and accessed later by the user interface
+   to display to the user, or this is the user interface capsule
+   and we'll pass its output onto the hardware */
+pub fn putc(cid: CapsuleID, character: char) -> Result<(), Cause>
+{
+    /* find the capsule we're going to write into */
+    match CAPSULES.lock().get_mut(&cid)
+    {
+        Some(capsule) =>
+        {
+            /* if this capsule can write straight to the hardware, then use that */
+            if (*capsule).has_property(CapsuleProperty::ConsoleWrite)
+            {
+                hardware::write_debug_string(format!("{}", character).as_str());
+            }
+            else
+            {
+                /* either add to the capsule's output buffer, or create a new buffer */
+                let mut stdout = STDOUT.lock();
+                match stdout.get_mut(&cid)
+                {
+                    Some(entry) => entry.push(character),
+                    None =>
+                    {
+                        let mut v = Vec::new();
+                        v.push(character);
+                        stdout.insert(cid, v);
+                    }
+                }
+            }
+        },
+        None => return Err(Cause::CapsuleBadID)
+    }
+
+    Ok(())
+}
+
+/* read a character from the user for the given capsule.
+   this will either read from the capsule's buffer that's filled
+   by the user interface capsule, or this is the user interface
+   capsule and we'll read the input from the hardware.
+   this call does not block
+   <= returns read character or an error code
+*/
+pub fn getc(cid: CapsuleID) -> Result<char, Cause>
+{
+    /* find the capsule we're trying to read from */
+    match CAPSULES.lock().get_mut(&cid)
+    {
+        Some(capsule) =>
+        {
+            /* if this capsule can read direct from the hardware, then let it */
+            if capsule.has_property(CapsuleProperty::ConsoleRead)
+            {
+                return match hardware::read_debug_char()
+                {
+                    Some(c) => Ok(c),
+                    None => Err(Cause::CapsuleStdinEmpty)
+                };
+            }
+            else
+            {
+                /* read from the capsule's buffer, or give up */
+                let mut stdin = STDIN.lock();
+                if let Some(entry) = stdin.get_mut(&cid)
+                {
+                    if entry.len() > 0
+                    {
+                        return Ok(entry.remove(0));
+                    }
+                }
+                
+                return Err(Cause::CapsuleStdinEmpty);
+            }
+        },
+        None => return Err(Cause::CapsuleBadID)
     }
 }
 
