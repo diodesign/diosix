@@ -7,9 +7,10 @@
 
 use super::lock::Mutex;
 use alloc::collections::vec_deque::VecDeque;
+use alloc::string::String;
 use hashbrown::hash_map::HashMap;
 use super::error::Cause;
-use super::service::{self, ServiceID};
+use super::service::{self, ServiceType};
 use super::capsule::CapsuleID;
 use super::pcore::{PhysicalCoreID, PhysicalCore};
 
@@ -44,7 +45,8 @@ pub fn create_mailbox(coreid: PhysicalCoreID)
 pub enum Sender
 {
     PhysicalCore(PhysicalCoreID),
-    Capsule(CapsuleID)
+    Capsule(CapsuleID),
+    Hypervisor
 }
 
 #[derive(Clone, Copy)]
@@ -52,7 +54,7 @@ pub enum Recipient
 {
     Broadcast,                      /* send to all physical CPU cores */
     PhysicalCore(PhysicalCoreID),   /* send to a single physical CPU core */
-    Service(ServiceID)              /* send to a single registered service */
+    Service(ServiceType)              /* send to a single registered service */
 }
 
 impl Recipient
@@ -67,18 +69,17 @@ impl Recipient
     }
 
     /* send to a particular capsule-hosted service */
-    pub fn send_to_service(id: ServiceID) -> Recipient
+    pub fn send_to_service(stype: ServiceType) -> Recipient
     {
-        Recipient::Service(id)
+        Recipient::Service(stype)
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 pub enum MessageContent
 {
-    /* warn all physical CPUs capsule is dying */
-    CapsuleTeardown(CapsuleID),
-    /* return any queued virtual core to the global queue for other physical CPUs to schedule */
+    HypervisorDebugStr(String),
+    CapsuleConsoleStr(String),
     DisownQueuedVirtualCore
 }
 
@@ -87,7 +88,7 @@ pub struct Message
 {
     sender: Sender,
     receiver: Recipient,
-    code: MessageContent
+    data: MessageContent
 }
 
 impl Message
@@ -97,20 +98,30 @@ impl Message
           data = message to send to the recipient
        <= returns message structure
     */
-    pub fn new(recv: Recipient, data: MessageContent) -> Message
+    pub fn new(recv: Recipient, data: MessageContent) -> Result<Message, Cause>
     {
-        Message
+        Ok(Message
         {
             receiver: recv,
-            code: data,
             
             /* determine sender from message type */
             sender: match data
             {
-                MessageContent::CapsuleTeardown(_) => Sender::PhysicalCore(PhysicalCore::get_id()),
+                MessageContent::HypervisorDebugStr(_) => Sender::Hypervisor,
+                MessageContent::CapsuleConsoleStr(_) => match PhysicalCore::get_capsule_id()
+                {
+                    Some(id) => Sender::Capsule(id),
+                    None =>
+                    {
+                        hvdebug!("BUG: Sending {:?} from non-existent capsule", data);
+                        return Err(Cause::CapsuleBadID);
+                    }
+                },
                 MessageContent::DisownQueuedVirtualCore => Sender::PhysicalCore(PhysicalCore::get_id())
-            }
-        }
+            },
+
+            data
+        })
     }
 
     pub fn get_receiver(&self) -> Recipient
