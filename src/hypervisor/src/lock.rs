@@ -86,7 +86,7 @@ pub struct Mutex<T>
 }
 
 /* Mutex uses the same API as std's Mutex. Create a Mutex using new() and then
-   call lock() to block until mutex successfully acquired. Drop the mutex to release */
+   call lock() to block until mutex successfully acquired. Drop the mutex guard to release */
 impl<T> Mutex<T>
 {
     pub fn new(description: &'static str, data: T) -> Mutex<T>
