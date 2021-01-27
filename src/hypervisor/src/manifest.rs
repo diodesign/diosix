@@ -116,12 +116,13 @@ pub fn unpack_at_boot() -> Result<(), Cause>
 pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
 {
     let image = get_dmfs_image!();
+    let properties = asset.get_properties();
     let content = match asset.get_contents()
     {
         ManifestObjectData::Bytes(b) => b.as_slice(),
         ManifestObjectData::Region(r) => &image[r.start..r.end]
     };
-
+    
     match asset.get_type()
     {
         /* print the included boot message */
@@ -131,18 +132,18 @@ pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
             debughousekeeper!(); /* ensure the message is seen */
         },
 
-        /* run a system service and ensure it auto-restarts if it crashes */
-        ManifestObjectType::SystemService => match create_capsule_from_exec(true, content)
+        /* create and run a system service */
+        ManifestObjectType::SystemService => match create_capsule_from_exec(content, Some(properties))
         {
-            Ok(_) => hvdebug!("Created capsule for {}, {} bytes in manifest",
-                        asset.get_description(), asset.get_contents_size()),
+            Ok(_) => hvdebug!("Created system service {} ({}) {} bytes",
+                        asset.get_name(), asset.get_description(), asset.get_contents_size()),
             Err(_e) => hvdebug!("Failed to create capsule for system service {}: {:?}", asset.get_name(), _e)
         },
 
-        /* run an included guest OS */
-        ManifestObjectType::GuestOS => match create_capsule_from_exec(false, content)
+        /* create an included guest OS (which does not have any special permissions) */
+        ManifestObjectType::GuestOS => match create_capsule_from_exec(content, None)
         {
-            Ok(_) => hvdebug!("Created guest OS capsule for {}: {}, {} bytes in manifest",
+            Ok(_) => hvdebug!("Created guest OS {} ({}) {} bytes",
                         asset.get_name(), asset.get_description(), asset.get_contents_size()),
             Err(_e) => hvdebug!("Failed to create capsule for system service {}: {:?}", asset.get_name(), _e)
         },
@@ -154,14 +155,14 @@ pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
 }
 
 /* create a capsule from an executable in a DMFS image
-   => auto_crash_restart = true to restart this automatically in case of a crash
-      binary = slice containing the executable to parse and load
+   => binary = slice containing the executable to parse and load
+      properties = permissions and other properties to grant the capsule, or None
    <= Ok, or an error code
 */
-fn create_capsule_from_exec(auto_crash_restart: bool, binary: &[u8]) -> Result<(), Cause>
+fn create_capsule_from_exec(binary: &[u8], properties: Option<Vec<String>>) -> Result<(), Cause>
 {
-    /* create an auto-restarting capsule */
-    let capid = capsule::create(auto_crash_restart)?;
+    /* create capsule with the given properties */
+    let capid = capsule::create(properties)?;
 
     /* assign one virtual CPU core to the capsule */
     let cpus = 1;
