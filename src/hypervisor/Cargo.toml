@@ -25,9 +25,7 @@ integritychecks = [] # enable to check integrity of per-CPU structures from over
 [dependencies]
 devicetree = { path = "src/devicetree" }
 dmfs = { path = "../mkdmfs/dmfs" }
-# use a patched xmas-elf that recognizes RISC-V ELF binaries
-# see: https://github.com/nrc/xmas-elf/pull/57
-xmas-elf = { git = "https://github.com/diodesign/xmas-elf.git", branch = "patch-1" }
+xmas-elf = { git = "https://github.com/nrc/xmas-elf.git" }
 
 # external dependencies
 [dependencies.hashbrown]
