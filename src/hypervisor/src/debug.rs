@@ -11,15 +11,30 @@
 use super::error::Cause;
 use core::fmt;
 use super::lock::Mutex;
+use alloc::vec::Vec;
 use alloc::string::String;
 use super::hardware;
 use super::service;
 use super::message;
 
+/* here's the logic for the hypervisor's debug queues
+    * all the hvprint macros feed into DEBUG_QUEUE
+    * the hypervisor will select a physical CPU core in between workloads to drain DEBUG_QUEUE
+    * DEBUG_QUEUE will be drained into two channels: DEBUG_LOG, and the system debug output port
+      (typically a serial port) if a user interface capsule isn't running
+    * the user interface capsule will drain DEBUG_LOG
+    * DEBUG_LOG will have a fixed limit to avoid it chewing up too much RAM
+    * if the qemuprint feature is active, the system debug output port will always be the
+      Qemu virt serial port regardless of what's in the host hardware's device tree
+*/
+
+const DEBUG_LOG_MAX_LEN: usize = 64 * 1024; /* 64KB max length for debug log buffer */
+
 lazy_static!
 {
-    pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new("debug output", false);
-    static ref DEBUG_QUEUE: Mutex<String> = Mutex::new("debug queue", String::new());
+    pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new("primary debug lock", false);
+    static ref DEBUG_QUEUE: Mutex<String> = Mutex::new("debug output queue", String::new());
+    static ref DEBUG_LOG: Mutex<Vec<char>> = Mutex::new("debug log buffer", Vec::new());
 }
 
 /* top level debug macros */
@@ -107,53 +122,77 @@ pub static mut CONSOLE: ConsoleWriter = ConsoleWriter {};
 
 impl fmt::Write for ConsoleWriter
 {
-    #[cfg(not(feature = "qemuprint"))]
     fn write_str(&mut self, s: &str) -> core::fmt::Result
     {
         DEBUG_QUEUE.lock().push_str(s);
         Ok(())
     }
-
-    #[cfg(feature = "qemuprint")]
-    fn write_str(&mut self, s: &str) -> core::fmt::Result
-    {
-        /* force debug output to Qemu's serial port. useful for early debugging */
-        for c in s.as_bytes()
-        {
-            /* this is the serial port address in qemu's RISC-V emulation */
-            if cfg!(target_arch == "riscv64") || cfg!(target_arch == "riscv32")
-            {
-                unsafe { *(0x10000000 as *mut u8) = *c };
-            }
-        }
-        Ok(())
-    }
 }
 
-/* if there's no user interface service, attempt to drain the
-   debug queue to the system debug interface */
-#[cfg(not(feature = "qemuprint"))]
+/* drain the debug queue into the debug logging buffer, and if no user interface
+   is available yet, drain the queue into the system debug output port */
 pub fn drain_queue()
 {
-    /* is a user interface available? if so, leave it to check the queue */
-    if service::is_registered(service::ServiceType::ConsoleInterface)
-    {
-        return;
-    }
-
     /* avoid blocking if we can't write at this time */
     if DEBUG_LOCK.is_locked() == false
     {
         let mut debug_lock = DEBUG_LOCK.lock();
         *debug_lock = true;
-
         let mut debug_queue = DEBUG_QUEUE.lock();
-        if hardware::write_debug_string(&debug_queue) == true
+        let mut debug_log = DEBUG_LOG.lock();
+
+        /* copy the debug queue out to the system debug output port ourselves if there's
+           no user interface yet */
+        if service::is_registered(service::ServiceType::ConsoleInterface) == false
         {
-            debug_queue.clear();
+            if cfg!(feature = "qemuprint")
+            {
+                /* force debug output to Qemu's serial port. useful for early debugging */
+                for c in debug_queue.as_bytes()
+                {
+                    /* this is the serial port address in qemu's RISC-V virt emulation */
+                    if cfg!(target_arch = "riscv64") || cfg!(target_arch = "riscv32")
+                    {
+                        unsafe { *(0x10000000 as *mut u8) = *c };
+                    }
+                }
+            }
+            else
+            {
+                /* write out the debug info to the registered output interface.
+                   bail out now if this failed */
+                if hardware::write_debug_string(&debug_queue) == false
+                {
+                    return;
+                }
+            }
+        }
+
+        /* drain the debug queue to the log buffer so it can be fetched later by the
+           user interface service */
+        for c in debug_queue.as_str().chars()
+        {
+            debug_log.push(c);
+        }
+        debug_queue.clear();
+
+        /* truncate the log buffer if it's too long */
+        if debug_log.len() > DEBUG_LOG_MAX_LEN
+        {
+            let to_truncate = debug_log.len() - DEBUG_LOG_MAX_LEN;
+            debug_log.drain(0..to_truncate);
         }
     }
 }
 
-#[cfg(feature = "qemuprint")]
-pub fn drain_queue() { }
+/* pick off the next character in the hypervisor log output buffer,
+   or None if the buffer is empty */
+pub fn get_log_char() -> Option<char>
+{
+    let mut debug_log = DEBUG_LOG.lock();
+    if debug_log.len() > 0
+    {
+        return Some(debug_log.remove(0));
+    }
+    None
+}
