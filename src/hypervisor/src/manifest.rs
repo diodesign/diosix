@@ -135,16 +135,16 @@ pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
         /* create and run a system service */
         ManifestObjectType::SystemService => match create_capsule_from_exec(content, Some(properties))
         {
-            Ok(_) => hvdebug!("Created system service {} ({}) {} bytes",
-                        asset.get_name(), asset.get_description(), asset.get_contents_size()),
+            Ok(cid) => hvdebug!("Created system service {} ({}) {} bytes (capsule {})",
+                        asset.get_name(), asset.get_description(), asset.get_contents_size(), cid),
             Err(_e) => hvdebug!("Failed to create capsule for system service {}: {:?}", asset.get_name(), _e)
         },
 
         /* create an included guest OS (which does not have any special permissions) */
         ManifestObjectType::GuestOS => match create_capsule_from_exec(content, None)
         {
-            Ok(_) => hvdebug!("Created guest OS {} ({}) {} bytes",
-                        asset.get_name(), asset.get_description(), asset.get_contents_size()),
+            Ok(cid) => hvdebug!("Created guest OS {} ({}) {} bytes (capsule {})",
+                        asset.get_name(), asset.get_description(), asset.get_contents_size(), cid),
             Err(_e) => hvdebug!("Failed to create capsule for system service {}: {:?}", asset.get_name(), _e)
         },
 
@@ -157,15 +157,15 @@ pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
 /* create a capsule from an executable in a DMFS image
    => binary = slice containing the executable to parse and load
       properties = permissions and other properties to grant the capsule, or None
-   <= Ok, or an error code
+   <= Ok with capusle ID, or an error code
 */
-fn create_capsule_from_exec(binary: &[u8], properties: Option<Vec<String>>) -> Result<(), Cause>
+fn create_capsule_from_exec(binary: &[u8], properties: Option<Vec<String>>) -> Result<capsule::CapsuleID, Cause>
 {
-    /* create capsule with the given properties */
-    let capid = capsule::create(properties)?;
-
     /* assign one virtual CPU core to the capsule */
     let cpus = 1;
+
+    /* create capsule with the given properties */
+    let capid = capsule::create(properties, cpus)?;
 
     /* reserve 128MB of physical RAM for the capsule */
     let size = 128 * 1024 * 1024;
@@ -179,7 +179,6 @@ fn create_capsule_from_exec(binary: &[u8], properties: Option<Vec<String>>) -> R
     {
         return Err(Cause::BootDeviceTreeBad);
     }
-
     let guest_dtb_base = ram.fill_end(guest_dtb)?;
 
     /* map that physical RAM into the capsule */
@@ -197,5 +196,5 @@ fn create_capsule_from_exec(binary: &[u8], properties: Option<Vec<String>>) -> R
         capsule::add_vcore(capid, vcoreid, entry, guest_dtb_base, Priority::High)?;
     }
 
-    Ok(())
+    Ok(capid)
 }
