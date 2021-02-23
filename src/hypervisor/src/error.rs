@@ -64,7 +64,11 @@ pub enum Cause
     CapsuleCannotRestart,
     CapsuleCantDie,
     CapsuleCantRestart,
-    CapsuleStdinEmpty,
+    CapsuleBufferEmpty,
+    CapsuleBufferWriteFailed,
+    CapsuleMaxVCores,
+    CapsuleBadPermissions,
+    CapsulePropertyNotFound,
 
     /* scheduler and timer */
     SchedNoTimer,
