@@ -27,18 +27,18 @@ include = [ "gooey" ]
 [service.gooey]
 path = "src/services"
 description = "console interface"
-properties = [ "auto_crash_restart", "service_console", "console_write", "console_read" ]
+properties = [ "auto_crash_restart", "service_console", "console_write", "console_read", "hv_log_read" ]
 
 # define each guest that may join us during boot
 [guest.riscv64-linux-busybox]
 path = "boot/guests"
 url = "https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64/supervisor"
-description = "64-bit RISC-V Linux 5.4.58 with Busybox"
+description = "64-bit RISC-V Linux with Busybox"
 
 [guest.riscv32-linux-busybox]
 path = "boot/guests"
 url = "https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv32/supervisor"
-description = "32-bit RISC-V Linux 5.4.61 with Busybox"
+description = "32-bit RISC-V Linux with Busybox"
 
 # select guests to include for a given target
 [target.riscv64gc-unknown-none-elf]
