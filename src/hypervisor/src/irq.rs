@@ -9,6 +9,7 @@ use super::scheduler;
 use super::capsule;
 use super::pcore;
 use super::hardware;
+use super::service;
 use super::error::Cause;
 
 /* platform-specific code must implement all this */
@@ -75,6 +76,8 @@ fn exception(irq: IRQ, context: &mut IRQContext)
             {
                 match action
                 {
+                    syscalls::Action::Yield => scheduler::ping(),
+
                     syscalls::Action::Terminate => if let Err(_e) = capsule::destroy_current()
                     {
                         hvalert!("BUG: Failed to terminate currently running capsule ({:?})", _e);
@@ -105,34 +108,92 @@ fn exception(irq: IRQ, context: &mut IRQContext)
                         hardware::scheduler_timer_at(target);
                     },
 
-                    /* output a character to the user from this capsule */
-                    syscalls::Action::OutputChar(character) => if let Some(capsule_id) = pcore::PhysicalCore::get_capsule_id()
+                    /* output a character to the user from this capsule
+                       when a console_write capsule calls this, it writes to the console.
+                       when a non-console_write capsule calls this, it writes to its console buffer */
+                    syscalls::Action::OutputChar(character) => if let Err(_) = capsule::putc(character)
                     {
-                        /* FIXME: improve this. don't allow the linux kernel to flood us with ^@
-                           for some reason during boot when waiting for the network to reply with DHCP information */
-                        if character != '^' && character != '@'
-                        {
-                            if let Err(_e) = capsule::putc(capsule_id, character)
-                            {
-                                hvdebug!("Couldn't buffer console byte {} from capsule {}: {:?}", character, capsule_id, _e);
-                                syscalls::failed(context, syscalls::ActionResult::Failed);
-                            }
-                        }
+                        syscalls::failed(context, syscalls::ActionResult::Failed);
                     },
 
-                    /* get a character from the user for this capsule */
-                    syscalls::Action::InputChar => if let Some(capsule_id) = pcore::PhysicalCore::get_capsule_id()
+                    /* get a character from the user for this capsule
+                       when a console_read capsule calls this, it reads from the console.
+                       when a non-console_read capsule calls this, it reads from its console buffer */
+                    syscalls::Action::InputChar => match capsule::getc()
                     {
-                        match capsule::getc(capsule_id)
+                        /* Linux expects getc()'s value (a character value, or -1 for none available) in
+                        the error field of the RISC-V SBI and not in the value field. FIXME: Non-portable.
+                        Ref: https://github.com/torvalds/linux/blob/master/arch/riscv/kernel/sbi.c#L92 */
+                        Ok(c) => syscalls::result_as_error(context, c as usize),
+                        Err(Cause::CapsuleBufferEmpty) => syscalls::result_as_error(context, usize::MAX), /* -1 == nothing to read */
+                        Err(_) => syscalls::failed(context, syscalls::ActionResult::Failed)
+                    },
+
+                    /* write a character to the given capsule's console buffer.
+                       only console_write capsules can call this */
+                    syscalls::Action::ConsoleBufferWriteChar(character, capsule_id) => match capsule::console_putc(character, capsule_id)
+                    {
+                        Ok(_) => (),
+                        Err(e) => syscalls::failed(context, match e
                         {
-                            Ok(c) => syscalls::result(context, c as usize),
-                            Err(Cause::CapsuleStdinEmpty) => syscalls::result(context, usize::MAX), /* -1 == nothing to read */
-                            Err(_e) =>
+                            Cause::CapsuleBadPermissions => syscalls::ActionResult::Denied,
+                            _ => syscalls::ActionResult::Failed
+                        })
+                    },
+
+                    /* get the next available character from any capsule's console buffer
+                       only console_read capsules can call this */
+                    syscalls::Action::ConsoleBufferReadChar => match capsule::console_getc()
+                    {
+                        Ok((character, capsule_id)) => syscalls::result_1extra(context, character as usize, capsule_id),
+                        Err(Cause::CapsuleBufferEmpty) => syscalls::result(context, usize::MAX), /* -1 == nothing to read */
+                        Err(e) => syscalls::failed(context, match e
+                        {
+                            Cause::CapsuleBadPermissions => syscalls::ActionResult::Denied,
+                            _ => syscalls::ActionResult::Failed
+                        })
+                    },
+                    
+                    /* get the next available character from the hypervisor's console/log buffer
+                       only console_read capsules can call this */
+                    syscalls::Action::HypervisorBufferReadChar => match capsule::hypervisor_getc()
+                    {
+                        Ok(character) => syscalls::result(context, character as usize),
+                        Err(Cause::CapsuleBufferEmpty) => syscalls::result(context, usize::MAX), /* -1 == nothing to read */
+                        Err(e) => syscalls::failed(context, match e
+                        {
+                            Cause::CapsuleBadPermissions => syscalls::ActionResult::Denied,
+                            _ => syscalls::ActionResult::Failed
+                        })
+                    },
+
+                    /* currently running capsule wants to register itself as a service so it can receive
+                       and proces requests from other capsules */
+                    syscalls::Action::RegisterService(stype_nr) => if let Some(cid) = pcore::PhysicalCore::get_capsule_id()
+                    {
+                        match service::usize_to_service_type(stype_nr)
+                        {
+                            Ok(stype) => match service::register(stype, cid)
                             {
-                                hvdebug!("Couldn't read console buffer from capsule {}: {:?}", capsule_id, _e);
-                                syscalls::failed(context, syscalls::ActionResult::Failed);
-                            }
+                                Ok(_) => (),
+                                Err(e) => syscalls::failed(context, match e
+                                {
+                                    Cause::CapsuleBadPermissions => syscalls::ActionResult::Denied,
+                                    _ => syscalls::ActionResult::Failed
+                                })
+                            },
+                            Err(e) => syscalls::failed(context, match e
+                            {
+                                Cause::ServiceNotFound => syscalls::ActionResult::BadParams,
+                                _ => syscalls::ActionResult::Failed
+                            })
                         }
+                    }
+                    else
+                    {
+                        /* how is this possible? can't find capsule running on this physical core
+                           but we're going to try returning to it anyway? */
+                        syscalls::failed(context, syscalls::ActionResult::Failed);
                     },
 
                     _ => if let Some(c) = pcore::PhysicalCore::get_capsule_id()
