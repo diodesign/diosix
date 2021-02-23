@@ -11,8 +11,8 @@ use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::{Occupied, Vacant};
 use hashbrown::hash_set::HashSet;
 use alloc::vec::Vec;
-use alloc::string::String;
-use platform::cpu::Entry;
+use alloc::string::{String, ToString};
+use platform::cpu::{Entry, CPUcount};
 use platform::physmem::PhysMemBase;
 use super::error::Cause;
 use super::physmem;
@@ -21,6 +21,7 @@ use super::vcore::{self, Priority, VirtualCoreID};
 use super::service::{self, ServiceType, SelectService};
 use super::pcore;
 use super::hardware;
+use super::debug;
 
 pub type CapsuleID = usize;
 
@@ -98,12 +99,13 @@ pub struct VcoreInit
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
-enum CapsuleProperty
+pub enum CapsuleProperty
 {
     AutoCrashRestart,   /* restart this capsule when it crashes */
     ServiceConsole,     /* allow capsule to handle abstracted system console */
     ConsoleWrite,       /* allow capsule to write out to the console */
-    ConsoleRead         /* allow capsule to read the console */
+    ConsoleRead,        /* allow capsule to read the console */
+    HvLogRead           /* allow capsule to read the hypervisor's debug log */
 }
 
 impl CapsuleProperty
@@ -140,6 +142,10 @@ impl CapsuleProperty
         {
             return Some(CapsuleProperty::ConsoleRead);
         }
+        if property.eq_ignore_ascii_case("hv_log_read")
+        {
+            return Some(CapsuleProperty::HvLogRead);
+        }
 
         None
     }
@@ -149,6 +155,7 @@ struct Capsule
 {
     state: CapsuleState,                     /* define whether this capsule is alive, dying or restarting */
     properties: HashSet<CapsuleProperty>,    /* set of properties and rights assigned to this capsule */
+    max_vpcus: CPUcount,
     vcores: HashSet<VirtualCoreID>,          /* set of virtual core IDs assigned to this capsule */
     init: HashMap<VirtualCoreID, VcoreInit>, /* map of vcore IDs to vcore initialization paramters */
     memory: Vec<Mapping>,                    /* map capsule supervisor virtual addresses to host physical addresses */
@@ -158,8 +165,9 @@ impl Capsule
 {
     /* create a new empty capsule using the current capsule on this physical CPU core.
     => properties = properties granted to this capsules, or None
+       max_vpcus = maximum virtual CPU cores for this capsule
     <= capsule object, or error code */
-    pub fn new(property_strings: Option<Vec<String>>) -> Result<Capsule, Cause>
+    pub fn new(property_strings: Option<Vec<String>>, max_vpcus: CPUcount) -> Result<Capsule, Cause>
     {
         /* turn a possible list of property strings into list of official properties */
         let mut properties = HashSet::new();
@@ -178,6 +186,7 @@ impl Capsule
         {
             state: CapsuleState::Valid,
             properties,
+            max_vpcus,
             vcores: HashSet::new(),
             init: HashMap::new(),
             memory: Vec::new()
@@ -199,10 +208,19 @@ impl Capsule
         self.properties.contains(&property)
     }
 
-    /* add a virtual core ID to the capsule */
-    pub fn add_vcore(&mut self, id: VirtualCoreID)
+    /* return the maximum number of virtual cores allowed by this capsule */
+    pub fn get_max_vcores(&self) -> CPUcount { self.max_vpcus }
+
+    /* add a virtual core ID to the capsule. Return error code on failure */
+    pub fn add_vcore(&mut self, id: VirtualCoreID) -> Result<(), Cause>
     {
-        self.vcores.insert(id);
+        if self.vcores.len() < self.max_vpcus
+        {
+            self.vcores.insert(id);
+            return Ok(());
+        }
+        
+        Err(Cause::CapsuleMaxVCores)
     }
 
     /* add a virtual core's initialization parameters to the capsule */
@@ -309,13 +327,14 @@ impl Drop for Capsule
 */
 pub fn add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dtb: PhysMemBase, prio: Priority) -> Result<(), Cause>
 {
-    vcore::VirtualCore::create(cid, vid, entry, dtb, prio)?;
     match CAPSULES.lock().get_mut(&cid)
     {
         Some(c) =>
         {
+            vcore::VirtualCore::create(cid, vid, entry, dtb, prio)?;
+
             /* register the vcore ID and stash its init params */
-            c.add_vcore(vid);
+            c.add_vcore(vid)?;
             c.add_init(vid, entry, dtb, prio);
         },
         None => return Err(Cause::CapsuleBadID)
@@ -327,8 +346,9 @@ pub fn add_vcore(cid: CapsuleID, vid: VirtualCoreID, entry: Entry, dtb: PhysMemB
    Once created, it needs to be given a supervisor image, at least.
    then it is ready to be scheduled by assigning it virtual CPU cores.
    => properties = array of properties to apply to this capsule, or None
+      max_vcores = maximum number virtual cores in this capsule
    <= CapsuleID for this new capsule, or an error code */
-pub fn create(properties: Option<Vec<String>>) -> Result<CapsuleID, Cause>
+pub fn create(properties: Option<Vec<String>>, max_vcores: CPUcount) -> Result<CapsuleID, Cause>
 {
     /* repeatedly try to generate an available ID */
     loop
@@ -347,7 +367,7 @@ pub fn create(properties: Option<Vec<String>>) -> Result<CapsuleID, Cause>
             Vacant(_) =>
             {
                 /* insert our new capsule */
-                capsules.insert(new_id, Capsule::new(properties)?);
+                capsules.insert(new_id, Capsule::new(properties, max_vcores)?);
 
                 /* we're all done here */
                 return Ok(new_id);
@@ -487,6 +507,16 @@ pub fn restart_current() -> Result<(), Cause>
     restart(cid, vid)
 }
 
+/* return the given capsule's maximum number of virtual cores, identified by ID, or None for not found */
+pub fn get_max_vcores(cid: CapsuleID) -> Result<CPUcount, Cause>
+{
+    match CAPSULES.lock().entry(cid)
+    {
+        Occupied(capsule) => Ok(capsule.get().get_max_vcores()),
+        Vacant(_) => Err(Cause::CapsuleBadID)
+    }
+}
+
 /* return the state of the given capsule, identified by ID, or None for not found */
 pub fn get_state(cid: CapsuleID) -> Option<CapsuleState>
 {
@@ -508,21 +538,50 @@ pub fn get_current_state() -> Option<CapsuleState>
     None
 }
 
-/* Return Some(true) if capsule currently running on this physical core
-   is allowed to restart if it's crashed. Some(false) if not, or None
-   if this physical core isn't running a capsule */
-pub fn is_current_autorestart() -> Option<bool>
+/* if the currently running capsule has the given property then return its
+   capsule ID. If not, return an error code. this can be used to gate permissions.
+   only gain the ID of a capsule to use/manipulate if it has the given property */
+pub fn get_capsule_id_if_property(property: CapsuleProperty) -> Result<CapsuleID, Cause>
 {
     let cid = match pcore::PhysicalCore::get_capsule_id()
     {
         Some(id) => id,
-        None => return None
+        None => return Err(Cause::CapsuleBadID)
     };
 
     match CAPSULES.lock().entry(cid)
     {
-        Occupied(capsule) => return Some(capsule.get().has_property(CapsuleProperty::AutoCrashRestart)),
-        Vacant(_) => None
+        Occupied(capsule) => match capsule.get().has_property(property)
+        {
+            true => Ok(cid),
+            false => Err(Cause::CapsulePropertyNotFound)
+        },
+        Vacant(_) => Err(Cause::CapsuleBadID)
+    }
+}
+
+/* return Ok() if currently running capsule has the given property, or an error code.
+   useful for gating access by calling current_has_property(...)?; beforehand */
+pub fn current_has_property(property: CapsuleProperty) -> Result<(), Cause>
+{
+    /* discard cid */
+    match get_capsule_id_if_property(property)
+    {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e)
+    }
+}
+
+/* return Some(true) if capsule currently running on this physical core
+   is allowed to restart if it's crashed. Some(false) if not, or None
+   if this physical core isn't running a capsule */
+pub fn is_current_autorestart() -> Option<bool>
+{
+    match get_capsule_id_if_property(CapsuleProperty::AutoCrashRestart)
+    {
+        Ok(_) => Some(true),
+        Err(Cause::CapsulePropertyNotFound) => Some(false),
+        Err(_) => None
     }
 }
 
@@ -541,12 +600,18 @@ pub fn is_service_allowed(cid: CapsuleID, stype: ServiceType) -> Result<bool, Ca
     }
 }
 
-/* write a character to the user as the given capsule.
+/* write a character to the user as the currently running capsule.
    this will either be buffered and accessed later by the user interface
    to display to the user, or this is the user interface capsule
    and we'll pass its output onto the hardware */
-pub fn putc(cid: CapsuleID, character: char) -> Result<(), Cause>
+pub fn putc(character: char) -> Result<(), Cause>
 {
+    let cid = match pcore::PhysicalCore::get_capsule_id()
+    {
+        Some(c) => c,
+        None => return Err(Cause::CapsuleBadID)
+    };
+
     /* find the capsule we're going to write into */
     match CAPSULES.lock().get_mut(&cid)
     {
@@ -555,7 +620,10 @@ pub fn putc(cid: CapsuleID, character: char) -> Result<(), Cause>
             /* if this capsule can write straight to the hardware, then use that */
             if (*capsule).has_property(CapsuleProperty::ConsoleWrite)
             {
-                hardware::write_debug_string(format!("{}", character).as_str());
+                if hardware::write_debug_string(character.to_string().as_str()) == false
+                {
+                    return Err(Cause::CapsuleBufferWriteFailed);
+                }
             }
             else
             {
@@ -579,15 +647,21 @@ pub fn putc(cid: CapsuleID, character: char) -> Result<(), Cause>
     Ok(())
 }
 
-/* read a character from the user for the given capsule.
+/* read a character from the user for the currently running capsule.
    this will either read from the capsule's buffer that's filled
    by the user interface capsule, or this is the user interface
    capsule and we'll read the input from the hardware.
    this call does not block
    <= returns read character or an error code
 */
-pub fn getc(cid: CapsuleID) -> Result<char, Cause>
+pub fn getc() -> Result<char, Cause>
 {
+    let cid = match pcore::PhysicalCore::get_capsule_id()
+    {
+        Some(c) => c,
+        None => return Err(Cause::CapsuleBadID)
+    };
+
     /* find the capsule we're trying to read from */
     match CAPSULES.lock().get_mut(&cid)
     {
@@ -599,25 +673,86 @@ pub fn getc(cid: CapsuleID) -> Result<char, Cause>
                 return match hardware::read_debug_char()
                 {
                     Some(c) => Ok(c),
-                    None => Err(Cause::CapsuleStdinEmpty)
+                    None => Err(Cause::CapsuleBufferEmpty)
                 };
             }
             else
             {
                 /* read from the capsule's buffer, or give up */
                 let mut stdin = STDIN.lock();
-                if let Some(entry) = stdin.get_mut(&cid)
+                if let Occupied(mut entry) = stdin.entry(cid)
                 {
-                    if entry.len() > 0
+                    let buffer = entry.get_mut();
+                    if buffer.len() > 0
                     {
-                        return Ok(entry.remove(0));
+                        return Ok(buffer.remove(0));
                     }
                 }
-                
-                return Err(Cause::CapsuleStdinEmpty);
+                return Err(Cause::CapsuleBufferEmpty);
             }
         },
         None => return Err(Cause::CapsuleBadID)
+    }
+}
+
+/* write the given character to the given capsule's input buffer.
+    *** the currently running capsule must have the console_write property ***
+*/
+pub fn console_putc(character: char, cid: CapsuleID) -> Result<(), Cause>
+{
+    current_has_property(CapsuleProperty::ConsoleWrite)?;
+
+    /* make sure the target capsule exists */
+    match CAPSULES.lock().entry(cid)
+    {
+        Occupied(_) =>
+        {
+            /* insert character into capsule's stdin buffer */
+            let mut stdin = STDIN.lock();
+            match stdin.entry(cid)
+            {
+                Occupied(mut array) => array.get_mut().push(character),
+                Vacant(fresh) =>
+                {
+                    let mut array = Vec::new();
+                    array.push(character);
+                    fresh.insert(array);
+                }
+            }
+            Ok(())
+        },
+        Vacant(_) => Err(Cause::CapsuleBadID)
+    }
+}
+
+/* get the next available character from the capsules' output buffers
+   *** the currently running capsule must have the console_read property ***
+   <= the capsule ID and character read from its buffer, or an error
+*/
+pub fn console_getc() -> Result<(char, CapsuleID), Cause>
+{
+    current_has_property(CapsuleProperty::ConsoleRead)?;
+
+    /* loop through capsule IDs in stdout hast table in search of a character */
+    for (cid, array) in STDOUT.lock().iter_mut()
+    {
+        if array.len() > 0
+        {
+            return Ok((array.remove(0), *cid));
+        }
+    }
+    Err(Cause::CapsuleBufferEmpty)
+}
+
+/* return a character from the hypervisor's log output, or an error.
+   *** the currently running capsule must have the hv_log_read property *** */
+pub fn hypervisor_getc() -> Result<char, Cause>
+{
+    current_has_property(CapsuleProperty::HvLogRead)?;
+    match debug::get_log_char()
+    {
+        Some(c) => Ok(c),
+        None => Err(Cause::CapsuleBufferEmpty)
     }
 }
 
