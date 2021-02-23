@@ -6,7 +6,7 @@
  */
 
 use super::error::Cause;
-use super::capsule::CapsuleID;
+use super::capsule::{self, CapsuleID};
 use super::scheduler;
 use platform::cpu::{SupervisorState, Entry};
 use platform::physmem::PhysMemBase;
@@ -53,6 +53,8 @@ impl VirtualCore
        <= OK for success, or error code */
     pub fn create(capsuleid: CapsuleID, core: VirtualCoreID, entry: Entry, dtb: PhysMemBase, priority: Priority) -> Result<(), Cause>
     {
+        let max_vcores = capsule::get_max_vcores(capsuleid)?;
+        
         let new_vcore = VirtualCore
         {
             id: VirtualCoreCanonicalID
@@ -61,7 +63,7 @@ impl VirtualCore
                 vcoreid: core
             },
             priority,
-            state: platform::cpu::init_supervisor_state(core, entry, dtb),
+            state: platform::cpu::init_supervisor_state(core, max_vcores, entry, dtb),
             timer_irq_at: None
         };
 
