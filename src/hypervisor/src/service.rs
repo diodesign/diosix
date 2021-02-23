@@ -20,6 +20,15 @@ pub enum ServiceType
     ConsoleInterface = 0 /* act as the console interface manager */
 }
 
+pub fn usize_to_service_type(stype: usize) -> Result<ServiceType, Cause>
+{
+    match stype
+    {
+        0 => Ok(ServiceType::ConsoleInterface),
+        _ => Err(Cause::ServiceNotFound)
+    }
+}
+
 /* select either a particular service or all services */
 pub enum SelectService
 {
