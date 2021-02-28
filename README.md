@@ -4,7 +4,7 @@ This `binaries` branch contains a collection of files that, while related to [Di
 
 ### Buildroot-built guest binaries
 
-The `buildroot-guests` directory contains one or more Busybox-based Linux guest operating systems built using [Buildroot](https://buildroot.org). These are self-contained binaries featuring a kernel and user-space programs in an initrd file-system that are unpacked into RAM and run by the hypervisor in a virtualized environment.
+The [`buildroot-guests`](buildroot-guests) directory contains one or more Busybox-based Linux guest operating systems built using [Buildroot](https://buildroot.org). These are self-contained binaries featuring a kernel and user-space programs in an initrd file-system that are unpacked into RAM and run by the hypervisor in a virtualized environment.
 
 To create a guest binary yourself, follow these steps on a Linux host system to configure and run Buildroot for the desired binary:
 1. Check out the latest Buildroot source from its [Git repository](https://git.buildroot.net/buildroot) and enter its directory using:
@@ -14,7 +14,7 @@ cd buildroot
 ```
 2. Copy the configuration file for the desired binary to `.config` inside the buildroot source directory. The configuration file is specified below for each binary file, and it is relative to the root directory of the `main` branch of the Diosix project. For example, to copy the configuration file for the binary `riscv64-linux-busybox`, use:
 ```
-cp /path/to/diosix/boot/buildroot/riscv64.config .config
+cp /path/to/diosix/boot/buildroot/riscv64-linux-busybox.config .config
 ```
 3. Run `make` to start the build. When it is complete, the file `output/images/vmlinux` will be the guest binary that can be used with Diosix. Copy it to the `boot/guests` directory in the Diosix project tree. To continue with the example of `riscv64-linux-busybox`, use:
 ```
@@ -25,7 +25,8 @@ Below is a table of the available guest binaries along with a description and co
 
 | Filename | Description | Built  | Configuration |
 |----------|-------------|--------|---------------|
-| riscv64-linux-busybox | RV64G (lp64d) Linux kernel version 5.10.13 with BusyBox 1.33.0 | Feb 21, 2021 | `boot/buildroot/riscv64.config` |
+| [riscv64-linux-busybox-micropython](buildroot-guests/riscv64-linux-busybox-micropython) | RV64G (lp64d) Linux kernel version 5.10.13 with BusyBox 1.33.0, Micropython 1.13, zsh 5.8, less | Feb 28, 2021 | `boot/buildroot/riscv64-linux-busybox-micropython.config` |
+| [riscv64-linux-busybox](buildroot-guests/riscv64-linux-busybox) | RV64G (lp64d) Linux kernel version 5.10.13 with BusyBox 1.33.0 | Feb 21, 2021 | `boot/buildroot/riscv64-linux-busybox.config` |
 
 A guest binary contains third-party free software, listed below, built from unmodified source code using Buildroot. If you wish to obtain the source for these components, please follow the links in the table.
 
@@ -37,6 +38,6 @@ A guest binary contains third-party free software, listed below, built from unmo
 
 ### Presentations
 
-In January 2021, Diosix developer Chris Williams gave a 30-minute overview of the project to the British Computer Society's Open Source Specialists group. The slides for this presentation are in `presentations/BCS-OpenSource-London-Jan-2021.pdf`, and you can watch a recording of the talk on YouTube by clicking on the preview below.
+In January 2021, Diosix developer Chris Williams gave a 30-minute overview of the project to the British Computer Society's Open Source Specialists group. The slides for this presentation are in [`presentations/BCS-OpenSource-London-Jan-2021.pdf`](presentations/BCS-OpenSource-London-Jan-2021.pdf), and you can watch a recording of the talk on YouTube by clicking on the preview below.
 
 [![A slide from the BCS OSS group talk](https://img.youtube.com/vi/Czd9AspXWUc/0.jpg)](https://www.youtube.com/watch?v=Czd9AspXWUc)
