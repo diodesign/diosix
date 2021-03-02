@@ -1,6 +1,6 @@
 [package]
 name = "hypervisor"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["Chris Williams <diosix@tuta.io>"]
 license = "MIT"
 build = "../mason/build.rs"
@@ -37,9 +37,6 @@ version = "1.4.0"
 features = [ "spin_no_std" ]
 
 # supported build targets - don't forget to update .cargo with details for the linker and runner when adding new ports
-[target.riscv32imac-unknown-none-elf.dependencies]
-platform = { path = "src/platform-riscv" }
-
 [target.riscv64imac-unknown-none-elf.dependencies]
 platform = { path = "src/platform-riscv" }
 
