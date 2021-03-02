@@ -260,7 +260,7 @@ pub fn context_switch(next: VirtualCore)
     /* find what this physical core was running, if anything */
     match VCORES.lock().remove(&pcore_id)
     {
-        Some(current_vcore) =>
+        Some(mut current_vcore) =>
         {
             let current_capsule = current_vcore.get_capsule_id();
 
@@ -276,7 +276,9 @@ pub fn context_switch(next: VirtualCore)
                on the waiting list. if it is doomed, drop it */
             if PhysicalCore::this().is_vcore_doomed() == false
             {
-                platform::cpu::save_supervisor_state(current_vcore.state_as_ref());
+                /* handle core and FP registers separately to keep rust borrow checker happy with current_vcore */
+                platform::cpu::save_supervisor_cpu_state(current_vcore.state_as_mut_ref());
+                platform::cpu::save_supervisor_fp_state(current_vcore.fp_state_as_mut_ref());
                 PhysicalCore::queue(current_vcore);
             }
             else
@@ -294,8 +296,13 @@ pub fn context_switch(next: VirtualCore)
         }
     }
 
-    /* prepare next virtual core to run when we leave this IRQ context */
-    platform::cpu::load_supervisor_state(next.state_as_ref());
+    /* prepare next virtual core to run when we leave this IRQ context.
+       this takes care of core registers and FP registers in one */
+    platform::cpu::load_supervisor_cpu_fp_state
+    (
+        next.state_as_ref(),
+        next.fp_state_as_ref()
+    );
 
     /* link next virtual core and capsule to this physical CPU */
     PCORES.lock().insert(VirtualCoreCanonicalID
