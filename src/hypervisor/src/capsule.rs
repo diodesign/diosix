@@ -407,6 +407,7 @@ fn destroy(cid: CapsuleID, vid: VirtualCoreID) -> Result<(), Cause>
                     from the global hash table, which should
                     trigger the final teardown via drop */
                     lock.remove(&cid);
+                    hvdebug!("Completed termination of capsule {}", cid);
                 }
 
                 return Ok(());
