@@ -1,7 +1,7 @@
 #
 # diosix hypervisor platform-specific linker settings
 #
-# (c) Chris Williams, 2019-2020.
+# (c) Chris Williams, 2019-2021.
 # See LICENSE for usage and copying.
 #
 
@@ -10,12 +10,6 @@
 #
 [build]
 target = "riscv64gc-unknown-none-elf"
-
-# Find the linker for 32-bit RISC-V (IMAC) targets
-[target.riscv32imac-unknown-none-elf]
-rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform-riscv/link.ld", "-C", "link-arg=--no-eh-frame-hdr" ]
-linker = "riscv32-linux-gnu-ld"
-ar = "riscv32-linux-gnu-ar"
 
 # Find the linker for 64-bit RISC-V (IMAC) targets
 [target.riscv64imac-unknown-none-elf]
