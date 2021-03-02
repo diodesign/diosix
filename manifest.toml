@@ -30,22 +30,21 @@ description = "console interface"
 properties = [ "auto_crash_restart", "service_console", "console_write", "console_read", "hv_log_read" ]
 
 # define each guest that may join us during boot
+# Mildly useful Linux with busybox, micropython, zsh, and less
+[guest.riscv64-linux-busybox-micropython]
+path = "boot/guests"
+url = "https://github.com/diodesign/diosix/raw/binaries/buildroot-guests/riscv64-linux-busybox-micropython"
+description = "64-bit RISC-V Linux with Busybox, Micropython, zsh, less"
+
+# bare-bones Linux and Busybox
 [guest.riscv64-linux-busybox]
 path = "boot/guests"
-url = "https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv64/supervisor"
+url = "https://github.com/diodesign/diosix/raw/binaries/buildroot-guests/riscv64-linux-busybox"
 description = "64-bit RISC-V Linux with Busybox"
-
-[guest.riscv32-linux-busybox]
-path = "boot/guests"
-url = "https://github.com/diodesign/diosix/raw/boot-binaries/boot/binaries/riscv32/supervisor"
-description = "32-bit RISC-V Linux with Busybox"
 
 # select guests to include for a given target
 [target.riscv64gc-unknown-none-elf]
-guests = [ "riscv64-linux-busybox" ]
+guests = [ "riscv64-linux-busybox-micropython" ]
 
 [target.riscv64imac-unknown-none-elf]
-guests = [ "riscv64-linux-busybox" ]
-
-[target.riscv32imac-unknown-none-elf]
-guests = [ "riscv32-linux-busybox" ]
+guests = [ "riscv64-linux-busybox-micropython" ]
