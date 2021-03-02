@@ -151,7 +151,7 @@ pub fn drain_queue()
                 for c in debug_queue.as_bytes()
                 {
                     /* this is the serial port address in qemu's RISC-V virt emulation */
-                    if cfg!(target_arch = "riscv64") || cfg!(target_arch = "riscv32")
+                    if cfg!(target_arch = "riscv64")
                     {
                         unsafe { *(0x10000000 as *mut u8) = *c };
                     }
