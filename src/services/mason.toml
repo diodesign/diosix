@@ -6,9 +6,6 @@
 # asm_dirs is a colon-separated list of directories to scan
 # for assembly code to build and link to the hypervisor's executable
 
-[target.riscv32imac-unknown-none-elf]
-asm_dirs = [ "src/supervisor-riscv/asm" ]
-
 [target.riscv64imac-unknown-none-elf]
 asm_dirs = [ "src/supervisor-riscv/asm" ]
 

@@ -24,9 +24,6 @@ features = [ "spin_no_std" ]
 [dependencies.spin]
 version = "0.7.0"
 
-[target.riscv32imac-unknown-none-elf.dependencies]
-supervisor = { path = "src/supervisor-riscv" }
-
 [target.riscv64imac-unknown-none-elf.dependencies]
 supervisor = { path = "src/supervisor-riscv" }
 

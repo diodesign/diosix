@@ -11,17 +11,6 @@
 [build]
 target = "riscv64gc-unknown-none-elf"
 
-# Find the linker for 32-bit RISC-V (IMAC) targets
-[target.riscv32imac-unknown-none-elf]
-rustflags = [
-    "-Z", "pre-link-arg=-nostartfiles",
-    "-C", "link-arg=-Tsrc/supervisor-riscv/link.ld",
-    "-C", "link-arg=-pie",
-    "-C", "link-arg=--no-dynamic-linker",
-    "-C", "relocation-model=pic" ]
-linker = "riscv32-linux-gnu-ld"
-ar = "riscv32-linux-gnu-ar"
-
 # Find the linker for 64-bit RISC-V (IMAC) targets
 [target.riscv64imac-unknown-none-elf]
 rustflags = [

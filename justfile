@@ -14,10 +14,10 @@
 # just test
 # 
 # Set target to the architecture you want to build for. Eg:
-# just target=riscv32imac-unknown-none-elf
+# just target=riscv64imac-unknown-none-elf
 #
 # Set emubin to the Qemu system emulator binary you want to use to run diosix, Eg:
-# just emubin=qemu-system-riscv32
+# just emubin=qemu-system-riscv64
 #
 # Set quality to release or debug to build a release or debug-grade build respectively. Eg:
 # just quality=release
