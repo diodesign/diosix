@@ -8,7 +8,7 @@
 use super::error::Cause;
 use super::capsule::{self, CapsuleID};
 use super::scheduler;
-use platform::cpu::{SupervisorState, Entry};
+use platform::cpu::{SupervisorState, SupervisorFPState, Entry};
 use platform::physmem::PhysMemBase;
 use platform::timer;
 
@@ -38,12 +38,14 @@ pub struct VirtualCore
     id: VirtualCoreCanonicalID,
     priority: Priority,
     state: SupervisorState,
+    fp_state: SupervisorFPState,
     timer_irq_at: Option<timer::TimerValue>
 }
 
 impl VirtualCore
 {
-    /* create a virtual CPU core for a supervisor capsule
+    /* create a virtual CPU core for a supervisor capsule. this virtual CPU is derived from
+       the physical CPU core we're running on. 
        => capsule = ID of the capsule
           core = virtual core ID within the capsule
           entry = pointer to where to begin execution
@@ -63,7 +65,8 @@ impl VirtualCore
                 vcoreid: core
             },
             priority,
-            state: platform::cpu::init_supervisor_state(core, max_vcores, entry, dtb),
+            state: platform::cpu::init_supervisor_cpu_state(core, max_vcores, entry, dtb),
+            fp_state: platform::cpu::init_supervisor_fp_state(),
             timer_irq_at: None
         };
 
@@ -73,11 +76,17 @@ impl VirtualCore
     }
 
     /* return reference to virtual CPU core's physical CPU state */
-    pub fn state_as_ref(&self) -> &SupervisorState
-    {
-        &self.state
-    }
-    
+    pub fn state_as_ref(&self) -> &SupervisorState { &self.state }
+
+    /* return reference to virtual CPU core's floating-point register state */
+    pub fn fp_state_as_ref(&self) -> &SupervisorFPState { &self.fp_state }
+
+    /* return mutable reference to virtual CPU core's physical CPU state */
+    pub fn state_as_mut_ref(&mut self) -> &mut SupervisorState { &mut self.state }
+
+    /* return mutable reference to virtual CPU core's floating-point register state */
+    pub fn fp_state_as_mut_ref(&mut self) -> &mut SupervisorFPState { &mut self.fp_state }
+
     /* return this virtual core's ID within its capsule */
     pub fn get_id(&self) -> VirtualCoreID { self.id.vcoreid }
 
