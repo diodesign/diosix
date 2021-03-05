@@ -7,13 +7,13 @@ This `binaries` branch contains a collection of files that, while related to [Di
 The [`buildroot-guests`](buildroot-guests) directory contains one or more Busybox-based Linux guest operating systems built using [Buildroot](https://buildroot.org). These are self-contained binaries featuring a kernel and user-space programs in an initrd file-system that are unpacked into RAM and run by the hypervisor in a virtualized environment.
 
 To create a guest binary yourself, follow these steps on a Linux host system to configure and run Buildroot for the desired binary:
-1. Check out the latest Buildroot source from its [Git repository](https://git.buildroot.net/buildroot) and enter its directory using:
+1. Ensure you have installed the [necessary packages](https://buildroot.org/downloads/manual/manual.html#requirement) to build Buildroot.
+2. Check out the latest Buildroot source from its [Git repository](https://git.buildroot.net/buildroot) and enter its directory using:
 ```
 git clone https://git.busybox.net/buildroot
 cd buildroot
 ```
-2. Ensure you have installed the [necessary packages](https://buildroot.org/downloads/manual/manual.html#requirement) to build Buildroot.
-3. Copy a configuration file for the desired binary to `.config` inside the buildroot source directory. The configuration file is specified below for each binary file, and it is relative to the root directory of the `main` branch of the Diosix project. For example, to copy the configuration file for the binary `riscv64-linux-busybox` to the buildroot source directory, use:
+3. Copy a configuration file for the desired guest binary to `.config` inside the buildroot source directory. The configuration file is specified below for each binary file, and its file path is relative to the root directory of the `main` branch of the Diosix project. For example, to copy the configuration file for the binary `riscv64-linux-busybox` to the buildroot source directory, use:
 ```
 cp /path/to/diosix/boot/buildroot/riscv64-linux-busybox.config .config
 ```
