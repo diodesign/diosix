@@ -12,7 +12,7 @@ To create a guest binary yourself, follow these steps on a Linux host system to 
 git clone https://git.busybox.net/buildroot
 cd buildroot
 ```
-2. Copy the configuration file for the desired binary to `.config` inside the buildroot source directory. The configuration file is specified below for each binary file, and it is relative to the root directory of the `main` branch of the Diosix project. For example, to copy the configuration file for the binary `riscv64-linux-busybox`, use:
+2. Copy a configuration file for the desired binary to `.config` inside the buildroot source directory. The configuration file is specified below for each binary file, and it is relative to the root directory of the `main` branch of the Diosix project. For example, to copy the configuration file for the binary `riscv64-linux-busybox` to the buildroot source directory, use:
 ```
 cp /path/to/diosix/boot/buildroot/riscv64-linux-busybox.config .config
 ```
