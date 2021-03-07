@@ -1,5 +1,64 @@
-## Reporting security issues
+# Reporting security issues
 
-The [Diosix](https://diosix.org) project takes security bugs extremely seriously. Your efforts to responsibly disclose your findings are very much appreciated, and every effort will be made to acknowledge your contributions. To privately report a security issue, please send an [email](mailto:diosix@tuta.io) with further details, and include the word "SECURITY" in the subject line.
+The [Diosix](https://diosix.org) project takes security bugs extremely seriously. Your efforts to responsibly disclose your findings are very much appreciated, and every effort will be made to acknowledge your contributions. To privately report a security vulnerability, email [security@diosix.org](mailto:security@diosix.org) with further details.
 
-The project's maintainers will send a response as soon as possible indicating the next steps in handling your report. After the initial reply to your report, the team will keep you informed of the project's progress toward a fix and full announcement, and may ask for additional information or guidance.
+The project's maintainers will send a response as soon as possible indicating the next steps in handling your report. After the initial reply to your report, the team will keep you informed of the project's progress toward a fix and public advisory, and may ask for additional information or guidance.
+
+# PGP public key
+
+If you wish to use PGP to securely disclose a vulnerability, use the public key below. This key expires March 6, 2023.
+
+```
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+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
+rh+XUjjZcrUAWyTBdZnTp70PccFe
+=CPPb
+-----END PGP PUBLIC KEY BLOCK-----
+```
