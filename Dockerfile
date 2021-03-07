@@ -23,7 +23,7 @@ WORKDIR /build
 
 # Install necessary bits and pieces of Rust and just, and then build diosix
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y \
-    && source $HOME/.cargo/env \
+    && . $HOME/.cargo/env \
     && cargo install --force just \
     && cd diosix \
     && just build
