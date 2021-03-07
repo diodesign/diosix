@@ -9,6 +9,7 @@
 FROM debian:unstable
 
 # Bring in the necessary tools
+RUN apt update
 RUN apt -y install python3 python3-flask build-essential pkg-config git curl binutils-riscv64-linux-gnu qemu-system-misc libssl-dev
 
 # Bring in the environment runtime script
