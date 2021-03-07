@@ -16,16 +16,15 @@ RUN apt -y install python3 python3-flask build-essential pkg-config git curl bin
 COPY ./docker/entrypoint.py /
 
 # Bring in the project source code
-COPY . /build
+COPY . /diosix
 
 # Define where we'll work
-WORKDIR /build
+WORKDIR /diosix
 
 # Install necessary bits and pieces of Rust and just, and then build diosix
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y \
     && . $HOME/.cargo/env \
     && cargo install --force just \
-    && cd diosix \
     && just build
 
 # Define the environment in which we'll run commands
