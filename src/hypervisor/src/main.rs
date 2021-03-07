@@ -42,11 +42,6 @@ extern crate devicetree;
 /* needed for parsing diosix manifest file-system (DMFS) images bundled with the hypervisor */
 extern crate dmfs;
 
-/* pass the feature qemudebug to be able to write direct to the emulator's stdout
-via the macro qemuprint::println!() */
-#[cfg(feature = "qemudebug")]
-extern crate qemuprint;
-
 /* needed for lazyily-allocated static variables */
 #[macro_use]
 extern crate lazy_static;
