@@ -1,4 +1,4 @@
-[![Build](https://github.com/diodesign/diosix/workflows/Build/badge.svg)](https://github.com/diodesign/diosix/actions?query=workflow%3A%22Build%22) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/master/LICENSE) [![Language: Rust](https://img.shields.io/badge/language-rust-yellow.svg)](https://www.rust-lang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
+[![Build](https://github.com/diodesign/diosix/workflows/Build/badge.svg)](https://github.com/diodesign/diosix/actions?query=workflow%3A%22Build%22) [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/main/LICENSE) [![Language: Rust](https://img.shields.io/badge/language-rust-yellow.svg)](https://www.rust-lang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
 
 ## Welcome guide
 
@@ -103,6 +103,6 @@ Please observe the project's [code of conduct](docs/conduct.md) when participati
 
 ## Copyright, distribution, and license <a name="copyright"></a>
 
-Copyright &copy; Chris Williams, 2018-2021. See [LICENSE](https://github.com/diodesign/diosix/blob/master/LICENSE) for distribution and use of source code, binaries, and documentation.
+Copyright &copy; Chris Williams, 2018-2021. See [LICENSE](https://github.com/diodesign/diosix/blob/main/LICENSE) for distribution and use of source code, binaries, and documentation.
 
-More information can be found [here](https://github.com/diodesign/diosix/blob/binaries/README.md) on the contents of the guest OS binaries used by Diosix. The home page [illustration](docs/logo.png) is a combination of artwork provided by [Katerina Limpitsouni](https://undraw.co/license) and [RISC-V International](https://riscv.org/about/risc-v-branding-guidelines/).
+More information can be found [here](https://github.com/diodesign/diosix/blob/binaries/README.md) on the contents of the guest OS binaries used by Diosix. The diosix.org [illustration](docs/logo.png) is a combination of artwork kindly provided by [Katerina Limpitsouni](https://undraw.co/license) and [RISC-V International](https://riscv.org/about/risc-v-branding-guidelines/).
