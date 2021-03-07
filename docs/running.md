@@ -1,88 +1,165 @@
-## Building and using Qemu to test the hypervisor
+# Building and running Diosix
 
-Although booting Diosix on physical hardware is the project's primary goal, running the hypervisor in the emulator [Qemu](https://qemu.org) has its advantages. One, of course, is that it allows people without access to compatible hardware to try the software from the comfort of their desktop. More importantly, another advantage of using Qemu is that it allows contributors to pause execution, inspect the system's internal state, and debug the code.
+These instructions will walk you through building and running Diosix. They assume you are using a GNU/Linux system running [Debian Testing](https://www.debian.org/) or equivalent, and that you are comfortable using the command line to navigate your file system and run programs.
 
-While various operating systems provide prebuilt versions of Qemu via a package manager, these versions can be somewhat out of date as Qemu's RISC-V support is constantly improving. This guide will walk you through building the emulator from its latest source code to ensure you have the latest bug fixes and features. You can skip the [build instructions](#compiling), and install Qemu via your package manager, if you are confident it supports RISC-V and is reasonably up to date, and go straight to [running the emulator](#running) instead. Building from source is highly recommended.
+## Objectives
+
+The outcome will booting one or more guest operating systems, such as Linux, on Diosix within a Qemu emulated environment. You can also perform unit tests, or just build the project to install its executable on real hardware.
 
 ## Table of contents
 
-1. [Compiling Qemu](#compiling)
-1. [Using Qemu](#running)
-1. [Debugging with Qemu](#debugging)
+1. [Getting started](#prep)
+1. [Run Diosix in Qemu](#qemu)
+   1. [Using the system console](#console)
+1. [Build without running](#buildonly)
+1. [Options](#opts)
+   1. [Output build diagnostic messages](#opt_quiet)
+   1. [Target a specific CPU architecture](#opt_target)
+   1. [Build release-ready software](#opt_quality)
+   1. [Set the number of emulated CPU cores](#opt_cpus)
+   1. [Disable downloads of guest OSes](#opt_no_guest_fetch)
 
-### Compiling Qemu <a name="compiling"></a>
+## Getting started <a name="prep"></a>
 
-These instructions assume you know your way around a Linux or Unix-like system, are comfortable using your system's command-line interface, and are using a [Debian](https://www.debian.org/)-like GNU/Linux operating system. If you are using another Linux distribution, please adjust the `apt` package installation commands to suit your operating system's package manager.
+These steps will prepare your system for building and running Diosix using its latest source code.
 
-To build Qemu, ensure you have all the necessary components installed. To do this, open a terminal and run the following:
+1. Ensure you have the necessary dependencies installed:
 
 ```
 sudo apt update
-sudo apt -y install build-essential git libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev
+sudo apt -y install build-essential pkg-config git curl binutils-riscv64-linux-gnu qemu-system-misc libssl-dev
 ```
 
-Next, enter a directory in which to download the Qemu's source code, then fetch the latest code and build it. These commands will use `src` within your home directory, and build just 32-bit and 64-bit RISC-V system emulators:
+2. If you have not yet installed the Rust toolchain, follow [these instructions](https://www.rust-lang.org/tools/install) to do so. Make the `nightly` version of Rust the default toolchain:
 
 ```
-mkdir -p $HOME/src
-git clone -b master https://github.com/qemu/qemu.git
-cd qemu
-./configure --target-list=riscv32-softmmu,riscv64-softmmu
-make
+rustup default nightly
 ```
 
-Two Qemu executable files are built by the above compilation process: `riscv32-softmmu/qemu-system-riscv32` for emulating 32-bit RISC-V systems, and `riscv64-softmmu/qemu-system-riscv64` for 64-bit RISC-V systems, both within the Qemu source directory. Diosix assumes it can find `qemu-system-riscv32` and `qemu-system-riscv64` in your `PATH` environment variable. To ensure these executable files can be located and used in future shell sessions, you need to update your shell's configuration files so that `PATH` automatically includes the location of these system emulators when you open a new session.
-
-For a discussion on editing your shell's configuration files to update `PATH`, see the [toolchain](toolchain.md) documentation. For now, this guide will keep it simple. If you are using Bash as your shell, you need to edit `.bashrc` in your home directory, or `.zshrc` if you are using Zsh. If you use another shell, check its manual for the location of its configuration file.
-
-Open the appropriate configuration file in a text editor, and insert the following lines at the end of the file:
+3. Install [`just`](https://github.com/casey/just), which Diosix uses to automate the steps needed to build and run the project:
 
 ```
-export PATH=$PATH:$HOME/src/qemu/riscv32-softmmu
-export PATH=$PATH:$HOME/src/qemu/riscv64-softmmu
+cargo install --force just
 ```
 
-Save and close the file in your editor. Then close your terminal session using `exit`, and reopen a fresh one. To check `PATH` is defined correctly, the following commands should display version information about the Qemu RISC-V system emulators rather than error messages that the files could not be found:
+4. Fetch the Diosix source code and enter its directory:
 
 ```
-qemu-system-riscv32 --version
-qemu-system-riscv64 --version
+git clone --recurse-submodules https://github.com/diodesign/diosix.git
+cd diosix
 ```
 
-If these commands work, then you are all set to build the hypervisor and run it within Qemu.
+## Run Diosix in Qemu <a name="qemu"></a>
 
-### Using Qemu <a name="running"></a>
-
-The recommended method for invoking Qemu with Diosix is to use the `cargo run` commands described in the hypervisor's [build](building.md) documentation. This will run Qemu within the terminal, displaying the output of the system's serial port.
-
-If you want to invoke Qemu directly, invoke `qemu-system-riscv32` for 32-bit targets or `qemu-system-riscv64` for 64-bit targets, and in the command line, specify `-bios none` to disable the loading of firmware, and load the hypervisor using the `-kernel <path to hypervisor>` parameter. The path to the hypervisor will be `target/<target triple>/release/hypervisor` after building Diosix using `cargo build --release --target <target triple>`. See the Qemu documentation for more command-line parameters, such as `-m` to specify the amount of physical RAM available, `-smp` for specifying the number of CPU cores, and `-machine` to specify the emulated hardware.
-
-When Qemu is running, press `control-a` and then `c` to enter the emulator's console. Here, you can type in one of Qemu's built-in commands, and hit `enter` to run it. Here are some useful commands:
-
-* `stop`: Pause execution of software within the emulator.
-* `cont`: Continue execution within the emulator.
-* `info cpus`: List the emulated CPU cores along with their ID numbers. The asterisked core is the currently selected core for other `info` commands.
-* `cpu <N>`: Change the currently selected CPU core to core with the ID value `<N>`.
-* `info registers`: Display the main control registers and general-purpose registers for the currently selected CPU core.
-* `info registers -a`: Display the main control registers and general-purpose registers for all CPU cores.
-* `xp /<N>i <addr>`: Disassemble `<N>` instructions starting from physical RAM address `<addr>`
-* `xp /<N>xb <addr>`: Print the contents of the emulated system's memory, as `<N>` bytes in hexadecimal, starting from physical RAM address `<addr>`.
-* `xp /<N>xw <addr>`: Print the contents of the emulated system's memory, as `<N>` 32-bit words in hexadecimal, starting from physical RAM address `<addr>`.
-* `xp /<N>xg <addr>`: Print the contents of the emulated system's memory, as `<N>` 64-bit words in hexadecimal, starting from physical RAM address `<addr>`.
-
-Press `control-a` and then `c` to leave the console and return to the emulator. Finally, use the command `quit`, or `q` for short, to terminate Qemu.
-
-### Quick debugging with Qemu <a name="debugging"></a>
-
-It is possible to connect the GNU debugger GDB to Qemu to debug a running hypervisor. For quick and easy troubleshooting, though, you can use the above Qemu console commands to investigate crashes and unexpected behavior.
-
-For example, if the hypervisor hangs, you can enter the Qemu console by pressing `control-a` and then `c`, and then entering the command `stop` to pause the execution. Then you can use `info registers -a` to find each processor core's program counter (the `pc` register) and also inspect its control registers (such as `mstatus` on RISC-V) to determine its state. Then, in another terminal, you can use Binutils' objdump to see where in the hypervisor each core has become stuck. For a 64-bit RISC-V build of Diosix, with the project's source code directory in `src` within your home directory, you can use...
+Once you have completed the [preparatory steps](#prep), run Diosix in the Qemu RISC-V emulator:
 
 ```
-cd $HOME/src/diosix
-riscv64-elf-objdump -d target/<target triple>/release/hypervisor | less
+just
 ```
 
-...to open a dissassembly of the hypervisor, for a given `<target triple>` (such as `riscv64gc-unknown-none-elf`), and then, in `less`, press `/` to start a search, enter the program counter address you want to inspect, and hit `enter` to jump to the instructions at that address. Press `q` to exit `less`.
+This will check to see if Diosix needs to be built. If so, the project will automatically create an executable containing the hypervisor and a simple file-system containing the system services, a set of welcome text, and one or more guest OS binaries. The contents of this exccutable are specified by the project's [`manifest.toml`](../manifest.toml) configuration file.
 
-For 32-bit RISC-V builds of Diosix, you should use `riscv32-elf-objdump`.
+Diosix is then booted in a Qemu RISC-V environment, and the hypervisor will start the included services and guests. To exit the emulator, press `Control-a` then `x`. The guest OSes provided by default are BusyBox-based Linux operating systems. To log in, use the username `root`. No password is required.
+
+### Using the system console <a name="console"></a>
+
+By default, Diosix will run a system service called `gooey` that provides a very simple user interface. This is accessed through the terminal when using Qemu, and on real hardware, through the system's first serial port.
+
+`gooey` will show messages and information from the hypervisor in red, and assign other colors to individual guests. For example, the first guest will use yellow to output its text, blue for the second guest, and purple for the third. By default, Diosix includes one guest. To include more, edit the `manifest.toml` file to add extra guests, and run Diosix again.
+
+Currently, `gooey` displays output text from all capsules, though when typing into it, either via Qemu or a real system's serial port, that input text is sent only to the first guest. The coloring of the input and output text can be temporarily altered by the guest, for example when listing files with `ls` and displaying executables in a special color.
+
+## Build without running <a name="buildonly"></a>
+
+To build Diosix without running the software:
+
+```
+just build
+```
+
+This will create an executable package of the hypervisor, services, and guests, as described [above](#qemu), at `src/hypervisor/target/diosix`. On RISC-V targets, this executable can be loaded by a suitable bootloader as a machine-level OpenSBI implementation. It expects to be loaded at the start of RAM at physical address `0x80000000` with a pointer to a valid Device Tree describing the hardware in register `a1`. It communicates through the serial port as configured by the firmware.
+
+Whether just building Diosix or building and running it, the build phase of the workflow will automatically use all available host CPU cores concurrently.
+
+## Options <a name="opts"></a>
+
+You can customize the processes of building and running Diosix by passing parameters to `just`.
+
+The parameters are space separated and must follow `just` before any command, such as `build`, is given. For example, to just build an optimized, non-debug Diosix with output from the toolchain components enabled:
+
+```
+just quiet=no quality=release build
+```
+
+Below is a list of supported parameters.
+
+### Output build diagnostic messages <a name="opt_quiet"></a>
+
+By default, the output of Diosix's toolchain components, such as `mkdmfs` and `cargo`, are suppressed during the build process. To see their output during build, set the `quiet` parameter to `no`, as in:
+
+```
+just quiet=no
+```
+
+This parameter can be used with `just` and `just build`.
+
+### Target a specific CPU architecture <a name="opt_target"></a>
+
+By default, Diosix is built for general-purpose 64-bit RISC-V (RV64GC) processors. To build Diosix for a particular CPU architecture, use the table below to find the `target` parameter for the required supported architecture.
+
+| Supported CPU architecture | `target` parameter value |
+|----------|--------------------------------|
+| RV64GC   | `riscv64gc-unknown-none-elf`   |
+| RV64IMAC | `riscv64imac-unknown-none-elf` |
+
+Then pass the `target` parameter to `just build` in the form of:
+
+```
+just target=<target parameter value>
+```
+
+For example, the RV64IMAC architecture's `target` parameter value is `riscv64imac-unknown-none-elf`. To build for that architecture, use:
+
+```
+just target=riscv64imac-unknown-none-elf
+```
+
+This parameter can be used with `just` and `just build`.
+
+### Build release-ready software <a name="opt_quality"></a>
+
+By default, an unoptimized debug version of Diosix is built that outputs diagnostic information to the virtual console. To build an optimized version of Diosix that does not output diagnostic messages, and may be suitable for general release, set the parameter `quality` to `release`, as in:
+
+```
+just quality=release
+```
+
+Diosix's portable code uses [macros](../src/hypervisor/src/debug.rs) to output information for the user. The table below describes which macros are active for a given build quality, and the common usage of each macro. These are the macros that should be used by other parts of the project.
+
+| Macro | Usage | Debug | Release |
+|-------|-------|-------|---------|
+| `hvalert` | Critical messages from the hypervisor | Active | Active |
+| `hvdebug` | Diagnostic messages from the hypervisor | Active | Inactive |
+| `hvdebugraw` | `hvdebug` but without any context, such as CPU ID, nor an automatic newline | Active | Inactive |
+
+This parameter can be used with `just` and `just build`.
+
+### Set the number of emulated CPU cores <a name="opt_cpus"></a>
+
+By default, Qemu runs Diosix on a four-core emulated system with 1GB of RAM. To override the number of CPU cores, set the `cpus` parameter to the number of cores required. For example, to boot Diosix on a dual-core emulated system:
+
+```
+just cpus=2
+```
+
+This parameter can be used with `just`. It has no effect with `just build`.
+
+### Disable downloads of guest OSes <a name="opt_no_guest_fetch"></a>
+
+By default, when Diosix's `manifest.toml` file specifies a guest OS that is not present in the build tree, it will fetch a copy of the guest from the internet so that it can be included in the final package. To prevent this from happening, set the parameter `guests-download` to `no`:
+
+```
+just guests-download=no
+```
+
+This will cause an error if a guest is required and not found in the build tree. This parameter can be used with `just` and `just build`.
