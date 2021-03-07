@@ -1,0 +1,11 @@
+# streamline the containerization process by leaving out files not needed to build
+target
+Dockerfile
+.dockerignore
+.git
+.gitignore
+.github
+*.md
+*.png
+CNAME
+_config.yml

@@ -8,19 +8,21 @@
 *.iso
 *.out
 *.elf
+*.img
 .DS_Store
 
 # ignore compiler output directories
 target/
 
-# ignore boot supervisor binaries */
-/boot/binaries/
+# ignore guest OS binaries
+boot/guests/
 
 # ignore rustfmt stuff
 **/*.rs.bk
 
 # ignore IDE stuff for now
-.vscode
+.vscode*
+.vscode/*
 
 # ignore Cargo metadata
 Cargo.lock

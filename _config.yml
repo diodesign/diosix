@@ -1,5 +1,5 @@
-theme: jekyll-theme-dinky
-markdown: gfm
-show_downloads: yes
-description: A lightweight bare-metal Rust-RISC-V hypervisor
-author: Chris Williams
+theme: jekyll-theme-minimal
+title: Diosix hypervisor
+description: Diosix is an open-source bare-metal hypervisor written in Rust for multi-core RISC-V systems
+show_downloads: no
+logo: docs/logo.png
