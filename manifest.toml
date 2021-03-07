@@ -7,8 +7,11 @@
 # See src/mkdmfs/src/main.rs for the file format
 #
 # Directory paths are relative to this manifest.toml file
+#
+# See the notes below on booting more than one guest
+#
 
-# these can be overridden by whatever's parsing this file, usually mkdmfs
+# these settings can be overridden by whatever's parsing this file, usually mkdmfs
 [defaults]
 arch = "riscv64gc-unknown-none-elf"
 quality = "debug"
@@ -24,27 +27,43 @@ welcome = "boot/banners/welcome.txt"
 include = [ "gooey" ]
 
 # define each individual service
+
+# this is the console usre-interface. it is granted permission to access the system console and
+# also other capsules' console buffers to route input and output text between the user and guests
 [service.gooey]
 path = "src/services"
 description = "console interface"
 properties = [ "auto_crash_restart", "service_console", "console_write", "console_read", "hv_log_read" ]
 
-# define each guest that may join us during boot
-# Mildly useful Linux with busybox, micropython, zsh, and less
+# define guests that may join us during boot
+
+# a mildly useful Linux with busybox, micropython, zsh, and less
 [guest.riscv64-linux-busybox-micropython]
 path = "boot/guests"
 url = "https://github.com/diodesign/diosix/raw/binaries/buildroot-guests/riscv64-linux-busybox-micropython"
 description = "64-bit RISC-V Linux with Busybox, Micropython, zsh, less"
 
-# bare-bones Linux and Busybox
+# a bare-bones Linux and Busybox
 [guest.riscv64-linux-busybox]
 path = "boot/guests"
 url = "https://github.com/diodesign/diosix/raw/binaries/buildroot-guests/riscv64-linux-busybox"
 description = "64-bit RISC-V Linux with Busybox"
 
-# select guests to include for a given target
+# select the guests to include for a given target
+
+# To include and boot more than one guest, add more than one entry to the guests array
+# for the architecture you wish to target. For example, to run three guests,
+# a Linux OS with Micropython installed, and two smaller Linux OSes, populate the guests array
+# for the default target as follows:
+#
+# [target.riscv64gc-unknown-none-elf]
+# guests = [ "riscv64-linux-busybox-micropython", "riscv64-linux-busybox", "riscv64-linux-busybox" ]
+#
+
+# RV64GC: this is the default target, loading one guest only by default
 [target.riscv64gc-unknown-none-elf]
 guests = [ "riscv64-linux-busybox-micropython" ]
 
+# RV64IMAC: alternative target, loading one guest only by default
 [target.riscv64imac-unknown-none-elf]
 guests = [ "riscv64-linux-busybox-micropython" ]
