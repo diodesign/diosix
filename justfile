@@ -9,10 +9,17 @@
 #
 # Only build diosix using the defaults:
 # just build
-#
-# Run diosix's built-in tests using the defaults:
-# just test
 # 
+# A link is created at src/hypervisor/target/diosix pointing to the location
+# of the built executable package containing the hypervisor, its services, and guests.
+#
+# You can control the workflow by setting parameters. These must go after just and before
+# the command, such as build. Eg, for a verbose build-only process:
+# just quiet=no build
+#
+#
+# Supported parameters
+#
 # Set target to the architecture you want to build for. Eg:
 # just target=riscv64imac-unknown-none-elf
 #
@@ -62,7 +69,7 @@
 # guests-download  yes
 # guests-build     yes
 #
-# Author: Chris Williams <diodesign@tuta.io>
+# Author: Chris Williams <chrisw@diosix.org>
 # See LICENSE for usage and distribution
 # See README for further instructions
 #
@@ -72,7 +79,7 @@ msgprefix := "--> "
 buildmsg  := msgprefix + "Building"
 cleanmsg  := msgprefix + "Cleaning build tree"
 rustupmsg := msgprefix + "Ensuring Rust can build for"
-builtmsg  := msgprefix + "Diosix built and ready for use"
+builtmsg  := msgprefix + "Diosix built and ready to use at"
 qemumsg   := msgprefix + "Running Diosix in Qemu"
 
 # define defaults, these are overriden by the command line
@@ -87,6 +94,7 @@ services        := "yes"
 guests          := "yes"
 guests-download := "yes"
 guests-build    := "yes"
+final-exe-path  := "src/hypervisor/target/diosix"
 
 # generate cargo switches
 quality_sw      := if quality == "debug" { "debug" } else { "release" }
@@ -105,17 +113,13 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 # build diosix with its components, and run it within qemu
 @qemu: build
     echo "{{qemumsg}}"
-    {{emubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 1G -kernel src/hypervisor/target/{{target}}/{{quality_sw}}/hypervisor
+    {{emubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 1G -kernel {{final-exe-path}}
 
-# run unit tests for each major component
-@test:
-    -cd src/hypervisor && cargo {{quiet_sw}} test
-    -cd src/services && cargo {{quiet_sw}} test
-    -cd src/mkdmfs && cargo {{quiet_sw}} test
-
-# build diosix and its components
+# the core workflow for building diosix and its components
+# a link is created at final-exe-path to the final packaged executable
 @build: _descr _rustup _hypervisor
-    echo "{{builtmsg}}"
+    ln -fs {{target}}/{{quality_sw}}/hypervisor {{final-exe-path}}
+    echo "{{builtmsg}} {{final-exe-path}}"
 
 # let the user know what's going to happen
 @_descr:
@@ -151,6 +155,13 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
     -cd src/hypervisor && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
     -cd src/services && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
     -cd src/mkdmfs && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+
+# FIXME: the framework for this is broken.
+# run unit tests for each major component
+# @_test:
+#    -cd src/hypervisor && cargo {{quiet_sw}} test
+#    -cd src/services && cargo {{quiet_sw}} test
+#    -cd src/mkdmfs && cargo {{quiet_sw}} test
 
 # are we allowed one easter egg?
 @_incredible:
