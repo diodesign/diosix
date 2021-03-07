@@ -1,4 +1,4 @@
-name: Build and test
+name: Build
 
 on:
   push:
@@ -15,6 +15,4 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build Diosix-on-Qemu Docker image
-      run: docker build . --file Dockerfile --tag diosix
-    - name: Run unit tests within Docker container
-      run: docker run --rm diosix:latest cargo test
+      run: docker build --tag diosix:latest .
