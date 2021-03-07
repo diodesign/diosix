@@ -25,29 +25,29 @@ These steps will prepare your system for building and running Diosix using its l
 
 1. Ensure you have the necessary dependencies installed:
 
-```
-sudo apt update
-sudo apt -y install build-essential pkg-config git curl binutils-riscv64-linux-gnu qemu-system-misc libssl-dev
-```
+   ```
+   sudo apt update
+   sudo apt -y install build-essential pkg-config git curl binutils-riscv64-linux-gnu qemu-system-misc libssl-dev
+   ```
 
 2. If you have not yet installed the Rust toolchain, follow [these instructions](https://www.rust-lang.org/tools/install) to do so. Make the `nightly` version of Rust the default toolchain:
 
-```
-rustup default nightly
-```
+   ```
+   rustup default nightly
+   ```
 
 3. Install [`just`](https://github.com/casey/just), which Diosix uses to automate the steps needed to build and run the project:
 
-```
-cargo install --force just
-```
+   ```
+   cargo install --force just
+   ```
 
 4. Fetch the Diosix source code and enter its directory:
 
-```
-git clone --recurse-submodules https://github.com/diodesign/diosix.git
-cd diosix
-```
+   ```
+   git clone --recurse-submodules https://github.com/diodesign/diosix.git
+   cd diosix
+   ```
 
 ## Run Diosix in Qemu <a name="qemu"></a>
 
@@ -61,7 +61,7 @@ This will check to see if Diosix needs to be built. If so, the project will auto
 
 Diosix is then booted in a Qemu RISC-V environment, and the hypervisor will start the included services and guests. To exit the emulator, press `Control-a` then `x`. The guest OSes provided by default are BusyBox-based Linux operating systems. To log in, use the username `root`. No password is required.
 
-### Using the system console <a name="console"></a>
+## Using the system console <a name="console"></a>
 
 By default, Diosix will run a system service called `gooey` that provides a very simple user interface. This is accessed through the terminal when using Qemu, and on real hardware, through the system's first serial port.
 
