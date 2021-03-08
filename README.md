@@ -21,7 +21,9 @@ Below is a recording of a user logging into a RISC-V Linux guest OS on Diosix an
 
 ## Quickstart using Qemu <a name="qemu"></a>
 
-To run a prebuilt version of Diosix and a RISC-V Linux guest within Qemu, first ensure you have installed a RISC-V-capable version of the emulator. This is included in the `qemu-system-misc` package on Debian 10, for example. Next, fetch from the [`binaries`](https://github.com/diodesign/diosix/tree/binaries) branch an executable containing the hypervisor and its guest:
+To run a prebuilt version of Diosix and a RISC-V Linux guest within Qemu, first ensure you have installed a 64-bit RISC-V-capable version of the emulator. This is included in the `qemu-system-misc` package on Debian 10, for example.
+
+Next, fetch from the [`binaries`](https://github.com/diodesign/diosix/tree/binaries) branch an executable containing the hypervisor and its guest:
 
 ```
 wget https://github.com/diodesign/diosix/raw/binaries/diosix/diosix-0.0.2-debug-20210307
