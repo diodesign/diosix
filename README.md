@@ -37,6 +37,16 @@ A guest binary contains third-party free software, listed below, built from unmo
 | glibc 2.32 | [GPL 2.0](https://sourceware.org/git/?p=glibc.git;a=blob;f=COPYING;h=d159169d1050894d3ea3b98e1c965c4058208fe1;hb=3de512be7ea6053255afed6154db9ee31d4e557a) | [sourceware.org](https://sourceware.org/git/?p=glibc.git;a=tree;h=d90f4673165d16d37a4d6990b8accde272893479;hb=3de512be7ea6053255afed6154db9ee31d4e557a) |
 | BusyBox 1.33.0 | [GPL 2.0](https://git.busybox.net/busybox/tree/LICENSE?h=1_33_stable) | [git.busybox.net](https://git.busybox.net/busybox/tree/?h=1_33_stable) |
 
+### Prebuilt versions of Diosix
+
+Every so often, built versions of Diosix will be uploaded to the [`diosix`](diosix) directory in this branch to be used to quickly get started with the hypervisor in Qemu. Below are the available builds.
+
+| Filename | Description |
+|----------|-------------|
+| [diosix-0.0.2-debug-20210307](diosix/diosix-0.0.2-debug-20210307) | Debug build of Diosix 0.0.2 built on March 7, 2021 after the mega-merge of the `november_reorg` development branch. Contains the hypervisor, the `gooey` virtual console, and a Linux guest OS environment containing BusyBox, Micropything, zsh, and less |
+
+Note: these builds include the third-party free software described above.
+
 ### Presentations
 
 In January 2021, Diosix developer Chris Williams gave a 30-minute overview of the project to the British Computer Society's Open Source Specialists group. The slides for this presentation are in [`presentations/BCS-OpenSource-London-Jan-2021.pdf`](presentations/BCS-OpenSource-London-Jan-2021.pdf), and you can watch a recording of the talk on YouTube by clicking on the preview below.
