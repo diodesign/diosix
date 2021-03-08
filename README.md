@@ -52,7 +52,7 @@ To run RISC-V Linux on Diosix from your browser using Google Cloud, click the bu
 
 When prompted, confirm you trust the Diosix repository and allow Google Cloud Shell to make Google Cloud API calls. Cloud Shell will next ask you to choose which Google Cloud project and region to use for this process.
 
-Once selected, Google Cloud Run will create a Docker container image of Diosix built its latest source code, and a prebuilt Linux guest OS.
+Once selected, Google Cloud Run will create a Docker container image of Diosix, built from its latest source code, with a prebuilt Linux guest OS.
 
 To start this container, run this command in Cloud Shell:
 
