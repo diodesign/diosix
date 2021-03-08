@@ -7,14 +7,14 @@
 1. [Build and run Diosix in a container](#container)
 1. [Build and run Diosix outside a container](#nocontainer)
 1. [Frequently anticipated questions](#faq)
-1. [Contact, contributions, security issue reporting, and code of conduct](#contact)
+1. [Contact, contributions, security, and code of conduct](#contact)
 1. [Copyright, distribution, and license](#copyright)
 
 ## About this project <a name="intro"></a>
 
-Diosix strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor written [in Rust](https://www.rust-lang.org/) for 64-bit [RISC-V](https://riscv.org/) computers. Though this project is a [work in progress](#todo), you can boot and use guest operating systems with it.
+Diosix strives to be a lightweight, fast, and secure multiprocessor bare-metal hypervisor written [in Rust](https://www.rust-lang.org/) for 64-bit [RISC-V](https://riscv.org/) computers. Though this project is a work in progress, you can boot and use guest operating systems with it.
 
-Specifically, it can initialize a compatible RISC-V system, and run one or more guest operating systems in hardware-isolated virtualized environments called capsules. System services also run in capsules using a provided runtime. One such service offers a virtual console through which the user can interact with guest capsules.
+Specifically, it initializes a compatible RISC-V system, and runs one or more guest operating systems in hardware-isolated virtualized environments called capsules. System services also run in capsules using a provided runtime. One such service offers a virtual console through which the user can interact with guest capsules.
 
 Below is a recording of Diosix booting within Qemu, and loading and running the console system service and a Linux guest OS. The user interacts with the guest OS via the console service to login and run programs, such as Micropython to print "hello world!" The guest OS is shut down using the `poweroff` command.
 
