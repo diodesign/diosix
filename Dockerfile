@@ -21,10 +21,11 @@ COPY . /diosix
 # Define where we'll work
 WORKDIR /diosix
 
-# Install necessary bits and pieces of Rust and just, and then build diosix
+# Install necessary bits and pieces of Rust and just, pull in the submodules, and then build diosix
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y \
     && . $HOME/.cargo/env \
     && cargo install --force just \
+    && git submodule update --init --recursive \
     && just build
 
 # Define the environment in which we'll run commands

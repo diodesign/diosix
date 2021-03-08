@@ -2,8 +2,6 @@
 target
 Dockerfile
 .dockerignore
-.git
-.gitignore
 .github
 *.md
 *.png
