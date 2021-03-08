@@ -12,7 +12,7 @@ The outcome will booting one or more guest operating systems, such as Linux, on 
 1. [Run Diosix in Qemu](#qemu)
    1. [Using the system console](#console)
 1. [Build without running](#buildonly)
-1. [Options](#opts)
+1. [Options for building and running](#opts)
    1. [Output build diagnostic messages](#opt_quiet)
    1. [Target a specific CPU architecture](#opt_target)
    1. [Build release-ready software](#opt_quality)
@@ -67,7 +67,7 @@ By default, Diosix will run a system service called `gooey` that provides a very
 
 `gooey` will show messages and information from the hypervisor in red, and assign other colors to individual guests. For example, the first guest will use yellow to output its text, blue for the second guest, and purple for the third. By default, Diosix includes one guest. To include more, edit the `manifest.toml` file to add extra guests, and run Diosix again.
 
-Currently, `gooey` displays output text from all capsules, though when typing into it, either via Qemu or a real system's serial port, that input text is sent only to the first guest. The coloring of the input and output text can be temporarily altered by the guest, for example when listing files with `ls` and displaying executables in a special color.
+Currently, `gooey` displays output text from all capsules, though when typing into it, either via Qemu or a real system's serial port, that input text is sent only to the first guest. The coloring of the input and output text can be temporarily altered by the guest, for example when listing files with `ls` and displaying executables in a special color. The exact colors seen may vary depending on the color scheme used by your terminal.
 
 ## Build without running <a name="buildonly"></a>
 
@@ -81,7 +81,7 @@ This will create an executable package of the hypervisor, services, and guests, 
 
 Whether just building Diosix or building and running it, the build phase of the workflow will automatically use all available host CPU cores concurrently.
 
-## Options <a name="opts"></a>
+## Options for building and running <a name="opts"></a>
 
 You can customize the processes of building and running Diosix by passing parameters to `just`.
 
