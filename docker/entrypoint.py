@@ -10,7 +10,7 @@
 #
 # syntax: entrypoint.py <command>
 #
-# Author: Chris Williams <diodesign@tuta.io>
+# Author: Chris Williams <chrisw@diosix.org>
 #
 
 import os
@@ -24,7 +24,7 @@ from flask import Flask
 if __name__ == "__main__":
     if not os.environ.get('K_SERVICE'):
         print('Running locally')
-        os.system('. $HOME/.cargo/env && cd /build/diosix && {}'.format(' '.join(sys.argv[1:])))
+        os.system('. $HOME/.cargo/env && cd /diosix && {}'.format(' '.join(sys.argv[1:])))
     else:
         print('Running HTTP service {} {} {} for Google Cloud', os.environ.get('K_SERVICE'), os.environ.get('K_REVISION'), os.environ.get('K_CONFIGURATION'))
         app = Flask(__name__)
