@@ -1,9 +1,3 @@
-[submodule "src/gooey"]
-	path = services/src/gooey
-	url = https://github.com/diodesign/gooey.git
-[submodule "services/src/supervisor-riscv"]
-	path = services/src/supervisor-riscv
-	url = https://github.com/diodesign/supervisor-riscv.git
 [submodule "src/services/src/supervisor-riscv"]
 	path = src/services/src/supervisor-riscv
 	url = https://github.com/diodesign/supervisor-riscv.git
