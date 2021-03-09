@@ -46,7 +46,7 @@ Micropython, zsh, and less are provided as well as BusyBox. Press `Control-a` th
 
 ## Quickstart using Google Cloud Run <a name="cloudrun"></a>
 
-To run RISC-V Linux on Diosix from your browser using Google Cloud, click the button below.
+To run RISC-V Linux on Diosix from your browser using Google Cloud, click the button below. You will need a Google Cloud account.
 
 [![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/diodesign/diosix)
 
