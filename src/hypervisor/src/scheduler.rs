@@ -187,62 +187,55 @@ fn run_next(search_mode: SearchMode)
     /* check for housekeeping */
     housekeeping();
 
-    /* if this core can run supervisor-level code then find it some work to do */
-    if pcore::PhysicalCore::smode_supported()
+    /* check for something to do */
+    loop
     {
-        loop
+        let mut something_found = true;
+
+        /* check to see if there's anything waiting to be picked up for this
+        physical CPU from a global queue. if so, then adopt it so it can get a chance to run */
+        match GLOBAL_QUEUES.lock().dequeue()
         {
-            let mut something_found = true;
+            /* we've found a virtual CPU core to run, so switch to that */
+            Some(orphan) =>
+            {   
+                let mut workloads = WORKLOAD.lock();
+                let pcore_id = PhysicalCore::get_id();
 
-            /* check to see if there's anything waiting to be picked up for this
-            physical CPU from a global queue. if so, then adopt it so it can get a chance to run */
-            match GLOBAL_QUEUES.lock().dequeue()
-            {
-                /* we've found a virtual CPU core to run, so switch to that */
-                Some(orphan) =>
-                {   
-                    let mut workloads = WORKLOAD.lock();
-                    let pcore_id = PhysicalCore::get_id();
-
-                    /* increment counter of how many virtual cores this physical CPU core
-                    has taken from the global queue */
-                    if let Some(count) = workloads.get_mut(&pcore_id)
-                    {
-                        *count = *count + 1;
-                    }
-                    else
-                    {
-                        workloads.insert(pcore_id, 1);
-                    }
-
-                    pcore::context_switch(orphan);
-                },
-
-                /* otherwise, try to take a virtual CPU core waiting for this physical CPU core and run it */
-                _ => match PhysicalCore::dequeue()
+                /* increment counter of how many virtual cores this physical CPU core
+                has taken from the global queue */
+                if let Some(count) = workloads.get_mut(&pcore_id)
                 {
-                    Some(virtcore) => pcore::context_switch(virtcore), /* waiting virtual CPU core found, queuing now */
-                    _ => something_found = false /* nothing else to run */
+                    *count = *count + 1;
                 }
-            }
+                else
+                {
+                    workloads.insert(pcore_id, 1);
+                }
 
-            /* if we've found something, or only searching once, exit the search loop */
-            if something_found == true || search_mode == SearchMode::CheckOnce
+                pcore::context_switch(orphan);
+            },
+
+            /* otherwise, try to take a virtual CPU core waiting for this physical CPU core and run it */
+            _ => match PhysicalCore::dequeue()
             {
-                break;
+                Some(virtcore) => pcore::context_switch(virtcore), /* waiting virtual CPU core found, queuing now */
+                _ => something_found = false /* nothing else to run */
             }
-
-            /* still here? see if there's a capsule waiting to be restarted and give us something to do */
-            capsulehousekeeper!();
         }
 
-        /* we've got a virtual core to run. tell the timer system to call us back soon */
-        hardware::scheduler_timer_next_in(TIMESLICE_LENGTH);
+        /* if we've found something, or only searching once, exit the search loop */
+        if something_found == true || search_mode == SearchMode::CheckOnce
+        {
+            break;
+        }
+
+        /* still here? see if there's a capsule waiting to be restarted and give us something to do */
+        capsulehousekeeper!();
     }
-    else
-    {
-        hardware::scheduler_timer_next_in(MAINTENANCE_LENGTH); /* we'll be back some time later */
-    }
+
+    /* at this point, we've got a virtual core to run. tell the timer system to call us back soon */
+    hardware::scheduler_timer_next_in(TIMESLICE_LENGTH);
 }
 
 /* perform any housekeeping duties defined by the various parts of the system */
