@@ -111,10 +111,8 @@ impl PhysicalCore
 
         let (heap_ptr, heap_size) = PhysicalCore::get_heap_config();
         cpu.heap.init(heap_ptr, heap_size);
-      
-        cpu.queues = ScheduleQueues::new();
 
-        /* create a mailbox for messages from other cores */
+        cpu.queues = ScheduleQueues::new();
         message::create_mailbox(id);
     }
 
