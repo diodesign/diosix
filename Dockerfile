@@ -6,10 +6,10 @@
 #
 
 # Establish base OS
-FROM debian:unstable
+FROM debian:testing
 
 # Bring in the necessary tools
-RUN apt update
+RUN apt update && apt upgrade -y
 RUN apt -y install python3 python3-flask build-essential pkg-config git curl binutils-riscv64-linux-gnu qemu-system-misc libssl-dev
 
 # Bring in the environment runtime script
