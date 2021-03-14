@@ -85,8 +85,8 @@ macro_rules! hvdebugraw
 /* low-level macros for hypervisor-only hvprintln and hvprint debug output routines */
 macro_rules! hvprintln
 {
-    ($fmt:expr) => (hvprint!(concat!($fmt, "\n")));
-    ($fmt:expr, $($arg:tt)*) => (hvprint!(concat!($fmt, "\n"), $($arg)*));
+    ($fmt:expr) => (hvprint!(concat!($fmt, "\r\n")));
+    ($fmt:expr, $($arg:tt)*) => (hvprint!(concat!($fmt, "\r\n"), $($arg)*));
 }
 
 macro_rules! hvprint
@@ -145,8 +145,22 @@ pub fn drain_queue()
                     /* this is the serial port address in qemu's RISC-V virt emulation */
                     if cfg!(target_arch = "riscv64")
                     {
-                        unsafe { *(0x10000000 as *mut u8) = *c };
+                        let tx_register = 0x10000000; /* qemu's standard UART location in memory */
+                        unsafe { *(tx_register as *mut u8) = *c };
                     }
+                }
+            }
+            else if cfg!(feature = "sifiveprint")
+            {
+                let tx_register = 0x10010000; /* sifive's standard UART tx register location in memory */
+
+                /* force debug output to SiFive's standard serial port. useful for early debugging */
+                for c in debug_queue.as_bytes()
+                {
+                    /* when reading the word-length tx write register,
+                       it's zero if we're OK to write to it */
+                    while unsafe { *(tx_register as *mut u32) } != 0 {}
+                    unsafe { *(tx_register as *mut u32) = *c as u32 };
                 }
             }
             else
