@@ -167,8 +167,8 @@ fn create_capsule_from_exec(binary: &[u8], properties: Option<Vec<String>>) -> R
     /* create capsule with the given properties */
     let capid = capsule::create(properties, cpus)?;
 
-    /* reserve 128MB of physical RAM for the capsule */
-    let size = 128 * 1024 * 1024;
+    /* reserve 256MB of physical RAM for the capsule */
+    let size = 256 * 1024 * 1024;
     let ram = physmem::alloc_region(size)?;
 
     /* create device tree blob for the virtual hardware available to the guest
