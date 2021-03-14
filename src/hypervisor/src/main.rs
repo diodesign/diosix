@@ -86,28 +86,21 @@ tasks, such as dropping objects when it's no longer needed, borrow checking, etc
 #[global_allocator]
 static HV_HEAP: heap::HVallocator = heap::HVallocator;
 
-/* set to true to allow physical CPU cores to start running supervisor code */
 lazy_static!
 {
+    /* set to true to allow physical CPU cores to start running supervisor code */
     static ref INIT_DONE: Mutex<bool> = Mutex::new("system bring-up", false);
-}
 
-/* a physical CPU core obtaining this lock when it is false must walk the DMFS, create
-capsules required to run at boot time, and set the flag to true. any other core
-obtaining it as true must release the lock and move on */
-lazy_static!
-{
+    /* a physical CPU core obtaining this lock when it is false must walk the DMFS, create
+    capsules required to run at boot time, and set the flag to true. any other core
+    obtaining it as true must release the lock and move on */
     static ref MANIFEST_UNPACKED: Mutex<bool> = Mutex::new("dmfs unpacked", false);
-}
 
-/* set to true if individual cores can sound off their presence and capabilities */
-lazy_static!
-{
+    /* set to true if individual cores can sound off their presence and capabilities */
     static ref ROLL_CALL: Mutex<bool> = Mutex::new("CPU roll call", false);
 }
 
-/* pointer sizes: do not assume this is a 32-bit or 64-bit system. it could be either.
-in future, we may support 16- or 128-bit, too. stick to usize as much as possible */
+/* pointer sizes: stick to usize as much as possible: don't always assume it's a 64-bit machine */
 
 /* hventry
    This is the official entry point of the Rust-level hypervisor.
@@ -176,7 +169,7 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
         /* delegate to boot CPU the welcome banner and set up global resources.
         note: the platform code should ensure whichever CPU core is assigned
         BOOT_PCORE_ID as its cpu_nr can initialize the hypervisor */
-        BOOT_PCORE_ID => 
+        BOOT_PCORE_ID =>
         {
             /* convert the dtb pointer into a rust byte slice. assumes dtb_len is valid */
             let dtb = unsafe { slice::from_raw_parts(dtb_ptr, u32::from_be(dtb_len) as usize) };
@@ -202,17 +195,15 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
     the hypervisor can't make any assumptions about the underlying hardware.
     the device tree for these early capsules is derived from the host's device tree,
     modified to virtualize the peripherals. the virtual CPU cores that will run the
-    capsule are based on the physical CPU core that creates it. ensure a suitable
-    physical CPU core creates the boot-time capsules. this is more straightforward
-    than the hypervisor trying to specify a hypothetical CPU core */
-    if pcore::PhysicalCore::smode_supported() == true
+    capsule are based on the physical CPU core that creates it. this is more
+    straightforward than the hypervisor trying to specify a hypothetical CPU core */
     {
         let mut flag = MANIFEST_UNPACKED.lock();
         
         if *flag == false
         {
             /* process the manifest and mark it as handled */
-            process_manifest()?;
+            manifest::unpack_at_boot()?;
             *flag = true;
 
             /* allow all working cores to join the roll call */
@@ -231,15 +222,6 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
     to come in. when it does fire, this stack will be flattened, a virtual CPU loaded up to run,
     and this boot thread will disappear. thus, the call to start() should be the last thing
     this boot thread does */
-    Ok(())
-}
-
-fn process_manifest() -> Result<(), Cause>
-{
-    /* process the contents of the DMFS image, including
-    printing to the debug port any messages and creating
-    capsules to run system services and supplied guests */
-    manifest::unpack_at_boot()?;
     Ok(())
 }
 
