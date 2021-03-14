@@ -11,12 +11,21 @@
 # just build
 # 
 # A link is created at src/hypervisor/target/diosix pointing to the location
-# of the built executable package containing the hypervisor, its services, and guests.
+# of the built ELF executable package containing the hypervisor, its services, and guests.
+# A flat binary of this ELF is created at src/hypervisor/target/diosix.bin
 #
+# Repartition a disk, typically an SD card, and install diosix on it (requires root via sudo)
+# just install
+#
+# set vendor to a supported vendor. eg: as sifive for SiFive Unleashed boards
+# set disk to the device to erase and install diosix on. eg: /dev/sdb
+# 
+# Eg:
+# just vendor=sifive disk=/dev/sdb install
+
 # You can control the workflow by setting parameters. These must go after just and before
 # the command, such as build. Eg, for a verbose build-only process:
 # just quiet=no build
-#
 #
 # Supported parameters
 #
@@ -25,6 +34,9 @@
 #
 # Set emubin to the Qemu system emulator binary you want to use to run diosix, Eg:
 # just emubin=qemu-system-riscv64
+#
+# Set objcopybin to the objcopy suitable for the target architecture. Eg:
+# just objcopybin=riscv64-linux-gnu-objcopy install
 #
 # Set quality to release or debug to build a release or debug-grade build respectively. Eg:
 # just quality=release
@@ -40,6 +52,9 @@
 #
 # Force debug text output via Qemu's serial port by setting qemuprint to yes, eg:
 # just qemuprint=yes
+# 
+# Force debug text output via SiFive's serial port by setting sifiveprint to yes, eg:
+# just sifiveprint=yes
 #
 # Disable hypervisor's regular integrity checks by setting integritychecks to no, eg:
 # just integritychecks=no
@@ -59,6 +74,7 @@
 # The defaults are:
 # emubin           qemu-system-riscv64
 # target           riscv64gc-unknown-none-elf
+# objcopybin       riscv64-linux-gnu-objcopy
 # quality          debug
 # quiet            yes
 # cpus             4
@@ -68,6 +84,7 @@
 # guests           yes
 # guests-download  yes
 # guests-build     yes
+# vendor           sifive
 #
 # Author: Chris Williams <chrisw@diosix.org>
 # See LICENSE for usage and distribution
@@ -75,33 +92,41 @@
 #
 
 # let the user know what we're up to
-msgprefix := "--> "
-buildmsg  := msgprefix + "Building"
-cleanmsg  := msgprefix + "Cleaning build tree"
-rustupmsg := msgprefix + "Ensuring Rust can build for"
-builtmsg  := msgprefix + "Diosix built and ready to use at"
-qemumsg   := msgprefix + "Running Diosix in Qemu"
+msgprefix  := "--> "
+buildmsg   := msgprefix + "Building"
+cleanmsg   := msgprefix + "Cleaning build tree"
+rustupmsg  := msgprefix + "Ensuring Rust can build for"
+builtmsg   := msgprefix + "Diosix built and ready to use at"
+qemumsg    := msgprefix + "Running Diosix in Qemu"
+installmsg := msgprefix + "Installing"
+installedmsg := msgprefix + "Diosix installed on disk"
 
 # define defaults, these are overriden by the command line
 target          := "riscv64gc-unknown-none-elf"
 emubin          := "qemu-system-riscv64"
+objcopybin      := "riscv64-linux-gnu-objcopy"
 quality         := "debug"
 quiet           := "yes"
 cpus            := "4"
 qemuprint       := "no"
+sifiveprint     := "no"
 integritychecks := "yes"
 services        := "yes"
 guests          := "yes"
 guests-download := "yes"
 guests-build    := "yes"
 final-exe-path  := "src/hypervisor/target/diosix"
+vendor          := "sifive"
+disk            := "/dev/null"
 
 # generate cargo switches
 quality_sw      := if quality == "debug" { "debug" } else { "release" }
 release_sw      := if quality == "release" { "--release " } else { "" }
 quiet_sw        := if quiet == "yes" { "--quiet " } else { "" }
+quiet_redir_sw  := if quiet == "yes" { "> /dev/null " } else { "" }
 verbose_sw      := if quiet == "no" { "--verbose " } else { "" }
 qemuprint_sw    := if qemuprint == "yes" { "--features qemuprint" } else { "" }
+sifiveprint_sw  := if sifiveprint == "yes" { "--features sifiveprint" } else { "" }
 cargo_sw        := quiet_sw + release_sw + "--target " + target
 integritychecks_sw := if integritychecks == "yes" { "--features integritychecks" } else { "" }
 services_sw     := if services == "no" { "--skip-services" } else { "" }
@@ -114,6 +139,14 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 @qemu: build
     echo "{{qemumsg}}"
     {{emubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 1G -kernel {{final-exe-path}}
+
+# build and install diosix with its components onto a disk (requires root via sudo)
+@install: build
+    {{objcopybin}} -O binary {{final-exe-path}} {{final-exe-path}}.bin {{quiet_redir_sw}}
+    echo "{{installmsg}} {{final-exe-path}}.bin on {{disk}}"
+    sudo sgdisk --clear --new=1:2048:65536 --change-name=1:bootloader --typecode=1:2E54B353-1271-4842-806F-E436D6AF6985 -g {{disk}} {{quiet_redir_sw}}
+    sudo dd if={{final-exe-path}}.bin of={{disk}}1 bs=512 {{quiet_redir_sw}} 2>&1
+    echo "{{installedmsg}}"
 
 # the core workflow for building diosix and its components
 # a link is created at final-exe-path to the final packaged executable
@@ -128,7 +161,7 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 # build the hypervisor and ensure it has a boot file system to include
 @_hypervisor: _mkdmfs
     echo "{{buildmsg}} hypervisor"
-    cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}} {{integritychecks_sw}}
+    cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}} {{sifiveprint_sw}} {{integritychecks_sw}}
 
 # build and run the dmfs generator to include banners and system services.
 # mkdmfs is configured by manifest.toml in the project root directory.
