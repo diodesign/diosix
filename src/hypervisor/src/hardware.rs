@@ -27,14 +27,18 @@ lazy_static!
 */
 pub fn parse_and_init(dtb: &[u8]) -> Result<(), Cause>
 {
-    if let Ok(dt) = Devices::new(dtb)
+    match Devices::new(dtb)
     {
-        *(HARDWARE.lock()) = Some(dt);
-        return Ok(())
-    }
-    else
-    {
-        return Err(Cause::DeviceTreeBad);
+        Ok(dt) => 
+        {
+            *(HARDWARE.lock()) = Some(dt);
+            return Ok(())
+        },
+        Err(e) =>
+        {
+            hvalert!("Unable to parse system Device Tree ({:?})", e);
+            return Err(Cause::DeviceTreeBad);
+        }
     }
 }
 
