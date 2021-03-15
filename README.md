@@ -110,7 +110,7 @@ It partially implements the [SBI specification](https://github.com/riscv/riscv-s
 
 **Q. What are the minimum requirements to run Diosix?**
 
-**A.** Diosix by default expects 256KB of RAM per CPU core plus space in memory to store itself, its data strucures, and its payload, and space to run guests. For example, a quad-core system with a 32MB Diosix payload (containing the hypervisor, a guest OS, console system service, and boot banners), running three guests instances with 128MB of memory each, would comfortably fit within 512MB of host RAM. The exact requirements are tunable: if your target hardware has limited RAM, Diosix's footprint can be scaled down as well as up.
+**A.** Diosix by default expects 1MB of RAM per CPU core plus space in memory to store the hypervisor and its payload, and space to run guests. For example, a quad-core system with a 32MB Diosix payload (containing the hypervisor, a guest OS, console system service, and boot banners), running three guests instances with 128MB of memory each, would comfortably fit within 512MB of host RAM. The exact requirements are tunable: if your target hardware has limited RAM, Diosix's footprint can be scaled down as well as up.
 
 ## Contact, contributions, security issue reporting, and code of conduct <a name="contact"></a>
 
