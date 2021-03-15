@@ -191,12 +191,15 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
         _ => while *(INIT_DONE.lock()) != true {}
     }
 
-    /* we're now ready to start creating capsules to run from the bundled DMFS image.
+    /* Create capsules to run from the bundled DMFS image.
     the hypervisor can't make any assumptions about the underlying hardware.
     the device tree for these early capsules is derived from the host's device tree,
-    modified to virtualize the peripherals. the virtual CPU cores that will run the
-    capsule are based on the physical CPU core that creates it. this is more
-    straightforward than the hypervisor trying to specify a hypothetical CPU core */
+    modified to virtualize peripherals. the virtual CPU cores will based on the
+    physical CPU core that creates it. this is more straightforward than the hypervisor
+    trying to specify a hypothetical CPU core
+    
+    as such, only allow supervisor-mode capable CPU cores to build capasules */
+    if pcore::PhysicalCore::smode_supported() == true
     {
         let mut flag = MANIFEST_UNPACKED.lock();
         
