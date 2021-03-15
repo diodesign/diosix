@@ -114,63 +114,71 @@ pub static mut CONSOLE: ConsoleWriter = ConsoleWriter {};
 
 impl fmt::Write for ConsoleWriter
 {
+    /* write the given string either to the debug queue, which will
+       be outputted as normal by the hypervisor or the user interface service,
+       or force output through a build-time-selected interface */
     fn write_str(&mut self, s: &str) -> core::fmt::Result
     {
-        DEBUG_QUEUE.lock().push_str(s);
+        /* check if we're forcing output to a particular hardware port */
+        if cfg!(feature = "qemuprint")
+        {
+            for c in s.as_bytes()
+            {
+                if cfg!(target_arch = "riscv64")
+                {
+                    let tx_register = 0x10000000; /* qemu's RV64 virt UART data register in memory */
+                    unsafe { *(tx_register as *mut u8) = *c };
+                }
+            }
+        }
+        else if cfg!(feature = "sifiveprint")
+        {
+            let tx_register = 0x10010000; /* sifive's UART tx register in memory */
+            for c in s.as_bytes()
+            {
+                /* when reading the word-length tx write register, it's zero if we're OK to write to it */
+                while unsafe { *(tx_register as *mut u32) } != 0 {}
+                unsafe { *(tx_register as *mut u32) = *c as u32 };
+            }
+        }
+        else
+        {
+            /* queue the output for printing out later when ready */
+            DEBUG_QUEUE.lock().push_str(s);
+        }
         Ok(())
     }
 }
 
-/* drain the debug queue into the debug logging buffer, and if no user interface
-   is available yet, drain the queue into the system debug output port */
+/* if no user interface is available yet, copy the queue into the system debug output port.
+   then regardless of the UI service, drain the debug queue into the debug logging buffer.
+   
+   if output is being forced to a particular port (eg, using qemuprint or sifiveprint)
+   then this function shouldn't have anything to do. a side effect of this is that
+   the UI service is then disconnected from the hypervisor's debug output, which means
+   there may be conflicts. forcing hypervisor output to a particular interface should
+   be used for early debugging, before any capsules are started */
 pub fn drain_queue()
 {
     /* avoid blocking if we can't write at this time */
     if DEBUG_LOCK.is_locked() == false
     {
+        /* acquire main debug lock and pretend to do something to it
+           to keep the toolchain happy */
         let mut debug_lock = DEBUG_LOCK.lock();
         *debug_lock = true;
+
         let mut debug_queue = DEBUG_QUEUE.lock();
         let mut debug_log = DEBUG_LOG.lock();
 
-        /* copy the debug queue out to the system debug output port ourselves if there's
-           no user interface yet */
+        /* copy the debug queue out to the system debug output port ourselves if there's no user interface yet */
         if service::is_registered(service::ServiceType::ConsoleInterface) == false
         {
-            if cfg!(feature = "qemuprint")
+            if hardware::write_debug_string(&debug_queue) == false
             {
-                /* force debug output to Qemu's serial port. useful for early debugging */
-                for c in debug_queue.as_bytes()
-                {
-                    /* this is the serial port address in qemu's RISC-V virt emulation */
-                    if cfg!(target_arch = "riscv64")
-                    {
-                        let tx_register = 0x10000000; /* qemu's standard UART location in memory */
-                        unsafe { *(tx_register as *mut u8) = *c };
-                    }
-                }
-            }
-            else if cfg!(feature = "sifiveprint")
-            {
-                let tx_register = 0x10010000; /* sifive's standard UART tx register location in memory */
-
-                /* force debug output to SiFive's standard serial port. useful for early debugging */
-                for c in debug_queue.as_bytes()
-                {
-                    /* when reading the word-length tx write register,
-                       it's zero if we're OK to write to it */
-                    while unsafe { *(tx_register as *mut u32) } != 0 {}
-                    unsafe { *(tx_register as *mut u32) = *c as u32 };
-                }
-            }
-            else
-            {
-                /* write out the debug info to the registered output interface.
-                   bail out now if this failed */
-                if hardware::write_debug_string(&debug_queue) == false
-                {
-                    return;
-                }
+                /* we may not even know what hardware is available yet,
+                   so bail out and try again later */
+                return;
             }
         }
 
