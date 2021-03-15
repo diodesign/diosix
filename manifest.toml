@@ -34,20 +34,34 @@ include = [ "gooey" ]
 path = "src/services"
 description = "console interface"
 properties = [ "auto_crash_restart", "service_console", "console_write", "console_read", "hv_log_read" ]
+ram = 64
+cpus = 2
 
 # define guests that may join us during boot
+
+# a mildly useful Linux with busybox, micropython, zsh, and less
+[guest.riscv64-linux-busybox-asciiinvaders]
+path = "boot/guests"
+url = "https://github.com/diodesign/diosix/raw/binaries/buildroot-guests/riscv64-linux-busybox-asciiinvaders"
+description = "64-bit RISC-V Linux with asciiinvaders and more"
+ram = 256
+cpus = 2
 
 # a mildly useful Linux with busybox, micropython, zsh, and less
 [guest.riscv64-linux-busybox-micropython]
 path = "boot/guests"
 url = "https://github.com/diodesign/diosix/raw/binaries/buildroot-guests/riscv64-linux-busybox-micropython"
 description = "64-bit RISC-V Linux with Busybox, Micropython, zsh, less"
+ram = 128
+cpus = 2
 
 # a bare-bones Linux and Busybox
 [guest.riscv64-linux-busybox]
 path = "boot/guests"
 url = "https://github.com/diodesign/diosix/raw/binaries/buildroot-guests/riscv64-linux-busybox"
 description = "64-bit RISC-V Linux with Busybox"
+ram = 128
+cpus = 2
 
 # select the guests to include for a given target
 
