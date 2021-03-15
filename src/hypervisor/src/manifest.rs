@@ -128,7 +128,7 @@ pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
         /* print the included boot message */
         ManifestObjectType::BootMsg =>
         {
-            hvdebugraw!("\n{}\n\n", String::from_utf8_lossy(content));
+            hvdebugraw!("\r\n{}\r\n\r\n", String::from_utf8_lossy(content));
             debughousekeeper!(); /* ensure the message is seen */
         },
 
