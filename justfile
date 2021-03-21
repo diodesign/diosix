@@ -7,6 +7,9 @@
 # Build and run diosix in Qemu, using the defaults:
 # just
 #
+# Build and run diosix in Spike, using the defaults:
+# just spike
+#
 # Only build diosix using the defaults:
 # just build
 # 
@@ -32,8 +35,14 @@
 # Set target to the architecture you want to build for. Eg:
 # just target=riscv64imac-unknown-none-elf
 #
-# Set emubin to the Qemu system emulator binary you want to use to run diosix, Eg:
-# just emubin=qemu-system-riscv64
+# Set qemubin to the path of the Qemu system emulator binary you want to use to run diosix, Eg:
+# just qemubin=qemu-system-riscv64
+#
+# Set spikebin to the path of the Spike binary you want to use to run diosix, Eg:
+# just spikebin=$HOME/src/riscv-isa-sim/build/spike
+#
+# Set spikeisa to the RISC-V ISA to use with Spike, eg:
+# just spikeisa=RV64IMAC
 #
 # Set objcopybin to the objcopy suitable for the target architecture. Eg:
 # just objcopybin=riscv64-linux-gnu-objcopy install
@@ -46,8 +55,8 @@
 # Set to yes to only report warnings and errors. Eg:
 # just quiet=no
 # just quiet=yes
-#
-# Set cpus to the number of CPU cores to run within qemu, eg:
+# 
+# Set cpus to the number of CPU cores to run within qemu and spike, eg:
 # just cpus=1
 #
 # Force debug text output via Qemu's serial port by setting qemuprint to yes, eg:
@@ -55,6 +64,9 @@
 # 
 # Force debug text output via SiFive's serial port by setting sifiveprint to yes, eg:
 # just sifiveprint=yes
+#
+# Force debug text output via Spike's HTIF by setting htifprint to yes, eg:
+# just htifprint=yes
 #
 # Disable hypervisor's regular integrity checks by setting integritychecks to no, eg:
 # just integritychecks=no
@@ -72,13 +84,17 @@
 # just guests-build=no 
 #
 # The defaults are:
-# emubin           qemu-system-riscv64
+# qemubin          qemu-system-riscv64
+# spikebin         spike
+# spikeisa         RV64IMAFDC
 # target           riscv64gc-unknown-none-elf
 # objcopybin       riscv64-linux-gnu-objcopy
 # quality          debug
 # quiet            yes
 # cpus             4
 # qemuprint        no
+# sifiveprint      no
+# htifprint        no
 # integritychecks  yes
 # services         yes
 # guests           yes
@@ -98,18 +114,22 @@ cleanmsg   := msgprefix + "Cleaning build tree"
 rustupmsg  := msgprefix + "Ensuring Rust can build for"
 builtmsg   := msgprefix + "Diosix built and ready to use at"
 qemumsg    := msgprefix + "Running Diosix in Qemu"
+spikemsg   := msgprefix + "Running Diosix in Spike"
 installmsg := msgprefix + "Installing"
 installedmsg := msgprefix + "Diosix installed on disk"
 
 # define defaults, these are overriden by the command line
 target          := "riscv64gc-unknown-none-elf"
-emubin          := "qemu-system-riscv64"
+qemubin         := "qemu-system-riscv64"
+spikebin        := "spike"
+spikeisa        := "RV64IMAFDC"
 objcopybin      := "riscv64-linux-gnu-objcopy"
 quality         := "debug"
 quiet           := "yes"
 cpus            := "4"
 qemuprint       := "no"
 sifiveprint     := "no"
+htifprint       := "no"
 integritychecks := "yes"
 services        := "yes"
 guests          := "yes"
@@ -127,6 +147,7 @@ quiet_redir_sw  := if quiet == "yes" { "> /dev/null " } else { "" }
 verbose_sw      := if quiet == "no" { "--verbose " } else { "" }
 qemuprint_sw    := if qemuprint == "yes" { "--features qemuprint" } else { "" }
 sifiveprint_sw  := if sifiveprint == "yes" { "--features sifiveprint" } else { "" }
+htifprint_sw    := if htifprint == "yes" { "--features htifprint" } else { "" }
 cargo_sw        := quiet_sw + release_sw + "--target " + target
 integritychecks_sw := if integritychecks == "yes" { "--features integritychecks" } else { "" }
 services_sw     := if services == "no" { "--skip-services" } else { "" }
@@ -138,7 +159,12 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 # build diosix with its components, and run it within qemu
 @qemu: build
     echo "{{qemumsg}}"
-    {{emubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 1G -kernel {{final-exe-path}}
+    {{qemubin}} -bios none -nographic -machine virt -smp {{cpus}} -m 1G -kernel {{final-exe-path}}
+
+# build diosix, and run it within spike
+@spike: build
+    echo "{{spikemsg}}"
+    {{spikebin}} --isa={{spikeisa}} -p{{cpus}} -m1024 {{final-exe-path}}
 
 # build and install diosix with its components onto a disk (requires root via sudo)
 @install: build
@@ -161,7 +187,7 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 # build the hypervisor and ensure it has a boot file system to include
 @_hypervisor: _mkdmfs
     echo "{{buildmsg}} hypervisor"
-    cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}} {{sifiveprint_sw}} {{integritychecks_sw}}
+    cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}} {{sifiveprint_sw}} {{htifprint_sw}} {{integritychecks_sw}}
 
 # build and run the dmfs generator to include banners and system services.
 # mkdmfs is configured by manifest.toml in the project root directory.
