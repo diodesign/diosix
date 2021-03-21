@@ -201,6 +201,7 @@ fn hvmain(cpu_nr: PhysicalCoreID, dtb_ptr: *const u8, dtb_len: u32) -> Result<()
     as such, only allow supervisor-mode capable CPU cores to build capasules */
     if pcore::PhysicalCore::smode_supported() == true
     {
+        /* only allow one core to do the unpacking */
         let mut flag = MANIFEST_UNPACKED.lock();
         
         if *flag == false

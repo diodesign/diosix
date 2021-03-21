@@ -141,6 +141,14 @@ impl fmt::Write for ConsoleWriter
                 unsafe { *(tx_register as *mut u32) = *c as u32 };
             }
         }
+        else if cfg!(feature = "htifprint")
+        {
+            extern "C" { fn platform_write_to_htif(byte: u8); }
+            for c in s.as_bytes()
+            {
+                unsafe { platform_write_to_htif(*c) }
+            }
+        }
         else
         {
             /* queue the output for printing out later when ready */

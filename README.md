@@ -66,7 +66,7 @@ Note: you will be [billed](https://cloud.google.com/run/pricing) by Google for a
 
 ## Run Diosix from source in a container <a name="run"></a>
 
-To build Diosix from source and boot it with a prebuilt guest OS within a Docker container on your own system, create a container image of the software:
+To build Diosix from source and boot it within Qemu with a prebuilt guest OS within a Docker container on your own system, create a container image of the software:
 
 ```
 git clone https://github.com/diodesign/diosix.git
@@ -84,7 +84,7 @@ As with Google Cloud Run, log into the provided guest Linux OS environment as `r
 
 ## Run Diosix from source without a container <a name="nocontainer"></a>
 
-To build and run Diosix from its latest source code without using Docker, follow [these instructions](docs/running.md).
+To build and run Diosix on real hardware, or within Qemu or Spike, from its latest source code without using Docker, follow [these instructions](docs/running.md).
 
 ## Frequently anticipated questions <a name="faq"></a> <a name="todo"></a>
 
