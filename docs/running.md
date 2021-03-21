@@ -11,6 +11,8 @@ The outcome will booting one or more guest operating systems, such as Linux, on 
 1. [Getting started](#prep)
 1. [Run Diosix in Qemu](#qemu)
    1. [Using the system console](#console)
+1. [Run Diosix in Spike](#spike)
+1. [Run Diosix on real hardware](#realhw)
 1. [Build without running](#buildonly)
 1. [Options for building and running](#opts)
    1. [Output build diagnostic messages](#opt_quiet)
@@ -68,6 +70,37 @@ By default, Diosix will run a system service called `gooey` that provides a very
 `gooey` will show messages and information from the hypervisor in red, and assign other colors to individual guests. For example, the first guest will use yellow to output its text, blue for the second guest, and purple for the third. By default, Diosix includes one guest. To include more, edit the `manifest.toml` file to add extra guests, and run Diosix again.
 
 Currently, `gooey` displays output text from all capsules, though when typing into it, either via Qemu or a real system's serial port, that input text is sent only to the first guest. The coloring of the input and output text can be temporarily altered by the guest, for example when listing files with `ls` and displaying executables in a special color. The exact colors seen may vary depending on the color scheme used by your terminal.
+
+## Run Diosix in Spike <a name="spike"></a>
+
+Once you have completed the [preparatory steps](#prep), run Diosix in the Spike RISC-V simulator:
+
+```
+just spike
+```
+
+Press `Control-c` to enter Spike's interactive debug mode. Instructions on how to use this mode are [here](https://github.com/riscv/riscv-isa-sim#interactive-debug-mode). Enter the command `q` or press `Control-c` again to quit the simulator from the debug mode.
+
+## Run Diosix on real hardware <a name="realhw"></a>
+
+**Warning: Follow the next steps with care! The storage device specified below will be reformatted with a new GPT-based partitioning scheme, with the hypervisor and its dmfs image stored in partition 1. This will render any prior data on the device inaccessible. See [LICENSE](../LICENSE) for more information on the conditions and terms of use of this documentation**
+
+Once you have completed the [preparatory steps](#prep), build Diosix and install it on an SD card or similar storage device for use in a physical system:
+
+```
+just disk=/dev/sdX install
+```
+
+Replace `/dev/sdX` with the path of the storage device you wish to install Diosix on. The installation process will require superuser privileges via `sudo`, and so your user account must be a `sudoer` for this just recipe to work. Once complete, the device can be used in a compatible computer. So far, this recipe supports:
+
+* SiFive's [HiFive Unleashed](https://www.sifive.com/boards/hifive-unleashed)
+  1. Ensure the Unleashed board's boot mode switches are all set to `1`.
+  1. Insert a microSD card into the host building Diosix and run the above command, replacing `/dev/sdX` with the card's path to install the hypervisor to the card.
+  1. Remove the microSD card and insert it into the Unleashed board.
+  1. Connect the host to the Unleashed board's microUSB port via a suitable USB cable.
+  1. Power on or reset the Unleashed board.
+  1. Run the command `sudo screen /dev/ttyUSBX 115200` on the host to access the board's serial port console. You should replace `/dev/ttyUSBX` with the Unleashed's USB-to-serial interface. Typically, `X` is `1`.
+  1. You should see Diosix's output in the serial port console.
 
 ## Build without running <a name="buildonly"></a>
 
