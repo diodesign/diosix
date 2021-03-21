@@ -79,7 +79,7 @@ Once you have completed the [preparatory steps](#prep), run Diosix in the Spike 
 just spike
 ```
 
-Press `Control-c` to enter Spike's interactive debug mode. Instructions on how to use this mode are [here](https://github.com/riscv/riscv-isa-sim#interactive-debug-mode). Enter the command `q` or press `Control-c` again to quit the simulator from the debug mode.
+Press `Control-c` to enter Spike's interactive debug mode. Instructions on how to use this mode are [here](https://github.com/riscv/riscv-isa-sim#interactive-debug-mode). Enter the command `q` or press `Control-c` again to quit the simulator from the debug mode. Note that support for Spike is not yet complete.
 
 ## Run Diosix on real hardware <a name="realhw"></a>
 
@@ -93,7 +93,7 @@ just disk=/dev/sdX install
 
 Replace `/dev/sdX` with the path of the storage device you wish to install Diosix on. The installation process will require superuser privileges via `sudo`, and so your user account must be a `sudoer` for this just recipe to work. Once complete, the device can be used in a compatible computer. So far, this recipe supports:
 
-* SiFive's [HiFive Unleashed](https://www.sifive.com/boards/hifive-unleashed)
+* SiFive's [HiFive Unleashed](https://www.sifive.com/boards/hifive-unleashed). To run Diosix on this system:
   1. Ensure the Unleashed board's boot mode switches are all set to `1`.
   1. Insert a microSD card into the host building Diosix and run the above command, replacing `/dev/sdX` with the card's path to install the hypervisor to the card.
   1. Remove the microSD card and insert it into the Unleashed board.
@@ -101,6 +101,8 @@ Replace `/dev/sdX` with the path of the storage device you wish to install Diosi
   1. Power on or reset the Unleashed board.
   1. Run the command `sudo screen /dev/ttyUSBX 115200` on the host to access the board's serial port console. You should replace `/dev/ttyUSBX` with the Unleashed's USB-to-serial interface. Typically, `X` is `1`.
   1. You should see Diosix's output in the serial port console.
+
+Note that support for real hardware is not yet complete.
 
 ## Build without running <a name="buildonly"></a>
 
