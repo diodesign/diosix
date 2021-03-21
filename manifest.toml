@@ -71,7 +71,7 @@ cpus = 2
 # for the default target as follows:
 #
 # [target.riscv64gc-unknown-none-elf]
-# guests = [ "riscv64-linux-busybox-micropython", "riscv64-linux-busybox", "riscv64-linux-busybox" ]
+# guests = [ "riscv64-linux-busybox-micropython", "riscv64-linux-busybox", "riscv64-linux-busybox-asciiinvaders" ]
 #
 
 # RV64GC: this is the default target, loading one guest only by default
