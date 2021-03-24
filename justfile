@@ -184,7 +184,7 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 @_descr:
     echo "{{buildmsg}} {{quality_sw}}-grade Diosix for {{target}} systems"
 
-# build the hypervisor and ensure it has a boot file system to include
+# build the hypervisor after ensuring it has a boot file system to include
 @_hypervisor: _mkdmfs
     echo "{{buildmsg}} hypervisor"
     cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}} {{sifiveprint_sw}} {{htifprint_sw}} {{integritychecks_sw}}
