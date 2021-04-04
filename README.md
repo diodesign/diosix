@@ -29,7 +29,7 @@ Next, fetch from the [`binaries`](https://github.com/diodesign/diosix/tree/binar
 wget https://github.com/diodesign/diosix/raw/binaries/diosix/diosix-0.0.2-debug-20210404
 ```
 
-Run Diosix on a dual-core Qemu system with 512MB of RAM:
+Run Diosix on a dual-core Qemu system with 1GB of RAM:
 
 ```
 qemu-system-riscv64 -bios none -nographic -machine virt -smp 2 -m 1G -kernel diosix-0.0.2-debug-20210404
