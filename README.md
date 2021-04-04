@@ -26,13 +26,13 @@ To run a prebuilt version of Diosix and a RISC-V Linux guest within Qemu, first 
 Next, fetch from the [`binaries`](https://github.com/diodesign/diosix/tree/binaries) branch an executable containing the hypervisor and its guest:
 
 ```
-wget https://github.com/diodesign/diosix/raw/binaries/diosix/diosix-0.0.2-debug-20210307
+wget https://github.com/diodesign/diosix/raw/binaries/diosix/diosix-0.0.2-debug-20210404
 ```
 
 Run Diosix on a dual-core Qemu system with 512MB of RAM:
 
 ```
-qemu-system-riscv64 -bios none -nographic -machine virt -smp 2 -m 512M -kernel diosix-0.0.2-debug-20210307
+qemu-system-riscv64 -bios none -nographic -machine virt -smp 2 -m 512M -kernel diosix-0.0.2-debug-20210404
 ```
 
 Once booted, the hypervisor will start its included Linux guest OS. When you see the following prompt, log into the guest as `root` with no password:
