@@ -43,6 +43,7 @@ Every so often, built versions of Diosix will be uploaded to the [`diosix`](dios
 
 | Filename | Description |
 |----------|-------------|
+| [diosix-0.0.2-debug-20210404](diosix/diosix-0.0.2-debug-20210404) | Debug build of Diosix 0.0.2 built on April 4, 2021. This contains the same software as the March 7 build as well as various internal changes, such as being built without the use of the Mason build script system |
 | [diosix-0.0.2-debug-20210307](diosix/diosix-0.0.2-debug-20210307) | Debug build of Diosix 0.0.2 built on March 7, 2021 after the mega-merge of the `november_reorg` development branch. Contains the hypervisor, the `gooey` virtual console, and a Linux guest OS environment containing BusyBox, Micropything, zsh, and less |
 
 Note: these builds include the third-party free software described above.
