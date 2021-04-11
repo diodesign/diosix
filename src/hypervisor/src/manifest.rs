@@ -119,7 +119,7 @@ pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
         {
             Ok(cid) => hvdebug!("Created guest OS {} ({}) {} bytes (capsule {})",
                         asset.get_name(), asset.get_description(), asset.get_contents_size(), cid),
-            Err(_e) => hvdebug!("Failed to create capsule for system service {}: {:?}", asset.get_name(), _e)
+            Err(_e) => hvdebug!("Failed to create capsule for guest OS {}: {:?}", asset.get_name(), _e)
         },
 
         t => hvdebug!("Found manifest object type {:?}", t)
