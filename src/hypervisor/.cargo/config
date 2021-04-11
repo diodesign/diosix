@@ -5,20 +5,16 @@
 # See LICENSE for usage and copying.
 #
 
-#
 # set the default build triple 
-#
 [build]
 target = "riscv64gc-unknown-none-elf"
 
 # Find the linker for 64-bit RISC-V (IMAC) targets
 [target.riscv64imac-unknown-none-elf]
-rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform-riscv/link.ld", "-C", "link-arg=--no-eh-frame-hdr" ]
-linker = "riscv64-linux-gnu-ld"
-ar = "riscv64-linux-gnu-ar"
+linker = "../itsylinker/target/debug/itsylinker"
+rustflags = [ "-C", "link-arg=-T", "-C", "link-arg=src/platform-riscv/link.toml" ]
 
 # Find the linker for 64-bit RISC-V (GC) targets
 [target.riscv64gc-unknown-none-elf]
-rustflags = [ "-Z", "pre-link-arg=-nostartfiles", "-C", "link-arg=-Tsrc/platform-riscv/link.ld", "-C", "link-arg=--no-eh-frame-hdr" ]
-linker = "riscv64-linux-gnu-ld"
-ar = "riscv64-linux-gnu-ar"
+linker = "../itsylinker/target/debug/itsylinker"
+rustflags = [ "-C", "link-arg=-T", "-C", "link-arg=src/platform-riscv/link.toml" ]
