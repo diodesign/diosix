@@ -179,13 +179,18 @@ cargo_cmd       := "cargo +nightly"
 
 # the core workflow for building diosix and its components
 # a link is created at final-exe-path to the final packaged executable
-@build: _descr _rustup _hypervisor
+@build: _descr _rustup _itsylinker _hypervisor
     ln -fs {{target}}/{{quality_sw}}/hypervisor {{final-exe-path}}
     echo "{{builtmsg}} {{final-exe-path}}"
 
 # let the user know what's going to happen
 @_descr:
     echo "{{buildmsg}} {{quality_sw}}-grade Diosix for {{target}} systems"
+
+# build the itsy-bitsy linker ready for use
+@_itsylinker:
+    echo "{{buildmsg}} linker"
+    cd src/itsylinker && {{cargo_cmd}} build {{quiet_sw}}
 
 # build the hypervisor after ensuring it has a boot file system to include
 @_hypervisor: _mkdmfs
@@ -194,12 +199,12 @@ cargo_cmd       := "cargo +nightly"
 
 # build and run the dmfs generator to include banners and system services.
 # mkdmfs is configured by manifest.toml in the project root directory.
-# the output fs image is linked in the hypervisor and unpacked at run-time
+# the output fs image is linked in the hypervisor and unpacked at run-time.
 #
 # the target directory stores the dmfs image file
 @_mkdmfs: _services
     echo "{{buildmsg}} dmfs image"
-    cd src/mkdmfs && {{cargo_cmd}} run {{quiet_sw}} -- -t {{target}} -q {{quality_sw}} {{verbose_sw}} {{services_sw}} {{guests_sw}} {{downloads_sw}} {{builds_sw}}
+    cd src/mkdmfs && {{cargo_cmd}} run {{quiet_sw}} --release -- -t {{target}} -q {{quality_sw}} {{verbose_sw}} {{services_sw}} {{guests_sw}} {{downloads_sw}} {{builds_sw}}
 
 # build the system services
 @_services: 
@@ -209,8 +214,8 @@ cargo_cmd       := "cargo +nightly"
 # make sure we've got the cross-compiler installed and setup
 @_rustup:
     echo "{{rustupmsg}} {{target}}"
-    rustup {{quiet_sw}} target install {{target}}
     rustup {{quiet_sw}} toolchain install nightly
+    rustup {{quiet_sw}} target install {{target}} --toolchain nightly
 
 # delete intermediate build files and update cargo dependencies to start afresh
 @clean:
