@@ -16,3 +16,6 @@
 [submodule "src/services/src/gooey"]
 	path = src/services/src/gooey
 	url = https://github.com/diodesign/gooey.git
+[submodule "src/itsylinker"]
+	path = src/itsylinker
+	url = https://github.com/diodesign/itsylinker.git
