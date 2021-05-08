@@ -4,7 +4,7 @@ These instructions will walk you through building and running Diosix. They assum
 
 ## Objectives
 
-The outcome will booting one or more guest operating systems, such as Linux, on Diosix within a Qemu emulated environment. You can also just build the project to install its executable package on real hardware.
+The outcome will involve booting one or more guest operating systems, such as Linux, on Diosix within a Qemu emulated environment. You can also just build the project to install its executable package on real hardware.
 
 ## Table of contents
 
