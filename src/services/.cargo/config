@@ -1,7 +1,7 @@
 #
 # diosix supervisor platform-specific linker settings
 #
-# (c) Chris Williams, 2020.
+# (c) Chris Williams, 2020-2021.
 # See LICENSE for usage and copying.
 #
 
@@ -11,24 +11,16 @@
 [build]
 target = "riscv64gc-unknown-none-elf"
 
-# Find the linker for 64-bit RISC-V (IMAC) targets
-[target.riscv64imac-unknown-none-elf]
-rustflags = [
-    "-Z", "pre-link-arg=-nostartfiles",
-    "-C", "link-arg=-Tsrc/supervisor-riscv/link.ld",
-    "-C", "link-arg=-pie",
-    "-C", "link-arg=--no-dynamic-linker",
-    "-C", "relocation-model=pic" ]
-linker = "riscv64-linux-gnu-ld"
-ar = "riscv64-linux-gnu-ar"
-
 # Find the linker for 64-bit RISC-V (GC) targets
 [target.riscv64gc-unknown-none-elf]
+linker = "../itsylinker/target/debug/itsylinker"
 rustflags = [
-    "-Z", "pre-link-arg=-nostartfiles",
-    "-C", "link-arg=-Tsrc/supervisor-riscv/link.ld",
-    "-C", "link-arg=-pie",
-    "-C", "link-arg=--no-dynamic-linker",
-    "-C", "relocation-model=pic" ]
-linker = "riscv64-linux-gnu-ld"
-ar = "riscv64-linux-gnu-ar"
+        "-C", "link-arg=-T", "-C", "link-arg=src/supervisor-riscv/link.toml",
+        "-C", "relocation-model=pic" ]
+
+# Find the linker for 64-bit RISC-V (IMAC) t0argets
+[target.riscv64imac-unknown-none-elf]
+linker = "../itsylinker/target/debug/itsylinker"
+rustflags = [
+        "-C", "link-arg=-T", "-C", "link-arg=src/supervisor-riscv/link.toml",
+        "-C", "relocation-model=pic" ]

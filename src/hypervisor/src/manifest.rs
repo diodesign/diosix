@@ -16,37 +16,14 @@ use dmfs::{ManifestImageIter, ManifestObject, ManifestObjectType, ManifestObject
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/* bring in the built-in dmfs image */
-use core::slice;
-use core::intrinsics::transmute;
-extern "C"
-{
-    static _binary_dmfs_img_start: u8;
-    static _binary_dmfs_img_size: u8;
-}
-
-/* convert the included dmfs image into a byte slice */
-macro_rules! get_dmfs_image
-{
-    () =>
-    {
-        unsafe
-        {
-            slice::from_raw_parts
-            (
-                transmute(&_binary_dmfs_img_start),
-                transmute(&_binary_dmfs_img_size)
-            )
-        }
-    }
-}
+/* drop in the dmfs image built by mkdmfs */
+static DMFS_IMAGE: &[u8] = include_bytes!("../../mkdmfs/target/dmfs.img");
 
 /* return a list of a DMFS image's asset names and descriptions
    <= array of (names, descriptions) of image's assets */
 pub fn list_assets() ->  Result<Vec<(String, String)>, Cause>
 {
-    let image = get_dmfs_image!();
-    let manifest = match ManifestImageIter::from_slice(image)
+    let manifest = match ManifestImageIter::from_slice(&DMFS_IMAGE)
     {
         Ok(m) => m,
         Err(_) => return Err(Cause::ManifestBadFS)
@@ -64,8 +41,7 @@ pub fn list_assets() ->  Result<Vec<(String, String)>, Cause>
 /* look up an asset from the given DMFS image by its name */
 pub fn get_named_asset(name: &str) -> Result<ManifestObject, Cause>
 {
-    let image = get_dmfs_image!();
-    let manifest = match ManifestImageIter::from_slice(image)
+    let manifest = match ManifestImageIter::from_slice(&DMFS_IMAGE)
     {
         Ok(m) => m,
         Err(_) => return Err(Cause::ManifestBadFS)
@@ -87,8 +63,7 @@ pub fn get_named_asset(name: &str) -> Result<ManifestObject, Cause>
    and output any included boot banner messages, during system start up */
 pub fn unpack_at_boot() -> Result<(), Cause>
 {
-    let image = get_dmfs_image!();
-    let manifest = match ManifestImageIter::from_slice(image)
+    let manifest = match ManifestImageIter::from_slice(&DMFS_IMAGE)
     {
         Ok(m) => m,
         Err(_) => return Err(Cause::ManifestBadFS)
@@ -115,12 +90,11 @@ pub fn unpack_at_boot() -> Result<(), Cause>
 */
 pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
 {
-    let image = get_dmfs_image!();
     let properties = asset.get_properties();
     let content = match asset.get_contents()
     {
         ManifestObjectData::Bytes(b) => b.as_slice(),
-        ManifestObjectData::Region(r) => &image[r.start..r.end]
+        ManifestObjectData::Region(r) => &DMFS_IMAGE[r.start..r.end]
     };
     
     match asset.get_type()
@@ -145,7 +119,7 @@ pub fn load_asset(asset: ManifestObject) -> Result<(), Cause>
         {
             Ok(cid) => hvdebug!("Created guest OS {} ({}) {} bytes (capsule {})",
                         asset.get_name(), asset.get_description(), asset.get_contents_size(), cid),
-            Err(_e) => hvdebug!("Failed to create capsule for system service {}: {:?}", asset.get_name(), _e)
+            Err(_e) => hvdebug!("Failed to create capsule for guest OS {}: {:?}", asset.get_name(), _e)
         },
 
         t => hvdebug!("Found manifest object type {:?}", t)

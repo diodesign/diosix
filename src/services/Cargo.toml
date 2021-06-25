@@ -3,7 +3,6 @@ name = "diosix-services"
 version = "1.0.0"
 authors = ["Chris Williams <chrisw@diosix.org>"]
 license = "MIT"
-build = "../mason/build.rs"
 publish = false
 edition = "2018"
 

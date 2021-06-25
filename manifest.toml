@@ -63,6 +63,14 @@ description = "64-bit RISC-V Linux with Busybox"
 ram = 128
 cpus = 2
 
+# repnop's vanadinite Rust operating system
+# see https://github.com/repnop/vanadinite
+[guest.vanadinite]
+path = "boot/guests"
+description = "RV64GC Vanadinite microkernel with userspace"
+ram = 128
+cpus = 1
+
 # select the guests to include for a given target
 
 # To include and boot more than one guest, add more than one entry to the guests array

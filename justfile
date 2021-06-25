@@ -155,6 +155,9 @@ guests_sw       := if guests == "no" { "--skip-guests" } else { "" }
 downloads_sw    := if guests-download == "no" { "--skip-downloads" } else { "" }
 builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 
+# use rustc's nightly build
+cargo_cmd       := "cargo +nightly"
+
 # the default recipe
 # build diosix with its components, and run it within qemu
 @qemu: build
@@ -176,7 +179,7 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 
 # the core workflow for building diosix and its components
 # a link is created at final-exe-path to the final packaged executable
-@build: _descr _rustup _hypervisor
+@build: _descr _rustup _itsylinker _hypervisor
     ln -fs {{target}}/{{quality_sw}}/hypervisor {{final-exe-path}}
     echo "{{builtmsg}} {{final-exe-path}}"
 
@@ -184,43 +187,49 @@ builds_sw       := if guests-build == "no" { "--skip-buildroot" } else { "" }
 @_descr:
     echo "{{buildmsg}} {{quality_sw}}-grade Diosix for {{target}} systems"
 
-# build the hypervisor and ensure it has a boot file system to include
+# build the itsy-bitsy linker ready for use
+@_itsylinker:
+    echo "{{buildmsg}} linker"
+    cd src/itsylinker && {{cargo_cmd}} build {{quiet_sw}}
+
+# build the hypervisor after ensuring it has a boot file system to include
 @_hypervisor: _mkdmfs
     echo "{{buildmsg}} hypervisor"
-    cd src/hypervisor && cargo build {{cargo_sw}} {{qemuprint_sw}} {{sifiveprint_sw}} {{htifprint_sw}} {{integritychecks_sw}}
+    cd src/hypervisor && {{cargo_cmd}} build {{cargo_sw}} {{qemuprint_sw}} {{sifiveprint_sw}} {{htifprint_sw}} {{integritychecks_sw}}
 
 # build and run the dmfs generator to include banners and system services.
 # mkdmfs is configured by manifest.toml in the project root directory.
-# the output fs image is linked in the hypervisor and unpacked at run-time
+# the output fs image is linked in the hypervisor and unpacked at run-time.
 #
 # the target directory stores the dmfs image file
 @_mkdmfs: _services
     echo "{{buildmsg}} dmfs image"
-    cd src/mkdmfs && cargo run {{quiet_sw}} -- -t {{target}} -q {{quality_sw}} {{verbose_sw}} {{services_sw}} {{guests_sw}} {{downloads_sw}} {{builds_sw}}
+    cd src/mkdmfs && {{cargo_cmd}} run {{quiet_sw}} --release -- -t {{target}} -q {{quality_sw}} {{verbose_sw}} {{services_sw}} {{guests_sw}} {{downloads_sw}} {{builds_sw}}
 
 # build the system services
 @_services: 
     echo "{{buildmsg}} system services"
-    cd src/services && cargo build {{cargo_sw}}
+    cd src/services && {{cargo_cmd}} build {{cargo_sw}}
 
 # make sure we've got the cross-compiler installed and setup
 @_rustup:
     echo "{{rustupmsg}} {{target}}"
-    rustup {{quiet_sw}} target install {{target}}
+    rustup {{quiet_sw}} toolchain install nightly
+    rustup {{quiet_sw}} target install {{target}} --toolchain nightly
 
 # delete intermediate build files and update cargo dependencies to start afresh
 @clean:
     echo "{{cleanmsg}}"
-    -cd src/hypervisor && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
-    -cd src/services && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
-    -cd src/mkdmfs && cargo {{quiet_sw}} clean && cargo {{quiet_sw}} update
+    -cd src/hypervisor && {{cargo_cmd}} {{quiet_sw}} clean && {{cargo_cmd}} {{quiet_sw}} update
+    -cd src/services && {{cargo_cmd}} {{quiet_sw}} clean && {{cargo_cmd}} {{quiet_sw}} update
+    -cd src/mkdmfs && {{cargo_cmd}} {{quiet_sw}} clean && {{cargo_cmd}} {{quiet_sw}} update
 
 # FIXME: the framework for this is broken.
 # run unit tests for each major component
 # @_test:
-#    -cd src/hypervisor && cargo {{quiet_sw}} test
-#    -cd src/services && cargo {{quiet_sw}} test
-#    -cd src/mkdmfs && cargo {{quiet_sw}} test
+#    -cd src/hypervisor && {{cargo_cmd}} {{quiet_sw}} test
+#    -cd src/services && {{cargo_cmd}} {{quiet_sw}} test
+#    -cd src/mkdmfs && {{cargo_cmd}} {{quiet_sw}} test
 
 # are we allowed one easter egg?
 @_incredible:
