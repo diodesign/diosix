@@ -11,6 +11,7 @@
 use super::lock::Mutex;
 use alloc::collections::vec_deque::VecDeque;
 use hashbrown::hash_map::HashMap;
+use spinning::Lazy;
 use platform::timer::TimerValue;
 use super::error::Cause;
 use super::vcore::{VirtualCore, Priority};
@@ -41,12 +42,9 @@ const MAINTENANCE_LENGTH: TimerValue = TimerValue::Seconds(5);
 of high-normal wait queues, virtual cores waiting to be assigned to a physical CPU sit in these global queues.
 when a physical CPU runs out of queued virtual cores, it pulls one from these global queues.
 a physical CPU core can ask fellow CPUs to push virtual cores onto the global queues via messages */
-lazy_static!
-{
-    static ref GLOBAL_QUEUES: Mutex<ScheduleQueues> = Mutex::new("global scheduler queue", ScheduleQueues::new());
-    static ref WORKLOAD: Mutex<HashMap<PhysicalCoreID, usize>> = Mutex::new("workload balancer", HashMap::new());
-    static ref LAST_HOUSEKEEP_CHECK: Mutex<TimerValue> = Mutex::new("housekeeper tracking", TimerValue::Exact(0));
-}
+static GLOBAL_QUEUES: Lazy<Mutex<ScheduleQueues>> = Lazy::new(|| Mutex::new("global scheduler queue", ScheduleQueues::new()));
+static WORKLOAD: Lazy<Mutex<HashMap<PhysicalCoreID, usize>>> = Lazy::new(|| Mutex::new("workload balancer", HashMap::new()));
+static LAST_HOUSEKEEP_CHECK: Lazy<Mutex<TimerValue>> = Lazy::new(|| Mutex::new("housekeeper tracking", TimerValue::Exact(0)));
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SearchMode

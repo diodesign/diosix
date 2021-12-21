@@ -33,9 +33,9 @@ xmas-elf = { git = "https://github.com/nrc/xmas-elf.git" }
 version = "0.11.1"
 features = [ "nightly" ]
 
-[dependencies.lazy_static]
-version = "1.4.0"
-features = [ "spin_no_std" ]
+[dependencies.spinning]
+git = "https://github.com/diodesign/spinning-rs"
+default-features = false
 
 # supported build targets - don't forget to update .cargo with details for the linker and runner when adding new ports
 [target.riscv64imac-unknown-none-elf.dependencies]

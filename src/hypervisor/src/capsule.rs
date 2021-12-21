@@ -10,6 +10,7 @@ use super::lock::Mutex;
 use hashbrown::hash_map::HashMap;
 use hashbrown::hash_map::Entry::{Occupied, Vacant};
 use hashbrown::hash_set::HashSet;
+use spinning::Lazy;
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
 use platform::cpu::{Entry, CPUcount};
@@ -29,26 +30,20 @@ pub type CapsuleID = usize;
 const CAPSULES_MAX: usize = 1000000;
 
 /* needed to assign system-wide unique capsule ID numbers */
-lazy_static!
-{
-    static ref CAPSULE_ID_NEXT: AtomicUsize = AtomicUsize::new(0);
-}
+static CAPSULE_ID_NEXT: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 /* maintain a shared table of capsules and linked data */
-lazy_static!
-{
-    /* acquire CAPSULES lock before accessing any capsules */
-    static ref CAPSULES: Mutex<HashMap<CapsuleID, Capsule>> = Mutex::new("capsule ID table", HashMap::new());
+/* acquire CAPSULES lock before accessing any capsules */
+static CAPSULES: Lazy<Mutex<HashMap<CapsuleID, Capsule>>> = Lazy::new(|| Mutex::new("capsule ID table", HashMap::new()));
 
-    /* set of capsules to restart */
-    static ref TO_RESTART: Mutex<HashSet<CapsuleID>> = Mutex::new("capsule restart list", HashSet::new());
+/* set of capsules to restart */
+static TO_RESTART: Lazy<Mutex<HashSet<CapsuleID>>> = Lazy::new(|| Mutex::new("capsule restart list", HashSet::new()));
 
-    /* maintain collective input and output system console buffers for capsules.
-       the console system service capsule (ServiceConsole) will read from
-       STDOUT to display capsules' text, and will write to STDIN to inject characters into capsules */
-    static ref STDIN: Mutex<HashMap<CapsuleID, Vec<char>>> = Mutex::new("capsule STDIN table", HashMap::new());
-    static ref STDOUT: Mutex<HashMap<CapsuleID, Vec<char>>> = Mutex::new("capsule STDOUT table", HashMap::new());
-}
+/* maintain collective input and output system console buffers for capsules.
+    the console system service capsule (ServiceConsole) will read from
+    STDOUT to display capsules' text, and will write to STDIN to inject characters into capsules */
+static STDIN: Lazy<Mutex<HashMap<CapsuleID, Vec<char>>>> = Lazy::new(|| Mutex::new("capsule STDIN table", HashMap::new()));
+static STDOUT: Lazy<Mutex<HashMap<CapsuleID, Vec<char>>>> = Lazy::new(|| Mutex::new("capsule STDOUT table", HashMap::new()));
 
 /* perform housekeeping duties on idle physical CPU cores */
 macro_rules! capsulehousekeeper

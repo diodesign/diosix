@@ -13,6 +13,7 @@ use core::fmt;
 use super::lock::Mutex;
 use alloc::vec::Vec;
 use alloc::string::String;
+use spinning::Lazy;
 use super::hardware;
 use super::service;
 use super::message;
@@ -30,12 +31,9 @@ use super::message;
 
 const DEBUG_LOG_MAX_LEN: usize = 64 * 1024; /* 64KB max length for debug log buffer */
 
-lazy_static!
-{
-    pub static ref DEBUG_LOCK: Mutex<bool> = Mutex::new("primary debug lock", false);
-    static ref DEBUG_QUEUE: Mutex<String> = Mutex::new("debug output queue", String::new());
-    static ref DEBUG_LOG: Mutex<Vec<char>> = Mutex::new("debug log buffer", Vec::new());
-}
+pub static DEBUG_LOCK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new("primary debug lock", false));
+static DEBUG_QUEUE: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new("debug output queue", String::new()));
+static DEBUG_LOG: Lazy<Mutex<Vec<char>>> = Lazy::new(|| Mutex::new("debug log buffer", Vec::new()));
 
 /* top level debug macros */
 /* bad news: bug detection, failures, etc. */

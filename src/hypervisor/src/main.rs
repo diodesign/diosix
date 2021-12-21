@@ -43,8 +43,8 @@ extern crate devicetree;
 extern crate dmfs;
 
 /* needed for lazyily-allocated static variables */
-#[macro_use]
-extern crate lazy_static;
+extern crate spinning;
+use spinning::Lazy;
 
 /* this will bring in all the hardware-specific code */
 extern crate platform;
@@ -70,11 +70,9 @@ mod message;    /* send messages between physical cores */
 mod service;    /* allow capsules to register services */
 mod manifest;   /* manage capsules loaded with the hypervisor */
 
-/* needed for exclusive locks */
 mod lock;
 use lock::Mutex;
 
-/* list of error codes */
 mod error;
 use error::Cause;
 
@@ -84,21 +82,18 @@ use pcore::{PhysicalCoreID, BOOT_PCORE_ID};
 although we'll keep track of physical memory, we'll let Rust perform essential
 tasks, such as dropping objects when it's no longer needed, borrow checking, etc */
 #[global_allocator]
-static HV_HEAP: heap::HVallocator = heap::HVallocator;
+static HV_HEAP: Lazy<heap::HVallocator> = Lazy::new(|| heap::HVallocator);
 
-lazy_static!
-{
-    /* set to true to allow physical CPU cores to start running supervisor code */
-    static ref INIT_DONE: Mutex<bool> = Mutex::new("system bring-up", false);
+/* set to true to allow physical CPU cores to start running supervisor code */
+static INIT_DONE: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new("system bring-up", false));
 
-    /* a physical CPU core obtaining this lock when it is false must walk the DMFS, create
-    capsules required to run at boot time, and set the flag to true. any other core
-    obtaining it as true must release the lock and move on */
-    static ref MANIFEST_UNPACKED: Mutex<bool> = Mutex::new("dmfs unpacked", false);
+/* a physical CPU core obtaining this lock when it is false must walk the DMFS, create
+capsules required to run at boot time, and set the flag to true. any other core
+obtaining it as true must release the lock and move on */
+static MANIFEST_UNPACKED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new("dmfs unpacked", false));
 
-    /* set to true if individual cores can sound off their presence and capabilities */
-    static ref ROLL_CALL: Mutex<bool> = Mutex::new("CPU roll call", false);
-}
+/* set to true if individual cores can sound off their presence and capabilities */
+static ROLL_CALL: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new("CPU roll call", false));
 
 /* pointer sizes: stick to usize as much as possible: don't always assume it's a 64-bit machine */
 

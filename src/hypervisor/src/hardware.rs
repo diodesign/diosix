@@ -7,16 +7,14 @@
 
 use alloc::vec::Vec;
 use super::lock::Mutex;
+use spinning::Lazy;
 use platform::devices::Devices;
 use platform::physmem::{PhysMemBase, PhysMemSize};
 use platform::timer;
 use super::error::Cause;
 
-lazy_static!
-{
-    /* acquire HARDWARE before accessing any system hardware */
-    static ref HARDWARE: Mutex<Option<Devices>> = Mutex::new("hardware management", None);
-}
+/* acquire HARDWARE before accessing any system hardware */
+static HARDWARE: Lazy<Mutex<Option<Devices>>> = Lazy::new(|| Mutex::new("hardware management", None));
 
 /* parse_and_init
    Parse a device tree structure to create a base set of hardware devices.
