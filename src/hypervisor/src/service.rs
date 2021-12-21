@@ -7,6 +7,7 @@
 
 use super::lock::Mutex;
 use hashbrown::hash_map::{HashMap, Entry};
+use spinning::Lazy;
 use alloc::collections::vec_deque::VecDeque;
 use alloc::vec::Vec;
 use super::message;
@@ -43,10 +44,7 @@ then other capsules can message those services
 to access those underlying resources. */
 
 /* maintain a table of registered services */
-lazy_static!
-{
-    static ref SERVICES: Mutex<HashMap<ServiceType, Service>> = Mutex::new("system service table", HashMap::new());
-}
+static SERVICES: Lazy<Mutex<HashMap<ServiceType, Service>>> = Lazy::new(|| Mutex::new("system service table", HashMap::new()));
 
 /* return true if the given service type is registered */
 pub fn is_registered(stype: ServiceType) -> bool

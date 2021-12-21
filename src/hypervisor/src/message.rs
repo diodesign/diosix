@@ -9,6 +9,7 @@ use super::lock::Mutex;
 use alloc::collections::vec_deque::VecDeque;
 use alloc::string::String;
 use hashbrown::hash_map::HashMap;
+use spinning::Lazy;
 use super::error::Cause;
 use super::service::{self, ServiceType};
 use super::capsule::CapsuleID;
@@ -30,10 +31,7 @@ use super::pcore::{PhysicalCoreID, PhysicalCore};
 */
 
 /* maintain a mailbox of messages per physical CPU core */
-lazy_static!
-{
-    static ref MAILBOXES: Mutex<HashMap<PhysicalCoreID, VecDeque<Message>>> = Mutex::new("mailbox", HashMap::new());
-}
+static MAILBOXES: Lazy<Mutex<HashMap<PhysicalCoreID, VecDeque<Message>>>> = Lazy::new(|| Mutex::new("mailbox", HashMap::new()));
 
 /* create a mailbox for physical CPU core coreid */
 pub fn create_mailbox(coreid: PhysicalCoreID)

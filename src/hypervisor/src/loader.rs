@@ -216,9 +216,7 @@ pub fn load(target: Region, source: &[u8]) -> Result<Entry, Cause>
                                 match (offset, info, addend)
                                 {
                                     (Some(&o), Some(&i), Some(&a)) =>
-                                    {
-                                        // hvdebug!("reloc: offset {:x}, addend {:x}", o, a);
-                                        
+                                    {   
                                         /* different CPU architectures have different relocation rules.
                                         relocation type is in the lower byte of the info word */
                                         match (&cpu, (i & 0xff) as u8)

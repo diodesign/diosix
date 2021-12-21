@@ -15,6 +15,7 @@ so it's OK to keep it really simple for now. */
 
 use super::lock::Mutex;
 use hashbrown::hash_map::HashMap;
+use spinning::Lazy;
 use platform::physmem::PhysMemSize;
 use platform::cpu::{SupervisorState, CPUFeatures};
 use platform::timer;
@@ -41,17 +42,14 @@ extern "C"
     fn platform_load_supervisor_state(state: &SupervisorState);
 }
 
-lazy_static!
-{
-    /* map running virtual CPU cores to physical CPU cores, and vice-versa
-    we can't store these in Core structs because it upsets Rust's borrow checker.
-    note: PCORES keeps track of the last physical CPU core to run a given virtual
-    core. this is more of a hint than a concrete guarantee: the virtual core
-    may have been scheduled away, though it should be in the last physical
-    CPU core's scheduling queue. */
-    static ref VCORES: Mutex<HashMap<PhysicalCoreID, VirtualCore>> = Mutex::new("physical-virtual core table", HashMap::new());
-    static ref PCORES: Mutex<HashMap<VirtualCoreCanonicalID, PhysicalCoreID>> = Mutex::new("physical-virtual core ID table", HashMap::new());
-}
+/* map running virtual CPU cores to physical CPU cores, and vice-versa
+we can't store these in Core structs because it upsets Rust's borrow checker.
+note: PCORES keeps track of the last physical CPU core to run a given virtual
+core. this is more of a hint than a concrete guarantee: the virtual core
+may have been scheduled away, though it should be in the last physical
+CPU core's scheduling queue. */
+static VCORES: Lazy<Mutex<HashMap<PhysicalCoreID, VirtualCore>>> = Lazy::new(|| Mutex::new("physical-virtual core table", HashMap::new()));
+static PCORES: Lazy<Mutex<HashMap<VirtualCoreCanonicalID, PhysicalCoreID>>> = Lazy::new(|| Mutex::new("physical-virtual core ID table", HashMap::new()));
 
 /* describe a physical CPU core - this structure is stored in the per-CPU private variable space.
    this is below the per-CPU machine-level stack */

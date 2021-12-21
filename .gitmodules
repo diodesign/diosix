@@ -1,9 +1,6 @@
 [submodule "src/services/src/supervisor-riscv"]
 	path = src/services/src/supervisor-riscv
 	url = https://github.com/diodesign/supervisor-riscv.git
-[submodule "src/mason"]
-	path = src/mason
-	url = https://github.com/diodesign/mason.git
 [submodule "src/mkdmfs"]
 	path = src/mkdmfs
 	url = https://github.com/diodesign/mkdmfs
@@ -19,3 +16,6 @@
 [submodule "src/services/src/gooey"]
 	path = src/services/src/gooey
 	url = https://github.com/diodesign/gooey.git
+[submodule "src/itsylinker"]
+	path = src/itsylinker
+	url = https://github.com/diodesign/itsylinker.git
