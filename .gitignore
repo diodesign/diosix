@@ -1,0 +1,5 @@
+# standard for zig and diosix
+
+.zig-cache/
+zig-out/
+binaries/
