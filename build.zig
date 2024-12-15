@@ -9,10 +9,10 @@ const Target = std.Target;
 const RISCVextensions = Target.Cpu.Feature.Set;
 
 // define our supported systems
-const SupportedSystem = struct { name: []const u8, linker_script: []const u8, asm_files: [1][]const u8 };
+const SupportedSystem = struct { name: []const u8, linker_script: []const u8, root_asm_file: []const u8 };
 
 const supported_systems = [_]SupportedSystem{
-    .{ .name = "qemu", .linker_script = "hw/qemu.ld", .asm_files = .{"hw/start.s"} },
+    .{ .name = "qemu", .linker_script = "hw/qemu/linker.ld", .root_asm_file = "hw/qemu/entry.s" },
 };
 
 pub fn build(b: *std.Build) void {
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
     const system_option = b.option(
         []const u8,
         "system",
-        std.fmt.allocPrint(b.allocator, "Select the system to build for ({s}) (default: qemu)", .{system_names}) catch unreachable,
+        std.fmt.allocPrint(b.allocator, "Select the system to build for: {s} (default: qemu)", .{system_names}) catch unreachable,
     ) orelse "qemu";
 
     const selected_system = for (supported_systems) |sys| {
@@ -67,12 +67,11 @@ pub fn build(b: *std.Build) void {
         @panic("Unsupported system selected");
     };
 
-    const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_source_file = b.path("core/main.zig"), .target = target, .optimize = optimize });
+    const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_source_file = b.path("core/main.zig"), .target = target, .optimize = optimize, .code_model = .medium, .linkage = .static });
 
-    // iterate over the assembly files we need to add
-    for (selected_system.asm_files) |path| {
-        vmdiosix.addAssemblyFile(b.path(path));
-    }
-
+    // include the root assembly file and linker script
+    vmdiosix.addAssemblyFile(b.path(selected_system.root_asm_file));
     vmdiosix.setLinkerScript(b.path(selected_system.linker_script));
+
+    b.installArtifact(vmdiosix);
 }
