@@ -23,7 +23,7 @@
 .global _start
 
 # Qemu's boot ROM provides us a bare-bones environment, with each core starting here
-# note: exceptions and interrupts are disabled
+# note: exceptions and interrupts (xint) are disabled
 # => a0 = per-system unique CPU core ID, aka hart ID
 #    a1 = pointer to device tree describing the environment
 _start:
@@ -60,7 +60,7 @@ _start:
     sub       sp, t4, t1
 
     # set up early xint handling (corrupts t0) and enable xint
-    call      xint
+    call      xint_early_init
 
     # boot CPU core (ID 0) needs to zero the BSS
     la        t0, bss_cleared
