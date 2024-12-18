@@ -4,3 +4,4 @@
 # SPDX-License-Identifier: MIT
 
 .include "hw/qemu/entry.s"
+.include "hw/qemu/xint.s"
