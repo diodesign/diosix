@@ -9,10 +9,14 @@ const Target = std.Target;
 const RISCVextensions = Target.Cpu.Feature.Set;
 
 // define our supported systems
-const SupportedSystem = struct { name: []const u8, linker_script: []const u8, root_asm_file: []const u8 };
+const SupportedSystem = struct { name: []const u8, linker_script: []const u8, top_asm_file: []const u8 };
 
+// a supported system has:
+// - a short unique descriptive name
+// - a linker script allowing the hypervisor to be loaded and run by a bootloader on this system
+// - a top-level assembly file that imports the assembly code needed by the hypervisor for this system
 const supported_systems = [_]SupportedSystem{
-    .{ .name = "qemu", .linker_script = "hw/qemu/linker.ld", .root_asm_file = "hw/qemu/entry.s" },
+    .{ .name = "qemu-virt", .linker_script = "hw/qemu/linker.ld", .top_asm_file = "hw/qemu/top.s" },
 };
 
 pub fn build(b: *std.Build) void {
@@ -28,12 +32,13 @@ pub fn build(b: *std.Build) void {
     min_cpu_features.addFeature(@intFromEnum(a));
     min_cpu_features.addFeature(@intFromEnum(c));
 
+    // insist on building for riscv64 targets
     const target = b.standardTargetOptions(.{
         .default_target = .{
             .cpu_arch = Target.Cpu.Arch.riscv64,
             .os_tag = Target.Os.Tag.freestanding,
             .abi = Target.Abi.none,
-            .cpu_features_sub = Target.riscv.cpu.baseline_rv64.features,
+            .cpu_model = .{ .explicit = &Target.riscv.cpu.baseline_rv64 },
             .cpu_features_add = min_cpu_features,
         },
     });
@@ -54,12 +59,12 @@ pub fn build(b: *std.Build) void {
         break :blk names.toOwnedSlice() catch unreachable;
     };
 
-    // allow the user to pick a system to build for, or select a default
+    // allow the user to pick a system to build for, or select a default (qemu-virt)
     const system_option = b.option(
         []const u8,
         "system",
-        std.fmt.allocPrint(b.allocator, "Select the system to build for: {s} (default: qemu)", .{system_names}) catch unreachable,
-    ) orelse "qemu";
+        std.fmt.allocPrint(b.allocator, "Select the system to build for: {s} (default: qemu-virt)", .{system_names}) catch unreachable,
+    ) orelse "qemu-virt";
 
     const selected_system = for (supported_systems) |sys| {
         if (std.mem.eql(u8, sys.name, system_option)) break sys;
@@ -69,8 +74,8 @@ pub fn build(b: *std.Build) void {
 
     const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_source_file = b.path("core/main.zig"), .target = target, .optimize = optimize, .code_model = .medium, .linkage = .static });
 
-    // include the root assembly file and linker script
-    vmdiosix.addAssemblyFile(b.path(selected_system.root_asm_file));
+    // include the top-level assembly file and linker script
+    vmdiosix.addAssemblyFile(b.path(selected_system.top_asm_file));
     vmdiosix.setLinkerScript(b.path(selected_system.linker_script));
 
     b.installArtifact(vmdiosix);
