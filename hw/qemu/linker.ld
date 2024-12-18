@@ -1,9 +1,8 @@
-/* diosix ELF layout for common RV64 hardware
+/* ELF layout of the hypervisor for Qemu-compatible targets
  *
- * Only requirement is that physical RAM starts at 0x80000000, where the hypervisor is loaded and entered
+ * Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
+ * SPDX-License-Identifier: MIT
  *
- * (c) Chris Williams, 2024.
- * See LICENSE for usage and copying.
  */
 
 OUTPUT_ARCH(riscv)
@@ -11,7 +10,7 @@ ENTRY(_start)
 
 SECTIONS
 {
-  /* execution starts at 0x80000000, DRAM base */
+  /* execution starts at 0x80000000, DRAM base, so place our entry point here */
   . = 0x80000000;
   __hypervisor_start = .;
 
@@ -53,5 +52,6 @@ SECTIONS
   /* set aligned end to the hypervisor, round up to nearest page boundary */
   __hypervisor_end = ALIGN(0x1000);
 
+  /* keep other GNU stuff out of the way */
   /DISCARD/ : { *(.note.gnu.property) }
 }
