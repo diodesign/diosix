@@ -10,9 +10,9 @@
 
 ## About this project <a name="intro"></a>
 
-Diosix strives to be a lightweight, reliable, and secure multi-core bare-metal hypervisor written [in Zig](https://ziglang.org/) for 64-bit [RISC-V](https://riscv.org/) computers. It is aimed at systems that may be small, or even large, yet have a need to run multiple hardware-isolated operating systems at the same time.
+Diosix strives to be a lightweight, reliable, and secure multi-core bare-metal hypervisor written [in Zig](https://ziglang.org/) for 64-bit [RISC-V](https://riscv.org/developers/) computers. It is aimed at systems that may be small, or even large, yet have a need to run multiple hardware-isolated operating systems at the same time.
 
-This is very much a work-in-progress as it is essentially a restart of the Rust-written project using Zig to iterate and innovate faster while maintaining a focus on safety, security, and robustness. Diosix is designed to be simple to install and self-contained, with a provided privileged guest virtual machine for managing the host hardware and guests.
+This is very much a work-in-progress as it is essentially a restart of the Rust-written project using Zig to iterate and innovate faster while maintaining a focus on safety, security, and robustness. Diosix is designed to be simple to install and self-contained, with a provided privileged guest virtual machine for managing the host hardware and other guests.    
 
 Instructions on this page assume you are using a Linux-compatible command-line environment.
 
@@ -49,7 +49,7 @@ qemu-system-riscv64 -nographic -machine virt -smp 4 -m 2G -bios none -kernel zig
 
 The hypervisor will output to the serial port by default, which is displayed in the terminal by Qemu. Press `control-a` then `x` to exit, or `control-a` then `c` to enter the emulator's debugging console. Use the command `quit` to exit the emulator from the console.
 
-## Contact, contributions, security issue reporting, and code of conduct <a name="contact"></a>
+## Contact, contributions, security issues, and code of conduct <a name="contact"></a>
 
 Email [hello@diosix.org](mailto:hello@diosix.org) if you have any questions or issues to raise, wish to get involved, or have source to contribute. If you have found a security flaw, please follow [these steps](docs/security.md) to report the bug. You can also submit pull requests or raise issues via GitHub, though please consider disclosing security-related matters privately.
 
