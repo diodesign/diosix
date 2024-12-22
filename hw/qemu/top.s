@@ -5,3 +5,4 @@
 
 .include "hw/qemu/entry.s"
 .include "hw/qemu/xint.s"
+.include "hw/qemu/util.s"

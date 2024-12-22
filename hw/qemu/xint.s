@@ -11,15 +11,15 @@
 .section .text
 .align 8
 
-.global xint_early_init
+.global hw_xint_init
 
-# set up boot xint handling on this core so we can catch
-# exceptions while the system is initializating.
-# also enable hardware interrupts.
+# set up xint handling on this CPU core
+# also enable hardware interrupts as well as execptions.
+# NB: assumes mscratch is already set to the top of the xint stack. see _start for pre-setup.
 # <= corrupts t0
-xint_early_init:
+hw_xint_init:
     # point this CPU core at default machine-level xint handler (see below)
-    la      t0, xint_machine_handler
+    la      t0, xint_machine_entry_handler
     csrrw   x0, mtvec, t0
   
     # delegate most supervisor-level exceptions to the supervisor-level guest,
@@ -45,8 +45,8 @@ xint_early_init:
     li      t0, 0x333
     csrrw   x0, mideleg, t0
 
-    # enable all XINT: set bit 3 in mstatus to enable MIE
-    # to receive hardware interrupts and exceptions
+    # enable all xint: set bit 3 in mstatus to enable MIE
+    # to receive hardware interrupts as well as exceptions
     csrrsi  x0, mstatus, 1 << 3
     ret
 
@@ -66,7 +66,7 @@ xint_early_init:
 # interrupts are automatically disabled on entry.
 # right now, xint are non-reentrant. if a xint handler is interrupted, the previous one will
 # be discarded. do not enable hardware interrupts. any exceptions will be unfortunate.
-xint_machine_handler:
+xint_machine_entry_handler:
     # get xint stack from mscratch by swapping it for interrupted code's sp
     csrrw   sp, mscratch, sp
     # now: sp = top of xint stack. mscratch = interrupted code's sp

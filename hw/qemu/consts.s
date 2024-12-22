@@ -22,11 +22,11 @@
 #   .   private heap space
 
 # describe per-CPU slab, all sizes in bytes
-.equ HV_CPU_SLAB_SHIFT,         (20) # total size of per-CPU slab = 1 << HV_CPU_SLAB_SHIFT = 1MB
-.equ HV_CPU_SLAB_SIZE,          (1 << HV_CPU_SLAB_SHIFT)
-.equ HV_CPU_STACK_BASE,         (0)
-.equ HV_CPU_STACK_SIZE,         (128 * 1024)
-.equ HV_CPU_PRIVATE_VARS_BASE,  (HV_CPU_STACK_BASE + HV_CPU_STACK_SIZE)
-.equ HV_CPU_PRIVATE_VARS_SIZE,  (PAGE_SIZE)
-.equ HV_CPU_HEAP_BASE,          (HV_CPU_PRIVATE_VARS_BASE + HV_CPU_PRIVATE_VARS_SIZE)
-.equ HV_CPU_HEAP_AREA_SIZE,     (HV_CPU_SLAB_SIZE - HV_CPU_HEAP_BASE)
+.equ CPU_SLAB_SHIFT,         (20) # total size of per-CPU slab = 1 << HV_CPU_SLAB_SHIFT = 1MB
+.equ CPU_SLAB_SIZE,          (1 << CPU_SLAB_SHIFT)
+.equ CPU_STACK_BASE,         (0)
+.equ CPU_STACK_SIZE,         (128 * 1024)
+.equ CPU_PRIVATE_VARS_BASE,  (CPU_STACK_BASE + CPU_STACK_SIZE)
+.equ CPU_PRIVATE_VARS_SIZE,  (PAGE_SIZE)
+.equ CPU_HEAP_BASE,          (CPU_PRIVATE_VARS_BASE + CPU_PRIVATE_VARS_SIZE)
+.equ CPU_HEAP_AREA_SIZE,     (CPU_SLAB_SIZE - CPU_HEAP_BASE)

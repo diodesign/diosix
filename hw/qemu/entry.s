@@ -39,18 +39,21 @@ _start:
 
     # use t3 this as a multiplier from the end of the hypervisor, using shifts to keep things easy
     la        t1, __hypervisor_end
-    slli      t3, t3, HV_CPU_SLAB_SHIFT
+    slli      t3, t3, CPU_SLAB_SHIFT
     add       t3, t3, t1
     # t3 = base of this CPU's private memory slab
 
     # write the top of the exception and interrupt (xint) stack to mscratch.
     # this allows us to find the stack after an xint fires
-    li        t1, HV_CPU_STACK_BASE
-    li        t2, HV_CPU_STACK_SIZE
+    li        t1, CPU_STACK_BASE
+    li        t2, CPU_STACK_SIZE
     add       t4, t2, t1
     add       t4, t4, t3
     # t4 = top of the stack, t2 = stack size, t1 = stack base from slab base
     csrrw     x0, mscratch, t4
+
+    # we'll complete intitialization of the xint handling in xint.s hw_init_xint(),
+    # which will be called from xint.init() from the main() function.
 
     # use the lower half of the xint stack to bring up the hypervisor.
     # set the boot stack pointer to halfway down that stack.
@@ -58,9 +61,6 @@ _start:
     # and ready for full use by xint handlers.
     srli      t1, t2, 1
     sub       sp, t4, t1
-
-    # set up early xint handling (corrupts t0) and enable xint
-    call      xint_early_init
 
     # boot CPU core (ID 0) needs to zero the BSS
     la        t0, bss_cleared
