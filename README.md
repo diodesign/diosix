@@ -12,7 +12,7 @@
 
 Diosix strives to be a lightweight, reliable, and secure multi-core bare-metal hypervisor written [in Zig](https://ziglang.org/) for 64-bit [RISC-V](https://riscv.org/developers/) computers. It is aimed at systems that may be small, or even large, yet have a need to run multiple hardware-isolated operating systems at the same time.
 
-This is very much a work-in-progress as it is essentially a restart of the Rust-written project using Zig to iterate and innovate faster while maintaining a focus on safety, security, and robustness. Diosix is designed to be simple to install and self-contained, with a provided privileged guest virtual machine for managing the host hardware and other guests.    
+This is very much a work-in-progress as it is essentially a restart of the Rust-written project this time using Zig to iterate and innovate faster while maintaining a focus on safety, security, and robustness. Diosix is designed to be simple to install and self-contained, with a provided privileged guest virtual machine for managing the host hardware and other guests. Porting to 32-bit RISC-V or non-RISC-V systems should be possible, though would be maintained as separate per-port branches rather than complicating the codebase with multiple targets in one branch.
 
 Instructions on this page assume you are using a Linux-compatible command-line environment.
 

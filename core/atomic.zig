@@ -9,6 +9,15 @@ const ordering = std.builtin.AtomicOrder;
 
 extern fn hw_pause() void;
 
+// primitives for atomically setting and unlocking boolean flags
+pub fn set_bool(ptr: *bool, val: bool) void {
+    @atomicStore(bool, ptr, val, ordering.seq_cst);
+}
+
+pub fn read_bool(ptr: *bool) bool {
+    return @atomicLoad(bool, ptr, ordering.seq_cst);
+}
+
 // basic blocking spinlock implementation
 const SpinLock = struct {
     lock_value: value(bool),
@@ -36,14 +45,17 @@ pub const NamedSpinLock = struct {
     name: []const u8,
     spinlock: SpinLock,
 
+    // initialize a named spinlock, providing the name as a string
     pub fn init(name: []const u8) NamedSpinLock {
         return NamedSpinLock{ .name = name, .spinlock = SpinLock.init() };
     }
 
+    // acquire this spinlock, blocking until it's available
     pub fn lock(self: *NamedSpinLock) void {
         self.spinlock.lock();
     }
 
+    // release this spinlock so others can acquire it
     pub fn unlock(self: *NamedSpinLock) void {
         self.spinlock.unlock();
     }

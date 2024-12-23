@@ -32,7 +32,7 @@ hw_private_variables:
 # return base address of this CPU core's heap - right above private vars 
 # <= a0 = pointer to heap base (corrupts t0)
 hw_heap_base:
-  csrrs a0, mscratch, x0  # private vars start above CPU IRQ stack
+  csrrs a0, mscratch, x0  # private vars start above CPU xint stack
   li    t0, CPU_PRIVATE_VARS_SIZE
   add   a0, a0, t0
   ret

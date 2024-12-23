@@ -104,7 +104,7 @@ xint_machine_entry_handler:
     csrrw   x0, mepc, t2
 
 continue:
-    # pass current sp to exception/hw handler as a pointer. this'll allow
+    # pass current sp to exception/hw handler as a pointer in a0. this'll allow
     # the higher-level hypervisor access and modify any of the stacked registers
     add     a0, sp, x0
     call    xint_handler

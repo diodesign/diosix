@@ -16,7 +16,7 @@
 #   .
 #   __hypervisor_end = top of the hypervisor's static footprint
 #   .
-#   . per-CPU slabs of physical memory: each CPU core has...
+#   . per-CPU slabs of physical memory: each CPU core has in order...
 #   .   exeception / interrupt stack
 #   .   page of private variables
 #   .   private heap space
