@@ -13,7 +13,7 @@
 .global hw_pause
 
 # hypervisor constants, such as stack and lock locations
-.include "hw/qemu/consts.s"
+.include "hypervisor/hw/qemu/consts.s"
 
 # print a character to the Qemu serial console
 # a0 = character to print

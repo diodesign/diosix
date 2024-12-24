@@ -16,7 +16,7 @@ const SupportedSystem = struct { name: []const u8, linker_script: []const u8, to
 // - a linker script allowing the hypervisor to be loaded and run by a bootloader on this system
 // - a top-level assembly file that imports the assembly code needed by the hypervisor for this system
 const supported_systems = [_]SupportedSystem{
-    .{ .name = "qemu-virt", .linker_script = "hw/qemu/linker.ld", .top_asm_file = "hw/qemu/top.s" },
+    .{ .name = "qemu-virt", .linker_script = "hypervisor/hw/qemu/linker.ld", .top_asm_file = "hypervisor/hw/qemu/top.s" },
 };
 
 pub fn build(b: *std.Build) void {
@@ -72,11 +72,43 @@ pub fn build(b: *std.Build) void {
         @panic("Unsupported system selected");
     };
 
-    const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_source_file = b.path("core/main.zig"), .target = target, .optimize = optimize, .code_model = .medium, .linkage = .static });
+    const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_source_file = b.path("hypervisor/core/main.zig"), .target = target, .optimize = optimize, .code_model = .medium, .linkage = .static });
 
     // include the top-level assembly file and linker script
     vmdiosix.addAssemblyFile(b.path(selected_system.top_asm_file));
     vmdiosix.setLinkerScript(b.path(selected_system.linker_script));
 
+    // include build-time metadata as options available to main.zig
+    // this includes boot banner text, and details of the build and current version
+    const metadata = b.addOptions();
+
+    const branch = get_cmd_output(&.{ "git", "symbolic-ref", "--short", "HEAD" });
+    const revision = get_cmd_output(&.{ "git", "rev-parse", "--short", "HEAD" });
+    const date = get_cmd_output(&.{"date"});
+
+    metadata.addOption([]const u8, "banner", @embedFile("boot/banner.txt"));
+    metadata.addOption([]const u8, "project_version", @embedFile("VERSION"));
+    metadata.addOption([]const u8, "git_branch", branch);
+    metadata.addOption([]const u8, "git_revision", revision);
+    metadata.addOption([]const u8, "build_date", date);
+    metadata.addOption([]const u8, "cpu_arch", "riscv64");
+    vmdiosix.root_module.addOptions("metadata", metadata);
+
     b.installArtifact(vmdiosix);
+}
+
+// run the given command and capture its output as an owned string, which is returned to the caller
+// the command needs to be an array of arguments, the first being the program to execute
+// all errors are fatal rather than passed up to the caller
+fn get_cmd_output(args: []const []const u8) []const u8 {
+    const result = std.process.Child.run(.{
+        .allocator = std.heap.page_allocator,
+        .argv = args,
+    }) catch |e| {
+        std.debug.print("Failed to run command '{s}' ({})\n", .{ args, e });
+        std.process.exit(1);
+    };
+
+    // get rid of whitespace at the start and end of the command's stdout
+    return std.mem.trim(u8, result.stdout, " \n");
 }

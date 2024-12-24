@@ -3,7 +3,7 @@
 # Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
-.include "hw/qemu/consts.s"
+.include "hypervisor/hw/qemu/consts.s"
 
 # physical memory map of a Qemu virt system
 # [ https://github.com/qemu/qemu/blob/master/hw/riscv/virt.c ]

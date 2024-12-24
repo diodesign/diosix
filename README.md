@@ -35,7 +35,9 @@ zig build
 
 This should complete without errors, and generate the hypervisor executable file `./zig-out/bin/vmdiosix`.
 
-By default, Diosix is built to run on the [Qemu](https://www.qemu.org/) hardware emulator. To select another system to build for, use the `-Dsystem` parameter with `zig build`. For a list of supported systems, consult `zig build -h`.
+By default, Diosix is built to run on the [Qemu](https://www.qemu.org/) hardware emulator. To select another system to build for, use the `-Dsystem` parameter with `zig build`.
+
+For a list of supported systems, consult `zig build -h`.
 
 ## Run Diosix <a name="run"></a>
 
@@ -47,7 +49,9 @@ Run Diosix on four virtual CPU cores with 2GB of RAM in Qemu, using Qemu's `virt
 qemu-system-riscv64 -nographic -machine virt -smp 4 -m 2G -bios none -kernel zig-out/bin/vmdiosix
 ```
 
-The hypervisor will output to the serial port by default, which is displayed in the terminal by Qemu. Press `control-a` then `x` to exit, or `control-a` then `c` to enter the emulator's debugging console. Use the command `quit` to exit the emulator from the console.
+The hypervisor will output to the serial port by default, which is displayed in the terminal by Qemu.
+
+Press `control-a` then `x` to exit, or `control-a` then `c` to enter the emulator's debugging console. Use the command `quit` to exit the emulator from the console.
 
 ## Contact, contributions, security issues, and code of conduct <a name="contact"></a>
 

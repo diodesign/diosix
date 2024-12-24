@@ -3,6 +3,6 @@
 # Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
-.include "hw/qemu/entry.s"
-.include "hw/qemu/xint.s"
-.include "hw/qemu/util.s"
+.include "hypervisor/hw/qemu/entry.s"
+.include "hypervisor/hw/qemu/xint.s"
+.include "hypervisor/hw/qemu/util.s"
