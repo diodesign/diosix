@@ -5,7 +5,7 @@
 
 const alloc = @import("alloc.zig");
 
-extern fn hw_private_variables() *CPUContext;
+extern fn hw_private_variables() *CpuContext;
 extern fn hw_heap_base() usize;
 extern fn hw_heap_size() usize;
 
@@ -13,13 +13,13 @@ extern fn hw_heap_size() usize;
 pub const ThreadContext = [32]usize;
 
 // the per-CPU context for the physical core running this thread
-const CPUContext = struct {
+const CpuContext = struct {
     cpu_core_id: usize,
     allocator: alloc.Allocator,
 };
 
 // return a pointer to the CPU context for the core running this thread
-pub inline fn get_cpu_context() *CPUContext {
+pub inline fn get_cpu_context() *CpuContext {
     return hw_private_variables();
 }
 
