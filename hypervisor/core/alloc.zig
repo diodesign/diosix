@@ -27,9 +27,10 @@ const Block = struct {
     // the block's payload follows immediately after this header
     // starting on a usize byte boundary
 
-    // return a pointer to the block's payload
-    pub fn payload(self: *Block) *usize {
-        return @ptrFromInt(@intFromPtr(self) + @sizeOf(Block));
+    // return a pointer to the block's payload, using T to define the pointer type
+    pub fn payload(self: *Block, comptime T: type) T {
+        const p: *usize = @ptrFromInt(@intFromPtr(self) + @sizeOf(Block));
+        return @as(T, @ptrCast(p));
     }
 };
 
@@ -60,9 +61,10 @@ pub const Allocator = struct {
     }
 
     // allocate a block of memory
+    // T = type of pointer to return, pointing to requesting block
     // size = the size of the block in bytes
     // returns a pointer to the block's payload, or error if the allocation failed
-    pub fn create(self: *Allocator, size: usize) !*usize {
+    pub fn create(self: *Allocator, comptime T: type, size: usize) !T {
         // don't forget to include the header in the requested size
         const full_size = (size + @sizeOf(Block));
 
@@ -92,7 +94,7 @@ pub const Allocator = struct {
                         self.inuse_size += rounded_up_size;
                         self.free_size -= rounded_up_size;
 
-                        return candidate.payload();
+                        return candidate.payload(T);
                     }
 
                     // if the free block is large enough to accoommodate this requested allocation,
@@ -111,7 +113,7 @@ pub const Allocator = struct {
                         self.inuse_size += rounded_up_size;
                         self.free_size -= rounded_up_size;
 
-                        return new_block.payload();
+                        return new_block.payload(T);
                     }
 
                     // rather than defer merging, proactively merge now

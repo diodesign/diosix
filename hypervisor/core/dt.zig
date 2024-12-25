@@ -18,8 +18,8 @@ const bigToNative = @import("std").mem.bigToNative;
 // <= the u32 at the requested offset, with endian corrected for the build target
 // Note: if the computed address of the u32 is not word aligned, this function returns null
 inline fn read_u32(src: [*]u8, offset: usize) ?u32 {
-    const addr: usize = (@intFromPtr(src) + offset);
-    if (addr & 0b11 != 0b00) return null;
+    const addr: usize = @intFromPtr(src) + offset;
+    if (addr & (@alignOf(u32) - 1) != 0) return null;
 
     const word: *u32 = @ptrFromInt(addr);
     return bigToNative(u32, word.*);
@@ -99,7 +99,7 @@ pub const DeviceTreeBlob = struct {
         // extract the blob size pre-parsing
         const blob_size = read_u32(blob, 1 * 4) orelse return DeviceTreeError.BadAlignment;
 
-        const new_dtb: *DeviceTreeBlob = @as(*DeviceTreeBlob, @ptrCast(try allocator.*.create(@sizeOf(DeviceTreeBlob))));
+        const new_dtb: *DeviceTreeBlob = try allocator.*.create(*DeviceTreeBlob, @sizeOf(DeviceTreeBlob));
         errdefer allocator.*.destroy(new_dtb) catch |err| {
             debug.printf("Failed to deallocate DTB object during failed initialization, reason: {}\n", .{err});
         };
@@ -120,7 +120,7 @@ pub const DeviceTreeBlob = struct {
         new_dtb.compatibility_check() catch |err| return err;
 
         // take a copy of the blob in our dtb structure
-        new_dtb.blob = @as([*]u8, @ptrCast(try allocator.*.create(blob_size)));
+        new_dtb.blob = try allocator.*.create([*]u8, blob_size);
         errdefer allocator.*.destroy(new_dtb.blob) orelse DeviceTreeError.DeAllocFailure;
 
         @memcpy(new_dtb.blob[0..blob_size], blob[0..blob_size]);
