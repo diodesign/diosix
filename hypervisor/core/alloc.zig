@@ -4,7 +4,7 @@
 //
 // Block sizes include the header and payload. The payload is the memory the caller can use.
 // Block sizes are also rounded up to the nearest multiple of BlockSizeMultiple to reduce fragmentation.
-// Free blocks are merged automatically.
+// Free blocks are merged automatically. All allocations are aligned to the system's pointer size.
 //
 // Simplicity and safety is the key here. Given the nature of the hypervisor's job,
 // it's not expected to perform a lot of allocations in a time-critical manner.
@@ -12,8 +12,6 @@
 //
 // Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
-
-const debug = @import("debug.zig");
 
 pub const AllocError = error{ NotEnoughFreeSpace, TooFragmented, BadBlockInList, BadBlock };
 
@@ -27,9 +25,10 @@ const Block = struct {
     size: usize,
     state: BlockState,
     // the block's payload follows immediately after this header
+    // starting on a usize byte boundary
 
     // return a pointer to the block's payload
-    pub fn payload(self: *Block) *anyopaque {
+    pub fn payload(self: *Block) *usize {
         return @ptrFromInt(@intFromPtr(self) + @sizeOf(Block));
     }
 };
@@ -45,7 +44,7 @@ pub const Allocator = struct {
     // initialize the allocator for an area of contiguous memory
     // base = address of the start of the memory area
     // size = the size of the memory area in bytes
-    // returns the initialized allocator
+    // returns the initialized allocator as a value
     pub fn init(base: usize, size: usize) Allocator {
         const first_block: *Block = @ptrFromInt(base);
         first_block.next = null;
@@ -60,24 +59,10 @@ pub const Allocator = struct {
         };
     }
 
-    // for debug purposes
-    fn print_heap(self: *Allocator) void {
-        debug.printf("{x} free, first {x} -> ", .{ self.free_size, @intFromPtr(self.first) });
-
-        var search: ?*Block = self.first;
-        while (search) |b| {
-            debug.printf("[ header {x} payload {x} state {} size {x} next {x}] -> ", .{ @intFromPtr(b), @intFromPtr(b.*.payload()), b.*.state, b.*.size, @intFromPtr(b.*.next) });
-
-            search = b.*.next;
-        }
-
-        debug.printf("end\n", .{});
-    }
-
     // allocate a block of memory
     // size = the size of the block in bytes
     // returns a pointer to the block's payload, or error if the allocation failed
-    pub fn create(self: *Allocator, size: usize) AllocError!*anyopaque {
+    pub fn create(self: *Allocator, size: usize) !*usize {
         // don't forget to include the header in the requested size
         const full_size = (size + @sizeOf(Block));
 
@@ -171,7 +156,7 @@ pub const Allocator = struct {
 
     // free the given block, as identified from its payload address
     // returns an error if something went wrong
-    pub fn destroy(self: *Allocator, payload: *anyopaque) AllocError!void {
+    pub fn destroy(self: *Allocator, payload: *anyopaque) !void {
         const victim_base: usize = @intFromPtr(payload);
         const victim: *Block = @ptrFromInt(victim_base - @sizeOf(Block));
 
