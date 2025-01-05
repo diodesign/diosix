@@ -1,6 +1,6 @@
 // generic atomic routines for spinlocks and so on
 //
-// Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024, 2025 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
@@ -10,11 +10,11 @@ const ordering = std.builtin.AtomicOrder;
 extern fn hw_pause() void;
 
 // primitives for atomically setting and unlocking boolean flags
-pub fn set_bool(ptr: *bool, val: bool) void {
+pub fn setBool(ptr: *bool, val: bool) void {
     @atomicStore(bool, ptr, val, ordering.seq_cst);
 }
 
-pub fn read_bool(ptr: *bool) bool {
+pub fn readBool(ptr: *bool) bool {
     return @atomicLoad(bool, ptr, ordering.seq_cst);
 }
 

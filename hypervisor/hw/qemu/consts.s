@@ -25,7 +25,7 @@
 .equ CPU_SLAB_SHIFT,         (20) # total size of per-CPU slab = 1 << HV_CPU_SLAB_SHIFT = 1MB
 .equ CPU_SLAB_SIZE,          (1 << CPU_SLAB_SHIFT)
 .equ CPU_STACK_BASE,         (0)
-.equ CPU_STACK_SIZE,         (128 * 1024)
+.equ CPU_STACK_SIZE,         (32 * 1024)
 .equ CPU_PRIVATE_VARS_BASE,  (CPU_STACK_BASE + CPU_STACK_SIZE)
 .equ CPU_PRIVATE_VARS_SIZE,  (PAGE_SIZE)
 .equ CPU_HEAP_BASE,          (CPU_PRIVATE_VARS_BASE + CPU_PRIVATE_VARS_SIZE)

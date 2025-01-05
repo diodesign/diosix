@@ -1,6 +1,6 @@
 // RISC-V non-hardware-specific routines
 //
-// Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024, 2025 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const alloc = @import("alloc.zig");
@@ -19,36 +19,36 @@ const CpuContext = struct {
 };
 
 // return a pointer to the CPU context for the core running this thread
-pub inline fn get_cpu_context() *CpuContext {
+pub inline fn getCPUContext() *CpuContext {
     return hw_private_variables();
 }
 
 // return the base address of the heap for the core running this thread
-pub inline fn get_cpu_heap_base() usize {
+pub inline fn getCPUHeapBase() usize {
     return hw_heap_base();
 }
 
 // return the size of the heap for the core running this thread
-pub inline fn get_cpu_heap_size() usize {
+pub inline fn getCPUHeapSize() usize {
     return hw_heap_size();
 }
 
 // return the mcause CSR
-pub inline fn read_mcause() usize {
+pub inline fn readMcause() usize {
     return asm volatile ("csrr %[ret], mcause"
         : [ret] "=r" (-> usize),
     );
 }
 
 // return the mepc CSR
-pub inline fn read_mepc() usize {
+pub inline fn readMepc() usize {
     return asm volatile ("csrr %[ret], mepc"
         : [ret] "=r" (-> usize),
     );
 }
 
 // return the mtval CSR
-pub inline fn read_mtval() usize {
+pub inline fn readMtval() usize {
     return asm volatile ("csrr %[ret], mtval"
         : [ret] "=r" (-> usize),
     );

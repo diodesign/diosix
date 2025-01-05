@@ -10,7 +10,7 @@
 // it's not expected to perform a lot of allocations in a time-critical manner.
 // If the allocator is holding back performance, we'll revist these design decisions.
 //
-// Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024, 2025 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 pub const AllocError = error{ NotEnoughFreeSpace, TooFragmented, BadBlockInList, BadBlock };
@@ -87,8 +87,8 @@ pub const Allocator = struct {
                 .Free => {
                     // if the candidate free block is the exact size requested
                     // then just flip it to in-use and return its payload pointer
-                    if (candidate.*.size == rounded_up_size) {
-                        candidate.*.state = BlockState.InUse;
+                    if (candidate.size == rounded_up_size) {
+                        candidate.state = BlockState.InUse;
 
                         // update accounting
                         self.inuse_size += rounded_up_size;
@@ -99,15 +99,15 @@ pub const Allocator = struct {
 
                     // if the free block is large enough to accoommodate this requested allocation,
                     // then use the end of the free block to create a new in-use block for the request
-                    if (candidate.*.size > rounded_up_size) {
-                        candidate.*.size -= rounded_up_size;
-                        const new_block: *Block = @ptrFromInt(@intFromPtr(candidate) + candidate.*.size);
-                        new_block.*.size = rounded_up_size;
-                        new_block.*.state = BlockState.InUse;
+                    if (candidate.size > rounded_up_size) {
+                        candidate.size -= rounded_up_size;
+                        const new_block: *Block = @ptrFromInt(@intFromPtr(candidate) + candidate.size);
+                        new_block.size = rounded_up_size;
+                        new_block.state = BlockState.InUse;
 
                         // insert the in-use block between the free block and the next in the chain
-                        new_block.*.next = candidate.*.next;
-                        candidate.*.next = new_block;
+                        new_block.next = candidate.next;
+                        candidate.next = new_block;
 
                         // update accounting
                         self.inuse_size += rounded_up_size;
@@ -117,7 +117,7 @@ pub const Allocator = struct {
                     }
 
                     // rather than defer merging, proactively merge now
-                    var merge: ?*Block = candidate.*.next;
+                    var merge: ?*Block = candidate.next;
                     while (merge) |victim| {
                         switch (victim.state) {
                             // we can't merge in-use blocks, so stop the merge attempt here
@@ -126,9 +126,9 @@ pub const Allocator = struct {
                             // check if two free blocks are next to each other in memory,
                             // and if so, absorb the second into the first
                             .Free => {
-                                if ((@intFromPtr(candidate) + candidate.*.size) == @intFromPtr(victim)) {
-                                    candidate.*.size += victim.*.size;
-                                    candidate.*.next = victim.*.next;
+                                if ((@intFromPtr(candidate) + candidate.size) == @intFromPtr(victim)) {
+                                    candidate.size += victim.size;
+                                    candidate.next = victim.next;
                                 }
                             },
 
@@ -142,7 +142,7 @@ pub const Allocator = struct {
 
                     // if the candidate is now large enough to fit the requested block, then repeat
                     // the above allocation process. if not, move on to the next candidate
-                    if (candidate.*.size < rounded_up_size) {
+                    if (candidate.size < rounded_up_size) {
                         search = candidate.next;
                     }
                 },
@@ -163,13 +163,13 @@ pub const Allocator = struct {
         const victim: *Block = @ptrFromInt(victim_base - @sizeOf(Block));
 
         // make sure this victim heap block is legit, or error out to the caller
-        if (victim.*.state != BlockState.InUse) {
+        if (victim.state != BlockState.InUse) {
             return AllocError.BadBlock;
         }
 
         // flip it to free and update accounting
-        victim.*.state = BlockState.Free;
-        self.inuse_size -= victim.*.size;
-        self.free_size += victim.*.size;
+        victim.state = BlockState.Free;
+        self.inuse_size -= victim.size;
+        self.free_size += victim.size;
     }
 };
