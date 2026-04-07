@@ -9,11 +9,11 @@
 // To generate a DTB in memory:
 // Use DeviceTree.new() and add elements, or update an existing DeviceTree, then call .to_dtb()
 //
-// Copyright (c) 2024, 2025 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const debug = @import("debug.zig");
-const LinkedList = @import("dsa.zip").LinkedList;
+const dsa = @import("dsa.zig");
 const Allocator = @import("alloc.zig").Allocator;
 const bigToNative = @import("std").mem.bigToNative;
 
@@ -25,11 +25,15 @@ const DeviceTreeError = error{ CannotConvert, BadMagic, UnsupportedVersion, Reac
 //    offset = byte offset into the array to read a u32
 // <= the u32 at the requested offset, with endian corrected for the build target
 // Note: if the computed address of the u32 is not word aligned, this function returns an error
-inline fn readU32(src: [*]u8, offset: usize) !u32 {
-    const addr: usize = @intFromPtr(src) + offset;
-    if (addr & (@alignOf(u32) - 1) != 0) return DeviceTreeError.BadAlignment;
+inline fn readU32(src: [*]const u8, offset: usize) !u32 {
+    const target_ptr = src + offset;
+    const addr = @intFromPtr(target_ptr);
 
-    const word: *u32 = @ptrFromInt(addr);
+    if ((addr & (@alignOf(u32) - 1)) != 0) {
+        return DeviceTreeError.BadAlignment;
+    }
+
+    const word: *const u32 = @ptrFromInt(addr);
     return bigToNative(u32, word.*);
 }
 
@@ -84,7 +88,7 @@ pub const DeviceTreeBlob = struct {
     size_dt_struct: u32,
 
     blob: [*]u8,
-    allocator: *Allocator,
+    allocator: Allocator,
 
     // return no error if this appears to be legit DTB data, or an error code if not
     pub fn compatibilityCheck(self: *DeviceTreeBlob) !void {
@@ -99,16 +103,15 @@ pub const DeviceTreeBlob = struct {
 
     // create a DeviceTreeBlob structure from a device tree blob in memory.
     // Note: this will take a copy of the blob data.
-    // => allocator to use, pointer to device tree blob in un-managed memory
+    // => allocator = allocator to use
+    //    blob = pointer to device tree blob in un-managed memory
     // <= pointer to caller-owned DeviceTreeBlob object, or error core for failure
-    pub fn init(allocator: *Allocator, blob: [*]u8) !*DeviceTreeBlob {
+    pub fn init(allocator: Allocator, blob: [*]u8) !*DeviceTreeBlob {
         // extract the blob size pre-parsing
         const blob_size = try readU32(blob, 1 * 4);
 
-        const new_dtb: *DeviceTreeBlob = try allocator.create(*DeviceTreeBlob, @sizeOf(DeviceTreeBlob));
-        errdefer allocator.destroy(new_dtb) catch |err| {
-            debug.printf("Failed to deallocate DTB object during failed initialization, reason: {}\n", .{err});
-        };
+        const new_dtb = try allocator.create(DeviceTreeBlob);
+        errdefer allocator.destroy(new_dtb);
 
         new_dtb.allocator = allocator;
 
@@ -128,27 +131,28 @@ pub const DeviceTreeBlob = struct {
         try new_dtb.compatibilityCheck();
 
         // take a copy of the blob in our dtb structure
-        new_dtb.blob = try allocator.create([*]u8, blob_size);
-        errdefer allocator.destroy(new_dtb.blob) orelse DeviceTreeError.DeAllocFailure;
+        new_dtb.blob = (try allocator.alloc(u8, blob_size)).ptr;
+        errdefer allocator.free(new_dtb.blob[0..blob_size]) orelse DeviceTreeError.DeAllocFailure;
 
         @memcpy(new_dtb.blob[0..blob_size], blob[0..blob_size]);
 
-        debug.printf("Device tree blob at 0x{x}, blob size = 0x{x}\n", .{ @intFromPtr(blob), blob_size });
+        debug.printf("DeviceTreeBlob.init: Device tree blob at {*}, blob size = 0x{x}\n", .{ blob, blob_size });
         return new_dtb;
     }
 
     // release heap resources held by this DeviceTreeBlob
-    pub fn deinit(self: *DeviceTreeBlob) !void {
-        try self.allocator.destroy(self.blob);
-        try self.allocator.destroy(self);
+    pub fn deinit(self: *DeviceTreeBlob) void {
+        self.allocator.free(self.blob[0..self.totalsize]);
+        self.allocator.destroy(self);
     }
 
     // turn a DTB in meory into a DeviceTree
+    // => returns
     pub fn parse(self: *DeviceTreeBlob) !*DeviceTree {
-        const new_dt: *DeviceTree = try self.allocator.create(*DeviceTree, @sizeOf(DeviceTree));
-        errdefer self.allocator.destroy(new_dt) catch |err| {
-            debug.printf("Failed to deallocate DT object during failed parse attempt, reason: {}\n", .{err});
-        };
+        const new_dt = try self.allocator.create(DeviceTree);
+        errdefer self.allocator.destroy(new_dt);
+
+        // try new_dt.*.init(self.allocator);
 
         return new_dt;
     }
@@ -190,27 +194,39 @@ const DeviceTreeProperty = union(DeviceTreePropertyType) {
     MultipleText: [*][*]u8,
 };
 
-// our logical native representation of a device tree
-// bake the tree structure code in as a sorted string-value map with multiple children per node is quite specific
-// and unlikely to be used elsewhere in the
+const DeviceTreeNode = struct {
+    leafName: [*:0]u8,
+    const content = union {
+        property: DeviceTreeProperty,
+        children: dsa.LinkedList(DeviceTreeNode),
+    };
+};
+
+// our logical native representation of a device tree: a sorted string-value map with multiple children per node
 pub const DeviceTree = struct {
-    // nodes: *StringTreeMap,
+    root: *DeviceTreeNode,
+    alloc: Allocator,
 
     // return a caller-owned empty device tree
-    pub fn init(allocator: *Allocator) !*DeviceTree {
-        const new_dt: *DeviceTree = try allocator.create(*DeviceTree, @sizeOf(DeviceTree));
-        errdefer allocator.destroy(new_dt) catch |err| {
-            debug.printf("Failed to deallocate DT object during failed initialization attempt, reason: {}\n", .{err});
-        };
+    pub fn init(allocator: Allocator) !*DeviceTree {
+        const new_dt = try allocator.create(DeviceTree);
+        errdefer allocator.destroy(new_dt);
 
-        // new_dt.nodes = try allocator.create(*StringTreeMap(*DeviceTreeProperty), @sizeOf(StringTreeMap));
-        // new_dt.nodes.init(allocator);
+        new_dt.alloc = allocator;
+
+        new_dt.root = try allocator.create(DeviceTreeNode);
+        errdefer allocator.destroy(new_dt.root);
+
+        // initialize the root node in the tree
+        const root_leafname = "/";
+        new_dt.root.leafName = (try allocator.dupeZ(u8, root_leafname)).ptr;
+        new_dt.root.content.children.init();
 
         return new_dt;
     }
 
     // teardown a device tree
-    pub fn deinit(self: *DeviceTree, allocator: *Allocator) !void {
-        try allocator.destroy(self);
+    pub fn deinit(self: *DeviceTree) void {
+        self.alloc.destroy(self);
     }
 };

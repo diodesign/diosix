@@ -1,30 +1,48 @@
-// debugging routines, mostly output to a suitable channel
+// Debug output for the hypervisor
 //
-// Copyright (c) 2024, 2025 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const writer = std.io.Writer;
-const fmt = std.fmt;
-
+const Writer = std.Io.Writer;
 const atomic = @import("atomic.zig");
 
-const basic_writer = writer(void, error{}, basicPrint){ .context = {} };
+const basic_writer_vtable = Writer.VTable{
+    .drain = basicDrain,
+    .flush = Writer.noopFlush,
+};
+
+var basic_writer = Writer{
+    .vtable = &basic_writer_vtable,
+    .buffer = &.{}, // unbuffered
+};
+
 var basic_writer_lock = atomic.NamedSpinLock.init("Global basic debug writer lock");
 
 extern fn hw_putchar(c: u8) void;
 
-fn basicPrint(_: void, string: []const u8) error{}!usize {
-    for (string) |c| {
-        hw_putchar(c);
+fn basicDrain(_: *Writer, data: []const []const u8, splat: usize) Writer.Error!usize {
+    var total: usize = 0;
+    for (data) |buf| {
+        for (buf) |c| hw_putchar(c);
+        total += buf.len;
     }
-
-    return string.len;
+    // handle splat for the last buffer
+    if (data.len > 0 and splat > 0) {
+        const last = data[data.len - 1];
+        var i: usize = 0;
+        while (i < splat - 1) : (i += 1) {
+            for (last) |c| hw_putchar(c);
+            total += last.len;
+        }
+    }
+    return total;
 }
 
+// standard printf calling convention. will block until it is able to exclusively output the text
 pub fn printf(comptime format: []const u8, args: anytype) void {
     basic_writer_lock.lock();
     defer basic_writer_lock.unlock();
 
-    fmt.format(basic_writer, format, args) catch unreachable;
+    basic_writer.print(format, args) catch {};
 }

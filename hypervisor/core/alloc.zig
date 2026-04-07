@@ -1,175 +1,437 @@
-// Deliberately simple linked-listed-based heap allocator
+// Linked-list-based heap allocator
 //
-// Not thread safe. It's up to the caller to ensure only one thread uses this allocator at a time.
+// Not thread safe. It's up to the caller to ensure only one thread uses an instance of the heap allocator at a time.
+// This std-compatible allocator is for hypervisor-level components, and not for allocating memory for less-privileged code.
 //
-// Block sizes include the header and payload. The payload is the memory the caller can use.
-// Block sizes are also rounded up to the nearest multiple of BlockSizeMultiple to reduce fragmentation.
-// Free blocks are merged automatically. All allocations are aligned to the system's pointer size.
+// HeapBlock sizes include the alignment padding, header, and payload whether the block is free or in use.
+// The payload is the memory the caller can use. Free blocks are merged automatically.
+// HeapBlock sizes are also rounded up to the nearest multiple of heap_block_size_multiple bytes to reduce fragmentation.
+// The payload area within a block can be resized by the caller. The allocator decides whether to reject the request
+// or resize the whole block to accommodate the request. See: resize().
 //
-// Simplicity and safety is the key here. Given the nature of the hypervisor's job,
-// it's not expected to perform a lot of allocations in a time-critical manner.
+// HeapBlock layout in memory in ascending address order, with each --- section aligned at least to the system usize:
+// ---------------------------------------------------------------------------------------------------
+//   Padding bytes to align the start of the payload area to the required alignment   (padding_size)
+// ---------------------------------------------------------------------------------------------------
+//   HeapBlock header containing metadata, including sizes and alignment requirement (sizeOf(Block))
+// ---------------------------------------------------------------------------------------------------
+//   Payload area that the caller can use                                      (payload_active_size)
+// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+//   Spare bytes in the block from a resize or size roundup         (max_size - payload_active_size)
+// ---------------------------------------------------------------------------------------------------
+// Total size of the above: max_size
+// Each HeapBlock is structured this way so that when the caller passes a pointer to the payload area
+// to the allocator, the block header is in a known location relative to the payload pointer,
+// and the alignment padding is placed below the header in memory.
+//
+// Simplicity and safety is the key here.
 // If the allocator is holding back performance, we'll revist these design decisions.
 //
-// Copyright (c) 2024, 2025 Chris Williams <chrisw@diosix.org>
+// Some things to consider for future:
+// * separate queues for different block sizes
+// * separate queues for different alignment requirements
+// * separate queues for different types of memory
+//
+// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
-pub const AllocError = error{ NotEnoughFreeSpace, TooFragmented, BadBlockInList, BadBlock };
+test {
+    const builtin = @import("builtin");
+    if (builtin.is_test) {
+        @export(&hw_putchar_mock, .{ .name = "hw_putchar", .linkage = .strong });
+        @export(&hw_pause_mock, .{ .name = "hw_pause", .linkage = .strong });
+    }
+}
+fn hw_putchar_mock(_: u8) callconv(.c) void {}
+fn hw_pause_mock() callconv(.c) void {}
 
-const BlockSizeMultiple: usize = 64;
+const debug = @import("debug.zig");
+const std = @import("std");
+const Alignment = std.mem.Alignment;
+pub const Allocator = std.mem.Allocator;
 
-// pick some magic numbers that stand out in a hex dump
-const BlockState = enum(usize) { Free = 0xdeaddead, InUse = 0xc0ffeeee, _ };
+pub const HeapAllocError = error{
+    not_enough_free_space,
+    bad_alignment,
+    too_fragmented,
+    bad_block_in_list,
+};
 
-const Block = struct {
-    next: ?*Block,
-    size: usize,
-    state: BlockState,
-    // the block's payload follows immediately after this header
-    // starting on a usize byte boundary
+const HeapBlockState = enum(usize) { free = 0xdeaddead, in_use = 0xc0ffeeee, _ };
+const heap_block_size_multiple: usize = 64;
 
-    // return a pointer to the block's payload, using T to define the pointer type
-    pub fn payload(self: *Block, comptime T: type) T {
-        const p: *usize = @ptrFromInt(@intFromPtr(self) + @sizeOf(Block));
-        return @as(T, @ptrCast(p));
+const HeapBlock = struct {
+    next: ?*HeapBlock, // null for last block in the list
+    state: HeapBlockState,
+    max_size: usize,
+    payload_active_size: usize,
+    padding_size: usize,
+    alignment: Alignment,
+    owner: ?*anyopaque, // null for created during initialization or if owner is unknown
+
+    fn getPayloadPtr(self: *HeapBlock) [*]u8 {
+        const ptr: [*]u8 = @ptrCast(self);
+        return ptr + @sizeOf(HeapBlock);
     }
 };
 
-pub const Allocator = struct {
-    // there must be at least one block in the list (either in-use or free)
-    first: *Block,
-
-    total_size: usize,
+pub const HeapAllocator = struct {
+    first: *HeapBlock, // there must be at least one block in the list (either in-use or free)
     free_size: usize,
     inuse_size: usize,
 
-    // initialize the allocator for an area of contiguous memory
+    // initialize the allocator struct for an area of contiguous physical memory
     // base = address of the start of the memory area
+    //        address must be field_ptr: *T aligned to the system pointer size
     // size = the size of the memory area in bytes
-    // returns the initialized allocator as a value
-    pub fn init(base: usize, size: usize) Allocator {
-        const first_block: *Block = @ptrFromInt(base);
-        first_block.next = null;
-        first_block.size = size;
-        first_block.state = BlockState.Free;
+    //        size must be enough to hold at least one HeapBlock
+    // returns an error if the initialization failed
+    pub fn init(self: *HeapAllocator, base: usize, size: usize) !void {
+        const heap_block_size_multiple_align = Alignment.fromByteUnits(@sizeOf(*anyopaque));
+        if (!Alignment.check(heap_block_size_multiple_align, base)) return HeapAllocError.bad_alignment;
+        if (size < @sizeOf(HeapBlock)) return HeapAllocError.not_enough_free_space;
 
-        return Allocator{
-            .first = first_block,
-            .total_size = size,
-            .free_size = size,
-            .inuse_size = 0,
+        // create a free block from the available memory and make it the first block
+        self.first = @ptrFromInt(base);
+        self.first.next = null;
+        self.first.state = .free;
+        self.first.max_size = size;
+        self.first.payload_active_size = 0;
+        self.first.padding_size = 0;
+        self.first.alignment = heap_block_size_multiple_align;
+        self.first.owner = null;
+
+        self.free_size = size;
+        self.inuse_size = 0;
+    }
+
+    // return a std.mem.Allocator interface for this HeapAllocator
+    pub fn allocator(self: *HeapAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
         };
     }
 
-    // allocate a block of memory
-    // T = type of pointer to return, pointing to requesting block
-    // size = the size of the block in bytes
-    // returns a pointer to the block's payload, or error if the allocation failed
-    pub fn create(self: *Allocator, comptime T: type, size: usize) !T {
-        // don't forget to include the header in the requested size
-        const full_size = (size + @sizeOf(Block));
+    // implement the std.mem.Allocator.VTable API
+    //
+    // See: https://ziglang.org/documentation/master/std/#std.mem.Allocator.VTable
+    //
+    pub fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *HeapAllocator = @ptrCast(@alignCast(ctx));
 
-        // round up the requested size to the nearest multiple of BlockSizeMultiple
-        // so that we can avoid fragmentation. The hypervisor is mainly allocating
-        // for a small set of structures, not dynamically allocating a diverse range of blocks.
-        const rounded_up_size: usize = (full_size + BlockSizeMultiple - 1) & ~(BlockSizeMultiple - 1);
-
-        // determine first if we even have enough capacity in the pool
-        if (self.free_size < rounded_up_size) return AllocError.NotEnoughFreeSpace;
-
-        // search for either a free block large enough that can hold this allocation,
-        // or any free blocks to merge togther to hopefully hold the request
-        var search: ?*Block = self.first;
+        var prev: ?*HeapBlock = null;
+        var search: ?*HeapBlock = self.first;
         while (search) |candidate| {
-            switch (candidate.state) {
-                // skip blocks that are in-use
-                .InUse => search = candidate.next,
+            if (candidate.state == .free) {
+                mergeFreeBlocks(candidate);
 
-                .Free => {
-                    // if the candidate free block is the exact size requested
-                    // then just flip it to in-use and return its payload pointer
-                    if (candidate.size == rounded_up_size) {
-                        candidate.state = BlockState.InUse;
-
-                        // update accounting
-                        self.inuse_size += rounded_up_size;
-                        self.free_size -= rounded_up_size;
-
-                        return candidate.payload(T);
-                    }
-
-                    // if the free block is large enough to accoommodate this requested allocation,
-                    // then use the end of the free block to create a new in-use block for the request
-                    if (candidate.size > rounded_up_size) {
-                        candidate.size -= rounded_up_size;
-                        const new_block: *Block = @ptrFromInt(@intFromPtr(candidate) + candidate.size);
-                        new_block.size = rounded_up_size;
-                        new_block.state = BlockState.InUse;
-
-                        // insert the in-use block between the free block and the next in the chain
-                        new_block.next = candidate.next;
-                        candidate.next = new_block;
-
-                        // update accounting
-                        self.inuse_size += rounded_up_size;
-                        self.free_size -= rounded_up_size;
-
-                        return new_block.payload(T);
-                    }
-
-                    // rather than defer merging, proactively merge now
-                    var merge: ?*Block = candidate.next;
-                    while (merge) |victim| {
-                        switch (victim.state) {
-                            // we can't merge in-use blocks, so stop the merge attempt here
-                            .InUse => break,
-
-                            // check if two free blocks are next to each other in memory,
-                            // and if so, absorb the second into the first
-                            .Free => {
-                                if ((@intFromPtr(candidate) + candidate.size) == @intFromPtr(victim)) {
-                                    candidate.size += victim.size;
-                                    candidate.next = victim.next;
-                                }
-                            },
-
-                            // detect a broken linked list
-                            else => return AllocError.BadBlockInList,
-                        }
-
-                        // look for more adjacent blocks to absorb
-                        merge = victim.next;
-                    }
-
-                    // if the candidate is now large enough to fit the requested block, then repeat
-                    // the above allocation process. if not, move on to the next candidate
-                    if (candidate.size < rounded_up_size) {
-                        search = candidate.next;
-                    }
-                },
-
-                // detect a broken linked list
-                else => return AllocError.BadBlockInList,
+                if (tryAllocateFromBlock(self, prev, candidate, len, alignment, ret_addr)) |payload_ptr| {
+                    return payload_ptr;
+                }
             }
+            prev = candidate;
+            search = candidate.next;
         }
 
-        // at this point, the heap has enough free space but is too fragmented
-        return AllocError.TooFragmented;
+        return null;
     }
 
-    // free the given block, as identified from its payload address
-    // returns an error if something went wrong
-    pub fn destroy(self: *Allocator, payload: *anyopaque) !void {
-        const victim_base: usize = @intFromPtr(payload);
-        const victim: *Block = @ptrFromInt(victim_base - @sizeOf(Block));
+    pub fn resize(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
+        _ = ctx;
+        _ = ret_addr;
+        const block: *HeapBlock = @ptrCast(@alignCast(memory.ptr - @sizeOf(HeapBlock)));
 
-        // make sure this victim heap block is legit, or error out to the caller
-        if (victim.state != BlockState.InUse) {
-            return AllocError.BadBlock;
+        if (block.state != .in_use) {
+            return false;
         }
 
-        // flip it to free and update accounting
-        victim.state = BlockState.Free;
-        self.inuse_size -= victim.size;
-        self.free_size += victim.size;
+        // The length of the slice passed to resize must match the active payload size.
+        if (memory.len != block.payload_active_size) {
+            return false;
+        }
+
+        // The alignment passed to resize must match the original alignment.
+        if (block.alignment.toByteUnits() != alignment.toByteUnits()) {
+            return false;
+        }
+
+        // Check if the new size can fit within the existing block's allocated space.
+        const required_size = block.padding_size + @sizeOf(HeapBlock) + new_len;
+        if (required_size <= block.max_size) {
+            // New size fits within the current block. This is a successful in-place resize.
+            block.payload_active_size = new_len;
+            return true;
+        }
+
+        // Cannot resize in-place. Per std.mem.Allocator.resize documentation,
+        // we must return false and leave the original allocation untouched.
+        return false;
+    }
+
+    pub fn remap(
+        _: *anyopaque,
+        _: []u8,
+        _: Alignment,
+        _: usize,
+        _: usize,
+    ) ?[*]u8 {
+        return null;
+    }
+
+    pub fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
+        _ = alignment;
+        _ = ret_addr;
+        const self: *HeapAllocator = @ptrCast(@alignCast(ctx));
+        const victim: *HeapBlock = @ptrCast(@alignCast(memory.ptr - @sizeOf(HeapBlock)));
+
+        if (victim.state != .in_use) {
+            return;
+        }
+
+        // The length of the slice passed to free must match the active payload size.
+        if (memory.len != victim.payload_active_size) {
+            return;
+        }
+
+        victim.state = .free;
+        self.inuse_size -= victim.max_size;
+        self.free_size += victim.max_size;
+        victim.owner = null;
+    }
+
+    fn tryAllocateFromBlock(self: *HeapAllocator, prev: ?*HeapBlock, block: *HeapBlock, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
+        // A block/chunk starts at its header address minus its padding.
+        const chunk_start = @intFromPtr(block) - block.padding_size;
+        const header_size = @sizeOf(HeapBlock);
+
+        // The payload must start at least header_size after the chunk start.
+        const min_payload_ptr = chunk_start + header_size;
+        const aligned_payload_ptr = std.mem.alignForward(usize, min_payload_ptr, alignment.toByteUnits());
+
+        // The header must be immediately before the payload for @fieldParentPtr to work.
+        const new_header_ptr = aligned_payload_ptr - header_size;
+        const padding = new_header_ptr - chunk_start;
+
+        const rounded_up_payload_size = (len + heap_block_size_multiple - 1) & ~(heap_block_size_multiple - 1);
+        const required_size = padding + header_size + rounded_up_payload_size;
+
+        if (block.max_size < required_size) {
+            return null; // block is too small
+        }
+
+        // Check if we should split the block
+        const remainder_size = block.max_size - required_size;
+        if (remainder_size >= header_size + heap_block_size_multiple) {
+            // Create a new free block from the remainder
+            const new_free_chunk_start = chunk_start + required_size;
+            const new_free_block: *HeapBlock = @ptrFromInt(new_free_chunk_start);
+            new_free_block.* = .{
+                .next = block.next,
+                .state = .free,
+                .max_size = remainder_size,
+                .payload_active_size = 0,
+                .padding_size = 0,
+                .alignment = Alignment.fromByteUnits(@sizeOf(usize)),
+                .owner = null,
+            };
+
+            // Update the current block to be in-use and truncated
+            const inuse_block: *HeapBlock = @ptrFromInt(new_header_ptr);
+            const old_next = new_free_block;
+            inuse_block.* = .{
+                .next = old_next,
+                .state = .in_use,
+                .max_size = required_size,
+                .payload_active_size = len,
+                .padding_size = padding,
+                .alignment = alignment,
+                .owner = @as(*anyopaque, @ptrFromInt(ret_addr)),
+            };
+
+            // Link the previous block to this new header location
+            if (prev) |p| p.next = inuse_block else self.first = inuse_block;
+
+            self.inuse_size += inuse_block.max_size;
+            self.free_size -= inuse_block.max_size;
+            return inuse_block.getPayloadPtr();
+        } else {
+            // Use the whole block
+            const final_size = block.max_size;
+            const inuse_block: *HeapBlock = @ptrFromInt(new_header_ptr);
+            const old_next = block.next;
+            inuse_block.* = .{
+                .next = old_next,
+                .state = .in_use,
+                .max_size = final_size,
+                .payload_active_size = len,
+                .padding_size = padding,
+                .alignment = alignment,
+                .owner = @as(*anyopaque, @ptrFromInt(ret_addr)),
+            };
+
+            if (prev) |p| p.next = inuse_block else self.first = inuse_block;
+
+            self.inuse_size += inuse_block.max_size;
+            self.free_size -= inuse_block.max_size;
+            return inuse_block.getPayloadPtr();
+        }
+    }
+
+    fn mergeFreeBlocks(block: *HeapBlock) void {
+        var current = block;
+        while (current.next) |next_block| {
+            if (next_block.state != .free) break;
+
+            const current_chunk_start = @intFromPtr(current) - current.padding_size;
+            const next_chunk_start = @intFromPtr(next_block) - next_block.padding_size;
+
+            if (current_chunk_start + current.max_size == next_chunk_start) {
+                current.max_size += next_block.max_size;
+                current.next = next_block.next;
+                continue;
+            }
+            break;
+        }
     }
 };
+
+test "heap allocator basic alloc and free" {
+    const testing = std.testing;
+
+    var heap_memory: [1024]u8 align(64) = undefined;
+    var heap = HeapAllocator{
+        .first = undefined,
+        .free_size = 0,
+        .inuse_size = 0,
+    };
+    try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
+
+    const allocator = heap.allocator();
+
+    const mem1 = try allocator.alloc(u8, 100);
+    try testing.expect(mem1.len == 100);
+    try testing.expect(heap.inuse_size > 0);
+
+    const mem2 = try allocator.alloc(u8, 200);
+    try testing.expect(mem2.len == 200);
+
+    allocator.free(@as([]u8, mem1));
+    allocator.free(@as([]u8, mem2));
+    try testing.expectEqual(@as(usize, 0), heap.inuse_size);
+    try testing.expectEqual(heap_memory.len, heap.free_size);
+}
+
+test "heap allocator alignment" {
+    const testing = std.testing;
+
+    var heap_memory: [2048]u8 align(64) = undefined;
+    var heap = HeapAllocator{
+        .first = undefined,
+        .free_size = 0,
+        .inuse_size = 0,
+    };
+    try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
+    const allocator = heap.allocator();
+
+    const mem_align_16 = try allocator.create(u128);
+    defer allocator.destroy(mem_align_16);
+    try testing.expectEqual(@as(usize, 0), @intFromPtr(mem_align_16) % @alignOf(u128));
+
+    const mem_align_64 = try allocator.alignedAlloc(u8, Alignment.fromByteUnits(64), 100);
+    defer allocator.free(@as([]u8, mem_align_64));
+    try testing.expectEqual(@as(usize, 0), @intFromPtr(mem_align_64.ptr) % 64);
+}
+
+test "heap allocator resize" {
+    const testing = std.testing;
+
+    var heap_memory: [1024]u8 align(64) = undefined;
+    var heap = HeapAllocator{
+        .first = undefined,
+        .free_size = 0,
+        .inuse_size = 0,
+    };
+    try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
+    const allocator = heap.allocator();
+
+    const mem = try allocator.alloc(u8, 50);
+    try testing.expect(mem.len == 50);
+
+    var success = allocator.resize(@as([]u8, mem), 25);
+    try testing.expect(success);
+    const mem_shrunk = mem[0..25];
+
+    success = allocator.resize(@as([]u8, mem_shrunk), 60);
+    try testing.expect(success);
+    const mem_grown = mem.ptr[0..60]; // use original mem which now has 60 active bytes
+
+    success = allocator.resize(@as([]u8, mem_grown), 2048);
+    try testing.expect(!success);
+    try testing.expect(mem_grown.len == 60);
+
+    allocator.free(@as([]u8, mem_grown));
+}
+
+test "heap allocator fragmentation and merging" {
+    const testing = std.testing;
+
+    var heap_memory: [2048]u8 align(64) = undefined;
+    var heap = HeapAllocator{
+        .first = undefined,
+        .free_size = 0,
+        .inuse_size = 0,
+    };
+    try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
+    const allocator = heap.allocator();
+
+    const mem1 = try allocator.alloc(u8, 100);
+    const mem2 = try allocator.alloc(u8, 100);
+    const mem3 = try allocator.alloc(u8, 100);
+
+    const block1: *HeapBlock = @ptrCast(@alignCast(mem1.ptr - @sizeOf(HeapBlock)));
+    const block2: *HeapBlock = @ptrCast(@alignCast(mem2.ptr - @sizeOf(HeapBlock)));
+
+    const chunk1_start = @intFromPtr(block1) - block1.padding_size;
+    const chunk2_start = @intFromPtr(block2) - block2.padding_size;
+
+    try testing.expect(chunk1_start + block1.max_size == chunk2_start);
+
+    allocator.free(@as([]u8, mem2));
+    try testing.expect(block2.state == .free);
+
+    allocator.free(@as([]u8, mem1));
+    try testing.expect(block1.state == .free);
+    try testing.expect(block1.max_size > 100);
+
+    allocator.free(@as([]u8, mem3));
+    try testing.expectEqual(heap_memory.len, heap.free_size);
+}
+
+test "heap allocator out of memory" {
+    const testing = std.testing;
+
+    var heap_memory: [512]u8 align(64) = undefined;
+    var heap = HeapAllocator{
+        .first = undefined,
+        .free_size = 0,
+        .inuse_size = 0,
+    };
+    try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
+    const allocator = heap.allocator();
+
+    const mem1 = try allocator.alloc(u8, 400);
+    defer allocator.free(@as([]u8, mem1));
+
+    const mem2 = allocator.alloc(u8, 200);
+    try testing.expectError(error.OutOfMemory, mem2);
+
+    allocator.free(@as([]u8, mem1));
+    const mem3 = allocator.alloc(u8, heap_memory.len);
+    try testing.expectError(error.OutOfMemory, mem3);
+}

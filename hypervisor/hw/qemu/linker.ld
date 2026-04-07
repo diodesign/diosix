@@ -1,6 +1,6 @@
 /* ELF layout of the hypervisor for Qemu-compatible targets
  *
- * Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
+ * Copyright (c) 2024, 2026 Chris Williams <chrisw@diosix.org>
  * SPDX-License-Identifier: MIT
  *
  */
@@ -23,7 +23,10 @@ SECTIONS
   {
     *(.text*)
     *(.rodata*)
+    *(.eh_frame_hdr)
+    *(.eh_frame)
   }
+
 
   .data : ALIGN(0x8)
   {

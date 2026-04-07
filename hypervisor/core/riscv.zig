@@ -1,6 +1,6 @@
 // RISC-V non-hardware-specific routines
 //
-// Copyright (c) 2024, 2025 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const alloc = @import("alloc.zig");
@@ -15,7 +15,7 @@ pub const ThreadContext = [32]usize;
 // the per-CPU context for the physical core running this thread
 const CpuContext = struct {
     cpu_core_id: usize,
-    allocator: alloc.Allocator,
+    allocator: alloc.HeapAllocator,
 };
 
 // return a pointer to the CPU context for the core running this thread
@@ -31,6 +31,18 @@ pub inline fn getCPUHeapBase() usize {
 // return the size of the heap for the core running this thread
 pub inline fn getCPUHeapSize() usize {
     return hw_heap_size();
+}
+
+// initialize the heap allocator for the CPU core running this thread
+pub fn initCPUHeapAllocator() !void {
+    const cpu_context = getCPUContext();
+    try cpu_context.allocator.init(getCPUHeapBase(), getCPUHeapSize());
+}
+
+// return a standard Zig allocator for the CPU core running this thread
+pub fn getCPUHeapAllocator() alloc.Allocator {
+    const cpu_context = getCPUContext();
+    return cpu_context.allocator.allocator();
 }
 
 // return the mcause CSR

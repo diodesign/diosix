@@ -9,8 +9,8 @@ const ordering = std.builtin.AtomicOrder;
 
 extern fn hw_pause() void;
 
-// primitives for atomically setting and unlocking boolean flags
-pub fn setBool(ptr: *bool, val: bool) void {
+// primitives for atomically reading and writing boolean flags
+pub fn writeBool(ptr: *bool, val: bool) void {
     @atomicStore(bool, ptr, val, ordering.seq_cst);
 }
 
