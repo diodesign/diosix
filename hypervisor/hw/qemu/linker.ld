@@ -55,6 +55,14 @@ SECTIONS
   /* set aligned end to the hypervisor, round up to nearest page boundary */
   __hypervisor_end = ALIGN(0x1000);
 
+  /* embedded root VM image */
+  .rootvm : ALIGN(0x1000)
+  {
+    __rootvm_start = .;
+    KEEP(*(.rootvm))
+    __rootvm_end = .;
+  }
+
   /* keep other GNU stuff out of the way */
   /DISCARD/ : { *(.note.gnu.property) }
 }

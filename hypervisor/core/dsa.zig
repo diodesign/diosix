@@ -8,7 +8,7 @@
 // take care to allocate LinkedList and Node(s) on the heap
 // and not the stack if you want your list to be long-living.
 // also, locking is to be handled outside this structure
-
+// T = type of the contents of each node
 pub fn LinkedList(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -287,4 +287,310 @@ test "doubly linked list" {
     allocator.destroy(n200);
     allocator.destroy(n300);
     allocator.destroy(n400);
+}
+
+pub const RBColor = enum { red, black };
+
+// define a red-black tree that can provide efficient ordered storage.
+// take care to allocate RedBlackTree and Node(s) on the heap
+// and not the stack if you want your tree to be long-living.
+// locking is to be handled outside this structure.
+// T = type of the contents of each node
+// compareFn = function that returns -1 if a < b, 0 if a == b, and 1 if a > b
+pub fn RedBlackTree(comptime T: type, comptime compareFn: fn (a: T, b: T) i8) type {
+    return struct {
+        const Self = @This();
+
+        pub const Node = struct {
+            parent: ?*Node,
+            left: ?*Node,
+            right: ?*Node,
+            color: RBColor,
+            contents: T,
+        };
+
+        root: ?*Node,
+
+        pub fn init(self: *Self) void {
+            self.root = null;
+        }
+
+        // insert the given node into the tree
+        pub fn insert(self: *Self, node: *Node) void {
+            node.left = null;
+            node.right = null;
+            node.color = .red;
+
+            var y: ?*Node = null;
+            var x = self.root;
+
+            while (x) |ptr| {
+                y = ptr;
+                if (compareFn(node.contents, ptr.contents) < 0) {
+                    x = ptr.left;
+                } else {
+                    x = ptr.right;
+                }
+            }
+
+            node.parent = y;
+            if (y == null) {
+                self.root = node;
+            } else if (compareFn(node.contents, y.?.contents) < 0) {
+                y.?.left = node;
+            } else {
+                y.?.right = node;
+            }
+
+            self.insertFixup(node);
+        }
+
+        fn insertFixup(self: *Self, node: *Node) void {
+            var z = node;
+            while (z.parent != null and z.parent.?.color == .red) {
+                if (z.parent == z.parent.?.parent.?.left) {
+                    const y = z.parent.?.parent.?.right;
+                    if (y != null and y.?.color == .red) {
+                        z.parent.?.color = .black;
+                        y.?.color = .black;
+                        z.parent.?.parent.?.color = .red;
+                        z = z.parent.?.parent.?;
+                    } else {
+                        if (z == z.parent.?.right) {
+                            z = z.parent.?;
+                            self.leftRotate(z);
+                        }
+                        z.parent.?.color = .black;
+                        z.parent.?.parent.?.color = .red;
+                        self.rightRotate(z.parent.?.parent.?);
+                    }
+                } else {
+                    const y = z.parent.?.parent.?.left;
+                    if (y != null and y.?.color == .red) {
+                        z.parent.?.color = .black;
+                        y.?.color = .black;
+                        z.parent.?.parent.?.color = .red;
+                        z = z.parent.?.parent.?;
+                    } else {
+                        if (z == z.parent.?.left) {
+                            z = z.parent.?;
+                            self.rightRotate(z);
+                        }
+                        z.parent.?.color = .black;
+                        z.parent.?.parent.?.color = .red;
+                        self.leftRotate(z.parent.?.parent.?);
+                    }
+                }
+            }
+            self.root.?.color = .black;
+        }
+
+        fn leftRotate(self: *Self, x: *Node) void {
+            const y = x.right.?;
+            x.right = y.left;
+            if (y.left != null) {
+                y.left.?.parent = x;
+            }
+            y.parent = x.parent;
+            if (x.parent == null) {
+                self.root = y;
+            } else if (x == x.parent.?.left) {
+                x.parent.?.left = y;
+            } else {
+                x.parent.?.right = y;
+            }
+            y.left = x;
+            x.parent = y;
+        }
+
+        fn rightRotate(self: *Self, y: *Node) void {
+            const x = y.left.?;
+            y.left = x.right;
+            if (x.right != null) {
+                x.right.?.parent = y;
+            }
+            x.parent = y.parent;
+            if (y.parent == null) {
+                self.root = x;
+            } else if (y == y.parent.?.right) {
+                y.parent.?.right = x;
+            } else {
+                y.parent.?.left = x;
+            }
+            x.right = y;
+            y.parent = x;
+        }
+
+        // remove the given node from the tree
+        pub fn remove(self: *Self, z: *Node) void {
+            var y = z;
+            var y_original_color = y.color;
+            var x: ?*Node = null;
+
+            if (z.left == null) {
+                x = z.right;
+                self.transplant(z, z.right);
+            } else if (z.right == null) {
+                x = z.left;
+                self.transplant(z, z.left);
+            } else {
+                y = self.minimum(z.right.?);
+                y_original_color = y.color;
+                x = y.right;
+                if (y.parent == z) {
+                    if (x != null) x.?.parent = y;
+                } else {
+                    self.transplant(y, y.right);
+                    y.right = z.right;
+                    y.right.?.parent = y;
+                }
+                self.transplant(z, y);
+                y.left = z.left;
+                y.left.?.parent = y;
+                y.color = z.color;
+            }
+
+            if (y_original_color == .black) {
+                self.removeFixup(x, y.parent);
+            }
+        }
+
+        fn transplant(self: *Self, u: *Node, v: ?*Node) void {
+            if (u.parent == null) {
+                self.root = v;
+            } else if (u == u.parent.?.left) {
+                u.parent.?.left = v;
+            } else {
+                u.parent.?.right = v;
+            }
+            if (v != null) {
+                v.?.parent = u.parent;
+            }
+        }
+
+        fn removeFixup(self: *Self, x_in: ?*Node, parent_in: ?*Node) void {
+            var x = x_in;
+            var parent = parent_in;
+
+            while (x != self.root and (x == null or x.?.color == .black)) {
+                if (x == parent.?.left or (x == null and parent.?.left == null)) {
+                    var w = parent.?.right;
+                    if (w != null and w.?.color == .red) {
+                        w.?.color = .black;
+                        parent.?.color = .red;
+                        self.leftRotate(parent.?);
+                        w = parent.?.right;
+                    }
+                    if (w == null or ((w.?.left == null or w.?.left.?.color == .black) and (w.?.right == null or w.?.right.?.color == .black))) {
+                        if (w != null) w.?.color = .red;
+                        x = parent;
+                        parent = x.?.parent;
+                    } else {
+                        if (w.?.right == null or w.?.right.?.color == .black) {
+                            if (w.?.left) |wl| wl.color = .black;
+                            w.?.color = .red;
+                            self.rightRotate(w.?);
+                            w = parent.?.right;
+                        }
+                        w.?.color = parent.?.color;
+                        parent.?.color = .black;
+                        if (w.?.right) |wr| wr.color = .black;
+                        self.leftRotate(parent.?);
+                        x = self.root;
+                    }
+                } else {
+                    var w = parent.?.left;
+                    if (w != null and w.?.color == .red) {
+                        w.?.color = .black;
+                        parent.?.color = .red;
+                        self.rightRotate(parent.?);
+                        w = parent.?.left;
+                    }
+                    if (w == null or ((w.?.right == null or w.?.right.?.color == .black) and (w.?.left == null or w.?.left.?.color == .black))) {
+                        if (w != null) w.?.color = .red;
+                        x = parent;
+                        parent = x.?.parent;
+                    } else {
+                        if (w.?.left == null or w.?.left.?.color == .black) {
+                            if (w.?.right) |wr| wr.color = .black;
+                            w.?.color = .red;
+                            self.leftRotate(w.?);
+                            w = parent.?.left;
+                        }
+                        w.?.color = parent.?.color;
+                        parent.?.color = .black;
+                        if (w.?.left) |wl| wl.color = .black;
+                        self.rightRotate(parent.?);
+                        x = self.root;
+                    }
+                }
+            }
+            if (x != null) x.?.color = .black;
+        }
+
+        // find and return the node with the minimum value
+        pub fn findMin(self: *Self) ?*Node {
+            if (self.root) |root| {
+                return self.minimum(root);
+            }
+            return null;
+        }
+
+        fn minimum(self: *Self, node: *Node) *Node {
+            _ = self;
+            var x = node;
+            while (x.left) |left| {
+                x = left;
+            }
+            return x;
+        }
+    };
+}
+
+fn compareU32(a: u32, b: u32) i8 {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+}
+
+test "red-black tree basics" {
+    const std = @import("std");
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const Tree = RedBlackTree(u32, compareU32);
+    const Node = Tree.Node;
+
+    var tree: Tree = undefined;
+    tree.init();
+
+    try testing.expect(tree.findMin() == null);
+
+    const values = [_]u32{ 10, 20, 30, 15, 25, 5, 1 };
+    var nodes: [values.len]*Node = undefined;
+
+    for (values, 0..) |v, i| {
+        const n = try allocator.create(Node);
+        n.* = .{
+            .parent = null,
+            .left = null,
+            .right = null,
+            .color = .red,
+            .contents = v,
+        };
+        tree.insert(n);
+        nodes[i] = n;
+    }
+
+    const min = tree.findMin();
+    try testing.expect(min != null);
+    try testing.expect(min.?.contents == 1);
+
+    // remove nodes
+    for (nodes) |n| {
+        tree.remove(n);
+        allocator.destroy(n);
+    }
+
+    try testing.expect(tree.root == null);
 }

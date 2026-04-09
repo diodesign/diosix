@@ -35,16 +35,6 @@
 // Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
-test {
-    const builtin = @import("builtin");
-    if (builtin.is_test) {
-        @export(&hw_putchar_mock, .{ .name = "hw_putchar", .linkage = .strong });
-        @export(&hw_pause_mock, .{ .name = "hw_pause", .linkage = .strong });
-    }
-}
-fn hw_putchar_mock(_: u8) callconv(.c) void {}
-fn hw_pause_mock() callconv(.c) void {}
-
 const debug = @import("debug.zig");
 const std = @import("std");
 const Alignment = std.mem.Alignment;

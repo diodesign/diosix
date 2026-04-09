@@ -1,6 +1,6 @@
 # Handle exceptions and interrupts (xint) on Qemu-compatible systems
 #
-# Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
+# Copyright (c) 2024, 2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
 .altmacro
@@ -89,19 +89,6 @@ xint_machine_entry_handler:
     # this means hypervisor functions relying on mscratch will break, so restore it.
     addi    t0, sp, XINT_REGISTER_FRAME_SIZE
     csrrw   x0, mscratch, t0
-
-    # for environment calls (ecalls), the riscv spec sets epc to the address of the ecall instruction.
-    # in which case, we need to advance epc 4 bytes to the next RV64 instruction.
-    # otherwise, we're going into a loop when we return. do this now because the ecall
-    # could schedule in another context, so incrementing epc after xint_handler
-    # may break a newly scheduled context. we increment mepc directly so that if another
-    # context isn't scheduled in, epc will be correct.
-    csrrs   t0, mcause, x0
-    li      t1, 9             # mcause = 9 for environment call from supervisor-to-hypervisor
-    bne     t0, t1, continue  # ... all usermode ecalls are handled at the supervisor level
-    csrrs   t2, mepc, x0      # ... and the hypervisor doesn't make ecalls into itself
-    addi    t2, t2, 4
-    csrrw   x0, mepc, t2
 
 continue:
     # pass current sp to exception/hw handler as a pointer in a0. this'll allow
