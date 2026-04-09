@@ -553,6 +553,12 @@ fn compareU32(a: u32, b: u32) i8 {
     return 0;
 }
 
+pub fn compareU64(a: u64, b: u64) i8 {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+}
+
 test "red-black tree basics" {
     const std = @import("std");
     const testing = std.testing;

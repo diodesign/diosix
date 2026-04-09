@@ -98,6 +98,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     const allocator = cpu_ctx.allocator.allocator();
 
     xint.init();
+    scheduler.initCpu();
 
     switch (cpu_core_id) {
         BootCpuID => {
@@ -114,7 +115,10 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         else => while (atomic.readBool(&boot_complete_flag) == false) {},
     }
 
-    debug.printf("CPU core ID {} waiting for work...\n", .{cpu_core_id});
+    debug.printf("CPU core ID {} entering scheduling loop...\n", .{cpu_core_id});
+    while (true) {
+        scheduler.schedule();
+    }
 }
 
 test "boot CPU initialization" {

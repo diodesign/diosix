@@ -5,6 +5,7 @@
 
 const builtin = @import("builtin");
 const alloc = @import("alloc.zig");
+const dsa = @import("dsa.zig");
 
 const is_test = builtin.is_test;
 
@@ -63,9 +64,17 @@ const std = @import("std");
 pub const ThreadContext = [32]usize;
 
 // the per-CPU context for the physical core running this thread
-const CpuContext = struct {
+pub const CpuContext = struct {
     cpu_core_id: usize,
     allocator: alloc.HeapAllocator,
+
+    // The currently running virtual core on this physical core
+    // This is typed as ?*anyopaque to avoid circular dependency with vcore.zig
+    active_vcore: ?*anyopaque,
+
+    // Per-CPU lock-free (contention-free) run queue
+    run_queue: dsa.RedBlackTree(u64, dsa.compareU64),
+    run_queue_count: usize,
 };
 
 // return a pointer to the CPU context for the core running this thread
@@ -139,6 +148,18 @@ pub inline fn readMstatus() usize {
     if (is_test) return test_mstatus;
     return asm volatile ("csrr %[ret], mstatus"
         : [ret] "=r" (-> usize),
+    );
+}
+
+// write to the mstatus CSR
+pub inline fn writeMstatus(val: usize) void {
+    if (is_test) {
+        test_mstatus = val;
+        return;
+    }
+    asm volatile ("csrw mstatus, %[val]"
+        :
+        : [val] "r" (val),
     );
 }
 

@@ -8,18 +8,8 @@ const riscv = @import("riscv.zig");
 const vcore = @import("vcore.zig");
 const alloc = @import("alloc.zig");
 
-// the per-CPU context for the physical core running this thread
-// this must match the structure returning by the low-level hw_private_variables()
-pub const CpuContext = struct {
-    cpu_core_id: usize,
-    allocator: alloc.HeapAllocator,
-
-    // The currently running virtual core on this physical core
-    active_vcore: ?*vcore.VirtualCore,
-};
-
 // Return the CPU context for the physical core running this code
-pub fn this() *CpuContext {
+pub fn this() *riscv.CpuContext {
     return riscv.getCPUContext();
 }
 

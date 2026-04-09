@@ -14,7 +14,7 @@ pub const Priority = enum {
     normal,
 };
 
-pub const SchedulerTree = dsa.RedBlackTree(u64, compareU64);
+pub const SchedulerTree = dsa.RedBlackTree(u64, dsa.compareU64);
 
 // Represents a virtual CPU core's context and state
 pub const VirtualCore = struct {
@@ -80,11 +80,6 @@ pub const VirtualCore = struct {
     }
 };
 
-fn compareU64(a: u64, b: u64) i8 {
-    if (a < b) return -1;
-    if (a > b) return 1;
-    return 0;
-}
 
 test "virtual core initialization" {
     const testing = std.testing;
