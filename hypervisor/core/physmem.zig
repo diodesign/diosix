@@ -74,9 +74,12 @@ pub fn init(device_tree: *dt.DeviceTree) !void {
 
     debug.printf("PhysMem: H-extension {s}\n", .{if (phys_mem_state.has_h_extension) "detected" else "NOT detected"});
 
-    // Calculate hypervisor footprint
+    // Calculate hypervisor footprint, including per-CPU slots (each 1MB)
+    const cpu_slab_size = 1024 * 1024;
+    const num_cpus = if (builtin.is_test) 1 else device_tree.countCpus();
     const hv_start = if (builtin.is_test) test_hv_start else @intFromPtr(&__hypervisor_start);
-    const hv_end = if (builtin.is_test) test_hv_end else @intFromPtr(&__hypervisor_end);
+    const hv_static_end = if (builtin.is_test) test_hv_end else @intFromPtr(&__hypervisor_end);
+    const hv_end = hv_static_end + (num_cpus * cpu_slab_size);
     const hv_region = Region{ .base = hv_start, .size = hv_end - hv_start };
 
     debug.printf("PhysMem: HV footprint 0x{x} - 0x{x} ({} KB)\n", .{ hv_start, hv_end, hv_region.size / 1024 });

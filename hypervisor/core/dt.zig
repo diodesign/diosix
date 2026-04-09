@@ -650,6 +650,24 @@ pub const DeviceTree = struct {
         return self.findNodeIndex(node_path) != null;
     }
 
+    /// Count the number of CPU nodes in the tree
+    pub fn countCpus(self: *const DeviceTree) usize {
+        var count: usize = 0;
+        var node_it = self.iter("/cpus", 2);
+        while (node_it.next()) |path| {
+            // CPU nodes are usually children of /cpus and have device_type = "cpu"
+            if (self.getProperty(path, "device_type")) |prop| {
+                if (prop.asText()) |text| {
+                    if (std.mem.eql(u8, text, "cpu")) {
+                        count += 1;
+                    }
+                } else |_| {}
+            } else |_| {}
+        }
+        // Fallback to at least one CPU if the device tree is malformed or missing CPU nodes
+        return if (count > 0) count else 1;
+    }
+
     // get #address-cells and #size-cells for a node, falling back to spec defaults
     pub fn getAddressSizeCells(self: *const DeviceTree, node_path: []const u8) AddressSizeCells {
         var addr_cells = DefaultAddressCells;
