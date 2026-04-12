@@ -14,11 +14,11 @@ pub const LoaderError = error{
     UnsupportedElfData,
     UnsupportedElfMachine,
     InvalidProgramHeader,
+    TranslationFailed,
 };
 
 pub const Loader = struct {
-    pub fn load(root_vm: *guest.Guest, source: []const u8) LoaderError!usize {
-        _ = root_vm;
+    pub fn load(root_vm: *guest.Guest, source: []const u8) !usize {
         // Basic ELF Header validation.
         if (source.len < 64) return LoaderError.InvalidElfHeader;
         if (!std.mem.eql(u8, source[elf_spec.EHDR.IDENT .. elf_spec.EHDR.IDENT + 4], elf_spec.MAGIC)) return LoaderError.InvalidElfHeader;
@@ -54,14 +54,19 @@ pub const Loader = struct {
                 // In a real system, we'd translate vaddr to paddr using the guest's view.
                 if (p_filesz > 0) {
                     const segment_data = source[p_offset .. p_offset + p_filesz];
-                    // Copy segment to guest physical memory.
-                    // Root VM has identity mapping at the moment, so we copy direct to host PA.
-                    @memcpy(@as([*]u8, @ptrFromInt(p_vaddr))[0..p_filesz], segment_data);
+                    // Translate Guest Physical Address (GPA) to Host Physical Address (HPA).
+                    // In 64-bit kernels, p_vaddr is often in high memory (e.g. 0xffffffff80000000).
+                    // We mask it to 32-bits to get the relative offset in the guest's RAM.
+                    const gpa = (p_vaddr & 0xFFFFFFFF);
+                    const hpa = try root_vm.space.translateGPA(gpa);
+                    @memcpy(@as([*]u8, @ptrFromInt(hpa))[0..p_filesz], segment_data);
                 }
                 
                 // Zero out any remaining memory in the segment (BSS).
                 if (p_memsz > p_filesz) {
-                    @memset(@as([*]u8, @ptrFromInt(p_vaddr + p_filesz))[0 .. p_memsz - p_filesz], 0);
+                    const gpa = ((p_vaddr + p_filesz) & 0xFFFFFFFF);
+                    const hpa = try root_vm.space.translateGPA(gpa);
+                    @memset(@as([*]u8, @ptrFromInt(hpa))[0 .. p_memsz - p_filesz], 0);
                 }
 
                 debug.printf("Loaded ELF segment: 0x{x} ({} bytes)\n", .{ p_vaddr, p_memsz });

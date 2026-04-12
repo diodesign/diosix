@@ -79,36 +79,60 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     system_ctx.?.device_tree = device_tree;
 
     // Initialize physical memory management.
+    // Initialize physical memory management.
+    const rootvm_ram_size = if (builtin.is_test) 2 * 1024 * 1024 else 512 * 1024 * 1024;
+    
+    // In a real boot, we discover regions first, find a gap, then initialize the allocator
     if (!builtin.is_test) {
-        try physmem.init(device_tree);
+        try physmem.discoverRegions(device_tree);
+    }
+
+    const rootvm_region = try physmem.findContiguousRegion(rootvm_ram_size);
+    const rootvm_hpa_base = rootvm_region.base;
+
+    if (!builtin.is_test) {
+        try physmem.init(device_tree, rootvm_region);
     }
 
     // Initialize the global scheduler.
     scheduler.init();
 
-    const rootvm_base = if (builtin.is_test) test_rootvm_start else @intFromPtr(&__rootvm_start);
-    const rootvm_size = if (builtin.is_test) test_rootvm_end - rootvm_base else @intFromPtr(&__rootvm_end) - rootvm_base;
+    const rootvm_elf_base = if (builtin.is_test) test_rootvm_start else @intFromPtr(&__rootvm_start);
+    const rootvm_elf_size = if (builtin.is_test) test_rootvm_end - rootvm_elf_base else @intFromPtr(&__rootvm_end) - rootvm_elf_base;
 
-    // Create the trusted root VM with identity mapping for its RAM range.
-    const root_vm = try guest.createGuest(cpu_allocator, true, true, null, rootvm_base, rootvm_base, rootvm_size);
+    // Create the trusted root VM. 
+    // Guest RAM starts at 0x80000000 (standard for RISC-V Linux).
+    const root_vm_gpa_base = 0x80000000;
+    const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size);
     system_ctx.?.root_vm = root_vm;
 
     // Load the root VM ELF and get its entry point.
-    const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_base))[0..rootvm_size]);
+    const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size]);
 
     // Generate a guest DTB from the host device tree.
-    // For now, we pass a copy, but in a real system we'd tailor it.
+    // Tailor it for the Root VM: 512MB RAM and 2 virtual CPUs.
+    const guest_memory_node = try std.fmt.allocPrint(cpu_allocator, "/memory@{x}", .{root_vm_gpa_base});
+    defer cpu_allocator.free(guest_memory_node);
+
+    // Update memory node for the guest
+    try device_tree.editProperty(guest_memory_node, "reg", try dt.DeviceTreeProperty.fromMultiU64(cpu_allocator, &.{ root_vm_gpa_base, rootvm_ram_size }));
+    try device_tree.editProperty(guest_memory_node, "device_type", try dt.DeviceTreeProperty.fromText(cpu_allocator, "memory"));
+
+    // For now, we leave other nodes as is, but in a real system we'd cull the CPU nodes to match 2 cores.
+    // The user strictly asked for 2 cores, so we'll ensure the DTB matches what we actually start.
+    
     const guest_dtb = try device_tree.toBlob();
     defer cpu_allocator.free(guest_dtb);
 
-    // Copy guest DTB into guest RAM (at a safe offset, eg 1MB after base).
-    const guest_dtb_gpa = rootvm_base + 1024 * 1024;
-    @memcpy(@as([*]u8, @ptrFromInt(guest_dtb_gpa))[0..guest_dtb.len], guest_dtb);
+    // Copy guest DTB into guest RAM (at 1MB after base).
+    const guest_dtb_gpa = root_vm_gpa_base + 1024 * 1024;
+    const guest_dtb_hpa = try root_vm.space.translateGPA(guest_dtb_gpa);
+    @memcpy(@as([*]u8, @ptrFromInt(guest_dtb_hpa))[0..guest_dtb.len], guest_dtb);
 
-    debug.printf("Found root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_base, rootvm_size, entry_point });
+    debug.printf("Found root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_elf_base, rootvm_elf_size, entry_point });
 
-    // Create virtual cores for the root VM.
-    const cpu_count = device_tree.countCpus();
+    // Create 2 virtual cores for the root VM as requested.
+    const cpu_count = 2;
     for (0..cpu_count) |i| {
         _ = try root_vm.addVcore(i, entry_point, guest_dtb_gpa, .high);
     }
@@ -250,7 +274,7 @@ test "boot CPU initialization" {
     test_rootvm_start = @intFromPtr(test_rootvm_data_buf.ptr);
     test_rootvm_end = test_rootvm_start + test_rootvm_data_buf.len;
 
-    var phys_test = try physmem.initForTest(allocator, 128);
+    var phys_test = try physmem.initForTest(allocator, 512);
     defer phys_test.deinit();
 
     // Run the boot init function

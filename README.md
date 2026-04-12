@@ -13,10 +13,10 @@ Rust-based implementation. By using Zig, we aim to iterate and innovate faster
 while maintaining a strict focus on safety, security, and robustness.
 
 Diosix is designed to be self-contained and simple to install. It includes a 
-privileged Root Virtual Machine (Root VM) for managing the host hardware and 
-orchestrating other guest workloads. While currently focused on 64-bit 
-RISC-V, the codebase is structured to allow for future ports to other 
-architectures.
+privileged Linux-based Root Virtual Machine (Root VM) for managing the host
+hardware and orchestrating other guest workloads. While currently focused
+on 64-bit RISC-V, the codebase is structured to allow for future ports to
+other architectures.
 
 For a deeper dive into the hypervisor's design, see the 
 [background information](docs/background.md) documentation.
@@ -41,7 +41,7 @@ Follow these steps to build the hypervisor from source:
    ```
 
 This process automatically downloads and cross-compiles [BuildRoot](https://buildroot.org/) 
-if the Root VM kernel is missing or needs updating. Because we build everything 
+if the Root VM image is missing or needs updating. Because we build everything 
 from source for an absolute guarantee of provenance and security, this initial 
 BuildRoot step can take significant time to compile the Linux kernel, a busybox 
 userspace, and the cross-compiler toolchain. Subsequent builds rely on the 

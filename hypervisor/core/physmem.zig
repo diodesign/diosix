@@ -133,7 +133,7 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
 }
 
 // Initialize physical memory management using the device tree
-pub fn init(device_tree: *dt.DeviceTree) !void {
+pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     phys_mem_state.has_h_extension = riscv.hasHExtension();
 
     debug.printf("PhysMem: H-extension {s}\n", .{if (phys_mem_state.has_h_extension) "detected" else "NOT detected"});
@@ -148,6 +148,10 @@ pub fn init(device_tree: *dt.DeviceTree) !void {
     phys_mem_state.hv_region = hv_region;
 
     debug.printf("PhysMem: HV footprint 0x{x} - 0x{x} ({} KB)\n", .{ hv_start, hv_end, hv_region.size / 1024 });
+
+    if (rootvm_region) |rvm| {
+        debug.printf("PhysMem: Root VM reservation 0x{x} - 0x{x} ({} MB)\n", .{ rvm.base, rvm.end(), rvm.size / (1024 * 1024) });
+    }
 
     // 1. First pass to find the range of RAM we need to track
     var min_ram: usize = 0xFFFFFFFFFFFFFFFF;
@@ -177,29 +181,9 @@ pub fn init(device_tree: *dt.DeviceTree) !void {
     phys_mem_state.ram_base = min_ram;
     phys_mem_state.ram_size = max_ram - min_ram;
     phys_mem_state.total_pages = phys_mem_state.ram_size / PageSize;
-    phys_mem_state.region_count = 0;
+    // phys_mem_state.region_count is already populated by discoverRegions
 
-    // 1b. Store individual RAM regions for isRam() checks
-    it = device_tree.iter("/", 1);
-    while (it.next()) |path| {
-        if (std.mem.startsWith(u8, std.fs.path.basename(path), "memory@")) {
-            const reg_prop = device_tree.getProperty(path, "reg") catch continue;
-            const cells = device_tree.getAddressSizeCells("/");
-            const data = reg_prop.data orelse continue;
-            const cell_size = 4;
-            const entry_size = (cells.address + cells.size) * cell_size;
-
-            var i: usize = 0;
-            while (i + entry_size <= data.len) : (i += entry_size) {
-                const base = try readCells(data[i..], cells.address);
-                const size = try readCells(data[i + cells.address * cell_size ..], cells.size);
-                if (phys_mem_state.region_count < max_regions) {
-                    phys_mem_state.regions[phys_mem_state.region_count] = .{ .base = @intCast(base), .size = @intCast(size) };
-                    phys_mem_state.region_count += 1;
-                }
-            }
-        }
-    }
+    // 1b. Region discovery is skipped as it should be called via discoverRegions() first
 
     // 2. Allocate and reserve space for page metadata
     const metadata_size = phys_mem_state.total_pages * @sizeOf(PageDescriptor);
@@ -264,8 +248,8 @@ pub fn init(device_tree: *dt.DeviceTree) !void {
                 const base = try readCells(data[i..], cells.address);
                 const size = try readCells(data[i + cells.address * cell_size ..], cells.size);
                 
-                // Add RAM block, now also skipping metadata
-                try addRamBlock(Region{ .base = @intCast(base), .size = @intCast(size) }, hv_region, metadata_region, device_tree.reserved_memory[0..device_tree.reserved_count]);
+                // Add RAM block, now also skipping metadata and rootvm
+                try addRamBlock(Region{ .base = @intCast(base), .size = @intCast(size) }, hv_region, metadata_region, rootvm_region, device_tree.reserved_memory[0..device_tree.reserved_count]);
             }
         }
     }
@@ -283,7 +267,7 @@ fn readCells(data: []const u8, count: usize) !u64 {
     return error.WidthUnsupported;
 }
 
-fn addRamBlock(ram: Region, hv: Region, metadata: Region, reserved: []dt.ReservedMemoryEntry) !void {
+fn addRamBlock(ram: Region, hv: Region, metadata: Region, rootvm: ?Region, reserved: []dt.ReservedMemoryEntry) !void {
     var current_base = ram.base;
     const ram_end = ram.end();
 
@@ -307,6 +291,18 @@ fn addRamBlock(ram: Region, hv: Region, metadata: Region, reserved: []dt.Reserve
             }
         } else if (metadata.base >= current_base and metadata.base < next_step) {
             next_step = metadata.base;
+        }
+        
+        // Check rootvm reservation
+        if (rootvm) |rvm| {
+            if (current_base >= rvm.base and current_base < rvm.end()) {
+                if (rvm.end() > next_step or !skip) {
+                    next_step = rvm.end();
+                    skip = true;
+                }
+            } else if (rvm.base >= current_base and rvm.base < next_step) {
+                next_step = rvm.base;
+            }
         }
 
         // Check reserved memory regions
@@ -435,6 +431,74 @@ pub fn isHypervisorMemory(base: usize, size: usize) bool {
 
     // Check for overlap
     return (base < hv_end and end > hv_start);
+}
+
+// Discover RAM regions from the device tree without initializing the allocator.
+pub fn discoverRegions(device_tree: *dt.DeviceTree) !void {
+    phys_mem_state.lock.lock();
+    defer phys_mem_state.lock.unlock();
+
+    phys_mem_state.region_count = 0;
+    var it = device_tree.iter("/", 1);
+    while (it.next()) |path| {
+        if (std.mem.startsWith(u8, std.fs.path.basename(path), "memory@")) {
+            const reg_prop = device_tree.getProperty(path, "reg") catch continue;
+            const cells = device_tree.getAddressSizeCells("/");
+            const data = reg_prop.data orelse continue;
+            const cell_size = 4;
+            const entry_size = (cells.address + cells.size) * cell_size;
+
+            var j: usize = 0;
+            while (j + entry_size <= data.len) : (j += entry_size) {
+                const base = try readCells(data[j..], cells.address);
+                const size = try readCells(data[j + cells.address * cell_size ..], cells.size);
+                if (phys_mem_state.region_count < max_regions) {
+                    phys_mem_state.regions[phys_mem_state.region_count] = .{ .base = @intCast(base), .size = @intCast(size) };
+                    phys_mem_state.region_count += 1;
+                }
+            }
+        }
+    }
+}
+
+// Find a contiguous region of RAM of the requested size that doesn't overlap with the hypervisor.
+pub fn findContiguousRegion(size: usize) !Region {
+    phys_mem_state.lock.lock();
+    defer phys_mem_state.lock.unlock();
+
+    if (phys_mem_state.region_count == 0) return PhysMemError.NoRAMFound;
+    for (0..phys_mem_state.region_count) |i| {
+        const reg = phys_mem_state.regions[i];
+        if (reg.size < size) continue;
+
+        // Try at the start of the region
+        var base = reg.base;
+        // Align to page size
+        base = (base + PageSize - 1) & ~(PageSize - 1);
+
+        while (base + size <= reg.end()) {
+            const candidate = Region{ .base = base, .size = size };
+            
+            // Ensure no overlap with hypervisor footprint
+            if (!isHypervisorMemory(candidate.base, candidate.size)) {
+                // Also check if we're hitting the metadata (which is at the start of a free block)
+                // For simplicity, we just check if it's within the first 128MB of the hypervisor's base
+                // or similar. In a real system, we'd check against metadata_region saved in init.
+                // But since we are looking for a LARGE block, we can just search from the END backwards.
+                
+                // Let's try from the end of the region instead to be safer 
+                // about metadata and hypervisor which are usually at the low end.
+                const top_base = (reg.end() - size) & ~(PageSize - 1);
+                if (!isHypervisorMemory(top_base, size)) {
+                    return Region{ .base = top_base, .size = size };
+                }
+            }
+            base += PageSize;
+            if (base > reg.end()) break;
+        }
+    }
+
+    return PhysMemError.OutOfMemory;
 }
 
 pub fn isRam(base: usize, size: usize) bool {

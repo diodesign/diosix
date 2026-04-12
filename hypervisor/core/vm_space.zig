@@ -97,4 +97,23 @@ pub const GuestSpace = struct {
             self.pmp_config.?.apply();
         }
     }
+
+    // Translate a Guest Physical Address to a Host Physical Address
+    pub fn translateGPA(self: *const GuestSpace, gpa: usize) !usize {
+        if (self.mode == .h_paging) {
+            const pt = self.paging.?;
+            // 1. Check if it's within the optimized identity/offset range
+            if (gpa >= pt.root_base_gpa and gpa < pt.root_base_gpa + pt.root_range_size) {
+                return gpa - pt.root_base_gpa + pt.root_base_hpa;
+            }
+            // 2. Otherwise, perform a page table walk
+            const pte_ptr = pt.walk(gpa, false) catch return error.TranslationFailed;
+            const hpa = (pte_ptr.* >> 10) << 12;
+            return hpa + (gpa % physmem.PageSize);
+        } else {
+            // PMP mode: assume identity for now if not otherwise specified.
+            // Future refinement: check PMP regions.
+            return gpa;
+        }
+    }
 };

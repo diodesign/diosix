@@ -9,7 +9,7 @@ CONFIG_FILE="$1"
 OUT_FILE="$2"
 BUILDROOT_DIR="$3"
 BUILDROOT_URL="https://gitlab.com/buildroot.org/buildroot.git"
-BUILDROOT_BRANCH="2024.02.x"
+BUILDROOT_BRANCH="2026.02.x"
 
 if [ -z "$CONFIG_FILE" ] || [ -z "$OUT_FILE" ] || [ -z "$BUILDROOT_DIR" ]; then
     echo "Usage: $0 <config_file> <out_file> <buildroot_dir>"
@@ -42,9 +42,18 @@ make -C "$BUILDROOT_DIR" BR2_DEFCONFIG="$ABS_CONFIG" defconfig
 # Fixup step for modern buildroot: olddefconfig updates the config for new versions silently
 make -C "$BUILDROOT_DIR" olddefconfig
 
+# Detect wget2 (e.g. Fedora 39+) which dropped --passive-ftp support.
+# BuildRoot's download rules pass --passive-ftp by default and will fail
+# if the system wget is actually wget2. Override BR2_WGET in that case.
+WGET_EXTRA_ARGS=""
+if wget --version 2>&1 | head -1 | grep -q "Wget2"; then
+    echo "Detected wget2: overriding BR2_WGET to drop --passive-ftp..."
+    WGET_EXTRA_ARGS='BR2_WGET="wget -nd -t 3"'
+fi
+
 # Build it
 echo "Building Root VM (this may take a while)..."
-make -C "$BUILDROOT_DIR"
+eval make -C "$BUILDROOT_DIR" -j"$(nproc)" $WGET_EXTRA_ARGS
 
 # Ensure the output directory exists
 mkdir -p "$(dirname "$OUT_FILE")"
