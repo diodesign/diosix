@@ -77,8 +77,10 @@ are accepted into the codebase. You can execute the test suite by running
 
 All contributions must strictly adhere to the [Diosix style 
 guide](docs/style-guide.md). This guide covers both our technical writing 
-standards—such as defining abbreviations on first use and using sentence-case 
-headings—and our idiomatic Zig coding conventions. Finally, we use the 
+standards — such as defining abbreviations on first use and using sentence-case 
+headings — and our idiomatic Zig coding conventions.
+
+Finally, we use the 
 [Calendar Versioning](https://calver.org/) (YY.MINOR) format for our releases, 
 where even-numbered minor versions indicate stable releases and odd numbers 
 represent development builds.
