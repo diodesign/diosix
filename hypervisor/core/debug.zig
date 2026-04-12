@@ -19,7 +19,7 @@ var basic_writer = Writer{
 
 var basic_writer_lock = atomic.NamedSpinLock.init("Global basic debug writer lock");
 
-extern fn hw_putchar(c: u8) void;
+pub extern fn hw_putchar(c: u8) void;
 extern fn hw_getchar() i16;
 
 fn basicDrain(_: *Writer, data: []const []const u8, splat: usize) Writer.Error!usize {

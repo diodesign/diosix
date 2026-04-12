@@ -97,7 +97,7 @@ pub const Cause = enum(usize) {
     load_page_fault = 13,
     store_page_fault = 15,
     guest_instruction_page_fault = 20,
-    guest_load_page_fault = 22,
+    guest_load_page_fault = 21,
     guest_store_page_fault = 23,
 
     // Interrupts (marker bit set below)
@@ -134,7 +134,8 @@ pub fn toCause(val: usize) Cause {
         13 => .load_page_fault,
         15 => .store_page_fault,
         20 => .guest_instruction_page_fault,
-        22 => .guest_load_page_fault,
+        21 => .guest_load_page_fault,
+        22 => .guest_load_page_fault, // Some versions use 21, others 22
         23 => .guest_store_page_fault,
 
         (1 << 63) | 0 => .user_swi,

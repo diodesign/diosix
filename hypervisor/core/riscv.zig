@@ -96,6 +96,8 @@ pub const CpuContext = struct {
     // Per-CPU lock-free (contention-free) run queue.
     run_queue: dsa.RedBlackTree(u64, dsa.compareU64),
     run_queue_count: usize,
+
+    trap_count: usize,
 };
 
 // Return a pointer to the CPU context for the core running this thread.
@@ -136,10 +138,40 @@ pub inline fn readMcause() usize {
     );
 }
 
+// Perform a memory fence for read/write on all harts.
+pub inline fn fence() void {
+    if (is_test) return;
+    asm volatile ("fence rw, rw");
+}
+
 // Return the mepc CSR.
 pub inline fn readMepc() usize {
     if (is_test) return test_mepc;
     return asm volatile ("csrr %[ret], mepc"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+// Return the mvendorid CSR.
+pub inline fn readMvendorid() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], mvendorid"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+// Return the marchid CSR.
+pub inline fn readMarchid() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], marchid"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+// Return the mimpid CSR.
+pub inline fn readMimpid() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], mimpid"
         : [ret] "=r" (-> usize),
     );
 }

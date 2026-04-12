@@ -49,27 +49,25 @@ pub const Loader = struct {
                 const p_filesz = readU64(source, off + elf_spec.PHDR.FILESZ);
                 const p_memsz = readU64(source, off + elf_spec.PHDR.MEMSZ);
 
+                // Translate high virtual addresses to Guest Physical Addresses (GPA).
+                const gpa = (p_vaddr & 0xFFFFFFFF);
+
                 // Map and load the segment. 
-                // For now, assume identity mapping for Root VM's RAM.
-                // In a real system, we'd translate vaddr to paddr using the guest's view.
                 if (p_filesz > 0) {
                     const segment_data = source[p_offset .. p_offset + p_filesz];
-                    // Translate Guest Physical Address (GPA) to Host Physical Address (HPA).
-                    // In 64-bit kernels, p_vaddr is often in high memory (e.g. 0xffffffff80000000).
-                    // We mask it to 32-bits to get the relative offset in the guest's RAM.
-                    const gpa = (p_vaddr & 0xFFFFFFFF);
                     const hpa = try root_vm.space.translateGPA(gpa);
                     @memcpy(@as([*]u8, @ptrFromInt(hpa))[0..p_filesz], segment_data);
                 }
                 
+                //     const gpa = ((p_vaddr + p_filesz) & 0xFFFFFFFF);
                 // Zero out any remaining memory in the segment (BSS).
                 if (p_memsz > p_filesz) {
-                    const gpa = ((p_vaddr + p_filesz) & 0xFFFFFFFF);
-                    const hpa = try root_vm.space.translateGPA(gpa);
+                    const bss_gpa = gpa + p_filesz;
+                    const hpa = try root_vm.space.translateGPA(bss_gpa);
                     @memset(@as([*]u8, @ptrFromInt(hpa))[0 .. p_memsz - p_filesz], 0);
                 }
 
-                debug.printf("Loaded ELF segment: 0x{x} ({} bytes)\n", .{ p_vaddr, p_memsz });
+                debug.printf("Loaded ELF segment: VADDR 0x{x} -> GPA 0x{x} ({} bytes)\n", .{ p_vaddr, gpa, p_memsz });
             }
         }
 

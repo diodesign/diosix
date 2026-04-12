@@ -41,6 +41,8 @@ pub const IRQ = struct {
     val: usize,
 };
 
+const MAX_TRAP_LOGS = 100;
+
 // Decode mcause and return an IRQ structure.
 fn dispatch(context: *riscv.ThreadContext) IRQ {
     const mcause = riscv.readMcause();
@@ -52,7 +54,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     const mtval = riscv.readMtval();
     const cause = riscv.toCause(mcause);
 
-    return IRQ{
+    const irq = IRQ{
         .severity = if (cause_type == .interrupt) .non_fatal else .fatal,
         .privilege_mode = riscv.getPreviousPrivilege(),
         .irq_type = cause_type,
@@ -61,6 +63,40 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
         .sp = sp,
         .val = mtval,
     };
+
+    // Explicitly handle unknown/unexpected traps with more verbosity
+    if (irq.cause == .unknown) {
+        debug.printf("!!! UNKNOWN TRAP on Core {}: mcause=0x{x} mtval=0x{x} mepc=0x{x} mstatus=0x{x}\n", .{
+            pcore.this().cpu_core_id,
+            mcause,
+            mtval,
+            riscv.readMepc(),
+            riscv.readMstatus(),
+        });
+    }
+
+    const cpu = pcore.this();
+    if (cpu.trap_count < MAX_TRAP_LOGS) {
+        // Always log non-page-fault exceptions, and only log page faults if we haven't hit the limit
+        const is_page_fault = switch (irq.cause) {
+            .guest_instruction_page_fault, .guest_load_page_fault, .guest_store_page_fault => true,
+            else => false,
+        };
+
+        if (!is_page_fault or (cpu.trap_count % 10 == 0)) {
+            debug.printf("Trapped: core={} mode={s} pc=0x{x} cause={s} (0x{x}) val=0x{x}\n", .{ 
+                cpu.cpu_core_id, 
+                @tagName(irq.privilege_mode), 
+                irq.pc, 
+                @tagName(irq.cause), 
+                @intFromEnum(irq.cause), 
+                irq.val 
+            });
+            cpu.trap_count += 1;
+        }
+    }
+
+    return irq;
 }
 
 // Our centralized high-level entry point for handling xints.
@@ -69,15 +105,6 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
     const pcpu = pcore.this();
     const irq = dispatch(context);
-
-    // Log every trap for debugging purposes
-    // debug.printf("Trapped: core={} mode={s} pc=0x{x} cause=0x{x} val=0x{x}\n", .{
-    //     pcpu.cpu_core_id, 
-    //     @tagName(irq.privilege_mode), 
-    //     irq.pc, 
-    //     @intFromEnum(irq.cause), 
-    //     irq.val
-    // });
 
     // If we're coming from a guest, save its context
     if (irq.privilege_mode != .machine) {
@@ -109,7 +136,6 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
                 sbi.handle(vc, context);
-                vc.mepc = irq.pc + 4; // Advance guest PC past ecall
             }
         },
         .guest_instruction_page_fault, .guest_load_page_fault, .guest_store_page_fault, .unknown => {

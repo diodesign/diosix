@@ -26,13 +26,19 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
     const function = context[@intFromEnum(arch.Register.a6)];
     const a0 = context[@intFromEnum(arch.Register.a0)];
     const a1 = context[@intFromEnum(arch.Register.a1)];
+    const a2 = context[@intFromEnum(arch.Register.a2)];
+
+    // Verbose SBI tracing for early boot diagnostics
+    debug.printf("SBI: ext=0x{x} func={} a0=0x{x} a1=0x{x} a2=0x{x} from vcore {}\n", .{ extension, function, a0, a1, a2, vc.id });
 
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
         interface.EXT.TIMER, interface.EXT.LEGACY_SET_TIMER => handleTimer(vc, context, function, a0),
         interface.EXT.SRST => handleSystemReset(vc, context, function, a0, a1),
+        interface.EXT.HSM => handleHSM(vc, context, function, a0, a1, a2),
         interface.EXT.LEGACY_CONSOLE_PUTCHAR => {
-            debug.putchar(@truncate(a0));
+            const c: u8 = @truncate(a0);
+            debug.putchar(c);
             setResult(context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_CONSOLE_GETCHAR => {
@@ -45,10 +51,13 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         },
         interface.EXT.DIOSIX => handleDiosix(vc, context, function),
         else => {
-            debug.printf("SBI: Unknown extension 0x{x} func {} from guest {}\n", .{ extension, function, vc.guest_id });
+            debug.printf("SBI: Unknown extension 0x{x} func {} from guest {}\n", .{ extension, function, vc.id });
             setResult(context, SBI_ERR_NOT_SUPPORTED, 0);
         },
     }
+
+    // Move guest to the next instruction after ECALL
+    vc.mepc += 4;
 }
 
 fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize) void {
@@ -72,6 +81,9 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
             };
             setResult(context, SBI_SUCCESS, supported);
         },
+        interface.BASE.GET_MVENDORID => setResult(context, SBI_SUCCESS, riscv.readMvendorid()),
+        interface.BASE.GET_MARCHID => setResult(context, SBI_SUCCESS, riscv.readMarchid()),
+        interface.BASE.GET_MIMPID => setResult(context, SBI_SUCCESS, riscv.readMimpid()),
         else => setResult(context, SBI_ERR_NOT_SUPPORTED, 0),
     }
 }
@@ -124,6 +136,54 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
     }
 }
 
+fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
+    const g = vc.getGuest();
+    switch (function) {
+        0 => { // HART_START
+            const target_hart = a0;
+            const start_addr = a1;
+            const opaque_param = a2;
+
+            if (g.findVcore(target_hart)) |target_vc| {
+                if (target_vc.state != .stopped) {
+                    setResult(context, interface.ERR_ALREADY_AVAILABLE, 0);
+                    return;
+                }
+                target_vc.mepc = start_addr;
+                target_vc.context[@intFromEnum(arch.Register.a0)] = target_hart;
+                target_vc.context[@intFromEnum(arch.Register.a1)] = opaque_param;
+                target_vc.state = .ready;
+                
+                // Ensure it's in the scheduler
+                scheduler.queue(target_vc);
+                
+                setResult(context, SBI_SUCCESS, 0);
+                debug.printf("SBI: HSM Started vcore {} at 0x{x} for guest {}\n", .{ target_hart, start_addr, g.id });
+            } else {
+                setResult(context, interface.ERR_INVALID_PARAM, 0);
+            }
+        },
+        1 => { // HART_STOP (currently stubbed)
+            vc.state = .stopped;
+            setResult(context, SBI_SUCCESS, 0);
+        },
+        2 => { // HART_GET_STATUS
+            const target_hart = a0;
+            if (g.findVcore(target_hart)) |target_vc| {
+                const status: usize = switch (target_vc.state) {
+                    .running => 0, // STARTED
+                    .ready => 0, // Also consider STARTED or START_PENDING
+                    .stopped => 1, // STOPPED
+                };
+                setResult(context, SBI_SUCCESS, status);
+            } else {
+                setResult(context, interface.ERR_INVALID_PARAM, 0);
+            }
+        },
+        else => setResult(context, SBI_ERR_NOT_SUPPORTED, 0),
+    }
+}
+
 fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize) void {
     const g = vc.getGuest();
     switch (function) {
@@ -136,7 +196,10 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
                     setResult(context, SBI_ERR_INVALID_ADDRESS, written);
                     return;
                 };
-                debug.putchar(@as(*u8, @ptrFromInt(hpa)).*);
+                const c = @as(*u8, @ptrFromInt(hpa)).*;
+                debug.putchar(c);
+                // Trace character output for diagnostics (uncomment for verbose character logging)
+                // debug.printf("{c}", .{c});
             }
             setResult(context, SBI_SUCCESS, written);
         },

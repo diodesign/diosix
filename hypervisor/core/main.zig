@@ -49,7 +49,7 @@ var test_rootvm_start: usize = 0;
 var test_rootvm_end: usize = 0;
 
 const BootCpuID: usize = 0; // CPU ID 0 does all the heavy lifting to begin with.
-var boot_complete_flag = false; // True when all cores can begin running viCPU threads.
+var boot_complete_flag = std.atomic.Value(bool).init(false); // True when all cores can begin running vCPU threads.
 
 // Global hypervisor state and resources - system_ctx_lock must be acquired before accessing post-boot.
 const SystemContext = struct {
@@ -127,9 +127,14 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     try device_tree.editProperty(guest_memory_node, "reg", try dt.DeviceTreeProperty.fromMultiU64(cpu_allocator, &.{ root_vm_gpa_base, rootvm_ram_size }));
     try device_tree.editProperty(guest_memory_node, "device_type", try dt.DeviceTreeProperty.fromText(cpu_allocator, "memory"));
 
-    // For now, we leave other nodes as is, but in a real system we'd cull the CPU nodes to match 2 cores.
-    // The user strictly asked for 2 cores, so we'll ensure the DTB matches what we actually start.
-    
+    const cpu_count = device_tree.countCpus();
+    debug.printf("PhysMem: Provisioning Root VM with {} virtual CPUs\n", .{cpu_count});
+
+    // Inject boot arguments into the guest DTB to ensure it uses the SBI console
+    device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, "console=hvc0 earlycon=sbi")) catch |err| {
+        debug.printf("Warning: Failed to inject bootargs into guest DTB: {s}\n", .{@errorName(err)});
+    };
+
     const guest_dtb = try device_tree.toBlob();
     defer cpu_allocator.free(guest_dtb);
 
@@ -140,10 +145,13 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
     debug.printf("Found root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_elf_base, rootvm_elf_size, entry_point });
 
-    // Create 2 virtual cores for the root VM as requested.
-    const cpu_count = 2;
+    // Create virtual cores for the root VM matching host count.
+    // Ensure we start at the PHYSICAL entry point (masking high virtual address bits).
+    const physical_entry = entry_point & 0xFFFFFFFF;
     for (0..cpu_count) |i| {
-        _ = try root_vm.addVcore(i, entry_point, guest_dtb_gpa, .high);
+        const vc = try root_vm.addVcore(i, physical_entry, guest_dtb_gpa, .high);
+        // Core 0 starts executing immediately; others wait for HSM Start.
+        if (i == 0) vc.state = .ready;
     }
 }
 
@@ -176,17 +184,18 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
                 return;
             };
 
-            atomic.writeBool(&boot_complete_flag, true);
+            boot_complete_flag.store(true, .seq_cst);
         },
 
-        else => while (atomic.readBool(&boot_complete_flag) == false) {},
+        else => {
+            while (boot_complete_flag.load(.seq_cst) == false) {
+                riscv.fence();
+            }
+        },
     }
 
     debug.printf("CPU core ID {} entering scheduling loop...\n", .{cpu_core_id});
     while (true) {
-        // Heartbeat for diagnostic
-        // debug.putchar(@intCast(0x30 + cpu_core_id)); 
-
         scheduler.schedule();
 
         // If scheduling picked a vcore, jump into it. 
@@ -202,10 +211,8 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
             // Generate hgatp for guest physical address translation if H-extension is active.
             const hgatp = if (vc.guest.space.mode == .h_paging) vc.guest.space.paging.?.hgatp(vc.guest.vmid) else 0;
 
-            const physical_entry = 0x80000000;
-
-            debug.printf("Core {} entering guest at GPA 0x{x}\n", .{pcore.this().cpu_core_id, physical_entry});
-            pcore.hw_run_vcore(&vc.context, physical_entry, mstatus, vc.hstatus, hgatp);
+            debug.printf("Core {} entering guest at GPA 0x{x}\n", .{pcore.this().cpu_core_id, vc.mepc});
+            pcore.hw_run_vcore(&vc.context, vc.mepc, mstatus, vc.hstatus, hgatp);
         }
 
         // We only get here if no vcores were available to run.

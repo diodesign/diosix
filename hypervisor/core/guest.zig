@@ -182,7 +182,6 @@ pub const Guest = struct {
         self.allocator.destroy(self);
     }
 
-    // Add a virtual core to this guest
     pub fn addVcore(self: *Guest, vid: vcore.VirtualCoreID, entry: usize, dtb: usize, priority: vcore.Priority) !*vcore.VirtualCore {
         const vc = try self.allocator.create(vcore.VirtualCore);
         errdefer self.allocator.destroy(vc);
@@ -204,6 +203,15 @@ pub const Guest = struct {
         scheduler.queue(vc);
 
         return vc;
+    }
+
+    pub fn findVcore(self: *const Guest, vid: vcore.VirtualCoreID) ?*vcore.VirtualCore {
+        var it = self.vcores.start;
+        while (it) |node| {
+            if (node.contents.id == vid) return node.contents;
+            it = node.next;
+        }
+        return null;
     }
 
     // Add a memory region to this guest

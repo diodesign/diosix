@@ -77,7 +77,8 @@ _start:
     # other CPU cores need to wait for clear_bss_finished
     # to change from zero to non-zero to indicate the BSS is clear
 clear_bss_wait_loop:
-    amoswap.w t1, x0, (t0)
+    lw        t1, (t0)
+    fence     r, rw
     beq       x0, t1, clear_bss_wait_loop
     j         clear_bss_loop_end
 
