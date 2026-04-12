@@ -1,4 +1,4 @@
-// RISC-V Supervisor Binary Interface (SBI) implementation
+// RISC-V Supervisor Binary Interface (SBI) implementation.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -12,7 +12,7 @@ const scheduler = @import("scheduler.zig");
 const interface = @import("interface").sbi;
 const arch = @import("interface").riscv;
 
-// SBI Error Codes
+// SBI Error Codes.
 pub const SBI_SUCCESS = interface.SUCCESS;
 pub const SBI_ERR_FAILED = interface.ERR_FAILED;
 pub const SBI_ERR_NOT_SUPPORTED = interface.ERR_NOT_SUPPORTED;
@@ -74,7 +74,7 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
 fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, stime: u64) void {
     _ = vc;
     _ = function;
-    // Set timer for guest
+    // Set timer for guest.
     riscv.setTimer(stime);
     setResult(context, SBI_SUCCESS, 0);
 }
@@ -103,7 +103,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 return;
             };
             
-            // Register all child vcores with the scheduler
+            // Register all child vcores with the scheduler.
             var it_vcore = child.vcores.start;
             while (it_vcore) |node| {
                 scheduler.queue(node.contents);
@@ -120,6 +120,6 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
 }
 
 fn setResult(context: *riscv.ThreadContext, err: isize, val: usize) void {
-    context[@intFromEnum(arch.Register.a0)] = @bitCast(err); // a0 = error code
-    context[@intFromEnum(arch.Register.a1)] = val;           // a1 = value
+    context[@intFromEnum(arch.Register.a0)] = @bitCast(err); // A0 = error code.
+    context[@intFromEnum(arch.Register.a1)] = val;           // A1 = value.
 }

@@ -1,4 +1,4 @@
-// Root VM ELF loader
+// Root VM ELF loader.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -19,16 +19,16 @@ pub const LoaderError = error{
 pub const Loader = struct {
     pub fn load(root_vm: *guest.Guest, source: []const u8) LoaderError!usize {
         _ = root_vm;
-        // Basic ELF Header validation
+        // Basic ELF Header validation.
         if (source.len < 64) return LoaderError.InvalidElfHeader;
         if (!std.mem.eql(u8, source[elf_spec.EHDR.IDENT .. elf_spec.EHDR.IDENT + 4], elf_spec.MAGIC)) return LoaderError.InvalidElfHeader;
         
-        // Class: 64-bit is 2
+        // Class: 64-bit is 2.
         if (source[4] != elf_spec.CLASS_64) return LoaderError.UnsupportedElfClass;
-        // Data: Little Endian is 1
+        // Data: Little Endian is 1.
         if (source[5] != elf_spec.DATA_LSB) return LoaderError.UnsupportedElfData;
 
-        // Machine: RISC-V is 0xF3
+        // Machine: RISC-V is 0xF3.
         const machine = readU16(source, elf_spec.EHDR.MACHINE);
         if (machine != elf_spec.MACHINE_RISCV) return LoaderError.UnsupportedElfMachine;
 
@@ -59,7 +59,7 @@ pub const Loader = struct {
                     @memcpy(@as([*]u8, @ptrFromInt(p_vaddr))[0..p_filesz], segment_data);
                 }
                 
-                // Zero out any remaining memory in the segment (BSS)
+                // Zero out any remaining memory in the segment (BSS).
                 if (p_memsz > p_filesz) {
                     @memset(@as([*]u8, @ptrFromInt(p_vaddr + p_filesz))[0 .. p_memsz - p_filesz], 0);
                 }
@@ -71,7 +71,7 @@ pub const Loader = struct {
         return entry_point;
     }
 
-    // Byte-level little-endian readers for manual parsing
+    // Byte-level little-endian readers for manual parsing.
     fn readU16(buf: []const u8, off: usize) u16 {
         return @as(u16, buf[off]) | (@as(u16, buf[off + 1]) << 8);
     }

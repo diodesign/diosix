@@ -1,4 +1,4 @@
-// Virtual CPU core management
+// Virtual CPU core management.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -24,36 +24,37 @@ pub const VirtualCoreState = enum {
 
 pub const SchedulerTree = dsa.RedBlackTree(u64, dsa.compareU64);
 
-// Represents a virtual CPU core's context and state
+// Represents a virtual CPU core's context and state.
 pub const VirtualCore = struct {
-    // Unique ID for this vcore within its guest
+    // Unique ID for this vcore within its guest.
     id: VirtualCoreID,
-    // The guest this vcore belongs to
+    // The guest this vcore belongs to.
     guest: *guest.Guest,
     guest_id: usize,
     state: VirtualCoreState,
 
-    // Virtual CPU registers and state
+    // Virtual CPU registers and state.
     context: riscv.ThreadContext,
 
-    // Machine state CSRs (for non-H or for context switching)
+    // Machine state CSRs (for non-H or for context switching).
     mepc: usize,
     mstatus: usize,
 
-    // H-extension state (if available)
+    // H-extension state (if available).
     hstatus: usize,
     hgatp: usize,
     hedeleg: usize,
     hideleg: usize,
     required_extensions: usize,
 
-    // Scheduling data
+    // Scheduling data.
     priority: Priority,
-    vruntime: u64, // For CFS-style scheduling
-    weight: u32, // For weighting vruntime increments
+    // For CFS-style scheduling.
+    vruntime: u64, 
+    weight: u32, // For weighting vruntime increments.
 
-    // Node for the scheduler's Red-Black Tree
-    // We order by vruntime
+    // Node for the scheduler's Red-Black Tree.
+    // We order by vruntime.
     scheduler_node: SchedulerTree.Node,
 
     pub fn init(id: VirtualCoreID, parent: *guest.Guest, entry: usize, dtb: usize, priority: Priority) VirtualCore {
@@ -64,7 +65,7 @@ pub const VirtualCore = struct {
             .state = .ready,
             .context = [_]usize{0} ** 32,
             .mepc = entry,
-            .mstatus = 0, // TODO: Set appropriate initial mstatus
+            .mstatus = 0, // TODO: Set appropriate initial mstatus.
             .hstatus = 0,
             .hgatp = 0,
             .hedeleg = 0,
@@ -79,10 +80,10 @@ pub const VirtualCore = struct {
             .scheduler_node = undefined,
         };
 
-        vcore.context[@intFromEnum(riscv.Register.a0)] = id; // a0 = vcore ID
-        vcore.context[@intFromEnum(riscv.Register.a1)] = dtb; // a1 = DTB address
+        vcore.context[@intFromEnum(riscv.Register.a0)] = id; // A0 = VCPU ID.
+        vcore.context[@intFromEnum(riscv.Register.a1)] = dtb; // A1 = DTB address.
 
-        // Initialize the scheduler node's contents to the vruntime for ordering
+        // Initialize the scheduler node's contents to the vruntime for ordering.
         vcore.scheduler_node.contents = 0;
 
         return vcore;
@@ -90,14 +91,14 @@ pub const VirtualCore = struct {
 
     pub fn deinit(self: *VirtualCore) void {
         _ = self;
-        // Cleanup vcore specific resources if any
+        // Cleanup vcore specific resources if any.
     }
 
     pub fn getGuest(self: *VirtualCore) *guest.Guest {
         return self.guest;
     }
 
-    // Update the scheduler node with latest vruntime before insertion
+    // Update the scheduler node with latest vruntime before insertion.
     pub fn updateSchedulerWeight(self: *VirtualCore) void {
         self.scheduler_node.contents = self.vruntime;
     }
@@ -110,10 +111,10 @@ pub const VirtualCore = struct {
         vc.guest = child_guest;
         vc.guest_id = child_guest.id;
         
-        // Return 0 in the child (a0 is x10)
+        // Return 0 in the child (A0 is X10).
         vc.context[@intFromEnum(riscv.Register.a0)] = 0;
 
-        // Reset scheduler node for the new vcore
+        // Reset scheduler node for the new vcore.
         vc.scheduler_node = undefined;
         vc.updateSchedulerWeight();
 

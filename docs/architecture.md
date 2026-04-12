@@ -1,42 +1,72 @@
-# Diosix Architecture
+# Diosix architecture
 
-Diosix is a lightweight, secure-by-design hypervisor that uses a hierarchical management model for virtual machines (VMs). 
+Diosix is a lightweight, secure-by-design hypervisor that uses a hierarchical 
+management model for Virtual Machines (VMs). Unlike traditional hypervisors 
+that use a flat structure for guest management, Diosix organizes VMs into 
+a tree-like lineage.
 
-## 1. Hierarchical Forking Model
+## Hierarchical forking model
 
-Unlike traditional hypervisors that use a flat structure for guest management, Diosix organizes VMs into a tree-like lineage. 
+The first VM loaded by the hypervisor at boot is known as the **Root VM**. This 
+VM acts as the progenitor for all other guests, similar to how the `init` 
+process (PID 1) functions in a Unix-like operating system.
 
-*   **The Root VM**: The first VM loaded by the hypervisor at boot. It acts as the progenitor (Unix `init` or PID 1 equivalent) for all other guests.
-*   **Recursive Management**: Any VM can fork itself or manage its direct children (start, stop, kill, or reboot). A parent VM is responsible for the lifecycle and resources of its descendants.
+Any VM can fork itself or manage its direct children, including starting, 
+stopping, killing, or rebooting them. A parent VM is entirely responsible 
+for the lifecycle and resources of its descendants. This recursive management 
+strategy eliminates the need for a complex, global hypervisor state.
 
-## 2. Resource Quotas
+## Resource quotas
 
-Diosix uses a **Subtree Resource Quota** system to prevent Denial-of-Service (DoS) attacks and ensure fair resource distribution. A VM's quota defines the absolute maximum resources that it and its entire descendant tree can consume.
+Diosix implements a subtree resource quota system to prevent 
+Denial of Service (DoS) scenarios and ensure fair resource distribution across the 
+system. A VM's quota defines the absolute maximum resources that it and its 
+entire descendant tree can consume.
 
-Currently, Diosix tracks and enforces the following quotas:
-*   **Physical RAM**: Total physical pages allocated for page tables and guest memory.
-*   **VCPU Cores**: Maximum number of virtual CPU cores in the subtree.
-*   **Scheduling Priority**: The highest priority any VCPU in the subtree can have.
-*   **Max Child Depth**: The maximum levels of nesting below this VM.
-*   **Max Descendants**: The total number of VMs allowed in the subtree.
 
-The Root VM starts with the maximum available system resources. Any VM can voluntarily decrease its own quota (a one-way operation) to sandbox itself and its future descendants.
+The hypervisor tracks several quotas to maintain system balance. Physical RAM 
+is measured by the total number of physical memory pages allocated for guest 
+RAM and page tables. Virtual CPU core (VCPU core) limits define the maximum 
+number of VCPU cores allowed within a VM's specific subtree, while scheduling 
+priority limits define the maximum priority any VCPU in that subtree can 
+possess. Finally, Diosix enforces limits on the maximum child depth and the 
+total number of descendants allowed within any branch of the hierarchy.
 
-## 3. Communication and Lineage Isolation
+The Root VM begins with the maximum available system resources. Any guest 
+can voluntarily decrease its own quota—a one-way operation—to sandbox 
+itself and its future descendants.
 
-Isolation is a core tenant of the Diosix architecture:
-*   **Direct Interaction**: VMs are strictly limited to communicating only with their immediate parent and immediate children.
-*   **Lineage Isolation**: VMs that do not share a direct parent-child relationship are completely isolated and cannot interact or detect each other’s existence.
+## Communication and lineage isolation
 
-## 4. Hardware Trust (`is_trusted`)
+Isolation is a fundamental pillar of the Diosix architecture. VMs 
+are strictly limited to communicating with their immediate parent and their 
+direct children. VMs that do not share a direct parent-child relationship are 
+completely isolated from one another and cannot interact or detect each 
+other's existence.
 
-Diosix distinguishes between managing children (available to all parents) and controlling hardware:
-*   **`is_trusted` flag**: Only a VM with this flag can map physical MMIO space or route hardware interrupts to itself.
-*   **Privilege De-escalation**: The Root VM is initialized as `is_trusted`. A VM can permanently relinquish this privilege using the `DROP_TRUST` call via the [Diosix SBI extension](interface.md). 
+## Hardware trust
 
-This enables a "Least Privilege" workflow where a trusted loader forks a child, populates it with a guest OS image, drops the child's trust, and then restarts the child as a standard isolated guest.
+Diosix distinguishes between the management of children and the control of 
+physical hardware. Only a VM that has its hardware trust flag set can map 
+physical Memory-Mapped I/O (MMIO) space or route hardware interrupts directly 
+to itself.
 
-## 5. Termination and Restart Policy
+By default, the Root VM is initialized with hardware trust. A guest can 
+permanently relinquish this privilege using the `DROP_TRUST` function provided 
+by the [Diosix Supervisor Binary Interface (SBI) extension](interface.md).
+This mechanism enables a "least privilege" workflow: a trusted loader forks a 
+child VM, which inherits its trust. The child then populates its own memory 
+with a guest image from storage before dropping its own trust and transitioning 
+into a standard isolated guest.
 
-*   **Cascading Termination**: If a VM terminates (via the `EXIT` SBI call or a fatal crash), the hypervisor recursively terminates all of its children and descendants. Orphans are not allowed.
-*   **System Restart**: If the top-level **Root VM** terminates or crashes, the hypervisor considers the system state to be finalized and restarts the host machine.
+## Termination and restart policy
+
+The hypervisor enforces a cascading termination policy. If a VM 
+terminates—either through the `EXIT` call defined in the 
+[RISC-V SBI specification](https://github.com/riscv-non-isa/riscv-sbi-doc/releases/download/v3.0/riscv-sbi.pdf) 
+or a fatal crash—the hypervisor recursively terminates all of its children and 
+descendants. Orphans are not permitted.
+
+If the top-level Root VM terminates or crashes, Diosix considers the system 
+state to be finalized and initiates a restart of the physical host machine. 
+This ensures the system remains in a known, stable state.

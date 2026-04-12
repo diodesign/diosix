@@ -1,4 +1,4 @@
-// RISC-V non-hardware-specific routines
+// RISC-V non-hardware-specific routines.
 //
 // Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -18,7 +18,7 @@ pub const SSTATUS = interface.SSTATUS;
 
 const is_test = builtin.is_test;
 
-// Mock CSR state for tests
+// Mock CSR state for tests.
 var mock_csrs = if (is_test) std.StaticStringMap(usize).initComptime(.{
     .{ "mstatus", 0 },
     .{ "mcause", 0 },
@@ -46,8 +46,8 @@ extern fn hw_heap_size() usize;
 extern fn hw_reboot() void;
 extern fn hw_shutdown() void;
 
-// provide mock symbols for hw_putchar and hw_pause when testing
-// so that debug output is silently discarded by the test harness
+// Provide mock symbols for hw_putchar and hw_pause when testing
+// so that debug output is silently discarded by the test harness.
 fn hw_putchar_mock(_: u8) callconv(.c) void {}
 fn hw_pause_mock() callconv(.c) void {}
 
@@ -58,7 +58,7 @@ comptime {
     }
 }
 
-// define mock hardware variables for tests
+// Define mock hardware variables for tests.
 var test_cpu_ctx: CpuContext = undefined;
 var test_heap: [1024 * 1024]u8 align(4096) = undefined;
 
@@ -72,54 +72,54 @@ pub export fn hw_heap_size_mock() usize {
     return test_heap.len;
 }
 
-// each thread context is the contents of its 32 general purpose CPU registers
+// Each thread context is the contents of its 32 general purpose CPU registers.
 pub const ThreadContext = [32]usize;
 
-// the per-CPU context for the physical core running this thread
+// The per-CPU context for the physical core running this thread.
 pub const CpuContext = struct {
     cpu_core_id: usize,
     allocator: alloc.HeapAllocator,
 
-    // The currently running virtual core on this physical core
-    // This is typed as ?*anyopaque to avoid circular dependency with vcore.zig
+    // The currently running virtual core on this physical core.
+    // This is typed as ?*anyopaque to avoid circular dependency with vcore.zig.
     active_vcore: ?*anyopaque,
 
-    // Per-CPU lock-free (contention-free) run queue
+    // Per-CPU lock-free (contention-free) run queue.
     run_queue: dsa.RedBlackTree(u64, dsa.compareU64),
     run_queue_count: usize,
 };
 
-// return a pointer to the CPU context for the core running this thread
+// Return a pointer to the CPU context for the core running this thread.
 pub inline fn getCPUContext() *CpuContext {
     if (is_test) return &test_cpu_ctx;
     return hw_private_variables();
 }
 
-// return the base address of the heap for the core running this thread
+// Return the base address of the heap for the core running this thread.
 pub inline fn getCPUHeapBase() usize {
     if (is_test) return @intFromPtr(&test_heap);
     return hw_heap_base();
 }
 
-// return the size of the heap for the core running this thread
+// Return the size of the heap for the core running this thread.
 pub inline fn getCPUHeapSize() usize {
     if (is_test) return test_heap.len;
     return hw_heap_size();
 }
 
-// initialize the heap allocator for the CPU core running this thread
+// Initialize the heap allocator for the CPU core running this thread.
 pub fn initCPUHeapAllocator() !void {
     const cpu_context = getCPUContext();
     try cpu_context.allocator.init(getCPUHeapBase(), getCPUHeapSize());
 }
 
-// return a standard Zig allocator for the CPU core running this thread
+// Return a standard Zig allocator for the CPU core running this thread.
 pub fn getCPUHeapAllocator() alloc.Allocator {
     const cpu_context = getCPUContext();
     return cpu_context.allocator.allocator();
 }
 
-// return the mcause CSR
+// Return the mcause CSR.
 pub inline fn readMcause() usize {
     if (is_test) return test_mcause;
     return asm volatile ("csrr %[ret], mcause"
@@ -127,7 +127,7 @@ pub inline fn readMcause() usize {
     );
 }
 
-// return the mepc CSR
+// Return the mepc CSR.
 pub inline fn readMepc() usize {
     if (is_test) return test_mepc;
     return asm volatile ("csrr %[ret], mepc"
@@ -135,7 +135,7 @@ pub inline fn readMepc() usize {
     );
 }
 
-// write to the mepc CSR
+// Write to the mepc CSR.
 pub inline fn writeMepc(val: usize) void {
     if (is_test) {
         test_mepc = val;
@@ -147,7 +147,7 @@ pub inline fn writeMepc(val: usize) void {
     );
 }
 
-// return the mtval CSR
+// Return the mtval CSR.
 pub inline fn readMtval() usize {
     if (is_test) return test_mtval;
     return asm volatile ("csrr %[ret], mtval"
@@ -155,7 +155,7 @@ pub inline fn readMtval() usize {
     );
 }
 
-// return the mstatus CSR
+// Return the mstatus CSR.
 pub inline fn readMstatus() usize {
     if (is_test) return test_mstatus;
     return asm volatile ("csrr %[ret], mstatus"
@@ -163,7 +163,7 @@ pub inline fn readMstatus() usize {
     );
 }
 
-// write to the mstatus CSR
+// Write to the mstatus CSR.
 pub inline fn writeMstatus(val: usize) void {
     if (is_test) {
         test_mstatus = val;
@@ -175,7 +175,7 @@ pub inline fn writeMstatus(val: usize) void {
     );
 }
 
-// return the misa CSR (0 if not supported or restricted)
+// Return the misa CSR (0 if not supported or restricted).
 pub inline fn readMisa() usize {
     if (is_test) return test_misa;
     return asm volatile ("csrr %[ret], misa"
@@ -183,14 +183,14 @@ pub inline fn readMisa() usize {
     );
 }
 
-// check if the H (hypervisor) extension is supported
+// Check if the H (hypervisor) extension is supported.
 pub fn hasHExtension() bool {
     const misa = readMisa();
     if (misa == 0) return false;
     return (misa & IsaExtension.h) != 0;
 }
 
-// return the privilege level of the code running before we entered the machine level
+// Return the privilege level of the code running before we entered the machine level.
 pub fn getPreviousPrivilege() PrivilegeMode {
     const mstatus = readMstatus();
     return @enumFromInt((mstatus & MSTATUS.MPP_MASK) >> MSTATUS.MPP_SHIFT);
@@ -280,16 +280,16 @@ pub inline fn readHtinst() usize {
 
 pub fn setTimer(stime: u64) void {
     _ = stime;
-    // TODO: implement hardware-specific timer set
+    // TODO: Implement hardware-specific timer set.
 }
 
-// reboot the host machine
+// Reboot the host machine.
 pub fn reboot() void {
     if (builtin.is_test) return;
     hw_reboot();
 }
 
-// shutdown the host machine
+// Shutdown the host machine.
 pub fn shutdown() void {
     if (builtin.is_test) return;
     hw_shutdown();

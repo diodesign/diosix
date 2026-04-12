@@ -1,4 +1,4 @@
-// High-level exception and interrupt (xint) handling on RISC-V
+// High-level exception and interrupt (xint) handling on RISC-V.
 //
 // Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -14,7 +14,7 @@ const vm_space = @import("vm_space.zig");
 
 extern fn hw_xint_init() void;
 
-// initialize hardware-dependent xint handling
+// Initialize hardware-dependent xint handling.
 pub fn init() void {
     hw_xint_init();
 }
@@ -40,7 +40,7 @@ pub const IRQ = struct {
     sp: usize,
 };
 
-// decode mcause and return an IRQ structure
+// Decode mcause and return an IRQ structure.
 fn dispatch(context: *riscv.ThreadContext) IRQ {
     const mcause = riscv.readMcause();
     const mepc = riscv.readMepc();
@@ -69,7 +69,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     };
 }
 
-// our centralized high-level entry point for handling xints
+// Our centralized high-level entry point for handling xints.
 pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (builtin.is_test) return;
 
@@ -84,7 +84,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
     switch (irq.cause) {
         .supervisor_environment_call => {
-            // HS-mode ecall is an SBI call from the guest supervisor
+            // HS-mode ecall is an SBI call from the guest supervisor.
             const pcpu = pcore.this();
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
@@ -96,7 +96,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
             const pcpu = pcore.this();
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                const gpa = riscv.readHtval(); // Guest physical address that faulted
+                const gpa = riscv.readHtval(); // Guest physical address that faulted.
                 const g = vc.getGuest();
                 g.space.handleFault(vc, gpa, @intFromEnum(irq.cause)) catch |err| {
                     debug.printf("Fault: GPA 0x{x} resolution failed: {s}\n", .{gpa, @errorName(err)});
@@ -114,8 +114,8 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
 
 fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
     _ = context;
-    // clear/acknowledge the interrupt condition
-    // TODO: implement acknowledge()
+    // Clear/acknowledge the interrupt condition.
+    // TODO: Implement acknowledge().
     debug.printf("Unhandled interrupt: 0x{x}\n", .{@intFromEnum(irq.cause)});
 }
 
@@ -136,7 +136,7 @@ fn fatal_exception(irq: IRQ) void {
             const g = vc.getGuest();
             g.terminate();
         } else {
-            // Should not happen if privilege_mode was not machine
+            // Should not happen if privilege_mode was not machine.
             debug.printf("No active vcore found for guest crash. Halting.\n", .{});
             while (true) {}
         }

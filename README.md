@@ -1,90 +1,108 @@
 [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/main/LICENSE) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
 
-## Diosix welcome guide
+## About this project
 
-1. [About this project](#intro)
-1. [Build Diosix](#build)
-1. [Run Diosix](#run)
-1. [Develop Diosix](#develop)
-1. [Background information](docs/background.md)
-    * [Hypervisor architecture](docs/architecture.md)
-    * [Security model](docs/security.md)
-    * [Interface and constants](docs/interface.md)
-1. [Contact, contributions, security, and code of conduct](#contact)
-1. [Copyright, distribution, and license](#copyright)
+Diosix strives to be a lightweight, reliable, and secure multi-core bare-metal 
+hypervisor written in [Zig](https://ziglang.org/) for 64-bit 
+[RISC-V](https://riscv.org/developers/) computers. It is aimed at systems that 
+may be small, or even large, yet have a need to run multiple hardware-isolated 
+operating systems at the same time.
 
-## About this project <a name="intro"></a>
+This project is a work-in-progress and represents a restart of the original 
+Rust-based implementation. By using Zig, we aim to iterate and innovate faster 
+while maintaining a strict focus on safety, security, and robustness.
 
-Diosix strives to be a lightweight, reliable, and secure multi-core bare-metal hypervisor written [in Zig](https://ziglang.org/) for 64-bit [RISC-V](https://riscv.org/developers/) computers. It is aimed at systems that may be small, or even large, yet have a need to run multiple hardware-isolated operating systems at the same time.
+Diosix is designed to be self-contained and simple to install. It includes a 
+privileged Root Virtual Machine (Root VM) for managing the host hardware and 
+orchestrating other guest workloads. While currently focused on 64-bit 
+RISC-V, the codebase is structured to allow for future ports to other 
+architectures.
 
-This is very much a work-in-progress as it is essentially a restart of the Rust-written project, this time using Zig to iterate and innovate faster while maintaining a focus on safety, security, and robustness.
+For a deeper dive into the hypervisor's design, see the 
+[background information](docs/background.md) documentation.
 
-Diosix is designed to be self-contained and simple to install, with a provided privileged guest virtual machine for managing the host hardware and other guests. Porting to 32-bit RISC-V or non-RISC-V systems should be possible, though would be maintained as separate per-port branches rather than complicating the codebase with multiple targets in one branch.
+## Build Diosix
 
-Instructions on this page assume you are using a Linux-compatible command-line environment.
+To build Diosix, you must have at least version 0.16.0 of the 
+[Zig toolchain](https://ziglang.org/download/) and Git version 2.53 installed. 
+Both are typically available through standard system package managers.
 
-## Build Diosix <a name="build"></a>
+Follow these steps to build the hypervisor from source:
 
-Before building Diosix, it is recommended you have at least version 0.16.0 of the [Zig toolchain](https://ziglang.org/download/) and Git version 2.53 installed. Both should be available via your package manager.
+1. Clone the repository and enter the project directory:
+   ```bash
+   git clone --branch zig https://github.com/diodesign/diosix.git
+   cd diosix
+   ```
 
-To build Diosix, download the latest source code from GitHub, and enter its directory:
+2. Start the build process using the Zig build system:
+   ```bash
+   zig build
+   ```
 
-```
-git clone --branch zig https://github.com/diodesign/diosix.git
-cd diosix
-```
+This process generates the hypervisor executable at `./zig-out/bin/vmdiosix`. By 
+default, Diosix targets the [QEMU](https://www.qemu.org/) hardware emulator. To 
+target a different system, use the `-Dsystem` parameter. You can view all 
+available build options by running `zig build -h`.
 
-Next, start the build process:
+## Run Diosix
 
-```
-zig build
-```
+We recommend using at least version 10.1.5 of QEMU to run Diosix. Ensure you have 
+the 64-bit RISC-V system emulator installed.
 
-This generates the hypervisor executable file `./zig-out/bin/vmdiosix`.
+To boot the hypervisor with four virtual CPU cores and 2GB of RAM using the 
+QEMU `virt` machine environment, run the following command:
 
-By default, Diosix is built to run on the [Qemu](https://www.qemu.org/) hardware emulator. To select another system to build for, use the `-Dsystem` parameter with `zig build`. For a list of supported systems, consult `zig build -h`.
-
-## Run Diosix <a name="run"></a>
-
-To run Diosix and boot it in Qemu, it is recommended you have at least version 9.2.4 of Qemu installed including its 64-bit RISC-V system emulator. This should be available via your package manager.
-
-Run Diosix on four virtual CPU cores with 2GB of RAM in Qemu, using Qemu's `virt` hardware environment:
-
-```
+```bash
 zig build run
 ```
 
-The hypervisor will output to the serial port by default, which is displayed in the terminal by Qemu.
+By default, the hypervisor sends its output to the serial port, which QEMU 
+displays in your terminal. You can exit the emulator by pressing `Ctrl+a` 
+then `x`, or enter the debug console with `Ctrl+a` then `c`.
 
-Press `control-a` then `x` to exit Qemu, or `control-a` then `c` to enter the emulator's debugging console. Use the command `quit` to exit the emulator from the console.
+## Develop Diosix
 
-## Develop Diosix <a name="develop"></a>
+We welcome contributions to the project and ask that you follow our established
+development standards to ensure high-quality code and documentation. When 
+writing new code, please be mindful of ownership and memory management; 
+function callers are responsible for freeing any pointers returned by functions 
+that require an allocator. Always use the provided allocator for cleanup to 
+avoid leaks.
 
-Some notes to be aware of when developing Diosix:
+We require comprehensive unit tests for all new core logic to verify correctness.
+These tests run on the build host and must pass successfully before any Changes
+are accepted into the codebase. You can execute the test suite by running
+`zig build test`.
 
-- **Caller-owned memory:** When a function requires an allocator, if the function returns a pointer, the function caller is responsible for freeing the data at that pointer when it is no longer needed. Free the data using the provided allocator.
-- **Write tests:** Add user-space-level [unit tests](#tests) to cover functionality. These tests run on the build host and not in an emulated or real hardware environment. Source code patches won't be accepted without suitable tests, and releases won't happen until all tests pass.
-- **Follow the coding style:** Keep formatting, naming, and implemtations consistent with the rest of the codebase. Make readability and maintainability a priority.
-- **Version numbers:** Use the [`YY.MINOR`](https://calver.org/) format. `YY` is the short year for that version release. Even-numbered `MINOR` versions are for stable releases, while odd indicates a release for development and testing.
+All contributions must strictly adhere to the [Diosix style 
+guide](docs/style-guide.md). This guide covers both our technical writing 
+standards—such as defining abbreviations on first use and using sentence-case 
+headings—and our idiomatic Zig coding conventions. Finally, we use the 
+[Calendar Versioning](https://calver.org/) (YY.MINOR) format for our releases, 
+where even-numbered minor versions indicate stable releases and odd numbers 
+represent development builds.
 
-### Run tests <a name="tests"></a>
+## Contact and community
 
-The project includes a suite of unit tests to verify the correctness of core data structures and logic. To run the tests:
+If you have questions, wish to contribute, or need to report an issue, please 
+email [hello@diosix.org](mailto:hello@diosix.org). You can also submit pull 
+requests or raise issues through our GitHub repository.
 
-```
-zig build test
-```
+If you have discovered a security vulnerability, please follow our 
+[security reporting process](docs/security.md#reporting-security-issues) to 
+disclose the matter privately and responsibly.
 
-If all tests pass, the command will exit successfully.
+All participants are expected to follow the project's 
+[code of conduct](docs/conduct.md).
 
-## Contact, contributions, security issues, and code of conduct <a name="contact"></a>
+## Copyright and license
 
-Email [hello@diosix.org](mailto:hello@diosix.org) if you have any questions or issues to raise, wish to get involved, or have source to contribute. If you have found a security flaw, follow [these steps](docs/security.md#reporting-security-issues) to report the bug. You can also submit pull requests or raise issues via GitHub, though please disclose security-related matters privately.
+Copyright &copy; Chris Williams, 2024, 2025, 2026. This project is distributed 
+under the terms of the MIT License. See the [LICENSE](LICENSE) file for the 
+full text.
 
-Please observe the project's [code of conduct](docs/conduct.md) when participating.
-
-## Copyright, distribution, and license <a name="copyright"></a>
-
-Copyright &copy; Chris Williams, 2024, 2025, 2026. See [LICENSE](LICENSE) for distribution and use of source code, binaries, and documentation.
-
-The diosix.org [illustration](docs/logo.png) is a combination of artwork provided by [Katerina Limpitsouni](https://undraw.co/license) and [RISC-V International](https://riscv.org/about/risc-v-branding-guidelines/). The use of any trademarks by this project is for identification purposes only and does not imply endorsement or ownership of such trademarks.
+The diosix.org illustration is a combination of artwork provided by 
+[Katerina Limpitsouni](https://undraw.co/license) and 
+[RISC-V International](https://riscv.org/about/risc-v-branding-guidelines/). 
+Any trademarks used are for identification purposes only.

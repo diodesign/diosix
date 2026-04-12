@@ -1,4 +1,4 @@
-// diosix hypervisor initialization and main loop
+// Diosix hypervisor initialization and main loop.
 //
 // Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -19,14 +19,14 @@ const vcore = @import("vcore.zig");
 const loader = @import("loader.zig");
 const elf_spec = @import("interface").elf;
 
-// Root VM linker symbols
+// Root VM linker symbols.
 extern const __rootvm_start: u8;
 extern const __rootvm_end: u8;
 
-// Mock Root VM symbols for tests
+// Mock Root VM symbols for tests.
 const test_rootvm_data = if (builtin.is_test) blk: {
     var data = [_]u8{0} ** 64;
-    // Minimal 64-bit RISC-V ELF header
+    // Minimal 64-bit RISC-V ELF header.
     @memcpy(data[elf_spec.EHDR.IDENT .. elf_spec.EHDR.IDENT + 4], elf_spec.MAGIC);
     data[4] = elf_spec.CLASS_64;
     data[5] = elf_spec.DATA_LSB;
@@ -44,10 +44,10 @@ const test_rootvm_data = if (builtin.is_test) blk: {
 var test_rootvm_start: usize = 0;
 var test_rootvm_end: usize = 0;
 
-const BootCpuID: usize = 0; // CPU ID 0 does all the heavy lifting to begin with
-var boot_complete_flag = false; // true when all cores can begin running viCPU threads
+const BootCpuID: usize = 0; // CPU ID 0 does all the heavy lifting to begin with.
+var boot_complete_flag = false; // True when all cores can begin running viCPU threads.
 
-// global hypervisor state and resources - system_ctx_lock must be acquired before accessing post-boot
+// Global hypervisor state and resources - system_ctx_lock must be acquired before accessing post-boot.
 const SystemContext = struct {
     device_tree: ?*dt.DeviceTree,
     root_vm: ?*guest.Guest,
@@ -55,8 +55,8 @@ const SystemContext = struct {
 var system_ctx_lock = atomic.NamedSpinLock.init("Global system context lock");
 var system_ctx: ?*SystemContext = null;
 
-// this is the core initialization logic for the boot CPU.
-// it is separated from main() to allow for easier testing.
+// This is the core initialization logic for the boot CPU.
+// It is separated from main() to allow for easier testing.
 fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     debug.printf("{s}Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ metadata.banner, metadata.project_version, metadata.git_branch, metadata.git_revision, metadata.build_date, metadata.build_user, metadata.build_hostname, metadata.zig_version, metadata.cpu_arch });
 
@@ -74,50 +74,50 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     const pre_parse_dtb = try dt.DeviceTreeBlob.init(cpu_allocator, dtb);
     defer pre_parse_dtb.deinit();
 
-    // keep parsed tree in boot CPU core's heap
+    // Keep parsed tree in boot CPU core's heap.
     const device_tree = try pre_parse_dtb.parse();
     system_ctx.?.device_tree = device_tree;
 
-    // initialize physical memory management
+    // Initialize physical memory management.
     if (!builtin.is_test) {
         try physmem.init(device_tree);
     }
 
-    // initialize the global scheduler
+    // Initialize the global scheduler.
     scheduler.init();
 
     const rootvm_base = if (builtin.is_test) test_rootvm_start else @intFromPtr(&__rootvm_start);
     const rootvm_size = if (builtin.is_test) test_rootvm_end - rootvm_base else @intFromPtr(&__rootvm_end) - rootvm_base;
 
-    // create the trusted root VM with identity mapping for its RAM range
+    // Create the trusted root VM with identity mapping for its RAM range.
     const root_vm = try guest.createGuest(cpu_allocator, true, true, null, rootvm_base, rootvm_base, rootvm_size);
     system_ctx.?.root_vm = root_vm;
 
-    // load the root VM ELF and get its entry point
+    // Load the root VM ELF and get its entry point.
     const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_base))[0..rootvm_size]);
 
-    // generate a guest DTB from the host device tree
-    // for now, we pass a copy, but in a real system we'd tailor it
+    // Generate a guest DTB from the host device tree.
+    // For now, we pass a copy, but in a real system we'd tailor it.
     const guest_dtb = try device_tree.toBlob();
     defer cpu_allocator.free(guest_dtb);
 
-    // copy guest DTB into guest RAM (at a safe offset, eg 1MB after base)
+    // Copy guest DTB into guest RAM (at a safe offset, eg 1MB after base).
     const guest_dtb_gpa = rootvm_base + 1024 * 1024;
     @memcpy(@as([*]u8, @ptrFromInt(guest_dtb_gpa))[0..guest_dtb.len], guest_dtb);
 
     debug.printf("Found root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_base, rootvm_size, entry_point });
 
-    // create virtual cores for the root VM
+    // Create virtual cores for the root VM.
     const cpu_count = device_tree.countCpus();
     for (0..cpu_count) |i| {
         _ = try root_vm.addVcore(i, entry_point, guest_dtb_gpa, .high);
     }
 }
 
-// this is the thread-safe Zig entry point for the hypervisor
-// cpu_core_id = unique ID assigned by the hypervisor to this physical CPU core
-// dtb = pointer to host system's device tree in memory
-// returns to an infinite loop
+// This is the thread-safe Zig entry point for the hypervisor.
+// cpu_core_id = unique ID assigned by the hypervisor to this physical CPU core.
+// dtb = pointer to host system's device tree in memory.
+// Returns to an infinite loop.
 pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     if (builtin.is_test) return;
     const cpu_ctx = riscv.getCPUContext();
@@ -151,7 +151,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     while (true) {
         scheduler.schedule();
 
-        // Check if the Root VM has terminated
+        // Check if the Root VM has terminated.
         if (cpu_core_id == BootCpuID) {
             if (system_ctx.?.root_vm) |rvm| {
                 if (rvm.state == .dying) {
@@ -172,7 +172,7 @@ test "boot CPU initialization" {
     // - 16 bytes memory reservation block (terminating entry: addr=0, size=0)
     // - 16 bytes structure block (BEGIN_NODE "" + END_NODE + FDT_END)
     // - 0 bytes strings block
-    // Total = 72 bytes (0x48)
+    // Total = 72 bytes (0x48).
     var fake_dtb_data align(4) = [_]u8{
         // ---- header (40 bytes) ----
         0xd0, 0x0d, 0xfe, 0xed, // magic
@@ -226,11 +226,11 @@ test "boot CPU initialization" {
     };
     const fake_dtb_ptr: [*]u8 = &fake_dtb_data;
 
-    // Use the standard testing allocator to act as the heap
+    // Use the standard testing allocator to act as the heap.
     const allocator = testing.allocator;
 
-    // Allocate real host memory to act as fake RAM for the test
-    const ram_size = 1024 * 1024; // 1MB
+    // Allocate real host memory to act as fake RAM for the test.
+    const ram_size = 1024 * 1024; // 1MB.
     const fake_ram = try allocator.alloc(u8, ram_size);
     defer allocator.free(fake_ram);
     const ram_base = @intFromPtr(fake_ram.ptr);
