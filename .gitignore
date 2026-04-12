@@ -1,3 +1,6 @@
 # standard for zig and diosix
 .zig-cache/
 zig-out/
+
+# log text files from debugging
+*.txt
