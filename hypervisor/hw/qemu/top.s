@@ -6,3 +6,4 @@
 .include "hypervisor/hw/qemu/entry.s"
 .include "hypervisor/hw/qemu/xint.s"
 .include "hypervisor/hw/qemu/util.s"
+.include "hypervisor/hw/qemu/rootvm.s"

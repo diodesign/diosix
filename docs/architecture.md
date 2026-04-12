@@ -16,6 +16,19 @@ stopping, killing, or rebooting them. A parent VM is entirely responsible
 for the lifecycle and resources of its descendants. This recursive management 
 strategy eliminates the need for a complex, global hypervisor state.
 
+## Root VM image generation
+
+The hypervisor includes a pre-packaged implementation of a 
+[BuildRoot](https://buildroot.org/) environment. When compiling the project 
+from source, the build system automatically cross-compiles a complete 
+RISC-V Linux kernel, a busybox-based userspace, and necessary scripting 
+environments for the initial Root VM. This ensures an absolute guarantee of 
+provenance by building all privileged guest code entirely from source.
+
+The generated kernel image is embedded directly into the hypervisor 
+executable payload as an Executable and Linkable Format (ELF) segment. 
+At runtime, the hypervisor unpacks and boots this payload as the Root VM.
+
 ## Resource quotas
 
 Diosix implements a subtree resource quota system to prevent 

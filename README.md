@@ -40,7 +40,14 @@ Follow these steps to build the hypervisor from source:
    zig build
    ```
 
-This process generates the hypervisor executable at `./zig-out/bin/vmdiosix`. By 
+This process automatically downloads and cross-compiles [BuildRoot](https://buildroot.org/) 
+if the Root VM kernel is missing or needs updating. Because we build everything 
+from source for an absolute guarantee of provenance and security, this initial 
+BuildRoot step can take significant time to compile the Linux kernel, a busybox 
+userspace, and the cross-compiler toolchain. Subsequent builds rely on the 
+cached output.
+
+The hypervisor executable is generated at `./zig-out/bin/vmdiosix`. By 
 default, Diosix targets the [QEMU](https://www.qemu.org/) hardware emulator. To 
 target a different system, use the `-Dsystem` parameter. You can view all 
 available build options by running `zig build -h`.

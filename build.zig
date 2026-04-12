@@ -77,13 +77,20 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("hypervisor/interface/lib.zig"),
     });
 
+    const run_buildroot = b.addSystemCommand(&.{ "bash", "scripts/build_rootvm.sh" });
+    run_buildroot.addFileArg(b.path("boot/riscv64-linux-busybox-micropython.config"));
+    run_buildroot.addArg("zig-out/bin/rootvm.elf");
+    run_buildroot.addArg("zig-out/buildroot");
+
     const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/core/main.zig"),
         .optimize = optimize,
         .target = target,
         .code_model = .medium,
     }), .linkage = .static });
+    vmdiosix.step.dependOn(&run_buildroot.step);
     vmdiosix.root_module.addImport("interface", interface_module);
+
 
     // include the top-level assembly file and linker script
     vmdiosix.root_module.addAssemblyFile(b.path(selected_system.top_asm_file));
