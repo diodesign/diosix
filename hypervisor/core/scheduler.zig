@@ -182,7 +182,7 @@ test "scheduler vruntime ordering" {
     vc1.vruntime = 100;
     vc2.vruntime = 50;
 
-    // Queue them
+    // Queue them (not queued by init)
     queue(&vc1);
     queue(&vc2);
 
@@ -215,13 +215,14 @@ test "hybrid local and global scheduling" {
     var test_guests = [_]?*guest.Guest{null} ** 10;
     defer for (test_guests) |maybe_g| if (maybe_g) |g| g.deinit();
 
-    var vcpus: [10]*vcore.VirtualCore = undefined;
+    var vcpus: [10]vcore.VirtualCore = undefined;
     for (0..10) |i| {
         test_guests[i] = try guest.createGuest(testing.allocator, false, false, null, 0, 0, 0);
-        vcpus[i] = try test_guests[i].?.addVcore(i, 0, 0, .normal);
+        vcpus[i] = vcore.VirtualCore.init(@intCast(i), test_guests[i].?, 0, 0, .normal);
+        
         vcpus[i].vruntime = i * 10;
         vcpus[i].updateSchedulerWeight();
-        queue(vcpus[i]);
+        queue(&vcpus[i]);
     }
 
     const pc = pcore.this();

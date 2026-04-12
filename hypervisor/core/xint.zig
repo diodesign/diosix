@@ -38,6 +38,7 @@ pub const IRQ = struct {
     cause: Cause,
     pc: usize,
     sp: usize,
+    val: usize,
 };
 
 // Decode mcause and return an IRQ structure.
@@ -48,24 +49,17 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
 
     const is_interrupt = (mcause & Cause.INTERRUPT_BIT) != 0;
     const cause_type: Type = if (is_interrupt) .interrupt else .exception;
-
-    const cause: Cause = @enumFromInt(mcause);
-
-    const severity: Severity = switch (cause_type) {
-        .interrupt => .non_fatal,
-        .exception => switch (cause) {
-            .user_environment_call, .supervisor_environment_call, .machine_environment_call => .non_fatal,
-            else => .fatal,
-        },
-    };
+    const mtval = riscv.readMtval();
+    const cause = riscv.toCause(mcause);
 
     return IRQ{
-        .severity = severity,
+        .severity = if (cause_type == .interrupt) .non_fatal else .fatal,
         .privilege_mode = riscv.getPreviousPrivilege(),
         .irq_type = cause_type,
         .cause = cause,
         .pc = mepc,
         .sp = sp,
+        .val = mtval,
     };
 }
 
@@ -73,35 +67,66 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
 pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (builtin.is_test) return;
 
+    const pcpu = pcore.this();
     const irq = dispatch(context);
+
+    // Log every trap for debugging purposes
+    // debug.printf("Trapped: core={} mode={s} pc=0x{x} cause=0x{x} val=0x{x}\n", .{
+    //     pcpu.cpu_core_id, 
+    //     @tagName(irq.privilege_mode), 
+    //     irq.pc, 
+    //     @intFromEnum(irq.cause), 
+    //     irq.val
+    // });
+
+    // If we're coming from a guest, save its context
+    if (irq.privilege_mode != .machine) {
+        if (pcpu.active_vcore) |vc_raw| {
+            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+            @memcpy(&vc.context, context);
+            vc.mepc = irq.pc;
+        }
+    }
 
     switch (irq.irq_type) {
         .exception => handle_exception(irq, context),
         .interrupt => handle_interrupt(irq, context),
     }
+
+    // Refresh context if we're running a vcore
+    if (pcpu.active_vcore) |vc_raw| {
+        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+        @memcpy(context, &vc.context);
+        pcore.contextSwitch(vc); // This handles CSRs including mepc
+    }
 }
 
 fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
     switch (irq.cause) {
-        .supervisor_environment_call => {
-            // HS-mode ecall is an SBI call from the guest supervisor.
+        .supervisor_environment_call, .virtual_supervisor_environment_call => {
+            // HS-mode or VS-mode ecall is an SBI call from the guest supervisor.
             const pcpu = pcore.this();
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
                 sbi.handle(vc, context);
+                vc.mepc = irq.pc + 4; // Advance guest PC past ecall
             }
-            riscv.writeMepc(irq.pc + 4);
         },
-        .guest_instruction_page_fault, .guest_load_page_fault, .guest_store_page_fault => {
+        .guest_instruction_page_fault, .guest_load_page_fault, .guest_store_page_fault, .unknown => {
+            // Some implementations might use 21 (unknown) for other guest faults.
+            // Only handle as fault if it's within the known guest fault range or matches unknown.
+            if (@intFromEnum(irq.cause) == 21 or irq.irq_type == .exception) {
             const pcpu = pcore.this();
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                const gpa = riscv.readHtval(); // Guest physical address that faulted.
+                const htval = riscv.readHtval();
+                const gpa = if (htval == 0) irq.val else htval; // Fallback to mtval if htval is zero
                 const g = vc.getGuest();
                 g.space.handleFault(vc, gpa, @intFromEnum(irq.cause)) catch |err| {
                     debug.printf("Fault: GPA 0x{x} resolution failed: {s}\n", .{gpa, @errorName(err)});
                     fatal_exception(irq);
                 };
+            }
             }
         },
         else => {
@@ -124,6 +149,7 @@ fn fatal_exception(irq: IRQ) void {
     debug.printf("Cause: {s} (0x{x})\n", .{ @tagName(irq.cause), @intFromEnum(irq.cause) });
     debug.printf("Privilege: {s}\n", .{@tagName(irq.privilege_mode)});
     debug.printf("PC: 0x{x}, SP: 0x{x}\n", .{ irq.pc, irq.sp });
+    debug.printf("HTVAL: 0x{x}, MTVAL: 0x{x}\n", .{ riscv.readHtval(), riscv.readMtval() });
 
     if (irq.privilege_mode == .machine) {
         debug.printf("Hypervisor crashed. Halting.\n", .{});

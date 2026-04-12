@@ -112,10 +112,14 @@ pub const PageTable = struct {
         const index = self.getIdx(gpa, 0);
         const ptes = @as([*]PTE, @ptrFromInt(ptes_phys));
         
-        if (ptes[index] & PTEFlags.valid != 0) return SV39x4Error.MappingOverlap;
+        if (ptes[index] & PTEFlags.valid != 0) {
+            const existing_hpa = (ptes[index] >> 10) << 12;
+            if (existing_hpa == hpa) return; // Already correctly mapped
+            return SV39x4Error.MappingOverlap;
+        }
         
         ptes[index] = ((hpa >> 12) << 10) | flags | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty;
-        if (physmem.isRam(hpa, physmem.PageSize)) {
+        if (physmem.isRam(hpa, physmem.PageSize) and physmem.isManaged(hpa)) {
             physmem.incrementPageRef(hpa);
         }
     }
@@ -155,7 +159,9 @@ pub const PageTable = struct {
         const new_hpa = try physmem.allocPage();
         @memcpy(@as([*]u8, @ptrFromInt(new_hpa))[0..physmem.PageSize], @as([*]u8, @ptrFromInt(hpa))[0..physmem.PageSize]);
         
-        physmem.decrementPageRef(hpa);
+        if (physmem.isManaged(hpa)) {
+            physmem.decrementPageRef(hpa);
+        }
         pte_ptr.* = ((new_hpa >> 12) << 10) | (pte & ~PTEFlags.cow) | PTEFlags.write | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty;
     }
 
@@ -195,7 +201,10 @@ pub const PageTable = struct {
         // 1. Root VM identity mapping
         if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + self.root_range_size) {
             const hpa = gpa - self.root_base_gpa + self.root_base_hpa;
-            try self.mapPage(gpa, hpa, PTEFlags.read | PTEFlags.write | PTEFlags.execute | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty, is_trusted);
+            // Round down to page boundaries to ensure idempotency and alignment
+            const gpa_page = gpa & ~(physmem.PageSize - 1);
+            const hpa_page = hpa & ~(physmem.PageSize - 1);
+            try self.mapPage(gpa_page, hpa_page, PTEFlags.read | PTEFlags.write | PTEFlags.execute | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
             return;
         }
 
@@ -248,7 +257,8 @@ pub const PageTable = struct {
 
     pub fn hgatp(self: PageTable, vmid: u16) u64 {
         const mode_sv39x4: u64 = 8;
-        return (mode_sv39x4 << 60) | (@as(u64, vmid) << 44) | (self.root_phys >> 12);
+        const vmid_u64: u64 = vmid;
+        return (mode_sv39x4 << 60) | (vmid_u64 << 44) | (self.root_phys >> 12);
     }
 };
 

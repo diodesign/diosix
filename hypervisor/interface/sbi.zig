@@ -23,6 +23,7 @@ pub const EXT = struct {
     pub const RFENCE = 0x52464e43;
     pub const HSM = 0x48534d;
     pub const SRST = 0x53525354;
+    pub const DBCN = 0x4442434e;
     pub const DIOSIX = 0x0A000005;
 
     // Legacy Extensions
@@ -49,6 +50,13 @@ pub const DIOSIX = struct {
     pub const YIELD = 1;
     pub const FORK = 2;
     pub const DROP_TRUST = 3;
+};
+
+// Debug Console Extension Function IDs
+pub const DBCN = struct {
+    pub const CONSOLE_WRITE = 0;
+    pub const CONSOLE_READ = 1;
+    pub const CONSOLE_WRITE_BYTE = 2;
 };
 
 // SBI Call Result

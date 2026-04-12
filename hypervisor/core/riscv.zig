@@ -15,6 +15,8 @@ pub const IsaExtension = interface.IsaExtension;
 pub const Cause = interface.Cause;
 pub const MSTATUS = interface.MSTATUS;
 pub const SSTATUS = interface.SSTATUS;
+pub const HSTATUS = interface.HSTATUS;
+pub const toCause = interface.toCause;
 
 const is_test = builtin.is_test;
 
@@ -40,21 +42,28 @@ var test_hgatp: usize = 0;
 // RISC-V 64-bit MXL for MISA
 const MISA_MXL_64: usize = 1 << 63;
 
+extern fn hw_putchar(c: u8) void;
+extern fn hw_getchar() i16;
+extern fn hw_set_timer(stime: u64) void;
 extern fn hw_private_variables() *CpuContext;
 extern fn hw_heap_base() usize;
 extern fn hw_heap_size() usize;
 extern fn hw_reboot() void;
 extern fn hw_shutdown() void;
+extern fn hw_pause() void;
+extern fn hw_pmp_init() void;
 
 // Provide mock symbols for hw_putchar and hw_pause when testing
 // so that debug output is silently discarded by the test harness.
 fn hw_putchar_mock(_: u8) callconv(.c) void {}
 fn hw_pause_mock() callconv(.c) void {}
+fn hw_pmp_init_mock() callconv(.c) void {}
 
 comptime {
     if (is_test) {
         @export(&hw_putchar_mock, .{ .name = "hw_putchar", .linkage = .strong });
         @export(&hw_pause_mock, .{ .name = "hw_pause", .linkage = .strong });
+        @export(&hw_pmp_init_mock, .{ .name = "hw_pmp_init", .linkage = .strong });
     }
 }
 
@@ -279,8 +288,8 @@ pub inline fn readHtinst() usize {
 }
 
 pub fn setTimer(stime: u64) void {
-    _ = stime;
-    // TODO: Implement hardware-specific timer set.
+    if (is_test) return;
+    hw_set_timer(stime);
 }
 
 // Reboot the host machine.
@@ -293,4 +302,9 @@ pub fn reboot() void {
 pub fn shutdown() void {
     if (builtin.is_test) return;
     hw_shutdown();
+}
+
+pub fn pause() void {
+    if (builtin.is_test) return;
+    hw_pause();
 }

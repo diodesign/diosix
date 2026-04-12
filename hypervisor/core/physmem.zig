@@ -510,6 +510,13 @@ pub fn isRam(base: usize, size: usize) bool {
     return false;
 }
 
+/// Returns true if the address is within the host physical RAM range managed by 
+/// the hypervisor's metadata descriptors. Static reservations (like the Root VM) 
+/// may be within 'isRam' but outside 'isManaged'.
+pub fn isManaged(addr: usize) bool {
+    return (addr >= phys_mem_state.ram_base and addr < phys_mem_state.ram_base + phys_mem_state.ram_size);
+}
+
 pub fn isMmio(base: usize, size: usize) bool {
     if (isHypervisorMemory(base, size)) return false;
     if (isRam(base, size)) return false;

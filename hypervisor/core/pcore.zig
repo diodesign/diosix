@@ -13,6 +13,14 @@ pub fn this() *riscv.CpuContext {
     return riscv.getCPUContext();
 }
 
+pub extern fn hw_run_vcore(
+    context: *riscv.ThreadContext,
+    mepc: usize,
+    mstatus: usize,
+    hstatus: usize,
+    hgatp: usize,
+) noreturn;
+
 // Perform a context switch to the given virtual core
 // This sets up the physical core to run the guest on the next exception return
 pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {

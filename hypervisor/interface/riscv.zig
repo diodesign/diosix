@@ -65,11 +65,18 @@ pub const MSTATUS = struct {
     pub const MPP_MASK = 0b11 << MPP_SHIFT;
     pub const MIE = 1 << 3;
     pub const SIE = 1 << 1;
+    pub const MPV: u64 = 1 << 39;
 };
 
 pub const SSTATUS = struct {
     pub const SPP_SHIFT = 8;
     pub const SIE = 1 << 1;
+};
+
+pub const HSTATUS = struct {
+    pub const GVA = 1 << 6;
+    pub const SPV = 1 << 7;
+    pub const SPVP = 1 << 8;
 };
 
 pub const Cause = enum(usize) {
@@ -84,6 +91,7 @@ pub const Cause = enum(usize) {
     store_access = 7,
     user_environment_call = 8,
     supervisor_environment_call = 9,
+    virtual_supervisor_environment_call = 10,
     machine_environment_call = 11,
     instruction_page_fault = 12,
     load_page_fault = 13,
@@ -107,3 +115,38 @@ pub const Cause = enum(usize) {
 
     pub const INTERRUPT_BIT = 1 << 63;
 };
+
+pub fn toCause(val: usize) Cause {
+    return switch (val) {
+        0 => .instruction_alignment,
+        1 => .instruction_access,
+        2 => .illegal_instruction,
+        3 => .breakpoint,
+        4 => .load_alignment,
+        5 => .load_access,
+        6 => .store_alignment,
+        7 => .store_access,
+        8 => .user_environment_call,
+        9 => .supervisor_environment_call,
+        10 => .virtual_supervisor_environment_call,
+        11 => .machine_environment_call,
+        12 => .instruction_page_fault,
+        13 => .load_page_fault,
+        15 => .store_page_fault,
+        20 => .guest_instruction_page_fault,
+        22 => .guest_load_page_fault,
+        23 => .guest_store_page_fault,
+
+        (1 << 63) | 0 => .user_swi,
+        (1 << 63) | 1 => .supervisor_swi,
+        (1 << 63) | 3 => .machine_swi,
+        (1 << 63) | 4 => .user_timer,
+        (1 << 63) | 5 => .supervisor_timer,
+        (1 << 63) | 7 => .machine_timer,
+        (1 << 63) | 8 => .user_interrupt,
+        (1 << 63) | 9 => .supervisor_interrupt,
+        (1 << 63) | 11 => .machine_interrupt,
+
+        else => .unknown,
+    };
+}

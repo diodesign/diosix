@@ -17,7 +17,11 @@ const scheduler = @import("scheduler.zig");
 const guest = @import("guest.zig");
 const vcore = @import("vcore.zig");
 const loader = @import("loader.zig");
+const pcore = @import("pcore.zig");
+const sv39x4 = @import("sv39x4.zig");
 const elf_spec = @import("interface").elf;
+
+extern fn hw_pmp_init() void;
 
 // Root VM linker symbols.
 extern const __rootvm_start: u8;
@@ -58,7 +62,8 @@ var system_ctx: ?*SystemContext = null;
 // This is the core initialization logic for the boot CPU.
 // It is separated from main() to allow for easier testing.
 fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
-    debug.printf("{s}Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ metadata.banner, metadata.project_version, metadata.git_branch, metadata.git_revision, metadata.build_date, metadata.build_user, metadata.build_hostname, metadata.zig_version, metadata.cpu_arch });
+    debug.printf("{s}\n", .{metadata.banner});
+    debug.printf("Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ metadata.project_version, metadata.git_branch, metadata.git_revision, metadata.build_date, metadata.build_user, metadata.build_hostname, metadata.zig_version, metadata.cpu_arch });
 
     system_ctx = try cpu_allocator.create(SystemContext);
     system_ctx.?.* = .{ .device_tree = null, .root_vm = null };
@@ -109,6 +114,10 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // Load the root VM ELF and get its entry point.
     const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size]);
 
+    // Pre-map the root VM's entry region (first 2MB) into the guest physical space.
+    // This avoids an immediate guest page fault during the first fetch.
+    try root_vm.space.map(root_vm_gpa_base, rootvm_hpa_base, 2 * 1024 * 1024, sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user);
+
     // Generate a guest DTB from the host device tree.
     // Tailor it for the Root VM: 512MB RAM and 2 virtual CPUs.
     const guest_memory_node = try std.fmt.allocPrint(cpu_allocator, "/memory@{x}", .{root_vm_gpa_base});
@@ -143,6 +152,8 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 // dtb = pointer to host system's device tree in memory.
 // Returns to an infinite loop.
 pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
+    hw_pmp_init();
+    scheduler.initCpu();
     if (builtin.is_test) return;
     const cpu_ctx = riscv.getCPUContext();
     cpu_ctx.cpu_core_id = cpu_core_id;
@@ -173,19 +184,38 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
 
     debug.printf("CPU core ID {} entering scheduling loop...\n", .{cpu_core_id});
     while (true) {
+        // Heartbeat for diagnostic
+        // debug.putchar(@intCast(0x30 + cpu_core_id)); 
+
         scheduler.schedule();
 
-        // Check if the Root VM has terminated.
-        if (cpu_core_id == BootCpuID) {
-            if (system_ctx.?.root_vm) |rvm| {
-                if (rvm.state == .dying) {
-                    debug.printf("Root VM has terminated. Restarting host...\n", .{});
-                    riscv.reboot();
-                    while (true) {}
-                }
-            }
+        // If scheduling picked a vcore, jump into it. 
+        // Once inside the guest, interrupts will drive future scheduling.
+        if (pcore.this().active_vcore) |ptr| {
+            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
+            
+            // Set up guest machine state: switch to supervisor mode on mret.
+            const mstatus = (riscv.readMstatus() & ~@as(usize, riscv.MSTATUS.MPP_MASK)) | 
+                            (@as(usize, @intFromEnum(riscv.PrivilegeMode.supervisor)) << riscv.MSTATUS.MPP_SHIFT) |
+                            riscv.MSTATUS.MPV;
+
+            // Generate hgatp for guest physical address translation if H-extension is active.
+            const hgatp = if (vc.guest.space.mode == .h_paging) vc.guest.space.paging.?.hgatp(vc.guest.vmid) else 0;
+
+            const physical_entry = 0x80000000;
+
+            debug.printf("Core {} entering guest at GPA 0x{x}\n", .{pcore.this().cpu_core_id, physical_entry});
+            pcore.hw_run_vcore(&vc.context, physical_entry, mstatus, vc.hstatus, hgatp);
         }
+
+        // We only get here if no vcores were available to run.
+        riscv.pause(); // wfi
     }
+}
+
+pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    debug.printf("\n*** HYPERVISOR PANIC ***\n{s}\n", .{message});
+    while (true) {}
 }
 
 test "boot CPU initialization" {

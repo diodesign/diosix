@@ -198,6 +198,11 @@ pub const Guest = struct {
             .contents = vc,
         };
         self.vcores.pushEnd(node);
+        
+        // Enroll the vcore in the global scheduler
+        const scheduler = @import("scheduler.zig");
+        scheduler.queue(vc);
+
         return vc;
     }
 
@@ -307,6 +312,10 @@ test "guest fork and memory sharing" {
     const parent = try createGuest(allocator, true, true, null, 0x80000000, hpa, 0x1000);
     defer parent.deinit();
 
+    const scheduler = @import("scheduler.zig");
+    scheduler.init();
+    scheduler.initCpu();
+
     // Add a vcore so there is something to fork
     _ = try parent.addVcore(0, 0, 0, .normal);
 
@@ -325,6 +334,10 @@ test "guest fork and memory sharing" {
 test "guest creation and vcore management" {
     const testing = std.testing;
     const allocator = testing.allocator;
+
+    const scheduler = @import("scheduler.zig");
+    scheduler.init();
+    scheduler.initCpu();
 
     // Reset ID counter for predictable test
     guest_id_next.store(0, .monotonic);

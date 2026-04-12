@@ -37,6 +37,13 @@ _start:
     mv        a0, t3
     # now a0 = runtime-assigned linear CPU core ID, counting from 0
 
+    # DEBUG: every core prints its ID as it starts
+    li        t1, 0x10000000
+    addi      t2, a0, 0x30    # '0' + ID
+    sb        t2, 0(t1)
+    li        t2, 0x20        # ' '
+    sb        t2, 0(t1)
+
     # use t3 this as a multiplier from the end of the hypervisor, using shifts to keep things easy
     la        t1, __hypervisor_end
     slli      t3, t3, CPU_SLAB_SHIFT
@@ -101,6 +108,7 @@ infinite_loop:
 
 
 # variables
+.section .data
 .align 8
 cpu_core_id_counter:
     .word 0

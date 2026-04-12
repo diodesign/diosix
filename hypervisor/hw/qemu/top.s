@@ -1,4 +1,4 @@
-# Top-level file for support assembly code for Qemu-compatible systems
+# Top-level file for support assembly code for Qemu-compatible systems (forced rebuild)
 #
 # Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT

@@ -35,6 +35,10 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             debug.putchar(@truncate(a0));
             setResult(context, SBI_SUCCESS, 0);
         },
+        interface.EXT.LEGACY_CONSOLE_GETCHAR => {
+            setResult(context, @bitCast(@as(isize, debug.getchar())), 0);
+        },
+        interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),
         interface.EXT.LEGACY_SHUTDOWN => {
             debug.printf("SBI: Guest {} requested shutdown\n", .{vc.guest_id});
             vc.getGuest().terminate();
@@ -59,6 +63,7 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
                 interface.EXT.BASE,
                 interface.EXT.TIMER,
                 interface.EXT.SRST,
+                interface.EXT.DBCN,
                 interface.EXT.DIOSIX,
                 interface.EXT.LEGACY_CONSOLE_PUTCHAR,
                 interface.EXT.LEGACY_SHUTDOWN,
@@ -113,6 +118,45 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
         },
         interface.DIOSIX.DROP_TRUST => {
             vc.getGuest().dropTrust();
+            setResult(context, SBI_SUCCESS, 0);
+        },
+        else => setResult(context, SBI_ERR_NOT_SUPPORTED, 0),
+    }
+}
+
+fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize) void {
+    const g = vc.getGuest();
+    switch (function) {
+        interface.DBCN.CONSOLE_WRITE => {
+            const num_bytes = a0;
+            const gpa = a1; // base_addr_lo
+            var written: usize = 0;
+            while (written < num_bytes) : (written += 1) {
+                const hpa = g.space.translateGPA(gpa + written) catch {
+                    setResult(context, SBI_ERR_INVALID_ADDRESS, written);
+                    return;
+                };
+                debug.putchar(@as(*u8, @ptrFromInt(hpa)).*);
+            }
+            setResult(context, SBI_SUCCESS, written);
+        },
+        interface.DBCN.CONSOLE_READ => {
+            const num_bytes = a0;
+            const gpa = a1; // base_addr_lo
+            var read: usize = 0;
+            while (read < num_bytes) : (read += 1) {
+                const c = debug.getchar();
+                if (c < 0) break;
+                const hpa = g.space.translateGPA(gpa + read) catch {
+                    setResult(context, SBI_ERR_INVALID_ADDRESS, read);
+                    return;
+                };
+                @as(*u8, @ptrFromInt(hpa)).* = @truncate(@as(u16, @bitCast(c)));
+            }
+            setResult(context, SBI_SUCCESS, read);
+        },
+        interface.DBCN.CONSOLE_WRITE_BYTE => {
+            debug.putchar(@truncate(a0));
             setResult(context, SBI_SUCCESS, 0);
         },
         else => setResult(context, SBI_ERR_NOT_SUPPORTED, 0),

@@ -20,6 +20,7 @@ var basic_writer = Writer{
 var basic_writer_lock = atomic.NamedSpinLock.init("Global basic debug writer lock");
 
 extern fn hw_putchar(c: u8) void;
+extern fn hw_getchar() i16;
 
 fn basicDrain(_: *Writer, data: []const []const u8, splat: usize) Writer.Error!usize {
     var total: usize = 0;
@@ -51,4 +52,12 @@ pub fn putchar(c: u8) void {
     basic_writer_lock.lock();
     defer basic_writer_lock.unlock();
     hw_putchar(c);
+}
+
+pub fn getchar() i16 {
+    // Potentially multiple cores could be polling for input, so lock it.
+    // In practice, usually only the console capsule or root VM handles input.
+    basic_writer_lock.lock();
+    defer basic_writer_lock.unlock();
+    return hw_getchar();
 }
