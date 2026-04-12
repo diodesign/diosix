@@ -34,9 +34,11 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     mstatus |= (@as(usize, 1) << 11); // Set MPP to 1 (Supervisor)
     riscv.writeMstatus(mstatus);
 
+    // Apply guest memory space (paging or PMP)
+    to_vcore.guest.space.apply(to_vcore.guest.vmid);
+
     if (riscv.hasHExtension()) {
         riscv.writeHstatus(to_vcore.hstatus);
-        riscv.writeHgatp(to_vcore.hgatp);
         riscv.writeHedeleg(to_vcore.hedeleg);
         riscv.writeHideleg(to_vcore.hideleg);
     }

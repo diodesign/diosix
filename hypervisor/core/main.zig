@@ -68,18 +68,17 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // initialize the global scheduler
     scheduler.init();
 
-    // create the trusted root VM
-    const root_vm = try guest.createGuest(cpu_allocator);
-    system_ctx.?.root_vm = root_vm;
-
     const rootvm_base = if (builtin.is_test) test_rootvm_start else @intFromPtr(&__rootvm_start);
     const rootvm_size = if (builtin.is_test) test_rootvm_end - rootvm_base else @intFromPtr(&__rootvm_end) - rootvm_base;
 
+    // create the trusted root VM with identity mapping for its RAM range
+    const root_vm = try guest.createGuest(cpu_allocator, true, true, null, rootvm_base, rootvm_base, rootvm_size);
+    system_ctx.?.root_vm = root_vm;
+
     debug.printf("Found root VM image at 0x{x} ({} bytes)\n", .{ rootvm_base, rootvm_size });
 
-    // TODO: Map root VM image into its own physical RAM region
-    // and create its initial virtual core.
-    _ = try root_vm.addVcore(0, rootvm_base, 0, .high);
+    // Map root VM image and create its initial virtual core.
+    _ = try root_vm.addVcore(0, rootvm_base, @intFromPtr(dtb), .high);
 }
 
 // this is the thread-safe Zig entry point for the hypervisor
@@ -118,6 +117,17 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     debug.printf("CPU core ID {} entering scheduling loop...\n", .{cpu_core_id});
     while (true) {
         scheduler.schedule();
+
+        // Check if the Root VM has terminated
+        if (cpu_core_id == BootCpuID) {
+            if (system_ctx.?.root_vm) |rvm| {
+                if (rvm.state == .dying) {
+                    debug.printf("Root VM has terminated. Restarting host...\n", .{});
+                    riscv.reboot();
+                    while (true) {}
+                }
+            }
+        }
     }
 }
 
@@ -204,6 +214,9 @@ test "boot CPU initialization" {
     defer allocator.free(test_rootvm_data_buf);
     test_rootvm_start = @intFromPtr(test_rootvm_data_buf.ptr);
     test_rootvm_end = test_rootvm_start + test_rootvm_data_buf.len;
+
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
 
     // Run the boot init function
     try bootCpuInit(allocator, fake_dtb_ptr);

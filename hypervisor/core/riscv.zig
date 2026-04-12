@@ -31,6 +31,8 @@ var test_hgatp: usize = 0;
 extern fn hw_private_variables() *CpuContext;
 extern fn hw_heap_base() usize;
 extern fn hw_heap_size() usize;
+extern fn hw_reboot() void;
+extern fn hw_shutdown() void;
 
 // provide mock symbols for hw_putchar and hw_pause when testing
 // so that debug output is silently discarded by the test harness
@@ -272,4 +274,16 @@ pub inline fn readHtinst() usize {
     return asm volatile ("csrr %[ret], htinst"
         : [ret] "=r" (-> usize),
     );
+}
+
+// reboot the host machine
+pub fn reboot() void {
+    if (builtin.is_test) return;
+    hw_reboot();
+}
+
+// shutdown the host machine
+pub fn shutdown() void {
+    if (builtin.is_test) return;
+    hw_shutdown();
 }

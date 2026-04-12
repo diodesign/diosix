@@ -5,10 +5,13 @@
 
 const std = @import("std");
 const dsa = @import("dsa.zig");
-const vcore = @import("vcore.zig");
 const pcore = @import("pcore.zig");
-const atomic = @import("atomic.zig");
+const vcore = @import("vcore.zig");
+const guest = @import("guest.zig");
+const alloc = @import("alloc.zig");
 const debug = @import("debug.zig");
+const atomic = @import("atomic.zig");
+const physmem = @import("physmem.zig");
 
 const CoreTree = vcore.SchedulerTree;
 
@@ -122,7 +125,22 @@ pub fn schedule() void {
     } else {
         // Nothing to run.
         // In a real system we might enter a low-power state or run housekeeping.
-        debug.printf("CPU {}: Idle\n", .{pc.cpu_core_id});
+        // debug.printf("CPU {}: Idle\n", .{pc.cpu_core_id});
+    }
+}
+
+// Relinquish the CPU to the scheduler
+pub fn yield(vc: *vcore.VirtualCore) void {
+    const pc = pcore.this();
+    if (pc.active_vcore) |ptr| {
+        const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
+        if (active_vc == vc) {
+            pc.active_vcore = null;
+            // fixed increment for now
+            const delta: u64 = 1000 * 1024 / vc.weight;
+            vc.vruntime += delta;
+            queue(vc);
+        }
     }
 }
 
@@ -134,8 +152,16 @@ test "scheduler vruntime ordering" {
     global_scheduler.min_vruntime = 0;
     initCpu();
 
-    var vc1 = vcore.VirtualCore.init(1, 1, 0, 0, .normal);
-    var vc2 = vcore.VirtualCore.init(2, 1, 0, 0, .normal);
+    var phys_test = try physmem.initForTest(testing.allocator, 128);
+    defer phys_test.deinit();
+
+    const testing_allocator = testing.allocator;
+    const g1 = try guest.createGuest(testing_allocator, false, false, null, 0, 0, 0);
+    defer g1.deinit();
+    const g2 = try guest.createGuest(testing_allocator, false, false, null, 0, 0, 0);
+    defer g2.deinit();
+    var vc1 = vcore.VirtualCore.init(1, g1, 0, 0, .normal);
+    var vc2 = vcore.VirtualCore.init(2, g2, 0, 0, .normal);
 
     vc1.vruntime = 100;
     vc2.vruntime = 50;
@@ -166,11 +192,19 @@ test "hybrid local and global scheduling" {
     global_scheduler.min_vruntime = 0;
     initCpu();
 
+    var phys_test = try physmem.initForTest(testing.allocator, 128);
+    defer phys_test.deinit();
+
     // 1. Fill local queue (up to MAX_LOCAL_VCORES = 8)
+    var test_guests = [_]?*guest.Guest{null} ** 10;
+    defer for (test_guests) |maybe_g| if (maybe_g) |g| g.deinit();
+
     var vcores: [10]vcore.VirtualCore = undefined;
     for (0..10) |i| {
-        vcores[i] = vcore.VirtualCore.init(i, 1, 0, 0, .normal);
+        test_guests[i] = try guest.createGuest(testing.allocator, false, false, null, 0, 0, 0);
+        vcores[i] = (try test_guests[i].?.addVcore(i, 0, 0, .normal)).*;
         vcores[i].vruntime = i * 10;
+        vcores[i].updateSchedulerWeight();
         queue(&vcores[i]);
     }
 

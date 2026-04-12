@@ -11,9 +11,25 @@
 .global hw_heap_base
 .global hw_heap_size
 .global hw_pause
+.global hw_reboot
+.global hw_shutdown
 
 # hypervisor constants, such as stack and lock locations
 .include "hypervisor/hw/qemu/consts.s"
+
+# reboot the host machine
+hw_reboot:
+  li t0, 0x100000 # SiFive Test device base address
+  li t1, 0x7777   # FINISHER_RESET
+  sw t1, 0(t0)
+  ret
+
+# shutdown the host machine
+hw_shutdown:
+  li t0, 0x100000 # SiFive Test device base address
+  li t1, 0x5555   # FINISHER_PASS
+  sw t1, 0(t0)
+  ret
 
 # print a character to the Qemu serial console
 # a0 = character to print

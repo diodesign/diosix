@@ -1,0 +1,100 @@
+// Unified Guest Memory Space Management
+// High-level abstraction that handles either H-extension paging or PMP.
+
+const std = @import("std");
+const physmem = @import("physmem.zig");
+const sv39x4 = @import("sv39x4.zig");
+const pmp = @import("pmp_manager.zig");
+const riscv = @import("riscv.zig");
+
+pub const GuestSpace = struct {
+    mode: enum { h_paging, pmp_fallback },
+    paging: ?sv39x4.PageTable,
+    pmp_config: ?pmp.PMPConfig,
+    is_trusted: bool,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, is_trusted: bool, base_gpa: usize, base_hpa: usize, range_size: usize) !GuestSpace {
+        if (riscv.hasHExtension()) {
+            return GuestSpace{
+                .mode = .h_paging,
+                .paging = try sv39x4.PageTable.init(base_gpa, base_hpa, range_size),
+                .pmp_config = null,
+                .is_trusted = is_trusted,
+                .allocator = allocator,
+            };
+        } else {
+            return GuestSpace{
+                .mode = .pmp_fallback,
+                .paging = null,
+                .pmp_config = try pmp.PMPConfig.init(allocator),
+                .is_trusted = is_trusted,
+                .allocator = allocator,
+            };
+        }
+    }
+
+    pub fn deinit(self: *GuestSpace) void {
+        if (self.mode == .h_paging) {
+            self.paging.?.deinit();
+        } else {
+            self.pmp_config.?.deinit();
+        }
+    }
+
+    // Map physical memory into guest address space
+    pub fn map(self: *GuestSpace, gpa: usize, hpa: usize, size: usize, flags: u64) !void {
+        if (self.mode == .h_paging) {
+            // Map individual pages for paging (allows fragmentation/CoW)
+            var offset: usize = 0;
+            while (offset < size) : (offset += physmem.PageSize) {
+                try self.paging.?.mapPage(gpa + offset, hpa + offset, flags, self.is_trusted);
+            }
+        } else {
+            // Map as one contiguous block for PMP
+            try self.pmp_config.?.addRegion(hpa, size, @intCast(flags));
+        }
+    }
+
+    // Fork this memory space
+    pub fn fork(self: *GuestSpace) !GuestSpace {
+        if (self.mode == .h_paging) {
+            return GuestSpace{
+                .mode = .h_paging,
+                .paging = try self.paging.?.fork(),
+                .pmp_config = null,
+                .is_trusted = self.is_trusted,
+                .allocator = self.allocator,
+            };
+        } else {
+            return GuestSpace{
+                .mode = .pmp_fallback,
+                .paging = null,
+                .pmp_config = try self.pmp_config.?.fork(self.allocator),
+                .is_trusted = self.is_trusted,
+                .allocator = self.allocator,
+            };
+        }
+    }
+
+    // Handle a guest physical page fault (CoW, shadow thawing, or error)
+    pub fn handleFault(self: *GuestSpace, vc: *anyopaque, gpa: usize, cause: usize) !void {
+        _ = vc;
+        _ = cause;
+        if (self.mode == .h_paging) {
+            try self.paging.?.resolveFault(gpa, self.is_trusted);
+        } else {
+            // PMP mode doesn't support CoW/Demand Paging yet
+            return error.NotSupported;
+        }
+    }
+
+    // Load hgatp for paging or set PMP regs for fallback
+    pub fn apply(self: *GuestSpace, vmid: u16) void {
+        if (self.mode == .h_paging) {
+            riscv.writeHgatp(self.paging.?.hgatp(vmid));
+        } else {
+            self.pmp_config.?.apply();
+        }
+    }
+};

@@ -123,6 +123,17 @@ pub fn LinkedList(comptime T: type) type {
             if (node.previous) |p| p.next = node.next;
             if (node.next) |n| n.previous = node.previous;
         }
+
+        // count and return the number of items in the list
+        pub fn count(self: *const Self) usize {
+            var n: usize = 0;
+            var it = self.start;
+            while (it) |node| {
+                n += 1;
+                it = node.next;
+            }
+            return n;
+        }
     };
 }
 

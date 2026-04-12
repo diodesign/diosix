@@ -7,6 +7,10 @@ const main = @import("main.zig");
 const builtin = @import("builtin");
 const debug = @import("debug.zig");
 const riscv = @import("riscv.zig");
+const pcore = @import("pcore.zig");
+const vcore = @import("vcore.zig");
+const hypercall = @import("hypercall.zig");
+const vm_space = @import("vm_space.zig");
 
 extern fn hw_xint_init() void;
 
@@ -41,6 +45,9 @@ pub const Cause = enum(usize) {
     instruction_page_fault = 12,
     load_page_fault = 13,
     store_page_fault = 15,
+    guest_instruction_page_fault = 20,
+    guest_load_page_fault = 22,
+    guest_store_page_fault = 23,
 
     // Interrupts (marker bit set below)
     user_swi = (1 << 63) | 0,
@@ -107,13 +114,27 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 }
 
 fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
-    _ = context;
     switch (irq.cause) {
         .supervisor_environment_call => {
-            // handle system calls here
-            // for now, just increment PC and return
-            // TODO: integrate with syscall handler
+            // HS-mode ecall is a hypercall from the guest supervisor
+            const pcpu = pcore.this();
+            if (pcpu.active_vcore) |vc_raw| {
+                const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+                hypercall.handle(vc, context);
+            }
             riscv.writeMepc(irq.pc + 4);
+        },
+        .guest_instruction_page_fault, .guest_load_page_fault, .guest_store_page_fault => {
+            const pcpu = pcore.this();
+            if (pcpu.active_vcore) |vc_raw| {
+                const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+                const gpa = riscv.readHtval(); // Guest physical address that faulted
+                const g = vc.getGuest();
+                g.space.handleFault(vc, gpa, @intFromEnum(irq.cause)) catch |err| {
+                    debug.printf("Fault: GPA 0x{x} resolution failed: {s}\n", .{gpa, @errorName(err)});
+                    fatal_exception(irq);
+                };
+            }
         },
         else => {
             if (irq.severity == .fatal) {
@@ -140,7 +161,16 @@ fn fatal_exception(irq: IRQ) void {
         debug.printf("Hypervisor crashed. Halting.\n", .{});
         while (true) {}
     } else {
-        debug.printf("Guest environment crashed. TODO: terminate/restart guest.\n", .{});
-        while (true) {}
+        debug.printf("Guest environment crashed. Terminating subtree.\n", .{});
+        const pcpu = pcore.this();
+        if (pcpu.active_vcore) |vc_raw| {
+            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+            const g = vc.getGuest();
+            g.terminate();
+        } else {
+            // Should not happen if privilege_mode was not machine
+            debug.printf("No active vcore found for guest crash. Halting.\n", .{});
+            while (true) {}
+        }
     }
 }
