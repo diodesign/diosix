@@ -46,3 +46,9 @@ pub fn printf(comptime format: []const u8, args: anytype) void {
 
     basic_writer.print(format, args) catch {};
 }
+
+pub fn putchar(c: u8) void {
+    basic_writer_lock.lock();
+    defer basic_writer_lock.unlock();
+    hw_putchar(c);
+}

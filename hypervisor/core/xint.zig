@@ -9,7 +9,7 @@ const debug = @import("debug.zig");
 const riscv = @import("riscv.zig");
 const pcore = @import("pcore.zig");
 const vcore = @import("vcore.zig");
-const hypercall = @import("hypercall.zig");
+const sbi = @import("sbi.zig");
 const vm_space = @import("vm_space.zig");
 
 extern fn hw_xint_init() void;
@@ -29,39 +29,7 @@ pub const Severity = enum {
     non_fatal,
 };
 
-pub const Cause = enum(usize) {
-    // Exceptions
-    instruction_alignment = 0,
-    instruction_access = 1,
-    illegal_instruction = 2,
-    breakpoint = 3,
-    load_alignment = 4,
-    load_access = 5,
-    store_alignment = 6,
-    store_access = 7,
-    user_environment_call = 8,
-    supervisor_environment_call = 9,
-    machine_environment_call = 11,
-    instruction_page_fault = 12,
-    load_page_fault = 13,
-    store_page_fault = 15,
-    guest_instruction_page_fault = 20,
-    guest_load_page_fault = 22,
-    guest_store_page_fault = 23,
-
-    // Interrupts (marker bit set below)
-    user_swi = (1 << 63) | 0,
-    supervisor_swi = (1 << 63) | 1,
-    machine_swi = (1 << 63) | 3,
-    user_timer = (1 << 63) | 4,
-    supervisor_timer = (1 << 63) | 5,
-    machine_timer = (1 << 63) | 7,
-    user_interrupt = (1 << 63) | 8,
-    supervisor_interrupt = (1 << 63) | 9,
-    machine_interrupt = (1 << 63) | 11,
-
-    unknown = 0xffffffffffffffff,
-};
+pub const Cause = riscv.Cause;
 
 pub const IRQ = struct {
     severity: Severity,
@@ -76,9 +44,9 @@ pub const IRQ = struct {
 fn dispatch(context: *riscv.ThreadContext) IRQ {
     const mcause = riscv.readMcause();
     const mepc = riscv.readMepc();
-    const sp = context[2]; // x2 is sp
+    const sp = context[@intFromEnum(riscv.Register.sp)];
 
-    const is_interrupt = (mcause >> 63) != 0;
+    const is_interrupt = (mcause & Cause.INTERRUPT_BIT) != 0;
     const cause_type: Type = if (is_interrupt) .interrupt else .exception;
 
     const cause: Cause = @enumFromInt(mcause);
@@ -116,11 +84,11 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
     switch (irq.cause) {
         .supervisor_environment_call => {
-            // HS-mode ecall is a hypercall from the guest supervisor
+            // HS-mode ecall is an SBI call from the guest supervisor
             const pcpu = pcore.this();
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                hypercall.handle(vc, context);
+                sbi.handle(vc, context);
             }
             riscv.writeMepc(irq.pc + 4);
         },

@@ -3,9 +3,18 @@
 // Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
 const builtin = @import("builtin");
 const alloc = @import("alloc.zig");
 const dsa = @import("dsa.zig");
+const interface = @import("interface").riscv;
+
+pub const Register = interface.Register;
+pub const PrivilegeMode = interface.PrivilegeMode;
+pub const IsaExtension = interface.IsaExtension;
+pub const Cause = interface.Cause;
+pub const MSTATUS = interface.MSTATUS;
+pub const SSTATUS = interface.SSTATUS;
 
 const is_test = builtin.is_test;
 
@@ -24,9 +33,12 @@ var test_mstatus: usize = 0;
 var test_mcause: usize = 0;
 var test_mepc: usize = 0;
 var test_mtval: usize = 0;
-var test_misa: usize = (1 << 63) | (1 << 7); // RV64 + H extension
+var test_misa: usize = (1 << 53) | IsaExtension.h | IsaExtension.gc; // RV64 is bit 63 in MXL, but for simple 64-bit mask we use (1 << 63)
 var test_hstatus: usize = 0;
 var test_hgatp: usize = 0;
+
+// RISC-V 64-bit MXL for MISA
+const MISA_MXL_64: usize = 1 << 63;
 
 extern fn hw_private_variables() *CpuContext;
 extern fn hw_heap_base() usize;
@@ -59,8 +71,6 @@ pub export fn hw_heap_base_mock() usize {
 pub export fn hw_heap_size_mock() usize {
     return test_heap.len;
 }
-
-const std = @import("std");
 
 // each thread context is the contents of its 32 general purpose CPU registers
 pub const ThreadContext = [32]usize;
@@ -177,21 +187,13 @@ pub inline fn readMisa() usize {
 pub fn hasHExtension() bool {
     const misa = readMisa();
     if (misa == 0) return false;
-    const h_bit: usize = 1 << 7; // H is the 8th letter
-    return (misa & h_bit) != 0;
+    return (misa & IsaExtension.h) != 0;
 }
-
-// privilege modes
-pub const PrivilegeMode = enum(u2) {
-    user = 0,
-    supervisor = 1,
-    machine = 3,
-};
 
 // return the privilege level of the code running before we entered the machine level
 pub fn getPreviousPrivilege() PrivilegeMode {
     const mstatus = readMstatus();
-    return @enumFromInt((mstatus >> 11) & 0b11);
+    return @enumFromInt((mstatus & MSTATUS.MPP_MASK) >> MSTATUS.MPP_SHIFT);
 }
 
 // ---- H-extension CSRs ----
@@ -274,6 +276,11 @@ pub inline fn readHtinst() usize {
     return asm volatile ("csrr %[ret], htinst"
         : [ret] "=r" (-> usize),
     );
+}
+
+pub fn setTimer(stime: u64) void {
+    _ = stime;
+    // TODO: implement hardware-specific timer set
 }
 
 // reboot the host machine

@@ -168,6 +168,16 @@ pub const Guest = struct {
         }
 
         self.space.deinit();
+        
+        var it_child = self.children.start;
+        while (it_child) |node| {
+            const next = node.next;
+            // node.contents should be deinitialized by the caller if they are the root,
+            // or here if we want deep deinit. But tests usually deinit each guest manually.
+            self.allocator.destroy(node);
+            it_child = next;
+        }
+
         freeVmid(self.vmid);
         self.allocator.destroy(self);
     }
@@ -256,33 +266,6 @@ pub const Guest = struct {
     }
 };
 
-test "guest fork and memory sharing" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    guest_id_next.store(0, .monotonic); // Reset for test
-    var phys_test = try physmem.initForTest(allocator, 128);
-    defer phys_test.deinit();
-
-    const hpa = try physmem.allocPage();
-    const parent = try createGuest(allocator, true, true, null, 0x80000000, hpa, 0x1000);
-    defer parent.deinit();
-
-    // Add a vcore so there is something to fork
-    _ = try parent.addVcore(0, 0, 0, .normal);
-
-    const child = try parent.fork();
-    defer child.deinit();
-
-    try testing.expect(child.id != parent.id);
-    try testing.expect(child.vmid != parent.vmid);
-    
-    // Check that we have a vcore in the child
-    try testing.expect(child.vcores.start != null);
-    const child_vc = child.vcores.start.?.contents;
-    try testing.expectEqual(@as(usize, 0), child_vc.context[10]); // a0 is 0
-}
-
 // Global guest tracking
 var guest_id_next = std.atomic.Value(usize).init(0);
 var vmid_next: u16 = 1; // 0 is reserved
@@ -310,6 +293,33 @@ pub fn createGuest(allocator: std.mem.Allocator, is_trusted: bool, is_root: bool
     };
 
     return try Guest.init(allocator, id, is_trusted, is_root, parent, base_gpa, base_hpa, range_size);
+}
+
+test "guest fork and memory sharing" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    guest_id_next.store(0, .monotonic); // Reset for test
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
+
+    const hpa = try physmem.allocPage();
+    const parent = try createGuest(allocator, true, true, null, 0x80000000, hpa, 0x1000);
+    defer parent.deinit();
+
+    // Add a vcore so there is something to fork
+    _ = try parent.addVcore(0, 0, 0, .normal);
+
+    const child = try parent.fork();
+    defer child.deinit();
+
+    try testing.expect(child.id != parent.id);
+    try testing.expect(child.vmid != parent.vmid);
+    
+    // Check that we have a vcore in the child
+    try testing.expect(child.vcores.start != null);
+    const child_vc = child.vcores.start.?.contents;
+    try testing.expectEqual(@as(usize, 0), child_vc.context[10]); // a0 is 0
 }
 
 test "guest creation and vcore management" {

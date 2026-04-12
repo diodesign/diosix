@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const riscv = @import("riscv.zig");
 const dsa = @import("dsa.zig");
 const pcore = @import("pcore.zig");
 const vcore = @import("vcore.zig");
@@ -69,37 +70,52 @@ pub fn queue(vc: *vcore.VirtualCore) void {
 // Pick the next virtual core to run, pulling from global if local is empty
 pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
+    const misa = riscv.readMisa();
 
     // 1. Try to pick from the local run queue first
-    if (pc.run_queue.findMin()) |node| {
-        pc.run_queue.remove(node);
-        pc.run_queue_count -= 1;
-
+    var it = pc.run_queue.findMin();
+    while (it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        global_scheduler.min_vruntime = vc.vruntime;
-        return vc;
+        if ((vc.required_extensions & misa) == vc.required_extensions) {
+            pc.run_queue.remove(node);
+            pc.run_queue_count -= 1;
+            global_scheduler.min_vruntime = vc.vruntime;
+            return vc;
+        }
+        // If not compatible, try next in local queue (rare case if local queue is filtered)
+        it = pc.run_queue.findNext(node);
     }
 
-    // 2. Local queue is empty, try to pull from the global queue
+    // 2. Local queue is empty or incompatible, try to pull from the global queue
     global_scheduler.lock.lock();
     defer global_scheduler.lock.unlock();
 
-    if (global_scheduler.run_queue.findMin()) |first_node| {
-        global_scheduler.run_queue.remove(first_node);
-        const first_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", first_node);
-        global_scheduler.min_vruntime = first_vc.vruntime;
+    var g_it = global_scheduler.run_queue.findMin();
+    while (g_it) |node| {
+        const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
+        if ((vc.required_extensions & misa) == vc.required_extensions) {
+            global_scheduler.run_queue.remove(node);
+            global_scheduler.min_vruntime = vc.vruntime;
 
-        // Greedy pull: fill local queue with some more work from global
-        var pulled: usize = 0;
-        while (pulled < PULL_BATCH) : (pulled += 1) {
-            if (global_scheduler.run_queue.findMin()) |node| {
-                global_scheduler.run_queue.remove(node);
-                pc.run_queue.insert(node);
-                pc.run_queue_count += 1;
-            } else break;
+            // Greedy pull: fill local queue with some more compatible work from global
+            var pulled: usize = 0;
+            var next_g = global_scheduler.run_queue.findMin();
+            while (pulled < PULL_BATCH and next_g != null) {
+                const g_node = next_g.?;
+                next_g = global_scheduler.run_queue.findNext(g_node);
+                
+                const g_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", g_node);
+                if ((g_vc.required_extensions & misa) == g_vc.required_extensions) {
+                    global_scheduler.run_queue.remove(g_node);
+                    pc.run_queue.insert(g_node);
+                    pc.run_queue_count += 1;
+                    pulled += 1;
+                }
+            }
+
+            return vc;
         }
-
-        return first_vc;
+        g_it = global_scheduler.run_queue.findNext(node);
     }
 
     return null;
@@ -199,13 +215,13 @@ test "hybrid local and global scheduling" {
     var test_guests = [_]?*guest.Guest{null} ** 10;
     defer for (test_guests) |maybe_g| if (maybe_g) |g| g.deinit();
 
-    var vcores: [10]vcore.VirtualCore = undefined;
+    var vcpus: [10]*vcore.VirtualCore = undefined;
     for (0..10) |i| {
         test_guests[i] = try guest.createGuest(testing.allocator, false, false, null, 0, 0, 0);
-        vcores[i] = (try test_guests[i].?.addVcore(i, 0, 0, .normal)).*;
-        vcores[i].vruntime = i * 10;
-        vcores[i].updateSchedulerWeight();
-        queue(&vcores[i]);
+        vcpus[i] = try test_guests[i].?.addVcore(i, 0, 0, .normal);
+        vcpus[i].vruntime = i * 10;
+        vcpus[i].updateSchedulerWeight();
+        queue(vcpus[i]);
     }
 
     const pc = pcore.this();

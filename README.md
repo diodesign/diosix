@@ -1,11 +1,14 @@
 [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/main/LICENSE) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
 
-## Welcome guide
+## Diosix welcome guide
 
 1. [About this project](#intro)
 1. [Build Diosix](#build)
 1. [Run Diosix](#run)
 1. [Develop Diosix](#develop)
+1. [Hypervisor architecture](docs/architecture.md)
+1. [Security model](docs/security.md)
+1. [Interface and constants](docs/interface.md)
 1. [Contact, contributions, security, and code of conduct](#contact)
 1. [Copyright, distribution, and license](#copyright)
 
@@ -75,7 +78,7 @@ If all tests pass, the command will exit successfully.
 
 ## Contact, contributions, security issues, and code of conduct <a name="contact"></a>
 
-Email [hello@diosix.org](mailto:hello@diosix.org) if you have any questions or issues to raise, wish to get involved, or have source to contribute. If you have found a security flaw, follow [these steps](docs/security.md) to report the bug. You can also submit pull requests or raise issues via GitHub, though please disclose security-related matters privately.
+Email [hello@diosix.org](mailto:hello@diosix.org) if you have any questions or issues to raise, wish to get involved, or have source to contribute. If you have found a security flaw, follow [these steps](docs/security.md#reporting) to report the bug. You can also submit pull requests or raise issues via GitHub, though please disclose security-related matters privately.
 
 Please observe the project's [code of conduct](docs/conduct.md) when participating.
 

@@ -32,11 +32,11 @@ Isolation is a core tenant of the Diosix architecture:
 
 Diosix distinguishes between managing children (available to all parents) and controlling hardware:
 *   **`is_trusted` flag**: Only a VM with this flag can map physical MMIO space or route hardware interrupts to itself.
-*   **Privilege De-escalation**: The Root VM is initialized as `is_trusted`. A VM can permanently relinquish this privilege using the `vm_drop_trust` hypercall. 
+*   **Privilege De-escalation**: The Root VM is initialized as `is_trusted`. A VM can permanently relinquish this privilege using the `DROP_TRUST` call via the [Diosix SBI extension](interface.md). 
 
 This enables a "Least Privilege" workflow where a trusted loader forks a child, populates it with a guest OS image, drops the child's trust, and then restarts the child as a standard isolated guest.
 
 ## 5. Termination and Restart Policy
 
-*   **Cascading Termination**: If a VM terminates (via `vm_exit` or a fatal crash), the hypervisor recursively terminates all of its children and descendants. Orphans are not allowed.
+*   **Cascading Termination**: If a VM terminates (via the `EXIT` SBI call or a fatal crash), the hypervisor recursively terminates all of its children and descendants. Orphans are not allowed.
 *   **System Restart**: If the top-level **Root VM** terminates or crashes, the hypervisor considers the system state to be finalized and restarts the host machine.

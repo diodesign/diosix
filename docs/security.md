@@ -21,6 +21,6 @@ Parents can manage their children’s lifecycle (stop, start, kill, reboot) rega
 3.  **Drop Trust**: The parent (or the child via hypercall) triggers `vm_drop_trust`.
 4.  **Restart**: The child is restarted as a standard isolated guest, and it can never regain trust or hardware access.
 
-## Reporting security issues
+## Reporting security issues {: #reporting}
 
 The project takes security bugs extremely seriously. To privately report a security vulnerability, email [security@diosix.org](mailto:security@diosix.org) with further details.

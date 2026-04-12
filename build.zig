@@ -73,12 +73,17 @@ pub fn build(b: *std.Build) !void {
         @panic("Unsupported system selected");
     };
 
+    const interface_module = b.createModule(.{
+        .root_source_file = b.path("hypervisor/interface/lib.zig"),
+    });
+
     const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/core/main.zig"),
         .optimize = optimize,
         .target = target,
         .code_model = .medium,
     }), .linkage = .static });
+    vmdiosix.root_module.addImport("interface", interface_module);
 
     // include the top-level assembly file and linker script
     vmdiosix.root_module.addAssemblyFile(b.path(selected_system.top_asm_file));
@@ -126,6 +131,7 @@ pub fn build(b: *std.Build) !void {
         .target = b.graph.host,
     });
     test_module.addOptions("metadata", metadata);
+    test_module.addImport("interface", interface_module);
     const unit_tests = b.addTest(.{
         .root_module = test_module,
         .name = "diosix-unit-tests",

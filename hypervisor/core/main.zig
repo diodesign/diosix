@@ -16,13 +16,31 @@ const physmem = @import("physmem.zig");
 const scheduler = @import("scheduler.zig");
 const guest = @import("guest.zig");
 const vcore = @import("vcore.zig");
+const loader = @import("loader.zig");
+const elf_spec = @import("interface").elf;
 
 // Root VM linker symbols
 extern const __rootvm_start: u8;
 extern const __rootvm_end: u8;
 
 // Mock Root VM symbols for tests
-const test_rootvm_data = if (builtin.is_test) [_]u8{0} ** 64 else {};
+const test_rootvm_data = if (builtin.is_test) blk: {
+    var data = [_]u8{0} ** 64;
+    // Minimal 64-bit RISC-V ELF header
+    @memcpy(data[elf_spec.EHDR.IDENT .. elf_spec.EHDR.IDENT + 4], elf_spec.MAGIC);
+    data[4] = elf_spec.CLASS_64;
+    data[5] = elf_spec.DATA_LSB;
+    data[elf_spec.EHDR.MACHINE] = @truncate(elf_spec.MACHINE_RISCV);
+    data[elf_spec.EHDR.MACHINE + 1] = @truncate(elf_spec.MACHINE_RISCV >> 8);
+    data[elf_spec.EHDR.ENTRY] = 0x00; // Entry point (0x80000000)
+    data[elf_spec.EHDR.ENTRY + 1] = 0x00;
+    data[elf_spec.EHDR.ENTRY + 2] = 0x00;
+    data[elf_spec.EHDR.ENTRY + 3] = 0x80;
+    data[elf_spec.EHDR.PHOFF] = 64;   // Program header offset
+    data[elf_spec.EHDR.PHENTSIZE] = 56;   // Program header size
+    data[elf_spec.EHDR.PHNUM] = 0;    // Number of program headers
+    break :blk data;
+} else {};
 var test_rootvm_start: usize = 0;
 var test_rootvm_end: usize = 0;
 
@@ -75,10 +93,25 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     const root_vm = try guest.createGuest(cpu_allocator, true, true, null, rootvm_base, rootvm_base, rootvm_size);
     system_ctx.?.root_vm = root_vm;
 
-    debug.printf("Found root VM image at 0x{x} ({} bytes)\n", .{ rootvm_base, rootvm_size });
+    // load the root VM ELF and get its entry point
+    const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_base))[0..rootvm_size]);
 
-    // Map root VM image and create its initial virtual core.
-    _ = try root_vm.addVcore(0, rootvm_base, @intFromPtr(dtb), .high);
+    // generate a guest DTB from the host device tree
+    // for now, we pass a copy, but in a real system we'd tailor it
+    const guest_dtb = try device_tree.toBlob();
+    defer cpu_allocator.free(guest_dtb);
+
+    // copy guest DTB into guest RAM (at a safe offset, eg 1MB after base)
+    const guest_dtb_gpa = rootvm_base + 1024 * 1024;
+    @memcpy(@as([*]u8, @ptrFromInt(guest_dtb_gpa))[0..guest_dtb.len], guest_dtb);
+
+    debug.printf("Found root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_base, rootvm_size, entry_point });
+
+    // create virtual cores for the root VM
+    const cpu_count = device_tree.countCpus();
+    for (0..cpu_count) |i| {
+        _ = try root_vm.addVcore(i, entry_point, guest_dtb_gpa, .high);
+    }
 }
 
 // this is the thread-safe Zig entry point for the hypervisor
@@ -212,6 +245,8 @@ test "boot CPU initialization" {
     // Initialize mock Root VM pointers (use another real host buffer)
     const test_rootvm_data_buf = try allocator.alloc(u8, 1024);
     defer allocator.free(test_rootvm_data_buf);
+    @memcpy(test_rootvm_data_buf[0..test_rootvm_data.len], &test_rootvm_data);
+
     test_rootvm_start = @intFromPtr(test_rootvm_data_buf.ptr);
     test_rootvm_end = test_rootvm_start + test_rootvm_data_buf.len;
 

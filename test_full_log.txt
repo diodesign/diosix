@@ -1,0 +1,117 @@
+test
++- run test diosix-unit-tests 26 pass, 2 fail (28 total); 4 leaks
+error: 'main.test.boot CPU initialization' failed:
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/loader.zig:25:56: 0x1241ceb in load (main.zig)
+               if (!std.mem.eql(u8, source[0..4], "\x7fELF")) return LoaderError.InvalidElfHeader;
+                                                              ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/main.zig:80:25: 0x124b4f1 in bootCpuInit (main.zig)
+           const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_base))[0..rootvm_size]);
+                               ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/main.zig:238:5: 0x124c6a8 in test.boot CPU initialization (main.zig)
+           try bootCpuInit(allocator, fake_dtb_ptr);
+           ^
+error: 'dt.test.round-trip: build tree, serialize to blob, parse back' failed:
+       expected 2, found 1
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/testing.zig:118:17: 0x1269f04 in expectEqualInner__anon_45305 (std.zig)
+                       return error.TestExpectedEqual;
+                       ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/dt.zig:1227:5: 0x1282bc6 in test.round-trip: build tree, serialize to blob, parse back (main.zig)
+           try std.testing.expectEqual(@as(u32, 2), try addr_cells_root.asU32());
+           ^
+error: 'guest.test.guest fork and memory sharing' leaked 1 allocations:
+       [DebugAllocator] (err): memory address 0x7fdb0de00020 leaked: 
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:232:52: 0x1277567 in fork (main.zig)
+               const line_node = try self.allocator.create(dsa.LinkedList(*Guest).Node);
+                                                          ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:274:34: 0x1278142 in test.guest fork and memory sharing (main.zig)
+           const child = try parent.fork();
+                                        ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/compiler/test_runner.zig:147:68: 0x11f19b0 in mainServer (test_runner.zig)
+                       const status: TestResults.Status = if (test_fn.func()) |v| s: {
+                                                                          ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/compiler/test_runner.zig:68:26: 0x11f27fd in main (test_runner.zig)
+               return mainServer(init) catch |err| std.debug.panic("internal test runner failure: {t}", .{err});
+                                ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/start.zig:686:88: 0x11ef136 in callMain (std.zig)
+           if (fn_info.params[0].type.? == std.process.Init.Minimal) return wrapMain(root.main(.{
+                                                                                              ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/start.zig:190:5: 0x11eeb41 in _start (std.zig)
+           asm volatile (switch (native_arch) {
+           ^
+error: 'guest.test.guest creation and vcore management' leaked 1 allocations:
+       [DebugAllocator] (err): memory address 0x7fdb0dd00000 leaked: 
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:80:46: 0x124141e in init (main.zig)
+                   const node = try allocator.create(dsa.LinkedList(*Guest).Node);
+                                                    ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:312:26: 0x1241a7d in createGuest (main.zig)
+           return try Guest.init(allocator, id, is_trusted, is_root, parent, base_gpa, base_hpa, range_size);
+                                ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:328:31: 0x127488d in test.guest creation and vcore management (main.zig)
+           const g2 = try createGuest(allocator, false, false, g1, 0, 0, 0);
+                                     ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/compiler/test_runner.zig:147:68: 0x11f19b0 in mainServer (test_runner.zig)
+                       const status: TestResults.Status = if (test_fn.func()) |v| s: {
+                                                                          ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/compiler/test_runner.zig:68:26: 0x11f27fd in main (test_runner.zig)
+               return mainServer(init) catch |err| std.debug.panic("internal test runner failure: {t}", .{err});
+                                ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/start.zig:686:88: 0x11ef136 in callMain (std.zig)
+           if (fn_info.params[0].type.? == std.process.Init.Minimal) return wrapMain(root.main(.{
+                                                                                              ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/start.zig:190:5: 0x11eeb41 in _start (std.zig)
+           asm volatile (switch (native_arch) {
+           ^
+error: 'guest.test.guest cascading termination and lineage' leaked 2 allocations:
+       [DebugAllocator] (err): memory address 0x7fdb0db20000 leaked: 
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:80:46: 0x124141e in init (main.zig)
+                   const node = try allocator.create(dsa.LinkedList(*Guest).Node);
+                                                    ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:312:26: 0x1241a7d in createGuest (main.zig)
+           return try Guest.init(allocator, id, is_trusted, is_root, parent, base_gpa, base_hpa, range_size);
+                                ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:370:34: 0x1272773 in test.guest cascading termination and lineage (main.zig)
+           const child = try createGuest(allocator, false, false, parent, 0, 0, 0);
+                                        ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/compiler/test_runner.zig:147:68: 0x11f19b0 in mainServer (test_runner.zig)
+                       const status: TestResults.Status = if (test_fn.func()) |v| s: {
+                                                                          ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/compiler/test_runner.zig:68:26: 0x11f27fd in main (test_runner.zig)
+               return mainServer(init) catch |err| std.debug.panic("internal test runner failure: {t}", .{err});
+                                ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/start.zig:686:88: 0x11ef136 in callMain (std.zig)
+           if (fn_info.params[0].type.? == std.process.Init.Minimal) return wrapMain(root.main(.{
+                                                                                              ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/start.zig:190:5: 0x11eeb41 in _start (std.zig)
+           asm volatile (switch (native_arch) {
+           ^
+       
+       [DebugAllocator] (err): memory address 0x7fdb0db20020 leaked: 
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:80:46: 0x124141e in init (main.zig)
+                   const node = try allocator.create(dsa.LinkedList(*Guest).Node);
+                                                    ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:312:26: 0x1241a7d in createGuest (main.zig)
+           return try Guest.init(allocator, id, is_trusted, is_root, parent, base_gpa, base_hpa, range_size);
+                                ^
+       /home/chris/Documents/src/diosix-hq/diosix/hypervisor/core/guest.zig:373:39: 0x127285f in test.guest cascading termination and lineage (main.zig)
+           const grandchild = try createGuest(allocator, false, false, child, 0, 0, 0);
+                                             ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/compiler/test_runner.zig:147:68: 0x11f19b0 in mainServer (test_runner.zig)
+                       const status: TestResults.Status = if (test_fn.func()) |v| s: {
+                                                                          ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/compiler/test_runner.zig:68:26: 0x11f27fd in main (test_runner.zig)
+               return mainServer(init) catch |err| std.debug.panic("internal test runner failure: {t}", .{err});
+                                ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/start.zig:686:88: 0x11ef136 in callMain (std.zig)
+           if (fn_info.params[0].type.? == std.process.Init.Minimal) return wrapMain(root.main(.{
+                                                                                              ^
+       /home/chris/Documents/src/zig/build/stage3/lib/zig/std/start.zig:190:5: 0x11eeb41 in _start (std.zig)
+           asm volatile (switch (native_arch) {
+           ^
+failed command: ./.zig-cache/o/49400f12944134db082da7131ebdd663/diosix-unit-tests --cache-dir=./.zig-cache --seed=0x6b4278b3 --listen=-
+
+Build Summary: 2/4 steps succeeded (1 failed); 26/28 tests passed (2 failed)
+test transitive failure
++- run test diosix-unit-tests 26 pass, 2 fail (28 total); 4 leaks
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/404fade50acd03ec08a07f300e2fcdb0/build /home/chris/Documents/src/zig/build/stage3/bin/zig /home/chris/Documents/src/zig/build/stage3/lib/zig /home/chris/Documents/src/diosix-hq/diosix .zig-cache /home/chris/.cache/zig --seed 0x6b4278b3 -Z1284124f8d54a2fe test

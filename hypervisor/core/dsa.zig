@@ -555,6 +555,25 @@ pub fn RedBlackTree(comptime T: type, comptime compareFn: fn (a: T, b: T) i8) ty
             }
             return x;
         }
+
+        // find and return the in-order successor of the given node
+        pub fn findNext(self: *Self, node: *Node) ?*Node {
+            _ = self;
+            if (node.right) |right| {
+                var x = right;
+                while (x.left) |left| {
+                    x = left;
+                }
+                return x;
+            }
+            var x = node;
+            var y = node.parent;
+            while (y != null and x == y.?.right) {
+                x = y.?;
+                y = y.?.parent;
+            }
+            return y;
+        }
     };
 }
 

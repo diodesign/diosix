@@ -786,7 +786,7 @@ pub const DeviceTree = struct {
             }
 
             // emit BEGIN_NODE / END_NODE tokens for proper nesting
-            for (1..comp_count) |idx| {
+            for (0..comp_count) |idx| {
                 if (idx < prev_count) {
                     // check if this component differs from previous
                     if (!std.mem.eql(u8, prev_nodes[idx], components[idx])) {
@@ -799,75 +799,95 @@ pub const DeviceTree = struct {
                         try bytes.addU32(FdtBeginNode);
                         try bytes.addNullTermString(components[idx]);
                         try bytes.padToU32();
-                        prev_nodes[prev_count] = components[idx];
-                        prev_count += 1;
+                        prev_nodes[idx] = components[idx];
+                        prev_count = idx + 1;
                     }
-                    // else: same component, no action needed
                 } else {
-                    // no previous node at this depth, create new
+                    // new deeper component
                     try bytes.addU32(FdtBeginNode);
                     try bytes.addNullTermString(components[idx]);
                     try bytes.padToU32();
-                    prev_nodes[prev_count] = components[idx];
-                    prev_count += 1;
+                    prev_nodes[idx] = components[idx];
+                    prev_count = idx + 1;
                 }
             }
 
             // emit properties for this node
             for (0..node.prop_count) |pi| {
-                const entry = &node.props[pi];
-                const prop_size: u32 = @intCast(entry.value.size());
+                const prop = &node.props[pi];
                 try bytes.addU32(FdtProp);
-                try bytes.addU32(prop_size);
+                try bytes.addU32(@intCast(prop.value.size()));
 
-                // reserve u32 for string offset, record for back-patching
+                // record property name offset placeholder
                 if (prop_ref_count >= prop_refs.len) {
-                    const new_refs = try self.allocator.alloc(PropRef, prop_refs.len * 2);
-                    @memcpy(new_refs[0..prop_ref_count], prop_refs[0..prop_ref_count]);
+                    const new_buf = try self.allocator.alloc(PropRef, prop_refs.len * 2);
+                    @memcpy(new_buf[0..prop_ref_count], prop_refs[0..prop_ref_count]);
                     self.allocator.free(prop_refs);
-                    prop_refs = new_refs;
+                    prop_refs = new_buf;
                 }
-                prop_refs[prop_ref_count] = .{ .offset = bytes.len, .name = entry.name };
+                prop_refs[prop_ref_count] = .{ .offset = bytes.len, .name = prop.name };
                 prop_ref_count += 1;
-                try bytes.addU32(0xffffffff); // name offset placeholder
+                try bytes.addU32(0xffffffff); // name off placeholder
 
-                // write property data
-                if (entry.value.data) |data| {
-                    try bytes.addBytes(data);
+                if (prop.value.data) |d| {
+                    try bytes.addBytes(d);
+                    try bytes.padToU32();
                 }
-                try bytes.padToU32();
             }
         }
 
-        // close all outstanding nodes
-        while (prev_count > 0) {
+        // close all remaining nodes
+        while (prev_count > 1) {
             try bytes.addU32(FdtEndNode);
             prev_count -= 1;
         }
-        try bytes.addU32(FdtEnd);
 
-        const dtstruct_end = bytes.offset32();
-        try bytes.alterU32(ref_size_struct, dtstruct_end - dtstruct_start);
+        try bytes.addU32(FdtEnd);
+        try bytes.padToU32();
+        try bytes.alterU32(ref_size_struct, bytes.offset32() - dtstruct_start);
 
         // strings block
         const dtstrings_start = bytes.offset32();
         try bytes.alterU32(ref_off_strings, dtstrings_start);
 
-        // write property name strings and resolve references
-        for (0..prop_ref_count) |ri| {
-            const ref = &prop_refs[ri];
-            const str_offset: u32 = bytes.offset32() - dtstrings_start;
-            try bytes.alterU32(ref.offset, str_offset);
-            try bytes.addNullTermString(ref.name);
+        // serialize unique property names and back-patch offsets
+        // use a small hashmap-like structure for string deduplication in the table
+        const StringOff = struct { name: []const u8, offset: u32 };
+        var unique_strings = try self.allocator.alloc(StringOff, 256);
+        defer self.allocator.free(unique_strings);
+        var unique_count: usize = 0;
+
+        for (0..prop_ref_count) |i| {
+            const p_ref = &prop_refs[i];
+            var found_off: ?u32 = null;
+            for (0..unique_count) |ui| {
+                if (std.mem.eql(u8, unique_strings[ui].name, p_ref.name)) {
+                    found_off = unique_strings[ui].offset;
+                    break;
+                }
+            }
+
+            if (found_off) |off| {
+                try bytes.alterU32(p_ref.offset, off);
+            } else {
+                const off = bytes.offset32() - dtstrings_start;
+                try bytes.alterU32(p_ref.offset, off);
+                if (unique_count >= unique_strings.len) {
+                    const new_buf = try self.allocator.alloc(StringOff, unique_strings.len * 2);
+                    @memcpy(new_buf[0..unique_count], unique_strings[0..unique_count]);
+                    self.allocator.free(unique_strings);
+                    unique_strings = new_buf;
+                }
+                unique_strings[unique_count] = .{ .name = p_ref.name, .offset = off };
+                unique_count += 1;
+                try bytes.addNullTermString(p_ref.name);
+            }
         }
 
-        const dtstrings_end = bytes.offset32();
-        try bytes.alterU32(ref_size_strings, dtstrings_end - dtstrings_start);
-
-        // total size
+        try bytes.alterU32(ref_size_strings, bytes.offset32() - dtstrings_start);
         try bytes.alterU32(ref_total_size, bytes.offset32());
 
-        return bytes.toOwnedSlice();
+        return try bytes.toOwnedSlice();
     }
 };
 

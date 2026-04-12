@@ -45,6 +45,7 @@ pub const VirtualCore = struct {
     hgatp: usize,
     hedeleg: usize,
     hideleg: usize,
+    required_extensions: usize,
 
     // Scheduling data
     priority: Priority,
@@ -68,6 +69,7 @@ pub const VirtualCore = struct {
             .hgatp = 0,
             .hedeleg = 0,
             .hideleg = 0,
+            .required_extensions = riscv.IsaExtension.gc,
             .priority = priority,
             .vruntime = 0,
             .weight = switch (priority) {
@@ -77,8 +79,8 @@ pub const VirtualCore = struct {
             .scheduler_node = undefined,
         };
 
-        vcore.context[10] = id; // a0 = vcore ID
-        vcore.context[11] = dtb; // a1 = DTB address
+        vcore.context[@intFromEnum(riscv.Register.a0)] = id; // a0 = vcore ID
+        vcore.context[@intFromEnum(riscv.Register.a1)] = dtb; // a1 = DTB address
 
         // Initialize the scheduler node's contents to the vruntime for ordering
         vcore.scheduler_node.contents = 0;
@@ -109,7 +111,7 @@ pub const VirtualCore = struct {
         vc.guest_id = child_guest.id;
         
         // Return 0 in the child (a0 is x10)
-        vc.context[10] = 0;
+        vc.context[@intFromEnum(riscv.Register.a0)] = 0;
 
         // Reset scheduler node for the new vcore
         vc.scheduler_node = undefined;
@@ -135,8 +137,8 @@ test "virtual core initialization" {
     try testing.expectEqual(id, vc.id);
     try testing.expectEqual(parent.id, vc.guest_id);
     try testing.expectEqual(entry, vc.mepc);
-    try testing.expectEqual(dtb, vc.context[11]); // a1
-    try testing.expectEqual(id, vc.context[10]); // a0
+    try testing.expectEqual(dtb, vc.context[@intFromEnum(riscv.Register.a1)]); // a1
+    try testing.expectEqual(id, vc.context[@intFromEnum(riscv.Register.a0)]); // a0
     try testing.expectEqual(@as(u32, 1024), vc.weight);
     try testing.expectEqual(@as(u64, 0), vc.vruntime);
 }
