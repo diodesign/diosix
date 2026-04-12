@@ -26,8 +26,9 @@ Diosix follows the
 to standardize communication between guests and the hypervisor. Diosix is 
 officially assigned **Implementation ID 5**.
 
-We support standard SBI extensions such as `BASE`, `TIMER`, and `SRST` 
-(System Reset). Additionally, we provide the Diosix extension 
+We support standard SBI extensions such as `BASE`, `TIMER`, `SRST` 
+(System Reset), and `DBCN` (Debug Console). Additionally, we provide the Diosix 
+extension 
 (EID `0x0A000005`) for custom features. This extension includes `YIELD` to 
 surrender the current Virtual CPU (VCPU), `FORK` to clone the current 
 Virtual Machine (VM), `DROP_TRUST` to permanently relinquish hardware access, 
