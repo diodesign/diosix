@@ -177,7 +177,36 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (pcpu.active_vcore) |vc_raw| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
         @memcpy(context, &vc.context);
-        pcore.contextSwitch(vc); // This handles CSRs including mepc
+        pcore.contextSwitch(vc); 
+        syncGuestStateToHardware(vc);
+    }
+}
+
+// Synchronize the virtual core's architecture state to the physical hardware CSRs.
+// This is required before returning to guest mode (mret) if the state has changed.
+fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
+    const ms = &vc.machine;
+    const gs = &vc.guest_state;
+
+    riscv.writeMepc(ms.mepc);
+    riscv.writeMstatus(ms.mstatus);
+
+    if (riscv.hasHExtension()) {
+        riscv.writeHstatus(ms.hstatus);
+        riscv.writeHgatp(ms.hgatp);
+        riscv.writeHvip(ms.hvip);
+        riscv.writeHedeleg(ms.hedeleg);
+        riscv.writeHideleg(ms.hideleg);
+
+        // Sync VS-mode (Guest Supervisor) CSRs
+        riscv.writeVsstatus(gs.vsstatus);
+        riscv.writeVsie(gs.vsie);
+        riscv.writeVstvec(gs.vstvec);
+        riscv.writeVsscratch(gs.vsscratch);
+        riscv.writeVsepc(gs.vsepc);
+        riscv.writeVscause(gs.vscause);
+        riscv.writeVstval(gs.vstval);
+        riscv.writeVsatp(gs.vsatp);
     }
 }
 
