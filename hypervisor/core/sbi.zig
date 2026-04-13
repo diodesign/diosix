@@ -28,8 +28,12 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
     const a1 = context[@intFromEnum(arch.Register.a1)];
     const a2 = context[@intFromEnum(arch.Register.a2)];
 
+    // const a3 = context[@intFromEnum(arch.Register.a3)];
+    // const a4 = context[@intFromEnum(arch.Register.a4)];
+    // const a5 = context[@intFromEnum(arch.Register.a5)];
+
     // Verbose SBI tracing for early boot diagnostics
-    debug.printf("SBI: ext=0x{x} func={} a0=0x{x} a1=0x{x} a2=0x{x} from vcore {}\n", .{ extension, function, a0, a1, a2, vc.id });
+    debug.printf("SBI: [ENTER] ext=0x{x} func={} a0=0x{x} a1=0x{x} a2=0x{x} from vcore {}\n", .{ extension, function, a0, a1, a2, vc.id });
 
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
@@ -39,11 +43,11 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),
         interface.EXT.LEGACY_CONSOLE_PUTCHAR => {
             const c: u8 = @truncate(a0);
-            debug.putchar(c);
+            debug.putcharFromGuest(vc.guest_id, c);
             setResult(context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_CONSOLE_GETCHAR => {
-            setResult(context, @bitCast(@as(isize, debug.getchar())), 0);
+            setResult(context, @bitCast(@as(isize, debug.getchar(vc.guest_id))), 0);
         },
         interface.EXT.LEGACY_SHUTDOWN => {
             debug.printf("SBI: Guest {} requested shutdown\n", .{vc.guest_id});
@@ -59,10 +63,10 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
     // Trace result for diagnostics
     const res_err = context[@intFromEnum(riscv.Register.a0)];
     const res_val = context[@intFromEnum(riscv.Register.a1)];
-    debug.printf("SBI: Exit ext=0x{x} err=0x{x} val=0x{x}\n", .{ extension, res_err, res_val });
+    debug.printf("SBI: [EXIT]  ext=0x{x} err=0x{x} val=0x{x}\n", .{ extension, res_err, res_val });
 
     // Move guest to the next instruction after ECALL
-    vc.mepc += 4;
+    vc.machine.mepc += 4;
 }
 
 fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize) void {
@@ -94,8 +98,8 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
 }
 
 fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, stime: u64) void {
-    _ = vc;
     _ = function;
+    debug.printf("SBI: Timer set to 0x{x} for guest {}\n", .{ stime, vc.guest_id });
     // Set timer for guest.
     riscv.setTimer(stime);
     setResult(context, SBI_SUCCESS, 0);
@@ -124,7 +128,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 setResult(context, SBI_ERR_FAILED, 0);
                 return;
             };
-            
+
             // Register all child vcores with the scheduler.
             var it_vcore = child.vcores.start;
             while (it_vcore) |node| {
@@ -154,14 +158,14 @@ fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: us
                     setResult(context, interface.ERR_ALREADY_AVAILABLE, 0);
                     return;
                 }
-                target_vc.mepc = start_addr;
+                target_vc.machine.mepc = start_addr;
                 target_vc.context[@intFromEnum(arch.Register.a0)] = target_hart;
                 target_vc.context[@intFromEnum(arch.Register.a1)] = opaque_param;
                 target_vc.state = .ready;
-                
+
                 // Ensure it's in the scheduler
                 scheduler.queue(target_vc);
-                
+
                 setResult(context, SBI_SUCCESS, 0);
                 debug.printf("SBI: HSM Started vcore {} at 0x{x} for guest {}\n", .{ target_hart, start_addr, g.id });
             } else {
@@ -202,7 +206,7 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
                     return;
                 };
                 const c = @as(*u8, @ptrFromInt(hpa)).*;
-                debug.putchar(c);
+                debug.putcharFromGuest(vc.guest_id, c);
                 // Trace character output for diagnostics (uncomment for verbose character logging)
                 // debug.printf("{c}", .{c});
             }
@@ -213,7 +217,7 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
             const gpa = a1; // base_addr_lo
             var read: usize = 0;
             while (read < num_bytes) : (read += 1) {
-                const c = debug.getchar();
+                const c = debug.getchar(vc.guest_id);
                 if (c < 0) break;
                 const hpa = g.space.translateGPA(gpa + read) catch {
                     setResult(context, SBI_ERR_INVALID_ADDRESS, read);
@@ -224,7 +228,7 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
             setResult(context, SBI_SUCCESS, read);
         },
         interface.DBCN.CONSOLE_WRITE_BYTE => {
-            debug.putchar(@truncate(a0));
+            debug.putcharFromGuest(vc.guest_id, @truncate(a0));
             setResult(context, SBI_SUCCESS, 0);
         },
         else => setResult(context, SBI_ERR_NOT_SUPPORTED, 0),
@@ -233,5 +237,5 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
 
 fn setResult(context: *riscv.ThreadContext, err: isize, val: usize) void {
     context[@intFromEnum(arch.Register.a0)] = @bitCast(err); // A0 = error code.
-    context[@intFromEnum(arch.Register.a1)] = val;           // A1 = value.
+    context[@intFromEnum(arch.Register.a1)] = val; // A1 = value.
 }

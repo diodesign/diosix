@@ -36,22 +36,18 @@ pub const VirtualCore = struct {
     // Virtual CPU registers and state.
     context: riscv.ThreadContext,
 
-    // Machine state CSRs (for non-H or for context switching).
-    mepc: usize,
-    mstatus: usize,
+    // Machine and Hypervisor specific architecture state.
+    machine: riscv.MachineState,
 
-    // H-extension state (if available).
-    hstatus: usize,
-    hgatp: usize,
-    hedeleg: usize,
-    hideleg: usize,
-    hvip: usize,
+    // VS-mode state (usually context switched).
+    guest_state: riscv.GuestState,
+
     required_extensions: usize,
 
     // Scheduling data.
     priority: Priority,
     // For CFS-style scheduling.
-    vruntime: u64, 
+    vruntime: u64,
     weight: u32, // For weighting vruntime increments.
 
     // Node for the scheduler's Red-Black Tree.
@@ -65,13 +61,25 @@ pub const VirtualCore = struct {
             .guest_id = parent.id,
             .state = .stopped,
             .context = [_]usize{0} ** 32,
-            .mepc = entry,
-            .mstatus = 0, // TODO: Set appropriate initial mstatus.
-            .hstatus = riscv.HSTATUS.SPV,
-            .hgatp = 0,
-            .hedeleg = 0,
-            .hideleg = 0,
-            .hvip = 0,
+            .machine = .{
+                .mepc = entry,
+                .mstatus = (1 << 11) | riscv.MSTATUS.MPV, // MPP=1 (Supervisor), MPV=1 (Virtualization)
+                .hstatus = riscv.HSTATUS.SPV,
+                .hgatp = 0,
+                .hedeleg = 0xb1f3, // Delegate common exceptions to guest supervisor
+                .hideleg = 0x333, // Delegate common interrupts to guest supervisor
+                .hvip = 0,
+            },
+            .guest_state = .{
+                .vsstatus = 0,
+                .vsie = 0,
+                .vstvec = 0,
+                .vsscratch = 0,
+                .vsepc = 0,
+                .vscause = 0,
+                .vstval = 0,
+                .vsatp = 0,
+            },
             .required_extensions = riscv.IsaExtension.i,
             .priority = priority,
             .vruntime = 0,
@@ -112,7 +120,7 @@ pub const VirtualCore = struct {
         vc.* = self.*;
         vc.guest = child_guest;
         vc.guest_id = child_guest.id;
-        
+
         // Return 0 in the child (A0 is X10).
         vc.context[@intFromEnum(riscv.Register.a0)] = 0;
 

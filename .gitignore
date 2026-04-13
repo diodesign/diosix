@@ -4,3 +4,4 @@ zig-out/
 
 # log text files from debugging
 *.txt
+*.log

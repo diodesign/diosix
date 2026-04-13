@@ -6,6 +6,7 @@
 const std = @import("std");
 const guest = @import("guest.zig");
 const debug = @import("debug.zig");
+const sv39x4 = @import("sv39x4.zig");
 const elf_spec = @import("interface").elf;
 
 pub const LoaderError = error{
@@ -59,7 +60,13 @@ pub const Loader = struct {
                     @memcpy(@as([*]u8, @ptrFromInt(hpa))[0..p_filesz], segment_data);
                 }
                 
-                //     const gpa = ((p_vaddr + p_filesz) & 0xFFFFFFFF);
+                // Map the segment in the guest's address space as RWX as requested.
+                // We use p_memsz to cover the full segment size including BSS.
+                // AddressSpace.map handles page alignment.
+                const rwx_flags = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
+                const hpa_start = try root_vm.space.translateGPA(gpa);
+                try root_vm.space.map(gpa, hpa_start, p_memsz, rwx_flags);
+                
                 // Zero out any remaining memory in the segment (BSS).
                 if (p_memsz > p_filesz) {
                     const bss_gpa = gpa + p_filesz;
@@ -67,7 +74,7 @@ pub const Loader = struct {
                     @memset(@as([*]u8, @ptrFromInt(hpa))[0 .. p_memsz - p_filesz], 0);
                 }
 
-                debug.printf("Loaded ELF segment: VADDR 0x{x} -> GPA 0x{x} ({} bytes)\n", .{ p_vaddr, gpa, p_memsz });
+                debug.printf("Loaded and mapped ELF segment: VADDR 0x{x} -> GPA 0x{x} ({} bytes)\n", .{ p_vaddr, gpa, p_memsz });
             }
         }
 

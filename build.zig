@@ -17,7 +17,7 @@ const SupportedSystem = struct { name: []const u8, linker_script: []const u8, to
 // - a top-level assembly file that imports the assembly code needed by the hypervisor for this system
 // - a command to run the hypervisor in a suitable emulator
 const supported_systems = [_]SupportedSystem{
-    .{ .name = "qemu-virt", .linker_script = "hypervisor/hw/qemu/linker.ld", .top_asm_file = "hypervisor/hw/qemu/top.s", .run_cmd = &.{ "qemu-system-riscv64", "-nographic", "-machine", "virt", "-smp", "4", "-m", "2G", "-bios", "none", "-kernel" } },
+    .{ .name = "qemu-virt", .linker_script = "hypervisor/hw/qemu/linker.ld", .top_asm_file = "hypervisor/hw/qemu/top.s", .run_cmd = &.{ "qemu-system-riscv64", "-nographic", "-machine", "virt", "-cpu", "max,h=true", "-smp", "1", "-m", "2G", "-bios", "none", "-kernel" } },
 };
 
 pub fn build(b: *std.Build) !void {
@@ -28,10 +28,12 @@ pub fn build(b: *std.Build) !void {
     const m: std.Target.riscv.Feature = .m;
     const a: std.Target.riscv.Feature = .a;
     const c: std.Target.riscv.Feature = .c;
+    const h: std.Target.riscv.Feature = .h;
     min_cpu_features.addFeature(@intFromEnum(i));
     min_cpu_features.addFeature(@intFromEnum(m));
     min_cpu_features.addFeature(@intFromEnum(a));
     min_cpu_features.addFeature(@intFromEnum(c));
+    min_cpu_features.addFeature(@intFromEnum(h));
 
     // insist on building for riscv64 targets
     const target = b.standardTargetOptions(.{

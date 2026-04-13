@@ -10,6 +10,7 @@ const physmem = @import("physmem.zig");
 const dsa = @import("dsa.zig");
 const vm_space = @import("vm_space.zig");
 const riscv = @import("riscv.zig");
+const debug = @import("debug.zig");
 
 pub const GuestID = usize;
 
@@ -75,6 +76,8 @@ pub const Guest = struct {
         };
         self.children.init();
         self.vcores.init();
+
+        debug.last_reader_guest_id = id;
 
         if (parent) |p| {
             const node = try allocator.create(dsa.LinkedList(*Guest).Node);
@@ -365,7 +368,7 @@ test "guest creation and vcore management" {
     const vc = try g1.addVcore(100, 0x1000, 0x2000, .high);
     try testing.expectEqual(@as(usize, 100), vc.id);
     try testing.expectEqual(g1.id, vc.guest_id);
-    try testing.expectEqual(@as(usize, 0x1000), vc.mepc);
+    try testing.expectEqual(@as(usize, 0x1000), vc.machine.mepc);
 
     // Check that it was added to the guest's vcore list
     try testing.expect(g1.vcores.start != null);

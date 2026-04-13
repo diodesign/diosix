@@ -29,8 +29,8 @@ const SpinLock = struct {
     // call lock() to acquire the lock, waiting endlessly until it's available
     pub fn lock(self: *SpinLock) void {
         while (self.lock_value.swap(true, ordering.acquire) != false) {
-            // spin until we get the lock
-            hw_pause();
+            // spin until we get the lock. avoid hw_pause (wfi) during early boot
+            // to prevent cores from waiting for interrupts that aren't set up yet.
         }
     }
 

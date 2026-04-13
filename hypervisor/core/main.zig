@@ -40,9 +40,9 @@ const test_rootvm_data = if (builtin.is_test) blk: {
     data[elf_spec.EHDR.ENTRY + 1] = 0x00;
     data[elf_spec.EHDR.ENTRY + 2] = 0x00;
     data[elf_spec.EHDR.ENTRY + 3] = 0x80;
-    data[elf_spec.EHDR.PHOFF] = 64;   // Program header offset
-    data[elf_spec.EHDR.PHENTSIZE] = 56;   // Program header size
-    data[elf_spec.EHDR.PHNUM] = 0;    // Number of program headers
+    data[elf_spec.EHDR.PHOFF] = 64; // Program header offset
+    data[elf_spec.EHDR.PHENTSIZE] = 56; // Program header size
+    data[elf_spec.EHDR.PHNUM] = 0; // Number of program headers
     break :blk data;
 } else {};
 var test_rootvm_start: usize = 0;
@@ -86,7 +86,7 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // Initialize physical memory management.
     // Initialize physical memory management.
     const rootvm_ram_size = if (builtin.is_test) 2 * 1024 * 1024 else 512 * 1024 * 1024;
-    
+
     // In a real boot, we discover regions first, find a gap, then initialize the allocator
     if (!builtin.is_test) {
         try physmem.discoverRegions(device_tree);
@@ -94,6 +94,8 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
     const rootvm_region = try physmem.findContiguousRegion(rootvm_ram_size);
     const rootvm_hpa_base = rootvm_region.base;
+
+    try riscv.verifyHExtension();
 
     if (!builtin.is_test) {
         try physmem.init(device_tree, rootvm_region);
@@ -105,18 +107,18 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     const rootvm_elf_base = if (builtin.is_test) test_rootvm_start else @intFromPtr(&__rootvm_start);
     const rootvm_elf_size = if (builtin.is_test) test_rootvm_end - rootvm_elf_base else @intFromPtr(&__rootvm_end) - rootvm_elf_base;
 
-    // Create the trusted root VM. 
+    // Create the trusted root VM.
     // Guest RAM starts at 0x80000000 (standard for RISC-V Linux).
     const root_vm_gpa_base = 0x80000000;
     const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size);
     system_ctx.?.root_vm = root_vm;
 
-    // Load the root VM ELF and get its entry point.
-    const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size]);
+    // Zero out the entire guest RAM reservation to ensure a clean slate.
+    @memset(@as([*]u8, @ptrFromInt(rootvm_hpa_base))[0..rootvm_ram_size], 0);
 
-    // Pre-map the root VM's initial boot region (first 8MB) into the guest physical space.
-    // The rest will be lazily mapped on demand via the guest space's identity auto-resolution.
-    try root_vm.space.map(root_vm_gpa_base, rootvm_hpa_base, 8 * 1024 * 1024, sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user);
+    // Load the root VM ELF and get its entry point.
+    // ELF segments are mapped as RWX inside Loader.load().
+    const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size]);
 
     // Generate a guest DTB from the host device tree.
     // Tailor it for the Root VM: 512MB RAM and 2 virtual CPUs.
@@ -141,16 +143,20 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     const guest_dtb = try device_tree.toBlob();
     defer cpu_allocator.free(guest_dtb);
 
-    // Copy guest DTB into guest RAM (at 1MB after base).
-    const guest_dtb_gpa = root_vm_gpa_base + 1024 * 1024;
+    // Provide a devicetree for the guest.
+    // Place it 1MB from the end of the guest's physical RAM reservation.
+    const guest_dtb_gpa = root_vm_gpa_base + rootvm_ram_size - 1024 * 1024;
     const guest_dtb_hpa = try root_vm.space.translateGPA(guest_dtb_gpa);
     @memcpy(@as([*]u8, @ptrFromInt(guest_dtb_hpa))[0..guest_dtb.len], guest_dtb);
+
+    // Map the DTB area as RWX explicitly. The rest of the 512MB RAM will be demand-paged.
+    try root_vm.space.map(guest_dtb_gpa, guest_dtb_hpa, guest_dtb.len, sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user);
 
     debug.printf("Found root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_elf_base, rootvm_elf_size, entry_point });
 
     // Create virtual cores for the root VM matching host count.
     // Ensure we start at the PHYSICAL entry point (masking high virtual address bits).
-    const physical_entry = entry_point & 0xFFFFFFFF;
+    const physical_entry = entry_point & 0x00000000FFFFFFFF;
     for (0..cpu_count) |i| {
         const vc = try root_vm.addVcore(i, physical_entry, guest_dtb_gpa, .high);
         // Core 0 starts executing immediately; others wait for HSM Start.
@@ -163,28 +169,34 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 // dtb = pointer to host system's device tree in memory.
 // Returns to an infinite loop.
 pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
+    // 1. Basic hardware/architectural setup. No locks or complex structures yet.
     hw_pmp_init();
-    scheduler.initCpu();
-    if (builtin.is_test) return;
+
+    // Delegate all exceptions/interrupts to S-mode (HS-mode) where possible.
+    if (riscv.hasHExtension()) {
+        riscv.writeMedeleg(0xb1f3);
+        riscv.writeMideleg(0x222); // SSIP, STIP, SEIP
+    }
+
     const cpu_ctx = riscv.getCPUContext();
     cpu_ctx.cpu_core_id = cpu_core_id;
 
-    cpu_ctx.allocator.init(riscv.getCPUHeapBase(), riscv.getCPUHeapSize()) catch {
-        debug.printf("CPU core ID {} failed to initialize its heap allocator\n", .{cpu_core_id});
-        return;
-    };
+    // 2. Initialize the heap allocator for this core.
+    cpu_ctx.allocator.init(riscv.getCPUHeapBase(), riscv.getCPUHeapSize()) catch return;
     const allocator = cpu_ctx.allocator.allocator();
 
+    // 3. Initialize interrupts and the scheduler.
     xint.init();
     scheduler.initCpu();
 
     switch (cpu_core_id) {
         BootCpuID => {
             bootCpuInit(allocator, dtb) catch |err| {
-                debug.printf("Boot CPU failed to initialize, reason: {s}\n", .{@errorName(err)});
+                debug.printf("Boot CPU core {} failed to initialize, reason: {s}\n", .{ cpu_core_id, @errorName(err) });
                 return;
             };
 
+            debug.printf("Boot CPU core {} finished initialization, releasing other cores\n", .{cpu_core_id});
             const boot_flag_ptr: *volatile bool = &boot_complete_flag;
             boot_flag_ptr.* = true;
             riscv.fence();
@@ -202,21 +214,19 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     while (true) {
         scheduler.schedule();
 
-        // If scheduling picked a vcore, jump into it. 
-        // Once inside the guest, interrupts will drive future scheduling.
         if (pcore.this().active_vcore) |ptr| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
-            
-            // Set up guest machine state: switch to supervisor mode on mret.
-            const mstatus = (riscv.readMstatus() & ~@as(usize, riscv.MSTATUS.MPP_MASK)) | 
-                            (@as(usize, @intFromEnum(riscv.PrivilegeMode.supervisor)) << riscv.MSTATUS.MPP_SHIFT) |
-                            riscv.MSTATUS.MPV;
 
-            // Generate hgatp for guest physical address translation if H-extension is active.
-            const hgatp = if (vc.guest.space.mode == .h_paging) vc.guest.space.paging.?.hgatp(vc.guest.vmid) else 0;
+            // Ensure machine state has latest hgatp if H-extension is active.
+            if (vc.guest.space.mode == .h_paging) {
+                const hgatp_val = vc.guest.space.paging.?.hgatp(vc.guest.vmid);
+                if (vc.machine.hgatp != hgatp_val) {
+                    debug.printf("CPU {}: Updating guest={} hgatp to 0x{x}\n", .{pcore.this().cpu_core_id, vc.guest_id, hgatp_val});
+                    vc.machine.hgatp = hgatp_val;
+                }
+            }
 
-            debug.printf("Core {} entering guest at GPA 0x{x}\n", .{pcore.this().cpu_core_id, vc.mepc});
-            pcore.hw_run_vcore(&vc.context, vc.mepc, mstatus, vc.hstatus, hgatp);
+            pcore.hw_run_vcore(&vc.context, &vc.machine, &vc.guest_state);
         }
 
         // We only get here if no vcores were available to run.

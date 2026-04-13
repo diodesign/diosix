@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const alloc = @import("alloc.zig");
 const dsa = @import("dsa.zig");
+const debug = @import("debug.zig");
 const interface = @import("interface").riscv;
 
 pub const Register = interface.Register;
@@ -15,7 +16,17 @@ pub const IsaExtension = interface.IsaExtension;
 pub const Cause = interface.Cause;
 pub const MSTATUS = interface.MSTATUS;
 pub const SSTATUS = interface.SSTATUS;
-pub const HSTATUS = interface.HSTATUS;
+pub const HSTATUS = struct {
+    pub const GVA: usize = 1 << 6;
+    pub const SPV: usize = 1 << 7;
+    pub const SPVP: usize = 1 << 8;
+    pub const HU: usize = 1 << 9;
+    pub const VGEIN_MASK: usize = 0x3f << 12;
+    pub const VGEIN_SHIFT: usize = 12;
+    pub const VTVM: usize = 1 << 20;
+    pub const VTW: usize = 1 << 21;
+    pub const VTSR: usize = 1 << 22;
+};
 pub const HVIP = interface.HVIP;
 pub const toCause = interface.toCause;
 
@@ -99,6 +110,29 @@ pub const CpuContext = struct {
     run_queue_count: usize,
 
     trap_count: usize,
+};
+
+// Machine and Hypervisor specific architecture state
+pub const MachineState = struct {
+    mepc: usize,
+    mstatus: usize,
+    hstatus: usize,
+    hgatp: usize,
+    hvip: usize,
+    hedeleg: usize,
+    hideleg: usize,
+};
+
+// VS-mode (Guest Supervisor) architecture state
+pub const GuestState = struct {
+    vsstatus: usize,
+    vsie: usize,
+    vstvec: usize,
+    vsscratch: usize,
+    vsepc: usize,
+    vscause: usize,
+    vstval: usize,
+    vsatp: usize,
 };
 
 // Return a pointer to the CPU context for the core running this thread.
@@ -305,6 +339,92 @@ pub inline fn writeHideleg(val: usize) void {
     );
 }
 
+pub inline fn readMedeleg() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], medeleg"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeMedeleg(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw medeleg, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readMideleg() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], mideleg"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeMideleg(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw mideleg, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn hlv_w(ptr: usize) u32 {
+    var val: u32 = 0;
+    asm volatile (
+        \\ .attribute arch, "rv64gc_zicsr_h"
+        \\ hlv.w %[val], (%[ptr])
+        : [val] "=r" (val)
+        : [ptr] "r" (ptr)
+    );
+    return val;
+}
+
+pub inline fn hlv_wu(ptr: usize) u32 {
+    var val: u32 = 0;
+    asm volatile (
+        \\ .attribute arch, "rv64gc_zicsr_h"
+        \\ hlv.wu %[val], (%[ptr])
+        : [val] "=r" (val)
+        : [ptr] "r" (ptr)
+    );
+    return val;
+}
+
+pub inline fn hlv_hu(ptr: usize) u16 {
+    var val: u16 = 0;
+    asm volatile (
+        \\ .attribute arch, "rv64gc_zicsr_h"
+        \\ hlv.hu %[val], (%[ptr])
+        : [val] "=r" (val)
+        : [ptr] "r" (ptr)
+    );
+    return val;
+}
+
+pub inline fn hlv_bu(ptr: usize) u8 {
+    var val: u8 = 0;
+    asm volatile (
+        \\ .attribute arch, "rv64gc_zicsr_h"
+        \\ hlv.bu %[val], (%[ptr])
+        : [val] "=r" (val)
+        : [ptr] "r" (ptr)
+    );
+    return val;
+}
+
+pub inline fn hlv_d(ptr: usize) u64 {
+    var val: u64 = 0;
+    asm volatile (
+        \\ .attribute arch, "rv64gc_zicsr_h"
+        \\ hlv.d %[val], (%[ptr])
+        : [val] "=r" (val)
+        : [ptr] "r" (ptr)
+    );
+    return val;
+}
+
+
 pub inline fn readHtval() usize {
     if (is_test) return 0;
     return asm volatile ("csrr %[ret], htval"
@@ -318,6 +438,46 @@ pub inline fn readHtinst() usize {
         : [ret] "=r" (-> usize),
     );
 }
+
+pub inline fn readMtval2() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], 0x344"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn readMtinst() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], 0x34a"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub fn verifyHExtension() !void {
+    if (is_test) return;
+    
+    // Test 1: hgatp persistence
+    const val_hgatp: u64 = (8 << 60) | (1 << 44) | 0x82edc;
+    writeHgatp(val_hgatp);
+    const read_hgatp = readHgatp();
+    if (read_hgatp != val_hgatp) {
+        debug.printf("[HV] CRITICAL: hgatp write failure. Wrote 0x{x}, read back 0x{x}\n", .{val_hgatp, read_hgatp});
+        return error.HardwareIncompatible;
+    }
+
+    // Test 2: mstatus.MPV persistence
+    const initial_mstatus = readMstatus();
+    writeMstatus(initial_mstatus | MSTATUS.MPV);
+    const mstatus_with_v = readMstatus();
+    writeMstatus(initial_mstatus); // Restore
+    if ((mstatus_with_v & MSTATUS.MPV) == 0) {
+        debug.printf("[HV] CRITICAL: mstatus.MPV write failure. H-extension disabled or broken?\n", .{});
+        return error.HardwareIncompatible;
+    }
+    
+    debug.printf("[HV] H-extension architectural audit PASSED\n", .{});
+}
+
 
 pub fn setTimer(stime: u64) void {
     if (is_test) return;
@@ -337,6 +497,88 @@ pub inline fn writeHvip(val: usize) void {
         :
         : [val] "r" (val),
     );
+}
+
+// ---- VS-mode (Guest Supervisor) CSRs ----
+
+pub inline fn readVsstatus() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vsstatus" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVsstatus(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vsstatus, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readVsie() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vsie" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVsie(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vsie, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readVstvec() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vstvec" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVstvec(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vstvec, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readVsscratch() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vsscratch" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVsscratch(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vsscratch, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readVsepc() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vsepc" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVsepc(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vsepc, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readVscause() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vscause" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVscause(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vscause, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readVstval() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vstval" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVstval(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vstval, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readVsatp() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vsatp" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVsatp(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vsatp, %[val]" : : [val] "r" (val));
 }
 
 // Reboot the host machine.

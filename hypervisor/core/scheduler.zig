@@ -73,6 +73,10 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
     const misa = riscv.readMisa();
 
+    debug.raw_puts("PC ");
+    debug.raw_putchar(@as(u8, @intCast(pc.cpu_core_id)) + '0');
+    debug.raw_puts(": Pick\n");
+
     // 1. Try to pick from the local run queue first
     var it = pc.run_queue.findMin();
     while (it) |node| {
@@ -88,7 +92,13 @@ pub fn pickNext() ?*vcore.VirtualCore {
     }
 
     // 2. Local queue is empty or incompatible, try to pull from the global queue
+    debug.raw_puts("PC ");
+    debug.raw_putchar(@as(u8, @intCast(pc.cpu_core_id)) + '0');
+    debug.raw_puts(": GLock\n");
     global_scheduler.lock.lock();
+    debug.raw_puts("PC ");
+    debug.raw_putchar(@as(u8, @intCast(pc.cpu_core_id)) + '0');
+    debug.raw_puts(": GAcq\n");
     defer global_scheduler.lock.unlock();
 
     var g_it = global_scheduler.run_queue.findMin();
@@ -138,11 +148,21 @@ pub fn schedule() void {
     }
 
     if (pickNext()) |next_vc| {
+        debug.raw_puts("CPU ");
+        debug.raw_putchar(@as(u8, @intCast(pc.cpu_core_id)) + '0');
+        debug.raw_puts(": Run guest=");
+        debug.raw_puthex(next_vc.guest_id);
+        debug.raw_puts(" vcore=");
+        debug.raw_puthex(next_vc.id);
+        debug.raw_putchar('\n');
+        
         pcore.contextSwitch(next_vc);
     } else {
         // Nothing to run.
-        // In a real system we might enter a low-power state or run housekeeping.
-        // debug.printf("CPU {}: Idle\n", .{pc.cpu_core_id});
+        if (pc.cpu_core_id == 0 and pc.trap_count < 1) {
+            debug.raw_puts("CPU 0: Idle\n");
+            pc.trap_count += 1;
+        }
     }
 }
 

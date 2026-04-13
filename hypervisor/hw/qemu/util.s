@@ -68,71 +68,93 @@ hw_set_timer:
 
 # load all registers from the given context and mret to the guest
 # a0 = pointer to ThreadContext [32]usize
-# a1 = mepc
-# a2 = mstatus
-# a3 = hstatus
-# a4 = hgatp
+# a1 = pointer to MachineState
+# a2 = pointer to GuestState
 hw_run_vcore:
-  # set machine state CSRs for the guest
-  csrw mepc, a1
-  csrw mstatus, a2
+  ld t0, 0(a1)      # mepc
+  csrw mepc, t0
+  ld t0, 8(a1)      # mstatus
+  csrw mstatus, t0
 
-  # set H-extension CSRs if this machine supports them
-  # (assuming it does if these were passed)
-  beqz a4, hw_run_vcore_no_h
-  csrw hstatus, a3
-  csrw hgatp, a4
-  # Flush any stale G-stage TLB entries to ensure guest isolation
+  # set H-extension CSRs if H-paging is enabled (hgatp != 0)
+  ld t1, 24(a1)     # hgatp
+  beqz t1, hw_run_vcore_no_h
+  ld t0, 16(a1)     # hstatus
+  csrw hstatus, t0
+  csrw hgatp, t1
+  ld t0, 32(a1)     # hvip
+  csrw hvip, t0
+  ld t0, 40(a1)     # hedeleg
+  csrw hedeleg, t0
+  ld t0, 48(a1)     # hideleg
+  csrw hideleg, t0
+  
+  # set VS-mode CSRs from a2
+  ld t0, 0(a2)      # vsstatus
+  csrw vsstatus, t0
+  ld t0, 8(a2)      # vsie
+  csrw vsie, t0
+  ld t0, 16(a2)     # vstvec
+  csrw vstvec, t0
+  ld t0, 24(a2)     # vsscratch
+  csrw vsscratch, t0
+  ld t0, 32(a2)     # vsepc
+  csrw vsepc, t0
+  ld t0, 40(a2)     # vscause
+  csrw vscause, t0
+  ld t0, 48(a2)     # vstval
+  csrw vstval, t0
+  ld t0, 56(a2)     # vsatp
+  csrw vsatp, t0
+
+  # Flush any stale G-stage TLB entries
   hfence.gvma
 
 hw_run_vcore_no_h:
-  # use t0 (x5) as temporary base pointer
-  mv t0, a0
-
-  # restore ra (x1)
-  ld x1, 8(t0)
-  # restore sp (x2) - handled last
+  # use a0 as temporary base pointer for GPR restoration
+  # load all registers, skipping zero (x0) and sp (x2)
+  ld x1, 8(a0)
   # restore gp (x3), tp (x4)
-  ld x3, 24(t0)
-  ld x4, 32(t0)
-  # restore x5 (t0) - handled last
-  # restore x6 (t1) to x9 (s1)
-  ld x6, 48(t0)
-  ld x7, 56(t0)
-  ld x8, 64(t0)
-  ld x9, 72(t0)
-  # restore a0 (x10) - handled later
+  ld x3, 24(a0)
+  ld x4, 32(a0)
+  # x5 (t0) - handled later
+  # x6 (t1) - handled later
+  # x7 (t2) to x9 (s1)
+  ld x7, 56(a0)
+  ld x8, 64(a0)
+  ld x9, 72(a0)
   # restore a1 (x11) to a7 (x17)
-  ld x11, 88(t0)
-  ld x12, 96(t0)
-  ld x13, 104(t0)
-  ld x14, 112(t0)
-  ld x15, 120(t0)
-  ld x16, 128(t0)
-  ld x17, 136(t0)
+  ld x11, 88(a0)
+  ld x12, 96(a0)
+  ld x13, 104(a0)
+  ld x14, 112(a0)
+  ld x15, 120(a0)
+  ld x16, 128(a0)
+  ld x17, 136(a0)
   # restore s2 (x18) to s11 (x27)
-  ld x18, 144(t0)
-  ld x19, 152(t0)
-  ld x20, 160(t0)
-  ld x21, 168(t0)
-  ld x22, 176(t0)
-  ld x23, 184(t0)
-  ld x24, 192(t0)
-  ld x25, 200(t0)
-  ld x26, 208(t0)
-  ld x27, 216(t0)
+  ld x18, 144(a0)
+  ld x19, 152(a0)
+  ld x20, 160(a0)
+  ld x21, 168(a0)
+  ld x22, 176(a0)
+  ld x23, 184(a0)
+  ld x24, 192(a0)
+  ld x25, 200(a0)
+  ld x26, 208(a0)
+  ld x27, 216(a0)
   # restore t3 (x28) to t6 (x31)
-  ld x28, 224(t0)
-  ld x29, 232(t0)
-  ld x30, 240(t0)
-  ld x31, 248(t0)
+  ld x28, 224(a0)
+  ld x29, 232(a0)
+  ld x30, 240(a0)
+  ld x31, 248(a0)
 
-  # restore a0 (x10)
-  ld x10, 80(t0)
-
-  # finally restore sp (x2) and then t0 (x5)
-  ld sp, 16(t0)
-  ld x5, 40(t0)
+  # restore remaining temporaries and sp
+  ld x5, 40(a0)   # t0
+  ld x6, 48(a0)   # t1
+  ld x2, 16(a0)   # sp
+  
+  # finally restore a0 (x10) last
+  ld x10, 80(a0)
   
   mret
 
