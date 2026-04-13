@@ -112,6 +112,9 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
             @memcpy(&vc.context, context);
             vc.mepc = irq.pc;
+            if (riscv.hasHExtension()) {
+                vc.hvip = riscv.readHvip();
+            }
         }
     }
 
@@ -142,22 +145,26 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
             // Some implementations might use 21 (unknown) for other guest faults.
             // Only handle as fault if it's within the known guest fault range or matches unknown.
             if (@intFromEnum(irq.cause) == 21 or irq.irq_type == .exception) {
-            const pcpu = pcore.this();
-            if (pcpu.active_vcore) |vc_raw| {
-                const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                const htval = riscv.readHtval();
-                const gpa = if (htval == 0) irq.val else htval; // Fallback to mtval if htval is zero
-                const g = vc.getGuest();
-                g.space.handleFault(vc, gpa, @intFromEnum(irq.cause)) catch |err| {
-                    debug.printf("Fault: GPA 0x{x} resolution failed: {s}\n", .{gpa, @errorName(err)});
-                    fatal_exception(irq);
-                };
-            }
+                const pcpu = pcore.this();
+                if (pcpu.active_vcore) |vc_raw| {
+                    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+                    const htval = riscv.readHtval();
+                    const gpa = if (htval == 0) irq.val else htval; // Fallback to mtval if htval is zero
+                    const g = vc.getGuest();
+                    g.space.handleFault(vc, gpa, @intFromEnum(irq.cause)) catch |err| {
+                        debug.printf("Fault: GPA 0x{x} resolution failed: {s}\n", .{gpa, @errorName(err)});
+                        fatal_exception(irq);
+                    };
+                }
             }
         },
         else => {
-            if (irq.severity == .fatal) {
-                fatal_exception(irq);
+            if (irq.irq_type == .exception) {
+                const pcpu = pcore.this();
+                debug.printf("Guest Exception: core={} pc=0x{x} cause={s} (0x{x}) val=0x{x}\n", .{pcpu.cpu_core_id, irq.pc, @tagName(irq.cause), @intFromEnum(irq.cause), irq.val});
+                if (irq.severity == .fatal) {
+                    fatal_exception(irq);
+                }
             }
         },
     }
@@ -165,9 +172,22 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
 
 fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
     _ = context;
-    // Clear/acknowledge the interrupt condition.
-    // TODO: Implement acknowledge().
-    debug.printf("Unhandled interrupt: 0x{x}\n", .{@intFromEnum(irq.cause)});
+    const pcpu = pcore.this();
+ 
+    switch (irq.cause) {
+        .machine_timer => {
+            if (pcpu.active_vcore) |vc_raw| {
+                const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+                vc.hvip |= riscv.HVIP.VSTIP;
+            }
+            // Clear hardware timer condition by setting it far into the future 
+            // until the guest (or hypervisor) sets a new one.
+            riscv.setTimer(0xffffffffffffffff);
+        },
+        else => {
+            debug.printf("Unhandled interrupt: 0x{x}\n", .{@intFromEnum(irq.cause)});
+        },
+    }
 }
 
 fn fatal_exception(irq: IRQ) void {

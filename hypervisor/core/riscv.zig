@@ -16,6 +16,7 @@ pub const Cause = interface.Cause;
 pub const MSTATUS = interface.MSTATUS;
 pub const SSTATUS = interface.SSTATUS;
 pub const HSTATUS = interface.HSTATUS;
+pub const HVIP = interface.HVIP;
 pub const toCause = interface.toCause;
 
 const is_test = builtin.is_test;
@@ -231,7 +232,6 @@ pub fn hasHExtension() bool {
     return (misa & IsaExtension.h) != 0;
 }
 
-// Return the privilege level of the code running before we entered the machine level.
 pub fn getPreviousPrivilege() PrivilegeMode {
     const mstatus = readMstatus();
     return @enumFromInt((mstatus & MSTATUS.MPP_MASK) >> MSTATUS.MPP_SHIFT);
@@ -322,6 +322,21 @@ pub inline fn readHtinst() usize {
 pub fn setTimer(stime: u64) void {
     if (is_test) return;
     hw_set_timer(stime);
+}
+ 
+pub inline fn readHvip() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], hvip"
+        : [ret] "=r" (-> usize),
+    );
+}
+ 
+pub inline fn writeHvip(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw hvip, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 // Reboot the host machine.

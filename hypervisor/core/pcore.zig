@@ -49,5 +49,6 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
         riscv.writeHstatus(to_vcore.hstatus);
         riscv.writeHedeleg(to_vcore.hedeleg);
         riscv.writeHideleg(to_vcore.hideleg);
+        riscv.writeHvip(to_vcore.hvip);
     }
 }

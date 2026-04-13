@@ -19,7 +19,7 @@ pub const ERR_ALREADY_AVAILABLE: isize = -6;
 // SBI Extension IDs
 pub const EXT = struct {
     pub const BASE = 0x10;
-    pub const TIMER = 0x54494d45;
+    pub const TIME = 0x54494d45;
     pub const RFENCE = 0x52464e43;
     pub const HSM = 0x48534d;
     pub const SRST = 0x53525354;

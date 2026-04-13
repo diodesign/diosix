@@ -78,6 +78,12 @@ pub const HSTATUS = struct {
     pub const SPV = 1 << 7;
     pub const SPVP = 1 << 8;
 };
+ 
+pub const HVIP = struct {
+    pub const VSSIP = 1 << 2;
+    pub const VSTIP = 1 << 10;
+    pub const VSEIP = 1 << 12;
+};
 
 pub const Cause = enum(usize) {
     // Exceptions

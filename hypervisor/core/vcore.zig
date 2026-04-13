@@ -45,6 +45,7 @@ pub const VirtualCore = struct {
     hgatp: usize,
     hedeleg: usize,
     hideleg: usize,
+    hvip: usize,
     required_extensions: usize,
 
     // Scheduling data.
@@ -70,6 +71,7 @@ pub const VirtualCore = struct {
             .hgatp = 0,
             .hedeleg = 0,
             .hideleg = 0,
+            .hvip = 0,
             .required_extensions = riscv.IsaExtension.i,
             .priority = priority,
             .vruntime = 0,

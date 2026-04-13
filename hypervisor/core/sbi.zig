@@ -33,9 +33,10 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
 
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
-        interface.EXT.TIMER, interface.EXT.LEGACY_SET_TIMER => handleTimer(vc, context, function, a0),
+        interface.EXT.TIME, interface.EXT.LEGACY_SET_TIMER => handleTimer(vc, context, function, a0),
         interface.EXT.SRST => handleSystemReset(vc, context, function, a0, a1),
         interface.EXT.HSM => handleHSM(vc, context, function, a0, a1, a2),
+        interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),
         interface.EXT.LEGACY_CONSOLE_PUTCHAR => {
             const c: u8 = @truncate(a0);
             debug.putchar(c);
@@ -44,7 +45,6 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.LEGACY_CONSOLE_GETCHAR => {
             setResult(context, @bitCast(@as(isize, debug.getchar())), 0);
         },
-        interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),
         interface.EXT.LEGACY_SHUTDOWN => {
             debug.printf("SBI: Guest {} requested shutdown\n", .{vc.guest_id});
             vc.getGuest().terminate();
@@ -55,6 +55,11 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             setResult(context, SBI_ERR_NOT_SUPPORTED, 0);
         },
     }
+
+    // Trace result for diagnostics
+    const res_err = context[@intFromEnum(riscv.Register.a0)];
+    const res_val = context[@intFromEnum(riscv.Register.a1)];
+    debug.printf("SBI: Exit ext=0x{x} err=0x{x} val=0x{x}\n", .{ extension, res_err, res_val });
 
     // Move guest to the next instruction after ECALL
     vc.mepc += 4;
@@ -70,7 +75,7 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
             const ext = context[@intFromEnum(arch.Register.a0)];
             const supported: usize = switch (ext) {
                 interface.EXT.BASE,
-                interface.EXT.TIMER,
+                interface.EXT.TIME,
                 interface.EXT.SRST,
                 interface.EXT.DBCN,
                 interface.EXT.DIOSIX,

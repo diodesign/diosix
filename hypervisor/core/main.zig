@@ -49,7 +49,7 @@ var test_rootvm_start: usize = 0;
 var test_rootvm_end: usize = 0;
 
 const BootCpuID: usize = 0; // CPU ID 0 does all the heavy lifting to begin with.
-var boot_complete_flag = std.atomic.Value(bool).init(false); // True when all cores can begin running vCPU threads.
+export var boot_complete_flag: bool = false; // True when all cores can begin running vCPU threads.
 
 // Global hypervisor state and resources - system_ctx_lock must be acquired before accessing post-boot.
 const SystemContext = struct {
@@ -114,9 +114,9 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // Load the root VM ELF and get its entry point.
     const entry_point = try loader.Loader.load(root_vm, @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size]);
 
-    // Pre-map the root VM's entry region (first 2MB) into the guest physical space.
-    // This avoids an immediate guest page fault during the first fetch.
-    try root_vm.space.map(root_vm_gpa_base, rootvm_hpa_base, 2 * 1024 * 1024, sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user);
+    // Pre-map the root VM's initial boot region (first 8MB) into the guest physical space.
+    // The rest will be lazily mapped on demand via the guest space's identity auto-resolution.
+    try root_vm.space.map(root_vm_gpa_base, rootvm_hpa_base, 8 * 1024 * 1024, sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user);
 
     // Generate a guest DTB from the host device tree.
     // Tailor it for the Root VM: 512MB RAM and 2 virtual CPUs.
@@ -130,9 +130,12 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     const cpu_count = device_tree.countCpus();
     debug.printf("PhysMem: Provisioning Root VM with {} virtual CPUs\n", .{cpu_count});
 
-    // Inject boot arguments into the guest DTB to ensure it uses the SBI console
+    // Inject boot arguments and console path into the guest DTB to ensure it uses the SBI console
     device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, "console=hvc0 earlycon=sbi")) catch |err| {
         debug.printf("Warning: Failed to inject bootargs into guest DTB: {s}\n", .{@errorName(err)});
+    };
+    device_tree.editProperty("/chosen", "stdout-path", try dt.DeviceTreeProperty.fromText(cpu_allocator, "serial0:115200n8")) catch |err| {
+        debug.printf("Warning: Failed to inject stdout-path into guest DTB: {s}\n", .{@errorName(err)});
     };
 
     const guest_dtb = try device_tree.toBlob();
@@ -179,22 +182,23 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         BootCpuID => {
             bootCpuInit(allocator, dtb) catch |err| {
                 debug.printf("Boot CPU failed to initialize, reason: {s}\n", .{@errorName(err)});
-                // In a real scenario, we might halt or panic here.
-                // For now, we just stop this core.
                 return;
             };
 
-            boot_complete_flag.store(true, .seq_cst);
+            const boot_flag_ptr: *volatile bool = &boot_complete_flag;
+            boot_flag_ptr.* = true;
+            riscv.fence();
         },
 
         else => {
-            while (boot_complete_flag.load(.seq_cst) == false) {
+            const boot_flag_ptr: *volatile bool = &boot_complete_flag;
+            while (boot_flag_ptr.* == false) {
                 riscv.fence();
             }
         },
     }
 
-    debug.printf("CPU core ID {} entering scheduling loop...\n", .{cpu_core_id});
+    debug.printf("CPU core ID {} entering scheduling loop\n", .{cpu_core_id});
     while (true) {
         scheduler.schedule();
 
