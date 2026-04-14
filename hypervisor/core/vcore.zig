@@ -147,7 +147,7 @@ test "virtual core initialization" {
 
     try testing.expectEqual(id, vc.id);
     try testing.expectEqual(parent.id, vc.guest_id);
-    try testing.expectEqual(entry, vc.mepc);
+    try testing.expectEqual(entry, vc.machine.mepc);
     try testing.expectEqual(dtb, vc.context[@intFromEnum(riscv.Register.a1)]); // a1
     try testing.expectEqual(id, vc.context[@intFromEnum(riscv.Register.a0)]); // a0
     try testing.expectEqual(@as(u32, 1024), vc.weight);

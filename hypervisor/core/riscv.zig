@@ -65,17 +65,31 @@ extern fn hw_shutdown() void;
 extern fn hw_pause() void;
 extern fn hw_pmp_init() void;
 
-// Provide mock symbols for hw_putchar and hw_pause when testing
-// so that debug output is silently discarded by the test harness.
+// Provide mock symbols for hardware functions when testing
 fn hw_putchar_mock(_: u8) callconv(.c) void {}
 fn hw_pause_mock() callconv(.c) void {}
 fn hw_pmp_init_mock() callconv(.c) void {}
+fn hw_reboot_mock() callconv(.c) void {}
+fn hw_shutdown_mock() callconv(.c) void {}
+fn hw_set_timer_mock(_: u64) callconv(.c) void {}
+fn hw_xint_init_mock() callconv(.c) void {}
+fn hw_run_vcore_mock(_: *ThreadContext, _: *const MachineState, _: *const GuestState) callconv(.c) noreturn {
+    while (true) {}
+}
 
 comptime {
     if (is_test) {
         @export(&hw_putchar_mock, .{ .name = "hw_putchar", .linkage = .strong });
         @export(&hw_pause_mock, .{ .name = "hw_pause", .linkage = .strong });
         @export(&hw_pmp_init_mock, .{ .name = "hw_pmp_init", .linkage = .strong });
+        @export(&hw_reboot_mock, .{ .name = "hw_reboot", .linkage = .strong });
+        @export(&hw_shutdown_mock, .{ .name = "hw_shutdown", .linkage = .strong });
+        @export(&hw_set_timer_mock, .{ .name = "hw_set_timer", .linkage = .strong });
+        @export(&hw_private_variables_mock, .{ .name = "hw_private_variables", .linkage = .strong });
+        @export(&hw_heap_base_mock, .{ .name = "hw_heap_base", .linkage = .strong });
+        @export(&hw_heap_size_mock, .{ .name = "hw_heap_size", .linkage = .strong });
+        @export(&hw_xint_init_mock, .{ .name = "hw_xint_init", .linkage = .strong });
+        @export(&hw_run_vcore_mock, .{ .name = "hw_run_vcore", .linkage = .strong });
     }
 }
 
@@ -91,6 +105,26 @@ pub export fn hw_heap_base_mock() usize {
 }
 pub export fn hw_heap_size_mock() usize {
     return test_heap.len;
+}
+
+pub fn initMockHardware() void {
+    if (!is_test) return;
+    test_cpu_ctx.cpu_core_id = 0;
+    test_cpu_ctx.active_vcore = null;
+    test_cpu_ctx.trap_count = 0;
+    test_cpu_ctx.last_trap_pc = 0;
+    test_cpu_ctx.trap_loop_count = 0;
+    test_cpu_ctx.run_queue_count = 0;
+    test_cpu_ctx.run_queue.init();
+
+    test_mstatus = 0;
+    test_mcause = 0;
+    test_mepc = 0;
+    test_mtval = 0;
+    test_misa = MISA_MXL_64 | IsaExtension.h | IsaExtension.gc;
+    test_hstatus = 0;
+    test_hgatp = 0;
+    @memset(&test_heap,0);
 }
 
 // Each thread context is the contents of its 32 general purpose CPU registers.
@@ -110,6 +144,10 @@ pub const CpuContext = struct {
     run_queue_count: usize,
 
     trap_count: usize,
+    
+    // Aegis: Trap loop detection fields
+    last_trap_pc: usize,
+    trap_loop_count: usize,
 };
 
 // Machine and Hypervisor specific architecture state

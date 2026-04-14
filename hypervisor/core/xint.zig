@@ -89,6 +89,18 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     }
 
     const cpu = pcore.this();
+    if (cpu.last_trap_pc == irq.pc) {
+        cpu.trap_loop_count += 1;
+        if (cpu.trap_loop_count > 2) {
+            debug.printf("!!! LOOP DETECTED on Core {}: pc=0x{x} cause={s} count={}\n", .{
+                cpu.cpu_core_id, irq.pc, @tagName(irq.cause), cpu.trap_loop_count
+            });
+        }
+    } else {
+        cpu.last_trap_pc = irq.pc;
+        cpu.trap_loop_count = 0;
+    }
+
     if (cpu.trap_count < MAX_TRAP_LOGS) {
         // Always log non-page-fault exceptions, and only log page faults if we haven't hit the limit
         const is_page_fault = switch (irq.cause) {
@@ -128,13 +140,26 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             const vsatp = riscv.readVsatp();
             const htval = riscv.readHtval();
             const mstatus = riscv.readMstatus();
-            debug.printf("[HV] State: hgatp=0x{x} hstatus=0x{x} vsatp=0x{x} mstatus=0x{x} htval=0x{x}\n", .{ hgatp, hstatus, vsatp, mstatus, htval });
-            debug.printf("[HV] Virtualization: MPV={} GVA={} SPV={} SPVP={}\n", .{ 
+            const hvip = if (riscv.hasHExtension()) riscv.readHvip() else 0;
+            const mideleg = if (riscv.hasHExtension()) riscv.readMideleg() else 0;
+            const medeleg = if (riscv.hasHExtension()) riscv.readMedeleg() else 0;
+
+            debug.printf("[HV] State: hgatp=0x{x} hstatus=0x{x} vsatp=0x{x} mstatus=0x{x} htval=0x{x} hvip=0x{x}\n", .{ hgatp, hstatus, vsatp, mstatus, htval, hvip });
+            debug.printf("[HV] Virtualization: MPV={} GVA={} SPV={} SPVP={} mideleg=0x{x} medeleg=0x{x}\n", .{ 
                 (mstatus & riscv.MSTATUS.MPV) != 0,
                 (hstatus & riscv.HSTATUS.GVA) != 0,
                 (hstatus & riscv.HSTATUS.SPV) != 0,
-                (hstatus & riscv.HSTATUS.SPVP) != 0
+                (hstatus & riscv.HSTATUS.SPVP) != 0,
+                mideleg,
+                medeleg
             });
+            
+            if (riscv.hasHExtension()) {
+                const vstvec = riscv.readVstvec();
+                const vscause = riscv.readVscause();
+                const vsie = riscv.readVsie();
+                debug.printf("[HV] Guest: vstvec=0x{x} vscause=0x{x} vsie=0x{x}\n", .{ vstvec, vscause, vsie });
+            }
             
             pcpu.trap_count += 1;
         }
@@ -190,6 +215,9 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 
     riscv.writeMepc(ms.mepc);
     riscv.writeMstatus(ms.mstatus);
+    
+    // Aegis: Confirm exactly where we are jumping to on return
+    debug.printf("[HV] -> Return to PC=0x{x} mode={s}\n", .{ ms.mepc, if ((ms.mstatus & riscv.MSTATUS.MPV) != 0) "virtual" else "host" });
 
     if (riscv.hasHExtension()) {
         riscv.writeHstatus(ms.hstatus);
@@ -266,6 +294,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
         .machine_timer => {
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+                debug.printf("IRQ: Injecting virtual timer interrupt (VSTIP) for guest {}\n", .{vc.guest_id});
                 vc.machine.hvip |= riscv.HVIP.VSTIP;
             }
             // Clear hardware timer condition by setting it far into the future
@@ -320,6 +349,7 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
         // Vectored mode: base + 4 * cause
         ms.mepc = base + 4 * (@intFromEnum(irq.cause) & 0x7FFFFFFFFFFFFFFF);
     }
+    debug.printf("[HV] Reflecting: trap PC=0x{x} -> guest handler=0x{x} mode={s}\n", .{irq.pc, ms.mepc, if (mode == 0) "direct" else "vectored"});
 
     // 4. Update hstatus.SPVP to reflect the privilege mode we're coming from
     ms.hstatus &= ~riscv.HSTATUS.SPVP;

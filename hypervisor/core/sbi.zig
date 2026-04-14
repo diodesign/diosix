@@ -102,6 +102,10 @@ fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: 
     debug.printf("SBI: Timer set to 0x{x} for guest {}\n", .{ stime, vc.guest_id });
     // Set timer for guest.
     riscv.setTimer(stime);
+    
+    // Clear the guest's virtual timer interrupt pending bit now that they've scheduled a new event.
+    vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSTIP);
+
     setResult(context, SBI_SUCCESS, 0);
 }
 

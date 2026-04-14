@@ -185,6 +185,7 @@ test "scheduler vruntime ordering" {
     const testing = std.testing;
 
     // Reset global scheduler state
+    riscv.initMockHardware();
     global_scheduler.run_queue.init();
     global_scheduler.min_vruntime = 0;
     initCpu();
@@ -225,6 +226,7 @@ test "hybrid local and global scheduling" {
     const testing = std.testing;
 
     // Reset state
+    riscv.initMockHardware();
     global_scheduler.run_queue.init();
     global_scheduler.min_vruntime = 0;
     initCpu();
