@@ -49,6 +49,7 @@ pub const VirtualCore = struct {
     // For CFS-style scheduling.
     vruntime: u64,
     weight: u32, // For weighting vruntime increments.
+    last_queued_time: u64, // Timestamp (rdtime) when last queued, for accounting.
 
     // Node for the scheduler's Red-Black Tree.
     // We order by vruntime.
@@ -60,7 +61,7 @@ pub const VirtualCore = struct {
             .guest = parent,
             .guest_id = parent.id,
             .state = .stopped,
-            .context = [_]usize{0} ** 32,
+            .context = std.mem.zeroes(riscv.ThreadContext),
             .machine = .{
                 .mepc = entry,
                 .mstatus = (1 << 11) | riscv.MSTATUS.MPV, // MPP=1 (Supervisor), MPV=1 (Virtualization)
@@ -87,6 +88,7 @@ pub const VirtualCore = struct {
                 .high => 2048,
                 .normal => 1024,
             },
+            .last_queued_time = 0,
             .scheduler_node = undefined,
         };
 

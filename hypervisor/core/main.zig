@@ -29,7 +29,7 @@ extern const __rootvm_end: u8;
 
 // Mock Root VM symbols for tests.
 const test_rootvm_data = if (builtin.is_test) blk: {
-    var data = [_]u8{0} ** 64;
+    var data: [64]u8 = std.mem.zeroes([64]u8);
     // Minimal 64-bit RISC-V ELF header.
     @memcpy(data[elf_spec.EHDR.IDENT .. elf_spec.EHDR.IDENT + 4], elf_spec.MAGIC);
     data[4] = elf_spec.CLASS_64;
@@ -49,7 +49,7 @@ var test_rootvm_start: usize = 0;
 var test_rootvm_end: usize = 0;
 
 const BootCpuID: usize = 0; // CPU ID 0 does all the heavy lifting to begin with.
-export var boot_complete_flag: bool = false; // True when all cores can begin running vCPU threads.
+export var boot_complete_flag = std.atomic.Value(bool).init(false); // True when all cores can begin running vCPU threads.
 
 // Global hypervisor state and resources - system_ctx_lock must be acquired before accessing post-boot.
 const SystemContext = struct {
@@ -84,16 +84,20 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     system_ctx.?.device_tree = device_tree;
 
     // Initialize physical memory management.
-    // Initialize physical memory management.
     const rootvm_ram_size = if (builtin.is_test) 2 * 1024 * 1024 else 512 * 1024 * 1024;
 
-    // In a real boot, we discover regions first, find a gap, then initialize the allocator
+    var rootvm_hpa_base: usize = 0;
+    var rootvm_region: physmem.Region = undefined;
+
     if (!builtin.is_test) {
         try physmem.discoverRegions(device_tree);
+        rootvm_region = try physmem.findContiguousRegion(rootvm_ram_size);
+        rootvm_hpa_base = rootvm_region.base;
+    } else {
+        // In tests, allocate 2MB (order 9) for Root VM.
+        rootvm_hpa_base = try physmem.allocPageSelection(9);
+        rootvm_region = .{ .base = rootvm_hpa_base, .size = rootvm_ram_size };
     }
-
-    const rootvm_region = try physmem.findContiguousRegion(rootvm_ram_size);
-    const rootvm_hpa_base = rootvm_region.base;
 
     try riscv.verifyHExtension();
 
@@ -155,11 +159,12 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     debug.printf("Found root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_elf_base, rootvm_elf_size, entry_point });
 
     // Create virtual cores for the root VM matching host count.
-    // Ensure we start at the PHYSICAL entry point (masking high virtual address bits).
-    const physical_entry = entry_point & 0x00000000FFFFFFFF;
+    // The loader returns the entry point as a GPA, so no masking is needed.
     for (0..cpu_count) |i| {
-        const vc = try root_vm.addVcore(i, physical_entry, guest_dtb_gpa, .high);
-        // Core 0 starts executing immediately; others wait for HSM Start.
+        // Core 0 starts executing immediately and is enrolled in the scheduler.
+        // Other cores wait for HSM HART_START, so they are not queued here.
+        const sched_fn: ?*const fn (*vcore.VirtualCore) void = if (i == 0) &scheduler.queue else null;
+        const vc = try root_vm.addVcore(i, entry_point, guest_dtb_gpa, .high, sched_fn);
         if (i == 0) vc.state = .ready;
     }
 }
@@ -172,11 +177,9 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     // 1. Basic hardware/architectural setup. No locks or complex structures yet.
     hw_pmp_init();
 
-    // Delegate all exceptions/interrupts to S-mode (HS-mode) where possible.
-    if (riscv.hasHExtension()) {
-        riscv.writeMedeleg(0xb1f3);
-        riscv.writeMideleg(0x222); // SSIP, STIP, SEIP
-    }
+    // Exception and interrupt delegation is handled by hw_xint_init() in xint.s,
+    // which is called from xint.init() below. See xint.s for the authoritative
+    // medeleg and mideleg values.
 
     const cpu_ctx = riscv.getCPUContext();
     cpu_ctx.cpu_core_id = cpu_core_id;
@@ -197,15 +200,12 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
             };
 
             debug.printf("Boot CPU core {} finished initialization, releasing other cores\n", .{cpu_core_id});
-            const boot_flag_ptr: *volatile bool = &boot_complete_flag;
-            boot_flag_ptr.* = true;
-            riscv.fence();
+            boot_complete_flag.store(true, .release);
         },
 
         else => {
-            const boot_flag_ptr: *volatile bool = &boot_complete_flag;
-            while (boot_flag_ptr.* == false) {
-                riscv.fence();
+            while (!boot_complete_flag.load(.acquire)) {
+                riscv.pause();
             }
         },
     }
@@ -325,7 +325,7 @@ test "boot CPU initialization" {
     test_rootvm_start = @intFromPtr(test_rootvm_data_buf.ptr);
     test_rootvm_end = test_rootvm_start + test_rootvm_data_buf.len;
 
-    var phys_test = try physmem.initForTest(allocator, 512);
+    var phys_test = try physmem.initForTest(allocator, 1024);
     defer phys_test.deinit();
 
     // Run the boot init function

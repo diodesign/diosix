@@ -45,8 +45,13 @@ pub fn initCpu() void {
     pc.trap_count = 0;
 }
 
-// Add a virtual core to a run queue (local preferred, global for overflow)
+// Add a virtual core to a run queue (local preferred, global for overflow).
+// Only vcores in 'ready' state may be queued.
 pub fn queue(vc: *vcore.VirtualCore) void {
+    // Only schedulable states may be queued.
+    if (vc.state != .ready and vc.state != .running) return;
+    vc.state = .ready;
+
     const pc = pcore.this();
 
     // Ensure the vcore's vruntime isn't too far behind to prevent it
@@ -56,6 +61,9 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     }
 
     vc.updateSchedulerWeight();
+
+    // Record the time at which this vcore was last queued (for accounting).
+    vc.last_queued_time = riscv.readTime();
 
     if (pc.run_queue_count < MAX_LOCAL_VCORES) {
         pc.run_queue.insert(&vc.scheduler_node);
@@ -139,9 +147,11 @@ pub fn schedule() void {
     // If there's an active vcore, update its runtime before putting it back
     if (pc.active_vcore) |ptr| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
-        // TODO: Calculate actual time spent running and update vruntime
-        // For now, use a fixed increment
-        const delta: u64 = 1000 * 1024 / vc.weight;
+        // Calculate actual time spent running using the hardware timer.
+        const now = riscv.readTime();
+        const actual_time = if (now > vc.last_queued_time) now - vc.last_queued_time else 1;
+        // Weight the runtime: heavier processes accumulate vruntime more slowly.
+        const delta: u64 = actual_time * 1024 / vc.weight;
         vc.vruntime += delta;
         queue(vc);
         pc.active_vcore = null;
@@ -173,8 +183,9 @@ pub fn yield(vc: *vcore.VirtualCore) void {
         const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
         if (active_vc == vc) {
             pc.active_vcore = null;
-            // fixed increment for now
-            const delta: u64 = 1000 * 1024 / vc.weight;
+            const now = riscv.readTime();
+            const actual_time = if (now > vc.last_queued_time) now - vc.last_queued_time else 1;
+            const delta: u64 = actual_time * 1024 / vc.weight;
             vc.vruntime += delta;
             queue(vc);
         }
@@ -203,6 +214,8 @@ test "scheduler vruntime ordering" {
 
     vc1.vruntime = 100;
     vc2.vruntime = 50;
+    vc1.state = .ready;
+    vc2.state = .ready;
 
     // Queue them (not queued by init)
     queue(&vc1);
@@ -235,7 +248,7 @@ test "hybrid local and global scheduling" {
     defer phys_test.deinit();
 
     // 1. Fill local queue (up to MAX_LOCAL_VCORES = 8)
-    var test_guests = [_]?*guest.Guest{null} ** 10;
+    var test_guests = std.mem.zeroes([10]?*guest.Guest);
     defer for (test_guests) |maybe_g| if (maybe_g) |g| g.deinit();
 
     var vcpus: [10]vcore.VirtualCore = undefined;
@@ -244,6 +257,7 @@ test "hybrid local and global scheduling" {
         vcpus[i] = vcore.VirtualCore.init(@intCast(i), test_guests[i].?, 0, 0, .normal);
         
         vcpus[i].vruntime = i * 10;
+        vcpus[i].state = .ready;
         vcpus[i].updateSchedulerWeight();
         queue(&vcpus[i]);
     }

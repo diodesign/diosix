@@ -201,9 +201,13 @@ pub const PageTable = struct {
         // 1. Root VM identity mapping
         if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + self.root_range_size) {
             const hpa = gpa - self.root_base_gpa + self.root_base_hpa;
-            // Round down to page boundaries to ensure idempotency and alignment
+            // Round down to page boundaries to ensure idempotency and alignment.
             const gpa_page = gpa & ~(physmem.PageSize - 1);
             const hpa_page = hpa & ~(physmem.PageSize - 1);
+            // Safety: verify the target HPA does not overlap the hypervisor footprint.
+            if (physmem.isHypervisorMemory(hpa_page, physmem.PageSize)) {
+                return error.AccessDenied;
+            }
             try self.mapPage(gpa_page, hpa_page, PTEFlags.read | PTEFlags.write | PTEFlags.execute | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
             return;
         }

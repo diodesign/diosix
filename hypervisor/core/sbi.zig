@@ -50,8 +50,8 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             setResult(context, @bitCast(@as(isize, debug.getchar(vc.guest_id))), 0);
         },
         interface.EXT.LEGACY_SHUTDOWN => {
-            debug.printf("SBI: Guest {} requested shutdown\n", .{vc.guest_id});
-            vc.getGuest().terminate();
+            debug.printf("SBI: Guest {} requested legacy shutdown\n", .{vc.guest_id});
+            terminateOrRestart(vc.getGuest());
         },
         interface.EXT.DIOSIX => handleDiosix(vc, context, function),
         else => {
@@ -112,15 +112,31 @@ fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: 
 fn handleSystemReset(vc: *vcore.VirtualCore, _: *riscv.ThreadContext, function: usize, reset_type: usize, reset_reason: usize) void {
     _ = function;
     _ = reset_reason;
-    debug.printf("SBI: System Reset (type {}) requested by guest {}\n", .{ reset_type, vc.guest_id });
-    vc.getGuest().terminate();
+    const g = vc.getGuest();
+    debug.printf("SBI: System Reset (type {}) requested by guest {}\n", .{ reset_type, g.id });
+
+    if (g.is_root) {
+        // SRST reset_type: 0 = shutdown, 1 = cold reboot, 2 = warm reboot
+        if (reset_type == 0) {
+            debug.printf("Root VM requested shutdown. Powering off host.\n", .{});
+            g.terminate();
+            riscv.shutdown();
+        } else {
+            debug.printf("Root VM requested reboot. Restarting host.\n", .{});
+            g.terminate();
+            riscv.reboot();
+        }
+    } else {
+        g.terminate();
+    }
 }
 
 fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize) void {
     switch (function) {
         interface.DIOSIX.EXIT => {
-            debug.printf("SBI: Diosix Exit requested by guest {}\n", .{vc.guest_id});
-            vc.getGuest().terminate();
+            const g = vc.getGuest();
+            debug.printf("SBI: Diosix Exit requested by guest {}\n", .{g.id});
+            terminateOrRestart(g);
         },
         interface.DIOSIX.YIELD => {
             scheduler.yield(vc);
@@ -242,4 +258,14 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
 fn setResult(context: *riscv.ThreadContext, err: isize, val: usize) void {
     context[@intFromEnum(arch.Register.a0)] = @bitCast(err); // A0 = error code.
     context[@intFromEnum(arch.Register.a1)] = val; // A1 = value.
+}
+
+/// Terminate a guest. If the guest is the Root VM, the architecture requires
+/// that the host is restarted because the system is no longer manageable.
+fn terminateOrRestart(g: *guest.Guest) void {
+    g.terminate();
+    if (g.is_root) {
+        debug.printf("Root VM terminated. Rebooting host as per architecture policy.\n", .{});
+        riscv.reboot();
+    }
 }

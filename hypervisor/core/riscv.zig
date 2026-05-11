@@ -50,6 +50,7 @@ var test_mtval: usize = 0;
 var test_misa: usize = (1 << 53) | IsaExtension.h | IsaExtension.gc; // RV64 is bit 63 in MXL, but for simple 64-bit mask we use (1 << 63)
 var test_hstatus: usize = 0;
 var test_hgatp: usize = 0;
+pub var test_time: u64 = 0;
 
 // RISC-V 64-bit MXL for MISA
 const MISA_MXL_64: usize = 1 << 63;
@@ -124,6 +125,7 @@ pub fn initMockHardware() void {
     test_misa = MISA_MXL_64 | IsaExtension.h | IsaExtension.gc;
     test_hstatus = 0;
     test_hgatp = 0;
+    test_time = 0;
     @memset(&test_heap,0);
 }
 
@@ -520,6 +522,15 @@ pub fn verifyHExtension() !void {
 pub fn setTimer(stime: u64) void {
     if (is_test) return;
     hw_set_timer(stime);
+}
+
+// Read the time CSR (or its memory-mapped equivalent via mtime).
+// In M-mode on RISC-V, `time` may not be directly accessible; fall back to CLINT mtime.
+pub inline fn readTime() u64 {
+    if (is_test) return test_time;
+    return asm volatile ("csrr %[ret], time"
+        : [ret] "=r" (-> u64),
+    );
 }
  
 pub inline fn readHvip() usize {

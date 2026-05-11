@@ -12,6 +12,7 @@ pub const GuestSpace = struct {
     paging: ?sv39x4.PageTable,
     pmp_config: ?pmp.PMPConfig,
     is_trusted: bool,
+    base_gpa: usize,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, is_trusted: bool, base_gpa: usize, base_hpa: usize, range_size: usize) !GuestSpace {
@@ -21,14 +22,21 @@ pub const GuestSpace = struct {
                 .paging = try sv39x4.PageTable.init(base_gpa, base_hpa, range_size),
                 .pmp_config = null,
                 .is_trusted = is_trusted,
+                .base_gpa = base_gpa,
                 .allocator = allocator,
             };
         } else {
+            var pmp_config = try pmp.PMPConfig.init(allocator);
+            // Register the root VM's memory region so the guest can access it.
+            if (range_size > 0) {
+                try pmp_config.addRegion(base_hpa, range_size, pmp.PMPAccess.read | pmp.PMPAccess.write | pmp.PMPAccess.execute);
+            }
             return GuestSpace{
                 .mode = .pmp_fallback,
                 .paging = null,
-                .pmp_config = try pmp.PMPConfig.init(allocator),
+                .pmp_config = pmp_config,
                 .is_trusted = is_trusted,
+                .base_gpa = base_gpa,
                 .allocator = allocator,
             };
         }
@@ -64,6 +72,7 @@ pub const GuestSpace = struct {
                 .paging = try self.paging.?.fork(),
                 .pmp_config = null,
                 .is_trusted = self.is_trusted,
+                .base_gpa = self.base_gpa,
                 .allocator = self.allocator,
             };
         } else {
@@ -72,6 +81,7 @@ pub const GuestSpace = struct {
                 .paging = null,
                 .pmp_config = try self.pmp_config.?.fork(self.allocator),
                 .is_trusted = self.is_trusted,
+                .base_gpa = self.base_gpa,
                 .allocator = self.allocator,
             };
         }
@@ -111,9 +121,8 @@ pub const GuestSpace = struct {
             const hpa = (pte_ptr.* >> 10) << 12;
             return hpa + (gpa % physmem.PageSize);
         } else {
-            // PMP mode: assume identity for now if not otherwise specified.
-            // Future refinement: check PMP regions.
-            return gpa;
+            // PMP mode: resolve the GPA through the PMP region list.
+            return self.pmp_config.?.translateGPA(gpa) catch return error.TranslationFailed;
         }
     }
 };

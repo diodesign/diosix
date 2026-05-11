@@ -1,20 +1,32 @@
 // RISC-V Physical Memory Protection (PMP) Management
 // Used as a fallback for guest isolation when H-extension is missing.
+//
+// PMP uses Top-of-Range (TOR) mode which requires two entries per region:
+// entry N = base address, entry N+1 = top address with TOR config.
+// Typical hardware provides 16 PMP entries, so we support up to 7 regions
+// (14 entries) plus one region reserved for the deny-all default.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
 const physmem = @import("physmem.zig");
 const debug = @import("debug.zig");
+
+const is_test = builtin.is_test;
 
 pub const PMPError = error{
     TooManyRegions,
     InvalidAlignment,
+    AddressNotFound,
 };
 
 pub const PMPAccess = struct {
-    pub const read = 1 << 0;
-    pub const write = 1 << 1;
-    pub const execute = 1 << 2;
-    pub const tor = 1 << 3; // Top of Range mode (uses two entries)
+    pub const read: u8 = 1 << 0;
+    pub const write: u8 = 1 << 1;
+    pub const execute: u8 = 1 << 2;
+    pub const tor: u8 = 1 << 3; // Top of Range mode
 };
 
 pub const Region = struct {
@@ -23,36 +35,50 @@ pub const Region = struct {
     flags: u8,
 };
 
+// Maximum number of PMP regions we support (7 TOR regions = 14 entries + 2 deny-all).
+pub const MAX_REGIONS: usize = 7;
+
 pub const PMPConfig = struct {
     regions: std.ArrayList(Region),
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) !PMPConfig {
         return PMPConfig{
             .regions = std.ArrayList(Region).empty,
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *PMPConfig) void {
         for (self.regions.items) |reg| {
-            physmem.freePage(reg.base); 
+            physmem.freePage(reg.base);
         }
         self.regions.deinit(self.allocator);
     }
 
     pub fn addRegion(self: *PMPConfig, base: usize, size: usize, flags: u8) !void {
-        // PMP usually has 16 entries. TOR mode uses 2 entries per region.
-        // We reserve 1 slot (2 entries) for the root VM as requested.
-        if (self.regions.items.len >= 7) return PMPError.TooManyRegions;
-        
+        if (self.regions.items.len >= MAX_REGIONS) return PMPError.TooManyRegions;
         try self.regions.append(self.allocator, .{ .base = base, .size = size, .flags = flags });
+    }
+
+    /// Translate a guest physical address to a host physical address within PMP regions.
+    /// For PMP mode, the guest is given a contiguous view of its physical memory;
+    /// we resolve a GPA by checking each region sequentially.
+    pub fn translateGPA(self: *const PMPConfig, gpa: usize) !usize {
+        var region_base_gpa: usize = 0;
+        for (self.regions.items) |reg| {
+            if (gpa >= region_base_gpa and gpa < region_base_gpa + reg.size) {
+                return reg.base + (gpa - region_base_gpa);
+            }
+            region_base_gpa += reg.size;
+        }
+        return PMPError.AddressNotFound;
     }
 
     pub fn fork(self: *PMPConfig, allocator: std.mem.Allocator) !PMPConfig {
         var other = try PMPConfig.init(allocator);
         for (self.regions.items) |reg| {
-            // "Copy entirely on fork" as requested for PMP fallback
+            // Full copy-on-fork: PMP doesn't support CoW.
             const new_base = try physmem.allocPageSelection(@intCast(std.math.log2(reg.size / physmem.PageSize)));
             @memcpy(@as([*]u8, @ptrFromInt(new_base))[0..reg.size], @as([*]u8, @ptrFromInt(reg.base))[0..reg.size]);
             try other.addRegion(new_base, reg.size, reg.flags);
@@ -60,11 +86,109 @@ pub const PMPConfig = struct {
         return other;
     }
 
-    // Apply this PMP configuration to the current physical core.
-    // Called during context switch to a guest vcore.
+    /// Apply this PMP configuration to the current physical core.
+    /// Called during context switch to a guest vcore.
+    ///
+    /// Strategy:
+    /// 1. First, deny all access by default (entry 0: NAPOT covering all memory, no permissions).
+    /// 2. Then, for each guest region, program a TOR pair (base + top) with RWX permissions.
+    ///
+    /// TOR mode: pmpaddrN = base >> 2, pmpaddrN+1 = (base + size) >> 2, pmpcfgN+1 = TOR | perms.
     pub fn apply(self: *PMPConfig) void {
-        _ = self;
-        // Implement CSR writes for pmpaddrN and pmpcfgN
-        // This is highly platform specific.
+        if (is_test) return;
+
+        // First clear all PMP entries to deny-all state.
+        clearAllPmp();
+
+        // Program each region as a TOR pair.
+        // PMP entry 0-1: deny-all sentinel is implicit (cleared to 0, no match = denied).
+        // We start from entry 0 for the first region.
+        var entry: usize = 0;
+        for (self.regions.items) |reg| {
+            if (entry + 2 > 16) break; // Hardware limit.
+
+            const base_shifted = reg.base >> 2;
+            const top_shifted = (reg.base + reg.size) >> 2;
+            const cfg: u8 = PMPAccess.tor | (reg.flags & 0x07); // TOR + RWX bits
+
+            writePmpAddr(entry, base_shifted);
+            writePmpAddr(entry + 1, top_shifted);
+            writePmpCfg(entry + 1, cfg);
+
+            entry += 2;
+        }
+
+        // Final entry: deny-all for everything else.
+        // Set the last used entry+1 to NAPOT covering all remaining space with no perms.
+        if (entry < 16) {
+            writePmpAddr(entry, ~@as(usize, 0)); // All ones = entire address space (NAPOT)
+            writePmpCfg(entry, 0x18); // NAPOT mode (bits 4:3 = 11), no R/W/X
+        }
+    }
+
+    fn clearAllPmp() void {
+        asm volatile ("csrw pmpcfg0, zero");
+        asm volatile ("csrw pmpcfg2, zero");
+        asm volatile ("csrw pmpaddr0, zero");
+        asm volatile ("csrw pmpaddr1, zero");
+        asm volatile ("csrw pmpaddr2, zero");
+        asm volatile ("csrw pmpaddr3, zero");
+        asm volatile ("csrw pmpaddr4, zero");
+        asm volatile ("csrw pmpaddr5, zero");
+        asm volatile ("csrw pmpaddr6, zero");
+        asm volatile ("csrw pmpaddr7, zero");
+        asm volatile ("csrw pmpaddr8, zero");
+        asm volatile ("csrw pmpaddr9, zero");
+        asm volatile ("csrw pmpaddr10, zero");
+        asm volatile ("csrw pmpaddr11, zero");
+        asm volatile ("csrw pmpaddr12, zero");
+        asm volatile ("csrw pmpaddr13, zero");
+        asm volatile ("csrw pmpaddr14, zero");
+        asm volatile ("csrw pmpaddr15, zero");
+    }
+
+    /// Write a value to pmpaddr[index]. Only entries 0-15 are supported.
+    fn writePmpAddr(index: usize, value: usize) void {
+        switch (index) {
+            0 => asm volatile ("csrw pmpaddr0, %[val]" : : [val] "r" (value)),
+            1 => asm volatile ("csrw pmpaddr1, %[val]" : : [val] "r" (value)),
+            2 => asm volatile ("csrw pmpaddr2, %[val]" : : [val] "r" (value)),
+            3 => asm volatile ("csrw pmpaddr3, %[val]" : : [val] "r" (value)),
+            4 => asm volatile ("csrw pmpaddr4, %[val]" : : [val] "r" (value)),
+            5 => asm volatile ("csrw pmpaddr5, %[val]" : : [val] "r" (value)),
+            6 => asm volatile ("csrw pmpaddr6, %[val]" : : [val] "r" (value)),
+            7 => asm volatile ("csrw pmpaddr7, %[val]" : : [val] "r" (value)),
+            8 => asm volatile ("csrw pmpaddr8, %[val]" : : [val] "r" (value)),
+            9 => asm volatile ("csrw pmpaddr9, %[val]" : : [val] "r" (value)),
+            10 => asm volatile ("csrw pmpaddr10, %[val]" : : [val] "r" (value)),
+            11 => asm volatile ("csrw pmpaddr11, %[val]" : : [val] "r" (value)),
+            12 => asm volatile ("csrw pmpaddr12, %[val]" : : [val] "r" (value)),
+            13 => asm volatile ("csrw pmpaddr13, %[val]" : : [val] "r" (value)),
+            14 => asm volatile ("csrw pmpaddr14, %[val]" : : [val] "r" (value)),
+            15 => asm volatile ("csrw pmpaddr15, %[val]" : : [val] "r" (value)),
+            else => {},
+        }
+    }
+
+    /// Write configuration for a single PMP entry.
+    /// PMP configs are packed 4-per-register in pmpcfg0 (entries 0-7) and pmpcfg2 (entries 8-15).
+    fn writePmpCfg(index: usize, cfg: u8) void {
+        if (index >= 16) return;
+
+        // Determine which pmpcfg register and which byte within it.
+        const reg_index = index / 8; // 0 → pmpcfg0, 1 → pmpcfg2
+        const byte_pos: u6 = @intCast((index % 8) * 8);
+        const mask = ~(@as(usize, 0xFF) << byte_pos);
+        const value = @as(usize, cfg) << byte_pos;
+
+        if (reg_index == 0) {
+            var current = asm volatile ("csrr %[ret], pmpcfg0" : [ret] "=r" (-> usize));
+            current = (current & mask) | value;
+            asm volatile ("csrw pmpcfg0, %[val]" : : [val] "r" (current));
+        } else {
+            var current = asm volatile ("csrr %[ret], pmpcfg2" : [ret] "=r" (-> usize));
+            current = (current & mask) | value;
+            asm volatile ("csrw pmpcfg2, %[val]" : : [val] "r" (current));
+        }
     }
 };

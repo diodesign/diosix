@@ -55,6 +55,7 @@ pub const IRQ = struct {
 };
 
 const MAX_TRAP_LOGS = 100;
+const TRAP_LOOP_HARD_LIMIT: usize = 64;
 
 // Decode mcause and return an IRQ structure.
 fn dispatch(context: *riscv.ThreadContext) IRQ {
@@ -91,10 +92,18 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     const cpu = pcore.this();
     if (cpu.last_trap_pc == irq.pc) {
         cpu.trap_loop_count += 1;
-        if (cpu.trap_loop_count > 2) {
-            debug.printf("!!! LOOP DETECTED on Core {}: pc=0x{x} cause={s} count={}\n", .{
-                cpu.cpu_core_id, irq.pc, @tagName(irq.cause), cpu.trap_loop_count
-            });
+        if (cpu.trap_loop_count > TRAP_LOOP_HARD_LIMIT) {
+            debug.printf("!!! TRAP LOOP EXCEEDED HARD LIMIT on Core {}: pc=0x{x} cause={s} count={} — terminating guest\n", .{ cpu.cpu_core_id, irq.pc, @tagName(irq.cause), cpu.trap_loop_count });
+            // Terminate the offending guest to reclaim the core.
+            const term_cpu = pcore.this();
+            if (term_cpu.active_vcore) |vc_raw| {
+                const vc_term: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+                vc_term.getGuest().terminate();
+                term_cpu.active_vcore = null;
+            }
+            cpu.trap_loop_count = 0;
+        } else if (cpu.trap_loop_count > 2) {
+            debug.printf("!!! LOOP DETECTED on Core {}: pc=0x{x} cause={s} count={}\n", .{ cpu.cpu_core_id, irq.pc, @tagName(irq.cause), cpu.trap_loop_count });
         }
     } else {
         cpu.last_trap_pc = irq.pc;
@@ -102,16 +111,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     }
 
     if (cpu.trap_count < MAX_TRAP_LOGS) {
-        // Always log non-page-fault exceptions, and only log page faults if we haven't hit the limit
-        const is_page_fault = switch (irq.cause) {
-            .guest_instruction_page_fault, .guest_load_page_fault, .guest_store_page_fault => true,
-            else => false,
-        };
-
-        if (!is_page_fault or (cpu.trap_count % 10 == 0)) {
-            debug.printf("Trapped: core={} mode={s} pc=0x{x} cause={s} (0x{x}) val=0x{x}\n", .{ cpu.cpu_core_id, @tagName(irq.privilege_mode), irq.pc, @tagName(irq.cause), @intFromEnum(irq.cause), irq.val });
-            cpu.trap_count += 1;
-        }
+        cpu.trap_count += 1;
     }
 
     return irq;
@@ -133,7 +133,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
         if (!is_page_fault or (pcpu.trap_count % 10 == 0)) {
             debug.printf("Trapped: core={} mode={s} pc=0x{x} cause={s} (0x{x}) val=0x{x}\n", .{ pcpu.cpu_core_id, @tagName(irq.privilege_mode), irq.pc, @tagName(irq.cause), @intFromEnum(irq.cause), irq.val });
-            
+
             // Log translation state for debugging isolation failures
             const hgatp = riscv.readHgatp();
             const hstatus = riscv.readHstatus();
@@ -145,22 +145,15 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             const medeleg = if (riscv.hasHExtension()) riscv.readMedeleg() else 0;
 
             debug.printf("[HV] State: hgatp=0x{x} hstatus=0x{x} vsatp=0x{x} mstatus=0x{x} htval=0x{x} hvip=0x{x}\n", .{ hgatp, hstatus, vsatp, mstatus, htval, hvip });
-            debug.printf("[HV] Virtualization: MPV={} GVA={} SPV={} SPVP={} mideleg=0x{x} medeleg=0x{x}\n", .{ 
-                (mstatus & riscv.MSTATUS.MPV) != 0,
-                (hstatus & riscv.HSTATUS.GVA) != 0,
-                (hstatus & riscv.HSTATUS.SPV) != 0,
-                (hstatus & riscv.HSTATUS.SPVP) != 0,
-                mideleg,
-                medeleg
-            });
-            
+            debug.printf("[HV] Virtualization: MPV={} GVA={} SPV={} SPVP={} mideleg=0x{x} medeleg=0x{x}\n", .{ (mstatus & riscv.MSTATUS.MPV) != 0, (hstatus & riscv.HSTATUS.GVA) != 0, (hstatus & riscv.HSTATUS.SPV) != 0, (hstatus & riscv.HSTATUS.SPVP) != 0, mideleg, medeleg });
+
             if (riscv.hasHExtension()) {
                 const vstvec = riscv.readVstvec();
                 const vscause = riscv.readVscause();
                 const vsie = riscv.readVsie();
                 debug.printf("[HV] Guest: vstvec=0x{x} vscause=0x{x} vsie=0x{x}\n", .{ vstvec, vscause, vsie });
             }
-            
+
             pcpu.trap_count += 1;
         }
     }
@@ -202,7 +195,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (pcpu.active_vcore) |vc_raw| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
         @memcpy(context, &vc.context);
-        pcore.contextSwitch(vc); 
+        pcore.contextSwitch(vc);
         syncGuestStateToHardware(vc);
     }
 }
@@ -215,7 +208,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 
     riscv.writeMepc(ms.mepc);
     riscv.writeMstatus(ms.mstatus);
-    
+
     // Aegis: Confirm exactly where we are jumping to on return
     debug.printf("[HV] -> Return to PC=0x{x} mode={s}\n", .{ ms.mepc, if ((ms.mstatus & riscv.MSTATUS.MPV) != 0) "virtual" else "host" });
 
@@ -340,7 +333,9 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
     const mode = gs.vstvec & 0b11;
 
     if (base == 0) {
-        debug.printf("WARNING: Reflecting exception to NULL vstvec! This will likely crash the guest.\n", .{});
+        debug.printf("FATAL: Reflecting exception to NULL vstvec — terminating guest.\n", .{});
+        vc.getGuest().terminate();
+        return error.NoHExtension; // Abort reflection.
     }
 
     if (mode == 0) {
@@ -349,7 +344,7 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
         // Vectored mode: base + 4 * cause
         ms.mepc = base + 4 * (@intFromEnum(irq.cause) & 0x7FFFFFFFFFFFFFFF);
     }
-    debug.printf("[HV] Reflecting: trap PC=0x{x} -> guest handler=0x{x} mode={s}\n", .{irq.pc, ms.mepc, if (mode == 0) "direct" else "vectored"});
+    debug.printf("[HV] Reflecting: trap PC=0x{x} -> guest handler=0x{x} mode={s}\n", .{ irq.pc, ms.mepc, if (mode == 0) "direct" else "vectored" });
 
     // 4. Update hstatus.SPVP to reflect the privilege mode we're coming from
     ms.hstatus &= ~riscv.HSTATUS.SPVP;

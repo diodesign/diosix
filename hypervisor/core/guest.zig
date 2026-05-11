@@ -77,7 +77,10 @@ pub const Guest = struct {
         self.children.init();
         self.vcores.init();
 
-        debug.last_reader_guest_id = id;
+        // Console input is restricted to the root VM only.
+        if (is_root) {
+            debug.last_reader_guest_id = id;
+        }
 
         if (parent) |p| {
             const node = try allocator.create(dsa.LinkedList(*Guest).Node);
@@ -185,7 +188,11 @@ pub const Guest = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn addVcore(self: *Guest, vid: vcore.VirtualCoreID, entry: usize, dtb: usize, priority: vcore.Priority) !*vcore.VirtualCore {
+    /// Add a virtual core to this guest.
+    /// `sched_queue` is an optional scheduler enqueue function. Pass `null` if the vcore
+    /// should not be auto-enrolled (e.g. stopped secondary harts, or testing).
+    /// This dependency-injection pattern allows future support for multiple scheduler backends.
+    pub fn addVcore(self: *Guest, vid: vcore.VirtualCoreID, entry: usize, dtb: usize, priority: vcore.Priority, sched_queue: ?*const fn (*vcore.VirtualCore) void) !*vcore.VirtualCore {
         const vc = try self.allocator.create(vcore.VirtualCore);
         errdefer self.allocator.destroy(vc);
 
@@ -200,10 +207,11 @@ pub const Guest = struct {
             .contents = vc,
         };
         self.vcores.pushEnd(node);
-        
-        // Enroll the vcore in the global scheduler
-        const scheduler = @import("scheduler.zig");
-        scheduler.queue(vc);
+
+        // Enroll the vcore in the scheduler if a queue function was provided.
+        if (sched_queue) |q| {
+            q(vc);
+        }
 
         return vc;
     }
@@ -282,21 +290,44 @@ pub const Guest = struct {
     }
 };
 
-// Global guest tracking
+// Global guest ID counter.
 var guest_id_next = std.atomic.Value(usize).init(0);
-var vmid_next: u16 = 1; // 0 is reserved
+
+// VMID management: bitmap-based allocator to support recycling.
+// VMID 0 is reserved by the architecture. Usable range: 1..max_vmids.
+const max_vmids: u16 = 4096; // Practical limit; hardware may support fewer.
+var vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
 var guests_lock = atomic.NamedSpinLock.init("Global guests lock");
 
 fn allocVmid() !u16 {
     guests_lock.lock();
     defer guests_lock.unlock();
-    const id = vmid_next;
-    vmid_next += 1;
-    return id;
+
+    // Search for a free bit in the bitmap (skip bit 0 = VMID 0).
+    for (&vmid_bitmap, 0..) |*word, wi| {
+        if (word.* == ~@as(u64, 0)) continue; // All bits set, skip.
+        const free_bit = @ctz(~word.*);
+        const vmid: u16 = @intCast(wi * 64 + free_bit);
+        if (vmid == 0) {
+            // VMID 0 is reserved; mark it used and continue searching.
+            word.* |= @as(u64, 1) << @intCast(free_bit);
+            continue;
+        }
+        word.* |= @as(u64, 1) << @intCast(free_bit);
+        return vmid;
+    }
+    // All VMIDs exhausted.
+    debug.printf("VMID: All {} VMIDs exhausted\n", .{max_vmids});
+    return error.OutOfMemory;
 }
 
 fn freeVmid(id: u16) void {
-    _ = id; // TODO: Implement recycling
+    guests_lock.lock();
+    defer guests_lock.unlock();
+    if (id == 0 or id >= max_vmids) return;
+    const wi = id / 64;
+    const bit: u6 = @intCast(id % 64);
+    vmid_bitmap[wi] &= ~(@as(u64, 1) << bit);
 }
 
 pub fn createGuest(allocator: std.mem.Allocator, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize) !*Guest {
@@ -316,6 +347,7 @@ test "guest fork and memory sharing" {
     const allocator = testing.allocator;
 
     guest_id_next.store(0, .monotonic); // Reset for test
+    vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64); // Reset VMID bitmap
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
 
@@ -328,7 +360,7 @@ test "guest fork and memory sharing" {
     scheduler.initCpu();
 
     // Add a vcore so there is something to fork
-    _ = try parent.addVcore(0, 0, 0, .normal);
+    _ = try parent.addVcore(0, 0, 0, .normal, null);
 
     const child = try parent.fork();
     defer child.deinit();
@@ -352,6 +384,7 @@ test "guest creation and vcore management" {
 
     // Reset ID counter for predictable test
     guest_id_next.store(0, .monotonic);
+    vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
 
@@ -365,7 +398,7 @@ test "guest creation and vcore management" {
     try testing.expectEqual(g1, g2.parent.?);
 
     // Add a vcore to g1
-    const vc = try g1.addVcore(100, 0x1000, 0x2000, .high);
+    const vc = try g1.addVcore(100, 0x1000, 0x2000, .high, null);
     try testing.expectEqual(@as(usize, 100), vc.id);
     try testing.expectEqual(g1.id, vc.guest_id);
     try testing.expectEqual(@as(usize, 0x1000), vc.machine.mepc);

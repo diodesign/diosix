@@ -76,9 +76,11 @@ const PageStackNode = struct {
     next: ?*PageStackNode,
 };
 
+const init_free_lists: [max_order]?*PageStackNode = @import("std").mem.zeroes([max_order]?*PageStackNode);
+
 var phys_mem_state = PhysMemState{
     .has_h_extension = false,
-    .free_lists = [_]?*PageStackNode{null} ** max_order,
+    .free_lists = init_free_lists,
     .regions = undefined,
     .region_count = 0,
     .ram_base = 0,
@@ -112,7 +114,7 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
     defer phys_mem_state.lock.unlock();
 
     phys_mem_state.has_h_extension = true;
-    phys_mem_state.free_lists = [_]?*PageStackNode{null} ** max_order;
+    phys_mem_state.free_lists = init_free_lists;
     phys_mem_state.ram_base = @intFromPtr(ram.ptr);
     phys_mem_state.ram_size = num_pages * PageSize;
     phys_mem_state.total_pages = num_pages;
@@ -536,6 +538,9 @@ fn pushFreeBlockLocked(addr: usize, order: u8) void {
         // Check buddy is within our managed RAM
         if (buddy_addr < phys_mem_state.ram_base or buddy_addr >= phys_mem_state.ram_base + phys_mem_state.ram_size) break;
 
+        // Never merge across reserved region boundaries (hypervisor, metadata, rootvm).
+        if (isHypervisorMemory(buddy_addr, block_size)) break;
+
         const buddy_desc = getPageDescriptor(buddy_addr);
         // Only merge if buddy is free and of the same order
         if (buddy_desc.flags & PageFlags.free == 0 or buddy_desc.order != o) break;
@@ -586,7 +591,7 @@ test "buddy allocator and refcounting" {
     var test_metadata: [4]PageDescriptor = undefined;
     phys_mem_state = PhysMemState{
         .has_h_extension = true,
-        .free_lists = [_]?*PageStackNode{null} ** max_order,
+        .free_lists = init_free_lists,
         .regions = undefined,
         .region_count = 0,
         .ram_base = 0,

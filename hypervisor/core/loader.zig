@@ -15,15 +15,19 @@ pub const LoaderError = error{
     UnsupportedElfData,
     UnsupportedElfMachine,
     InvalidProgramHeader,
+    SegmentOutOfBounds,
+    SegmentTooLarge,
     TranslationFailed,
 };
 
 pub const Loader = struct {
+    /// Load an ELF binary from `source` into `root_vm`'s guest address space.
+    /// Returns the guest physical entry point address.
     pub fn load(root_vm: *guest.Guest, source: []const u8) !usize {
-        // Basic ELF Header validation.
+        // Basic ELF Header validation — ELF64 header is 64 bytes.
         if (source.len < 64) return LoaderError.InvalidElfHeader;
         if (!std.mem.eql(u8, source[elf_spec.EHDR.IDENT .. elf_spec.EHDR.IDENT + 4], elf_spec.MAGIC)) return LoaderError.InvalidElfHeader;
-        
+
         // Class: 64-bit is 2.
         if (source[4] != elf_spec.CLASS_64) return LoaderError.UnsupportedElfClass;
         // Data: Little Endian is 1.
@@ -38,6 +42,11 @@ pub const Loader = struct {
         const ph_num = readU16(source, elf_spec.EHDR.PHNUM);
         const ph_size = readU16(source, elf_spec.EHDR.PHENTSIZE);
 
+        // Validate program header table fits within source.
+        if (ph_off + @as(u64, ph_num) * @as(u64, ph_size) > source.len) {
+            return LoaderError.InvalidProgramHeader;
+        }
+
         var i: usize = 0;
         while (i < ph_num) : (i += 1) {
             const off = ph_off + (i * ph_size);
@@ -50,23 +59,36 @@ pub const Loader = struct {
                 const p_filesz = readU64(source, off + elf_spec.PHDR.FILESZ);
                 const p_memsz = readU64(source, off + elf_spec.PHDR.MEMSZ);
 
-                // Translate high virtual addresses to Guest Physical Addresses (GPA).
-                const gpa = (p_vaddr & 0xFFFFFFFF);
+                // Validate segment data fits within the ELF source.
+                if (p_filesz > 0) {
+                    if (p_offset > source.len or p_filesz > source.len - p_offset) {
+                        return LoaderError.SegmentOutOfBounds;
+                    }
+                }
+                if (p_memsz < p_filesz) {
+                    return LoaderError.InvalidProgramHeader;
+                }
 
-                // Map and load the segment. 
+                // Translate virtual address to guest physical address.
+                // RISC-V kernels are typically linked at high virtual addresses
+                // (e.g. 0xffffffff80200000) with the physical offset encoded
+                // in the low bits. We use the guest's base GPA plus the page
+                // offset within the virtual address space.
+                const gpa = virtualToGPA(p_vaddr, root_vm.space.base_gpa);
+
+                // Map and load the segment.
                 if (p_filesz > 0) {
                     const segment_data = source[p_offset .. p_offset + p_filesz];
                     const hpa = try root_vm.space.translateGPA(gpa);
                     @memcpy(@as([*]u8, @ptrFromInt(hpa))[0..p_filesz], segment_data);
                 }
-                
-                // Map the segment in the guest's address space as RWX as requested.
+
+                // Map the segment in the guest's address space as RWX.
                 // We use p_memsz to cover the full segment size including BSS.
-                // AddressSpace.map handles page alignment.
                 const rwx_flags = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
                 const hpa_start = try root_vm.space.translateGPA(gpa);
                 try root_vm.space.map(gpa, hpa_start, p_memsz, rwx_flags);
-                
+
                 // Zero out any remaining memory in the segment (BSS).
                 if (p_memsz > p_filesz) {
                     const bss_gpa = gpa + p_filesz;
@@ -78,7 +100,27 @@ pub const Loader = struct {
             }
         }
 
-        return entry_point;
+        // Return the entry point translated to GPA for the guest.
+        return virtualToGPA(entry_point, root_vm.space.base_gpa);
+    }
+
+    /// Translate a virtual address to a guest physical address.
+    ///
+    /// RISC-V Sv39 kernels use the top bits for the virtual address space
+    /// (e.g. 0xffffffff80200000 → physical offset 0x80200000). For Sv48/Sv57
+    /// this mask would change. For the Root VM, we assume a direct mapping
+    /// where the GPA can be derived from the lower bits.
+    ///
+    /// This uses a 39-bit mask (matching Sv39) rather than an arbitrary 32-bit
+    /// truncation, preserving addresses up to 512 GB of GPA space.
+    fn virtualToGPA(vaddr: u64, base_gpa: usize) usize {
+        // Sv39 uses bits [38:0] for the physical page; mask off the high bits.
+        const sv39_mask: u64 = (1 << 39) - 1;
+        const physical_offset: usize = @intCast(vaddr & sv39_mask);
+        // If the physical offset is already within the guest's RAM range, use it directly.
+        // Otherwise, rebase it relative to the guest's base GPA.
+        if (physical_offset >= base_gpa) return physical_offset;
+        return base_gpa + physical_offset;
     }
 
     // Byte-level little-endian readers for manual parsing.
