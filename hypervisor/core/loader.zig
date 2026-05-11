@@ -47,11 +47,29 @@ pub const Loader = struct {
             return LoaderError.InvalidProgramHeader;
         }
 
+        // First pass: find the minimum virtual address among all loadable segments.
+        // This gives us the base virtual address the ELF was linked at, allowing us
+        // to compute relative physical offsets without assuming a specific link layout.
+        var min_vaddr: u64 = std.math.maxInt(u64);
         var i: usize = 0;
         while (i < ph_num) : (i += 1) {
             const off = ph_off + (i * ph_size);
             if (off + ph_size > source.len) return LoaderError.InvalidProgramHeader;
+            const p_type = readU32(source, off + elf_spec.PHDR.TYPE);
+            if (p_type == elf_spec.PT_LOAD) {
+                const p_vaddr = readU64(source, off + elf_spec.PHDR.VADDR);
+                if (p_vaddr < min_vaddr) {
+                    min_vaddr = p_vaddr;
+                }
+            }
+        }
+        
+        if (min_vaddr == std.math.maxInt(u64)) min_vaddr = 0;
 
+        // Second pass: load and map the segments into the guest's physical memory.
+        i = 0;
+        while (i < ph_num) : (i += 1) {
+            const off = ph_off + (i * ph_size);
             const p_type = readU32(source, off + elf_spec.PHDR.TYPE);
             if (p_type == elf_spec.PT_LOAD) {
                 const p_offset = readU64(source, off + elf_spec.PHDR.OFFSET);
@@ -69,12 +87,11 @@ pub const Loader = struct {
                     return LoaderError.InvalidProgramHeader;
                 }
 
-                // Translate virtual address to guest physical address.
-                // RISC-V kernels are typically linked at high virtual addresses
-                // (e.g. 0xffffffff80200000) with the physical offset encoded
-                // in the low bits. We use the guest's base GPA plus the page
-                // offset within the virtual address space.
-                const gpa = virtualToGPA(p_vaddr, root_vm.space.base_gpa);
+                // Programmatically translate virtual address to guest physical address.
+                // We use the segment's relative offset from the base virtual address
+                // to map it cleanly into the guest's RAM footprint.
+                const offset = p_vaddr - min_vaddr;
+                const gpa = root_vm.space.base_gpa + @as(usize, @intCast(offset));
 
                 // Map and load the segment.
                 if (p_filesz > 0) {
@@ -101,26 +118,8 @@ pub const Loader = struct {
         }
 
         // Return the entry point translated to GPA for the guest.
-        return virtualToGPA(entry_point, root_vm.space.base_gpa);
-    }
-
-    /// Translate a virtual address to a guest physical address.
-    ///
-    /// RISC-V Sv39 kernels use the top bits for the virtual address space
-    /// (e.g. 0xffffffff80200000 → physical offset 0x80200000). For Sv48/Sv57
-    /// this mask would change. For the Root VM, we assume a direct mapping
-    /// where the GPA can be derived from the lower bits.
-    ///
-    /// This uses a 39-bit mask (matching Sv39) rather than an arbitrary 32-bit
-    /// truncation, preserving addresses up to 512 GB of GPA space.
-    fn virtualToGPA(vaddr: u64, base_gpa: usize) usize {
-        // Sv39 uses bits [38:0] for the physical page; mask off the high bits.
-        const sv39_mask: u64 = (1 << 39) - 1;
-        const physical_offset: usize = @intCast(vaddr & sv39_mask);
-        // If the physical offset is already within the guest's RAM range, use it directly.
-        // Otherwise, rebase it relative to the guest's base GPA.
-        if (physical_offset >= base_gpa) return physical_offset;
-        return base_gpa + physical_offset;
+        const entry_offset = entry_point - min_vaddr;
+        return root_vm.space.base_gpa + @as(usize, @intCast(entry_offset));
     }
 
     // Byte-level little-endian readers for manual parsing.
