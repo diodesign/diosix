@@ -182,6 +182,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     // medeleg and mideleg values.
 
     const cpu_ctx = riscv.getCPUContext();
+    @memset(@as([*]u8, @ptrCast(cpu_ctx))[0..@sizeOf(riscv.CpuContext)], 0);
     cpu_ctx.cpu_core_id = cpu_core_id;
 
     // 2. Initialize the heap allocator for this core.
@@ -221,7 +222,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
             if (vc.guest.space.mode == .h_paging) {
                 const hgatp_val = vc.guest.space.paging.?.hgatp(vc.guest.vmid);
                 if (vc.machine.hgatp != hgatp_val) {
-                    debug.printf("CPU {}: Updating guest={} hgatp to 0x{x}\n", .{pcore.this().cpu_core_id, vc.guest_id, hgatp_val});
+                    debug.printf("CPU {}: Updating guest={} hgatp to 0x{x}\n", .{ pcore.this().cpu_core_id, vc.guest_id, hgatp_val });
                     vc.machine.hgatp = hgatp_val;
                 }
             }

@@ -43,6 +43,8 @@ pub fn initCpu() void {
     pc.run_queue_count = 0;
     pc.active_vcore = null;
     pc.trap_count = 0;
+    pc.last_trap_pc = 0;
+    pc.trap_loop_count = 0;
 }
 
 // Add a virtual core to a run queue (local preferred, global for overflow).
