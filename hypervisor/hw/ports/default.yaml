@@ -1,0 +1,6 @@
+# Default target hardware configuration
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+default_system: qemu-virt

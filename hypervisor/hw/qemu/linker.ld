@@ -52,7 +52,7 @@ SECTIONS
   . += 8;
   fromhost = .;
 
-  /* embedded root VM image */
+  /* embedded Root VM image */
   .rootvm : ALIGN(0x1000)
   {
     __rootvm_start = .;

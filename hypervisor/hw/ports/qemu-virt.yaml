@@ -1,0 +1,34 @@
+# QEMU Virt hardware configuration
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+name: qemu-virt
+linker_script: hypervisor/hw/qemu/linker.ld
+
+# Emulator execution parameters
+run_cmd:
+  - qemu-system-riscv64
+  - -nographic
+  - -machine
+  - virt
+  - -cpu
+  - max,h=true
+  - -smp
+  - 4
+  - -m
+  - 2G
+  - -bios
+  - none
+  - -kernel
+
+# Assembly source assets required for low-level initialization
+assembly_files:
+  - hypervisor/hw/qemu/entry.s
+  - hypervisor/hw/qemu/xint.s
+  - hypervisor/hw/qemu/util.s
+  - hypervisor/hw/qemu/rootvm.s
+
+# Static assembly dependencies that should trigger a full rebuild when changed
+dependencies:
+  - hypervisor/hw/qemu/consts.s

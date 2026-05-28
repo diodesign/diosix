@@ -1,4 +1,4 @@
-// RISC-V Physical Memory Protection (PMP) Management
+// RISC-V Physical Memory Protection (PMP) management
 // Used as a fallback for guest isolation when H-extension is missing.
 //
 // PMP uses Top-of-Range (TOR) mode which requires two entries per region:
@@ -150,22 +150,70 @@ pub const PMPConfig = struct {
     /// Write a value to pmpaddr[index]. Only entries 0-15 are supported.
     fn writePmpAddr(index: usize, value: usize) void {
         switch (index) {
-            0 => asm volatile ("csrw pmpaddr0, %[val]" : : [val] "r" (value)),
-            1 => asm volatile ("csrw pmpaddr1, %[val]" : : [val] "r" (value)),
-            2 => asm volatile ("csrw pmpaddr2, %[val]" : : [val] "r" (value)),
-            3 => asm volatile ("csrw pmpaddr3, %[val]" : : [val] "r" (value)),
-            4 => asm volatile ("csrw pmpaddr4, %[val]" : : [val] "r" (value)),
-            5 => asm volatile ("csrw pmpaddr5, %[val]" : : [val] "r" (value)),
-            6 => asm volatile ("csrw pmpaddr6, %[val]" : : [val] "r" (value)),
-            7 => asm volatile ("csrw pmpaddr7, %[val]" : : [val] "r" (value)),
-            8 => asm volatile ("csrw pmpaddr8, %[val]" : : [val] "r" (value)),
-            9 => asm volatile ("csrw pmpaddr9, %[val]" : : [val] "r" (value)),
-            10 => asm volatile ("csrw pmpaddr10, %[val]" : : [val] "r" (value)),
-            11 => asm volatile ("csrw pmpaddr11, %[val]" : : [val] "r" (value)),
-            12 => asm volatile ("csrw pmpaddr12, %[val]" : : [val] "r" (value)),
-            13 => asm volatile ("csrw pmpaddr13, %[val]" : : [val] "r" (value)),
-            14 => asm volatile ("csrw pmpaddr14, %[val]" : : [val] "r" (value)),
-            15 => asm volatile ("csrw pmpaddr15, %[val]" : : [val] "r" (value)),
+            0 => asm volatile ("csrw pmpaddr0, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            1 => asm volatile ("csrw pmpaddr1, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            2 => asm volatile ("csrw pmpaddr2, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            3 => asm volatile ("csrw pmpaddr3, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            4 => asm volatile ("csrw pmpaddr4, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            5 => asm volatile ("csrw pmpaddr5, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            6 => asm volatile ("csrw pmpaddr6, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            7 => asm volatile ("csrw pmpaddr7, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            8 => asm volatile ("csrw pmpaddr8, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            9 => asm volatile ("csrw pmpaddr9, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            10 => asm volatile ("csrw pmpaddr10, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            11 => asm volatile ("csrw pmpaddr11, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            12 => asm volatile ("csrw pmpaddr12, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            13 => asm volatile ("csrw pmpaddr13, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            14 => asm volatile ("csrw pmpaddr14, %[val]"
+                :
+                : [val] "r" (value),
+            ),
+            15 => asm volatile ("csrw pmpaddr15, %[val]"
+                :
+                : [val] "r" (value),
+            ),
             else => {},
         }
     }
@@ -182,13 +230,23 @@ pub const PMPConfig = struct {
         const value = @as(usize, cfg) << byte_pos;
 
         if (reg_index == 0) {
-            var current = asm volatile ("csrr %[ret], pmpcfg0" : [ret] "=r" (-> usize));
+            var current = asm volatile ("csrr %[ret], pmpcfg0"
+                : [ret] "=r" (-> usize),
+            );
             current = (current & mask) | value;
-            asm volatile ("csrw pmpcfg0, %[val]" : : [val] "r" (current));
+            asm volatile ("csrw pmpcfg0, %[val]"
+                :
+                : [val] "r" (current),
+            );
         } else {
-            var current = asm volatile ("csrr %[ret], pmpcfg2" : [ret] "=r" (-> usize));
+            var current = asm volatile ("csrr %[ret], pmpcfg2"
+                : [ret] "=r" (-> usize),
+            );
             current = (current & mask) | value;
-            asm volatile ("csrw pmpcfg2, %[val]" : : [val] "r" (current));
+            asm volatile ("csrw pmpcfg2, %[val]"
+                :
+                : [val] "r" (current),
+            );
         }
     }
 };

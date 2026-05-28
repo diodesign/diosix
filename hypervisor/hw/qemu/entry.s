@@ -1,6 +1,6 @@
 # Prepare Qemu-virt-compatible RV64 system environment for running the hypervisor proper
 #
-# Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
+# Copyright (c) 2024, 2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
 .include "hypervisor/hw/qemu/consts.s"
@@ -15,19 +15,20 @@
 # 0x10000000, size: 0x100:     UART interface
 # 0x10001000, size: 0x1000:    VirtIO peripherals 
 # 0x0c000000, size: 0x4000000: PLIC (Platform Level Interrupt Controller)
-# 0x80000000: DRAM base <-- hypervisor + entered loaded here, _start must be placed here
+# 0x80000000: DRAM base <-- hypervisor loaded and entered here; _start must be placed here
 
 .section .text.entry
 .align 8
 
 .global _start
 
-# Qemu's boot ROM provides us a bare-bones environment, with each core starting here
+# Qemu's boot ROM provides a bare-bones environment, with each core starting here.
 # note: exceptions and interrupts (xint) are disabled
 # => a0 = per-system unique CPU core ID, aka hart ID
 #    a1 = pointer to device tree describing the environment
 _start:
     # each core should grab a slab of memory starting from the end of the hypervisor.
+    # each slab contains a per-CPU stack and variables. see consts.s for layout and sizing.
     # in order to scale to many cores, not waste too much memory, and to cope with non-linear
     # CPU ID / hart ID, each core will take memory using an atomic counter.
     # thus, memory is allocated on a first come, first served basis.
@@ -35,20 +36,18 @@ _start:
     li        t2, 1
     amoadd.w  t3, t2, (t1)
     mv        a0, t3
-    # now a0 = runtime-assigned linear CPU core ID, counting from 0
+    # now a0, t3 = runtime-assigned linear CPU core ID, counting from 0
 
-    # DEBUG: every core prints its ID as it starts
+    # DEBUG: every core prints a dot to the serial port to indicate it got this far
     li        t1, 0x10000000
-    addi      t2, a0, 0x30    # '0' + ID
-    sb        t2, 0(t1)
-    li        t2, 0x20        # ' '
+    li        t2, 0x2e        # '.'
     sb        t2, 0(t1)
 
-    # use t3 this as a multiplier from the end of the hypervisor, using shifts to keep things easy
+    # use the CPU ID in t3 as a multiplier to obtain this CPU's memory slab from the end of the hypervisor. slab address = __hypervisor_end + ( CPU ID << CPU_SLAB_SHIFT )  
     la        t1, __hypervisor_end
     slli      t3, t3, CPU_SLAB_SHIFT
     add       t3, t3, t1
-    # t3 = base of this CPU's private memory slab
+    # now t3 = base of this CPU's private memory slab
 
     # write the top of the exception and interrupt (xint) stack to mscratch.
     # this allows us to find the stack after an xint fires
@@ -69,18 +68,17 @@ _start:
     srli      t1, t2, 1
     sub       sp, t4, t1
 
-    # boot CPU core (ID 0) needs to zero the BSS
+    # boot CPU core (a0 == CPU ID 0) needs to zero the BSS
     la        t0, bss_cleared
     beq       x0, a0, clear_bss
     # t0 => flag to signal bss fully cleared
 
-    # other CPU cores need to wait for clear_bss_finished
+    # other CPU cores need to wait for bss_cleared
     # to change from zero to non-zero to indicate the BSS is clear
 clear_bss_wait_loop:
-    lw        t1, (t0)
-    fence     r, rw
-    beq       x0, t1, clear_bss_wait_loop
-    j         clear_bss_loop_end
+    amoor.w.aq  t1, x0, (t0)
+    beq         x0, t1, clear_bss_wait_loop
+    j           clear_bss_loop_end
 
 clear_bss:
     la        t1, __bss_start
@@ -92,8 +90,13 @@ clear_bss_loop:
     bltu      t1, t2, clear_bss_loop
 
 clear_bss_loop_end:
-    li        t1, 1        # set clear_bss_finished to 1 now we're done
-    amoswap.w x0, t1, (t0) # t0 => bss_cleared
+    li          t1, 1           # set clear_bss_finished to 1 now we're done
+    amoor.w.rl  x0, t1, (t0)    # t0 => bss_cleared
+
+    # DEBUG: every core prints a hash to the serial port to indicate it got this far
+    li        t1, 0x10000000
+    li        t2, 0x23        # '#'
+    sb        t2, 0(t1)
 
     # call main with:
     # a0 = runtime-assigned CPU ID number

@@ -77,7 +77,7 @@ pub const Guest = struct {
         self.children.init();
         self.vcores.init();
 
-        // Console input is restricted to the root VM only.
+        // Console input is restricted to the Root VM only.
         if (is_root) {
             debug.last_reader_guest_id = id;
         }

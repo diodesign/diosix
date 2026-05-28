@@ -1,10 +1,13 @@
-// Unified Guest Memory Space Management
+// Unified guest memory space management
 // High-level abstraction that handles either H-extension paging or PMP.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
 
 const std = @import("std");
 const physmem = @import("physmem.zig");
 const sv39x4 = @import("sv39x4.zig");
-const pmp = @import("pmp_manager.zig");
+const pmp = @import("pmp.zig");
 const riscv = @import("riscv.zig");
 
 pub const GuestSpace = struct {
@@ -27,7 +30,7 @@ pub const GuestSpace = struct {
             };
         } else {
             var pmp_config = try pmp.PMPConfig.init(allocator);
-            // Register the root VM's memory region so the guest can access it.
+            // Register the Root VM's memory region so the guest can access it.
             if (range_size > 0) {
                 try pmp_config.addRegion(base_hpa, range_size, pmp.PMPAccess.read | pmp.PMPAccess.write | pmp.PMPAccess.execute);
             }

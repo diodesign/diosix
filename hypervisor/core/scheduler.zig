@@ -83,11 +83,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
     const misa = riscv.readMisa();
 
-    debug.raw_puts("PC ");
-    debug.raw_putchar(@as(u8, @intCast(pc.cpu_core_id)) + '0');
-    debug.raw_puts(": Pick\n");
-
-    // 1. Try to pick from the local run queue first
+    // Try to pick from the local run queue first
     var it = pc.run_queue.findMin();
     while (it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
@@ -101,14 +97,8 @@ pub fn pickNext() ?*vcore.VirtualCore {
         it = pc.run_queue.findNext(node);
     }
 
-    // 2. Local queue is empty or incompatible, try to pull from the global queue
-    debug.raw_puts("PC ");
-    debug.raw_putchar(@as(u8, @intCast(pc.cpu_core_id)) + '0');
-    debug.raw_puts(": GLock\n");
+    // Local queue is empty or incompatible, try to pull from the global queue
     global_scheduler.lock.lock();
-    debug.raw_puts("PC ");
-    debug.raw_putchar(@as(u8, @intCast(pc.cpu_core_id)) + '0');
-    debug.raw_puts(": GAcq\n");
     defer global_scheduler.lock.unlock();
 
     var g_it = global_scheduler.run_queue.findMin();
@@ -124,7 +114,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
             while (pulled < PULL_BATCH and next_g != null) {
                 const g_node = next_g.?;
                 next_g = global_scheduler.run_queue.findNext(g_node);
-                
+
                 const g_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", g_node);
                 if ((g_vc.required_extensions & misa) == g_vc.required_extensions) {
                     global_scheduler.run_queue.remove(g_node);
@@ -160,19 +150,10 @@ pub fn schedule() void {
     }
 
     if (pickNext()) |next_vc| {
-        debug.raw_puts("CPU ");
-        debug.raw_putchar(@as(u8, @intCast(pc.cpu_core_id)) + '0');
-        debug.raw_puts(": Run guest=");
-        debug.raw_puthex(next_vc.guest_id);
-        debug.raw_puts(" vcore=");
-        debug.raw_puthex(next_vc.id);
-        debug.raw_putchar('\n');
-        
         pcore.contextSwitch(next_vc);
     } else {
         // Nothing to run.
         if (pc.cpu_core_id == 0 and pc.trap_count < 1) {
-            debug.raw_puts("CPU 0: Idle\n");
             pc.trap_count += 1;
         }
     }
@@ -257,7 +238,7 @@ test "hybrid local and global scheduling" {
     for (0..10) |i| {
         test_guests[i] = try guest.createGuest(testing.allocator, false, false, null, 0, 0, 0);
         vcpus[i] = vcore.VirtualCore.init(@intCast(i), test_guests[i].?, 0, 0, .normal);
-        
+
         vcpus[i].vruntime = i * 10;
         vcpus[i].state = .ready;
         vcpus[i].updateSchedulerWeight();

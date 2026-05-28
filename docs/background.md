@@ -29,5 +29,5 @@ technical guides:
   and Executable and Linkable Format (ELF) loading protocols.
 
 ---
-*For contributors, please refer to the [Diosix style guide](style-guide.md) 
+*For contributors, refer to the [Diosix style guide](style-guide.md) 
 before writing new documentation or code.*

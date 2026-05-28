@@ -46,7 +46,6 @@ fn basicDrain(_: *Writer, data: []const []const u8, splat: usize) Writer.Error!u
     return total;
 }
 
-
 fn writeCharInternal(c: u8) void {
     hw_putchar(c);
     line_start = (c == '\n');
@@ -64,7 +63,7 @@ fn writePrefix(source_id: ?usize) void {
             hw_putchar('V');
             hw_putchar('M');
             hw_putchar(' ');
-            
+
             // Simplistic decimal print for ID
             if (id == 0) {
                 hw_putchar('0');
@@ -99,7 +98,7 @@ fn writePrefix(source_id: ?usize) void {
 pub fn printf(comptime format: []const u8, args: anytype) void {
     const pcpu = pcore.this();
     const lock_already_held = (current_owner == @intFromPtr(pcpu));
-    
+
     if (!lock_already_held) {
         basic_writer_lock.lock();
         current_owner = @intFromPtr(pcpu);
@@ -118,7 +117,7 @@ pub fn printf(comptime format: []const u8, args: anytype) void {
 pub fn putchar(c: u8) void {
     const pcpu = pcore.this();
     const lock_already_held = (current_owner == @intFromPtr(pcpu));
-    
+
     if (!lock_already_held) {
         basic_writer_lock.lock();
         current_owner = @intFromPtr(pcpu);
@@ -137,7 +136,7 @@ pub fn putchar(c: u8) void {
 pub fn putcharFromGuest(source_id: usize, c: u8) void {
     const pcpu = pcore.this();
     const lock_already_held = (current_owner == @intFromPtr(pcpu));
-    
+
     if (!lock_already_held) {
         basic_writer_lock.lock();
         current_owner = @intFromPtr(pcpu);
@@ -160,7 +159,7 @@ pub fn getchar(source_id: usize) i16 {
 
     const pcpu = pcore.this();
     const lock_already_held = (current_owner == @intFromPtr(pcpu));
-    
+
     if (!lock_already_held) {
         basic_writer_lock.lock();
         current_owner = @intFromPtr(pcpu);
@@ -173,23 +172,4 @@ pub fn getchar(source_id: usize) i16 {
     }
 
     return hw_getchar();
-}
-
-// Lock-free raw character output for multicore debugging
-pub fn raw_putchar(c: u8) void {
-    if (builtin.is_test) return;
-    hw_putchar(c);
-}
-
-pub fn raw_puts(s: []const u8) void {
-    for (s) |c| raw_putchar(c);
-}
-
-pub fn raw_puthex(val: u64) void {
-    const chars = "0123456789abcdef";
-    var i: u5 = 16;
-    while (i > 0) {
-        i -= 1;
-        raw_putchar(chars[@intCast((val >> (@as(u6, i) * 4)) & 0xf)]);
-    }
 }

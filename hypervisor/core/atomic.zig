@@ -1,13 +1,11 @@
 // generic atomic routines for spinlocks and so on
 //
-// Copyright (c) 2024, 2025 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
 const value = std.atomic.Value;
 const ordering = std.builtin.AtomicOrder;
-
-extern fn hw_pause() void;
 
 // primitives for atomically reading and writing boolean flags
 pub fn writeBool(ptr: *bool, val: bool) void {
@@ -28,9 +26,10 @@ const SpinLock = struct {
 
     // call lock() to acquire the lock, waiting endlessly until it's available
     pub fn lock(self: *SpinLock) void {
-        while (self.lock_value.swap(true, ordering.acquire) != false) {
+        while (self.lock_value.swap(true, ordering.acq_rel) != false) {
             // spin until we get the lock. avoid hw_pause (wfi) during early boot
             // to prevent cores from waiting for interrupts that aren't set up yet.
+            std.atomic.spinLoopHint();
         }
     }
 
@@ -60,3 +59,42 @@ pub const NamedSpinLock = struct {
         self.spinlock.unlock();
     }
 };
+
+// LockPayload provides RAII-style mutual exclusion for any type T. It uses a
+// NamedSpinLock internally to protect the data.
+pub fn LockPayload(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        lock: NamedSpinLock,
+        data: T,
+
+        pub fn init(name: []const u8, data: T) Self {
+            return Self{
+                .lock = NamedSpinLock.init(name),
+                .data = data,
+            };
+        }
+
+        // returns a Guard object giving temporary exclusive access to the data
+        pub fn acquire(self: *Self) Guard {
+            self.lock.lock();
+            return Guard{ .payload = self };
+        }
+
+        // unlike other languages / environments, we must explicitly get the
+        // contents of the guard (the data we want to use) and release it
+        // when we're done using it exclusively.
+        pub const Guard = struct {
+            payload: *Self,
+
+            pub fn get(self: Guard) *T {
+                return &self.payload.data;
+            }
+
+            pub fn release(self: Guard) void {
+                self.payload.lock.unlock();
+            }
+        };
+    };
+}
