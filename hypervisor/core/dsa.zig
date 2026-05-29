@@ -148,13 +148,13 @@ test "doubly linked list" {
     var list: List = undefined;
     list.init();
 
-    // 1. Test initial state and empty list operations
+    // Test initial state and empty list operations
     try testing.expect(list.start == null);
     try testing.expect(list.end == null);
     try testing.expect(list.popStart() == null);
     try testing.expect(list.popEnd() == null);
 
-    // 2. Test pushStart and popStart (LIFO)
+    // Test pushStart and popStart (LIFO)
     const node1 = try allocator.create(Node);
     node1.* = .{ .next = null, .previous = null, .contents = 10 };
     list.pushStart(node1);
@@ -186,7 +186,7 @@ test "doubly linked list" {
     allocator.destroy(node1);
     allocator.destroy(node2);
 
-    // 3. Test pushEnd and popEnd (LIFO from the other side)
+    // Test pushEnd and popEnd (LIFO from the other side)
     const node3 = try allocator.create(Node);
     node3.* = .{ .next = null, .previous = null, .contents = 30 };
     list.pushEnd(node3);
@@ -218,7 +218,7 @@ test "doubly linked list" {
     allocator.destroy(node3);
     allocator.destroy(node4);
 
-    // 4. Test mixed push/pop (FIFO)
+    // Test mixed push/pop (FIFO)
     const node5 = try allocator.create(Node);
     node5.* = .{ .next = null, .previous = null, .contents = 50 };
     const node6 = try allocator.create(Node);
@@ -239,7 +239,7 @@ test "doubly linked list" {
     allocator.destroy(node5);
     allocator.destroy(node6);
 
-    // 5. Test insert
+    // Test insert
     const n100 = try allocator.create(Node);
     n100.* = .{ .next = null, .previous = null, .contents = 100 };
     const n200 = try allocator.create(Node);
@@ -273,7 +273,7 @@ test "doubly linked list" {
     try testing.expect(n300.next == n400);
     try testing.expect(n400.previous == n300);
 
-    // 6. Test remove
+    // Test remove
     // remove from middle
     list.remove(n300);
     try testing.expect(n200.next == n400);

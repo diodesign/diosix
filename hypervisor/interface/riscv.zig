@@ -85,7 +85,7 @@ pub const HSTATUS = struct {
     pub const SPV = 1 << 7;
     pub const SPVP = 1 << 8;
 };
- 
+
 pub const HVIP = struct {
     pub const VSSIP: usize = 1 << 2;
     pub const VSTIP: usize = 1 << 6;
@@ -93,6 +93,8 @@ pub const HVIP = struct {
 };
 
 pub const Cause = enum(usize) {
+    pub const INTERRUPT_BIT = 1 << 63;
+
     // Exceptions
     instruction_alignment = 0,
     instruction_access = 1,
@@ -114,20 +116,18 @@ pub const Cause = enum(usize) {
     virtual_instruction = 22,
     guest_store_page_fault = 23,
 
-    // Interrupts (marker bit set below)
-    user_swi = (1 << 63) | 0,
-    supervisor_swi = (1 << 63) | 1,
-    machine_swi = (1 << 63) | 3,
-    user_timer = (1 << 63) | 4,
-    supervisor_timer = (1 << 63) | 5,
-    machine_timer = (1 << 63) | 7,
-    user_interrupt = (1 << 63) | 8,
-    supervisor_interrupt = (1 << 63) | 9,
-    machine_interrupt = (1 << 63) | 11,
+    // Interrupts (exception number with interrupt bit set)
+    user_swi = INTERRUPT_BIT | 0,
+    supervisor_swi = INTERRUPT_BIT | 1,
+    machine_swi = INTERRUPT_BIT | 3,
+    user_timer = INTERRUPT_BIT | 4,
+    supervisor_timer = INTERRUPT_BIT | 5,
+    machine_timer = INTERRUPT_BIT | 7,
+    user_interrupt = INTERRUPT_BIT | 8,
+    supervisor_interrupt = INTERRUPT_BIT | 9,
+    machine_interrupt = INTERRUPT_BIT | 11,
 
     unknown = 0xffffffffffffffff,
-
-    pub const INTERRUPT_BIT = 1 << 63;
 };
 
 pub fn toCause(val: usize) Cause {
@@ -152,16 +152,80 @@ pub fn toCause(val: usize) Cause {
         22 => .virtual_instruction,
         23 => .guest_store_page_fault,
 
-        (1 << 63) | 0 => .user_swi,
-        (1 << 63) | 1 => .supervisor_swi,
-        (1 << 63) | 3 => .machine_swi,
-        (1 << 63) | 4 => .user_timer,
-        (1 << 63) | 5 => .supervisor_timer,
-        (1 << 63) | 7 => .machine_timer,
-        (1 << 63) | 8 => .user_interrupt,
-        (1 << 63) | 9 => .supervisor_interrupt,
-        (1 << 63) | 11 => .machine_interrupt,
+        Cause.INTERRUPT_BIT | 0 => .user_swi,
+        Cause.INTERRUPT_BIT | 1 => .supervisor_swi,
+        Cause.INTERRUPT_BIT | 3 => .machine_swi,
+        Cause.INTERRUPT_BIT | 4 => .user_timer,
+        Cause.INTERRUPT_BIT | 5 => .supervisor_timer,
+        Cause.INTERRUPT_BIT | 7 => .machine_timer,
+        Cause.INTERRUPT_BIT | 8 => .user_interrupt,
+        Cause.INTERRUPT_BIT | 9 => .supervisor_interrupt,
+        Cause.INTERRUPT_BIT | 11 => .machine_interrupt,
 
         else => .unknown,
     };
 }
+
+// Standard RISC-V CSR Numbers
+pub const CSR = struct {
+    // Entropy Source (Zkr)
+    pub const SEED = 0x015;
+
+    // Advanced Interrupt Architecture (AIA) CSRs
+    pub const SISELECT_LEGACY = 0x015;
+    pub const SIREG_LEGACY = 0x016;
+    pub const VSISELECT_LEGACY = 0x215;
+    pub const VSIREG_LEGACY = 0x216;
+
+    pub const SISELECT = 0x150;
+    pub const SIREG = 0x151;
+    pub const VSISELECT = 0x250;
+    pub const VSIREG = 0x251;
+
+    pub const SISELECTH = 0xdb0;
+    pub const SIREGH = 0xdb4;
+    pub const VSISELECTH = 0xeb0;
+    pub const VSIREGH = 0xeb4;
+
+    // Execution Environment Config
+    pub const SENVCFG = 0x10a;
+    pub const VSENVCFG = 0x20a;
+
+    // Timer/Counter CSRs
+    pub const TIME = 0xc01;
+};
+
+// RISC-V Instruction Decoding Constants
+pub const Instr = struct {
+    pub const OPCODE_MASK = 0x7f;
+    pub const CSR_MASK = 0xfff;
+    pub const RD_MASK = 0x1f;
+    pub const RS1_MASK = 0x1f;
+    pub const FUNCT3_MASK = 0x7;
+
+    pub const OPCODE_SYSTEM = 0x73;
+    pub const OPCODE_MISC_MEM = 0x0f;
+
+    // CSR Instruction Types (funct3)
+    pub const FUNCT3_CSRRW = 1;
+    pub const FUNCT3_CSRRS = 2;
+    pub const FUNCT3_CSRRC = 3;
+    pub const FUNCT3_CSRRWI = 5;
+    pub const FUNCT3_CSRRSI = 6;
+    pub const FUNCT3_CSRRCI = 7;
+
+    // Specific standard instruction encodings
+    pub const WFI = 0x10500073;
+    pub const FENCE_I = 0x0000100f;
+    pub const FUNCT3_FENCE = 0;
+};
+
+// Platform-Specific Core Local Interruptor (CLINT) Hardware definitions
+pub const CLINT = struct {
+    pub const BASE = 0x02000000;
+
+    // Returns MSIP register pointer for the given physical hart ID
+    pub fn msip(hart: usize) *volatile u32 {
+        return @ptrFromInt(BASE + 4 * hart);
+    }
+};

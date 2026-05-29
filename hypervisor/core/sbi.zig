@@ -28,15 +28,6 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
     const a1 = context[@intFromEnum(arch.Register.a1)];
     const a2 = context[@intFromEnum(arch.Register.a2)];
 
-    // const a3 = context[@intFromEnum(arch.Register.a3)];
-    // const a4 = context[@intFromEnum(arch.Register.a4)];
-    // const a5 = context[@intFromEnum(arch.Register.a5)];
-
-    // Verbose SBI tracing for early boot diagnostics (disabled for production)
-    if (false) {
-        debug.printf("SBI: [ENTER] ext=0x{x} func={} a0=0x{x} a1=0x{x} a2=0x{x} from vcore {}\n", .{ extension, function, a0, a1, a2, vc.id });
-    }
-
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
         interface.EXT.TIME => handleTimer(vc, context, a0),
@@ -58,8 +49,7 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.LEGACY_CLEAR_IPI => {
             vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSSIP);
             // Clear the CLINT MSIP register for the current physical CPU core
-            const msip_ptr = @as(*volatile u32, @ptrFromInt(0x02000000 + 4 * riscv.getCPUContext().cpu_core_id));
-            msip_ptr.* = 0;
+            arch.CLINT.msip(riscv.getCPUContext().cpu_core_id).* = 0;
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_SEND_IPI => {
@@ -75,17 +65,14 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
                     if ((mask & (@as(usize, 1) << @intCast(target_vc.id))) != 0) {
                         target_vc.machine.hvip |= riscv.HVIP.VSSIP;
                         // Trigger physical IPI to wake up target physical core from WFI
-                        const msip_ptr = @as(*volatile u32, @ptrFromInt(0x02000000 + 4 * target_vc.id));
-                        msip_ptr.* = 1;
+                        arch.CLINT.msip(target_vc.id).* = 1;
                     }
                 }
                 it_vcore = node.next;
             }
             setResult(vc, context, SBI_SUCCESS, 0);
         },
-        interface.EXT.LEGACY_REMOTE_FENCE_I,
-        interface.EXT.LEGACY_REMOTE_SFENCE_VMA,
-        interface.EXT.LEGACY_REMOTE_SFENCE_VMA_ASID => {
+        interface.EXT.LEGACY_REMOTE_FENCE_I, interface.EXT.LEGACY_REMOTE_SFENCE_VMA, interface.EXT.LEGACY_REMOTE_SFENCE_VMA_ASID => {
             // For a single virtual CPU, there are no remote harts, so remote fences are a complete no-op.
             setResult(vc, context, SBI_SUCCESS, 0);
         },
@@ -98,13 +85,6 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             debug.printf("SBI: Unknown extension 0x{x} func {} from guest {}\n", .{ extension, function, vc.id });
             setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0);
         },
-    }
-
-    // Trace result for diagnostics (disabled for production)
-    if (false) {
-        const res_err = context[@intFromEnum(riscv.Register.a0)];
-        const res_val = context[@intFromEnum(riscv.Register.a1)];
-        debug.printf("SBI: [EXIT]  ext=0x{x} err=0x{x} val=0x{x}\n", .{ extension, res_err, res_val });
     }
 
     // Move guest to the next instruction after ECALL
@@ -147,15 +127,15 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
 fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64) void {
     // Set timer for guest.
     riscv.setTimer(stime);
-    
+
     // Track that the guest has explicitly scheduled a timer interrupt.
     vc.timer_scheduled = true;
     vc.timer_target = stime;
-    
+
     if (riscv.hasHExtension()) {
         vc.guest_state.vstimecmp = stime;
     }
-    
+
     // Clear the guest's virtual timer interrupt pending bit now that they've scheduled a new event.
     vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSTIP);
 
@@ -169,8 +149,7 @@ fn handleSystemReset(vc: *vcore.VirtualCore, _: *riscv.ThreadContext, function: 
     debug.printf("SBI: System Reset (type {}) requested by guest {}\n", .{ reset_type, g.id });
 
     if (g.is_root) {
-        // SRST reset_type: 0 = shutdown, 1 = cold reboot, 2 = warm reboot
-        if (reset_type == 0) {
+        if (reset_type == interface.SRST.TYPE_SHUTDOWN) {
             debug.printf("Root VM requested shutdown. Powering off host.\n", .{});
             g.terminate();
             riscv.shutdown();
@@ -221,7 +200,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
 fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
     const g = vc.getGuest();
     switch (function) {
-        0 => { // HART_START
+        interface.HSM.HART_START => {
             const target_hart = a0;
             const start_addr = a1;
             const opaque_param = a2;
@@ -233,33 +212,31 @@ fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: us
                 }
                 target_vc.machine.mepc = start_addr;
                 target_vc.context[@intFromEnum(arch.Register.a0)] = target_hart;
-                target_vc.context[@intFromEnum(arch.Register.a1)] = opaque_param;
+                target_vc.context[@intFromEnum(riscv.Register.a1)] = opaque_param;
                 target_vc.state = .ready;
 
                 // Ensure it's in the scheduler
                 scheduler.queue(target_vc);
 
                 // Trigger physical IPI to wake up physical core target_hart from WFI
-                const msip_ptr = @as(*volatile u32, @ptrFromInt(0x02000000 + 4 * target_hart));
-                msip_ptr.* = 1;
+                arch.CLINT.msip(target_hart).* = 1;
 
                 setResult(vc, context, SBI_SUCCESS, 0);
-                debug.printf("SBI: HSM Started vcore {} at 0x{x} for guest {}\n", .{ target_hart, start_addr, g.id });
             } else {
                 setResult(vc, context, interface.ERR_INVALID_PARAM, 0);
             }
         },
-        1 => { // HART_STOP (currently stubbed)
+        interface.HSM.HART_STOP => {
             vc.state = .stopped;
             setResult(vc, context, SBI_SUCCESS, 0);
         },
-        2 => { // HART_GET_STATUS
+        interface.HSM.HART_GET_STATUS => {
             const target_hart = a0;
             if (g.findVcore(target_hart)) |target_vc| {
                 const status: usize = switch (target_vc.state) {
-                    .running => 0, // STARTED
-                    .ready => 0, // Also consider STARTED or START_PENDING
-                    .stopped => 1, // STOPPED
+                    .running => interface.HSM.STATUS_STARTED,
+                    .ready => interface.HSM.STATUS_STARTED,
+                    .stopped => interface.HSM.STATUS_STOPPED,
                 };
                 setResult(vc, context, SBI_SUCCESS, status);
             } else {

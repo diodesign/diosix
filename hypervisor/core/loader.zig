@@ -63,7 +63,7 @@ pub const Loader = struct {
                 }
             }
         }
-        
+
         if (min_vaddr == std.math.maxInt(u64)) min_vaddr = 0;
 
         // Second pass: load and map the segments into the guest's physical memory.
@@ -113,7 +113,7 @@ pub const Loader = struct {
                     @memset(@as([*]u8, @ptrFromInt(hpa))[0 .. p_memsz - p_filesz], 0);
                 }
 
-                debug.printf("Loaded and mapped ELF segment: VADDR 0x{x} -> GPA 0x{x} ({} bytes)\n", .{ p_vaddr, gpa, p_memsz });
+                // debug.printf("Loaded and mapped ELF segment: VADDR 0x{x} -> GPA 0x{x} ({} bytes)\n", .{ p_vaddr, gpa, p_memsz });
             }
         }
 

@@ -115,11 +115,11 @@ pub const GuestSpace = struct {
     pub fn translateGPA(self: *const GuestSpace, gpa: usize) !usize {
         if (self.mode == .h_paging) {
             const pt = self.paging.?;
-            // 1. Check if it's within the optimized identity/offset range
+            // Check if it's within the optimized identity/offset range
             if (gpa >= pt.root_base_gpa and gpa < pt.root_base_gpa + pt.root_range_size) {
                 return gpa - pt.root_base_gpa + pt.root_base_hpa;
             }
-            // 2. Otherwise, perform a page table walk
+            // Otherwise, perform a page table walk
             const pte_ptr = pt.walk(gpa, false) catch return error.TranslationFailed;
             const hpa = (pte_ptr.* >> 10) << 12;
             return hpa + (gpa % physmem.PageSize);

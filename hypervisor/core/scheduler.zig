@@ -87,29 +87,15 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
     const misa = riscv.readMisa();
 
-    if (false) {
-        debug.printf("CPU {}: pickNext() called. misa=0x{x}, local_queue_count={}\n", .{ pc.cpu_core_id, misa, pc.run_queue_count });
-    }
-
     // Try to pick from the local run queue first
     var it = pc.run_queue.findMin();
     while (it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        if (false) {
-            debug.printf("  Checking local vcore guest={} vcore={} required_extensions=0x{x}\n", .{ vc.guest_id, vc.id, vc.required_extensions });
-        }
         if ((vc.required_extensions & misa) == vc.required_extensions) {
             pc.run_queue.remove(node);
             pc.run_queue_count -= 1;
             global_min_vruntime.store(vc.vruntime, .monotonic);
-            if (false) {
-                debug.printf("  CPU {}: picked local vcore guest={} vcore={}\n", .{ pc.cpu_core_id, vc.guest_id, vc.id });
-            }
             return vc;
-        } else {
-            if (false) {
-                debug.printf("  CPU {}: local vcore guest={} vcore={} is incompatible (required=0x{x}, got=0x{x})\n", .{ pc.cpu_core_id, vc.guest_id, vc.id, vc.required_extensions, misa });
-            }
         }
         it = pc.run_queue.findNext(node);
     }
@@ -120,16 +106,8 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const state = guard.get();
 
     var g_it = state.run_queue.findMin();
-    if (g_it == null) {
-        if (false) {
-            debug.printf("  CPU {}: global queue is empty\n", .{ pc.cpu_core_id });
-        }
-    }
     while (g_it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        if (false) {
-            debug.printf("  Checking global vcore guest={} vcore={} required_extensions=0x{x}\n", .{ vc.guest_id, vc.id, vc.required_extensions });
-        }
         if ((vc.required_extensions & misa) == vc.required_extensions) {
             state.run_queue.remove(node);
             global_min_vruntime.store(vc.vruntime, .monotonic);
@@ -150,14 +128,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
                 }
             }
 
-            if (false) {
-                debug.printf("  CPU {}: picked global vcore guest={} vcore={} pulled={}\n", .{ pc.cpu_core_id, vc.guest_id, vc.id, pulled });
-            }
             return vc;
-        } else {
-            if (false) {
-                debug.printf("  CPU {}: global vcore guest={} vcore={} is incompatible (required=0x{x}, got=0x{x})\n", .{ pc.cpu_core_id, vc.guest_id, vc.id, vc.required_extensions, misa });
-            }
         }
         g_it = state.run_queue.findNext(node);
     }
@@ -271,7 +242,7 @@ test "hybrid local and global scheduling" {
     var phys_test = try physmem.initForTest(testing.allocator, 128);
     defer phys_test.deinit();
 
-    // 1. Fill local queue (up to MAX_LOCAL_VCORES = 8)
+    // Fill local queue (up to MAX_LOCAL_VCORES = 8)
     var test_guests = std.mem.zeroes([10]?*guest.Guest);
     defer for (test_guests) |maybe_g| if (maybe_g) |g| g.deinit();
 
@@ -299,13 +270,13 @@ test "hybrid local and global scheduling" {
     const global_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", global_min.?);
     try testing.expectEqual(@as(usize, 8), global_vc.id);
 
-    // 2. Pick all from local
+    // Pick all from local
     for (0..8) |_| {
         _ = pickNext();
     }
     try testing.expectEqual(@as(usize, 0), pc.run_queue_count);
 
-    // 3. Next pick should pull from global
+    // Next pick should pull from global
     // It should pull id 8 (and return it) and batch pull id 9 into local
     const pulled = pickNext() orelse return error.TestFailed;
     try testing.expectEqual(@as(usize, 8), pulled.id);

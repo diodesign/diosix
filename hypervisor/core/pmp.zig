@@ -90,8 +90,8 @@ pub const PMPConfig = struct {
     /// Called during context switch to a guest vcore.
     ///
     /// Strategy:
-    /// 1. First, deny all access by default (entry 0: NAPOT covering all memory, no permissions).
-    /// 2. Then, for each guest region, program a TOR pair (base + top) with RWX permissions.
+    /// First, deny all access by default (entry 0: NAPOT covering all memory, no permissions).
+    /// Then, for each guest region, program a TOR pair (base + top) with RWX permissions.
     ///
     /// TOR mode: pmpaddrN = base >> 2, pmpaddrN+1 = (base + size) >> 2, pmpcfgN+1 = TOR | perms.
     pub fn apply(self: *PMPConfig) void {

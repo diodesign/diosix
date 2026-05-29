@@ -138,7 +138,7 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
 pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     phys_mem_state.has_h_extension = riscv.hasHExtension();
 
-    debug.printf("PhysMem: H-extension {s}\n", .{if (phys_mem_state.has_h_extension) "detected" else "NOT detected"});
+    debug.printf("H-extension {s}\n", .{if (phys_mem_state.has_h_extension) "detected" else "NOT detected"});
 
     // Calculate hypervisor footprint, including per-CPU slots (each 1MB)
     const cpu_slab_size = 1024 * 1024;
@@ -149,13 +149,13 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     const hv_region = Region{ .base = hv_start, .size = hv_end - hv_start };
     phys_mem_state.hv_region = hv_region;
 
-    debug.printf("PhysMem: HV footprint 0x{x} - 0x{x} ({} KB)\n", .{ hv_start, hv_end, hv_region.size / 1024 });
+    debug.printf("HV footprint 0x{x} - 0x{x} ({} KB)\n", .{ hv_start, hv_end, hv_region.size / 1024 });
 
     if (rootvm_region) |rvm| {
-        debug.printf("PhysMem: Root VM reservation 0x{x} - 0x{x} ({} MB)\n", .{ rvm.base, rvm.end(), rvm.size / (1024 * 1024) });
+        debug.printf("Root VM reservation 0x{x} - 0x{x} ({} MB)\n", .{ rvm.base, rvm.end(), rvm.size / (1024 * 1024) });
     }
 
-    // 1. First pass to find the range of RAM we need to track
+    // First pass to find the range of RAM we need to track
     var min_ram: usize = 0xFFFFFFFFFFFFFFFF;
     var max_ram: usize = 0;
 
@@ -185,11 +185,11 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     phys_mem_state.total_pages = phys_mem_state.ram_size / PageSize;
     // phys_mem_state.region_count is already populated by discoverRegions
 
-    // 1b. Region discovery is skipped as it should be called via discoverRegions() first
+    // Region discovery is skipped as it should be called via discoverRegions() first
 
-    // 2. Allocate and reserve space for page metadata
+    // Allocate and reserve space for page metadata
     const metadata_size = phys_mem_state.total_pages * @sizeOf(PageDescriptor);
-    debug.printf("PhysMem: Allocating {} KB for page metadata\n", .{metadata_size / 1024});
+    debug.printf("Allocating {} KB for page metadata\n", .{metadata_size / 1024});
 
     // For now, we take the metadata from the very beginning of the first free block.
     // We'll need a way to ensure this is reserved.
@@ -207,7 +207,7 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
                 const base = try readCells(data[i..], cells.address);
                 const size = try readCells(data[i + cells.address * 4 ..], cells.size);
                 const reg = Region{ .base = @intCast(base), .size = @intCast(size) };
-                
+
                 // metadata must be outside hypervisor footprint
                 if (reg.base < hv_region.base) {
                     if (hv_region.base - reg.base >= metadata_size) {
@@ -226,7 +226,7 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     }
 
     if (metadata_phys == 0 and !builtin.is_test) return PhysMemError.OutOfMemory;
-    
+
     // Initialize metadata slice
     if (!builtin.is_test) {
         phys_mem_state.metadata = @as([*]PageDescriptor, @ptrFromInt(metadata_phys))[0..phys_mem_state.total_pages];
@@ -235,7 +235,7 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
 
     const metadata_region = Region{ .base = metadata_phys, .size = metadata_size };
 
-    // 3. Second pass: Add RAM chunks to buddy allocator, skipping HV and metadata
+    // econd pass: Add RAM chunks to buddy allocator, skipping HV and metadata
     it = device_tree.iter("/", 1);
     while (it.next()) |path| {
         if (std.mem.startsWith(u8, std.fs.path.basename(path), "memory@")) {
@@ -249,14 +249,14 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
             while (i + entry_size <= data.len) : (i += entry_size) {
                 const base = try readCells(data[i..], cells.address);
                 const size = try readCells(data[i + cells.address * cell_size ..], cells.size);
-                
+
                 // Add RAM block, now also skipping metadata and rootvm
                 try addRamBlock(Region{ .base = @intCast(base), .size = @intCast(size) }, hv_region, metadata_region, rootvm_region, device_tree.reserved_memory[0..device_tree.reserved_count]);
             }
         }
     }
 
-    debug.printf("PhysMem: Initialized with {} free pages ({} MB total reachable)\n", .{ phys_mem_state.free_pages, (phys_mem_state.total_pages * PageSize) / (1024 * 1024) });
+    debug.printf("Physical memory initialized with {} free pages ({} MB total reachable)\n", .{ phys_mem_state.free_pages, (phys_mem_state.total_pages * PageSize) / (1024 * 1024) });
 }
 
 fn readCells(data: []const u8, count: usize) !u64 {
@@ -294,7 +294,7 @@ fn addRamBlock(ram: Region, hv: Region, metadata: Region, rootvm: ?Region, reser
         } else if (metadata.base >= current_base and metadata.base < next_step) {
             next_step = metadata.base;
         }
-        
+
         // Check rootvm reservation
         if (rootvm) |rvm| {
             if (current_base >= rvm.base and current_base < rvm.end()) {
@@ -326,7 +326,7 @@ fn addRamBlock(ram: Region, hv: Region, metadata: Region, rootvm: ?Region, reser
             var addr = current_base;
             // Align up to page boundary
             addr = (addr + PageSize - 1) & ~(PageSize - 1);
-            
+
             while (addr < next_step) {
                 // Find the largest power-of-two block that fits
                 var order: u8 = 0;
@@ -336,7 +336,7 @@ fn addRamBlock(ram: Region, hv: Region, metadata: Region, rootvm: ?Region, reser
                         order += 1;
                     } else break;
                 }
-                
+
                 pushFreeBlock(addr, order);
                 addr += (@as(usize, 1) << @intCast(order)) * PageSize;
             }
@@ -347,8 +347,8 @@ fn addRamBlock(ram: Region, hv: Region, metadata: Region, rootvm: ?Region, reser
 
 fn getPageDescriptor(addr: usize) *PageDescriptor {
     if (addr < phys_mem_state.ram_base or addr >= phys_mem_state.ram_base + phys_mem_state.ram_size) {
-        debug.printf("PhysMem: Address 0x{x} out of range [0x{x}-0x{x})\n", .{ addr, phys_mem_state.ram_base, phys_mem_state.ram_base + phys_mem_state.ram_size });
-        @panic("PhysMem: Address out of range");
+        debug.printf("Physical address 0x{x} out of range [0x{x}-0x{x})\n", .{ addr, phys_mem_state.ram_base, phys_mem_state.ram_base + phys_mem_state.ram_size });
+        @panic("Physical address out of range");
     }
     const index = (addr - phys_mem_state.ram_base) / PageSize;
     return &phys_mem_state.metadata[index];
@@ -387,7 +387,7 @@ pub fn allocPageSelection(order: u8) !usize {
             desc.order = order;
             desc.refcount = 1;
 
-            @memset(@as([*]u8, @ptrFromInt(addr))[0..(@as(usize, 1) << @intCast(order)) * PageSize], 0);
+            @memset(@as([*]u8, @ptrFromInt(addr))[0 .. (@as(usize, 1) << @intCast(order)) * PageSize], 0);
             return addr;
         }
     }
@@ -476,15 +476,15 @@ pub fn findContiguousRegion(size: usize) !Region {
 
         while (base + size <= reg.end()) {
             const candidate = Region{ .base = base, .size = size };
-            
+
             // Ensure no overlap with hypervisor footprint
             if (!isHypervisorMemory(candidate.base, candidate.size)) {
                 // Also check if we're hitting the metadata (which is at the start of a free block)
                 // For simplicity, we just check if it's within the first 128MB of the hypervisor's base
                 // or similar. In a real system, we'd check against metadata_region saved in init.
                 // But since we are looking for a LARGE block, we can just search from the END backwards.
-                
-                // Let's try from the end of the region instead to be safer 
+
+                // Let's try from the end of the region instead to be safer
                 // about metadata and hypervisor which are usually at the low end.
                 const top_base = (reg.end() - size) & ~(PageSize - 1);
                 if (!isHypervisorMemory(top_base, size)) {
@@ -508,8 +508,8 @@ pub fn isRam(base: usize, size: usize) bool {
     return false;
 }
 
-/// Returns true if the address is within the host physical RAM range managed by 
-/// the hypervisor's metadata descriptors. Static reservations (like the Root VM) 
+/// Returns true if the address is within the host physical RAM range managed by
+/// the hypervisor's metadata descriptors. Static reservations (like the Root VM)
 /// may be within 'isRam' but outside 'isManaged'.
 pub fn isManaged(addr: usize) bool {
     return (addr >= phys_mem_state.ram_base and addr < phys_mem_state.ram_base + phys_mem_state.ram_size);
@@ -569,7 +569,7 @@ fn removeFromFreeList(addr: usize, order: u8) void {
                 phys_mem_state.free_lists[order] = node.next;
             }
             phys_mem_state.free_pages -= (@as(usize, 1) << @intCast(order));
-            
+
             // Mark the block as no longer free at this order
             const desc = getPageDescriptor(addr);
             desc.flags &= ~PageFlags.free;
@@ -629,7 +629,7 @@ test "buddy allocator and refcounting" {
     incrementPageRef(p1);
     decrementPageRef(p1);
     try testing.expectEqual(@as(usize, 0), phys_mem_state.free_pages); // Should still be 1 (base ref was 1)
-    
+
     // Force free for test
     freePage(p1);
     try testing.expectEqual(@as(usize, 4), phys_mem_state.free_pages);

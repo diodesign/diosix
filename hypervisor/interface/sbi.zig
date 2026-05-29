@@ -64,6 +64,29 @@ pub const DBCN = struct {
     pub const CONSOLE_WRITE_BYTE = 2;
 };
 
+// HSM Extension Function IDs and Hart Status Codes
+pub const HSM = struct {
+    pub const HART_START = 0;
+    pub const HART_STOP = 1;
+    pub const HART_GET_STATUS = 2;
+    pub const HART_SUSPEND = 3;
+
+    pub const STATUS_STARTED = 0;
+    pub const STATUS_STOPPED = 1;
+    pub const STATUS_START_PENDING = 2;
+    pub const STATUS_STOP_PENDING = 3;
+    pub const STATUS_SUSPENDED = 4;
+};
+
+// SRST Extension reset types and function IDs
+pub const SRST = struct {
+    pub const SYSTEM_RESET = 0;
+
+    pub const TYPE_SHUTDOWN = 0;
+    pub const TYPE_COLD_REBOOT = 1;
+    pub const TYPE_WARM_REBOOT = 2;
+};
+
 // SBI Call Result
 pub const Result = struct {
     err: isize,

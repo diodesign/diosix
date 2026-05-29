@@ -36,7 +36,7 @@ pub const Guest = struct {
     id: GuestID,
     state: GuestState,
     is_trusted: bool, // Can map MMIO and route interrupts
-    is_root: bool,    // Is the progenitor VM (PID 1)
+    is_root: bool, // Is the progenitor VM (PID 1)
 
     // Subtree resource tracking
     quotas: QuotaSet,
@@ -99,28 +99,27 @@ pub const Guest = struct {
         return self;
     }
 
-
     pub fn terminate(self: *Guest) void {
         self.state = .dying;
-        
+
         // Release console focus
         debug.destroyGuestState(self.id);
-        
-        // 1. Recursive termination of all children (cascading)
+
+        // Recursive termination of all children (cascading)
         var it_child = self.children.start;
         while (it_child) |node| {
             node.contents.terminate();
             it_child = node.next;
         }
 
-        // 2. Stop and free all vcores
+        // Stop and free all vcores
         var it_vcore = self.vcores.start;
         while (it_vcore) |node| {
             node.contents.state = .stopped;
             it_vcore = node.next;
         }
 
-        // 3. Reclaim resources in used counters up the lineage
+        // Reclaim resources in used counters up the lineage
         var p_opt = self.parent;
         while (p_opt) |p| {
             p.quotas.used_ram_pages -= self.quotas.used_ram_pages;
@@ -178,7 +177,7 @@ pub const Guest = struct {
         }
 
         self.space.deinit();
-        
+
         var it_child = self.children.start;
         while (it_child) |node| {
             const next = node.next;
@@ -244,7 +243,7 @@ pub const Guest = struct {
             state.guest_id_next = next + 1;
             break :blk next;
         };
-        
+
         // Resource check: RAM=0 (fork is lazy), VCPUs=count, Depth=current+1
         const vcpu_count = self.vcores.count();
         if (!self.checkQuota(0, vcpu_count, self.quotas.current_depth + 1)) {
@@ -253,10 +252,10 @@ pub const Guest = struct {
 
         // Create new guest space with lazy forking
         const child_space = try self.space.fork();
-        
+
         const child = try self.allocator.create(Guest);
         errdefer self.allocator.destroy(child);
-        
+
         child.* = .{
             .id = child_id,
             .state = .valid,
@@ -272,7 +271,7 @@ pub const Guest = struct {
         };
         child.children.init();
         child.vcores.init();
-        
+
         // Lineage tracking
         const line_node = try self.allocator.create(dsa.LinkedList(*Guest).Node);
         line_node.* = .{ .next = null, .previous = null, .contents = child };
@@ -386,7 +385,7 @@ test "guest fork and memory sharing" {
 
     try testing.expect(child.id != parent.id);
     try testing.expect(child.vmid != parent.vmid);
-    
+
     // Check that we have a vcore in the child
     try testing.expect(child.vcores.start != null);
     const child_vc = child.vcores.start.?.contents;

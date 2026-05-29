@@ -945,7 +945,7 @@ pub const DeviceTreeBlob = struct {
         errdefer allocator.free(new_dtb.blob);
         @memcpy(new_dtb.blob, blob[0..blob_size]);
 
-        debug.printf("DeviceTreeBlob.init: Device tree blob at {*}, blob size = 0x{x}\n", .{ blob, blob_size });
+        debug.printf("Device tree blob at {*}, blob size = 0x{x}\n", .{ blob, blob_size });
         return new_dtb;
     }
 

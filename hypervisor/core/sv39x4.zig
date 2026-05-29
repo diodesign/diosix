@@ -1,6 +1,6 @@
 // RISC-V SV39x4 Stage-2 (G-stage) Page Table Management
 //
-// SV39x4 provides a 41-bit Guest Physical Address (GPA) space by using 
+// SV39x4 provides a 41-bit Guest Physical Address (GPA) space by using
 // a 16KB root-level page table (compared to 4KB for S-mode SV39).
 
 const std = @import("std");
@@ -22,7 +22,7 @@ pub const PTEFlags = struct {
     pub const global: u64 = 1 << 5;
     pub const accessed: u64 = 1 << 6;
     pub const dirty: u64 = 1 << 7;
-    
+
     // Software defined flags (bits 9-8)
     pub const cow: u64 = 1 << 8;
     pub const demand: u64 = 1 << 9;
@@ -39,7 +39,7 @@ pub const PageTable = struct {
     root_base_gpa: usize = 0,
     root_base_hpa: usize = 0,
     root_range_size: usize = 0,
-    
+
     pub fn init(base_gpa: usize, base_hpa: usize, range_size: usize) !PageTable {
         const addr = try physmem.allocPageSelection(2);
         return PageTable{
@@ -50,15 +50,15 @@ pub const PageTable = struct {
             .root_range_size = range_size,
         };
     }
-    
+
     pub fn deinit(self: *PageTable) void {
         self.destroyTable(self.root_phys, 2);
     }
-    
+
     fn destroyTable(self: *PageTable, addr: usize, level: u8) void {
         const ptes = @as([*]PTE, @ptrFromInt(addr));
         const num_entries = if (level == 2) @as(usize, 2048) else @as(usize, 512);
-        
+
         for (0..num_entries) |i| {
             const pte = ptes[i];
             if (pte & PTEFlags.valid != 0) {
@@ -84,19 +84,19 @@ pub const PageTable = struct {
         if (gpa % physmem.PageSize != 0 or hpa % physmem.PageSize != 0) return SV39x4Error.InvalidAlignment;
 
         // Security Shields:
-        // 1. Prevent mapping hypervisor memory
+        // Prevent mapping hypervisor memory
         if (physmem.isHypervisorMemory(hpa, physmem.PageSize)) return error.AccessDenied;
 
-        // 2. Prevent non-trusted guest mapping MMIO
+        // Prevent non-trusted guest mapping MMIO
         if (!is_trusted and physmem.isMmio(hpa, physmem.PageSize)) return error.AccessDenied;
 
         var ptes_phys = self.root_phys;
         var level: u8 = 2;
-        
+
         while (level > 0) : (level -= 1) {
             const index = self.getIdx(gpa, level);
             const ptes = @as([*]PTE, @ptrFromInt(ptes_phys));
-            
+
             if (ptes[index] & PTEFlags.valid == 0) {
                 // Create next level table
                 const next_table = try physmem.allocPage();
@@ -104,36 +104,36 @@ pub const PageTable = struct {
             } else if (ptes[index] & (PTEFlags.read | PTEFlags.write | PTEFlags.execute) != 0) {
                 return SV39x4Error.MappingOverlap;
             }
-            
+
             ptes_phys = (ptes[index] >> 10) << 12;
         }
-        
+
         // At level 0, set leaf entry
         const index = self.getIdx(gpa, 0);
         const ptes = @as([*]PTE, @ptrFromInt(ptes_phys));
-        
+
         if (ptes[index] & PTEFlags.valid != 0) {
             const existing_hpa = (ptes[index] >> 10) << 12;
             if (existing_hpa == hpa) return; // Already correctly mapped
             return SV39x4Error.MappingOverlap;
         }
-        
+
         ptes[index] = ((hpa >> 12) << 10) | flags | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty;
         if (physmem.isRam(hpa, physmem.PageSize) and physmem.isManaged(hpa)) {
             physmem.incrementPageRef(hpa);
         }
     }
-    
+
     // Walk the page table to find the entry for the given GPA.
     // If 'create' is true, intermediate tables are allocated as needed.
     pub fn walk(self: *const PageTable, gpa: usize, create: bool) !*PTE {
         var ptes_phys = self.root_phys;
         var level: u8 = 2;
-        
+
         while (level > 0) : (level -= 1) {
             const index = self.getIdx(gpa, level);
             const ptes = @as([*]PTE, @ptrFromInt(ptes_phys));
-            
+
             if (ptes[index] & PTEFlags.valid == 0) {
                 if (!create) return error.WalkFailed;
                 const next_table = try physmem.allocPage();
@@ -141,10 +141,10 @@ pub const PageTable = struct {
             } else if (ptes[index] & (PTEFlags.read | PTEFlags.write | PTEFlags.execute) != 0) {
                 return SV39x4Error.WalkFailed; // Encountered leaf too early
             }
-            
+
             ptes_phys = (ptes[index] >> 10) << 12;
         }
-        
+
         const index = self.getIdx(gpa, 0);
         const ptes = @as([*]PTE, @ptrFromInt(ptes_phys));
         return &ptes[index];
@@ -154,11 +154,11 @@ pub const PageTable = struct {
         _ = self;
         const pte = pte_ptr.*;
         const hpa = (pte >> 10) << 12;
-        
+
         // Always clone for now. A more advanced implementation would check the refcount.
         const new_hpa = try physmem.allocPage();
         @memcpy(@as([*]u8, @ptrFromInt(new_hpa))[0..physmem.PageSize], @as([*]u8, @ptrFromInt(hpa))[0..physmem.PageSize]);
-        
+
         if (physmem.isManaged(hpa)) {
             physmem.decrementPageRef(hpa);
         }
@@ -179,7 +179,7 @@ pub const PageTable = struct {
     // This is "Truly Cheap": it returns an empty root table with a shadow source.
     pub fn fork(self: *const PageTable) !PageTable {
         const other_root = try physmem.allocPageSelection(2);
-        
+
         // Note: we don't copy ANY entries from the source.
         // Instead, we rely on resolveFault and thawFromShadow to populate
         // the child's table on demand. This ensures all shared pages
@@ -205,7 +205,7 @@ pub const PageTable = struct {
             return;
         }
 
-        // 1. Root VM identity mapping
+        // Root VM identity mapping
         if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + self.root_range_size) {
             const hpa = gpa - self.root_base_gpa + self.root_base_hpa;
             // Round down to page boundaries to ensure idempotency and alignment.
@@ -219,7 +219,7 @@ pub const PageTable = struct {
             return;
         }
 
-        // 2. Resolve via walking
+        // Resolve via walking
         const pte_ptr = try self.walk(gpa, true);
         const pte = pte_ptr.*;
 
@@ -232,7 +232,7 @@ pub const PageTable = struct {
             return; // Already valid leafy mapping?
         }
 
-        // 3. Recursive thawing from shadow chain
+        // Recursive thawing from shadow chain
         if (self.shadow_source) |shadow| {
             try self.thawFromShadow(shadow, gpa, is_trusted);
             return;
@@ -265,7 +265,6 @@ pub const PageTable = struct {
         }
     }
 
-
     pub fn hgatp(self: PageTable, vmid: u16) u64 {
         const mode_sv39x4: u64 = 8;
         const vmid_u64: u64 = vmid;
@@ -286,19 +285,19 @@ test "stage-2 paging and shielding" {
     const hpa = try physmem.allocPage();
     const gpa = 0x1000;
 
-    // 1. Success case: Map RAM for non-trusted guest
+    // Success case: Map RAM for non-trusted guest
     try pt.mapPage(gpa, hpa, PTEFlags.read | PTEFlags.write | PTEFlags.valid, false);
     const pte = (try pt.walk(gpa, false)).*;
     try testing.expect(pte & PTEFlags.valid != 0);
 
-    // 2. Shielding: Prevent mapping hypervisor memory (assume HV at 0x80000000)
+    // Shielding: Prevent mapping hypervisor memory (assume HV at 0x80000000)
     // physmem.isHypervisorMemory is mocked in test to match hv_region
-    // In initForTest, hv_region is usually far away. 
+    // In initForTest, hv_region is usually far away.
     // Let's check a real MMIO address.
     const mmio_hpa = 0x10000000; // Likely MMIO
     try testing.expectError(error.AccessDenied, pt.mapPage(gpa + 0x1000, mmio_hpa, PTEFlags.read | PTEFlags.valid, false));
 
-    // 3. Trusted guest can map MMIO
+    // Trusted guest can map MMIO
     try pt.mapPage(gpa + 0x2000, mmio_hpa, PTEFlags.read | PTEFlags.valid, true);
 }
 
@@ -330,7 +329,7 @@ test "stage-2 Copy-on-Write" {
 
     // Resolve fault
     try pt2.resolveFault(gpa, false);
-    
+
     // Now it should be writable and not CoW
     try testing.expect(pte2_ptr.* & PTEFlags.cow == 0);
     try testing.expect(pte2_ptr.* & PTEFlags.write != 0);

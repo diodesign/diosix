@@ -123,8 +123,8 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     try device_tree.editProperty(guest_memory_node, "reg", try dt.DeviceTreeProperty.fromMultiU64(cpu_allocator, &.{ root_vm_gpa_base, rootvm_ram_size }));
     try device_tree.editProperty(guest_memory_node, "device_type", try dt.DeviceTreeProperty.fromText(cpu_allocator, "memory"));
 
-    const cpu_count = 1;
-    debug.printf("PhysMem: Provisioning Root VM with {} virtual CPUs\n", .{cpu_count});
+    const cpu_count = 2;
+    debug.printf("Provisioning Root VM with {} virtual CPUs\n", .{cpu_count});
 
     // Inject boot arguments and console path into the guest DTB to ensure it uses the SBI console (hvc0)
     device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, "console=hvc0 earlycon=sbi riscv_aia=off")) catch |err| {
@@ -157,9 +157,6 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
             }
         }
         if (found_aia) |path| {
-            if (false) {
-                debug.printf("DTB: Deleting AIA node: {s}\n", .{path});
-            }
             device_tree.deleteNode(path);
         } else break;
     }
@@ -194,7 +191,6 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                         }
                     }
                     try device_tree.editProperty(path, "riscv,isa", try dt.DeviceTreeProperty.fromText(cpu_allocator, new_isa.items));
-                    // debug.printf("DTB: Stripped sstc from {s} riscv,isa -> {s}\n", .{path, new_isa.items});
                 } else |_| {}
             } else |_| {}
 
@@ -215,16 +211,18 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                     }
                     if (changed) {
                         try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, new_extensions.items));
-                        // debug.printf("DTB: Stripped sstc from {s} riscv,isa-extensions\n", .{path});
                     }
                 } else |_| {}
             } else |_| {}
         }
 
-        if (!std.mem.endsWith(u8, path, "cpu@0")) {
-            // Only modify the CPU node itself, not its sub-nodes (like interrupt-controller)
-            // A CPU node path has exactly 2 slashes (e.g. "/cpus/cpu@1")
-            if (slash_count == 2) {
+        if (slash_count == 2) {
+            var cpu_id: usize = 0;
+            if (std.mem.indexOf(u8, path, "cpu@")) |idx| {
+                const id_str = path[idx + 4 ..];
+                cpu_id = std.fmt.parseInt(usize, id_str, 10) catch 0;
+            }
+            if (cpu_id >= cpu_count) {
                 try device_tree.editProperty(path, "status", try dt.DeviceTreeProperty.fromText(cpu_allocator, "disabled"));
 
                 // Add the sub-node interrupt-controller's phandle to the disabled list
@@ -276,17 +274,6 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         }
     }
 
-    if (false) {
-        const root_path = "/";
-        debug.printf("DT Node: '{s}'\n", .{root_path});
-        if (device_tree.propertyIter(root_path)) |*prop_it| {
-            var p_it = prop_it.*;
-            while (p_it.next()) |prop| {
-                debug.printf("  Prop: '{s}' (size={})\n", .{ prop.name, prop.value.size() });
-            }
-        }
-    }
-
     const guest_dtb = try device_tree.toBlob();
     defer cpu_allocator.free(guest_dtb);
 
@@ -299,7 +286,7 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // Map the DTB area as RWX explicitly. The rest of the 512MB RAM will be demand-paged.
     try root_vm.space.map(guest_dtb_gpa, guest_dtb_hpa, guest_dtb.len, sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user);
 
-    debug.printf("Found Root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_elf_base, rootvm_elf_size, entry_point });
+    debug.printf("Using Root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_elf_base, rootvm_elf_size, entry_point });
 
     // Create virtual cores for the Root VM matching host count.
     // The loader returns the entry point as a GPA, so no masking is needed.
@@ -349,7 +336,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
                 return;
             };
 
-            debug.printf("Boot CPU core {} finished initialization, releasing other cores\n", .{cpu_core_id});
+            debug.printf("Physical boot CPU core {} finished initialization, releasing other cores\n", .{cpu_core_id});
 
             const guard = boot_complete_flag.acquire();
             guard.get().* = true;
@@ -366,32 +353,22 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         },
     }
 
-    debug.printf("CPU core ID {} entering scheduling loop\n", .{cpu_core_id});
+    debug.printf("Physical CPU core ID {} ready for work\n", .{cpu_core_id});
     while (true) {
         scheduler.schedule();
 
         if (pcore.this().active_vcore) |ptr| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
-            if (false) {
-                debug.printf("CPU {}: active_vcore found: guest={} vcore={}\n", .{ pcore.this().cpu_core_id, vc.guest_id, vc.id });
-            }
 
             // Ensure machine state has latest hgatp if H-extension is active.
             if (vc.guest.space.mode == .h_paging) {
                 const hgatp_val = vc.guest.space.paging.?.hgatp(vc.guest.vmid);
                 if (vc.machine.hgatp != hgatp_val) {
-                    if (false) {
-                        debug.printf("CPU {}: Updating guest={} hgatp to 0x{x}\n", .{ pcore.this().cpu_core_id, vc.guest_id, hgatp_val });
-                    }
                     vc.machine.hgatp = hgatp_val;
                 }
             }
 
-            // Inject pending virtual timer interrupt if scheduled and target has passed.
             if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
-                if (false) {
-                    debug.printf("CPU {}: Injecting virtual timer interrupt (VSTIP) for guest {}, target=0x{x}, now=0x{x}\n", .{ pcore.this().cpu_core_id, vc.guest_id, vc.timer_target, riscv.readTime() });
-                }
                 vc.machine.hvip |= riscv.HVIP.VSTIP;
                 vc.timer_scheduled = false;
             }

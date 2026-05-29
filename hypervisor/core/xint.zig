@@ -167,54 +167,6 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     const irq = dispatch(context);
 
     total_trap_count += 1;
-    const enable_log = false;
-
-    if (enable_log) {
-        if (pcpu.active_vcore) |vc_raw| {
-            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-            debug.printf("xint_handler: total_traps={} core={} active_vcore=0x{x} guest={} vcore={}\n", .{ total_trap_count, pcpu.cpu_core_id, @intFromPtr(pcpu.active_vcore), vc.guest_id, vc.id });
-        } else {
-            debug.printf("xint_handler: total_traps={} core={} active_vcore=NULL\n", .{ total_trap_count, pcpu.cpu_core_id });
-        }
-    }
-    // Trap detail logging
-    if (enable_log) {
-        if (irq.privilege_mode != .machine) {
-            const is_ecall = (irq.cause == .virtual_supervisor_environment_call or irq.cause == .supervisor_environment_call or irq.cause == .user_environment_call);
-            if (is_ecall) {
-                const a7 = context[@intFromEnum(riscv.Register.a7)];
-                const a6 = context[@intFromEnum(riscv.Register.a6)];
-                const a0 = context[@intFromEnum(riscv.Register.a0)];
-                const a1 = context[@intFromEnum(riscv.Register.a1)];
-                const a2 = context[@intFromEnum(riscv.Register.a2)];
-                debug.printf("SBI call: core={} mode={s} pc=0x{x} ext=0x{x} func={} a0=0x{x} a1=0x{x} a2=0x{x}\n", .{ pcpu.cpu_core_id, @tagName(irq.privilege_mode), irq.pc, a7, a6, a0, a1, a2 });
-            } else {
-                debug.printf("Trapped: core={} mode={s} pc=0x{x} cause={s} (0x{x}) val=0x{x}\n", .{ pcpu.cpu_core_id, @tagName(irq.privilege_mode), irq.pc, @tagName(irq.cause), @intFromEnum(irq.cause), irq.val });
-
-                // Log translation state for debugging isolation failures
-                const hgatp = riscv.readHgatp();
-                const hstatus = riscv.readHstatus();
-                const vsatp = riscv.readVsatp();
-                const htval = riscv.readHtval();
-                const mstatus = riscv.readMstatus();
-                const hvip = if (riscv.hasHExtension()) riscv.readHvip() else 0;
-                const mideleg = if (riscv.hasHExtension()) riscv.readMideleg() else 0;
-                const medeleg = if (riscv.hasHExtension()) riscv.readMedeleg() else 0;
-
-                debug.printf("State: hgatp=0x{x} hstatus=0x{x} vsatp=0x{x} mstatus=0x{x} htval=0x{x} hvip=0x{x}\n", .{ hgatp, hstatus, vsatp, mstatus, htval, hvip });
-                debug.printf("Virtualization: MPV={} GVA={} SPV={} SPVP={} mideleg=0x{x} medeleg=0x{x}\n", .{ (mstatus & riscv.MSTATUS.MPV) != 0, (hstatus & riscv.HSTATUS.GVA) != 0, (hstatus & riscv.HSTATUS.SPV) != 0, (hstatus & riscv.HSTATUS.SPVP) != 0, mideleg, medeleg });
-
-                if (riscv.hasHExtension()) {
-                    const vstvec = riscv.readVstvec();
-                    const vscause = riscv.readVscause();
-                    const vsie = riscv.readVsie();
-                    debug.printf("Guest: vstvec=0x{x} vscause=0x{x} vsie=0x{x}\n", .{ vstvec, vscause, vsie });
-                }
-
-                pcpu.trap_count += 1;
-            }
-        }
-    }
 
     // If we're coming from a guest, save its context
     if (irq.privilege_mode != .machine) {
@@ -285,14 +237,8 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
     const ms = &vc.machine;
     const gs = &vc.guest_state;
 
-    if (false) {
-        debug.printf("syncGuestStateToHardware: mepc=0x{x}\n", .{ms.mepc});
-    }
     riscv.writeMepc(ms.mepc);
     riscv.writeMstatus(ms.mstatus);
-
-    // Aegis: Confirm exactly where we are jumping to on return (Disabled for high-speed VM boot)
-    // debug.printf("Hypervisor -> Return to PC=0x{x} mode={s}\n", .{ ms.mepc, if ((ms.mstatus & riscv.MSTATUS.MPV) != 0) "virtual" else "host" });
 
     if (riscv.hasHExtension()) {
         if (vc.guest.space.mode == .h_paging) {
@@ -371,30 +317,31 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                 // Check if it's an access to siselect (0x150 or 0x015), sireg (0x151 or 0x016), vsiselect (0x250 or 0x215), vsireg (0x251 or 0x216),
                 // siselecth (0xdb0), siregh (0xdb4), vsiselecth (0xeb0), vsiregh (0xeb4),
                 // or senvcfg (0x10A), vsenvcfg (0x20A)
-                const opcode = instr & 0x7f;
-                const csr = (instr >> 20) & 0xfff;
-                const is_seed_csr = (csr == 0x015);
-                const is_aia_csr = (csr == 0x016 or csr == 0x215 or csr == 0x216 or
-                    csr == 0x150 or csr == 0x151 or csr == 0x250 or csr == 0x251 or
-                    csr == 0xdb0 or csr == 0xdb4 or csr == 0xeb0 or csr == 0xeb4);
-                const is_envcfg_csr = (csr == 0x10a or csr == 0x20a);
-                if (opcode == 0x73 and (is_aia_csr or is_envcfg_csr or is_seed_csr)) {
-                    const rd = (instr >> 7) & 0x1f;
-                    const rs1 = (instr >> 15) & 0x1f;
-                    const funct3 = (instr >> 12) & 0x7;
+                const opcode = instr & riscv.Instr.OPCODE_MASK;
+                const csr = (instr >> 20) & riscv.Instr.CSR_MASK;
+
+                const is_emulated_csr = switch (csr) {
+                    riscv.CSR.SEED, riscv.CSR.SIREG_LEGACY, riscv.CSR.VSISELECT_LEGACY, riscv.CSR.VSIREG_LEGACY, riscv.CSR.SISELECT, riscv.CSR.SIREG, riscv.CSR.VSISELECT, riscv.CSR.VSIREG, riscv.CSR.SISELECTH, riscv.CSR.SIREGH, riscv.CSR.VSISELECTH, riscv.CSR.VSIREGH, riscv.CSR.SENVCFG, riscv.CSR.VSENVCFG => true,
+                    else => false,
+                };
+
+                if (opcode == riscv.Instr.OPCODE_SYSTEM and is_emulated_csr) {
+                    const rd = (instr >> 7) & riscv.Instr.RD_MASK;
+                    const rs1 = (instr >> 15) & riscv.Instr.RS1_MASK;
+                    const funct3 = (instr >> 12) & riscv.Instr.FUNCT3_MASK;
 
                     // Determine previous value to return in rd
                     var old_val: usize = 0;
-                    if (csr == 0x015) {
+                    if (csr == riscv.CSR.SEED) {
                         // RISC-V Entropy Source Extension (Zkr): Return ES16 status (0x80000000)
                         // combined with 16 bits of pseudo-random entropy from hardware time.
                         const time_now = riscv.readTime();
                         const entropy = (time_now ^ (time_now >> 16)) & 0xffff;
                         old_val = 0x80000000 | entropy;
                         debug.printf("Zkr seed read: time=0x{x} entropy=0x{x} old_val=0x{x}\n", .{ time_now, entropy, old_val });
-                    } else if (csr == 0x215 or csr == 0x150 or csr == 0x250 or csr == 0xdb0 or csr == 0xeb0) {
+                    } else if (csr == riscv.CSR.VSISELECT_LEGACY or csr == riscv.CSR.SISELECT or csr == riscv.CSR.VSISELECT or csr == riscv.CSR.SISELECTH or csr == riscv.CSR.VSISELECTH) {
                         old_val = vc.siselect;
-                    } else if (csr == 0x10a or csr == 0x20a) {
+                    } else if (csr == riscv.CSR.SENVCFG or csr == riscv.CSR.VSENVCFG) {
                         old_val = vc.guest_state.vsenvcfg;
                     } else {
                         // sireg/siregh always returns 0 for our emulation
@@ -402,47 +349,47 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     }
 
                     // Write new value based on instruction type
-                    if (funct3 == 1) { // CSRRW
+                    if (funct3 == riscv.Instr.FUNCT3_CSRRW) {
                         const new_val = if (rs1 == 0) 0 else context[rs1];
-                        if (csr == 0x215 or csr == 0x150 or csr == 0x250 or csr == 0xdb0 or csr == 0xeb0) {
+                        if (csr == riscv.CSR.VSISELECT_LEGACY or csr == riscv.CSR.SISELECT or csr == riscv.CSR.VSISELECT or csr == riscv.CSR.SISELECTH or csr == riscv.CSR.VSISELECTH) {
                             vc.siselect = new_val;
-                        } else if (csr == 0x10a or csr == 0x20a) {
+                        } else if (csr == riscv.CSR.SENVCFG or csr == riscv.CSR.VSENVCFG) {
                             vc.guest_state.vsenvcfg = new_val;
                         }
-                    } else if (funct3 == 2) { // CSRRS
+                    } else if (funct3 == riscv.Instr.FUNCT3_CSRRS) {
                         if (rs1 != 0) {
                             const val_to_set = context[rs1];
-                            if (csr == 0x215 or csr == 0x150 or csr == 0x250 or csr == 0xdb0 or csr == 0xeb0) {
+                            if (csr == riscv.CSR.VSISELECT_LEGACY or csr == riscv.CSR.SISELECT or csr == riscv.CSR.VSISELECT or csr == riscv.CSR.SISELECTH or csr == riscv.CSR.VSISELECTH) {
                                 vc.siselect |= val_to_set;
-                            } else if (csr == 0x10a or csr == 0x20a) {
+                            } else if (csr == riscv.CSR.SENVCFG or csr == riscv.CSR.VSENVCFG) {
                                 vc.guest_state.vsenvcfg |= val_to_set;
                             }
                         }
-                    } else if (funct3 == 3) { // CSRRC
+                    } else if (funct3 == riscv.Instr.FUNCT3_CSRRC) {
                         if (rs1 != 0) {
                             const val_to_clear = context[rs1];
-                            if (csr == 0x215 or csr == 0x150 or csr == 0x250 or csr == 0xdb0 or csr == 0xeb0) {
+                            if (csr == riscv.CSR.VSISELECT_LEGACY or csr == riscv.CSR.SISELECT or csr == riscv.CSR.VSISELECT or csr == riscv.CSR.SISELECTH or csr == riscv.CSR.VSISELECTH) {
                                 vc.siselect &= ~val_to_clear;
-                            } else if (csr == 0x10a or csr == 0x20a) {
+                            } else if (csr == riscv.CSR.SENVCFG or csr == riscv.CSR.VSENVCFG) {
                                 vc.guest_state.vsenvcfg &= ~val_to_clear;
                             }
                         }
-                    } else if (funct3 == 5) { // CSRRWI
-                        if (csr == 0x215 or csr == 0x150 or csr == 0x250 or csr == 0xdb0 or csr == 0xeb0) {
+                    } else if (funct3 == riscv.Instr.FUNCT3_CSRRWI) {
+                        if (csr == riscv.CSR.VSISELECT_LEGACY or csr == riscv.CSR.SISELECT or csr == riscv.CSR.VSISELECT or csr == riscv.CSR.SISELECTH or csr == riscv.CSR.VSISELECTH) {
                             vc.siselect = rs1;
-                        } else if (csr == 0x10a or csr == 0x20a) {
+                        } else if (csr == riscv.CSR.SENVCFG or csr == riscv.CSR.VSENVCFG) {
                             vc.guest_state.vsenvcfg = rs1;
                         }
-                    } else if (funct3 == 6) { // CSRRSI
-                        if (csr == 0x215 or csr == 0x150 or csr == 0x250 or csr == 0xdb0 or csr == 0xeb0) {
+                    } else if (funct3 == riscv.Instr.FUNCT3_CSRRSI) {
+                        if (csr == riscv.CSR.VSISELECT_LEGACY or csr == riscv.CSR.SISELECT or csr == riscv.CSR.VSISELECT or csr == riscv.CSR.SISELECTH or csr == riscv.CSR.VSISELECTH) {
                             vc.siselect |= rs1;
-                        } else if (csr == 0x10a or csr == 0x20a) {
+                        } else if (csr == riscv.CSR.SENVCFG or csr == riscv.CSR.VSENVCFG) {
                             vc.guest_state.vsenvcfg |= rs1;
                         }
-                    } else if (funct3 == 7) { // CSRRCI
-                        if (csr == 0x215 or csr == 0x150 or csr == 0x250 or csr == 0xdb0 or csr == 0xeb0) {
+                    } else if (funct3 == riscv.Instr.FUNCT3_CSRRCI) {
+                        if (csr == riscv.CSR.VSISELECT_LEGACY or csr == riscv.CSR.SISELECT or csr == riscv.CSR.VSISELECT or csr == riscv.CSR.SISELECTH or csr == riscv.CSR.VSISELECTH) {
                             vc.siselect &= ~rs1;
-                        } else if (csr == 0x10a or csr == 0x20a) {
+                        } else if (csr == riscv.CSR.SENVCFG or csr == riscv.CSR.VSENVCFG) {
                             vc.guest_state.vsenvcfg &= ~rs1;
                         }
                     }
@@ -454,23 +401,17 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
 
                     vc.machine.mepc += 4;
                     pcore.this().trap_loop_count = 0; // Reset loop detector
-                    if (false) {
-                        if (csr == 0x10a or csr == 0x20a) {
-                            debug.printf("Core {} VCore {}: Emulated CSR 0x{x} access at PC=0x{x} vsenvcfg=0x{x}\n", .{ pcpu.cpu_core_id, vc.id, csr, irq.pc, vc.guest_state.vsenvcfg });
-                        } else {
-                            debug.printf("Core {} VCore {}: Emulated CSR 0x{x} access at PC=0x{x} siselect=0x{x}\n", .{ pcpu.cpu_core_id, vc.id, csr, irq.pc, vc.siselect });
-                        }
-                    }
+
                     return;
                 }
 
                 // Emulate rdtime / csrr rd, time
-                const rdtime_inst: u32 = (0xc01 << 20) | (2 << 12) | (0x1c << 2) | 3;
-                const rdtime_mask: u32 = ~@as(u32, 0x1f << 7);
+                const rdtime_inst: u32 = (riscv.CSR.TIME << 20) | (riscv.Instr.FUNCT3_CSRRS << 12) | riscv.Instr.OPCODE_SYSTEM;
+                const rdtime_mask: u32 = ~@as(u32, riscv.Instr.RD_MASK << 7);
 
                 if ((instr & rdtime_mask) == rdtime_inst) {
                     const time_now = riscv.readTime();
-                    const rd = (instr >> 7) & 0x1f;
+                    const rd = (instr >> 7) & riscv.Instr.RD_MASK;
 
                     // Fix register corruption: write to both the stack copy (context) and the stored vc.context.
                     context[rd] = @as(usize, time_now);
@@ -478,32 +419,29 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     vc.machine.mepc += 4;
                     pcore.this().trap_loop_count = 0; // Reset loop detector
 
-                    if (false) {
-                        debug.printf("Emulated rdtime: time=0x{x} rd={} pc=0x{x}\n", .{ time_now, rd, irq.pc });
-                    }
                     return;
                 }
 
-                // Emulate FENCE.I (opcode 0x0000100f) - instruction fence
+                // Emulate FENCE.I - instruction fence
                 // This is safe to emulate as NOP since QEMU maintains I-cache coherency.
-                if (instr == 0x0000100f) {
+                if (instr == riscv.Instr.FENCE_I) {
                     vc.machine.mepc += 4;
                     pcore.this().trap_loop_count = 0;
                     return;
                 }
 
-                // Emulate WFI (opcode 0x10500073) - wait for interrupt
+                // Emulate WFI - Wait For Interrupt
                 // In VS-mode, WFI may trap as illegal. We yield to the scheduler.
-                if (instr == 0x10500073) {
+                if (instr == riscv.Instr.WFI) {
                     vc.machine.mepc += 4;
                     pcore.this().trap_loop_count = 0;
                     scheduler.schedule();
                     return;
                 }
 
-                // Emulate FENCE (opcode matches: low 7 bits = 0x0f, funct3 = 0)
+                // Emulate FENCE (opcode matches: OPCODE_MISC_MEM, funct3 = FUNCT3_FENCE)
                 // Various FENCE encodings that might trap from VS-mode
-                if ((instr & 0x7f) == 0x0f and ((instr >> 12) & 0x7) == 0) {
+                if ((instr & riscv.Instr.OPCODE_MASK) == riscv.Instr.OPCODE_MISC_MEM and ((instr >> 12) & riscv.Instr.FUNCT3_MASK) == riscv.Instr.FUNCT3_FENCE) {
                     vc.machine.mepc += 4;
                     pcore.this().trap_loop_count = 0;
                     return;
@@ -532,9 +470,8 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
             }
         },
         .guest_instruction_page_fault, .guest_load_page_fault, .guest_store_page_fault, .unknown => {
-            // Some implementations might use 21 (unknown) for other guest faults.
-            // Only handle as fault if it's within the known guest fault range or matches unknown.
-            if (@intFromEnum(irq.cause) == 21 or irq.irq_type == .exception) {
+            // Only handle as fault if it's an exception, not an interrupt.
+            if (irq.irq_type == .exception) {
                 const pcpu = pcore.this();
                 if (pcpu.active_vcore) |vc_raw| {
                     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
@@ -543,10 +480,6 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     const htval_val = riscv.readHtval();
                     var gpa = mtval2;
                     if (gpa == 0) gpa = htval_val;
-
-                    if (false) {
-                        debug.printf("Guest Fault: cause={s} (0x{x}) pc=0x{x} val=0x{x} gpa=0x{x}\n", .{ @tagName(irq.cause), @intFromEnum(irq.cause), irq.pc, irq.val, gpa });
-                    }
 
                     // As per RISC-V Privileged / Hypervisor specification, mtval2 and htval
                     // hold the guest physical address shifted right by 2 bits.
@@ -563,9 +496,6 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                             .guest_store_page_fault => .store_page_fault,
                             else => irq.cause,
                         };
-                        if (false) {
-                            debug.printf("Guest VS-stage Page Fault: core={} pc=0x{x} cause={s} (0x{x}) val=0x{x} - reflecting\n", .{ pcpu.cpu_core_id, irq.pc, @tagName(reflected_irq.cause), @intFromEnum(reflected_irq.cause), irq.val });
-                        }
                         reflectExceptionToGuest(vc, reflected_irq) catch |err| {
                             debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
                             fatal_exception(irq);
@@ -586,9 +516,6 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                 const pcpu = pcore.this();
                 if (pcpu.active_vcore) |vc_raw| {
                     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                    if (false) {
-                        debug.printf("Guest Exception: core={} pc=0x{x} cause={s} (0x{x}) val=0x{x} - reflecting\n", .{ pcpu.cpu_core_id, irq.pc, @tagName(irq.cause), @intFromEnum(irq.cause), irq.val });
-                    }
                     reflectExceptionToGuest(vc, irq) catch |err| {
                         debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
                         fatal_exception(irq);
@@ -609,14 +536,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
         .machine_timer => {
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                // Only inject virtual timer interrupt if the guest explicitly scheduled a legacy timer via SBI,
-                // and the guest is not using Sstc (vstimecmp).
-                // If the guest is using vstimecmp, the hardware handles VSTIP natively and writing VSTIP to hvip
-                // will permanently assert it, causing an infinite loop of guest interrupts.
                 if (vc.timer_scheduled) {
-                    if (false) {
-                        debug.printf("IRQ: Injecting virtual timer interrupt (VSTIP) for guest {}\n", .{vc.guest_id});
-                    }
                     vc.machine.hvip |= riscv.HVIP.VSTIP;
                     vc.timer_scheduled = false; // Reset scheduling state until next event
                 }
@@ -663,12 +583,12 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
     const ms = &vc.machine;
     const gs = &vc.guest_state;
 
-    // 1. Save fault context in VS-mode registers
+    // Save fault context in VS-mode registers
     gs.vsepc = irq.pc;
     gs.vscause = @intFromEnum(irq.cause);
     gs.vstval = irq.val;
 
-    // 2. Modify SSTATUS/VSSTATUS:
+    // Modify SSTATUS/VSSTATUS:
     // - Set SPP to previous privilege (0 for User, 1 for Supervisor)
     // - Set SPIE to current SIE
     // - Clear SIE
@@ -703,11 +623,8 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
         // Vectored mode: base + 4 * cause
         ms.mepc = base + 4 * (@intFromEnum(irq.cause) & 0x7FFFFFFFFFFFFFFF);
     }
-    if (false) {
-        debug.printf("Reflecting: trap PC=0x{x} -> guest handler=0x{x} mode={s}\n", .{ irq.pc, ms.mepc, if (mode == 0) "direct" else "vectored" });
-    }
 
-    // 4. Update hstatus.SPVP to reflect the privilege mode we're coming from
+    // Update hstatus.SPVP to reflect the privilege mode we're coming from
     ms.hstatus &= ~riscv.HSTATUS.SPVP;
     if (irq.privilege_mode == .supervisor) {
         ms.hstatus |= riscv.HSTATUS.SPVP;

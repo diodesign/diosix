@@ -29,6 +29,9 @@ pub const HSTATUS = struct {
 };
 pub const HVIP = interface.HVIP;
 pub const toCause = interface.toCause;
+pub const CSR = interface.CSR;
+pub const Instr = interface.Instr;
+pub const CLINT = interface.CLINT;
 
 const is_test = builtin.is_test;
 
@@ -588,6 +591,8 @@ pub inline fn readMtinst() usize {
 pub fn verifyHExtension() !void {
     if (is_test) return;
 
+    debug.printf("H-extension architectural audit...\n", .{});
+
     // Test 1: hgatp persistence
     const val_hgatp: u64 = (8 << 60) | (1 << 44) | 0x82edc;
     writeHgatp(val_hgatp);
@@ -606,8 +611,6 @@ pub fn verifyHExtension() !void {
         debug.printf("CRITICAL: mstatus.MPV write failure. H-extension disabled or broken?\n", .{});
         return error.HardwareIncompatible;
     }
-
-    debug.printf("H-extension architectural audit passed!\n", .{});
 }
 
 pub fn setTimer(stime: u64) void {
