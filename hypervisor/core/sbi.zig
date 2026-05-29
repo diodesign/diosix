@@ -49,7 +49,7 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.LEGACY_CLEAR_IPI => {
             vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSSIP);
             // Clear the CLINT MSIP register for the current physical CPU core
-            arch.CLINT.msip(riscv.getCPUContext().cpu_core_id).* = 0;
+            arch.CLINT.msip(riscv.getCPUContext().hardware_hart_id).* = 0;
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_SEND_IPI => {

@@ -547,8 +547,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
         },
         .machine_swi => {
             // Clear the CLINT MSIP register for the current physical CPU core
-            const msip_ptr = @as(*volatile u32, @ptrFromInt(0x02000000 + 4 * pcpu.cpu_core_id));
-            msip_ptr.* = 0;
+            riscv.CLINT.msip(pcpu.hardware_hart_id).* = 0;
         },
         .machine_interrupt, .supervisor_interrupt => {
             // Machine/Supervisor external interrupt from the PLIC.
@@ -562,8 +561,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                     // If the vcore is active on another physical core, send an IPI to wake it up
                     if (vc.running_on_cpu) |target_cpu| {
                         if (target_cpu != pcpu.cpu_core_id) {
-                            const msip_ptr = @as(*volatile u32, @ptrFromInt(0x02000000 + 4 * target_cpu));
-                            msip_ptr.* = 1;
+                            riscv.CLINT.msip(vc.id).* = 1;
                         }
                     }
                     it_vcore = node.next;

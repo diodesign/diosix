@@ -35,6 +35,9 @@ pub const CLINT = interface.CLINT;
 
 const is_test = builtin.is_test;
 
+pub const MAX_PHYS_CORES = 256;
+pub var cpu_to_hart_map = std.mem.zeroes([MAX_PHYS_CORES]usize);
+
 // Mock CSR state for tests.
 var mock_csrs = if (is_test) std.StaticStringMap(usize).initComptime(.{
     .{ "mstatus", 0 },
@@ -117,6 +120,7 @@ pub export fn hw_heap_size_mock() usize {
 pub fn initMockHardware() void {
     if (!is_test) return;
     test_cpu_ctx.cpu_core_id = 0;
+    test_cpu_ctx.hardware_hart_id = 0;
     test_cpu_ctx.active_vcore = null;
     test_cpu_ctx.trap_count = 0;
     test_cpu_ctx.last_trap_pc = 0;
@@ -143,6 +147,7 @@ pub const ThreadContext = [32]usize;
 // The per-CPU context for the physical core running this thread.
 pub const CpuContext = struct {
     cpu_core_id: usize,
+    hardware_hart_id: usize,
     allocator: alloc.HeapAllocator,
 
     // The currently running virtual core on this physical core.
@@ -299,6 +304,14 @@ pub inline fn writeMstatus(val: usize) void {
     asm volatile ("csrw mstatus, %[val]"
         :
         : [val] "r" (val),
+    );
+}
+
+// Return the mhartid CSR.
+pub inline fn readMhartid() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], mhartid"
+        : [ret] "=r" (-> usize),
     );
 }
 

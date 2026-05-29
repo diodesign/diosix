@@ -48,6 +48,8 @@ pub var global_root_vm: ?*guest.Guest = null;
 // This is the core initialization logic for the boot CPU.
 // It is separated from main() to allow for easier testing.
 fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
+    var guest_hart_ids = std.mem.zeroes([8]usize);
+
     debug.printf("\n{s}\n", .{metadata.banner});
     debug.printf("Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ metadata.project_version, metadata.git_branch, metadata.git_revision, metadata.build_date, metadata.build_user, metadata.build_hostname, metadata.zig_version, metadata.cpu_arch });
 
@@ -166,6 +168,7 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
     // Keep only virtual CPU 0 active in the guest DTB by marking any extra `/cpus/cpu@` node as disabled.
     var cpu_it = device_tree.iter("/cpus/cpu@", 10);
+    var enabled_cpu_index: usize = 0;
     while (cpu_it.next()) |path| {
         // Strip Sstc for all CPU nodes so the guest does not use the Sstc timer extension
         var slash_count: usize = 0;
@@ -217,12 +220,31 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         }
 
         if (slash_count == 2) {
-            var cpu_id: usize = 0;
-            if (std.mem.indexOf(u8, path, "cpu@")) |idx| {
-                const id_str = path[idx + 4 ..];
-                cpu_id = std.fmt.parseInt(usize, id_str, 10) catch 0;
-            }
-            if (cpu_id >= cpu_count) {
+            if (enabled_cpu_index < cpu_count) {
+                try device_tree.editProperty(path, "status", try dt.DeviceTreeProperty.fromText(cpu_allocator, "okay"));
+
+                // Read its original "reg" property as the physical hart ID
+                var reg_val: usize = enabled_cpu_index; // fallback
+                if (device_tree.getProperty(path, "reg")) |reg_prop| {
+                    if (reg_prop.data) |reg_data| {
+                        if (reg_data.len == 8) {
+                            reg_val = (@as(usize, reg_data[0]) << 56) | (@as(usize, reg_data[1]) << 48) |
+                                      (@as(usize, reg_data[2]) << 40) | (@as(usize, reg_data[3]) << 32) |
+                                      (@as(usize, reg_data[4]) << 24) | (@as(usize, reg_data[5]) << 16) |
+                                      (@as(usize, reg_data[6]) << 8)  | reg_data[7];
+                        } else if (reg_data.len == 4) {
+                            reg_val = (@as(usize, reg_data[0]) << 24) | (@as(usize, reg_data[1]) << 16) |
+                                      (@as(usize, reg_data[2]) << 8)  | reg_data[3];
+                        }
+                    }
+                } else |_| {}
+
+                if (enabled_cpu_index < guest_hart_ids.len) {
+                    guest_hart_ids[enabled_cpu_index] = reg_val;
+                }
+                
+                enabled_cpu_index += 1;
+            } else {
                 try device_tree.editProperty(path, "status", try dt.DeviceTreeProperty.fromText(cpu_allocator, "disabled"));
 
                 // Add the sub-node interrupt-controller's phandle to the disabled list
@@ -293,7 +315,8 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     for (0..cpu_count) |i| {
         // Core 0 starts executing immediately and is enrolled in the scheduler.
         // Other cores wait for HSM HART_START, so they are not queued here.
-        const vc = try root_vm.addVcore(i, entry_point, guest_dtb_gpa, .high, null);
+        const vcore_id = guest_hart_ids[i];
+        const vc = try root_vm.addVcore(vcore_id, entry_point, guest_dtb_gpa, .high, null);
         if (i == 0) {
             vc.state = .ready;
             scheduler.queue(vc);
@@ -319,6 +342,12 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     const cpu_ctx = riscv.getCPUContext();
     @memset(@as([*]u8, @ptrCast(cpu_ctx))[0..@sizeOf(riscv.CpuContext)], 0);
     cpu_ctx.cpu_core_id = cpu_core_id;
+
+    const hart_id = riscv.readMhartid();
+    cpu_ctx.hardware_hart_id = hart_id;
+    if (cpu_core_id < riscv.cpu_to_hart_map.len) {
+        riscv.cpu_to_hart_map[cpu_core_id] = hart_id;
+    }
 
     // Initialize the heap allocator for this core.
     cpu_ctx.allocator.init(riscv.getCPUHeapBase(), riscv.getCPUHeapSize()) catch return;
