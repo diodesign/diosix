@@ -36,10 +36,20 @@ pub var uart_base: ?usize = null;
 pub var test_device_base: ?usize = null;
 
 pub const CLINT = struct {
+    // Standard CLINT register offsets
+    pub const MTIMECMP_BASE = 0x4000;
+    pub const MTIME_OFFSET = 0xbff8;
+
     pub fn msip(hart: usize) ?*volatile u32 {
         const base = clint_base orelse return null;
         return @ptrFromInt(base + 4 * hart);
     }
+};
+
+pub const SiFiveTest = struct {
+    // SiFive test device finisher command codes
+    pub const FINISHER_PASS = 0x5555;
+    pub const FINISHER_RESET = 0x7777;
 };
 
 const is_test = builtin.is_test;
@@ -639,7 +649,7 @@ pub fn verifyHExtension() !void {
 pub fn setTimer(stime: u64) void {
     if (is_test) return;
     const base = clint_base orelse 0x02000000;
-    const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(base + 0x4000 + 8 * readMhartid()));
+    const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(base + CLINT.MTIMECMP_BASE + 8 * readMhartid()));
     mtimecmp_ptr.* = stime;
 }
 
@@ -648,7 +658,7 @@ pub fn setTimer(stime: u64) void {
 pub inline fn readTime() u64 {
     if (is_test) return test_time;
     const base = clint_base orelse 0x02000000;
-    const mtime_ptr = @as(*volatile u64, @ptrFromInt(base + 0xbff8));
+    const mtime_ptr = @as(*volatile u64, @ptrFromInt(base + CLINT.MTIME_OFFSET));
     return mtime_ptr.*;
 }
 
@@ -840,7 +850,7 @@ pub fn reboot() void {
     if (builtin.is_test) return;
     if (test_device_base) |base| {
         const ptr = @as(*volatile u32, @ptrFromInt(base));
-        ptr.* = 0x7777;
+        ptr.* = SiFiveTest.FINISHER_RESET;
     }
     while (true) {}
 }
@@ -850,7 +860,7 @@ pub fn shutdown() void {
     if (builtin.is_test) return;
     if (test_device_base) |base| {
         const ptr = @as(*volatile u32, @ptrFromInt(base));
-        ptr.* = 0x5555;
+        ptr.* = SiFiveTest.FINISHER_PASS;
     }
     while (true) {}
 }

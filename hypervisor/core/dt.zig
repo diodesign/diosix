@@ -684,6 +684,27 @@ pub const DeviceTree = struct {
         return .{ .address = addr_cells, .size = size_cells };
     }
 
+    // read a node's base address from its "reg" property,
+    // dynamically accounting for parent address cells.
+    pub fn readAddress(self: *const DeviceTree, path: []const u8) !?usize {
+        const reg_prop = self.getProperty(path, "reg") catch return null;
+        const data = reg_prop.data orelse return null;
+
+        const parent_path = try getParent(self.allocator, path);
+        defer self.allocator.free(parent_path);
+        const cells = self.getAddressSizeCells(parent_path);
+
+        const cell_size = 4;
+        if (data.len >= cells.address * cell_size) {
+            if (cells.address == 1) {
+                return @as(usize, readBeU32(data[0..4]));
+            } else if (cells.address == 2) {
+                return @intCast(readBeU64(data[0..8]));
+            }
+        }
+        return null;
+    }
+
     // iterate over nodes whose paths start with the given prefix, limited by depth
     pub fn iter(self: *const DeviceTree, prefix: []const u8, max_depth: usize) NodeIterator {
         return .{

@@ -74,21 +74,32 @@ pub var panic_mode: bool = false;
 // Allow designated reader guest to read from the console (compat with guest.zig)
 pub var last_reader_guest_id: ?usize = null;
 
+pub const UART = struct {
+    // 16550 UART Register Offsets
+    pub const RBR = 0; // Receiver Buffer Register (read)
+    pub const THR = 0; // Transmitter Holding Register (write)
+    pub const LSR = 5; // Line Status Register
+
+    // LSR Bitmasks
+    pub const LSR_DR = 0x01;   // Data Ready
+    pub const LSR_THRE = 0x20; // Transmitter Holding Register Empty
+};
+
 pub fn hw_putchar(c: u8) void {
     if (builtin.is_test) return;
     const uart = riscv.uart_base orelse 0x10000000;
-    const status_reg = @as(*volatile u8, @ptrFromInt(uart + 5));
-    const tx_reg = @as(*volatile u8, @ptrFromInt(uart));
-    while (status_reg.* & 0x20 == 0) {}
+    const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
+    const tx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.THR));
+    while (status_reg.* & UART.LSR_THRE == 0) {}
     tx_reg.* = c;
 }
 
 pub fn hw_getchar() i16 {
     if (builtin.is_test) return -1;
     const uart = riscv.uart_base orelse 0x10000000;
-    const status_reg = @as(*volatile u8, @ptrFromInt(uart + 5));
-    const rx_reg = @as(*volatile u8, @ptrFromInt(uart));
-    if (status_reg.* & 0x01 != 0) {
+    const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
+    const rx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.RBR));
+    if (status_reg.* & UART.LSR_DR != 0) {
         return @as(i16, rx_reg.*);
     }
     return -1;
