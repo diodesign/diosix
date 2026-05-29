@@ -30,6 +30,27 @@ extern const __rootvm_end: u8;
 // CPU ID 0 does all the heavy lifting to begin with.
 const BootCpuID: usize = 0;
 
+fn readRegAddress(tree: *const dt.DeviceTree, path: []const u8) !?usize {
+    const reg_prop = tree.getProperty(path, "reg") catch return null;
+    const data = reg_prop.data orelse return null;
+
+    const parent_path = try dt.getParent(tree.allocator, path);
+    defer tree.allocator.free(parent_path);
+    const cells = tree.getAddressSizeCells(parent_path);
+
+    const cell_size = 4;
+    if (data.len >= cells.address * cell_size) {
+        if (cells.address == 1) {
+            return @as(usize, @as(u32, data[0]) << 24 | @as(u32, data[1]) << 16 | @as(u32, data[2]) << 8 | @as(u32, data[3]));
+        } else if (cells.address == 2) {
+            const high = @as(u64, @as(u32, data[0]) << 24 | @as(u32, data[1]) << 16 | @as(u32, data[2]) << 8 | @as(u32, data[3]));
+            const low = @as(u64, @as(u32, data[4]) << 24 | @as(u32, data[5]) << 16 | @as(u32, data[6]) << 8 | @as(u32, data[7]));
+            return @intCast((high << 32) | low);
+        }
+    }
+    return null;
+}
+
 // True when all cores can begin running vCPU threads.
 var boot_complete_flag = atomic.LockPayload(bool).init("Boot complete", false);
 
@@ -49,7 +70,6 @@ pub var global_root_vm: ?*guest.Guest = null;
 // It is separated from main() to allow for easier testing.
 fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     var guest_hart_ids = std.mem.zeroes([8]usize);
-
     debug.printf("\n{s}\n", .{metadata.banner});
     debug.printf("Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ metadata.project_version, metadata.git_branch, metadata.git_revision, metadata.build_date, metadata.build_user, metadata.build_hostname, metadata.zig_version, metadata.cpu_arch });
 
@@ -74,6 +94,34 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // Keep parsed tree in boot CPU core's heap.
     const device_tree = try pre_parse_dtb.parse();
     ctx.device_tree = device_tree;
+
+    // Discover hardware peripherals from the DTB
+    if (!builtin.is_test) {
+        var dt_it = device_tree.iter("/", 10);
+        while (dt_it.next()) |path| {
+            if (device_tree.getProperty(path, "compatible")) |compat_prop| {
+                if (compat_prop.asText()) |compat_text| {
+                    if (std.mem.indexOf(u8, compat_text, "clint") != null or std.mem.indexOf(u8, compat_text, "sifive,clint0") != null) {
+                        if (try readRegAddress(device_tree, path)) |addr| {
+                            riscv.clint_base = addr;
+                        }
+                    } else if (std.mem.indexOf(u8, compat_text, "ns16550a") != null or std.mem.indexOf(u8, compat_text, "uart") != null) {
+                        if (try readRegAddress(device_tree, path)) |addr| {
+                            riscv.uart_base = addr;
+                        }
+                    } else if (std.mem.indexOf(u8, compat_text, "sifive,test0") != null) {
+                        if (try readRegAddress(device_tree, path)) |addr| {
+                            riscv.test_device_base = addr;
+                        }
+                    }
+                } else |_| {}
+            } else |_| {}
+        }
+    }
+
+    if (riscv.clint_base) |addr| debug.printf("DTB: Discovered CLINT at 0x{x}\n", .{addr});
+    if (riscv.uart_base) |addr| debug.printf("DTB: Discovered UART at 0x{x}\n", .{addr});
+    if (riscv.test_device_base) |addr| debug.printf("DTB: Discovered Test/Poweroff device at 0x{x}\n", .{addr});
 
     // Initialize physical memory management.
     const rootvm_ram_size = if (builtin.is_test) 2 * 1024 * 1024 else 512 * 1024 * 1024;
@@ -229,12 +277,12 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                     if (reg_prop.data) |reg_data| {
                         if (reg_data.len == 8) {
                             reg_val = (@as(usize, reg_data[0]) << 56) | (@as(usize, reg_data[1]) << 48) |
-                                      (@as(usize, reg_data[2]) << 40) | (@as(usize, reg_data[3]) << 32) |
-                                      (@as(usize, reg_data[4]) << 24) | (@as(usize, reg_data[5]) << 16) |
-                                      (@as(usize, reg_data[6]) << 8)  | reg_data[7];
+                                (@as(usize, reg_data[2]) << 40) | (@as(usize, reg_data[3]) << 32) |
+                                (@as(usize, reg_data[4]) << 24) | (@as(usize, reg_data[5]) << 16) |
+                                (@as(usize, reg_data[6]) << 8) | reg_data[7];
                         } else if (reg_data.len == 4) {
                             reg_val = (@as(usize, reg_data[0]) << 24) | (@as(usize, reg_data[1]) << 16) |
-                                      (@as(usize, reg_data[2]) << 8)  | reg_data[3];
+                                (@as(usize, reg_data[2]) << 8) | reg_data[3];
                         }
                     }
                 } else |_| {}
@@ -242,7 +290,7 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                 if (enabled_cpu_index < guest_hart_ids.len) {
                     guest_hart_ids[enabled_cpu_index] = reg_val;
                 }
-                
+
                 enabled_cpu_index += 1;
             } else {
                 try device_tree.editProperty(path, "status", try dt.DeviceTreeProperty.fromText(cpu_allocator, "disabled"));
@@ -348,6 +396,9 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     if (cpu_core_id < riscv.cpu_to_hart_map.len) {
         riscv.cpu_to_hart_map[cpu_core_id] = hart_id;
     }
+    if (cpu_core_id < riscv.MAX_PHYS_CORES) {
+        riscv.cpu_contexts[cpu_core_id] = cpu_ctx;
+    }
 
     // Initialize the heap allocator for this core.
     cpu_ctx.allocator.init(riscv.getCPUHeapBase(), riscv.getCPUHeapSize()) catch return;
@@ -412,7 +463,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
 
 pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     debug.releaseLocksForCrash();
-    debug.printf("\n*** HYPERVISOR PANIC ***\n{s}\n", .{message});
+    debug.printf("\n\nPanic! {s}\n", .{message});
     while (true) {}
 }
 

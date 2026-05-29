@@ -49,7 +49,9 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.LEGACY_CLEAR_IPI => {
             vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSSIP);
             // Clear the CLINT MSIP register for the current physical CPU core
-            arch.CLINT.msip(riscv.getCPUContext().hardware_hart_id).* = 0;
+            if (riscv.CLINT.msip(riscv.getCPUContext().hardware_hart_id)) |ptr| {
+                ptr.* = 0;
+            }
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_SEND_IPI => {
@@ -64,8 +66,15 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
                 if (target_vc.id != vc.id) {
                     if ((mask & (@as(usize, 1) << @intCast(target_vc.id))) != 0) {
                         target_vc.machine.hvip |= riscv.HVIP.VSSIP;
+                        if (target_vc.wfi_blocked) {
+                            target_vc.wfi_blocked = false;
+                            target_vc.state = .ready;
+                            scheduler.queue(target_vc);
+                        }
                         // Trigger physical IPI to wake up target physical core from WFI
-                        arch.CLINT.msip(target_vc.id).* = 1;
+                        if (riscv.CLINT.msip(target_vc.id)) |ptr| {
+                            ptr.* = 1;
+                        }
                     }
                 }
                 it_vcore = node.next;
@@ -214,12 +223,15 @@ fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: us
                 target_vc.context[@intFromEnum(arch.Register.a0)] = target_hart;
                 target_vc.context[@intFromEnum(riscv.Register.a1)] = opaque_param;
                 target_vc.state = .ready;
+                target_vc.wfi_blocked = false;
 
                 // Ensure it's in the scheduler
                 scheduler.queue(target_vc);
 
                 // Trigger physical IPI to wake up physical core target_hart from WFI
-                arch.CLINT.msip(target_hart).* = 1;
+                if (riscv.CLINT.msip(target_hart)) |ptr| {
+                    ptr.* = 1;
+                }
 
                 setResult(vc, context, SBI_SUCCESS, 0);
             } else {

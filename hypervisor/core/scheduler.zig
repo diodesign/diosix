@@ -52,6 +52,7 @@ pub fn initCpu() void {
 // Add a virtual core to a run queue (local preferred, global for overflow).
 // Only vcores in 'ready' state may be queued.
 pub fn queue(vc: *vcore.VirtualCore) void {
+    if (vc.wfi_blocked) return;
     // Only schedulable states may be queued.
     if (vc.state != .ready and vc.state != .running) return;
     vc.state = .ready;

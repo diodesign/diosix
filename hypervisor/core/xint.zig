@@ -435,6 +435,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                 if (instr == riscv.Instr.WFI) {
                     vc.machine.mepc += 4;
                     pcore.this().trap_loop_count = 0;
+                    vc.wfi_blocked = true;
                     scheduler.schedule();
                     return;
                 }
@@ -540,6 +541,21 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                     vc.machine.hvip |= riscv.HVIP.VSTIP;
                     vc.timer_scheduled = false; // Reset scheduling state until next event
                 }
+            } else {
+                // Core was sleeping. Check if the vcore mapped to this hart has its timer expired.
+                if (main.global_root_vm) |g| {
+                    if (g.findVcore(pcpu.hardware_hart_id)) |vc| {
+                        if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
+                            vc.machine.hvip |= riscv.HVIP.VSTIP;
+                            vc.timer_scheduled = false;
+                            if (vc.wfi_blocked) {
+                                vc.wfi_blocked = false;
+                                vc.state = .ready;
+                                scheduler.queue(vc);
+                            }
+                        }
+                    }
+                }
             }
             // Clear hardware timer condition by setting it far into the future
             // until the guest (or hypervisor) sets a new one.
@@ -547,7 +563,18 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
         },
         .machine_swi => {
             // Clear the CLINT MSIP register for the current physical CPU core
-            riscv.CLINT.msip(pcpu.hardware_hart_id).* = 0;
+            if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
+                ptr.* = 0;
+            }
+            if (main.global_root_vm) |g| {
+                if (g.findVcore(pcpu.hardware_hart_id)) |vc| {
+                    if (vc.wfi_blocked) {
+                        vc.wfi_blocked = false;
+                        vc.state = .ready;
+                        scheduler.queue(vc);
+                    }
+                }
+            }
         },
         .machine_interrupt, .supervisor_interrupt => {
             // Machine/Supervisor external interrupt from the PLIC.
@@ -557,11 +584,18 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 while (it_vcore) |node| {
                     const vc = node.contents;
                     vc.machine.hvip |= riscv.HVIP.VSEIP;
+                    if (vc.wfi_blocked) {
+                        vc.wfi_blocked = false;
+                        vc.state = .ready;
+                        scheduler.queue(vc);
+                    }
 
                     // If the vcore is active on another physical core, send an IPI to wake it up
                     if (vc.running_on_cpu) |target_cpu| {
                         if (target_cpu != pcpu.cpu_core_id) {
-                            riscv.CLINT.msip(vc.id).* = 1;
+                            if (riscv.CLINT.msip(vc.id)) |ptr| {
+                                ptr.* = 1;
+                            }
                         }
                     }
                     it_vcore = node.next;
@@ -645,7 +679,7 @@ fn fatal_exception(irq: IRQ) void {
     }
 
     debug.releaseLocksForCrash();
-    debug.printf("\n*** FATAL EXCEPTION ***\n", .{});
+    debug.printf("\nBug! Fatal exception\n", .{});
     debug.printf("Cause: {s} (0x{x})\n", .{ @tagName(irq.cause), @intFromEnum(irq.cause) });
     debug.printf("Privilege: {s}\n", .{@tagName(irq.privilege_mode)});
     debug.printf("PC: 0x{x}, SP: 0x{x}\n", .{ irq.pc, irq.sp });

@@ -220,12 +220,5 @@ pub const Instr = struct {
     pub const FUNCT3_FENCE = 0;
 };
 
-// Platform-Specific Core Local Interruptor (CLINT) Hardware definitions
-pub const CLINT = struct {
-    pub const BASE = 0x02000000;
+// (End of interface/riscv.zig)
 
-    // Returns MSIP register pointer for the given physical hart ID
-    pub fn msip(hart: usize) *volatile u32 {
-        return @ptrFromInt(BASE + 4 * hart);
-    }
-};

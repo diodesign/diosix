@@ -31,12 +31,22 @@ pub const HVIP = interface.HVIP;
 pub const toCause = interface.toCause;
 pub const CSR = interface.CSR;
 pub const Instr = interface.Instr;
-pub const CLINT = interface.CLINT;
+pub var clint_base: ?usize = null;
+pub var uart_base: ?usize = null;
+pub var test_device_base: ?usize = null;
+
+pub const CLINT = struct {
+    pub fn msip(hart: usize) ?*volatile u32 {
+        const base = clint_base orelse return null;
+        return @ptrFromInt(base + 4 * hart);
+    }
+};
 
 const is_test = builtin.is_test;
 
 pub const MAX_PHYS_CORES = 256;
 pub var cpu_to_hart_map = std.mem.zeroes([MAX_PHYS_CORES]usize);
+pub var cpu_contexts = std.mem.zeroes([MAX_PHYS_CORES]?*CpuContext);
 
 // Mock CSR state for tests.
 var mock_csrs = if (is_test) std.StaticStringMap(usize).initComptime(.{
@@ -628,14 +638,17 @@ pub fn verifyHExtension() !void {
 
 pub fn setTimer(stime: u64) void {
     if (is_test) return;
-    hw_set_timer(stime);
+    const base = clint_base orelse 0x02000000;
+    const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(base + 0x4000 + 8 * readMhartid()));
+    mtimecmp_ptr.* = stime;
 }
 
 // Read the time CSR (or its memory-mapped equivalent via mtime).
 // In M-mode on RISC-V, `time` may not be directly accessible; fall back to CLINT mtime.
 pub inline fn readTime() u64 {
     if (is_test) return test_time;
-    const mtime_ptr = @as(*volatile u64, @ptrFromInt(0x0200bff8));
+    const base = clint_base orelse 0x02000000;
+    const mtime_ptr = @as(*volatile u64, @ptrFromInt(base + 0xbff8));
     return mtime_ptr.*;
 }
 
@@ -825,13 +838,21 @@ pub inline fn writeHstateen0(val: usize) void {
 // Reboot the host machine.
 pub fn reboot() void {
     if (builtin.is_test) return;
-    hw_reboot();
+    if (test_device_base) |base| {
+        const ptr = @as(*volatile u32, @ptrFromInt(base));
+        ptr.* = 0x7777;
+    }
+    while (true) {}
 }
 
 // Shutdown the host machine.
 pub fn shutdown() void {
     if (builtin.is_test) return;
-    hw_shutdown();
+    if (test_device_base) |base| {
+        const ptr = @as(*volatile u32, @ptrFromInt(base));
+        ptr.* = 0x5555;
+    }
+    while (true) {}
 }
 
 pub fn pause() void {

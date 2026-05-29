@@ -47,6 +47,7 @@ pub const VirtualCore = struct {
     timer_scheduled: bool,
     timer_target: u64,
     running_on_cpu: ?usize,
+    wfi_blocked: bool,
 
     // Scheduling data.
     priority: Priority,
@@ -69,6 +70,7 @@ pub const VirtualCore = struct {
             .timer_scheduled = false,
             .timer_target = 0,
             .running_on_cpu = null,
+            .wfi_blocked = false,
             .context = std.mem.zeroes(riscv.ThreadContext),
             .machine = .{
                 .mepc = entry,

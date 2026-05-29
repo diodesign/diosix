@@ -74,8 +74,25 @@ pub var panic_mode: bool = false;
 // Allow designated reader guest to read from the console (compat with guest.zig)
 pub var last_reader_guest_id: ?usize = null;
 
-pub extern fn hw_putchar(c: u8) void;
-extern fn hw_getchar() i16;
+pub fn hw_putchar(c: u8) void {
+    if (builtin.is_test) return;
+    const uart = riscv.uart_base orelse 0x10000000;
+    const status_reg = @as(*volatile u8, @ptrFromInt(uart + 5));
+    const tx_reg = @as(*volatile u8, @ptrFromInt(uart));
+    while (status_reg.* & 0x20 == 0) {}
+    tx_reg.* = c;
+}
+
+pub fn hw_getchar() i16 {
+    if (builtin.is_test) return -1;
+    const uart = riscv.uart_base orelse 0x10000000;
+    const status_reg = @as(*volatile u8, @ptrFromInt(uart + 5));
+    const rx_reg = @as(*volatile u8, @ptrFromInt(uart));
+    if (status_reg.* & 0x01 != 0) {
+        return @as(i16, rx_reg.*);
+    }
+    return -1;
+}
 
 fn acquireConsole() *ConsoleState {
     const pcpu = pcore.this();
