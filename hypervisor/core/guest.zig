@@ -103,6 +103,9 @@ pub const Guest = struct {
     pub fn terminate(self: *Guest) void {
         self.state = .dying;
         
+        // Release console focus
+        debug.destroyGuestState(self.id);
+        
         // 1. Recursive termination of all children (cascading)
         var it_child = self.children.start;
         while (it_child) |node| {
@@ -164,6 +167,7 @@ pub const Guest = struct {
     }
 
     pub fn deinit(self: *Guest) void {
+        debug.destroyGuestState(self.id);
         var it_vcore = self.vcores.start;
         while (it_vcore) |node| {
             const next = node.next;
@@ -232,7 +236,14 @@ pub const Guest = struct {
 
     // Fork this guest to create a child VM
     pub fn fork(self: *Guest) !*Guest {
-        const child_id = guest_id_next.fetchAdd(1, .monotonic);
+        const child_id = blk: {
+            const guard = guest_manager.acquire();
+            defer guard.release();
+            const state = guard.get();
+            const next = state.guest_id_next;
+            state.guest_id_next = next + 1;
+            break :blk next;
+        };
         
         // Resource check: RAM=0 (fork is lazy), VCPUs=count, Depth=current+1
         const vcpu_count = self.vcores.count();
@@ -290,21 +301,22 @@ pub const Guest = struct {
     }
 };
 
-// Global guest ID counter.
-var guest_id_next = std.atomic.Value(usize).init(0);
+// Global guest manager state to encapsulate VMIDs and guest ID counters.
+const GuestManagerState = struct {
+    vmid_bitmap: [max_vmids / 64]u64 = std.mem.zeroes([max_vmids / 64]u64),
+    guest_id_next: usize = 0,
+};
 
-// VMID management: bitmap-based allocator to support recycling.
-// VMID 0 is reserved by the architecture. Usable range: 1..max_vmids.
 const max_vmids: u16 = 4096; // Practical limit; hardware may support fewer.
-var vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
-var guests_lock = atomic.NamedSpinLock.init("Global guests lock");
+var guest_manager = atomic.LockPayload(GuestManagerState).init("Global guest manager state", .{});
 
 fn allocVmid() !u16 {
-    guests_lock.lock();
-    defer guests_lock.unlock();
+    const guard = guest_manager.acquire();
+    defer guard.release();
+    const state = guard.get();
 
     // Search for a free bit in the bitmap (skip bit 0 = VMID 0).
-    for (&vmid_bitmap, 0..) |*word, wi| {
+    for (&state.vmid_bitmap, 0..) |*word, wi| {
         if (word.* == ~@as(u64, 0)) continue; // All bits set, skip.
         const free_bit = @ctz(~word.*);
         const vmid: u16 = @intCast(wi * 64 + free_bit);
@@ -322,20 +334,22 @@ fn allocVmid() !u16 {
 }
 
 fn freeVmid(id: u16) void {
-    guests_lock.lock();
-    defer guests_lock.unlock();
+    const guard = guest_manager.acquire();
+    defer guard.release();
+    const state = guard.get();
     if (id == 0 or id >= max_vmids) return;
     const wi = id / 64;
     const bit: u6 = @intCast(id % 64);
-    vmid_bitmap[wi] &= ~(@as(u64, 1) << bit);
+    state.vmid_bitmap[wi] &= ~(@as(u64, 1) << bit);
 }
 
 pub fn createGuest(allocator: std.mem.Allocator, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize) !*Guest {
     const id = blk: {
-        guests_lock.lock();
-        defer guests_lock.unlock();
-        const next = guest_id_next.load(.monotonic);
-        guest_id_next.store(next + 1, .monotonic);
+        const guard = guest_manager.acquire();
+        defer guard.release();
+        const state = guard.get();
+        const next = state.guest_id_next;
+        state.guest_id_next = next + 1;
         break :blk next;
     };
 
@@ -346,8 +360,13 @@ test "guest fork and memory sharing" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    guest_id_next.store(0, .monotonic); // Reset for test
-    vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64); // Reset VMID bitmap
+    {
+        const guard = guest_manager.acquire();
+        defer guard.release();
+        const state = guard.get();
+        state.guest_id_next = 0;
+        state.vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+    }
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
 
@@ -383,8 +402,13 @@ test "guest creation and vcore management" {
     scheduler.initCpu();
 
     // Reset ID counter for predictable test
-    guest_id_next.store(0, .monotonic);
-    vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+    {
+        const guard = guest_manager.acquire();
+        defer guard.release();
+        const state = guard.get();
+        state.guest_id_next = 0;
+        state.vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+    }
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
 

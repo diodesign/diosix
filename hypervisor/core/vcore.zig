@@ -43,6 +43,9 @@ pub const VirtualCore = struct {
     guest_state: riscv.GuestState,
 
     required_extensions: usize,
+    siselect: usize,
+    timer_scheduled: bool,
+    timer_target: u64,
 
     // Scheduling data.
     priority: Priority,
@@ -61,18 +64,21 @@ pub const VirtualCore = struct {
             .guest = parent,
             .guest_id = parent.id,
             .state = .stopped,
+            .siselect = 0,
+            .timer_scheduled = false,
+            .timer_target = 0,
             .context = std.mem.zeroes(riscv.ThreadContext),
             .machine = .{
                 .mepc = entry,
-                .mstatus = (1 << 11) | riscv.MSTATUS.MPV, // MPP=1 (Supervisor), MPV=1 (Virtualization)
-                .hstatus = riscv.HSTATUS.SPV,
+                .mstatus = (1 << 11) | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPV=1 (Virtualization), VS=Dirty, FS=Dirty
+                .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
                 .hgatp = 0,
-                .hedeleg = 0xb1f3, // Delegate common exceptions to guest supervisor
-                .hideleg = 0x333, // Delegate common interrupts to guest supervisor
+                .hedeleg = 0xb1fb, // Delegate exceptions to guest: includes breakpoint (bit 3)
+                .hideleg = 0x444, // Delegate VS interrupts: VSSIP(2), VSTIP(6), VSEIP(10)
                 .hvip = 0,
             },
             .guest_state = .{
-                .vsstatus = 0,
+                .vsstatus = (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
                 .vsie = 0,
                 .vstvec = 0,
                 .vsscratch = 0,
@@ -80,6 +86,8 @@ pub const VirtualCore = struct {
                 .vscause = 0,
                 .vstval = 0,
                 .vsatp = 0,
+                .vstimecmp = 0xffffffffffffffff,
+                .vsenvcfg = (@as(usize, 1) << 63) | 240,
             },
             .required_extensions = riscv.IsaExtension.i,
             .priority = priority,

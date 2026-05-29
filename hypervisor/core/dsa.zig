@@ -1,6 +1,6 @@
 // general-purpose data structures and algorithms for when std isn't appropriate or possible
 //
-// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 // define a linked list that can arbitrarily insert and remove nodes in O(1).

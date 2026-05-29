@@ -32,7 +32,7 @@
 // * separate queues for different alignment requirements
 // * separate queues for different types of memory
 //
-// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const debug = @import("debug.zig");

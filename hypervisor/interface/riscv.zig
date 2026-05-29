@@ -66,11 +66,18 @@ pub const MSTATUS = struct {
     pub const MIE = 1 << 3;
     pub const SIE = 1 << 1;
     pub const MPV: u64 = 1 << 39;
+
+    // Vector State (VS) and Floating-point State (FS) field definitions
+    pub const VS_SHIFT = 9;
+    pub const VS_MASK = 0b11 << VS_SHIFT;
+    pub const FS_SHIFT = 13;
+    pub const FS_MASK = 0b11 << FS_SHIFT;
 };
 
 pub const SSTATUS = struct {
     pub const SPP_SHIFT = 8;
     pub const SIE = 1 << 1;
+    pub const SPIE = 1 << 5;
 };
 
 pub const HSTATUS = struct {
@@ -104,6 +111,7 @@ pub const Cause = enum(usize) {
     store_page_fault = 15,
     guest_instruction_page_fault = 20,
     guest_load_page_fault = 21,
+    virtual_instruction = 22,
     guest_store_page_fault = 23,
 
     // Interrupts (marker bit set below)
@@ -141,7 +149,7 @@ pub fn toCause(val: usize) Cause {
         15 => .store_page_fault,
         20 => .guest_instruction_page_fault,
         21 => .guest_load_page_fault,
-        22 => .guest_load_page_fault, // Some versions use 21, others 22
+        22 => .virtual_instruction,
         23 => .guest_store_page_fault,
 
         (1 << 63) | 0 => .user_swi,

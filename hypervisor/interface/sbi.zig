@@ -30,6 +30,8 @@ pub const EXT = struct {
     pub const LEGACY_SET_TIMER = 0x0;
     pub const LEGACY_CONSOLE_PUTCHAR = 0x1;
     pub const LEGACY_CONSOLE_GETCHAR = 0x2;
+    pub const LEGACY_CLEAR_IPI = 0x3;
+    pub const LEGACY_SEND_IPI = 0x4;
     pub const LEGACY_SHUTDOWN = 0x8;
 };
 

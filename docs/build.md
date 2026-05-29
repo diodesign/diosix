@@ -14,7 +14,7 @@ The build wrapper (`scripts/build.sh`) solves this by dynamically capturing real
 
 These values are then passed directly to `zig build` as command-line options. By defining these dynamic environmental variables as explicit build options (using `-D` options), the build script (`build.zig`) can declare them as proper inputs to the build graph. This ensures that any change in the captured host environment correctly invalidates the build configuration's cache keys, resulting in fresh, deterministic, and accurate versioning without polluting the hermeticity of the build script.
 
-## Declarative Hardware Ports via YAML Configuration
+## Declarative hardware ports via YAML configuration
 
 To support a highly modular hardware architecture that allows different target boards (such as QEMU emulator models or physical SiFive silicon) to share common assembly routines without code duplication, symlink hacks, or complex code arrays, the build system employs a declarative YAML-based hardware configuration model.
 
@@ -22,13 +22,13 @@ Every target platform is described by a dedicated YAML configuration file locate
 
 At the core of the configuration loading process is a lightweight, zero-dependency, self-contained YAML parser module located at `scripts/yaml_parser.zig`. Written explicitly for Diosix, this custom parser operates completely offline and handles standard YAML constructs like key-value pairs and arrays. This design avoids any reliance on external package managers or network downloads, maintaining excellent build speed, supply-chain safety, and compiler version compatibility.
 
-## Dynamic Port Discovery and Target Selection
+## Dynamic port discovery and target selection
 
 During the configure phase of the build, the `build.zig` script automatically scans the target configuration directory to dynamically discover all available hardware ports. It ignores the default configuration metadata and collects all valid port configurations. This dynamic list is compiled into a text list displayed to the developer when querying compiler help options.
 
 The build system determines the default target system by reading a global configuration metadata file located at `hypervisor/hw/ports/default.yaml`. This metadata file designates the fallback target when no specific architecture option is passed. Developers can explicitly override this default from the command line by using the `-Dsystem` parameter when executing the build wrapper. The build script dynamically loads, parses, and configures the corresponding target YAML file, ensuring that board additions require no modifications to the core build script.
 
-## Compilation and Natively Cached Dependency Tracking
+## Compilation and natively cached dependency tracking
 
 Once a hardware port is loaded and parsed, the build script registers each individual assembly file listed in the configuration file to the compilation unit using native compiler methods. Compiling the assembly files individually enables the compiler to translate them as separate units, preventing duplicate symbol linker collisions and allowing the target linker script to dictate the precise spatial section ordering, such as keeping the entry stage section at the baseline DRAM address.
 

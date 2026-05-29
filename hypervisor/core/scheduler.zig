@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
 const riscv = @import("riscv.zig");
 const dsa = @import("dsa.zig");
 const pcore = @import("pcore.zig");
@@ -17,23 +18,23 @@ const physmem = @import("physmem.zig");
 const CoreTree = vcore.SchedulerTree;
 
 // Global scheduler state
-const Scheduler = struct {
+const SchedulerState = struct {
     run_queue: CoreTree,
-    lock: atomic.NamedSpinLock,
-    min_vruntime: u64,
 };
 
-var global_scheduler = Scheduler{
+var global_scheduler = atomic.LockPayload(SchedulerState).init("Global scheduler state", .{
     .run_queue = undefined,
-    .lock = atomic.NamedSpinLock.init("Global scheduler lock"),
-    .min_vruntime = 0,
-};
+});
+
+var global_min_vruntime = std.atomic.Value(u64).init(0);
 
 const MAX_LOCAL_VCORES = 8;
 const PULL_BATCH = 4;
 
 pub fn init() void {
-    global_scheduler.run_queue.init();
+    const guard = global_scheduler.acquire();
+    defer guard.release();
+    guard.get().run_queue.init();
 }
 
 // initialize the per-CPU scheduler state
@@ -44,6 +45,7 @@ pub fn initCpu() void {
     pc.active_vcore = null;
     pc.trap_count = 0;
     pc.last_trap_pc = 0;
+    pc.last_trap_val = 0;
     pc.trap_loop_count = 0;
 }
 
@@ -58,8 +60,9 @@ pub fn queue(vc: *vcore.VirtualCore) void {
 
     // Ensure the vcore's vruntime isn't too far behind to prevent it
     // from hogging the CPU if it's been sleeping for a long time.
-    if (vc.vruntime < global_scheduler.min_vruntime) {
-        vc.vruntime = global_scheduler.min_vruntime;
+    const min_vr = global_min_vruntime.load(.monotonic);
+    if (vc.vruntime < min_vr) {
+        vc.vruntime = min_vr;
     }
 
     vc.updateSchedulerWeight();
@@ -67,14 +70,14 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     // Record the time at which this vcore was last queued (for accounting).
     vc.last_queued_time = riscv.readTime();
 
-    if (pc.run_queue_count < MAX_LOCAL_VCORES) {
+    if (pc.run_queue_count < MAX_LOCAL_VCORES and (builtin.is_test or (if (pc.active_vcore) |active| @intFromPtr(active) == @intFromPtr(vc) else false))) {
         pc.run_queue.insert(&vc.scheduler_node);
         pc.run_queue_count += 1;
     } else {
-        // Local queue is full, offload to the global queue
-        global_scheduler.lock.lock();
-        defer global_scheduler.lock.unlock();
-        global_scheduler.run_queue.insert(&vc.scheduler_node);
+        // Offload to the global queue
+        const guard = global_scheduler.acquire();
+        defer guard.release();
+        guard.get().run_queue.insert(&vc.scheduler_node);
     }
 }
 
@@ -83,50 +86,79 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
     const misa = riscv.readMisa();
 
+    if (false) {
+        debug.printf("CPU {}: pickNext() called. misa=0x{x}, local_queue_count={}\n", .{ pc.cpu_core_id, misa, pc.run_queue_count });
+    }
+
     // Try to pick from the local run queue first
     var it = pc.run_queue.findMin();
     while (it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
+        if (false) {
+            debug.printf("  Checking local vcore guest={} vcore={} required_extensions=0x{x}\n", .{ vc.guest_id, vc.id, vc.required_extensions });
+        }
         if ((vc.required_extensions & misa) == vc.required_extensions) {
             pc.run_queue.remove(node);
             pc.run_queue_count -= 1;
-            global_scheduler.min_vruntime = vc.vruntime;
+            global_min_vruntime.store(vc.vruntime, .monotonic);
+            if (false) {
+                debug.printf("  CPU {}: picked local vcore guest={} vcore={}\n", .{ pc.cpu_core_id, vc.guest_id, vc.id });
+            }
             return vc;
+        } else {
+            if (false) {
+                debug.printf("  CPU {}: local vcore guest={} vcore={} is incompatible (required=0x{x}, got=0x{x})\n", .{ pc.cpu_core_id, vc.guest_id, vc.id, vc.required_extensions, misa });
+            }
         }
-        // If not compatible, try next in local queue (rare case if local queue is filtered)
         it = pc.run_queue.findNext(node);
     }
 
     // Local queue is empty or incompatible, try to pull from the global queue
-    global_scheduler.lock.lock();
-    defer global_scheduler.lock.unlock();
+    const guard = global_scheduler.acquire();
+    defer guard.release();
+    const state = guard.get();
 
-    var g_it = global_scheduler.run_queue.findMin();
+    var g_it = state.run_queue.findMin();
+    if (g_it == null) {
+        if (false) {
+            debug.printf("  CPU {}: global queue is empty\n", .{ pc.cpu_core_id });
+        }
+    }
     while (g_it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
+        if (false) {
+            debug.printf("  Checking global vcore guest={} vcore={} required_extensions=0x{x}\n", .{ vc.guest_id, vc.id, vc.required_extensions });
+        }
         if ((vc.required_extensions & misa) == vc.required_extensions) {
-            global_scheduler.run_queue.remove(node);
-            global_scheduler.min_vruntime = vc.vruntime;
+            state.run_queue.remove(node);
+            global_min_vruntime.store(vc.vruntime, .monotonic);
 
             // Greedy pull: fill local queue with some more compatible work from global
             var pulled: usize = 0;
-            var next_g = global_scheduler.run_queue.findMin();
+            var next_g = state.run_queue.findMin();
             while (pulled < PULL_BATCH and next_g != null) {
                 const g_node = next_g.?;
-                next_g = global_scheduler.run_queue.findNext(g_node);
+                next_g = state.run_queue.findNext(g_node);
 
                 const g_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", g_node);
                 if ((g_vc.required_extensions & misa) == g_vc.required_extensions) {
-                    global_scheduler.run_queue.remove(g_node);
+                    state.run_queue.remove(g_node);
                     pc.run_queue.insert(g_node);
                     pc.run_queue_count += 1;
                     pulled += 1;
                 }
             }
 
+            if (false) {
+                debug.printf("  CPU {}: picked global vcore guest={} vcore={} pulled={}\n", .{ pc.cpu_core_id, vc.guest_id, vc.id, pulled });
+            }
             return vc;
+        } else {
+            if (false) {
+                debug.printf("  CPU {}: global vcore guest={} vcore={} is incompatible (required=0x{x}, got=0x{x})\n", .{ pc.cpu_core_id, vc.guest_id, vc.id, vc.required_extensions, misa });
+            }
         }
-        g_it = global_scheduler.run_queue.findNext(node);
+        g_it = state.run_queue.findNext(node);
     }
 
     return null;
@@ -180,8 +212,12 @@ test "scheduler vruntime ordering" {
 
     // Reset global scheduler state
     riscv.initMockHardware();
-    global_scheduler.run_queue.init();
-    global_scheduler.min_vruntime = 0;
+    {
+        const guard = global_scheduler.acquire();
+        defer guard.release();
+        guard.get().run_queue.init();
+    }
+    global_min_vruntime.store(0, .monotonic);
     initCpu();
 
     var phys_test = try physmem.initForTest(testing.allocator, 128);
@@ -207,12 +243,12 @@ test "scheduler vruntime ordering" {
     // Pick next - should be vc2 because 50 < 100
     const next1 = pickNext() orelse return error.TestFailed;
     try testing.expectEqual(@as(usize, 2), next1.id);
-    try testing.expectEqual(@as(u64, 50), global_scheduler.min_vruntime);
+    try testing.expectEqual(@as(u64, 50), global_min_vruntime.load(.monotonic));
 
     // Pick next - should be vc1
     const next2 = pickNext() orelse return error.TestFailed;
     try testing.expectEqual(@as(usize, 1), next2.id);
-    try testing.expectEqual(@as(u64, 100), global_scheduler.min_vruntime);
+    try testing.expectEqual(@as(u64, 100), global_min_vruntime.load(.monotonic));
 
     // Queue empty
     try testing.expect(pickNext() == null);
@@ -223,8 +259,12 @@ test "hybrid local and global scheduling" {
 
     // Reset state
     riscv.initMockHardware();
-    global_scheduler.run_queue.init();
-    global_scheduler.min_vruntime = 0;
+    {
+        const guard = global_scheduler.acquire();
+        defer guard.release();
+        guard.get().run_queue.init();
+    }
+    global_min_vruntime.store(0, .monotonic);
     initCpu();
 
     var phys_test = try physmem.initForTest(testing.allocator, 128);
@@ -249,9 +289,11 @@ test "hybrid local and global scheduling" {
     try testing.expectEqual(@as(usize, 8), pc.run_queue_count);
 
     // Check that top of global queue has vcore with id 8 (the 9th one added)
-    global_scheduler.lock.lock();
-    const global_min = global_scheduler.run_queue.findMin();
-    global_scheduler.lock.unlock();
+    const global_min = blk: {
+        const guard = global_scheduler.acquire();
+        defer guard.release();
+        break :blk guard.get().run_queue.findMin();
+    };
     try testing.expect(global_min != null);
     const global_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", global_min.?);
     try testing.expectEqual(@as(usize, 8), global_vc.id);

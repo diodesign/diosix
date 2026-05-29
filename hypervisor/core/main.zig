@@ -1,6 +1,6 @@
 // Diosix hypervisor initialization and main loop.
 //
-// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
@@ -121,16 +121,74 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     try device_tree.editProperty(guest_memory_node, "reg", try dt.DeviceTreeProperty.fromMultiU64(cpu_allocator, &.{ root_vm_gpa_base, rootvm_ram_size }));
     try device_tree.editProperty(guest_memory_node, "device_type", try dt.DeviceTreeProperty.fromText(cpu_allocator, "memory"));
 
-    const cpu_count = device_tree.countCpus();
+    const cpu_count = 1;
     debug.printf("PhysMem: Provisioning Root VM with {} virtual CPUs\n", .{cpu_count});
 
-    // Inject boot arguments and console path into the guest DTB to ensure it uses the SBI console
-    device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, "console=hvc0 earlycon=sbi")) catch |err| {
+    // Inject boot arguments and console path into the guest DTB to ensure it uses the SBI console (hvc0)
+    device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, "console=hvc0 earlycon=sbi riscv_aia=off")) catch |err| {
         debug.printf("Warning: Failed to inject bootargs into guest DTB: {s}\n", .{@errorName(err)});
     };
     device_tree.editProperty("/chosen", "stdout-path", try dt.DeviceTreeProperty.fromText(cpu_allocator, "serial0:115200n8")) catch |err| {
         debug.printf("Warning: Failed to inject stdout-path into guest DTB: {s}\n", .{@errorName(err)});
     };
+
+    // Clean up host-specific reserved memory nodes and entries for the guest DTB.
+    // The guest has its own private RAM range (GPA 0x80000000) and does not need
+    // or overlap with host-specific reservations.
+    device_tree.reserved_count = 0;
+    while (true) {
+        var res_it = device_tree.iter("/reserved-memory", 10);
+        if (res_it.next()) |path| {
+            device_tree.deleteNode(path);
+        } else break;
+    }
+
+    // Clean up AIA interrupt controller nodes (aplic and imsic) to force
+    // the guest kernel to fall back to PLIC, preventing tight loops on siselect/sireg.
+    while (true) {
+        var aia_it = device_tree.iter("/", 10);
+        var found_aia: ?[]const u8 = null;
+        while (aia_it.next()) |path| {
+            if (std.mem.indexOf(u8, path, "aplic") != null or std.mem.indexOf(u8, path, "imsic") != null) {
+                found_aia = path;
+                break;
+            }
+        }
+        if (found_aia) |path| {
+            if (false) {
+                debug.printf("DTB: Deleting AIA node: {s}\n", .{path});
+            }
+            device_tree.deleteNode(path);
+        } else break;
+    }
+
+    // Keep only virtual CPU 0 active in the guest DTB by marking any extra `/cpus/cpu@` node as disabled.
+    var cpu_it = device_tree.iter("/cpus/cpu@", 10);
+    while (cpu_it.next()) |path| {
+        if (!std.mem.endsWith(u8, path, "cpu@0")) {
+            // Only modify the CPU node itself, not its sub-nodes (like interrupt-controller)
+            // A CPU node path has exactly 2 slashes (e.g. "/cpus/cpu@1")
+            var slash_count: usize = 0;
+            for (path) |c| {
+                if (c == '/') slash_count += 1;
+            }
+            if (slash_count == 2) {
+                try device_tree.editProperty(path, "status", try dt.DeviceTreeProperty.fromText(cpu_allocator, "disabled"));
+            }
+        }
+    }
+
+    // Dump root device tree properties for early boot diagnostics
+    if (false) {
+        const root_path = "/";
+        debug.printf("DT Node: '{s}'\n", .{root_path});
+        if (device_tree.propertyIter(root_path)) |*prop_it| {
+            var p_it = prop_it.*;
+            while (p_it.next()) |prop| {
+                debug.printf("  Prop: '{s}' (size={})\n", .{prop.name, prop.value.size()});
+            }
+        }
+    }
 
     const guest_dtb = try device_tree.toBlob();
     defer cpu_allocator.free(guest_dtb);
@@ -151,9 +209,11 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     for (0..cpu_count) |i| {
         // Core 0 starts executing immediately and is enrolled in the scheduler.
         // Other cores wait for HSM HART_START, so they are not queued here.
-        const sched_fn: ?*const fn (*vcore.VirtualCore) void = if (i == 0) &scheduler.queue else null;
-        const vc = try root_vm.addVcore(i, entry_point, guest_dtb_gpa, .high, sched_fn);
-        if (i == 0) vc.state = .ready;
+        const vc = try root_vm.addVcore(i, entry_point, guest_dtb_gpa, .high, null);
+        if (i == 0) {
+            vc.state = .ready;
+            scheduler.queue(vc);
+        }
     }
 
     system_ctx_ptr.* = ctx;
@@ -214,14 +274,28 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
 
         if (pcore.this().active_vcore) |ptr| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
+            if (false) {
+                debug.printf("CPU {}: active_vcore found: guest={} vcore={}\n", .{ pcore.this().cpu_core_id, vc.guest_id, vc.id });
+            }
 
             // Ensure machine state has latest hgatp if H-extension is active.
             if (vc.guest.space.mode == .h_paging) {
                 const hgatp_val = vc.guest.space.paging.?.hgatp(vc.guest.vmid);
                 if (vc.machine.hgatp != hgatp_val) {
-                    debug.printf("CPU {}: Updating guest={} hgatp to 0x{x}\n", .{ pcore.this().cpu_core_id, vc.guest_id, hgatp_val });
+                    if (false) {
+                        debug.printf("CPU {}: Updating guest={} hgatp to 0x{x}\n", .{ pcore.this().cpu_core_id, vc.guest_id, hgatp_val });
+                    }
                     vc.machine.hgatp = hgatp_val;
                 }
+            }
+
+            // Inject pending virtual timer interrupt if scheduled and target has passed.
+            if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
+                if (false) {
+                    debug.printf("CPU {}: Injecting virtual timer interrupt (VSTIP) for guest {}, target=0x{x}, now=0x{x}\n", .{ pcore.this().cpu_core_id, vc.guest_id, vc.timer_target, riscv.readTime() });
+                }
+                vc.machine.hvip |= riscv.HVIP.VSTIP;
+                vc.timer_scheduled = false;
             }
 
             pcore.hw_run_vcore(&vc.context, &vc.machine, &vc.guest_state);
@@ -233,6 +307,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
 }
 
 pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    debug.releaseLocksForCrash();
     debug.printf("\n*** HYPERVISOR PANIC ***\n{s}\n", .{message});
     while (true) {}
 }

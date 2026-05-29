@@ -407,22 +407,18 @@ pub fn freePage(addr: usize) void {
 
 // Increment reference count of a page. Used for Copy-on-Write sharing.
 pub fn incrementPageRef(addr: usize) void {
-    phys_mem_state.lock.lock();
-    defer phys_mem_state.lock.unlock();
     const desc = getPageDescriptor(addr);
-    desc.refcount += 1;
+    _ = @atomicRmw(u32, &desc.refcount, .Add, 1, .seq_cst);
 }
 
 // Decrement reference count of a page. If it reaches 0, free the page.
 pub fn decrementPageRef(addr: usize) void {
-    phys_mem_state.lock.lock();
-    defer phys_mem_state.lock.unlock();
     const desc = getPageDescriptor(addr);
-    if (desc.refcount > 0) {
-        desc.refcount -= 1;
-        if (desc.refcount == 0) {
-            pushFreeBlockLocked(addr, desc.order);
-        }
+    const old = @atomicRmw(u32, &desc.refcount, .Sub, 1, .seq_cst);
+    if (old == 1) {
+        phys_mem_state.lock.lock();
+        defer phys_mem_state.lock.unlock();
+        pushFreeBlockLocked(addr, desc.order);
     }
 }
 

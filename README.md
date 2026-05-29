@@ -138,7 +138,7 @@ All participants are expected to follow the project's
 
 ## Copyright and license
 
-Copyright &copy; Diosix contributors. This project is distributed under the terms of the MIT License. See [LICENSE](LICENSE) for the full text and [CONTRIBUTORS](CONTRIBUTORS) for the list of copyright holders.
+Copyright &copy; 2024-2026 Diosix contributors. This project is distributed under the terms of the MIT License. See [LICENSE](LICENSE) for the full text and [CONTRIBUTORS](CONTRIBUTORS) for the list of copyright holders.
 
 The diosix.org illustration is a combination of artwork provided by 
 [Katerina Limpitsouni](https://undraw.co/license) and 

@@ -198,6 +198,13 @@ pub const PageTable = struct {
 
     // Entry point for fault handling
     pub fn resolveFault(self: *PageTable, gpa: usize, is_trusted: bool) !void {
+        // Identity map standard MMIO/peripheral regions below RAM for trusted guests (like Root VM)
+        if (is_trusted and gpa < 0x80000000) {
+            const gpa_page = gpa & ~(physmem.PageSize - 1);
+            try self.mapPage(gpa_page, gpa_page, PTEFlags.read | PTEFlags.write | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
+            return;
+        }
+
         // 1. Root VM identity mapping
         if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + self.root_range_size) {
             const hpa = gpa - self.root_base_gpa + self.root_base_hpa;
@@ -307,14 +314,14 @@ test "stage-2 Copy-on-Write" {
 
     const hpa = try physmem.allocPage();
     const gpa = 0x1000;
-    try pt.mapPage(gpa, hpa, PTEFlags.read | PTEFlags.write | PTEFlags.valid, true);
+    try pt.mapPage(gpa, hpa, PTEFlags.read | PTEFlags.write | PTEFlags.valid, false);
 
     var pt2 = try pt.fork();
     defer pt2.deinit();
 
     // In pt2, the page table is empty, so walk will fail.
     // We must resolve the fault first.
-    try pt2.resolveFault(gpa, true);
+    try pt2.resolveFault(gpa, false);
 
     // Now in pt2, the page should be CoW and not writable
     const pte2_ptr = try pt2.walk(gpa, false);
@@ -322,7 +329,7 @@ test "stage-2 Copy-on-Write" {
     try testing.expect(pte2_ptr.* & PTEFlags.write == 0);
 
     // Resolve fault
-    try pt2.resolveFault(gpa, true);
+    try pt2.resolveFault(gpa, false);
     
     // Now it should be writable and not CoW
     try testing.expect(pte2_ptr.* & PTEFlags.cow == 0);

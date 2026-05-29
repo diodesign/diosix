@@ -1,6 +1,6 @@
 // RISC-V non-hardware-specific routines.
 //
-// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
@@ -47,10 +47,13 @@ var test_mstatus: usize = 0;
 var test_mcause: usize = 0;
 var test_mepc: usize = 0;
 var test_mtval: usize = 0;
+var test_mie: usize = 0;
 var test_misa: usize = (1 << 53) | IsaExtension.h | IsaExtension.gc; // RV64 is bit 63 in MXL, but for simple 64-bit mask we use (1 << 63)
 var test_hstatus: usize = 0;
 var test_hgatp: usize = 0;
 pub var test_time: u64 = 0;
+var test_menvcfg: usize = 0;
+var test_henvcfg: usize = 0;
 
 // RISC-V 64-bit MXL for MISA
 const MISA_MXL_64: usize = 1 << 63;
@@ -114,6 +117,7 @@ pub fn initMockHardware() void {
     test_cpu_ctx.active_vcore = null;
     test_cpu_ctx.trap_count = 0;
     test_cpu_ctx.last_trap_pc = 0;
+    test_cpu_ctx.last_trap_val = 0;
     test_cpu_ctx.trap_loop_count = 0;
     test_cpu_ctx.run_queue_count = 0;
     test_cpu_ctx.run_queue.init();
@@ -122,6 +126,7 @@ pub fn initMockHardware() void {
     test_mcause = 0;
     test_mepc = 0;
     test_mtval = 0;
+    test_mie = 0;
     test_misa = MISA_MXL_64 | IsaExtension.h | IsaExtension.gc;
     test_hstatus = 0;
     test_hgatp = 0;
@@ -149,6 +154,7 @@ pub const CpuContext = struct {
     
     // Aegis: Trap loop detection fields
     last_trap_pc: usize,
+    last_trap_val: usize,
     trap_loop_count: usize,
 };
 
@@ -173,6 +179,8 @@ pub const GuestState = struct {
     vscause: usize,
     vstval: usize,
     vsatp: usize,
+    vstimecmp: usize,
+    vsenvcfg: usize,
 };
 
 // Return a pointer to the CPU context for the core running this thread.
@@ -291,6 +299,26 @@ pub inline fn writeMstatus(val: usize) void {
     );
 }
 
+// Return the mie CSR.
+pub inline fn readMie() usize {
+    if (is_test) return test_mie;
+    return asm volatile ("csrr %[ret], mie"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+// Write to the mie CSR.
+pub inline fn writeMie(val: usize) void {
+    if (is_test) {
+        test_mie = val;
+        return;
+    }
+    asm volatile ("csrw mie, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
 // Return the misa CSR (0 if not supported or restricted).
 pub inline fn readMisa() usize {
     if (is_test) return test_misa;
@@ -331,6 +359,48 @@ pub inline fn writeHstatus(val: usize) void {
     );
 }
 
+pub inline fn writeHcounteren(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw hcounteren, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn writeMcounteren(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw mcounteren, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readMenvcfg() usize {
+    if (is_test) return test_menvcfg;
+    return asm volatile ("csrr %[ret], menvcfg" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeMenvcfg(val: usize) void {
+    if (is_test) {
+        test_menvcfg = val;
+        return;
+    }
+    asm volatile ("csrw menvcfg, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readHenvcfg() usize {
+    if (is_test) return test_henvcfg;
+    return asm volatile ("csrr %[ret], henvcfg" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeHenvcfg(val: usize) void {
+    if (is_test) {
+        test_henvcfg = val;
+        return;
+    }
+    asm volatile ("csrw henvcfg, %[val]" : : [val] "r" (val));
+}
+
 pub inline fn readHgatp() usize {
     if (is_test) return test_hgatp;
     return asm volatile ("csrr %[ret], hgatp"
@@ -347,6 +417,11 @@ pub inline fn writeHgatp(val: usize) void {
         :
         : [val] "r" (val),
     );
+}
+
+pub inline fn hfenceGvma() void {
+    if (is_test) return;
+    asm volatile ("hfence.gvma");
 }
 
 pub inline fn readHedeleg() usize {
@@ -481,7 +556,7 @@ pub inline fn readHtinst() usize {
 
 pub inline fn readMtval2() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], 0x344"
+    return asm volatile ("csrr %[ret], 0x34b"
         : [ret] "=r" (-> usize),
     );
 }
@@ -549,6 +624,16 @@ pub inline fn writeHvip(val: usize) void {
 }
 
 // ---- VS-mode (Guest Supervisor) CSRs ----
+
+pub inline fn readVsenvcfg() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], 0x10a" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVsenvcfg(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw 0x10a, %[val]" : : [val] "r" (val));
+}
 
 pub inline fn readVsstatus() usize {
     if (is_test) return 0;
@@ -628,6 +713,26 @@ pub inline fn readVsatp() usize {
 pub inline fn writeVsatp(val: usize) void {
     if (is_test) return;
     asm volatile ("csrw vsatp, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn readVstimecmp() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], 0x24d" : [ret] "=r" (-> usize));
+}
+
+pub inline fn writeVstimecmp(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw 0x24d, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn writeMstateen0(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw 0x30c, %[val]" : : [val] "r" (val));
+}
+
+pub inline fn writeHstateen0(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw 0x60c, %[val]" : : [val] "r" (val));
 }
 
 // Reboot the host machine.

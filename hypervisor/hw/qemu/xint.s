@@ -25,14 +25,13 @@ hw_xint_init:
     # delegate most supervisor-level exceptions to the supervisor-level guest,
     # so that the guest can deal with its exception direct. for a given exception,
     # bit = 1 to delegate, 0 = pass to the machine-level hypervisor.
-    # 0xb1f3 = delegate all exceptions (0-15) apart from:
+    # 0xb1fb = delegate all exceptions (0-15) apart from:
     # 02: illegal instruction (catch in case we need to implement it in software)
-    # 03: breakpoint
     # 09: environment call from supervisor mode
     # 10: reserved
     # 11: environment call from machine mode
     # 14: reserved
-    li      t0, 0xb1f3
+    li      t0, 0xb1fb
     csrrw   x0, medeleg, t0
   
     # 0x333 = delegate the following interrupts to their modes:

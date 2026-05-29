@@ -1,6 +1,6 @@
 // generic atomic routines for spinlocks and so on
 //
-// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");

@@ -39,6 +39,10 @@ hw_shutdown:
 # a0 = character to print
 hw_putchar:
   li t0, 0x10000000 # UART0 base address
+hw_putchar_spin:
+  lbu t1, 5(t0)     # read line status register
+  andi t1, t1, 0x20 # check transmitter holding register empty (bit 5)
+  beqz t1, hw_putchar_spin
   sb a0, 0(t0)
   ret
 
@@ -106,6 +110,14 @@ hw_run_vcore:
   csrw vstval, t0
   ld t0, 56(a2)     # vsatp
   csrw vsatp, t0
+  ld t0, 64(a2)     # vstimecmp
+  csrw 0x24d, t0
+  ld t0, 72(a2)     # vsenvcfg
+  csrw 0x10a, t0    # senvcfg
+  li t0, 1
+  slli t0, t0, 63   # STCE
+  ori t0, t0, 240   # Cache block ops
+  csrw 0x60a, t0    # henvcfg
 
   # Flush any stale G-stage TLB entries
   hfence.gvma

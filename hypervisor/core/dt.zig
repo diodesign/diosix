@@ -9,7 +9,7 @@
 // To generate a DTB in memory:
 // Use DeviceTree.init() and add elements, or update an existing DeviceTree, then call .toBlob()
 //
-// Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
+// Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const debug = @import("debug.zig");
@@ -777,11 +777,16 @@ pub const DeviceTree = struct {
             // split path into components
             var components: [max_path_depth][]const u8 = undefined;
             var comp_count: usize = 0;
-            var split_it = std.mem.splitScalar(u8, node.path, '/');
-            while (split_it.next()) |comp| {
-                if (comp_count < max_path_depth) {
-                    components[comp_count] = comp;
-                    comp_count += 1;
+            if (std.mem.eql(u8, node.path, "/")) {
+                components[0] = "";
+                comp_count = 1;
+            } else {
+                var split_it = std.mem.splitScalar(u8, node.path, '/');
+                while (split_it.next()) |comp| {
+                    if (comp_count < max_path_depth) {
+                        components[comp_count] = comp;
+                        comp_count += 1;
+                    }
                 }
             }
 
@@ -837,7 +842,7 @@ pub const DeviceTree = struct {
         }
 
         // close all remaining nodes
-        while (prev_count > 1) {
+        while (prev_count > 0) {
             try bytes.addU32(FdtEndNode);
             prev_count -= 1;
         }
