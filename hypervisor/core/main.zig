@@ -43,6 +43,8 @@ var system_ctx_locked = atomic.LockPayload(?*SystemContext).init(
     null,
 );
 
+pub var global_root_vm: ?*guest.Guest = null;
+
 // This is the core initialization logic for the boot CPU.
 // It is separated from main() to allow for easier testing.
 fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
@@ -162,30 +164,125 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         } else break;
     }
 
+    var disabled_phandles = std.ArrayList(u32).empty;
+    defer disabled_phandles.deinit(cpu_allocator);
+
     // Keep only virtual CPU 0 active in the guest DTB by marking any extra `/cpus/cpu@` node as disabled.
     var cpu_it = device_tree.iter("/cpus/cpu@", 10);
     while (cpu_it.next()) |path| {
+        // Strip Sstc for all CPU nodes so the guest does not use the Sstc timer extension
+        var slash_count: usize = 0;
+        for (path) |c| {
+            if (c == '/') slash_count += 1;
+        }
+        if (slash_count == 2) {
+            // Let's strip "sstc" from "riscv,isa" property of this CPU node.
+            if (device_tree.getProperty(path, "riscv,isa")) |isa_prop| {
+                if (isa_prop.asText()) |isa_text| {
+                    var new_isa = std.ArrayList(u8).empty;
+                    defer new_isa.deinit(cpu_allocator);
+
+                    var i: usize = 0;
+                    while (i < isa_text.len) {
+                        if (i + 5 <= isa_text.len and std.mem.eql(u8, isa_text[i .. i + 5], "_sstc")) {
+                            i += 5;
+                        } else if (i + 4 <= isa_text.len and std.mem.eql(u8, isa_text[i .. i + 4], "sstc")) {
+                            i += 4;
+                        } else {
+                            try new_isa.append(cpu_allocator, isa_text[i]);
+                            i += 1;
+                        }
+                    }
+                    try device_tree.editProperty(path, "riscv,isa", try dt.DeviceTreeProperty.fromText(cpu_allocator, new_isa.items));
+                    // debug.printf("DTB: Stripped sstc from {s} riscv,isa -> {s}\n", .{path, new_isa.items});
+                } else |_| {}
+            } else |_| {}
+
+            // Let's strip "sstc" from "riscv,isa-extensions" property of this CPU node if it exists.
+            if (device_tree.getProperty(path, "riscv,isa-extensions")) |ext_prop| {
+                if (ext_prop.asMultiText(cpu_allocator)) |extensions| {
+                    defer cpu_allocator.free(extensions);
+                    var new_extensions = std.ArrayList(u8).empty;
+                    defer new_extensions.deinit(cpu_allocator);
+                    var changed = false;
+                    for (extensions) |ext_str| {
+                        if (std.mem.eql(u8, ext_str, "sstc")) {
+                            changed = true;
+                        } else {
+                            try new_extensions.appendSlice(cpu_allocator, ext_str);
+                            try new_extensions.append(cpu_allocator, 0);
+                        }
+                    }
+                    if (changed) {
+                        try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, new_extensions.items));
+                        // debug.printf("DTB: Stripped sstc from {s} riscv,isa-extensions\n", .{path});
+                    }
+                } else |_| {}
+            } else |_| {}
+        }
+
         if (!std.mem.endsWith(u8, path, "cpu@0")) {
             // Only modify the CPU node itself, not its sub-nodes (like interrupt-controller)
             // A CPU node path has exactly 2 slashes (e.g. "/cpus/cpu@1")
-            var slash_count: usize = 0;
-            for (path) |c| {
-                if (c == '/') slash_count += 1;
-            }
             if (slash_count == 2) {
                 try device_tree.editProperty(path, "status", try dt.DeviceTreeProperty.fromText(cpu_allocator, "disabled"));
+
+                // Add the sub-node interrupt-controller's phandle to the disabled list
+                const ic_path = try std.fmt.allocPrint(cpu_allocator, "{s}/interrupt-controller", .{path});
+                defer cpu_allocator.free(ic_path);
+                if (device_tree.getProperty(ic_path, "phandle")) |prop| {
+                    if (prop.data) |data| {
+                        if (data.len >= 4) {
+                            const phandle = (@as(u32, data[0]) << 24) | (@as(u32, data[1]) << 16) | (@as(u32, data[2]) << 8) | data[3];
+                            try disabled_phandles.append(cpu_allocator, phandle);
+                        }
+                    }
+                } else |_| {}
             }
         }
     }
 
-    // Dump root device tree properties for early boot diagnostics
+    // Filter PLIC interrupts-extended to remove references to disabled CPUs
+    var plic_it = device_tree.iter("/", 10);
+    while (plic_it.next()) |path| {
+        if (std.mem.indexOf(u8, path, "plic") != null or std.mem.indexOf(u8, path, "interrupt-controller") != null) {
+            if (device_tree.getProperty(path, "interrupts-extended")) |prop| {
+                if (prop.data) |data| {
+                    var new_data = std.ArrayList(u8).empty;
+                    defer new_data.deinit(cpu_allocator);
+
+                    var offset: usize = 0;
+                    while (offset + 7 < data.len) : (offset += 8) {
+                        const phandle = (@as(u32, data[offset]) << 24) | (@as(u32, data[offset + 1]) << 16) | (@as(u32, data[offset + 2]) << 8) | data[offset + 3];
+
+                        // Check if this phandle is in the disabled list
+                        var is_disabled = false;
+                        for (disabled_phandles.items) |dp| {
+                            if (dp == phandle) {
+                                is_disabled = true;
+                                break;
+                            }
+                        }
+
+                        if (!is_disabled) {
+                            try new_data.appendSlice(cpu_allocator, data[offset .. offset + 8]);
+                        }
+                    }
+
+                    // Replace the property
+                    try device_tree.editProperty(path, "interrupts-extended", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, new_data.items));
+                }
+            } else |_| {}
+        }
+    }
+
     if (false) {
         const root_path = "/";
         debug.printf("DT Node: '{s}'\n", .{root_path});
         if (device_tree.propertyIter(root_path)) |*prop_it| {
             var p_it = prop_it.*;
             while (p_it.next()) |prop| {
-                debug.printf("  Prop: '{s}' (size={})\n", .{prop.name, prop.value.size()});
+                debug.printf("  Prop: '{s}' (size={})\n", .{ prop.name, prop.value.size() });
             }
         }
     }
@@ -216,6 +313,7 @@ fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         }
     }
 
+    global_root_vm = root_vm;
     system_ctx_ptr.* = ctx;
 }
 

@@ -46,6 +46,7 @@ pub const VirtualCore = struct {
     siselect: usize,
     timer_scheduled: bool,
     timer_target: u64,
+    running_on_cpu: ?usize,
 
     // Scheduling data.
     priority: Priority,
@@ -67,6 +68,7 @@ pub const VirtualCore = struct {
             .siselect = 0,
             .timer_scheduled = false,
             .timer_target = 0,
+            .running_on_cpu = null,
             .context = std.mem.zeroes(riscv.ThreadContext),
             .machine = .{
                 .mepc = entry,
@@ -135,6 +137,7 @@ pub const VirtualCore = struct {
         vc.context[@intFromEnum(riscv.Register.a0)] = 0;
 
         // Reset scheduler node for the new vcore.
+        vc.running_on_cpu = null;
         vc.scheduler_node = undefined;
         vc.updateSchedulerWeight();
 

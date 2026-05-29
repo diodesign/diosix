@@ -33,8 +33,8 @@ extern fn hw_xint_init() void;
 pub fn init() void {
     hw_xint_init();
 
-    // Enable physical timer, software, and external interrupts
-    riscv.writeMie(0x888);
+    // Enable physical timer, software, and external interrupts (including supervisor mode in M-mode)
+    riscv.writeMie(0xa8a);
 
     // Enable M-mode delegation of cycle, time, and instret counters (bits 0, 1, 2 = 7)
     // to lower privilege modes (HS, VS, VU, U).
@@ -87,6 +87,8 @@ pub const IRQ = struct {
 
 const MAX_TRAP_LOGS = 100;
 const TRAP_LOOP_HARD_LIMIT: usize = 64;
+
+pub var total_trap_count: usize = 0;
 
 // Decode mcause and return an IRQ structure.
 fn dispatch(context: *riscv.ThreadContext) IRQ {
@@ -163,20 +165,30 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
     const pcpu = pcore.this();
     const irq = dispatch(context);
-    
-    if (false) {
+
+    total_trap_count += 1;
+    const enable_log = false;
+
+    if (enable_log) {
         if (pcpu.active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-            debug.printf("[HV] xint_handler: core={} active_vcore=0x{x} guest={} vcore={}\n", .{ pcpu.cpu_core_id, @intFromPtr(pcpu.active_vcore), vc.guest_id, vc.id });
+            debug.printf("xint_handler: total_traps={} core={} active_vcore=0x{x} guest={} vcore={}\n", .{ total_trap_count, pcpu.cpu_core_id, @intFromPtr(pcpu.active_vcore), vc.guest_id, vc.id });
         } else {
-            debug.printf("[HV] xint_handler: core={} active_vcore=NULL\n", .{ pcpu.cpu_core_id });
+            debug.printf("xint_handler: total_traps={} core={} active_vcore=NULL\n", .{ total_trap_count, pcpu.cpu_core_id });
         }
     }
     // Trap detail logging
-    if (false) {
+    if (enable_log) {
         if (irq.privilege_mode != .machine) {
             const is_ecall = (irq.cause == .virtual_supervisor_environment_call or irq.cause == .supervisor_environment_call or irq.cause == .user_environment_call);
-            if (!is_ecall) {
+            if (is_ecall) {
+                const a7 = context[@intFromEnum(riscv.Register.a7)];
+                const a6 = context[@intFromEnum(riscv.Register.a6)];
+                const a0 = context[@intFromEnum(riscv.Register.a0)];
+                const a1 = context[@intFromEnum(riscv.Register.a1)];
+                const a2 = context[@intFromEnum(riscv.Register.a2)];
+                debug.printf("SBI call: core={} mode={s} pc=0x{x} ext=0x{x} func={} a0=0x{x} a1=0x{x} a2=0x{x}\n", .{ pcpu.cpu_core_id, @tagName(irq.privilege_mode), irq.pc, a7, a6, a0, a1, a2 });
+            } else {
                 debug.printf("Trapped: core={} mode={s} pc=0x{x} cause={s} (0x{x}) val=0x{x}\n", .{ pcpu.cpu_core_id, @tagName(irq.privilege_mode), irq.pc, @tagName(irq.cause), @intFromEnum(irq.cause), irq.val });
 
                 // Log translation state for debugging isolation failures
@@ -189,14 +201,14 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 const mideleg = if (riscv.hasHExtension()) riscv.readMideleg() else 0;
                 const medeleg = if (riscv.hasHExtension()) riscv.readMedeleg() else 0;
 
-                debug.printf("[HV] State: hgatp=0x{x} hstatus=0x{x} vsatp=0x{x} mstatus=0x{x} htval=0x{x} hvip=0x{x}\n", .{ hgatp, hstatus, vsatp, mstatus, htval, hvip });
-                debug.printf("[HV] Virtualization: MPV={} GVA={} SPV={} SPVP={} mideleg=0x{x} medeleg=0x{x}\n", .{ (mstatus & riscv.MSTATUS.MPV) != 0, (hstatus & riscv.HSTATUS.GVA) != 0, (hstatus & riscv.HSTATUS.SPV) != 0, (hstatus & riscv.HSTATUS.SPVP) != 0, mideleg, medeleg });
+                debug.printf("State: hgatp=0x{x} hstatus=0x{x} vsatp=0x{x} mstatus=0x{x} htval=0x{x} hvip=0x{x}\n", .{ hgatp, hstatus, vsatp, mstatus, htval, hvip });
+                debug.printf("Virtualization: MPV={} GVA={} SPV={} SPVP={} mideleg=0x{x} medeleg=0x{x}\n", .{ (mstatus & riscv.MSTATUS.MPV) != 0, (hstatus & riscv.HSTATUS.GVA) != 0, (hstatus & riscv.HSTATUS.SPV) != 0, (hstatus & riscv.HSTATUS.SPVP) != 0, mideleg, medeleg });
 
                 if (riscv.hasHExtension()) {
                     const vstvec = riscv.readVstvec();
                     const vscause = riscv.readVscause();
                     const vsie = riscv.readVsie();
-                    debug.printf("[HV] Guest: vstvec=0x{x} vscause=0x{x} vsie=0x{x}\n", .{ vstvec, vscause, vsie });
+                    debug.printf("Guest: vstvec=0x{x} vscause=0x{x} vsie=0x{x}\n", .{ vstvec, vscause, vsie });
                 }
 
                 pcpu.trap_count += 1;
@@ -254,6 +266,13 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     // Refresh context if we're running a vcore
     if (pcpu.active_vcore) |vc_raw| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+
+        // Inject pending virtual timer interrupt if scheduled and target has passed.
+        if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
+            vc.machine.hvip |= riscv.HVIP.VSTIP;
+            vc.timer_scheduled = false;
+        }
+
         @memcpy(context, &vc.context);
         pcore.contextSwitch(vc);
         syncGuestStateToHardware(vc);
@@ -267,13 +286,13 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
     const gs = &vc.guest_state;
 
     if (false) {
-        debug.printf("[HV] syncGuestStateToHardware: mepc=0x{x}\n", .{ms.mepc});
+        debug.printf("syncGuestStateToHardware: mepc=0x{x}\n", .{ms.mepc});
     }
     riscv.writeMepc(ms.mepc);
     riscv.writeMstatus(ms.mstatus);
 
     // Aegis: Confirm exactly where we are jumping to on return (Disabled for high-speed VM boot)
-    // debug.printf("[HV] -> Return to PC=0x{x} mode={s}\n", .{ ms.mepc, if ((ms.mstatus & riscv.MSTATUS.MPV) != 0) "virtual" else "host" });
+    // debug.printf("Hypervisor -> Return to PC=0x{x} mode={s}\n", .{ ms.mepc, if ((ms.mstatus & riscv.MSTATUS.MPV) != 0) "virtual" else "host" });
 
     if (riscv.hasHExtension()) {
         if (vc.guest.space.mode == .h_paging) {
@@ -285,9 +304,18 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         // If the guest has programmed a timer via vstimecmp (Sstc), ensure we clear any stale
         // software-injected VSTIP bit in hvip so the hardware can manage the interrupt natively.
         var hvip_val = ms.hvip;
-        if (gs.vstimecmp != 0) {
+        if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
             hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
         }
+
+        // Dynamically assert or clear VSEIP in hvip based on the physical mip MEIP/SEIP bits
+        const mip_val = riscv.readMip();
+        if ((mip_val & ((1 << 9) | (1 << 11))) != 0) {
+            hvip_val |= riscv.HVIP.VSEIP;
+        } else {
+            hvip_val &= ~@as(usize, riscv.HVIP.VSEIP);
+        }
+
         riscv.writeHvip(hvip_val);
 
         riscv.writeHedeleg(ms.hedeleg);
@@ -347,8 +375,8 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                 const csr = (instr >> 20) & 0xfff;
                 const is_seed_csr = (csr == 0x015);
                 const is_aia_csr = (csr == 0x016 or csr == 0x215 or csr == 0x216 or
-                                    csr == 0x150 or csr == 0x151 or csr == 0x250 or csr == 0x251 or
-                                    csr == 0xdb0 or csr == 0xdb4 or csr == 0xeb0 or csr == 0xeb4);
+                    csr == 0x150 or csr == 0x151 or csr == 0x250 or csr == 0x251 or
+                    csr == 0xdb0 or csr == 0xdb4 or csr == 0xeb0 or csr == 0xeb4);
                 const is_envcfg_csr = (csr == 0x10a or csr == 0x20a);
                 if (opcode == 0x73 and (is_aia_csr or is_envcfg_csr or is_seed_csr)) {
                     const rd = (instr >> 7) & 0x1f;
@@ -363,7 +391,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                         const time_now = riscv.readTime();
                         const entropy = (time_now ^ (time_now >> 16)) & 0xffff;
                         old_val = 0x80000000 | entropy;
-                        debug.printf("[HV] Zkr seed read: time=0x{x} entropy=0x{x} old_val=0x{x}\n", .{ time_now, entropy, old_val });
+                        debug.printf("Zkr seed read: time=0x{x} entropy=0x{x} old_val=0x{x}\n", .{ time_now, entropy, old_val });
                     } else if (csr == 0x215 or csr == 0x150 or csr == 0x250 or csr == 0xdb0 or csr == 0xeb0) {
                         old_val = vc.siselect;
                     } else if (csr == 0x10a or csr == 0x20a) {
@@ -428,9 +456,9 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     pcore.this().trap_loop_count = 0; // Reset loop detector
                     if (false) {
                         if (csr == 0x10a or csr == 0x20a) {
-                            debug.printf("[HV] Core {} VCore {}: Emulated CSR 0x{x} access at PC=0x{x} vsenvcfg=0x{x}\n", .{ pcpu.cpu_core_id, vc.id, csr, irq.pc, vc.guest_state.vsenvcfg });
+                            debug.printf("Core {} VCore {}: Emulated CSR 0x{x} access at PC=0x{x} vsenvcfg=0x{x}\n", .{ pcpu.cpu_core_id, vc.id, csr, irq.pc, vc.guest_state.vsenvcfg });
                         } else {
-                            debug.printf("[HV] Core {} VCore {}: Emulated CSR 0x{x} access at PC=0x{x} siselect=0x{x}\n", .{ pcpu.cpu_core_id, vc.id, csr, irq.pc, vc.siselect });
+                            debug.printf("Core {} VCore {}: Emulated CSR 0x{x} access at PC=0x{x} siselect=0x{x}\n", .{ pcpu.cpu_core_id, vc.id, csr, irq.pc, vc.siselect });
                         }
                     }
                     return;
@@ -484,7 +512,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                 // Unrecognized instruction — log it once then reflect to guest
                 {
                     if (pcore.this().trap_loop_count < 2) {
-                        debug.printf("[HV] Unhandled illegal instruction 0x{x} at PC=0x{x} — reflecting to guest\n", .{ instr, irq.pc });
+                        debug.printf("Unhandled illegal instruction 0x{x} at PC=0x{x} — reflecting to guest\n", .{ instr, irq.pc });
                     }
                     reflectExceptionToGuest(vc, irq) catch |err| {
                         debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
@@ -517,7 +545,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     if (gpa == 0) gpa = htval_val;
 
                     if (false) {
-                        debug.printf("[HV] Guest Fault: cause={s} (0x{x}) pc=0x{x} val=0x{x} gpa=0x{x}\n", .{ @tagName(irq.cause), @intFromEnum(irq.cause), irq.pc, irq.val, gpa });
+                        debug.printf("Guest Fault: cause={s} (0x{x}) pc=0x{x} val=0x{x} gpa=0x{x}\n", .{ @tagName(irq.cause), @intFromEnum(irq.cause), irq.pc, irq.val, gpa });
                     }
 
                     // As per RISC-V Privileged / Hypervisor specification, mtval2 and htval
@@ -602,13 +630,24 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             const msip_ptr = @as(*volatile u32, @ptrFromInt(0x02000000 + 4 * pcpu.cpu_core_id));
             msip_ptr.* = 0;
         },
-        .machine_interrupt => {
-            // Machine external interrupt (MEIP) from the PLIC.
-            // For now, log and inject VSEIP into the guest.
-            debug.printf("MEI: Machine external interrupt on core {}\n", .{pcpu.cpu_core_id});
-            if (pcpu.active_vcore) |vc_raw| {
-                const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                vc.machine.hvip |= riscv.HVIP.VSEIP;
+        .machine_interrupt, .supervisor_interrupt => {
+            // Machine/Supervisor external interrupt from the PLIC.
+            // Route it to the guest vcores globally.
+            if (main.global_root_vm) |g| {
+                var it_vcore = g.vcores.start;
+                while (it_vcore) |node| {
+                    const vc = node.contents;
+                    vc.machine.hvip |= riscv.HVIP.VSEIP;
+
+                    // If the vcore is active on another physical core, send an IPI to wake it up
+                    if (vc.running_on_cpu) |target_cpu| {
+                        if (target_cpu != pcpu.cpu_core_id) {
+                            const msip_ptr = @as(*volatile u32, @ptrFromInt(0x02000000 + 4 * target_cpu));
+                            msip_ptr.* = 1;
+                        }
+                    }
+                    it_vcore = node.next;
+                }
             }
         },
         else => {
@@ -665,7 +704,7 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
         ms.mepc = base + 4 * (@intFromEnum(irq.cause) & 0x7FFFFFFFFFFFFFFF);
     }
     if (false) {
-        debug.printf("[HV] Reflecting: trap PC=0x{x} -> guest handler=0x{x} mode={s}\n", .{ irq.pc, ms.mepc, if (mode == 0) "direct" else "vectored" });
+        debug.printf("Reflecting: trap PC=0x{x} -> guest handler=0x{x} mode={s}\n", .{ irq.pc, ms.mepc, if (mode == 0) "direct" else "vectored" });
     }
 
     // 4. Update hstatus.SPVP to reflect the privilege mode we're coming from

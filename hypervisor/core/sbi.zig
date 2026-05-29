@@ -83,6 +83,12 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             }
             setResult(vc, context, SBI_SUCCESS, 0);
         },
+        interface.EXT.LEGACY_REMOTE_FENCE_I,
+        interface.EXT.LEGACY_REMOTE_SFENCE_VMA,
+        interface.EXT.LEGACY_REMOTE_SFENCE_VMA_ASID => {
+            // For a single virtual CPU, there are no remote harts, so remote fences are a complete no-op.
+            setResult(vc, context, SBI_SUCCESS, 0);
+        },
         interface.EXT.LEGACY_SHUTDOWN => {
             debug.printf("SBI: Guest {} requested legacy shutdown\n", .{vc.guest_id});
             terminateOrRestart(vc.getGuest());
@@ -122,6 +128,9 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
                 interface.EXT.LEGACY_CONSOLE_PUTCHAR,
                 interface.EXT.LEGACY_CLEAR_IPI,
                 interface.EXT.LEGACY_SEND_IPI,
+                interface.EXT.LEGACY_REMOTE_FENCE_I,
+                interface.EXT.LEGACY_REMOTE_SFENCE_VMA,
+                interface.EXT.LEGACY_REMOTE_SFENCE_VMA_ASID,
                 interface.EXT.LEGACY_SHUTDOWN,
                 => 1,
                 else => 0,
@@ -142,6 +151,10 @@ fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64
     // Track that the guest has explicitly scheduled a timer interrupt.
     vc.timer_scheduled = true;
     vc.timer_target = stime;
+    
+    if (riscv.hasHExtension()) {
+        vc.guest_state.vstimecmp = stime;
+    }
     
     // Clear the guest's virtual timer interrupt pending bit now that they've scheduled a new event.
     vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSTIP);

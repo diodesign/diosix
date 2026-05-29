@@ -55,6 +55,7 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     // Only schedulable states may be queued.
     if (vc.state != .ready and vc.state != .running) return;
     vc.state = .ready;
+    vc.running_on_cpu = null;
 
     const pc = pcore.this();
 

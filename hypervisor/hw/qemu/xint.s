@@ -34,14 +34,12 @@ hw_xint_init:
     li      t0, 0xb1fb
     csrrw   x0, medeleg, t0
   
-    # 0x333 = delegate the following interrupts to their modes:
+    # 0x133 = delegate the following interrupts to their modes (excluding external interrupts):
     # bit 0: User software interrupt
     # bit 1: Supervisor software interrupt
     # bit 4: User timer interrupt
     # bit 5: Supervisor timer interrupt
-    # bit 8: User external interrupt
-    # bit 9: Supervisor external interrupt
-    li      t0, 0x333
+    li      t0, 0x133
     csrrw   x0, mideleg, t0
 
     # enable all xint: set bit 3 in mstatus to enable MIE

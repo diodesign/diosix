@@ -24,6 +24,7 @@ pub extern fn hw_run_vcore(
 pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     const cpu = this();
     cpu.active_vcore = to_vcore;
+    to_vcore.running_on_cpu = cpu.cpu_core_id;
 
     // Apply guest memory space (paging or PMP)
     to_vcore.guest.space.apply(to_vcore.guest.vmid);

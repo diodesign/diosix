@@ -131,7 +131,7 @@ pub fn initMockHardware() void {
     test_hstatus = 0;
     test_hgatp = 0;
     test_time = 0;
-    @memset(&test_heap,0);
+    @memset(&test_heap, 0);
 }
 
 // Each thread context is the contents of its 32 general purpose CPU registers.
@@ -151,7 +151,7 @@ pub const CpuContext = struct {
     run_queue_count: usize,
 
     trap_count: usize,
-    
+
     // Aegis: Trap loop detection fields
     last_trap_pc: usize,
     last_trap_val: usize,
@@ -307,6 +307,14 @@ pub inline fn readMie() usize {
     );
 }
 
+// Return the mip CSR.
+pub inline fn readMip() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], mip"
+        : [ret] "=r" (-> usize),
+    );
+}
+
 // Write to the mie CSR.
 pub inline fn writeMie(val: usize) void {
     if (is_test) {
@@ -377,7 +385,9 @@ pub inline fn writeMcounteren(val: usize) void {
 
 pub inline fn readMenvcfg() usize {
     if (is_test) return test_menvcfg;
-    return asm volatile ("csrr %[ret], menvcfg" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], menvcfg"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeMenvcfg(val: usize) void {
@@ -385,12 +395,17 @@ pub inline fn writeMenvcfg(val: usize) void {
         test_menvcfg = val;
         return;
     }
-    asm volatile ("csrw menvcfg, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw menvcfg, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readHenvcfg() usize {
     if (is_test) return test_henvcfg;
-    return asm volatile ("csrr %[ret], henvcfg" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], henvcfg"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeHenvcfg(val: usize) void {
@@ -398,7 +413,10 @@ pub inline fn writeHenvcfg(val: usize) void {
         test_henvcfg = val;
         return;
     }
-    asm volatile ("csrw henvcfg, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw henvcfg, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readHgatp() usize {
@@ -489,8 +507,8 @@ pub inline fn hlv_w(ptr: usize) u32 {
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
         \\ hlv.w %[val], (%[ptr])
-        : [val] "=r" (val)
-        : [ptr] "r" (ptr)
+        : [val] "=r" (val),
+        : [ptr] "r" (ptr),
     );
     return val;
 }
@@ -500,8 +518,8 @@ pub inline fn hlv_wu(ptr: usize) u32 {
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
         \\ hlv.wu %[val], (%[ptr])
-        : [val] "=r" (val)
-        : [ptr] "r" (ptr)
+        : [val] "=r" (val),
+        : [ptr] "r" (ptr),
     );
     return val;
 }
@@ -511,8 +529,8 @@ pub inline fn hlv_hu(ptr: usize) u16 {
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
         \\ hlv.hu %[val], (%[ptr])
-        : [val] "=r" (val)
-        : [ptr] "r" (ptr)
+        : [val] "=r" (val),
+        : [ptr] "r" (ptr),
     );
     return val;
 }
@@ -522,8 +540,8 @@ pub inline fn hlv_bu(ptr: usize) u8 {
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
         \\ hlv.bu %[val], (%[ptr])
-        : [val] "=r" (val)
-        : [ptr] "r" (ptr)
+        : [val] "=r" (val),
+        : [ptr] "r" (ptr),
     );
     return val;
 }
@@ -533,12 +551,11 @@ pub inline fn hlv_d(ptr: usize) u64 {
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
         \\ hlv.d %[val], (%[ptr])
-        : [val] "=r" (val)
-        : [ptr] "r" (ptr)
+        : [val] "=r" (val),
+        : [ptr] "r" (ptr),
     );
     return val;
 }
-
 
 pub inline fn readHtval() usize {
     if (is_test) return 0;
@@ -570,13 +587,13 @@ pub inline fn readMtinst() usize {
 
 pub fn verifyHExtension() !void {
     if (is_test) return;
-    
+
     // Test 1: hgatp persistence
     const val_hgatp: u64 = (8 << 60) | (1 << 44) | 0x82edc;
     writeHgatp(val_hgatp);
     const read_hgatp = readHgatp();
     if (read_hgatp != val_hgatp) {
-        debug.printf("[HV] CRITICAL: hgatp write failure. Wrote 0x{x}, read back 0x{x}\n", .{val_hgatp, read_hgatp});
+        debug.printf("CRITICAL: hgatp write failure. Wrote 0x{x}, read back 0x{x}\n", .{ val_hgatp, read_hgatp });
         return error.HardwareIncompatible;
     }
 
@@ -586,13 +603,12 @@ pub fn verifyHExtension() !void {
     const mstatus_with_v = readMstatus();
     writeMstatus(initial_mstatus); // Restore
     if ((mstatus_with_v & MSTATUS.MPV) == 0) {
-        debug.printf("[HV] CRITICAL: mstatus.MPV write failure. H-extension disabled or broken?\n", .{});
+        debug.printf("CRITICAL: mstatus.MPV write failure. H-extension disabled or broken?\n", .{});
         return error.HardwareIncompatible;
     }
-    
-    debug.printf("[HV] H-extension architectural audit PASSED\n", .{});
-}
 
+    debug.printf("H-extension architectural audit passed!\n", .{});
+}
 
 pub fn setTimer(stime: u64) void {
     if (is_test) return;
@@ -603,18 +619,17 @@ pub fn setTimer(stime: u64) void {
 // In M-mode on RISC-V, `time` may not be directly accessible; fall back to CLINT mtime.
 pub inline fn readTime() u64 {
     if (is_test) return test_time;
-    return asm volatile ("csrr %[ret], time"
-        : [ret] "=r" (-> u64),
-    );
+    const mtime_ptr = @as(*volatile u64, @ptrFromInt(0x0200bff8));
+    return mtime_ptr.*;
 }
- 
+
 pub inline fn readHvip() usize {
     if (is_test) return 0;
     return asm volatile ("csrr %[ret], hvip"
         : [ret] "=r" (-> usize),
     );
 }
- 
+
 pub inline fn writeHvip(val: usize) void {
     if (is_test) return;
     asm volatile ("csrw hvip, %[val]"
@@ -627,112 +642,168 @@ pub inline fn writeHvip(val: usize) void {
 
 pub inline fn readVsenvcfg() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], 0x10a" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], 0x10a"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVsenvcfg(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw 0x10a, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw 0x10a, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVsstatus() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vsstatus" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], vsstatus"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVsstatus(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw vsstatus, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw vsstatus, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVsie() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vsie" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], vsie"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVsie(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw vsie, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw vsie, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVstvec() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vstvec" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], vstvec"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVstvec(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw vstvec, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw vstvec, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVsscratch() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vsscratch" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], vsscratch"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVsscratch(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw vsscratch, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw vsscratch, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVsepc() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vsepc" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], vsepc"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVsepc(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw vsepc, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw vsepc, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVscause() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vscause" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], vscause"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVscause(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw vscause, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw vscause, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVstval() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vstval" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], vstval"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVstval(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw vstval, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw vstval, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVsatp() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vsatp" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], vsatp"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVsatp(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw vsatp, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw vsatp, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn readVstimecmp() usize {
     if (is_test) return 0;
-    return asm volatile ("csrr %[ret], 0x24d" : [ret] "=r" (-> usize));
+    return asm volatile ("csrr %[ret], 0x24d"
+        : [ret] "=r" (-> usize),
+    );
 }
 
 pub inline fn writeVstimecmp(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw 0x24d, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw 0x24d, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn writeMstateen0(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw 0x30c, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw 0x30c, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 pub inline fn writeHstateen0(val: usize) void {
     if (is_test) return;
-    asm volatile ("csrw 0x60c, %[val]" : : [val] "r" (val));
+    asm volatile ("csrw 0x60c, %[val]"
+        :
+        : [val] "r" (val),
+    );
 }
 
 // Reboot the host machine.

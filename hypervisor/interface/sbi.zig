@@ -32,6 +32,9 @@ pub const EXT = struct {
     pub const LEGACY_CONSOLE_GETCHAR = 0x2;
     pub const LEGACY_CLEAR_IPI = 0x3;
     pub const LEGACY_SEND_IPI = 0x4;
+    pub const LEGACY_REMOTE_FENCE_I = 0x5;
+    pub const LEGACY_REMOTE_SFENCE_VMA = 0x6;
+    pub const LEGACY_REMOTE_SFENCE_VMA_ASID = 0x7;
     pub const LEGACY_SHUTDOWN = 0x8;
 };
 
