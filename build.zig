@@ -177,7 +177,7 @@ pub fn build(b: *std.Build) !void {
     const metadata_obj = b.addObject(.{
         .name = "metadata_info",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("hypervisor/core/metadata_info.zig"),
+            .root_source_file = b.path("hypervisor/core/metadata.zig"),
             .optimize = optimize,
             .target = target,
         }),
