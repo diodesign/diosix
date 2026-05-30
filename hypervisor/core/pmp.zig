@@ -50,40 +50,12 @@ pub const PMPConfig = struct {
     }
 
     pub fn deinit(self: *PMPConfig) void {
-        for (self.regions.items) |reg| {
-            physmem.freePage(reg.base);
-        }
         self.regions.deinit(self.allocator);
     }
 
     pub fn addRegion(self: *PMPConfig, base: usize, size: usize, flags: u8) !void {
         if (self.regions.items.len >= MAX_REGIONS) return PMPError.TooManyRegions;
         try self.regions.append(self.allocator, .{ .base = base, .size = size, .flags = flags });
-    }
-
-    /// Translate a guest physical address to a host physical address within PMP regions.
-    /// For PMP mode, the guest is given a contiguous view of its physical memory;
-    /// we resolve a GPA by checking each region sequentially.
-    pub fn translateGPA(self: *const PMPConfig, gpa: usize) !usize {
-        var region_base_gpa: usize = 0;
-        for (self.regions.items) |reg| {
-            if (gpa >= region_base_gpa and gpa < region_base_gpa + reg.size) {
-                return reg.base + (gpa - region_base_gpa);
-            }
-            region_base_gpa += reg.size;
-        }
-        return PMPError.AddressNotFound;
-    }
-
-    pub fn fork(self: *PMPConfig, allocator: std.mem.Allocator) !PMPConfig {
-        var other = try PMPConfig.init(allocator);
-        for (self.regions.items) |reg| {
-            // Full copy-on-fork: PMP doesn't support CoW.
-            const new_base = try physmem.allocPageSelection(@intCast(std.math.log2(reg.size / physmem.PageSize)));
-            @memcpy(@as([*]u8, @ptrFromInt(new_base))[0..reg.size], @as([*]u8, @ptrFromInt(reg.base))[0..reg.size]);
-            try other.addRegion(new_base, reg.size, reg.flags);
-        }
-        return other;
     }
 
     /// Apply this PMP configuration to the current physical core.
@@ -100,22 +72,26 @@ pub const PMPConfig = struct {
         // First clear all PMP entries to deny-all state.
         clearAllPmp();
 
-        // Program each region as a TOR pair.
-        // PMP entry 0-1: deny-all sentinel is implicit (cleared to 0, no match = denied).
-        // We start from entry 0 for the first region.
+        // Program each region.
         var entry: usize = 0;
         for (self.regions.items) |reg| {
-            if (entry + 2 > 16) break; // Hardware limit.
+            if (reg.base == 0 and reg.size == ~@as(usize, 0)) {
+                if (entry >= 16) break;
+                writePmpAddr(entry, ~@as(usize, 0)); // Entire 64-bit space
+                writePmpCfg(entry, 0x18 | (reg.flags & 0x07)); // NAPOT + RWX bits
+                entry += 1;
+            } else {
+                if (entry + 2 > 16) break; // Hardware limit.
+                const base_shifted = reg.base >> 2;
+                const top_shifted = (reg.base + reg.size) >> 2;
+                const cfg: u8 = PMPAccess.tor | (reg.flags & 0x07); // TOR + RWX bits
 
-            const base_shifted = reg.base >> 2;
-            const top_shifted = (reg.base + reg.size) >> 2;
-            const cfg: u8 = PMPAccess.tor | (reg.flags & 0x07); // TOR + RWX bits
+                writePmpAddr(entry, base_shifted);
+                writePmpAddr(entry + 1, top_shifted);
+                writePmpCfg(entry + 1, cfg);
 
-            writePmpAddr(entry, base_shifted);
-            writePmpAddr(entry + 1, top_shifted);
-            writePmpCfg(entry + 1, cfg);
-
-            entry += 2;
+                entry += 2;
+            }
         }
 
         // Final entry: deny-all for everything else.

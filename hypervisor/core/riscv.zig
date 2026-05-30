@@ -34,6 +34,7 @@ pub const Instr = interface.Instr;
 pub var clint_base: ?usize = null;
 pub var uart_base: ?usize = null;
 pub var test_device_base: ?usize = null;
+pub var plic_base: ?usize = null;
 
 pub const CLINT = struct {
     // Standard CLINT register offsets
@@ -74,6 +75,7 @@ var test_mcause: usize = 0;
 var test_mepc: usize = 0;
 var test_mtval: usize = 0;
 var test_mie: usize = 0;
+var test_mip: usize = 0;
 var test_misa: usize = (1 << 53) | IsaExtension.h | IsaExtension.gc; // RV64 is bit 63 in MXL, but for simple 64-bit mask we use (1 << 63)
 var test_hstatus: usize = 0;
 var test_hgatp: usize = 0;
@@ -154,6 +156,7 @@ pub fn initMockHardware() void {
     test_mepc = 0;
     test_mtval = 0;
     test_mie = 0;
+    test_mip = 0;
     test_misa = MISA_MXL_64 | IsaExtension.h | IsaExtension.gc;
     test_hstatus = 0;
     test_hgatp = 0;
@@ -345,9 +348,21 @@ pub inline fn readMie() usize {
 
 // Return the mip CSR.
 pub inline fn readMip() usize {
-    if (is_test) return 0;
+    if (is_test) return test_mip;
     return asm volatile ("csrr %[ret], mip"
         : [ret] "=r" (-> usize),
+    );
+}
+
+// Write to the mip CSR.
+pub inline fn writeMip(val: usize) void {
+    if (is_test) {
+        test_mip = val;
+        return;
+    }
+    asm volatile ("csrw mip, %[val]"
+        :
+        : [val] "r" (val),
     );
 }
 
@@ -868,4 +883,161 @@ pub fn shutdown() void {
 pub fn pause() void {
     if (builtin.is_test) return;
     hw_pause();
+}
+
+// ---- Physical S-mode (Supervisor) CSR helpers & cache management for non-H fallback ----
+
+pub inline fn readSstatus() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], sstatus"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeSstatus(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw sstatus, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readSie() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], sie"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeSie(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw sie, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readStvec() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], stvec"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeStvec(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw stvec, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readSscratch() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], sscratch"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeSscratch(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw sscratch, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readSepc() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], sepc"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeSepc(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw sepc, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readScause() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], scause"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeScause(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw scause, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readStval() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], stval"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeStval(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw stval, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readSatp() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], satp"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeSatp(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw satp, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readStimecmp() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], 0x14d"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeStimecmp(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw 0x14d, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readSenvcfg() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], 0x10a"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeSenvcfg(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw 0x10a, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn sfenceVma() void {
+    if (is_test) return;
+    asm volatile ("sfence.vma");
 }

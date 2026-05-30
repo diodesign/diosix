@@ -83,3 +83,15 @@ descendants. Orphans are not permitted.
 If the top-level Root VM terminates or crashes, Diosix considers the system 
 state to be finalized and initiates a restart of the physical host machine. 
 This ensures the system remains in a known, stable state.
+
+## Memory address space terminology
+
+Diosix explicitly categorizes address spaces to guarantee absolute clarity and maintain separation of concerns throughout the codebase, debug outputs, and documentation:
+
+*  **Host Physical Address (HPA)**. A physical memory address on the actual host hardware, such as physical DRAM, and memory-mapped peripheral registers (e.g., CLINT, PLIC, or UART).
+
+*  **Guest Physical Address (GPA)**. A physical memory address as perceived by a guest virtual machine. In Hypervisor paging mode, GPAs are translated to HPAs via second-stage G-stage page tables (`sv39x4`). Under PMP fallback mode, GPAs are mapped contiguously to HPAs via bounds-checked identity offset translation.
+
+*  **Guest Virtual Address (GVA)**. A virtual memory address managed within the guest virtual machine's own operating system supervisor context, via first-stage VS-stage translation.
+
+These concepts are consistently referenced via their abbreviations (**HPA**, **GPA**, and **GVA**) across the hypervisor's source code and diagnostics.

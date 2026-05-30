@@ -188,6 +188,18 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 gs.vsatp = riscv.readVsatp();
                 gs.vstimecmp = riscv.readVstimecmp();
                 gs.vsenvcfg = riscv.readVsenvcfg();
+            } else {
+                const gs = &vc.guest_state;
+                gs.vsstatus = riscv.readSstatus();
+                gs.vsie = riscv.readSie();
+                gs.vstvec = riscv.readStvec();
+                gs.vsscratch = riscv.readSscratch();
+                gs.vsepc = riscv.readSepc();
+                gs.vscause = riscv.readScause();
+                gs.vstval = riscv.readStval();
+                gs.vsatp = riscv.readSatp();
+                gs.vstimecmp = riscv.readStimecmp();
+                gs.vsenvcfg = riscv.readSenvcfg();
             }
         }
     }
@@ -292,6 +304,40 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 
         // Flush any G-stage TLB entries to ensure any page table updates are immediately active.
         riscv.hfenceGvma();
+    } else {
+        // Clear or set STIP (bit 5) in physical mip based on whether VSTIP in machine.hvip is set.
+        var mip_val = riscv.readMip();
+        if ((ms.hvip & riscv.HVIP.VSTIP) != 0) {
+            mip_val |= (1 << 5); // STIP
+        } else {
+            mip_val &= ~@as(usize, 1 << 5);
+        }
+
+        // If guest has programmed a timer via stimecmp, inject if target passed
+        if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+            if (riscv.readTime() >= gs.vstimecmp) {
+                mip_val |= (1 << 5);
+            } else {
+                mip_val &= ~@as(usize, 1 << 5);
+            }
+        }
+
+        riscv.writeMip(mip_val);
+
+        // Sync S-mode (Guest Supervisor) CSRs directly
+        riscv.writeSstatus(gs.vsstatus);
+        riscv.writeSie(gs.vsie);
+        riscv.writeStvec(gs.vstvec);
+        riscv.writeSscratch(gs.vsscratch);
+        riscv.writeSepc(gs.vsepc);
+        riscv.writeScause(gs.vscause);
+        riscv.writeStval(gs.vstval);
+        riscv.writeSatp(gs.vsatp);
+        riscv.writeStimecmp(gs.vstimecmp);
+        riscv.writeSenvcfg(gs.vsenvcfg);
+
+        // Flash S-mode TLB entries
+        riscv.sfenceVma();
     }
 }
 
@@ -311,7 +357,11 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                 // to avoid expensive instruction-space translations and memory loads (hlv_wu).
                 var instr = irq.val;
                 if (instr == 0) {
-                    instr = riscv.hlv_wu(irq.pc);
+                    if (riscv.hasHExtension()) {
+                        instr = riscv.hlv_wu(irq.pc);
+                    } else {
+                        instr = 0;
+                    }
                 }
 
                 // Check if it's an access to siselect (0x150 or 0x015), sireg (0x151 or 0x016), vsiselect (0x250 or 0x215), vsireg (0x251 or 0x216),
@@ -476,19 +526,25 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                 const pcpu = pcore.this();
                 if (pcpu.active_vcore) |vc_raw| {
                     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                    // Try to get Guest Physical Address from mtval2 or htval
-                    const mtval2 = riscv.readMtval2();
-                    const htval_val = riscv.readHtval();
-                    var gpa = mtval2;
-                    if (gpa == 0) gpa = htval_val;
+                    var gpa: usize = 0;
+                    if (riscv.hasHExtension()) {
+                        // Try to get Guest Physical Address from mtval2 or htval
+                        const mtval2 = riscv.readMtval2();
+                        const htval_val = riscv.readHtval();
+                        gpa = mtval2;
+                        if (gpa == 0) gpa = htval_val;
 
-                    // As per RISC-V Privileged / Hypervisor specification, mtval2 and htval
-                    // hold the guest physical address shifted right by 2 bits.
-                    if (gpa != 0) {
-                        gpa = gpa << 2;
+                        // As per RISC-V Privileged / Hypervisor specification, mtval2 and htval
+                        // hold the guest physical address shifted right by 2 bits.
+                        if (gpa != 0) {
+                            gpa = gpa << 2;
+                        }
+                    } else {
+                        // In non-H mode, standard page faults write the faulting GVA directly to mtval (irq.val)
+                        gpa = irq.val;
                     }
 
-                    if (gpa == 0) {
+                    if (gpa == 0 or !riscv.hasHExtension()) {
                         // First-stage (VS-stage) page fault! Reflect to guest as standard page fault.
                         var reflected_irq = irq;
                         reflected_irq.cause = switch (irq.cause) {
@@ -610,12 +666,10 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
 
 // Reflect an exception back to the guest supervisor
 fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
-    if (!riscv.hasHExtension()) return error.NoHExtension;
-
     const ms = &vc.machine;
     const gs = &vc.guest_state;
 
-    // Save fault context in VS-mode registers
+    // Save fault context in S-mode/VS-mode registers
     gs.vsepc = irq.pc;
     gs.vscause = @intFromEnum(irq.cause);
     gs.vstval = irq.val;
@@ -634,10 +688,13 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
         gs.vsstatus |= riscv.SSTATUS.SPIE;
     }
 
-    // 2b. Ensure we enter VS-mode (Supervisor + Virtualization)
+    // Ensure we enter Supervisor mode (MPP=1)
     ms.mstatus &= ~@as(usize, riscv.MSTATUS.MPP_MASK);
     ms.mstatus |= (@as(usize, 1) << riscv.MSTATUS.MPP_SHIFT);
-    ms.mstatus |= riscv.MSTATUS.MPV;
+
+    if (riscv.hasHExtension()) {
+        ms.mstatus |= riscv.MSTATUS.MPV;
+    }
 
     // Handle both direct and vectored modes
     const base = gs.vstvec & ~@as(usize, 0b11);
@@ -646,7 +703,7 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
     if (base == 0) {
         debug.printf("FATAL: Reflecting exception to NULL vstvec — terminating guest.\n", .{});
         vc.getGuest().terminate();
-        return error.NoHExtension; // Abort reflection.
+        return error.InvalidAddress;
     }
 
     if (mode == 0) {
@@ -656,10 +713,12 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
         ms.mepc = base + 4 * (@intFromEnum(irq.cause) & 0x7FFFFFFFFFFFFFFF);
     }
 
-    // Update hstatus.SPVP to reflect the privilege mode we're coming from
-    ms.hstatus &= ~riscv.HSTATUS.SPVP;
-    if (irq.privilege_mode == .supervisor) {
-        ms.hstatus |= riscv.HSTATUS.SPVP;
+    if (riscv.hasHExtension()) {
+        // Update hstatus.SPVP to reflect the privilege mode we're coming from
+        ms.hstatus &= ~riscv.HSTATUS.SPVP;
+        if (irq.privilege_mode == .supervisor) {
+            ms.hstatus |= riscv.HSTATUS.SPVP;
+        }
     }
 }
 

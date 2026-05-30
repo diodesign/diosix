@@ -23,7 +23,7 @@ For a deeper dive into this type-1 hypervisor's design, see the
 
 ### Supported hardware
 
-Diosix runs on RVA20-compliant (RV64GC) systems, automatically adapting its isolation model based on whether the hypervisor (H) extension or Physical Memory Protection (PMP) is available.
+Diosix runs on RVA20-compliant (RV64GC) systems, automatically adapting its isolation model based on whether the hypervisor (H) extension or physical memory protection (PMP) is available.
 
 ## Build Diosix
 

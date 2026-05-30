@@ -93,15 +93,20 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                         if (try device_tree.readAddress(path)) |addr| {
                             riscv.test_device_base = addr;
                         }
+                    } else if (std.mem.indexOf(u8, compat_text, "plic") != null or std.mem.indexOf(u8, compat_text, "sifive,plic") != null) {
+                        if (try device_tree.readAddress(path)) |addr| {
+                            riscv.plic_base = addr;
+                        }
                     }
                 } else |_| {}
             } else |_| {}
         }
     }
 
-    if (riscv.clint_base) |addr| debug.printf("Discovered CLINT at 0x{x}\n", .{addr});
-    if (riscv.uart_base) |addr| debug.printf("Discovered UART at 0x{x}\n", .{addr});
-    if (riscv.test_device_base) |addr| debug.printf("Discovered Test/Poweroff device at 0x{x}\n", .{addr});
+    if (riscv.clint_base) |addr| debug.printf("Discovered CLINT at HPA 0x{x}\n", .{addr});
+    if (riscv.uart_base) |addr| debug.printf("Discovered UART at HPA 0x{x}\n", .{addr});
+    if (riscv.test_device_base) |addr| debug.printf("Discovered Test/Poweroff device at HPA 0x{x}\n", .{addr});
+    if (riscv.plic_base) |addr| debug.printf("Discovered PLIC at HPA 0x{x}\n", .{addr});
 
     // Initialize physical memory management.
     const rootvm_ram_size = if (builtin.is_test) 2 * 1024 * 1024 else 512 * 1024 * 1024;
@@ -119,7 +124,9 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         rootvm_region = .{ .base = rootvm_hpa_base, .size = rootvm_ram_size };
     }
 
-    try riscv.verifyHExtension();
+    if (riscv.hasHExtension()) {
+        try riscv.verifyHExtension();
+    }
 
     if (!builtin.is_test) {
         try physmem.init(device_tree, rootvm_region);
@@ -132,8 +139,9 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     const rootvm_elf_size = if (builtin.is_test) test_rootvm_end - rootvm_elf_base else @intFromPtr(&__rootvm_end) - rootvm_elf_base;
 
     // Create the trusted Root VM.
-    // Guest RAM starts at 0x80000000 (standard for RISC-V Linux).
-    const root_vm_gpa_base = 0x80000000;
+    // Guest RAM starts at 0x80000000 (standard for RISC-V Linux) if H-extension is active.
+    // For PMP fallback mode, guest RAM must start at the actual host physical address (HPA).
+    const root_vm_gpa_base = if (riscv.hasHExtension()) 0x80000000 else rootvm_hpa_base;
     const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size);
     ctx.root_vm = root_vm;
 
@@ -336,7 +344,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // Map the DTB area as RWX explicitly. The rest of the 512MB RAM will be demand-paged.
     try root_vm.space.map(guest_dtb_gpa, guest_dtb_hpa, guest_dtb.len, sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user);
 
-    debug.printf("Using Root VM image at 0x{x} ({} bytes), entry at 0x{x}\n", .{ rootvm_elf_base, rootvm_elf_size, entry_point });
+    debug.printf("Using Root VM image at HPA 0x{x} ({} bytes), entry at GPA 0x{x}\n", .{ rootvm_elf_base, rootvm_elf_size, entry_point });
 
     // Create virtual cores for the Root VM matching host count.
     // The loader returns the entry point as a GPA, so no masking is needed.

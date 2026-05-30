@@ -138,7 +138,7 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
 pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     phys_mem_state.has_h_extension = riscv.hasHExtension();
 
-    debug.printf("H-extension {s}\n", .{if (phys_mem_state.has_h_extension) "detected" else "NOT detected"});
+    debug.printf("H-extension {s}\n", .{if (phys_mem_state.has_h_extension) "detected" else "not detected - using PMP"});
 
     // Calculate hypervisor footprint, including per-CPU slots (each 1MB)
     const cpu_slab_size = 1024 * 1024;
@@ -149,10 +149,10 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     const hv_region = Region{ .base = hv_start, .size = hv_end - hv_start };
     phys_mem_state.hv_region = hv_region;
 
-    debug.printf("HV footprint 0x{x} - 0x{x} ({} KB)\n", .{ hv_start, hv_end, hv_region.size / 1024 });
+    debug.printf("Hypervisor HPA footprint 0x{x} - 0x{x} ({} KB)\n", .{ hv_start, hv_end, hv_region.size / 1024 });
 
     if (rootvm_region) |rvm| {
-        debug.printf("Root VM reservation 0x{x} - 0x{x} ({} MB)\n", .{ rvm.base, rvm.end(), rvm.size / (1024 * 1024) });
+        debug.printf("Root VM HPA reservation 0x{x} - 0x{x} ({} MB)\n", .{ rvm.base, rvm.end(), rvm.size / (1024 * 1024) });
     }
 
     // First pass to find the range of RAM we need to track
@@ -347,7 +347,7 @@ fn addRamBlock(ram: Region, hv: Region, metadata: Region, rootvm: ?Region, reser
 
 fn getPageDescriptor(addr: usize) *PageDescriptor {
     if (addr < phys_mem_state.ram_base or addr >= phys_mem_state.ram_base + phys_mem_state.ram_size) {
-        debug.printf("Physical address 0x{x} out of range [0x{x}-0x{x})\n", .{ addr, phys_mem_state.ram_base, phys_mem_state.ram_base + phys_mem_state.ram_size });
+        debug.printf("HPA 0x{x} out of range [0x{x}-0x{x})\n", .{ addr, phys_mem_state.ram_base, phys_mem_state.ram_base + phys_mem_state.ram_size });
         @panic("Physical address out of range");
     }
     const index = (addr - phys_mem_state.ram_base) / PageSize;

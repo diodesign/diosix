@@ -141,9 +141,7 @@ fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64
     vc.timer_scheduled = true;
     vc.timer_target = stime;
 
-    if (riscv.hasHExtension()) {
-        vc.guest_state.vstimecmp = stime;
-    }
+    vc.guest_state.vstimecmp = stime;
 
     // Clear the guest's virtual timer interrupt pending bit now that they've scheduled a new event.
     vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSTIP);
