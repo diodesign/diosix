@@ -7,7 +7,7 @@ hypervisor written in [Zig](https://ziglang.org/) for 64-bit
 [RISC-V](https://riscv.org/developers/) computers. It is aimed at systems small and large that
 have a need to run multiple hardware-isolated operating systems at the same time.
 
-Below is a recording of a user logging into a RISC-V Linux guest OS on Diosix and running a few commands.
+Below is a recording of a user logging into a RISC-V Linux guest OS running on Diosix.
 
 [![asciicast](https://asciinema.org/a/1161817.svg)](https://asciinema.org/a/1161817)
 
@@ -21,13 +21,9 @@ hardware and orchestrating other guest workloads.
 For a deeper dive into this type-1 hypervisor's design, see the 
 [background information](docs/background.md) documentation.
 
-### Supported hardware
-
-Diosix runs on RVA20-compliant (RV64GC) systems, automatically adapting its isolation model based on whether the hypervisor (H) extension or physical memory protection (PMP) is available.
-
 ## Build Diosix
 
-To build Diosix, you must have at least version 0.16.0 of the 
+To build Diosix, you must have at least version 0.17.0 of the 
 [Zig toolchain](https://ziglang.org/download/) and [Git](https://git.kernel.org/pub/scm/git/git.git/) version 2.54 installed.
 
 Follow these steps to build the hypervisor from source:
@@ -57,17 +53,21 @@ BuildRoot step can take significant time to compile the Linux kernel, a busybox
 userspace, and the cross-compiler toolchain. Subsequent builds rely on the 
 cached output.
 
+### Supported hardware
+
+Diosix runs on RVA20-compliant (RV64GC) systems, automatically adapting its isolation model based on whether the hypervisor (H) extension or physical memory protection (PMP) is available.
+
 ### Target hardware systems
 
 Diosix relies on a modular, declarative hardware configuration model. Available hardware ports are defined inside target configuration YAML files located in `hypervisor/hw/ports/`, such as `qemu-virt.yaml`.
 
-The default target system is specified in `hypervisor/hw/ports/default.yaml`, which defaults to `qemu-virt`. To compile for a different target hardware system, specify the target name using the `-Dsystem` parameter like so:
+The default target system is specified in `hypervisor/hw/ports/default.yaml`, which defaults to `qemu-virt`. To compile for a different target hardware system, specify the target name using the `-Dsystem` parameter. For example, to build for a PMP-only Qemu-emulated system, use:
 
 ```bash
-./scripts/build.sh -Dsystem=qemu-virt
+./scripts/build.sh -Dsystem=qemu-virt-pmp
 ```
 
-You can view all dynamically discovered target hardware systems and build options by running:
+You can view all dynamically discovered target hardware systems and other build options by running:
 
 ```bash
 ./scripts/build.sh -h
@@ -122,10 +122,6 @@ Finally, we use the
 [Calendar Versioning](https://calver.org/) (YY.MINOR) format for our releases, 
 where even-numbered minor versions indicate stable releases and odd numbers 
 represent development builds.
-
-### ZLS integration
-
-The [Zig Language Server](https://zigtools.org/zls/) (ZLS) works out-of-the-box with this project. During diagnostics and background checks, `build.zig` gracefully falls back to `"unknown"` placeholders for any missing environment-derived metadata, such as the current git revision or build date. This prevents background compilation failures and ensures autocomplete and diagnostics function perfectly without requiring any custom wrapper scripts or IDE configurations.
 
 ## Contact and community
 
