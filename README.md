@@ -7,7 +7,7 @@ hypervisor written in [Zig](https://ziglang.org/) for 64-bit
 [RISC-V](https://riscv.org/developers/) computers. It is aimed at systems small and large that
 have a need to run multiple hardware-isolated operating systems at the same time.
 
-Here's a recording of a user logging into a RISC-V Linux guest OS running on Diosix and trying out a few commands.
+Below is a recording of a user logging into a RISC-V Linux guest OS running on Diosix.
 
 [![asciicast](https://asciinema.org/a/1161817.svg)](https://asciinema.org/a/1161817)
 
@@ -20,10 +20,6 @@ hardware and orchestrating other guest workloads.
 
 For a deeper dive into this type-1 hypervisor's design, see the 
 [technical documentation](docs/background.md).
-
-### Supported hardware
-
-Diosix runs on RVA20-compliant (RV64GC) systems, automatically adapting its isolation model based on whether the hypervisor (H) extension or physical memory protection (PMP) is available.
 
 ## Build Diosix
 
@@ -56,6 +52,10 @@ from source for an absolute guarantee of provenance and security, this initial
 BuildRoot step can take significant time to compile the Linux kernel, a busybox 
 userspace, and the cross-compiler toolchain. Subsequent builds rely on the 
 cached output.
+
+### Supported hardware
+
+Diosix runs on RVA20-compliant (RV64GC) systems, automatically adapting its isolation model based on whether the hypervisor (H) extension or physical memory protection (PMP) is available.
 
 ### Target hardware systems
 
@@ -131,7 +131,6 @@ The project maintains two primary branches to orchestrate development and releas
 * **`devel`**: The active staging branch for development and ongoing feature additions.
 
 Development workflows should target the `devel` branch. Changes are only merged from `devel` into `stable` after completing rigorous testing, quality control, and validation.
-
 ## Contact and community
 
 If you have questions, wish to contribute, or need to report an issue, 
