@@ -7,7 +7,7 @@ hypervisor written in [Zig](https://ziglang.org/) for 64-bit
 [RISC-V](https://riscv.org/developers/) computers. It is aimed at systems small and large that
 have a need to run multiple hardware-isolated operating systems at the same time.
 
-Below is a recording of a user logging into a RISC-V Linux guest OS on Diosix and running a few commands.
+Here's a recording of a user logging into a RISC-V Linux guest OS running on Diosix and trying out a few commands.
 
 [![asciicast](https://asciinema.org/a/1161817.svg)](https://asciinema.org/a/1161817)
 
@@ -19,7 +19,7 @@ privileged Linux-based Root Virtual Machine (Root VM) for managing the host
 hardware and orchestrating other guest workloads.
 
 For a deeper dive into this type-1 hypervisor's design, see the 
-[background information](docs/background.md) documentation.
+[technical documentation](docs/background.md).
 
 ### Supported hardware
 
@@ -27,7 +27,7 @@ Diosix runs on RVA20-compliant (RV64GC) systems, automatically adapting its isol
 
 ## Build Diosix
 
-To build Diosix, you must have at least version 0.16.0 of the 
+To build Diosix, you must have at least version 0.17.0 of the 
 [Zig toolchain](https://ziglang.org/download/) and [Git](https://git.kernel.org/pub/scm/git/git.git/) version 2.54 installed.
 
 Follow these steps to build the hypervisor from source:
@@ -35,7 +35,7 @@ Follow these steps to build the hypervisor from source:
 1. Clone the repository and enter the project directory:
 
    ```bash
-   git clone --branch zig https://github.com/diodesign/diosix.git
+   git clone --branch stable https://github.com/diodesign/diosix.git
    cd diosix
    ```
 
@@ -51,7 +51,7 @@ For a detailed explanation of the compilation process, declarative hardware conf
 
 ### Root VM image
 
-The build process automatically downloads and cross-compiles [BuildRoot](https://buildroot.org/) if the Root VM image is missing or needs updating. Because we build everything 
+The build process automatically downloads and cross-compiles [BuildRoot](https://buildroot.org/) if the Root VM image is missing or needs updating. Because Diosix builds everything 
 from source for an absolute guarantee of provenance and security, this initial 
 BuildRoot step can take significant time to compile the Linux kernel, a busybox 
 userspace, and the cross-compiler toolchain. Subsequent builds rely on the 
@@ -61,13 +61,13 @@ cached output.
 
 Diosix relies on a modular, declarative hardware configuration model. Available hardware ports are defined inside target configuration YAML files located in `hypervisor/hw/ports/`, such as `qemu-virt.yaml`.
 
-The default target system is specified in `hypervisor/hw/ports/default.yaml`, which defaults to `qemu-virt`. To compile for a different target hardware system, specify the target name using the `-Dsystem` parameter like so:
+The default target system is specified in `hypervisor/hw/ports/default.yaml`, which defaults to `qemu-virt`. To compile for a different target hardware system, specify the target name using the `-Dsystem` parameter. For example, to target a PMP-only Qemu-simulated system, use:
 
 ```bash
-./scripts/build.sh -Dsystem=qemu-virt
+./scripts/build.sh -Dsystem=qemu-virt-pmp
 ```
 
-You can view all dynamically discovered target hardware systems and build options by running:
+You can view all dynamically discovered target hardware systems and other build options by running:
 
 ```bash
 ./scripts/build.sh -h
@@ -123,9 +123,14 @@ Finally, we use the
 where even-numbered minor versions indicate stable releases and odd numbers 
 represent development builds.
 
-### ZLS integration
+### Branching model
 
-The [Zig Language Server](https://zigtools.org/zls/) (ZLS) works out-of-the-box with this project. During diagnostics and background checks, `build.zig` gracefully falls back to `"unknown"` placeholders for any missing environment-derived metadata, such as the current git revision or build date. This prevents background compilation failures and ensures autocomplete and diagnostics function perfectly without requiring any custom wrapper scripts or IDE configurations.
+The project maintains two primary branches to orchestrate development and releases:
+
+* **`stable`**: The branch representing production-ready code. Releases are created directly from this branch, and it is also the source branch used to build the official project website, [diosix.org](https://diosix.org/).
+* **`devel`**: The active staging branch for development and ongoing feature additions.
+
+Development workflows should target the `devel` branch. Changes are only merged from `devel` into `stable` after completing rigorous testing, quality control, and validation.
 
 ## Contact and community
 
