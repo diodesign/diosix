@@ -7,6 +7,10 @@ hypervisor written in [Zig](https://ziglang.org/) for 64-bit
 [RISC-V](https://riscv.org/developers/) computers. It is aimed at systems small and large that
 have a need to run multiple hardware-isolated operating systems at the same time.
 
+Below is a recording of a user logging into a RISC-V Linux guest OS on Diosix and running a few commands.
+
+[![asciicast](https://asciinema.org/a/1161817.svg)](https://asciinema.org/a/1161817)
+
 This project is a work-in-progress. By using Zig, we aim to iterate and innovate quickly 
 while maintaining a strict focus on safety, security, and robustness.
 
@@ -47,7 +51,7 @@ For a detailed explanation of the compilation process, declarative hardware conf
 
 ### Root VM image
 
-This build process automatically downloads and cross-compiles [BuildRoot](https://buildroot.org/) if the Root VM image is missing or needs updating. Because we build everything 
+The build process automatically downloads and cross-compiles [BuildRoot](https://buildroot.org/) if the Root VM image is missing or needs updating. Because we build everything 
 from source for an absolute guarantee of provenance and security, this initial 
 BuildRoot step can take significant time to compile the Linux kernel, a busybox 
 userspace, and the cross-compiler toolchain. Subsequent builds rely on the 

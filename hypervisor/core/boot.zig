@@ -11,7 +11,6 @@ const debug = @import("debug.zig");
 const riscv = @import("riscv.zig");
 const alloc = @import("alloc.zig");
 const atomic = @import("atomic.zig");
-const metadata = @import("metadata");
 const dt = @import("dt.zig");
 const physmem = @import("physmem.zig");
 const scheduler = @import("scheduler.zig");
@@ -21,6 +20,16 @@ const loader = @import("loader.zig");
 const pcore = @import("pcore.zig");
 const sv39x4 = @import("sv39x4.zig");
 const elf_spec = @import("interface").elf;
+
+extern const banner: [*:0]const u8;
+extern const project_version: [*:0]const u8;
+extern const git_branch: [*:0]const u8;
+extern const git_revision: [*:0]const u8;
+extern const build_date: [*:0]const u8;
+extern const build_user: [*:0]const u8;
+extern const build_hostname: [*:0]const u8;
+extern const zig_version: [*:0]const u8;
+extern const cpu_arch: [*:0]const u8;
 
 // Root VM linker symbols.
 extern const __rootvm_start: u8;
@@ -41,8 +50,8 @@ pub var system_ctx_locked = atomic.LockPayload(?*SystemContext).init(
 // It is separated from main() to allow for easier testing.
 pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     var guest_hart_ids = std.mem.zeroes([8]usize);
-    debug.printf("\n{s}\n", .{metadata.banner});
-    debug.printf("Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ metadata.project_version, metadata.git_branch, metadata.git_revision, metadata.build_date, metadata.build_user, metadata.build_hostname, metadata.zig_version, metadata.cpu_arch });
+    debug.printf("\n{s}\n", .{banner});
+    debug.printf("Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ project_version, git_branch, git_revision, build_date, build_user, build_hostname, zig_version, cpu_arch });
 
     // Set up the system context
     const system_ctx_guard = system_ctx_locked.acquire();
@@ -90,9 +99,9 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         }
     }
 
-    if (riscv.clint_base) |addr| debug.printf("DTB: Discovered CLINT at 0x{x}\n", .{addr});
-    if (riscv.uart_base) |addr| debug.printf("DTB: Discovered UART at 0x{x}\n", .{addr});
-    if (riscv.test_device_base) |addr| debug.printf("DTB: Discovered Test/Poweroff device at 0x{x}\n", .{addr});
+    if (riscv.clint_base) |addr| debug.printf("Discovered CLINT at 0x{x}\n", .{addr});
+    if (riscv.uart_base) |addr| debug.printf("Discovered UART at 0x{x}\n", .{addr});
+    if (riscv.test_device_base) |addr| debug.printf("Discovered Test/Poweroff device at 0x{x}\n", .{addr});
 
     // Initialize physical memory management.
     const rootvm_ram_size = if (builtin.is_test) 2 * 1024 * 1024 else 512 * 1024 * 1024;

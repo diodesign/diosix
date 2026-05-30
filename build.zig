@@ -171,7 +171,20 @@ pub fn build(b: *std.Build) !void {
     metadata.addOption([]const u8, "build_hostname", build_hostname);
     metadata.addOption([]const u8, "zig_version", zig_version_opt);
     metadata.addOption([]const u8, "cpu_arch", "riscv64");
-    vmdiosix.root_module.addOptions("metadata", metadata);
+
+    // Compile the metadata object file separately to decouple options invalidation.
+    // This holds the versioning strings and is linked to the main executable.
+    const metadata_obj = b.addObject(.{
+        .name = "metadata_info",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("hypervisor/core/metadata_info.zig"),
+            .optimize = optimize,
+            .target = target,
+        }),
+    });
+    metadata_obj.root_module.addOptions("metadata", metadata);
+    vmdiosix.root_module.addObjectFile(metadata_obj.getEmittedBin());
+
     b.installArtifact(vmdiosix);
 
     const yaml_obj = b.addObject(.{
@@ -201,12 +214,24 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .target = b.graph.host,
     });
-    test_module.addOptions("metadata", metadata);
     test_module.addImport("interface", interface_module);
     const unit_tests = b.addTest(.{
         .root_module = test_module,
         .name = "diosix-unit-tests",
     });
+
+    // Compile and link the metadata info separately for host unit tests
+    const test_metadata_obj = b.addObject(.{
+        .name = "metadata_info_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("hypervisor/core/metadata_info.zig"),
+            .optimize = optimize,
+            .target = b.graph.host,
+        }),
+    });
+    test_metadata_obj.root_module.addOptions("metadata", metadata);
+    unit_tests.root_module.addObjectFile(test_metadata_obj.getEmittedBin());
+
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const yaml_test_module = b.createModule(.{

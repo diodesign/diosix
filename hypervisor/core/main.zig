@@ -10,7 +10,6 @@ const debug = @import("debug.zig");
 const riscv = @import("riscv.zig");
 const alloc = @import("alloc.zig");
 const atomic = @import("atomic.zig");
-const metadata = @import("metadata");
 const dt = @import("dt.zig");
 const physmem = @import("physmem.zig");
 const scheduler = @import("scheduler.zig");
