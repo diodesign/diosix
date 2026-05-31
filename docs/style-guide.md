@@ -27,6 +27,9 @@ by the abbreviation in brackets. For example, use "Virtual Machine (VM)" or
 "Supervisor Binary Interface (SBI)" for the first mention. For all 
 subsequent mentions on that same page, use only the abbreviation.
 
+Industry-wide terms, such as YAML, CPU, and RAM, do not need to be
+spelled out.
+
 ### Structure and formatting
 
 Use bulleted lists only for non-sequential items and numbered lists strictly 
