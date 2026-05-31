@@ -31,9 +31,10 @@ To compile the hypervisor, you must have the following installed:
 
 The build system automatically downloads and compiles the guest Root Virtual
 Machine (Root VM) using Buildroot. Building the guest requires standard
-host-side compilation utilities and a RISC-V 64-bit emulator. On minimal or
-server-oriented installations (such as a fresh Ubuntu 22.04 environment), you
-must manually install these dependencies.
+host-side compilation utilities, while running the hypervisor in emulation
+requires a RISC-V 64-bit emulator. On minimal or server-oriented
+installations, such as a fresh Ubuntu 22.04 environment, you must manually
+install these dependencies.
 
 To install the required tools and emulator on Debian or Ubuntu systems, run:
 
@@ -78,7 +79,7 @@ docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
 
 #### Run compilation and emulation
 
-To build and run Diosix inside the Docker container, run the container
+To build and run Diosix inside the Docker container using QEMU, run the container
 interactively (with `-it` and `--rm`) and pass the build wrapper commands:
 
 ```bash
