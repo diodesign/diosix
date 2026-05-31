@@ -31,22 +31,58 @@ To compile the hypervisor, you must have the following installed:
 
 The build system automatically downloads and compiles the guest Root Virtual
 Machine (Root VM) using Buildroot. Building the guest requires standard
-host-side compilation utilities. On minimal or server-oriented installations
-(such as a fresh Ubuntu 22.04 environment), you must manually install these
-dependencies.
+host-side compilation utilities and a RISC-V 64-bit emulator. On minimal or
+server-oriented installations (such as a fresh Ubuntu 22.04 environment), you
+must manually install these dependencies.
 
-To install the required tools on Debian or Ubuntu systems, run:
+To install the required tools and emulator on Debian or Ubuntu systems, run:
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential rsync cpio unzip file bc findutils wget
+sudo apt install -y build-essential rsync cpio unzip file bc findutils wget qemu-system-misc
 ```
 
 On Fedora systems, run:
 
 ```bash
 sudo dnf groupinstall "Development Tools"
-sudo dnf install -y rsync cpio unzip bc wget
+sudo dnf install -y rsync cpio unzip bc wget qemu-system-riscv
+```
+
+### Containerized builds using Docker
+
+For a highly reproducible and isolated build environment that automatically
+manages all tools (including the aligned Zig compiler version and required
+Buildroot host packages), you can use the provided Dockerfiles.
+
+The configuration Dockerfiles are located in `dockerfiles/`:
+*   `dockerfiles/ubuntu-22.04.Dockerfile`: Builds and runs on Ubuntu 22.04.
+*   `dockerfiles/fedora-44.Dockerfile`: Builds and runs on Fedora 44.
+
+#### Build the container image
+
+Navigate to the project root and build the image for your preferred
+distribution:
+
+```bash
+# For Ubuntu 22.04
+docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
+
+# For Fedora 44
+docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
+```
+
+#### Run compilation and emulation
+
+To build and run Diosix inside the Docker container, run the container
+interactively (with `-it` and `--rm`) and pass the build wrapper commands:
+
+```bash
+# Build the default target inside the Ubuntu environment
+docker run -it --rm diosix-ubuntu ./scripts/build.sh
+
+# Build and run the hypervisor inside QEMU interactively
+docker run -it --rm diosix-ubuntu ./scripts/build.sh run
 ```
 
 ---

@@ -1,0 +1,36 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+      - devel
+  pull_request:
+    branches:
+      - devel
+
+jobs:
+  ubuntu-build:
+    name: Ubuntu 22.04 Build and Test
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker container
+        run: docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
+
+      - name: Run unit tests
+        run: docker run --rm diosix-ubuntu ./scripts/build.sh test
+
+  fedora-build:
+    name: Fedora 44 Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker container
+        run: docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
+
+      - name: Run unit tests
+        run: docker run --rm diosix-fedora ./scripts/build.sh test
