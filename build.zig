@@ -203,6 +203,7 @@ pub fn build(b: *std.Build) !void {
 
     // the last argument to qemu is the kernel file to run
     run_step.addArtifactArg(vmdiosix);
+    run_step.stdio = .inherit;
 
     const run_option = b.step("run", "Run the hypervisor");
     run_option.dependOn(&run_step.step);
