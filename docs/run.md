@@ -7,12 +7,11 @@ hardware, configure custom targets, and control emulator execution.
 
 ## System requirements
 
-To run Diosix, the target system (physical or emulated) must meet the following
+To run Diosix, the target system, physical or emulated, must meet the following
 requirements:
-*   **Processor architecture:** A 64-bit RISC-V (RV20 / RV64GC) processor.
-*   **Hardware isolation:** Support for either the RISC-V hypervisor (H)
-    extension or Physical Memory Protection (PMP).
-*   **Emulator (optional):** QEMU version 10.1.5 or later (for emulated runs).
+*   One or more 64-bit RISC-V (RV20 / RV64GC) processor cores.
+*   Support for either the RISC-V hypervisor (H) extension or physical memory protection (PMP).
+*   For QEMU emulated runs, version 10.1.5 or later of the QEMU emulator.
 
 ---
 

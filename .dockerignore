@@ -1,0 +1,7 @@
+# Ignore local build caches and artifacts to prevent GLIBC version mismatch errors in the container
+.zig-cache/
+zig-out/
+
+# Ignore debug logs
+*.txt
+*.log
