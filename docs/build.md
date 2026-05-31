@@ -7,6 +7,50 @@ hardware ports, and host metadata injection.
 
 ---
 
+## Host build requirements
+
+Before compiling Diosix, ensure your host system is configured with the
+necessary development tools, and that you have cloned the source repository.
+
+### Fetch the source repository
+
+To clone the Diosix source code and enter its directory, run:
+
+```bash
+git clone https://github.com/diodesign/diosix.git
+cd diosix
+```
+
+### Hypervisor toolchain
+
+To compile the hypervisor, you must have the following installed:
+*   **Zig:** Version 0.17.0 or later.
+*   **Git:** Version 2.54 or later.
+
+### Guest operating system build dependencies
+
+The build system automatically downloads and compiles the guest Root Virtual
+Machine (Root VM) using Buildroot. Building the guest requires standard
+host-side compilation utilities. On minimal or server-oriented installations
+(such as a fresh Ubuntu 22.04 environment), you must manually install these
+dependencies.
+
+To install the required tools on Debian or Ubuntu systems, run:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential rsync cpio unzip file bc findutils wget
+```
+
+On Fedora systems, run:
+
+```bash
+sudo dnf groupinstall "Development Tools"
+sudo dnf install -y rsync cpio unzip bc wget
+```
+
+---
+
 ## Metadata injection and the wrapper script
 
 At the entry point of the build process is a shell-based build wrapper located
@@ -35,7 +79,7 @@ options to compile, run, and test the hypervisor.
 
 ### Build the default target
 
-To compile the hypervisor and generate the guest Root Virtual Machine (Root VM)
+To compile the hypervisor and generate the guest Root VM
 payload without running the emulator, execute:
 
 ```bash

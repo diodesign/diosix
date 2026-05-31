@@ -28,7 +28,7 @@ To build, compile, and run the complete system:
 1. Clone the repository and enter the project directory:
 
    ```bash
-   git clone --branch stable https://github.com/diodesign/diosix.git
+   git clone https://github.com/diodesign/diosix.git
    cd diosix
    ```
 

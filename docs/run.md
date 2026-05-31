@@ -5,9 +5,19 @@ hardware, configure custom targets, and control emulator execution.
 
 ---
 
+## System requirements
+
+To run Diosix, the target system (physical or emulated) must meet the following
+hardware requirements:
+*   **Processor architecture:** A 64-bit RISC-V (RV20 / RV64GC) processor.
+*   **Hardware isolation:** Support for either the RISC-V hypervisor (H)
+    extension or Physical Memory Protection (PMP).
+
+---
+
 ## Run Diosix in emulation
 
-The simplest way to run and test Diosix is inside the Quick Emulator (QEMU).
+The simplest way to run and test Diosix is inside QEMU.
 Emulation allows you to iterate on guest development and debug
 platform-specific drivers without physical hardware.
 
@@ -43,8 +53,7 @@ console.
 Available hardware targets are defined in YAML configuration files located in
 `hypervisor/hw/ports/`. You can compile and run for a specific target by
 passing the `-Dsystem` parameter. For example, to target a simulated system
-using RISC-V's Physical Memory Protection (PMP) isolation
-instead of the hardware virtualization (H) extension, run:
+using RISC-V's PMP isolation instead of the H extension, run:
 
 ```bash
 ./scripts/build.sh run -Dsystem=qemu-virt-pmp
