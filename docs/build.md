@@ -31,7 +31,7 @@ resulting in accurate versioning.
 ## Declarative hardware ports via YAML configuration
 
 To support modular hardware platforms, the build system uses declarative
-YAML Ain't Markup Language (YAML) configurations to define how target boards
+YAML configurations to define how target boards
 share assembly routines and linker scripts.
 
 Every target platform is described by a dedicated YAML configuration file
@@ -41,10 +41,10 @@ command-line arguments needed to execute the target in QEMU, the list of
 assembly files to compile, and any static dependency assets.
 
 The configuration is parsed by a custom YAML parser located at
-`scripts/yaml_parser.zig`. Written specifically for the project, it operates
-completely offline and parses key-value pairs and arrays without external
-dependencies. This design avoids reliance on external package managers or
-network downloads, maintaining build speed and offline reliability.
+`scripts/yaml_parser.zig`. Written specifically for this project, it parses
+key-value pairs and arrays without external dependencies. This design avoids
+reliance on external package managers or network downloads, maintaining build
+speed and offline reliability.
 
 ---
 

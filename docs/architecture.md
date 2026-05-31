@@ -12,11 +12,11 @@ The first VM loaded by the hypervisor at boot is known as the Root VM. This VM
 acts as the progenitor for all other guests, similar to how the `init` process
 functions in Unix-like operating systems.
 
-Any VM can fork itself or manage its direct children, including starting,
-stopping, killing, or rebooting them. A parent VM is entirely responsible for
-the lifecycle and resources of its descendants. This recursive structure
-delegates resource management to the parent VMs rather than maintaining a
-global state in the hypervisor.
+Any guest VM, starting with the Root VM, can fork itself or manage its direct
+children, including starting, stopping, killing, or rebooting them. A parent VM is
+entirely responsible for the lifecycle and resources of its descendants. This
+recursive structure delegates resource management to the parent VMs rather than
+maintaining a global state in the hypervisor.
 
 ---
 
@@ -39,13 +39,13 @@ Diosix uses a subtree resource quota system to prevent resource exhaustion. A
 VM's quota defines the maximum resources that the VM and its entire descendant
 tree can consume.
 
-The hypervisor tracks quotas for physical memory pages, Virtual Central
-Processing Unit (VCPU) cores, scheduling priority, maximum child depth, and the
-total number of descendants within any branch of the hierarchy.
+The hypervisor tracks quotas for physical memory pages, virtual CPU cores,
+scheduling priority, maximum child depth, and the total number of descendants
+within any branch of the hierarchy.
 
 The Root VM begins with the maximum available system resources. Any guest can
-voluntarily decrease its own quota—a one-way operation—to sandbox itself and its
-future descendants.
+voluntarily decrease its own quota — a one-way operation — to sandbox itself
+and its future descendants.
 
 ---
 
@@ -64,10 +64,14 @@ physical hardware. Only a VM that has its hardware trust flag set can map
 physical Memory-Mapped Input/Output (MMIO) space or route hardware interrupts
 directly to itself.
 
-By default, the Root VM has hardware trust. A guest can relinquish this
-privilege using the `DROP_TRUST` call in the Supervisor Binary Interface (SBI)
-extension (interface.md). This allows a trusted loader to fork a guest, write
+By default, the Root VM has hardware trust. This is so that hardware drivers can be provided by the Root VM for the rest of the system, rather than the hypervisor itself. When a guest VM needs access to the underlying host, such as accessing storage or network resources, it must coordinate with the Root VM for that access.
+
+A guest can relinquish this privilege using the `DROP_TRUST` call in the Supervisor Binary Interface (SBI) extension. This allows a trusted loader to fork a guest, write
 the guest image, and drop trust before executing the guest code.
+
+As such, the Root VM can fork to create a trusted child VM, which then loads in a guest image from storage, drops its trusted staus, and then acts as a normal, untrusted guest VM managed by its Root VM parent.
+
+For more information, see [Diosix shared interface](interface.md).
 
 ---
 
@@ -78,6 +82,8 @@ its descendants. Orphans are not permitted.
 
 If the Root VM terminates, the hypervisor restarts the host machine to ensure
 the system returns to a clean boot state.
+
+The Root VM can also signal to the hypervisor to shutdown the host system.
 
 ---
 
@@ -98,6 +104,3 @@ logs, and documentation:
 *  **Guest Virtual Address (GVA).** A virtual memory address managed within the
    guest VM's own operating system supervisor context, via first-stage VS-stage
    translation.
-
-These concepts are referenced via their abbreviations (**HPA**, **GPA**, and
-**GVA**) across the hypervisor's source code and diagnostics.

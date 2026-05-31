@@ -12,7 +12,7 @@ The hypervisor manages memory explicitly to prevent leaks and runtime failures.
 Function callers are responsible for tracking and freeing heap allocations
 returned by functions that require an allocator. You must use the provided
 allocator for resource deallocations and handle cleanups under failure states
-using Zig's `errdefer` mechanism.
+using Zig's `defer` and `errdefer` mechanisms.
 
 ---
 
@@ -48,12 +48,14 @@ headings, and spelling out abbreviations on first use.
 Diosix manages development and releases using a staging-to-release workflow.
 
 ### Calendar Versioning
+
 We use the Calendar Versioning (CalVer) standard in the `YY.MINOR` format. Even-numbered
 minor versions indicate stable, production-ready releases suitable for
 deployment. Odd-numbered minor versions indicate development builds representing
 active, ongoing changes.
 
 ### Staging branches
+
 The repository maintains two branches to coordinate changes. The `devel` branch
 serves as the staging area for ongoing feature additions and active development.
 The `stable` branch represents production-ready code, from which releases are

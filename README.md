@@ -25,36 +25,40 @@ Before you begin, ensure you have the following software installed on your host:
 
 To build, compile, and run the complete system:
 
-1.  Clone the repository and enter the project directory:
+1. Clone the repository and enter the project directory:
 
-    ```bash
-    git clone --branch stable https://github.com/diodesign/diosix.git
-    cd diosix
-    ```
+   ```bash
+   git clone --branch stable https://github.com/diodesign/diosix.git
+   cd diosix
+   ```
 
-2.  Compile the hypervisor and boot the system inside QEMU:
+1. Compile the hypervisor and boot the system inside QEMU:
 
-    ```bash
-    ./scripts/build.sh run
-    ```
+   ```bash
+   ./scripts/build.sh run
+   ```
 
-The build process automatically downloads and compiles an included guest
-Virtual Machine (VM) called the Root VM. Once compilation completes, QEMU boots
-the hypervisor, which automatically starts and runs this Root VM.
+   The build process automatically downloads and compiles a trusted Linux guest
+   Virtual Machine (VM) called the Root VM, which assists the hypervisor in
+   managing the host hardware and running other guests. Once compilation completes,
+   QEMU boots the hypervisor, which then automatically starts and runs this Root VM.
 
-The hypervisor outputs debug and diagnostic information directly to your
-terminal window. The terminal also provides interactive console access to the
-running guest VM, allowing you to type commands and log in once the boot process
-finishes.
+   The hypervisor outputs debug and diagnostic information directly to your
+   terminal. You can also interact with the running Root VM via the terminal.
+
+1. To log into the Root VM, use the username `root` with no password.
+
+   If the Root VM is powered off, the hypervisor will automatically restart it.
 
 To control the emulator process from your terminal:
-*  **Exit the emulator:** Press `Ctrl-a` followed by `x` at any time to instantly
-   terminate the emulation.
-*  **Enter the debug monitor:** Press `Ctrl-a` followed by `c` to drop into the
-   QEMU monitor shell.
 
-Here's a recording of a user building and running Diosix, and then logging
-into and interacting with a Linux guest virtual machine running on the hypervisor.
+*  Exit the emulator by pressing `Ctrl-a` followed by `x` to terminate
+   the emulation.
+*  Enter the QEMU monitor shell by pressing `Ctrl-a` followed by `c`. Press
+   `Ctrl-a` and `c` again to return to the hypervisor console.
+
+The following is a recording of a user building and running Diosix, and then
+logging into and interacting with the Root VM running on the hypervisor.
 
 [![asciicast](https://asciinema.org/a/1161817.svg)](https://asciinema.org/a/1161817)
 
@@ -70,17 +74,17 @@ For more information about Diosix, see the following documentation:
 *  **[Build Diosix](docs/build.md):** Learn about the build system, build commands,
    and incremental build caching.
 *  **[Run Diosix](docs/run.md):** Learn how to run the hypervisor, use target
-   emulators, customize boot parameters, and load payloads onto physical
+   emulators, customize boot parameters, and load the software onto physical
    hardware targets.
-*  **[Develop for Diosix](docs/development.md):** View our programming
-   guidelines, memory ownership rules, unit testing commands, contribution
+*  **[Develop for Diosix](docs/development.md):** View the project's programming
+   guidelines, memory ownership rules, unit testing commands, Git
    branching workflows, and CalVer release versioning.
 
-For more information about the technology used by Diosix, see the following
-external documentation:
+For more information about the technology used by the hypervisor, see the
+following external documentation:
 
-*  [Learn about Zig](https://ziglang.org/learn/)
-*  [RISC-V for developers](https://riscv.org/developers/)
+*  [Learn about Zig](https://ziglang.org/learn/).
+*  [RISC-V for developers](https://riscv.org/developers/).
 
 ---
 
