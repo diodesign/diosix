@@ -7,6 +7,14 @@ ENV FORCE_UNSAFE_CONFIGURE=1
 # Install core development tools, Buildroot host tools, and QEMU emulation
 RUN dnf update -y && dnf install -y \
     @development-tools \
+    gcc-c++ \
+    perl-English \
+    perl-ExtUtils-MakeMaker \
+    perl-Thread-Queue \
+    perl-FindBin \
+    perl-IPC-Cmd \
+    perl-open \
+    python3-passlib \
     curl \
     git \
     rsync \

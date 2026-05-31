@@ -24,8 +24,10 @@ cd diosix
 ### Hypervisor toolchain
 
 To compile the hypervisor, you must have the following installed:
+
 *   Zig version 0.17.0 or later.
 *   Git version 2.54 or later.
+*   For Docker-based builds, Docker version 29.5.2 or later.
 
 ### Guest operating system build dependencies
 
@@ -50,6 +52,9 @@ On Fedora systems, run:
 ```bash
 sudo dnf groupinstall "Development Tools"
 sudo dnf install -y \
+    gcc-c++ \
+    perl-English perl-ExtUtils-MakeMaker perl-Thread-Queue perl-FindBin perl-IPC-Cmd perl-open \
+    python3-passlib \
     git rsync cpio unzip bc wget xz python3 which \
     qemu-system-riscv
 ```
@@ -79,8 +84,9 @@ docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
 
 #### Run compilation and emulation
 
-To build and run Diosix inside the Docker container using QEMU, run the container
-interactively (with `-it` and `--rm`) and pass the build wrapper commands:
+To build and run Diosix inside the Docker container using the QEMU emulator,
+run the container interactively (with `-it` and `--rm`) and pass the build
+wrapper commands:
 
 ```bash
 # Build the default target inside the Ubuntu environment
