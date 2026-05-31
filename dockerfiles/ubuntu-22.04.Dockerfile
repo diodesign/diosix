@@ -17,12 +17,14 @@ RUN apt-get update && apt-get install -y \
     findutils \
     wget \
     xz-utils \
+    python3 \
     qemu-system-misc \
     && rm -rf /var/lib/apt/lists/*
 
-# Dynamically install the latest master development version of Zig (0.17.0-dev)
-RUN ZIG_URL=$(curl -s https://ziglang.org/download/index.json | grep -A 5 '"x86_64-linux"' | head -n 5 | grep -o 'https://ziglang.org/builds/zig-x86_64-linux-[^"]*') \
-    && echo "Downloading Zig from: $ZIG_URL" \
+# Dynamically detect host CPU architecture and install the latest master version of Zig (0.17.0-dev)
+RUN ARCH="$(uname -m)-linux" \
+    && ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c "import sys, json; print(json.load(sys.stdin)['master']['$ARCH']['tarball'])") \
+    && echo "Downloading Zig for $ARCH from: $ZIG_URL" \
     && curl -L "$ZIG_URL" -o zig.tar.xz \
     && tar -xf zig.tar.xz -C /opt \
     && ZIG_DIR=$(tar -tf zig.tar.xz | head -1 | cut -f1 -d"/") \
