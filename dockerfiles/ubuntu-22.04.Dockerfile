@@ -19,7 +19,6 @@ RUN apt-get update && apt-get install -y \
     wget \
     xz-utils \
     python3 \
-    which \
     qemu-system-misc \
     && rm -rf /var/lib/apt/lists/*
 
