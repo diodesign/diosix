@@ -28,7 +28,8 @@ by the abbreviation in brackets. For example, use "Virtual Machine (VM)" or
 subsequent mentions on that same page, use only the abbreviation.
 
 Industry-wide terms, such as YAML, CPU, and RAM, do not need to be
-spelled out.
+spelled out. Familiar names of software and other products, such as QEMU,
+do not need to be spelled out.
 
 ### Structure and formatting
 

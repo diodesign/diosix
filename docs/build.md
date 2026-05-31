@@ -28,6 +28,63 @@ resulting in accurate versioning.
 
 ---
 
+## Use the build wrapper
+
+The build wrapper script (`scripts/build.sh`) supports several commands and
+options to compile, run, and test the hypervisor.
+
+### Build the default target
+
+To compile the hypervisor and generate the guest Root Virtual Machine (Root VM)
+payload without running the emulator, execute:
+
+```bash
+./scripts/build.sh
+```
+
+This compiles the codebase for the default target defined in `default.yaml` and
+places the output Executable and Linkable Format (ELF) executable in
+`./zig-out/bin/vmdiosix`.
+
+### Run the emulator
+
+To compile the codebase and automatically boot the system in a QEMU environment, run:
+
+```bash
+./scripts/build.sh run
+```
+
+### Run unit tests
+
+To run the project's native unit tests on your host system:
+
+```bash
+./scripts/build.sh test
+```
+
+### Customize compilation options
+
+You can pass standard Zig build options directly to the wrapper script. For
+example, to override the target system port or compile an optimized release
+build:
+
+```bash
+# Target a specific hardware port
+./scripts/build.sh -Dsystem=qemu-virt-pmp
+
+# Build with optimizations for release
+./scripts/build.sh -Doptimize=ReleaseSafe
+```
+
+To list all available build targets, configuration parameters, and help
+options, run:
+
+```bash
+./scripts/build.sh -h
+```
+
+---
+
 ## Declarative hardware ports via YAML configuration
 
 To support modular hardware platforms, the build system uses declarative

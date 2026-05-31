@@ -12,7 +12,7 @@ robustness. We target RISC-V for its open, modular, and extensible nature.
 
 ---
 
-## Quick start
+## Quickstart
 
 The simplest way to run and test Diosix is inside an emulated environment using
 the QEMU emulator. The following instructions assume you are using a Linux host
