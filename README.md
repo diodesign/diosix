@@ -25,23 +25,33 @@ Before you begin, ensure you have the following software installed on your host:
 
 To build, compile, and run the complete system:
 
-1. Clone the repository and enter the project directory:
+1.  Clone the repository and enter the project directory:
 
     ```bash
     git clone --branch stable https://github.com/diodesign/diosix.git
     cd diosix
     ```
 
-2. Compile the hypervisor and boot the system inside QEMU:
+2.  Compile the hypervisor and boot the system inside QEMU:
 
     ```bash
     ./scripts/build.sh run
     ```
 
-By default, the hypervisor routes via the serial port, which QEMU
-displays directly in your terminal. You can exit and terminate the emulator at
-any time by pressing `Ctrl-a` followed by `x`. To enter the QEMU debug monitor,
-press `Ctrl-a` followed by `c`.
+The build process automatically downloads and compiles an included guest
+Virtual Machine (VM) called the Root VM. Once compilation completes, QEMU boots
+the hypervisor, which automatically starts and runs this Root VM.
+
+The hypervisor outputs debug and diagnostic information directly to your
+terminal window. The terminal also provides interactive console access to the
+running guest VM, allowing you to type commands and log in once the boot process
+finishes.
+
+To control the emulator process from your terminal:
+*  **Exit the emulator:** Press `Ctrl-a` followed by `x` at any time to instantly
+   terminate the emulation.
+*  **Enter the debug monitor:** Press `Ctrl-a` followed by `c` to drop into the
+   QEMU monitor shell.
 
 Here's a recording of a user building and running Diosix, and then logging
 into and interacting with a Linux guest virtual machine running on the hypervisor.
