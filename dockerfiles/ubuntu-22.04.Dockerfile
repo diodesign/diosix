@@ -3,6 +3,7 @@ FROM ubuntu:22.04
 
 # Avoid interactive prompts during apt package installation
 ENV DEBIAN_FRONTEND=noninteractive
+ENV FORCE_UNSAFE_CONFIGURE=1
 
 # Install core build-essential, downloaders, Buildroot host tools, and QEMU emulation
 RUN apt-get update && apt-get install -y \
@@ -18,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     xz-utils \
     python3 \
+    which \
     qemu-system-misc \
     && rm -rf /var/lib/apt/lists/*
 

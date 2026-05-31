@@ -85,6 +85,8 @@ docker run -it --rm diosix-ubuntu ./scripts/build.sh
 docker run -it --rm diosix-ubuntu ./scripts/build.sh run
 ```
 
+For more information on running Diosix, see [Run Diosix](run.md).
+
 ---
 
 ## Metadata injection and the wrapper script

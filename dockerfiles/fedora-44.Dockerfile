@@ -1,6 +1,9 @@
 # Fedora 44 Build and Run environment for Diosix
 FROM fedora:44
 
+# Allow Buildroot to compile as root inside the container
+ENV FORCE_UNSAFE_CONFIGURE=1
+
 # Install core development tools, Buildroot host tools, and QEMU emulation
 RUN dnf update -y && dnf install -y \
     @development-tools \
@@ -15,6 +18,7 @@ RUN dnf update -y && dnf install -y \
     wget \
     xz \
     python3 \
+    which \
     qemu-system-riscv \
     && dnf clean all
 
