@@ -24,8 +24,8 @@ cd diosix
 ### Hypervisor toolchain
 
 To compile the hypervisor, you must have the following installed:
-*   **Zig:** Version 0.17.0 or later.
-*   **Git:** Version 2.54 or later.
+*   Zig version 0.17.0 or later.
+*   Git version 2.54 or later.
 
 ### Guest operating system build dependencies
 
@@ -39,14 +39,18 @@ To install the required tools and emulator on Debian or Ubuntu systems, run:
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential rsync cpio unzip file bc findutils wget qemu-system-misc
+sudo apt install -y \
+    build-essential git rsync cpio unzip file bc findutils \
+    wget xz-utils python3 qemu-system-misc
 ```
 
 On Fedora systems, run:
 
 ```bash
 sudo dnf groupinstall "Development Tools"
-sudo dnf install -y rsync cpio unzip bc wget qemu-system-riscv
+sudo dnf install -y \
+    git rsync cpio unzip bc wget xz python3 which \
+    qemu-system-riscv
 ```
 
 ### Containerized builds using Docker
