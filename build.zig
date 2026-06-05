@@ -79,6 +79,9 @@ pub fn build(b: *std.Build) !void {
         std.fmt.allocPrint(b.allocator, "Select the system to build for: {s} (default: {s})", .{ system_names, default_system }) catch unreachable,
     ) orelse default_system;
 
+    // Allow user to override the CPU model/extensions passed to QEMU
+    const qemu_cpu_opt = b.option([]const u8, "qemu-cpu", "Override the CPU model/extensions passed to QEMU");
+
     // Load and parse selected system YAML configuration
     const selected_yaml_filename = try std.fmt.allocPrint(b.allocator, "{s}.yaml", .{system_option});
     defer b.allocator.free(selected_yaml_filename);
@@ -198,7 +201,22 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(&b.addInstallFile(yaml_obj.getEmittedBin(), "yaml_parser.o").step);
 
     // create a 'zig build run' command to execute the hypervisor in a suitable emulator
-    const run_step = b.addSystemCommand(port_config.run_cmd);
+    var qemu_args = ArrayList([]const u8).empty;
+    defer qemu_args.deinit(b.allocator);
+
+    var arg_idx: usize = 0;
+    while (arg_idx < port_config.run_cmd.len) : (arg_idx += 1) {
+        const arg = port_config.run_cmd[arg_idx];
+        if (std.mem.eql(u8, arg, "-cpu") and arg_idx + 1 < port_config.run_cmd.len) {
+            try qemu_args.append(b.allocator, b.dupe("-cpu"));
+            try qemu_args.append(b.allocator, try b.allocator.dupe(u8, qemu_cpu_opt orelse port_config.run_cmd[arg_idx + 1]));
+            arg_idx += 1;
+        } else {
+            try qemu_args.append(b.allocator, try b.allocator.dupe(u8, arg));
+        }
+    }
+
+    const run_step = b.addSystemCommand(qemu_args.items);
     run_step.step.dependOn(b.getInstallStep());
 
     // the last argument to qemu is the kernel file to run

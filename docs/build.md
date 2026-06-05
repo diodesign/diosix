@@ -3,14 +3,21 @@
 The Diosix build pipeline uses the Zig build system to compile the hypervisor
 and generate reproducible guest operating system images. This process
 coordinates the build graph, target architecture configurations, declarative
-hardware ports, and host metadata injection.
+hardware ports, and build host metadata injection.
 
 ---
 
-## Host build requirements
+## Host build process
 
-Before compiling Diosix, ensure your host system is configured with the
-necessary development tools, and that you have cloned the source repository.
+This section details the steps required to configure your build host, clone the repository, install guest OS build dependencies, and compile the hypervisor.
+
+### Prerequisites
+
+To compile the hypervisor, you must have the following installed:
+
+*   Zig version 0.17.0 or later.
+*   Git version 2.54 or later.
+*   For Docker-based builds, Docker version 29.5.2 or later.
 
 ### Fetch the source repository
 
@@ -21,30 +28,21 @@ git clone https://github.com/diodesign/diosix.git
 cd diosix
 ```
 
-### Hypervisor toolchain
-
-To compile the hypervisor, you must have the following installed:
-
-*   Zig version 0.17.0 or later.
-*   Git version 2.54 or later.
-*   For Docker-based builds, Docker version 29.5.2 or later.
-
 ### Guest operating system build dependencies
 
 The build system automatically downloads and compiles the guest Root Virtual
 Machine (Root VM) using Buildroot. Building the guest requires standard
-host-side compilation utilities, while running the hypervisor in emulation
-requires a RISC-V 64-bit emulator. On minimal or server-oriented
+host-side compilation utilities. On minimal or server-oriented
 installations, such as a fresh Ubuntu 22.04 environment, you must manually
-install these dependencies.
+install these dependencies before you can use Buildroot.
 
-To install the required tools and emulator on Debian or Ubuntu systems, run:
+To install the required tools on Debian or Ubuntu systems, run:
 
 ```bash
 sudo apt update
 sudo apt install -y \
     build-essential git rsync cpio unzip file bc findutils \
-    wget xz-utils python3 qemu-system-misc
+    wget xz-utils python3
 ```
 
 On Fedora systems, run:
@@ -55,111 +53,33 @@ sudo dnf install -y \
     gcc-c++ \
     perl-English perl-ExtUtils-MakeMaker perl-Thread-Queue perl-FindBin perl-IPC-Cmd perl-open \
     python3-passlib \
-    git rsync cpio unzip bc wget xz python3 which \
-    qemu-system-riscv
+    git rsync cpio unzip bc wget xz python3 which
 ```
-
-### Containerized builds using Docker
-
-For a highly reproducible and isolated build environment that automatically
-manages all tools (including the aligned Zig compiler version and required
-Buildroot host packages), you can use the provided Dockerfiles.
-
-The configuration Dockerfiles are located in `dockerfiles/`:
-*   `dockerfiles/ubuntu-22.04.Dockerfile`: Builds and runs on Ubuntu 22.04.
-*   `dockerfiles/fedora-44.Dockerfile`: Builds and runs on Fedora 44.
-
-#### Build the container image
-
-Navigate to the project root and build the image for your preferred
-distribution:
-
-```bash
-# For Ubuntu 22.04
-docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
-
-# For Fedora 44
-docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
-```
-
-#### Run compilation and emulation
-
-To build and run Diosix inside the Docker container using the QEMU emulator,
-run the container interactively (with `-it` and `--rm`) and pass the build
-wrapper commands:
-
-```bash
-# Build the default target inside the Ubuntu environment
-docker run -it --rm diosix-ubuntu ./scripts/build.sh
-
-# Build and run the hypervisor inside QEMU interactively
-docker run -it --rm diosix-ubuntu ./scripts/build.sh run
-```
-
-For more information on running Diosix, see [Run Diosix](run.md).
-
----
-
-## Metadata injection and the wrapper script
-
-At the entry point of the build process is a shell-based build wrapper located
-at `scripts/build.sh`. This wrapper serves as the primary interface for
-initiating compiles.
-
-Because the Zig build system relies on a hermetic caching model to accelerate
-build cycles, running subprocesses that query the host environment (such as `git`
-or the system date) directly inside the build script (`build.zig`) can cause the
-caching system to reuse stale binaries.
-
-The wrapper script (`scripts/build.sh`) solves this by capturing environmental
-metadata from the host system before compiling. It queries the local Git
-repository for the current branch name and commit revision, and retrieves the
-host system's date and time. These values are then passed directly to
-`zig build` as explicit build options (using `-D` parameters). This ensures that
-any change in the captured host environment correctly invalidates the cache,
-resulting in accurate versioning.
-
----
 
 ## Use the build wrapper
 
 The build wrapper script (`scripts/build.sh`) supports several commands and
-options to compile, run, and test the hypervisor.
+options to compile and test the hypervisor on your host system.
 
 ### Build the default target
 
 To compile the hypervisor and generate the guest Root VM
-payload without running the emulator, execute:
+payload, run:
 
 ```bash
 ./scripts/build.sh
 ```
 
-This compiles the codebase for the default target defined in `default.yaml` and
-places the output Executable and Linkable Format (ELF) executable in
-`./zig-out/bin/vmdiosix`.
+This compiles the codebase for the default target defined in `hypervisor/hw/ports/default.yaml` and
+places the output ELF executable in `./zig-out/bin/vmdiosix`.
 
-### Run the emulator
-
-To compile the codebase and automatically boot the system in a QEMU environment, run:
-
-```bash
-./scripts/build.sh run
-```
-
-### Run unit tests
-
-To run the project's native unit tests on your host system:
-
-```bash
-./scripts/build.sh test
-```
+For instructions on booting and running the built hypervisor, see [Run Diosix](run.md).
 
 ### Customize compilation options
 
-You can pass standard Zig build options directly to the wrapper script. For
-example, to override the target system port or compile an optimized release
-build:
+You can pass standard Zig build options and Diosix-specific build options
+directly to the wrapper script. For example, to override the target hardware
+system port or to compile an optimized build:
 
 ```bash
 # Target a specific hardware port
@@ -178,11 +98,69 @@ options, run:
 
 ---
 
+## Containerized build process using Docker
+
+For a highly reproducible and isolated build environment that automatically
+manages all tools, including the required Zig compiler version and Buildroot
+host packages, you can use the provided Dockerfiles.
+
+The configuration Dockerfiles are located in `dockerfiles/`:
+
+*   `dockerfiles/ubuntu-22.04.Dockerfile`: Builds and runs on Ubuntu 22.04.
+*   `dockerfiles/fedora-44.Dockerfile`: Builds and runs on Fedora 44.
+
+### Build the container image
+
+To build the container image, navigate to the Diosix project root and build the image for your preferred distribution:
+
+```bash
+# For Ubuntu 22.04
+docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
+
+# For Fedora 44
+docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
+```
+
+### Run compilation inside the container
+
+To compile the codebase using the Docker environment, run the build wrapper command inside the container:
+
+```bash
+# Build the default target inside the Ubuntu environment
+docker run -it --rm diosix-ubuntu ./scripts/build.sh
+
+# Build the default target inside the Fedora environment
+docker run -it --rm diosix-fedora ./scripts/build.sh
+```
+
+For more information on booting and running the built hypervisor, see [Run Diosix](run.md).
+
+---
+
+## Metadata injection and the wrapper script
+
+The entry point of the build process is the shell-based build wrapper located at
+`scripts/build.sh`. This wrapper serves as the primary interface for initiating compiles.
+
+To accelerate build cycles, Zig serializes and caches the build configuration
+graph generated by `build.zig`. If `build.zig` remains unmodified and its
+command-line parameters are identical, Zig bypasses executing `build.zig`
+entirely. Executing subprocesses to query the host, such as `git` or the system
+date, directly inside `build.zig` would therefore result in stale or missing
+metadata, as Zig would reuse the cached configuration without re-querying the host.
+
+The wrapper script solves this by capturing git and temporal metadata from the
+host system before compiling. These values are passed to `zig build` as explicit
+build options, using `-D` parameters, ensuring that any change in the host
+environment correctly invalidates the build configuration cache.
+
+---
+
 ## Declarative hardware ports via YAML configuration
 
-To support modular hardware platforms, the build system uses declarative
-YAML configurations to define how target boards
-share assembly routines and linker scripts.
+To support diverse hardware platforms, the build system uses declarative
+YAML configurations to define how target boards share and use assembly routines
+and linker scripts.
 
 Every target platform is described by a dedicated YAML configuration file
 located in the target configuration directory at `hypervisor/hw/ports/`. These
@@ -196,13 +174,11 @@ key-value pairs and arrays without external dependencies. This design avoids
 reliance on external package managers or network downloads, maintaining build
 speed and offline reliability.
 
----
+### Dynamic port discovery and target selection
 
-## Dynamic port discovery and target selection
-
-During the configure phase, the `build.zig` script scans the target configuration
-directory to discover available hardware ports and list them in the compiler
-help options.
+During the configure phase, the `build.zig` program scans the target configuration
+directory to discover available hardware ports and, if necessary, lists them in
+the compiler help options.
 
 The build system determines the default target system by reading a global
 configuration file located at `hypervisor/hw/ports/default.yaml`. This file
@@ -212,16 +188,14 @@ You can override the default target system using the `-Dsystem` parameter. The
 build script loads the corresponding YAML file, allowing you to add new target
 boards without modifying the core build script.
 
----
+### Compilation and cached dependency tracking
 
-## Compilation and cached dependency tracking
-
-Once a hardware port is configured, the build script registers each assembly
+Once a hardware port is selected, the build script registers each assembly
 file individually. This prevents duplicate symbol collisions and allows the
 linker script to control section ordering, such as placing the entry stage
 at the base physical DRAM address.
 
-To ensure that statically included files (like `consts.s`) are correctly
+To ensure that statically included files, like `consts.s`, are correctly
 tracked, the build system declares them as explicit dependencies of the
 compilation step. Modifying any dependent assembly file invalidates the
 compiler cache, forcing a fresh compilation of the assembly sources.

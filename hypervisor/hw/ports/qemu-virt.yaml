@@ -13,7 +13,7 @@ run_cmd:
   - -machine
   - virt
   - -cpu
-  - max
+  - rv64
   - -smp
   - 4
   - -m

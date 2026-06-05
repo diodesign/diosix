@@ -4,6 +4,7 @@ FROM ubuntu:22.04
 # Avoid interactive prompts during apt package installation
 ENV DEBIAN_FRONTEND=noninteractive
 ENV FORCE_UNSAFE_CONFIGURE=1
+ENV DIOSIX_QEMU_CPU="rv64,x-h=true,x-v=true"
 
 # Install core build-essential, downloaders, Buildroot host tools, and QEMU emulation
 RUN apt-get update && apt-get install -y \
