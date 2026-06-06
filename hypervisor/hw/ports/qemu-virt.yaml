@@ -13,7 +13,7 @@ run_cmd:
   - -machine
   - virt
   - -cpu
-  - rv64
+  - rv64,smstateen=true,sstc=true
   - -smp
   - 4
   - -m

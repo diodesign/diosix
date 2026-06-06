@@ -13,6 +13,7 @@ const vcore = @import("vcore.zig");
 const sbi = @import("sbi.zig");
 const vm_space = @import("vm_space.zig");
 const scheduler = @import("scheduler.zig");
+const config = @import("config");
 
 fn raw_print_char(c: u8) void {
     debug.hw_putchar(c);
@@ -33,6 +34,46 @@ extern fn hw_xint_init() void;
 pub fn init() void {
     hw_xint_init();
 
+    const pcpu = pcore.this();
+    if (!config.legacy_cpu and pcpu.cpu_core_id == 0) {
+        // Probe Smstateen (0x30c)
+        pcpu.probing_active = true;
+        pcpu.probe_failed = false;
+        _ = riscv.readMstateen0();
+        riscv.riscv_supports_smstateen = !pcpu.probe_failed;
+
+        // Probe Sstc (0x14d) by verifying that writing to the supervisor comparator (stimecmp)
+        // actually toggles the supervisor timer interrupt pending bit (STIP, bit 5) in mip.
+        // The comparator is only active if the STCE bit (bit 63) in menvcfg is set, so we temporarily enable it.
+        pcpu.probing_active = true;
+        pcpu.probe_failed = false;
+
+        const old_menvcfg = riscv.readMenvcfg();
+        const stce_bit = @as(usize, 1) << 63;
+        riscv.writeMenvcfg(old_menvcfg | stce_bit);
+
+        const old_stimecmp = riscv.readStimecmp();
+
+        riscv.writeStimecmp(0xffffffffffffffff);
+        const mip_clear = riscv.readMip();
+
+        riscv.writeStimecmp(0);
+        const mip_set = riscv.readMip();
+
+        riscv.writeStimecmp(old_stimecmp);
+        riscv.writeMenvcfg(old_menvcfg);
+
+        const stip_bit = @as(usize, 1) << 5; // STIP in mip
+        const stip_cleared = (mip_clear & stip_bit) == 0;
+        const stip_asserted = (mip_set & stip_bit) != 0;
+
+        riscv.riscv_supports_sstc = !pcpu.probe_failed and stip_cleared and stip_asserted;
+
+        pcpu.probing_active = false;
+
+        debug.printf("Probed extensions: Smstateen={}, Sstc={}\n", .{ riscv.riscv_supports_smstateen, riscv.riscv_supports_sstc });
+    }
+
     // Enable physical timer, software, and external interrupts (including supervisor mode in M-mode)
     riscv.writeMie(0xa8a);
 
@@ -45,7 +86,7 @@ pub fn init() void {
     mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
     riscv.writeMstatus(mstatus);
 
-    if (riscv.hasHExtension()) {
+    if (riscv.hasHExtension() and !config.legacy_cpu and riscv.riscv_supports_smstateen) {
         // Enable STCE (bit 63) to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
         // and Cache Block Operations: CBZE (bit 7), CBCFE (bit 6), and CBIE (bits 4-5) = 240 (0xF0).
         // This grants lower privilege modes (including the guest VM) permission to execute them natively in hardware.
@@ -186,8 +227,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 gs.vscause = riscv.readVscause();
                 gs.vstval = riscv.readVstval();
                 gs.vsatp = riscv.readVsatp();
-                gs.vstimecmp = riscv.readVstimecmp();
-                gs.vsenvcfg = riscv.readVsenvcfg();
+                if (!config.legacy_cpu) {
+                    if (riscv.riscv_supports_sstc) gs.vstimecmp = riscv.readVstimecmp();
+                    if (riscv.riscv_supports_smstateen) gs.vsenvcfg = riscv.readVsenvcfg();
+                }
             } else {
                 const gs = &vc.guest_state;
                 gs.vsstatus = riscv.readSstatus();
@@ -198,8 +241,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 gs.vscause = riscv.readScause();
                 gs.vstval = riscv.readStval();
                 gs.vsatp = riscv.readSatp();
-                gs.vstimecmp = riscv.readStimecmp();
-                gs.vsenvcfg = riscv.readSenvcfg();
+                if (!config.legacy_cpu) {
+                    if (riscv.riscv_supports_sstc) gs.vstimecmp = riscv.readStimecmp();
+                    if (riscv.riscv_supports_smstateen) gs.vsenvcfg = riscv.readSenvcfg();
+                }
             }
         }
     }
@@ -261,9 +306,20 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 
         // If the guest has programmed a timer via vstimecmp (Sstc), ensure we clear any stale
         // software-injected VSTIP bit in hvip so the hardware can manage the interrupt natively.
+        // On legacy CPUs lacking Sstc, emulate the timer interrupt in software by setting VSTIP.
         var hvip_val = ms.hvip;
-        if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
-            hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
+        if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
+            if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+                if (riscv.readTime() >= gs.vstimecmp) {
+                    hvip_val |= riscv.HVIP.VSTIP;
+                } else {
+                    hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
+                }
+            }
+        } else {
+            if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+                hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
+            }
         }
 
         // Dynamically assert or clear VSEIP in hvip based on the physical mip MEIP/SEIP bits
@@ -299,8 +355,10 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeVscause(gs.vscause);
         riscv.writeVstval(gs.vstval);
         riscv.writeVsatp(gs.vsatp);
-        riscv.writeVstimecmp(gs.vstimecmp);
-        riscv.writeVsenvcfg(gs.vsenvcfg);
+        if (!config.legacy_cpu) {
+            if (riscv.riscv_supports_sstc) riscv.writeVstimecmp(gs.vstimecmp);
+            if (riscv.riscv_supports_smstateen) riscv.writeVsenvcfg(gs.vsenvcfg);
+        }
 
         // Flush any G-stage TLB entries to ensure any page table updates are immediately active.
         riscv.hfenceGvma();
@@ -333,8 +391,10 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeScause(gs.vscause);
         riscv.writeStval(gs.vstval);
         riscv.writeSatp(gs.vsatp);
-        riscv.writeStimecmp(gs.vstimecmp);
-        riscv.writeSenvcfg(gs.vsenvcfg);
+        if (!config.legacy_cpu) {
+            if (riscv.riscv_supports_sstc) riscv.writeStimecmp(gs.vstimecmp);
+            if (riscv.riscv_supports_smstateen) riscv.writeSenvcfg(gs.vsenvcfg);
+        }
 
         // Flash S-mode TLB entries
         riscv.sfenceVma();
@@ -343,6 +403,13 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 
 fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
     if (irq.privilege_mode == .machine) {
+        const pcpu = pcore.this();
+        if (pcpu.probing_active) {
+            pcpu.probe_failed = true;
+            // Advance PC past the 4-byte instruction that triggered the illegal instruction exception
+            riscv.writeMepc(irq.pc + 4);
+            return;
+        }
         fatal_exception(irq);
         return;
     }
@@ -723,17 +790,28 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
 }
 
 var fatal_exception_active = std.atomic.Value(bool).init(false);
+var cpu_in_fatal = std.mem.zeroes([256]bool);
 
 fn fatal_exception(irq: IRQ) void {
+    const cpu_id = pcore.this().cpu_core_id;
+    if (cpu_id < cpu_in_fatal.len) {
+        if (cpu_in_fatal[cpu_id]) {
+            // Recursive fatal exception on the SAME core! Direct raw UART write and halt immediately.
+            debug.hw_putchar('\n');
+            debug.hw_putchar('!');
+            debug.hw_putchar('R');
+            debug.hw_putchar('E');
+            debug.hw_putchar('C');
+            debug.hw_putchar('!');
+            debug.hw_putchar('\n');
+            while (true) {}
+        }
+        cpu_in_fatal[cpu_id] = true;
+    }
+
     if (fatal_exception_active.swap(true, .seq_cst)) {
-        // Recursive fatal exception! Direct raw UART write and halt immediately.
-        debug.hw_putchar('\n');
-        debug.hw_putchar('!');
-        debug.hw_putchar('R');
-        debug.hw_putchar('E');
-        debug.hw_putchar('C');
-        debug.hw_putchar('!');
-        debug.hw_putchar('\n');
+        // Another core has already claimed the fatal exception printer.
+        // Halt silently to avoid garbling the primary traceback.
         while (true) {}
     }
 

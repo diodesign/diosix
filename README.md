@@ -18,10 +18,13 @@ The simplest way to run and test Diosix is inside an emulated environment using
 the QEMU emulator. The following instructions assume you are using a Linux host
 system and are comfortable using a command-line terminal.
 
-Before you begin, ensure you have the following software installed on your host:
-*  [QEMU](https://www.qemu.org/) version 10.1.5 or later.
-*  [Git](https://git-scm.com/) version 2.54 or later.
-*  [Zig](https://ziglang.org/download/) version 0.17.0 or later.
+Before you begin, make sure your host machine and target system meet the
+prerequisites detailed in the documentation:
+
+* [Host build system](docs/build.md): Package dependencies and tools required
+  to compile Diosix.
+* [Target system](docs/run.md): Supported CPU profiles and emulator versions.
+  This quickstart assumes you're using QEMU 10 and later.
 
 To build, compile, and run the complete system:
 
@@ -44,11 +47,11 @@ To build, compile, and run the complete system:
    QEMU boots the hypervisor, which then automatically starts and runs this Root VM.
 
    The hypervisor outputs debug and diagnostic information directly to your
-   terminal. You can also interact with the running Root VM via the terminal.
+   terminal. You can interact with the running Root VM via the terminal, too.
 
 1. To log into the Root VM, use the username `root` with no password.
 
-   If the Root VM is powered off, the hypervisor will automatically restart it.
+   If the Root VM is powered off, the hypervisor will automatically restart.
 
 To control the emulator process from your terminal:
 

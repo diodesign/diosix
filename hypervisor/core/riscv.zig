@@ -83,6 +83,9 @@ pub var test_time: u64 = 0;
 var test_menvcfg: usize = 0;
 var test_henvcfg: usize = 0;
 
+pub export var riscv_supports_sstc: bool = false;
+pub export var riscv_supports_smstateen: bool = false;
+
 // RISC-V 64-bit MXL for MISA
 const MISA_MXL_64: usize = 1 << 63;
 
@@ -187,6 +190,9 @@ pub const CpuContext = struct {
     last_trap_pc: usize,
     last_trap_val: usize,
     trap_loop_count: usize,
+
+    probing_active: bool,
+    probe_failed: bool,
 };
 
 // Machine and Hypervisor specific architecture state
@@ -841,6 +847,13 @@ pub inline fn writeVstimecmp(val: usize) void {
     asm volatile ("csrw 0x24d, %[val]"
         :
         : [val] "r" (val),
+    );
+}
+
+pub inline fn readMstateen0() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], 0x30c"
+        : [ret] "=r" (-> usize),
     );
 }
 

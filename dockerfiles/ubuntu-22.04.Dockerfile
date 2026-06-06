@@ -4,7 +4,6 @@ FROM ubuntu:22.04
 # Avoid interactive prompts during apt package installation
 ENV DEBIAN_FRONTEND=noninteractive
 ENV FORCE_UNSAFE_CONFIGURE=1
-ENV DIOSIX_QEMU_CPU="rv64,x-h=true,x-v=true"
 
 # Install core build-essential, downloaders, Buildroot host tools, and QEMU emulation
 RUN apt-get update && apt-get install -y \
@@ -36,6 +35,9 @@ RUN ARCH="$(uname -m)-linux" \
 # Set up project workspace
 WORKDIR /diosix
 COPY . .
+
+# Configure the default target system to be qemu-virt-legacy since Ubuntu 22.04 LTS runs QEMU 6.2.0
+RUN sed -i 's/default_system: qemu-virt/default_system: qemu-virt-legacy/' hypervisor/hw/ports/default.yaml
 
 # Default command builds the default QEMU target system
 CMD ["./scripts/build.sh"]

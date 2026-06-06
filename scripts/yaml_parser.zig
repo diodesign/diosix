@@ -12,6 +12,7 @@ pub const PortConfig = struct {
     run_cmd: [][]const u8,
     assembly_files: [][]const u8,
     dependencies: [][]const u8,
+    legacy_cpu: bool,
 
     pub fn deinit(self: PortConfig, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -41,6 +42,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !PortConfig {
     var run_cmd = ArrayList([]const u8).empty;
     var assembly_files = ArrayList([]const u8).empty;
     var dependencies = ArrayList([]const u8).empty;
+    var legacy_cpu = false;
 
     errdefer {
         if (name) |n| allocator.free(n);
@@ -101,6 +103,9 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !PortConfig {
                 current_list = .assembly_files;
             } else if (std.mem.eql(u8, key, "dependencies")) {
                 current_list = .dependencies;
+            } else if (std.mem.eql(u8, key, "legacy_cpu")) {
+                current_list = .none;
+                legacy_cpu = std.mem.eql(u8, stripQuotes(value_raw), "true");
             } else {
                 current_list = .none;
             }
@@ -113,6 +118,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !PortConfig {
         .run_cmd = try run_cmd.toOwnedSlice(allocator),
         .assembly_files = try assembly_files.toOwnedSlice(allocator),
         .dependencies = try dependencies.toOwnedSlice(allocator),
+        .legacy_cpu = legacy_cpu,
     };
 }
 
@@ -151,6 +157,7 @@ pub fn selfCheck() !void {
         \\# Test configuration
         \\name: "test-system" # comment here
         \\linker_script: 'path/to/linker.ld'
+        \\legacy_cpu: true
         \\
         \\run_cmd:
         \\  - "cmd1"
@@ -169,6 +176,7 @@ pub fn selfCheck() !void {
 
     if (!std.mem.eql(u8, config.name, "test-system")) return error.SelfCheckFailedName;
     if (!std.mem.eql(u8, config.linker_script, "path/to/linker.ld")) return error.SelfCheckFailedLinkerScript;
+    if (!config.legacy_cpu) return error.SelfCheckFailedLegacyCpu;
     if (config.run_cmd.len != 3) return error.SelfCheckFailedRunCmdLen;
     if (!std.mem.eql(u8, config.run_cmd[0], "cmd1")) return error.SelfCheckFailedRunCmd0;
     if (!std.mem.eql(u8, config.run_cmd[1], "cmd2")) return error.SelfCheckFailedRunCmd1;
@@ -212,6 +220,7 @@ test "yaml parser - comprehensive test suite" {
         \\# A comment line
         \\name: "qemu-virt"
         \\linker_script: 'hypervisor/hw/qemu/linker.ld'
+        \\legacy_cpu: false
         \\
         \\run_cmd:
         \\  - qemu-system-riscv64
@@ -229,10 +238,11 @@ test "yaml parser - comprehensive test suite" {
 
     try testing.expectEqualStrings("qemu-virt", config.name);
     try testing.expectEqualStrings("hypervisor/hw/qemu/linker.ld", config.linker_script);
+    try testing.expect(!config.legacy_cpu);
     try testing.expectEqual(2, config.run_cmd.len);
     try testing.expectEqualStrings("qemu-system-riscv64", config.run_cmd[0]);
     try testing.expectEqualStrings("-nographic", config.run_cmd[1]);
-    try testing.expectEqual(2, config.assembly_files.len);
+    try testing.expect(config.assembly_files.len == 2);
     try testing.expectEqualStrings("hypervisor/hw/qemu/entry.s", config.assembly_files[0]);
     try testing.expectEqualStrings("hypervisor/hw/qemu/xint.s", config.assembly_files[1]);
     try testing.expectEqual(1, config.dependencies.len);
