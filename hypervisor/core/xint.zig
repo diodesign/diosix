@@ -34,45 +34,6 @@ extern fn hw_xint_init() void;
 pub fn init() void {
     hw_xint_init();
 
-    const pcpu = pcore.this();
-    if (!config.legacy_cpu and pcpu.cpu_core_id == 0) {
-        // Probe Smstateen (0x30c)
-        pcpu.probing_active = true;
-        pcpu.probe_failed = false;
-        _ = riscv.readMstateen0();
-        riscv.riscv_supports_smstateen = !pcpu.probe_failed;
-
-        // Probe Sstc (0x14d) by verifying that writing to the supervisor comparator (stimecmp)
-        // actually toggles the supervisor timer interrupt pending bit (STIP, bit 5) in mip.
-        // The comparator is only active if the STCE bit (bit 63) in menvcfg is set, so we temporarily enable it.
-        pcpu.probing_active = true;
-        pcpu.probe_failed = false;
-
-        const old_menvcfg = riscv.readMenvcfg();
-        const stce_bit = @as(usize, 1) << 63;
-        riscv.writeMenvcfg(old_menvcfg | stce_bit);
-
-        const old_stimecmp = riscv.readStimecmp();
-
-        riscv.writeStimecmp(0xffffffffffffffff);
-        const mip_clear = riscv.readMip();
-
-        riscv.writeStimecmp(0);
-        const mip_set = riscv.readMip();
-
-        riscv.writeStimecmp(old_stimecmp);
-        riscv.writeMenvcfg(old_menvcfg);
-
-        const stip_bit = @as(usize, 1) << 5; // STIP in mip
-        const stip_cleared = (mip_clear & stip_bit) == 0;
-        const stip_asserted = (mip_set & stip_bit) != 0;
-
-        riscv.riscv_supports_sstc = !pcpu.probe_failed and stip_cleared and stip_asserted;
-
-        pcpu.probing_active = false;
-
-        debug.printf("Probed extensions: Smstateen={}, Sstc={}\n", .{ riscv.riscv_supports_smstateen, riscv.riscv_supports_sstc });
-    }
 
     // Enable physical timer, software, and external interrupts (including supervisor mode in M-mode)
     riscv.writeMie(0xa8a);

@@ -9,6 +9,7 @@ const alloc = @import("alloc.zig");
 const dsa = @import("dsa.zig");
 const debug = @import("debug.zig");
 const interface = @import("interface").riscv;
+const config = @import("config");
 
 pub const Register = interface.Register;
 pub const PrivilegeMode = interface.PrivilegeMode;
@@ -642,28 +643,76 @@ pub inline fn readMtinst() usize {
     );
 }
 
-pub fn verifyHExtension() !void {
+pub fn auditCpuFeatures() !void {
     if (is_test) return;
 
-    debug.printf("H-extension architectural audit...\n", .{});
+    debug.printf("CPU features architectural audit...\n", .{});
 
-    // Test 1: hgatp persistence
-    const val_hgatp: u64 = (8 << 60) | (1 << 44) | 0x82edc;
-    writeHgatp(val_hgatp);
-    const read_hgatp = readHgatp();
-    if (read_hgatp != val_hgatp) {
-        debug.printf("CRITICAL: hgatp write failure. Wrote 0x{x}, read back 0x{x}\n", .{ val_hgatp, read_hgatp });
-        return error.HardwareIncompatible;
+    const pcpu = getCPUContext();
+    if (!config.legacy_cpu) {
+        // Probe Smstateen (0x30c)
+        pcpu.probing_active = true;
+        pcpu.probe_failed = false;
+        _ = readMstateen0();
+        riscv_supports_smstateen = !pcpu.probe_failed;
+
+        // Probe Sstc (0x14d) by verifying that writing to the supervisor comparator (stimecmp)
+        // actually toggles the supervisor timer interrupt pending bit (STIP, bit 5) in mip.
+        // The comparator is only active if the STCE bit (bit 63) in menvcfg is set, so we temporarily enable it.
+        pcpu.probing_active = true;
+        pcpu.probe_failed = false;
+
+        const old_menvcfg = readMenvcfg();
+        const stce_bit = @as(usize, 1) << 63;
+        writeMenvcfg(old_menvcfg | stce_bit);
+
+        const old_stimecmp = readStimecmp();
+
+        writeStimecmp(0xffffffffffffffff);
+        const mip_clear = readMip();
+
+        writeStimecmp(0);
+        const mip_set = readMip();
+
+        writeStimecmp(old_stimecmp);
+        writeMenvcfg(old_menvcfg);
+
+        const stip_bit = @as(usize, 1) << 5; // STIP in mip
+        const stip_cleared = (mip_clear & stip_bit) == 0;
+        const stip_asserted = (mip_set & stip_bit) != 0;
+
+        riscv_supports_sstc = !pcpu.probe_failed and stip_cleared and stip_asserted;
+
+        pcpu.probing_active = false;
     }
 
-    // Test 2: mstatus.MPV persistence
-    const initial_mstatus = readMstatus();
-    writeMstatus(initial_mstatus | MSTATUS.MPV);
-    const mstatus_with_v = readMstatus();
-    writeMstatus(initial_mstatus); // Restore
-    if ((mstatus_with_v & MSTATUS.MPV) == 0) {
-        debug.printf("CRITICAL: mstatus.MPV write failure. H-extension disabled or broken?\n", .{});
-        return error.HardwareIncompatible;
+    const has_h = hasHExtension();
+
+    // Print probed features in a clean, audited list
+    debug.printf("H-extension: {s}\n", .{if (has_h) "detected" else "absent"});
+    debug.printf("Smstateen: {s}\n", .{if (riscv_supports_smstateen) "detected" else "absent"});
+    debug.printf("Sstc: {s}\n", .{if (riscv_supports_sstc) "detected" else "absent"});
+
+    // Perform H-extension verification if detected
+    if (has_h) {
+        // Test 1: hgatp persistence
+        const val_hgatp: u64 = (8 << 60) | (1 << 44) | 0x82edc;
+        writeHgatp(val_hgatp);
+        const read_hgatp = readHgatp();
+        if (read_hgatp != val_hgatp) {
+            debug.printf("CRITICAL: hgatp write failure. Wrote 0x{x}, read back 0x{x}\n", .{ val_hgatp, read_hgatp });
+            return error.HardwareIncompatible;
+        }
+
+        // Test 2: mstatus.MPV persistence
+        const initial_mstatus = readMstatus();
+        writeMstatus(initial_mstatus | MSTATUS.MPV);
+        const mstatus_with_v = readMstatus();
+        writeMstatus(initial_mstatus); // Restore
+        if ((mstatus_with_v & MSTATUS.MPV) == 0) {
+            debug.printf("CRITICAL: mstatus.MPV write failure. H-extension disabled or broken?\n", .{});
+            return error.HardwareIncompatible;
+        }
     }
 }
 

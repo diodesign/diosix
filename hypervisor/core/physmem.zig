@@ -138,8 +138,6 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
 pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     phys_mem_state.has_h_extension = riscv.hasHExtension();
 
-    debug.printf("H-extension {s}\n", .{if (phys_mem_state.has_h_extension) "detected" else "not detected - using PMP"});
-
     // Calculate hypervisor footprint, including per-CPU slots (each 1MB)
     const cpu_slab_size = 1024 * 1024;
     const num_cpus = if (builtin.is_test) 1 else device_tree.countCpus();
