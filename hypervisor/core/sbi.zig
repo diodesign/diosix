@@ -28,6 +28,9 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
     const a1 = context[@intFromEnum(arch.Register.a1)];
     const a2 = context[@intFromEnum(arch.Register.a2)];
 
+    // Log every guest SBI call to trace hangs/hang spots.
+    // debug.printf("SBI: guest {} call ext 0x{x} func {} a0 0x{x} a1 0x{x} a2 0x{x}\n", .{ vc.guest_id, extension, function, a0, a1, a2 });
+
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
         interface.EXT.TIME => handleTimer(vc, context, a0),
@@ -35,6 +38,7 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.SRST => handleSystemReset(vc, context, function, a0, a1),
         interface.EXT.HSM => handleHSM(vc, context, function, a0, a1, a2),
         interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),
+        interface.EXT.IPI => handleIPI(vc, context, a0, a1),
         interface.EXT.LEGACY_CONSOLE_PUTCHAR => {
             const c: u8 = @truncate(a0);
             debug.putcharFromGuest(vc.guest_id, c);
@@ -63,18 +67,16 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             var it_vcore = g.vcores.start;
             while (it_vcore) |node| {
                 const target_vc = node.contents;
-                if (target_vc.id != vc.id) {
-                    if ((mask & (@as(usize, 1) << @intCast(target_vc.id))) != 0) {
-                        target_vc.machine.hvip |= riscv.HVIP.VSSIP;
-                        if (target_vc.wfi_blocked) {
-                            target_vc.wfi_blocked = false;
-                            target_vc.state = .ready;
-                            scheduler.queue(target_vc);
-                        }
-                        // Trigger physical IPI to wake up target physical core from WFI
-                        if (riscv.CLINT.msip(target_vc.id)) |ptr| {
-                            ptr.* = 1;
-                        }
+                if ((mask & (@as(usize, 1) << @intCast(target_vc.id))) != 0) {
+                    target_vc.machine.hvip |= riscv.HVIP.VSSIP;
+                    if (target_vc.wfi_blocked) {
+                        target_vc.wfi_blocked = false;
+                        target_vc.state = .ready;
+                        scheduler.queue(target_vc);
+                    }
+                    // Trigger physical IPI to wake up target physical core from WFI
+                    if (riscv.CLINT.msip(target_vc.id)) |ptr| {
+                        ptr.* = 1;
                     }
                 }
                 it_vcore = node.next;
@@ -113,6 +115,7 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
                 interface.EXT.SRST,
                 interface.EXT.HSM,
                 interface.EXT.DBCN,
+                interface.EXT.IPI,
                 interface.EXT.DIOSIX,
                 interface.EXT.LEGACY_CONSOLE_PUTCHAR,
                 interface.EXT.LEGACY_CLEAR_IPI,
@@ -131,6 +134,41 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
         interface.BASE.GET_MIMPID => setResult(vc, context, SBI_SUCCESS, riscv.readMimpid()),
         else => setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0),
     }
+}
+
+fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: usize, hart_mask_base: usize) void {
+    const g = vc.getGuest();
+    var it_vcore = g.vcores.start;
+    while (it_vcore) |node| {
+        const target_vc = node.contents;
+        
+        var should_send = false;
+        if (hart_mask_base == 0xffffffffffffffff) {
+            should_send = true;
+        } else {
+            const hart_id = target_vc.id;
+            if (hart_id >= hart_mask_base and hart_id < hart_mask_base + @bitSizeOf(usize)) {
+                const bit_pos = hart_id - hart_mask_base;
+                if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
+                    should_send = true;
+                }
+            }
+        }
+
+        if (should_send) {
+            target_vc.machine.hvip |= riscv.HVIP.VSSIP;
+            if (target_vc.wfi_blocked) {
+                target_vc.wfi_blocked = false;
+                target_vc.state = .ready;
+                scheduler.queue(target_vc);
+            }
+            if (riscv.CLINT.msip(target_vc.id)) |ptr| {
+                ptr.* = 1;
+            }
+        }
+        it_vcore = node.next;
+    }
+    setResult(vc, context, SBI_SUCCESS, 0);
 }
 
 fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64) void {
@@ -263,6 +301,7 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
         interface.DBCN.CONSOLE_WRITE => {
             const num_bytes = a0;
             const gpa = a1; // base_addr_lo
+            // debug.printf("DBCN: write {} bytes at GPA 0x{x}\n", .{ num_bytes, gpa });
             var written: usize = 0;
             var buf: [256]u8 = undefined;
             var buf_idx: usize = 0;

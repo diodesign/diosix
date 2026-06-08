@@ -20,6 +20,7 @@ const pcore = @import("pcore.zig");
 const sv39x4 = @import("sv39x4.zig");
 const elf_spec = @import("interface").elf;
 const boot = @import("boot.zig");
+const config = @import("config");
 
 extern fn hw_pmp_init() void;
 
@@ -94,6 +95,8 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         },
     }
 
+    xint.initCpuFeatures();
+
     debug.printf("Physical CPU core ID {} ready for work\n", .{cpu_core_id});
     while (true) {
         scheduler.schedule();
@@ -118,6 +121,27 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         }
 
         // We only get here if no vcores were available to run.
+        // Program the physical timer before going to sleep if a guest vcore is waiting for a timer event.
+        if (global_root_vm) |g| {
+            if (g.findVcore(pcore.this().hardware_hart_id)) |vc| {
+                if (vc.wfi_blocked) {
+                    var next_timer: u64 = 0xffffffffffffffff;
+                    if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
+                        if (vc.guest_state.vstimecmp != 0 and vc.guest_state.vstimecmp != 0xffffffffffffffff) {
+                            next_timer = vc.guest_state.vstimecmp;
+                        }
+                    }
+                    if (vc.timer_scheduled) {
+                        if (vc.timer_target < next_timer) {
+                            next_timer = vc.timer_target;
+                        }
+                    }
+                    if (next_timer != 0xffffffffffffffff) {
+                        riscv.setTimer(next_timer);
+                    }
+                }
+            }
+        }
         riscv.pause(); // wfi
     }
 }

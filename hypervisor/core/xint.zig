@@ -85,7 +85,12 @@ pub fn init() void {
     var mstatus = riscv.readMstatus();
     mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
     riscv.writeMstatus(mstatus);
+}
 
+// Configure environment and state enables on the calling CPU core once
+// the global probed features flags are initialized and stable.
+// This must be called by every CPU core.
+pub fn initCpuFeatures() void {
     if (riscv.hasHExtension() and !config.legacy_cpu and riscv.riscv_supports_smstateen) {
         // Enable STCE (bit 63) to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
         // and Cache Block Operations: CBZE (bit 7), CBCFE (bit 6), and CBIE (bits 4-5) = 240 (0xF0).
@@ -668,9 +673,15 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 // Core was sleeping. Check if the vcore mapped to this hart has its timer expired.
                 if (main.global_root_vm) |g| {
                     if (g.findVcore(pcpu.hardware_hart_id)) |vc| {
-                        if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
-                            vc.machine.hvip |= riscv.HVIP.VSTIP;
-                            vc.timer_scheduled = false;
+                        const sbi_timer_expired = vc.timer_scheduled and riscv.readTime() >= vc.timer_target;
+                        const sstc_timer_expired = !config.legacy_cpu and riscv.riscv_supports_sstc and vc.guest_state.vstimecmp != 0 and vc.guest_state.vstimecmp != 0xffffffffffffffff and riscv.readTime() >= vc.guest_state.vstimecmp;
+                        const timer_expired = sbi_timer_expired or sstc_timer_expired;
+
+                        if (timer_expired) {
+                            if (sbi_timer_expired or config.legacy_cpu or !riscv.riscv_supports_sstc) {
+                                vc.machine.hvip |= riscv.HVIP.VSTIP;
+                                vc.timer_scheduled = false;
+                            }
                             if (vc.wfi_blocked) {
                                 vc.wfi_blocked = false;
                                 vc.state = .ready;
@@ -763,22 +774,16 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
         ms.mstatus |= riscv.MSTATUS.MPV;
     }
 
-    // Handle both direct and vectored modes
     const base = gs.vstvec & ~@as(usize, 0b11);
-    const mode = gs.vstvec & 0b11;
-
     if (base == 0) {
         debug.printf("FATAL: Reflecting exception to NULL vstvec — terminating guest.\n", .{});
         vc.getGuest().terminate();
         return error.InvalidAddress;
     }
 
-    if (mode == 0) {
-        ms.mepc = base;
-    } else {
-        // Vectored mode: base + 4 * cause
-        ms.mepc = base + 4 * (@intFromEnum(irq.cause) & 0x7FFFFFFFFFFFFFFF);
-    }
+    // Synchronous exceptions always jump to the base address, even in vectored mode
+    ms.mepc = base;
+
 
     if (riscv.hasHExtension()) {
         // Update hstatus.SPVP to reflect the privilege mode we're coming from
