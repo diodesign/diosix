@@ -141,8 +141,10 @@ following external documentation:
 ## Copyright and license
 
 Copyright &copy; 2024-2026 Diosix contributors. This project is distributed
-under the terms of the MIT License. See [LICENSE](LICENSE) for the full text and
-[CONTRIBUTORS](CONTRIBUTORS) for the list of copyright holders.
+under the terms of the MIT License. See
+[LICENSE](https://github.com/diodesign/diosix/blob/stable/LICENSE) for the full text and
+[CONTRIBUTORS](https://github.com/diodesign/diosix/blob/stable/CONTRIBUTORS)
+for the list of copyright holders.
 
 The diosix.org website illustration is a combination of artwork provided by
 [Katerina Limpitsouni](https://undraw.co/license) and
