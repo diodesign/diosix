@@ -22,68 +22,68 @@ You can use Docker to avoid installing and managing the project's build
 dependencies manually, or you can install them yourself by hand:
 
 <p>
-  <details>
-    <summary><strong>Use a Docker container</strong></summary>
+<details>
+<summary><strong>Use a Docker container</strong></summary>
+
+To use Docker to build and run Diosix, follow these steps.
   
-    To use Docker to build and run Diosix, follow these steps.
+1. Make sure you have Docker installed and running on your system.
+   We recommend version 29.5.2 or later.
   
-    1. Make sure you have Docker installed and running on your system.
-       We recommend version 29.5.2 or later.
+1. Clone the Diosix source code, and enter its directory:
   
-    1. Clone the Diosix source code, and enter its directory:
-  
-       ```bash
-       git clone https://github.com/diodesign/diosix.git
-       cd diosix
-       ```
+   ```bash
+   git clone https://github.com/diodesign/diosix.git
+   cd diosix
+   ```
    
-    1. Build a container image of your preferred distribution:
+1. Build a container image of your preferred distribution:
   
-       ```bash
-       # For Ubuntu 22.04
-       docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
+   ```bash
+   # For Ubuntu 22.04
+   docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
        
-       # For Fedora 44
-       docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
-       ``` 
+   # For Fedora 44
+   docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
+   ``` 
   
-    1. Use the build wrapper to compile and run Diosix within the container:
+1. Use the build wrapper to compile and run Diosix within the container:
   
-       ```bash
-       # For Ubuntu 22.04
-       docker run -it --rm diosix-ubuntu ./scripts/build.sh run
-       
-       # For Fedora 44
-       docker run -it --rm diosix-fedora ./scripts/build.sh run
-       ``` 
-  </details>
+   ```bash
+   # For Ubuntu 22.04
+   docker run -it --rm diosix-ubuntu ./scripts/build.sh run
+   
+   # For Fedora 44
+   docker run -it --rm diosix-fedora ./scripts/build.sh run
+   ``` 
+</details>
 </p>
 
 <p>
-  <details>
-    <summary><strong>Use the manual method</strong></summary>
+<details>
+<summary><strong>Use the manual method</strong></summary>
   
-    To install the build dependencies, and compile and run Diosix manually,
-    follow these steps:
+To install the build dependencies, and compile and run Diosix manually,
+follow these steps:
   
-    1. Make sure you have the following installed:
+1. Make sure you have the following installed:
   
-       * The hypervisor and guest operating system [build dependencies](docs/build.md).
-       * QEMU version 10 or later. Earlier versions, such as 6.2, may suffice.
+   * The hypervisor and guest operating system [build dependencies](docs/build.md).
+   * QEMU version 10 or later. Earlier versions, such as 6.2, may suffice.
   
-    1. Clone the Diosix source code, and enter its directory:
+1. Clone the Diosix source code, and enter its directory:
   
-       ```bash
-       git clone https://github.com/diodesign/diosix.git
-       cd diosix
-       ```
+   ```bash
+   git clone https://github.com/diodesign/diosix.git
+   cd diosix
+   ```
   
-    1. Use the wrapper script to compile and run Diosix:
+1. Use the wrapper script to compile and run Diosix:
   
-       ```bash
-       ./scripts/build.sh run
-       ```
-  </details>
+   ```bash
+   ./scripts/build.sh run
+   ```
+</details>
 </p>
 
 The build process automatically compiles from source a trusted Linux guest
