@@ -1,4 +1,4 @@
-[![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/main/LICENSE) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
+[![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](LICENSE.md) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
 
 # About Diosix
 
@@ -138,13 +138,11 @@ following external documentation:
 
 ---
 
-## Copyright and license
+## Copyright, license, and legal
 
 Copyright &copy; 2024-2026 Diosix contributors. This project is distributed
-under the terms of the MIT License. See
-[LICENSE](https://github.com/diodesign/diosix/blob/stable/LICENSE) for the full text and
-[CONTRIBUTORS](https://github.com/diodesign/diosix/blob/stable/CONTRIBUTORS)
-for the list of copyright holders.
+under the terms of the MIT License. See [LICENSE](LICENSE.md) for the full text
+and [CONTRIBUTORS](CONTRIBUTORS.md) for the list of copyright holders.
 
 The diosix.org website illustration is a combination of artwork provided by
 [Katerina Limpitsouni](https://undraw.co/license) and

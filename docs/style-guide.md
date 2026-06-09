@@ -49,6 +49,8 @@ definitions:
 *   **Guest Physical Address (GPA)**: A physical memory address from
     the guest VM's perspective.
 
+For more information on HPA and GPA, see [Diosix architecture](architecture.md).
+
 ### Structure and formatting
 
 Use bulleted lists only for non-sequential items and numbered lists strictly 
