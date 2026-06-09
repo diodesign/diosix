@@ -20,7 +20,7 @@
 
 # hypervisor constants, such as stack and lock locations
 .include "hypervisor/hw/qemu/consts.s"
-.include "hypervisor/hw/qemu/config.s"
+.include "config.s"
 
 # reboot the host machine
 hw_reboot:

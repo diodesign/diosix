@@ -14,7 +14,7 @@ run_cmd:
   - -machine
   - virt
   - -cpu
-  - rv64,x-h=true,x-v=true
+  - rv64,x-h=true
   - -smp
   - 4
   - -m

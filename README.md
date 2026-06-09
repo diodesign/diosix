@@ -1,6 +1,6 @@
 [![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/main/LICENSE) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
 
-# About this project
+# About Diosix
 
 Diosix is a type-1 bare-metal hypervisor written in the Zig programming language
 for 64-bit RISC-V systems. It allows systems large and small to run multiple
@@ -55,7 +55,8 @@ To use Docker to build and run Diosix, follow these steps.
    
    # For Fedora 44
    docker run -it --rm diosix-fedora ./scripts/build.sh run
-   ``` 
+   ```
+
 </details>
 </p>
 
@@ -83,9 +84,10 @@ follow these steps:
    ```bash
    ./scripts/build.sh run
    ```
+
 </details>
 </p>
-
+  
 The build process automatically compiles from source a trusted Linux guest
 virtual machine (VM) called the Root VM, which assists the hypervisor in
 managing the host hardware and running other guests.
@@ -108,7 +110,7 @@ To control the emulator process from your terminal:
 The following is a recording of a user building and running Diosix, and then
 logging into and interacting with the Root VM running on the hypervisor.
 
-[![asciicast](https://asciinema.org/a/1161817.svg)](https://asciinema.org/a/1161817)
+[![asciicast of Diosix running](https://asciinema.org/a/1214657.svg)](https://asciinema.org/a/1214657)
 
 ---
 
@@ -124,7 +126,7 @@ For more information about Diosix, see the following documentation:
 *  **[Run Diosix](docs/run.md):** Learn how to run the hypervisor, use target
    emulators, customize boot parameters, and load the software onto physical
    hardware targets.
-*  **[Develop for Diosix](docs/development.md):** View the project's programming
+*  **[Develop Diosix](docs/development.md):** View the project's programming
    guidelines, memory ownership rules, unit testing commands, Git
    branching workflows, and CalVer release versioning.
 
