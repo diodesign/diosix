@@ -22,7 +22,7 @@ You can use Docker to avoid installing and managing the project's build
 dependencies manually, or you can install them yourself by hand:
 
 <p>
-<details>
+<details markdown="1">
 <summary><strong>Use a Docker container</strong></summary>
 
 To use Docker to build and run Diosix, follow these steps.
@@ -61,7 +61,7 @@ To use Docker to build and run Diosix, follow these steps.
 </p>
 
 <p>
-<details>
+<details markdown="1">
 <summary><strong>Use the manual method</strong></summary>
   
 To install the build dependencies, and compile and run Diosix manually,
