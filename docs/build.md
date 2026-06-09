@@ -1,4 +1,4 @@
-# Diosix build system architecture
+# Build Diosix
 
 The Diosix build pipeline uses the Zig build system to compile the hypervisor
 and generate reproducible guest operating system images. This process
@@ -7,11 +7,11 @@ hardware ports, and build host metadata injection.
 
 ---
 
-## Host build process
+## Build process
 
-This section details the steps required to configure your build host, clone the repository, install guest OS build dependencies, and compile the hypervisor.
+This section details the dependencies needed to compile the hypervisor and a guest OS, and the steps to clone the project repository and build the complete system.
 
-### Prerequisites
+### Hypervisor build dependencies
 
 To compile the hypervisor, you must have the following installed:
 
@@ -19,22 +19,15 @@ To compile the hypervisor, you must have the following installed:
 *   Git version 2.54 or later.
 *   For Docker-based builds, Docker version 29.5.2 or later.
 
-### Fetch the source repository
-
-To clone the Diosix source code and enter its directory, run:
-
-```bash
-git clone https://github.com/diodesign/diosix.git
-cd diosix
-```
-
 ### Guest operating system build dependencies
 
-The build system automatically downloads and compiles the guest Root Virtual
-Machine (Root VM) using Buildroot. Building this guest requires standard
-host-side compilation utilities. On minimal or server-oriented
-installations, such as a fresh Ubuntu 22.04 environment, you must manually
-install these dependencies before you can use Buildroot.
+The build system automatically downloads and compiles from source a guest Root Virtual
+Machine (Root VM) using Buildroot. The Root VM helps the hypervisor manage the
+host hardware and other VMs.
+
+Building this guest requires standard host-side compilation utilities. On minimal
+or server-oriented installations, such as a fresh Ubuntu 22.04 environment, you must 
+manually install these dependencies before you can use Buildroot.
 
 To install the required tools on Debian or Ubuntu systems, run:
 
@@ -56,14 +49,24 @@ sudo dnf install -y \
     git rsync cpio unzip bc wget xz python3 which
 ```
 
-## Use the build wrapper
+### Fetch the source repository
 
-The build wrapper script (`scripts/build.sh`) supports several commands and
-options to compile and test the hypervisor on your host system.
+To clone the Diosix source code, and enter its directory, run:
 
-### Build the default target
+```bash
+git clone https://github.com/diodesign/diosix.git
+cd diosix
+```
 
-To compile the hypervisor and generate the guest Root VM payload,
+### Use the build wrapper
+
+Use the build wrapper script (`scripts/build.sh`) to compile and test the
+hypervisor. It supports several commands and options to control the build
+process.
+
+#### Build the default target
+
+To compile the hypervisor and generate the Root VM payload,
 run the build wrapper script:
 
 ```bash
@@ -71,15 +74,16 @@ run the build wrapper script:
 ```
 
 This compiles the codebase for the default target defined in `hypervisor/hw/ports/default.yaml` and
-places the output ELF executable in `./zig-out/bin/vmdiosix`. The default target is the QEMU Virt platform, suitable for QEMU versions 10 and later.
+places the output ELF executable in `./zig-out/bin/vmdiosix`. The default target is the QEMU Virt platform, suitable for QEMU versions 10 and later. The generated executable contains both the hypervisor and the root VM image, ready to be booted.
 
-For instructions on booting and running the built hypervisor, see [Run Diosix](run.md).
+For more information on booting the built hypervisor, see [Run Diosix](run.md).
 
-### Customize compilation options
+#### Customize compilation options
 
-You can pass standard Zig build options and Diosix-specific build options
-directly to the wrapper script to process. For example, to override the hardware
-target platform from the default, compile an optimized build, or build for a legacy processor or emulator lacking newer RISC-V extensions, see the following commands:
+You can pass standard Zig build options and Diosix-specific build options to the wrapper
+script to process. For example, to override the hardware target platform from the default,
+compile an optimized build, or build for a legacy processor or emulator lacking newer RISC-V
+extensions, see the following commands:
 
 ```bash
 # Target a specific hardware port, such as the PMP-only QEMU Virt platform
@@ -105,18 +109,18 @@ options, run:
 
 For a highly reproducible and isolated build environment that automatically
 manages all tools, including the required Zig compiler version and Buildroot
-host packages, you can use the provided Dockerfiles.
+packages, you can use the provided Dockerfiles.
 
 The configuration Dockerfiles are located in `dockerfiles/`:
 
-*   `dockerfiles/ubuntu-22.04.Dockerfile`: Builds and runs on Ubuntu 22.04.
-*   `dockerfiles/fedora-44.Dockerfile`: Builds and runs on Fedora 44.
+*   `dockerfiles/ubuntu-22.04.Dockerfile`: Builds Diosix on Ubuntu 22.04.
+*   `dockerfiles/fedora-44.Dockerfile`: Builds Diosix on Fedora 44.
 
 We recommend you use Docker version 29.5.2 or later.
 
-### Build the container image
+### Build a container image
 
-To build the container image, navigate to the Diosix project root and build the image for your preferred distribution:
+To build a container image, navigate to the Diosix project root and build the image for your preferred distribution:
 
 ```bash
 # For Ubuntu 22.04

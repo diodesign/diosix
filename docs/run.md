@@ -1,32 +1,24 @@
 # Run Diosix
 
-This page describes how to boot and run Diosix in emulation or on physical
+This page describes how to boot Diosix in emulation or on physical
 hardware, configure custom targets, and control emulator execution.
 
-When Diosix runs, it boots a trusted guest Virtual Machine (VM) called the
-Root VM, which launches and manages additional guest VMs. You can interact
-with the Root VM and guest VMs via the serial console to run programs, and
-configure and monitor the system.
+When Diosix runs, it starts an included trusted guest virtual machine (VM)
+called the Root VM. The Root VM then launches and manages additional guest
+VMs. You can interact with the Root VM and guest VMs via the serial console
+to run programs, and configure and monitor the system.
 
 ---
 
 ## System requirements
 
-To run Diosix, you must first compile the hypervisor and its Root VM. While you
-can build and run the system in a single step using the wrapper script commands
-described in this document, your build host machine must still meet all the
-compilation prerequisites. For details on build toolchains, host packages, and
-Docker container configurations, see [Build Diosix](build.md).
-
-### Target system requirements
-
-To execute the compiled hypervisor, the physical or emulated target system must
-meet the following hardware requirements:
+The target system must meet the following hardware requirements:
 
 * One or more 64-bit RVA20 RV64GC RISC-V processor cores.
 * Support for either the RISC-V Hypervisor (H) extension or Physical Memory
   Protection (PMP).
-* For QEMU-emulated runs, version 10.1.5 or later of the QEMU emulator.
+* For QEMU-emulated runs, we recommend version 10.1.5 or later of the QEMU emulator.
+  Earlier versions, such as 6.2, should suffice.
 
 ---
 
@@ -36,12 +28,16 @@ The simplest way to run and test Diosix is inside the QEMU emulator. Emulation
 lets you iterate on hypervisor and guest development and debug platform-specific
 drivers without needing physical target hardware.
 
+### Prerequisites
+
+Before you can run Diosix using the wrapper script in this section, you must follow the steps in [Build Diosix](build.md) to install the required dependencies. Once you have installed those build components, you can use the wrapper script to build and run the hypervisor and the Root VM.
+
 ### Install QEMU
 
-Before running Diosix in emulation, install a 64-bit RISC-V QEMU emulator on
-your host system.
+If you haven't already installed a 64-bit RISC-V QEMU emulator on
+your host system, you must do so before running Diosix in emulation.
 
-On Debian or Ubuntu systems, run:
+The following commands install QEMU on Debian or Ubuntu systems:
 
 ```bash
 sudo apt update
@@ -56,8 +52,7 @@ sudo dnf install -y qemu-system-riscv
 
 ### Run Diosix using the build wrapper
 
-To compile Diosix and run it inside QEMU, run the build wrapper script as
-follows:
+To run Diosix inside QEMU, run the build wrapper script as follows:
 
 ```bash
 ./scripts/build.sh run
@@ -68,17 +63,20 @@ This command automatically builds the hypervisor for the default target system,
 is an emulated RISC-V 64-bit machine configured with 4 CPU cores and 2 GB of
 RAM.
 
-The build script also generates the Root VM image and boots the hypervisor and
+The build script also generates the Root VM image, and boots the hypervisor and
 the Root VM in QEMU for you to interact with and use. By default, the Root VM
 is a Linux-powered guest. You can log in using the username `root` with no
 password.
 
 Rebooting the Root VM reboots the hypervisor.
 
-### Run inside a Docker container
+---
+
+## Run inside a Docker container
 
 To run the compiled hypervisor inside the QEMU emulator using a Docker
-container:
+container, follow the containerization steps in [Build Diosix](build.md).
+Then run one of the following commands:
 
 ```bash
 # For the Ubuntu environment
@@ -88,7 +86,9 @@ docker run -it --rm diosix-ubuntu ./scripts/build.sh run
 docker run -it --rm diosix-fedora ./scripts/build.sh run
 ```
 
-### Run unit tests
+---
+
+## Run unit tests
 
 To run the project's native unit tests and parser checks on your host system:
 
