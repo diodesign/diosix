@@ -31,6 +31,24 @@ Industry-wide terms, such as YAML, CPU, and RAM, do not need to be
 spelled out. Familiar names of software and other products, such as QEMU,
 do not need to be spelled out.
 
+To avoid confusion between the compilation environment, the virtualization
+environment, and physical hardware, adhere to the following terminology
+definitions:
+
+*   **Host build machine** (or **build machine**): The physical computer
+    or development system where the source code is compiled and the
+    executable binaries (the hypervisor and guest payloads) are built.
+*   **Host hardware** (or **host system**): The physical machine, board,
+    or SoC that runs the compiled hypervisor.
+*   **Target platform** (or **target system**): The board, CPU architecture
+    configuration, or emulator machine designed to execute the compiled
+    hypervisor.
+*   **Guest VM**: A virtual machine running on the hypervisor.
+*   **Host Physical Address (HPA)**: A physical memory address of the
+    host hardware.
+*   **Guest Physical Address (GPA)**: A physical memory address from
+    the guest VM's perspective.
+
 ### Structure and formatting
 
 Use bulleted lists only for non-sequential items and numbered lists strictly 

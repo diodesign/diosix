@@ -15,12 +15,12 @@ robustness. We target RISC-V for its open, modular, and extensible nature.
 ## Quickstart
 
 The simplest way to run and test Diosix is inside the QEMU emulator. The
-following instructions assume you are using a Linux host system and are
+following instructions assume you are using a Linux build machine and are
 comfortable using a command-line interface.
 
 Before you begin, make sure you have the following installed:
 
-* [Build dependencies](docs/build.md): Package dependencies and tools required
+* [Build dependencies](docs/build.md): Packages and tools required
   to compile Diosix.
 * QEMU 10 or later. See [Run Diosix](docs/run.md) for more information
   about supported platforms.

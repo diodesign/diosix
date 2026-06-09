@@ -35,7 +35,7 @@ Before you can run Diosix using the wrapper script in this section, you must fol
 ### Install QEMU
 
 If you haven't already installed a 64-bit RISC-V QEMU emulator on
-your host system, you must do so before running Diosix in emulation.
+your build machine, you must do so before running Diosix in emulation.
 
 The following commands install QEMU on Debian or Ubuntu systems:
 
@@ -90,7 +90,7 @@ docker run -it --rm diosix-fedora ./scripts/build.sh run
 
 ## Run unit tests
 
-To run the project's native unit tests and parser checks on your host system:
+To run the project's native unit tests and parser checks on your build machine:
 
 ```bash
 ./scripts/build.sh test
