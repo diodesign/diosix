@@ -13,6 +13,7 @@ const vcore = @import("vcore.zig");
 const sbi = @import("sbi.zig");
 const vm_space = @import("vm_space.zig");
 const scheduler = @import("scheduler.zig");
+const config = @import("config");
 
 fn raw_print_char(c: u8) void {
     debug.hw_putchar(c);
@@ -33,6 +34,7 @@ extern fn hw_xint_init() void;
 pub fn init() void {
     hw_xint_init();
 
+
     // Enable physical timer, software, and external interrupts (including supervisor mode in M-mode)
     riscv.writeMie(0xa8a);
 
@@ -44,8 +46,13 @@ pub fn init() void {
     var mstatus = riscv.readMstatus();
     mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
     riscv.writeMstatus(mstatus);
+}
 
-    if (riscv.hasHExtension()) {
+// Configure environment and state enables on the calling CPU core once
+// the global probed features flags are initialized and stable.
+// This must be called by every CPU core.
+pub fn initCpuFeatures() void {
+    if (riscv.hasHExtension() and !config.legacy_cpu and riscv.riscv_supports_smstateen) {
         // Enable STCE (bit 63) to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
         // and Cache Block Operations: CBZE (bit 7), CBCFE (bit 6), and CBIE (bits 4-5) = 240 (0xF0).
         // This grants lower privilege modes (including the guest VM) permission to execute them natively in hardware.
@@ -186,8 +193,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 gs.vscause = riscv.readVscause();
                 gs.vstval = riscv.readVstval();
                 gs.vsatp = riscv.readVsatp();
-                gs.vstimecmp = riscv.readVstimecmp();
-                gs.vsenvcfg = riscv.readVsenvcfg();
+                if (!config.legacy_cpu) {
+                    if (riscv.riscv_supports_sstc) gs.vstimecmp = riscv.readVstimecmp();
+                    if (riscv.riscv_supports_smstateen) gs.vsenvcfg = riscv.readVsenvcfg();
+                }
             } else {
                 const gs = &vc.guest_state;
                 gs.vsstatus = riscv.readSstatus();
@@ -198,8 +207,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 gs.vscause = riscv.readScause();
                 gs.vstval = riscv.readStval();
                 gs.vsatp = riscv.readSatp();
-                gs.vstimecmp = riscv.readStimecmp();
-                gs.vsenvcfg = riscv.readSenvcfg();
+                if (!config.legacy_cpu) {
+                    if (riscv.riscv_supports_sstc) gs.vstimecmp = riscv.readStimecmp();
+                    if (riscv.riscv_supports_smstateen) gs.vsenvcfg = riscv.readSenvcfg();
+                }
             }
         }
     }
@@ -261,9 +272,20 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 
         // If the guest has programmed a timer via vstimecmp (Sstc), ensure we clear any stale
         // software-injected VSTIP bit in hvip so the hardware can manage the interrupt natively.
+        // On legacy CPUs lacking Sstc, emulate the timer interrupt in software by setting VSTIP.
         var hvip_val = ms.hvip;
-        if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
-            hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
+        if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
+            if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+                if (riscv.readTime() >= gs.vstimecmp) {
+                    hvip_val |= riscv.HVIP.VSTIP;
+                } else {
+                    hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
+                }
+            }
+        } else {
+            if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+                hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
+            }
         }
 
         // Dynamically assert or clear VSEIP in hvip based on the physical mip MEIP/SEIP bits
@@ -299,8 +321,10 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeVscause(gs.vscause);
         riscv.writeVstval(gs.vstval);
         riscv.writeVsatp(gs.vsatp);
-        riscv.writeVstimecmp(gs.vstimecmp);
-        riscv.writeVsenvcfg(gs.vsenvcfg);
+        if (!config.legacy_cpu) {
+            if (riscv.riscv_supports_sstc) riscv.writeVstimecmp(gs.vstimecmp);
+            if (riscv.riscv_supports_smstateen) riscv.writeVsenvcfg(gs.vsenvcfg);
+        }
 
         // Flush any G-stage TLB entries to ensure any page table updates are immediately active.
         riscv.hfenceGvma();
@@ -333,8 +357,10 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeScause(gs.vscause);
         riscv.writeStval(gs.vstval);
         riscv.writeSatp(gs.vsatp);
-        riscv.writeStimecmp(gs.vstimecmp);
-        riscv.writeSenvcfg(gs.vsenvcfg);
+        if (!config.legacy_cpu) {
+            if (riscv.riscv_supports_sstc) riscv.writeStimecmp(gs.vstimecmp);
+            if (riscv.riscv_supports_smstateen) riscv.writeSenvcfg(gs.vsenvcfg);
+        }
 
         // Flash S-mode TLB entries
         riscv.sfenceVma();
@@ -343,6 +369,13 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 
 fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
     if (irq.privilege_mode == .machine) {
+        const pcpu = pcore.this();
+        if (pcpu.probing_active) {
+            pcpu.probe_failed = true;
+            // Advance PC past the 4-byte instruction that triggered the illegal instruction exception
+            riscv.writeMepc(irq.pc + 4);
+            return;
+        }
         fatal_exception(irq);
         return;
     }
@@ -601,9 +634,15 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 // Core was sleeping. Check if the vcore mapped to this hart has its timer expired.
                 if (main.global_root_vm) |g| {
                     if (g.findVcore(pcpu.hardware_hart_id)) |vc| {
-                        if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
-                            vc.machine.hvip |= riscv.HVIP.VSTIP;
-                            vc.timer_scheduled = false;
+                        const sbi_timer_expired = vc.timer_scheduled and riscv.readTime() >= vc.timer_target;
+                        const sstc_timer_expired = !config.legacy_cpu and riscv.riscv_supports_sstc and vc.guest_state.vstimecmp != 0 and vc.guest_state.vstimecmp != 0xffffffffffffffff and riscv.readTime() >= vc.guest_state.vstimecmp;
+                        const timer_expired = sbi_timer_expired or sstc_timer_expired;
+
+                        if (timer_expired) {
+                            if (sbi_timer_expired or config.legacy_cpu or !riscv.riscv_supports_sstc) {
+                                vc.machine.hvip |= riscv.HVIP.VSTIP;
+                                vc.timer_scheduled = false;
+                            }
                             if (vc.wfi_blocked) {
                                 vc.wfi_blocked = false;
                                 vc.state = .ready;
@@ -696,22 +735,16 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
         ms.mstatus |= riscv.MSTATUS.MPV;
     }
 
-    // Handle both direct and vectored modes
     const base = gs.vstvec & ~@as(usize, 0b11);
-    const mode = gs.vstvec & 0b11;
-
     if (base == 0) {
         debug.printf("FATAL: Reflecting exception to NULL vstvec — terminating guest.\n", .{});
         vc.getGuest().terminate();
         return error.InvalidAddress;
     }
 
-    if (mode == 0) {
-        ms.mepc = base;
-    } else {
-        // Vectored mode: base + 4 * cause
-        ms.mepc = base + 4 * (@intFromEnum(irq.cause) & 0x7FFFFFFFFFFFFFFF);
-    }
+    // Synchronous exceptions always jump to the base address, even in vectored mode
+    ms.mepc = base;
+
 
     if (riscv.hasHExtension()) {
         // Update hstatus.SPVP to reflect the privilege mode we're coming from
@@ -723,17 +756,28 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
 }
 
 var fatal_exception_active = std.atomic.Value(bool).init(false);
+var cpu_in_fatal = std.mem.zeroes([256]bool);
 
 fn fatal_exception(irq: IRQ) void {
+    const cpu_id = pcore.this().cpu_core_id;
+    if (cpu_id < cpu_in_fatal.len) {
+        if (cpu_in_fatal[cpu_id]) {
+            // Recursive fatal exception on the SAME core! Direct raw UART write and halt immediately.
+            debug.hw_putchar('\n');
+            debug.hw_putchar('!');
+            debug.hw_putchar('R');
+            debug.hw_putchar('E');
+            debug.hw_putchar('C');
+            debug.hw_putchar('!');
+            debug.hw_putchar('\n');
+            while (true) {}
+        }
+        cpu_in_fatal[cpu_id] = true;
+    }
+
     if (fatal_exception_active.swap(true, .seq_cst)) {
-        // Recursive fatal exception! Direct raw UART write and halt immediately.
-        debug.hw_putchar('\n');
-        debug.hw_putchar('!');
-        debug.hw_putchar('R');
-        debug.hw_putchar('E');
-        debug.hw_putchar('C');
-        debug.hw_putchar('!');
-        debug.hw_putchar('\n');
+        // Another core has already claimed the fatal exception printer.
+        // Halt silently to avoid garbling the primary traceback.
         while (true) {}
     }
 

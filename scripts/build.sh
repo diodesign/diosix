@@ -16,6 +16,12 @@ BUILD_USER=$(whoami 2>/dev/null || echo "unknown")
 BUILD_HOSTNAME=$(hostname 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date 2>/dev/null || echo "unknown")
 
+# Add optional QEMU CPU override from host environment
+EXTRA_ARGS=()
+if [ -n "$DIOSIX_QEMU_CPU" ]; then
+    EXTRA_ARGS+=("-Dqemu-cpu=$DIOSIX_QEMU_CPU")
+fi
+
 # Forward to zig build with metadata options
 exec zig build \
   -Dgit_branch="$GIT_BRANCH" \
@@ -24,4 +30,5 @@ exec zig build \
   -Dbuild_user="$BUILD_USER" \
   -Dbuild_hostname="$BUILD_HOSTNAME" \
   -Dbuild_date="$BUILD_DATE" \
+  "${EXTRA_ARGS[@]}" \
   "$@"

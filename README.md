@@ -14,41 +14,43 @@ robustness. We target RISC-V for its open, modular, and extensible nature.
 
 ## Quickstart
 
-The simplest way to run and test Diosix is inside an emulated environment using
-the QEMU emulator. The following instructions assume you are using a Linux host
-system and are comfortable using a command-line terminal.
+The simplest way to run and test Diosix is inside the QEMU emulator. The
+following instructions assume you are using a Linux host system and are
+comfortable using a command-line interface.
 
-Before you begin, ensure you have the following software installed on your host:
-*  [QEMU](https://www.qemu.org/) version 10.1.5 or later.
-*  [Git](https://git-scm.com/) version 2.54 or later.
-*  [Zig](https://ziglang.org/download/) version 0.17.0 or later.
+Before you begin, make sure you have the following installed:
 
-To build, compile, and run the complete system:
+* [Build dependencies](docs/build.md): Package dependencies and tools required
+  to compile Diosix.
+* QEMU 10 or later. See [Run Diosix](docs/run.md) for more information
+  about supported platforms.
 
-1. Clone the repository and enter the project directory:
+To compile and run the complete system:
+
+1. Clone the repository, and enter the project directory:
 
    ```bash
-   git clone --branch stable https://github.com/diodesign/diosix.git
+   git clone https://github.com/diodesign/diosix.git
    cd diosix
    ```
 
-1. Compile the hypervisor and boot the system inside QEMU:
+1. Compile the hypervisor, and boot the system inside QEMU:
 
    ```bash
    ./scripts/build.sh run
    ```
 
-   The build process automatically downloads and compiles a trusted Linux guest
-   Virtual Machine (VM) called the Root VM, which assists the hypervisor in
+   The build process automatically compiles from source a trusted Linux guest
+   virtual machine (VM) called the Root VM, which assists the hypervisor in
    managing the host hardware and running other guests. Once compilation completes,
    QEMU boots the hypervisor, which then automatically starts and runs this Root VM.
 
    The hypervisor outputs debug and diagnostic information directly to your
-   terminal. You can also interact with the running Root VM via the terminal.
+   terminal. You can interact with the running Root VM via the terminal, too.
 
-1. To log into the Root VM, use the username `root` with no password.
+1. To log in to the Root VM, use the username `root` with no password.
 
-   If the Root VM is powered off, the hypervisor will automatically restart it.
+   If the Root VM is powered off, the hypervisor will automatically restart.
 
 To control the emulator process from your terminal:
 

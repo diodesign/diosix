@@ -1,24 +1,110 @@
 # Run Diosix
 
-This page describes how to boot and run Diosix in emulation or on physical
+This page describes how to boot Diosix in emulation or on physical
 hardware, configure custom targets, and control emulator execution.
+
+When Diosix runs, it starts an included trusted guest virtual machine (VM)
+called the Root VM. The Root VM then launches and manages additional guest
+VMs. You can interact with the Root VM and guest VMs via the serial console
+to run programs, and configure and monitor the system.
+
+---
+
+## System requirements
+
+The target system must meet the following hardware requirements:
+
+* One or more 64-bit RVA20 RV64GC RISC-V processor cores.
+* Support for either the RISC-V Hypervisor (H) extension or Physical Memory
+  Protection (PMP).
+* For QEMU-emulated runs, we recommend version 10.1.5 or later of the QEMU emulator.
+  Earlier versions, such as 6.2, should suffice.
 
 ---
 
 ## Run Diosix in emulation
 
-The simplest way to run and test Diosix is inside the Quick Emulator (QEMU).
-Emulation allows you to iterate on guest development and debug
-platform-specific drivers without physical hardware.
+The simplest way to run and test Diosix is inside the QEMU emulator. Emulation
+lets you iterate on hypervisor and guest development and debug platform-specific
+drivers without needing physical target hardware.
 
-To compile and run Diosix inside QEMU, use the build wrapper script:
+### Prerequisites
+
+Before you can run Diosix using the wrapper script in this section, you must follow the steps in [Build Diosix](build.md) to install the required dependencies. Once you have installed those build components, you can use the wrapper script to build and run the hypervisor and the Root VM.
+
+### Install QEMU
+
+If you haven't already installed a 64-bit RISC-V QEMU emulator on
+your host system, you must do so before running Diosix in emulation.
+
+The following commands install QEMU on Debian or Ubuntu systems:
+
+```bash
+sudo apt update
+sudo apt install -y qemu-system-misc
+```
+
+On Fedora systems, run:
+
+```bash
+sudo dnf install -y qemu-system-riscv
+```
+
+### Run Diosix using the build wrapper
+
+To run Diosix inside QEMU, run the build wrapper script as follows:
 
 ```bash
 ./scripts/build.sh run
 ```
 
 This command automatically builds the hypervisor for the default target system,
-generates the guest Root Virtual Machine (Root VM) image, and boots QEMU.
+`qemu-virt`, which is selected in `hypervisor/hw/ports/default.yaml`. This target
+is an emulated RISC-V 64-bit machine configured with 4 CPU cores and 2 GB of
+RAM.
+
+The build script also generates the Root VM image, and boots the hypervisor and
+the Root VM in QEMU for you to interact with and use. By default, the Root VM
+is a Linux-powered guest. You can log in using the username `root` with no
+password.
+
+Rebooting the Root VM reboots the hypervisor.
+
+---
+
+## Run inside a Docker container
+
+To run the compiled hypervisor inside the QEMU emulator using a Docker
+container, follow the containerization steps in [Build Diosix](build.md).
+Then run one of the following commands:
+
+```bash
+# For the Ubuntu environment
+docker run -it --rm diosix-ubuntu ./scripts/build.sh run
+
+# For the Fedora environment
+docker run -it --rm diosix-fedora ./scripts/build.sh run
+```
+
+---
+
+## Run unit tests
+
+To run the project's native unit tests and parser checks on your host system:
+
+```bash
+./scripts/build.sh test
+```
+
+To run the unit tests inside a Docker container:
+
+```bash
+# For the Ubuntu environment
+docker run -it --rm diosix-ubuntu ./scripts/build.sh test
+
+# For the Fedora environment
+docker run -it --rm diosix-fedora ./scripts/build.sh test
+```
 
 ---
 
@@ -26,32 +112,33 @@ generates the guest Root Virtual Machine (Root VM) image, and boots QEMU.
 
 The emulator runs in a non-graphical terminal mode. The hypervisor routes debug
 and diagnostic logging to the serial port, which it also uses to provide
-interactive console access to guest Virtual Machines (VMs). QEMU displays this
-serial interface directly in your terminal, allowing you to interact with the
-guest once it boots.
+interactive console access to Root and guest VMs. QEMU displays this serial
+interface directly in your terminal, allowing you to interact with VMs once they
+boot.
 
-To control the QEMU process, use the standard emulator escape sequences. Press
-`Ctrl-a` followed by `x` to terminate the emulator. Press `Ctrl-a` followed by
-`c` to enter the QEMU monitor shell, which lets you inspect registers and query
-hardware state; press `Ctrl-a` followed by `c` again to return to the hypervisor
-console.
+To control the QEMU process, use standard escape sequences. Press `Ctrl-a`
+followed by `x` to terminate the emulator. Press `Ctrl-a` followed by `c` to
+enter the QEMU monitor shell to inspect registers and query hardware state.
+Press `Ctrl-a` followed by `c` again to return to the hypervisor console.
 
 ---
 
-## Customize running options
+## Target hardware configurations
 
-Available hardware targets are defined in YAML configuration files located in
-`hypervisor/hw/ports/`. You can compile and run for a specific target by
-passing the `-Dsystem` parameter. For example, to target a simulated system
-using RISC-V's Physical Memory Protection (PMP) isolation
-instead of the hardware virtualization (H) extension, run:
+Diosix supports running on various physical and emulated RISC-V hardware systems.
+
+Target hardware platforms are defined by YAML configuration files in
+`hypervisor/hw/ports/`. Select a target platform by passing the `-Dsystem`
+parameter to the build script.
+
+For example, to run using PMP isolation instead of the Hypervisor (H)
+extension, target `qemu-virt-pmp`:
 
 ```bash
 ./scripts/build.sh run -Dsystem=qemu-virt-pmp
 ```
 
-For a list of all dynamically discovered target systems and available options,
-pass the `-h` (or `--help`) parameter to the build wrapper script:
+To list all discovered target systems, as well as other build and run-time options:
 
 ```bash
 ./scripts/build.sh -h
@@ -61,45 +148,34 @@ pass the `-h` (or `--help`) parameter to the build wrapper script:
 
 ## Run Diosix on physical hardware
 
-To boot on physical hardware, compile the hypervisor for your specific target
-board, flatten the executable to a raw binary, and load it onto physical
-media.
+To boot on physical hardware, compile the hypervisor for the target board,
+flatten the executable to a raw binary, and load it onto physical media.
 
 ### The hypervisor payload
 
 The build process generates a freestanding Executable and Linkable Format (ELF)
-payload located at `./zig-out/bin/vmdiosix`. This executable contains the
-compiled hypervisor binary statically linked with the guest Root VM payload.
+payload at `./zig-out/bin/vmdiosix`, containing the hypervisor and guest
+Root VM.
 
 ### Flatten the payload
 
-Physical bootloaders and firmware operating in Machine-mode (M-mode) typically
-expect a raw, flat binary rather than an ELF file. You must convert the ELF
-payload into a flat binary before deploying it.
-
-To flatten the payload, use an `objcopy` utility suitable for your target
-architecture, such as `llvm-objcopy` (which is included with the Zig toolchain)
-or `riscv64-unknown-elf-objcopy`:
+Most physical bootloaders expect a flat binary instead of an ELF file. Convert
+the ELF payload to a flat binary using `llvm-objcopy` (included with Zig) or
+`riscv64-unknown-elf-objcopy`:
 
 ```bash
 llvm-objcopy -O binary ./zig-out/bin/vmdiosix ./zig-out/bin/vmdiosix.bin
 ```
 
-This generates `vmdiosix.bin`, a flattened raw binary.
-
 ### Load the hypervisor
 
-Diosix operates at the M-mode level and must be executed directly by the target
-system's early bootloader or firmware.
+Diosix runs in Machine-mode (M-mode) and must be loaded by the early bootloader
+or firmware:
 
-To deploy and boot on a physical target:
-
-1.  Write the flattened raw binary (`vmdiosix.bin`) directly to your physical
-    boot media. For example, copy it to a designated boot partition on an SD
-    card, or write it directly into your target system's Flash ROM.
-2.  Configure the target system's M-mode bootloader or firmware to load the binary
-    payload directly into physical memory (typically starting at physical RAM
-    address `0x80000000`) and jump to its entry point.
-3.  Ensure the bootloader passes the physical address of a valid hardware
-    Device Tree Blob (DTB) in the RISC-V `a1` register to enable peripheral
-    auto-discovery.
+1. Write `vmdiosix.bin` directly to the physical boot media (such as an SD card
+   partition or Flash ROM).
+2. Configure the M-mode bootloader to load the binary into RAM (typically
+   starting at `0x80000000`) and jump to its entry point.
+3. Ensure the bootloader passes the physical address of the Device Tree Blob
+   (DTB) in the RISC-V `a1` register.
+4. Boot the system. Diosix will start and communicate via the serial port.

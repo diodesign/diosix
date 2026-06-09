@@ -39,9 +39,9 @@ _start:
     # now a0, t3 = runtime-assigned linear CPU core ID, counting from 0
 
     # DEBUG: every core prints a dot to the serial port to indicate it got this far
-    li        t1, 0x10000000
-    li        t2, 0x2e        # '.'
-    sb        t2, 0(t1)
+    # li        t1, 0x10000000
+    # li        t2, 0x2e        # '.'
+    # sb        t2, 0(t1)
 
     # use the CPU ID in t3 as a multiplier to obtain this CPU's memory slab from the end of the hypervisor. slab address = __hypervisor_end + ( CPU ID << CPU_SLAB_SHIFT )  
     la        t1, __hypervisor_end
@@ -94,9 +94,9 @@ clear_bss_loop_end:
     amoor.w.rl  x0, t1, (t0)    # t0 => bss_cleared
 
     # DEBUG: every core prints a hash to the serial port to indicate it got this far
-    li        t1, 0x10000000
-    li        t2, 0x23        # '#'
-    sb        t2, 0(t1)
+    # li        t1, 0x10000000
+    # li        t2, 0x23        # '#'
+    # sb        t2, 0(t1)
 
     # call main with:
     # a0 = runtime-assigned CPU ID number

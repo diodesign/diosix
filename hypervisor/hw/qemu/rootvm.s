@@ -1,8 +1,4 @@
-# Minimal Root VM payload
-#
-# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
-# SPDX-License-Identifier: MIT
-
+# Auto-generated modification hash: 9578b32fcf570336731ca64736b684a64f9585a1472325151e6f8e7295556763
 .section .rootvm, "a"
 .global root_vm_start
 .global root_vm_end

@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
-pub const SPEC_VERSION: usize = 0x00000002; // v0.2
+pub const SPEC_VERSION: usize = 0x02000000; // v2.0
 pub const IMPL_ID: usize = 5; // Diosix official implementation ID
 pub const IMPL_VERSION: usize = 1;
 
@@ -24,6 +24,7 @@ pub const EXT = struct {
     pub const HSM = 0x48534d;
     pub const SRST = 0x53525354;
     pub const DBCN = 0x4442434e;
+    pub const IPI = 0x735049;
     pub const DIOSIX = 0x0A000005;
 
     // Legacy Extensions

@@ -20,6 +20,7 @@
 
 # hypervisor constants, such as stack and lock locations
 .include "hypervisor/hw/qemu/consts.s"
+.include "hypervisor/hw/qemu/config.s"
 
 # reboot the host machine
 hw_reboot:
@@ -110,14 +111,24 @@ hw_run_vcore:
   csrw vstval, t0
   ld t0, 56(a2)     # vsatp
   csrw vsatp, t0
+  .if LEGACY_CPU == 0
+  la t0, riscv_supports_sstc
+  lbu t0, 0(t0)
+  beqz t0, 1f
   ld t0, 64(a2)     # vstimecmp
   csrw 0x24d, t0
+1:
+  la t0, riscv_supports_smstateen
+  lbu t0, 0(t0)
+  beqz t0, 2f
   ld t0, 72(a2)     # vsenvcfg
   csrw 0x10a, t0    # senvcfg
   li t0, 1
   slli t0, t0, 63   # STCE
   ori t0, t0, 240   # Cache block ops
   csrw 0x60a, t0    # henvcfg
+2:
+  .endif
 
   # Flush any stale G-stage TLB entries
   hfence.gvma

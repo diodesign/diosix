@@ -16,13 +16,18 @@ if [ -z "$CONFIG_FILE" ] || [ -z "$OUT_FILE" ] || [ -z "$BUILDROOT_DIR" ]; then
     exit 1
 fi
 
-# Check timestamps to see if a rebuild is necessary.
-if [ -f "$OUT_FILE" ]; then
-    if [ "$OUT_FILE" -nt "$CONFIG_FILE" ] && [ "$OUT_FILE" -nt "$0" ]; then
-        echo "Root VM binary is newer than configuration. Skipping BuildRoot."
+HASH_FILE="${OUT_FILE}.sha256"
+CURRENT_HASH=$(sha256sum "$CONFIG_FILE" "$0" | sha256sum | cut -d' ' -f1)
+
+# Check if a rebuild is necessary using the configuration hash.
+if [ -f "$OUT_FILE" ] && [ -f "$HASH_FILE" ]; then
+    RECORDED_HASH=$(cat "$HASH_FILE")
+    if [ "$CURRENT_HASH" = "$RECORDED_HASH" ]; then
+        echo "Root VM binary is up to date. Skipping BuildRoot."
         exit 0
     fi
 fi
+
 
 echo "Root VM binary missing or outdated. Running BuildRoot..."
 
@@ -35,7 +40,11 @@ fi
 # Need to provide absolute path for defconfig if it's outside
 ABS_CONFIG=$(realpath "$CONFIG_FILE")
 
-# Configure BuildRoot
+# Configure BuildRoot, tracking version changes to trigger clean rebuilds
+if [ -f "$BUILDROOT_DIR/.config" ]; then
+    cp "$BUILDROOT_DIR/.config" "$BUILDROOT_DIR/.config.old"
+fi
+
 echo "Configuring BuildRoot..."
 make -C "$BUILDROOT_DIR" BR2_DEFCONFIG="$ABS_CONFIG" defconfig
 
@@ -44,6 +53,16 @@ echo 'BR2_TARGET_GENERIC_GETTY_PORT="hvc0"' >> "$BUILDROOT_DIR/.config"
 
 # Fixup step for modern buildroot: olddefconfig updates the config for new versions silently
 make -C "$BUILDROOT_DIR" olddefconfig
+
+if [ -f "$BUILDROOT_DIR/.config.old" ]; then
+    OLD_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config.old" | cut -d'"' -f2)
+    NEW_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config" | cut -d'"' -f2)
+    if [ "$OLD_KV" != "$NEW_KV" ] && [ -n "$OLD_KV" ]; then
+        echo "Linux kernel version changed from '$OLD_KV' to '$NEW_KV'. Cleaning old kernel build..."
+        make -C "$BUILDROOT_DIR" linux-dirclean linux-headers-dirclean
+    fi
+    rm "$BUILDROOT_DIR/.config.old"
+fi
 
 # Detect wget2 (e.g. Fedora 39+) which dropped --passive-ftp support.
 # BuildRoot's download rules pass --passive-ftp by default and will fail
@@ -70,4 +89,21 @@ fi
 
 echo "Copying built image to $OUT_FILE..."
 cp "$IMAGE_PATH" "$OUT_FILE"
+echo "$CURRENT_HASH" > "$HASH_FILE"
+
+# Force Zig to re-assemble rootvm.s by updating its content hash
+# with the newly built payload's configuration checksum.
+cat <<EOF > hypervisor/hw/qemu/rootvm.s
+# Auto-generated modification hash: $CURRENT_HASH
+.section .rootvm, "a"
+.global root_vm_start
+.global root_vm_end
+.balign 4096
+root_vm_start:
+.incbin "zig-out/bin/rootvm.elf"
+root_vm_end:
+EOF
+
 echo "Root VM build complete!"
+
+

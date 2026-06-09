@@ -54,12 +54,26 @@ minor versions indicate stable, production-ready releases suitable for
 deployment. Odd-numbered minor versions indicate development builds representing
 active, ongoing changes.
 
-### Staging branches
+### Branching strategy
 
-The repository maintains two branches to coordinate changes. The `devel` branch
-serves as the staging area for ongoing feature additions and active development.
-The `stable` branch represents production-ready code, from which releases are
-created and the project website is built.
+The repository uses a staging-to-release branching model built around two
+permanent, long-lived branches alongside short-lived, ephemeral branches:
 
-All development workflows target the `devel` branch; changes are only merged
-from `devel` into `stable` after completing testing and validation.
+- `devel`: The integration branch for active development. All new features,
+  improvements, and bug fixes target this branch first.
+- `stable`: The production-ready branch. Release tags are cut from `stable`,
+  and it is used to build the official project website.
+- Feature and bug-fix branches: Temporary, short-lived branches created to
+  isolate individual tasks. Once a task is complete and merged, its branch
+  is deleted.
+
+#### Development workflow
+
+1. Create a short-lived feature or bug-fix branch from `devel`.
+2. Implement changes and run unit tests locally.
+3. Submit a pull request to merge the changes into `devel` for
+   collaborative review and continuous integration testing.
+4. Periodically, after stabilization and verification, changes in
+   `devel` are merged into `stable`. Releases are then tagged from `stable`.
+5. Delete the completed feature or bug-fix branch from the remote
+   and local repositories.

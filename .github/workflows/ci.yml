@@ -1,0 +1,68 @@
+name: Diosix continuous integration
+
+on:
+  push:
+    branches:
+      - devel
+      - stable
+  pull_request:
+    branches:
+      - devel
+      - stable
+
+jobs:
+  ubuntu-build:
+    name: Ubuntu 22.04 build and test
+    # If the PR is from an external fork, use GitHub's ubuntu-latest. Otherwise, use the diosix.org self-hosted runner.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Build Docker container
+        run: docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
+
+      - name: Run unit tests
+        run: docker run --rm diosix-ubuntu ./scripts/build.sh test
+
+      - name: Verify guest root VM boots to login shell
+        run: |
+          docker run --rm diosix-ubuntu sh -c ' \
+            ./scripts/build.sh run > qemu.log 2>&1 & \
+            QEMU_PID=$! && \
+            timeout 60s sh -c "until grep -q \"buildroot-guest login:\" qemu.log; do sleep 1; done" && \
+            kill $QEMU_PID || true'
+
+      - name: Clean up Docker image
+        if: always()
+        run: docker rmi diosix-ubuntu || true
+
+  fedora-build:
+    name: Fedora 44 build and test
+    # Keeps the same secure, dynamic runner logic for the Fedora pipeline
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Build Docker container
+        run: docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
+
+      - name: Run unit tests
+        run: docker run --rm diosix-fedora ./scripts/build.sh test
+
+      - name: Verify guest root VM boots to login shell
+        run: |
+          docker run --rm diosix-fedora sh -c ' \
+            ./scripts/build.sh run > qemu.log 2>&1 & \
+            QEMU_PID=$! && \
+            timeout 60s sh -c "until grep -q \"buildroot-guest login:\" qemu.log; do sleep 1; done" && \
+            kill $QEMU_PID || true'
+
+      - name: Clean up Docker image
+        if: always()
+        run: docker rmi diosix-fedora || true

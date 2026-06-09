@@ -124,9 +124,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         rootvm_region = .{ .base = rootvm_hpa_base, .size = rootvm_ram_size };
     }
 
-    if (riscv.hasHExtension()) {
-        try riscv.verifyHExtension();
-    }
+    try riscv.auditCpuFeatures();
 
     if (!builtin.is_test) {
         try physmem.init(device_tree, rootvm_region);

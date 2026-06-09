@@ -1,19 +1,20 @@
-# QEMU Virt hardware configuration (PMP fallback mode)
+# QEMU Virt hardware configuration (legacy mode)
 #
 # Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
-name: qemu-virt-pmp
+name: qemu-virt-legacy
 linker_script: hypervisor/hw/qemu/linker.ld
+legacy_cpu: true
 
-# Emulator execution parameters (H-extension explicitly disabled)
+# Emulator execution parameters (targets legacy QEMU and CPU)
 run_cmd:
   - qemu-system-riscv64
   - -nographic
   - -machine
   - virt
   - -cpu
-  - rv64,smstateen=true,sstc=true,v=true
+  - rv64,x-h=true,x-v=true
   - -smp
   - 4
   - -m
