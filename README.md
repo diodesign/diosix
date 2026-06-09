@@ -110,7 +110,7 @@ To control the emulator process from your terminal:
 The following is a recording of a user building and running Diosix, and then
 logging into and interacting with the Root VM running on the hypervisor.
 
-[![asciicast](https://asciinema.org/a/1161817.svg)](https://asciinema.org/a/1161817)
+[![asciicast of Diosix running](https://asciinema.org/a/1214657.svg)](https://asciinema.org/a/1214657)
 
 ---
 
