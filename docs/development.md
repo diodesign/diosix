@@ -1,4 +1,4 @@
-# Develop for Diosix
+# Develop Diosix
 
 We welcome contributions to the Diosix project. To maintain a consistent
 standard across both code and documentation, contributors must follow the
