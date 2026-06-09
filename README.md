@@ -47,7 +47,7 @@ To use Docker to build and run Diosix, follow these steps.
    docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
    ``` 
   
-1. Use the build wrapper to compile and run Diosix within the container:
+1. Use the build wrapper script to compile and run Diosix within the container:
   
    ```bash
    # For Ubuntu 22.04
@@ -79,7 +79,7 @@ follow these steps:
    cd diosix
    ```
   
-1. Use the wrapper script to compile and run Diosix:
+1. Use the build wrapper script to compile and run Diosix:
   
    ```bash
    ./scripts/build.sh run
