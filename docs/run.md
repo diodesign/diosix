@@ -60,8 +60,7 @@ To run Diosix inside QEMU, run the build wrapper script as follows:
 
 This command automatically builds the hypervisor for the default target system,
 `qemu-virt`, which is selected in `hypervisor/hw/ports/default.yaml`. This target
-is an emulated RISC-V 64-bit machine configured with 4 CPU cores and 2 GB of
-RAM.
+is an emulated RISC-V 64-bit machine.
 
 The build script also generates the Root VM image, and boots the hypervisor and
 the Root VM in QEMU for you to interact with and use. By default, the Root VM

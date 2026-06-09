@@ -18,44 +18,90 @@ The simplest way to run and test Diosix is inside the QEMU emulator. The
 following instructions assume you are using a Linux build machine and are
 comfortable using a command-line interface.
 
-Before you begin, make sure you have the following installed:
+You can use Docker to avoid installing and managing the project's build
+dependencies manually, or you can install them yourself by hand:
 
-* [Build dependencies](docs/build.md): Packages and tools required
-  to compile Diosix.
-* QEMU 10 or later. See [Run Diosix](docs/run.md) for more information
-  about supported platforms.
+<p>
+  <details>
+    <summary><strong>Use a Docker container</strong></summary>
+  
+    To use Docker to build and run Diosix, follow these steps.
+  
+    1. Make sure you have Docker installed and running on your system.
+       We recommend version 29.5.2 or later.
+  
+    1. Clone the Diosix source code, and enter its directory:
+  
+       ```bash
+       git clone https://github.com/diodesign/diosix.git
+       cd diosix
+       ```
+   
+    1. Build a container image of your preferred distribution:
+  
+       ```bash
+       # For Ubuntu 22.04
+       docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
+       
+       # For Fedora 44
+       docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
+       ``` 
+  
+    1. Use the build wrapper to compile and run Diosix within the container:
+  
+       ```bash
+       # For Ubuntu 22.04
+       docker run -it --rm diosix-ubuntu ./scripts/build.sh run
+       
+       # For Fedora 44
+       docker run -it --rm diosix-fedora ./scripts/build.sh run
+       ``` 
+  </details>
+</p>
 
-To compile and run the complete system:
+<p>
+  <details>
+    <summary><strong>Use the manual method</strong></summary>
+  
+    To install the build dependencies, and compile and run Diosix manually,
+    follow these steps:
+  
+    1. Make sure you have the following installed:
+  
+       * The hypervisor and guest operating system [build dependencies](docs/build.md).
+       * QEMU version 10 or later. Earlier versions, such as 6.2, may suffice.
+  
+    1. Clone the Diosix source code, and enter its directory:
+  
+       ```bash
+       git clone https://github.com/diodesign/diosix.git
+       cd diosix
+       ```
+  
+    1. Use the wrapper script to compile and run Diosix:
+  
+       ```bash
+       ./scripts/build.sh run
+       ```
+  </details>
+</p>
 
-1. Clone the repository, and enter the project directory:
+The build process automatically compiles from source a trusted Linux guest
+virtual machine (VM) called the Root VM, which assists the hypervisor in
+managing the host hardware and running other guests.
 
-   ```bash
-   git clone https://github.com/diodesign/diosix.git
-   cd diosix
-   ```
+Once the build completes, QEMU boots the hypervisor, which then automatically
+boots and runs the included Root VM.
 
-1. Compile the hypervisor, and boot the system inside QEMU:
+The hypervisor outputs debug and diagnostic information to the terminal, and you
+can interact with the running Root VM via the terminal, too.
 
-   ```bash
-   ./scripts/build.sh run
-   ```
-
-   The build process automatically compiles from source a trusted Linux guest
-   virtual machine (VM) called the Root VM, which assists the hypervisor in
-   managing the host hardware and running other guests. Once compilation completes,
-   QEMU boots the hypervisor, which then automatically starts and runs this Root VM.
-
-   The hypervisor outputs debug and diagnostic information directly to your
-   terminal. You can interact with the running Root VM via the terminal, too.
-
-1. To log in to the Root VM, use the username `root` with no password.
-
-   If the Root VM is powered off, the hypervisor will automatically restart.
+To log in to the Root VM, use the username `root` with no password. If the Root VM is powered
+off, the hypervisor will automatically restart.
 
 To control the emulator process from your terminal:
 
-*  Exit the emulator by pressing `Ctrl-a` followed by `x` to terminate
-   the emulation.
+*  Exit the emulator by pressing `Ctrl-a` followed by `x` to terminate QEMU.
 *  Enter the QEMU monitor shell by pressing `Ctrl-a` followed by `c`. Press
    `Ctrl-a` and `c` again to return to the hypervisor console.
 
