@@ -1,4 +1,4 @@
-[![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](https://github.com/diodesign/diosix/blob/main/LICENSE) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
+[![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](LICENSE.md) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
 
 # About Diosix
 
@@ -22,7 +22,7 @@ You can use Docker to avoid installing and managing the project's build
 dependencies manually, or you can install them yourself by hand:
 
 <p>
-<details>
+<details markdown="1">
 <summary><strong>Use a Docker container</strong></summary>
 
 To use Docker to build and run Diosix, follow these steps.
@@ -61,7 +61,7 @@ To use Docker to build and run Diosix, follow these steps.
 </p>
 
 <p>
-<details>
+<details markdown="1">
 <summary><strong>Use the manual method</strong></summary>
   
 To install the build dependencies, and compile and run Diosix manually,
@@ -138,11 +138,11 @@ following external documentation:
 
 ---
 
-## Copyright and license
+## Copyright, license, and legal
 
 Copyright &copy; 2024-2026 Diosix contributors. This project is distributed
-under the terms of the MIT License. See [LICENSE](LICENSE) for the full text and
-[CONTRIBUTORS](CONTRIBUTORS) for the list of copyright holders.
+under the terms of the MIT License. See [LICENSE](LICENSE.md) for the full text
+and [CONTRIBUTORS](CONTRIBUTORS.md) for the list of copyright holders.
 
 The diosix.org website illustration is a combination of artwork provided by
 [Katerina Limpitsouni](https://undraw.co/license) and

@@ -92,7 +92,7 @@ extensions, see the following commands:
 # Build with optimizations for release
 ./scripts/build.sh -Doptimize=ReleaseSafe
 
-# Target a legacy CPU/emulator lacking modern RISC-V extensions
+# Target a legacy CPU/emulator lacking modern RISC-V extensions (eg, QEMU 6.x)
 ./scripts/build.sh -Dsystem=qemu-virt-legacy
 ```
 
