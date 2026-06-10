@@ -30,7 +30,7 @@ drivers without needing physical target hardware.
 
 ### Prerequisites
 
-Before you can run Diosix using the wrapper script in this section, you must follow the steps in [Build Diosix](build.md) to install the required dependencies. Once you have installed those build components, you can use the wrapper script to build and run the hypervisor and the Root VM.
+Before you can run Diosix using the wrapper script in this section, you must follow the steps in [Build Diosix](build.md) to install the required dependencies and fetch the project source code. Then, you can use the wrapper script to build and run the hypervisor and the Root VM.
 
 ### Install QEMU
 

@@ -54,7 +54,7 @@ sudo dnf install -y \
 To clone the Diosix source code, and enter its directory, run:
 
 ```bash
-git clone https://github.com/diodesign/diosix.git
+git clone --recurse-submodules https://github.com/diodesign/diosix.git
 cd diosix
 ```
 
