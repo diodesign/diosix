@@ -140,7 +140,9 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // Guest RAM starts at 0x80000000 (standard for RISC-V Linux) if H-extension is active.
     // For PMP fallback mode, guest RAM must start at the actual host physical address (HPA).
     const root_vm_gpa_base = if (riscv.hasHExtension()) 0x80000000 else rootvm_hpa_base;
-    const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size);
+    const rootvm_elf = @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size];
+    const guest_arch = try loader.Loader.detectArch(rootvm_elf);
+    const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size, guest_arch);
     ctx.root_vm = root_vm;
 
     // Zero out the entire guest RAM reservation to ensure a clean slate.

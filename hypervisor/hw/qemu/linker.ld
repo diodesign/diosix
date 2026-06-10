@@ -37,7 +37,8 @@ SECTIONS
   __bss_start = ALIGN(0x8);
   .bss : ALIGN(0x8)
   {
-    *(.*bss*)
+    *(.bss*)
+    *(COMMON)
   }
   __bss_end = ALIGN(0x8);
 

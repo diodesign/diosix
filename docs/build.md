@@ -21,8 +21,8 @@ To compile the hypervisor, you must have the following installed:
 
 ### Guest operating system build dependencies
 
-The build system automatically downloads and compiles from source a guest Root Virtual
-Machine (Root VM) using Buildroot. The Root VM helps the hypervisor manage the
+The build system automatically downloads and compiles from source a 64-bit RISC-V guest
+Root Virtual Machine (Root VM) using Buildroot. The Root VM helps the hypervisor manage the
 host hardware and other VMs.
 
 Building this guest requires standard compilation utilities on the build machine. On minimal

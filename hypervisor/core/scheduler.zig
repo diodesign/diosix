@@ -92,7 +92,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     var it = pc.run_queue.findMin();
     while (it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        if ((vc.required_extensions & misa) == vc.required_extensions) {
+        if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
             pc.run_queue.remove(node);
             pc.run_queue_count -= 1;
             global_min_vruntime.store(vc.vruntime, .monotonic);
@@ -109,7 +109,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     var g_it = state.run_queue.findMin();
     while (g_it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        if ((vc.required_extensions & misa) == vc.required_extensions) {
+        if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
             state.run_queue.remove(node);
             global_min_vruntime.store(vc.vruntime, .monotonic);
 
@@ -121,7 +121,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
                 next_g = state.run_queue.findNext(g_node);
 
                 const g_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", g_node);
-                if ((g_vc.required_extensions & misa) == g_vc.required_extensions) {
+                if ((g_vc.requiredExtensions() & misa) == g_vc.requiredExtensions()) {
                     state.run_queue.remove(g_node);
                     pc.run_queue.insert(g_node);
                     pc.run_queue_count += 1;
@@ -197,9 +197,9 @@ test "scheduler vruntime ordering" {
     defer phys_test.deinit();
 
     const testing_allocator = testing.allocator;
-    const g1 = try guest.createGuest(testing_allocator, false, false, null, 0, 0, 0);
+    const g1 = try guest.createGuest(testing_allocator, false, false, null, 0, 0, 0, .riscv64);
     defer g1.deinit();
-    const g2 = try guest.createGuest(testing_allocator, false, false, null, 0, 0, 0);
+    const g2 = try guest.createGuest(testing_allocator, false, false, null, 0, 0, 0, .riscv64);
     defer g2.deinit();
     var vc1 = vcore.VirtualCore.init(1, g1, 0, 0, .normal);
     var vc2 = vcore.VirtualCore.init(2, g2, 0, 0, .normal);
@@ -249,7 +249,7 @@ test "hybrid local and global scheduling" {
 
     var vcpus: [10]vcore.VirtualCore = undefined;
     for (0..10) |i| {
-        test_guests[i] = try guest.createGuest(testing.allocator, false, false, null, 0, 0, 0);
+        test_guests[i] = try guest.createGuest(testing.allocator, false, false, null, 0, 0, 0, .riscv64);
         vcpus[i] = vcore.VirtualCore.init(@intCast(i), test_guests[i].?, 0, 0, .normal);
 
         vcpus[i].vruntime = i * 10;

@@ -32,11 +32,19 @@ pub const QuotaSet = struct {
     used_descendants: usize = 0,
 };
 
+pub const TargetArch = enum {
+    riscv64,
+    riscv32,
+    aarch64,
+    x86_64,
+};
+
 pub const Guest = struct {
     id: GuestID,
     state: GuestState,
     is_trusted: bool, // Can map MMIO and route interrupts
     is_root: bool, // Is the progenitor VM (PID 1)
+    target_arch: TargetArch,
 
     // Subtree resource tracking
     quotas: QuotaSet,
@@ -57,7 +65,7 @@ pub const Guest = struct {
     // allocator for heap-allocated Guest structures
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, id: GuestID, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize) !*Guest {
+    pub fn init(allocator: std.mem.Allocator, id: GuestID, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize, target_arch: TargetArch) !*Guest {
         const self = try allocator.create(Guest);
         errdefer allocator.destroy(self);
 
@@ -66,6 +74,7 @@ pub const Guest = struct {
             .state = .valid,
             .is_trusted = is_trusted,
             .is_root = is_root,
+            .target_arch = target_arch,
             .quotas = if (parent) |p| p.quotas else .{},
             .parent = parent,
             .children = .{ .start = null, .end = null },
@@ -261,6 +270,7 @@ pub const Guest = struct {
             .state = .valid,
             .is_trusted = self.is_trusted,
             .is_root = false, // Only the progenitor is truly root
+            .target_arch = self.target_arch,
             .quotas = self.quotas,
             .parent = self,
             .children = .{ .start = null, .end = null },
@@ -342,7 +352,7 @@ fn freeVmid(id: u16) void {
     state.vmid_bitmap[wi] &= ~(@as(u64, 1) << bit);
 }
 
-pub fn createGuest(allocator: std.mem.Allocator, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize) !*Guest {
+pub fn createGuest(allocator: std.mem.Allocator, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize, target_arch: TargetArch) !*Guest {
     const id = blk: {
         const guard = guest_manager.acquire();
         defer guard.release();
@@ -352,7 +362,7 @@ pub fn createGuest(allocator: std.mem.Allocator, is_trusted: bool, is_root: bool
         break :blk next;
     };
 
-    return try Guest.init(allocator, id, is_trusted, is_root, parent, base_gpa, base_hpa, range_size);
+    return try Guest.init(allocator, id, is_trusted, is_root, parent, base_gpa, base_hpa, range_size, target_arch);
 }
 
 test "guest fork and memory sharing" {
@@ -370,7 +380,7 @@ test "guest fork and memory sharing" {
     defer phys_test.deinit();
 
     const hpa = try physmem.allocPage();
-    const parent = try createGuest(allocator, true, true, null, 0x80000000, hpa, 0x1000);
+    const parent = try createGuest(allocator, true, true, null, 0x80000000, hpa, 0x1000, .riscv64);
     defer parent.deinit();
 
     const scheduler = @import("scheduler.zig");
@@ -389,7 +399,7 @@ test "guest fork and memory sharing" {
     // Check that we have a vcore in the child
     try testing.expect(child.vcores.start != null);
     const child_vc = child.vcores.start.?.contents;
-    try testing.expectEqual(@as(usize, 0), child_vc.context[10]); // a0 is 0
+    try testing.expectEqual(@as(usize, 0), child_vc.exec_path.native.context[10]); // a0 is 0
 }
 
 test "guest creation and vcore management" {
@@ -411,11 +421,11 @@ test "guest creation and vcore management" {
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
 
-    const g1 = try createGuest(allocator, true, true, null, 0, 0, 0);
+    const g1 = try createGuest(allocator, true, true, null, 0, 0, 0, .riscv64);
     defer g1.deinit();
     try testing.expectEqual(@as(usize, 0), g1.id);
 
-    const g2 = try createGuest(allocator, false, false, g1, 0, 0, 0);
+    const g2 = try createGuest(allocator, false, false, g1, 0, 0, 0, .riscv64);
     defer g2.deinit();
     try testing.expectEqual(@as(usize, 1), g2.id);
     try testing.expectEqual(g1, g2.parent.?);
@@ -424,7 +434,7 @@ test "guest creation and vcore management" {
     const vc = try g1.addVcore(100, 0x1000, 0x2000, .high, null);
     try testing.expectEqual(@as(usize, 100), vc.id);
     try testing.expectEqual(g1.id, vc.guest_id);
-    try testing.expectEqual(@as(usize, 0x1000), vc.machine.mepc);
+    try testing.expectEqual(@as(usize, 0x1000), vc.exec_path.native.machine.mepc);
 
     // Check that it was added to the guest's vcore list
     try testing.expect(g1.vcores.start != null);
@@ -438,7 +448,7 @@ test "guest trust drop" {
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
 
-    const g = try createGuest(allocator, true, true, null, 0, 0, 0);
+    const g = try createGuest(allocator, true, true, null, 0, 0, 0, .riscv64);
     defer g.deinit();
 
     try testing.expect(g.is_trusted == true);
@@ -454,13 +464,13 @@ test "guest cascading termination and lineage" {
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
 
-    const parent = try createGuest(allocator, true, true, null, 0, 0, 0);
+    const parent = try createGuest(allocator, true, true, null, 0, 0, 0, .riscv64);
     defer parent.deinit();
 
-    const child = try createGuest(allocator, false, false, parent, 0, 0, 0);
+    const child = try createGuest(allocator, false, false, parent, 0, 0, 0, .riscv64);
     defer child.deinit();
 
-    const grandchild = try createGuest(allocator, false, false, child, 0, 0, 0);
+    const grandchild = try createGuest(allocator, false, false, child, 0, 0, 0, .riscv64);
     defer grandchild.deinit();
 
     try testing.expectEqual(parent, child.parent.?);

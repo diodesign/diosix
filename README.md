@@ -3,8 +3,10 @@
 # About Diosix
 
 Diosix is a type-1 bare-metal hypervisor written in the Zig programming language
-for 64-bit RISC-V systems. It allows systems large and small to run multiple
+for multi-core 64-bit RISC-V systems. It allows machines large and small to run multiple
 hardware-isolated operating systems at the same time.
+
+The hypervior supports 64-bit Arm and x86 guest operating systems as well as 32 and 64-bit RISC-V.
 
 This project is an ongoing work-in-progress. By using Zig, we aim to innovate and
 iterate quickly while maintaining a strict focus on safety, security, and
@@ -87,8 +89,8 @@ follow these steps:
 
 </details>
 </p>
-  
-The build process automatically compiles from source a trusted Linux guest
+
+The build process automatically compiles from source a trusted 64-bit RISC-V Linux guest
 virtual machine (VM) called the Root VM, which assists the hypervisor in
 managing the host hardware and running other guests.
 
@@ -140,9 +142,12 @@ following external documentation:
 
 ## Copyright, license, and legal
 
-Copyright &copy; 2024-2026 Diosix contributors. This project is distributed
-under the terms of the MIT License. See [LICENSE](LICENSE.md) for the full text
-and [CONTRIBUTORS](CONTRIBUTORS.md) for the list of copyright holders.
+Copyright &copy; 2024-2026 Diosix contributors. 
+
+The Diosix source code is distributed under the terms of the MIT License. See [LICENSE.md](LICENSE.md) for the full text and [CONTRIBUTORS.md](CONTRIBUTORS.md) for the list of copyright holders.
+
+Note that compiled binary releases or execution images of Diosix that link with the integrated **Unicorn Engine** are subject to the copyleft constraints of the **GNU General Public License version 2 (GPLv2)**. Individual source files remain permissive MIT, but distributed binary packages containing the emulation layer must be distributed under the GPLv2.
+
 
 The diosix.org website illustration is a combination of artwork provided by
 [Katerina Limpitsouni](https://undraw.co/license) and

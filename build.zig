@@ -143,10 +143,49 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("hypervisor/interface/lib.zig"),
     });
 
+    // Allow user to select the guest Root VM architecture
+    const guest_arch_opt = b.option([]const u8, "guest-arch", "Select the guest architecture to build for: riscv64, riscv32, aarch64, x86_64") orelse "riscv64";
+    const config_filename = try std.fmt.allocPrint(b.allocator, "boot/{s}-linux-busybox-micropython.config", .{guest_arch_opt});
+    defer b.allocator.free(config_filename);
+
     const run_buildroot = b.addSystemCommand(&.{ "bash", "scripts/build_rootvm.sh" });
-    run_buildroot.addFileArg(b.path("boot/riscv64-linux-busybox-micropython.config"));
+    run_buildroot.addFileArg(b.path(config_filename));
     run_buildroot.addArg("zig-out/bin/rootvm.elf");
     run_buildroot.addArg("zig-out/buildroot");
+    run_buildroot.addArg(guest_arch_opt);
+
+
+    // Create a wrapper script to run `zig cc` targeted to riscv64-linux-musl with sanitizers disabled
+    const write_wrapper = b.addSystemCommand(&.{
+        "sh", "-c",
+        b.fmt("mkdir -p zig-out && echo '#!/bin/sh' > zig-out/zig-cc && echo 'exec \"{s}\" cc -target riscv64-linux-musl -fno-sanitize=all \"$@\"' >> zig-out/zig-cc && chmod +x zig-out/zig-cc", .{b.graph.zig_exe}),
+    });
+
+    // Run CMake to build Unicorn static library
+    const unicorn_build_dir = "zig-out/unicorn";
+    const cmake_configure = b.addSystemCommand(&.{
+        "cmake",
+        "-S", "third_party/unicorn",
+        "-B", unicorn_build_dir,
+        "-DCMAKE_SYSTEM_NAME=Generic",
+        "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
+    });
+    cmake_configure.addPrefixedFileArg("-DCMAKE_C_COMPILER=", b.path("zig-out/zig-cc"));
+    cmake_configure.addArgs(&.{
+        "-DCMAKE_C_FLAGS=-DUNICORN_NO_SYSTEM",
+        "-DUNICORN_ARCHS=arm;aarch64;riscv;x86",
+        "-DUNICORN_BUILD_SHARED=OFF",
+        "-DUNICORN_BUILD_STATIC=ON",
+    });
+    cmake_configure.step.dependOn(&write_wrapper.step);
+
+    const cmake_build = b.addSystemCommand(&.{
+        "cmake",
+        "--build", unicorn_build_dir,
+        "--config", "Release",
+        "--parallel",
+    });
+    cmake_build.step.dependOn(&cmake_configure.step);
 
     const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/core/main.zig"),
@@ -155,7 +194,34 @@ pub fn build(b: *std.Build) !void {
         .code_model = .medium,
     }), .linkage = .static });
     vmdiosix.step.dependOn(&run_buildroot.step);
+    vmdiosix.step.dependOn(&cmake_build.step);
     vmdiosix.root_module.addImport("interface", interface_module);
+    vmdiosix.root_module.addIncludePath(b.path("third_party/unicorn/include"));
+    
+    const unicorn_libs = [_][]const u8{
+        "libunicorn.a",
+        "libunicorn-common.a",
+        "libaarch64-softmmu.a",
+        "libarm-softmmu.a",
+        "libm68k-softmmu.a",
+        "libmips-softmmu.a",
+        "libmips64-softmmu.a",
+        "libmips64el-softmmu.a",
+        "libmipsel-softmmu.a",
+        "libppc-softmmu.a",
+        "libppc64-softmmu.a",
+        "libriscv32-softmmu.a",
+        "libriscv64-softmmu.a",
+        "libs390x-softmmu.a",
+        "libsparc-softmmu.a",
+        "libsparc64-softmmu.a",
+        "libtricore-softmmu.a",
+        "libx86_64-softmmu.a",
+    };
+    for (unicorn_libs) |lib_name| {
+        vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/{s}", .{ unicorn_build_dir, lib_name })));
+    }
+
 
     // include the assembly files and linker script from parsed YAML configuration
     for (port_config.assembly_files) |asm_file| {

@@ -104,20 +104,28 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         if (pcore.this().active_vcore) |ptr| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
 
-            // Ensure machine state has latest hgatp if H-extension is active.
-            if (vc.guest.space.mode == .h_paging) {
-                const hgatp_val = vc.guest.space.paging.?.hgatp(vc.guest.vmid);
-                if (vc.machine.hgatp != hgatp_val) {
-                    vc.machine.hgatp = hgatp_val;
-                }
-            }
+            switch (vc.exec_path) {
+                .native => {
+                    // Ensure machine state has latest hgatp if H-extension is active.
+                    if (vc.guest.space.mode == .h_paging) {
+                        const hgatp_val = vc.guest.space.paging.?.hgatp(vc.guest.vmid);
+                        if (vc.getNativeMachine().hgatp != hgatp_val) {
+                            vc.getNativeMachine().hgatp = hgatp_val;
+                        }
+                    }
 
-            if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
-                vc.machine.hvip |= riscv.HVIP.VSTIP;
-                vc.timer_scheduled = false;
-            }
+                    if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
+                        vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
+                        vc.timer_scheduled = false;
+                    }
 
-            pcore.hw_run_vcore(&vc.context, &vc.machine, &vc.guest_state);
+                    pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
+                },
+                .emulated => {
+                    vc.runEmulated();
+                    scheduler.yield(vc);
+                },
+            }
         }
 
         // We only get here if no vcores were available to run.
@@ -126,9 +134,12 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
             if (g.findVcore(pcore.this().hardware_hart_id)) |vc| {
                 if (vc.wfi_blocked) {
                     var next_timer: u64 = 0xffffffffffffffff;
-                    if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-                        if (vc.guest_state.vstimecmp != 0 and vc.guest_state.vstimecmp != 0xffffffffffffffff) {
-                            next_timer = vc.guest_state.vstimecmp;
+                    if (vc.exec_path == .native) {
+                        if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
+                            const gs = vc.getNativeGuestState();
+                            if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+                                next_timer = gs.vstimecmp;
+                            }
                         }
                     }
                     if (vc.timer_scheduled) {

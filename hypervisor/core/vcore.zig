@@ -24,6 +24,11 @@ pub const VirtualCoreState = enum {
 
 pub const SchedulerTree = dsa.RedBlackTree(u64, dsa.compareU64);
 
+pub const VirtualCoreType = enum {
+    native,
+    emulated,
+};
+
 // Represents a virtual CPU core's context and state.
 pub const VirtualCore = struct {
     // Unique ID for this vcore within its guest.
@@ -33,17 +38,29 @@ pub const VirtualCore = struct {
     guest_id: usize,
     state: VirtualCoreState,
 
-    // Virtual CPU registers and state.
-    context: riscv.ThreadContext,
+    // Polymorphic execution path parameters
+    exec_path: union(VirtualCoreType) {
+        native: struct {
+            // Virtual CPU registers and state.
+            context: riscv.ThreadContext,
 
-    // Machine and Hypervisor specific architecture state.
-    machine: riscv.MachineState,
+            // Machine and Hypervisor specific architecture state.
+            machine: riscv.MachineState,
 
-    // VS-mode state (usually context switched).
-    guest_state: riscv.GuestState,
+            // VS-mode state (usually context switched).
+            guest_state: riscv.GuestState,
 
-    required_extensions: usize,
-    siselect: usize,
+            required_extensions: usize,
+            siselect: usize,
+        },
+        emulated: struct {
+            uc: ?*anyopaque,
+            target_arch: guest.TargetArch,
+            entry: usize,
+            dtb: usize,
+        },
+    },
+
     timer_scheduled: bool,
     timer_target: u64,
     running_on_cpu: ?usize,
@@ -66,34 +83,10 @@ pub const VirtualCore = struct {
             .guest = parent,
             .guest_id = parent.id,
             .state = .stopped,
-            .siselect = 0,
             .timer_scheduled = false,
             .timer_target = 0,
             .running_on_cpu = null,
             .wfi_blocked = false,
-            .context = std.mem.zeroes(riscv.ThreadContext),
-            .machine = .{
-                .mepc = entry,
-                .mstatus = (1 << 11) | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPV=1 (Virtualization), VS=Dirty, FS=Dirty
-                .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
-                .hgatp = 0,
-                .hedeleg = 0xb1fb, // Delegate exceptions to guest: includes breakpoint (bit 3)
-                .hideleg = 0x444, // Delegate VS interrupts: VSSIP(2), VSTIP(6), VSEIP(10)
-                .hvip = 0,
-            },
-            .guest_state = .{
-                .vsstatus = (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
-                .vsie = 0,
-                .vstvec = 0,
-                .vsscratch = 0,
-                .vsepc = 0,
-                .vscause = 0,
-                .vstval = 0,
-                .vsatp = 0,
-                .vstimecmp = 0xffffffffffffffff,
-                .vsenvcfg = (@as(usize, 1) << 63) | 240,
-            },
-            .required_extensions = riscv.IsaExtension.i,
             .priority = priority,
             .vruntime = 0,
             .weight = switch (priority) {
@@ -102,10 +95,50 @@ pub const VirtualCore = struct {
             },
             .last_queued_time = 0,
             .scheduler_node = undefined,
+            .exec_path = undefined,
         };
 
-        vcore.context[@intFromEnum(riscv.Register.a0)] = id; // A0 = VCPU ID.
-        vcore.context[@intFromEnum(riscv.Register.a1)] = dtb; // A1 = DTB address.
+        if (parent.target_arch == .riscv64) {
+            vcore.exec_path = .{
+                .native = .{
+                    .siselect = 0,
+                    .required_extensions = riscv.IsaExtension.i,
+                    .context = std.mem.zeroes(riscv.ThreadContext),
+                    .machine = .{
+                        .mepc = entry,
+                        .mstatus = (1 << 11) | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPV=1 (Virtualization), VS=Dirty, FS=Dirty
+                        .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
+                        .hgatp = 0,
+                        .hedeleg = 0xb1fb, // Delegate exceptions to guest: includes breakpoint (bit 3)
+                        .hideleg = 0x444, // Delegate VS interrupts: VSSIP(2), VSTIP(6), VSEIP(10)
+                        .hvip = 0,
+                    },
+                    .guest_state = .{
+                        .vsstatus = (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
+                        .vsie = 0,
+                        .vstvec = 0,
+                        .vsscratch = 0,
+                        .vsepc = 0,
+                        .vscause = 0,
+                        .vstval = 0,
+                        .vsatp = 0,
+                        .vstimecmp = 0xffffffffffffffff,
+                        .vsenvcfg = (@as(usize, 1) << 63) | 240,
+                    },
+                },
+            };
+            vcore.exec_path.native.context[@intFromEnum(riscv.Register.a0)] = id; // A0 = VCPU ID.
+            vcore.exec_path.native.context[@intFromEnum(riscv.Register.a1)] = dtb; // A1 = DTB address.
+        } else {
+            vcore.exec_path = .{
+                .emulated = .{
+                    .uc = null,
+                    .target_arch = parent.target_arch,
+                    .entry = entry,
+                    .dtb = dtb,
+                },
+            };
+        }
 
         // Initialize the scheduler node's contents to the vruntime for ordering.
         vcore.scheduler_node.contents = 0;
@@ -114,8 +147,42 @@ pub const VirtualCore = struct {
     }
 
     pub fn deinit(self: *VirtualCore) void {
-        _ = self;
-        // Cleanup vcore specific resources if any.
+        switch (self.exec_path) {
+            .emulated => |*e| {
+                if (e.uc) |uc| {
+                    _ = @import("unicorn_glue.zig").uc_close(uc);
+                    e.uc = null;
+                }
+            },
+            else => {},
+        }
+    }
+
+    pub fn runEmulated(self: *VirtualCore) void {
+        @import("arch_emulation.zig").run(self);
+    }
+
+    pub fn requiredExtensions(self: *VirtualCore) usize {
+        return switch (self.exec_path) {
+            .native => |n| n.required_extensions,
+            .emulated => 0,
+        };
+    }
+
+    pub fn getNativeSiselect(self: *VirtualCore) *usize {
+        return &self.exec_path.native.siselect;
+    }
+
+    pub fn getNativeContext(self: *VirtualCore) *riscv.ThreadContext {
+        return &self.exec_path.native.context;
+    }
+
+    pub fn getNativeMachine(self: *VirtualCore) *riscv.MachineState {
+        return &self.exec_path.native.machine;
+    }
+
+    pub fn getNativeGuestState(self: *VirtualCore) *riscv.GuestState {
+        return &self.exec_path.native.guest_state;
     }
 
     pub fn getGuest(self: *VirtualCore) *guest.Guest {
@@ -135,8 +202,14 @@ pub const VirtualCore = struct {
         vc.guest = child_guest;
         vc.guest_id = child_guest.id;
 
-        // Return 0 in the child (A0 is X10).
-        vc.context[@intFromEnum(riscv.Register.a0)] = 0;
+        switch (vc.exec_path) {
+            .native => |*n| {
+                n.context[@intFromEnum(riscv.Register.a0)] = 0; // Return 0 in the child (A0 is X10).
+            },
+            .emulated => |*e| {
+                e.uc = null; // Fresh Unicorn context on startup for child
+            },
+        }
 
         // Reset scheduler node for the new vcore.
         vc.running_on_cpu = null;
@@ -155,16 +228,16 @@ test "virtual core initialization" {
     const dtb: usize = 0x9000;
     var phys_test = try physmem.initForTest(testing.allocator, 128);
     defer phys_test.deinit();
-    const parent = try guest.createGuest(testing.allocator, false, false, null, 0, 0, 0);
+    const parent = try guest.createGuest(testing.allocator, false, false, null, 0, 0, 0, .riscv64);
     defer parent.deinit();
 
     const vc = VirtualCore.init(id, parent, entry, dtb, .normal);
 
     try testing.expectEqual(id, vc.id);
     try testing.expectEqual(parent.id, vc.guest_id);
-    try testing.expectEqual(entry, vc.machine.mepc);
-    try testing.expectEqual(dtb, vc.context[@intFromEnum(riscv.Register.a1)]); // a1
-    try testing.expectEqual(id, vc.context[@intFromEnum(riscv.Register.a0)]); // a0
+    try testing.expectEqual(entry, vc.exec_path.native.machine.mepc);
+    try testing.expectEqual(dtb, vc.exec_path.native.context[@intFromEnum(riscv.Register.a1)]); // a1
+    try testing.expectEqual(id, vc.exec_path.native.context[@intFromEnum(riscv.Register.a0)]); // a0
     try testing.expectEqual(@as(u32, 1024), vc.weight);
     try testing.expectEqual(@as(u64, 0), vc.vruntime);
 }

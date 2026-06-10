@@ -12,9 +12,11 @@ BUILDROOT_URL="https://gitlab.com/buildroot.org/buildroot.git"
 BUILDROOT_BRANCH="2026.02.x"
 
 if [ -z "$CONFIG_FILE" ] || [ -z "$OUT_FILE" ] || [ -z "$BUILDROOT_DIR" ]; then
-    echo "Usage: $0 <config_file> <out_file> <buildroot_dir>"
+    echo "Usage: $0 <config_file> <out_file> <buildroot_dir> [guest_arch]"
     exit 1
 fi
+
+GUEST_ARCH="${4:-riscv64}"
 
 HASH_FILE="${OUT_FILE}.sha256"
 CURRENT_HASH=$(sha256sum "$CONFIG_FILE" "$0" | sha256sum | cut -d' ' -f1)
@@ -48,8 +50,14 @@ fi
 echo "Configuring BuildRoot..."
 make -C "$BUILDROOT_DIR" BR2_DEFCONFIG="$ABS_CONFIG" defconfig
 
-# Enforce the use of the SBI console (hvc0) for the root login prompt
-echo 'BR2_TARGET_GENERIC_GETTY_PORT="hvc0"' >> "$BUILDROOT_DIR/.config"
+# Enforce the use of the appropriate console for the root login prompt
+GETTY_PORT="hvc0"
+if [ "$GUEST_ARCH" = "aarch64" ]; then
+    GETTY_PORT="ttyAMA0"
+elif [ "$GUEST_ARCH" = "x86_64" ]; then
+    GETTY_PORT="ttyS0"
+fi
+echo "BR2_TARGET_GENERIC_GETTY_PORT=\"$GETTY_PORT\"" >> "$BUILDROOT_DIR/.config"
 
 # Fixup step for modern buildroot: olddefconfig updates the config for new versions silently
 make -C "$BUILDROOT_DIR" olddefconfig

@@ -561,6 +561,7 @@ pub inline fn writeMideleg(val: usize) void {
 }
 
 pub inline fn hlv_w(ptr: usize) u32 {
+    if (comptime is_test) return 0;
     var val: u32 = 0;
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
@@ -572,6 +573,7 @@ pub inline fn hlv_w(ptr: usize) u32 {
 }
 
 pub inline fn hlv_wu(ptr: usize) u32 {
+    if (comptime is_test) return 0;
     var val: u32 = 0;
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
@@ -583,6 +585,7 @@ pub inline fn hlv_wu(ptr: usize) u32 {
 }
 
 pub inline fn hlv_hu(ptr: usize) u16 {
+    if (comptime is_test) return 0;
     var val: u16 = 0;
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
@@ -594,6 +597,7 @@ pub inline fn hlv_hu(ptr: usize) u16 {
 }
 
 pub inline fn hlv_bu(ptr: usize) u8 {
+    if (comptime is_test) return 0;
     var val: u8 = 0;
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"
@@ -605,6 +609,7 @@ pub inline fn hlv_bu(ptr: usize) u8 {
 }
 
 pub inline fn hlv_d(ptr: usize) u64 {
+    if (comptime is_test) return 0;
     var val: u64 = 0;
     asm volatile (
         \\ .attribute arch, "rv64gc_zicsr_h"

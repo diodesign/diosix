@@ -33,6 +33,67 @@ hypervisor unpacks and boots this payload as the Root VM.
 
 ---
 
+## Multi-architecture emulation layer
+
+To allow running non-native guest VMs alongside native 64-bit RISC-V workloads,
+Diosix integrates a transparent, cross-architecture virtual CPU core emulation layer.
+
+### Supported guest architectures
+
+The hypervisor inspects the ELF machine headers of a guest VM's binary at boot
+time to identify its target instruction set architecture:
+
+*   64-bit RISC-V guest VMs run directly on the host physical CPU at native speeds
+    using the host processor's hardware virtualization extension or the Physical
+    Memory Protection (PMP) fallback mode.
+*   32-bit RISC-V, 64-bit Arm, and 64-bit x86 guest VMs run transparently using
+    software just-in-time (JIT) emulation.
+
+### Unicorn Engine integration
+
+The emulation layer is powered by [Unicorn Engine](https://github.com/unicorn-engine/unicorn), a lightweight multi-platform, multi-architecture CPU emulator framework based on QEMU.
+
+Unicorn is compiled as a static library and linked directly into the hypervisor binary image. Since Unicorn is licensed under the GPL, the presence of Unicorn in a compiled Diosix binary means outbound binary distributions are [subject to the GPL](../LICENSE.md), whereas the standalone Diosix hypervisor source code remains under its permissive MIT license.
+
+#### Memory management
+
+The guest VM's allocated host physical memory is mapped directly into
+Unicorn's virtual address space contiguously via `uc_mem_map_ptr`. Accesses to
+unmapped memory locations (for example, peripheral registers or the UART
+console at `0x10000000`) are intercepted via a Unicorn memory exception hook
+(`UC_HOOK_MEM_UNMAPPED`). Reads and writes are emulated by the hypervisor for
+example, guest console output is redirected to the hypervisor console via
+`putcharFromGuest`.
+
+#### Dynamic allocator wrapper
+
+Unicorn relies on standard C library allocation routines (`malloc`, `calloc`, `realloc`, and `free`). Since Diosix runs on bare metal without a standard C library, it implements these symbols using a thread-safe, spinlock-protected wrapper around the hypervisor's per-hart bare-metal `HeapAllocator`.
+
+#### Interrupt handling and preemption
+
+Emulation runs inside Unicorn's execution loop (`uc_emu_start`). To prevent a
+guest VM from hogging a physical core, the hypervisor handles preemption:
+
+*   Host timer interrupts trap to the machine-mode interrupt handler
+    (`xint_handler`).
+*   If an interrupt fires while an emulated virtual core is running,
+    the handler invokes `stop()` (which calls `uc_emu_stop()`) to
+    immediately exit the Unicorn JIT loop.
+*   The scheduler then yields the core, allowing other virtual cores to run.
+
+#### SBI and system call interception
+
+System calls and software interrupts executed by the guest (for example, `ECALL` on
+RISC-V, `SVC` on Arm, or software interrupts on x86) are caught via a Unicorn
+interrupt hook.
+
+The hypervisor reads the guest's registers, maps them into a mock supervisor
+context, executes the request via the native Supervisor Binary Interface (SBI)
+handler, writes the return values back to the guest's virtual registers, and
+advances the instruction pointer to resume execution.
+
+---
+
 ## Resource quotas
 
 Diosix uses a subtree resource quota system to prevent resource exhaustion. A
@@ -92,15 +153,15 @@ The Root VM can also signal to the hypervisor to shutdown the host system.
 Diosix uses distinct address space definitions across the codebase, debugging
 logs, and documentation:
 
-*  **Host Physical Address (HPA).** A physical memory address on the host hardware,
+*  **Host physical address (HPA).** A physical memory address on the host hardware,
    such as physical DRAM, and memory-mapped peripheral registers (e.g., Core Local
    Interruptor (CLINT), Platform-Level Interrupt Controller (PLIC), or Universal
    Asynchronous Receiver-Transmitter (UART)).
-*  **Guest Physical Address (GPA).** A physical memory address as perceived by a
+*  **Guest physical address (GPA).** A physical memory address as perceived by a
    guest VM. In Hypervisor paging mode, GPAs are translated to HPAs via
    second-stage G-stage page tables (`sv39x4`). Under Physical Memory Protection
    (PMP) fallback mode, GPAs are mapped contiguously to HPAs via bounds-checked
    identity offset translation.
-*  **Guest Virtual Address (GVA).** A virtual memory address managed within the
+*  **Guest virtual address (GVA).** A virtual memory address managed within the
    guest VM's own operating system supervisor context, via first-stage VS-stage
    translation.

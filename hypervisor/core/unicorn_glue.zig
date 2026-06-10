@@ -1,0 +1,847 @@
+// Unicorn Engine C API bindings and standard library glue.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+
+const std = @import("std");
+const riscv = @import("riscv.zig");
+const atomic = @import("atomic.zig");
+const debug = @import("debug.zig");
+
+// Global lock to protect allocator operations across harts
+var allocator_lock = atomic.NamedSpinLock.init("Unicorn Allocator Lock");
+
+// Mock TLS buffer
+var tls_buffer: [8192]u8 = undefined;
+
+// Standard C Allocation Header
+const MallocHeader = struct {
+    cpu_core_id: usize,
+    size: usize,
+};
+
+// Export standard C memory allocation symbols for Unicorn to link against
+pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
+    allocator_lock.lock();
+    defer allocator_lock.unlock();
+
+    const cpu = riscv.getCPUContext();
+    const alloc_size = @sizeOf(MallocHeader) + size;
+    
+    // Allocate raw slice
+    const slice = cpu.allocator.allocator().alloc(u8, alloc_size) catch return null;
+    
+    // Store header info
+    const header = @as(*MallocHeader, @ptrCast(@alignCast(slice.ptr)));
+    header.cpu_core_id = cpu.cpu_core_id;
+    header.size = size;
+    
+    // Return pointer to payload
+    return @ptrFromInt(@intFromPtr(slice.ptr) + @sizeOf(MallocHeader));
+}
+
+pub export fn free(ptr: ?*anyopaque) callconv(.c) void {
+    const p = ptr orelse return;
+    
+    allocator_lock.lock();
+    defer allocator_lock.unlock();
+
+    const header = @as(*MallocHeader, @ptrFromInt(@intFromPtr(p) - @sizeOf(MallocHeader)));
+    const cpu = riscv.cpu_contexts[header.cpu_core_id] orelse {
+        debug.printf("Unicorn glue: free() invalid CPU core context for ID {}\n", .{header.cpu_core_id});
+        return;
+    };
+    
+    const slice = @as([*]u8, @ptrFromInt(@intFromPtr(header)))[0..(@sizeOf(MallocHeader) + header.size)];
+    cpu.allocator.allocator().free(slice);
+}
+
+pub export fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
+    if (ptr == null) return malloc(size);
+    if (size == 0) {
+        free(ptr);
+        return null;
+    }
+
+    allocator_lock.lock();
+    const header = @as(*MallocHeader, @ptrFromInt(@intFromPtr(ptr.?) - @sizeOf(MallocHeader)));
+    const old_size = header.size;
+    allocator_lock.unlock();
+
+    if (size <= old_size) return ptr;
+
+    const new_ptr = malloc(size) orelse return null;
+    @memcpy(@as([*]u8, @ptrCast(new_ptr))[0..old_size], @as([*]const u8, @ptrCast(ptr.?))[0..old_size]);
+    free(ptr);
+    return new_ptr;
+}
+
+pub export fn calloc(num: usize, size: usize) callconv(.c) ?*anyopaque {
+    const total = num * size;
+    const ptr = malloc(total) orelse return null;
+    @memset(@as([*]u8, @ptrCast(ptr))[0..total], 0);
+    return ptr;
+}
+
+// Export standard assertions and print redirection for debug purposes
+pub export fn __assert_fail(assertion: [*:0]const u8, file: [*:0]const u8, line: c_uint, function: [*:0]const u8) callconv(.c) noreturn {
+    debug.printf("Assertion failed: {s} ({s}:{d}: {s})\n", .{ assertion, file, line, function });
+    while (true) {}
+}
+
+pub export fn abort() callconv(.c) noreturn {
+    debug.printf("Unicorn called abort()\n", .{});
+    while (true) {}
+}
+
+pub export fn printf(format: [*:0]const u8, ...) callconv(.c) c_int {
+    // Basic redirection to debug log
+    _ = format;
+    return 0;
+}
+
+pub export fn fprintf(stream: ?*anyopaque, format: [*:0]const u8, ...) callconv(.c) c_int {
+    _ = stream;
+    _ = format;
+    return 0;
+}
+
+pub export fn usleep(usec: c_uint) callconv(.c) c_int {
+    const start = riscv.readTime();
+    // 10MHz frequency means 10 ticks per microsecond
+    const ticks = @as(u64, usec) * 10;
+    while (riscv.readTime() - start < ticks) {}
+    return 0;
+}
+
+pub export fn clock_gettime(clk_id: c_int, tp: ?*anyopaque) callconv(.c) c_int {
+    _ = clk_id;
+    const TimeSpec = struct {
+        tv_sec: i64,
+        tv_nsec: i64,
+    };
+    const t = @as(*TimeSpec, @ptrCast(@alignCast(tp orelse return -1)));
+    const time_ticks = riscv.readTime();
+    // 10MHz frequency means 1 tick = 100ns
+    const total_ns = time_ticks * 100;
+    t.tv_sec = @as(i64, @intCast(total_ns / 1_000_000_000));
+    t.tv_nsec = @as(i64, @intCast(total_ns % 1_000_000_000));
+    return 0;
+}
+
+pub export fn gettimeofday(tv: ?*anyopaque, tz: ?*anyopaque) callconv(.c) c_int {
+    _ = tz;
+    const TimeVal = struct {
+        tv_sec: i64,
+        tv_usec: i64,
+    };
+    const t = @as(*TimeVal, @ptrCast(@alignCast(tv orelse return -1)));
+    const time_ticks = riscv.readTime();
+    // 10MHz frequency means 10 ticks per microsecond
+    const total_us = time_ticks / 10;
+    t.tv_sec = @as(i64, @intCast(total_us / 1_000_000));
+    t.tv_usec = @as(i64, @intCast(total_us % 1_000_000));
+    return 0;
+}
+
+pub export fn __tls_get_addr(ti: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const TlsIdx = struct {
+        module: usize,
+        offset: usize,
+    };
+    const idx = @as(*TlsIdx, @ptrCast(@alignCast(ti orelse return null)));
+    return &tls_buffer[idx.offset % 8192];
+}
+
+pub export fn getpid() callconv(.c) c_int {
+    return 1;
+}
+
+pub export fn getppid() callconv(.c) c_int {
+    return 1;
+}
+
+pub export fn getpagesize() callconv(.c) c_int {
+    return 4096;
+}
+
+pub export fn posix_memalign(memptr: ?*?*anyopaque, alignment: usize, size: usize) callconv(.c) c_int {
+    _ = alignment;
+    const ptr = malloc(size);
+    if (ptr == null) return 12; // ENOMEM
+    memptr.?.* = ptr;
+    return 0;
+}
+
+pub export fn sprintf(str: [*:0]u8, format: [*:0]const u8, ...) callconv(.c) c_int {
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+
+    const fmt = std.mem.span(format);
+    if (std.mem.eql(u8, fmt, "D%d") or std.mem.eql(u8, fmt, "A%d")) {
+        const val = @cVaArg(&ap, c_int);
+        const prefix = format[0];
+        const res = std.fmt.bufPrint(str[0..16], "{c}{d}", .{ prefix, val }) catch return -1;
+        str[res.len] = 0;
+        return @intCast(res.len);
+    } else if (std.mem.eql(u8, fmt, "ACC%d")) {
+        const val = @cVaArg(&ap, c_int);
+        const res = std.fmt.bufPrint(str[0..16], "ACC{d}", .{ val }) catch return -1;
+        str[res.len] = 0;
+        return @intCast(res.len);
+    }
+    str[0] = 0;
+    return 0;
+}
+
+pub export fn qsort(base: ?*anyopaque, nitems: usize, size: usize, compar: ?*const fn(?*const anyopaque, ?*const anyopaque) callconv(.c) c_int) callconv(.c) void {
+    if (base == null or nitems <= 1 or size == 0 or compar == null) return;
+    const cmp = compar.?;
+    const ptr = @as([*]u8, @ptrCast(base.?));
+    
+    var i: usize = 0;
+    while (i < nitems - 1) : (i += 1) {
+        var j: usize = 0;
+        while (j < nitems - 1 - i) : (j += 1) {
+            const elem1 = ptr + (j * size);
+            const elem2 = ptr + ((j + 1) * size);
+            if (cmp(elem1, elem2) > 0) {
+                var k: usize = 0;
+                while (k < size) : (k += 1) {
+                    const temp = elem1[k];
+                    elem1[k] = elem2[k];
+                    elem2[k] = temp;
+                }
+            }
+        }
+    }
+}
+
+pub export fn pow(x: f64, y: f64) callconv(.c) f64 {
+    _ = x;
+    _ = y;
+    return 0.0;
+}
+
+pub export fn atan2(y: f64, x: f64) callconv(.c) f64 {
+    _ = y;
+    _ = x;
+    return 0.0;
+}
+
+pub export fn pthread_exit(retval: ?*anyopaque) callconv(.c) noreturn {
+    _ = retval;
+    while (true) {}
+}
+
+pub export fn pthread_join(thread: usize, retval: ?*?*anyopaque) callconv(.c) c_int {
+    _ = thread;
+    _ = retval;
+    return 0;
+}
+
+pub export fn siglongjmp(env: ?*anyopaque, val: c_int) callconv(.c) noreturn {
+    if (comptime @import("builtin").is_test) {
+        const dummy = @intFromPtr(env) + @as(usize, @intCast(val));
+        _ = dummy;
+        while (true) {}
+    }
+    asm volatile (
+        \\ld ra, 0(a0)
+        \\ld sp, 8(a0)
+        \\ld s0, 16(a0)
+        \\ld s1, 24(a0)
+        \\ld s2, 32(a0)
+        \\ld s3, 40(a0)
+        \\ld s4, 48(a0)
+        \\ld s5, 56(a0)
+        \\ld s6, 64(a0)
+        \\ld s7, 72(a0)
+        \\ld s8, 80(a0)
+        \\ld s9, 88(a0)
+        \\ld s10, 96(a0)
+        \\ld s11, 104(a0)
+        \\mv a0, a1
+        \\bnez a0, 1f
+        \\li a0, 1
+        \\1:
+        \\jr ra
+        :
+        : [env] "{a0}" (env),
+          [val] "{a1}" (val)
+    );
+    while (true) {}
+}
+
+pub export fn longjmp(env: ?*anyopaque, val: c_int) callconv(.c) noreturn {
+    siglongjmp(env, val);
+}
+
+pub export var stdout: ?*anyopaque = null;
+
+pub export fn fflush(stream: ?*anyopaque) callconv(.c) c_int {
+    _ = stream;
+    return 0;
+}
+
+pub export fn raise(sig: c_int) callconv(.c) c_int {
+    _ = sig;
+    return 0;
+}
+
+pub export fn strncmp(s1: [*:0]const u8, s2: [*:0]const u8, n: usize) callconv(.c) c_int {
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const c1 = s1[i];
+        const c2 = s2[i];
+        if (c1 != c2 or c1 == 0) {
+            return @as(c_int, c1) - @as(c_int, c2);
+        }
+    }
+    return 0;
+}
+
+pub export fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*anyopaque {
+    _ = filename;
+    _ = mode;
+    return null;
+}
+
+pub export fn setvbuf(stream: ?*anyopaque, buf: ?[*]u8, mode: c_int, size: usize) callconv(.c) c_int {
+    _ = stream;
+    _ = buf;
+    _ = mode;
+    _ = size;
+    return 0;
+}
+
+pub export fn fread(ptr: ?*anyopaque, size: usize, nmemb: usize, stream: ?*anyopaque) callconv(.c) usize {
+    _ = ptr;
+    _ = size;
+    _ = nmemb;
+    _ = stream;
+    return 0;
+}
+
+pub export fn fclose(stream: ?*anyopaque) callconv(.c) c_int {
+    _ = stream;
+    return 0;
+}
+
+// Bindings to Unicorn Engine C API
+pub const uc_err = enum(c_int) {
+    UC_ERR_OK = 0,
+    UC_ERR_NOMEM,
+    UC_ERR_ARCH,
+    UC_ERR_HANDLE,
+    UC_ERR_MODE,
+    UC_ERR_VERSION,
+    UC_ERR_READ_UNMAPPED,
+    UC_ERR_WRITE_UNMAPPED,
+    UC_ERR_FETCH_UNMAPPED,
+    UC_ERR_HOOK,
+    UC_ERR_INSN_INVALID,
+    UC_ERR_MAP,
+    UC_ERR_WRITE_PROT,
+    UC_ERR_READ_PROT,
+    UC_ERR_FETCH_PROT,
+    UC_ERR_ARG,
+    UC_ERR_READ_UNALIGNED,
+    UC_ERR_WRITE_UNALIGNED,
+    UC_ERR_FETCH_UNALIGNED,
+    UC_ERR_HOOK_EXIST,
+    UC_ERR_RESOURCE,
+    UC_ERR_EXCEPTION,
+};
+
+pub const uc_arch = enum(c_int) {
+    UC_ARCH_ARM = 1,
+    UC_ARCH_ARM64,
+    UC_ARCH_MIPS,
+    UC_ARCH_X86,
+    UC_ARCH_PPC,
+    UC_ARCH_SPARC,
+    UC_ARCH_M68K,
+    UC_ARCH_MAX,
+    UC_ARCH_RISCV = 9,
+};
+
+pub const uc_mode = c_int;
+pub const UC_MODE_LITTLE_ENDIAN: uc_mode = 0;
+pub const UC_MODE_BIG_ENDIAN: uc_mode = 1 << 30;
+pub const UC_MODE_ARM: uc_mode = 0;
+pub const UC_MODE_16: uc_mode = 1 << 1;
+pub const UC_MODE_32: uc_mode = 1 << 2;
+pub const UC_MODE_64: uc_mode = 1 << 3;
+pub const UC_MODE_RISCV32: uc_mode = 1 << 2;
+pub const UC_MODE_RISCV64: uc_mode = 1 << 3;
+
+pub const uc_mem_type = enum(c_int) {
+    UC_MEM_READ = 16,
+    UC_MEM_WRITE,
+    UC_MEM_FETCH,
+    UC_MEM_READ_UNMAPPED,
+    UC_MEM_WRITE_UNMAPPED,
+    UC_MEM_FETCH_UNMAPPED,
+    UC_MEM_WRITE_PROT,
+    UC_MEM_READ_PROT,
+    UC_MEM_FETCH_PROT,
+    UC_MEM_READ_AFTER,
+};
+
+pub const uc_prot = struct {
+    pub const UC_PROT_NONE = 0;
+    pub const UC_PROT_READ = 1;
+    pub const UC_PROT_WRITE = 2;
+    pub const UC_PROT_ALL = 3;
+};
+
+// Register IDs for Unicorn Engine targets
+pub const uc_riscv_reg = enum(c_int) {
+    UC_RISCV_REG_INVALID = 0,
+    UC_RISCV_REG_X0, UC_RISCV_REG_X1, UC_RISCV_REG_X2, UC_RISCV_REG_X3,
+    UC_RISCV_REG_X4, UC_RISCV_REG_X5, UC_RISCV_REG_X6, UC_RISCV_REG_X7,
+    UC_RISCV_REG_X8, UC_RISCV_REG_X9, UC_RISCV_REG_X10, UC_RISCV_REG_X11,
+    UC_RISCV_REG_X12, UC_RISCV_REG_X13, UC_RISCV_REG_X14, UC_RISCV_REG_X15,
+    UC_RISCV_REG_X16, UC_RISCV_REG_X17, UC_RISCV_REG_X18, UC_RISCV_REG_X19,
+    UC_RISCV_REG_X20, UC_RISCV_REG_X21, UC_RISCV_REG_X22, UC_RISCV_REG_X23,
+    UC_RISCV_REG_X24, UC_RISCV_REG_X25, UC_RISCV_REG_X26, UC_RISCV_REG_X27,
+    UC_RISCV_REG_X28, UC_RISCV_REG_X29, UC_RISCV_REG_X30, UC_RISCV_REG_X31,
+    UC_RISCV_REG_PC,
+};
+
+pub const uc_arm64_reg = enum(c_int) {
+    UC_ARM64_REG_INVALID = 0,
+    UC_ARM64_REG_X0 = 17, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3,
+    UC_ARM64_REG_X4, UC_ARM64_REG_X5, UC_ARM64_REG_X6, UC_ARM64_REG_X7,
+    UC_ARM64_REG_X8, UC_ARM64_REG_X9, UC_ARM64_REG_X10, UC_ARM64_REG_X11,
+    UC_ARM64_REG_X12, UC_ARM64_REG_X13, UC_ARM64_REG_X14, UC_ARM64_REG_X15,
+    UC_ARM64_REG_X16, UC_ARM64_REG_X17, UC_ARM64_REG_X18, UC_ARM64_REG_X19,
+    UC_ARM64_REG_X20, UC_ARM64_REG_X21, UC_ARM64_REG_X22, UC_ARM64_REG_X23,
+    UC_ARM64_REG_X24, UC_ARM64_REG_X25, UC_ARM64_REG_X26, UC_ARM64_REG_X27,
+    UC_ARM64_REG_X28,
+    UC_ARM64_REG_FP, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC,
+};
+
+pub const uc_x86_reg = enum(c_int) {
+    UC_X86_REG_INVALID = 0,
+    UC_X86_REG_RAX = 35,
+    UC_X86_REG_RBP = 36,
+    UC_X86_REG_RBX = 37,
+    UC_X86_REG_RCX = 38,
+    UC_X86_REG_RDI = 39,
+    UC_X86_REG_RDX = 40,
+    UC_X86_REG_RIP = 41,
+    UC_X86_REG_RSI = 43,
+    UC_X86_REG_RSP = 44,
+};
+
+// C API function prototypes linked from libunicorn.a
+const is_test = @import("builtin").is_test;
+
+pub const uc_version = if (is_test) struct {
+    fn impl(major: ?*c_int, minor: ?*c_int) callconv(.c) c_uint {
+        _ = major; _ = minor; return 0;
+    }
+}.impl else struct {
+    extern fn uc_version(major: ?*c_int, minor: ?*c_int) c_uint;
+}.uc_version;
+
+pub const uc_open = if (is_test) struct {
+    fn impl(arch: uc_arch, mode: uc_mode, engine: *?*anyopaque) callconv(.c) uc_err {
+        _ = arch; _ = mode; _ = engine; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_open(arch: uc_arch, mode: uc_mode, engine: *?*anyopaque) uc_err;
+}.uc_open;
+
+pub const uc_close = if (is_test) struct {
+    fn impl(engine: ?*anyopaque) callconv(.c) uc_err {
+        _ = engine; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_close(engine: ?*anyopaque) uc_err;
+}.uc_close;
+
+pub const uc_emu_start = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, begin: u64, until: u64, timeout: u64, count: u64) callconv(.c) uc_err {
+        _ = engine; _ = begin; _ = until; _ = timeout; _ = count; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_emu_start(engine: ?*anyopaque, begin: u64, until: u64, timeout: u64, count: u64) uc_err;
+}.uc_emu_start;
+
+pub const uc_emu_stop = if (is_test) struct {
+    fn impl(engine: ?*anyopaque) callconv(.c) uc_err {
+        _ = engine; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_emu_stop(engine: ?*anyopaque) uc_err;
+}.uc_emu_stop;
+
+pub const uc_reg_write = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, regid: c_int, value: ?*const anyopaque) callconv(.c) uc_err {
+        _ = engine; _ = regid; _ = value; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_reg_write(engine: ?*anyopaque, regid: c_int, value: ?*const anyopaque) uc_err;
+}.uc_reg_write;
+
+pub const uc_reg_read = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, regid: c_int, value: ?*anyopaque) callconv(.c) uc_err {
+        _ = engine; _ = regid; _ = value; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_reg_read(engine: ?*anyopaque, regid: c_int, value: ?*anyopaque) uc_err;
+}.uc_reg_read;
+
+pub const uc_mem_map = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, address: u64, size: u64, perms: u32) callconv(.c) uc_err {
+        _ = engine; _ = address; _ = size; _ = perms; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_mem_map(engine: ?*anyopaque, address: u64, size: u64, perms: u32) uc_err;
+}.uc_mem_map;
+
+pub const uc_mem_map_ptr = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, address: u64, size: u64, perms: u32, ptr: ?*anyopaque) callconv(.c) uc_err {
+        _ = engine; _ = address; _ = size; _ = perms; _ = ptr; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_mem_map_ptr(engine: ?*anyopaque, address: u64, size: u64, perms: u32, ptr: ?*anyopaque) uc_err;
+}.uc_mem_map_ptr;
+
+pub const uc_mem_unmap = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, address: u64, size: u64) callconv(.c) uc_err {
+        _ = engine; _ = address; _ = size; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_mem_unmap(engine: ?*anyopaque, address: u64, size: u64) uc_err;
+}.uc_mem_unmap;
+
+// Hook API
+pub const uc_cb_eventmem_t = *const fn(uc: ?*anyopaque, mem_type: uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) bool;
+pub const uc_hook = ?*anyopaque;
+pub const UC_HOOK_MEM_UNMAPPED = 2048; // Hook unmapped memory accesses
+
+pub const uc_hook_add = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, hh: *uc_hook, type_mask: c_int, callback: ?*const anyopaque, user_data: ?*anyopaque, begin: u64, end: u64) callconv(.c) uc_err {
+        _ = engine; _ = hh; _ = type_mask; _ = callback; _ = user_data; _ = begin; _ = end; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_hook_add(engine: ?*anyopaque, hh: *uc_hook, type_mask: c_int, callback: ?*const anyopaque, user_data: ?*anyopaque, begin: u64, end: u64, ...) uc_err;
+}.uc_hook_add;
+
+// Remaining C/POSIX stubs required by Unicorn Engine:
+pub export var stderr: ?*anyopaque = null;
+
+pub export fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8 {
+    _ = name;
+    return null;
+}
+
+pub export fn munmap(addr: ?*anyopaque, length: usize) callconv(.c) c_int {
+    _ = addr;
+    _ = length;
+    return 0;
+}
+
+pub export fn perror(s: [*:0]const u8) callconv(.c) void {
+    debug.printf("perror: {s}\n", .{s});
+}
+
+pub export fn exit(status: c_int) callconv(.c) noreturn {
+    debug.printf("exit called with status {}\n", .{status});
+    while (true) {}
+}
+
+pub export fn sigsetjmp(env: ?*anyopaque, savesigs: c_int) callconv(.c) c_int {
+    _ = savesigs;
+    if (comptime @import("builtin").is_test) return 0;
+    asm volatile (
+        \\sd ra, 0(a0)
+        \\sd sp, 8(a0)
+        \\sd s0, 16(a0)
+        \\sd s1, 24(a0)
+        \\sd s2, 32(a0)
+        \\sd s3, 40(a0)
+        \\sd s4, 48(a0)
+        \\sd s5, 56(a0)
+        \\sd s6, 64(a0)
+        \\sd s7, 72(a0)
+        \\sd s8, 80(a0)
+        \\sd s9, 88(a0)
+        \\sd s10, 96(a0)
+        \\sd s11, 104(a0)
+        \\li a0, 0
+        \\ret
+        :
+        : [env] "{a0}" (env)
+    );
+    return 0;
+}
+
+pub export fn snprintf(str: [*]u8, size: usize, format: [*:0]const u8, ...) callconv(.c) c_int {
+    if (size == 0) return 0;
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+
+    var write_idx: usize = 0;
+    var fmt_idx: usize = 0;
+
+    while (format[fmt_idx] != 0 and write_idx < size - 1) {
+        if (format[fmt_idx] == '%') {
+            fmt_idx += 1;
+            if (format[fmt_idx] == 0) break;
+            if (format[fmt_idx] == '%') {
+                str[write_idx] = '%';
+                write_idx += 1;
+                fmt_idx += 1;
+                continue;
+            }
+            
+            if (format[fmt_idx] == 's') {
+                const s = @cVaArg(&ap, [*:0]const u8);
+                const s_span = std.mem.span(s);
+                for (s_span) |char| {
+                    if (write_idx >= size - 1) break;
+                    str[write_idx] = char;
+                    write_idx += 1;
+                }
+                fmt_idx += 1;
+            } else if (format[fmt_idx] == 'd' or format[fmt_idx] == 'i') {
+                const val = @cVaArg(&ap, c_int);
+                var buf: [32]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&buf, "{d}", .{val}) catch "";
+                for (formatted) |char| {
+                    if (write_idx >= size - 1) break;
+                    str[write_idx] = char;
+                    write_idx += 1;
+                }
+                fmt_idx += 1;
+            } else if (format[fmt_idx] == 'u') {
+                const val = @cVaArg(&ap, c_uint);
+                var buf: [32]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&buf, "{d}", .{val}) catch "";
+                for (formatted) |char| {
+                    if (write_idx >= size - 1) break;
+                    str[write_idx] = char;
+                    write_idx += 1;
+                }
+                fmt_idx += 1;
+            } else if (format[fmt_idx] == 'x') {
+                const val = @cVaArg(&ap, c_uint);
+                var buf: [32]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&buf, "{x}", .{val}) catch "";
+                for (formatted) |char| {
+                    if (write_idx >= size - 1) break;
+                    str[write_idx] = char;
+                    write_idx += 1;
+                }
+                fmt_idx += 1;
+            } else {
+                str[write_idx] = '%';
+                write_idx += 1;
+                if (write_idx < size - 1) {
+                    str[write_idx] = format[fmt_idx];
+                    write_idx += 1;
+                }
+                fmt_idx += 1;
+            }
+        } else {
+            str[write_idx] = format[fmt_idx];
+            write_idx += 1;
+            fmt_idx += 1;
+        }
+    }
+    str[write_idx] = 0;
+    return @intCast(write_idx);
+}
+
+var global_errno: c_int = 0;
+pub export fn __errno_location() callconv(.c) *c_int {
+    return &global_errno;
+}
+
+pub export fn madvise(addr: ?*anyopaque, length: usize, advice: c_int) callconv(.c) c_int {
+    _ = addr;
+    _ = length;
+    _ = advice;
+    return 0;
+}
+
+pub export fn mprotect(addr: ?*anyopaque, len: usize, prot: c_int) callconv(.c) c_int {
+    _ = addr;
+    _ = len;
+    _ = prot;
+    return 0;
+}
+
+pub export fn __riscv_flush_icache(start: ?*anyopaque, end: ?*anyopaque, flags: c_ulong) callconv(.c) void {
+    _ = start;
+    _ = end;
+    _ = flags;
+    if (comptime @import("builtin").is_test) return;
+    asm volatile ("fence.i");
+}
+
+pub export fn bsearch(key: ?*const anyopaque, base: ?*const anyopaque, nitems: usize, size: usize, compar: ?*const fn(?*const anyopaque, ?*const anyopaque) callconv(.c) c_int) callconv(.c) ?*anyopaque {
+    if (key == null or base == null or nitems == 0 or size == 0 or compar == null) return null;
+    const cmp = compar.?;
+    const ptr = @as([*]const u8, @ptrCast(base.?));
+    
+    var low: usize = 0;
+    var high: usize = nitems;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const mid_ptr = ptr + (mid * size);
+        const res = cmp(key.?, mid_ptr);
+        if (res == 0) {
+            return @as(?*anyopaque, @constCast(@ptrCast(mid_ptr)));
+        } else if (res < 0) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return null;
+}
+
+pub export fn mmap(addr: ?*anyopaque, length: usize, prot: c_int, flags: c_int, fd: c_int, offset: i64) callconv(.c) ?*anyopaque {
+    _ = addr;
+    _ = prot;
+    _ = flags;
+    _ = fd;
+    _ = offset;
+    if (malloc(length)) |ptr| {
+        return ptr;
+    }
+    return @ptrFromInt(@as(usize, 0xffffffffffffffff));
+}
+
+pub export fn strerror(errnum: c_int) callconv(.c) [*:0]const u8 {
+    _ = errnum;
+    return "Unknown error";
+}
+
+pub export fn __fpclassifyl(x: f128) callconv(.c) c_int {
+    _ = x;
+    return 4; // FP_NORMAL
+}
+
+pub export fn pthread_attr_init(attr: ?*anyopaque) callconv(.c) c_int {
+    _ = attr;
+    return 0;
+}
+
+pub export fn pthread_attr_setdetachstate(attr: ?*anyopaque, state: c_int) callconv(.c) c_int {
+    _ = attr;
+    _ = state;
+    return 0;
+}
+
+pub export fn sigfillset(set: ?*anyopaque) callconv(.c) c_int {
+    _ = set;
+    return 0;
+}
+
+pub export fn pthread_sigmask(how: c_int, set: ?*const anyopaque, oldset: ?*anyopaque) callconv(.c) c_int {
+    _ = how;
+    _ = set;
+    _ = oldset;
+    return 0;
+}
+
+pub export fn pthread_create(thread: ?*usize, attr: ?*const anyopaque, start_routine: ?*const anyopaque, arg: ?*anyopaque) callconv(.c) c_int {
+    _ = thread;
+    _ = attr;
+    _ = start_routine;
+    _ = arg;
+    return 0;
+}
+
+pub export fn pthread_attr_destroy(attr: ?*anyopaque) callconv(.c) c_int {
+    _ = attr;
+    return 0;
+}
+
+pub export fn strcmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) c_int {
+    var i: usize = 0;
+    while (true) : (i += 1) {
+        const c1 = s1[i];
+        const c2 = s2[i];
+        if (c1 != c2 or c1 == 0) {
+            return @as(c_int, c1) - @as(c_int, c2);
+        }
+    }
+}
+
+pub export fn strcpy(dest: [*]u8, src: [*:0]const u8) callconv(.c) [*]u8 {
+    var i: usize = 0;
+    while (true) : (i += 1) {
+        dest[i] = src[i];
+        if (src[i] == 0) break;
+    }
+    return dest;
+}
+
+pub export fn strdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8 {
+    const len = std.mem.span(s).len;
+    const ptr = malloc(len + 1) orelse return null;
+    const dest = @as([*]u8, @ptrCast(ptr));
+    @memcpy(dest[0..len], s[0..len]);
+    dest[len] = 0;
+    return @ptrCast(dest);
+}
+
+pub export fn vasprintf(strp: *?[*:0]u8, format: [*:0]const u8, ap: ?*anyopaque) callconv(.c) c_int {
+    _ = ap;
+    const fmt_span = std.mem.span(format);
+    const ptr = malloc(fmt_span.len + 1) orelse return -1;
+    const dest = @as([*]u8, @ptrCast(ptr));
+    @memcpy(dest[0..fmt_span.len], fmt_span[0..fmt_span.len]);
+    dest[fmt_span.len] = 0;
+    strp.* = @ptrCast(dest);
+    return @intCast(fmt_span.len);
+}
+
+pub export fn strncpy(dest: [*]u8, src: [*:0]const u8, n: usize) callconv(.c) [*]u8 {
+    var i: usize = 0;
+    var pad = false;
+    while (i < n) : (i += 1) {
+        if (pad) {
+            dest[i] = 0;
+        } else {
+            dest[i] = src[i];
+            if (src[i] == 0) pad = true;
+        }
+    }
+    return dest;
+}
+
+pub export fn strcat(dest: [*:0]u8, src: [*:0]const u8) callconv(.c) [*:0]u8 {
+    var dest_idx: usize = 0;
+    while (dest[dest_idx] != 0) : (dest_idx += 1) {}
+    
+    var src_idx: usize = 0;
+    while (true) : (src_idx += 1) {
+        dest[dest_idx + src_idx] = src[src_idx];
+        if (src[src_idx] == 0) break;
+    }
+    return dest;
+}
+
+pub export fn strstr(haystack: [*:0]const u8, needle: [*:0]const u8) callconv(.c) ?[*:0]const u8 {
+    const h_span = std.mem.span(haystack);
+    const n_span = std.mem.span(needle);
+    if (n_span.len == 0) return haystack;
+    if (h_span.len < n_span.len) return null;
+    
+    var i: usize = 0;
+    while (i <= h_span.len - n_span.len) : (i += 1) {
+        if (std.mem.eql(u8, h_span[i..(i + n_span.len)], n_span)) {
+            return @ptrCast(&haystack[i]);
+        }
+    }
+    return null;
+}

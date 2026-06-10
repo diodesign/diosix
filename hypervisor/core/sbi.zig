@@ -47,11 +47,11 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.LEGACY_CONSOLE_GETCHAR => {
             const char_val = @as(isize, debug.getchar(vc.guest_id));
             context[@intFromEnum(arch.Register.a0)] = @bitCast(char_val);
-            vc.context[@intFromEnum(arch.Register.a0)] = @bitCast(char_val);
+            vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = @bitCast(char_val);
             // Do NOT modify a1 or other registers.
         },
         interface.EXT.LEGACY_CLEAR_IPI => {
-            vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSSIP);
+            vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSSIP);
             // Clear the CLINT MSIP register for the current physical CPU core
             if (riscv.CLINT.msip(riscv.getCPUContext().hardware_hart_id)) |ptr| {
                 ptr.* = 0;
@@ -68,7 +68,9 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             while (it_vcore) |node| {
                 const target_vc = node.contents;
                 if ((mask & (@as(usize, 1) << @intCast(target_vc.id))) != 0) {
-                    target_vc.machine.hvip |= riscv.HVIP.VSSIP;
+                    if (target_vc.exec_path == .native) {
+                        target_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
+                    }
                     if (target_vc.wfi_blocked) {
                         target_vc.wfi_blocked = false;
                         target_vc.state = .ready;
@@ -99,7 +101,9 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
     }
 
     // Move guest to the next instruction after ECALL
-    vc.machine.mepc += 4;
+    if (vc.exec_path == .native) {
+        vc.getNativeMachine().mepc += 4;
+    }
 }
 
 fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize) void {
@@ -156,7 +160,9 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
         }
 
         if (should_send) {
-            target_vc.machine.hvip |= riscv.HVIP.VSSIP;
+            if (target_vc.exec_path == .native) {
+                target_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
+            }
             if (target_vc.wfi_blocked) {
                 target_vc.wfi_blocked = false;
                 target_vc.state = .ready;
@@ -179,10 +185,12 @@ fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64
     vc.timer_scheduled = true;
     vc.timer_target = stime;
 
-    vc.guest_state.vstimecmp = stime;
+    if (vc.exec_path == .native) {
+        vc.getNativeGuestState().vstimecmp = stime;
 
-    // Clear the guest's virtual timer interrupt pending bit now that they've scheduled a new event.
-    vc.machine.hvip &= ~@as(usize, riscv.HVIP.VSTIP);
+        // Clear the guest's virtual timer interrupt pending bit now that they've scheduled a new event.
+        vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
+    }
 
     setResult(vc, context, SBI_SUCCESS, 0);
 }
@@ -255,9 +263,14 @@ fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: us
                     setResult(vc, context, interface.ERR_ALREADY_AVAILABLE, 0);
                     return;
                 }
-                target_vc.machine.mepc = start_addr;
-                target_vc.context[@intFromEnum(arch.Register.a0)] = target_hart;
-                target_vc.context[@intFromEnum(riscv.Register.a1)] = opaque_param;
+                if (target_vc.exec_path == .native) {
+                    target_vc.getNativeMachine().mepc = start_addr;
+                    target_vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = target_hart;
+                    target_vc.getNativeContext()[@intFromEnum(riscv.Register.a1)] = opaque_param;
+                } else {
+                    target_vc.exec_path.emulated.entry = start_addr;
+                    target_vc.exec_path.emulated.dtb = opaque_param;
+                }
                 target_vc.state = .ready;
                 target_vc.wfi_blocked = false;
 
@@ -371,8 +384,10 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
 fn setResult(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, err: isize, val: usize) void {
     context[@intFromEnum(arch.Register.a0)] = @bitCast(err); // A0 = error code.
     context[@intFromEnum(arch.Register.a1)] = val; // A1 = value.
-    vc.context[@intFromEnum(arch.Register.a0)] = @bitCast(err);
-    vc.context[@intFromEnum(arch.Register.a1)] = val;
+    if (vc.exec_path == .native) {
+        vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = @bitCast(err);
+        vc.getNativeContext()[@intFromEnum(arch.Register.a1)] = val;
+    }
 }
 
 /// Terminate a guest. If the guest is the Root VM, the architecture requires

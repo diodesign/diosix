@@ -1,4 +1,8 @@
-The MIT License (MIT)
+# Licensing of Diosix
+
+Unless otherwise stated, the following license applies to the Diosix source code:
+
+## MIT License (MIT)
 
 Copyright (c) 2024-2026 Diosix contributors
 
@@ -19,3 +23,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+## Compiled binary license notice
+
+This hypervisor integrates the [Unicorn Engine](https://www.unicorn-engine.org/), which contains parts of QEMU's JIT compiler (TCG). Because Unicorn is licensed under the GNU General Public License version 2 (GPLv2), any compiled binary images of Diosix that link with the Unicorn Engine are defined as derivative works under [GPLv2 rules](https://github.com/unicorn-engine/unicorn/blob/master/COPYING).
+
+Consequently, while the individual source files of Diosix remain under the permissive MIT license, compiled binary distributions containing the emulation layer must be distributed under the GPLv2.
+
