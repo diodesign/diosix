@@ -141,14 +141,9 @@ following external documentation:
 
 ---
 
-## Copyright, license, and legal
+## Legal stuff
 
-Copyright &copy; 2024-2026 Diosix contributors. 
-
-The Diosix source code is distributed under the terms of the MIT License. See [LICENSE.md](LICENSE.md) for the full text and [CONTRIBUTORS.md](CONTRIBUTORS.md) for the list of copyright holders.
-
-Note that compiled binary releases or execution images of Diosix that link with the integrated **Unicorn Engine** are subject to the copyleft constraints of the **GNU General Public License version 2 (GPLv2)**. Individual source files remain permissive MIT, but distributed binary packages containing the emulation layer must be distributed under the GPLv2.
-
+The Diosix source code is distributed under the terms of the MIT License. See [LICENSE.md](LICENSE.md) for the full text and [CONTRIBUTORS.md](CONTRIBUTORS.md) for the list of copyright holders. Diosix binary releases are covered by [the GPLv2](COPYING.md).
 
 The diosix.org website illustration is a combination of artwork provided by
 [Katerina Limpitsouni](https://undraw.co/license) and

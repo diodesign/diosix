@@ -28,7 +28,6 @@ SOFTWARE.
 
 ## Compiled binary license notice
 
-This hypervisor integrates the [Unicorn Engine](https://www.unicorn-engine.org/), which contains parts of QEMU's JIT compiler (TCG). Because Unicorn is licensed under the GNU General Public License version 2 (GPLv2), any compiled binary images of Diosix that link with the Unicorn Engine are defined as derivative works under [GPLv2 rules](https://github.com/unicorn-engine/unicorn/blob/master/COPYING).
+This hypervisor integrates [Unicorn Engine](https://www.unicorn-engine.org/), which contains parts of QEMU's JIT compiler (TCG). Because Unicorn is licensed under the GNU General Public License version 2 (GPLv2), any compiled binary images of Diosix that link with Unicorn Engine are defined as derivative works under [GPLv2 rules](COPYING.md).
 
-Consequently, while the individual source files of Diosix remain under the permissive MIT license, compiled binary distributions containing the emulation layer must be distributed under the GPLv2.
-
+Consequently, while the individual source files of Diosix remain under the permissive MIT License, compiled binary distributions containing the emulation layer must be distributed under the GPLv2.

@@ -23,7 +23,7 @@ maintaining a global state in the hypervisor.
 ## Root VM image generation
 
 Diosix cross-compiles the Root VM guest environment from source using
-Buildroot. This process builds the RISC-V Linux kernel, a BusyBox-based
+Buildroot. This process builds a native RISC-V Linux kernel, a BusyBox-based
 userspace, and early initialization scripts entirely from source, ensuring
 that all privileged guest code is built from origin.
 
@@ -40,20 +40,22 @@ Diosix integrates a transparent, cross-architecture virtual CPU core emulation l
 
 ### Supported guest architectures
 
-The hypervisor inspects the ELF machine headers of a guest VM's binary at boot
-time to identify its target instruction set architecture:
+The hypervisor inspects the ELF machine headers of a guest VM's binary to identify
+its target instruction set architecture:
 
-*   64-bit RISC-V guest VMs run directly on the host physical CPU at native speeds
-    using the host processor's hardware virtualization extension or the Physical
-    Memory Protection (PMP) fallback mode.
-*   32-bit RISC-V, 64-bit Arm, and 64-bit x86 guest VMs run transparently using
-    software just-in-time (JIT) emulation.
+*   64-bit RISC-V (`riscv64`) guest VMs run directly on the host physical CPU at
+    native speeds using the host processor's hardware virtualization extension or
+    the Physical Memory Protection (PMP) fallback mode.
+*   32-bit RISC-V, 64-bit Arm, and 64-bit x86 (`riscv32`, `aarch64`, `x86_64`)
+    guest VMs run transparently using software just-in-time (JIT) emulation.
 
 ### Unicorn Engine integration
 
 The emulation layer is powered by [Unicorn Engine](https://github.com/unicorn-engine/unicorn), a lightweight multi-platform, multi-architecture CPU emulator framework based on QEMU.
 
 Unicorn is compiled as a static library and linked directly into the hypervisor binary image. Since Unicorn is licensed under the GPL, the presence of Unicorn in a compiled Diosix binary means outbound binary distributions are [subject to the GPL](../LICENSE.md), whereas the standalone Diosix hypervisor source code remains under its permissive MIT license.
+
+The following sub-sections apply only to emulated guest VMs.
 
 #### Memory management
 
@@ -81,16 +83,27 @@ guest VM from hogging a physical core, the hypervisor handles preemption:
     immediately exit the Unicorn JIT loop.
 *   The scheduler then yields the core, allowing other virtual cores to run.
 
-#### SBI and system call interception
+#### System call interception
 
-System calls and software interrupts executed by the guest (for example, `ECALL` on
-RISC-V, `SVC` on Arm, or software interrupts on x86) are caught via a Unicorn
+System calls made by a guest kernel to the hypervisor are caught via a Unicorn
 interrupt hook.
 
-The hypervisor reads the guest's registers, maps them into a mock supervisor
+The hypervisor reads the guest's CPU registers, maps them into a mock supervisor
 context, executes the request via the native Supervisor Binary Interface (SBI)
 handler, writes the return values back to the guest's virtual registers, and
 advances the instruction pointer to resume execution.
+
+### Native-vs-emulated guests
+
+The differences between native and emulated execution paths in Diosix are summarized in the following table:
+
+| Feature                      | Native guest (`riscv64`)                                                                                           | Emulated guest (`riscv32`, `aarch64`, `x86_64`)                                                        |
+| :-----------------------------| :-------------------------------------------------------------------------------------------------------------------| :-------------------------------------------------------------------------------------------------------|
+| CPU execution                | Runs directly on the host physical CPU at full hardware speed.                                                     | Runs in software via JIT binary translation using Unicorn.                                             |
+| Host virtualization hardware | Requires and utilizes the RISC-V H extension (or PMP fallback) for isolated guest execution.                                                    | Does not utilize host hardware virtualization features for isolated guest execution.                   |
+| Memory allocation            | Dynamic and on-demand using G-stage page tables and Copy-on-Write (CoW) support (contiguous only in PMP fallback). | Pre-allocated as a single contiguous block, mapped statically in full via `uc_mem_map_ptr` at VM boot. |
+| Context switching            | Handled via assembly register swap routines during M-mode entry/exit traps.                                        | Handled by stopping the software JIT loop (`uc_emu_stop`), saving Unicorn registers, and yielding.     |
+| System call interception     | Traps directly from guest VS-mode to hypervisor M-mode via `ECALL`.                                                | Trapped via Unicorn software interrupt hooks, which copy registers into a mock thread context.         |
 
 ---
 
