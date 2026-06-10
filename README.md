@@ -1,4 +1,4 @@
-[![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](LICENSE.md) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
+[![License: MIT](https://img.shields.io/github/license/diodesign/diosix)](LICENSE.md) [![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/) [![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/) [![Diosix continuous integration](https://github.com/diodesign/diosix/actions/workflows/ci.yml/badge.svg)](https://github.com/diodesign/diosix/actions/workflows/ci.yml)
 
 # About Diosix
 
