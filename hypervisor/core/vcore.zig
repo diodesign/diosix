@@ -58,6 +58,10 @@ pub const VirtualCore = struct {
             target_arch: guest.TargetArch,
             entry: usize,
             dtb: usize,
+            context: riscv.ThreadContext,
+            machine: riscv.MachineState,
+            guest_state: riscv.GuestState,
+            stack: []u8,
         },
     },
 
@@ -130,14 +134,30 @@ pub const VirtualCore = struct {
             vcore.exec_path.native.context[@intFromEnum(riscv.Register.a0)] = id; // A0 = VCPU ID.
             vcore.exec_path.native.context[@intFromEnum(riscv.Register.a1)] = dtb; // A1 = DTB address.
         } else {
+            const stack_size = 128 * 1024; // 128KB stack
+            const stack = parent.allocator.alloc(u8, stack_size) catch @panic("Failed to allocate S-mode stack for emulator");
+
             vcore.exec_path = .{
                 .emulated = .{
                     .uc = null,
                     .target_arch = parent.target_arch,
                     .entry = entry,
                     .dtb = dtb,
+                    .context = std.mem.zeroes(riscv.ThreadContext),
+                    .machine = .{
+                        .mepc = @intFromPtr(&@import("arch_emulation.zig").emulatedRunnerSMode),
+                        .mstatus = (1 << 11) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor Mode), MPV=0, FS=3
+                        .hstatus = 0,
+                        .hgatp = 0,
+                        .hedeleg = 0,
+                        .hideleg = 0,
+                        .hvip = 0,
+                    },
+                    .guest_state = std.mem.zeroes(riscv.GuestState),
+                    .stack = stack,
                 },
             };
+            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.sp)] = @intFromPtr(stack.ptr) + stack.len;
         }
 
         // Initialize the scheduler node's contents to the vruntime for ordering.
@@ -153,6 +173,7 @@ pub const VirtualCore = struct {
                     _ = @import("unicorn_glue.zig").uc_close(uc);
                     e.uc = null;
                 }
+                self.guest.allocator.free(e.stack);
             },
             else => {},
         }
@@ -174,15 +195,24 @@ pub const VirtualCore = struct {
     }
 
     pub fn getNativeContext(self: *VirtualCore) *riscv.ThreadContext {
-        return &self.exec_path.native.context;
+        return switch (self.exec_path) {
+            .native => |*n| &n.context,
+            .emulated => |*e| &e.context,
+        };
     }
 
     pub fn getNativeMachine(self: *VirtualCore) *riscv.MachineState {
-        return &self.exec_path.native.machine;
+        return switch (self.exec_path) {
+            .native => |*n| &n.machine,
+            .emulated => |*e| &e.machine,
+        };
     }
 
     pub fn getNativeGuestState(self: *VirtualCore) *riscv.GuestState {
-        return &self.exec_path.native.guest_state;
+        return switch (self.exec_path) {
+            .native => |*n| &n.guest_state,
+            .emulated => |*e| &e.guest_state,
+        };
     }
 
     pub fn getGuest(self: *VirtualCore) *guest.Guest {

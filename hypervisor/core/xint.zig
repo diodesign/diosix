@@ -566,7 +566,15 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
             const pcpu = pcore.this();
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                sbi.handle(vc, context);
+                if (vc.exec_path == .emulated) {
+                    // This is the S-mode emulator runner exiting.
+                    // Advance PC past ECALL so it doesn't execute again when rescheduled.
+                    vc.getNativeMachine().mepc += 4;
+                    // Yield the physical core to schedule other vcores
+                    scheduler.schedule();
+                } else {
+                    sbi.handle(vc, context);
+                }
             }
         },
         .guest_instruction_page_fault, .guest_load_page_fault, .guest_store_page_fault, .unknown => {

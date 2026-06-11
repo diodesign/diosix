@@ -209,6 +209,9 @@ pub const Guest = struct {
         errdefer self.allocator.destroy(vc);
 
         vc.* = vcore.VirtualCore.init(vid, self, entry, dtb, priority);
+        if (self.target_arch != .riscv64) {
+            vc.exec_path.emulated.context[@intFromEnum(riscv.Register.a0)] = @intFromPtr(vc);
+        }
 
         const node = try self.allocator.create(dsa.LinkedList(*vcore.VirtualCore).Node);
         errdefer self.allocator.destroy(node);

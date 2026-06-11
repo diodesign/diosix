@@ -102,7 +102,7 @@ pub const PMPConfig = struct {
         }
     }
 
-    fn clearAllPmp() void {
+    pub fn clearAllPmp() void {
         asm volatile ("csrw pmpcfg0, zero");
         asm volatile ("csrw pmpcfg2, zero");
         asm volatile ("csrw pmpaddr0, zero");
@@ -124,7 +124,7 @@ pub const PMPConfig = struct {
     }
 
     /// Write a value to pmpaddr[index]. Only entries 0-15 are supported.
-    fn writePmpAddr(index: usize, value: usize) void {
+    pub fn writePmpAddr(index: usize, value: usize) void {
         switch (index) {
             0 => asm volatile ("csrw pmpaddr0, %[val]"
                 :
@@ -196,7 +196,7 @@ pub const PMPConfig = struct {
 
     /// Write configuration for a single PMP entry.
     /// PMP configs are packed 4-per-register in pmpcfg0 (entries 0-7) and pmpcfg2 (entries 8-15).
-    fn writePmpCfg(index: usize, cfg: u8) void {
+    pub fn writePmpCfg(index: usize, cfg: u8) void {
         if (index >= 16) return;
 
         // Determine which pmpcfg register and which byte within it.
@@ -226,3 +226,46 @@ pub const PMPConfig = struct {
         }
     }
 };
+
+extern const __hypervisor_start: u8;
+extern const __bss_start: u8;
+extern const __hypervisor_end: u8;
+
+pub fn applyEmulatorPmp(cpu_core_id: usize, base_hpa: usize, range_size: usize) void {
+    if (is_test) return;
+
+    PMPConfig.clearAllPmp();
+
+    const hv_start = @intFromPtr(&__hypervisor_start);
+    const bss_start = @intFromPtr(&__bss_start);
+    const hv_end = @intFromPtr(&__hypervisor_end);
+
+    // Entry 0 and 1: Hypervisor text + rodata (RX)
+    PMPConfig.writePmpAddr(0, hv_start >> 2);
+    PMPConfig.writePmpAddr(1, bss_start >> 2);
+    PMPConfig.writePmpCfg(1, PMPAccess.tor | PMPAccess.read | PMPAccess.execute);
+
+    // Entry 2 and 3: Hypervisor data + bss (RW)
+    PMPConfig.writePmpAddr(2, bss_start >> 2);
+    PMPConfig.writePmpAddr(3, hv_end >> 2);
+    PMPConfig.writePmpCfg(3, PMPAccess.tor | PMPAccess.read | PMPAccess.write);
+
+    // Entry 4 and 5: Current CPU core slab (RW)
+    const CPU_SLAB_SHIFT = 20;
+    const CPU_SLAB_SIZE = 1 << CPU_SLAB_SHIFT;
+    const slab_base = hv_end + (cpu_core_id << CPU_SLAB_SHIFT);
+    PMPConfig.writePmpAddr(4, slab_base >> 2);
+    PMPConfig.writePmpAddr(5, (slab_base + CPU_SLAB_SIZE) >> 2);
+    PMPConfig.writePmpCfg(5, PMPAccess.tor | PMPAccess.read | PMPAccess.write);
+
+    // Entry 6 and 7: Guest RAM (RW)
+    if (range_size > 0) {
+        PMPConfig.writePmpAddr(6, base_hpa >> 2);
+        PMPConfig.writePmpAddr(7, (base_hpa + range_size) >> 2);
+        PMPConfig.writePmpCfg(7, PMPAccess.tor | PMPAccess.read | PMPAccess.write);
+    }
+
+    // Entry 8: Deny-all for the rest of the address space (NAPOT mode, no perms)
+    PMPConfig.writePmpAddr(8, ~@as(usize, 0));
+    PMPConfig.writePmpCfg(8, 0x18); // NAPOT mode (bits 4:3 = 11), no R/W/X
+}

@@ -26,6 +26,17 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     cpu.active_vcore = to_vcore;
     to_vcore.running_on_cpu = cpu.cpu_core_id;
 
-    // Apply guest memory space (paging or PMP)
-    to_vcore.guest.space.apply(to_vcore.guest.vmid);
+    switch (to_vcore.exec_path) {
+        .native => {
+            to_vcore.guest.space.apply(to_vcore.guest.vmid);
+        },
+        .emulated => |*e| {
+            // Store physical CPU core context pointer in emulated runner's tp register
+            e.context[@intFromEnum(riscv.Register.tp)] = @intFromPtr(cpu);
+            
+            // Apply PMP protection sandbox for the S-mode emulator runner
+            const pmp = @import("pmp.zig");
+            pmp.applyEmulatorPmp(cpu.cpu_core_id, to_vcore.guest.space.base_hpa, to_vcore.guest.space.range_size);
+        },
+    }
 }

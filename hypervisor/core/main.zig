@@ -122,8 +122,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
                     pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
                 },
                 .emulated => {
-                    vc.runEmulated();
-                    scheduler.yield(vc);
+                    pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
                 },
             }
         }

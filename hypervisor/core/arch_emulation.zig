@@ -190,3 +190,26 @@ fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c
         else => {},
     }
 }
+
+// S-mode runner entry point for the emulated Virtual Core.
+// a0 is mapped to `vc_ptr` on entry.
+pub fn emulatedRunnerSMode(vc_ptr: usize) callconv(.c) noreturn {
+    const vc: *vcore.VirtualCore = @ptrFromInt(vc_ptr);
+    while (vc.state != .stopped) {
+        run(vc);
+        
+        // Trap back to M-mode via ECALL to yield or handle exit
+        if (comptime @import("builtin").is_test) {
+            break;
+        } else {
+            asm volatile ("ecall");
+        }
+    }
+    
+    // Final yield on exit
+    if (comptime @import("builtin").is_test) {} else {
+        asm volatile ("ecall");
+    }
+    
+    while (true) {}
+}

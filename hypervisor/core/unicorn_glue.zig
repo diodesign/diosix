@@ -11,6 +11,16 @@ const debug = @import("debug.zig");
 // Global lock to protect allocator operations across harts
 var allocator_lock = atomic.NamedSpinLock.init("Unicorn Allocator Lock");
 
+inline fn getSModeCPUContext() *riscv.CpuContext {
+    if (comptime @import("builtin").is_test) return riscv.getCPUContext();
+    return @ptrFromInt(asm volatile ("mv %[ret], tp" : [ret] "=r" (-> usize)));
+}
+
+inline fn readSModeTime() u64 {
+    if (comptime @import("builtin").is_test) return riscv.readTime();
+    return asm volatile ("csrr %[ret], time" : [ret] "=r" (-> u64));
+}
+
 // Mock TLS buffer
 var tls_buffer: [8192]u8 = undefined;
 
@@ -25,7 +35,7 @@ pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
     allocator_lock.lock();
     defer allocator_lock.unlock();
 
-    const cpu = riscv.getCPUContext();
+    const cpu = getSModeCPUContext();
     const alloc_size = @sizeOf(MallocHeader) + size;
     
     // Allocate raw slice
@@ -107,10 +117,10 @@ pub export fn fprintf(stream: ?*anyopaque, format: [*:0]const u8, ...) callconv(
 }
 
 pub export fn usleep(usec: c_uint) callconv(.c) c_int {
-    const start = riscv.readTime();
+    const start = readSModeTime();
     // 10MHz frequency means 10 ticks per microsecond
     const ticks = @as(u64, usec) * 10;
-    while (riscv.readTime() - start < ticks) {}
+    while (readSModeTime() - start < ticks) {}
     return 0;
 }
 
@@ -121,7 +131,7 @@ pub export fn clock_gettime(clk_id: c_int, tp: ?*anyopaque) callconv(.c) c_int {
         tv_nsec: i64,
     };
     const t = @as(*TimeSpec, @ptrCast(@alignCast(tp orelse return -1)));
-    const time_ticks = riscv.readTime();
+    const time_ticks = readSModeTime();
     // 10MHz frequency means 1 tick = 100ns
     const total_ns = time_ticks * 100;
     t.tv_sec = @as(i64, @intCast(total_ns / 1_000_000_000));
@@ -136,7 +146,7 @@ pub export fn gettimeofday(tv: ?*anyopaque, tz: ?*anyopaque) callconv(.c) c_int 
         tv_usec: i64,
     };
     const t = @as(*TimeVal, @ptrCast(@alignCast(tv orelse return -1)));
-    const time_ticks = riscv.readTime();
+    const time_ticks = readSModeTime();
     // 10MHz frequency means 10 ticks per microsecond
     const total_us = time_ticks / 10;
     t.tv_sec = @as(i64, @intCast(total_us / 1_000_000));
