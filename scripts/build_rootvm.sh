@@ -99,19 +99,6 @@ echo "Copying built image to $OUT_FILE..."
 cp "$IMAGE_PATH" "$OUT_FILE"
 echo "$CURRENT_HASH" > "$HASH_FILE"
 
-# Force Zig to re-assemble rootvm.s by updating its content hash
-# with the newly built payload's configuration checksum.
-cat <<EOF > hypervisor/hw/qemu/rootvm.s
-# Auto-generated modification hash: $CURRENT_HASH
-.section .rootvm, "a"
-.global root_vm_start
-.global root_vm_end
-.balign 4096
-root_vm_start:
-.incbin "zig-out/bin/rootvm.elf"
-root_vm_end:
-EOF
-
 echo "Root VM build complete!"
 
 
