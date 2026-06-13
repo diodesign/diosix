@@ -142,6 +142,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     const root_vm_gpa_base = if (riscv.hasHExtension()) 0x80000000 else rootvm_hpa_base;
     const rootvm_elf = @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size];
     const guest_arch = try loader.Loader.detectArch(rootvm_elf);
+    debug.printf("Detected guest VM target architecture: {s}\n", .{@tagName(guest_arch)});
     const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size, guest_arch);
     ctx.root_vm = root_vm;
 

@@ -38,6 +38,15 @@ hypervisor unpacks and boots this payload as the Root VM.
 To allow running non-native guest VMs alongside native 64-bit RISC-V workloads,
 Diosix integrates a transparent, cross-architecture virtual CPU core emulation layer.
 
+### Generic virtual core interface
+
+To support multiple execution paths, the hypervisor relies on a generic virtual
+CPU core interface (`vcore.VirtualCore`) that acts as an architecture-independent
+abstraction layer. This tagged-union struct isolates whether the core is a
+physical host core running a native guest, or a software-emulated core running
+a cross-architecture binary. When the scheduler selects a core to run, the
+physical core context wrapper performs the appropriate privilege transitions.
+
 ### Supported guest architectures
 
 The hypervisor inspects the ELF machine headers of a guest VM's binary to identify
