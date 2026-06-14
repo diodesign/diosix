@@ -57,6 +57,12 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     }
     em.uc = uc;
 
+    // Register the rdtime callback so guest rdtime/rdtimeh instructions
+    // execute inside the JIT loop, reading the real host timer directly.
+    if (em.target_arch == .riscv32) {
+        glue.diosix_uc_set_rdtime_fn(uc, &glue.rdtimeCallback);
+    }
+
     // Set TCG buffer to 4MB to fit within the per-CPU heap allocation.
     const ctl_err = glue.uc_ctl(uc, @as(c_uint, 0x4400000d), @as(c_uint, 4 * 1024 * 1024));
     if (ctl_err != .UC_ERR_OK) {
@@ -81,8 +87,11 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 
     // Map a physical alias at GPA 0 for guests whose page tables reference
     // physical addresses starting at 0 (e.g., ELF PHDR addresses).
+    // Cap the alias to avoid covering MMIO regions (UART at 0x10000000).
     if (gpa_base > 0) {
-        _ = glue.uc_mem_map_ptr(uc, 0, ram_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
+        const uart_base: u64 = 0x10000000;
+        const alias_size = if (ram_size > uart_base) uart_base else ram_size;
+        _ = glue.uc_mem_map_ptr(uc, 0, alias_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
         // Non-fatal: the guest may not need this mapping.
     }
 

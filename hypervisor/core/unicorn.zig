@@ -901,7 +901,16 @@ pub export fn mmap(addr: ?*anyopaque, length: usize, prot: c_int, flags: c_int, 
 }
 
 pub extern fn uc_strerror(error_code: uc_err) ?[*:0]const u8;
-pub extern fn my_uc_ctl_set_tcg_buffer_size(engine: ?*anyopaque, size: u32) uc_err;
+
+// Diosix glue: register an rdtime callback with Unicorn's internal QEMU CPU
+// state so that guest rdtime instructions execute inside the JIT loop.
+pub extern fn diosix_uc_set_rdtime_fn(uc: ?*anyopaque, fn_ptr: *const fn () callconv(.c) u64) void;
+
+// Callback passed to diosix_uc_set_rdtime_fn. Reads the real host timer
+// from S-mode and returns it to Unicorn's JIT-compiled rdtime handler.
+pub fn rdtimeCallback() callconv(.c) u64 {
+    return readSModeTime();
+}
 
 pub export fn strerror(errnum: c_int) callconv(.c) [*:0]const u8 {
     _ = errnum;

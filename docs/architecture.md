@@ -106,22 +106,36 @@ a guest VM from hogging a physical core, the hypervisor handles preemption:
 
 #### Timer access
 
-Guest operating systems frequently execute timing instructions such as
-`rdtime` on RISC-V during boot-time calibration loops and scheduler tick
-handling. Because Unicorn's internal emulation lacks a native time source,
-each `rdtime` instruction raises an illegal-instruction exception within
-the QEMU-based JIT engine, which surfaces to the hypervisor as a
-`UC_ERR_EXCEPTION` stop.
+Guest operating systems frequently read timing registers, such as
+`rdtime`, `rdtimeh`, `rdcycle`, and `rdinstret` on RISC-V, during
+boot-time calibration loops and scheduler tick handling.
 
-The hypervisor's exception handler decodes the faulting instruction and,
-if it matches a time-related Control and Status Register (CSR) read
-(`rdtime`, `rdtimeh`, `rdcycle`, `rdinstret`), reads the real host timer
-via the S-mode `time` CSR, writes the value to the guest's destination
-register, and advances the program counter. Emulation then resumes from
-the next instruction.
+For native RISC-V guests on hardware with the H-extension, the hypervisor sets
+`mcounteren` and `hcounteren` (bits 0–2) to delegate counter CSR access
+to VS-mode. The guest executes `rdtime` at full hardware speed with zero
+trap overhead. On hardware without the H-extension (PMP fallback mode),
+guests run directly in S-mode, so `mcounteren` alone is sufficient.
 
-Reading the host timer from S-mode (`csrr time`) is safe because it is a
-read-only operation that returns a scalar timestamp, exposing no
+For emulated guests, Unicorn's QEMU backend requires a `rdtime_fn`
+callback on its internal `CPURISCVState` structure for `rdtime` to
+return a value. Diosix registers this callback during virtual core
+initialization through a thin C glue layer (`unicorn.c`) that
+bridges the Unicorn-internal `riscv_cpu_set_rdtime_fn` API without
+modifying the third-party Unicorn source tree. The callback executes an
+inline `csrr time` instruction to read the real host hardware timer
+from Supervisor mode, and the hypervisor also sets `mcounteren`
+(bits 0–2) in the emulated CPU's CSR bank to enable S-mode counter
+access within the QEMU backend.
+
+With the callback registered, guest `rdtime` and `rdtimeh` instructions
+execute entirely inside the JIT loop, returning the host timer value
+directly. This eliminates the overhead of an exception stop and
+engine re-entry on every timer read, which is critical during
+boot-time calibration loops that may execute millions of `rdtime`
+instructions.
+
+Reading the host timer from Supervisor mode is safe because `csrr time`
+is a read-only operation that returns a scalar timestamp, exposing no
 hypervisor state or memory.
 
 #### Per-vcore isolation

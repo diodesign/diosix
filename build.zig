@@ -159,37 +159,16 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addArg(guest_arch_opt);
 
 
-    // Create a wrapper script to run `zig cc` targeted to riscv64-linux-musl with sanitizers disabled
-    const write_wrapper = b.addSystemCommand(&.{
-        "sh", "-c",
-        b.fmt("mkdir -p zig-out && echo '#!/bin/sh' > zig-out/zig-cc && echo 'exec \"{s}\" cc -target riscv64-linux-musl -fno-sanitize=all \"$@\"' >> zig-out/zig-cc && chmod +x zig-out/zig-cc", .{b.graph.zig_exe}),
-    });
-
-    // Run CMake to build Unicorn static library
+    // Build Unicorn static library via wrapper script.
+    // The script creates the zig-cc compiler wrapper (only if needed) and
+    // runs CMake configure + build. Output is redirected to a log file.
+    // CMake's own dependency tracking provides incremental builds.
     const unicorn_build_dir = "zig-out/unicorn";
-    const cmake_configure = b.addSystemCommand(&.{
-        "cmake",
-        "-S", "third_party/unicorn",
-        "-B", unicorn_build_dir,
-        "-DCMAKE_SYSTEM_NAME=Generic",
-        "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
-    });
-    cmake_configure.addPrefixedFileArg("-DCMAKE_C_COMPILER=", b.path("zig-out/zig-cc"));
-    cmake_configure.addArgs(&.{
-        "-DCMAKE_C_FLAGS=-DUNICORN_NO_SYSTEM",
-        "-DUNICORN_ARCH=arm;aarch64;m68k;mips;ppc;riscv;s390x;sparc;tricore;x86",
-        "-DUNICORN_BUILD_SHARED=OFF",
-        "-DUNICORN_BUILD_STATIC=ON",
-    });
-    cmake_configure.step.dependOn(&write_wrapper.step);
-
     const cmake_build = b.addSystemCommand(&.{
-        "cmake",
-        "--build", unicorn_build_dir,
-        "--config", "Release",
-        "--parallel",
+        "bash", "scripts/build_unicorn.sh",
+        b.graph.zig_exe,
+        unicorn_build_dir,
     });
-    cmake_build.step.dependOn(&cmake_configure.step);
 
     const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/core/main.zig"),
@@ -225,6 +204,9 @@ pub fn build(b: *std.Build) !void {
     for (unicorn_libs) |lib_name| {
         vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/{s}", .{ unicorn_build_dir, lib_name })));
     }
+
+    // Link the Diosix-side Unicorn glue object (bridges internal QEMU APIs).
+    vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/unicorn_glue.o", .{unicorn_build_dir})));
 
 
     // Dynamically read the modification hash of the rootvm.elf payload if it exists
