@@ -137,6 +137,9 @@ pub const VirtualCore = struct {
             const stack_size = 128 * 1024; // 128KB stack
             const stack = parent.allocator.alloc(u8, stack_size) catch @panic("Failed to allocate S-mode stack for emulator");
 
+            var hypervisor_gp: usize = 0;
+            asm volatile ("mv %[g], gp" : [g] "=r" (hypervisor_gp));
+
             vcore.exec_path = .{
                 .emulated = .{
                     .uc = null,
@@ -145,7 +148,7 @@ pub const VirtualCore = struct {
                     .dtb = dtb,
                     .context = std.mem.zeroes(riscv.ThreadContext),
                     .machine = .{
-                        .mepc = @intFromPtr(&@import("arch_emulation.zig").emulatedRunnerSMode),
+                        .mepc = @intFromPtr(&@import("emulation.zig").emulatedRunnerSMode),
                         .mstatus = (1 << 11) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor Mode), MPV=0, FS=3
                         .hstatus = 0,
                         .hgatp = 0,
@@ -158,6 +161,7 @@ pub const VirtualCore = struct {
                 },
             };
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.sp)] = @intFromPtr(stack.ptr) + stack.len;
+            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.gp)] = hypervisor_gp;
         }
 
         // Initialize the scheduler node's contents to the vruntime for ordering.
@@ -170,7 +174,7 @@ pub const VirtualCore = struct {
         switch (self.exec_path) {
             .emulated => |*e| {
                 if (e.uc) |uc| {
-                    _ = @import("unicorn_glue.zig").uc_close(uc);
+                    _ = @import("unicorn.zig").uc_close(uc);
                     e.uc = null;
                 }
                 self.guest.allocator.free(e.stack);
@@ -180,7 +184,7 @@ pub const VirtualCore = struct {
     }
 
     pub fn runEmulated(self: *VirtualCore) void {
-        @import("arch_emulation.zig").run(self);
+        @import("emulation.zig").run(self);
     }
 
     pub fn requiredExtensions(self: *VirtualCore) usize {

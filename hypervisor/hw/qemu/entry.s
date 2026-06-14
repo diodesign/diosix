@@ -57,6 +57,10 @@ _start:
     add       t4, t4, t3
     # t4 = top of the stack, t2 = stack size, t1 = stack base from slab base
     csrrw     x0, mscratch, t4
+    
+    # Also set tp (thread pointer) to t4. This allows both M-mode and S-mode to find
+    # the physical CPU context quickly without needing to read mscratch.
+    mv        tp, t4
 
     # we'll complete intitialization of the xint handling in xint.s hw_init_xint(),
     # which will be called from xint.init() from the main() function.

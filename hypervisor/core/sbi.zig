@@ -28,9 +28,6 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
     const a1 = context[@intFromEnum(arch.Register.a1)];
     const a2 = context[@intFromEnum(arch.Register.a2)];
 
-    // Log every guest SBI call to trace hangs/hang spots.
-    // debug.printf("SBI: guest {} call ext 0x{x} func {} a0 0x{x} a1 0x{x} a2 0x{x}\n", .{ vc.guest_id, extension, function, a0, a1, a2 });
-
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
         interface.EXT.TIME => handleTimer(vc, context, a0),
@@ -145,7 +142,7 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
     var it_vcore = g.vcores.start;
     while (it_vcore) |node| {
         const target_vc = node.contents;
-        
+
         var should_send = false;
         if (hart_mask_base == 0xffffffffffffffff) {
             should_send = true;

@@ -13,12 +13,16 @@ var allocator_lock = atomic.NamedSpinLock.init("Unicorn Allocator Lock");
 
 inline fn getSModeCPUContext() *riscv.CpuContext {
     if (comptime @import("builtin").is_test) return riscv.getCPUContext();
-    return @ptrFromInt(asm volatile ("mv %[ret], tp" : [ret] "=r" (-> usize)));
+    return @ptrFromInt(asm volatile ("mv %[ret], tp"
+        : [ret] "=r" (-> usize),
+    ));
 }
 
-inline fn readSModeTime() u64 {
+pub inline fn readSModeTime() u64 {
     if (comptime @import("builtin").is_test) return riscv.readTime();
-    return asm volatile ("csrr %[ret], time" : [ret] "=r" (-> u64));
+    return asm volatile ("csrr %[ret], time"
+        : [ret] "=r" (-> u64),
+    );
 }
 
 // Mock TLS buffer
@@ -37,22 +41,25 @@ pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
 
     const cpu = getSModeCPUContext();
     const alloc_size = @sizeOf(MallocHeader) + size;
-    
+
     // Allocate raw slice
-    const slice = cpu.allocator.allocator().alloc(u8, alloc_size) catch return null;
-    
+    const slice = cpu.allocator.allocator().alloc(u8, alloc_size) catch {
+        debug.printf("unicorn_glue: malloc failed for size {}! (free={})\n", .{ alloc_size, cpu.allocator.free_size });
+        return null;
+    };
+
     // Store header info
     const header = @as(*MallocHeader, @ptrCast(@alignCast(slice.ptr)));
     header.cpu_core_id = cpu.cpu_core_id;
     header.size = size;
-    
+
     // Return pointer to payload
     return @ptrFromInt(@intFromPtr(slice.ptr) + @sizeOf(MallocHeader));
 }
 
 pub export fn free(ptr: ?*anyopaque) callconv(.c) void {
     const p = ptr orelse return;
-    
+
     allocator_lock.lock();
     defer allocator_lock.unlock();
 
@@ -61,7 +68,7 @@ pub export fn free(ptr: ?*anyopaque) callconv(.c) void {
         debug.printf("Unicorn glue: free() invalid CPU core context for ID {}\n", .{header.cpu_core_id});
         return;
     };
-    
+
     const slice = @as([*]u8, @ptrFromInt(@intFromPtr(header)))[0..(@sizeOf(MallocHeader) + header.size)];
     cpu.allocator.allocator().free(slice);
 }
@@ -117,6 +124,7 @@ pub export fn fprintf(stream: ?*anyopaque, format: [*:0]const u8, ...) callconv(
 }
 
 pub export fn usleep(usec: c_uint) callconv(.c) c_int {
+    debug.printf("unicorn_glue: usleep({d})\n", .{usec});
     const start = readSModeTime();
     // 10MHz frequency means 10 ticks per microsecond
     const ticks = @as(u64, usec) * 10;
@@ -155,6 +163,7 @@ pub export fn gettimeofday(tv: ?*anyopaque, tz: ?*anyopaque) callconv(.c) c_int 
 }
 
 pub export fn __tls_get_addr(ti: ?*anyopaque) callconv(.c) ?*anyopaque {
+    debug.printf("unicorn_glue: __tls_get_addr called\n", .{});
     const TlsIdx = struct {
         module: usize,
         offset: usize,
@@ -196,7 +205,7 @@ pub export fn sprintf(str: [*:0]u8, format: [*:0]const u8, ...) callconv(.c) c_i
         return @intCast(res.len);
     } else if (std.mem.eql(u8, fmt, "ACC%d")) {
         const val = @cVaArg(&ap, c_int);
-        const res = std.fmt.bufPrint(str[0..16], "ACC{d}", .{ val }) catch return -1;
+        const res = std.fmt.bufPrint(str[0..16], "ACC{d}", .{val}) catch return -1;
         str[res.len] = 0;
         return @intCast(res.len);
     }
@@ -204,11 +213,11 @@ pub export fn sprintf(str: [*:0]u8, format: [*:0]const u8, ...) callconv(.c) c_i
     return 0;
 }
 
-pub export fn qsort(base: ?*anyopaque, nitems: usize, size: usize, compar: ?*const fn(?*const anyopaque, ?*const anyopaque) callconv(.c) c_int) callconv(.c) void {
+pub export fn qsort(base: ?*anyopaque, nitems: usize, size: usize, compar: ?*const fn (?*const anyopaque, ?*const anyopaque) callconv(.c) c_int) callconv(.c) void {
     if (base == null or nitems <= 1 or size == 0 or compar == null) return;
     const cmp = compar.?;
     const ptr = @as([*]u8, @ptrCast(base.?));
-    
+
     var i: usize = 0;
     while (i < nitems - 1) : (i += 1) {
         var j: usize = 0;
@@ -247,15 +256,13 @@ pub export fn pthread_exit(retval: ?*anyopaque) callconv(.c) noreturn {
 pub export fn pthread_join(thread: usize, retval: ?*?*anyopaque) callconv(.c) c_int {
     _ = thread;
     _ = retval;
+    debug.printf("unicorn_glue: pthread_join called\n", .{});
     return 0;
 }
 
-pub export fn siglongjmp(env: ?*anyopaque, val: c_int) callconv(.c) noreturn {
-    if (comptime @import("builtin").is_test) {
-        const dummy = @intFromPtr(env) + @as(usize, @intCast(val));
-        _ = dummy;
-        while (true) {}
-    }
+pub export fn siglongjmp(env: ?*anyopaque, val: c_int) callconv(.naked) noreturn {
+    _ = env;
+    _ = val;
     asm volatile (
         \\ld ra, 0(a0)
         \\ld sp, 8(a0)
@@ -275,19 +282,59 @@ pub export fn siglongjmp(env: ?*anyopaque, val: c_int) callconv(.c) noreturn {
         \\bnez a0, 1f
         \\li a0, 1
         \\1:
-        \\jr ra
-        :
-        : [env] "{a0}" (env),
-          [val] "{a1}" (val)
+        \\ret
     );
-    while (true) {}
 }
 
-pub export fn longjmp(env: ?*anyopaque, val: c_int) callconv(.c) noreturn {
-    siglongjmp(env, val);
+pub export fn longjmp(env: ?*anyopaque, val: c_int) callconv(.naked) noreturn {
+    _ = env;
+    _ = val;
+    asm volatile (
+        \\ld ra, 0(a0)
+        \\ld sp, 8(a0)
+        \\ld s0, 16(a0)
+        \\ld s1, 24(a0)
+        \\ld s2, 32(a0)
+        \\ld s3, 40(a0)
+        \\ld s4, 48(a0)
+        \\ld s5, 56(a0)
+        \\ld s6, 64(a0)
+        \\ld s7, 72(a0)
+        \\ld s8, 80(a0)
+        \\ld s9, 88(a0)
+        \\ld s10, 96(a0)
+        \\ld s11, 104(a0)
+        \\mv a0, a1
+        \\bnez a0, 1f
+        \\li a0, 1
+        \\1:
+        \\ret
+    );
 }
 
 pub export var stdout: ?*anyopaque = null;
+
+pub export fn setjmp(env: ?*anyopaque) callconv(.naked) c_int {
+    _ = env;
+    asm volatile (
+        \\sd ra, 0(a0)
+        \\sd sp, 8(a0)
+        \\sd s0, 16(a0)
+        \\sd s1, 24(a0)
+        \\sd s2, 32(a0)
+        \\sd s3, 40(a0)
+        \\sd s4, 48(a0)
+        \\sd s5, 56(a0)
+        \\sd s6, 64(a0)
+        \\sd s7, 72(a0)
+        \\sd s8, 80(a0)
+        \\sd s9, 88(a0)
+        \\sd s10, 96(a0)
+        \\sd s11, 104(a0)
+        \\li a0, 0
+        \\ret
+    );
+}
 
 pub export fn fflush(stream: ?*anyopaque) callconv(.c) c_int {
     _ = stream;
@@ -372,8 +419,10 @@ pub const uc_arch = enum(c_int) {
     UC_ARCH_PPC,
     UC_ARCH_SPARC,
     UC_ARCH_M68K,
+    UC_ARCH_RISCV,
+    UC_ARCH_S390X,
+    UC_ARCH_TRICORE,
     UC_ARCH_MAX,
-    UC_ARCH_RISCV = 9,
 };
 
 pub const uc_mode = c_int;
@@ -403,34 +452,84 @@ pub const uc_prot = struct {
     pub const UC_PROT_NONE = 0;
     pub const UC_PROT_READ = 1;
     pub const UC_PROT_WRITE = 2;
-    pub const UC_PROT_ALL = 3;
+    pub const UC_PROT_EXEC = 4;
+    pub const UC_PROT_ALL = 7;
 };
 
 // Register IDs for Unicorn Engine targets
 pub const uc_riscv_reg = enum(c_int) {
     UC_RISCV_REG_INVALID = 0,
-    UC_RISCV_REG_X0, UC_RISCV_REG_X1, UC_RISCV_REG_X2, UC_RISCV_REG_X3,
-    UC_RISCV_REG_X4, UC_RISCV_REG_X5, UC_RISCV_REG_X6, UC_RISCV_REG_X7,
-    UC_RISCV_REG_X8, UC_RISCV_REG_X9, UC_RISCV_REG_X10, UC_RISCV_REG_X11,
-    UC_RISCV_REG_X12, UC_RISCV_REG_X13, UC_RISCV_REG_X14, UC_RISCV_REG_X15,
-    UC_RISCV_REG_X16, UC_RISCV_REG_X17, UC_RISCV_REG_X18, UC_RISCV_REG_X19,
-    UC_RISCV_REG_X20, UC_RISCV_REG_X21, UC_RISCV_REG_X22, UC_RISCV_REG_X23,
-    UC_RISCV_REG_X24, UC_RISCV_REG_X25, UC_RISCV_REG_X26, UC_RISCV_REG_X27,
-    UC_RISCV_REG_X28, UC_RISCV_REG_X29, UC_RISCV_REG_X30, UC_RISCV_REG_X31,
-    UC_RISCV_REG_PC,
+    UC_RISCV_REG_X0,
+    UC_RISCV_REG_X1,
+    UC_RISCV_REG_X2,
+    UC_RISCV_REG_X3,
+    UC_RISCV_REG_X4,
+    UC_RISCV_REG_X5,
+    UC_RISCV_REG_X6,
+    UC_RISCV_REG_X7,
+    UC_RISCV_REG_X8,
+    UC_RISCV_REG_X9,
+    UC_RISCV_REG_X10,
+    UC_RISCV_REG_X11,
+    UC_RISCV_REG_X12,
+    UC_RISCV_REG_X13,
+    UC_RISCV_REG_X14,
+    UC_RISCV_REG_X15,
+    UC_RISCV_REG_X16,
+    UC_RISCV_REG_X17,
+    UC_RISCV_REG_X18,
+    UC_RISCV_REG_X19,
+    UC_RISCV_REG_X20,
+    UC_RISCV_REG_X21,
+    UC_RISCV_REG_X22,
+    UC_RISCV_REG_X23,
+    UC_RISCV_REG_X24,
+    UC_RISCV_REG_X25,
+    UC_RISCV_REG_X26,
+    UC_RISCV_REG_X27,
+    UC_RISCV_REG_X28,
+    UC_RISCV_REG_X29,
+    UC_RISCV_REG_X30,
+    UC_RISCV_REG_X31,
+    UC_RISCV_REG_PC = 190,
+    UC_RISCV_REG_PRIV = 191,
 };
 
 pub const uc_arm64_reg = enum(c_int) {
     UC_ARM64_REG_INVALID = 0,
-    UC_ARM64_REG_X0 = 17, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3,
-    UC_ARM64_REG_X4, UC_ARM64_REG_X5, UC_ARM64_REG_X6, UC_ARM64_REG_X7,
-    UC_ARM64_REG_X8, UC_ARM64_REG_X9, UC_ARM64_REG_X10, UC_ARM64_REG_X11,
-    UC_ARM64_REG_X12, UC_ARM64_REG_X13, UC_ARM64_REG_X14, UC_ARM64_REG_X15,
-    UC_ARM64_REG_X16, UC_ARM64_REG_X17, UC_ARM64_REG_X18, UC_ARM64_REG_X19,
-    UC_ARM64_REG_X20, UC_ARM64_REG_X21, UC_ARM64_REG_X22, UC_ARM64_REG_X23,
-    UC_ARM64_REG_X24, UC_ARM64_REG_X25, UC_ARM64_REG_X26, UC_ARM64_REG_X27,
+    UC_ARM64_REG_X0 = 17,
+    UC_ARM64_REG_X1,
+    UC_ARM64_REG_X2,
+    UC_ARM64_REG_X3,
+    UC_ARM64_REG_X4,
+    UC_ARM64_REG_X5,
+    UC_ARM64_REG_X6,
+    UC_ARM64_REG_X7,
+    UC_ARM64_REG_X8,
+    UC_ARM64_REG_X9,
+    UC_ARM64_REG_X10,
+    UC_ARM64_REG_X11,
+    UC_ARM64_REG_X12,
+    UC_ARM64_REG_X13,
+    UC_ARM64_REG_X14,
+    UC_ARM64_REG_X15,
+    UC_ARM64_REG_X16,
+    UC_ARM64_REG_X17,
+    UC_ARM64_REG_X18,
+    UC_ARM64_REG_X19,
+    UC_ARM64_REG_X20,
+    UC_ARM64_REG_X21,
+    UC_ARM64_REG_X22,
+    UC_ARM64_REG_X23,
+    UC_ARM64_REG_X24,
+    UC_ARM64_REG_X25,
+    UC_ARM64_REG_X26,
+    UC_ARM64_REG_X27,
     UC_ARM64_REG_X28,
-    UC_ARM64_REG_FP, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC,
+    UC_ARM64_REG_FP,
+    UC_ARM64_REG_LR,
+    UC_ARM64_REG_SP,
+    UC_ARM64_REG_PC,
 };
 
 pub const uc_x86_reg = enum(c_int) {
@@ -451,23 +550,39 @@ const is_test = @import("builtin").is_test;
 
 pub const uc_version = if (is_test) struct {
     fn impl(major: ?*c_int, minor: ?*c_int) callconv(.c) c_uint {
-        _ = major; _ = minor; return 0;
+        _ = major;
+        _ = minor;
+        return 0;
     }
 }.impl else struct {
-    extern fn uc_version(major: ?*c_int, minor: ?*c_int) c_uint;
+    pub extern fn uc_version(major: ?*c_int, minor: ?*c_int) c_uint;
 }.uc_version;
 
 pub const uc_open = if (is_test) struct {
     fn impl(arch: uc_arch, mode: uc_mode, engine: *?*anyopaque) callconv(.c) uc_err {
-        _ = arch; _ = mode; _ = engine; return .UC_ERR_OK;
+        _ = arch;
+        _ = mode;
+        _ = engine;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_open(arch: uc_arch, mode: uc_mode, engine: *?*anyopaque) uc_err;
 }.uc_open;
 
+pub const uc_ctl = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, control: c_uint, ...) callconv(.c) uc_err {
+        _ = engine;
+        _ = control;
+        return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_ctl(engine: ?*anyopaque, control: c_uint, ...) uc_err;
+}.uc_ctl;
+
 pub const uc_close = if (is_test) struct {
     fn impl(engine: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine; return .UC_ERR_OK;
+        _ = engine;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_close(engine: ?*anyopaque) uc_err;
@@ -475,7 +590,12 @@ pub const uc_close = if (is_test) struct {
 
 pub const uc_emu_start = if (is_test) struct {
     fn impl(engine: ?*anyopaque, begin: u64, until: u64, timeout: u64, count: u64) callconv(.c) uc_err {
-        _ = engine; _ = begin; _ = until; _ = timeout; _ = count; return .UC_ERR_OK;
+        _ = engine;
+        _ = begin;
+        _ = until;
+        _ = timeout;
+        _ = count;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_emu_start(engine: ?*anyopaque, begin: u64, until: u64, timeout: u64, count: u64) uc_err;
@@ -483,7 +603,8 @@ pub const uc_emu_start = if (is_test) struct {
 
 pub const uc_emu_stop = if (is_test) struct {
     fn impl(engine: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine; return .UC_ERR_OK;
+        _ = engine;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_emu_stop(engine: ?*anyopaque) uc_err;
@@ -491,7 +612,10 @@ pub const uc_emu_stop = if (is_test) struct {
 
 pub const uc_reg_write = if (is_test) struct {
     fn impl(engine: ?*anyopaque, regid: c_int, value: ?*const anyopaque) callconv(.c) uc_err {
-        _ = engine; _ = regid; _ = value; return .UC_ERR_OK;
+        _ = engine;
+        _ = regid;
+        _ = value;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_reg_write(engine: ?*anyopaque, regid: c_int, value: ?*const anyopaque) uc_err;
@@ -499,7 +623,10 @@ pub const uc_reg_write = if (is_test) struct {
 
 pub const uc_reg_read = if (is_test) struct {
     fn impl(engine: ?*anyopaque, regid: c_int, value: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine; _ = regid; _ = value; return .UC_ERR_OK;
+        _ = engine;
+        _ = regid;
+        _ = value;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_reg_read(engine: ?*anyopaque, regid: c_int, value: ?*anyopaque) uc_err;
@@ -507,36 +634,78 @@ pub const uc_reg_read = if (is_test) struct {
 
 pub const uc_mem_map = if (is_test) struct {
     fn impl(engine: ?*anyopaque, address: u64, size: u64, perms: u32) callconv(.c) uc_err {
-        _ = engine; _ = address; _ = size; _ = perms; return .UC_ERR_OK;
+        _ = engine;
+        _ = address;
+        _ = size;
+        _ = perms;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_mem_map(engine: ?*anyopaque, address: u64, size: u64, perms: u32) uc_err;
 }.uc_mem_map;
 
 pub const uc_mem_map_ptr = if (is_test) struct {
-    fn impl(engine: ?*anyopaque, address: u64, size: u64, perms: u32, ptr: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine; _ = address; _ = size; _ = perms; _ = ptr; return .UC_ERR_OK;
+    fn dummy_uc_mem_map_ptr(engine: ?*anyopaque, address: u64, size: u64, perms: u32, ptr: ?*anyopaque) uc_err {
+        _ = engine;
+        _ = address;
+        _ = size;
+        _ = perms;
+        _ = ptr;
+        return .UC_ERR_OK;
     }
-}.impl else struct {
+}.dummy_uc_mem_map_ptr else struct {
     extern fn uc_mem_map_ptr(engine: ?*anyopaque, address: u64, size: u64, perms: u32, ptr: ?*anyopaque) uc_err;
 }.uc_mem_map_ptr;
 
+pub const uc_mem_read = if (is_test) struct {
+    fn dummy_uc_mem_read(engine: ?*anyopaque, address: u64, bytes: [*]u8, size: usize) uc_err {
+        _ = engine;
+        _ = address;
+        _ = bytes;
+        _ = size;
+        return .UC_ERR_OK;
+    }
+}.dummy_uc_mem_read else struct {
+    extern fn uc_mem_read(engine: ?*anyopaque, address: u64, bytes: [*]u8, size: usize) uc_err;
+}.uc_mem_read;
+
 pub const uc_mem_unmap = if (is_test) struct {
     fn impl(engine: ?*anyopaque, address: u64, size: u64) callconv(.c) uc_err {
-        _ = engine; _ = address; _ = size; return .UC_ERR_OK;
+        _ = engine;
+        _ = address;
+        _ = size;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_mem_unmap(engine: ?*anyopaque, address: u64, size: u64) uc_err;
 }.uc_mem_unmap;
 
 // Hook API
-pub const uc_cb_eventmem_t = *const fn(uc: ?*anyopaque, mem_type: uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) bool;
+pub const uc_cb_eventmem_t = *const fn (uc: ?*anyopaque, mem_type: uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) bool;
 pub const uc_hook = ?*anyopaque;
-pub const UC_HOOK_MEM_UNMAPPED = 2048; // Hook unmapped memory accesses
+pub const UC_HOOK_MEM_UNMAPPED = 112; // 1<<4 | 1<<5 | 1<<6
+pub const UC_HOOK_BLOCK: c_int = 8; // 1<<3
+
+// UC_CTL control codes for cache management.
+pub const UC_CTL_FLUSH_TLB: c_uint = 0x2d000000;
+pub const UC_CTL_FLUSH_TB: c_uint = 0x29000000;
+
+// UC_HOOK_INSN_INVALID fires when Unicorn encounters an instruction it
+// cannot handle (e.g., rdtime with no rdtime_fn callback). The hook runs
+// inside the emulation loop; returning true continues execution without
+// the stop/restart overhead of UC_ERR_EXCEPTION.
+pub const UC_HOOK_INSN_INVALID: c_int = 1 << 14;
 
 pub const uc_hook_add = if (is_test) struct {
     fn impl(engine: ?*anyopaque, hh: *uc_hook, type_mask: c_int, callback: ?*const anyopaque, user_data: ?*anyopaque, begin: u64, end: u64) callconv(.c) uc_err {
-        _ = engine; _ = hh; _ = type_mask; _ = callback; _ = user_data; _ = begin; _ = end; return .UC_ERR_OK;
+        _ = engine;
+        _ = hh;
+        _ = type_mask;
+        _ = callback;
+        _ = user_data;
+        _ = begin;
+        _ = end;
+        return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_hook_add(engine: ?*anyopaque, hh: *uc_hook, type_mask: c_int, callback: ?*const anyopaque, user_data: ?*anyopaque, begin: u64, end: u64, ...) uc_err;
@@ -561,13 +730,16 @@ pub export fn perror(s: [*:0]const u8) callconv(.c) void {
 }
 
 pub export fn exit(status: c_int) callconv(.c) noreturn {
-    debug.printf("exit called with status {}\n", .{status});
+    const ra = asm volatile ("mv %[ret], ra"
+        : [ret] "=r" (-> usize),
+    );
+    debug.printf("exit called with status {}, return address 0x{x}\n", .{ status, ra });
     while (true) {}
 }
 
-pub export fn sigsetjmp(env: ?*anyopaque, savesigs: c_int) callconv(.c) c_int {
+pub export fn sigsetjmp(env: ?*anyopaque, savesigs: c_int) callconv(.naked) c_int {
+    _ = env;
     _ = savesigs;
-    if (comptime @import("builtin").is_test) return 0;
     asm volatile (
         \\sd ra, 0(a0)
         \\sd sp, 8(a0)
@@ -585,10 +757,7 @@ pub export fn sigsetjmp(env: ?*anyopaque, savesigs: c_int) callconv(.c) c_int {
         \\sd s11, 104(a0)
         \\li a0, 0
         \\ret
-        :
-        : [env] "{a0}" (env)
     );
-    return 0;
 }
 
 pub export fn snprintf(str: [*]u8, size: usize, format: [*:0]const u8, ...) callconv(.c) c_int {
@@ -609,7 +778,7 @@ pub export fn snprintf(str: [*]u8, size: usize, format: [*:0]const u8, ...) call
                 fmt_idx += 1;
                 continue;
             }
-            
+
             if (format[fmt_idx] == 's') {
                 const s = @cVaArg(&ap, [*:0]const u8);
                 const s_span = std.mem.span(s);
@@ -695,11 +864,11 @@ pub export fn __riscv_flush_icache(start: ?*anyopaque, end: ?*anyopaque, flags: 
     asm volatile ("fence.i");
 }
 
-pub export fn bsearch(key: ?*const anyopaque, base: ?*const anyopaque, nitems: usize, size: usize, compar: ?*const fn(?*const anyopaque, ?*const anyopaque) callconv(.c) c_int) callconv(.c) ?*anyopaque {
+pub export fn bsearch(key: ?*const anyopaque, base: ?*const anyopaque, nitems: usize, size: usize, compar: ?*const fn (?*const anyopaque, ?*const anyopaque) callconv(.c) c_int) callconv(.c) ?*anyopaque {
     if (key == null or base == null or nitems == 0 or size == 0 or compar == null) return null;
     const cmp = compar.?;
     const ptr = @as([*]const u8, @ptrCast(base.?));
-    
+
     var low: usize = 0;
     var high: usize = nitems;
     while (low < high) {
@@ -707,7 +876,7 @@ pub export fn bsearch(key: ?*const anyopaque, base: ?*const anyopaque, nitems: u
         const mid_ptr = ptr + (mid * size);
         const res = cmp(key.?, mid_ptr);
         if (res == 0) {
-            return @as(?*anyopaque, @constCast(@ptrCast(mid_ptr)));
+            return @as(?*anyopaque, @ptrCast(@constCast(mid_ptr)));
         } else if (res < 0) {
             high = mid;
         } else {
@@ -723,11 +892,16 @@ pub export fn mmap(addr: ?*anyopaque, length: usize, prot: c_int, flags: c_int, 
     _ = flags;
     _ = fd;
     _ = offset;
+
     if (malloc(length)) |ptr| {
         return ptr;
     }
+    debug.printf("Unicorn mmap() (length: {}) failed!\n", .{length});
     return @ptrFromInt(@as(usize, 0xffffffffffffffff));
 }
+
+pub extern fn uc_strerror(error_code: uc_err) ?[*:0]const u8;
+pub extern fn my_uc_ctl_set_tcg_buffer_size(engine: ?*anyopaque, size: u32) uc_err;
 
 pub export fn strerror(errnum: c_int) callconv(.c) [*:0]const u8 {
     _ = errnum;
@@ -767,6 +941,7 @@ pub export fn pthread_create(thread: ?*usize, attr: ?*const anyopaque, start_rou
     _ = attr;
     _ = start_routine;
     _ = arg;
+    debug.printf("unicorn_glue: pthread_create called, returning 0\n", .{});
     return 0;
 }
 
@@ -832,7 +1007,7 @@ pub export fn strncpy(dest: [*]u8, src: [*:0]const u8, n: usize) callconv(.c) [*
 pub export fn strcat(dest: [*:0]u8, src: [*:0]const u8) callconv(.c) [*:0]u8 {
     var dest_idx: usize = 0;
     while (dest[dest_idx] != 0) : (dest_idx += 1) {}
-    
+
     var src_idx: usize = 0;
     while (true) : (src_idx += 1) {
         dest[dest_idx + src_idx] = src[src_idx];
@@ -846,7 +1021,7 @@ pub export fn strstr(haystack: [*:0]const u8, needle: [*:0]const u8) callconv(.c
     const n_span = std.mem.span(needle);
     if (n_span.len == 0) return haystack;
     if (h_span.len < n_span.len) return null;
-    
+
     var i: usize = 0;
     while (i <= h_span.len - n_span.len) : (i += 1) {
         if (std.mem.eql(u8, h_span[i..(i + n_span.len)], n_span)) {

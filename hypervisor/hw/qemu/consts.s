@@ -22,7 +22,7 @@
 #   .   private heap space
 
 # describe per-CPU slab, all sizes in bytes
-.equ CPU_SLAB_SHIFT,         (20) # total size of per-CPU slab = 1 << HV_CPU_SLAB_SHIFT = 1MB
+.equ CPU_SLAB_SHIFT,         (24) # total size of per-CPU slab = 1 << CPU_SLAB_SHIFT = 16MB
 .equ CPU_SLAB_SIZE,          (1 << CPU_SLAB_SHIFT)
 .equ CPU_STACK_BASE,         (0)
 .equ CPU_STACK_SIZE,         (32 * 1024)

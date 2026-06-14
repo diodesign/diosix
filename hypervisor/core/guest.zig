@@ -8,7 +8,7 @@ const atomic = @import("atomic.zig");
 const vcore = @import("vcore.zig");
 const physmem = @import("physmem.zig");
 const dsa = @import("dsa.zig");
-const vm_space = @import("vm_space.zig");
+const vm_space = @import("vm.zig");
 const riscv = @import("riscv.zig");
 const debug = @import("debug.zig");
 

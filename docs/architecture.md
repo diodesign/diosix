@@ -70,11 +70,11 @@ The following sub-sections apply only to emulated guest VMs.
 
 #### Supervisor-mode sandboxing
 
-The emulator executes inside an S-mode wrapper function (`emulatedRunnerSMode`) with paging disabled (`satp = 0`). To prevent unauthorized access to the hypervisor and hardware devices, the hypervisor's M-mode scheduler dynamically configures RISC-V PMP entries on context switch:
-
+The emulation layer acts as a special S-mode guest. It executes inside an S-mode wrapper function (`emulatedRunnerSMode`) with paging disabled (`satp = 0`). To prevent unauthorized access to the hypervisor and hardware devices, the hypervisor's M-mode scheduler dynamically configures RISC-V PMP entries on context switch:
+  
 *   Read/Execute (RX) access is granted only to the hypervisor's code and read-only data sections (`__hypervisor_start` to `__bss_start`) to run the Unicorn library and helpers.
 *   Read/Write (RW) access is granted to the hypervisor's global data and BSS segments (`__bss_start` to `__hypervisor_end`).
-*   Read/Write (RW) access is granted to the current physical core's private memory slab (including its stack and per-core heap) to service JIT allocations.
+*   Read/Write (RW) access is granted to the current physical core's private memory slab (a 16MB contiguous block including its stack and per-core heap) to service JIT allocations (TCG buffers).
 *   Read/Write (RW) access is granted to the guest's pre-allocated physical RAM region.
 
 All other host memory (including private M-mode exception stacks, other cores' heap/stack slabs, and memory-mapped I/O blocks like CLINT or PLIC) is completely denied.
@@ -91,18 +91,72 @@ To locate the per-hart allocator from S-mode (where the machine-only `mscratch` 
 
 #### Interrupt handling and preemption
 
-Emulation runs inside Unicorn's execution loop (`uc_emu_start`). To prevent a guest VM from hogging a physical core, the hypervisor handles preemption:
+Emulation runs inside Unicorn's execution loop (`uc_emu_start`). To prevent
+a guest VM from hogging a physical core, the hypervisor handles preemption:
 
-*   Host timer interrupts trap to the machine-mode interrupt handler (`xint_handler`).
-*   If an interrupt fires while an emulated virtual core is running, the handler invokes `stop()` (which calls `uc_emu_stop()`) to immediately exit the Unicorn JIT loop.
-*   The CPU resumes the S-mode runner, which exits the JIT loop and executes an environment call (`ECALL`).
-*   The `ECALL` traps back to the hypervisor's M-mode handler, which yields the core, allowing other virtual cores to run.
+*   Host timer interrupts trap to the machine-mode interrupt handler
+    (`xint_handler`).
+*   If an interrupt fires while an emulated virtual core is running, the
+    handler invokes `stop()` (which calls `uc_emu_stop()`) to immediately
+    exit the Unicorn JIT loop.
+*   The CPU resumes the S-mode runner, which exits the JIT loop and
+    executes an environment call (`ECALL`).
+*   The `ECALL` traps back to the hypervisor's M-mode handler, which
+    yields the core, allowing other virtual cores to run.
+
+#### Timer access
+
+Guest operating systems frequently execute timing instructions such as
+`rdtime` on RISC-V during boot-time calibration loops and scheduler tick
+handling. Because Unicorn's internal emulation lacks a native time source,
+each `rdtime` instruction raises an illegal-instruction exception within
+the QEMU-based JIT engine, which surfaces to the hypervisor as a
+`UC_ERR_EXCEPTION` stop.
+
+The hypervisor's exception handler decodes the faulting instruction and,
+if it matches a time-related Control and Status Register (CSR) read
+(`rdtime`, `rdtimeh`, `rdcycle`, `rdinstret`), reads the real host timer
+via the S-mode `time` CSR, writes the value to the guest's destination
+register, and advances the program counter. Emulation then resumes from
+the next instruction.
+
+Reading the host timer from S-mode (`csrr time`) is safe because it is a
+read-only operation that returns a scalar timestamp, exposing no
+hypervisor state or memory.
+
+#### Per-vcore isolation
+
+Each emulated virtual CPU core receives its own independent Unicorn
+engine instance (`uc_engine`) created via `uc_open()`. This provides
+complete isolation:
+
+*   **CPU state**: Each instance maintains a separate register file,
+    program counter, page tables, and CSR bank. One virtual core cannot
+    read or modify another's architectural state.
+*   **Memory space**: Each instance has its own Unicorn address space.
+    Guest physical RAM is mapped independently via `uc_mem_map_ptr`
+    per vcore.
+*   **JIT cache**: Each instance generates and caches its own translated
+    code blocks in a private Translation Cache Generation (TCG) context.
+*   **Hooks**: Each instance maintains a separate set of hook callbacks.
+
+Virtual cores within the same guest VM share the same underlying host
+physical RAM allocation (mapped read/write into each core's Unicorn
+instance), which is correct hardware-equivalent behavior. Virtual cores
+belonging to different guest VMs are backed by separate physical RAM
+allocations from the hypervisor's memory manager, so cross-VM memory
+access is not possible.
 
 #### System call interception
 
-System calls made by a guest kernel to the hypervisor are caught via a Unicorn interrupt hook.
+System calls made by a guest kernel to the hypervisor are caught via a
+Unicorn interrupt hook.
 
-The hypervisor reads the guest's CPU registers, maps them into a mock supervisor context, executes the request via the native Supervisor Binary Interface (SBI) handler, writes the return values back to the guest's virtual registers, and advances the instruction pointer to resume execution.
+The hypervisor reads the guest's CPU registers, maps them into a mock
+supervisor context, executes the request via the native Supervisor Binary
+Interface (SBI) handler, writes the return values back to the guest's
+virtual registers, and advances the instruction pointer to resume
+execution.
 
 ### Native-vs-emulated guests
 

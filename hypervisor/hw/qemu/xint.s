@@ -87,6 +87,10 @@ xint_machine_entry_handler:
     addi    t0, sp, XINT_REGISTER_FRAME_SIZE
     csrrw   x0, mscratch, t0
 
+    # Also restore tp to the hypervisor's CPU context (which is what mscratch points to)
+    # so that pcore.this() works correctly inside xint_handler
+    csrr    tp, mscratch
+
 continue:
     # pass current sp to exception/hw handler as a pointer in a0. this'll allow
     # the higher-level hypervisor access and modify any of the stacked registers

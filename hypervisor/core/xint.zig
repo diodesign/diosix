@@ -11,7 +11,7 @@ const riscv = @import("riscv.zig");
 const pcore = @import("pcore.zig");
 const vcore = @import("vcore.zig");
 const sbi = @import("sbi.zig");
-const vm_space = @import("vm_space.zig");
+const vm_space = @import("vm.zig");
 const scheduler = @import("scheduler.zig");
 const config = @import("config");
 
@@ -181,7 +181,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (pcpu.active_vcore) |vc_raw| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
         if (vc.exec_path == .emulated) {
-            @import("arch_emulation.zig").stop(vc);
+            @import("emulation.zig").stop(vc);
         }
     }
 
@@ -737,6 +737,10 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
 
 // Reflect an exception back to the guest supervisor
 fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
+    if (vc.exec_path == .emulated) {
+        debug.printf("FATAL: reflectExceptionToGuest called for S-mode emulator runner! irq cause={}\n", .{irq.cause});
+        fatal_exception(irq);
+    }
     const ms = vc.getNativeMachine();
     const gs = vc.getNativeGuestState();
 

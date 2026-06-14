@@ -242,7 +242,10 @@ pub inline fn getCPUHeapSize() usize {
 // Initialize the heap allocator for the CPU core running this thread.
 pub fn initCPUHeapAllocator() !void {
     const cpu_context = getCPUContext();
-    try cpu_context.allocator.init(getCPUHeapBase(), getCPUHeapSize());
+    const heap_base = getCPUHeapBase();
+    const heap_size = getCPUHeapSize();
+    debug.printf("CPU Heap Init: base = 0x{x}, size = 0x{x} ({} MB)\n", .{heap_base, heap_size, heap_size / 1024 / 1024});
+    try cpu_context.allocator.init(heap_base, heap_size);
 }
 
 // Return a standard Zig allocator for the CPU core running this thread.
