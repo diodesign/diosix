@@ -31,6 +31,12 @@ extern const __rootvm_end: u8;
 // CPU ID 0 does all the heavy lifting to begin with.
 const BootCpuID: usize = 0;
 
+/// Preemptive multitasking timeslice: maximum time (in timer ticks) a
+/// virtual core runs before the hypervisor forces a scheduling decision.
+/// Set to 50ms at the standard RISC-V timer frequency of 10 MHz.
+/// This matches the original Rust hypervisor's TIMESLICE_LENGTH.
+const TIMESLICE_TICKS: u64 = 500_000;
+
 
 // True when all cores can begin running vCPU threads.
 var boot_complete_flag = atomic.LockPayload(bool).init("Boot complete", false);
@@ -103,6 +109,29 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
 
         if (pcore.this().active_vcore) |ptr| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
+
+            // Program the machine timer for preemptive multitasking.
+            // The vcore runs for at most TIMESLICE_TICKS before the timer
+            // fires and xint_handler calls scheduler.schedule() to pick
+            // the next vcore (CFS vruntime ordering). If the guest has a
+            // pending timer that expires sooner, use that instead to avoid
+            // delaying guest timer interrupts.
+            var timeslice_target: u64 = riscv.readTime() +% TIMESLICE_TICKS;
+
+            // If the guest has a timer that fires before the timeslice ends,
+            // use the guest timer so we can deliver its interrupt promptly.
+            if (vc.timer_scheduled and vc.timer_target < timeslice_target) {
+                timeslice_target = vc.timer_target;
+            }
+            if (vc.exec_path == .native) {
+                if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
+                    const gs = vc.getNativeGuestState();
+                    if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff and gs.vstimecmp < timeslice_target) {
+                        timeslice_target = gs.vstimecmp;
+                    }
+                }
+            }
+            riscv.setTimer(timeslice_target);
 
             switch (vc.exec_path) {
                 .native => {

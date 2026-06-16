@@ -166,7 +166,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     debug.printf("Provisioning Root VM with {} virtual CPUs\n", .{cpu_count});
 
     // Inject boot arguments and console path into the guest DTB to ensure it uses the SBI console (hvc0)
-    device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, "console=hvc0 earlycon=sbi riscv_aia=off")) catch |err| {
+    device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, "maxcpus=1 lpj=100 earlycon=sbi riscv_aia=off norandmaps nokaslr keep_bootcon panic=30")) catch |err| {
         debug.printf("Warning: Failed to inject bootargs into guest DTB: {s}\n", .{@errorName(err)});
     };
     device_tree.editProperty("/chosen", "stdout-path", try dt.DeviceTreeProperty.fromText(cpu_allocator, "serial0:115200n8")) catch |err| {
@@ -213,47 +213,81 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
             if (c == '/') slash_count += 1;
         }
         if (slash_count == 2) {
-            // Let's strip "sstc" from "riscv,isa" property of this CPU node.
-            if (device_tree.getProperty(path, "riscv,isa")) |isa_prop| {
-                if (isa_prop.asText()) |isa_text| {
-                    var new_isa = std.ArrayList(u8).empty;
-                    defer new_isa.deinit(cpu_allocator);
+            if (guest_arch == .riscv32) {
+                // Emulated guest: replace riscv,isa with only the extensions
+                // that Unicorn's QEMU fork supports (rv32imafdc). The host DTB
+                // advertises many extensions (Zbb, Zba, Zbs, Zfa, Zicbom, etc.)
+                // that Unicorn cannot execute. The kernel will use software
+                // fallbacks for anything not in this ISA string.
+                try device_tree.editProperty(path, "riscv,isa", try dt.DeviceTreeProperty.fromText(cpu_allocator, "rv32imafdc"));
 
-                    var i: usize = 0;
-                    while (i < isa_text.len) {
-                        if (i + 5 <= isa_text.len and std.mem.eql(u8, isa_text[i .. i + 5], "_sstc")) {
-                            i += 5;
-                        } else if (i + 4 <= isa_text.len and std.mem.eql(u8, isa_text[i .. i + 4], "sstc")) {
-                            i += 4;
-                        } else {
-                            try new_isa.append(cpu_allocator, isa_text[i]);
-                            i += 1;
-                        }
-                    }
-                    try device_tree.editProperty(path, "riscv,isa", try dt.DeviceTreeProperty.fromText(cpu_allocator, new_isa.items));
-                } else |_| {}
-            } else |_| {}
+                // Set the new-style ISA base property. Linux 7.0 uses
+                // riscv,isa-base + riscv,isa-extensions as the primary ISA
+                // discovery mechanism. Without riscv,isa-base the kernel
+                // may reject the CPU entirely.
+                try device_tree.editProperty(path, "riscv,isa-base", try dt.DeviceTreeProperty.fromText(cpu_allocator, "rv32i"));
 
-            // Let's strip "sstc" from "riscv,isa-extensions" property of this CPU node if it exists.
-            if (device_tree.getProperty(path, "riscv,isa-extensions")) |ext_prop| {
-                if (ext_prop.asMultiText(cpu_allocator)) |extensions| {
-                    defer cpu_allocator.free(extensions);
-                    var new_extensions = std.ArrayList(u8).empty;
-                    defer new_extensions.deinit(cpu_allocator);
-                    var changed = false;
-                    for (extensions) |ext_str| {
-                        if (std.mem.eql(u8, ext_str, "sstc")) {
-                            changed = true;
-                        } else {
-                            try new_extensions.appendSlice(cpu_allocator, ext_str);
-                            try new_extensions.append(cpu_allocator, 0);
+                // Set mmu-type to sv32 for 32-bit guests. The host DTB has
+                // sv48 or sv39 (64-bit MMU types) which makes the rv32 kernel
+                // reject the CPU as "incompatible".
+                try device_tree.editProperty(path, "mmu-type", try dt.DeviceTreeProperty.fromText(cpu_allocator, "riscv,sv32"));
+
+                // Set riscv,isa-extensions to only supported extensions.
+                // Always set this (not conditional on existing) since the
+                // kernel may rely on it as the primary ISA source.
+                {
+                    var minimal_exts = std.ArrayList(u8).empty;
+                    defer minimal_exts.deinit(cpu_allocator);
+                    for ([_][]const u8{ "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" }) |ext| {
+                        try minimal_exts.appendSlice(cpu_allocator, ext);
+                        try minimal_exts.append(cpu_allocator, 0);
+                    }
+                    try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, minimal_exts.items));
+                }
+            } else {
+                // Native guest: strip only "sstc" from "riscv,isa" (the hypervisor
+                // virtualizes the timer itself).
+                if (device_tree.getProperty(path, "riscv,isa")) |isa_prop| {
+                    if (isa_prop.asText()) |isa_text| {
+                        var new_isa = std.ArrayList(u8).empty;
+                        defer new_isa.deinit(cpu_allocator);
+
+                        var i: usize = 0;
+                        while (i < isa_text.len) {
+                            if (i + 5 <= isa_text.len and std.mem.eql(u8, isa_text[i .. i + 5], "_sstc")) {
+                                i += 5;
+                            } else if (i + 4 <= isa_text.len and std.mem.eql(u8, isa_text[i .. i + 4], "sstc")) {
+                                i += 4;
+                            } else {
+                                try new_isa.append(cpu_allocator, isa_text[i]);
+                                i += 1;
+                            }
                         }
-                    }
-                    if (changed) {
-                        try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, new_extensions.items));
-                    }
+                        try device_tree.editProperty(path, "riscv,isa", try dt.DeviceTreeProperty.fromText(cpu_allocator, new_isa.items));
+                    } else |_| {}
                 } else |_| {}
-            } else |_| {}
+
+                // Strip "sstc" from "riscv,isa-extensions" for native guests.
+                if (device_tree.getProperty(path, "riscv,isa-extensions")) |ext_prop| {
+                    if (ext_prop.asMultiText(cpu_allocator)) |extensions| {
+                        defer cpu_allocator.free(extensions);
+                        var new_extensions = std.ArrayList(u8).empty;
+                        defer new_extensions.deinit(cpu_allocator);
+                        var changed = false;
+                        for (extensions) |ext_str| {
+                            if (std.mem.eql(u8, ext_str, "sstc")) {
+                                changed = true;
+                            } else {
+                                try new_extensions.appendSlice(cpu_allocator, ext_str);
+                                try new_extensions.append(cpu_allocator, 0);
+                            }
+                        }
+                        if (changed) {
+                            try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, new_extensions.items));
+                        }
+                    } else |_| {}
+                } else |_| {}
+            }
         }
 
         if (slash_count == 2) {
@@ -297,6 +331,50 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                 } else |_| {}
             }
         }
+    }
+
+    // Delete extra CPU nodes beyond cpu_count from the DTB entirely.
+    // The kernel's setup_smp can BUG even on disabled CPU nodes.
+    // We must delete all descendants too (e.g., interrupt-controller),
+    // otherwise the serializer recreates empty parent nodes.
+    // Delete one at a time (restart iteration after each delete).
+    while (true) {
+        var del_it = device_tree.iter("/cpus/cpu@", 10);
+        var del_index: usize = 0;
+        var found_to_delete: ?[]const u8 = null;
+        var delete_prefix: ?[]const u8 = null;
+        while (del_it.next()) |path| {
+            // Check if this path is a child of a CPU we already want to delete.
+            if (delete_prefix) |prefix| {
+                if (std.mem.startsWith(u8, path, prefix)) {
+                    found_to_delete = path;
+                    break;
+                }
+                // Past the prefix's children, we found a new CPU node.
+                // Delete the prefix itself first.
+                found_to_delete = null;
+                delete_prefix = null;
+            }
+
+            var slash_cnt: usize = 0;
+            for (path) |c| {
+                if (c == '/') slash_cnt += 1;
+            }
+            if (slash_cnt == 2) {
+                if (del_index >= cpu_count) {
+                    // Mark this CPU and all its children for deletion.
+                    // First delete children, then the node itself.
+                    delete_prefix = path;
+                    found_to_delete = path;
+                    // Don't break — look for children first.
+                } else {
+                    del_index += 1;
+                }
+            }
+        }
+        if (found_to_delete) |path| {
+            device_tree.deleteNode(path);
+        } else break;
     }
 
     // Filter PLIC interrupts-extended to remove references to disabled CPUs

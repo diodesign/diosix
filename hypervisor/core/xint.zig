@@ -547,7 +547,48 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     return;
                 }
 
-                // Unrecognized instruction — log it once then reflect to guest
+                // Unrecognized instruction — check if it's an M-mode CSR read from
+                // the Unicorn JIT (which may emit native CSR instructions that fault
+                // because the S-mode runner can't access M-mode CSRs).
+                if ((instr & riscv.Instr.OPCODE_MASK) == riscv.Instr.OPCODE_SYSTEM) {
+                    const funct3 = (instr >> 12) & riscv.Instr.FUNCT3_MASK;
+                    if (funct3 >= 1 and funct3 <= 3) { // CSRRW, CSRRS, CSRRC
+                        const mmode_csr = instr >> 20;
+                        const mmode_rd = (instr >> 7) & riscv.Instr.RD_MASK;
+
+                        // Emulate reads of M-mode CSRs.
+                        const val: usize = switch (mmode_csr) {
+                            0xF14 => riscv.readMhartid(), // mhartid
+                            0xF11 => 0, // mvendorid
+                            0xF12 => 0, // marchid
+                            0xF13 => 0, // mimpid
+                            0x301 => 0, // misa: return 0 to indicate not available
+                            else => {
+                                // Truly unrecognized — fall through to reflection
+                                if (pcore.this().trap_loop_count < 2) {
+                                    debug.printf("Unhandled illegal instruction 0x{x} at PC=0x{x} — reflecting to guest\n", .{ instr, irq.pc });
+                                }
+                                reflectExceptionToGuest(vc, irq) catch |err| {
+                                    debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
+                                    fatal_exception(irq);
+                                };
+                                return;
+                            },
+                        };
+
+                        // For CSRRS/CSRRC with rs1=0, it's a pure read.
+                        // For CSRRW, the write is a no-op for read-only M-mode CSRs.
+
+                        if (mmode_rd != 0) {
+                            context[mmode_rd] = val;
+                            vc.getNativeContext()[mmode_rd] = val;
+                        }
+                        vc.getNativeMachine().mepc += 4;
+                        pcore.this().trap_loop_count = 0;
+                        return;
+                    }
+                }
+
                 {
                     if (pcore.this().trap_loop_count < 2) {
                         debug.printf("Unhandled illegal instruction 0x{x} at PC=0x{x} — reflecting to guest\n", .{ instr, irq.pc });
@@ -650,14 +691,20 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
         .machine_timer => {
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-                if (vc.exec_path == .native) {
-                    if (vc.timer_scheduled) {
+
+                // Deliver guest timer interrupt if the guest's timer has expired.
+                if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
+                    if (vc.exec_path == .native) {
                         vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
-                        vc.timer_scheduled = false; // Reset scheduling state until next event
                     }
-                } else {
                     vc.timer_scheduled = false;
                 }
+
+                // Preemptive multitasking: the timeslice timer has fired.
+                // Force a scheduling decision so other vcores get CPU time.
+                // scheduler.schedule() will re-queue this vcore (updating
+                // its CFS vruntime) and pick the next one to run.
+                scheduler.schedule();
             } else {
                 // Core was sleeping. Check if the vcore mapped to this hart has its timer expired.
                 if (main.global_root_vm) |g| {
@@ -683,7 +730,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 }
             }
             // Clear hardware timer condition by setting it far into the future
-            // until the guest (or hypervisor) sets a new one.
+            // until the main loop programs a new timeslice or guest timer.
             riscv.setTimer(0xffffffffffffffff);
         },
         .machine_swi => {

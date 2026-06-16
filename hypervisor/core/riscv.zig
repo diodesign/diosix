@@ -244,7 +244,7 @@ pub fn initCPUHeapAllocator() !void {
     const cpu_context = getCPUContext();
     const heap_base = getCPUHeapBase();
     const heap_size = getCPUHeapSize();
-    debug.printf("CPU Heap Init: base = 0x{x}, size = 0x{x} ({} MB)\n", .{heap_base, heap_size, heap_size / 1024 / 1024});
+    debug.printf("CPU Heap Init: base = 0x{x}, size = 0x{x} ({} MB)\n", .{ heap_base, heap_size, heap_size / 1024 / 1024 });
     try cpu_context.allocator.init(heap_base, heap_size);
 }
 
@@ -654,7 +654,7 @@ pub inline fn readMtinst() usize {
 pub fn auditCpuFeatures() !void {
     if (is_test) return;
 
-    debug.printf("CPU features architectural audit...\n", .{});
+    debug.printf("CPU features audit...\n", .{});
 
     const pcpu = getCPUContext();
     if (!config.legacy_cpu) {

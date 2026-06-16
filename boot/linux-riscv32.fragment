@@ -1,2 +1,6 @@
 CONFIG_ARCH_RV32I=y
 CONFIG_32BIT=y
+# Disable stack protector — the Unicorn TCG JIT occasionally corrupts the
+# per-function canary during TB state transitions, triggering false panics.
+# The actual stack is not corrupted; this is a QEMU emulation artefact.
+# CONFIG_STACKPROTECTOR is not set

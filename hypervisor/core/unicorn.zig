@@ -669,6 +669,18 @@ pub const uc_mem_read = if (is_test) struct {
     extern fn uc_mem_read(engine: ?*anyopaque, address: u64, bytes: [*]u8, size: usize) uc_err;
 }.uc_mem_read;
 
+pub const uc_mem_write = if (is_test) struct {
+    fn dummy_uc_mem_write(engine: ?*anyopaque, address: u64, bytes: [*]const u8, size: usize) uc_err {
+        _ = engine;
+        _ = address;
+        _ = bytes;
+        _ = size;
+        return .UC_ERR_OK;
+    }
+}.dummy_uc_mem_write else struct {
+    extern fn uc_mem_write(engine: ?*anyopaque, address: u64, bytes: [*]const u8, size: usize) uc_err;
+}.uc_mem_write;
+
 pub const uc_mem_unmap = if (is_test) struct {
     fn impl(engine: ?*anyopaque, address: u64, size: u64) callconv(.c) uc_err {
         _ = engine;
@@ -684,11 +696,15 @@ pub const uc_mem_unmap = if (is_test) struct {
 pub const uc_cb_eventmem_t = *const fn (uc: ?*anyopaque, mem_type: uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) bool;
 pub const uc_hook = ?*anyopaque;
 pub const UC_HOOK_MEM_UNMAPPED = 112; // 1<<4 | 1<<5 | 1<<6
+pub const UC_HOOK_INTR: c_int = 1; // 1<<0
 pub const UC_HOOK_BLOCK: c_int = 8; // 1<<3
+pub const UC_HOOK_MEM_WRITE: c_int = 1 << 11; // 2048
+
+pub const uc_cb_hookintr_t = *const fn (uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c) void;
 
 // UC_CTL control codes for cache management.
-pub const UC_CTL_FLUSH_TLB: c_uint = 0x2d000000;
-pub const UC_CTL_FLUSH_TB: c_uint = 0x29000000;
+pub const UC_CTL_FLUSH_TLB: c_uint = 0x4000000b; // UC_CTL_WRITE(UC_CTL_TLB_FLUSH=11, 0)
+pub const UC_CTL_FLUSH_TB: c_uint = 0x4000000a; // UC_CTL_WRITE(UC_CTL_TB_FLUSH=10, 0)
 
 // UC_HOOK_INSN_INVALID fires when Unicorn encounters an instruction it
 // cannot handle (e.g., rdtime with no rdtime_fn callback). The hook runs
@@ -905,6 +921,31 @@ pub extern fn uc_strerror(error_code: uc_err) ?[*:0]const u8;
 // Diosix glue: register an rdtime callback with Unicorn's internal QEMU CPU
 // state so that guest rdtime instructions execute inside the JIT loop.
 pub extern fn diosix_uc_set_rdtime_fn(uc: ?*anyopaque, fn_ptr: *const fn () callconv(.c) u64) void;
+
+// Diosix glue: deliver an exception using QEMU's native riscv_cpu_do_interrupt.
+// This bypasses uc_reg_read/write (which has JIT state sync issues) and lets
+// QEMU properly set sepc, scause, stval, mstatus, and pc=stvec.
+// The info struct is populated with pre/post interrupt state for debugging.
+pub const InterruptInfo = extern struct {
+    pre_priv: u32,
+    pre_pc: u32,
+    pre_stvec: u32,
+    pre_mtvec: u32,
+    pre_medeleg: u32,
+    pre_badaddr: u32,
+    pre_mstatus: u32,
+    post_pc: u32,
+    post_sepc: u32,
+    post_scause: u32,
+    post_stval: u32,
+    post_priv: u32,
+};
+pub extern fn diosix_uc_do_interrupt(uc: ?*anyopaque, exception_index: c_int, info: ?*InterruptInfo) void;
+
+// Diosix glue: inject an asynchronous interrupt (e.g., timer) using QEMU's
+// native riscv_cpu_do_interrupt. Called from the run loop (not from hooks),
+// so env->pc is already correct (no +4 undo needed).
+pub extern fn diosix_uc_inject_interrupt(uc: ?*anyopaque, cause: c_int) void;
 
 // Callback passed to diosix_uc_set_rdtime_fn. Reads the real host timer
 // from S-mode and returns it to Unicorn's JIT-compiled rdtime handler.

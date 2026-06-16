@@ -36,6 +36,10 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.HSM => handleHSM(vc, context, function, a0, a1, a2),
         interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),
         interface.EXT.IPI => handleIPI(vc, context, a0, a1),
+        interface.EXT.RFENCE => {
+            // For a single virtual CPU, remote fences are a no-op.
+            setResult(vc, context, SBI_SUCCESS, 0);
+        },
         interface.EXT.LEGACY_CONSOLE_PUTCHAR => {
             const c: u8 = @truncate(a0);
             debug.putcharFromGuest(vc.guest_id, c);
@@ -117,6 +121,7 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
                 interface.EXT.HSM,
                 interface.EXT.DBCN,
                 interface.EXT.IPI,
+                interface.EXT.RFENCE,
                 interface.EXT.DIOSIX,
                 interface.EXT.LEGACY_CONSOLE_PUTCHAR,
                 interface.EXT.LEGACY_CLEAR_IPI,
@@ -175,8 +180,11 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
 }
 
 fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64) void {
-    // Set timer for guest.
-    riscv.setTimer(stime);
+    // For emulated guests, don't program the host hardware timer.
+    // The timer is managed by the emulation loop's blockCallback.
+    if (vc.exec_path == .native) {
+        riscv.setTimer(stime);
+    }
 
     // Track that the guest has explicitly scheduled a timer interrupt.
     vc.timer_scheduled = true;
@@ -309,9 +317,11 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
     const g = vc.getGuest();
     switch (function) {
         interface.DBCN.CONSOLE_WRITE => {
-            const num_bytes = a0;
+            // Cap bytes-per-call to prevent a guest from monopolizing the
+            // hypervisor in this loop. The guest can make multiple calls.
+            const DBCN_MAX_WRITE: usize = 4096;
+            const num_bytes = if (a0 > DBCN_MAX_WRITE) DBCN_MAX_WRITE else a0;
             const gpa = a1; // base_addr_lo
-            // debug.printf("DBCN: write {} bytes at GPA 0x{x}\n", .{ num_bytes, gpa });
             var written: usize = 0;
             var buf: [256]u8 = undefined;
             var buf_idx: usize = 0;

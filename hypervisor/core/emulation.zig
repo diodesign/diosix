@@ -14,6 +14,7 @@ const guest = @import("guest.zig");
 const glue = @import("unicorn.zig");
 const riscv = @import("riscv.zig");
 const debug = @import("debug.zig");
+const sbi = @import("sbi.zig");
 
 /// Result of handling an exception from Unicorn.
 pub const ExceptionAction = enum {
@@ -29,6 +30,24 @@ pub const ExceptionAction = enum {
 const rv32 = @import("arch/riscv32.zig");
 const aarch64 = @import("arch/aarch64.zig");
 const x86_64 = @import("arch/x86_64.zig");
+
+// ---- Named constants (avoid magic numbers) ----
+
+/// Unicorn control command to set the TCG translation buffer size.
+/// Encoded as UC_CTL_WRITE | UC_CTL_TB_REQUEST_CACHE (0x0d).
+const UC_CTL_TB_CACHE_SIZE: c_uint = 0x4400000d;
+
+/// QEMU virt platform UART base address (NS16550A).
+const QEMU_VIRT_UART_BASE: u64 = 0x10000000;
+
+/// Maximum number of exception-stop cycles before the emulation loop
+/// yields back to the scheduler. Prevents runaway exception storms.
+const EXCEPTION_BUDGET: u32 = 1_000_000;
+
+/// Number of translation blocks between forced yields from the JIT.
+/// This is a safety net to ensure the outer loop gets control even
+/// when no timer or exception fires. Set high to minimise overhead.
+const BLOCK_YIELD_THRESHOLD: u32 = 500_000;
 
 
 // Initialize Unicorn context for the given virtual core.
@@ -57,14 +76,10 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     }
     em.uc = uc;
 
-    // Register the rdtime callback so guest rdtime/rdtimeh instructions
-    // execute inside the JIT loop, reading the real host timer directly.
-    if (em.target_arch == .riscv32) {
-        glue.diosix_uc_set_rdtime_fn(uc, &glue.rdtimeCallback);
-    }
-
     // Set TCG buffer to 4MB to fit within the per-CPU heap allocation.
-    const ctl_err = glue.uc_ctl(uc, @as(c_uint, 0x4400000d), @as(c_uint, 4 * 1024 * 1024));
+    // This call triggers UC_INIT which creates the CPU — must happen before
+    // accessing internal CPU state (e.g., rdtime_fn registration below).
+    const ctl_err = glue.uc_ctl(uc, UC_CTL_TB_CACHE_SIZE, @as(c_uint, 4 * 1024 * 1024));
     if (ctl_err != .UC_ERR_OK) {
         debug.printf("Unicorn: failed to set TCG buffer size, err={}\n", .{ctl_err});
         _ = glue.uc_close(uc);
@@ -87,10 +102,9 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 
     // Map a physical alias at GPA 0 for guests whose page tables reference
     // physical addresses starting at 0 (e.g., ELF PHDR addresses).
-    // Cap the alias to avoid covering MMIO regions (UART at 0x10000000).
+    // Cap the alias to avoid covering MMIO regions.
     if (gpa_base > 0) {
-        const uart_base: u64 = 0x10000000;
-        const alias_size = if (ram_size > uart_base) uart_base else ram_size;
+        const alias_size = if (ram_size > QEMU_VIRT_UART_BASE) QEMU_VIRT_UART_BASE else ram_size;
         _ = glue.uc_mem_map_ptr(uc, 0, alias_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
         // Non-fatal: the guest may not need this mapping.
     }
@@ -105,12 +119,34 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     var hook_insn_invalid: glue.uc_hook = null;
     _ = glue.uc_hook_add(uc, &hook_insn_invalid, glue.UC_HOOK_INSN_INVALID, @as(?*const anyopaque, @ptrCast(&insnInvalidCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
 
+    // Interrupt/exception hook: intercepts ecall (and other exceptions)
+    // before QEMU delivers them to mtvec/stvec. This is critical for
+    // SBI call handling — without it, ecall from S-mode silently jumps
+    // to mtvec (address 0) and the guest resets.
+    var hook_intr: glue.uc_hook = null;
+    _ = glue.uc_hook_add(uc, &hook_intr, glue.UC_HOOK_INTR, @as(?*const anyopaque, @ptrCast(&intrCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
+
+    // Block hook: fires at the start of each translation block.
+    // Used to check for pending timer interrupts inside the JIT loop,
+    // since neither count nor timeout parameters work in our bare-metal
+    // Unicorn environment (no OS threads for timeout, count is ignored).
+    var hook_block: glue.uc_hook = null;
+    _ = glue.uc_hook_add(uc, &hook_block, glue.UC_HOOK_BLOCK, @as(?*const anyopaque, @ptrCast(&blockCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
+
     // Delegate to architecture-specific register initialization.
     switch (em.target_arch) {
         .riscv32 => rv32.initRegisters(uc, em.entry, em.dtb, vc.id),
         .aarch64 => aarch64.initRegisters(uc, em.entry, em.dtb, vc.id),
         .x86_64 => x86_64.initRegisters(uc, em.entry, em.dtb, vc.id),
         else => {},
+    }
+
+    // Register the rdtime callback so guest rdtime/rdtimeh instructions
+    // execute inside the JIT loop, reading the real host timer directly.
+    // Must be after initRegisters above, which triggers UC_INIT (CPU
+    // creation) via uc_reg_write. Before UC_INIT, uc->cpu is NULL.
+    if (em.target_arch == .riscv32) {
+        glue.diosix_uc_set_rdtime_fn(uc, &glue.rdtimeCallback);
     }
 }
 
@@ -129,7 +165,10 @@ pub fn stop(vc: *vcore.VirtualCore) void {
 // exceptions are decoded and re-delivered to the guest's trap handler,
 // matching real hardware behavior.
 pub fn run(vc: *vcore.VirtualCore) void {
-    init(vc) catch return;
+    init(vc) catch |e| {
+        debug.printf("Unicorn init failed: {s}\n", .{@errorName(e)});
+        return;
+    };
 
     const em = &vc.exec_path.emulated;
     const uc = em.uc.?;
@@ -142,9 +181,47 @@ pub fn run(vc: *vcore.VirtualCore) void {
         else => return,
     };
 
-    var exception_budget: u32 = 100000;
+    var exception_budget: u32 = EXCEPTION_BUDGET;
+
     while (exception_budget > 0) {
 
+        // Check for pending timer interrupt before (re-)entering the guest.
+        // The guest calls SBI SET_TIMER which sets vc.timer_target. If the
+        // current time has passed the target, deliver a supervisor timer
+        // interrupt through the guest's stvec. This is the emulated
+        // equivalent of the hardware STIP interrupt.
+        if (em.target_arch == .riscv32 and vc.timer_scheduled) {
+            const now = glue.readSModeTime();
+            if (now >= vc.timer_target) {
+                // Timer has expired. Only deliver if the guest has interrupts
+                // enabled (SIE bit) and has the timer interrupt enabled in sie.
+                var sstatus: u64 = 0;
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_SSTATUS, &sstatus);
+                var sie: u64 = 0;
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_SIE, &sie);
+
+                const SSTATUS_SIE: u64 = 1 << 1;
+                const SIE_STIE: u64 = 1 << 5; // Supervisor timer interrupt enable
+
+
+                if ((sstatus & SSTATUS_SIE) != 0 and (sie & SIE_STIE) != 0) {
+                    vc.timer_scheduled = false;
+                    vc.timer_skip_blocks = 0;
+                    // Deliver timer interrupt: save state, set scause, jump to stvec.
+                    rv32.deliverInterrupt(uc, pc, 5); // cause 5 = supervisor timer interrupt
+                    pc = rv32.readPC(uc);
+                    continue;
+                } else {
+                    // Interrupts disabled — let the kernel execute ~1000 blocks
+                    // before we stop and re-check. This prevents a busy loop
+                    // when the kernel is in a critical section with SIE=0.
+                    vc.timer_skip_blocks = 1000;
+                }
+            }
+        }
+
+        // Run the guest. The timer is checked inside the JIT loop
+        // via the blockCallback hook, so we don't need timeout/count.
         const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, 0);
 
         const new_pc: u64 = switch (em.target_arch) {
@@ -156,6 +233,9 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
         if (err == .UC_ERR_OK) {
             // Clean stop — check for ECALL/HVC/SYSCALL via arch handler.
+            // Note: if blockCallback stopped us (for timer), the current PC
+            // is at a random TB boundary, not necessarily an ecall. If
+            // intrCallback handled an ecall, PC is already past it (ecall+4).
             const handled = switch (em.target_arch) {
                 .riscv32 => rv32.handleCleanStop(uc, vc, new_pc),
                 .aarch64 => aarch64.handleCleanStop(uc, vc, new_pc),
@@ -163,7 +243,9 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 else => false,
             };
             if (handled) return; // ECALL handled; yield to outer loop.
-            return; // Clean stop with no ECALL — done.
+            // Clean stop with no ECALL — resume (blockCallback or intrCallback stop).
+            pc = new_pc;
+            continue;
         }
 
         if (err == .UC_ERR_EXCEPTION) {
@@ -176,8 +258,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
             switch (action) {
                 .emulated => {
-                    // Instruction was emulated (CSR read, sfence, etc.).
-                    // Resume at updated PC without consuming budget.
                     pc = switch (em.target_arch) {
                         .riscv32 => rv32.readPC(uc),
                         .aarch64 => aarch64.readPC(uc),
@@ -187,7 +267,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
                     continue;
                 },
                 .delivered => {
-                    // Trap delivered to guest handler via stvec/vbar.
                     pc = switch (em.target_arch) {
                         .riscv32 => rv32.readPC(uc),
                         .aarch64 => aarch64.readPC(uc),
@@ -214,10 +293,53 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
 // Invalid-instruction callback — intercepts instructions that Unicorn
 // cannot execute natively and emulates them inline. This fires inside
-// the JIT loop so there is no engine stop/restart overhead.
+// Block callback — fires at the start of each translation block inside
+// the JIT loop. Used to check for pending timer interrupts since neither
+// count nor timeout parameters work in our bare-metal environment.
 //
-// Currently handles RISC-V rdtime/rdtimeh/rdcycle/rdinstret by reading
-// the real host timer and writing the result to the destination register.
+// IMPORTANT: Must NOT call uc_reg_read/uc_reg_write here because those
+// functions call restore_jit_state() which corrupts JIT execution state
+// when invoked from within the JIT loop. Instead, only check the timer
+// target against rdtime and stop the engine if it has expired. The
+// actual CSR checks and interrupt delivery happen in the outer loop.
+fn blockCallback(uc: ?*anyopaque, _: u64, _: u32, user_data: ?*anyopaque) callconv(.c) void {
+    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
+
+    // Periodically yield control to the outer loop even when no timer is
+    // scheduled. Without this, the kernel can execute forever inside
+    // uc_emu_start during long init phases (e.g., memory zone setup) that
+    // don't generate exceptions or SBI calls. The outer loop needs to
+    // run periodically to check for timer expiry and deliver interrupts.
+    const S = struct {
+        var block_count: u32 = 0;
+    };
+    S.block_count += 1;
+    if (S.block_count >= BLOCK_YIELD_THRESHOLD) {
+        S.block_count = 0;
+        _ = glue.uc_emu_stop(uc);
+        return;
+    }
+
+    if (!vc.timer_scheduled) return;
+
+    const now = glue.readSModeTime();
+    if (now >= vc.timer_target) {
+        // Timer has expired. But if the outer loop previously found
+        // interrupts disabled (SIE=0), it sets timer_skip_blocks to
+        // avoid a busy loop. Decrement and wait.
+        if (vc.timer_skip_blocks > 0) {
+            vc.timer_skip_blocks -= 1;
+            return;
+        }
+        // Stop the engine so the outer emulation loop can check CSRs
+        // and deliver the interrupt safely.
+        S.block_count = 0;
+        _ = glue.uc_emu_stop(uc);
+    }
+}
+
+// Invalid-instruction callback — intercepts instructions that Unicorn
+// cannot execute natively and emulates them inline. This fires inside
 fn insnInvalidCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
     const em = &vc.exec_path.emulated;
@@ -231,15 +353,72 @@ fn insnInvalidCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) boo
     };
 }
 
+// Interrupt/exception callback — intercepts CPU exceptions before QEMU
+// delivers them to mtvec/stvec. This is the primary path for handling
+// SBI calls (ecall from S-mode).
+fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c) void {
+    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
+    const em = &vc.exec_path.emulated;
+    if (em.target_arch != .riscv32) return;
+
+    // RISC-V ecall exception causes: U-mode=8, S-mode=9, M-mode=11.
+    if (intno == 8 or intno == 9 or intno == 11) {
+        // SBI call — read a7/a6/a0/a1/a2, handle, write results back.
+        var a7: u32 = 0;
+        var a6: u32 = 0;
+        var a0: u32 = 0;
+        var a1: u32 = 0;
+        var a2: u32 = 0;
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X17), &a7);
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X16), &a6);
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X10), &a0);
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X11), &a1);
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X12), &a2);
+
+        var mock_context = std.mem.zeroes(riscv.ThreadContext);
+        mock_context[@intFromEnum(riscv.Register.a7)] = a7;
+        mock_context[@intFromEnum(riscv.Register.a6)] = a6;
+        mock_context[@intFromEnum(riscv.Register.a0)] = a0;
+        mock_context[@intFromEnum(riscv.Register.a1)] = a1;
+        mock_context[@intFromEnum(riscv.Register.a2)] = a2;
+
+        sbi.handle(vc, &mock_context);
+
+        const res_a0 = @as(u32, @truncate(mock_context[@intFromEnum(riscv.Register.a0)]));
+        const res_a1 = @as(u32, @truncate(mock_context[@intFromEnum(riscv.Register.a1)]));
+        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X10), &res_a0);
+        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X11), &res_a1);
+
+        // PC already advanced by QEMU. Stop so the outer loop can reschedule.
+        _ = glue.uc_emu_stop(uc);
+        return;
+    }
+
+    // All other exceptions: deliver to the guest's S-mode trap handler
+    // via QEMU's native riscv_cpu_do_interrupt. This correctly handles
+    // medeleg/mideleg delegation, sepc/scause/stval/sstatus manipulation,
+    // privilege mode transitions, and PC = stvec.
+    var info: glue.InterruptInfo = std.mem.zeroes(glue.InterruptInfo);
+    glue.diosix_uc_do_interrupt(uc, @intCast(intno), &info);
+
+    // Flush Unicorn TB cache so the next uc_emu_start generates fresh
+    // translation blocks with the updated CSR/privilege state.
+    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
+
+    // Stop execution so that uc_emu_start returns. The run loop will
+    // re-enter at the new PC (stvec), generating a fresh translation block
+    // with the correct privilege and CSR state.
+    _ = glue.uc_emu_stop(uc);
+}
+
 // Memory callback for unmapped regions — handles MMIO (UART, etc.).
 fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) bool {
     _ = uc;
     _ = size;
     const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(user_data.?)));
 
-    // UART console output (QEMU virt: 0x10000000).
-    const uart_base = 0x10000000;
-    if (address >= uart_base and address < uart_base + 8) {
+    // UART console output.
+    if (address >= QEMU_VIRT_UART_BASE and address < QEMU_VIRT_UART_BASE + 8) {
         if (mem_type == .UC_MEM_WRITE_UNMAPPED) {
             debug.putcharFromGuest(vc.guest_id, @as(u8, @intCast(value & 0xff)));
         }

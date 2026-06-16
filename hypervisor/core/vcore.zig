@@ -67,6 +67,7 @@ pub const VirtualCore = struct {
 
     timer_scheduled: bool,
     timer_target: u64,
+    timer_skip_blocks: u32, // blocks to skip before next timer stop (avoids busy-loop when SIE=0)
     running_on_cpu: ?usize,
     wfi_blocked: bool,
 
@@ -89,6 +90,7 @@ pub const VirtualCore = struct {
             .state = .stopped,
             .timer_scheduled = false,
             .timer_target = 0,
+            .timer_skip_blocks = 0,
             .running_on_cpu = null,
             .wfi_blocked = false,
             .priority = priority,
