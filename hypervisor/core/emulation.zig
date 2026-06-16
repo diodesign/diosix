@@ -44,11 +44,6 @@ const QEMU_VIRT_UART_BASE: u64 = 0x10000000;
 /// yields back to the scheduler. Prevents runaway exception storms.
 const EXCEPTION_BUDGET: u32 = 1_000_000;
 
-/// Number of translation blocks between forced yields from the JIT.
-/// This is a safety net to ensure the outer loop gets control even
-/// when no timer or exception fires. Set high to minimise overhead.
-const BLOCK_YIELD_THRESHOLD: u32 = 100_000;
-
 
 // Initialize Unicorn context for the given virtual core.
 pub fn init(vc: *vcore.VirtualCore) !void {
@@ -126,12 +121,11 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     var hook_intr: glue.uc_hook = null;
     _ = glue.uc_hook_add(uc, &hook_intr, glue.UC_HOOK_INTR, @as(?*const anyopaque, @ptrCast(&intrCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
 
-    // Block hook: fires at the start of each translation block.
-    // Used to check for pending timer interrupts inside the JIT loop,
-    // since neither count nor timeout parameters work in our bare-metal
-    // Unicorn environment (no OS threads for timeout, count is ignored).
-    var hook_block: glue.uc_hook = null;
-    _ = glue.uc_hook_add(uc, &hook_block, glue.UC_HOOK_BLOCK, @as(?*const anyopaque, @ptrCast(&blockCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
+    // Block hook: DISABLED — using uc_emu_start count parameter for
+    // bounded execution instead. Timer/preemption checks happen in
+    // the outer loop between uc_emu_start calls.
+    // var hook_block: glue.uc_hook = null;
+    // _ = glue.uc_hook_add(uc, &hook_block, glue.UC_HOOK_BLOCK, @as(?*const anyopaque, @ptrCast(&blockCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
 
     // Delegate to architecture-specific register initialization.
     switch (em.target_arch) {
@@ -191,6 +185,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
     var exception_budget: u32 = EXCEPTION_BUDGET;
 
     while (exception_budget > 0) {
+
         // Check for pending timer interrupt before (re-)entering the guest.
         // The guest calls SBI SET_TIMER which sets vc.timer_target. If the
         // current time has passed the target, deliver a supervisor timer
@@ -225,10 +220,14 @@ pub fn run(vc: *vcore.VirtualCore) void {
             }
         }
 
-        // Run the guest. The timer is checked inside the JIT loop
-        // via the blockCallback hook, so we don't need timeout/count.
+        // Run the guest with a bounded instruction count. The count
+        // parameter limits instructions per call, ensuring uc_emu_start
+        // returns periodically so we can check timers and handle
+        // preemption. Without this, QEMU's TB chaining can keep the
+        // JIT running indefinitely in tight loops.
+        em.preempt_pending = false;
         em.emu_running = true;
-        const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, 0);
+        const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, 100_000);
         em.emu_running = false;
         // Clear stale CPU exit flags left by asynchronous uc_emu_stop
         // (called from M-mode timer handler). Without this, the JIT
@@ -319,6 +318,15 @@ pub fn run(vc: *vcore.VirtualCore) void {
 // actual CSR checks and interrupt delivery happen in the outer loop.
 fn blockCallback(uc: ?*anyopaque, _: u64, _: u32, user_data: ?*anyopaque) callconv(.c) void {
     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
+    const em = &vc.exec_path.emulated;
+
+    // Check preemption: the M-mode timer handler sets this flag when
+    // the timeslice expires. We stop from within the JIT (guaranteed
+    // safe) rather than relying on uc_emu_stop from M-mode context.
+    if (em.preempt_pending) {
+        _ = glue.uc_emu_stop(uc);
+        return;
+    }
 
     // Check guest timer: if the emulated kernel set a supervisor timer
     // via SBI SET_TIMER, stop the engine when it expires so the outer
