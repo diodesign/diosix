@@ -194,6 +194,11 @@ pub const CpuContext = struct {
 
     probing_active: bool,
     probe_failed: bool,
+
+    // True when this hart is executing in M-mode. Set on boot and trap entry,
+    // cleared before mret to S-mode. Used by IRQ-safe spinlocks to decide
+    // whether mstatus CSR access is safe (only valid from M-mode).
+    in_m_mode: bool,
 };
 
 // Machine and Hypervisor specific architecture state

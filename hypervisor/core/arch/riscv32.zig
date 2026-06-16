@@ -64,10 +64,12 @@ const INSN_C_NOP: u16 = 0x0001;
 // ---- RISC-V Exception Delegation Masks ----
 
 /// Exception delegation mask for medeleg.
-/// Delegates standard exception causes 0-13 to S-mode, EXCEPT:
+/// Delegates all standard exception causes to S-mode, EXCEPT:
 ///   - Cause 9 (ECALL from S-mode) — must trap to M-mode for SBI handling.
-///   - Causes 14-15 (reserved / double-trap) — must NOT be delegated for security.
-const MEDELEG_DEFAULT: u64 = 0x3dff;
+///   - Cause 14 (double-trap / reserved) — must NOT be delegated for security.
+/// Critically, causes 12 (insn page fault), 13 (load page fault), and
+/// 15 (store page fault) MUST be delegated for guest demand paging.
+const MEDELEG_DEFAULT: u64 = 0xBDFF;
 
 /// Interrupt delegation mask for mideleg.
 /// Delegates standard S-mode interrupts (SSIP=1, STIP=5, SEIP=9) to S-mode.
@@ -250,7 +252,12 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
         const funct7 = insn >> 25;
 
         // SFENCE.VMA: funct7 = 0x09
+        // Flush Unicorn's internal TLB and TB cache to ensure the guest's
+        // page table updates take effect. Without this, QEMU keeps using
+        // stale TLB entries after the kernel calls setup_vm_final().
         if (funct7 == 0x09) {
+            _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB));
+            _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
             writePC(uc, pc + 4);
             return true;
         }

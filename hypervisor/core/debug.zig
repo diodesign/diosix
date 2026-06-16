@@ -68,6 +68,7 @@ var global_console_state = atomic.LockPayload(ConsoleState).init("Debug console 
 // Reentrant lock tracking
 var console_lock_owner: usize = 0;
 var console_lock_recursion: usize = 0;
+var console_lock_saved_mstatus: usize = 0;
 
 // Top-level crash bypass flag to guarantee panic messages get printed immediately
 pub var panic_mode: bool = false;
@@ -111,8 +112,9 @@ fn acquireConsole() *ConsoleState {
     if (@atomicLoad(usize, &console_lock_owner, .seq_cst) == self_ptr) {
         console_lock_recursion += 1;
     } else {
-        global_console_state.lock.lock();
+        const prev_ms = global_console_state.lock.lock();
         @atomicStore(usize, &console_lock_owner, self_ptr, .seq_cst);
+        console_lock_saved_mstatus = prev_ms;
         console_lock_recursion = 1;
     }
     return &global_console_state.data;
@@ -124,8 +126,9 @@ fn releaseConsole() void {
     if (@atomicLoad(usize, &console_lock_owner, .seq_cst) == self_ptr) {
         console_lock_recursion -= 1;
         if (console_lock_recursion == 0) {
+            const saved_ms = console_lock_saved_mstatus;
             @atomicStore(usize, &console_lock_owner, 0, .seq_cst);
-            global_console_state.lock.unlock();
+            global_console_state.lock.unlock(saved_ms);
         }
     }
 }

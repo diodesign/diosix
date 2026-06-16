@@ -36,8 +36,8 @@ const MallocHeader = struct {
 
 // Export standard C memory allocation symbols for Unicorn to link against
 pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
-    allocator_lock.lock();
-    defer allocator_lock.unlock();
+    const lock_mstatus = allocator_lock.lock();
+    defer allocator_lock.unlock(lock_mstatus);
 
     const cpu = getSModeCPUContext();
     const alloc_size = @sizeOf(MallocHeader) + size;
@@ -60,8 +60,8 @@ pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
 pub export fn free(ptr: ?*anyopaque) callconv(.c) void {
     const p = ptr orelse return;
 
-    allocator_lock.lock();
-    defer allocator_lock.unlock();
+    const lock_mstatus = allocator_lock.lock();
+    defer allocator_lock.unlock(lock_mstatus);
 
     const header = @as(*MallocHeader, @ptrFromInt(@intFromPtr(p) - @sizeOf(MallocHeader)));
     const cpu = riscv.cpu_contexts[header.cpu_core_id] orelse {
@@ -80,10 +80,10 @@ pub export fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
         return null;
     }
 
-    allocator_lock.lock();
+    const realloc_mstatus = allocator_lock.lock();
     const header = @as(*MallocHeader, @ptrFromInt(@intFromPtr(ptr.?) - @sizeOf(MallocHeader)));
     const old_size = header.size;
-    allocator_lock.unlock();
+    allocator_lock.unlock(realloc_mstatus);
 
     if (size <= old_size) return ptr;
 
@@ -946,6 +946,10 @@ pub extern fn diosix_uc_do_interrupt(uc: ?*anyopaque, exception_index: c_int, in
 // native riscv_cpu_do_interrupt. Called from the run loop (not from hooks),
 // so env->pc is already correct (no +4 undo needed).
 pub extern fn diosix_uc_inject_interrupt(uc: ?*anyopaque, cause: c_int) void;
+
+// Clear stale CPU exit flags after an asynchronous uc_emu_stop.
+// Must be called after uc_emu_start returns and before re-entering.
+pub extern fn diosix_uc_clear_stop(uc: ?*anyopaque) void;
 
 // Callback passed to diosix_uc_set_rdtime_fn. Reads the real host timer
 // from S-mode and returns it to Unicorn's JIT-compiled rdtime handler.

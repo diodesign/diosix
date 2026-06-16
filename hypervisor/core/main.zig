@@ -58,6 +58,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     const cpu_ctx = riscv.getCPUContext();
     @memset(@as([*]u8, @ptrCast(cpu_ctx))[0..@sizeOf(riscv.CpuContext)], 0);
     cpu_ctx.cpu_core_id = cpu_core_id;
+    cpu_ctx.in_m_mode = true; // Boot code runs in M-mode
 
     const hart_id = riscv.readMhartid();
     cpu_ctx.hardware_hart_id = hart_id;
@@ -148,9 +149,11 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
                         vc.timer_scheduled = false;
                     }
 
+                    pcore.this().in_m_mode = false;
                     pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
                 },
                 .emulated => {
+                    pcore.this().in_m_mode = false;
                     pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
                 },
             }

@@ -62,6 +62,8 @@ pub const VirtualCore = struct {
             machine: riscv.MachineState,
             guest_state: riscv.GuestState,
             stack: []u8,
+            emu_running: bool = false,
+            preempt_pending: bool = false,
         },
     },
 
@@ -151,7 +153,7 @@ pub const VirtualCore = struct {
                     .context = std.mem.zeroes(riscv.ThreadContext),
                     .machine = .{
                         .mepc = @intFromPtr(&@import("emulation.zig").emulatedRunnerSMode),
-                        .mstatus = (1 << 11) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor Mode), MPV=0, FS=3
+                        .mstatus = (1 << 11) | (1 << 7) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor Mode), MPIE=1 (enable M-mode interrupts after mret), MPV=0, FS=3
                         .hstatus = 0,
                         .hgatp = 0,
                         .hedeleg = 0,

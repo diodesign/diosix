@@ -30,8 +30,16 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
 
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
-        interface.EXT.TIME => handleTimer(vc, context, a0),
-        interface.EXT.LEGACY_SET_TIMER => handleTimer(vc, context, a0),
+        interface.EXT.TIME => {
+            // RV32 SBI: 64-bit stime split across a0 (low) and a1 (high).
+            // RV64 SBI: a0 holds the full 64-bit value; a1 is unused.
+            const stime = if (vc.exec_path == .emulated) a0 | (@as(u64, a1) << 32) else a0;
+            handleTimer(vc, context, stime);
+        },
+        interface.EXT.LEGACY_SET_TIMER => {
+            const stime = if (vc.exec_path == .emulated) a0 | (@as(u64, a1) << 32) else a0;
+            handleTimer(vc, context, stime);
+        },
         interface.EXT.SRST => handleSystemReset(vc, context, function, a0, a1),
         interface.EXT.HSM => handleHSM(vc, context, function, a0, a1, a2),
         interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),

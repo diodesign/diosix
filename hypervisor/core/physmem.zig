@@ -110,8 +110,8 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
     @memset(std.mem.sliceAsBytes(metadata), 0);
     const ram = try allocator.alloc(u8, num_pages * PageSize);
 
-    phys_mem_state.lock.lock();
-    defer phys_mem_state.lock.unlock();
+    const lock_ms = phys_mem_state.lock.lock();
+    defer phys_mem_state.lock.unlock(lock_ms);
 
     phys_mem_state.has_h_extension = true;
     phys_mem_state.free_lists = init_free_lists;
@@ -353,16 +353,16 @@ fn getPageDescriptor(addr: usize) *PageDescriptor {
 }
 
 fn pushFreeBlock(addr: usize, order: u8) void {
-    phys_mem_state.lock.lock();
-    defer phys_mem_state.lock.unlock();
+    const lock_ms = phys_mem_state.lock.lock();
+    defer phys_mem_state.lock.unlock(lock_ms);
     pushFreeBlockLocked(addr, order);
 }
 
 // Allocate power-of-two naturally aligned blocks.
 // order 0 = 4KB, 1 = 8KB, 2 = 16KB, etc.
 pub fn allocPageSelection(order: u8) !usize {
-    phys_mem_state.lock.lock();
-    defer phys_mem_state.lock.unlock();
+    const lock_ms = phys_mem_state.lock.lock();
+    defer phys_mem_state.lock.unlock(lock_ms);
 
     var o = order;
     while (o < max_order) : (o += 1) {
@@ -414,8 +414,8 @@ pub fn decrementPageRef(addr: usize) void {
     const desc = getPageDescriptor(addr);
     const old = @atomicRmw(u32, &desc.refcount, .Sub, 1, .seq_cst);
     if (old == 1) {
-        phys_mem_state.lock.lock();
-        defer phys_mem_state.lock.unlock();
+        const lock_ms = phys_mem_state.lock.lock();
+        defer phys_mem_state.lock.unlock(lock_ms);
         pushFreeBlockLocked(addr, desc.order);
     }
 }
@@ -431,8 +431,8 @@ pub fn isHypervisorMemory(base: usize, size: usize) bool {
 
 // Discover RAM regions from the device tree without initializing the allocator.
 pub fn discoverRegions(device_tree: *dt.DeviceTree) !void {
-    phys_mem_state.lock.lock();
-    defer phys_mem_state.lock.unlock();
+    const lock_ms = phys_mem_state.lock.lock();
+    defer phys_mem_state.lock.unlock(lock_ms);
 
     phys_mem_state.region_count = 0;
     var it = device_tree.iter("/", 1);
@@ -459,8 +459,8 @@ pub fn discoverRegions(device_tree: *dt.DeviceTree) !void {
 
 // Find a contiguous region of RAM of the requested size that doesn't overlap with the hypervisor.
 pub fn findContiguousRegion(size: usize) !Region {
-    phys_mem_state.lock.lock();
-    defer phys_mem_state.lock.unlock();
+    const lock_ms = phys_mem_state.lock.lock();
+    defer phys_mem_state.lock.unlock(lock_ms);
 
     if (phys_mem_state.region_count == 0) return PhysMemError.NoRAMFound;
     for (0..phys_mem_state.region_count) |i| {

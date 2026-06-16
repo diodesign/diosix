@@ -47,7 +47,7 @@ const EXCEPTION_BUDGET: u32 = 1_000_000;
 /// Number of translation blocks between forced yields from the JIT.
 /// This is a safety net to ensure the outer loop gets control even
 /// when no timer or exception fires. Set high to minimise overhead.
-const BLOCK_YIELD_THRESHOLD: u32 = 500_000;
+const BLOCK_YIELD_THRESHOLD: u32 = 100_000;
 
 
 // Initialize Unicorn context for the given virtual core.
@@ -153,8 +153,14 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 // Stop execution of the emulated vcore.
 pub fn stop(vc: *vcore.VirtualCore) void {
     const em = &vc.exec_path.emulated;
-    if (em.uc) |uc| {
-        _ = glue.uc_emu_stop(uc);
+    // Set preempt flag — checked by blockCallback inside the JIT loop.
+    // uc_emu_stop from M-mode doesn't reliably interrupt the JIT because
+    // Unicorn's quit_request flag isn't checked between TBs in this build.
+    em.preempt_pending = true;
+    if (em.emu_running) {
+        if (em.uc) |uc| {
+            _ = glue.uc_emu_stop(uc);
+        }
     }
 }
 
@@ -181,10 +187,10 @@ pub fn run(vc: *vcore.VirtualCore) void {
         else => return,
     };
 
+
     var exception_budget: u32 = EXCEPTION_BUDGET;
 
     while (exception_budget > 0) {
-
         // Check for pending timer interrupt before (re-)entering the guest.
         // The guest calls SBI SET_TIMER which sets vc.timer_target. If the
         // current time has passed the target, deliver a supervisor timer
@@ -202,7 +208,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
                 const SSTATUS_SIE: u64 = 1 << 1;
                 const SIE_STIE: u64 = 1 << 5; // Supervisor timer interrupt enable
-
 
                 if ((sstatus & SSTATUS_SIE) != 0 and (sie & SIE_STIE) != 0) {
                     vc.timer_scheduled = false;
@@ -222,7 +227,13 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
         // Run the guest. The timer is checked inside the JIT loop
         // via the blockCallback hook, so we don't need timeout/count.
+        em.emu_running = true;
         const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, 0);
+        em.emu_running = false;
+        // Clear stale CPU exit flags left by asynchronous uc_emu_stop
+        // (called from M-mode timer handler). Without this, the JIT
+        // immediately exits on the next uc_emu_start call.
+        glue.diosix_uc_clear_stop(uc);
 
         const new_pc: u64 = switch (em.target_arch) {
             .riscv32 => rv32.readPC(uc),
@@ -232,6 +243,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
         };
 
         if (err == .UC_ERR_OK) {
+
             // Clean stop — check for ECALL/HVC/SYSCALL via arch handler.
             // Note: if blockCallback stopped us (for timer), the current PC
             // is at a random TB boundary, not necessarily an ecall. If
@@ -243,12 +255,15 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 else => false,
             };
             if (handled) return; // ECALL handled; yield to outer loop.
-            // Clean stop with no ECALL — resume (blockCallback or intrCallback stop).
+            // Clean stop from timer preemption or block yield.
+            // The timer is reprogrammed by xint_handler (M-mode), so we
+            // just continue the emulation loop.
             pc = new_pc;
             continue;
         }
 
         if (err == .UC_ERR_EXCEPTION) {
+
             const action = switch (em.target_arch) {
                 .riscv32 => rv32.handleException(uc, new_pc),
                 .aarch64 => aarch64.handleException(uc, new_pc),
@@ -305,35 +320,17 @@ pub fn run(vc: *vcore.VirtualCore) void {
 fn blockCallback(uc: ?*anyopaque, _: u64, _: u32, user_data: ?*anyopaque) callconv(.c) void {
     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
 
-    // Periodically yield control to the outer loop even when no timer is
-    // scheduled. Without this, the kernel can execute forever inside
-    // uc_emu_start during long init phases (e.g., memory zone setup) that
-    // don't generate exceptions or SBI calls. The outer loop needs to
-    // run periodically to check for timer expiry and deliver interrupts.
-    const S = struct {
-        var block_count: u32 = 0;
-    };
-    S.block_count += 1;
-    if (S.block_count >= BLOCK_YIELD_THRESHOLD) {
-        S.block_count = 0;
-        _ = glue.uc_emu_stop(uc);
-        return;
-    }
-
+    // Check guest timer: if the emulated kernel set a supervisor timer
+    // via SBI SET_TIMER, stop the engine when it expires so the outer
+    // loop can deliver the interrupt.
     if (!vc.timer_scheduled) return;
 
     const now = glue.readSModeTime();
     if (now >= vc.timer_target) {
-        // Timer has expired. But if the outer loop previously found
-        // interrupts disabled (SIE=0), it sets timer_skip_blocks to
-        // avoid a busy loop. Decrement and wait.
         if (vc.timer_skip_blocks > 0) {
             vc.timer_skip_blocks -= 1;
             return;
         }
-        // Stop the engine so the outer emulation loop can check CSRs
-        // and deliver the interrupt safely.
-        S.block_count = 0;
         _ = glue.uc_emu_stop(uc);
     }
 }

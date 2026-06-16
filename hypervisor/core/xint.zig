@@ -177,7 +177,9 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
 pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (builtin.is_test) return;
 
+
     const pcpu = pcore.this();
+    pcpu.in_m_mode = true; // Trap entry is always in M-mode
     if (pcpu.active_vcore) |vc_raw| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
         if (vc.exec_path == .emulated) {
@@ -266,7 +268,18 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             @memcpy(context, vc.getNativeContext());
             pcore.contextSwitch(vc);
             syncGuestStateToHardware(vc);
+        } else if (vc.exec_path == .emulated) {
+            // For emulated vcores, we must write the struct mepc to the
+            // hardware CSR so mret goes to the right place.
+            riscv.writeMepc(vc.getNativeMachine().mepc);
         }
+    }
+
+
+    // Clear in_m_mode before mret returns to a lower privilege mode.
+    // If we're returning to M-mode (idle hart WFI loop), keep it true.
+    if (irq.privilege_mode != .machine) {
+        pcpu.in_m_mode = false;
     }
 }
 
@@ -689,6 +702,10 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
 
     switch (irq.cause) {
         .machine_timer => {
+            // Reprogram mtimecmp to clear the level-triggered interrupt.
+            const TIMESLICE_TICKS: u64 = 500_000; // 50ms at 10MHz
+            riscv.setTimer(riscv.readTime() +% TIMESLICE_TICKS);
+
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
 
@@ -702,8 +719,6 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
 
                 // Preemptive multitasking: the timeslice timer has fired.
                 // Force a scheduling decision so other vcores get CPU time.
-                // scheduler.schedule() will re-queue this vcore (updating
-                // its CFS vruntime) and pick the next one to run.
                 scheduler.schedule();
             } else {
                 // Core was sleeping. Check if the vcore mapped to this hart has its timer expired.
