@@ -5,9 +5,9 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const alloc = @import("alloc.zig");
-const dsa = @import("dsa.zig");
-const debug = @import("debug.zig");
+const alloc = @import("../../alloc.zig");
+const dsa = @import("../../dsa.zig");
+const debug = @import("../../debug.zig");
 const interface = @import("interface").riscv;
 const config = @import("config");
 
@@ -185,6 +185,10 @@ pub const CpuContext = struct {
     run_queue: dsa.RedBlackTree(u64, dsa.compareU64),
     run_queue_count: usize,
 
+    // Blocked queue for vcores waiting for interrupts (WFI).
+    // Uses *anyopaque to avoid circular dependencies with vcore.zig.
+    blocked_queue: dsa.LinkedList(*anyopaque),
+
     trap_count: usize,
 
     // Aegis: Trap loop detection fields
@@ -199,6 +203,15 @@ pub const CpuContext = struct {
     // cleared before mret to S-mode. Used by IRQ-safe spinlocks to decide
     // whether mstatus CSR access is safe (only valid from M-mode).
     in_m_mode: bool,
+
+    // The vcore that went WFI-blocked on this physical core.
+    // Only THIS core monitors its timer to avoid thundering herd.
+    blocked_vcore: ?*anyopaque,
+
+    // Set when the G-stage page table is modified (demand paging).
+    // Cleared after hfence.gvma. Prevents unnecessary TLB flushes
+    // on ecall/timer returns that don't change page tables.
+    gstage_dirty: bool,
 };
 
 // Machine and Hypervisor specific architecture state
@@ -696,6 +709,15 @@ pub fn auditCpuFeatures() !void {
 
         riscv_supports_sstc = !pcpu.probe_failed and stip_cleared and stip_asserted;
 
+        // If Sstc is detected, keep menvcfg.STCE enabled so VS-mode can access
+        // stimecmp (mapped to vstimecmp by hardware). Without STCE, guest
+        // stimecmp accesses trap as illegal instruction.
+        if (riscv_supports_sstc) {
+            writeMenvcfg(old_menvcfg | stce_bit);
+            // Clear the test STIP by setting stimecmp to infinity
+            writeStimecmp(0xffffffffffffffff);
+        }
+
         pcpu.probing_active = false;
     }
 
@@ -736,13 +758,14 @@ pub fn setTimer(stime: u64) void {
     mtimecmp_ptr.* = stime;
 }
 
-// Read the time CSR (or its memory-mapped equivalent via mtime).
-// In M-mode on RISC-V, `time` may not be directly accessible; fall back to CLINT mtime.
+// Read the time CSR. On RISC-V, `rdtime` reads the platform time counter
+// directly via CSR, avoiding MMIO contention on the CLINT mtime register.
+// MMIO reads to CLINT serialize all cores in QEMU through the BQL.
 pub inline fn readTime() u64 {
     if (is_test) return test_time;
-    const base = clint_base orelse 0x02000000;
-    const mtime_ptr = @as(*volatile u64, @ptrFromInt(base + CLINT.MTIME_OFFSET));
-    return mtime_ptr.*;
+    return asm volatile ("rdtime %[ret]"
+        : [ret] "=r" (-> u64),
+    );
 }
 
 pub inline fn readHvip() usize {

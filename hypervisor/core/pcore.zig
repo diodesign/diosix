@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const riscv = @import("riscv.zig");
+const riscv = @import("arch/riscv64/riscv.zig");
 const vcore = @import("vcore.zig");
 const alloc = @import("alloc.zig");
 
@@ -26,7 +26,7 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     cpu.active_vcore = to_vcore;
     to_vcore.running_on_cpu = cpu.cpu_core_id;
 
-    const pmp = @import("pmp.zig");
+    const pmp = @import("arch/riscv64/pmp.zig");
     switch (to_vcore.exec_path) {
         .native => {
             to_vcore.guest.space.apply(to_vcore.guest.vmid);

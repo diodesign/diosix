@@ -5,9 +5,9 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const xint = @import("xint.zig");
+const xint = @import("arch/riscv64/xint.zig");
 const debug = @import("debug.zig");
-const riscv = @import("riscv.zig");
+const riscv = @import("arch/riscv64/riscv.zig");
 const alloc = @import("alloc.zig");
 const atomic = @import("atomic.zig");
 const dt = @import("dt.zig");
@@ -17,7 +17,7 @@ const guest = @import("guest.zig");
 const vcore = @import("vcore.zig");
 const loader = @import("loader.zig");
 const pcore = @import("pcore.zig");
-const sv39x4 = @import("sv39x4.zig");
+const sv39x4 = @import("arch/riscv64/sv39x4.zig");
 const elf_spec = @import("interface").elf;
 const boot = @import("boot.zig");
 const config = @import("config");
@@ -160,31 +160,13 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         }
 
         // We only get here if no vcores were available to run.
-        // Program the physical timer before going to sleep if a guest vcore is waiting for a timer event.
-        if (global_root_vm) |g| {
-            if (g.findVcore(pcore.this().hardware_hart_id)) |vc| {
-                if (vc.wfi_blocked) {
-                    var next_timer: u64 = 0xffffffffffffffff;
-                    if (vc.exec_path == .native) {
-                        if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-                            const gs = vc.getNativeGuestState();
-                            if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
-                                next_timer = gs.vstimecmp;
-                            }
-                        }
-                    }
-                    if (vc.timer_scheduled) {
-                        if (vc.timer_target < next_timer) {
-                            next_timer = vc.timer_target;
-                        }
-                    }
-                    if (next_timer != 0xffffffffffffffff) {
-                        riscv.setTimer(next_timer);
-                    }
-                }
-            }
-        }
-        riscv.pause(); // wfi
+        // Sleep until an IPI wakes us (e.g., HART_START or IPI broadcast).
+        // Timer monitoring for blocked vcores is handled by the trap handler's
+        // idle loop (in xint.zig), which is entered after the first trap.
+        // We must NOT busy-loop or do MMIO here — in QEMU, MMIO writes to CLINT
+        // serialize all vCPUs through the BQL, causing massive slowdowns.
+        riscv.setTimer(0xffffffffffffffff);
+        riscv.pause(); // WFI — sleep until IPI
     }
 }
 

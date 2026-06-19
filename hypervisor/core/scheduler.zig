@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const riscv = @import("riscv.zig");
+const riscv = @import("arch/riscv64/riscv.zig");
 const dsa = @import("dsa.zig");
 const pcore = @import("pcore.zig");
 const vcore = @import("vcore.zig");
@@ -42,7 +42,9 @@ pub fn initCpu() void {
     const pc = pcore.this();
     pc.run_queue.init();
     pc.run_queue_count = 0;
+    pc.blocked_queue.init();
     pc.active_vcore = null;
+    pc.blocked_vcore = null;
     pc.trap_count = 0;
     pc.last_trap_pc = 0;
     pc.last_trap_val = 0;
@@ -52,7 +54,7 @@ pub fn initCpu() void {
 // Add a virtual core to a run queue (local preferred, global for overflow).
 // Only vcores in 'ready' state may be queued.
 pub fn queue(vc: *vcore.VirtualCore) void {
-    if (vc.wfi_blocked) return;
+    if (@atomicLoad(bool, &vc.wfi_blocked, .acquire)) return;
     // Only schedulable states may be queued.
     if (vc.state != .ready and vc.state != .running) return;
     vc.state = .ready;

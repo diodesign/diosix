@@ -1,10 +1,9 @@
 /*
- * Unicorn Engine glue for Diosix hypervisor.
+ * RISC-V 32-bit guest Unicorn Engine glue for Diosix hypervisor.
  *
- * Provides thin wrappers around Unicorn/QEMU internal APIs that are not
- * exposed through Unicorn's public header. This file is compiled with
- * access to Unicorn's internal headers but lives in the Diosix codebase,
- * avoiding any modifications to the third-party Unicorn source tree.
+ * Provides thin wrappers around Unicorn/QEMU internal APIs for
+ * emulating riscv32 guests. Compiled with access to Unicorn's
+ * RISC-V internal headers (riscv32-softmmu target).
  *
  * Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
  * SPDX-License-Identifier: MIT
@@ -13,7 +12,7 @@
 #include "uc_priv.h"
 #include "cpu.h"
 
-/* Forward declaration for QEMU's native exception handler. */
+/* Forward declaration for QEMU's native RISC-V exception handler. */
 void riscv_cpu_do_interrupt(CPUState *cs);
 
 /*
@@ -24,7 +23,8 @@ void riscv_cpu_do_interrupt(CPUState *cs);
 #define RISCV_RV32_INTERRUPT_BIT  (1u << 31)
 
 /*
- * Debug info struct populated by diosix_uc_do_interrupt for Zig-side tracing.
+ * Debug info struct populated by diosix_uc_rv32_do_interrupt for
+ * Zig-side tracing.
  */
 struct diosix_interrupt_info {
     uint32_t pre_priv;
@@ -53,7 +53,8 @@ void diosix_uc_set_rdtime_fn(void *uc, uint64_t (*fn)(void))
 }
 
 /*
- * Deliver an exception using QEMU's native riscv_cpu_do_interrupt.
+ * Deliver an exception to a 32-bit RISC-V guest using QEMU's native
+ * riscv_cpu_do_interrupt.
  *
  * Populates the provided info struct with pre/post interrupt state
  * for debug tracing by the Zig caller.
@@ -95,7 +96,8 @@ void diosix_uc_do_interrupt(void *uc, int exception_index,
 }
 
 /*
- * Inject an asynchronous interrupt (e.g., timer) from the run loop.
+ * Inject an asynchronous interrupt (e.g., timer) into a 32-bit RISC-V
+ * guest from the run loop.
  *
  * Unlike diosix_uc_do_interrupt (which is called from the INTR hook
  * and must undo the cpu-exec.c PC += 4), this function is called
@@ -114,30 +116,5 @@ void diosix_uc_inject_interrupt(void *uc, int cause)
         /* Set interrupt bit to indicate async interrupt */
         u->cpu->exception_index = cause | RISCV_RV32_INTERRUPT_BIT;
         riscv_cpu_do_interrupt(u->cpu);
-    }
-}
-
-/*
- * Clear stale stop/exit flags after an asynchronous uc_emu_stop.
- *
- * uc_emu_stop sets uc->stop_request and calls cpu_exit() which sets
- * cpu->exit_request and cpu->tcg_exit_req. uc_emu_start resets
- * stop_request but does NOT reset the CPU-level exit flags. This
- * causes the JIT to immediately exit on the next uc_emu_start call.
- *
- * Call this after uc_emu_start returns and before calling it again
- * to ensure the JIT loop can run to completion (or until the next
- * preemption).
- */
-void diosix_uc_clear_stop(void *uc)
-{
-    struct uc_struct *u = (struct uc_struct *)uc;
-    if (u) {
-        u->stop_request = false;
-        if (u->cpu) {
-            u->cpu->exit_request = 0;
-            u->cpu->tcg_exit_req = 0;
-            u->cpu->icount_decr_ptr->u16.high = 0;
-        }
     }
 }

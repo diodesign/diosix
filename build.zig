@@ -205,8 +205,10 @@ pub fn build(b: *std.Build) !void {
         vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/{s}", .{ unicorn_build_dir, lib_name })));
     }
 
-    // Link the Diosix-side Unicorn glue object (bridges internal QEMU APIs).
+    // Link the Diosix-side Unicorn glue objects (bridges internal QEMU APIs).
     vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/unicorn_glue.o", .{unicorn_build_dir})));
+    vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/unicorn_arm64_glue.o", .{unicorn_build_dir})));
+    vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/unicorn_common_glue.o", .{unicorn_build_dir})));
 
 
     // Dynamically read the modification hash of the rootvm.elf payload if it exists

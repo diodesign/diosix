@@ -8,7 +8,7 @@ const builtin = @import("builtin");
 const Writer = std.Io.Writer;
 const atomic = @import("atomic.zig");
 const pcore = @import("pcore.zig");
-const riscv = @import("riscv.zig");
+const riscv = @import("arch/riscv64/riscv.zig");
 
 // Circular queue size for console text streams
 const queue_size = 4096;

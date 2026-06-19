@@ -11,8 +11,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const physmem = @import("physmem.zig");
-const debug = @import("debug.zig");
+const physmem = @import("../../physmem.zig");
+const debug = @import("../../debug.zig");
 
 const is_test = builtin.is_test;
 

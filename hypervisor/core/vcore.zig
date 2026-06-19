@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const riscv = @import("riscv.zig");
+const riscv = @import("arch/riscv64/riscv.zig");
 const dsa = @import("dsa.zig");
 const guest = @import("guest.zig");
 const physmem = @import("physmem.zig");
@@ -72,6 +72,8 @@ pub const VirtualCore = struct {
     timer_skip_blocks: u32, // blocks to skip before next timer stop (avoids busy-loop when SIE=0)
     running_on_cpu: ?usize,
     wfi_blocked: bool,
+    pending_ipi: bool,
+    blocked_on_cpu: ?usize, // Which physical core blocked this vcore (WFI)
 
     // Scheduling data.
     priority: Priority,
@@ -84,6 +86,9 @@ pub const VirtualCore = struct {
     // We order by vruntime.
     scheduler_node: SchedulerTree.Node,
 
+    // Node for the physical core's blocked queue (WFI).
+    blocked_node: dsa.LinkedList(*anyopaque).Node,
+
     pub fn init(id: VirtualCoreID, parent: *guest.Guest, entry: usize, dtb: usize, priority: Priority) VirtualCore {
         var vcore = VirtualCore{
             .id = id,
@@ -95,6 +100,8 @@ pub const VirtualCore = struct {
             .timer_skip_blocks = 0,
             .running_on_cpu = null,
             .wfi_blocked = false,
+            .pending_ipi = false,
+            .blocked_on_cpu = null,
             .priority = priority,
             .vruntime = 0,
             .weight = switch (priority) {
@@ -103,6 +110,7 @@ pub const VirtualCore = struct {
             },
             .last_queued_time = 0,
             .scheduler_node = undefined,
+            .blocked_node = undefined,
             .exec_path = undefined,
         };
 
@@ -115,7 +123,7 @@ pub const VirtualCore = struct {
                     .machine = .{
                         .mepc = entry,
                         .mstatus = (1 << 11) | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPV=1 (Virtualization), VS=Dirty, FS=Dirty
-                        .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
+                        .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP | riscv.HSTATUS.VTW,
                         .hgatp = 0,
                         .hedeleg = 0xb1fb, // Delegate exceptions to guest: includes breakpoint (bit 3)
                         .hideleg = 0x444, // Delegate VS interrupts: VSSIP(2), VSTIP(6), VSEIP(10)
@@ -227,6 +235,23 @@ pub const VirtualCore = struct {
         return self.guest;
     }
 
+    /// Atomically try to wake this vcore from WFI-blocked state.
+    /// Returns true if THIS caller won the race and woke the vcore.
+    /// Returns false if the vcore was already awake (another core won).
+    /// This prevents multiple physical cores from double-inserting the
+    /// same vcore into the scheduler tree, which would corrupt it.
+    pub fn tryWake(self: *VirtualCore) bool {
+        // Atomic CAS: transition wfi_blocked from true → false.
+        // Only one caller can succeed; others see it's already false.
+        const old = @cmpxchgStrong(bool, &self.wfi_blocked, true, false, .acq_rel, .monotonic);
+        if (old == null) {
+            // We won — set the vcore ready for scheduling.
+            self.state = .ready;
+            return true;
+        }
+        return false;
+    }
+
     // Update the scheduler node with latest vruntime before insertion.
     pub fn updateSchedulerWeight(self: *VirtualCore) void {
         self.scheduler_node.contents = self.vruntime;
@@ -251,6 +276,7 @@ pub const VirtualCore = struct {
 
         // Reset scheduler node for the new vcore.
         vc.running_on_cpu = null;
+        vc.pending_ipi = false;
         vc.scheduler_node = undefined;
         vc.updateSchedulerWeight();
 

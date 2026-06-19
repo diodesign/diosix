@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const riscv = @import("riscv.zig");
+const riscv = @import("arch/riscv64/riscv.zig");
 const atomic = @import("atomic.zig");
 const debug = @import("debug.zig");
 
@@ -497,39 +497,85 @@ pub const uc_riscv_reg = enum(c_int) {
 
 pub const uc_arm64_reg = enum(c_int) {
     UC_ARM64_REG_INVALID = 0,
-    UC_ARM64_REG_X0 = 17,
-    UC_ARM64_REG_X1,
-    UC_ARM64_REG_X2,
-    UC_ARM64_REG_X3,
-    UC_ARM64_REG_X4,
-    UC_ARM64_REG_X5,
-    UC_ARM64_REG_X6,
-    UC_ARM64_REG_X7,
-    UC_ARM64_REG_X8,
-    UC_ARM64_REG_X9,
-    UC_ARM64_REG_X10,
-    UC_ARM64_REG_X11,
-    UC_ARM64_REG_X12,
-    UC_ARM64_REG_X13,
-    UC_ARM64_REG_X14,
-    UC_ARM64_REG_X15,
-    UC_ARM64_REG_X16,
-    UC_ARM64_REG_X17,
-    UC_ARM64_REG_X18,
-    UC_ARM64_REG_X19,
-    UC_ARM64_REG_X20,
-    UC_ARM64_REG_X21,
-    UC_ARM64_REG_X22,
-    UC_ARM64_REG_X23,
-    UC_ARM64_REG_X24,
-    UC_ARM64_REG_X25,
-    UC_ARM64_REG_X26,
-    UC_ARM64_REG_X27,
-    UC_ARM64_REG_X28,
-    UC_ARM64_REG_FP,
-    UC_ARM64_REG_LR,
-    UC_ARM64_REG_SP,
-    UC_ARM64_REG_PC,
+    // X29 and X30 come first in Unicorn's enum (before general-purpose X0-X28).
+    UC_ARM64_REG_X29 = 1, // FP
+    UC_ARM64_REG_X30 = 2, // LR
+    UC_ARM64_REG_NZCV = 3,
+    UC_ARM64_REG_SP = 4,
+    // General-purpose registers X0-X28 start at 199.
+    UC_ARM64_REG_X0 = 199,
+    UC_ARM64_REG_X1 = 200,
+    UC_ARM64_REG_X2 = 201,
+    UC_ARM64_REG_X3 = 202,
+    UC_ARM64_REG_X4 = 203,
+    UC_ARM64_REG_X5 = 204,
+    UC_ARM64_REG_X6 = 205,
+    UC_ARM64_REG_X7 = 206,
+    UC_ARM64_REG_X8 = 207,
+    UC_ARM64_REG_X9 = 208,
+    UC_ARM64_REG_X10 = 209,
+    UC_ARM64_REG_X11 = 210,
+    UC_ARM64_REG_X12 = 211,
+    UC_ARM64_REG_X13 = 212,
+    UC_ARM64_REG_X14 = 213,
+    UC_ARM64_REG_X15 = 214,
+    UC_ARM64_REG_X16 = 215,
+    UC_ARM64_REG_X17 = 216,
+    UC_ARM64_REG_X18 = 217,
+    UC_ARM64_REG_X19 = 218,
+    UC_ARM64_REG_X20 = 219,
+    UC_ARM64_REG_X21 = 220,
+    UC_ARM64_REG_X22 = 221,
+    UC_ARM64_REG_X23 = 222,
+    UC_ARM64_REG_X24 = 223,
+    UC_ARM64_REG_X25 = 224,
+    UC_ARM64_REG_X26 = 225,
+    UC_ARM64_REG_X27 = 226,
+    UC_ARM64_REG_X28 = 227,
+    // Program counter and system registers.
+    UC_ARM64_REG_PC = 260,
+    UC_ARM64_REG_CPACR_EL1 = 261,
+    UC_ARM64_REG_TPIDR_EL0 = 263,
+    UC_ARM64_REG_TPIDRRO_EL0 = 264,
+    UC_ARM64_REG_TPIDR_EL1 = 265,
+    UC_ARM64_REG_PSTATE = 266,
+    UC_ARM64_REG_ELR_EL0 = 268,
+    UC_ARM64_REG_ELR_EL1 = 269,
+    UC_ARM64_REG_ELR_EL2 = 270,
+    UC_ARM64_REG_ELR_EL3 = 271,
+    UC_ARM64_REG_SP_EL0 = 273,
+    UC_ARM64_REG_SP_EL1 = 274,
+    UC_ARM64_REG_SP_EL2 = 275,
+    UC_ARM64_REG_SP_EL3 = 276,
+    UC_ARM64_REG_TTBR0_EL1 = 278,
+    UC_ARM64_REG_TTBR1_EL1 = 279,
+    UC_ARM64_REG_ESR_EL0 = 280,
+    UC_ARM64_REG_ESR_EL1 = 281,
+    UC_ARM64_REG_ESR_EL2 = 282,
+    UC_ARM64_REG_ESR_EL3 = 283,
+    UC_ARM64_REG_FAR_EL0 = 284,
+    UC_ARM64_REG_FAR_EL1 = 285,
+    UC_ARM64_REG_FAR_EL2 = 286,
+    UC_ARM64_REG_FAR_EL3 = 287,
+    UC_ARM64_REG_MAIR_EL1 = 289,
+    UC_ARM64_REG_VBAR_EL0 = 290,
+    UC_ARM64_REG_VBAR_EL1 = 291,
+    UC_ARM64_REG_VBAR_EL2 = 292,
+    UC_ARM64_REG_VBAR_EL3 = 293,
+    // Coprocessor register access (for timer regs via UC_ARM64_REG_CP_REG).
+    UC_ARM64_REG_CP_REG = 294,
+    UC_ARM64_REG_FPCR = 295,
+    UC_ARM64_REG_FPSR = 296,
+};
+
+// Matches C typedef: uc_arm64_cp_reg { uint32_t crn, crm, op0, op1, op2; uint64_t val; }
+pub const uc_arm64_cp_reg = extern struct {
+    crn: u32 = 0,
+    crm: u32 = 0,
+    op0: u32 = 0,
+    op1: u32 = 0,
+    op2: u32 = 0,
+    val: u64 = 0,
 };
 
 pub const uc_x86_reg = enum(c_int) {
@@ -950,6 +996,20 @@ pub extern fn diosix_uc_inject_interrupt(uc: ?*anyopaque, cause: c_int) void;
 // Clear stale CPU exit flags after an asynchronous uc_emu_stop.
 // Must be called after uc_emu_start returns and before re-entering.
 pub extern fn diosix_uc_clear_stop(uc: ?*anyopaque) void;
+
+// ARM64 exception delivery: calls QEMU's arm_cpu_do_interrupt to handle
+// the full EL1 exception entry (SPSR, ELR, ESR, VBAR vector dispatch).
+pub extern fn diosix_uc_do_interrupt_arm64(uc: ?*anyopaque, exception_index: c_int) void;
+
+// Disable QEMU's internal ARM64 MMU by clearing SCTLR_EL1.M (bit 0).
+// Called when we detect the guest has enabled the MMU but QEMU's page
+// table walk fails. Since we map VA ranges directly in Unicorn's flat
+// memory, we don't need the MMU.
+pub extern fn diosix_uc_disable_arm64_mmu(uc: ?*anyopaque) void;
+
+// Synchronize ARM64 MMU state: syncs TTBR banked fields to el[] and
+// rebuilds QEMU's internal hflags cache. Call after MMU-enable exceptions.
+pub extern fn diosix_uc_arm64_sync_mmu_state(uc: ?*anyopaque) void;
 
 // Callback passed to diosix_uc_set_rdtime_fn. Reads the real host timer
 // from S-mode and returns it to Unicorn's JIT-compiled rdtime handler.

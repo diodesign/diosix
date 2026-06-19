@@ -193,6 +193,7 @@ pub const CSR = struct {
 
     // Timer/Counter CSRs
     pub const TIME = 0xc01;
+    pub const STIMECMP = 0x14d;
 };
 
 // RISC-V Instruction Decoding Constants

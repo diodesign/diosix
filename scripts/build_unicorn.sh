@@ -77,7 +77,7 @@ fi
 # Compile the Diosix-side glue file that bridges Unicorn's internal
 # riscv_cpu_set_rdtime_fn API. This uses the same compiler and include
 # paths as Unicorn's riscv32 target to ensure correct symbol naming.
-GLUE_SRC="hypervisor/core/unicorn.c"
+GLUE_SRC="hypervisor/core/arch/riscv32/glue.c"
 GLUE_OBJ="${BUILD_DIR}/unicorn_glue.o"
 if [ "$GLUE_SRC" -nt "$GLUE_OBJ" ]; then
     if ! "$ZIG_CC_ABS" \
@@ -95,10 +95,54 @@ if [ "$GLUE_SRC" -nt "$GLUE_OBJ" ]; then
         -std=gnu11 -fPIC \
         -c "$GLUE_SRC" -o "$GLUE_OBJ" \
         >> "$LOG_FILE" 2>&1; then
-        echo "Unicorn glue compilation failed. See log: $LOG_FILE"
+        echo "RISC-V glue compilation failed. See log: $LOG_FILE"
+        exit 1
+    fi
+fi
+
+# Compile the architecture-independent glue (diosix_uc_clear_stop).
+COMMON_GLUE_SRC="hypervisor/core/arch/common/glue.c"
+COMMON_GLUE_OBJ="${BUILD_DIR}/unicorn_common_glue.o"
+if [ "$COMMON_GLUE_SRC" -nt "$COMMON_GLUE_OBJ" ]; then
+    if ! "$ZIG_CC_ABS" \
+        -DUNICORN_NO_SYSTEM \
+        -I "${BUILD_DIR}" \
+        -I "${SOURCE_DIR}/qemu" \
+        -I "${SOURCE_DIR}/qemu/include" \
+        -I "${SOURCE_DIR}/include" \
+        -I "${SOURCE_DIR}/glib_compat" \
+        -std=gnu11 -fPIC \
+        -c "$COMMON_GLUE_SRC" -o "$COMMON_GLUE_OBJ" \
+        >> "$LOG_FILE" 2>&1; then
+        echo "Common glue compilation failed. See log: $LOG_FILE"
         exit 1
     fi
 fi
 
 echo "Unicorn Engine build OK"
+
+# Compile the ARM64-specific glue file with aarch64 target includes.
+# This needs access to CPUARMState for direct field access (e.g. sctlr_el[]).
+ARM64_GLUE_SRC="hypervisor/core/arch/aarch64/glue.c"
+ARM64_GLUE_OBJ="${BUILD_DIR}/unicorn_arm64_glue.o"
+if [ "$ARM64_GLUE_SRC" -nt "$ARM64_GLUE_OBJ" ]; then
+    if ! "$ZIG_CC_ABS" \
+        -DNEED_CPU_H -DUNICORN_NO_SYSTEM \
+        -include "${SOURCE_DIR}/qemu/aarch64.h" \
+        -I "${BUILD_DIR}" \
+        -I "${BUILD_DIR}/aarch64-softmmu" \
+        -I "${SOURCE_DIR}/glib_compat" \
+        -I "${SOURCE_DIR}/qemu" \
+        -I "${SOURCE_DIR}/qemu/include" \
+        -I "${SOURCE_DIR}/include" \
+        -I "${SOURCE_DIR}/qemu/tcg" \
+        -I "${SOURCE_DIR}/qemu/tcg/riscv" \
+        -I "${SOURCE_DIR}/qemu/target/arm" \
+        -std=gnu11 -fPIC \
+        -c "$ARM64_GLUE_SRC" -o "$ARM64_GLUE_OBJ" \
+        >> "$LOG_FILE" 2>&1; then
+        echo "ARM64 glue compilation failed. See log: $LOG_FILE"
+        exit 1
+    fi
+fi
 

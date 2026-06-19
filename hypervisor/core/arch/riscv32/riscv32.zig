@@ -7,13 +7,13 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const emulation = @import("../emulation.zig");
-const vcore = @import("../vcore.zig");
-const guest = @import("../guest.zig");
-const glue = @import("../unicorn.zig");
-const riscv = @import("../riscv.zig");
-const debug = @import("../debug.zig");
-const sbi = @import("../sbi.zig");
+const emulation = @import("../../emulation.zig");
+const vcore = @import("../../vcore.zig");
+const guest = @import("../../guest.zig");
+const glue = @import("../../unicorn.zig");
+const riscv = @import("../riscv64/riscv.zig");
+const debug = @import("../../debug.zig");
+const sbi = @import("sbi.zig");
 
 pub const ExceptionAction = emulation.ExceptionAction;
 

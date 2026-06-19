@@ -5,10 +5,10 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
-const emulation = @import("../emulation.zig");
-const glue = @import("../unicorn.zig");
-const vcore = @import("../vcore.zig");
-const debug = @import("../debug.zig");
+const emulation = @import("../../emulation.zig");
+const glue = @import("../../unicorn.zig");
+const vcore = @import("../../vcore.zig");
+const debug = @import("../../debug.zig");
 
 pub const ExceptionAction = emulation.ExceptionAction;
 

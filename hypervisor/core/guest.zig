@@ -9,7 +9,7 @@ const vcore = @import("vcore.zig");
 const physmem = @import("physmem.zig");
 const dsa = @import("dsa.zig");
 const vm_space = @import("vm.zig");
-const riscv = @import("riscv.zig");
+const riscv = @import("arch/riscv64/riscv.zig");
 const debug = @import("debug.zig");
 
 pub const GuestID = usize;
@@ -62,6 +62,10 @@ pub const Guest = struct {
     // Virtual memory ID for this guest
     vmid: u16,
 
+    // Fast O(1) lookup from guest_hart_id to vcore.
+    // Lock-free because vcores are only added during init before booting.
+    vcore_lookup: [max_vcores]?*vcore.VirtualCore,
+
     // allocator for heap-allocated Guest structures
     allocator: std.mem.Allocator,
 
@@ -80,6 +84,7 @@ pub const Guest = struct {
             .children = .{ .start = null, .end = null },
             .vcores = .{ .start = null, .end = null },
             .vmid = try allocVmid(),
+            .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = try vm_space.GuestSpace.init(allocator, is_trusted, base_gpa, base_hpa, range_size),
             .allocator = allocator,
         };
@@ -223,6 +228,13 @@ pub const Guest = struct {
         };
         self.vcores.pushEnd(node);
 
+        // Register in the O(1) lookup table if the hart ID fits.
+        if (vid < max_vcores) {
+            self.vcore_lookup[vid] = vc;
+        } else {
+            debug.printf("Warning: Guest {} created vcore with ID {} exceeding max_vcores ({})\n", .{ self.id, vid, max_vcores });
+        }
+
         // Enroll the vcore in the scheduler if a queue function was provided.
         if (sched_queue) |q| {
             q(vc);
@@ -230,6 +242,8 @@ pub const Guest = struct {
 
         return vc;
     }
+
+    pub const max_vcores: usize = 128;
 
     pub fn findVcore(self: *const Guest, vid: vcore.VirtualCoreID) ?*vcore.VirtualCore {
         var it = self.vcores.start;
@@ -279,6 +293,7 @@ pub const Guest = struct {
             .children = .{ .start = null, .end = null },
             .vcores = .{ .start = null, .end = null },
             .vmid = try allocVmid(),
+            .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = child_space,
             .allocator = self.allocator,
         };
@@ -306,6 +321,9 @@ pub const Guest = struct {
             const vc_node = try child.allocator.create(dsa.LinkedList(*vcore.VirtualCore).Node);
             vc_node.* = .{ .next = null, .previous = null, .contents = vc };
             child.vcores.pushEnd(vc_node);
+            if (vc.id < max_vcores) {
+                child.vcore_lookup[vc.id] = vc;
+            }
             it_vcore = node.next;
         }
 

@@ -4,8 +4,8 @@
 // a 16KB root-level page table (compared to 4KB for S-mode SV39).
 
 const std = @import("std");
-const physmem = @import("physmem.zig");
-const debug = @import("debug.zig");
+const physmem = @import("../../physmem.zig");
+const debug = @import("../../debug.zig");
 
 pub const SV39x4Error = error{
     InvalidAlignment,

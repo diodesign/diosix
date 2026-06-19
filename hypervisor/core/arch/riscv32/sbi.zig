@@ -4,13 +4,15 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const riscv = @import("riscv.zig");
-const vcore = @import("vcore.zig");
-const guest = @import("guest.zig");
-const debug = @import("debug.zig");
-const scheduler = @import("scheduler.zig");
+const riscv = @import("../riscv64/riscv.zig");
+const vcore = @import("../../vcore.zig");
+const guest = @import("../../guest.zig");
+const debug = @import("../../debug.zig");
+const scheduler = @import("../../scheduler.zig");
+const pcore = @import("../../pcore.zig");
 const interface = @import("interface").sbi;
 const arch = @import("interface").riscv;
+const config = @import("config");
 
 // SBI Error Codes.
 pub const SBI_SUCCESS = interface.SUCCESS;
@@ -45,7 +47,12 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),
         interface.EXT.IPI => handleIPI(vc, context, a0, a1),
         interface.EXT.RFENCE => {
-            // For a single virtual CPU, remote fences are a no-op.
+            // Execute local TLB flushes. The guest is requesting remote fences
+            // across virtual harts. For correctness, we flush locally and rely on
+            // the fact that when a vcore is scheduled onto a different physical core,
+            // the context switch in hw_run_vcore already performs hfence.gvma.
+            riscv.hfenceGvma();
+            riscv.getCPUContext().gstage_dirty = false; // TLB already flushed
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_CONSOLE_PUTCHAR => {
@@ -61,6 +68,7 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
         },
         interface.EXT.LEGACY_CLEAR_IPI => {
             vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSSIP);
+            _ = @atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel);
             // Clear the CLINT MSIP register for the current physical CPU core
             if (riscv.CLINT.msip(riscv.getCPUContext().hardware_hart_id)) |ptr| {
                 ptr.* = 0;
@@ -68,34 +76,55 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_SEND_IPI => {
-            const g = vc.getGuest();
-            var mask: usize = 0xffffffffffffffff;
-            if (a0 != 0) {
-                mask = @as(usize, riscv.hlv_d(a0));
+            // SBI v0.1: hart_mask is ALWAYS a virtual address pointing to the bit-vector, even on RV64
+            const mask_ptr = context[@intFromEnum(arch.Register.a0)];
+            var hart_mask: usize = 0;
+            if (mask_ptr != 0) {
+                // Diosix is 64-bit, we can just read 64 bits from the guest's virtual address
+                hart_mask = @as(usize, @bitCast(riscv.hlv_d(mask_ptr)));
+            } else {
+                // If mask_ptr is NULL, it usually means broadcast (or all 1s).
+                // But typically SBI 0.1 callers pass a valid pointer.
+                hart_mask = 0;
             }
-            var it_vcore = g.vcores.start;
-            while (it_vcore) |node| {
-                const target_vc = node.contents;
-                if ((mask & (@as(usize, 1) << @intCast(target_vc.id))) != 0) {
-                    if (target_vc.exec_path == .native) {
-                        target_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
-                    }
-                    if (target_vc.wfi_blocked) {
-                        target_vc.wfi_blocked = false;
-                        target_vc.state = .ready;
-                        scheduler.queue(target_vc);
-                    }
-                    // Trigger physical IPI to wake up target physical core from WFI
-                    if (riscv.CLINT.msip(target_vc.id)) |ptr| {
-                        ptr.* = 1;
+            const g = vc.getGuest();
+            for (0..guest.Guest.max_vcores) |vid| {
+                if ((hart_mask & (@as(usize, 1) << @intCast(vid))) != 0) {
+                    if (g.vcore_lookup[vid]) |target_vc| {
+                        if (target_vc.exec_path == .native) {
+                            _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
+                        }
+                        if (target_vc.blocked_on_cpu) |home_cpu| {
+                            if (home_cpu == pcore.this().cpu_core_id) {
+                                if (target_vc.tryWake()) {
+                                    pcore.this().blocked_queue.remove(&target_vc.blocked_node);
+                                    target_vc.blocked_on_cpu = null;
+                                    scheduler.queue(target_vc);
+                                }
+                            } else {
+                                if (home_cpu < riscv.cpu_to_hart_map.len) {
+                                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
+                                        ptr.* = 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            if (target_vc.running_on_cpu) |target_cpu| {
+                                if (target_cpu != pcore.this().cpu_core_id and target_cpu < riscv.cpu_to_hart_map.len) {
+                                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
+                                        ptr.* = 1;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                it_vcore = node.next;
             }
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_REMOTE_FENCE_I, interface.EXT.LEGACY_REMOTE_SFENCE_VMA, interface.EXT.LEGACY_REMOTE_SFENCE_VMA_ASID => {
-            // For a single virtual CPU, there are no remote harts, so remote fences are a complete no-op.
+            riscv.hfenceGvma();
+            riscv.getCPUContext().gstage_dirty = false;
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_SHUTDOWN => {
@@ -152,57 +181,132 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
 
 fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: usize, hart_mask_base: usize) void {
     const g = vc.getGuest();
-    var it_vcore = g.vcores.start;
-    while (it_vcore) |node| {
-        const target_vc = node.contents;
 
-        var should_send = false;
-        if (hart_mask_base == 0xffffffffffffffff) {
-            should_send = true;
-        } else {
-            const hart_id = target_vc.id;
-            if (hart_id >= hart_mask_base and hart_id < hart_mask_base + @bitSizeOf(usize)) {
-                const bit_pos = hart_id - hart_mask_base;
-                if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
-                    should_send = true;
+    if (hart_mask_base == 0xffffffffffffffff) {
+        // Broadcast to all valid vcores in the guest
+        for (0..guest.Guest.max_vcores) |vid| {
+            if (g.vcore_lookup[vid]) |target_vc| {
+                if (target_vc.exec_path == .native) {
+                    _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
+                }
+                if (target_vc.blocked_on_cpu) |home_cpu| {
+                    if (home_cpu == pcore.this().cpu_core_id) {
+                        if (target_vc.tryWake()) {
+                            pcore.this().blocked_queue.remove(&target_vc.blocked_node);
+                            target_vc.blocked_on_cpu = null;
+                            scheduler.queue(target_vc);
+                        }
+                    } else {
+                        if (home_cpu < riscv.cpu_to_hart_map.len) {
+                            if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
+                                ptr.* = 1;
+                            }
+                        }
+                    }
+                } else {
+                    if (target_vc.running_on_cpu) |target_cpu| {
+                        if (target_cpu != pcore.this().cpu_core_id and target_cpu < riscv.cpu_to_hart_map.len) {
+                            if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
+                                ptr.* = 1;
+                            }
+                        }
+                    }
                 }
             }
         }
-
-        if (should_send) {
-            if (target_vc.exec_path == .native) {
-                target_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
-            }
-            if (target_vc.wfi_blocked) {
-                target_vc.wfi_blocked = false;
-                target_vc.state = .ready;
-                scheduler.queue(target_vc);
-            }
-            if (riscv.CLINT.msip(target_vc.id)) |ptr| {
-                ptr.* = 1;
+    } else {
+        // Targeted send
+        for (0..@bitSizeOf(usize)) |bit_pos| {
+            if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
+                const hart_id = hart_mask_base + bit_pos;
+                if (hart_id < guest.Guest.max_vcores) {
+                    if (g.vcore_lookup[hart_id]) |target_vc| {
+                        if (target_vc.exec_path == .native) {
+                            _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
+                        }
+                        if (target_vc.blocked_on_cpu) |home_cpu| {
+                            if (home_cpu == pcore.this().cpu_core_id) {
+                                if (target_vc.tryWake()) {
+                                    pcore.this().blocked_queue.remove(&target_vc.blocked_node);
+                                    target_vc.blocked_on_cpu = null;
+                                    scheduler.queue(target_vc);
+                                }
+                            } else {
+                                if (home_cpu < riscv.cpu_to_hart_map.len) {
+                                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
+                                        ptr.* = 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            if (target_vc.running_on_cpu) |target_cpu| {
+                                if (target_cpu != pcore.this().cpu_core_id and target_cpu < riscv.cpu_to_hart_map.len) {
+                                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
+                                        ptr.* = 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
-        it_vcore = node.next;
     }
     setResult(vc, context, SBI_SUCCESS, 0);
 }
 
 fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64) void {
-    // For emulated guests, don't program the host hardware timer.
-    // The timer is managed by the emulation loop's blockCallback.
     if (vc.exec_path == .native) {
-        riscv.setTimer(stime);
-    }
+        if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
+            // When Sstc is enabled (STCE=1), VSTIP is read-only in hvip and managed
+            // natively by hardware comparing time >= vstimecmp. Manually injecting
+            // VSTIP via hvip writes will silently fail.
+            // Map the SBI SET_TIMER call directly to the hardware vstimecmp mechanism.
+            vc.getNativeGuestState().vstimecmp = stime;
+            // Clear any lingering manual scheduled timer.
+            vc.timer_scheduled = false;
+        } else {
+            vc.timer_scheduled = true;
+            vc.timer_target = stime;
+            vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
+        }
 
-    // Track that the guest has explicitly scheduled a timer interrupt.
-    vc.timer_scheduled = true;
-    vc.timer_target = stime;
+        // Calculate the next physical timer event across the current vcore AND all blocked vcores
+        var next_timer: u64 = ~@as(u64, 0);
+        
+        // Include the current vcore's timer
+        if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
+            const vstc = vc.getNativeGuestState().vstimecmp;
+            if (vstc != 0 and vstc != 0xffffffffffffffff) {
+                next_timer = vstc;
+            }
+        } else if (vc.timer_scheduled) {
+            next_timer = vc.timer_target;
+        }
 
-    if (vc.exec_path == .native) {
-        vc.getNativeGuestState().vstimecmp = stime;
+        var it = pcore.this().blocked_queue.start;
+        while (it) |node| {
+            const blocked_vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
+            if (blocked_vc.timer_scheduled and blocked_vc.timer_target < next_timer) {
+                next_timer = blocked_vc.timer_target;
+            }
+            if (blocked_vc.exec_path == .native and !config.legacy_cpu and riscv.riscv_supports_sstc) {
+                const gs = blocked_vc.getNativeGuestState();
+                if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff and gs.vstimecmp < next_timer) {
+                    next_timer = gs.vstimecmp;
+                }
+            }
+            it = node.next;
+        }
 
-        // Clear the guest's virtual timer interrupt pending bit now that they've scheduled a new event.
-        vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
+        if (next_timer != ~@as(u64, 0)) {
+            riscv.setTimer(next_timer);
+        } else {
+            riscv.setTimer(0xffffffffffffffff);
+        }
+    } else {
+        vc.timer_scheduled = true;
+        vc.timer_target = stime;
     }
 
     setResult(vc, context, SBI_SUCCESS, 0);
@@ -276,6 +380,7 @@ fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: us
                     setResult(vc, context, interface.ERR_ALREADY_AVAILABLE, 0);
                     return;
                 }
+
                 if (target_vc.exec_path == .native) {
                     target_vc.getNativeMachine().mepc = start_addr;
                     target_vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = target_hart;
@@ -290,13 +395,13 @@ fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: us
                 // Ensure it's in the scheduler
                 scheduler.queue(target_vc);
 
-                // Trigger physical IPI to wake up physical core target_hart from WFI
-                if (riscv.CLINT.msip(target_hart)) |ptr| {
-                    ptr.* = 1;
-                }
+                // Trigger physical IPI to wake any idle physical core to pick up this vcore
+                broadcastPhysicalIPI();
+
 
                 setResult(vc, context, SBI_SUCCESS, 0);
             } else {
+                debug.printf("HART_START: hart={} NOT FOUND\n", .{target_hart});
                 setResult(vc, context, interface.ERR_INVALID_PARAM, 0);
             }
         },
@@ -412,5 +517,21 @@ fn terminateOrRestart(g: *guest.Guest) void {
     if (g.is_root) {
         debug.printf("Root VM terminated. Rebooting host as per architecture policy.\n", .{});
         riscv.reboot();
+    }
+}
+
+/// Send a physical IPI to all other physical cores to wake them from WFI.
+/// This is necessary when a WFI-blocked vcore is woken and queued: since
+/// running_on_cpu is null for blocked vcores, we can't target a specific
+/// physical core. Broadcasting ensures an idle core picks up the vcore.
+fn broadcastPhysicalIPI() void {
+    const my_hart = riscv.getCPUContext().hardware_hart_id;
+    for (0..riscv.MAX_PHYS_CORES) |cpu_id| {
+        const hw_hart = riscv.cpu_to_hart_map[cpu_id];
+        if (hw_hart == 0 and cpu_id != 0) break; // End of initialized entries
+        if (hw_hart == my_hart) continue; // Don't IPI ourselves
+        if (riscv.CLINT.msip(hw_hart)) |ptr| {
+            ptr.* = 1;
+        }
     }
 }

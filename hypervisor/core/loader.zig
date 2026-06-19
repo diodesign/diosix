@@ -1,7 +1,7 @@
 const std = @import("std");
 const guest = @import("guest.zig");
 const debug = @import("debug.zig");
-const sv39x4 = @import("sv39x4.zig");
+const sv39x4 = @import("arch/riscv64/sv39x4.zig");
 const elf_spec = @import("interface").elf;
 
 pub const LoaderError = error{
