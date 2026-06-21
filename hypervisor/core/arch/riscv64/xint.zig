@@ -295,8 +295,8 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                     if (riscv.readTime() >= vc.timer_target) {
                         if (vc.exec_path == .native) {
                             vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
+                            vc.timer_scheduled = false;
                         }
-                        vc.timer_scheduled = false;
                         wake = true;
                     } else {
                         if (vc.timer_target < min_timer) {
@@ -373,8 +373,9 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 pcore.contextSwitch(vc);
                 syncGuestStateToHardware(vc);
             } else if (vc.exec_path == .emulated) {
-                // For emulated vcores, we must write the struct mepc to the
-                // hardware CSR so mret goes to the right place.
+                @memcpy(context, vc.getNativeContext());
+                pcore.contextSwitch(vc);
+                riscv.writeMstatus(vc.getNativeMachine().mstatus);
                 riscv.writeMepc(vc.getNativeMachine().mepc);
             }
         }
@@ -1070,13 +1071,18 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                     continue;
                 }
 
-                if (vc.exec_path == .native) {
-                    if ((vc.getNativeMachine().hvip & riscv.HVIP.VSSIP) != 0 or @atomicLoad(bool, &vc.pending_ipi, .acquire)) {
-                        pcpu.blocked_queue.remove(node);
-                        if (vc.tryWake()) {
-                            vc.blocked_on_cpu = null;
-                            scheduler.queue(vc);
-                        }
+                var wake = false;
+                if (@atomicLoad(bool, &vc.pending_ipi, .acquire)) {
+                    wake = true;
+                } else if (vc.exec_path == .native and (vc.getNativeMachine().hvip & riscv.HVIP.VSSIP) != 0) {
+                    wake = true;
+                }
+
+                if (wake) {
+                    pcpu.blocked_queue.remove(node);
+                    if (vc.tryWake()) {
+                        vc.blocked_on_cpu = null;
+                        scheduler.queue(vc);
                     }
                 }
                 

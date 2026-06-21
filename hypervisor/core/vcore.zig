@@ -64,6 +64,7 @@ pub const VirtualCore = struct {
             stack: []u8,
             emu_running: bool = false,
             preempt_pending: bool = false,
+            exception_cause: u32 = 0,
         },
     },
 

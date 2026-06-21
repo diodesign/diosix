@@ -31,6 +31,15 @@ void diosix_uc_clear_stop(void *uc)
             u->cpu->exit_request = 0;
             u->cpu->tcg_exit_req = 0;
             u->cpu->icount_decr_ptr->u16.high = 0;
+            u->cpu->halted = 0;
+            u->cpu->exception_index = -1;
         }
     }
+}
+
+int diosix_uc_is_halted(uc_engine *u) {
+    if (u && u->cpu) {
+        return u->cpu->halted;
+    }
+    return 0;
 }

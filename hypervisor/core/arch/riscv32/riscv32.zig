@@ -9,6 +9,7 @@
 const std = @import("std");
 const emulation = @import("../../emulation.zig");
 const vcore = @import("../../vcore.zig");
+const pcore = @import("../../pcore.zig");
 const guest = @import("../../guest.zig");
 const glue = @import("../../unicorn.zig");
 const riscv = @import("../riscv64/riscv.zig");
@@ -19,18 +20,20 @@ pub const ExceptionAction = emulation.ExceptionAction;
 
 // Unicorn register IDs for RISC-V S-mode CSRs (from riscv.h uc_riscv_reg).
 pub const UC_REG_SSTATUS: c_int = 133;
-pub const UC_REG_SIE: c_int = 136;  // Supervisor interrupt enable
+pub const UC_REG_SIE: c_int = 136; // Supervisor interrupt enable
 pub const UC_REG_STVEC: c_int = 137;
 pub const UC_REG_SEPC: c_int = 140;
 pub const UC_REG_SCAUSE: c_int = 141;
 pub const UC_REG_STVAL: c_int = 142;
 pub const UC_REG_SATP: c_int = 146;
-pub const UC_REG_SIP: c_int = 143;  // Supervisor interrupt pending
+pub const UC_REG_SIP: c_int = 143; // Supervisor interrupt pending
+pub const UC_REG_PRIV: c_int = 191; // Privilege mode
 
 // Unicorn register IDs for RISC-V M-mode CSRs.
-pub const UC_REG_MSTATUS: c_int = 116;  // mstatus — use instead of sstatus for SPP writes
+pub const UC_REG_MSTATUS: c_int = 116; // mstatus — use instead of sstatus for SPP writes
 pub const UC_REG_MEDELEG: c_int = 118;
 pub const UC_REG_MIDELEG: c_int = 119;
+pub const UC_REG_MIP: c_int = 131; // Machine interrupt pending
 
 // Unicorn register IDs for unprivileged counters.
 // NOTE: These map to CSR_INSTRET/CSR_INSTRETH (not CSR_TIME/CSR_TIMEH)
@@ -38,8 +41,8 @@ pub const UC_REG_MIDELEG: c_int = 119;
 // reads, so this mismatch is benign. Fixing to the "correct" IDs breaks
 // boot because MCOUNTEREN=0 path (illegal-insn trap → emulateCSR) is
 // how the kernel currently gets time values.
-pub const UC_REG_TIME: c_int = 46;
-pub const UC_REG_TIMEH: c_int = 78;
+pub const UC_REG_TIME: c_int = 45;
+pub const UC_REG_TIMEH: c_int = 77;
 
 // NOTE: Maps to CSR_MIE (not CSR_MCOUNTEREN) due to csrno_map layout.
 // Writing 0x7 here accidentally enables SSIE in MIE. Fixing to the
@@ -261,12 +264,8 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
             writePC(uc, pc + 4);
             return true;
         }
-
-        // WFI: treat as NOP, advance PC.
-        if (insn == INSN_WFI) {
-            writePC(uc, pc + 4);
-            return true;
-        }
+        // WFI is intentionally left unhandled here so that Unicorn throws
+        // EXCP_HALTED, which we then handle in handleCleanStop.
 
         return false;
     }
@@ -315,6 +314,40 @@ pub fn handleCleanStop(uc: ?*anyopaque, vc: *vcore.VirtualCore, pc: u64) bool {
             if (glue.uc_mem_read(uc, phys, @as([*]u8, @ptrCast(&insn)), 4) != .UC_ERR_OK) return false;
         } else return false;
     }
+
+    if (insn == INSN_WFI) {
+        const em = &vc.exec_path.emulated;
+        em.preempt_pending = false;
+
+        // QEMU's GETPC() inside riscv_raise_exception restores the PC to
+        // the WFI instruction itself. We must manually advance it so it
+        // doesn't loop infinitely.
+        writePC(uc, pc + 4);
+
+        // Block the vcore, waiting for interrupts
+        var mip: u64 = 0;
+        _ = glue.uc_reg_read(uc, UC_REG_MIP, &mip);
+
+        var timer_pending = false;
+        if (vc.timer_scheduled) {
+            if (glue.readSModeTime() >= vc.timer_target) {
+                timer_pending = true;
+            }
+        }
+
+        if (mip == 0 and !timer_pending) {
+            @atomicStore(bool, &vc.wfi_blocked, true, .release);
+            pcore.this().blocked_queue.pushStart(&vc.blocked_node);
+            debug.printf("handleCleanStop: Blocking guest {}: mip=0, timer_pending=false\n", .{vc.id});
+        } else {
+            debug.printf("handleCleanStop: guest {} WFI acts as NOP (mip=0x{x}, timer_pending={})\n", .{ vc.id, mip, timer_pending });
+        }
+
+        // Always return true to yield the physical core and prevent emulation.run
+        // from overwriting the advanced PC with the old PC.
+        return true;
+    }
+
     if (insn != INSN_ECALL) return false; // Not ECALL
 
     var a7: u32 = 0;
@@ -456,36 +489,36 @@ pub fn handleException(uc: ?*anyopaque, new_pc: u64) ExceptionAction {
 fn csrToUcReg(csr: u32) ?c_int {
     return switch (csr) {
         // S-mode CSRs
-        0x100 => UC_REG_SSTATUS,     // sstatus
-        0x104 => @as(c_int, 136),    // sie
-        0x105 => UC_REG_STVEC,       // stvec
-        0x106 => @as(c_int, 138),    // scounteren
-        0x140 => @as(c_int, 139),    // sscratch
-        0x141 => UC_REG_SEPC,        // sepc
-        0x142 => UC_REG_SCAUSE,      // scause
-        0x143 => UC_REG_STVAL,       // stval
-        0x144 => @as(c_int, 143),    // sip
-        0x180 => UC_REG_SATP,        // satp
+        0x100 => UC_REG_SSTATUS, // sstatus
+        0x104 => @as(c_int, 136), // sie
+        0x105 => UC_REG_STVEC, // stvec
+        0x106 => @as(c_int, 138), // scounteren
+        0x140 => @as(c_int, 139), // sscratch
+        0x141 => UC_REG_SEPC, // sepc
+        0x142 => UC_REG_SCAUSE, // scause
+        0x143 => UC_REG_STVAL, // stval
+        0x144 => @as(c_int, 143), // sip
+        0x180 => UC_REG_SATP, // satp
 
         // M-mode CSRs (read-only ID registers)
-        0xF11 => @as(c_int, 148),    // mvendorid
-        0xF12 => @as(c_int, 149),    // marchid
-        0xF13 => @as(c_int, 150),    // mimpid
-        0xF14 => @as(c_int, 151),    // mhartid
+        0xF11 => @as(c_int, 148), // mvendorid
+        0xF12 => @as(c_int, 149), // marchid
+        0xF13 => @as(c_int, 150), // mimpid
+        0xF14 => @as(c_int, 151), // mhartid
 
         // M-mode CSRs (delegation and counters)
-        0x302 => UC_REG_MEDELEG,     // medeleg
-        0x303 => UC_REG_MIDELEG,     // mideleg
-        0x306 => UC_REG_MCOUNTEREN,  // mcounteren
+        0x302 => UC_REG_MEDELEG, // medeleg
+        0x303 => UC_REG_MIDELEG, // mideleg
+        0x306 => UC_REG_MCOUNTEREN, // mcounteren
 
         // Unprivileged counter CSRs (lower 32 bits)
-        0xC00 => UC_REG_TIME,        // cycle (alias time)
-        0xC01 => UC_REG_TIME,        // time
-        0xC02 => UC_REG_TIME,        // instret (alias time)
+        0xC00 => UC_REG_TIME, // cycle (alias time)
+        0xC01 => UC_REG_TIME, // time
+        0xC02 => UC_REG_TIME, // instret (alias time)
         // Upper 32 bits for RV32
-        0xC80 => UC_REG_TIMEH,       // cycleh
-        0xC81 => UC_REG_TIMEH,       // timeh
-        0xC82 => UC_REG_TIMEH,       // instreth
+        0xC80 => UC_REG_TIMEH, // cycleh
+        0xC81 => UC_REG_TIMEH, // timeh
+        0xC82 => UC_REG_TIMEH, // instreth
 
         else => null,
     };

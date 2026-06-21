@@ -13,6 +13,8 @@ const pcore = @import("../../pcore.zig");
 const interface = @import("interface").sbi;
 const arch = @import("interface").riscv;
 const config = @import("config");
+const rv32 = @import("riscv32.zig");
+const glue = @import("../../unicorn.zig");
 
 // SBI Error Codes.
 pub const SBI_SUCCESS = interface.SUCCESS;
@@ -67,12 +69,29 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             // Do NOT modify a1 or other registers.
         },
         interface.EXT.LEGACY_CLEAR_IPI => {
-            vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSSIP);
-            _ = @atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel);
-            // Clear the CLINT MSIP register for the current physical CPU core
-            if (riscv.CLINT.msip(riscv.getCPUContext().hardware_hart_id)) |ptr| {
-                ptr.* = 0;
+            if (vc.exec_path == .emulated) {
+                var mip: u64 = 0;
+                _ = glue.uc_reg_read(vc.exec_path.emulated.uc, rv32.UC_REG_MIP, &mip);
+                mip &= ~(@as(u64, 1) << 1); // clear SSIP
+
+                // Temporarily elevate to M-mode so the write to MIP succeeds
+                var current_priv: u32 = 0;
+                _ = glue.uc_reg_read(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &current_priv);
+                var m_priv: u32 = 3; // PRV_M
+                _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &m_priv);
+
+                _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_MIP, &mip);
+
+                // Restore previous privilege mode
+                _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &current_priv);
+            } else {
+                vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSSIP);
+                // Clear the CLINT MSIP register for the current physical CPU core
+                if (riscv.CLINT.msip(riscv.getCPUContext().hardware_hart_id)) |ptr| {
+                    ptr.* = 0;
+                }
             }
+            _ = @atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel);
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_SEND_IPI => {
@@ -91,9 +110,7 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             for (0..guest.Guest.max_vcores) |vid| {
                 if ((hart_mask & (@as(usize, 1) << @intCast(vid))) != 0) {
                     if (g.vcore_lookup[vid]) |target_vc| {
-                        if (target_vc.exec_path == .native) {
-                            _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
-                        }
+                        _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
                         if (target_vc.blocked_on_cpu) |home_cpu| {
                             if (home_cpu == pcore.this().cpu_core_id) {
                                 if (target_vc.tryWake()) {
@@ -186,9 +203,7 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
         // Broadcast to all valid vcores in the guest
         for (0..guest.Guest.max_vcores) |vid| {
             if (g.vcore_lookup[vid]) |target_vc| {
-                if (target_vc.exec_path == .native) {
                     _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
-                }
                 if (target_vc.blocked_on_cpu) |home_cpu| {
                     if (home_cpu == pcore.this().cpu_core_id) {
                         if (target_vc.tryWake()) {
@@ -221,9 +236,7 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
                 const hart_id = hart_mask_base + bit_pos;
                 if (hart_id < guest.Guest.max_vcores) {
                     if (g.vcore_lookup[hart_id]) |target_vc| {
-                        if (target_vc.exec_path == .native) {
                             _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
-                        }
                         if (target_vc.blocked_on_cpu) |home_cpu| {
                             if (home_cpu == pcore.this().cpu_core_id) {
                                 if (target_vc.tryWake()) {
@@ -388,6 +401,14 @@ fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: us
                 } else {
                     target_vc.exec_path.emulated.entry = start_addr;
                     target_vc.exec_path.emulated.dtb = opaque_param;
+                    if (target_vc.exec_path.emulated.uc) |uc| {
+                        var pc: u64 = start_addr;
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &pc);
+                        var a0_val: u64 = target_hart;
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X10), &a0_val);
+                        var a1_val: u64 = opaque_param;
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X11), &a1_val);
+                    }
                 }
                 target_vc.state = .ready;
                 target_vc.wfi_blocked = false;

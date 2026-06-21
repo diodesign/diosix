@@ -996,6 +996,7 @@ pub extern fn diosix_uc_inject_interrupt(uc: ?*anyopaque, cause: c_int) void;
 // Clear stale CPU exit flags after an asynchronous uc_emu_stop.
 // Must be called after uc_emu_start returns and before re-entering.
 pub extern fn diosix_uc_clear_stop(uc: ?*anyopaque) void;
+pub extern fn diosix_uc_is_halted(uc: ?*anyopaque) c_int;
 
 // ARM64 exception delivery: calls QEMU's arm_cpu_do_interrupt to handle
 // the full EL1 exception entry (SPSR, ELR, ESR, VBAR vector dispatch).

@@ -119,6 +119,16 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         _ = glue.uc_mem_map_ptr(uc, identity_va_base, identity_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
     }
 
+    if (em.target_arch == .riscv32 and gpa_base > 0) {
+        // Dummy alias mapping to satisfy Unicorn's memory_check() when restarting
+        // execution at a virtual address. Unicorn checks the flat memory map
+        // before evaluating the guest MMU.
+        const kernel_va_base: u64 = 0xc0000000;
+        const max_alias_size = 0xffffffff - kernel_va_base;
+        const alias_size = if (ram_size > max_alias_size) max_alias_size else ram_size;
+        _ = glue.uc_mem_map_ptr(uc, kernel_va_base, alias_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
+    }
+
     // Register hooks.
     var hook_mem: glue.uc_hook = null;
     _ = glue.uc_hook_add(uc, &hook_mem, glue.UC_HOOK_MEM_UNMAPPED, @as(?*const anyopaque, @ptrCast(&memCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
@@ -214,38 +224,53 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
     while (exception_budget > 0) {
 
-        // Check for pending timer interrupt before (re-)entering the guest.
-        // The guest calls SBI SET_TIMER which sets vc.timer_target. If the
-        // current time has passed the target, deliver a supervisor timer
-        // interrupt through the guest's stvec. This is the emulated
-        // equivalent of the hardware STIP interrupt.
-        if (em.target_arch == .riscv32 and vc.timer_scheduled) {
-            const now = glue.readSModeTime();
-            if (now >= vc.timer_target) {
-                // Timer has expired. Only deliver if the guest has interrupts
-                // enabled (SIE bit) and has the timer interrupt enabled in sie.
-                var sstatus: u64 = 0;
-                _ = glue.uc_reg_read(uc, rv32.UC_REG_SSTATUS, &sstatus);
-                var sie: u64 = 0;
-                _ = glue.uc_reg_read(uc, rv32.UC_REG_SIE, &sie);
 
-                const SSTATUS_SIE: u64 = 1 << 1;
-                const SIE_STIE: u64 = 1 << 5; // Supervisor timer interrupt enable
+        // Sync pending interrupts to the guest's MIP register and manually inject
+        // traps if interrupts are enabled.
+        if (em.target_arch == .riscv32) {
+            var mip: u64 = 0;
+            _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &mip);
 
-                if ((sstatus & SSTATUS_SIE) != 0 and (sie & SIE_STIE) != 0) {
-                    vc.timer_scheduled = false;
-                    vc.timer_skip_blocks = 0;
-                    // Deliver timer interrupt: save state, set scause, jump to stvec.
-                    rv32.deliverInterrupt(uc, pc, 5); // cause 5 = supervisor timer interrupt
-                    pc = rv32.readPC(uc);
-                    continue;
-                } else {
-                    // Interrupts disabled — let the kernel execute ~1000 blocks
-                    // before we stop and re-check. This prevents a busy loop
-                    // when the kernel is in a critical section with SIE=0.
-                    vc.timer_skip_blocks = 1000;
-                }
+            const MIP_SSIP: u64 = 1 << 1;
+
+
+
+
+            // 1. Software Interrupts (IPIs)
+            // SSIP is writable in Unicorn's mip, so we can set it via uc_reg_write.
+            if (@atomicLoad(bool, &vc.pending_ipi, .acquire)) {
+                mip |= MIP_SSIP;
+            } else {
+                mip &= ~MIP_SSIP;
             }
+
+            // 2. Timer Interrupts
+            // We set STIP in mip if a timer is pending. Unicorn allows this, and
+            // it allows QEMU to naturally evaluate the interrupt once SIE becomes 1
+            // without needing manual interrupt injection.
+            var timer_pending = false;
+            if (vc.timer_scheduled) {
+                const now = glue.readSModeTime();
+                if (now >= vc.timer_target) {
+                    timer_pending = true;
+                    mip |= @as(u64, 1 << 5); // MIP_STIP
+                } else {
+                    mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
+                }
+            } else {
+                mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
+            }
+
+            // Temporarily elevate to M-mode so the write to MIP (for SSIP and STIP) succeeds
+            var current_priv: u32 = 0;
+            _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
+            var m_priv: u32 = 3; // PRV_M
+            _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
+
+            _ = glue.uc_reg_write(uc, rv32.UC_REG_MIP, &mip);
+
+            // Restore previous privilege mode
+            _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
         }
 
         // Run the guest with a bounded instruction count. The count
@@ -257,10 +282,24 @@ pub fn run(vc: *vcore.VirtualCore) void {
         em.emu_running = true;
         const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, 100_000);
         em.emu_running = false;
+
         // Clear stale CPU exit flags left by asynchronous uc_emu_stop
         // (called from M-mode timer handler). Without this, the JIT
         // immediately exits on the next uc_emu_start call.
         glue.diosix_uc_clear_stop(uc);
+
+
+
+        // After returning from Unicorn, read back MIP to see if the guest cleared
+        // the pending software interrupt (IPI).
+        if (em.target_arch == .riscv32) {
+            var mip: u64 = 0;
+            _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &mip);
+            const MIP_SSIP: u64 = 1 << 1;
+            if ((mip & MIP_SSIP) == 0) {
+                _ = @atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel);
+            }
+        }
 
         const new_pc: u64 = switch (em.target_arch) {
             .riscv32 => rv32.readPC(uc),
@@ -296,10 +335,22 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 .x86_64 => x86_64.handleCleanStop(uc, vc, new_pc),
                 else => false,
             };
-            if (handled) return; // ECALL handled; yield to outer loop.
-            // Clean stop from timer preemption or block yield.
-            // The timer is reprogrammed by xint_handler (M-mode), so we
-            // just continue the emulation loop.
+            if (handled) return; // ECALL or WFI handled; yield to outer loop.
+
+            // If we were preempted by a physical timer or IPI (via xint_handler),
+            // yield the physical core so the scheduler can run.
+            if (em.preempt_pending) {
+                pc = new_pc;
+                return;
+            }
+
+            // Normal completion of the execution slice (100k instructions).
+            // Decrement the loop budget so we eventually yield the core.
+            if (exception_budget > 100_000) {
+                exception_budget -= 100_000;
+            } else {
+                exception_budget = 0;
+            }
             pc = new_pc;
             continue;
         }
@@ -328,13 +379,14 @@ pub fn run(vc: *vcore.VirtualCore) void {
                         .riscv32 => rv32.readPC(uc),
                         .aarch64 => aarch64.readPC(uc),
                         .x86_64 => x86_64.readPC(uc),
-                        else => 0,
+                        else => return,
                     };
                     exception_budget -= 1;
                     continue;
                 },
                 .unhandled => {
-                    debug.printf("Unicorn: unhandled exception at PC 0x{x}\n", .{new_pc});
+                    debug.printf("Unhandled exception {} at PC 0x{x}\n", .{em.exception_cause, pc});
+                    vc.state = .stopped;
                     return;
                 },
             }
@@ -345,7 +397,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
         return;
     }
 
-    debug.printf("Unicorn: exception budget exhausted\n", .{});
+    debug.printf("Unicorn: guest {} exception budget exhausted at pc=0x{x}\n", .{vc.id, pc});
 }
 
 // Invalid-instruction callback — intercepts instructions that Unicorn
@@ -379,6 +431,7 @@ fn blockCallback(uc: ?*anyopaque, _: u64, _: u32, user_data: ?*anyopaque) callco
     const now = glue.readSModeTime();
     if (now >= vc.timer_target) {
         if (vc.timer_skip_blocks > 0) {
+
             vc.timer_skip_blocks -= 1;
             return;
         }
@@ -418,6 +471,17 @@ fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c
 // RISC-V specific interrupt handling.
 fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void {
 
+
+
+    // Cause 2: Illegal Instruction. QEMU throws this for rdtime/rdcycle
+    // because we deliberately set MCOUNTEREN=0 to trap them.
+    if (intno == 2) {
+        if (rv32.handleInvalidInsn(uc)) {
+            // Emulation successful. PC was advanced. Continue execution.
+            return;
+        }
+    }
+
     // RISC-V ecall exception causes: U-mode=8, S-mode=9, M-mode=11.
     if (intno == 8 or intno == 9 or intno == 11) {
         // SBI call — read a7/a6/a0/a1/a2, handle, write results back.
@@ -455,6 +519,8 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
     // via QEMU's native riscv_cpu_do_interrupt. This correctly handles
     // medeleg/mideleg delegation, sepc/scause/stval/sstatus manipulation,
     // privilege mode transitions, and PC = stvec.
+
+
     var info: glue.InterruptInfo = std.mem.zeroes(glue.InterruptInfo);
     glue.diosix_uc_do_interrupt(uc, @intCast(intno), &info);
 
@@ -470,6 +536,14 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
 
 // AArch64 specific interrupt handling.
 fn intrCallbackAarch64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void {
+
+    // EXCP_HALTED is 0x10003 (65539). QEMU throws this when it encounters WFI.
+    if (intno == 65539) {
+        @atomicStore(bool, &vc.wfi_blocked, true, .release);
+        _ = glue.uc_emu_stop(uc);
+        return;
+    }
+
     // QEMU ARM64 exception numbers (from target/arm/cpu.h):
     //   EXCP_SWI  = 2  (SVC from AArch64)
     //   EXCP_HVC  = 11 (HyperVisor Call)
@@ -671,12 +745,21 @@ pub fn emulatedRunnerSMode(vc_ptr: usize) callconv(.c) noreturn {
         if (comptime @import("builtin").is_test) {
             break;
         } else {
-            asm volatile ("ecall");
+            // DIOSIX.YIELD
+            asm volatile (
+                \\li a7, 0x0A000005
+                \\li a6, 1
+                \\ecall
+            );
         }
     }
 
     if (comptime @import("builtin").is_test) {} else {
-        asm volatile ("ecall");
+        asm volatile (
+            \\li a7, 0x0A000005
+            \\li a6, 1
+            \\ecall
+        );
     }
 
     while (true) {}
