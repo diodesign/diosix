@@ -248,16 +248,10 @@ pub fn run(vc: *vcore.VirtualCore) void {
             // We set STIP in mip if a timer is pending. Unicorn allows this, and
             // it allows QEMU to naturally evaluate the interrupt once SIE becomes 1
             // without needing manual interrupt injection.
-            var timer_pending = false;
             if (vc.timer_scheduled) {
                 const now = rv32.readVirtualTime(uc);
                 if (now >= vc.timer_target) {
-                    timer_pending = true;
                     mip |= @as(u64, 1 << 5); // MIP_STIP
-                    // Prevent single-stepping: let the guest run for a while
-                    // so it can actually handle the interrupt or make progress
-                    // even if interrupts are temporarily disabled.
-                    vc.timer_skip_blocks = 10_000;
                 } else {
                     mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
                 }
@@ -277,14 +271,13 @@ pub fn run(vc: *vcore.VirtualCore) void {
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
         }
 
-        // Run the guest with a bounded instruction count. The count
-        // parameter limits instructions per call, ensuring uc_emu_start
-        // returns periodically so we can check timers and handle
-        // preemption. Without this, QEMU's TB chaining can keep the
-        // JIT running indefinitely in tight loops.
+        // Run the guest infinitely (instruction count 0). Asynchronous preemption
+        // via physical hardware timers (machine_timer in xint.zig) will
+        // call uc_emu_stop() to break this loop when the hypervisor quantum expires
+        // or a physical interrupt arrives.
         em.preempt_pending = false;
         em.emu_running = true;
-        const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, 100_000);
+        const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, 0);
         em.emu_running = false;
 
         // Clear stale CPU exit flags left by asynchronous uc_emu_stop
@@ -429,15 +422,6 @@ fn blockCallback(uc: ?*anyopaque, _: u64, _: u32, user_data: ?*anyopaque) callco
     // via SBI SET_TIMER, stop the engine when it expires so the outer
     // loop can deliver the interrupt.
     if (!vc.timer_scheduled) return;
-
-    if (vc.timer_skip_blocks > 0) {
-        vc.timer_skip_blocks -= 1;
-        return;
-    }
-    
-    // Only check the actual hardware timer CSR every 1000 blocks to 
-    // prevent massive performance degradation during JIT emulation.
-    vc.timer_skip_blocks = 1000;
 
     const now = switch (em.target_arch) {
         .riscv32 => rv32.readVirtualTime(uc),

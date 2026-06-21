@@ -1052,6 +1052,15 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             if (next_timer != ~@as(u64, 0)) {
                 riscv.setTimer(next_timer);
             }
+
+            // Asynchronous preemption: if Unicorn JIT is running on this core, stop it.
+            if (pcpu.active_vcore) |opaque_vc| {
+                const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                if (active_vc.exec_path == .emulated) {
+                    const unicorn = @import("../../unicorn.zig");
+                    _ = unicorn.uc_emu_stop(active_vc.exec_path.emulated.uc);
+                }
+            }
         },
         .machine_swi => {
             // Clear the CLINT MSIP register for the current physical CPU core
@@ -1085,8 +1094,16 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                         scheduler.queue(vc);
                     }
                 }
-                
                 it = next_it;
+            }
+
+            // Asynchronous preemption: if Unicorn JIT is running on this core, stop it.
+            if (pcpu.active_vcore) |opaque_vc| {
+                const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                if (active_vc.exec_path == .emulated) {
+                    const unicorn = @import("../../unicorn.zig");
+                    _ = unicorn.uc_emu_stop(active_vc.exec_path.emulated.uc);
+                }
             }
         },
         .machine_interrupt, .supervisor_interrupt => {
@@ -1113,6 +1130,15 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                         }
                     }
                     it_vcore = node.next;
+                }
+            }
+
+            // Asynchronous preemption: if Unicorn JIT is running on this core, stop it.
+            if (pcpu.active_vcore) |opaque_vc| {
+                const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                if (active_vc.exec_path == .emulated) {
+                    const unicorn = @import("../../unicorn.zig");
+                    _ = unicorn.uc_emu_stop(active_vc.exec_path.emulated.uc);
                 }
             }
         },
