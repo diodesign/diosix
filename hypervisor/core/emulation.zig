@@ -250,10 +250,14 @@ pub fn run(vc: *vcore.VirtualCore) void {
             // without needing manual interrupt injection.
             var timer_pending = false;
             if (vc.timer_scheduled) {
-                const now = glue.readSModeTime();
+                const now = rv32.readVirtualTime(uc);
                 if (now >= vc.timer_target) {
                     timer_pending = true;
                     mip |= @as(u64, 1 << 5); // MIP_STIP
+                    // Prevent single-stepping: let the guest run for a while
+                    // so it can actually handle the interrupt or make progress
+                    // even if interrupts are temporarily disabled.
+                    vc.timer_skip_blocks = 10_000;
                 } else {
                     mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
                 }
@@ -396,8 +400,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
         debug.printf("Unicorn: execution error {} at PC 0x{x}\n", .{ err, new_pc });
         return;
     }
-
-    debug.printf("Unicorn: guest {} exception budget exhausted at pc=0x{x}\n", .{vc.id, pc});
 }
 
 // Invalid-instruction callback — intercepts instructions that Unicorn
@@ -428,13 +430,20 @@ fn blockCallback(uc: ?*anyopaque, _: u64, _: u32, user_data: ?*anyopaque) callco
     // loop can deliver the interrupt.
     if (!vc.timer_scheduled) return;
 
-    const now = glue.readSModeTime();
-    if (now >= vc.timer_target) {
-        if (vc.timer_skip_blocks > 0) {
+    if (vc.timer_skip_blocks > 0) {
+        vc.timer_skip_blocks -= 1;
+        return;
+    }
+    
+    // Only check the actual hardware timer CSR every 1000 blocks to 
+    // prevent massive performance degradation during JIT emulation.
+    vc.timer_skip_blocks = 1000;
 
-            vc.timer_skip_blocks -= 1;
-            return;
-        }
+    const now = switch (em.target_arch) {
+        .riscv32 => rv32.readVirtualTime(uc),
+        else => glue.readSModeTime(),
+    };
+    if (now >= vc.timer_target) {
         _ = glue.uc_emu_stop(uc);
     }
 }

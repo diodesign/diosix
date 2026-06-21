@@ -156,7 +156,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // ---- DTB Generation ----
     // For aarch64 guests, we generate a DTB from scratch describing the virtual
     // machine's resources. For RISC-V guests, we modify the host DTB.
-    const cpu_count: usize = 2;
+    const cpu_count: usize = 4;
     debug.printf("Provisioning Root VM with {} virtual CPUs\n", .{cpu_count});
 
     var guest_dtb: []u8 = undefined;

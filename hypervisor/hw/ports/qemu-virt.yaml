@@ -20,6 +20,8 @@ run_cmd:
   - 2G
   - -bios
   - none
+  - -tb-size
+  - 2048
   - -kernel
 
 # Assembly source assets required for low-level initialization

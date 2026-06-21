@@ -825,7 +825,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
 
                             // Emulate reads of M-mode CSRs.
                             const val: usize = switch (mmode_csr) {
-                                0xF14 => riscv.readMhartid(), // mhartid
+                                0xF14 => vc.id, // mhartid
                                 0xF11 => 0, // mvendorid
                                 0xF12 => 0, // marchid
                                 0xF13 => 0, // mimpid

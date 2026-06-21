@@ -141,6 +141,15 @@ pub fn writePC(uc: ?*anyopaque, pc: u64) void {
     _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &val);
 }
 
+/// Read the virtual time from Unicorn.
+pub fn readVirtualTime(uc: ?*anyopaque) u64 {
+    var low: u32 = 0;
+    var high: u32 = 0;
+    _ = glue.uc_reg_read(uc, UC_REG_TIME, &low);
+    _ = glue.uc_reg_read(uc, UC_REG_TIMEH, &high);
+    return (@as(u64, high) << 32) | @as(u64, low);
+}
+
 /// Handle an invalid instruction intercepted by UC_HOOK_INSN_INVALID.
 /// Checks if the instruction is rdtime/rdtimeh/rdcycle/rdinstret, reads
 /// the real host timer, writes it to the destination register, and
@@ -176,6 +185,35 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
             _ = glue.uc_reg_write(uc, UC_REG_SCAUSE, &scause_val);
             var stval_val: u64 = pc;
             _ = glue.uc_reg_write(uc, UC_REG_STVAL, &stval_val);
+            
+            // Update sstatus: SPP=priv, SPIE=SIE, SIE=0, priv=1
+            var sstatus: u64 = 0;
+            _ = glue.uc_reg_read(uc, UC_REG_SSTATUS, &sstatus);
+            var priv: u32 = 0;
+            _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PRIV), &priv);
+            
+            const SSTATUS_SIE: u64 = 1 << 1;
+            const SSTATUS_SPIE: u64 = 1 << 5;
+            const SSTATUS_SPP: u64 = 1 << 8;
+            
+            if ((sstatus & SSTATUS_SIE) != 0) {
+                sstatus |= SSTATUS_SPIE;
+            } else {
+                sstatus &= ~SSTATUS_SPIE;
+            }
+            sstatus &= ~SSTATUS_SIE;
+            
+            if (priv == 1) { // S-mode
+                sstatus |= SSTATUS_SPP;
+            } else { // U-mode
+                sstatus &= ~SSTATUS_SPP;
+            }
+            
+            _ = glue.uc_reg_write(uc, UC_REG_SSTATUS, &sstatus);
+            
+            var m_priv: u32 = 1; // PRV_S
+            _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PRIV), &m_priv);
+
             const stvec_base = stvec & ~@as(u64, 0x3);
             writePC(uc, stvec_base);
             return true;
@@ -226,7 +264,11 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
                 // execute natively and fail.
                 0xF14 => { // mhartid
                     if (rd != 0) {
-                        var val: u64 = 0; // Guest vcore 0
+                        var val: u64 = 0;
+                        if (pcore.this().active_vcore) |opaque_vc| {
+                            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                            val = vc.id;
+                        }
                         _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
                     }
                 },
