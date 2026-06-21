@@ -25,6 +25,8 @@ pub const ExceptionAction = enum {
     delivered,
     /// Exception could not be handled. Stop emulation.
     unhandled,
+    /// Guest requested a wait-for-interrupt.
+    wfi,
 };
 
 // Architecture-specific handlers
@@ -152,13 +154,24 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     // var hook_block: glue.uc_hook = null;
     // _ = glue.uc_hook_add(uc, &hook_block, glue.UC_HOOK_BLOCK, @as(?*const anyopaque, @ptrCast(&blockCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
 
-    // Delegate to architecture-specific register initialization.
-    switch (em.target_arch) {
-        .riscv32 => rv32.initRegisters(uc, em.entry, em.dtb, vc.id),
-        .aarch64 => aarch64.initRegisters(uc, em.entry, em.dtb, vc.id),
-        .x86_64 => x86_64.initRegisters(uc, em.entry, em.dtb, vc.id),
-        else => {},
+    // Initialize cleanly isolated contexts for all sub-vcores
+    for (&em.sub_vcores, 0..) |*sub, i| {
+        _ = glue.uc_context_alloc(uc, &sub.context);
+        switch (em.target_arch) {
+            .riscv32 => {
+                var m_priv: u32 = 3;
+                _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
+                rv32.initRegisters(uc, em.entry, em.dtb, i);
+            },
+            .aarch64 => aarch64.initRegisters(uc, em.entry, em.dtb, i),
+            .x86_64 => x86_64.initRegisters(uc, em.entry, em.dtb, i),
+            else => {},
+        }
+        _ = glue.uc_context_save(uc, sub.context.?);
     }
+
+    // Restore CPU0 to begin execution cleanly
+    _ = glue.uc_context_restore(uc, em.sub_vcores[0].context.?);
 
     // Register the rdtime callback so guest rdtime/rdtimeh instructions
     // execute inside the JIT loop, reading the real host timer directly.
@@ -196,6 +209,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
     const em = &vc.exec_path.emulated;
     const uc = em.uc.?;
+    em.preempt_pending = false;
 
     // Read the current PC via the architecture handler.
     var pc: u64 = switch (em.target_arch) {
@@ -246,15 +260,29 @@ pub fn run(vc: *vcore.VirtualCore) void {
         }
 
         if (!found_ready) {
+            // All sub_vcores are blocked or stopped.
+            // Block the entire VirtualCore so the physical core can sleep.
             @atomicStore(bool, &vc.wfi_blocked, true, .release);
-            return;
+            break;
         }
-
         vc.exec_path.emulated.active_sub_vcore = em.active_sub_vcore;
-        sub.state = .running;
 
         if (sub.context) |ctx| {
             _ = glue.uc_context_restore(uc, ctx);
+            
+            // First time running? Apply HART_START parameters
+            if (sub.state == .ready) {
+                if (em.target_arch == .riscv32) {
+                    var start_pc: u64 = sub.start_pc;
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &start_pc);
+                    var a0: u64 = sub.start_a0;
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X10), &a0);
+                    var a1: u64 = sub.start_a1;
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X11), &a1);
+                }
+                sub.state = .running;
+            }
+
             pc = switch (em.target_arch) {
                 .riscv32 => rv32.readPC(uc),
                 .aarch64 => aarch64.readPC(uc),
@@ -262,22 +290,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 else => 0,
             };
         } else {
-            _ = glue.uc_context_alloc(uc, &sub.context);
-            if (em.active_sub_vcore > 0) {
-                var start_pc: u64 = sub.start_pc;
-                _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &start_pc);
-                var a0: u64 = sub.start_a0;
-                _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X10), &a0);
-                var a1: u64 = sub.start_a1;
-                _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X11), &a1);
-            }
-            pc = switch (em.target_arch) {
-                .riscv32 => rv32.readPC(uc),
-                .aarch64 => aarch64.readPC(uc),
-                .x86_64 => x86_64.readPC(uc),
-                else => 0,
-            };
-            _ = glue.uc_context_save(uc, sub.context.?);
+            @panic("Uninitialized uc_context in single-engine emulation");
         }
 
         // Sync pending interrupts for THIS sub-vCPU
@@ -311,6 +324,8 @@ pub fn run(vc: *vcore.VirtualCore) void {
             _ = glue.uc_reg_write(uc, rv32.UC_REG_MIP, &mip);
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
         }
+
+
 
         em.emu_running = true;
         const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
@@ -367,6 +382,15 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
             switch (action) {
                 .emulated => {
+                    _ = glue.uc_context_save(uc, sub.context.?);
+                    em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
+                    continue;
+                },
+                .wfi => {
+                    @atomicStore(bool, &sub.wfi_blocked, true, .release);
+                    // Advance PC past WFI (4 bytes)
+                    var pc_val = new_pc + 4;
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &pc_val);
                     _ = glue.uc_context_save(uc, sub.context.?);
                     em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
                     continue;
@@ -428,6 +452,23 @@ fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c
 fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void {
 
 
+
+    // EXCP_HALTED is 0x10003 (65539). QEMU throws this when it encounters WFI natively.
+    if (intno == 65539) {
+        const em = &vc.exec_path.emulated;
+        @atomicStore(bool, &em.sub_vcores[em.active_sub_vcore].wfi_blocked, true, .release);
+        
+        debug.printf("intrCallbackRiscv32: CPU {} blocked on WFI at pc=0x{x}\n", .{ em.active_sub_vcore, rv32.readPC(uc) });
+        
+        // We must advance the PC past the WFI instruction, otherwise Unicorn
+        // will keep re-executing it every time the CPU is woken up.
+        // WFI is a 4-byte instruction.
+        const pc = rv32.readPC(uc);
+        rv32.writePC(uc, pc + 4);
+        
+        _ = glue.uc_emu_stop(uc);
+        return;
+    }
 
     // Cause 2: Illegal Instruction. QEMU throws this for rdtime/rdcycle
     // because we deliberately set MCOUNTEREN=0 to trap them.

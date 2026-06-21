@@ -113,6 +113,15 @@ pub fn initRegisters(uc: ?*anyopaque, entry: usize, dtb: usize, vcore_id: usize)
     var int_deleg_val: u64 = MIDELEG_DEFAULT;
     _ = glue.uc_reg_write(uc, UC_REG_MIDELEG, &int_deleg_val);
 
+    // Set mstatus: MPP=1 (S-mode), MPIE=1, TW=1 (Trap WFI)
+    var mstatus_val: u64 = 0;
+    _ = glue.uc_reg_read(uc, UC_REG_MSTATUS, &mstatus_val);
+    const MSTATUS_MPP_S_MODE: u64 = 1 << 11;
+    const MSTATUS_MPIE: u64 = 1 << 7;
+    const MSTATUS_TW: u64 = 1 << 21;
+    mstatus_val |= MSTATUS_MPP_S_MODE | MSTATUS_MPIE | MSTATUS_TW;
+    _ = glue.uc_reg_write(uc, UC_REG_MSTATUS, &mstatus_val);
+
     // Enable S-mode access to time/cycle/instret CSRs via mcounteren.
     // Bit 0 (CY) = cycle, bit 1 (TM) = time, bit 2 (IR) = instret.
     var mcounteren_val: u64 = 0x7;
@@ -647,6 +656,10 @@ fn emulateCSR(uc: ?*anyopaque, insn: u32, pc: u64) ?ExceptionAction {
 /// Emulate SYSTEM instructions with funct3=0 (ECALL/EBREAK/xRET/SFENCE/WFI).
 /// Returns .emulated if handled, null otherwise.
 fn emulateSystem(uc: ?*anyopaque, insn: u32, pc: u64) ?ExceptionAction {
+    if (insn == INSN_WFI) {
+        return .wfi;
+    }
+
     const funct7 = insn >> 25;
     if (funct7 == 0x09) {
         // SFENCE.VMA: flush Unicorn's TLB and TB, skip instruction.
