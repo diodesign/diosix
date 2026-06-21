@@ -888,7 +888,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     // Yield the physical core to schedule other vcores
                     scheduler.schedule();
                 } else {
-                    sbi.handle(vc, context);
+                    sbi.handle(vc, 0, context);
                 }
             }
         },

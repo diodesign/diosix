@@ -25,7 +25,7 @@ pub const SBI_ERR_DENIED = interface.ERR_DENIED;
 pub const SBI_ERR_INVALID_ADDRESS = interface.ERR_INVALID_ADDRESS;
 pub const SBI_ERR_ALREADY_AVAILABLE = interface.ERR_ALREADY_AVAILABLE;
 
-pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
+pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadContext) void {
     const extension = context[@intFromEnum(arch.Register.a7)];
     const function = context[@intFromEnum(arch.Register.a6)];
     const a0 = context[@intFromEnum(arch.Register.a0)];
@@ -38,14 +38,14 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             // RV32 SBI: 64-bit stime split across a0 (low) and a1 (high).
             // RV64 SBI: a0 holds the full 64-bit value; a1 is unused.
             const stime = if (vc.exec_path == .emulated) a0 | (@as(u64, a1) << 32) else a0;
-            handleTimer(vc, context, stime);
+            handleTimer(vc, sub_idx, context, stime);
         },
         interface.EXT.LEGACY_SET_TIMER => {
             const stime = if (vc.exec_path == .emulated) a0 | (@as(u64, a1) << 32) else a0;
-            handleTimer(vc, context, stime);
+            handleTimer(vc, sub_idx, context, stime);
         },
         interface.EXT.SRST => handleSystemReset(vc, context, function, a0, a1),
-        interface.EXT.HSM => handleHSM(vc, context, function, a0, a1, a2),
+        interface.EXT.HSM => handleHSM(vc, sub_idx, context, function, a0, a1, a2),
         interface.EXT.DBCN => handleDebugConsole(vc, context, function, a0, a1),
         interface.EXT.IPI => handleIPI(vc, context, a0, a1),
         interface.EXT.RFENCE => {
@@ -84,14 +84,16 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
 
                 // Restore previous privilege mode
                 _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &current_priv);
+                
+                _ = @atomicRmw(bool, &vc.exec_path.emulated.sub_vcores[sub_idx].pending_ipi, .Xchg, false, .acq_rel);
             } else {
                 vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSSIP);
                 // Clear the CLINT MSIP register for the current physical CPU core
                 if (riscv.CLINT.msip(riscv.getCPUContext().hardware_hart_id)) |ptr| {
                     ptr.* = 0;
                 }
+                _ = @atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel);
             }
-            _ = @atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel);
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_SEND_IPI => {
@@ -99,37 +101,43 @@ pub fn handle(vc: *vcore.VirtualCore, context: *riscv.ThreadContext) void {
             const mask_ptr = context[@intFromEnum(arch.Register.a0)];
             var hart_mask: usize = 0;
             if (mask_ptr != 0) {
-                // Diosix is 64-bit, we can just read 64 bits from the guest's virtual address
                 hart_mask = @as(usize, @bitCast(riscv.hlv_d(mask_ptr)));
             } else {
-                // If mask_ptr is NULL, it usually means broadcast (or all 1s).
-                // But typically SBI 0.1 callers pass a valid pointer.
                 hart_mask = 0;
             }
-            const g = vc.getGuest();
-            for (0..guest.Guest.max_vcores) |vid| {
-                if ((hart_mask & (@as(usize, 1) << @intCast(vid))) != 0) {
-                    if (g.vcore_lookup[vid]) |target_vc| {
-                        _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
-                        if (target_vc.blocked_on_cpu) |home_cpu| {
-                            if (home_cpu == pcore.this().cpu_core_id) {
-                                if (target_vc.tryWake()) {
-                                    pcore.this().blocked_queue.remove(&target_vc.blocked_node);
-                                    target_vc.blocked_on_cpu = null;
-                                    scheduler.queue(target_vc);
-                                }
-                            } else {
-                                if (home_cpu < riscv.cpu_to_hart_map.len) {
-                                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
-                                        ptr.* = 1;
+            if (vc.exec_path == .emulated) {
+                for (0..vc.exec_path.emulated.sub_vcore_count) |vid| {
+                    if ((hart_mask & (@as(usize, 1) << @intCast(vid))) != 0) {
+                        const target_sub = &vc.exec_path.emulated.sub_vcores[vid];
+                        _ = @atomicRmw(bool, &target_sub.pending_ipi, .Xchg, true, .acq_rel);
+                    }
+                }
+            } else {
+                const g = vc.getGuest();
+                for (0..guest.Guest.max_vcores) |vid| {
+                    if ((hart_mask & (@as(usize, 1) << @intCast(vid))) != 0) {
+                        if (g.vcore_lookup[vid]) |target_vc| {
+                            _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
+                            if (target_vc.blocked_on_cpu) |home_cpu| {
+                                if (home_cpu == pcore.this().cpu_core_id) {
+                                    if (target_vc.tryWake()) {
+                                        pcore.this().blocked_queue.remove(&target_vc.blocked_node);
+                                        target_vc.blocked_on_cpu = null;
+                                        scheduler.queue(target_vc);
+                                    }
+                                } else {
+                                    if (home_cpu < riscv.cpu_to_hart_map.len) {
+                                        if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
+                                            ptr.* = 1;
+                                        }
                                     }
                                 }
-                            }
-                        } else {
-                            if (target_vc.running_on_cpu) |target_cpu| {
-                                if (target_cpu != pcore.this().cpu_core_id and target_cpu < riscv.cpu_to_hart_map.len) {
-                                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
-                                        ptr.* = 1;
+                            } else {
+                                if (target_vc.running_on_cpu) |target_cpu| {
+                                    if (target_cpu != pcore.this().cpu_core_id and target_cpu < riscv.cpu_to_hart_map.len) {
+                                        if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
+                                            ptr.* = 1;
+                                        }
                                     }
                                 }
                             }
@@ -268,15 +276,25 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
     setResult(vc, context, SBI_SUCCESS, 0);
 }
 
-fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64) void {
-    if (vc.exec_path == .native) {
+fn handleTimer(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadContext, stime: u64) void {
+    if (vc.exec_path == .emulated) {
+        const sub = &vc.exec_path.emulated.sub_vcores[sub_idx];
+        sub.timer_target = stime;
+        sub.timer_scheduled = true;
+
+        var mip: u64 = 0;
+        _ = glue.uc_reg_read(vc.exec_path.emulated.uc, rv32.UC_REG_MIP, &mip);
+        mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
+
+        var current_priv: u32 = 0;
+        _ = glue.uc_reg_read(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &current_priv);
+        var m_priv: u32 = 3;
+        _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &m_priv);
+        _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_MIP, &mip);
+        _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &current_priv);
+    } else {
         if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-            // When Sstc is enabled (STCE=1), VSTIP is read-only in hvip and managed
-            // natively by hardware comparing time >= vstimecmp. Manually injecting
-            // VSTIP via hvip writes will silently fail.
-            // Map the SBI SET_TIMER call directly to the hardware vstimecmp mechanism.
             vc.getNativeGuestState().vstimecmp = stime;
-            // Clear any lingering manual scheduled timer.
             vc.timer_scheduled = false;
         } else {
             vc.timer_scheduled = true;
@@ -284,10 +302,8 @@ fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64
             vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
         }
 
-        // Calculate the next physical timer event across the current vcore AND all blocked vcores
         var next_timer: u64 = ~@as(u64, 0);
         
-        // Include the current vcore's timer
         if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
             const vstc = vc.getNativeGuestState().vstimecmp;
             if (vstc != 0 and vstc != 0xffffffffffffffff) {
@@ -317,9 +333,6 @@ fn handleTimer(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, stime: u64
         } else {
             riscv.setTimer(0xffffffffffffffff);
         }
-    } else {
-        vc.timer_scheduled = true;
-        vc.timer_target = stime;
     }
 
     setResult(vc, context, SBI_SUCCESS, 0);
@@ -380,7 +393,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
     }
 }
 
-fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
+fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
     const g = vc.getGuest();
     switch (function) {
         interface.HSM.HART_START => {
@@ -388,59 +401,72 @@ fn handleHSM(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: us
             const start_addr = a1;
             const opaque_param = a2;
 
-            if (g.findVcore(target_hart)) |target_vc| {
-                if (target_vc.state != .stopped) {
-                    setResult(vc, context, interface.ERR_ALREADY_AVAILABLE, 0);
-                    return;
-                }
-
-                if (target_vc.exec_path == .native) {
-                    target_vc.getNativeMachine().mepc = start_addr;
-                    target_vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = target_hart;
-                    target_vc.getNativeContext()[@intFromEnum(riscv.Register.a1)] = opaque_param;
-                } else {
-                    target_vc.exec_path.emulated.entry = start_addr;
-                    target_vc.exec_path.emulated.dtb = opaque_param;
-                    if (target_vc.exec_path.emulated.uc) |uc| {
-                        var pc: u64 = start_addr;
-                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &pc);
-                        var a0_val: u64 = target_hart;
-                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X10), &a0_val);
-                        var a1_val: u64 = opaque_param;
-                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X11), &a1_val);
+            if (vc.exec_path == .emulated) {
+                if (target_hart < vc.exec_path.emulated.sub_vcore_count) {
+                    const target_sub = &vc.exec_path.emulated.sub_vcores[target_hart];
+                    if (target_sub.state == .stopped) {
+                        target_sub.start_pc = start_addr;
+                        target_sub.start_a0 = target_hart;
+                        target_sub.start_a1 = opaque_param;
+                        target_sub.state = .ready;
+                        setResult(vc, context, interface.SUCCESS, 0);
+                    } else {
+                        setResult(vc, context, interface.ERR_ALREADY_AVAILABLE, 0);
                     }
+                } else {
+                    setResult(vc, context, interface.ERR_INVALID_PARAM, 0);
                 }
-                target_vc.state = .ready;
-                target_vc.wfi_blocked = false;
-
-                // Ensure it's in the scheduler
-                scheduler.queue(target_vc);
-
-                // Trigger physical IPI to wake any idle physical core to pick up this vcore
-                broadcastPhysicalIPI();
-
-
-                setResult(vc, context, SBI_SUCCESS, 0);
             } else {
-                debug.printf("HART_START: hart={} NOT FOUND\n", .{target_hart});
-                setResult(vc, context, interface.ERR_INVALID_PARAM, 0);
+                if (g.findVcore(target_hart)) |target_vc| {
+                    if (target_vc.state != .stopped) {
+                        setResult(vc, context, interface.ERR_ALREADY_AVAILABLE, 0);
+                        return;
+                    }
+
+                    target_vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = target_hart;
+                    target_vc.getNativeContext()[@intFromEnum(arch.Register.a1)] = opaque_param;
+                    target_vc.getNativeMachine().mepc = start_addr;
+                    target_vc.state = .ready;
+                    scheduler.queue(target_vc);
+                    setResult(vc, context, interface.SUCCESS, 0);
+                } else {
+                    setResult(vc, context, interface.ERR_INVALID_PARAM, 0);
+                }
             }
         },
         interface.HSM.HART_STOP => {
-            vc.state = .stopped;
-            setResult(vc, context, SBI_SUCCESS, 0);
+            if (vc.exec_path == .emulated) {
+                vc.exec_path.emulated.sub_vcores[sub_idx].state = .stopped;
+                // No setResult needed as HART_STOP never returns
+            } else {
+                vc.state = .stopped;
+                setResult(vc, context, SBI_SUCCESS, 0);
+            }
         },
         interface.HSM.HART_GET_STATUS => {
             const target_hart = a0;
-            if (g.findVcore(target_hart)) |target_vc| {
-                const status: usize = switch (target_vc.state) {
-                    .running => interface.HSM.STATUS_STARTED,
-                    .ready => interface.HSM.STATUS_STARTED,
-                    .stopped => interface.HSM.STATUS_STOPPED,
-                };
-                setResult(vc, context, SBI_SUCCESS, status);
+            if (vc.exec_path == .emulated) {
+                if (target_hart < vc.exec_path.emulated.sub_vcore_count) {
+                    const status: usize = switch (vc.exec_path.emulated.sub_vcores[target_hart].state) {
+                        .running => interface.HSM.STATUS_STARTED,
+                        .ready => interface.HSM.STATUS_STARTED,
+                        .stopped => interface.HSM.STATUS_STOPPED,
+                    };
+                    setResult(vc, context, SBI_SUCCESS, status);
+                } else {
+                    setResult(vc, context, interface.ERR_INVALID_PARAM, 0);
+                }
             } else {
-                setResult(vc, context, interface.ERR_INVALID_PARAM, 0);
+                if (g.findVcore(target_hart)) |target_vc| {
+                    const status: usize = switch (target_vc.state) {
+                        .running => interface.HSM.STATUS_STARTED,
+                        .ready => interface.HSM.STATUS_STARTED,
+                        .stopped => interface.HSM.STATUS_STOPPED,
+                    };
+                    setResult(vc, context, SBI_SUCCESS, status);
+                } else {
+                    setResult(vc, context, interface.ERR_INVALID_PARAM, 0);
+                }
             }
         },
         else => setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0),

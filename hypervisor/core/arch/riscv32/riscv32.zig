@@ -141,14 +141,7 @@ pub fn writePC(uc: ?*anyopaque, pc: u64) void {
     _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &val);
 }
 
-/// Read the virtual time from Unicorn.
-pub fn readVirtualTime(uc: ?*anyopaque) u64 {
-    var low: u32 = 0;
-    var high: u32 = 0;
-    _ = glue.uc_reg_read(uc, UC_REG_TIME, &low);
-    _ = glue.uc_reg_read(uc, UC_REG_TIMEH, &high);
-    return (@as(u64, high) << 32) | @as(u64, low);
-}
+
 
 /// Handle an invalid instruction intercepted by UC_HOOK_INSN_INVALID.
 /// Checks if the instruction is rdtime/rdtimeh/rdcycle/rdinstret, reads
@@ -267,7 +260,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
                         var val: u64 = 0;
                         if (pcore.this().active_vcore) |opaque_vc| {
                             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-                            val = vc.id;
+                            val = vc.exec_path.emulated.active_sub_vcore;
                         }
                         _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
                     }
@@ -348,7 +341,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
 /// Handle a clean stop (UC_ERR_OK). Check if the instruction at `pc`
 /// is an ECALL and if so, forward it to the SBI layer.
 /// Returns true if an ECALL was handled and PC was advanced.
-pub fn handleCleanStop(uc: ?*anyopaque, vc: *vcore.VirtualCore, pc: u64) bool {
+pub fn handleCleanStop(uc: ?*anyopaque, vc: *vcore.VirtualCore, sub_idx: usize, pc: u64) bool {
     var insn: u32 = 0;
     if (glue.uc_mem_read(uc, pc, @as([*]u8, @ptrCast(&insn)), 4) != .UC_ERR_OK) {
         // Try Sv32 translation if flat read fails
@@ -357,32 +350,31 @@ pub fn handleCleanStop(uc: ?*anyopaque, vc: *vcore.VirtualCore, pc: u64) bool {
         } else return false;
     }
 
-    if (insn == INSN_WFI) {
-        const em = &vc.exec_path.emulated;
-        em.preempt_pending = false;
 
-        // QEMU's GETPC() inside riscv_raise_exception restores the PC to
+
+    if (insn == INSN_WFI) {
         // the WFI instruction itself. We must manually advance it so it
         // doesn't loop infinitely.
         writePC(uc, pc + 4);
 
-        // Block the vcore, waiting for interrupts
+        // Block the sub-vcore, waiting for interrupts
         var mip: u64 = 0;
         _ = glue.uc_reg_read(uc, UC_REG_MIP, &mip);
 
+        const sub = &vc.exec_path.emulated.sub_vcores[sub_idx];
+
         var timer_pending = false;
-        if (vc.timer_scheduled) {
-            if (glue.readSModeTime() >= vc.timer_target) {
+        if (sub.timer_scheduled) {
+            if (glue.readSModeTime() >= sub.timer_target) {
                 timer_pending = true;
             }
         }
 
-        if (mip == 0 and !timer_pending) {
-            @atomicStore(bool, &vc.wfi_blocked, true, .release);
-            pcore.this().blocked_queue.pushStart(&vc.blocked_node);
-            debug.printf("handleCleanStop: Blocking guest {}: mip=0, timer_pending=false\n", .{vc.id});
+        if (mip == 0 and !timer_pending and !sub.pending_ipi) {
+            @atomicStore(bool, &sub.wfi_blocked, true, .release);
+            debug.printf("handleCleanStop: Blocking sub-vcore {} of guest {}: mip=0, timer_pending=false\n", .{sub_idx, vc.id});
         } else {
-            debug.printf("handleCleanStop: guest {} WFI acts as NOP (mip=0x{x}, timer_pending={})\n", .{ vc.id, mip, timer_pending });
+            debug.printf("handleCleanStop: sub-vcore {} of guest {} WFI acts as NOP (mip=0x{x}, timer_pending={})\n", .{ sub_idx, vc.id, mip, timer_pending });
         }
 
         // Always return true to yield the physical core and prevent emulation.run
@@ -410,7 +402,7 @@ pub fn handleCleanStop(uc: ?*anyopaque, vc: *vcore.VirtualCore, pc: u64) bool {
     mock_context[@intFromEnum(riscv.Register.a1)] = a1;
     mock_context[@intFromEnum(riscv.Register.a2)] = a2;
 
-    sbi.handle(vc, &mock_context);
+    sbi.handle(vc, sub_idx, &mock_context);
 
     const res_a0 = @as(u32, @truncate(mock_context[@intFromEnum(riscv.Register.a0)]));
     const res_a1 = @as(u32, @truncate(mock_context[@intFromEnum(riscv.Register.a1)]));

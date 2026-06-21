@@ -29,6 +29,24 @@ pub const VirtualCoreType = enum {
     emulated,
 };
 
+pub const max_sub_vcores: usize = 8;
+pub const emulation_timeslice_instructions: u32 = 50_000;
+
+pub const SubVcoreState = struct {
+    id: usize = 0,
+    state: VirtualCoreState = .stopped,
+    context: ?*anyopaque = null, // uc_context
+    timer_scheduled: bool = false,
+    timer_target: u64 = 0,
+    wfi_blocked: bool = false,
+    pending_ipi: bool = false,
+
+    start_pc: u64 = 0,
+    start_a0: u64 = 0,
+    start_a1: u64 = 0,
+};
+
+
 // Represents a virtual CPU core's context and state.
 pub const VirtualCore = struct {
     // Unique ID for this vcore within its guest.
@@ -63,7 +81,12 @@ pub const VirtualCore = struct {
             guest_state: riscv.GuestState,
             stack: []u8,
             emu_running: bool = false,
+            
+            sub_vcores: [max_sub_vcores]SubVcoreState = std.mem.zeroes([max_sub_vcores]SubVcoreState),
+            sub_vcore_count: usize = 1,
+            active_sub_vcore: usize = 0,
             preempt_pending: bool = false,
+
             exception_cause: u32 = 0,
         },
     },

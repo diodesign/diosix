@@ -678,6 +678,45 @@ pub const uc_reg_read = if (is_test) struct {
     extern fn uc_reg_read(engine: ?*anyopaque, regid: c_int, value: ?*anyopaque) uc_err;
 }.uc_reg_read;
 
+pub const uc_context_alloc = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, context: *?*anyopaque) callconv(.c) uc_err {
+        _ = engine;
+        _ = context;
+        return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_context_alloc(engine: ?*anyopaque, context: *?*anyopaque) uc_err;
+}.uc_context_alloc;
+
+pub const uc_context_save = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, context: ?*anyopaque) callconv(.c) uc_err {
+        _ = engine;
+        _ = context;
+        return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_context_save(engine: ?*anyopaque, context: ?*anyopaque) uc_err;
+}.uc_context_save;
+
+pub const uc_context_restore = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, context: ?*anyopaque) callconv(.c) uc_err {
+        _ = engine;
+        _ = context;
+        return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_context_restore(engine: ?*anyopaque, context: ?*anyopaque) uc_err;
+}.uc_context_restore;
+
+pub const uc_context_free = if (is_test) struct {
+    fn impl(context: ?*anyopaque) callconv(.c) uc_err {
+        _ = context;
+        return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_context_free(context: ?*anyopaque) uc_err;
+}.uc_context_free;
+
 pub const uc_mem_map = if (is_test) struct {
     fn impl(engine: ?*anyopaque, address: u64, size: u64, perms: u32) callconv(.c) uc_err {
         _ = engine;

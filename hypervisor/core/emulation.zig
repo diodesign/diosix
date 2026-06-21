@@ -172,10 +172,9 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 // Stop execution of the emulated vcore.
 pub fn stop(vc: *vcore.VirtualCore) void {
     const em = &vc.exec_path.emulated;
-    // Set preempt flag — checked by blockCallback inside the JIT loop.
+    em.preempt_pending = true;
     // uc_emu_stop from M-mode doesn't reliably interrupt the JIT because
     // Unicorn's quit_request flag isn't checked between TBs in this build.
-    em.preempt_pending = true;
     if (em.emu_running) {
         if (em.uc) |uc| {
             _ = glue.uc_emu_stop(uc);
@@ -223,34 +222,80 @@ pub fn run(vc: *vcore.VirtualCore) void {
     var exception_budget: u32 = EXCEPTION_BUDGET;
 
     while (exception_budget > 0) {
+        if (em.preempt_pending) {
+            break;
+        }
 
+        // ---- MICRO-SCHEDULER LOGIC ----
+        var found_ready = false;
+        const start_idx = em.active_sub_vcore;
+        var curr_idx = start_idx;
+        var sub: *vcore.SubVcoreState = undefined;
+        while (true) {
+            sub = &em.sub_vcores[curr_idx];
+            if (sub.state == .ready or sub.state == .running) {
+                if (!sub.wfi_blocked or sub.pending_ipi or (sub.timer_scheduled and glue.readSModeTime() >= sub.timer_target)) {
+                    sub.wfi_blocked = false;
+                    em.active_sub_vcore = curr_idx;
+                    found_ready = true;
+                    break;
+                }
+            }
+            curr_idx = (curr_idx + 1) % em.sub_vcore_count;
+            if (curr_idx == start_idx) break;
+        }
 
-        // Sync pending interrupts to the guest's MIP register and manually inject
-        // traps if interrupts are enabled.
+        if (!found_ready) {
+            @atomicStore(bool, &vc.wfi_blocked, true, .release);
+            return;
+        }
+
+        vc.exec_path.emulated.active_sub_vcore = em.active_sub_vcore;
+        sub.state = .running;
+
+        if (sub.context) |ctx| {
+            _ = glue.uc_context_restore(uc, ctx);
+            pc = switch (em.target_arch) {
+                .riscv32 => rv32.readPC(uc),
+                .aarch64 => aarch64.readPC(uc),
+                .x86_64 => x86_64.readPC(uc),
+                else => 0,
+            };
+        } else {
+            _ = glue.uc_context_alloc(uc, &sub.context);
+            if (em.active_sub_vcore > 0) {
+                var start_pc: u64 = sub.start_pc;
+                _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &start_pc);
+                var a0: u64 = sub.start_a0;
+                _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X10), &a0);
+                var a1: u64 = sub.start_a1;
+                _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X11), &a1);
+            }
+            pc = switch (em.target_arch) {
+                .riscv32 => rv32.readPC(uc),
+                .aarch64 => aarch64.readPC(uc),
+                .x86_64 => x86_64.readPC(uc),
+                else => 0,
+            };
+            _ = glue.uc_context_save(uc, sub.context.?);
+        }
+
+        // Sync pending interrupts for THIS sub-vCPU
         if (em.target_arch == .riscv32) {
             var mip: u64 = 0;
             _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &mip);
 
             const MIP_SSIP: u64 = 1 << 1;
 
-
-
-
-            // 1. Software Interrupts (IPIs)
-            // SSIP is writable in Unicorn's mip, so we can set it via uc_reg_write.
-            if (@atomicLoad(bool, &vc.pending_ipi, .acquire)) {
+            if (@atomicLoad(bool, &sub.pending_ipi, .acquire)) {
                 mip |= MIP_SSIP;
             } else {
                 mip &= ~MIP_SSIP;
             }
 
-            // 2. Timer Interrupts
-            // We set STIP in mip if a timer is pending. Unicorn allows this, and
-            // it allows QEMU to naturally evaluate the interrupt once SIE becomes 1
-            // without needing manual interrupt injection.
-            if (vc.timer_scheduled) {
-                const now = rv32.readVirtualTime(uc);
-                if (now >= vc.timer_target) {
+            if (sub.timer_scheduled) {
+                const now = glue.readSModeTime();
+                if (now >= sub.timer_target) {
                     mip |= @as(u64, 1 << 5); // MIP_STIP
                 } else {
                     mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
@@ -259,42 +304,26 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
             }
 
-            // Temporarily elevate to M-mode so the write to MIP (for SSIP and STIP) succeeds
             var current_priv: u32 = 0;
             _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
-            var m_priv: u32 = 3; // PRV_M
+            var m_priv: u32 = 3;
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
-
             _ = glue.uc_reg_write(uc, rv32.UC_REG_MIP, &mip);
-
-            // Restore previous privilege mode
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
         }
 
-        // Run the guest infinitely (instruction count 0). Asynchronous preemption
-        // via physical hardware timers (machine_timer in xint.zig) will
-        // call uc_emu_stop() to break this loop when the hypervisor quantum expires
-        // or a physical interrupt arrives.
-        em.preempt_pending = false;
         em.emu_running = true;
-        const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, 0);
+        const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
         em.emu_running = false;
 
-        // Clear stale CPU exit flags left by asynchronous uc_emu_stop
-        // (called from M-mode timer handler). Without this, the JIT
-        // immediately exits on the next uc_emu_start call.
         glue.diosix_uc_clear_stop(uc);
 
-
-
-        // After returning from Unicorn, read back MIP to see if the guest cleared
-        // the pending software interrupt (IPI).
         if (em.target_arch == .riscv32) {
             var mip: u64 = 0;
             _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &mip);
             const MIP_SSIP: u64 = 1 << 1;
             if ((mip & MIP_SSIP) == 0) {
-                _ = @atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel);
+                _ = @atomicRmw(bool, &sub.pending_ipi, .Xchg, false, .acq_rel);
             }
         }
 
@@ -302,58 +331,33 @@ pub fn run(vc: *vcore.VirtualCore) void {
             .riscv32 => rv32.readPC(uc),
             .aarch64 => aarch64.readPC(uc),
             .x86_64 => x86_64.readPC(uc),
-            else => 0,
+            else => return,
         };
 
-        // Debug: log first 10 run iterations for aarch64.
-        if (em.target_arch == .aarch64) {
-            const S_run = struct {
-                var run_count: u32 = 0;
-            };
-            if (S_run.run_count < 10) {
-                S_run.run_count += 1;
-                var x30: u64 = 0;
-                _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_arm64_reg.UC_ARM64_REG_X30), &x30);
-                var insn_bytes: u32 = 0;
-                _ = glue.uc_mem_read(uc, new_pc, @as([*]u8, @ptrCast(&insn_bytes)), 4);
-                debug.printf("aarch64 run #{}: err={} pc=0x{x}->0x{x} LR=0x{x} insn=0x{x}\n", .{ S_run.run_count, err, pc, new_pc, x30, insn_bytes });
-            }
-        }
-
         if (err == .UC_ERR_OK) {
-
-            // Clean stop — check for ECALL/HVC/SYSCALL via arch handler.
-            // Note: if blockCallback stopped us (for timer), the current PC
-            // is at a random TB boundary, not necessarily an ecall. If
-            // intrCallback handled an ecall, PC is already past it (ecall+4).
             const handled = switch (em.target_arch) {
-                .riscv32 => rv32.handleCleanStop(uc, vc, new_pc),
+                .riscv32 => rv32.handleCleanStop(uc, vc, em.active_sub_vcore, new_pc),
                 .aarch64 => aarch64.handleCleanStop(uc, vc, new_pc),
                 .x86_64 => x86_64.handleCleanStop(uc, vc, new_pc),
                 else => false,
             };
-            if (handled) return; // ECALL or WFI handled; yield to outer loop.
-
-            // If we were preempted by a physical timer or IPI (via xint_handler),
-            // yield the physical core so the scheduler can run.
-            if (em.preempt_pending) {
-                pc = new_pc;
-                return;
+            
+            _ = glue.uc_context_save(uc, sub.context.?);
+            em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
+            
+            if (handled) {
+                pc = switch (em.target_arch) {
+                    .riscv32 => rv32.readPC(uc),
+                    .aarch64 => aarch64.readPC(uc),
+                    .x86_64 => x86_64.readPC(uc),
+                    else => 0,
+                };
             }
-
-            // Normal completion of the execution slice (100k instructions).
-            // Decrement the loop budget so we eventually yield the core.
-            if (exception_budget > 100_000) {
-                exception_budget -= 100_000;
-            } else {
-                exception_budget = 0;
-            }
-            pc = new_pc;
+            
             continue;
         }
 
         if (err == .UC_ERR_EXCEPTION) {
-
             const action = switch (em.target_arch) {
                 .riscv32 => rv32.handleException(uc, new_pc),
                 .aarch64 => aarch64.handleException(uc, new_pc),
@@ -363,22 +367,14 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
             switch (action) {
                 .emulated => {
-                    pc = switch (em.target_arch) {
-                        .riscv32 => rv32.readPC(uc),
-                        .aarch64 => aarch64.readPC(uc),
-                        .x86_64 => x86_64.readPC(uc),
-                        else => 0,
-                    };
+                    _ = glue.uc_context_save(uc, sub.context.?);
+                    em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
                     continue;
                 },
                 .delivered => {
-                    pc = switch (em.target_arch) {
-                        .riscv32 => rv32.readPC(uc),
-                        .aarch64 => aarch64.readPC(uc),
-                        .x86_64 => x86_64.readPC(uc),
-                        else => return,
-                    };
                     exception_budget -= 1;
+                    _ = glue.uc_context_save(uc, sub.context.?);
+                    em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
                     continue;
                 },
                 .unhandled => {
@@ -389,48 +385,15 @@ pub fn run(vc: *vcore.VirtualCore) void {
             }
         }
 
-        // Any other error is fatal for this execution slice.
         debug.printf("Unicorn: execution error {} at PC 0x{x}\n", .{ err, new_pc });
+        vc.state = .stopped;
         return;
     }
 }
 
 // Invalid-instruction callback — intercepts instructions that Unicorn
 // cannot execute natively and emulates them inline. This fires inside
-// Block callback — fires at the start of each translation block inside
-// the JIT loop. Used to check for pending timer interrupts since neither
-// count nor timeout parameters work in our bare-metal environment.
-//
-// IMPORTANT: Must NOT call uc_reg_read/uc_reg_write here because those
-// functions call restore_jit_state() which corrupts JIT execution state
-// when invoked from within the JIT loop. Instead, only check the timer
-// target against rdtime and stop the engine if it has expired. The
-// actual CSR checks and interrupt delivery happen in the outer loop.
-fn blockCallback(uc: ?*anyopaque, _: u64, _: u32, user_data: ?*anyopaque) callconv(.c) void {
-    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
-    const em = &vc.exec_path.emulated;
 
-    // Check preemption: the M-mode timer handler sets this flag when
-    // the timeslice expires. We stop from within the JIT (guaranteed
-    // safe) rather than relying on uc_emu_stop from M-mode context.
-    if (em.preempt_pending) {
-        _ = glue.uc_emu_stop(uc);
-        return;
-    }
-
-    // Check guest timer: if the emulated kernel set a supervisor timer
-    // via SBI SET_TIMER, stop the engine when it expires so the outer
-    // loop can deliver the interrupt.
-    if (!vc.timer_scheduled) return;
-
-    const now = switch (em.target_arch) {
-        .riscv32 => rv32.readVirtualTime(uc),
-        else => glue.readSModeTime(),
-    };
-    if (now >= vc.timer_target) {
-        _ = glue.uc_emu_stop(uc);
-    }
-}
 
 // Invalid-instruction callback — intercepts instructions that Unicorn
 // cannot execute natively and emulates them inline. This fires inside
@@ -496,7 +459,7 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
         mock_context[@intFromEnum(riscv.Register.a1)] = a1;
         mock_context[@intFromEnum(riscv.Register.a2)] = a2;
 
-        sbi.handle(vc, &mock_context);
+        sbi.handle(vc, vc.exec_path.emulated.active_sub_vcore, &mock_context);
 
         const res_a0 = @as(u32, @truncate(mock_context[@intFromEnum(riscv.Register.a0)]));
         const res_a1 = @as(u32, @truncate(mock_context[@intFromEnum(riscv.Register.a1)]));
@@ -736,7 +699,10 @@ pub fn emulatedRunnerSMode(vc_ptr: usize) callconv(.c) noreturn {
         run(vc);
 
         if (comptime @import("builtin").is_test) {
-            break;
+            // We no longer use a block hook for asynchronous preemption.
+            // True preemption is achieved by the M-mode physical timer handler
+            // directly calling uc_emu_stop(), allowing us to run the JIT
+            // at maximum throughput without basic-block intercepts!
         } else {
             // DIOSIX.YIELD
             asm volatile (

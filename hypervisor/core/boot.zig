@@ -443,11 +443,23 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
     // Create virtual cores for the Root VM matching host count.
     // The loader returns the entry point as a GPA, so no masking is needed.
-    for (0..cpu_count) |i| {
+    const is_emulated = (guest_arch != .riscv64);
+    const hypervisor_vcore_count = if (is_emulated) 1 else cpu_count;
+
+    for (0..hypervisor_vcore_count) |i| {
         // Core 0 starts executing immediately and is enrolled in the scheduler.
         // Other cores wait for HSM HART_START, so they are not queued here.
         const vcore_id = if (guest_arch == .aarch64) i else guest_hart_ids[i];
         const vc = try root_vm.addVcore(vcore_id, entry_point, guest_dtb_gpa, .high, null);
+        
+        if (is_emulated) {
+            vc.exec_path.emulated.sub_vcore_count = cpu_count;
+            vc.exec_path.emulated.sub_vcores[0].start_pc = entry_point;
+            vc.exec_path.emulated.sub_vcores[0].start_a0 = vcore_id;
+            vc.exec_path.emulated.sub_vcores[0].start_a1 = guest_dtb_gpa;
+            vc.exec_path.emulated.sub_vcores[0].state = .ready;
+        }
+
         if (i == 0) {
             vc.state = .ready;
             scheduler.queue(vc);
