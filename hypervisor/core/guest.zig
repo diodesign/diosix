@@ -215,7 +215,7 @@ pub const Guest = struct {
 
         vc.* = vcore.VirtualCore.init(vid, self, entry, dtb, priority);
         vc.blocked_node.contents = @ptrCast(vc);
-        if (self.target_arch != .riscv64) {
+        if (vc.exec_path == .emulated) {
             vc.exec_path.emulated.context[@intFromEnum(riscv.Register.a0)] = @intFromPtr(vc);
         }
 

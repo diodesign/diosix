@@ -44,10 +44,8 @@ pub const UC_REG_MIP: c_int = 131; // Machine interrupt pending
 pub const UC_REG_TIME: c_int = 45;
 pub const UC_REG_TIMEH: c_int = 77;
 
-// NOTE: Maps to CSR_MIE (not CSR_MCOUNTEREN) due to csrno_map layout.
-// Writing 0x7 here accidentally enables SSIE in MIE. Fixing to the
-// correct ID (122) breaks boot because MCOUNTEREN=0 means S-mode time
-// reads trap as illegal-insn, which our emulateCSR then handles.
+// NOTE: Maps to CSR_MCOUNTEREN.
+// We must use 122. If we trap rdtime in S-mode, emulateCSR will provide the host time.
 pub const UC_REG_MCOUNTEREN: c_int = 120;
 
 // ---- RISC-V Instruction Encodings ----
@@ -259,24 +257,6 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
                     // timeh / cycleh / instreth (upper 32 bits for RV32).
                     if (rd != 0) {
                         var val: u64 = glue.readSModeTime() >> 32;
-                        _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
-                    }
-                },
-                // M-mode read-only CSRs that Unicorn's JIT might try to
-                // execute natively and fail.
-                0xF14 => { // mhartid
-                    if (rd != 0) {
-                        var val: u64 = 0;
-                        if (pcore.this().active_vcore) |opaque_vc| {
-                            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-                            val = vc.exec_path.emulated.active_sub_vcore;
-                        }
-                        _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
-                    }
-                },
-                0xF11, 0xF12, 0xF13 => { // mvendorid, marchid, mimpid
-                    if (rd != 0) {
-                        var val: u64 = 0;
                         _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
                     }
                 },
@@ -547,7 +527,7 @@ fn csrToUcReg(csr: u32) ?c_int {
         0xF11 => @as(c_int, 148), // mvendorid
         0xF12 => @as(c_int, 149), // marchid
         0xF13 => @as(c_int, 150), // mimpid
-        0xF14 => @as(c_int, 151), // mhartid
+        // 0xF14 intercepted above
 
         // M-mode CSRs (delegation and counters)
         0x302 => UC_REG_MEDELEG, // medeleg
@@ -591,6 +571,26 @@ fn emulateCSR(uc: ?*anyopaque, insn: u32, pc: u64) ?ExceptionAction {
         0xC81, 0xC80, 0xC82 => {
             if (rd != 0) {
                 var val: u64 = glue.readSModeTime() >> 32;
+                _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
+            }
+            writePC(uc, pc + 4);
+            return .emulated;
+        },
+        0xF14 => { // mhartid
+            if (rd != 0) {
+                var val: u64 = 0;
+                if (pcore.this().active_vcore) |opaque_vc| {
+                    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                    val = vc.exec_path.emulated.active_sub_vcore;
+                }
+                _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
+            }
+            writePC(uc, pc + 4);
+            return .emulated;
+        },
+        0xF11, 0xF12, 0xF13 => { // mvendorid, marchid, mimpid
+            if (rd != 0) {
+                var val: u64 = 0;
                 _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
             }
             writePC(uc, pc + 4);

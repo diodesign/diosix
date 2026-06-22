@@ -36,7 +36,8 @@ pub fn init() void {
 
 
     // Enable physical timer, software, and external interrupts (including supervisor mode in M-mode)
-    riscv.writeMie(0xa8a);
+    riscv.writeMideleg(0x222);
+    riscv.writeMie(0x888);
 
     // Enable M-mode delegation of cycle, time, and instret counters (bits 0, 1, 2 = 7)
     // to lower privilege modes (HS, VS, VU, U).
@@ -583,15 +584,18 @@ fn fetchGuestInstruction(pc: usize) usize {
 
 fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
     if (irq.privilege_mode == .machine) {
-        const pcpu = pcore.this();
-        if (pcpu.probing_active) {
-            pcpu.probe_failed = true;
-            // Advance PC past the 4-byte instruction that triggered the illegal instruction exception
-            riscv.writeMepc(irq.pc + 4);
+        if (irq.irq_type == .exception) {
+            const pcpu = pcore.this();
+            if (pcpu.probing_active) {
+                pcpu.probe_failed = true;
+                // Advance PC past the 4-byte instruction that triggered the illegal instruction exception
+                riscv.writeMepc(irq.pc + 4);
+                return;
+            }
+            fatal_exception(irq);
             return;
         }
-        fatal_exception(irq);
-        return;
+        // If it's an interrupt, let it fall through and be handled normally!
     }
     switch (irq.cause) {
         .illegal_instruction, .virtual_instruction => {

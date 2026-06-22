@@ -84,7 +84,7 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
 
                 // Restore previous privilege mode
                 _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &current_priv);
-                
+
                 _ = @atomicRmw(bool, &vc.exec_path.emulated.sub_vcores[sub_idx].pending_ipi, .Xchg, false, .acq_rel);
             } else {
                 vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSSIP);
@@ -206,12 +206,34 @@ fn handleBase(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: u
 
 fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: usize, hart_mask_base: usize) void {
     const g = vc.getGuest();
+    if (vc.exec_path == .emulated) {
+        if (hart_mask_base == 0xffffffffffffffff) {
+            // Broadcast to all sub-vcores
+            for (0..vc.exec_path.emulated.sub_vcore_count) |target_hart| {
+                const target_sub = &vc.exec_path.emulated.sub_vcores[target_hart];
+                _ = @atomicRmw(bool, &target_sub.pending_ipi, .Xchg, true, .acq_rel);
+            }
+        } else {
+            // Targeted send
+            for (0..@bitSizeOf(usize)) |bit_pos| {
+                if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
+                    const hart_id = hart_mask_base + bit_pos;
+                    if (hart_id < vc.exec_path.emulated.sub_vcore_count) {
+                        const target_sub = &vc.exec_path.emulated.sub_vcores[hart_id];
+                        _ = @atomicRmw(bool, &target_sub.pending_ipi, .Xchg, true, .acq_rel);
+                    }
+                }
+            }
+        }
+        setResult(vc, context, interface.SUCCESS, 0);
+        return;
+    }
 
     if (hart_mask_base == 0xffffffffffffffff) {
         // Broadcast to all valid vcores in the guest
         for (0..guest.Guest.max_vcores) |vid| {
             if (g.vcore_lookup[vid]) |target_vc| {
-                    _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
+                _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
                 if (target_vc.blocked_on_cpu) |home_cpu| {
                     if (home_cpu == pcore.this().cpu_core_id) {
                         if (target_vc.tryWake()) {
@@ -244,7 +266,7 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
                 const hart_id = hart_mask_base + bit_pos;
                 if (hart_id < guest.Guest.max_vcores) {
                     if (g.vcore_lookup[hart_id]) |target_vc| {
-                            _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
+                        _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
                         if (target_vc.blocked_on_cpu) |home_cpu| {
                             if (home_cpu == pcore.this().cpu_core_id) {
                                 if (target_vc.tryWake()) {
@@ -303,7 +325,7 @@ fn handleTimer(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCon
         }
 
         var next_timer: u64 = ~@as(u64, 0);
-        
+
         if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
             const vstc = vc.getNativeGuestState().vstimecmp;
             if (vstc != 0 and vstc != 0xffffffffffffffff) {
@@ -409,6 +431,7 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
                         target_sub.start_a0 = target_hart;
                         target_sub.start_a1 = opaque_param;
                         target_sub.state = .ready;
+                        debug.printf("SBI: starting hart {} at start_addr=0x{x} opaque=0x{x}\n", .{ target_hart, start_addr, opaque_param });
                         setResult(vc, context, interface.SUCCESS, 0);
                     } else {
                         setResult(vc, context, interface.ERR_ALREADY_AVAILABLE, 0);

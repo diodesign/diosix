@@ -16,6 +16,7 @@ const riscv = @import("arch/riscv64/riscv.zig");
 const debug = @import("debug.zig");
 const sbi = @import("arch/riscv32/sbi.zig");
 const psci = @import("arch/aarch64/psci.zig");
+const pcore = @import("pcore.zig");
 
 /// Result of handling an exception from Unicorn.
 pub const ExceptionAction = enum {
@@ -168,6 +169,12 @@ pub fn init(vc: *vcore.VirtualCore) !void {
             else => {},
         }
         _ = glue.uc_context_save(uc, sub.context.?);
+        
+        if (i == 0) {
+            sub.state = .ready;
+        } else {
+            sub.state = .stopped;
+        }
     }
 
     // Restore CPU0 to begin execution cleanly
@@ -260,8 +267,30 @@ pub fn run(vc: *vcore.VirtualCore) void {
         }
 
         if (!found_ready) {
+            var nearest_timer: u64 = ~@as(u64, 0);
+            var any_timer_scheduled = false;
+            for (0..em.sub_vcore_count) |i| {
+                const s = &em.sub_vcores[i];
+                if (s.timer_scheduled and s.timer_target < nearest_timer) {
+                    nearest_timer = s.timer_target;
+                    any_timer_scheduled = true;
+                }
+            }
+            if (any_timer_scheduled) {
+                vc.timer_target = nearest_timer;
+                vc.timer_scheduled = true;
+            } else {
+                vc.timer_scheduled = false;
+            }
+
             // All sub_vcores are blocked or stopped.
             // Block the entire VirtualCore so the physical core can sleep.
+
+            const pcpu = pcore.this();
+            vc.blocked_node.contents = vc;
+            pcpu.blocked_queue.pushStart(&vc.blocked_node);
+            vc.blocked_on_cpu = pcpu.cpu_core_id;
+
             @atomicStore(bool, &vc.wfi_blocked, true, .release);
             break;
         }
@@ -269,6 +298,19 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
         if (sub.context) |ctx| {
             _ = glue.uc_context_restore(uc, ctx);
+            
+            // Workaround: Unicorn's uc_context_restore (with UC_CTL_CONTEXT_CPU) does not flush
+            // QEMU's TLB. This causes instruction page faults when switching from a sub-vcore with
+            // paging enabled to one with paging disabled (like during SMP secondary core boot).
+            // QEMU's write_satp only flushes the TLB if the ASID changes. We toggle the ASID bit
+            // and write back the actual value to force a TLB flush.
+            if (em.target_arch == .riscv32) {
+                var actual_satp: u64 = 0;
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_SATP, &actual_satp);
+                var dummy_satp: u64 = actual_satp ^ (@as(u64, 1) << 22); // Toggle lowest ASID bit for RV32
+                _ = glue.uc_reg_write(uc, rv32.UC_REG_SATP, &dummy_satp);
+                _ = glue.uc_reg_write(uc, rv32.UC_REG_SATP, &actual_satp);
+            }
             
             // First time running? Apply HART_START parameters
             if (sub.state == .ready) {
@@ -328,7 +370,13 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
 
         em.emu_running = true;
-        const err = glue.uc_emu_start(uc, pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
+        const current_pc = switch (em.target_arch) {
+            .riscv32 => rv32.readPC(uc),
+            .aarch64 => aarch64.readPC(uc),
+            .x86_64 => x86_64.readPC(uc),
+            else => return,
+        };
+        const err = glue.uc_emu_start(uc, current_pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
         em.emu_running = false;
 
         glue.diosix_uc_clear_stop(uc);
@@ -350,6 +398,12 @@ pub fn run(vc: *vcore.VirtualCore) void {
         };
 
         if (err == .UC_ERR_OK) {
+            if (em.target_arch == .riscv32 and new_pc == 0xc0001048) {
+                var stvec: u64 = 0;
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_STVEC, &stvec);
+                debug.printf("EMU: OK stop. subcore={}, current_pc=0x{x}, new_pc=0x{x}, stvec=0x{x}\n", .{em.active_sub_vcore, current_pc, new_pc, stvec});
+            }
+
             const handled = switch (em.target_arch) {
                 .riscv32 => rv32.handleCleanStop(uc, vc, em.active_sub_vcore, new_pc),
                 .aarch64 => aarch64.handleCleanStop(uc, vc, new_pc),
@@ -369,10 +423,19 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 };
             }
             
+            // We do not need to manually check interrupts here because we sync MIP
+            // right before uc_emu_start. Any pending interrupts will be
+            // natively delivered by Unicorn during the next timeslice.
             continue;
         }
 
         if (err == .UC_ERR_EXCEPTION) {
+            if (em.target_arch == .riscv32) {
+                var stvec: u64 = 0;
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_STVEC, &stvec);
+                debug.printf("EMU: Exception! subcore={}, err={}, current_pc=0x{x}, new_pc=0x{x}, stvec=0x{x}\n", .{em.active_sub_vcore, err, current_pc, new_pc, stvec});
+            }
+
             const action = switch (em.target_arch) {
                 .riscv32 => rv32.handleException(uc, new_pc),
                 .aarch64 => aarch64.handleException(uc, new_pc),
@@ -517,6 +580,19 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
     // medeleg/mideleg delegation, sepc/scause/stval/sstatus manipulation,
     // privilege mode transitions, and PC = stvec.
 
+    var pre_pc: u64 = 0;
+    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &pre_pc);
+    var stvec: u64 = 0;
+    _ = glue.uc_reg_read(uc, rv32.UC_REG_STVEC, &stvec);
+    
+    // Prevent log spam if stuck in a loop
+    const S = struct {
+        var count: u32 = 0;
+    };
+    S.count += 1;
+    if (S.count < 20) {
+        debug.printf("intrCallback: native intno {} at PC=0x{x} (stvec=0x{x})\n", .{intno, pre_pc, stvec});
+    }
 
     var info: glue.InterruptInfo = std.mem.zeroes(glue.InterruptInfo);
     glue.diosix_uc_do_interrupt(uc, @intCast(intno), &info);

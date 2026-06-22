@@ -80,8 +80,17 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     } else {
         // Offload to the global queue
         const guard = global_scheduler.acquire();
-        defer guard.release();
         guard.get().run_queue.insert(&vc.scheduler_node);
+        guard.release(); // release early to minimize lock hold time during IPI loop
+
+        // Wake up all other physical CPUs so one can pick this up from the global queue
+        for (0..riscv.cpu_to_hart_map.len) |target_cpu| {
+            if (target_cpu != pc.cpu_core_id) {
+                if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
+                    ptr.* = 1;
+                }
+            }
+        }
     }
 }
 

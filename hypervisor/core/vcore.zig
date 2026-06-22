@@ -85,6 +85,7 @@ pub const VirtualCore = struct {
             sub_vcores: [max_sub_vcores]SubVcoreState = std.mem.zeroes([max_sub_vcores]SubVcoreState),
             sub_vcore_count: usize = 1,
             active_sub_vcore: usize = 0,
+            last_run_sub_vcore: ?usize = null,
             preempt_pending: bool = false,
 
             exception_cause: u32 = 0,
@@ -150,7 +151,7 @@ pub const VirtualCore = struct {
                         .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP | riscv.HSTATUS.VTW,
                         .hgatp = 0,
                         .hedeleg = 0xb1fb, // Delegate exceptions to guest: includes breakpoint (bit 3)
-                        .hideleg = 0x444, // Delegate VS interrupts: VSSIP(2), VSTIP(6), VSEIP(10)
+                        .hideleg = 0x644, // Delegate VS interrupts and physical SEIP
                         .hvip = 0,
                     },
                     .guest_state = .{

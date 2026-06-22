@@ -1,4 +1,4 @@
-# Fedora 44 Build and Run environment for Diosix
+# Fedora 44 build and run environment for Diosix
 FROM fedora:44
 
 # Allow Buildroot to compile as root inside the container
@@ -27,6 +27,8 @@ RUN dnf update -y && dnf install -y \
     xz \
     python3 \
     which \
+    cmake \
+    ninja-build \
     qemu-system-riscv \
     && dnf clean all
 

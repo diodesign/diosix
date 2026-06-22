@@ -1,4 +1,4 @@
-# Ubuntu 22.04 Build and Run environment for Diosix
+# Ubuntu 22.04 build and run environment for Diosix
 FROM ubuntu:22.04
 
 # Avoid interactive prompts during apt package installation
@@ -19,6 +19,9 @@ RUN apt-get update && apt-get install -y \
     wget \
     xz-utils \
     python3 \
+    cmake \
+    ninja-build \
+    pkg-config \
     qemu-system-misc \
     && rm -rf /var/lib/apt/lists/*
 
