@@ -153,17 +153,16 @@ flatten the executable to a raw binary, and load it onto physical media.
 ### The hypervisor payload
 
 The build process generates a freestanding Executable and Linkable Format (ELF)
-payload at `./zig-out/bin/vmdiosix`, containing the hypervisor and guest
-Root VM.
+payload at an output directory based on the guest Root VM architecture (for example,
+`./zig-out/guest-riscv64/bin/vmdiosix`, `./zig-out/guest-riscv32/bin/vmdiosix`, or `./zig-out/guest-aarch64/bin/vmdiosix`).
+The payload contains both the hypervisor and the guest Root VM.
 
 ### Flatten the payload
 
-Most physical bootloaders expect a flat binary instead of an ELF file. Convert
-the ELF payload to a flat binary using `llvm-objcopy` (included with Zig) or
-`riscv64-unknown-elf-objcopy`:
+Most physical bootloaders expect a flat binary instead of an ELF file. Convert the ELF payload to a flat binary using `llvm-objcopy` (included with Zig) or `riscv64-unknown-elf-objcopy`, replacing `guest-riscv64` with the architecture of your Root VM:
 
 ```bash
-llvm-objcopy -O binary ./zig-out/bin/vmdiosix ./zig-out/bin/vmdiosix.bin
+llvm-objcopy -O binary ./zig-out/guest-riscv64/bin/vmdiosix ./zig-out/guest-riscv64/bin/vmdiosix.bin
 ```
 
 ### Load the hypervisor

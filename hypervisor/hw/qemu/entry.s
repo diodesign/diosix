@@ -72,41 +72,82 @@ _start:
     srli      t1, t2, 1
     sub       sp, t4, t1
 
-    # boot CPU core (a0 == CPU ID 0) needs to zero the BSS
-    la        t0, bss_cleared
-    beq       x0, a0, clear_bss
-    # t0 => flag to signal bss fully cleared
+    # boot CPU core (a0 == CPU ID 0) needs to zero the BSS and copy DTB
+    beq       x0, a0, early_boot_prep
 
-    # other CPU cores need to wait for bss_cleared
-    # to change from zero to non-zero to indicate the BSS is clear
-clear_bss_wait_loop:
+    # other CPU cores need to wait for early_boot_prep_done
+    # to change from zero to non-zero to indicate the prep is finished
+    # and then proceed to the main entry point.
+    # t0 => flag to signal to non-boot cores that early boot prep is complete
+    la         t0, early_boot_prep_done
+
+early_boot_prep_wait_loop:
     amoor.w.aq  t1, x0, (t0)
-    beq         x0, t1, clear_bss_wait_loop
-    j           clear_bss_loop_end
+    beq         x0, t1, early_boot_prep_wait_loop
+    j           call_main
 
-clear_bss:
+early_boot_prep:
+    # --------------------------------------------------------------------
+    # Zero the BSS
+    # --------------------------------------------------------------------
     la        t1, __bss_start
     la        t2, __bss_end
-    bgeu      t1, t2, clear_bss_loop_end # avoid empty or malformed bss 
+    bgeu      t1, t2, clear_bss_done # avoid empty or malformed bss 
 clear_bss_loop:
+    # as per the linker script, BSS start and end are 64-bit word aligned
     sd        x0, (t1)
     addi      t1, t1, 8
     bltu      t1, t2, clear_bss_loop
 
-clear_bss_loop_end:
-    li          t1, 1           # set clear_bss_finished to 1 now we're done
-    amoor.w.rl  x0, t1, (t0)    # t0 => bss_cleared
+clear_bss_done:
+    # -------------------------------------------------------------
+    # Relocate DTB if it overlaps with our max CPU slabs footprint
+    # -------------------------------------------------------------
+    la        t1, __hypervisor_end
+    li        t2, MAX_PHYS_CORES
+    slli      t2, t2, CPU_SLAB_SHIFT
+    add       t1, t1, t2        # t1 = dtb_safe_address
 
-    # DEBUG: every core prints a hash to the serial port to indicate it got this far
-    # li        t1, 0x10000000
-    # li        t2, 0x23        # '#'
-    # sb        t2, 0(t1)
+    bgeu      a1, t1, dtb_copy_done
 
+    # Extract big-endian size from DTB offset 0x4
+    lbu       t0, 4(a1)
+    lbu       t2, 5(a1)
+    lbu       t3, 6(a1)
+    lbu       t4, 7(a1)
+    slli      t0, t0, 24
+    slli      t2, t2, 16
+    slli      t3, t3, 8
+    or        t0, t0, t2
+    or        t0, t0, t3
+    or        t0, t0, t4        # t0 = size in bytes
+    
+    # Align size to 8 bytes for faster copying
+    addi      t0, t0, 7
+    andi      t0, t0, -8
+    
+    mv        t2, a1
+    mv        t3, t1
+copy_dtb_loop:
+    ld        t4, 0(t2)
+    sd        t4, 0(t3)
+    addi      t2, t2, 8
+    addi      t3, t3, 8
+    addi      t0, t0, -8
+    bgtz      t0, copy_dtb_loop
+
+    # Update a1 to the new safe location
+    mv        a1, t1
+
+dtb_copy_done:
+    la          t0, early_boot_prep_done
+    li          t1, 1           # set prep_finished to 1 now we're done
+    amoor.w.rl  x0, t1, (t0)    # t0 => early_boot_prep_done
+
+call_main:
     # call main with:
     # a0 = runtime-assigned CPU ID number
-    # a1 = pointer to start of devicetree
-    # a2 = big-endian length of the devicetree (ugh)
-    lw        a2, 4(a1)       # 32-bit size of tree stored from byte 4 in tree blob
+    # a1 = pointer to start of devicetree (valid for boot core only)
     la        t0, main
     jalr      ra, t0, 0
 
@@ -122,5 +163,5 @@ cpu_core_id_counter:
     .word 0
 
 .align 8
-bss_cleared:
+early_boot_prep_done:
     .word 0

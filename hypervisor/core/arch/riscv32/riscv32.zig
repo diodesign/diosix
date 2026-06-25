@@ -153,10 +153,12 @@ pub fn writePC(uc: ?*anyopaque, pc: u64) void {
 /// Handle an invalid instruction intercepted by UC_HOOK_INSN_INVALID.
 /// Checks if the instruction is rdtime/rdtimeh/rdcycle/rdinstret, reads
 /// the real host timer, writes it to the destination register, and
-/// advances PC. Returns true if handled (resume emulation), false to
-/// let Unicorn raise UC_ERR_INSN_INVALID.
-pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
-    const pc = readPC(uc);
+/// Returns .emulated if handled (resume emulation), .wfi if WFI, or .unhandled
+/// to let Unicorn raise UC_ERR_INSN_INVALID.
+pub fn handleInvalidInsn(uc: ?*anyopaque) ExceptionAction {
+    // Unicorn's cpu_exec loop adds +4 to env->pc before calling UC_HOOK_INTR.
+    // We must subtract 4 to get the original faulting PC.
+    const pc = readPC(uc) - 4;
 
     // Read the instruction at PC. Try flat addressing first,
     // fall back to Sv32 page table walk if flat read fails.
@@ -167,7 +169,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
             ok = glue.uc_mem_read(uc, phys, @as([*]u8, @ptrCast(&insn)), 4) == .UC_ERR_OK;
         }
     }
-    if (!ok) return false;
+    if (!ok) return .unhandled;
 
     // Check for compressed (16-bit) instructions: bits[1:0] != 0b11.
     const is_compressed = (insn & 0x3) != 0x3;
@@ -216,13 +218,13 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
 
             const stvec_base = stvec & ~@as(u64, 0x3);
             writePC(uc, stvec_base);
-            return true;
+            return .emulated;
         }
 
         // C.NOP: advance PC past the 2-byte instruction.
         if (c_insn == INSN_C_NOP) {
             writePC(uc, pc + 2);
-            return true;
+            return .emulated;
         }
 
         const S_c = struct {
@@ -232,7 +234,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
             S_c.log_count += 1;
             debug.printf("Unhandled compressed instruction 0x{x} at PC=0x{x}\n", .{ c_insn, pc });
         }
-        return false;
+        return .unhandled;
     }
 
     const opcode = insn & 0x7F;
@@ -268,11 +270,11 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
                         S.log_count += 1;
                         debug.printf("Unhandled CSR 0x{x} at PC=0x{x} insn=0x{x}\n", .{ csr, pc, insn });
                     }
-                    return false;
+                    return .unhandled;
                 },
             }
             writePC(uc, pc + 4);
-            return true;
+            return .emulated;
         }
 
         // funct3 == 0: ECALL, EBREAK, SFENCE.VMA, WFI, etc.
@@ -286,12 +288,15 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
             _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB));
             _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
             writePC(uc, pc + 4);
-            return true;
+            return .emulated;
         }
-        // WFI is intentionally left unhandled here so that Unicorn throws
-        // EXCP_HALTED, which we then handle in handleCleanStop.
 
-        return false;
+        // Handle WFI here since MSTATUS_TW causes it to raise ILLEGAL_INST (2).
+        if (insn == INSN_WFI) {
+            return .wfi;
+        }
+
+        return .unhandled;
     }
 
     // MISC-MEM instructions (opcode 0x0F): FENCE, FENCE.I
@@ -300,7 +305,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
         // FENCE:   funct3 = 0
         // Both can be safely emulated as NOP.
         writePC(uc, pc + 4);
-        return true;
+        return .emulated;
     }
 
     // AMO instructions (opcode 0x2F): Unicorn may not support all atomics.
@@ -313,7 +318,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
             S2.log_count += 1;
             debug.printf("Unhandled AMO instruction 0x{x} at PC=0x{x}\n", .{ insn, pc });
         }
-        return false;
+        return .unhandled;
     }
 
     // Unknown instruction.
@@ -324,7 +329,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
         S3.log_count += 1;
         debug.printf("Unhandled invalid instruction 0x{x} at PC=0x{x} (opcode=0x{x})\n", .{ insn, pc, opcode });
     }
-    return false;
+    return .unhandled;
 }
 
 /// Handle a clean stop (UC_ERR_OK). Check if the instruction at `pc`

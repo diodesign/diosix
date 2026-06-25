@@ -173,10 +173,26 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         guest_dtb = try arm_dt.toBlob();
     } else {
         // RISC-V path: modify the host device tree for the guest.
+        // First, delete any existing /memory@* nodes from the host DTB.
+        while (true) {
+            var mem_it = device_tree.iter("/", 1);
+            var found_mem: ?[]const u8 = null;
+            while (mem_it.next()) |path| {
+                if (std.mem.startsWith(u8, path, "/memory@")) {
+                    found_mem = path;
+                    break;
+                }
+            }
+            if (found_mem) |path| {
+                device_tree.deleteNode(path);
+            } else break;
+        }
+
         const guest_memory_node = try std.fmt.allocPrint(cpu_allocator, "/memory@{x}", .{root_vm_gpa_base});
         defer cpu_allocator.free(guest_memory_node);
 
-        // Update memory node for the guest
+        // Add the guest's private memory node
+
         try device_tree.editProperty(guest_memory_node, "reg", try dt.DeviceTreeProperty.fromMultiU64(cpu_allocator, &.{ root_vm_gpa_base, rootvm_ram_size }));
         try device_tree.editProperty(guest_memory_node, "device_type", try dt.DeviceTreeProperty.fromText(cpu_allocator, "memory"));
 
@@ -223,7 +239,6 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         var cpu_it = device_tree.iter("/cpus/cpu@", 10);
         var enabled_cpu_index: usize = 0;
         while (cpu_it.next()) |path| {
-            // Strip Sstc for all CPU nodes so the guest does not use the Sstc timer extension
             var slash_count: usize = 0;
             for (path) |c| {
                 if (c == '/') slash_count += 1;
@@ -260,49 +275,6 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                         }
                         try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, minimal_exts.items));
                     }
-                } else {
-                    // Native guest: strip "sstc" from "riscv,isa" so the guest uses SBI SET_TIMER.
-                    // The hypervisor virtualizes the timer via vstimecmp.
-                    if (device_tree.getProperty(path, "riscv,isa")) |isa_prop| {
-                        if (isa_prop.asText()) |isa_text| {
-                            var new_isa = std.ArrayList(u8).empty;
-                            defer new_isa.deinit(cpu_allocator);
-
-                            var i: usize = 0;
-                            while (i < isa_text.len) {
-                                if (i + 5 <= isa_text.len and std.mem.eql(u8, isa_text[i .. i + 5], "_sstc")) {
-                                    i += 5;
-                                } else if (i + 4 <= isa_text.len and std.mem.eql(u8, isa_text[i .. i + 4], "sstc")) {
-                                    i += 4;
-                                } else {
-                                    try new_isa.append(cpu_allocator, isa_text[i]);
-                                    i += 1;
-                                }
-                            }
-                            try device_tree.editProperty(path, "riscv,isa", try dt.DeviceTreeProperty.fromText(cpu_allocator, new_isa.items));
-                        } else |_| {}
-                    } else |_| {}
-
-                    // Strip "sstc" from "riscv,isa-extensions" for native guests.
-                    if (device_tree.getProperty(path, "riscv,isa-extensions")) |ext_prop| {
-                        if (ext_prop.asMultiText(cpu_allocator)) |extensions| {
-                            defer cpu_allocator.free(extensions);
-                            var new_extensions = std.ArrayList(u8).empty;
-                            defer new_extensions.deinit(cpu_allocator);
-                            var changed = false;
-                            for (extensions) |ext_str| {
-                                if (std.mem.eql(u8, ext_str, "sstc")) {
-                                    changed = true;
-                                } else {
-                                    try new_extensions.appendSlice(cpu_allocator, ext_str);
-                                    try new_extensions.append(cpu_allocator, 0);
-                                }
-                            }
-                            if (changed) {
-                                try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, new_extensions.items));
-                            }
-                        } else |_| {}
-                    } else |_| {}
                 }
             }
 

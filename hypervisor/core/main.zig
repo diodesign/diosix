@@ -31,23 +31,22 @@ extern const __rootvm_end: u8;
 // CPU ID 0 does all the heavy lifting to begin with.
 const BootCpuID: usize = 0;
 
-/// Preemptive multitasking timeslice: maximum time (in timer ticks) a
-/// virtual core runs before the hypervisor forces a scheduling decision.
-/// Set to 50ms at the standard RISC-V timer frequency of 10 MHz.
-/// This matches the original Rust hypervisor's TIMESLICE_LENGTH.
-const TIMESLICE_TICKS: u64 = 500_000;
-
-
 // True when all cores can begin running vCPU threads.
-var boot_complete_flag = atomic.LockPayload(bool).init("Boot complete", false);
+var boot_complete_flag = std.atomic.Value(bool).init(false);
+
+// True when CPU 0 has finished probing global hardware features.
+pub var features_probed = std.atomic.Value(bool).init(false);
 
 pub var global_root_vm: ?*guest.Guest = null;
 
 // This is the thread-safe Zig entry point for the hypervisor.
 // cpu_core_id = unique ID assigned by the hypervisor to this physical CPU core.
-// dtb = pointer to host system's device tree in memory.
+// dtb = pointer to host system's device tree in memory (valid for boot core only)
 // Returns to an infinite loop.
+var global_dtb: [*]u8 = undefined;
+
 pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
+    if (cpu_core_id == BootCpuID) global_dtb = dtb;
     // Basic hardware/architectural setup. No locks or complex structures yet.
     hw_pmp_init();
 
@@ -55,18 +54,20 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     // which is called from xint.init() below. See xint.s for the authoritative
     // medeleg and mideleg values.
 
-    const cpu_ctx = riscv.getCPUContext();
+    var cpu_ctx = riscv.getCPUContext();
+    // Zero out the CpuContext structure since QEMU might have left garbage
     @memset(@as([*]u8, @ptrCast(cpu_ctx))[0..@sizeOf(riscv.CpuContext)], 0);
+    
     cpu_ctx.cpu_core_id = cpu_core_id;
+    if (cpu_core_id < riscv.MAX_PHYS_CORES) {
+        riscv.cpu_contexts[cpu_core_id] = cpu_ctx;
+    }
     cpu_ctx.in_m_mode = true; // Boot code runs in M-mode
 
     const hart_id = riscv.readMhartid();
     cpu_ctx.hardware_hart_id = hart_id;
     if (cpu_core_id < riscv.cpu_to_hart_map.len) {
         riscv.cpu_to_hart_map[cpu_core_id] = hart_id;
-    }
-    if (cpu_core_id < riscv.MAX_PHYS_CORES) {
-        riscv.cpu_contexts[cpu_core_id] = cpu_ctx;
     }
 
     // Initialize the heap allocator for this core.
@@ -80,24 +81,27 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     // Make the boot CPU core does the single-threaded initialization, holding back the other cores until it's done.
     switch (cpu_core_id) {
         BootCpuID => {
-            boot.bootCpuInit(allocator, dtb) catch |err| {
+            boot.bootCpuInit(allocator, global_dtb) catch |err| {
                 debug.printf("Boot CPU core {} failed to initialize, reason: {s}\n", .{ cpu_core_id, @errorName(err) });
                 return;
             };
 
+            // Signal that features have been probed (done inside bootCpuInit via auditCpuFeatures)
+            features_probed.store(true, .release);
+
             debug.printf("Physical boot CPU core {} finished initialization, releasing other cores\n", .{cpu_core_id});
 
-            const guard = boot_complete_flag.acquire();
-            guard.get().* = true;
-            guard.release();
+            boot_complete_flag.store(true, .release);
         },
 
         else => {
-            while (true) {
-                const guard = boot_complete_flag.acquire();
-                const completed = guard.get().*;
-                guard.release();
-                if (completed) break;
+            // Wait for CPU 0 to finish probing features
+            while (!features_probed.load(.acquire)) {
+                asm volatile ("nop");
+            }
+
+            while (!boot_complete_flag.load(.acquire)) {
+                asm volatile ("nop");
             }
         },
     }
@@ -117,7 +121,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
             // the next vcore (CFS vruntime ordering). If the guest has a
             // pending timer that expires sooner, use that instead to avoid
             // delaying guest timer interrupts.
-            var timeslice_target: u64 = riscv.readTime() +% TIMESLICE_TICKS;
+            var timeslice_target: u64 = riscv.readTime() +% riscv.TIMESLICE_TICKS;
 
             // If the guest has a timer that fires before the timeslice ends,
             // use the guest timer so we can deliver its interrupt promptly.
@@ -127,7 +131,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
             if (vc.exec_path == .native) {
                 if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
                     const gs = vc.getNativeGuestState();
-                    if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff and gs.vstimecmp < timeslice_target) {
+                    if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY and gs.vstimecmp < timeslice_target) {
                         timeslice_target = gs.vstimecmp;
                     }
                 }
@@ -142,11 +146,6 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
                         if (vc.getNativeMachine().hgatp != hgatp_val) {
                             vc.getNativeMachine().hgatp = hgatp_val;
                         }
-                    }
-
-                    if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
-                        vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
-                        vc.timer_scheduled = false;
                     }
 
                     pcore.this().in_m_mode = false;
@@ -165,7 +164,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         // idle loop (in xint.zig), which is entered after the first trap.
         // We must NOT busy-loop or do MMIO here — in QEMU, MMIO writes to CLINT
         // serialize all vCPUs through the BQL, causing massive slowdowns.
-        riscv.setTimer(0xffffffffffffffff);
+        riscv.setTimer(riscv.TIMER_INFINITY);
         riscv.pause(); // WFI — sleep until IPI
     }
 }
@@ -175,5 +174,3 @@ pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noretu
     debug.printf("\n\nPanic! {s}\n", .{message});
     while (true) {}
 }
-
-

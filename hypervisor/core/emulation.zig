@@ -48,7 +48,6 @@ const QEMU_VIRT_UART_BASE: u64 = 0x10000000;
 /// yields back to the scheduler. Prevents runaway exception storms.
 const EXCEPTION_BUDGET: u32 = 1_000_000;
 
-
 // Initialize Unicorn context for the given virtual core.
 pub fn init(vc: *vcore.VirtualCore) !void {
     const em = &vc.exec_path.emulated;
@@ -120,16 +119,18 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         const identity_va_base: u64 = 0xffff800000000000;
         const identity_size = if (ram_size > QEMU_VIRT_UART_BASE) QEMU_VIRT_UART_BASE else ram_size;
         _ = glue.uc_mem_map_ptr(uc, identity_va_base, identity_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
-    }
-
-    if (em.target_arch == .riscv32 and gpa_base > 0) {
+    } else if (em.target_arch == .riscv32) {
         // Dummy alias mapping to satisfy Unicorn's memory_check() when restarting
         // execution at a virtual address. Unicorn checks the flat memory map
         // before evaluating the guest MMU.
         const kernel_va_base: u64 = 0xc0000000;
+        const kernel_load_offset = 0x200000;
         const max_alias_size = 0xffffffff - kernel_va_base;
-        const alias_size = if (ram_size > max_alias_size) max_alias_size else ram_size;
-        _ = glue.uc_mem_map_ptr(uc, kernel_va_base, alias_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
+        var alias_size = if (ram_size > max_alias_size) max_alias_size else ram_size;
+        if (alias_size > kernel_load_offset) {
+            alias_size -= kernel_load_offset;
+        }
+        _ = glue.uc_mem_map_ptr(uc, kernel_va_base, alias_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base + kernel_load_offset));
     }
 
     // Register hooks.
@@ -169,7 +170,7 @@ pub fn init(vc: *vcore.VirtualCore) !void {
             else => {},
         }
         _ = glue.uc_context_save(uc, sub.context.?);
-        
+
         if (i == 0) {
             sub.state = .ready;
         } else {
@@ -226,7 +227,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
         else => return,
     };
 
-
     // One-shot trace for aarch64 to verify initial guest state.
     if (em.target_arch == .aarch64) {
         const S_trace = struct {
@@ -256,9 +256,13 @@ pub fn run(vc: *vcore.VirtualCore) void {
             sub = &em.sub_vcores[curr_idx];
             if (sub.state == .ready or sub.state == .running) {
                 if (!sub.wfi_blocked or sub.pending_ipi or (sub.timer_scheduled and glue.readSModeTime() >= sub.timer_target)) {
+                    if (sub.wfi_blocked) {
+                    }
                     sub.wfi_blocked = false;
                     em.active_sub_vcore = curr_idx;
                     found_ready = true;
+                    
+
                     break;
                 }
             }
@@ -297,21 +301,30 @@ pub fn run(vc: *vcore.VirtualCore) void {
         vc.exec_path.emulated.active_sub_vcore = em.active_sub_vcore;
 
         if (sub.context) |ctx| {
+            var prev_satp: u64 = 0;
+            if (em.target_arch == .riscv32) {
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_SATP, &prev_satp);
+            }
+
             _ = glue.uc_context_restore(uc, ctx);
-            
+
             // Workaround: Unicorn's uc_context_restore (with UC_CTL_CONTEXT_CPU) does not flush
             // QEMU's TLB. This causes instruction page faults when switching from a sub-vcore with
             // paging enabled to one with paging disabled (like during SMP secondary core boot).
-            // QEMU's write_satp only flushes the TLB if the ASID changes. We toggle the ASID bit
+            // QEMU's write_satp only flushes the TLB if the ASID changes. We toggle the MODE bit
             // and write back the actual value to force a TLB flush.
             if (em.target_arch == .riscv32) {
                 var actual_satp: u64 = 0;
                 _ = glue.uc_reg_read(uc, rv32.UC_REG_SATP, &actual_satp);
-                var dummy_satp: u64 = actual_satp ^ (@as(u64, 1) << 22); // Toggle lowest ASID bit for RV32
-                _ = glue.uc_reg_write(uc, rv32.UC_REG_SATP, &dummy_satp);
-                _ = glue.uc_reg_write(uc, rv32.UC_REG_SATP, &actual_satp);
+                
+                // Optimization: Only force a QEMU TLB flush if the page table actually changed
+                if (actual_satp != prev_satp) {
+                    var dummy_satp: u64 = actual_satp ^ (@as(u64, 1) << 31); // Toggle MODE bit (Sv32)
+                    _ = glue.uc_reg_write(uc, rv32.UC_REG_SATP, &dummy_satp);
+                    _ = glue.uc_reg_write(uc, rv32.UC_REG_SATP, &actual_satp);
+                }
             }
-            
+
             // First time running? Apply HART_START parameters
             if (sub.state == .ready) {
                 if (em.target_arch == .riscv32) {
@@ -367,8 +380,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
         }
 
-
-
         em.emu_running = true;
         const current_pc = switch (em.target_arch) {
             .riscv32 => rv32.readPC(uc),
@@ -389,31 +400,40 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 _ = @atomicRmw(bool, &sub.pending_ipi, .Xchg, false, .acq_rel);
             }
         }
-
         const new_pc: u64 = switch (em.target_arch) {
             .riscv32 => rv32.readPC(uc),
             .aarch64 => aarch64.readPC(uc),
             .x86_64 => x86_64.readPC(uc),
-            else => return,
+            else => 0,
         };
 
-        if (err == .UC_ERR_OK) {
-            if (em.target_arch == .riscv32 and new_pc == 0xc0001048) {
-                var stvec: u64 = 0;
-                _ = glue.uc_reg_read(uc, rv32.UC_REG_STVEC, &stvec);
-                debug.printf("EMU: OK stop. subcore={}, current_pc=0x{x}, new_pc=0x{x}, stvec=0x{x}\n", .{em.active_sub_vcore, current_pc, new_pc, stvec});
-            }
+        if (em.target_arch == .riscv32) {
+            var current_priv: u32 = 0;
+            _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
+            var m_priv: u32 = 3;
+            _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
 
+            var post_mip: u64 = 0;
+            _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &post_mip);
+
+            _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
+
+            if ((post_mip & (1 << 1)) == 0) { // MIP_SSIP
+                @atomicStore(bool, &sub.pending_ipi, false, .release);
+            }
+        }
+
+        if (err == .UC_ERR_OK) {
             const handled = switch (em.target_arch) {
                 .riscv32 => rv32.handleCleanStop(uc, vc, em.active_sub_vcore, new_pc),
                 .aarch64 => aarch64.handleCleanStop(uc, vc, new_pc),
                 .x86_64 => x86_64.handleCleanStop(uc, vc, new_pc),
                 else => false,
             };
-            
+
             _ = glue.uc_context_save(uc, sub.context.?);
             em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
-            
+
             if (handled) {
                 pc = switch (em.target_arch) {
                     .riscv32 => rv32.readPC(uc),
@@ -422,7 +442,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
                     else => 0,
                 };
             }
-            
+
             // We do not need to manually check interrupts here because we sync MIP
             // right before uc_emu_start. Any pending interrupts will be
             // natively delivered by Unicorn during the next timeslice.
@@ -433,7 +453,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
             if (em.target_arch == .riscv32) {
                 var stvec: u64 = 0;
                 _ = glue.uc_reg_read(uc, rv32.UC_REG_STVEC, &stvec);
-                debug.printf("EMU: Exception! subcore={}, err={}, current_pc=0x{x}, new_pc=0x{x}, stvec=0x{x}\n", .{em.active_sub_vcore, err, current_pc, new_pc, stvec});
+                debug.printf("EMU: Exception! subcore={}, err={}, current_pc=0x{x}, new_pc=0x{x}, stvec=0x{x}\n", .{ em.active_sub_vcore, err, current_pc, new_pc, stvec });
             }
 
             const action = switch (em.target_arch) {
@@ -465,7 +485,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
                     continue;
                 },
                 .unhandled => {
-                    debug.printf("Unhandled exception {} at PC 0x{x}\n", .{em.exception_cause, pc});
+                    debug.printf("Unhandled exception {} at PC 0x{x}\n", .{ em.exception_cause, pc });
                     vc.state = .stopped;
                     return;
                 },
@@ -481,7 +501,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
 // Invalid-instruction callback — intercepts instructions that Unicorn
 // cannot execute natively and emulates them inline. This fires inside
 
-
 // Invalid-instruction callback — intercepts instructions that Unicorn
 // cannot execute natively and emulates them inline. This fires inside
 fn insnInvalidCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
@@ -490,7 +509,7 @@ fn insnInvalidCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) boo
 
     // Delegate to architecture-specific handler.
     return switch (em.target_arch) {
-        .riscv32 => rv32.handleInvalidInsn(uc),
+        .riscv32 => rv32.handleInvalidInsn(uc) == .emulated,
         .aarch64 => aarch64.handleInvalidInsn(uc),
         .x86_64 => x86_64.handleInvalidInsn(uc),
         else => false,
@@ -514,21 +533,20 @@ fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c
 // RISC-V specific interrupt handling.
 fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void {
 
-
-
     // EXCP_HALTED is 0x10003 (65539). QEMU throws this when it encounters WFI natively.
     if (intno == 65539) {
         const em = &vc.exec_path.emulated;
         @atomicStore(bool, &em.sub_vcores[em.active_sub_vcore].wfi_blocked, true, .release);
-        
+
         debug.printf("intrCallbackRiscv32: CPU {} blocked on WFI at pc=0x{x}\n", .{ em.active_sub_vcore, rv32.readPC(uc) });
-        
-        // We must advance the PC past the WFI instruction, otherwise Unicorn
-        // will keep re-executing it every time the CPU is woken up.
-        // WFI is a 4-byte instruction.
+
+        // QEMU already advanced the PC past the WFI instruction natively, but Unicorn's
+        // cpu_exec loop blindly adds 4 to env->pc before calling UC_HOOK_INTR.
+        // We must subtract 4 to undo Unicorn's bogus addition, leaving us at the
+        // correct next instruction.
         const pc = rv32.readPC(uc);
-        rv32.writePC(uc, pc + 4);
-        
+        rv32.writePC(uc, pc - 4);
+
         _ = glue.uc_emu_stop(uc);
         return;
     }
@@ -536,9 +554,17 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
     // Cause 2: Illegal Instruction. QEMU throws this for rdtime/rdcycle
     // because we deliberately set MCOUNTEREN=0 to trap them.
     if (intno == 2) {
-        if (rv32.handleInvalidInsn(uc)) {
-            // Emulation successful. PC was advanced. Continue execution.
-            return;
+        const action = rv32.handleInvalidInsn(uc);
+        switch (action) {
+            .emulated => return, // PC advanced, continue
+            .wfi => {
+                debug.printf("intrCallbackRiscv32: CPU {} blocked on WFI at pc=0x{x}\n", .{ vc.exec_path.emulated.active_sub_vcore, rv32.readPC(uc) - 4 });
+                // PC is already correctly advanced by Unicorn's +4 because
+                // WFI is a 4-byte instruction and cpu_loop_exit_restore restored it.
+                _ = glue.uc_emu_stop(uc);
+                return;
+            },
+            .unhandled, .delivered => {}, // Fall through to standard exception delivery
         }
     }
 
@@ -584,18 +610,11 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
     _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &pre_pc);
     var stvec: u64 = 0;
     _ = glue.uc_reg_read(uc, rv32.UC_REG_STVEC, &stvec);
-    
-    // Prevent log spam if stuck in a loop
-    const S = struct {
-        var count: u32 = 0;
-    };
-    S.count += 1;
-    if (S.count < 20) {
-        debug.printf("intrCallback: native intno {} at PC=0x{x} (stvec=0x{x})\n", .{intno, pre_pc, stvec});
-    }
 
     var info: glue.InterruptInfo = std.mem.zeroes(glue.InterruptInfo);
     glue.diosix_uc_do_interrupt(uc, @intCast(intno), &info);
+
+    debug.printf("intrCallbackRiscv32: CPU {} took exception {}, pre_pc=0x{x}, stvec=0x{x}\n", .{ vc.exec_path.emulated.active_sub_vcore, intno, pre_pc, stvec });
 
     // Flush Unicorn TB cache so the next uc_emu_start generates fresh
     // translation blocks with the updated CSR/privilege state.

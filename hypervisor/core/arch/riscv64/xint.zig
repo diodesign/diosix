@@ -35,9 +35,11 @@ pub fn init() void {
     hw_xint_init();
 
 
-    // Enable physical timer, software, and external interrupts (including supervisor mode in M-mode)
-    riscv.writeMideleg(0x222);
-    riscv.writeMie(0x888);
+    // Do not delegate physical interrupts to S-mode, as the hypervisor needs to handle them in M-mode.
+    // Especially stimecmp (Sstc) timer interrupts must trap to M-mode.
+    riscv.writeMideleg(0);
+    // Enable physical timer, software, and external interrupts (both machine and supervisor mode)
+    riscv.writeMie(0xAAA);
 
     // Enable M-mode delegation of cycle, time, and instret counters (bits 0, 1, 2 = 7)
     // to lower privilege modes (HS, VS, VU, U).
@@ -53,26 +55,51 @@ pub fn init() void {
 // the global probed features flags are initialized and stable.
 // This must be called by every CPU core.
 pub fn initCpuFeatures() void {
-    if (riscv.hasHExtension() and !config.legacy_cpu and riscv.riscv_supports_smstateen) {
-        // Enable STCE (bit 63) to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
-        // and Cache Block Operations: CBZE (bit 7), CBCFE (bit 6), and CBIE (bits 4-5) = 240 (0xF0).
-        // This grants lower privilege modes (including the guest VM) permission to execute them natively in hardware.
-        const envcfg_val = (@as(usize, 1) << 63) | 240;
-        riscv.writeMenvcfg(envcfg_val);
-        riscv.writeHenvcfg(envcfg_val);
+    if (config.legacy_cpu) return;
 
+    var envcfg_val: usize = 0;
+    
+    if (riscv.riscv_supports_sstc) {
+        // Enable STCE (bit 63) to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
+        envcfg_val |= (@as(usize, 1) << 63);
+    }
+    
+    if (riscv.riscv_supports_smstateen) {
+        // Enable Cache Block Operations: CBZE (bit 7), CBCFE (bit 6), and CBIE (bits 4-5) = 240 (0xF0).
+        envcfg_val |= 240;
+        
         // Enable state-enables for AIA (bit 59), IMSIC (bit 58), and CSRIND (bit 60),
         // as well as ENVCFG (bit 62) to delegate native hardware register access to lower privilege levels (HS/VS/U).
+        const stateen_base = (@as(usize, 1) << 62) | (@as(usize, 1) << 60) | (@as(usize, 1) << 59) | (@as(usize, 1) << 58);
+        
         // For mstateen0 (0x30c), we also enable bit 63 (SE0) to control/enable lower-level stateen.
-        const mstateen_val = (@as(usize, 1) << 63) | (@as(usize, 1) << 62) | (@as(usize, 1) << 60) | (@as(usize, 1) << 59) | (@as(usize, 1) << 58);
-        const hstateen_val = (@as(usize, 1) << 62) | (@as(usize, 1) << 60) | (@as(usize, 1) << 59) | (@as(usize, 1) << 58);
-        riscv.writeMstateen0(mstateen_val);
-        riscv.writeHstateen0(hstateen_val);
-    } else if (riscv.hasHExtension() and !config.legacy_cpu and riscv.riscv_supports_sstc) {
-        // No smstateen but Sstc detected: still set menvcfg/henvcfg STCE
-        const stce_bit = @as(usize, 1) << 63;
-        riscv.writeMenvcfg(riscv.readMenvcfg() | stce_bit);
-        riscv.writeHenvcfg(riscv.readHenvcfg() | stce_bit);
+        riscv.writeMstateen0(stateen_base | (@as(usize, 1) << 63));
+        
+        if (riscv.hasHExtension()) {
+            riscv.writeHstateen0(stateen_base);
+        }
+    }
+
+    if (envcfg_val != 0) {
+        riscv.writeMenvcfg(envcfg_val);
+        if (riscv.hasHExtension()) {
+            riscv.writeHenvcfg(envcfg_val);
+        }
+    }
+
+    // Initialize the physical supervisor timer (stimecmp) to infinity so it doesn't 
+    // immediately fire a physical STIP trap storm. The hypervisor will program this
+    // dynamically when it needs to wake up from WFI.
+    if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
+        riscv.writeStimecmp(0xffffffffffffffff);
+    }
+
+    // For PMP fallback guests (native without H-extension), we must delegate supervisor
+    // interrupts directly to S-mode since the guest runs natively in S-mode.
+    if (!riscv.hasHExtension()) {
+        const current_mideleg = riscv.readMideleg();
+        const sip_mask = (1 << 1) | (1 << 5) | (1 << 9); // SSIP, STIP, SEIP
+        riscv.writeMideleg(current_mideleg | sip_mask);
     }
 }
 
@@ -291,25 +318,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                     if (pending_virt != 0) wake = true;
                 }
                 
-                // Check SBI Timer
-                if (!wake and vc.timer_scheduled) {
-                    if (riscv.readTime() >= vc.timer_target) {
-                        if (vc.exec_path == .native) {
-                            vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
-                            vc.timer_scheduled = false;
-                        }
-                        wake = true;
-                    } else {
-                        if (vc.timer_target < min_timer) {
-                            min_timer = vc.timer_target;
-                        }
-                    }
-                }
-                
-                // Check Sstc Timer
-                if (!wake and vc.exec_path == .native and !config.legacy_cpu and riscv.riscv_supports_sstc) {
+                // Check Native Timer (Sstc hardware or software emulated)
+                if (!wake and vc.exec_path == .native) {
                     const vstc = vc.getNativeGuestState().vstimecmp;
-                    if (vstc != 0 and vstc != 0xffffffffffffffff) {
+                    if (vstc != 0 and vstc != riscv.TIMER_INFINITY) {
                         if (riscv.readTime() >= vstc) {
                             vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
                             wake = true;
@@ -317,6 +329,17 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                             if (vstc < min_timer) {
                                 min_timer = vstc;
                             }
+                        }
+                    }
+                }
+
+                // Check Emulated Guest Timer
+                if (!wake and vc.exec_path == .emulated and vc.timer_scheduled) {
+                    if (riscv.readTime() >= vc.timer_target) {
+                        wake = true;
+                    } else {
+                        if (vc.timer_target < min_timer) {
+                            min_timer = vc.timer_target;
                         }
                     }
                 }
@@ -344,12 +367,11 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             }
             
             // Sleep the physical CPU
-            if (min_timer != ~@as(u64, 0)) {
+            if (min_timer != riscv.TIMER_INFINITY) {
                 riscv.setTimer(min_timer);
             } else {
                 // If no timers are scheduled, set a safe watchdog to prevent permanent hardware lockups
-                const WATCHDOG_TICKS: u64 = 100_000_000; // ~10 seconds
-                riscv.setTimer(riscv.readTime() +% WATCHDOG_TICKS);
+                riscv.setTimer(riscv.readTime() +% riscv.WATCHDOG_TICKS);
             }
             riscv.pause(); // Execute WFI
         }
@@ -364,12 +386,6 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
 
             if (vc.exec_path == .native) {
-                // Inject pending virtual timer interrupt if scheduled and target has passed.
-                if (vc.timer_scheduled and riscv.readTime() >= vc.timer_target) {
-                    vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
-                    vc.timer_scheduled = false;
-                }
-
                 @memcpy(context, vc.getNativeContext());
                 pcore.contextSwitch(vc);
                 syncGuestStateToHardware(vc);
@@ -416,7 +432,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         // On legacy CPUs lacking Sstc, emulate the timer interrupt in software by setting VSTIP.
         var hvip_val = ms.hvip;
         if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
-            if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+            if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY) {
                 if (riscv.readTime() >= gs.vstimecmp) {
                     hvip_val |= riscv.HVIP.VSTIP;
                 } else {
@@ -424,7 +440,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
                 }
             }
         } else {
-            if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+            if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY) {
                 hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
             }
         }
@@ -443,13 +459,26 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         // because the vcore might have migrated from another physical core, or
         // the timer might have been cleared by another vcore's timer expiring.
         var next_timer: u64 = ~@as(u64, 0);
-        if (vc.timer_scheduled) {
-            if (riscv.readTime() >= vc.timer_target) {
-                hvip_val |= riscv.HVIP.VSTIP;
-                riscv.writeHvip(hvip_val); // write again to include VSTIP
-                vc.timer_scheduled = false;
-            } else {
-                next_timer = vc.timer_target;
+
+        if (vc.exec_path == .emulated) {
+            if (vc.timer_scheduled) {
+                if (riscv.readTime() >= vc.timer_target) {
+                    vc.timer_scheduled = false; // Emulation loop will handle MIP_STIP
+                } else {
+                    next_timer = vc.timer_target;
+                }
+            }
+        } else {
+            const vstc = vc.getNativeGuestState().vstimecmp;
+            if (vstc != 0 and vstc != 0xffffffffffffffff) {
+                if (riscv.readTime() >= vstc) {
+                    if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
+                        hvip_val |= riscv.HVIP.VSTIP;
+                        riscv.writeHvip(hvip_val);
+                    }
+                } else {
+                    next_timer = vstc;
+                }
             }
         }
         
@@ -457,10 +486,11 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         var it = pcore.this().blocked_queue.start;
         while (it) |node| {
             const blocked_vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
-            if (blocked_vc.timer_scheduled and blocked_vc.timer_target < next_timer) {
-                next_timer = blocked_vc.timer_target;
-            }
-            if (blocked_vc.exec_path == .native and !config.legacy_cpu and riscv.riscv_supports_sstc) {
+            if (blocked_vc.exec_path == .emulated) {
+                if (blocked_vc.timer_scheduled and blocked_vc.timer_target < next_timer) {
+                    next_timer = blocked_vc.timer_target;
+                }
+            } else {
                 const b_gs = blocked_vc.getNativeGuestState();
                 if (b_gs.vstimecmp != 0 and b_gs.vstimecmp != 0xffffffffffffffff and b_gs.vstimecmp < next_timer) {
                     next_timer = b_gs.vstimecmp;
@@ -469,10 +499,18 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
             it = node.next;
         }
         
-        if (next_timer != ~@as(u64, 0)) {
+        // Clamp the next_timer to enforce a preemptive timeslice (10ms at 10MHz = 100,000 ticks)
+        // This ensures that native guests don't monopolize the physical CPU and starve
+        // other vcores (e.g. during SMP bringup when spinning in WFI/Zawrs loops).
+        const timeslice_target = riscv.readTime() +% riscv.TIMESLICE_TICKS;
+        if (next_timer == riscv.TIMER_INFINITY or next_timer > timeslice_target) {
+            next_timer = timeslice_target;
+        }
+
+        if (next_timer != riscv.TIMER_INFINITY) {
             riscv.setTimer(next_timer);
         } else {
-            riscv.setTimer(0xffffffffffffffff);
+            riscv.setTimer(riscv.TIMER_INFINITY);
         }
 
         riscv.writeHedeleg(ms.hedeleg);
@@ -512,12 +550,18 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
             pcore.this().gstage_dirty = false;
         }
     } else {
-        // Clear or set STIP (bit 5) in physical mip based on whether VSTIP in machine.hvip is set.
+        // Clear or set STIP (bit 5) and SSIP (bit 1) in physical mip based on whether VSTIP/VSSIP in machine.hvip is set.
         var mip_val = riscv.readMip();
         if ((ms.hvip & riscv.HVIP.VSTIP) != 0) {
             mip_val |= (1 << 5); // STIP
         } else {
             mip_val &= ~@as(usize, 1 << 5);
+        }
+
+        if ((ms.hvip & riscv.HVIP.VSSIP) != 0) {
+            mip_val |= (1 << 1); // SSIP
+        } else {
+            mip_val &= ~@as(usize, 1 << 1);
         }
 
         // If guest has programmed a timer via stimecmp, inject if target passed
@@ -540,6 +584,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeScause(gs.vscause);
         riscv.writeStval(gs.vstval);
         riscv.writeSatp(gs.vsatp);
+
         if (!config.legacy_cpu) {
             if (riscv.riscv_supports_sstc) riscv.writeStimecmp(gs.vstimecmp);
             if (riscv.riscv_supports_smstateen) riscv.writeSenvcfg(gs.vsenvcfg);
@@ -969,7 +1014,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
     const pcpu = pcore.this();
 
     switch (irq.cause) {
-        .machine_timer => {
+        .machine_timer, .supervisor_timer => {
             riscv.setTimer(0xffffffffffffffff);
             var next_timer: u64 = ~@as(u64, 0);
             
@@ -996,7 +1041,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 if (vc.exec_path == .native) {
                     if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
                         const gs = vc.getNativeGuestState();
-                        if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff and riscv.readTime() >= gs.vstimecmp) {
+                        if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY and riscv.readTime() >= gs.vstimecmp) {
                             vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
                         }
                     }
@@ -1031,7 +1076,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 if (!wake and vc.exec_path == .native) {
                     if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
                         const gs = vc.getNativeGuestState();
-                        if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff) {
+                        if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY) {
                             if (riscv.readTime() >= gs.vstimecmp) {
                                 vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
                                 wake = true;
@@ -1061,10 +1106,15 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             if (pcpu.active_vcore) |opaque_vc| {
                 const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
                 if (active_vc.exec_path == .emulated) {
-                    const unicorn = @import("../../unicorn.zig");
-                    _ = unicorn.uc_emu_stop(active_vc.exec_path.emulated.uc);
+                    if (active_vc.exec_path.emulated.uc) |uc| {
+                        const unicorn = @import("../../unicorn.zig");
+                        _ = unicorn.uc_emu_stop(uc);
+                    }
                 }
             }
+
+            // Preemptive multitasking: yield the physical CPU when timeslice expires
+            scheduler.schedule();
         },
         .machine_swi => {
             // Clear the CLINT MSIP register for the current physical CPU core
@@ -1105,8 +1155,10 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             if (pcpu.active_vcore) |opaque_vc| {
                 const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
                 if (active_vc.exec_path == .emulated) {
-                    const unicorn = @import("../../unicorn.zig");
-                    _ = unicorn.uc_emu_stop(active_vc.exec_path.emulated.uc);
+                    if (active_vc.exec_path.emulated.uc) |uc| {
+                        const unicorn = @import("../../unicorn.zig");
+                        _ = unicorn.uc_emu_stop(uc);
+                    }
                 }
             }
         },
@@ -1141,8 +1193,10 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             if (pcpu.active_vcore) |opaque_vc| {
                 const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
                 if (active_vc.exec_path == .emulated) {
-                    const unicorn = @import("../../unicorn.zig");
-                    _ = unicorn.uc_emu_stop(active_vc.exec_path.emulated.uc);
+                    if (active_vc.exec_path.emulated.uc) |uc| {
+                        const unicorn = @import("../../unicorn.zig");
+                        _ = unicorn.uc_emu_stop(uc);
+                    }
                 }
             }
         },

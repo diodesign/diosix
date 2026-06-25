@@ -5,6 +5,11 @@
 
 .equ PAGE_SIZE, (4096)
 
+# maximum number of physical cores supported
+# keep this in sync with MAX_PHYS_CORES in hypervisor/core/arch/riscv64/riscv.zig
+# we'll do this automatically when we later increase this core count
+.equ MAX_PHYS_CORES, 256
+
 # during exceptions and interrupts (xint), reserve space for 32 CPU registers, eight-bytes wide each
 .equ  XINT_REGISTER_FRAME_SIZE,   (32 * 8)
 
@@ -22,7 +27,7 @@
 #   .   private heap space
 
 # describe per-CPU slab, all sizes in bytes
-.equ CPU_SLAB_SHIFT,         (24) # total size of per-CPU slab = 1 << CPU_SLAB_SHIFT = 16MB
+.equ CPU_SLAB_SHIFT,         (20) # total size of per-CPU slab = 1 << CPU_SLAB_SHIFT = 1MB
 .equ CPU_SLAB_SIZE,          (1 << CPU_SLAB_SHIFT)
 .equ CPU_STACK_BASE,         (0)
 .equ CPU_STACK_SIZE,         (32 * 1024)

@@ -53,7 +53,11 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
             // across virtual harts. For correctness, we flush locally and rely on
             // the fact that when a vcore is scheduled onto a different physical core,
             // the context switch in hw_run_vcore already performs hfence.gvma.
-            riscv.hfenceGvma();
+            if (riscv.hasHExtension()) {
+                riscv.hfenceGvma();
+            } else {
+                riscv.sfenceVma();
+            }
             riscv.getCPUContext().gstage_dirty = false; // TLB already flushed
             setResult(vc, context, SBI_SUCCESS, 0);
         },
@@ -148,7 +152,11 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.EXT.LEGACY_REMOTE_FENCE_I, interface.EXT.LEGACY_REMOTE_SFENCE_VMA, interface.EXT.LEGACY_REMOTE_SFENCE_VMA_ASID => {
-            riscv.hfenceGvma();
+            if (riscv.hasHExtension()) {
+                riscv.hfenceGvma();
+            } else {
+                riscv.sfenceVma();
+            }
             riscv.getCPUContext().gstage_dirty = false;
             setResult(vc, context, SBI_SUCCESS, 0);
         },
@@ -315,33 +323,23 @@ fn handleTimer(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCon
         _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_MIP, &mip);
         _ = glue.uc_reg_write(vc.exec_path.emulated.uc, rv32.UC_REG_PRIV, &current_priv);
     } else {
-        if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-            vc.getNativeGuestState().vstimecmp = stime;
-            vc.timer_scheduled = false;
-        } else {
-            vc.timer_scheduled = true;
-            vc.timer_target = stime;
-            vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
-        }
+        vc.getNativeGuestState().vstimecmp = stime;
 
         var next_timer: u64 = ~@as(u64, 0);
 
-        if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-            const vstc = vc.getNativeGuestState().vstimecmp;
-            if (vstc != 0 and vstc != 0xffffffffffffffff) {
-                next_timer = vstc;
-            }
-        } else if (vc.timer_scheduled) {
-            next_timer = vc.timer_target;
+        const vstc = vc.getNativeGuestState().vstimecmp;
+        if (vstc != 0 and vstc != 0xffffffffffffffff) {
+            next_timer = vstc;
         }
 
         var it = pcore.this().blocked_queue.start;
         while (it) |node| {
             const blocked_vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
-            if (blocked_vc.timer_scheduled and blocked_vc.timer_target < next_timer) {
-                next_timer = blocked_vc.timer_target;
-            }
-            if (blocked_vc.exec_path == .native and !config.legacy_cpu and riscv.riscv_supports_sstc) {
+            if (blocked_vc.exec_path == .emulated) {
+                if (blocked_vc.timer_scheduled and blocked_vc.timer_target < next_timer) {
+                    next_timer = blocked_vc.timer_target;
+                }
+            } else {
                 const gs = blocked_vc.getNativeGuestState();
                 if (gs.vstimecmp != 0 and gs.vstimecmp != 0xffffffffffffffff and gs.vstimecmp < next_timer) {
                     next_timer = gs.vstimecmp;
@@ -431,7 +429,6 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
                         target_sub.start_a0 = target_hart;
                         target_sub.start_a1 = opaque_param;
                         target_sub.state = .ready;
-                        debug.printf("SBI: starting hart {} at start_addr=0x{x} opaque=0x{x}\n", .{ target_hart, start_addr, opaque_param });
                         setResult(vc, context, interface.SUCCESS, 0);
                     } else {
                         setResult(vc, context, interface.ERR_ALREADY_AVAILABLE, 0);
@@ -451,6 +448,7 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
                     target_vc.getNativeMachine().mepc = start_addr;
                     target_vc.state = .ready;
                     scheduler.queue(target_vc);
+                    broadcastPhysicalIPI();
                     setResult(vc, context, interface.SUCCESS, 0);
                 } else {
                     setResult(vc, context, interface.ERR_INVALID_PARAM, 0);

@@ -73,8 +73,8 @@ run the build wrapper script:
 ./scripts/build.sh
 ```
 
-This compiles the codebase for the default target defined in `hypervisor/hw/ports/default.yaml` and
-places the output ELF executable in `./zig-out/bin/vmdiosix`. The default target is the QEMU Virt platform, suitable for QEMU versions 10 and later. The generated executable contains both the hypervisor and the root VM image, ready to be booted.
+This compiles the codebase for the default target defined in `hypervisor/hw/ports/default.yaml`. While the hypervisor target architecture is always 64-bit RISC-V, the build process
+places the output ELF executable in a directory based on the architecture of the guest Root VM (for example, `./zig-out/guest-riscv64/bin/vmdiosix`, `./zig-out/guest-riscv32/bin/vmdiosix`, or `./zig-out/guest-aarch64/bin/vmdiosix`). The default target is the QEMU Virt platform, suitable for QEMU versions 10 and later. The generated executable contains both the hypervisor and the root VM image, ready to be booted.
 
 For more information on booting the built hypervisor, see [Run Diosix](run.md).
 

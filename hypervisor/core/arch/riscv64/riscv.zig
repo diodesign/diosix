@@ -57,6 +57,11 @@ pub const SiFiveTest = struct {
 const is_test = builtin.is_test;
 
 pub const MAX_PHYS_CORES = 256;
+
+// Timer configuration constants
+pub const TIMER_INFINITY: u64 = 0xffffffffffffffff;
+pub const TIMESLICE_TICKS: u64 = 100_000;      // 10ms at standard 10MHz RISC-V clock
+pub const WATCHDOG_TICKS: u64 = 100_000_000;   // 10s at standard 10MHz RISC-V clock
 pub var cpu_to_hart_map = std.mem.zeroes([MAX_PHYS_CORES]usize);
 pub var cpu_contexts = std.mem.zeroes([MAX_PHYS_CORES]?*CpuContext);
 
@@ -215,7 +220,7 @@ pub const CpuContext = struct {
 };
 
 // Machine and Hypervisor specific architecture state
-pub const MachineState = struct {
+pub const MachineState = extern struct {
     mepc: usize,
     mstatus: usize,
     hstatus: usize,
@@ -226,7 +231,7 @@ pub const MachineState = struct {
 };
 
 // VS-mode (Guest Supervisor) architecture state
-pub const GuestState = struct {
+pub const GuestState = extern struct {
     vsstatus: usize,
     vsie: usize,
     vstvec: usize,

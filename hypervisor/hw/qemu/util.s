@@ -134,6 +134,15 @@ hw_run_vcore:
   hfence.gvma
 
 hw_run_vcore_no_h:
+  .if LEGACY_CPU == 0
+  la t0, riscv_supports_sstc
+  lbu t0, 0(t0)
+  beqz t0, 3f
+  ld t0, 64(a2)     # vstimecmp field is used for stimecmp in PMP fallback
+  csrw 0x14d, t0    # stimecmp
+3:
+  .endif
+
   # use a0 as temporary base pointer for GPR restoration
   # load all registers, skipping zero (x0) and sp (x2)
   ld x1, 8(a0)

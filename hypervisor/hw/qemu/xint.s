@@ -37,14 +37,9 @@ hw_xint_init:
     # 0x133 = delegate the following interrupts to their modes (excluding external interrupts):
     # bit 0: User software interrupt
     # bit 1: Supervisor software interrupt
-    # bit 4: User timer interrupt
-    # bit 5: Supervisor timer interrupt
     li      t0, 0x133
     csrrw   x0, mideleg, t0
 
-    # enable all xint: set bit 3 in mstatus to enable MIE
-    # to receive hardware interrupts as well as exceptions
-    csrrsi  x0, mstatus, 1 << 3
     ret
 
 
