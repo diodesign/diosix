@@ -51,16 +51,19 @@ _start:
 
     # write the top of the exception and interrupt (xint) stack to mscratch.
     # this allows us to find the stack after an xint fires
-    li        t1, CPU_STACK_BASE
+    li        t1, CPU_STACK_SIZE
+    add       t1, t1, t3
+    csrrw     x0, mscratch, t1
+
+    # Restore t2 (stack size) and t4 (top of stack) for the stack pointer calculation below
     li        t2, CPU_STACK_SIZE
-    add       t4, t2, t1
-    add       t4, t4, t3
-    # t4 = top of the stack, t2 = stack size, t1 = stack base from slab base
-    csrrw     x0, mscratch, t4
-    
-    # Also set tp (thread pointer) to t4. This allows both M-mode and S-mode to find
-    # the physical CPU context quickly without needing to read mscratch.
-    mv        tp, t4
+    mv        t4, t1
+
+    # tp is used for pcore.this() across C and Zig code.
+    # it points to the CPU's private variables
+    li        t1, CPU_PRIVATE_VARS_BASE
+    add       t1, t1, t3
+    mv        tp, t1
 
     # we'll complete intitialization of the xint handling in xint.s hw_init_xint(),
     # which will be called from xint.init() from the main() function.

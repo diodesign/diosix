@@ -7,9 +7,51 @@ const std = @import("std");
 const riscv = @import("arch/riscv64/riscv.zig");
 const atomic = @import("atomic.zig");
 const debug = @import("debug.zig");
+const pcore = @import("pcore.zig");
 
 // Global lock to protect allocator operations across harts
 var allocator_lock = atomic.NamedSpinLock.init("Unicorn Allocator Lock");
+
+fn isHostTp(tp_val: usize) bool {
+    if (tp_val % 16 != 0) return false;
+    if (tp_val < 0x80000000 or tp_val >= 0x85000000) return false;
+    const ctx = @as(*riscv.CpuContext, @ptrFromInt(tp_val));
+    const core_id = ctx.cpu_core_id;
+    if (core_id >= riscv.cpu_contexts.len) return false;
+    return riscv.cpu_contexts[core_id] == ctx;
+}
+
+pub const TpGuard = struct {
+    saved_tp: usize,
+    swapped: bool,
+    pub inline fn init() TpGuard {
+        var current: usize = undefined;
+        asm volatile (
+            \\mv %[current], tp
+            : [current] "=r" (current)
+        );
+        if (isHostTp(current)) {
+            return .{ .saved_tp = current, .swapped = false };
+        } else {
+            var host_tp: usize = undefined;
+            asm volatile (
+                \\csrr %[host_tp], mscratch
+                \\mv tp, %[host_tp]
+                : [host_tp] "=r" (host_tp)
+            );
+            return .{ .saved_tp = current, .swapped = true };
+        }
+    }
+    pub inline fn deinit(self: TpGuard) void {
+        if (self.swapped) {
+            asm volatile (
+                \\mv tp, %[saved]
+                :
+                : [saved] "r" (self.saved_tp)
+            );
+        }
+    }
+};
 
 inline fn getSModeCPUContext() *riscv.CpuContext {
     if (comptime @import("builtin").is_test) return riscv.getCPUContext();
@@ -35,42 +77,81 @@ const MallocHeader = struct {
 };
 
 // Export standard C memory allocation symbols for Unicorn to link against
-pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
-    const lock_mstatus = allocator_lock.lock();
-    defer allocator_lock.unlock(lock_mstatus);
-
-    const cpu = getSModeCPUContext();
-    const alloc_size = @sizeOf(MallocHeader) + size;
-
-    // Allocate raw slice
-    const slice = cpu.allocator.allocator().alloc(u8, alloc_size) catch {
-        debug.printf("unicorn_glue: malloc failed for size {}! (free={})\n", .{ alloc_size, cpu.allocator.free_size });
-        return null;
-    };
-
-    // Store header info
-    const header = @as(*MallocHeader, @ptrCast(@alignCast(slice.ptr)));
-    header.cpu_core_id = cpu.cpu_core_id;
-    header.size = size;
-
-    // Return pointer to payload
-    return @ptrFromInt(@intFromPtr(slice.ptr) + @sizeOf(MallocHeader));
-}
-
 pub export fn free(ptr: ?*anyopaque) callconv(.c) void {
     const p = ptr orelse return;
 
+    if (@intFromPtr(p) % 16 != 0) return;
+
+    const guard = TpGuard.init();
+    defer guard.deinit();
+
     const lock_mstatus = allocator_lock.lock();
     defer allocator_lock.unlock(lock_mstatus);
 
-    const header = @as(*MallocHeader, @ptrFromInt(@intFromPtr(p) - @sizeOf(MallocHeader)));
-    const cpu = riscv.cpu_contexts[header.cpu_core_id] orelse {
-        debug.printf("Unicorn glue: free() invalid CPU core context for ID {}\n", .{header.cpu_core_id});
+    const header = @as(*align(1) MallocHeader, @ptrFromInt(@intFromPtr(p) - @sizeOf(MallocHeader)));
+    if (header.cpu_core_id == std.math.maxInt(usize)) {
+        const physmem = @import("physmem.zig");
+        physmem.freePage(@intFromPtr(header));
         return;
-    };
+    }
+
+    if (header.cpu_core_id >= riscv.cpu_contexts.len) {
+        return;
+    }
+
+    const cpu = riscv.cpu_contexts[header.cpu_core_id] orelse return;
 
     const slice = @as([*]u8, @ptrFromInt(@intFromPtr(header)))[0..(@sizeOf(MallocHeader) + header.size)];
     cpu.allocator.allocator().free(slice);
+}
+
+pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
+    if (size == 0) return null;
+
+    const guard = TpGuard.init();
+    defer guard.deinit();
+
+    const alloc_size = size + @sizeOf(MallocHeader);
+
+    // For all allocations, bypass the per-CPU heap and use the physical memory manager directly.
+    if (true) {
+        const physmem = @import("physmem.zig");
+        // Calculate the buddy allocator order needed for this allocation size.
+        // We round up to the nearest page size, then find the power of 2.
+        const num_pages = (alloc_size + 4095) / 4096;
+        const order = std.math.log2_int_ceil(usize, num_pages);
+
+        if (physmem.allocPageSelection(order)) |phys_addr| {
+            // Zero-fill the entire allocated block to ensure TCG structures are clean.
+            const total_bytes = (@as(usize, 1) << @intCast(order)) * 4096;
+            const dest = @as([*]u8, @ptrFromInt(phys_addr))[0..total_bytes];
+            @memset(dest, 0);
+
+            const header = @as(*MallocHeader, @ptrFromInt(phys_addr));
+            header.* = .{
+                .size = size,
+                .cpu_core_id = std.math.maxInt(usize),
+            };
+            return @ptrFromInt(phys_addr + @sizeOf(MallocHeader));
+        } else |_| {
+            return null;
+        }
+    }
+
+    const lock_mstatus = allocator_lock.lock();
+    defer allocator_lock.unlock(lock_mstatus);
+
+    const cpu_core_id = pcore.this().cpu_core_id;
+    const cpu = riscv.cpu_contexts[cpu_core_id] orelse return null;
+
+    const slice = cpu.allocator.allocator().alignedAlloc(u8, std.mem.Alignment.fromByteUnits(16), alloc_size) catch return null;
+    const header = @as(*MallocHeader, @ptrCast(@alignCast(slice.ptr)));
+    header.* = .{
+        .size = size,
+        .cpu_core_id = cpu_core_id,
+    };
+
+    return @ptrFromInt(@intFromPtr(slice.ptr) + @sizeOf(MallocHeader));
 }
 
 pub export fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
@@ -80,8 +161,20 @@ pub export fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
         return null;
     }
 
+    const guard = TpGuard.init();
+    defer guard.deinit();
+
+    const p = ptr orelse return null;
+    if (@intFromPtr(p) % 16 != 0) {
+        return malloc(size);
+    }
+
     const realloc_mstatus = allocator_lock.lock();
-    const header = @as(*MallocHeader, @ptrFromInt(@intFromPtr(ptr.?) - @sizeOf(MallocHeader)));
+    const header = @as(*align(1) MallocHeader, @ptrFromInt(@intFromPtr(p) - @sizeOf(MallocHeader)));
+    if (header.cpu_core_id >= riscv.cpu_contexts.len and header.cpu_core_id != std.math.maxInt(usize)) {
+        allocator_lock.unlock(realloc_mstatus);
+        return malloc(size);
+    }
     const old_size = header.size;
     allocator_lock.unlock(realloc_mstatus);
 
@@ -96,34 +189,91 @@ pub export fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
 pub export fn calloc(num: usize, size: usize) callconv(.c) ?*anyopaque {
     const total = num * size;
     const ptr = malloc(total) orelse return null;
+
     @memset(@as([*]u8, @ptrCast(ptr))[0..total], 0);
     return ptr;
 }
 
 // Export standard assertions and print redirection for debug purposes
 pub export fn __assert_fail(assertion: [*:0]const u8, file: [*:0]const u8, line: c_uint, function: [*:0]const u8) callconv(.c) noreturn {
-    debug.printf("Assertion failed: {s} ({s}:{d}: {s})\n", .{ assertion, file, line, function });
+    const ra = asm volatile ("mv %[ret], ra" : [ret] "=r" (-> usize));
+    const guard = TpGuard.init();
+    _ = guard;
+    debug.printf("Assertion failed: {s} ({s}:{d}: {s}), ra=0x{x}\n", .{ assertion, file, line, function, ra });
     while (true) {}
 }
 
 pub export fn abort() callconv(.c) noreturn {
-    debug.printf("Unicorn called abort()\n", .{});
+    const ra = asm volatile ("mv %[ret], ra" : [ret] "=r" (-> usize));
+    const guard = TpGuard.init();
+    _ = guard;
+    debug.printf("Unicorn called abort(), ra=0x{x}\n", .{ra});
     while (true) {}
 }
 
+fn printVa(format: [*:0]const u8, ap: *std.builtin.VaList) void {
+    const fmt = std.mem.span(format);
+    var i: usize = 0;
+    while (i < fmt.len) {
+        if (fmt[i] == '%') {
+            i += 1;
+            if (i >= fmt.len) break;
+            switch (fmt[i]) {
+                '%' => debug.putchar('%'),
+                's' => {
+                    const s = @cVaArg(ap, [*:0]const u8);
+                    debug.printf("{s}", .{s});
+                },
+                'd', 'i' => {
+                    const d = @cVaArg(ap, c_int);
+                    debug.printf("{d}", .{d});
+                },
+                'x' => {
+                    const x = @cVaArg(ap, c_uint);
+                    debug.printf("{x}", .{x});
+                },
+                'p' => {
+                    const p = @cVaArg(ap, ?*anyopaque);
+                    debug.printf("{?}", .{p});
+                },
+                'c' => {
+                    const c = @cVaArg(ap, c_int);
+                    debug.putchar(@intCast(c));
+                },
+                else => {
+                    debug.putchar('%');
+                    debug.putchar(fmt[i]);
+                }
+            }
+        } else {
+            debug.putchar(fmt[i]);
+        }
+        i += 1;
+    }
+}
+
 pub export fn printf(format: [*:0]const u8, ...) callconv(.c) c_int {
-    // Basic redirection to debug log
-    _ = format;
+    const guard = TpGuard.init();
+    defer guard.deinit();
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    printVa(format, &ap);
     return 0;
 }
 
 pub export fn fprintf(stream: ?*anyopaque, format: [*:0]const u8, ...) callconv(.c) c_int {
+    const guard = TpGuard.init();
+    defer guard.deinit();
     _ = stream;
-    _ = format;
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    printVa(format, &ap);
     return 0;
 }
 
 pub export fn usleep(usec: c_uint) callconv(.c) c_int {
+    const guard = TpGuard.init();
+    defer guard.deinit();
     debug.printf("unicorn_glue: usleep({d})\n", .{usec});
     const start = readSModeTime();
     // 10MHz frequency means 10 ticks per microsecond
@@ -133,6 +283,8 @@ pub export fn usleep(usec: c_uint) callconv(.c) c_int {
 }
 
 pub export fn clock_gettime(clk_id: c_int, tp: ?*anyopaque) callconv(.c) c_int {
+    const guard = TpGuard.init();
+    defer guard.deinit();
     _ = clk_id;
     const TimeSpec = struct {
         tv_sec: i64,
@@ -148,6 +300,8 @@ pub export fn clock_gettime(clk_id: c_int, tp: ?*anyopaque) callconv(.c) c_int {
 }
 
 pub export fn gettimeofday(tv: ?*anyopaque, tz: ?*anyopaque) callconv(.c) c_int {
+    const guard = TpGuard.init();
+    defer guard.deinit();
     _ = tz;
     const TimeVal = struct {
         tv_sec: i64,
@@ -163,6 +317,8 @@ pub export fn gettimeofday(tv: ?*anyopaque, tz: ?*anyopaque) callconv(.c) c_int 
 }
 
 pub export fn __tls_get_addr(ti: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const guard = TpGuard.init();
+    defer guard.deinit();
     debug.printf("unicorn_glue: __tls_get_addr called\n", .{});
     const TlsIdx = struct {
         module: usize,
@@ -185,6 +341,8 @@ pub export fn getpagesize() callconv(.c) c_int {
 }
 
 pub export fn posix_memalign(memptr: ?*?*anyopaque, alignment: usize, size: usize) callconv(.c) c_int {
+    const guard = TpGuard.init();
+    defer guard.deinit();
     _ = alignment;
     const ptr = malloc(size);
     if (ptr == null) return 12; // ENOMEM
@@ -193,6 +351,8 @@ pub export fn posix_memalign(memptr: ?*?*anyopaque, alignment: usize, size: usiz
 }
 
 pub export fn sprintf(str: [*:0]u8, format: [*:0]const u8, ...) callconv(.c) c_int {
+    const guard = TpGuard.init();
+    defer guard.deinit();
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
 
@@ -827,10 +987,14 @@ pub export fn munmap(addr: ?*anyopaque, length: usize) callconv(.c) c_int {
 }
 
 pub export fn perror(s: [*:0]const u8) callconv(.c) void {
+    const guard = TpGuard.init();
+    defer guard.deinit();
     debug.printf("perror: {s}\n", .{s});
 }
 
 pub export fn exit(status: c_int) callconv(.c) noreturn {
+    const guard = TpGuard.init();
+    _ = guard;
     const ra = asm volatile ("mv %[ret], ra"
         : [ret] "=r" (-> usize),
     );

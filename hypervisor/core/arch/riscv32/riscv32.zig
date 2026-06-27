@@ -563,11 +563,16 @@ fn emulateCSR(uc: ?*anyopaque, insn: u32, pc: u64) ?ExceptionAction {
     const rs1_or_imm: u5 = @truncate((insn >> 15) & 0x1F);
     const funct3 = (insn >> 12) & 0x7;
 
-    // For time/cycle/instret, read from the real host timer.
     switch (csr) {
         0xC01, 0xC00, 0xC02 => {
             if (rd != 0) {
-                var val: u64 = glue.readSModeTime();
+                var val: u64 = 0;
+                if (pcore.this().active_vcore) |opaque_vc| {
+                    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                    val = vc.exec_path.emulated.virtual_time;
+                } else {
+                    val = glue.readSModeTime();
+                }
                 _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
             }
             writePC(uc, pc + 4);
@@ -575,7 +580,13 @@ fn emulateCSR(uc: ?*anyopaque, insn: u32, pc: u64) ?ExceptionAction {
         },
         0xC81, 0xC80, 0xC82 => {
             if (rd != 0) {
-                var val: u64 = glue.readSModeTime() >> 32;
+                var val: u64 = 0;
+                if (pcore.this().active_vcore) |opaque_vc| {
+                    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                    val = vc.exec_path.emulated.virtual_time >> 32;
+                } else {
+                    val = glue.readSModeTime() >> 32;
+                }
                 _ = glue.uc_reg_write(uc, @as(c_int, @intCast(1 + @as(u32, rd))), &val);
             }
             writePC(uc, pc + 4);

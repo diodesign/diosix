@@ -31,7 +31,6 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
     const a0 = context[@intFromEnum(arch.Register.a0)];
     const a1 = context[@intFromEnum(arch.Register.a1)];
     const a2 = context[@intFromEnum(arch.Register.a2)];
-
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
         interface.EXT.TIME => {
@@ -422,6 +421,7 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
             const opaque_param = a2;
 
             if (vc.exec_path == .emulated) {
+                debug.printf("SBI: HSM HART_START called for emulated hart {} start_addr=0x{x}\n", .{ target_hart, start_addr });
                 if (target_hart < vc.exec_path.emulated.sub_vcore_count) {
                     const target_sub = &vc.exec_path.emulated.sub_vcores[target_hart];
                     if (target_sub.state == .stopped) {
@@ -524,7 +524,8 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
                         return;
                     };
                 };
-                buf[buf_idx] = @as(*u8, @ptrFromInt(hpa)).*;
+                const char = @as(*u8, @ptrFromInt(hpa)).*;
+                buf[buf_idx] = char;
                 buf_idx += 1;
                 written += 1;
 

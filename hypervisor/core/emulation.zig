@@ -124,13 +124,9 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         // execution at a virtual address. Unicorn checks the flat memory map
         // before evaluating the guest MMU.
         const kernel_va_base: u64 = 0xc0000000;
-        const kernel_load_offset = 0x200000;
         const max_alias_size = 0xffffffff - kernel_va_base;
-        var alias_size = if (ram_size > max_alias_size) max_alias_size else ram_size;
-        if (alias_size > kernel_load_offset) {
-            alias_size -= kernel_load_offset;
-        }
-        _ = glue.uc_mem_map_ptr(uc, kernel_va_base, alias_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base + kernel_load_offset));
+        const alias_size = if (ram_size > max_alias_size) max_alias_size else ram_size;
+        _ = glue.uc_mem_map_ptr(uc, kernel_va_base, alias_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
     }
 
     // Register hooks.
@@ -242,6 +238,10 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
     var exception_budget: u32 = EXCEPTION_BUDGET;
 
+    if (em.virtual_time == 0) {
+        em.virtual_time = glue.readSModeTime();
+    }
+
     while (exception_budget > 0) {
         if (em.preempt_pending) {
             break;
@@ -255,13 +255,11 @@ pub fn run(vc: *vcore.VirtualCore) void {
         while (true) {
             sub = &em.sub_vcores[curr_idx];
             if (sub.state == .ready or sub.state == .running) {
-                if (!sub.wfi_blocked or sub.pending_ipi or (sub.timer_scheduled and glue.readSModeTime() >= sub.timer_target)) {
-                    if (sub.wfi_blocked) {
-                    }
+                if (!sub.wfi_blocked or sub.pending_ipi or (sub.timer_scheduled and em.virtual_time >= sub.timer_target)) {
+                    if (sub.wfi_blocked) {}
                     sub.wfi_blocked = false;
                     em.active_sub_vcore = curr_idx;
                     found_ready = true;
-                    
 
                     break;
                 }
@@ -316,7 +314,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
             if (em.target_arch == .riscv32) {
                 var actual_satp: u64 = 0;
                 _ = glue.uc_reg_read(uc, rv32.UC_REG_SATP, &actual_satp);
-                
+
                 // Optimization: Only force a QEMU TLB flush if the page table actually changed
                 if (actual_satp != prev_satp) {
                     var dummy_satp: u64 = actual_satp ^ (@as(u64, 1) << 31); // Toggle MODE bit (Sv32)
@@ -362,7 +360,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
             }
 
             if (sub.timer_scheduled) {
-                const now = glue.readSModeTime();
+                const now = em.virtual_time;
                 if (now >= sub.timer_target) {
                     mip |= @as(u64, 1 << 5); // MIP_STIP
                 } else {
@@ -387,7 +385,18 @@ pub fn run(vc: *vcore.VirtualCore) void {
             .x86_64 => x86_64.readPC(uc),
             else => return,
         };
+
+        var saved_tp: usize = undefined;
+        asm volatile (
+            \\mv %[saved], tp
+            : [saved] "=r" (saved_tp)
+        );
         const err = glue.uc_emu_start(uc, current_pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
+        asm volatile (
+            \\mv tp, %[saved]
+            :
+            : [saved] "r" (saved_tp)
+        );
         em.emu_running = false;
 
         glue.diosix_uc_clear_stop(uc);
@@ -406,6 +415,8 @@ pub fn run(vc: *vcore.VirtualCore) void {
             .x86_64 => x86_64.readPC(uc),
             else => 0,
         };
+        sub.last_pc = new_pc;
+        em.virtual_time += 250; // Advance virtual clock on JIT exit/preemption
 
         if (em.target_arch == .riscv32) {
             var current_priv: u32 = 0;
@@ -504,6 +515,8 @@ pub fn run(vc: *vcore.VirtualCore) void {
 // Invalid-instruction callback — intercepts instructions that Unicorn
 // cannot execute natively and emulates them inline. This fires inside
 fn insnInvalidCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
     const em = &vc.exec_path.emulated;
 
@@ -520,6 +533,8 @@ fn insnInvalidCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) boo
 // delivers them to mtvec/stvec. This is the primary path for handling
 // SBI calls (ecall from S-mode).
 fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c) void {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
     const em = &vc.exec_path.emulated;
 
@@ -532,13 +547,11 @@ fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c
 
 // RISC-V specific interrupt handling.
 fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void {
+    const em = &vc.exec_path.emulated;
 
     // EXCP_HALTED is 0x10003 (65539). QEMU throws this when it encounters WFI natively.
     if (intno == 65539) {
-        const em = &vc.exec_path.emulated;
         @atomicStore(bool, &em.sub_vcores[em.active_sub_vcore].wfi_blocked, true, .release);
-
-        debug.printf("intrCallbackRiscv32: CPU {} blocked on WFI at pc=0x{x}\n", .{ em.active_sub_vcore, rv32.readPC(uc) });
 
         // QEMU already advanced the PC past the WFI instruction natively, but Unicorn's
         // cpu_exec loop blindly adds 4 to env->pc before calling UC_HOOK_INTR.
@@ -550,7 +563,6 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
         _ = glue.uc_emu_stop(uc);
         return;
     }
-
     // Cause 2: Illegal Instruction. QEMU throws this for rdtime/rdcycle
     // because we deliberately set MCOUNTEREN=0 to trap them.
     if (intno == 2) {
@@ -558,7 +570,6 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
         switch (action) {
             .emulated => return, // PC advanced, continue
             .wfi => {
-                debug.printf("intrCallbackRiscv32: CPU {} blocked on WFI at pc=0x{x}\n", .{ vc.exec_path.emulated.active_sub_vcore, rv32.readPC(uc) - 4 });
                 // PC is already correctly advanced by Unicorn's +4 because
                 // WFI is a 4-byte instruction and cpu_loop_exit_restore restored it.
                 _ = glue.uc_emu_stop(uc);
@@ -612,9 +623,7 @@ fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
     _ = glue.uc_reg_read(uc, rv32.UC_REG_STVEC, &stvec);
 
     var info: glue.InterruptInfo = std.mem.zeroes(glue.InterruptInfo);
-    glue.diosix_uc_do_interrupt(uc, @intCast(intno), &info);
-
-    debug.printf("intrCallbackRiscv32: CPU {} took exception {}, pre_pc=0x{x}, stvec=0x{x}\n", .{ vc.exec_path.emulated.active_sub_vcore, intno, pre_pc, stvec });
+    glue.diosix_uc_do_interrupt(uc, @as(c_int, @bitCast(intno)), &info);
 
     // Flush Unicorn TB cache so the next uc_emu_start generates fresh
     // translation blocks with the updated CSR/privilege state.
@@ -775,6 +784,9 @@ fn intrCallbackAarch64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
 
 // Memory callback for unmapped regions — handles MMIO (UART, etc.).
 fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) bool {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    _ = size;
     const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(user_data.?)));
 
     // NS16550A UART console output (RISC-V QEMU virt platform).
@@ -799,14 +811,18 @@ fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: 
         // Returning 0 means "TX ready" which is sufficient for earlycon.
         return true; // Claim all PL011 MMIO accesses.
     }
-
-    // Debug: log first few unmapped accesses to understand guest behavior.
-    const S2 = struct {
-        var unmapped_log_count: u32 = 0;
-    };
-    if (S2.unmapped_log_count < 20) {
-        S2.unmapped_log_count += 1;
-        debug.printf("MMIO: {} addr=0x{x} size={} val=0x{x}\n", .{ mem_type, address, size, value });
+    // For any unmapped access below guest RAM (0x80000000):
+    // Map a 4KB page, fill it with 0xff (so PCI vendor/device ID scans read 0xffffffff), and retry.
+    if (address < 0x80000000) {
+        const page_size: u64 = 4096;
+        const page_base = address & ~(page_size - 1);
+        const map_err = glue.uc_mem_map(uc, page_base, page_size, glue.uc_prot.UC_PROT_ALL);
+        if (map_err == .UC_ERR_OK) {
+            const buf: [4096]u8 = @splat(0xff);
+            _ = glue.uc_mem_write(uc, page_base, &buf, page_size);
+            return true;
+        }
+        return true;
     }
 
     // AArch64 kernel virtual address space: demand-map zero-filled pages

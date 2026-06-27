@@ -57,6 +57,7 @@ if [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
         "-DUNICORN_ARCH=arm;aarch64;m68k;mips;ppc;riscv;s390x;sparc;tricore;x86" \
         -DUNICORN_BUILD_SHARED=OFF \
         -DUNICORN_BUILD_STATIC=ON \
+        -DUNICORN_BUILD_TESTS=OFF \
         >> "$LOG_FILE" 2>&1; then
         echo "Unicorn Engine configure failed. See log: $LOG_FILE"
         exit 1

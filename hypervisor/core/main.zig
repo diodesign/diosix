@@ -57,7 +57,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     var cpu_ctx = riscv.getCPUContext();
     // Zero out the CpuContext structure since QEMU might have left garbage
     @memset(@as([*]u8, @ptrCast(cpu_ctx))[0..@sizeOf(riscv.CpuContext)], 0);
-    
+
     cpu_ctx.cpu_core_id = cpu_core_id;
     if (cpu_core_id < riscv.MAX_PHYS_CORES) {
         riscv.cpu_contexts[cpu_core_id] = cpu_ctx;
@@ -112,8 +112,8 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     while (true) {
         scheduler.schedule();
 
-        if (pcore.this().active_vcore) |ptr| {
-            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
+        if (pcore.this().active_vcore) |vc_raw| {
+            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
 
             // Program the machine timer for preemptive multitasking.
             // The vcore runs for at most TIMESLICE_TICKS before the timer
@@ -152,6 +152,8 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
                     pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
                 },
                 .emulated => {
+                    vc.exec_path.emulated.context[@intFromEnum(riscv.Register.a0)] = @intFromPtr(vc);
+                    vc.exec_path.emulated.context[@intFromEnum(riscv.Register.tp)] = @intFromPtr(pcore.this());
                     pcore.this().in_m_mode = false;
                     pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
                 },

@@ -233,8 +233,14 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
 
 
-    // If we're coming from a guest, save its context
-    if (irq.privilege_mode != .machine) {
+    // If we're coming from a guest or emulator, save its context
+    var is_guest = irq.privilege_mode != .machine;
+    if (pcpu.active_vcore) |vc_raw| {
+        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+        if (vc.exec_path == .emulated) is_guest = true;
+    }
+
+    if (is_guest) {
         if (pcpu.active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
             @memcpy(vc.getNativeContext(), context);
@@ -381,7 +387,13 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     // If we trapped from M-mode (e.g. nested trap during memory probing),
     // we must NOT overwrite the hardware state with the guest's state,
     // as we need to return directly back to the interrupted M-mode code.
-    if (irq.privilege_mode != .machine) {
+    var restore_context = irq.privilege_mode != .machine;
+    if (pcpu.active_vcore) |vc_raw| {
+        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+        if (vc.exec_path == .emulated) restore_context = true;
+    }
+
+    if (restore_context) {
         if (pcpu.active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
 
@@ -401,7 +413,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
     // Clear in_m_mode before mret returns to a lower privilege mode.
     // If we're returning to M-mode (idle hart WFI loop), keep it true.
-    if (irq.privilege_mode != .machine) {
+    if (restore_context) {
         pcpu.in_m_mode = false;
     }
 }
@@ -630,15 +642,19 @@ fn fetchGuestInstruction(pc: usize) usize {
 fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
     if (irq.privilege_mode == .machine) {
         if (irq.irq_type == .exception) {
-            const pcpu = pcore.this();
-            if (pcpu.probing_active) {
-                pcpu.probe_failed = true;
-                // Advance PC past the 4-byte instruction that triggered the illegal instruction exception
-                riscv.writeMepc(irq.pc + 4);
+            if (irq.cause == .machine_environment_call) {
+                // Let the M-mode emulator ecall fall through to standard handling
+            } else {
+                const pcpu = pcore.this();
+                if (pcpu.probing_active) {
+                    pcpu.probe_failed = true;
+                    // Advance PC past the 4-byte instruction that triggered the illegal instruction exception
+                    riscv.writeMepc(irq.pc + 4);
+                    return;
+                }
+                fatal_exception(irq, context);
                 return;
             }
-            fatal_exception(irq);
-            return;
         }
         // If it's an interrupt, let it fall through and be handled normally!
     }
@@ -888,7 +904,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                                     csr_reflect_irq.val = instr;
                                     reflectExceptionToGuest(vc, csr_reflect_irq) catch |err| {
                                         debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
-                                        fatal_exception(irq);
+                                        fatal_exception(irq, context);
                                     };
                                     return;
                                 },
@@ -917,26 +933,30 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                         reflect_irq.val = instr;
                         reflectExceptionToGuest(vc, reflect_irq) catch |err| {
                             debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
-                            fatal_exception(irq);
+                            fatal_exception(irq, context);
                         };
                     }
                 }
             } else {
-                fatal_exception(irq);
+                fatal_exception(irq, context);
             }
         },
-        .supervisor_environment_call, .virtual_supervisor_environment_call => {
+        .machine_environment_call, .supervisor_environment_call, .virtual_supervisor_environment_call => {
             // HS-mode or VS-mode ecall is an SBI call from the guest supervisor.
+            // M-mode ecall is the M-mode emulator runner yielding.
             const pcpu = pcore.this();
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
                 if (vc.exec_path == .emulated) {
-                    // This is the S-mode emulator runner exiting.
+                    // This is the emulator runner exiting.
                     // Advance PC past ECALL so it doesn't execute again when rescheduled.
                     vc.getNativeMachine().mepc += 4;
                     // Yield the physical core to schedule other vcores
                     scheduler.schedule();
                 } else {
+                    if (irq.cause == .machine_environment_call) {
+                        @panic("Unhandled M-mode ecall from native guest");
+                    }
                     sbi.handle(vc, 0, context);
                 }
             }
@@ -976,7 +996,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                         };
                         reflectExceptionToGuest(vc, reflected_irq) catch |err| {
                             debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
-                            fatal_exception(irq);
+                            fatal_exception(irq, context);
                         };
                         return;
                     }
@@ -984,7 +1004,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     const g = vc.getGuest();
                     g.space.handleFault(vc, gpa, @intFromEnum(irq.cause)) catch |err| {
                         debug.printf("Fault: GPA 0x{x} resolution failed: {s}\n", .{ gpa, @errorName(err) });
-                        fatal_exception(irq);
+                        fatal_exception(irq, context);
                     };
                     // Mark G-stage page table as dirty so syncGuestStateToHardware
                     // will flush the TLB before returning to the guest.
@@ -999,10 +1019,10 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
                     reflectExceptionToGuest(vc, irq) catch |err| {
                         debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
-                        fatal_exception(irq);
+                        fatal_exception(irq, context);
                     };
                 } else {
-                    fatal_exception(irq);
+                    fatal_exception(irq, context);
                 }
             }
         },
@@ -1210,7 +1230,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
 fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
     if (vc.exec_path == .emulated) {
         debug.printf("FATAL: reflectExceptionToGuest called for S-mode emulator runner! irq cause={}\n", .{irq.cause});
-        fatal_exception(irq);
+        fatal_exception(irq, null);
     }
     const ms = vc.getNativeMachine();
     const gs = vc.getNativeGuestState();
@@ -1268,7 +1288,7 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
 var fatal_exception_active = std.atomic.Value(bool).init(false);
 var cpu_in_fatal = std.mem.zeroes([256]bool);
 
-fn fatal_exception(irq: IRQ) void {
+fn fatal_exception(irq: IRQ, context: ?*riscv.ThreadContext) void {
     const cpu_id = pcore.this().cpu_core_id;
     if (cpu_id < cpu_in_fatal.len) {
         if (cpu_in_fatal[cpu_id]) {
@@ -1297,6 +1317,17 @@ fn fatal_exception(irq: IRQ) void {
     debug.printf("Privilege: {s}\n", .{@tagName(irq.privilege_mode)});
     debug.printf("PC: 0x{x}, SP: 0x{x}\n", .{ irq.pc, irq.sp });
     debug.printf("HTVAL: 0x{x}, MTVAL: 0x{x}\n", .{ riscv.readHtval(), riscv.readMtval() });
+
+    if (context) |ctx| {
+        debug.printf("Registers:\n", .{});
+        debug.printf(" ra: 0x{x}, gp: 0x{x}, tp: 0x{x}\n", .{ ctx[1], ctx[3], ctx[4] });
+        debug.printf(" t0: 0x{x}, t1: 0x{x}, t2: 0x{x}\n", .{ ctx[5], ctx[6], ctx[7] });
+        debug.printf(" s0/fp: 0x{x}, s1: 0x{x}\n", .{ ctx[8], ctx[9] });
+        debug.printf(" a0: 0x{x}, a1: 0x{x}, a2: 0x{x}, a3: 0x{x}\n", .{ ctx[10], ctx[11], ctx[12], ctx[13] });
+        debug.printf(" a4: 0x{x}, a5: 0x{x}, a6: 0x{x}, a7: 0x{x}\n", .{ ctx[14], ctx[15], ctx[16], ctx[17] });
+        debug.printf(" s2-s11: 0x{x} 0x{x} 0x{x} 0x{x} 0x{x} 0x{x} 0x{x} 0x{x} 0x{x} 0x{x}\n", .{ ctx[18], ctx[19], ctx[20], ctx[21], ctx[22], ctx[23], ctx[24], ctx[25], ctx[26], ctx[27] });
+        debug.printf(" t3-t6: 0x{x} 0x{x} 0x{x} 0x{x}\n", .{ ctx[28], ctx[29], ctx[30], ctx[31] });
+    }
 
     if (irq.privilege_mode == .machine) {
         debug.printf("Hypervisor crashed. Halting.\n", .{});

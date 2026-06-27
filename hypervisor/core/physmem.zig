@@ -69,7 +69,7 @@ const PhysMemState = struct {
 };
 
 const max_regions = 16;
-pub const max_order = 12; // Up to 2^11 pages = 16MB contiguous. Increase if needed for larger Superpages.
+pub const max_order = 16; // Up to 2^15 pages = 128MB contiguous. Increase if needed for larger Superpages.
 
 // A node in the LIFO page stack, stored at the start of the free page itself
 const PageStackNode = struct {
@@ -138,7 +138,7 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
 pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     phys_mem_state.has_h_extension = riscv.hasHExtension();
 
-    // Calculate hypervisor footprint, including per-CPU slots (each 16MB)
+    // Calculate hypervisor footprint, including per-CPU slots (each 1MB)
     const cpu_slab_size = 1 * 1024 * 1024;
     const num_cpus = if (builtin.is_test) 1 else device_tree.countCpus();
     const hv_start = if (builtin.is_test) test_hv_start else @intFromPtr(&__hypervisor_start);

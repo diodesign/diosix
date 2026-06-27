@@ -252,7 +252,7 @@ pub fn applyEmulatorPmp(cpu_core_id: usize, base_hpa: usize, range_size: usize) 
 
     // Entry 4 and 5: Current CPU core slab (RW)
     // This MUST match CPU_SLAB_SHIFT in consts.s
-    const CPU_SLAB_SHIFT = 24;
+    const CPU_SLAB_SHIFT = 20;
     const CPU_SLAB_SIZE = 1 << CPU_SLAB_SHIFT;
     const slab_base = hv_end + (cpu_core_id << CPU_SLAB_SHIFT);
     PMPConfig.writePmpAddr(4, slab_base >> 2);

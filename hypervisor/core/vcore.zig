@@ -44,6 +44,7 @@ pub const SubVcoreState = struct {
     start_pc: u64 = 0,
     start_a0: u64 = 0,
     start_a1: u64 = 0,
+    last_pc: u64 = 0,
 };
 
 
@@ -89,6 +90,7 @@ pub const VirtualCore = struct {
             preempt_pending: bool = false,
 
             exception_cause: u32 = 0,
+            virtual_time: u64 = 0,
         },
     },
 
@@ -171,8 +173,9 @@ pub const VirtualCore = struct {
             vcore.exec_path.native.context[@intFromEnum(riscv.Register.a0)] = id; // A0 = VCPU ID.
             vcore.exec_path.native.context[@intFromEnum(riscv.Register.a1)] = dtb; // A1 = DTB address.
         } else {
-            const stack_size = 128 * 1024; // 128KB stack
-            const stack = parent.allocator.alloc(u8, stack_size) catch @panic("Failed to allocate S-mode stack for emulator");
+            const stack_size = 2 * 1024 * 1024; // 2MB stack
+            const stack_phys = physmem.allocPageSelection(9) catch @panic("Failed to allocate S-mode stack for emulator");
+            const stack = @as([*]align(16) u8, @ptrFromInt(stack_phys))[0..stack_size];
 
             var hypervisor_gp: usize = 0;
             asm volatile ("mv %[g], gp" : [g] "=r" (hypervisor_gp));
@@ -186,14 +189,25 @@ pub const VirtualCore = struct {
                     .context = std.mem.zeroes(riscv.ThreadContext),
                     .machine = .{
                         .mepc = @intFromPtr(&@import("emulation.zig").emulatedRunnerSMode),
-                        .mstatus = (1 << 11) | (1 << 7) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor Mode), MPIE=1 (enable M-mode interrupts after mret), MPV=0, FS=3
+                        .mstatus = (3 << 11) | (1 << 7) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=3 (Machine Mode), MPIE=1 (enable M-mode interrupts after mret), MPV=0, FS=3
                         .hstatus = 0,
                         .hgatp = 0,
                         .hedeleg = 0,
                         .hideleg = 0,
                         .hvip = 0,
                     },
-                    .guest_state = std.mem.zeroes(riscv.GuestState),
+                    .guest_state = .{
+                        .vsstatus = 0,
+                        .vsie = 0,
+                        .vstvec = 0,
+                        .vsscratch = 0,
+                        .vsepc = 0,
+                        .vscause = 0,
+                        .vstval = 0,
+                        .vsatp = 0,
+                        .vstimecmp = 0xffffffffffffffff,
+                        .vsenvcfg = 0,
+                    },
                     .stack = stack,
                 },
             };
