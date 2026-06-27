@@ -421,7 +421,6 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
             const opaque_param = a2;
 
             if (vc.exec_path == .emulated) {
-                debug.printf("SBI: HSM HART_START called for emulated hart {} start_addr=0x{x}\n", .{ target_hart, start_addr });
                 if (target_hart < vc.exec_path.emulated.sub_vcore_count) {
                     const target_sub = &vc.exec_path.emulated.sub_vcores[target_hart];
                     if (target_sub.state == .stopped) {
