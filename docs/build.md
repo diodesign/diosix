@@ -73,8 +73,8 @@ run the build wrapper script:
 ./scripts/build.sh
 ```
 
-This compiles the codebase for the default target defined in `hypervisor/hw/ports/default.yaml`. While the hypervisor target architecture is always 64-bit RISC-V, the build process
-places the output ELF executable in a directory based on the architecture of the guest Root VM (for example, `./zig-out/guest-riscv64/bin/vmdiosix`, `./zig-out/guest-riscv32/bin/vmdiosix`, or `./zig-out/guest-aarch64/bin/vmdiosix`). The default target is the QEMU Virt platform, suitable for QEMU versions 10 and later. The generated executable contains both the hypervisor and the root VM image, ready to be booted.
+This compiles the codebase to produce a platform-agnostic, universal hypervisor binary. While the hypervisor target architecture is always 64-bit RISC-V, the build process
+places the output ELF executable in a directory based on the architecture of the guest Root VM (for example, `./zig-out/guest-riscv64/bin/vmdiosix`, `./zig-out/guest-riscv32/bin/vmdiosix`, or `./zig-out/guest-aarch64/bin/vmdiosix`). The target is position independent and runs on any standard 64-bit RISC-V platform. The generated executable contains both the hypervisor and the root VM image, ready to be booted.
 
 For more information on booting the built hypervisor, see [Run Diosix](run.md).
 
@@ -86,14 +86,14 @@ compile an optimized build, or build for a legacy processor or emulator lacking 
 extensions, see the following commands:
 
 ```bash
-# Target a specific hardware port, such as the PMP-only QEMU Virt platform
-./scripts/build.sh -Dsystem=qemu-virt-pmp
+# Target a specific hardware configuration, such as PMP fallback mode (disable Hypervisor extension)
+./scripts/build.sh -Dpmp=true
 
 # Build with optimizations for release
 ./scripts/build.sh -Doptimize=ReleaseSafe
 
-# Target a legacy CPU/emulator lacking modern RISC-V extensions (eg, QEMU 6.x)
-./scripts/build.sh -Dsystem=qemu-virt-legacy
+# Target a legacy CPU/emulator lacking modern RISC-V extensions (e.g. QEMU 6.x)
+./scripts/build.sh -Dlegacy-cpu=true
 ```
 
 To list all available build targets, configuration parameters, and help
@@ -165,46 +165,21 @@ environment correctly invalidates the build configuration cache.
 
 ---
 
-## Declarative hardware ports via YAML configuration
+## Platform-agnostic compilation and position independence
 
-To support diverse hardware platforms, the build system uses declarative
-YAML configurations to define how target boards share and use assembly routines
-and linker scripts.
+To support diverse hardware platforms, the build system compiles the hypervisor as a single, platform-agnostic universal binary. Rather than linking separate target configurations at compile time, all boot-strap, context switching, and trap management assembly code resides in the core RISC-V 64-bit architecture directory (`hypervisor/core/arch/riscv64/`) and is compiled into the binary.
 
-Every target platform is described by a dedicated YAML configuration file
-located in the target configuration directory at `hypervisor/hw/ports/`. These
-description files specify the target name, the linker script path, the
-command-line arguments needed to execute the target in QEMU, the list of
-assembly files to compile, and any static dependency assets.
+The entry point and early boot code are position-independent, relying on PC-relative addressing (`auipc`, `la`) to resolve structures dynamically.
 
-The configuration is parsed by a custom YAML parser located at
-`scripts/yaml_parser.zig`. Written specifically for this project, it parses
-key-value pairs and arrays without external dependencies. This design avoids
-reliance on external package managers or network downloads, maintaining build
-speed and offline reliability.
+### Dynamic runtime device drivers
 
-### Dynamic port discovery and target selection
+Platform-specific MMIO differences are handled by a dynamic device driver subsystem (`hypervisor/core/drivers.zig`). Early during the hypervisor boot process, the main CPU core parses the Host Device Tree Blob (DTB) passed by the bootloader in register `a1`. 
 
-During the configure phase, the `build.zig` program scans the target configuration
-directory to discover available hardware ports and, if necessary, lists them in
-the compiler help options.
-
-The build system determines the default target system by reading a global
-configuration file located at `hypervisor/hw/ports/default.yaml`. This file
-designates the fallback target when no specific architecture option is passed.
-
-You can override the default target system using the `-Dsystem` parameter. The
-build script loads the corresponding YAML file, allowing you to add new target
-boards without modifying the core build script.
+Based on discovered peripherals and CPU extensions, the hypervisor registers and binds drivers at runtime:
+*  Binds to the NS16550 UART driver for console IO if a compatible UART MMIO base is discovered.
+*  Uses the RISC-V Sstc supervisor timer extension if supported by the CPU, or dynamically programs CLINT timer MMIO registers based on the discovered CLINT address.
+*  Configures shutdown and reboot pathways via the discovered SiFive Test poweroff device.
 
 ### Compilation and cached dependency tracking
 
-Once a hardware port is selected, the build script registers each assembly
-file individually. This prevents duplicate symbol collisions and allows the
-linker script to control section ordering, such as placing the entry stage
-at the base physical DRAM address.
-
-To ensure that statically included files, like `consts.s`, are correctly
-tracked, the build system declares them as explicit dependencies of the
-compilation step. Modifying any dependent assembly file invalidates the
-compiler cache, forcing a fresh compilation of the assembly sources.
+The build script compiles the generic assembly files (`entry.s`, `xint.s`, `util.s`) from the architecture directory. Statically included configuration parameters (such as `consts.s` and `config.s`) are registered as explicit dependencies of the compilation step. Modifying any of these dependent assembly header files correctly invalidates the build cache and triggers a fresh compilation of the assembly sources.

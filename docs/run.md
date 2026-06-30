@@ -58,9 +58,7 @@ To run Diosix inside QEMU, run the build wrapper script as follows:
 ./scripts/build.sh run
 ```
 
-This command automatically builds the hypervisor for the default target system,
-`qemu-virt`, which is selected in `hypervisor/hw/ports/default.yaml`. This target
-is an emulated 64-bit RISC-V machine.
+This command automatically builds the platform-agnostic, universal hypervisor binary and boots it in a standard RISC-V 64-bit QEMU virt machine environment.
 
 The build script also generates the native Root VM image, and boots the hypervisor and
 the Root VM in QEMU for you to interact with and use. By default, the Root VM
@@ -124,20 +122,28 @@ Press `Ctrl-a` followed by `c` again to return to the hypervisor console.
 
 ## Target hardware configurations
 
-Diosix supports running on various physical and emulated RISC-V hardware systems.
+Diosix compiles to a universal binary that runs on various physical and emulated RISC-V hardware systems, discovering its environment dynamically at boot using the Device Tree Blob (DTB) and registering corresponding device drivers.
 
-Target hardware platforms are defined by YAML configuration files in
-`hypervisor/hw/ports/`. Select a target platform by passing the `-Dsystem`
-parameter to the build script.
+You can customize the QEMU emulation parameters directly using build options passed to the runner:
 
-For example, to run using PMP isolation instead of the Hypervisor (H)
-extension, target `qemu-virt-pmp`:
+*   To disable the Hypervisor (H) extension in QEMU and force Diosix to use Physical Memory Protection (PMP) isolation instead:
+    ```bash
+    ./scripts/build.sh run -Dpmp=true
+    ```
+*   To disable Sstc and Smstateen extension features inside the hypervisor and the emulated QEMU CPU model:
+    ```bash
+    ./scripts/build.sh run -Dlegacy-cpu=true
+    ```
+*   To change the number of SMP CPU cores emulated by QEMU (default is 4):
+    ```bash
+    ./scripts/build.sh run -Dsmp=8
+    ```
+*   To change the host memory size emulated by QEMU (default is 2G):
+    ```bash
+    ./scripts/build.sh run -Dmem=1G
+    ```
 
-```bash
-./scripts/build.sh run -Dsystem=qemu-virt-pmp
-```
-
-To list all discovered target systems, as well as other build and run-time options:
+To list all available build and run-time parameter options, run:
 
 ```bash
 ./scripts/build.sh -h
