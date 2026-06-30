@@ -1,0 +1,17 @@
+# Disable unused subsystems
+# CONFIG_NET is not set
+# CONFIG_PCI is not set
+# CONFIG_USB is not set
+# CONFIG_SOUND is not set
+# CONFIG_SCSI is not set
+# CONFIG_THERMAL is not set
+# CONFIG_VGA_ARB is not set
+# CONFIG_DRM is not set
+# CONFIG_BT is not set
+# CONFIG_WIRELESS is not set
+# CONFIG_MEDIA_SUPPORT is not set
+# CONFIG_NFC is not set
+# CONFIG_INPUT is not set
+# CONFIG_SERIO is not set
+# CONFIG_HPET is not set
+# CONFIG_ACPI is not set

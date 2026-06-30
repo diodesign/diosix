@@ -28,7 +28,7 @@ pub const TpGuard = struct {
         var current: usize = undefined;
         asm volatile (
             \\mv %[current], tp
-            : [current] "=r" (current)
+            : [current] "=r" (current),
         );
         if (isHostTp(current)) {
             return .{ .saved_tp = current, .swapped = false };
@@ -37,7 +37,7 @@ pub const TpGuard = struct {
             asm volatile (
                 \\csrr %[host_tp], mscratch
                 \\mv tp, %[host_tp]
-                : [host_tp] "=r" (host_tp)
+                : [host_tp] "=r" (host_tp),
             );
             return .{ .saved_tp = current, .swapped = true };
         }
@@ -47,7 +47,7 @@ pub const TpGuard = struct {
             asm volatile (
                 \\mv tp, %[saved]
                 :
-                : [saved] "r" (self.saved_tp)
+                : [saved] "r" (self.saved_tp),
             );
         }
     }
@@ -113,45 +113,27 @@ pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
 
     const alloc_size = size + @sizeOf(MallocHeader);
 
-    // For all allocations, bypass the per-CPU heap and use the physical memory manager directly.
-    if (true) {
-        const physmem = @import("physmem.zig");
-        // Calculate the buddy allocator order needed for this allocation size.
-        // We round up to the nearest page size, then find the power of 2.
-        const num_pages = (alloc_size + 4095) / 4096;
-        const order = std.math.log2_int_ceil(usize, num_pages);
+    const physmem = @import("physmem.zig");
+    // Calculate the buddy allocator order needed for this allocation size.
+    // We round up to the nearest page size, then find the power of 2.
+    const num_pages = (alloc_size + 4095) / 4096;
+    const order = std.math.log2_int_ceil(usize, num_pages);
 
-        if (physmem.allocPageSelection(order)) |phys_addr| {
-            // Zero-fill the entire allocated block to ensure TCG structures are clean.
-            const total_bytes = (@as(usize, 1) << @intCast(order)) * 4096;
-            const dest = @as([*]u8, @ptrFromInt(phys_addr))[0..total_bytes];
-            @memset(dest, 0);
+    if (physmem.allocPageSelection(order)) |phys_addr| {
+        // Zero-fill the entire allocated block to ensure TCG structures are clean.
+        const total_bytes = (@as(usize, 1) << @intCast(order)) * 4096;
+        const dest = @as([*]u8, @ptrFromInt(phys_addr))[0..total_bytes];
+        @memset(dest, 0);
 
-            const header = @as(*MallocHeader, @ptrFromInt(phys_addr));
-            header.* = .{
-                .size = size,
-                .cpu_core_id = std.math.maxInt(usize),
-            };
-            return @ptrFromInt(phys_addr + @sizeOf(MallocHeader));
-        } else |_| {
-            return null;
-        }
+        const header = @as(*MallocHeader, @ptrFromInt(phys_addr));
+        header.* = .{
+            .size = size,
+            .cpu_core_id = std.math.maxInt(usize),
+        };
+        return @ptrFromInt(phys_addr + @sizeOf(MallocHeader));
+    } else |_| {
+        return null;
     }
-
-    const lock_mstatus = allocator_lock.lock();
-    defer allocator_lock.unlock(lock_mstatus);
-
-    const cpu_core_id = pcore.this().cpu_core_id;
-    const cpu = riscv.cpu_contexts[cpu_core_id] orelse return null;
-
-    const slice = cpu.allocator.allocator().alignedAlloc(u8, std.mem.Alignment.fromByteUnits(16), alloc_size) catch return null;
-    const header = @as(*MallocHeader, @ptrCast(@alignCast(slice.ptr)));
-    header.* = .{
-        .size = size,
-        .cpu_core_id = cpu_core_id,
-    };
-
-    return @ptrFromInt(@intFromPtr(slice.ptr) + @sizeOf(MallocHeader));
 }
 
 pub export fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
@@ -196,7 +178,9 @@ pub export fn calloc(num: usize, size: usize) callconv(.c) ?*anyopaque {
 
 // Export standard assertions and print redirection for debug purposes
 pub export fn __assert_fail(assertion: [*:0]const u8, file: [*:0]const u8, line: c_uint, function: [*:0]const u8) callconv(.c) noreturn {
-    const ra = asm volatile ("mv %[ret], ra" : [ret] "=r" (-> usize));
+    const ra = asm volatile ("mv %[ret], ra"
+        : [ret] "=r" (-> usize),
+    );
     const guard = TpGuard.init();
     _ = guard;
     debug.printf("Assertion failed: {s} ({s}:{d}: {s}), ra=0x{x}\n", .{ assertion, file, line, function, ra });
@@ -204,7 +188,9 @@ pub export fn __assert_fail(assertion: [*:0]const u8, file: [*:0]const u8, line:
 }
 
 pub export fn abort() callconv(.c) noreturn {
-    const ra = asm volatile ("mv %[ret], ra" : [ret] "=r" (-> usize));
+    const ra = asm volatile ("mv %[ret], ra"
+        : [ret] "=r" (-> usize),
+    );
     const guard = TpGuard.init();
     _ = guard;
     debug.printf("Unicorn called abort(), ra=0x{x}\n", .{ra});
@@ -243,7 +229,7 @@ fn printVa(format: [*:0]const u8, ap: *std.builtin.VaList) void {
                 else => {
                     debug.putchar('%');
                     debug.putchar(fmt[i]);
-                }
+                },
             }
         } else {
             debug.putchar(fmt[i]);
@@ -981,8 +967,10 @@ pub export fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8 {
 }
 
 pub export fn munmap(addr: ?*anyopaque, length: usize) callconv(.c) c_int {
-    _ = addr;
     _ = length;
+    if (addr) |ptr| {
+        free(ptr);
+    }
     return 0;
 }
 
@@ -1153,16 +1141,24 @@ pub export fn bsearch(key: ?*const anyopaque, base: ?*const anyopaque, nitems: u
 
 pub export fn mmap(addr: ?*anyopaque, length: usize, prot: c_int, flags: c_int, fd: c_int, offset: i64) callconv(.c) ?*anyopaque {
     _ = addr;
-    _ = prot;
-    _ = flags;
     _ = fd;
     _ = offset;
+    _ = prot;
+    _ = flags;
+
+    const physmem = @import("physmem.zig");
+    const max_alloc_size = (@as(usize, 1) << (physmem.max_order - 1)) * physmem.PageSize - @sizeOf(MallocHeader);
+
+    if (length > max_alloc_size) {
+        debug.printf("Unicorn mmap() failed: length {} exceeds maximum allocator capacity {}\n", .{ length, max_alloc_size });
+        return @ptrFromInt(std.math.maxInt(usize));
+    }
 
     if (malloc(length)) |ptr| {
         return ptr;
     }
     debug.printf("Unicorn mmap() (length: {}) failed!\n", .{length});
-    return @ptrFromInt(@as(usize, 0xffffffffffffffff));
+    return @ptrFromInt(std.math.maxInt(usize));
 }
 
 pub extern fn uc_strerror(error_code: uc_err) ?[*:0]const u8;

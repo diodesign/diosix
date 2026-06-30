@@ -213,6 +213,10 @@ pub const CpuContext = struct {
     // Only THIS core monitors its timer to avoid thundering herd.
     blocked_vcore: ?*anyopaque,
 
+    // The last timer value written to CLINT mtimecmp for this physical CPU.
+    // Used to avoid redundant MMIO writes that trigger BQL contention in QEMU.
+    last_timer_val: u64,
+
     // Set when the G-stage page table is modified (demand paging).
     // Cleared after hfence.gvma. Prevents unnecessary TLB flushes
     // on ecall/timer returns that don't change page tables.
@@ -758,6 +762,10 @@ pub fn auditCpuFeatures() !void {
 
 pub fn setTimer(stime: u64) void {
     if (is_test) return;
+    const pcpu = getCPUContext();
+    if (pcpu.last_timer_val == stime) return;
+    pcpu.last_timer_val = stime;
+
     const base = clint_base orelse 0x02000000;
     const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(base + CLINT.MTIMECMP_BASE + 8 * readMhartid()));
     mtimecmp_ptr.* = stime;

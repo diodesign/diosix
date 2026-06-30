@@ -91,6 +91,9 @@ pub const VirtualCore = struct {
 
             exception_cause: u32 = 0,
             virtual_time: u64 = 0,
+            hsm_started: bool = false,
+            sc_hook_addr: u64 = 0,
+            idle_hook_addr: u64 = 0,
         },
     },
 
@@ -286,6 +289,12 @@ pub const VirtualCore = struct {
         if (old == null) {
             // We won — set the vcore ready for scheduling.
             self.state = .ready;
+            if (self.exec_path == .emulated) {
+                const host_time = riscv.readTime();
+                if (host_time > self.exec_path.emulated.virtual_time) {
+                    self.exec_path.emulated.virtual_time = host_time;
+                }
+            }
             return true;
         }
         return false;

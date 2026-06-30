@@ -199,7 +199,7 @@ pub const PageTable = struct {
     // Entry point for fault handling
     pub fn resolveFault(self: *PageTable, gpa: usize, is_trusted: bool) !void {
         // Identity map standard MMIO/peripheral regions below RAM for trusted guests (like Root VM)
-        if (is_trusted and gpa < 0x80000000) {
+        if (is_trusted and gpa < physmem.getRamBase()) {
             const gpa_page = gpa & ~(physmem.PageSize - 1);
             try self.mapPage(gpa_page, gpa_page, PTEFlags.read | PTEFlags.write | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
             return;

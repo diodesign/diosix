@@ -58,6 +58,8 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     // Zero out the CpuContext structure since QEMU might have left garbage
     @memset(@as([*]u8, @ptrCast(cpu_ctx))[0..@sizeOf(riscv.CpuContext)], 0);
 
+    cpu_ctx.last_timer_val = riscv.TIMER_INFINITY;
+
     cpu_ctx.cpu_core_id = cpu_core_id;
     if (cpu_core_id < riscv.MAX_PHYS_CORES) {
         riscv.cpu_contexts[cpu_core_id] = cpu_ctx;

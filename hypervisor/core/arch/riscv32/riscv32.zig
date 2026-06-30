@@ -365,8 +365,7 @@ pub fn handleCleanStop(uc: ?*anyopaque, vc: *vcore.VirtualCore, sub_idx: usize, 
         }
 
         if (mip == 0 and !timer_pending and !sub.pending_ipi) {
-            @atomicStore(bool, &sub.wfi_blocked, true, .release);
-            debug.printf("handleCleanStop: Blocking sub-vcore {} of guest {}: mip=0, timer_pending=false\n", .{sub_idx, vc.id});
+            debug.printf("handleCleanStop: WFI acts as NOP for sub-vcore {} of guest {}: mip=0, timer_pending=false\n", .{sub_idx, vc.id});
         } else {
             debug.printf("handleCleanStop: sub-vcore {} of guest {} WFI acts as NOP (mip=0x{x}, timer_pending={})\n", .{ sub_idx, vc.id, mip, timer_pending });
         }

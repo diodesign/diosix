@@ -170,6 +170,112 @@ pub const Loader = struct {
         return root_vm.space.base_gpa + @as(usize, @intCast(entry_offset));
     }
 
+    /// Look up the virtual address of a symbol by name in the ELF's symbol table
+    pub fn findSymbol(source: []const u8, name: []const u8) ?u64 {
+        if (source.len < 24) return null;
+        if (!std.mem.eql(u8, source[0..4], elf_spec.MAGIC)) return null;
+
+        const class = source[4];
+        var sh_off: u64 = 0;
+        var sh_num: u16 = 0;
+        var sh_size: u16 = 0;
+
+        if (class == 1) { // ELF32
+            if (source.len < 52) return null;
+            sh_off = readU32(source, 32);
+            sh_size = readU16(source, 46);
+            sh_num = readU16(source, 48);
+        } else if (class == 2) { // ELF64
+            if (source.len < 64) return null;
+            sh_off = readU64(source, 40);
+            sh_size = readU16(source, 58);
+            sh_num = readU16(source, 60);
+        } else {
+            return null;
+        }
+
+        // Validate section header table fits within source
+        if (sh_off + @as(u64, sh_num) * @as(u64, sh_size) > source.len) {
+            return null;
+        }
+
+        // Find the SHT_SYMTAB section
+        var symtab_sh_offset: u64 = 0;
+        var symtab_sh_size: u64 = 0;
+        var symtab_sh_entsize: u64 = 0;
+        var symtab_sh_link: u32 = 0;
+
+        var i: usize = 0;
+        while (i < sh_num) : (i += 1) {
+            const off = sh_off + (i * sh_size);
+            const sh_type = readU32(source, off + 4);
+
+            if (sh_type == 2) { // SHT_SYMTAB
+                if (class == 1) { // ELF32 Section Header
+                    symtab_sh_offset = readU32(source, off + 16);
+                    symtab_sh_size = readU32(source, off + 20);
+                    symtab_sh_link = readU32(source, off + 32);
+                    symtab_sh_entsize = readU32(source, off + 36);
+                } else { // ELF64 Section Header
+                    symtab_sh_offset = readU64(source, off + 24);
+                    symtab_sh_size = readU64(source, off + 32);
+                    symtab_sh_link = readU32(source, off + 40);
+                    symtab_sh_entsize = readU64(source, off + 56);
+                }
+                break;
+            }
+        }
+
+        if (symtab_sh_offset == 0 or symtab_sh_size == 0 or symtab_sh_entsize == 0) {
+            return null;
+        }
+
+        // Find the associated SHT_STRTAB section via symtab_sh_link index
+        if (symtab_sh_link >= sh_num) return null;
+        const strtab_sh_off = sh_off + (symtab_sh_link * sh_size);
+        const strtab_sh_type = readU32(source, strtab_sh_off + 4);
+        if (strtab_sh_type != 3) return null; // SHT_STRTAB
+
+        var strtab_offset: u64 = 0;
+        var strtab_size: u64 = 0;
+        if (class == 1) {
+            strtab_offset = readU32(source, strtab_sh_off + 16);
+            strtab_size = readU32(source, strtab_sh_off + 20);
+        } else {
+            strtab_offset = readU64(source, strtab_sh_off + 24);
+            strtab_size = readU64(source, strtab_sh_off + 32);
+        }
+
+        if (strtab_offset == 0 or strtab_size == 0) return null;
+        if (strtab_offset + strtab_size > source.len) return null;
+        if (symtab_sh_offset + symtab_sh_size > source.len) return null;
+
+        // Iterate through symtab entries
+        const sym_count = symtab_sh_size / symtab_sh_entsize;
+        var sym_idx: usize = 0;
+        while (sym_idx < sym_count) : (sym_idx += 1) {
+            const sym_off = symtab_sh_offset + (sym_idx * symtab_sh_entsize);
+            const st_name = readU32(source, sym_off + 0);
+            if (st_name == 0 or st_name >= strtab_size) continue;
+
+            // Get null-terminated string at strtab_offset + st_name bounded by strtab size
+            const max_name_len = strtab_size - st_name;
+            const sym_name_ptr = source[strtab_offset + st_name .. strtab_offset + st_name + max_name_len];
+            const name_len = std.mem.indexOfScalar(u8, sym_name_ptr, 0) orelse continue;
+            const sym_name = sym_name_ptr[0..name_len];
+
+            if (std.mem.eql(u8, sym_name, name)) {
+                if (class == 1) { // ELF32_Sym
+                    return readU32(source, sym_off + 4); // st_value
+                } else { // ELF64_Sym
+                    return readU64(source, sym_off + 8); // st_value
+                }
+            }
+        }
+
+        return null;
+    }
+
     // Byte-level little-endian readers for manual parsing.
     fn readU16(buf: []const u8, off: usize) u16 {
         return @as(u16, buf[off]) | (@as(u16, buf[off + 1]) << 8);

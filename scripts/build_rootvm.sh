@@ -36,7 +36,11 @@ echo "Root VM binary missing or outdated. Running BuildRoot..."
 # Get BuildRoot
 if [ ! -d "$BUILDROOT_DIR/.git" ]; then
     echo "Cloning BuildRoot ($BUILDROOT_BRANCH) into $BUILDROOT_DIR..."
-    git clone --depth 1 -b "$BUILDROOT_BRANCH" "$BUILDROOT_URL" "$BUILDROOT_DIR"
+    TEMP_CLONE=$(mktemp -d -p "$(dirname "$BUILDROOT_DIR")")
+    git clone --depth 1 -b "$BUILDROOT_BRANCH" "$BUILDROOT_URL" "$TEMP_CLONE"
+    mv "$BUILDROOT_DIR/dl" "$TEMP_CLONE/dl" 2>/dev/null || true
+    rm -rf "$BUILDROOT_DIR"
+    mv "$TEMP_CLONE" "$BUILDROOT_DIR"
 fi
 
 # Need to provide absolute path for defconfig if it's outside

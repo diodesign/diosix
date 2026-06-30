@@ -376,8 +376,9 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             if (min_timer != riscv.TIMER_INFINITY) {
                 riscv.setTimer(min_timer);
             } else {
-                // If no timers are scheduled, set a safe watchdog to prevent permanent hardware lockups
-                riscv.setTimer(riscv.readTime() +% riscv.WATCHDOG_TICKS);
+                // If no timers are scheduled, set the timer to TIMER_INFINITY to prevent spurious wakeups,
+                // avoiding repeatedly resetting a rolling watchdog timer that spams MMIO writes.
+                riscv.setTimer(riscv.TIMER_INFINITY);
             }
             riscv.pause(); // Execute WFI
         }

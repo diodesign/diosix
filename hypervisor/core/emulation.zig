@@ -17,6 +17,10 @@ const debug = @import("debug.zig");
 const sbi = @import("arch/riscv32/sbi.zig");
 const psci = @import("arch/aarch64/psci.zig");
 const pcore = @import("pcore.zig");
+const loader = @import("loader.zig");
+
+extern const __rootvm_start: u8;
+extern const __rootvm_end: u8;
 
 /// Result of handling an exception from Unicorn.
 pub const ExceptionAction = enum {
@@ -47,6 +51,102 @@ const QEMU_VIRT_UART_BASE: u64 = 0x10000000;
 /// Maximum number of exception-stop cycles before the emulation loop
 /// yields back to the scheduler. Prevents runaway exception storms.
 const EXCEPTION_BUDGET: u32 = 1_000_000;
+
+const UC_HOOK_CODE: c_int = 4;
+
+fn scHookCallback(uc: ?*anyopaque, address: u64, size: u32, user_data: ?*anyopaque) callconv(.c) void {
+    _ = size;
+    _ = user_data;
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+
+    // Read the instruction at the current PC (which is address)
+    var insn: u32 = 0;
+    if (glue.uc_mem_read(uc, address, @ptrCast(&insn), 4) != .UC_ERR_OK) return;
+
+    // Decode sc.w:
+    // Format: 00011 aq rl rs2 rs1 funct3 rd opcode
+    // rs2 is bits 20-24 (source register to store)
+    // rs1 is bits 15-19 (base pointer register)
+    // rd is bits 7-11 (destination success/failure register)
+    const rs2 = (insn >> 20) & 0x1f;
+    const rs1 = (insn >> 15) & 0x1f;
+    const rd = (insn >> 7) & 0x1f;
+
+    // Map register index (0..31) to Unicorn register enum (UC_RISCV_REG_X0 = 1, etc.)
+    const uc_rs1 = @as(c_int, @intCast(rs1)) + 1;
+    const uc_rs2 = @as(c_int, @intCast(rs2)) + 1;
+    const uc_rd = @as(c_int, @intCast(rd)) + 1;
+
+    // Read register values
+    var rs1_val: u32 = 0;
+    var rs2_val: u32 = 0;
+    _ = glue.uc_reg_read(uc, uc_rs1, &rs1_val);
+    _ = glue.uc_reg_read(uc, uc_rs2, &rs2_val);
+
+    // Emulate the store: write rs2_val to address in rs1_val
+    _ = glue.uc_mem_write(uc, rs1_val, @ptrCast(&rs2_val), 4);
+
+    // Set destination register rd to 0 (success status for sc.w)
+    var zero: u32 = 0;
+    _ = glue.uc_reg_write(uc, uc_rd, &zero);
+
+    // Advance PC by 4 to skip the sc.w instruction
+    const next_pc = address + 4;
+    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &next_pc);
+}
+
+fn idleEnableInterruptsHook(uc: ?*anyopaque, address: u64, size: u32, user_data: ?*anyopaque) callconv(.c) void {
+    _ = size;
+    _ = address;
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+
+    const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(user_data)));
+    const em = &vc.exec_path.emulated;
+    const sub = &em.sub_vcores[em.active_sub_vcore];
+
+    var current_priv: u32 = 0;
+    _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
+
+    var m_priv: u32 = 3;
+    _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
+
+    var mstatus: u64 = 0;
+    var sie: u64 = 0;
+    _ = glue.uc_reg_read(uc, rv32.UC_REG_MSTATUS, &mstatus);
+    _ = glue.uc_reg_read(uc, rv32.UC_REG_SIE, &sie);
+
+    const SSTATUS_SIE: u64 = 1 << 1;
+    const sie_enabled = ((mstatus & SSTATUS_SIE) != 0);
+
+    if (sie_enabled) {
+        const SIE_STIE: u64 = 1 << 5;
+        const SIE_SSIE: u64 = 1 << 1;
+        const timer_pending = sub.timer_scheduled and (em.virtual_time >= sub.timer_target);
+        const ipi_pending = @atomicLoad(bool, &sub.pending_ipi, .acquire);
+
+        var mip: u64 = 0;
+        _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &mip);
+
+        var changed = false;
+        if (timer_pending and (sie & SIE_STIE) != 0) {
+            mip |= 1 << 5; // MIP_STIP
+            changed = true;
+        }
+        if (ipi_pending and (sie & SIE_SSIE) != 0) {
+            mip |= 1 << 1; // MIP_SSIP
+            _ = @atomicRmw(bool, &sub.pending_ipi, .Xchg, false, .acq_rel);
+            changed = true;
+        }
+
+        if (changed) {
+            _ = glue.uc_reg_write(uc, rv32.UC_REG_MIP, &mip);
+        }
+    }
+
+    _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
+}
 
 // Initialize Unicorn context for the given virtual core.
 pub fn init(vc: *vcore.VirtualCore) !void {
@@ -146,6 +246,51 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     var hook_intr: glue.uc_hook = null;
     _ = glue.uc_hook_add(uc, &hook_intr, glue.UC_HOOK_INTR, @as(?*const anyopaque, @ptrCast(&intrCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0), @as(u64, 0xffffffffffffffff));
 
+    // Register sc.w and idle loop emulator hooks for RISC-V 32-bit
+    if (em.target_arch == .riscv32) {
+        const elf_base = @intFromPtr(&__rootvm_start);
+        const elf_size = @intFromPtr(&__rootvm_end) - elf_base;
+        const elf_bytes = @as([*]const u8, @ptrFromInt(elf_base))[0..elf_size];
+
+        var sc_hook_addr: u64 = 0xc0021618; // Default fallback
+        var idle_hook_addr: u64 = 0xc0640728; // Default fallback
+
+        if (loader.Loader.findSymbol(elf_bytes, "cpuhp_wait_for_sync_state")) |cpuhp_gva| {
+            const hpa = hpa_base + (cpuhp_gva - 0xc0000000);
+            const ptr = @as([*]const u32, @ptrFromInt(hpa));
+            var j: usize = 0;
+            while (j < 128) : (j += 1) {
+                const insn = ptr[j];
+                if ((insn & 0xfc00707f) == 0x1800202f) { // sc.w.rl
+                    sc_hook_addr = cpuhp_gva + j * 4;
+                    break;
+                }
+            }
+        }
+
+        if (loader.Loader.findSymbol(elf_bytes, "default_idle_call")) |idle_gva| {
+            const hpa = hpa_base + (idle_gva - 0xc0000000);
+            const ptr = @as([*]const u32, @ptrFromInt(hpa));
+            var j: usize = 0;
+            while (j < 128) : (j += 1) {
+                const insn = ptr[j];
+                if (insn == 0x10016073) { // csrsi sstatus, 2
+                    idle_hook_addr = idle_gva + (j + 1) * 4;
+                    break;
+                }
+            }
+        }
+
+        em.sc_hook_addr = sc_hook_addr;
+        em.idle_hook_addr = idle_hook_addr;
+
+        var hook_sc: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_sc, UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&scHookCallback)), null, sc_hook_addr, sc_hook_addr);
+
+        var hook_idle: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_idle, UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&idleEnableInterruptsHook)), @as(?*anyopaque, @ptrCast(vc)), idle_hook_addr, idle_hook_addr);
+    }
+
     // Block hook: DISABLED — using uc_emu_start count parameter for
     // bounded execution instead. Timer/preemption checks happen in
     // the outer loop between uc_emu_start calls.
@@ -238,9 +383,8 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
     var exception_budget: u32 = EXCEPTION_BUDGET;
 
-    if (em.virtual_time == 0) {
-        em.virtual_time = glue.readSModeTime();
-    }
+    // Synchronize virtual time with host physical time on entry
+    em.virtual_time = glue.readSModeTime();
 
     while (exception_budget > 0) {
         if (em.preempt_pending) {
@@ -249,23 +393,20 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
         // ---- MICRO-SCHEDULER LOGIC ----
         var found_ready = false;
-        const start_idx = em.active_sub_vcore;
-        var curr_idx = start_idx;
+        var curr_idx = em.active_sub_vcore;
+        var checked: usize = 0;
         var sub: *vcore.SubVcoreState = undefined;
-        while (true) {
+        while (checked < em.sub_vcore_count) : (checked += 1) {
+            curr_idx = (curr_idx + 1) % em.sub_vcore_count;
             sub = &em.sub_vcores[curr_idx];
             if (sub.state == .ready or sub.state == .running) {
                 if (!sub.wfi_blocked or sub.pending_ipi or (sub.timer_scheduled and em.virtual_time >= sub.timer_target)) {
-                    if (sub.wfi_blocked) {}
                     sub.wfi_blocked = false;
                     em.active_sub_vcore = curr_idx;
                     found_ready = true;
-
                     break;
                 }
             }
-            curr_idx = (curr_idx + 1) % em.sub_vcore_count;
-            if (curr_idx == start_idx) break;
         }
 
         if (!found_ready) {
@@ -348,31 +489,49 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
         // Sync pending interrupts for THIS sub-vCPU
         if (em.target_arch == .riscv32) {
+            var current_priv: u32 = 0;
+            _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
+
+            var m_priv: u32 = 3;
+            _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
+
             var mip: u64 = 0;
             _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &mip);
 
+            var mstatus: u64 = 0;
+            _ = glue.uc_reg_read(uc, rv32.UC_REG_MSTATUS, &mstatus);
+
+            _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
+
+            const SSTATUS_SIE: u64 = 1 << 1;
+            const sie_enabled = (current_priv < 1) or ((mstatus & SSTATUS_SIE) != 0);
+
             const MIP_SSIP: u64 = 1 << 1;
+            const MIP_STIP: u64 = 1 << 5;
 
-            if (@atomicLoad(bool, &sub.pending_ipi, .acquire)) {
-                mip |= MIP_SSIP;
-            } else {
-                mip &= ~MIP_SSIP;
-            }
-
-            if (sub.timer_scheduled) {
-                const now = em.virtual_time;
-                if (now >= sub.timer_target) {
-                    mip |= @as(u64, 1 << 5); // MIP_STIP
+            if (sie_enabled) {
+                if (@atomicLoad(bool, &sub.pending_ipi, .acquire)) {
+                    mip |= MIP_SSIP;
                 } else {
-                    mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
+                    mip &= ~MIP_SSIP;
+                }
+
+                if (sub.timer_scheduled) {
+                    const now = em.virtual_time;
+                    if (now >= sub.timer_target) {
+                        mip |= MIP_STIP;
+                    } else {
+                        mip &= ~MIP_STIP;
+                    }
+                } else {
+                    mip &= ~MIP_STIP;
                 }
             } else {
-                mip &= ~@as(u64, 1 << 5); // Clear MIP_STIP
+                mip &= ~MIP_SSIP;
+                mip &= ~MIP_STIP;
             }
 
-            var current_priv: u32 = 0;
-            _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
-            var m_priv: u32 = 3;
+            m_priv = 3;
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
             _ = glue.uc_reg_write(uc, rv32.UC_REG_MIP, &mip);
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
@@ -389,52 +548,63 @@ pub fn run(vc: *vcore.VirtualCore) void {
         var saved_tp: usize = undefined;
         asm volatile (
             \\mv %[saved], tp
-            : [saved] "=r" (saved_tp)
+            : [saved] "=r" (saved_tp),
         );
         const err = glue.uc_emu_start(uc, current_pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
         asm volatile (
             \\mv tp, %[saved]
             :
-            : [saved] "r" (saved_tp)
+            : [saved] "r" (saved_tp),
         );
         em.emu_running = false;
 
         glue.diosix_uc_clear_stop(uc);
-
-        if (em.target_arch == .riscv32) {
-            var mip: u64 = 0;
-            _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &mip);
-            const MIP_SSIP: u64 = 1 << 1;
-            if ((mip & MIP_SSIP) == 0) {
-                _ = @atomicRmw(bool, &sub.pending_ipi, .Xchg, false, .acq_rel);
-            }
-        }
-        const new_pc: u64 = switch (em.target_arch) {
+        var new_pc: u64 = switch (em.target_arch) {
             .riscv32 => rv32.readPC(uc),
             .aarch64 => aarch64.readPC(uc),
             .x86_64 => x86_64.readPC(uc),
             else => 0,
         };
         sub.last_pc = new_pc;
-        em.virtual_time += 250; // Advance virtual clock on JIT exit/preemption
-
-        if (em.target_arch == .riscv32) {
-            var current_priv: u32 = 0;
-            _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
-            var m_priv: u32 = 3;
-            _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
-
-            var post_mip: u64 = 0;
-            _ = glue.uc_reg_read(uc, rv32.UC_REG_MIP, &post_mip);
-
-            _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
-
-            if ((post_mip & (1 << 1)) == 0) { // MIP_SSIP
-                @atomicStore(bool, &sub.pending_ipi, false, .release);
-            }
-        }
+        em.virtual_time = glue.readSModeTime();
 
         if (err == .UC_ERR_OK) {
+            if (em.target_arch == .riscv32) {
+                var current_priv: u32 = 0;
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
+                var m_priv: u32 = 3;
+                _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
+
+                var mstatus: u64 = 0;
+                var sie: u64 = 0;
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_MSTATUS, &mstatus);
+                _ = glue.uc_reg_read(uc, rv32.UC_REG_SIE, &sie);
+
+                _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
+
+                const SSTATUS_SIE: u64 = 1 << 1;
+                const SIE_STIE: u64 = 1 << 5;
+                const SIE_SSIE: u64 = 1 << 1;
+
+                const sie_enabled = (current_priv < 1) or ((mstatus & SSTATUS_SIE) != 0);
+
+                if (sie_enabled) {
+                    const timer_pending = sub.timer_scheduled and (em.virtual_time >= sub.timer_target);
+                    const ipi_pending = @atomicLoad(bool, &sub.pending_ipi, .acquire);
+
+                    if (timer_pending and (sie & SIE_STIE) != 0) {
+                        rv32.deliverInterrupt(uc, new_pc, 5);
+                        new_pc = rv32.readPC(uc);
+                        sub.last_pc = new_pc;
+                    } else if (ipi_pending and (sie & SIE_SSIE) != 0) {
+                        _ = @atomicRmw(bool, &sub.pending_ipi, .Xchg, false, .acq_rel);
+                        rv32.deliverInterrupt(uc, new_pc, 1);
+                        new_pc = rv32.readPC(uc);
+                        sub.last_pc = new_pc;
+                    }
+                }
+            }
+
             const handled = switch (em.target_arch) {
                 .riscv32 => rv32.handleCleanStop(uc, vc, em.active_sub_vcore, new_pc),
                 .aarch64 => aarch64.handleCleanStop(uc, vc, new_pc),
@@ -443,7 +613,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
             };
 
             _ = glue.uc_context_save(uc, sub.context.?);
-            em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
 
             if (handled) {
                 pc = switch (em.target_arch) {
@@ -461,11 +630,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
         }
 
         if (err == .UC_ERR_EXCEPTION) {
-            if (em.target_arch == .riscv32) {
-                var stvec: u64 = 0;
-                _ = glue.uc_reg_read(uc, rv32.UC_REG_STVEC, &stvec);
-                debug.printf("EMU: Exception! subcore={}, err={}, current_pc=0x{x}, new_pc=0x{x}, stvec=0x{x}\n", .{ em.active_sub_vcore, err, current_pc, new_pc, stvec });
-            }
 
             const action = switch (em.target_arch) {
                 .riscv32 => rv32.handleException(uc, new_pc),
@@ -477,22 +641,61 @@ pub fn run(vc: *vcore.VirtualCore) void {
             switch (action) {
                 .emulated => {
                     _ = glue.uc_context_save(uc, sub.context.?);
-                    em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
                     continue;
                 },
                 .wfi => {
-                    @atomicStore(bool, &sub.wfi_blocked, true, .release);
-                    // Advance PC past WFI (4 bytes)
+                    var current_priv: u32 = 0;
+                    _ = glue.uc_reg_read(uc, rv32.UC_REG_PRIV, &current_priv);
+                    var m_priv: u32 = 3;
+                    _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
+
+                    var mstatus: u64 = 0;
+                    var sie: u64 = 0;
+                    _ = glue.uc_reg_read(uc, rv32.UC_REG_MSTATUS, &mstatus);
+                    _ = glue.uc_reg_read(uc, rv32.UC_REG_SIE, &sie);
+
+                    _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
+
+                    const SSTATUS_SIE: u64 = 1 << 1;
+                    const sie_enabled = ((mstatus & SSTATUS_SIE) != 0);
+
+                    const SIE_STIE: u64 = 1 << 5;
+                    const SIE_SSIE: u64 = 1 << 1;
+
+                    const timer_pending = sub.timer_scheduled and (em.virtual_time >= sub.timer_target);
+                    const ipi_pending = @atomicLoad(bool, &sub.pending_ipi, .acquire);
+
+                    if (timer_pending and (sie & SIE_STIE) != 0) {
+                        if (sie_enabled) {
+                            rv32.deliverInterrupt(uc, new_pc + 4, 5);
+                        } else {
+                            var pc_val = new_pc + 4;
+                            _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &pc_val);
+                        }
+                        _ = glue.uc_context_save(uc, sub.context.?);
+                        continue;
+                    } else if (ipi_pending and (sie & SIE_SSIE) != 0) {
+                        if (sie_enabled) {
+                            _ = @atomicRmw(bool, &sub.pending_ipi, .Xchg, false, .acq_rel);
+                            rv32.deliverInterrupt(uc, new_pc + 4, 1);
+                        } else {
+                            var pc_val = new_pc + 4;
+                            _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &pc_val);
+                        }
+                        _ = glue.uc_context_save(uc, sub.context.?);
+                        continue;
+                    }
+
+                    // Otherwise, block the sub-vcore on WFI
+                    sub.wfi_blocked = true;
                     var pc_val = new_pc + 4;
                     _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_PC), &pc_val);
                     _ = glue.uc_context_save(uc, sub.context.?);
-                    em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
                     continue;
                 },
                 .delivered => {
                     exception_budget -= 1;
                     _ = glue.uc_context_save(uc, sub.context.?);
-                    em.active_sub_vcore = (em.active_sub_vcore + 1) % em.sub_vcore_count;
                     continue;
                 },
                 .unhandled => {
@@ -545,14 +748,12 @@ fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c
     }
 }
 
-// RISC-V specific interrupt handling.
 fn intrCallbackRiscv32(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void {
     const em = &vc.exec_path.emulated;
+    _ = em;
 
     // EXCP_HALTED is 0x10003 (65539). QEMU throws this when it encounters WFI natively.
     if (intno == 65539) {
-        @atomicStore(bool, &em.sub_vcores[em.active_sub_vcore].wfi_blocked, true, .release);
-
         // QEMU already advanced the PC past the WFI instruction natively, but Unicorn's
         // cpu_exec loop blindly adds 4 to env->pc before calling UC_HOOK_INTR.
         // We must subtract 4 to undo Unicorn's bogus addition, leaving us at the
@@ -874,4 +1075,37 @@ pub fn emulatedRunnerSMode(vc_ptr: usize) callconv(.c) noreturn {
     }
 
     while (true) {}
+}
+
+fn translateSv32(uc: ?*anyopaque, satp: u64, va: u32) u64 {
+    const root_ppn = satp & 0x3fffff;
+    const root_pa = root_ppn * 4096;
+
+    const vpn1 = va >> 22;
+    const vpn0 = (va >> 12) & 0x3ff;
+    const offset = va & 0xfff;
+
+    var pte1: u32 = 0;
+    if (glue.uc_mem_read(uc, root_pa + vpn1 * 4, @ptrCast(&pte1), 4) != .UC_ERR_OK) return 0;
+
+    if ((pte1 & 1) == 0) return 0; // Invalid
+
+    // Check if it's a leaf (R/W/X bits not all 0)
+    if ((pte1 & 0xe) != 0) {
+        // Superpage
+        const ppn1 = pte1 >> 20;
+        const ppn0 = (pte1 >> 10) & 0x3ff;
+        const pa = (ppn1 * 1024 + ppn0) * 4096 + (va & 0x3fffff);
+        return pa;
+    }
+
+    const level0_ppn = pte1 >> 10;
+    const level0_pa = level0_ppn * 4096;
+
+    var pte0: u32 = 0;
+    if (glue.uc_mem_read(uc, level0_pa + vpn0 * 4, @ptrCast(&pte0), 4) != .UC_ERR_OK) return 0;
+    if ((pte0 & 1) == 0) return 0; // Invalid
+
+    const ppn = pte0 >> 10;
+    return ppn * 4096 + offset;
 }

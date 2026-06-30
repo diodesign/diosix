@@ -413,6 +413,9 @@ pub fn incrementPageRef(addr: usize) void {
 pub fn decrementPageRef(addr: usize) void {
     const desc = getPageDescriptor(addr);
     const old = @atomicRmw(u32, &desc.refcount, .Sub, 1, .seq_cst);
+    if (old == 0) {
+        @panic("Physical memory reference count underflow / double free detected");
+    }
     if (old == 1) {
         const lock_ms = phys_mem_state.lock.lock();
         defer phys_mem_state.lock.unlock(lock_ms);
@@ -504,6 +507,10 @@ pub fn isRam(base: usize, size: usize) bool {
         if (base >= reg.base and end <= reg.end()) return true;
     }
     return false;
+}
+
+pub fn getRamBase() usize {
+    return phys_mem_state.regions[0].base;
 }
 
 /// Returns true if the address is within the host physical RAM range managed by

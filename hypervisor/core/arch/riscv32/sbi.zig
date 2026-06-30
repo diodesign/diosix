@@ -31,6 +31,7 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
     const a0 = context[@intFromEnum(arch.Register.a0)];
     const a1 = context[@intFromEnum(arch.Register.a1)];
     const a2 = context[@intFromEnum(arch.Register.a2)];
+
     switch (extension) {
         interface.EXT.BASE => handleBase(vc, context, function),
         interface.EXT.TIME => {
@@ -423,11 +424,13 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
             if (vc.exec_path == .emulated) {
                 if (target_hart < vc.exec_path.emulated.sub_vcore_count) {
                     const target_sub = &vc.exec_path.emulated.sub_vcores[target_hart];
+
                     if (target_sub.state == .stopped) {
                         target_sub.start_pc = start_addr;
                         target_sub.start_a0 = target_hart;
                         target_sub.start_a1 = opaque_param;
                         target_sub.state = .ready;
+                        vc.exec_path.emulated.hsm_started = true;
                         setResult(vc, context, interface.SUCCESS, 0);
                     } else {
                         setResult(vc, context, interface.ERR_ALREADY_AVAILABLE, 0);

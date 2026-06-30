@@ -20,6 +20,7 @@ const loader = @import("loader.zig");
 const pcore = @import("pcore.zig");
 const sv39x4 = @import("arch/riscv64/sv39x4.zig");
 const elf_spec = @import("interface").elf;
+const emulation = @import("emulation.zig");
 
 extern const banner: [*:0]const u8;
 extern const project_version: [*:0]const u8;
@@ -430,6 +431,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
             vc.exec_path.emulated.sub_vcores[0].start_a0 = vcore_id;
             vc.exec_path.emulated.sub_vcores[0].start_a1 = guest_dtb_gpa;
             vc.exec_path.emulated.sub_vcores[0].state = .ready;
+            try emulation.init(vc);
         }
 
         if (i == 0) {
