@@ -9,6 +9,7 @@ const Writer = std.Io.Writer;
 const atomic = @import("atomic.zig");
 const pcore = @import("pcore.zig");
 const riscv = @import("arch/riscv64/riscv.zig");
+const drivers = @import("drivers.zig");
 
 // Circular queue size for console text streams
 const queue_size = 4096;
@@ -88,20 +89,28 @@ pub const UART = struct {
 
 pub fn hw_putchar(c: u8) void {
     if (builtin.is_test) return;
-    const uart = riscv.uart_base orelse 0x10000000;
-    const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
-    const tx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.THR));
-    while (status_reg.* & UART.LSR_THRE == 0) {}
-    tx_reg.* = c;
+    if (drivers.console) |drv| {
+        drv.putchar(c);
+    } else {
+        const uart = riscv.uart_base orelse 0x10000000;
+        const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
+        const tx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.THR));
+        while (status_reg.* & UART.LSR_THRE == 0) {}
+        tx_reg.* = c;
+    }
 }
 
 pub fn hw_getchar() i16 {
     if (builtin.is_test) return -1;
-    const uart = riscv.uart_base orelse 0x10000000;
-    const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
-    const rx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.RBR));
-    if (status_reg.* & UART.LSR_DR != 0) {
-        return @as(i16, rx_reg.*);
+    if (drivers.console) |drv| {
+        return drv.getchar();
+    } else {
+        const uart = riscv.uart_base orelse 0x10000000;
+        const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
+        const rx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.RBR));
+        if (status_reg.* & UART.LSR_DR != 0) {
+            return @as(i16, rx_reg.*);
+        }
     }
     return -1;
 }

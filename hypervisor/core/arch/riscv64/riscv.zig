@@ -766,9 +766,14 @@ pub fn setTimer(stime: u64) void {
     if (pcpu.last_timer_val == stime) return;
     pcpu.last_timer_val = stime;
 
-    const base = clint_base orelse 0x02000000;
-    const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(base + CLINT.MTIMECMP_BASE + 8 * readMhartid()));
-    mtimecmp_ptr.* = stime;
+    const drivers = @import("../../drivers.zig");
+    if (drivers.timer) |drv| {
+        drv.setTimer(stime);
+    } else {
+        const base = clint_base orelse 0x02000000;
+        const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(base + CLINT.MTIMECMP_BASE + 8 * readMhartid()));
+        mtimecmp_ptr.* = stime;
+    }
 }
 
 // Read the time CSR. On RISC-V, `rdtime` reads the platform time counter
@@ -974,7 +979,10 @@ pub inline fn writeHstateen0(val: usize) void {
 // Reboot the host machine.
 pub fn reboot() void {
     if (builtin.is_test) return;
-    if (test_device_base) |base| {
+    const drivers = @import("../../drivers.zig");
+    if (drivers.reset) |drv| {
+        drv.reset();
+    } else if (test_device_base) |base| {
         const ptr = @as(*volatile u32, @ptrFromInt(base));
         ptr.* = SiFiveTest.FINISHER_RESET;
     }
@@ -984,7 +992,10 @@ pub fn reboot() void {
 // Shutdown the host machine.
 pub fn shutdown() void {
     if (builtin.is_test) return;
-    if (test_device_base) |base| {
+    const drivers = @import("../../drivers.zig");
+    if (drivers.reset) |drv| {
+        drv.shutdown();
+    } else if (test_device_base) |base| {
         const ptr = @as(*volatile u32, @ptrFromInt(base));
         ptr.* = SiFiveTest.FINISHER_PASS;
     }

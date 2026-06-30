@@ -1,4 +1,4 @@
-# Generic utility functions for Qemu-compatible hardware
+# Generic utility functions for RV64 targets
 #
 # Copyright (c) 2024 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
@@ -6,70 +6,17 @@
 .section .text
 .align 8
 
-.global hw_putchar
-.global hw_getchar
-.global hw_set_timer
 .global hw_run_vcore
 .global hw_private_variables
 .global hw_heap_base
 .global hw_heap_size
 .global hw_pause
-.global hw_reboot
-.global hw_shutdown
 .global hw_pmp_init
 
 # hypervisor constants, such as stack and lock locations
-.include "hypervisor/hw/qemu/consts.s"
+.include "hypervisor/core/arch/riscv64/consts.s"
 .include "config.s"
 
-# reboot the host machine
-hw_reboot:
-  li t0, 0x100000 # SiFive Test device base address
-  li t1, 0x7777   # FINISHER_RESET
-  sw t1, 0(t0)
-  ret
-
-# shutdown the host machine
-hw_shutdown:
-  li t0, 0x100000 # SiFive Test device base address
-  li t1, 0x5555   # FINISHER_PASS
-  sw t1, 0(t0)
-  ret
-
-# print a character to the Qemu serial console
-# a0 = character to print
-hw_putchar:
-  li t0, 0x10000000 # UART0 base address
-hw_putchar_spin:
-  lbu t1, 5(t0)     # read line status register
-  andi t1, t1, 0x20 # check transmitter holding register empty (bit 5)
-  beqz t1, hw_putchar_spin
-  sb a0, 0(t0)
-  ret
-
-# read a character from the Qemu serial console
-# <= a0 = character read, or -1 if none waiting
-hw_getchar:
-  li t0, 0x10000000 # UART0 base address
-  lb t1, 5(t0)      # read line status register
-  andi t1, t1, 0x01 # check for data ready bit
-  beqz t1, hw_getchar_none
-  lb a0, 0(t0)      # read character from receive buffer register
-  ret
-hw_getchar_none:
-  li a0, -1
-  ret
-
-# set the machine-level timer to fire at the given time
-# a0 = time to fire at
-hw_set_timer:
-  # CLINT base 0x02000000. mtimecmp starts at 0x4000
-  li t0, 0x02004000
-  csrr t1, mhartid
-  slli t1, t1, 3   # hart id * 8
-  add t0, t0, t1
-  sd a0, 0(t0)      # write 64-bit time to mtimecmp
-  ret
 
 # load all registers from the given context and mret to the guest
 # a0 = pointer to ThreadContext [32]usize

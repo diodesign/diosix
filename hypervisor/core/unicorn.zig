@@ -12,9 +12,18 @@ const pcore = @import("pcore.zig");
 // Global lock to protect allocator operations across harts
 var allocator_lock = atomic.NamedSpinLock.init("Unicorn Allocator Lock");
 
+extern const __hypervisor_end: u8;
+
 fn isHostTp(tp_val: usize) bool {
     if (tp_val % 16 != 0) return false;
-    if (tp_val < 0x80000000 or tp_val >= 0x85000000) return false;
+    
+    const hv_end = @intFromPtr(&__hypervisor_end);
+    const max_cores = riscv.MAX_PHYS_CORES;
+    const cpu_slab_shift = 20; // 1MB per CPU slab (matching CPU_SLAB_SHIFT)
+    const max_slab_end = hv_end + (max_cores << cpu_slab_shift);
+
+    if (tp_val < hv_end or tp_val >= max_slab_end) return false;
+
     const ctx = @as(*riscv.CpuContext, @ptrFromInt(tp_val));
     const core_id = ctx.cpu_core_id;
     if (core_id >= riscv.cpu_contexts.len) return false;

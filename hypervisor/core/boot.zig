@@ -127,6 +127,10 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
     try riscv.auditCpuFeatures();
 
+    // Initialize host dynamic device drivers
+    const drivers = @import("drivers.zig");
+    drivers.init();
+
     if (!builtin.is_test) {
         try physmem.init(device_tree, rootvm_region);
     }

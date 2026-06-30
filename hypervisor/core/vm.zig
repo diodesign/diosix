@@ -117,10 +117,11 @@ pub const GuestSpace = struct {
 
             var pmp_config = try pmp.PMPConfig.init(self.allocator);
 
-            // 1. Deny access to the hypervisor's private DRAM region [0x80000000, child_base_hpa)
-            const hv_size = child_base_hpa - 0x80000000;
+            // 1. Deny access to the hypervisor's private DRAM region [ram_base, child_base_hpa)
+            const ram_base = physmem.getRamBase();
+            const hv_size = child_base_hpa - ram_base;
             if (hv_size > 0) {
-                try pmp_config.addRegion(0x80000000, hv_size, 0); // flags = 0 (no access)
+                try pmp_config.addRegion(ram_base, hv_size, 0); // flags = 0 (no access)
             }
 
             // 2. Allow access to the entire 64-bit physical address space for everything else.

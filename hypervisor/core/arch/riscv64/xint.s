@@ -6,7 +6,7 @@
 .altmacro
 
 # hypervisor constants, such as stack and lock locations
-.include "hypervisor/hw/qemu/consts.s"
+.include "hypervisor/core/arch/riscv64/consts.s"
 
 .section .text
 .align 8

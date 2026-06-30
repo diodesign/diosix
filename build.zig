@@ -11,15 +11,8 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 const Target = std.Target;
 const RISCVextensions = Target.Cpu.Feature.Set;
-const yaml = @import("scripts/yaml_parser.zig");
 
 pub fn build(b: *std.Build) !void {
-    // Run self-tests for the YAML parser before using it
-    yaml.selfCheck() catch |err| {
-        std.debug.print("YAML parser self-check failed: {any}\n", .{err});
-        return err;
-    };
-
     const git_branch = b.option([]const u8, "git_branch", "Current git branch") orelse "unknown branch";
     const git_revision = b.option([]const u8, "git_revision", "Current git revision") orelse "unknown revision";
     const zig_version_opt = b.option([]const u8, "zig_version", "Current zig version") orelse "unknown zig version";
@@ -27,82 +20,11 @@ pub fn build(b: *std.Build) !void {
     const build_hostname = b.option([]const u8, "build_hostname", "Current build hostname") orelse "unknown build host";
     const build_date = b.option([]const u8, "build_date", "Current build date") orelse "unknown build date";
 
-    // Dynamic hardware port discovery from hypervisor/hw/ports/
-    const ports_dir_path = "hypervisor/hw/ports";
-    var ports_dir = b.root.root_dir.handle.openDir(b.graph.io, ports_dir_path, .{ .iterate = true }) catch |err| {
-        std.debug.print("Failed to open hardware ports directory '{s}': {any}\n", .{ ports_dir_path, err });
-        return err;
-    };
-    defer ports_dir.close(b.graph.io);
-
-    var system_list = ArrayList([]const u8).empty;
-    defer {
-        for (system_list.items) |sys| b.allocator.free(sys);
-        system_list.deinit(b.allocator);
-    }
-
-    var ports_iter = ports_dir.iterate();
-    while (try ports_iter.next(b.graph.io)) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".yaml") and !std.mem.eql(u8, entry.name, "default.yaml")) {
-            const sys_name = entry.name[0 .. entry.name.len - 5]; // strip ".yaml"
-            try system_list.append(b.allocator, try b.allocator.dupe(u8, sys_name));
-        }
-    }
-
-    // Build-run-time list of supported system names for option help display
-    var names_buf = ArrayList(u8).empty;
-    defer names_buf.deinit(b.allocator);
-    for (system_list.items, 0..) |sys_name, idx| {
-        try names_buf.appendSlice(b.allocator, sys_name);
-        if (idx < (system_list.items.len - 1)) {
-            try names_buf.appendSlice(b.allocator, ", ");
-        }
-    }
-    const system_names = try names_buf.toOwnedSlice(b.allocator);
-    defer b.allocator.free(system_names);
-
-    // Parse the default system from hypervisor/hw/ports/default.yaml
-    const default_yaml_path = try std.fs.path.join(b.allocator, &.{ ports_dir_path, "default.yaml" });
-    defer b.allocator.free(default_yaml_path);
-    const default_content = b.root.root_dir.handle.readFileAlloc(b.graph.io, default_yaml_path, b.allocator, std.Io.Limit.limited(1024 * 1024)) catch |err| {
-        std.debug.print("Failed to read default system file '{s}': {any}\n", .{ default_yaml_path, err });
-        return err;
-    };
-    defer b.allocator.free(default_content);
-    const default_system = try yaml.parseDefault(b.allocator, default_content);
-    defer b.allocator.free(default_system);
-
-    // Allow user to pick a target hardware system to build for, defaulting to value in default.yaml
-    const system_option = b.option(
-        []const u8,
-        "system",
-        std.fmt.allocPrint(b.allocator, "Select the system to build for: {s} (default: {s})", .{ system_names, default_system }) catch unreachable,
-    ) orelse default_system;
-
-    // Load and parse selected system YAML configuration early so we can inspect its legacy_cpu configuration
-    const selected_yaml_filename = try std.fmt.allocPrint(b.allocator, "{s}.yaml", .{system_option});
-    defer b.allocator.free(selected_yaml_filename);
-    const selected_yaml_path = try std.fs.path.join(b.allocator, &.{ ports_dir_path, selected_yaml_filename });
-    defer b.allocator.free(selected_yaml_path);
-    const selected_yaml_content = b.root.root_dir.handle.readFileAlloc(b.graph.io, selected_yaml_path, b.allocator, std.Io.Limit.limited(1024 * 1024)) catch |err| {
-        std.debug.print("Failed to read system configuration file '{s}': {any}\n", .{ selected_yaml_path, err });
-        return err;
-    };
-    defer b.allocator.free(selected_yaml_content);
-
-    const port_config = yaml.parse(b.allocator, selected_yaml_content) catch |err| {
-        std.debug.print("Failed to parse system configuration file '{s}': {any}\n", .{ selected_yaml_path, err });
-        return err;
-    };
-    defer port_config.deinit(b.allocator);
-
-    // Allow user to override the CPU model/extensions passed to QEMU
     const qemu_cpu_opt = b.option([]const u8, "qemu-cpu", "Override the CPU model/extensions passed to QEMU");
-
-    // Allow user to compile out Sstc and Smstateen support for legacy CPUs (e.g. QEMU 6.2)
-    // If not specified, default to the setting parsed from the target hardware YAML configuration.
-    const legacy_cpu_opt = b.option(bool, "legacy-cpu", "Compile out Sstc and Smstateen support");
-    const legacy_cpu = legacy_cpu_opt orelse port_config.legacy_cpu;
+    const legacy_cpu = b.option(bool, "legacy-cpu", "Compile out Sstc and Smstateen support") orelse false;
+    const pmp_fallback = b.option(bool, "pmp", "Run in PMP fallback mode (disable H-extension)") orelse false;
+    const smp_cores = b.option(u32, "smp", "Number of SMP CPU cores for emulator") orelse 4;
+    const mem_size = b.option([]const u8, "mem", "Memory size for emulator (e.g. 2G)") orelse "2G";
 
     // Generate config.s dynamically
     const config_s_content = try std.fmt.allocPrint(b.allocator,
@@ -235,31 +157,37 @@ pub fn build(b: *std.Build) !void {
     const rootvm_s_step = b.addWriteFiles();
     const rootvm_s_file = rootvm_s_step.add("rootvm.s", rootvm_s_content);
 
-    // include the assembly files and linker script from parsed YAML configuration
-    for (port_config.assembly_files) |asm_file| {
-        if (std.mem.endsWith(u8, asm_file, "rootvm.s")) {
-            continue;
-        }
+    // include the assembly files and linker script
+    const assembly_files = [_][]const u8{
+        "hypervisor/core/arch/riscv64/entry.s",
+        "hypervisor/core/arch/riscv64/xint.s",
+        "hypervisor/core/arch/riscv64/util.s",
+    };
+    for (assembly_files) |asm_file| {
         vmdiosix.root_module.addAssemblyFile(b.path(asm_file));
     }
     vmdiosix.root_module.addAssemblyFile(rootvm_s_file);
     vmdiosix.step.dependOn(&rootvm_s_step.step);
 
-    vmdiosix.setLinkerScript(b.path(port_config.linker_script));
+    vmdiosix.setLinkerScript(b.path("hypervisor/core/arch/riscv64/linker.ld"));
 
     // Register all dependencies (like consts.s) so modifying any of them triggers a full rebuild
-    if (port_config.dependencies.len > 0) {
-        var dep_step = b.addWriteFiles();
-        for (port_config.dependencies) |dep_file| {
-            const filename = std.fs.path.basename(dep_file);
-            _ = dep_step.addCopyFile(b.path(dep_file), filename);
-        }
-        vmdiosix.step.dependOn(&dep_step.step);
-    }
+    var dep_step = b.addWriteFiles();
+    const filename = "consts.s";
+    _ = dep_step.addCopyFile(b.path("hypervisor/core/arch/riscv64/consts.s"), filename);
+    vmdiosix.root_module.addIncludePath(dep_step.getDirectory());
+    vmdiosix.step.dependOn(&dep_step.step);
 
     // include build-time config options
+    const driver_ns16550 = b.option(bool, "driver-ns16550", "Compile in NS16550 UART driver") orelse true;
+    const driver_clint = b.option(bool, "driver-clint", "Compile in CLINT timer driver") orelse true;
+    const driver_sifive_test = b.option(bool, "driver-sifive-test", "Compile in SiFive test device driver") orelse true;
+
     const hypervisor_options = b.addOptions();
     hypervisor_options.addOption(bool, "legacy_cpu", legacy_cpu);
+    hypervisor_options.addOption(bool, "compile_ns16550", driver_ns16550);
+    hypervisor_options.addOption(bool, "compile_clint", driver_clint);
+    hypervisor_options.addOption(bool, "compile_sifive_test", driver_sifive_test);
     vmdiosix.root_module.addOptions("config", hypervisor_options);
 
     // Generate config.s dynamically inside the build cache
@@ -300,31 +228,41 @@ pub fn build(b: *std.Build) !void {
     });
     b.getInstallStep().dependOn(&install_step.step);
 
-    const yaml_obj = b.addObject(.{
-        .name = "yaml_parser",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("scripts/yaml_parser.zig"),
-            .optimize = optimize,
-            .target = b.graph.host,
-        }),
-    });
-    b.getInstallStep().dependOn(&b.addInstallFile(yaml_obj.getEmittedBin(), "yaml_parser.o").step);
-
     // create a 'zig build run' command to execute the hypervisor in a suitable emulator
     var qemu_args = ArrayList([]const u8).empty;
     defer qemu_args.deinit(b.allocator);
 
-    var arg_idx: usize = 0;
-    while (arg_idx < port_config.run_cmd.len) : (arg_idx += 1) {
-        const arg = port_config.run_cmd[arg_idx];
-        if (std.mem.eql(u8, arg, "-cpu") and arg_idx + 1 < port_config.run_cmd.len) {
-            try qemu_args.append(b.allocator, b.dupe("-cpu"));
-            try qemu_args.append(b.allocator, try b.allocator.dupe(u8, qemu_cpu_opt orelse port_config.run_cmd[arg_idx + 1]));
-            arg_idx += 1;
+    try qemu_args.append(b.allocator, "qemu-system-riscv64");
+    try qemu_args.append(b.allocator, "-nographic");
+    try qemu_args.append(b.allocator, "-machine");
+    try qemu_args.append(b.allocator, "virt");
+    try qemu_args.append(b.allocator, "-cpu");
+    if (qemu_cpu_opt) |cpu| {
+        try qemu_args.append(b.allocator, cpu);
+    } else {
+        var cpu_buf = ArrayList(u8).empty;
+        defer cpu_buf.deinit(b.allocator);
+        try cpu_buf.appendSlice(b.allocator, "rv64");
+        if (pmp_fallback) {
+            try cpu_buf.appendSlice(b.allocator, ",h=false");
         } else {
-            try qemu_args.append(b.allocator, try b.allocator.dupe(u8, arg));
+            try cpu_buf.appendSlice(b.allocator, ",h=true");
         }
+        if (legacy_cpu) {
+            try cpu_buf.appendSlice(b.allocator, ",smstateen=false,sstc=false");
+        } else {
+            try cpu_buf.appendSlice(b.allocator, ",smstateen=true,sstc=true");
+        }
+        try cpu_buf.appendSlice(b.allocator, ",v=true");
+        try qemu_args.append(b.allocator, try cpu_buf.toOwnedSlice(b.allocator));
     }
+    try qemu_args.append(b.allocator, "-smp");
+    try qemu_args.append(b.allocator, b.fmt("{d}", .{smp_cores}));
+    try qemu_args.append(b.allocator, "-m");
+    try qemu_args.append(b.allocator, mem_size);
+    try qemu_args.append(b.allocator, "-bios");
+    try qemu_args.append(b.allocator, "none");
+    try qemu_args.append(b.allocator, "-kernel");
 
     const run_step = b.addSystemCommand(qemu_args.items);
     run_step.step.dependOn(b.getInstallStep());
@@ -364,18 +302,6 @@ pub fn build(b: *std.Build) !void {
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
-    const yaml_test_module = b.createModule(.{
-        .root_source_file = b.path("scripts/yaml_parser.zig"),
-        .optimize = optimize,
-        .target = b.graph.host,
-    });
-    const yaml_tests = b.addTest(.{
-        .root_module = yaml_test_module,
-        .name = "yaml-parser-tests",
-    });
-    const run_yaml_tests = b.addRunArtifact(yaml_tests);
-
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
-    test_step.dependOn(&run_yaml_tests.step);
 }
