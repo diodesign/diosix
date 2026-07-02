@@ -285,7 +285,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     }
 
     // If the trap came from a guest (not machine mode), handle rescheduling and idle loops
-    if (irq.privilege_mode != .machine) {
+    if (is_guest) {
         // If the active vcore was stopped (e.g., guest VM exited/terminated), reschedule immediately.
         if (pcpu.active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));

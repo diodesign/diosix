@@ -26,9 +26,6 @@ const MSTATUS_MIE: usize = 1 << 3;
 // controlled, so we return 0 (no-op on restore).
 inline fn disableInterrupts() usize {
     if (builtin.is_test) return 0;
-    const pcore = @import("pcore.zig");
-    const pcpu = pcore.this();
-    if (!pcpu.in_m_mode) return 0;
     return asm volatile ("csrrci %[ret], mstatus, 0x8"
         : [ret] "=r" (-> usize),
     );
@@ -48,17 +45,17 @@ inline fn restoreInterrupts(prev: usize) void {
 // deadlock (e.g., timer interrupt handler trying to acquire a lock
 // already held by the interrupted code on the same hart).
 const SpinLock = struct {
-    lock_value: value(bool),
+    lock_value: value(u32),
 
     pub fn init() SpinLock {
-        return SpinLock{ .lock_value = value(bool).init(false) };
+        return SpinLock{ .lock_value = value(u32).init(0) };
     }
 
     // Acquire the lock, disabling interrupts first. Returns the
     // previous mstatus so interrupts can be restored on unlock.
     pub fn lock(self: *SpinLock) usize {
         const prev_mstatus = disableInterrupts();
-        while (self.lock_value.swap(true, ordering.acq_rel) != false) {
+        while (self.lock_value.swap(1, ordering.acq_rel) != 0) {
             // spin until we get the lock. avoid hw_pause (wfi) during early boot
             // to prevent cores from waiting for interrupts that aren't set up yet.
             std.atomic.spinLoopHint();
@@ -68,7 +65,7 @@ const SpinLock = struct {
 
     // release the lock and restore interrupt state
     pub fn unlock(self: *SpinLock, prev_mstatus: usize) void {
-        self.lock_value.store(false, ordering.release);
+        self.lock_value.store(0, ordering.release);
         restoreInterrupts(prev_mstatus);
     }
 };

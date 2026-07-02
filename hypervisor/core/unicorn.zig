@@ -12,68 +12,14 @@ const pcore = @import("pcore.zig");
 // Global lock to protect allocator operations across harts
 var allocator_lock = atomic.NamedSpinLock.init("Unicorn Allocator Lock");
 
-extern const __hypervisor_end: u8;
-
-fn isHostTp(tp_val: usize) bool {
-    if (tp_val % 16 != 0) return false;
-    
-    const hv_end = @intFromPtr(&__hypervisor_end);
-    const max_cores = riscv.MAX_PHYS_CORES;
-    const cpu_slab_shift = 20; // 1MB per CPU slab (matching CPU_SLAB_SHIFT)
-    const max_slab_end = hv_end + (max_cores << cpu_slab_shift);
-
-    if (tp_val < hv_end or tp_val >= max_slab_end) return false;
-
-    const ctx = @as(*riscv.CpuContext, @ptrFromInt(tp_val));
-    const core_id = ctx.cpu_core_id;
-    if (core_id >= riscv.cpu_contexts.len) return false;
-    return riscv.cpu_contexts[core_id] == ctx;
-}
-
-pub const TpGuard = struct {
-    saved_tp: usize,
-    swapped: bool,
-    pub inline fn init() TpGuard {
-        var current: usize = undefined;
-        asm volatile (
-            \\mv %[current], tp
-            : [current] "=r" (current),
-        );
-        if (isHostTp(current)) {
-            return .{ .saved_tp = current, .swapped = false };
-        } else {
-            var host_tp: usize = undefined;
-            asm volatile (
-                \\csrr %[host_tp], mscratch
-                \\mv tp, %[host_tp]
-                : [host_tp] "=r" (host_tp),
-            );
-            return .{ .saved_tp = current, .swapped = true };
-        }
-    }
-    pub inline fn deinit(self: TpGuard) void {
-        if (self.swapped) {
-            asm volatile (
-                \\mv tp, %[saved]
-                :
-                : [saved] "r" (self.saved_tp),
-            );
-        }
-    }
-};
+pub const TpGuard = riscv.TpGuard;
 
 inline fn getSModeCPUContext() *riscv.CpuContext {
-    if (comptime @import("builtin").is_test) return riscv.getCPUContext();
-    return @ptrFromInt(asm volatile ("mv %[ret], tp"
-        : [ret] "=r" (-> usize),
-    ));
+    return riscv.getCPUContext();
 }
 
 pub inline fn readSModeTime() u64 {
-    if (comptime @import("builtin").is_test) return riscv.readTime();
-    return asm volatile ("csrr %[ret], time"
-        : [ret] "=r" (-> u64),
-    );
+    return riscv.readTime();
 }
 
 // Mock TLS buffer
@@ -187,9 +133,7 @@ pub export fn calloc(num: usize, size: usize) callconv(.c) ?*anyopaque {
 
 // Export standard assertions and print redirection for debug purposes
 pub export fn __assert_fail(assertion: [*:0]const u8, file: [*:0]const u8, line: c_uint, function: [*:0]const u8) callconv(.c) noreturn {
-    const ra = asm volatile ("mv %[ret], ra"
-        : [ret] "=r" (-> usize),
-    );
+    const ra = riscv.readRA();
     const guard = TpGuard.init();
     _ = guard;
     debug.printf("Assertion failed: {s} ({s}:{d}: {s}), ra=0x{x}\n", .{ assertion, file, line, function, ra });
@@ -197,16 +141,14 @@ pub export fn __assert_fail(assertion: [*:0]const u8, file: [*:0]const u8, line:
 }
 
 pub export fn abort() callconv(.c) noreturn {
-    const ra = asm volatile ("mv %[ret], ra"
-        : [ret] "=r" (-> usize),
-    );
+    const ra = riscv.readRA();
     const guard = TpGuard.init();
     _ = guard;
     debug.printf("Unicorn called abort(), ra=0x{x}\n", .{ra});
     while (true) {}
 }
 
-fn printVa(format: [*:0]const u8, ap: *std.builtin.VaList) void {
+fn printVa(format: [*:0]const u8, ap: *std.builtin.VaList) callconv(.c) void {
     const fmt = std.mem.span(format);
     var i: usize = 0;
     while (i < fmt.len) {
@@ -415,81 +357,7 @@ pub export fn pthread_join(thread: usize, retval: ?*?*anyopaque) callconv(.c) c_
     return 0;
 }
 
-pub export fn siglongjmp(env: ?*anyopaque, val: c_int) callconv(.naked) noreturn {
-    _ = env;
-    _ = val;
-    asm volatile (
-        \\ld ra, 0(a0)
-        \\ld sp, 8(a0)
-        \\ld s0, 16(a0)
-        \\ld s1, 24(a0)
-        \\ld s2, 32(a0)
-        \\ld s3, 40(a0)
-        \\ld s4, 48(a0)
-        \\ld s5, 56(a0)
-        \\ld s6, 64(a0)
-        \\ld s7, 72(a0)
-        \\ld s8, 80(a0)
-        \\ld s9, 88(a0)
-        \\ld s10, 96(a0)
-        \\ld s11, 104(a0)
-        \\mv a0, a1
-        \\bnez a0, 1f
-        \\li a0, 1
-        \\1:
-        \\ret
-    );
-}
-
-pub export fn longjmp(env: ?*anyopaque, val: c_int) callconv(.naked) noreturn {
-    _ = env;
-    _ = val;
-    asm volatile (
-        \\ld ra, 0(a0)
-        \\ld sp, 8(a0)
-        \\ld s0, 16(a0)
-        \\ld s1, 24(a0)
-        \\ld s2, 32(a0)
-        \\ld s3, 40(a0)
-        \\ld s4, 48(a0)
-        \\ld s5, 56(a0)
-        \\ld s6, 64(a0)
-        \\ld s7, 72(a0)
-        \\ld s8, 80(a0)
-        \\ld s9, 88(a0)
-        \\ld s10, 96(a0)
-        \\ld s11, 104(a0)
-        \\mv a0, a1
-        \\bnez a0, 1f
-        \\li a0, 1
-        \\1:
-        \\ret
-    );
-}
-
 pub export var stdout: ?*anyopaque = null;
-
-pub export fn setjmp(env: ?*anyopaque) callconv(.naked) c_int {
-    _ = env;
-    asm volatile (
-        \\sd ra, 0(a0)
-        \\sd sp, 8(a0)
-        \\sd s0, 16(a0)
-        \\sd s1, 24(a0)
-        \\sd s2, 32(a0)
-        \\sd s3, 40(a0)
-        \\sd s4, 48(a0)
-        \\sd s5, 56(a0)
-        \\sd s6, 64(a0)
-        \\sd s7, 72(a0)
-        \\sd s8, 80(a0)
-        \\sd s9, 88(a0)
-        \\sd s10, 96(a0)
-        \\sd s11, 104(a0)
-        \\li a0, 0
-        \\ret
-    );
-}
 
 pub export fn fflush(stream: ?*anyopaque) callconv(.c) c_int {
     _ = stream;
@@ -744,6 +612,36 @@ pub const uc_x86_reg = enum(c_int) {
     UC_X86_REG_RIP = 41,
     UC_X86_REG_RSI = 43,
     UC_X86_REG_RSP = 44,
+    UC_X86_REG_CR0 = 50,
+    UC_X86_REG_CR2 = 52,
+    UC_X86_REG_CR3 = 53,
+    UC_X86_REG_CR4 = 54,
+    UC_X86_REG_R8 = 106,
+    UC_X86_REG_R9 = 107,
+    UC_X86_REG_R10 = 108,
+    UC_X86_REG_R11 = 109,
+    UC_X86_REG_R12 = 110,
+    UC_X86_REG_R13 = 111,
+    UC_X86_REG_R14 = 112,
+    UC_X86_REG_R15 = 113,
+    UC_X86_REG_CS = 11,
+    UC_X86_REG_SS = 49,
+    UC_X86_REG_DS = 17,
+    UC_X86_REG_ES = 28,
+    UC_X86_REG_FS = 32,
+    UC_X86_REG_GS = 33,
+    UC_X86_REG_EFLAGS = 25,
+    UC_X86_REG_IDTR = 242,
+    UC_X86_REG_GDTR = 243,
+    UC_X86_REG_LDTR = 244,
+    UC_X86_REG_TR = 245,
+};
+
+pub const uc_x86_mmr = extern struct {
+    selector: u16 = 0,
+    base: u64 = 0,
+    limit: u32 = 0,
+    flags: u32 = 0,
 };
 
 // C API function prototypes linked from libunicorn.a
@@ -937,8 +835,13 @@ pub const uc_cb_eventmem_t = *const fn (uc: ?*anyopaque, mem_type: uc_mem_type, 
 pub const uc_hook = ?*anyopaque;
 pub const UC_HOOK_MEM_UNMAPPED = 112; // 1<<4 | 1<<5 | 1<<6
 pub const UC_HOOK_INTR: c_int = 1; // 1<<0
+pub const UC_HOOK_CODE: c_int = 4; // 1<<2
 pub const UC_HOOK_BLOCK: c_int = 8; // 1<<3
 pub const UC_HOOK_MEM_WRITE: c_int = 1 << 11; // 2048
+pub const UC_HOOK_INSN: c_int = 2;
+pub const UC_X86_INS_SYSCALL: c_int = 699;
+pub const UC_X86_INS_IN: c_int = 218;
+pub const UC_X86_INS_OUT: c_int = 500;
 
 pub const uc_cb_hookintr_t = *const fn (uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c) void;
 
@@ -953,7 +856,7 @@ pub const UC_CTL_FLUSH_TB: c_uint = 0x4000000a; // UC_CTL_WRITE(UC_CTL_TB_FLUSH=
 pub const UC_HOOK_INSN_INVALID: c_int = 1 << 14;
 
 pub const uc_hook_add = if (is_test) struct {
-    fn impl(engine: ?*anyopaque, hh: *uc_hook, type_mask: c_int, callback: ?*const anyopaque, user_data: ?*anyopaque, begin: u64, end: u64) callconv(.c) uc_err {
+    fn impl(engine: ?*anyopaque, hh: *uc_hook, type_mask: c_int, callback: ?*const anyopaque, user_data: ?*anyopaque, begin: u64, end: u64, ...) callconv(.c) uc_err {
         _ = engine;
         _ = hh;
         _ = type_mask;
@@ -992,35 +895,11 @@ pub export fn perror(s: [*:0]const u8) callconv(.c) void {
 pub export fn exit(status: c_int) callconv(.c) noreturn {
     const guard = TpGuard.init();
     _ = guard;
-    const ra = asm volatile ("mv %[ret], ra"
-        : [ret] "=r" (-> usize),
-    );
+    const ra = riscv.readRA();
     debug.printf("exit called with status {}, return address 0x{x}\n", .{ status, ra });
     while (true) {}
 }
 
-pub export fn sigsetjmp(env: ?*anyopaque, savesigs: c_int) callconv(.naked) c_int {
-    _ = env;
-    _ = savesigs;
-    asm volatile (
-        \\sd ra, 0(a0)
-        \\sd sp, 8(a0)
-        \\sd s0, 16(a0)
-        \\sd s1, 24(a0)
-        \\sd s2, 32(a0)
-        \\sd s3, 40(a0)
-        \\sd s4, 48(a0)
-        \\sd s5, 56(a0)
-        \\sd s6, 64(a0)
-        \\sd s7, 72(a0)
-        \\sd s8, 80(a0)
-        \\sd s9, 88(a0)
-        \\sd s10, 96(a0)
-        \\sd s11, 104(a0)
-        \\li a0, 0
-        \\ret
-    );
-}
 
 pub export fn snprintf(str: [*]u8, size: usize, format: [*:0]const u8, ...) callconv(.c) c_int {
     if (size == 0) return 0;
@@ -1122,8 +1001,7 @@ pub export fn __riscv_flush_icache(start: ?*anyopaque, end: ?*anyopaque, flags: 
     _ = start;
     _ = end;
     _ = flags;
-    if (comptime @import("builtin").is_test) return;
-    asm volatile ("fence.i");
+    riscv.flushIcache();
 }
 
 pub export fn bsearch(key: ?*const anyopaque, base: ?*const anyopaque, nitems: usize, size: usize, compar: ?*const fn (?*const anyopaque, ?*const anyopaque) callconv(.c) c_int) callconv(.c) ?*anyopaque {
@@ -1353,3 +1231,30 @@ pub export fn strstr(haystack: [*:0]const u8, needle: [*:0]const u8) callconv(.c
     }
     return null;
 }
+
+comptime {
+    if (is_test) {
+        @export(&diosix_uc_set_rdtime_fn_mock, .{ .name = "diosix_uc_set_rdtime_fn", .linkage = .strong });
+        @export(&diosix_uc_do_interrupt_mock, .{ .name = "diosix_uc_do_interrupt", .linkage = .strong });
+        @export(&diosix_uc_inject_interrupt_mock, .{ .name = "diosix_uc_inject_interrupt", .linkage = .strong });
+        @export(&diosix_uc_clear_stop_mock, .{ .name = "diosix_uc_clear_stop", .linkage = .strong });
+        @export(&diosix_uc_is_halted_mock, .{ .name = "diosix_uc_is_halted", .linkage = .strong });
+        @export(&diosix_uc_do_interrupt_arm64_mock, .{ .name = "diosix_uc_do_interrupt_arm64", .linkage = .strong });
+        @export(&diosix_uc_disable_arm64_mmu_mock, .{ .name = "diosix_uc_disable_arm64_mmu", .linkage = .strong });
+        @export(&diosix_uc_arm64_sync_mmu_state_mock, .{ .name = "diosix_uc_arm64_sync_mmu_state", .linkage = .strong });
+
+        const mock_val: u8 = 0;
+        @export(&mock_val, .{ .name = "__rootvm_start", .linkage = .strong });
+        @export(&mock_val, .{ .name = "__rootvm_end", .linkage = .strong });
+    }
+}
+
+fn diosix_uc_set_rdtime_fn_mock(_: ?*anyopaque, _: *const fn () callconv(.c) u64) callconv(.c) void {}
+fn diosix_uc_do_interrupt_mock(_: ?*anyopaque, _: c_int, _: ?*InterruptInfo) callconv(.c) void {}
+fn diosix_uc_inject_interrupt_mock(_: ?*anyopaque, _: c_int) callconv(.c) void {}
+fn diosix_uc_clear_stop_mock(_: ?*anyopaque) callconv(.c) void {}
+fn diosix_uc_is_halted_mock(_: ?*anyopaque) callconv(.c) c_int { return 0; }
+fn diosix_uc_do_interrupt_arm64_mock(_: ?*anyopaque, _: c_int) callconv(.c) void {}
+fn diosix_uc_disable_arm64_mmu_mock(_: ?*anyopaque) callconv(.c) void {}
+fn diosix_uc_arm64_sync_mmu_state_mock(_: ?*anyopaque) callconv(.c) void {}
+

@@ -786,6 +786,72 @@ pub inline fn readTime() u64 {
     );
 }
 
+extern const __hypervisor_end: u8;
+
+fn isHostTp(tp_val: usize) bool {
+    if (is_test) return false;
+    if (tp_val % 16 != 0) return false;
+    
+    const hv_end = @intFromPtr(&__hypervisor_end);
+    const max_cores = MAX_PHYS_CORES;
+    const cpu_slab_shift = 20; // 1MB per CPU slab
+    const max_slab_end = hv_end + (max_cores << cpu_slab_shift);
+
+    if (tp_val < hv_end or tp_val >= max_slab_end) return false;
+
+    const ctx = @as(*CpuContext, @ptrFromInt(tp_val));
+    const core_id = ctx.cpu_core_id;
+    if (core_id >= cpu_contexts.len) return false;
+    return cpu_contexts[core_id] == ctx;
+}
+
+pub const TpGuard = struct {
+    saved_tp: usize = 0,
+    swapped: bool = false,
+    pub inline fn init() TpGuard {
+        if (is_test) return .{};
+        var current: usize = undefined;
+        asm volatile (
+            \\mv %[current], tp
+            : [current] "=r" (current),
+        );
+        if (isHostTp(current)) {
+            return .{ .saved_tp = current, .swapped = false };
+        } else {
+            var host_tp: usize = undefined;
+            asm volatile (
+                \\csrr %[host_tp], mscratch
+                \\mv tp, %[host_tp]
+                : [host_tp] "=r" (host_tp),
+            );
+            return .{ .saved_tp = current, .swapped = true };
+        }
+    }
+    pub inline fn deinit(self: TpGuard) void {
+        if (is_test) return;
+        if (self.swapped) {
+            asm volatile (
+                "mv tp, %[saved]"
+                :
+                : [saved] "r" (self.saved_tp),
+            );
+        }
+    }
+};
+
+pub inline fn readRA() usize {
+    if (is_test) return 0;
+    return asm volatile ("mv %[ret], ra"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn flushIcache() void {
+    if (is_test) return;
+    asm volatile ("fence.i");
+}
+
+
 pub inline fn readHvip() usize {
     if (is_test) return 0;
     return asm volatile ("csrr %[ret], hvip"

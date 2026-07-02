@@ -181,7 +181,9 @@ pub const VirtualCore = struct {
             const stack = @as([*]align(16) u8, @ptrFromInt(stack_phys))[0..stack_size];
 
             var hypervisor_gp: usize = 0;
-            asm volatile ("mv %[g], gp" : [g] "=r" (hypervisor_gp));
+            if (comptime !@import("builtin").is_test) {
+                asm volatile ("mv %[g], gp" : [g] "=r" (hypervisor_gp));
+            }
 
             vcore.exec_path = .{
                 .emulated = .{

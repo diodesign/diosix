@@ -62,6 +62,9 @@ pub const Guest = struct {
     // Virtual memory ID for this guest
     vmid: u16,
 
+    // Early page table physical address (GPA) for x86_64 boot
+    early_pgt_gpa: usize,
+
     // Fast O(1) lookup from guest_hart_id to vcore.
     // Lock-free because vcores are only added during init before booting.
     vcore_lookup: [max_vcores]?*vcore.VirtualCore,
@@ -86,6 +89,7 @@ pub const Guest = struct {
             .vmid = try allocVmid(),
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = try vm_space.GuestSpace.init(allocator, is_trusted, base_gpa, base_hpa, range_size),
+            .early_pgt_gpa = 0,
             .allocator = allocator,
         };
         self.children.init();
@@ -296,6 +300,7 @@ pub const Guest = struct {
             .vmid = try allocVmid(),
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = child_space,
+            .early_pgt_gpa = 0,
             .allocator = self.allocator,
         };
         child.children.init();

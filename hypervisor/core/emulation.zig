@@ -148,6 +148,80 @@ fn idleEnableInterruptsHook(uc: ?*anyopaque, address: u64, size: u32, user_data:
     _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
 }
 
+fn x86_64CopyBootdataTrace(uc: ?*anyopaque, address: u64, size: u32, user_data: ?*anyopaque) callconv(.c) void {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    _ = size;
+    _ = user_data;
+    var rsi: u64 = 0;
+    var rdi: u64 = 0;
+    var rsp: u64 = 0;
+    var cr3: u64 = 0;
+    var cr2: u64 = 0;
+    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RSI), &rsi);
+    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RDI), &rdi);
+    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RSP), &rsp);
+    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_CR3), &cr3);
+    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_CR2), &cr2);
+    var pte_273: u64 = 0;
+    _ = glue.uc_mem_read(uc, cr3 + 273 * 8, @ptrCast(&pte_273), 8);
+    if (pte_273 == 0) {
+        pte_273 = 0x80011007; // (ram_base + 0x11000) | 7
+        _ = glue.uc_mem_write(uc, cr3 + 273 * 8, @ptrCast(&pte_273), 8);
+        debug.printf("emulation: dynamically mapped CR3[273] = 0x80011007\n", .{});
+    }
+    debug.printf("x86_64 copy_bootdata trace: pc=0x{x} RSI=0x{x} RDI=0x{x} RSP=0x{x} CR3=0x{x} CR2=0x{x} PML4[273]=0x{x}\n", .{ address, rsi, rdi, rsp, cr3, cr2, pte_273 });
+}
+
+fn x86_64IdtTrace(uc: ?*anyopaque, address: u64, size: u32, user_data: ?*anyopaque) callconv(.c) void {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    _ = uc;
+    _ = size;
+    _ = user_data;
+    debug.printf("x86_64 IDT trace: pc=0x{x}\n", .{ address });
+}
+
+fn x86_64SyscallCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(user_data.?));
+    const rip = x86_64.readPC(uc);
+    if (x86_64.handleCleanStop(uc, vc, rip)) {
+        _ = glue.uc_emu_stop(uc);
+    }
+}
+
+fn x86_64OutCallback(uc: ?*anyopaque, port: u32, size: c_int, value: u32, user_data: ?*anyopaque) callconv(.c) void {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    _ = size;
+    const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(user_data.?)));
+
+    // COM1 (0x3f8) serial output
+    if (port == 0x3f8) {
+        debug.putcharFromGuest(vc.guest_id, @as(u8, @intCast(value & 0xff)));
+    }
+
+    x86_64.advanceInsnPC(uc);
+}
+
+fn x86_64InCallback(uc: ?*anyopaque, port: u32, size: c_int, user_data: ?*anyopaque) callconv(.c) u32 {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    _ = size;
+    _ = user_data;
+
+    var result: u32 = 0;
+    // COM1 (0x3f8) line status register (LSR) read
+    if (port == 0x3f8 + 5) {
+        result = 0x20; // LSR empty status (0x20)
+    }
+
+    x86_64.advanceInsnPC(uc);
+    return result;
+}
+
 // Initialize Unicorn context for the given virtual core.
 pub fn init(vc: *vcore.VirtualCore) !void {
     const em = &vc.exec_path.emulated;
@@ -291,6 +365,23 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         _ = glue.uc_hook_add(uc, &hook_idle, UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&idleEnableInterruptsHook)), @as(?*anyopaque, @ptrCast(vc)), idle_hook_addr, idle_hook_addr);
     }
 
+    if (em.target_arch == .x86_64) {
+        var hook_syscall: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_syscall, glue.UC_HOOK_INSN, @as(?*const anyopaque, @ptrCast(&x86_64SyscallCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 1), @as(u64, 0), glue.UC_X86_INS_SYSCALL);
+
+        var hook_out: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_out, glue.UC_HOOK_INSN, @as(?*const anyopaque, @ptrCast(&x86_64OutCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 1), @as(u64, 0), glue.UC_X86_INS_OUT);
+
+        var hook_in: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_in, glue.UC_HOOK_INSN, @as(?*const anyopaque, @ptrCast(&x86_64InCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 1), @as(u64, 0), glue.UC_X86_INS_IN);
+
+        var hook_trace: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_trace, glue.UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&x86_64CopyBootdataTrace)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0xffffffff82267800), @as(u64, 0xffffffff82267820));
+
+        var hook_idt_trace: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_idt_trace, glue.UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&x86_64IdtTrace)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0xffffffff822675b0), @as(u64, 0xffffffff82267790));
+    }
+
     // Block hook: DISABLED — using uc_emu_start count parameter for
     // bounded execution instead. Timer/preemption checks happen in
     // the outer loop between uc_emu_start calls.
@@ -307,7 +398,7 @@ pub fn init(vc: *vcore.VirtualCore) !void {
                 rv32.initRegisters(uc, em.entry, em.dtb, i);
             },
             .aarch64 => aarch64.initRegisters(uc, em.entry, em.dtb, i),
-            .x86_64 => x86_64.initRegisters(uc, em.entry, em.dtb, i),
+            .x86_64 => x86_64.initRegisters(uc, em.entry, vc.guest.space.base_gpa, vc.guest.space.range_size, vc.guest.early_pgt_gpa),
             else => {},
         }
         _ = glue.uc_context_save(uc, sub.context.?);
@@ -535,6 +626,22 @@ pub fn run(vc: *vcore.VirtualCore) void {
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &m_priv);
             _ = glue.uc_reg_write(uc, rv32.UC_REG_MIP, &mip);
             _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
+        } else if (em.target_arch == .aarch64) {
+            var pstate: u64 = 0;
+            _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_arm64_reg.UC_ARM64_REG_PSTATE), &pstate);
+            const irq_enabled = (pstate & (1 << 7)) == 0;
+            if (irq_enabled and sub.timer_scheduled and em.virtual_time >= sub.timer_target) {
+                sub.timer_scheduled = false;
+                aarch64.deliverInterrupt(uc, pc, 0);
+            }
+        } else if (em.target_arch == .x86_64) {
+            var rflags: u64 = 0;
+            _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_EFLAGS), &rflags);
+            const irq_enabled = (rflags & (1 << 9)) != 0;
+            if (irq_enabled and sub.timer_scheduled and em.virtual_time >= sub.timer_target) {
+                sub.timer_scheduled = false;
+                x86_64.deliverInterrupt(uc, pc, 32);
+            }
         }
 
         em.emu_running = true;
@@ -546,16 +653,21 @@ pub fn run(vc: *vcore.VirtualCore) void {
         };
 
         var saved_tp: usize = undefined;
-        asm volatile (
-            \\mv %[saved], tp
-            : [saved] "=r" (saved_tp),
-        );
-        const err = glue.uc_emu_start(uc, current_pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
-        asm volatile (
-            \\mv tp, %[saved]
-            :
-            : [saved] "r" (saved_tp),
-        );
+        var err: glue.uc_err = undefined;
+        if (comptime @import("builtin").is_test) {
+            err = glue.uc_emu_start(uc, current_pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
+        } else {
+            asm volatile (
+                \\mv %[saved], tp
+                : [saved] "=r" (saved_tp),
+            );
+            err = glue.uc_emu_start(uc, current_pc, 0xffffffffffffffff, 0, vcore.emulation_timeslice_instructions);
+            asm volatile (
+                \\mv tp, %[saved]
+                :
+                : [saved] "r" (saved_tp),
+            );
+        }
         em.emu_running = false;
 
         glue.diosix_uc_clear_stop(uc);
@@ -602,6 +714,26 @@ pub fn run(vc: *vcore.VirtualCore) void {
                         new_pc = rv32.readPC(uc);
                         sub.last_pc = new_pc;
                     }
+                }
+            } else if (em.target_arch == .aarch64) {
+                var pstate: u64 = 0;
+                _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_arm64_reg.UC_ARM64_REG_PSTATE), &pstate);
+                const irq_enabled = (pstate & (1 << 7)) == 0;
+                if (irq_enabled and sub.timer_scheduled and em.virtual_time >= sub.timer_target) {
+                    sub.timer_scheduled = false;
+                    aarch64.deliverInterrupt(uc, new_pc, 0);
+                    new_pc = aarch64.readPC(uc);
+                    sub.last_pc = new_pc;
+                }
+            } else if (em.target_arch == .x86_64) {
+                var rflags: u64 = 0;
+                _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_EFLAGS), &rflags);
+                const irq_enabled = (rflags & (1 << 9)) != 0;
+                if (irq_enabled and sub.timer_scheduled and em.virtual_time >= sub.timer_target) {
+                    sub.timer_scheduled = false;
+                    x86_64.deliverInterrupt(uc, new_pc, 32);
+                    new_pc = x86_64.readPC(uc);
+                    sub.last_pc = new_pc;
                 }
             }
 
@@ -706,6 +838,15 @@ pub fn run(vc: *vcore.VirtualCore) void {
             }
         }
 
+        if (em.target_arch == .x86_64) {
+            var cr0: u64 = 0;
+            var cr3: u64 = 0;
+            var eflags: u64 = 0;
+            _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_CR0), &cr0);
+            _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_CR3), &cr3);
+            _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_EFLAGS), &eflags);
+            debug.printf("x86_64 registers: CR0=0x{x} CR3=0x{x} EFLAGS=0x{x}\n", .{ cr0, cr3, eflags });
+        }
         debug.printf("Unicorn: execution error {} at PC 0x{x}\n", .{ err, new_pc });
         vc.state = .stopped;
         return;
@@ -744,6 +885,7 @@ fn intrCallback(uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c
     switch (em.target_arch) {
         .riscv32 => intrCallbackRiscv32(uc, intno, vc),
         .aarch64 => intrCallbackAarch64(uc, intno, vc),
+        .x86_64 => intrCallbackX86_64(uc, intno, vc),
         else => {},
     }
 }
@@ -983,6 +1125,18 @@ fn intrCallbackAarch64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
     _ = glue.uc_emu_stop(uc);
 }
 
+fn intrCallbackX86_64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void {
+    // EXCP_HALTED is 65539. QEMU fires this when it encounters HLT.
+    if (intno == 65539) {
+        @atomicStore(bool, &vc.wfi_blocked, true, .release);
+        _ = glue.uc_emu_stop(uc);
+        return;
+    }
+    debug.printf("x86_64: unhandled interrupt/exception number {} at PC=0x{x}\n", .{ intno, x86_64.readPC(uc) });
+    _ = glue.uc_emu_stop(uc);
+}
+
+
 // Memory callback for unmapped regions — handles MMIO (UART, etc.).
 fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) bool {
     const guard = glue.TpGuard.init();
@@ -1012,18 +1166,42 @@ fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: 
         // Returning 0 means "TX ready" which is sufficient for earlycon.
         return true; // Claim all PL011 MMIO accesses.
     }
-    // For any unmapped access below guest RAM (0x80000000):
-    // Map a 4KB page, fill it with 0xff (so PCI vendor/device ID scans read 0xffffffff), and retry.
     if (address < 0x80000000) {
         const page_size: u64 = 4096;
         const page_base = address & ~(page_size - 1);
         const map_err = glue.uc_mem_map(uc, page_base, page_size, glue.uc_prot.UC_PROT_ALL);
-        if (map_err == .UC_ERR_OK) {
+        if (map_err == .UC_ERR_OK or map_err == .UC_ERR_MAP) {
             const buf: [4096]u8 = @splat(0xff);
             _ = glue.uc_mem_write(uc, page_base, &buf, page_size);
             return true;
         }
-        return true;
+        return false;
+    }
+
+    // Map local APIC (0xfee00000) and I/O APIC (0xfec00000) regions as dummy pages.
+    if (address >= 0xfec00000 and address < 0xff000000) {
+        const page_size: u64 = 4096;
+        const page_base = address & ~(page_size - 1);
+        const map_err = glue.uc_mem_map(uc, page_base, page_size, glue.uc_prot.UC_PROT_ALL);
+        if (map_err == .UC_ERR_OK) {
+            var apic_buf = std.mem.zeroes([4096]u8);
+            
+            // If mapping local APIC page (0xfee00000), set up realistic registers
+            if (page_base == 0xfee00000) {
+                // APIC ID register at offset 0x20: CPU ID 0
+                std.mem.writeInt(u32, apic_buf[0x20..0x24], 0x00000000, .little);
+                // APIC Version register at offset 0x30: version 0x14 (integrated APIC), max LVT 5
+                std.mem.writeInt(u32, apic_buf[0x30..0x34], 0x00050014, .little);
+                // Spurious Interrupt Vector register at offset 0xf0: default 0x000000ff after reset
+                std.mem.writeInt(u32, apic_buf[0xf0..0xf4], 0x000000ff, .little);
+            }
+            
+            _ = glue.uc_mem_write(uc, page_base, &apic_buf, page_size);
+            return true;
+        } else if (map_err == .UC_ERR_MAP) {
+            return true;
+        }
+        return false;
     }
 
     // AArch64 kernel virtual address space: demand-map zero-filled pages
@@ -1035,13 +1213,14 @@ fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: 
         const page_size: u64 = 0x200000; // 2MB
         const page_base = address & ~(page_size - 1);
         const map_err = glue.uc_mem_map(uc, page_base, page_size, glue.uc_prot.UC_PROT_ALL);
-        if (map_err == .UC_ERR_OK) {
+        if (map_err == .UC_ERR_OK or map_err == .UC_ERR_MAP) {
             return true; // Retry the access — it should succeed now.
         }
-        // If mapping failed (e.g., overlap), still return true to avoid crash.
-        return true;
+        debug.printf("memCallback: ffff map failed at 0x{x} err={}\n", .{address, @intFromEnum(map_err)});
+        return false;
     }
 
+    debug.printf("UNMAPPED ACCESS: address=0x{x} type={}\n", .{address, @intFromEnum(mem_type)});
     return false; // Unmapped access — stop emulation.
 }
 

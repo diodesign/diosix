@@ -103,6 +103,7 @@ pub const PMPConfig = struct {
     }
 
     pub fn clearAllPmp() void {
+        if (comptime @import("builtin").is_test) return;
         asm volatile ("csrw pmpcfg0, zero");
         asm volatile ("csrw pmpcfg2, zero");
         asm volatile ("csrw pmpaddr0, zero");
@@ -125,6 +126,7 @@ pub const PMPConfig = struct {
 
     /// Write a value to pmpaddr[index]. Only entries 0-15 are supported.
     pub fn writePmpAddr(index: usize, value: usize) void {
+        if (comptime @import("builtin").is_test) return;
         switch (index) {
             0 => asm volatile ("csrw pmpaddr0, %[val]"
                 :
@@ -197,6 +199,7 @@ pub const PMPConfig = struct {
     /// Write configuration for a single PMP entry.
     /// PMP configs are packed 4-per-register in pmpcfg0 (entries 0-7) and pmpcfg2 (entries 8-15).
     pub fn writePmpCfg(index: usize, cfg: u8) void {
+        if (comptime @import("builtin").is_test) return;
         if (index >= 16) return;
 
         // Determine which pmpcfg register and which byte within it.

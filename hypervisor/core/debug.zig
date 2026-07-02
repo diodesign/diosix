@@ -207,7 +207,7 @@ fn drainQueuesInternal(state: *ConsoleState) void {
 // Releases our spinlocks immediately when a crash is caught, enabling diagnostic prints.
 pub fn releaseLocksForCrash() void {
     panic_mode = true;
-    global_console_state.lock.spinlock.lock_value.store(false, .release);
+    global_console_state.lock.spinlock.lock_value.store(0, .release);
 }
 
 const basic_writer_vtable = Writer.VTable{

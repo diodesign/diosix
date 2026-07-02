@@ -12,6 +12,7 @@ const glue = @import("../../unicorn.zig");
 const vcore = @import("../../vcore.zig");
 const debug = @import("../../debug.zig");
 const psci = @import("psci.zig");
+const pcore = @import("../../pcore.zig");
 
 pub const ExceptionAction = emulation.ExceptionAction;
 
@@ -201,17 +202,35 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
             }
             switch (@as(u15, @truncate(sysreg))) {
                 SYSREG_CNTP_CTL_EL0 => {
-                    // Timer control write: bit 0 = ENABLE.
-                    // We don't actively manage the timer control here;
-                    // the timer fires based on CVAL comparison in the outer loop.
+                    // Timer control write: bit 0 = ENABLE, bit 1 = IMASK.
+                    if (pcore.this().active_vcore) |opaque_vc| {
+                        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                        const em = &vc.exec_path.emulated;
+                        const sub = &em.sub_vcores[em.active_sub_vcore];
+                        const enabled = (val & 1) != 0;
+                        const masked = (val & 2) != 0;
+                        sub.timer_scheduled = enabled and !masked;
+                    }
                 },
                 SYSREG_CNTP_CVAL_EL0 => {
-                    // Timer compare value — not yet wired to vc.timer_target.
-                    // TODO: set vc.timer_target = val for proper timer delivery.
+                    if (pcore.this().active_vcore) |opaque_vc| {
+                        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                        const em = &vc.exec_path.emulated;
+                        const sub = &em.sub_vcores[em.active_sub_vcore];
+                        sub.timer_target = val;
+                        sub.timer_scheduled = true;
+                    }
                 },
                 SYSREG_CNTP_TVAL_EL0 => {
-                    // Timer value — relative: CVAL = CNTPCT + TVAL.
-                    // TODO: set vc.timer_target = readSModeTime() + val.
+                    if (pcore.this().active_vcore) |opaque_vc| {
+                        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                        const em = &vc.exec_path.emulated;
+                        const sub = &em.sub_vcores[em.active_sub_vcore];
+                        const offset = @as(i64, @bitCast(val));
+                        const current_time = glue.readSModeTime();
+                        sub.timer_target = @bitCast(@as(i64, @bitCast(current_time)) +% offset);
+                        sub.timer_scheduled = true;
+                    }
                 },
                 else => {
                     const S2 = struct {
@@ -450,6 +469,16 @@ pub fn deliverInterrupt(uc: ?*anyopaque, pc: u64, _: u32) void {
     // Save PSTATE to SPSR_EL1 (approximated).
     var pstate: u64 = 0;
     _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_ARM64_REG_PSTATE), &pstate);
+
+    var spsr = glue.uc_arm64_cp_reg{
+        .crn = 4,
+        .crm = 0,
+        .op0 = 3,
+        .op1 = 0,
+        .op2 = 0,
+        .val = pstate,
+    };
+    _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_ARM64_REG_CP_REG), &spsr);
 
     // Set PSTATE to EL1h with all exceptions masked.
     var new_pstate: u64 = PSTATE_EL1H_ALL_MASKED;

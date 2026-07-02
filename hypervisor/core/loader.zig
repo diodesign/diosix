@@ -77,8 +77,9 @@ pub const Loader = struct {
             return LoaderError.InvalidProgramHeader;
         }
 
-        // First pass: find the minimum virtual address among all loadable segments.
+        // First pass: find the minimum virtual and physical addresses among all loadable segments.
         var min_vaddr: u64 = std.math.maxInt(u64);
+        var min_paddr: u64 = std.math.maxInt(u64);
         var i: usize = 0;
         while (i < ph_num) : (i += 1) {
             const off = ph_off + (i * ph_size);
@@ -86,23 +87,30 @@ pub const Loader = struct {
             
             var p_type: u32 = 0;
             var p_vaddr: u64 = 0;
+            var p_paddr: u64 = 0;
 
             if (class == 1) { // ELF32 Phdr
                 p_type = readU32(source, off + 0);
                 p_vaddr = readU32(source, off + 8);
+                p_paddr = readU32(source, off + 12);
             } else { // ELF64 Phdr
                 p_type = readU32(source, off + 0);
                 p_vaddr = readU64(source, off + 16);
+                p_paddr = readU64(source, off + 24);
             }
 
             if (p_type == elf_spec.PT_LOAD) {
                 if (p_vaddr < min_vaddr) {
                     min_vaddr = p_vaddr;
                 }
+                if (p_paddr < min_paddr) {
+                    min_paddr = p_paddr;
+                }
             }
         }
 
         if (min_vaddr == std.math.maxInt(u64)) min_vaddr = 0;
+        if (min_paddr == std.math.maxInt(u64)) min_paddr = 0;
 
         // Second pass: load and map the segments into the guest's physical memory.
         i = 0;
@@ -112,6 +120,7 @@ pub const Loader = struct {
             var p_type: u32 = 0;
             var p_offset: u64 = 0;
             var p_vaddr: u64 = 0;
+            var p_paddr: u64 = 0;
             var p_filesz: u64 = 0;
             var p_memsz: u64 = 0;
 
@@ -119,12 +128,14 @@ pub const Loader = struct {
                 p_type = readU32(source, off + 0);
                 p_offset = readU32(source, off + 4);
                 p_vaddr = readU32(source, off + 8);
+                p_paddr = readU32(source, off + 12);
                 p_filesz = readU32(source, off + 16);
                 p_memsz = readU32(source, off + 20);
             } else { // ELF64 Phdr
                 p_type = readU32(source, off + 0);
                 p_offset = readU64(source, off + 8);
                 p_vaddr = readU64(source, off + 16);
+                p_paddr = readU64(source, off + 24);
                 p_filesz = readU64(source, off + 32);
                 p_memsz = readU64(source, off + 40);
             }
@@ -165,8 +176,16 @@ pub const Loader = struct {
             }
         }
 
-        // Return the entry point translated to GPA for the guest.
-        const entry_offset = entry_point - min_vaddr;
+        // Look up early_top_pgt for x86_64 guest to configure the initial page tables.
+        if (findSymbol(source, "early_top_pgt")) |pgt_vaddr| {
+            const pgt_offset = pgt_vaddr -% min_vaddr;
+            root_vm.early_pgt_gpa = root_vm.space.base_gpa + @as(usize, @intCast(pgt_offset));
+        }
+
+        const entry_offset = if (entry_point < min_vaddr)
+            entry_point -% min_paddr
+        else
+            entry_point -% min_vaddr;
         return root_vm.space.base_gpa + @as(usize, @intCast(entry_offset));
     }
 
