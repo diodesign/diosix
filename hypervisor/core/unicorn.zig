@@ -12,7 +12,80 @@ const pcore = @import("pcore.zig");
 // Global lock to protect allocator operations across harts
 var allocator_lock = atomic.NamedSpinLock.init("Unicorn Allocator Lock");
 
-pub const TpGuard = riscv.TpGuard;
+pub const TpGuard = struct {
+    saved_tp: usize = 0,
+    swapped: bool = false,
+
+    pub fn init() TpGuard {
+        if (comptime @import("builtin").is_test) return .{};
+        var current: usize = undefined;
+        asm volatile (
+            \\mv %[current], tp
+            : [current] "=r" (current),
+        );
+        if (riscv.isHostTp(current)) {
+            return .{ .saved_tp = current, .swapped = false };
+        } else {
+            const host_tp = riscv.readSscratch();
+            asm volatile (
+                \\mv tp, %[host_tp]
+                :
+                : [host_tp] "r" (host_tp),
+            );
+            return .{ .saved_tp = current, .swapped = true };
+        }
+    }
+
+    pub fn deinit(self: TpGuard) void {
+        if (comptime @import("builtin").is_test) return;
+        if (self.swapped) {
+            asm volatile (
+                \\mv tp, %[saved]
+                :
+                : [saved] "r" (self.saved_tp),
+            );
+        }
+    }
+};
+
+const vcore = @import("vcore.zig");
+
+pub const UCTpGuard = struct {
+    saved_tp: usize = 0,
+    pub fn init() UCTpGuard {
+        if (comptime @import("builtin").is_test) return .{};
+        var saved_tp: usize = undefined;
+        var caller_ra: usize = undefined;
+        asm volatile (
+            \\mv %[saved], tp
+            \\mv %[ra], ra
+            : [saved] "=r" (saved_tp),
+              [ra] "=r" (caller_ra),
+        );
+        const cpu = riscv.getCPUContext();
+        if (cpu.active_vcore) |vc_raw| {
+            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+            riscv.writeSscratch(saved_tp);
+            const tls = vc.exec_path.emulated.tls_pointer;
+            if (tls != 0) {
+                asm volatile (
+                    \\mv tp, %[tls]
+                    :
+                    : [tls] "r" (tls),
+                );
+            }
+        }
+        return .{ .saved_tp = saved_tp };
+    }
+    pub fn deinit(self: UCTpGuard) void {
+        if (comptime @import("builtin").is_test) return;
+        asm volatile (
+            \\mv tp, %[saved]
+            :
+            : [saved] "r" (self.saved_tp),
+        );
+    }
+};
 
 inline fn getSModeCPUContext() *riscv.CpuContext {
     return riscv.getCPUContext();
@@ -227,7 +300,7 @@ pub export fn clock_gettime(clk_id: c_int, tp: ?*anyopaque) callconv(.c) c_int {
         tv_sec: i64,
         tv_nsec: i64,
     };
-    const t = @as(*TimeSpec, @ptrCast(@alignCast(tp orelse return -1)));
+    const t = @as(*align(1) TimeSpec, @ptrCast(tp orelse return -1));
     const time_ticks = readSModeTime();
     // 10MHz frequency means 1 tick = 100ns
     const total_ns = time_ticks * 100;
@@ -244,7 +317,7 @@ pub export fn gettimeofday(tv: ?*anyopaque, tz: ?*anyopaque) callconv(.c) c_int 
         tv_sec: i64,
         tv_usec: i64,
     };
-    const t = @as(*TimeVal, @ptrCast(@alignCast(tv orelse return -1)));
+    const t = @as(*align(1) TimeVal, @ptrCast(tv orelse return -1));
     const time_ticks = readSModeTime();
     // 10MHz frequency means 10 ticks per microsecond
     const total_us = time_ticks / 10;
@@ -256,12 +329,11 @@ pub export fn gettimeofday(tv: ?*anyopaque, tz: ?*anyopaque) callconv(.c) c_int 
 pub export fn __tls_get_addr(ti: ?*anyopaque) callconv(.c) ?*anyopaque {
     const guard = TpGuard.init();
     defer guard.deinit();
-    debug.printf("unicorn_glue: __tls_get_addr called\n", .{});
     const TlsIdx = struct {
         module: usize,
         offset: usize,
     };
-    const idx = @as(*TlsIdx, @ptrCast(@alignCast(ti orelse return null)));
+    const idx = @as(*align(1) const TlsIdx, @ptrCast(ti orelse return null));
     return &tls_buffer[idx.offset % 8192];
 }
 
@@ -635,6 +707,9 @@ pub const uc_x86_reg = enum(c_int) {
     UC_X86_REG_GDTR = 243,
     UC_X86_REG_LDTR = 244,
     UC_X86_REG_TR = 245,
+    UC_X86_REG_MSR = 248,
+    UC_X86_REG_FS_BASE = 250,
+    UC_X86_REG_GS_BASE = 251,
 };
 
 pub const uc_x86_mmr = extern struct {
@@ -644,191 +719,250 @@ pub const uc_x86_mmr = extern struct {
     flags: u32 = 0,
 };
 
-// C API function prototypes linked from libunicorn.a
-const is_test = @import("builtin").is_test;
+pub const uc_x86_msr = extern struct {
+    rid: u32,
+    value: u64,
+};
 
-pub const uc_version = if (is_test) struct {
+// Raw C API function prototypes linked from libunicorn.a
+const is_test = @import("builtin").is_test;
+const raw_uc_version = if (is_test) struct {
     fn impl(major: ?*c_int, minor: ?*c_int) callconv(.c) c_uint {
-        _ = major;
-        _ = minor;
-        return 0;
+        _ = major; _ = minor; return 0;
     }
 }.impl else struct {
     pub extern fn uc_version(major: ?*c_int, minor: ?*c_int) c_uint;
 }.uc_version;
 
-pub const uc_open = if (is_test) struct {
+pub fn uc_version(major: ?*c_int, minor: ?*c_int) c_uint {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_version(major, minor);
+}
+
+const raw_uc_open = if (is_test) struct {
     fn impl(arch: uc_arch, mode: uc_mode, engine: *?*anyopaque) callconv(.c) uc_err {
-        _ = arch;
-        _ = mode;
-        _ = engine;
-        return .UC_ERR_OK;
+        _ = arch; _ = mode; _ = engine; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_open(arch: uc_arch, mode: uc_mode, engine: *?*anyopaque) uc_err;
 }.uc_open;
 
-pub const uc_ctl = if (is_test) struct {
-    fn impl(engine: ?*anyopaque, control: c_uint, ...) callconv(.c) uc_err {
-        _ = engine;
-        _ = control;
-        return .UC_ERR_OK;
+pub fn uc_open(arch: uc_arch, mode: uc_mode, engine: *?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_open(arch, mode, engine);
+}
+
+const raw_uc_ctl = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, control: c_uint, arg: usize) callconv(.c) uc_err {
+        _ = engine; _ = control; _ = arg; return .UC_ERR_OK;
     }
 }.impl else struct {
-    extern fn uc_ctl(engine: ?*anyopaque, control: c_uint, ...) uc_err;
+    extern fn uc_ctl(engine: ?*anyopaque, control: c_uint, arg: usize) uc_err;
 }.uc_ctl;
 
-pub const uc_close = if (is_test) struct {
+pub fn uc_ctl(engine: ?*anyopaque, control: c_uint, arg: usize) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_ctl(engine, control, arg);
+}
+
+const raw_uc_close = if (is_test) struct {
     fn impl(engine: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine;
-        return .UC_ERR_OK;
+        _ = engine; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_close(engine: ?*anyopaque) uc_err;
 }.uc_close;
 
-pub const uc_emu_start = if (is_test) struct {
+pub fn uc_close(engine: ?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_close(engine);
+}
+
+const raw_uc_emu_start = if (is_test) struct {
     fn impl(engine: ?*anyopaque, begin: u64, until: u64, timeout: u64, count: u64) callconv(.c) uc_err {
-        _ = engine;
-        _ = begin;
-        _ = until;
-        _ = timeout;
-        _ = count;
-        return .UC_ERR_OK;
+        _ = engine; _ = begin; _ = until; _ = timeout; _ = count; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_emu_start(engine: ?*anyopaque, begin: u64, until: u64, timeout: u64, count: u64) uc_err;
 }.uc_emu_start;
 
-pub const uc_emu_stop = if (is_test) struct {
+pub fn uc_emu_start(engine: ?*anyopaque, begin: u64, until: u64, timeout: u64, count: u64) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_emu_start(engine, begin, until, timeout, count);
+}
+
+const raw_uc_emu_stop = if (is_test) struct {
     fn impl(engine: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine;
-        return .UC_ERR_OK;
+        _ = engine; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_emu_stop(engine: ?*anyopaque) uc_err;
 }.uc_emu_stop;
 
-pub const uc_reg_write = if (is_test) struct {
+pub fn uc_emu_stop(engine: ?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_emu_stop(engine);
+}
+
+const raw_uc_reg_write = if (is_test) struct {
     fn impl(engine: ?*anyopaque, regid: c_int, value: ?*const anyopaque) callconv(.c) uc_err {
-        _ = engine;
-        _ = regid;
-        _ = value;
-        return .UC_ERR_OK;
+        _ = engine; _ = regid; _ = value; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_reg_write(engine: ?*anyopaque, regid: c_int, value: ?*const anyopaque) uc_err;
 }.uc_reg_write;
 
-pub const uc_reg_read = if (is_test) struct {
+pub fn uc_reg_write(engine: ?*anyopaque, regid: c_int, value: ?*const anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_reg_write(engine, regid, value);
+}
+
+const raw_uc_reg_read = if (is_test) struct {
     fn impl(engine: ?*anyopaque, regid: c_int, value: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine;
-        _ = regid;
-        _ = value;
-        return .UC_ERR_OK;
+        _ = engine; _ = regid; _ = value; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_reg_read(engine: ?*anyopaque, regid: c_int, value: ?*anyopaque) uc_err;
 }.uc_reg_read;
 
-pub const uc_context_alloc = if (is_test) struct {
+pub fn uc_reg_read(engine: ?*anyopaque, regid: c_int, value: ?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_reg_read(engine, regid, value);
+}
+
+const raw_uc_context_alloc = if (is_test) struct {
     fn impl(engine: ?*anyopaque, context: *?*anyopaque) callconv(.c) uc_err {
-        _ = engine;
-        _ = context;
-        return .UC_ERR_OK;
+        _ = engine; _ = context; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_context_alloc(engine: ?*anyopaque, context: *?*anyopaque) uc_err;
 }.uc_context_alloc;
 
-pub const uc_context_save = if (is_test) struct {
+pub fn uc_context_alloc(engine: ?*anyopaque, context: *?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_context_alloc(engine, context);
+}
+
+const raw_uc_context_save = if (is_test) struct {
     fn impl(engine: ?*anyopaque, context: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine;
-        _ = context;
-        return .UC_ERR_OK;
+        _ = engine; _ = context; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_context_save(engine: ?*anyopaque, context: ?*anyopaque) uc_err;
 }.uc_context_save;
 
-pub const uc_context_restore = if (is_test) struct {
+pub fn uc_context_save(engine: ?*anyopaque, context: ?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_context_save(engine, context);
+}
+
+const raw_uc_context_restore = if (is_test) struct {
     fn impl(engine: ?*anyopaque, context: ?*anyopaque) callconv(.c) uc_err {
-        _ = engine;
-        _ = context;
-        return .UC_ERR_OK;
+        _ = engine; _ = context; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_context_restore(engine: ?*anyopaque, context: ?*anyopaque) uc_err;
 }.uc_context_restore;
 
-pub const uc_context_free = if (is_test) struct {
+pub fn uc_context_restore(engine: ?*anyopaque, context: ?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_context_restore(engine, context);
+}
+
+const raw_uc_context_free = if (is_test) struct {
     fn impl(context: ?*anyopaque) callconv(.c) uc_err {
-        _ = context;
-        return .UC_ERR_OK;
+        _ = context; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_context_free(context: ?*anyopaque) uc_err;
 }.uc_context_free;
 
-pub const uc_mem_map = if (is_test) struct {
+pub fn uc_context_free(context: ?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_context_free(context);
+}
+
+const raw_uc_mem_map = if (is_test) struct {
     fn impl(engine: ?*anyopaque, address: u64, size: u64, perms: u32) callconv(.c) uc_err {
-        _ = engine;
-        _ = address;
-        _ = size;
-        _ = perms;
-        return .UC_ERR_OK;
+        _ = engine; _ = address; _ = size; _ = perms; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_mem_map(engine: ?*anyopaque, address: u64, size: u64, perms: u32) uc_err;
 }.uc_mem_map;
 
-pub const uc_mem_map_ptr = if (is_test) struct {
+pub fn uc_mem_map(engine: ?*anyopaque, address: u64, size: u64, perms: u32) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_mem_map(engine, address, size, perms);
+}
+
+const raw_uc_mem_map_ptr = if (is_test) struct {
     fn dummy_uc_mem_map_ptr(engine: ?*anyopaque, address: u64, size: u64, perms: u32, ptr: ?*anyopaque) uc_err {
-        _ = engine;
-        _ = address;
-        _ = size;
-        _ = perms;
-        _ = ptr;
-        return .UC_ERR_OK;
+        _ = engine; _ = address; _ = size; _ = perms; _ = ptr; return .UC_ERR_OK;
     }
 }.dummy_uc_mem_map_ptr else struct {
     extern fn uc_mem_map_ptr(engine: ?*anyopaque, address: u64, size: u64, perms: u32, ptr: ?*anyopaque) uc_err;
 }.uc_mem_map_ptr;
 
-pub const uc_mem_read = if (is_test) struct {
+pub fn uc_mem_map_ptr(engine: ?*anyopaque, address: u64, size: u64, perms: u32, ptr: ?*anyopaque) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_mem_map_ptr(engine, address, size, perms, ptr);
+}
+
+const raw_uc_mem_read = if (is_test) struct {
     fn dummy_uc_mem_read(engine: ?*anyopaque, address: u64, bytes: [*]u8, size: usize) uc_err {
-        _ = engine;
-        _ = address;
-        _ = bytes;
-        _ = size;
-        return .UC_ERR_OK;
+        _ = engine; _ = address; _ = bytes; _ = size; return .UC_ERR_OK;
     }
 }.dummy_uc_mem_read else struct {
     extern fn uc_mem_read(engine: ?*anyopaque, address: u64, bytes: [*]u8, size: usize) uc_err;
 }.uc_mem_read;
 
-pub const uc_mem_write = if (is_test) struct {
+pub fn uc_mem_read(engine: ?*anyopaque, address: u64, bytes: [*]u8, size: usize) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_mem_read(engine, address, bytes, size);
+}
+
+const raw_uc_mem_write = if (is_test) struct {
     fn dummy_uc_mem_write(engine: ?*anyopaque, address: u64, bytes: [*]const u8, size: usize) uc_err {
-        _ = engine;
-        _ = address;
-        _ = bytes;
-        _ = size;
-        return .UC_ERR_OK;
+        _ = engine; _ = address; _ = bytes; _ = size; return .UC_ERR_OK;
     }
 }.dummy_uc_mem_write else struct {
     extern fn uc_mem_write(engine: ?*anyopaque, address: u64, bytes: [*]const u8, size: usize) uc_err;
 }.uc_mem_write;
 
-pub const uc_mem_unmap = if (is_test) struct {
+pub fn uc_mem_write(engine: ?*anyopaque, address: u64, bytes: [*]const u8, size: usize) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_mem_write(engine, address, bytes, size);
+}
+
+const raw_uc_mem_unmap = if (is_test) struct {
     fn impl(engine: ?*anyopaque, address: u64, size: u64) callconv(.c) uc_err {
-        _ = engine;
-        _ = address;
-        _ = size;
-        return .UC_ERR_OK;
+        _ = engine; _ = address; _ = size; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_mem_unmap(engine: ?*anyopaque, address: u64, size: u64) uc_err;
 }.uc_mem_unmap;
+
+pub fn uc_mem_unmap(engine: ?*anyopaque, address: u64, size: u64) uc_err {
+    const guard = UCTpGuard.init();
+    defer guard.deinit();
+    return raw_uc_mem_unmap(engine, address, size);
+}
 
 // Hook API
 pub const uc_cb_eventmem_t = *const fn (uc: ?*anyopaque, mem_type: uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) bool;
@@ -838,6 +972,7 @@ pub const UC_HOOK_INTR: c_int = 1; // 1<<0
 pub const UC_HOOK_CODE: c_int = 4; // 1<<2
 pub const UC_HOOK_BLOCK: c_int = 8; // 1<<3
 pub const UC_HOOK_MEM_WRITE: c_int = 1 << 11; // 2048
+pub const UC_HOOK_MEM_READ: c_int = 1 << 10; // 1024
 pub const UC_HOOK_INSN: c_int = 2;
 pub const UC_X86_INS_SYSCALL: c_int = 699;
 pub const UC_X86_INS_IN: c_int = 218;
@@ -857,18 +992,19 @@ pub const UC_HOOK_INSN_INVALID: c_int = 1 << 14;
 
 pub const uc_hook_add = if (is_test) struct {
     fn impl(engine: ?*anyopaque, hh: *uc_hook, type_mask: c_int, callback: ?*const anyopaque, user_data: ?*anyopaque, begin: u64, end: u64, ...) callconv(.c) uc_err {
-        _ = engine;
-        _ = hh;
-        _ = type_mask;
-        _ = callback;
-        _ = user_data;
-        _ = begin;
-        _ = end;
-        return .UC_ERR_OK;
+        _ = engine; _ = hh; _ = type_mask; _ = callback; _ = user_data; _ = begin; _ = end; return .UC_ERR_OK;
     }
 }.impl else struct {
     extern fn uc_hook_add(engine: ?*anyopaque, hh: *uc_hook, type_mask: c_int, callback: ?*const anyopaque, user_data: ?*anyopaque, begin: u64, end: u64, ...) uc_err;
 }.uc_hook_add;
+
+pub const uc_hook_del = if (is_test) struct {
+    fn impl(engine: ?*anyopaque, hh: uc_hook) callconv(.c) uc_err {
+        _ = engine; _ = hh; return .UC_ERR_OK;
+    }
+}.impl else struct {
+    extern fn uc_hook_del(engine: ?*anyopaque, hh: uc_hook) uc_err;
+}.uc_hook_del;
 
 // Remaining C/POSIX stubs required by Unicorn Engine:
 pub export var stderr: ?*anyopaque = null;
@@ -899,7 +1035,6 @@ pub export fn exit(status: c_int) callconv(.c) noreturn {
     debug.printf("exit called with status {}, return address 0x{x}\n", .{ status, ra });
     while (true) {}
 }
-
 
 pub export fn snprintf(str: [*]u8, size: usize, format: [*:0]const u8, ...) callconv(.c) c_int {
     if (size == 0) return 0;
@@ -1253,8 +1388,9 @@ fn diosix_uc_set_rdtime_fn_mock(_: ?*anyopaque, _: *const fn () callconv(.c) u64
 fn diosix_uc_do_interrupt_mock(_: ?*anyopaque, _: c_int, _: ?*InterruptInfo) callconv(.c) void {}
 fn diosix_uc_inject_interrupt_mock(_: ?*anyopaque, _: c_int) callconv(.c) void {}
 fn diosix_uc_clear_stop_mock(_: ?*anyopaque) callconv(.c) void {}
-fn diosix_uc_is_halted_mock(_: ?*anyopaque) callconv(.c) c_int { return 0; }
+fn diosix_uc_is_halted_mock(_: ?*anyopaque) callconv(.c) c_int {
+    return 0;
+}
 fn diosix_uc_do_interrupt_arm64_mock(_: ?*anyopaque, _: c_int) callconv(.c) void {}
 fn diosix_uc_disable_arm64_mmu_mock(_: ?*anyopaque) callconv(.c) void {}
 fn diosix_uc_arm64_sync_mmu_state_mock(_: ?*anyopaque) callconv(.c) void {}
-

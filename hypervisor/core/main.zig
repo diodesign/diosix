@@ -127,7 +127,8 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
 
             // If the guest has a timer that fires before the timeslice ends,
             // use the guest timer so we can deliver its interrupt promptly.
-            if (vc.timer_scheduled and vc.timer_target < timeslice_target) {
+            const now = riscv.readTime();
+            if (vc.timer_scheduled and vc.timer_target > now and vc.timer_target < timeslice_target) {
                 timeslice_target = vc.timer_target;
             }
             if (vc.exec_path == .native) {
@@ -173,8 +174,8 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
     }
 }
 
-pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, return_address: ?usize) noreturn {
     debug.releaseLocksForCrash();
-    debug.printf("\n\nPanic! {s}\n", .{message});
+    debug.printf("\n\nPanic! {s} at 0x{x}\n", .{ message, return_address orelse 0 });
     while (true) {}
 }

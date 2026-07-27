@@ -172,7 +172,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     }
 
     const cpu = pcore.this();
-    const is_ecall = (irq.cause == .virtual_supervisor_environment_call or irq.cause == .supervisor_environment_call or irq.cause == .user_environment_call);
+    const is_ecall = (irq.cause == .virtual_supervisor_environment_call or irq.cause == .supervisor_environment_call or irq.cause == .user_environment_call or irq.cause == .machine_environment_call);
     if (!is_ecall and !is_interrupt and cpu.last_trap_pc == irq.pc and cpu.last_trap_val == irq.val) {
         cpu.trap_loop_count += 1;
         if (cpu.trap_loop_count > TRAP_LOOP_HARD_LIMIT) {
@@ -222,14 +222,16 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
     const pcpu = pcore.this();
     pcpu.in_m_mode = true; // Trap entry is always in M-mode
+    const irq = dispatch(context);
     if (pcpu.active_vcore) |vc_raw| {
+        if (@intFromPtr(vc_raw) & 7 != 0) {
+            @import("../../debug.zig").printf("!!! xint_handler misaligned pcpu 0x{x} vc_raw 0x{x}\n", .{@intFromPtr(pcpu), @intFromPtr(vc_raw)});
+        }
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
         if (vc.exec_path == .emulated) {
-            @import("../../emulation.zig").stop(vc);
+            // Emulated core trap
         }
     }
-
-    const irq = dispatch(context);
 
 
 

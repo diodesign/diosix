@@ -141,12 +141,9 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     const rootvm_elf_base = if (builtin.is_test) test_rootvm_start else @intFromPtr(&__rootvm_start);
     const rootvm_elf_size = if (builtin.is_test) test_rootvm_end - rootvm_elf_base else @intFromPtr(&__rootvm_end) - rootvm_elf_base;
 
-    // Create the trusted Root VM.
-    // Guest RAM starts at 0x80000000 (standard for RISC-V Linux) if H-extension is active.
-    // For PMP fallback mode, guest RAM must start at the actual host physical address (HPA).
-    const root_vm_gpa_base = if (riscv.hasHExtension()) 0x80000000 else rootvm_hpa_base;
     const rootvm_elf = @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size];
     const guest_arch = try loader.Loader.detectArch(rootvm_elf);
+    const root_vm_gpa_base = if (guest_arch == .x86_64) 0 else if (riscv.hasHExtension()) 0x80000000 else rootvm_hpa_base;
     debug.printf("Detected guest VM target architecture: {s}\n", .{@tagName(guest_arch)});
     const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size, guest_arch);
     ctx.root_vm = root_vm;
@@ -204,7 +201,8 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         // Inject boot arguments into the guest DTB.
         // Use hvc0 as the primary console and SBI for early boot output.
         // maxcpus limits the number of CPUs the guest will bring online.
-        const bootargs = try std.fmt.allocPrint(cpu_allocator, "console=hvc0 earlycon=sbi maxcpus={} unaligned_scalar_speed=fast", .{cpu_count});
+        const mitigations = if (guest_arch != .riscv64) " mitigations=off" else "";
+        const bootargs = try std.fmt.allocPrint(cpu_allocator, "console=hvc0 earlycon=sbi maxcpus={} unaligned_scalar_speed=fast{s}", .{ cpu_count, mitigations });
         defer cpu_allocator.free(bootargs);
         device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, bootargs)) catch |err| {
             debug.printf("Warning: Failed to inject bootargs into guest DTB: {s}\n", .{@errorName(err)});
@@ -471,7 +469,7 @@ fn buildAarch64Dtb(allocator: std.mem.Allocator, ram_base: usize, ram_size: usiz
     // /chosen — boot arguments.
     try arm_dt.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(
         allocator,
-        "earlycon=pl011,mmio32,0x09000000 console=ttyAMA0 nokaslr norandmaps panic=30",
+        "earlycon=pl011,mmio32,0x09000000 console=ttyAMA0 nokaslr norandmaps panic=30 mitigations=off",
     ));
     try arm_dt.editProperty("/chosen", "stdout-path", try dt.DeviceTreeProperty.fromText(allocator, "/pl011@9000000"));
 

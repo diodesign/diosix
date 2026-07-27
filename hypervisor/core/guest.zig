@@ -39,6 +39,26 @@ pub const TargetArch = enum {
     x86_64,
 };
 
+pub const PitChannel = struct {
+    latch: u16 = 0,
+    count_latched: bool = false,
+    latched_val: u16 = 0,
+    read_state: u8 = 0, // 0 = LSB, 1 = MSB
+    write_state: u8 = 0, // 0 = LSB, 1 = MSB
+    mode: u8 = 0,
+    access: u8 = 3, // 1 = LSB, 2 = MSB, 3 = LSB/MSB
+    start_time: u64 = 0,
+    period_ticks: u64 = 0,
+    gate: u8 = 1,
+};
+
+pub const PitState = struct {
+    channels: [3]PitChannel = [_]PitChannel{ .{}, .{}, .{} },
+    port_61: u8 = 0x01, // gate 2 enabled
+    pic_master_imr: u8 = 0xff,
+    pic_slave_imr: u8 = 0xff,
+};
+
 pub const Guest = struct {
     id: GuestID,
     state: GuestState,
@@ -69,6 +89,12 @@ pub const Guest = struct {
     // Lock-free because vcores are only added during init before booting.
     vcore_lookup: [max_vcores]?*vcore.VirtualCore,
 
+    // PIT (Programmable Interval Timer) State
+    pit: PitState,
+
+    // Shared IO-APIC backing memory for x86_64 guests
+    ioapic_mem: [4096]u8,
+
     // allocator for heap-allocated Guest structures
     allocator: std.mem.Allocator,
 
@@ -90,6 +116,8 @@ pub const Guest = struct {
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = try vm_space.GuestSpace.init(allocator, is_trusted, base_gpa, base_hpa, range_size),
             .early_pgt_gpa = 0,
+            .pit = .{},
+            .ioapic_mem = std.mem.zeroes([4096]u8),
             .allocator = allocator,
         };
         self.children.init();
@@ -135,6 +163,13 @@ pub const Guest = struct {
         while (it_vcore) |node| {
             node.contents.state = .stopped;
             it_vcore = node.next;
+        }
+
+        // Send an IPI to all CPUs to force them to reschedule and drop stopped vcores from their run_queues
+        for (0..@import("arch/riscv64/riscv.zig").cpu_to_hart_map.len) |target_cpu| {
+            if (@import("arch/riscv64/riscv.zig").CLINT.msip(@import("arch/riscv64/riscv.zig").cpu_to_hart_map[target_cpu])) |ptr| {
+                ptr.* = 1;
+            }
         }
 
         // Reclaim resources in used counters up the lineage
@@ -301,6 +336,8 @@ pub const Guest = struct {
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = child_space,
             .early_pgt_gpa = 0,
+            .pit = .{},
+            .ioapic_mem = std.mem.zeroes([4096]u8),
             .allocator = self.allocator,
         };
         child.children.init();

@@ -285,8 +285,8 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) ExceptionAction {
         // page table updates take effect. Without this, QEMU keeps using
         // stale TLB entries after the kernel calls setup_vm_final().
         if (funct7 == 0x09) {
-            _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB));
-            _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
+            _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB), 0);
+            _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
             writePC(uc, pc + 4);
             return .emulated;
         }
@@ -503,8 +503,8 @@ pub fn handleException(uc: ?*anyopaque, new_pc: u64) ExceptionAction {
     // Flush Unicorn TLB/TB caches — Unicorn's TCG doesn't respond to
     // guest-issued sfence.vma, so we must flush manually after any trap
     // that may result in page table modifications.
-    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB));
-    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
+    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB), 0);
+    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
 
     return .delivered;
 }
@@ -568,7 +568,7 @@ fn emulateCSR(uc: ?*anyopaque, insn: u32, pc: u64) ?ExceptionAction {
                 var val: u64 = 0;
                 if (pcore.this().active_vcore) |opaque_vc| {
                     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-                    val = vc.exec_path.emulated.virtual_time;
+                    val = vc.virtual_time;
                 } else {
                     val = glue.readSModeTime();
                 }
@@ -582,7 +582,7 @@ fn emulateCSR(uc: ?*anyopaque, insn: u32, pc: u64) ?ExceptionAction {
                 var val: u64 = 0;
                 if (pcore.this().active_vcore) |opaque_vc| {
                     const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-                    val = vc.exec_path.emulated.virtual_time >> 32;
+                    val = vc.virtual_time >> 32;
                 } else {
                     val = glue.readSModeTime() >> 32;
                 }
@@ -678,8 +678,8 @@ fn emulateSystem(uc: ?*anyopaque, insn: u32, pc: u64) ?ExceptionAction {
     const funct7 = insn >> 25;
     if (funct7 == 0x09) {
         // SFENCE.VMA: flush Unicorn's TLB and TB, skip instruction.
-        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB));
-        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
+        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB), 0);
+        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
         writePC(uc, pc + 4);
         return .emulated;
     }
@@ -789,6 +789,6 @@ pub fn deliverInterrupt(uc: ?*anyopaque, current_pc: u64, cause: u64) void {
     // QEMU may reuse a stale TB from the interrupted context, causing the
     // trap handler's instructions (e.g. csrrw sscratch) to execute with
     // the wrong CSR state.
-    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB));
-    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
+    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB), 0);
+    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
 }

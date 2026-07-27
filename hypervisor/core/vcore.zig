@@ -8,6 +8,7 @@ const riscv = @import("arch/riscv64/riscv.zig");
 const dsa = @import("dsa.zig");
 const guest = @import("guest.zig");
 const physmem = @import("physmem.zig");
+const glue = @import("unicorn.zig");
 
 pub const VirtualCoreID = usize;
 
@@ -29,8 +30,24 @@ pub const VirtualCoreType = enum {
     emulated,
 };
 
+fn init_ioapic_redtbl() [24]u64 {
+    var tbl: [24]u64 = undefined;
+    for (&tbl) |*entry| {
+        entry.* = 0x00010000;
+    }
+    return tbl;
+}
+
 pub const max_sub_vcores: usize = 8;
-pub const emulation_timeslice_instructions: u32 = 50_000;
+pub const emulation_timeslice_instructions: u32 = 2_000_000;
+
+pub const LapicTimerState = struct {
+    lvt_timer: u32 = 0x10000, // Masked (disabled) by default
+    init_count: u32 = 0,
+    divide_cfg: u32 = 0,
+    start_time: u64 = 0,
+    period_ticks: u64 = 0,
+};
 
 pub const SubVcoreState = struct {
     id: usize = 0,
@@ -45,6 +62,9 @@ pub const SubVcoreState = struct {
     start_a0: u64 = 0,
     start_a1: u64 = 0,
     last_pc: u64 = 0,
+    lapic_timer: LapicTimerState = .{},
+    last_page_fault_addr: u64 = 0,
+    freeze_count: u32 = 0,
 };
 
 
@@ -82,7 +102,18 @@ pub const VirtualCore = struct {
             guest_state: riscv.GuestState,
             stack: []u8,
             emu_running: bool = false,
+            tls_pointer: usize = 0,
             
+            virtual_smode_time: u64 = 0,
+            pit_calibration_active: bool = false,
+            pit_calibration_ticks: u32 = 0,
+            delay_bypass_count: u32 = 0,
+            last_mapped_user_page: u64 = 0,
+            exit_count: u64 = 0,
+            text_poke_happened: bool = false,
+            trace_instructions_count: u32 = 0,
+            trace_hook: glue.uc_hook = null,
+
             sub_vcores: [max_sub_vcores]SubVcoreState = std.mem.zeroes([max_sub_vcores]SubVcoreState),
             sub_vcore_count: usize = 1,
             active_sub_vcore: usize = 0,
@@ -90,19 +121,24 @@ pub const VirtualCore = struct {
             preempt_pending: bool = false,
 
             exception_cause: u32 = 0,
-            virtual_time: u64 = 0,
             hsm_started: bool = false,
+            lapic_mem: [4096]u8 = std.mem.zeroes([4096]u8),
             sc_hook_addr: u64 = 0,
             idle_hook_addr: u64 = 0,
+            icr_dest: u32 = 0,
+            ioapic_reg_sel: u8 = 0,
+            ioapic_redtbl: [24]u64 = init_ioapic_redtbl(),
         },
     },
 
     timer_scheduled: bool,
     timer_target: u64,
+    virtual_time: u64,
     timer_skip_blocks: u32, // blocks to skip before next timer stop (avoids busy-loop when SIE=0)
     running_on_cpu: ?usize,
     wfi_blocked: bool,
     pending_ipi: bool,
+    is_queued: bool,
     blocked_on_cpu: ?usize, // Which physical core blocked this vcore (WFI)
 
     // Scheduling data.
@@ -127,10 +163,12 @@ pub const VirtualCore = struct {
             .state = .stopped,
             .timer_scheduled = false,
             .timer_target = 0,
+            .virtual_time = 0,
             .timer_skip_blocks = 0,
             .running_on_cpu = null,
             .wfi_blocked = false,
             .pending_ipi = false,
+            .is_queued = false,
             .blocked_on_cpu = null,
             .priority = priority,
             .vruntime = 0,
@@ -180,6 +218,11 @@ pub const VirtualCore = struct {
             const stack_phys = physmem.allocPageSelection(9) catch @panic("Failed to allocate S-mode stack for emulator");
             const stack = @as([*]align(16) u8, @ptrFromInt(stack_phys))[0..stack_size];
 
+            // Allocate a dummy TLS block for Unicorn's C code.
+            const tls_size = 4096;
+            const tls_phys = physmem.allocPageSelection(0) catch @panic("Failed to allocate TLS for emulator");
+            @memset(@as([*]u8, @ptrFromInt(tls_phys))[0..tls_size], 0);
+
             var hypervisor_gp: usize = 0;
             if (comptime !@import("builtin").is_test) {
                 asm volatile ("mv %[g], gp" : [g] "=r" (hypervisor_gp));
@@ -214,10 +257,31 @@ pub const VirtualCore = struct {
                         .vsenvcfg = 0,
                     },
                     .stack = stack,
+                    .tls_pointer = tls_phys + 2048,
                 },
             };
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.sp)] = @intFromPtr(stack.ptr) + stack.len;
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.gp)] = hypervisor_gp;
+            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.tp)] = tls_phys + 2048;
+        }
+
+        if (parent.target_arch == .x86_64) {
+            const init_latch: u64 = 11932; // 100 Hz default (10ms period)
+            const period_clint: u64 = (init_latch * 10_000_000) / 1_193_182;
+            parent.pit.channels[0] = .{
+                .latch = @intCast(init_latch),
+                .access = 3,
+                .mode = 3,
+                .period_ticks = period_clint,
+            };
+            vcore.exec_path.emulated.sub_vcores[0].timer_scheduled = true;
+            vcore.exec_path.emulated.sub_vcores[0].timer_target = glue.readSModeTime() + period_clint;
+        }
+
+        if (parent.target_arch == .x86_64) {
+            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[0x20..0x24], @as(u32, @intCast(id)) << 24, .little); // APIC ID
+            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[0x30..0x34], 0x00050014, .little); // APIC Version
+            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[0xf0..0xf4], 0x000000ff, .little); // Spurious Vector
         }
 
         // Initialize the scheduler node's contents to the vruntime for ordering.
@@ -227,6 +291,34 @@ pub const VirtualCore = struct {
     }
 
     pub fn deinit(self: *VirtualCore) void {
+        // Trigger a wake to dequeue it if it's blocked, preventing re-queueing
+        _ = @atomicRmw(bool, &self.wfi_blocked, .Xchg, false, .acq_rel);
+
+        // Spin wait until the home CPU removes it from the blocked_queue
+        while ((@as(*volatile ?usize, &self.blocked_on_cpu)).*) |home_cpu| {
+            if (home_cpu < riscv.cpu_to_hart_map.len) {
+                if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
+                    ptr.* = 1; // Send IPI to wake the home CPU
+                }
+            }
+            std.atomic.spinLoopHint();
+        }
+
+        // Spin wait until the vcore is no longer running on a physical CPU
+        while ((@as(*volatile ?usize, &self.running_on_cpu)).* != null) {
+            std.atomic.spinLoopHint();
+        }
+
+        // Spin wait until the vcore is no longer in a blocked queue
+        while ((@as(*volatile ?usize, &self.blocked_on_cpu)).* != null) {
+            std.atomic.spinLoopHint();
+        }
+
+        // Spin wait until the vcore is removed from any run_queue
+        while ((@as(*volatile bool, &self.is_queued)).*) {
+            std.atomic.spinLoopHint();
+        }
+
         switch (self.exec_path) {
             .emulated => |*e| {
                 if (e.uc) |uc| {
@@ -290,11 +382,12 @@ pub const VirtualCore = struct {
         const old = @cmpxchgStrong(bool, &self.wfi_blocked, true, false, .acq_rel, .monotonic);
         if (old == null) {
             // We won — set the vcore ready for scheduling.
-            self.state = .ready;
+            _ = @cmpxchgStrong(VirtualCoreState, &self.state, .running, .ready, .seq_cst, .seq_cst);
+            // It might already be .ready, which is fine.
             if (self.exec_path == .emulated) {
                 const host_time = riscv.readTime();
-                if (host_time > self.exec_path.emulated.virtual_time) {
-                    self.exec_path.emulated.virtual_time = host_time;
+                if (host_time > self.virtual_time) {
+                    self.virtual_time = host_time;
                 }
             }
             return true;
@@ -327,6 +420,7 @@ pub const VirtualCore = struct {
         // Reset scheduler node for the new vcore.
         vc.running_on_cpu = null;
         vc.pending_ipi = false;
+        vc.is_queued = false;
         vc.scheduler_node = undefined;
         vc.updateSchedulerWeight();
 

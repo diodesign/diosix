@@ -265,14 +265,14 @@ pub fn handleInvalidInsn(uc: ?*anyopaque) bool {
     // op0=1, op1=varies, CRn=8 for TLBI.
     if ((insn & 0xFFF80000) == 0xD5080000) {
         // Flush Unicorn's TLB.
-        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB));
+        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TLB), 0);
         writePC(uc, pc + 4);
         return true;
     }
 
     // IC instructions: instruction cache maintenance. Treat as NOP + TB flush.
     if ((insn & 0xFFF80000) == 0xD5080000 or (insn & 0xFFFF0000) == 0xD50B0000) {
-        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
+        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
         writePC(uc, pc + 4);
         return true;
     }
@@ -377,7 +377,7 @@ pub fn handleException(uc: ?*anyopaque, new_pc: u64) ExceptionAction {
 
     // Flush TB cache so the next uc_emu_start generates fresh
     // translation blocks with the updated exception state.
-    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB));
+    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
 
     return .delivered;
 }

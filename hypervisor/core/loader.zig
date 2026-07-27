@@ -152,8 +152,10 @@ pub const Loader = struct {
                 }
 
                 // Translate virtual address to guest physical address.
-                const offset = p_vaddr - min_vaddr;
-                const gpa = root_vm.space.base_gpa + @as(usize, @intCast(offset));
+                const gpa = if (root_vm.target_arch == .x86_64)
+                    root_vm.space.base_gpa + @as(usize, @intCast(p_paddr))
+                else
+                    root_vm.space.base_gpa + @as(usize, @intCast(p_vaddr - min_vaddr));
 
                 // Map and load the segment.
                 if (p_filesz > 0) {
@@ -178,8 +180,16 @@ pub const Loader = struct {
 
         // Look up early_top_pgt for x86_64 guest to configure the initial page tables.
         if (findSymbol(source, "early_top_pgt")) |pgt_vaddr| {
-            const pgt_offset = pgt_vaddr -% min_vaddr;
-            root_vm.early_pgt_gpa = root_vm.space.base_gpa + @as(usize, @intCast(pgt_offset));
+            if (root_vm.target_arch == .x86_64) {
+                root_vm.early_pgt_gpa = root_vm.space.base_gpa + @as(usize, @intCast(pgt_vaddr -% min_vaddr + min_paddr));
+            } else {
+                const pgt_offset = pgt_vaddr -% min_vaddr;
+                root_vm.early_pgt_gpa = root_vm.space.base_gpa + @as(usize, @intCast(pgt_offset));
+            }
+        }
+
+        if (root_vm.target_arch == .x86_64) {
+            return root_vm.space.base_gpa + @as(usize, @intCast(entry_point));
         }
 
         const entry_offset = if (entry_point < min_vaddr)

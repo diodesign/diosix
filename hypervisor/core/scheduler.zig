@@ -74,8 +74,7 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     // Record the time at which this vcore was last queued (for accounting).
     vc.last_queued_time = riscv.readTime();
 
-    const is_emulated = (vc.exec_path == .emulated);
-    if (pc.run_queue_count < MAX_LOCAL_VCORES and (!is_emulated or pc.cpu_core_id == 0) and (builtin.is_test or (if (pc.active_vcore) |active| @intFromPtr(active) == @intFromPtr(vc) else false))) {
+    if (pc.run_queue_count < MAX_LOCAL_VCORES and (builtin.is_test or (if (pc.active_vcore) |active| @intFromPtr(active) == @intFromPtr(vc) else true))) {
         pc.run_queue.insert(&vc.scheduler_node);
         pc.run_queue_count += 1;
     } else {
@@ -84,9 +83,9 @@ pub fn queue(vc: *vcore.VirtualCore) void {
         guard.get().run_queue.insert(&vc.scheduler_node);
         guard.release(); // release early to minimize lock hold time during IPI loop
 
-        // Wake up all other physical CPUs so one can pick this up from the global queue
+        // Wake up all physical CPUs so one can pick this up from the global queue
         for (0..riscv.MAX_PHYS_CORES) |target_cpu| {
-            if (target_cpu != pc.cpu_core_id and riscv.cpu_contexts[target_cpu] != null) {
+            if (riscv.cpu_contexts[target_cpu] != null) {
                 if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
                     ptr.* = 1;
                 }
@@ -105,13 +104,10 @@ pub fn pickNext() ?*vcore.VirtualCore {
     while (it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
         if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
-            if (vc.exec_path == .emulated and pc.cpu_core_id != 0) {
-                it = pc.run_queue.findNext(node);
-                continue;
-            }
             pc.run_queue.remove(node);
             pc.run_queue_count -= 1;
             global_min_vruntime.store(vc.vruntime, .monotonic);
+            if (@intFromPtr(vc) & 7 != 0) @import("debug.zig").printf("!!! pickNext returning misaligned vc 0x{x}\n", .{@intFromPtr(vc)});
             return vc;
         }
         it = pc.run_queue.findNext(node);
@@ -126,10 +122,6 @@ pub fn pickNext() ?*vcore.VirtualCore {
     while (g_it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
         if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
-            if (vc.exec_path == .emulated and pc.cpu_core_id != 0) {
-                g_it = state.run_queue.findNext(node);
-                continue;
-            }
             state.run_queue.remove(node);
             global_min_vruntime.store(vc.vruntime, .monotonic);
 
@@ -142,9 +134,6 @@ pub fn pickNext() ?*vcore.VirtualCore {
 
                 const g_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", g_node);
                 if ((g_vc.requiredExtensions() & misa) == g_vc.requiredExtensions()) {
-                    if (g_vc.exec_path == .emulated and pc.cpu_core_id != 0) {
-                        continue;
-                    }
                     state.run_queue.remove(g_node);
                     pc.run_queue.insert(g_node);
                     pc.run_queue_count += 1;
@@ -152,6 +141,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
                 }
             }
 
+            if (@intFromPtr(vc) & 7 != 0) @import("debug.zig").printf("!!! pickNext returning misaligned vc 0x{x}\n", .{@intFromPtr(vc)});
             return vc;
         }
         g_it = state.run_queue.findNext(node);

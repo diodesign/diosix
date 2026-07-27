@@ -60,8 +60,8 @@ pub const MAX_PHYS_CORES = 256;
 
 // Timer configuration constants
 pub const TIMER_INFINITY: u64 = 0xffffffffffffffff;
-pub const TIMESLICE_TICKS: u64 = 100_000;      // 10ms at standard 10MHz RISC-V clock
-pub const WATCHDOG_TICKS: u64 = 100_000_000;   // 10s at standard 10MHz RISC-V clock
+pub const TIMESLICE_TICKS: u64 = 100_000; // 10ms at standard 10MHz RISC-V clock
+pub const WATCHDOG_TICKS: u64 = 100_000_000; // 10s at standard 10MHz RISC-V clock
 pub var cpu_to_hart_map = std.mem.zeroes([MAX_PHYS_CORES]usize);
 pub var cpu_contexts = std.mem.zeroes([MAX_PHYS_CORES]?*CpuContext);
 
@@ -681,7 +681,7 @@ pub inline fn readMtinst() usize {
 pub fn auditCpuFeatures() !void {
     if (is_test) return;
 
-    debug.printf("CPU features audit...\n", .{});
+    debug.printf("CPU features audit:\n", .{});
 
     const pcpu = getCPUContext();
     if (!config.legacy_cpu) {
@@ -733,9 +733,9 @@ pub fn auditCpuFeatures() !void {
     const has_h = hasHExtension();
 
     // Print probed features in a clean, audited list
-    debug.printf("H-extension: {s}\n", .{if (has_h) "detected" else "absent"});
-    debug.printf("Smstateen: {s}\n", .{if (riscv_supports_smstateen) "detected" else "absent"});
-    debug.printf("Sstc: {s}\n", .{if (riscv_supports_sstc) "detected" else "absent"});
+    debug.printf(" - Hardware virtualization (H) {s}\n", .{if (has_h) "detected" else "absent"});
+    debug.printf(" - Enhanced isolation (Smstateen) {s}\n", .{if (riscv_supports_smstateen) "detected" else "absent"});
+    debug.printf(" - Efficient timer interrupts (Sstc) {s}\n", .{if (riscv_supports_sstc) "detected" else "absent"});
 
     // Perform H-extension verification if detected
     if (has_h) {
@@ -788,10 +788,10 @@ pub inline fn readTime() u64 {
 
 extern const __hypervisor_end: u8;
 
-fn isHostTp(tp_val: usize) bool {
+pub fn isHostTp(tp_val: usize) bool {
     if (is_test) return false;
     if (tp_val % 16 != 0) return false;
-    
+
     const hv_end = @intFromPtr(&__hypervisor_end);
     const max_cores = MAX_PHYS_CORES;
     const cpu_slab_shift = 20; // 1MB per CPU slab
@@ -830,8 +830,7 @@ pub const TpGuard = struct {
     pub inline fn deinit(self: TpGuard) void {
         if (is_test) return;
         if (self.swapped) {
-            asm volatile (
-                "mv tp, %[saved]"
+            asm volatile ("mv tp, %[saved]"
                 :
                 : [saved] "r" (self.saved_tp),
             );
@@ -850,7 +849,6 @@ pub inline fn flushIcache() void {
     if (is_test) return;
     asm volatile ("fence.i");
 }
-
 
 pub inline fn readHvip() usize {
     if (is_test) return 0;

@@ -182,12 +182,14 @@ pub fn build(b: *std.Build) !void {
     const driver_ns16550 = b.option(bool, "driver-ns16550", "Compile in NS16550 UART driver") orelse true;
     const driver_clint = b.option(bool, "driver-clint", "Compile in CLINT timer driver") orelse true;
     const driver_sifive_test = b.option(bool, "driver-sifive-test", "Compile in SiFive test device driver") orelse true;
+    const enable_gdb = b.option(bool, "gdb", "Enable embedded GDB RSP remote debugging stub") orelse (optimize == .Debug);
 
     const hypervisor_options = b.addOptions();
     hypervisor_options.addOption(bool, "legacy_cpu", legacy_cpu);
     hypervisor_options.addOption(bool, "compile_ns16550", driver_ns16550);
     hypervisor_options.addOption(bool, "compile_clint", driver_clint);
     hypervisor_options.addOption(bool, "compile_sifive_test", driver_sifive_test);
+    hypervisor_options.addOption(bool, "enable_gdb", enable_gdb);
     vmdiosix.root_module.addOptions("config", hypervisor_options);
 
     // Generate config.s dynamically inside the build cache
@@ -233,7 +235,12 @@ pub fn build(b: *std.Build) !void {
     defer qemu_args.deinit(b.allocator);
 
     try qemu_args.append(b.allocator, "qemu-system-riscv64");
-    try qemu_args.append(b.allocator, "-nographic");
+    if (enable_gdb) {
+        try qemu_args.append(b.allocator, "-serial");
+        try qemu_args.append(b.allocator, "tcp::1234,server,nowait");
+    } else {
+        try qemu_args.append(b.allocator, "-nographic");
+    }
     try qemu_args.append(b.allocator, "-machine");
     try qemu_args.append(b.allocator, "virt");
     try qemu_args.append(b.allocator, "-cpu");

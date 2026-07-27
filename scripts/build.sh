@@ -17,10 +17,15 @@ BUILD_HOSTNAME=$(hostname 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date 2>/dev/null || echo "unknown")
 
 # Add optional QEMU CPU override from host environment
-EXTRA_ARGS=()
-if [ -n "$DIOSIX_QEMU_CPU" ]; then
-    EXTRA_ARGS+=("-Dqemu-cpu=$DIOSIX_QEMU_CPU")
-fi
+# Parse command line arguments for --debug
+BUILD_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" == "--debug" ]; then
+        BUILD_ARGS+=("-Doptimize=Debug" "-Dgdb=true")
+    else
+        BUILD_ARGS+=("$arg")
+    fi
+done
 
 # Forward to zig build with metadata options
 exec zig build \
@@ -31,4 +36,4 @@ exec zig build \
   -Dbuild_hostname="$BUILD_HOSTNAME" \
   -Dbuild_date="$BUILD_DATE" \
   "${EXTRA_ARGS[@]}" \
-  "$@"
+  "${BUILD_ARGS[@]}"
