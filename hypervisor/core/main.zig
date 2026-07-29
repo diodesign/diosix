@@ -21,6 +21,7 @@ const sv39x4 = @import("arch/riscv64/sv39x4.zig");
 const elf_spec = @import("interface").elf;
 const boot = @import("boot.zig");
 const config = @import("config");
+const gdb_stub = @import("gdb_stub.zig");
 
 extern fn hw_pmp_init() void;
 
@@ -170,6 +171,7 @@ pub export fn main(cpu_core_id: usize, dtb: [*]u8) void {
         // We must NOT busy-loop or do MMIO here — in QEMU, MMIO writes to CLINT
         // serialize all vCPUs through the BQL, causing massive slowdowns.
         riscv.setTimer(riscv.TIMER_INFINITY);
+        gdb_stub.stub.pollSerialInput();
         riscv.pause(); // WFI — sleep until IPI
     }
 }

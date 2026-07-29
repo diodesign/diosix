@@ -182,7 +182,7 @@ pub fn build(b: *std.Build) !void {
     const driver_ns16550 = b.option(bool, "driver-ns16550", "Compile in NS16550 UART driver") orelse true;
     const driver_clint = b.option(bool, "driver-clint", "Compile in CLINT timer driver") orelse true;
     const driver_sifive_test = b.option(bool, "driver-sifive-test", "Compile in SiFive test device driver") orelse true;
-    const enable_gdb = b.option(bool, "gdb", "Enable embedded GDB RSP remote debugging stub") orelse (optimize == .Debug);
+    const enable_gdb = b.option(bool, "gdb", "Enable embedded GDB RSP remote debugging stub") orelse false;
 
     const hypervisor_options = b.addOptions();
     hypervisor_options.addOption(bool, "legacy_cpu", legacy_cpu);

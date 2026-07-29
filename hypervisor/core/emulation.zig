@@ -738,7 +738,13 @@ pub fn run(vc: *vcore.VirtualCore) void {
         }
 
         if (!found_ready) {
-            var nearest_timer: u64 = ~@as(u64, 0);
+            if (gdb_stub.stub.gdb_connected) {
+                sub = &em.sub_vcores[0];
+                sub.wfi_blocked = false;
+                em.active_sub_vcore = 0;
+                found_ready = true;
+            } else {
+                var nearest_timer: u64 = ~@as(u64, 0);
             var any_timer_scheduled = false;
             for (0..em.sub_vcore_count) |i| {
                 const s = &em.sub_vcores[i];
@@ -764,6 +770,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
             @atomicStore(bool, &vc.wfi_blocked, true, .release);
             break;
+            }
         }
         vc.exec_path.emulated.active_sub_vcore = em.active_sub_vcore;
 
@@ -914,6 +921,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 aarch64.deliverInterrupt(uc, pc, 0);
             }
         } else if (em.target_arch == .x86_64) {
+            x86_64.syncKernelPageTables(uc, vc.guest.space.base_hpa, vc.guest.early_pgt_gpa);
             var rflags: u64 = 0;
             _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_EFLAGS), &rflags);
             const irq_enabled = (rflags & (1 << 9)) != 0;
@@ -970,13 +978,13 @@ pub fn run(vc: *vcore.VirtualCore) void {
         var saved_tp: usize = undefined;
         var err: glue.uc_err = undefined;
         if (comptime @import("builtin").is_test) {
-            err = glue.uc_emu_start(uc, current_pc, 0xffffffffffffffff, 0, 0);
+            err = glue.uc_emu_start(uc, current_pc, 0, 0, 50000);
         } else {
             asm volatile (
                 \\mv %[saved], tp
                 : [saved] "=r" (saved_tp),
             );
-            err = glue.uc_emu_start(uc, current_pc, 0xffffffffffffffff, 0, 0);
+            err = glue.uc_emu_start(uc, current_pc, 0, 0, 50000);
             asm volatile (
                 \\mv tp, %[saved]
                 :
@@ -1497,6 +1505,13 @@ fn intrCallbackX86_64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void 
     // EXCP_HALTED is 65539. QEMU fires this when it encounters HLT.
     if (intno == 65539) {
         @atomicStore(bool, &vc.wfi_blocked, true, .release);
+        _ = glue.uc_emu_stop(uc);
+        return;
+    }
+
+    // Breakpoint (#BP = 3) or Debug (#DB = 1) exceptions — notify GDB if attached
+    if (intno == 1 or intno == 3) {
+        gdb_stub.stub.notifyTrap(5);
         _ = glue.uc_emu_stop(uc);
         return;
     }
