@@ -265,23 +265,19 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
                         _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
                         var ipi_sent = false;
 
-                        if (target_vc.blocked_on_cpu) |home_cpu| {
-                            if (home_cpu == pcore.this().cpu_core_id) {
-                                if (target_vc.tryWake()) {
-                                    pcore.this().blocked_queue.remove(&target_vc.blocked_node);
-                                    target_vc.blocked_on_cpu = null;
-                                    scheduler.queue(target_vc);
-                                }
-                                ipi_sent = true;
-                            } else {
-                                if (home_cpu < riscv.cpu_to_hart_map.len) {
-                                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
-                                        ptr.* = 1;
-                                        ipi_sent = true;
+                        if (target_vc.tryWake()) {
+                            if (target_vc.blocked_on_cpu) |home_cpu| {
+                                if (home_cpu < riscv.MAX_PHYS_CORES) {
+                                    if (riscv.cpu_contexts[home_cpu]) |target_pcpu| {
+                                        target_pcpu.blocked_queue.remove(&target_vc.blocked_node);
                                     }
                                 }
+                                target_vc.blocked_on_cpu = null;
                             }
-                        } else if (target_vc.running_on_cpu) |target_cpu| {
+                            scheduler.queue(target_vc);
+                        }
+
+                        if (target_vc.running_on_cpu) |target_cpu| {
                             if (target_cpu != pcore.this().cpu_core_id and target_cpu < riscv.cpu_to_hart_map.len) {
                                 if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
                                     ptr.* = 1;
