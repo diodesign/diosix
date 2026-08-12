@@ -36,7 +36,7 @@ To use Docker to build and run Diosix, follow these steps.
 1. Clone the Diosix source code, and enter its directory:
   
    ```bash
-   git clone --recurse-submodules https://github.com/diodesign/diosix.git
+   git clone https://github.com/diodesign/diosix.git
    cd diosix
    ```
    
@@ -78,7 +78,7 @@ follow these steps:
 1. Clone the Diosix source code, and enter its directory:
   
    ```bash
-   git clone --recurse-submodules https://github.com/diodesign/diosix.git
+   git clone https://github.com/diodesign/diosix.git
    cd diosix
    ```
   
@@ -143,7 +143,7 @@ following external documentation:
 
 ## Legal stuff
 
-The Diosix source code is distributed under the terms of the MIT License. See [LICENSE.md](LICENSE.md) for the full text and [CONTRIBUTORS.md](CONTRIBUTORS.md) for the list of copyright holders. Diosix binary releases are covered by [the GPLv2](COPYING.md).
+Diosix source code and binaries are distributed under the terms of the MIT License. See [LICENSE.md](LICENSE.md) for the full text and [CONTRIBUTORS.md](CONTRIBUTORS.md) for the list of copyright holders.
 
 The diosix.org website illustration is a combination of artwork provided by
 [Katerina Limpitsouni](https://undraw.co/license) and

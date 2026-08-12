@@ -81,56 +81,19 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addArg(guest_arch_opt);
 
 
-    // Build Unicorn static library via wrapper script.
-    // The script creates the zig-cc compiler wrapper (only if needed) and
-    // runs CMake configure + build. Output is redirected to a log file.
-    // CMake's own dependency tracking provides incremental builds.
-    const unicorn_build_dir = "zig-out/unicorn";
-    const cmake_build = b.addSystemCommand(&.{
-        "bash", "scripts/build_unicorn.sh",
-        b.graph.zig_exe,
-        unicorn_build_dir,
+    const emulation_module = b.createModule(.{
+        .root_source_file = b.path("hypervisor/hardware/emulation/mod.zig"),
     });
 
     const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_module = b.createModule(.{
-        .root_source_file = b.path("hypervisor/core/main.zig"),
+        .root_source_file = b.path("hypervisor/main.zig"),
         .optimize = optimize,
         .target = target,
         .code_model = .medium,
     }), .linkage = .static });
     vmdiosix.step.dependOn(&run_buildroot.step);
-    vmdiosix.step.dependOn(&cmake_build.step);
     vmdiosix.root_module.addImport("interface", interface_module);
-    vmdiosix.root_module.addIncludePath(b.path("third_party/unicorn/include"));
-    
-    const unicorn_libs = [_][]const u8{
-        "libunicorn.a",
-        "libunicorn-common.a",
-        "libaarch64-softmmu.a",
-        "libarm-softmmu.a",
-        "libm68k-softmmu.a",
-        "libmips-softmmu.a",
-        "libmips64-softmmu.a",
-        "libmips64el-softmmu.a",
-        "libmipsel-softmmu.a",
-        "libppc-softmmu.a",
-        "libppc64-softmmu.a",
-        "libriscv32-softmmu.a",
-        "libriscv64-softmmu.a",
-        "libs390x-softmmu.a",
-        "libsparc-softmmu.a",
-        "libsparc64-softmmu.a",
-        "libtricore-softmmu.a",
-        "libx86_64-softmmu.a",
-    };
-    for (unicorn_libs) |lib_name| {
-        vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/{s}", .{ unicorn_build_dir, lib_name })));
-    }
-
-    // Link the Diosix-side Unicorn glue objects (bridges internal QEMU APIs).
-    vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/unicorn_glue.o", .{unicorn_build_dir})));
-    vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/unicorn_arm64_glue.o", .{unicorn_build_dir})));
-    vmdiosix.root_module.addObjectFile(b.path(b.fmt("{s}/unicorn_common_glue.o", .{unicorn_build_dir})));
+    vmdiosix.root_module.addImport("emulation", emulation_module);
 
 
     // Dynamically read the modification hash of the rootvm.elf payload if it exists
@@ -159,9 +122,9 @@ pub fn build(b: *std.Build) !void {
 
     // include the assembly files and linker script
     const assembly_files = [_][]const u8{
-        "hypervisor/core/arch/riscv64/entry.s",
-        "hypervisor/core/arch/riscv64/xint.s",
-        "hypervisor/core/arch/riscv64/util.s",
+        "hypervisor/hardware/native/cpu/riscv64/entry.s",
+        "hypervisor/hardware/native/cpu/riscv64/xint.s",
+        "hypervisor/hardware/native/cpu/riscv64/util.s",
     };
     for (assembly_files) |asm_file| {
         vmdiosix.root_module.addAssemblyFile(b.path(asm_file));
@@ -169,12 +132,12 @@ pub fn build(b: *std.Build) !void {
     vmdiosix.root_module.addAssemblyFile(rootvm_s_file);
     vmdiosix.step.dependOn(&rootvm_s_step.step);
 
-    vmdiosix.setLinkerScript(b.path("hypervisor/core/arch/riscv64/linker.ld"));
+    vmdiosix.setLinkerScript(b.path("hypervisor/hardware/native/cpu/riscv64/linker.ld"));
 
     // Register all dependencies (like consts.s) so modifying any of them triggers a full rebuild
     var dep_step = b.addWriteFiles();
     const filename = "consts.s";
-    _ = dep_step.addCopyFile(b.path("hypervisor/core/arch/riscv64/consts.s"), filename);
+    _ = dep_step.addCopyFile(b.path("hypervisor/hardware/native/cpu/riscv64/consts.s"), filename);
     vmdiosix.root_module.addIncludePath(dep_step.getDirectory());
     vmdiosix.step.dependOn(&dep_step.step);
 
@@ -284,11 +247,12 @@ pub fn build(b: *std.Build) !void {
     // run all the unit tests on the host system
     // tests use a separate module targeting native so the test runner has OS support
     const test_module = b.createModule(.{
-        .root_source_file = b.path("hypervisor/core/main.zig"),
+        .root_source_file = b.path("hypervisor/main.zig"),
         .optimize = optimize,
         .target = b.graph.host,
     });
     test_module.addImport("interface", interface_module);
+    test_module.addImport("emulation", emulation_module);
     test_module.addOptions("config", hypervisor_options);
     const unit_tests = b.addTest(.{
         .root_module = test_module,

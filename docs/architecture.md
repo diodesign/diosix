@@ -58,119 +58,40 @@ its target instruction set architecture:
 *   32-bit RISC-V, 64-bit Arm, and 64-bit x86 (`riscv32`, `aarch64`, `x86_64`)
     guest VMs run transparently using software just-in-time (JIT) emulation.
 
-### Unicorn Engine integration
+### Native Freestanding Zig Dynamic Recompiler (`dynarec`)
 
-The emulation layer is powered by [Unicorn Engine](https://github.com/unicorn-engine/unicorn), a lightweight multi-platform, multi-architecture CPU emulator framework based on QEMU.
+The non-native emulation layer is powered by a native, freestanding Zig dynamic binary recompiler (`dynarec`). It translates non-native guest instructions (starting with `rv32` and expanding to `aarch64` and `x86_64`) directly into RISC-V 64-bit (`rv64`) host machine code without an intermediate representation (IR) pass or standard library OS dependencies.
 
-Unicorn is compiled as a static library and linked directly into the hypervisor binary image. Since Unicorn is licensed under the GPL, the presence of Unicorn in a compiled Diosix binary means outbound binary distributions are [subject to the GPL](../LICENSE.md), whereas the standalone Diosix hypervisor source code remains under its permissive MIT license.
+To prevent bugs or exploits in guest code from compromising the hypervisor, the entire JIT emulation layer runs in RISC-V supervisor mode (S-mode) as opposed to the hypervisor's machine mode (M-mode).
 
-To prevent bugs or exploits in the emulator from compromising the hypervisor, the entire JIT emulation layer runs in RISC-V supervisor mode (S-mode) as opposed to the hypervisor's machine mode (M-mode).
-
-The following sub-sections apply only to emulated guest VMs.
+The following sub-sections apply to non-native guest VMs.
 
 #### Supervisor-mode sandboxing
 
-The emulation layer acts as a special S-mode guest. It executes inside an S-mode wrapper function (`emulatedRunnerSMode`) with paging disabled (`satp = 0`). To prevent unauthorized access to the hypervisor and hardware devices, the hypervisor's M-mode scheduler dynamically configures RISC-V PMP entries on context switch:
+The dynamic recompiler acts as a special S-mode guest running in supervisor mode. To prevent unauthorized access to the hypervisor and hardware devices, the hypervisor's M-mode scheduler dynamically configures RISC-V PMP entries on context switch:
   
-*   Read/Execute (RX) access is granted only to the hypervisor's code and read-only data sections (`__hypervisor_start` to `__bss_start`) to run the Unicorn library and helpers.
+*   Read/Execute (RX) access is granted only to the hypervisor's code and read-only data sections (`__hypervisor_start` to `__bss_start`) to run the dynamic recompiler engine and decoders.
 *   Read/Write (RW) access is granted to the hypervisor's global data and BSS segments (`__bss_start` to `__hypervisor_end`).
-*   Read/Write (RW) access is granted to the current physical core's private memory slab (a 16MB contiguous block including its stack and per-core heap) to service JIT allocations (TCG buffers).
+*   Read/Write (RW) access is granted to the current physical core's private memory slab (a 16MB contiguous block including its stack and per-core heap) to service JIT allocations (code translation blocks).
 *   Read/Write (RW) access is granted to the guest's pre-allocated physical RAM region.
 
 All other host memory (including private M-mode exception stacks, other cores' heap/stack slabs, and memory-mapped I/O blocks like CLINT or PLIC) is completely denied.
 
-#### Memory management
+#### Memory management & SoftTLB
 
-The guest VM's allocated host physical memory is mapped directly into Unicorn's virtual address space contiguously via `uc_mem_map_ptr`. Accesses to unmapped memory locations (for example, peripheral registers or the UART console at `0x10000000`) are intercepted via a Unicorn memory exception hook (`UC_HOOK_MEM_UNMAPPED`). Reads and writes are emulated by the hypervisor; for example, guest console output is redirected to the hypervisor console via `putcharFromGuest`.
+Guest virtual-to-physical address translation is managed by an Sv32 software MMU (`SoftTLB`). The SoftTLB maintains a 1024-entry direct-mapped fast-path cache and falls back to a 2-level Sv32 software page table walker on cache misses. Memory-mapped I/O (MMIO) accesses to peripheral registers (such as UART at `0x10000000` or CLINT at `0x02000000`) are intercepted and routed to virtual device models in `hypervisor/hardware/emulation/devices/`.
 
-#### Dynamic allocator wrapper
+#### Dynamic translation and register pinning
 
-Unicorn relies on standard C library allocation routines (`malloc`, `calloc`, `realloc`, and `free`). Since Diosix runs on bare metal without a standard C library, it implements these symbols using a thread-safe, spinlock-protected wrapper around the hypervisor's per-hart bare-metal `HeapAllocator`. 
-
-To locate the per-hart allocator from S-mode (where the machine-only `mscratch` CSR is inaccessible), the scheduler maps the CPU's context pointer into the S-mode runner's thread pointer (`tp`) register on context switch. The stubs read `tp` directly to access their core's heap.
+The dynamic recompiler maps RV32 guest general-purpose registers (`x0`–`x31`) statically to host RV64 registers. All arithmetic, logical, and shift operations enforce 32-bit sign-extension rules by emitting RV64 32-bit word-variant host instructions (`addw`, `subw`, `slliw`, `sraiw`, `addiw`). JIT execution buffers are synchronized using `fence.i` instructions upon block emission.
 
 #### Interrupt handling and preemption
 
-Emulation runs inside Unicorn's execution loop (`uc_emu_start`). To prevent
-a guest VM from hogging a physical core, the hypervisor handles preemption:
+Emulation runs inside bounded dynamic recompiler execution loops. To prevent a guest VM from hogging a physical core, the hypervisor handles preemption:
 
-*   Host timer interrupts trap to the machine-mode interrupt handler
-    (`xint_handler`).
-*   If an interrupt fires while an emulated virtual core is running, the
-    handler invokes `stop()` (which calls `uc_emu_stop()`) to immediately
-    exit the Unicorn JIT loop.
-*   The CPU resumes the S-mode runner, which exits the JIT loop and
-    executes an environment call (`ECALL`).
-*   The `ECALL` traps back to the hypervisor's M-mode handler, which
-    yields the core, allowing other virtual cores to run.
-
-#### Timer access
-
-Guest operating systems frequently read timing registers, such as
-`rdtime`, `rdtimeh`, `rdcycle`, and `rdinstret` on RISC-V, during
-boot-time calibration loops and scheduler tick handling.
-
-For native RISC-V guests on hardware with the H-extension, the hypervisor sets
-`mcounteren` and `hcounteren` (bits 0–2) to delegate counter CSR access
-to VS-mode. The guest executes `rdtime` at full hardware speed with zero
-trap overhead. On hardware without the H-extension (PMP fallback mode),
-guests run directly in S-mode, so `mcounteren` alone is sufficient.
-
-For emulated guests, Unicorn's QEMU backend requires a `rdtime_fn`
-callback on its internal `CPURISCVState` structure for `rdtime` to
-return a value. Diosix registers this callback during virtual core
-initialization through a thin C glue layer (`unicorn.c`) that
-bridges the Unicorn-internal `riscv_cpu_set_rdtime_fn` API without
-modifying the third-party Unicorn source tree. The callback executes an
-inline `csrr time` instruction to read the real host hardware timer
-from Supervisor mode, and the hypervisor also sets `mcounteren`
-(bits 0–2) in the emulated CPU's CSR bank to enable S-mode counter
-access within the QEMU backend.
-
-With the callback registered, guest `rdtime` and `rdtimeh` instructions
-execute entirely inside the JIT loop, returning the host timer value
-directly. This eliminates the overhead of an exception stop and
-engine re-entry on every timer read, which is critical during
-boot-time calibration loops that may execute millions of `rdtime`
-instructions.
-
-Reading the host timer from Supervisor mode is safe because `csrr time`
-is a read-only operation that returns a scalar timestamp, exposing no
-hypervisor state or memory.
-
-#### Per-vcore isolation
-
-Each emulated virtual CPU core receives its own independent Unicorn
-engine instance (`uc_engine`) created via `uc_open()`. This provides
-complete isolation:
-
-*   **CPU state**: Each instance maintains a separate register file,
-    program counter, page tables, and CSR bank. One virtual core cannot
-    read or modify another's architectural state.
-*   **Memory space**: Each instance has its own Unicorn address space.
-    Guest physical RAM is mapped independently via `uc_mem_map_ptr`
-    per vcore.
-*   **JIT cache**: Each instance generates and caches its own translated
-    code blocks in a private Translation Cache Generation (TCG) context.
-*   **Hooks**: Each instance maintains a separate set of hook callbacks.
-
-Virtual cores within the same guest VM share the same underlying host
-physical RAM allocation (mapped read/write into each core's Unicorn
-instance), which is correct hardware-equivalent behavior. Virtual cores
-belonging to different guest VMs are backed by separate physical RAM
-allocations from the hypervisor's memory manager, so cross-VM memory
-access is not possible.
-
-#### System call interception
-
-System calls made by a guest kernel to the hypervisor are caught via a
-Unicorn interrupt hook.
-
-The hypervisor reads the guest's CPU registers, maps them into a mock
-supervisor context, executes the request via the native Supervisor Binary
-Interface (SBI) handler, writes the return values back to the guest's
-virtual registers, and advances the instruction pointer to resume
-execution.
+*   Host timer interrupts trap to the machine-mode interrupt handler (`xint_handler`).
+*   If an interrupt fires while an emulated virtual core is running, the handler signals preemption.
+*   The CPU resumes the S-mode runner, which exits the translation loop and yields execution back to the scheduler via an `ECALL`.
 
 ### Native-vs-emulated guests
 
@@ -178,12 +99,12 @@ The differences between native and emulated execution paths in Diosix are summar
 
 | Feature                      | Native guest (`riscv64`)                                                                                           | Emulated guest (`riscv32`, `aarch64`, `x86_64`)                                                        |
 | :-----------------------------| :-------------------------------------------------------------------------------------------------------------------| :-------------------------------------------------------------------------------------------------------|
-| CPU execution mode           | Runs directly on the host physical CPU at full hardware speed.                                                     | Runs in software via JIT binary translation using Unicorn.                                             |
-| CPU execution privilege      | Runs in Virtual Supervisor (VS) and Virtual User (VU) modes (or host S/U modes under PMP fallback).                | Runs JIT translator in host S-mode. Guest code executes as virtual instructions in JIT space.          |
+| CPU execution mode           | Runs directly on the host physical CPU at full hardware speed.                                                     | Runs in software via native freestanding Zig dynamic recompiler (`dynarec`).                           |
+| CPU execution privilege      | Runs in Virtual Supervisor (VS) and Virtual User (VU) modes (or host S/U modes under PMP fallback).                | Runs JIT translator in host S-mode. Guest code executes as translated RV64 instructions in JIT space.  |
 | Host virtualization hardware | Requires and utilizes the RISC-V H extension (or PMP fallback) for isolated guest execution.                       | Does not utilize host hardware virtualization features; isolated via host S-mode and PMP sandboxing.   |
-| Memory allocation            | Dynamic and on-demand using G-stage page tables and Copy-on-Write (CoW) support (contiguous only in PMP fallback). | Pre-allocated as a single contiguous block, mapped statically in full via `uc_mem_map_ptr` at VM boot. |
+| Memory allocation            | Dynamic and on-demand using G-stage page tables and Copy-on-Write (CoW) support (contiguous only in PMP fallback). | Pre-allocated as a single contiguous block, translated via Sv32 SoftTLB.                                |
 | Context switching            | Handled via assembly register swap routines during M-mode entry/exit traps.                                        | Handled via standard scheduler context switch and supervisor environment call (`ECALL`) yield loops.   |
-| System call interception     | Traps directly from guest VS-mode (or S-mode under PMP fallback) to hypervisor M-mode via `ECALL`.                 | Trapped via Unicorn software interrupt hooks, which copy registers into a mock thread context.         |
+| System call interception     | Traps directly from guest VS-mode (or S-mode under PMP fallback) to hypervisor M-mode via `ECALL`.                 | Intercepted by dynarec instruction decoder and handled via native SBI / system call dispatcher.        |
 
 ---
 

@@ -54,7 +54,7 @@ sudo dnf install -y \
 To clone the Diosix source code, and enter its directory, run:
 
 ```bash
-git clone --recurse-submodules https://github.com/diodesign/diosix.git
+git clone https://github.com/diodesign/diosix.git
 cd diosix
 ```
 
@@ -167,7 +167,7 @@ environment correctly invalidates the build configuration cache.
 
 ## Platform-agnostic compilation and position independence
 
-To support diverse hardware platforms, the build system compiles the hypervisor as a single, platform-agnostic universal binary. Rather than linking separate target configurations at compile time, all boot-strap, context switching, and trap management assembly code resides in the core RISC-V 64-bit architecture directory (`hypervisor/core/arch/riscv64/`) and is compiled into the binary.
+To support diverse hardware platforms, the build system compiles the hypervisor as a single, platform-agnostic universal binary. Rather than linking separate target configurations at compile time, all boot-strap, context switching, and trap management assembly code resides in the core RISC-V 64-bit architecture directory (`hypervisor/hardware/native/cpu/riscv64/`) and is compiled into the binary.
 
 The entry point and early boot code are position-independent, relying on PC-relative addressing (`auipc`, `la`) to resolve structures dynamically.
 

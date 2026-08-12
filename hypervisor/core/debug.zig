@@ -8,7 +8,7 @@ const builtin = @import("builtin");
 const Writer = std.Io.Writer;
 const atomic = @import("atomic.zig");
 const pcore = @import("pcore.zig");
-const riscv = @import("arch/riscv64/riscv.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const drivers = @import("drivers.zig");
 
 // Circular queue size for console text streams
@@ -185,7 +185,7 @@ fn hwWriteDecimal(val: usize) void {
 
 // Drains characters from the single shared output queue to the UART
 fn drainQueuesInternal(state: *ConsoleState) void {
-    const gdb_stub = @import("gdb_stub.zig");
+    const gdb_stub = @import("gdb/stub.zig");
     if (gdb_stub.stub.gdb_connected) {
         while (state.output_queue.pop()) |_| {}
         return;

@@ -5,10 +5,10 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const main = @import("main.zig");
-const xint = @import("arch/riscv64/xint.zig");
+const main = @import("../main.zig");
+const xint = @import("../hardware/native/cpu/riscv64/xint.zig");
 const debug = @import("debug.zig");
-const riscv = @import("arch/riscv64/riscv.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const alloc = @import("alloc.zig");
 const atomic = @import("atomic.zig");
 const dt = @import("dt.zig");
@@ -18,7 +18,7 @@ const guest = @import("guest.zig");
 const vcore = @import("vcore.zig");
 const loader = @import("loader.zig");
 const pcore = @import("pcore.zig");
-const sv39x4 = @import("arch/riscv64/sv39x4.zig");
+const sv39x4 = @import("../hardware/native/cpu/riscv64/sv39x4.zig");
 const elf_spec = @import("interface").elf;
 const emulation = @import("emulation.zig");
 
@@ -249,9 +249,9 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
             if (slash_count == 2) {
                 if (guest_arch == .riscv32) {
                     // Emulated guest: replace riscv,isa with only the extensions
-                    // that Unicorn's QEMU fork supports (rv32imafdc). The host DTB
+                    // that the dynamic recompiler supports (rv32imafdc). The host DTB
                     // advertises many extensions (Zbb, Zba, Zbs, Zfa, Zicbom, etc.)
-                    // that Unicorn cannot execute. The kernel will use software
+                    // that the recompiler may not execute. The kernel will use software
                     // fallbacks for anything not in this ISA string.
                     try device_tree.editProperty(path, "riscv,isa", try dt.DeviceTreeProperty.fromText(cpu_allocator, "rv32imafdc"));
 

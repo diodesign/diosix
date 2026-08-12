@@ -4,11 +4,12 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const riscv = @import("arch/riscv64/riscv.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const dsa = @import("dsa.zig");
 const guest = @import("guest.zig");
 const physmem = @import("physmem.zig");
-const glue = @import("unicorn.zig");
+const native_emu = @import("emulation");
+const glue = @import("emulation.zig");
 
 pub const VirtualCoreID = usize;
 
@@ -98,7 +99,8 @@ pub const VirtualCore = struct {
             siselect: usize,
         },
         emulated: struct {
-            uc: ?*anyopaque,
+            vcpu: ?*native_emu.VCpu = null,
+            engine: ?*native_emu.Engine = null,
             target_arch: guest.TargetArch,
             entry: usize,
             dtb: usize,
@@ -117,7 +119,7 @@ pub const VirtualCore = struct {
             exit_count: u64 = 0,
             text_poke_happened: bool = false,
             trace_instructions_count: u32 = 0,
-            trace_hook: glue.uc_hook = null,
+            trace_hook: ?*anyopaque = null,
 
             sub_vcores: [max_sub_vcores]SubVcoreState = std.mem.zeroes([max_sub_vcores]SubVcoreState),
             sub_vcore_count: usize = 1,
@@ -224,7 +226,7 @@ pub const VirtualCore = struct {
             const stack_phys = physmem.allocPageSelection(9) catch @panic("Failed to allocate S-mode stack for emulator");
             const stack = @as([*]align(16) u8, @ptrFromInt(stack_phys))[0..stack_size];
 
-            // Allocate a dummy TLS block for Unicorn's C code.
+            // Allocate a dummy TLS block for emulation runner context.
             const tls_size = 4096;
             const tls_phys = physmem.allocPageSelection(0) catch @panic("Failed to allocate TLS for emulator");
             @memset(@as([*]u8, @ptrFromInt(tls_phys))[0..tls_size], 0);
@@ -236,7 +238,8 @@ pub const VirtualCore = struct {
 
             vcore.exec_path = .{
                 .emulated = .{
-                    .uc = null,
+                    .vcpu = null,
+                    .engine = null,
                     .target_arch = parent.target_arch,
                     .entry = entry,
                     .dtb = dtb,
@@ -327,10 +330,8 @@ pub const VirtualCore = struct {
 
         switch (self.exec_path) {
             .emulated => |*e| {
-                if (e.uc) |uc| {
-                    _ = @import("unicorn.zig").uc_close(uc);
-                    e.uc = null;
-                }
+                e.vcpu = null;
+                e.engine = null;
                 self.guest.allocator.free(e.stack);
             },
             else => {},
@@ -419,7 +420,8 @@ pub const VirtualCore = struct {
                 n.context[@intFromEnum(riscv.Register.a0)] = 0; // Return 0 in the child (A0 is X10).
             },
             .emulated => |*e| {
-                e.uc = null; // Fresh Unicorn context on startup for child
+                e.vcpu = null;
+                e.engine = null;
             },
         }
 

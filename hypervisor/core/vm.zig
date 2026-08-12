@@ -6,9 +6,9 @@
 
 const std = @import("std");
 const physmem = @import("physmem.zig");
-const sv39x4 = @import("arch/riscv64/sv39x4.zig");
-const pmp = @import("arch/riscv64/pmp.zig");
-const riscv = @import("arch/riscv64/riscv.zig");
+const sv39x4 = @import("../hardware/native/cpu/riscv64/sv39x4.zig");
+const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 
 pub const GuestSpace = struct {
     mode: enum { h_paging, pmp_fallback },

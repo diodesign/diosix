@@ -9,7 +9,7 @@ const vcore = @import("vcore.zig");
 const physmem = @import("physmem.zig");
 const dsa = @import("dsa.zig");
 const vm_space = @import("vm.zig");
-const riscv = @import("arch/riscv64/riscv.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const debug = @import("debug.zig");
 
 pub const GuestID = usize;
@@ -166,8 +166,8 @@ pub const Guest = struct {
         }
 
         // Send an IPI to all CPUs to force them to reschedule and drop stopped vcores from their run_queues
-        for (0..@import("arch/riscv64/riscv.zig").cpu_to_hart_map.len) |target_cpu| {
-            if (@import("arch/riscv64/riscv.zig").CLINT.msip(@import("arch/riscv64/riscv.zig").cpu_to_hart_map[target_cpu])) |ptr| {
+        for (0..@import("../hardware/native/cpu/riscv64/mod.zig").cpu_to_hart_map.len) |target_cpu| {
+            if (@import("../hardware/native/cpu/riscv64/mod.zig").CLINT.msip(@import("../hardware/native/cpu/riscv64/mod.zig").cpu_to_hart_map[target_cpu])) |ptr| {
                 ptr.* = 1;
             }
         }

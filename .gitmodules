@@ -1,3 +1,0 @@
-[submodule "third_party/unicorn"]
-	path = third_party/unicorn
-	url = https://github.com/unicorn-engine/unicorn

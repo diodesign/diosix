@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const riscv = @import("arch/riscv64/riscv.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const vcore = @import("vcore.zig");
 const alloc = @import("alloc.zig");
 
@@ -25,12 +25,9 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     const cpu = this();
     if (@intFromPtr(to_vcore) & 7 != 0) @import("debug.zig").printf("!!! contextSwitch given misaligned to_vcore 0x{x}\n", .{@intFromPtr(to_vcore)});
     cpu.active_vcore = to_vcore;
-    if (cpu.cpu_core_id != 0) {
-        @import("debug.zig").printf("!!! contextSwitch CPU {} setting active_vcore to 0x{x}\n", .{cpu.cpu_core_id, @intFromPtr(to_vcore)});
-    }
     to_vcore.running_on_cpu = cpu.cpu_core_id;
 
-    const pmp = @import("arch/riscv64/pmp.zig");
+    const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
     switch (to_vcore.exec_path) {
         .native => {
             to_vcore.guest.space.apply(to_vcore.guest.vmid);
@@ -40,7 +37,7 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
             if (!e.emu_running) {
                 e.context[@intFromEnum(riscv.Register.tp)] = @intFromPtr(cpu);
             }
-            
+
             pmp.PMPConfig.clearAllPmp();
             pmp.PMPConfig.writePmpAddr(0, ~@as(usize, 0));
             pmp.PMPConfig.writePmpCfg(0, 0x1f); // NAPOT, RWX

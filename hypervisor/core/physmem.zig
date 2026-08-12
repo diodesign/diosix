@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const atomic = @import("atomic.zig");
-const riscv = @import("arch/riscv64/riscv.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const debug = @import("debug.zig");
 const dt = @import("dt.zig");
 

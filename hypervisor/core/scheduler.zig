@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const riscv = @import("arch/riscv64/riscv.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const dsa = @import("dsa.zig");
 const pcore = @import("pcore.zig");
 const vcore = @import("vcore.zig");

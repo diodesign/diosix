@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const config = @import("config");
-const riscv = @import("arch/riscv64/riscv.zig");
+const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 
 // Driver interfaces
 pub const ConsoleDriver = struct {
