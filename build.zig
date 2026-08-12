@@ -198,8 +198,6 @@ pub fn build(b: *std.Build) !void {
     defer qemu_args.deinit(b.allocator);
 
     try qemu_args.append(b.allocator, "qemu-system-riscv64");
-    try qemu_args.append(b.allocator, "-gdb");
-    try qemu_args.append(b.allocator, "tcp::12345");
     if (enable_gdb) {
         try qemu_args.append(b.allocator, "-serial");
         try qemu_args.append(b.allocator, "tcp::1234,server,nowait");

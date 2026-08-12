@@ -82,21 +82,36 @@ pub fn queue(vc: *vcore.VirtualCore) void {
         guard.get().run_queue.insert(&vc.scheduler_node);
         guard.release();
 
-        // Wake up target physical CPU via CLINT MSIP
-        if (vc.id < riscv.MAX_PHYS_CORES and riscv.cpu_contexts[vc.id] != null) {
-            if (riscv.CLINT.msip(riscv.cpu_to_hart_map[vc.id])) |ptr| {
-                ptr.* = 1;
-            }
-        } else {
-            for (0..riscv.MAX_PHYS_CORES) |target_cpu| {
-                if (riscv.cpu_contexts[target_cpu] != null) {
-                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
-                        ptr.* = 1;
-                    }
+        // Wake up all physical CPUs so any idle core can pick up the work
+        for (0..riscv.MAX_PHYS_CORES) |target_cpu| {
+            const hw_hart = if (riscv.cpu_contexts[target_cpu] != null) riscv.cpu_to_hart_map[target_cpu] else target_cpu;
+            if (hw_hart != pc.hardware_hart_id) {
+                if (riscv.CLINT.msip(hw_hart)) |ptr| {
+                    ptr.* = 1;
                 }
             }
         }
     }
+}
+
+fn searchNodeById(node_opt: ?*vcore.SchedulerTree.Node, target_id: usize, misa: usize) ?*vcore.SchedulerTree.Node {
+    const node = node_opt orelse return null;
+    if (searchNodeById(node.left, target_id, misa)) |found| return found;
+    const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
+    if (vc.id == target_id and (vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
+        return node;
+    }
+    return searchNodeById(node.right, target_id, misa);
+}
+
+fn searchNodeAny(node_opt: ?*vcore.SchedulerTree.Node, misa: usize) ?*vcore.SchedulerTree.Node {
+    const node = node_opt orelse return null;
+    if (searchNodeAny(node.left, misa)) |found| return found;
+    const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
+    if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
+        return node;
+    }
+    return searchNodeAny(node.right, misa);
 }
 
 // Pick the next virtual core to run, pulling from global if local is empty
@@ -105,58 +120,41 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const misa = riscv.readMisa();
 
     // 1. Try to pick matching vcore (vcore.id == cpu_core_id) from local run queue first
-    var it = pc.run_queue.findMin();
-    while (it) |node| {
+    if (searchNodeById(pc.run_queue.root, pc.cpu_core_id, misa)) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        if (vc.id == pc.cpu_core_id and (vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
-            pc.run_queue.remove(node);
-            pc.run_queue_count -= 1;
-            global_min_vruntime.store(vc.vruntime, .monotonic);
-            return vc;
-        }
-        it = pc.run_queue.findNext(node);
+        pc.run_queue.remove(node);
+        pc.run_queue_count -= 1;
+        global_min_vruntime.store(vc.vruntime, .monotonic);
+        return vc;
     }
 
     // 2. Otherwise pick any compatible vcore from local run queue
-    it = pc.run_queue.findMin();
-    while (it) |node| {
+    if (searchNodeAny(pc.run_queue.root, misa)) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
-            pc.run_queue.remove(node);
-            pc.run_queue_count -= 1;
-            global_min_vruntime.store(vc.vruntime, .monotonic);
-            return vc;
-        }
-        it = pc.run_queue.findNext(node);
+        pc.run_queue.remove(node);
+        pc.run_queue_count -= 1;
+        global_min_vruntime.store(vc.vruntime, .monotonic);
+        return vc;
     }
 
-    // 3. Local queue is empty or incompatible, try to pull from the global queue
+    // 3. Local queue is empty, pull matching vcore from global queue
     const guard = global_scheduler.acquire();
     defer guard.release();
     const state = guard.get();
 
-    // First check global queue for matching vcore.id == cpu_core_id
-    var g_it = state.run_queue.findMin();
-    while (g_it) |node| {
+    if (searchNodeById(state.run_queue.root, pc.cpu_core_id, misa)) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        if (vc.id == pc.cpu_core_id and (vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
-            state.run_queue.remove(node);
-            global_min_vruntime.store(vc.vruntime, .monotonic);
-            return vc;
-        }
-        g_it = state.run_queue.findNext(node);
+        state.run_queue.remove(node);
+        global_min_vruntime.store(vc.vruntime, .monotonic);
+        return vc;
     }
 
-    // Otherwise pick the first compatible vcore from global queue
-    g_it = state.run_queue.findMin();
-    while (g_it) |node| {
+    // 4. Fallback: pull any compatible vcore from global queue
+    if (searchNodeAny(state.run_queue.root, misa)) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
-        if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
-            state.run_queue.remove(node);
-            global_min_vruntime.store(vc.vruntime, .monotonic);
-            return vc;
-        }
-        g_it = state.run_queue.findNext(node);
+        state.run_queue.remove(node);
+        global_min_vruntime.store(vc.vruntime, .monotonic);
+        return vc;
     }
 
     return null;

@@ -363,9 +363,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 it = next_it;
             }
             
-            // Clear stale MSIP before sleeping
+            // Check if a hardware MSIP IPI is pending on this physical core
+            var msip_pending = false;
             if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
-                ptr.* = 0;
+                if (ptr.* != 0) msip_pending = true;
             }
             
             // Try to schedule any newly woken vcores
@@ -374,15 +375,17 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 break;
             }
             
-            // Sleep the physical CPU
-            if (min_timer != riscv.TIMER_INFINITY) {
-                riscv.setTimer(min_timer);
-            } else {
-                // If no timers are scheduled, set the timer to TIMER_INFINITY to prevent spurious wakeups,
-                // avoiding repeatedly resetting a rolling watchdog timer that spams MMIO writes.
-                riscv.setTimer(riscv.TIMER_INFINITY);
+            // Sleep the physical CPU only if no IPI is pending
+            if (!msip_pending) {
+                if (min_timer != riscv.TIMER_INFINITY) {
+                    riscv.setTimer(min_timer);
+                } else {
+                    // If no timers are scheduled, set the timer to TIMER_INFINITY to prevent spurious wakeups,
+                    // avoiding repeatedly resetting a rolling watchdog timer that spams MMIO writes.
+                    riscv.setTimer(riscv.TIMER_INFINITY);
+                }
+                riscv.pause(); // Execute WFI
             }
-            riscv.pause(); // Execute WFI
         }
     }
 
@@ -391,9 +394,8 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     // we must NOT overwrite the hardware state with the guest's state,
     // as we need to return directly back to the interrupted M-mode code.
     var restore_context = irq.privilege_mode != .machine;
-    if (pcpu.active_vcore) |vc_raw| {
-        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-        if (vc.exec_path == .emulated) restore_context = true;
+    if (pcpu.active_vcore != null) {
+        restore_context = true;
     }
 
     if (restore_context) {
@@ -842,8 +844,10 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     // If virtual interrupts are already pending (e.g., VSTIP from a timer
                     // that fired between SBI SET_TIMER and WFI), don't block.
                     // On real hardware, WFI would complete immediately.
+                    const gs = vc.getNativeGuestState();
+                    const timer_expired = (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY and riscv.readTime() >= gs.vstimecmp);
                     const pending_virt = vc.getNativeMachine().hvip & vc.getNativeMachine().hideleg;
-                    if (pending_virt != 0 or @atomicLoad(bool, &vc.pending_ipi, .acquire)) {
+                    if (pending_virt != 0 or @atomicLoad(bool, &vc.pending_ipi, .acquire) or timer_expired) {
                         // Spurious wakeup — resume guest at mepc+4 immediately.
                         riscv.writeMepc(vc.getNativeMachine().mepc);
                         return;
@@ -1045,27 +1049,16 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             if (pcpu.active_vcore) |vc_raw| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
 
-                // Deliver guest timer interrupt if the guest's timer has expired.
-                if (vc.timer_scheduled) {
-                    if (riscv.readTime() >= vc.timer_target) {
-                        if (vc.exec_path == .native) {
-                            vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
-                        }
-                        vc.timer_scheduled = false;
-                    } else {
-                        if (vc.timer_target < next_timer) next_timer = vc.timer_target;
-                    }
-                }
-
-                // Also check vstimecmp for Sstc-based timers.
-                // NOTE: Sstc for the *active* vcore is handled natively by hardware,
-                // but we check it here just in case, and we don't need to put it in next_timer
-                // because the hardware will generate the interrupt natively when it expires.
-                if (vc.exec_path == .native) {
-                    if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-                        const gs = vc.getNativeGuestState();
-                        if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY and riscv.readTime() >= gs.vstimecmp) {
-                            vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
+                // Deliver guest timer interrupt if the guest's timer has expired (only on legacy non-Sstc hardware).
+                if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
+                    if (vc.timer_scheduled) {
+                        if (riscv.readTime() >= vc.timer_target) {
+                            if (vc.exec_path == .native) {
+                                vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
+                            }
+                            vc.timer_scheduled = false;
+                        } else {
+                            if (vc.timer_target < next_timer) next_timer = vc.timer_target;
                         }
                     }
                 }
@@ -1177,6 +1170,11 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 if (active_vc.exec_path == .emulated) {
                     active_vc.exec_path.emulated.preempt_pending = true;
                 }
+            }
+
+            // Schedule any ready vcore picked up via IPI only if this physical CPU is currently idle
+            if (pcpu.active_vcore == null) {
+                scheduler.schedule();
             }
         },
         .machine_interrupt, .supervisor_interrupt => {

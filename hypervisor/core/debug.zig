@@ -66,10 +66,11 @@ const ConsoleState = struct {
 // Global thread-safe debug console state
 var global_console_state = atomic.LockPayload(ConsoleState).init("Debug console state", .{});
 
-// Reentrant lock tracking
+// Reentrant lock tracking (per-hart to prevent cross-core interference)
+const MAX_CPUS = 128;
 var console_lock_owner: usize = 0;
-var console_lock_recursion: usize = 0;
-var console_lock_saved_mstatus: usize = 0;
+var console_lock_recursion = std.mem.zeroes([MAX_CPUS]usize);
+var console_lock_saved_mstatus = std.mem.zeroes([MAX_CPUS]usize);
 
 // Top-level crash bypass flag to guarantee panic messages get printed immediately
 pub var panic_mode: bool = false;
@@ -116,26 +117,30 @@ pub fn hw_getchar() i16 {
 }
 
 fn acquireConsole() *ConsoleState {
-    const pcpu = pcore.this();
-    const self_ptr = @intFromPtr(pcpu);
-    if (@atomicLoad(usize, &console_lock_owner, .seq_cst) == self_ptr) {
-        console_lock_recursion += 1;
+    const hart_id = riscv.readMhartid();
+    const self_id = hart_id + 1; // 1-indexed so 0 represents unowned
+    const cpu_idx = if (hart_id < MAX_CPUS) hart_id else 0;
+
+    if (@atomicLoad(usize, &console_lock_owner, .seq_cst) == self_id) {
+        console_lock_recursion[cpu_idx] += 1;
     } else {
         const prev_ms = global_console_state.lock.lock();
-        @atomicStore(usize, &console_lock_owner, self_ptr, .seq_cst);
-        console_lock_saved_mstatus = prev_ms;
-        console_lock_recursion = 1;
+        @atomicStore(usize, &console_lock_owner, self_id, .seq_cst);
+        console_lock_saved_mstatus[cpu_idx] = prev_ms;
+        console_lock_recursion[cpu_idx] = 1;
     }
     return &global_console_state.data;
 }
 
 fn releaseConsole() void {
-    const pcpu = pcore.this();
-    const self_ptr = @intFromPtr(pcpu);
-    if (@atomicLoad(usize, &console_lock_owner, .seq_cst) == self_ptr) {
-        console_lock_recursion -= 1;
-        if (console_lock_recursion == 0) {
-            const saved_ms = console_lock_saved_mstatus;
+    const hart_id = riscv.readMhartid();
+    const self_id = hart_id + 1;
+    const cpu_idx = if (hart_id < MAX_CPUS) hart_id else 0;
+
+    if (@atomicLoad(usize, &console_lock_owner, .seq_cst) == self_id) {
+        console_lock_recursion[cpu_idx] -= 1;
+        if (console_lock_recursion[cpu_idx] == 0) {
+            const saved_ms = console_lock_saved_mstatus[cpu_idx];
             @atomicStore(usize, &console_lock_owner, 0, .seq_cst);
             global_console_state.lock.unlock(saved_ms);
         }

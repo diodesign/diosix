@@ -112,7 +112,9 @@ pub export fn main(hartid: usize, fdt_paddr: usize) void {
 
     debug.printf("Physical CPU hart ID {} ready for work\n", .{hartid});
     while (true) {
-        scheduler.schedule();
+        if (pcore.this().active_vcore == null) {
+            scheduler.schedule();
+        }
 
         if (pcore.this().active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
