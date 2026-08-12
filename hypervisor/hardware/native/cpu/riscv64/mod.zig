@@ -62,7 +62,14 @@ pub const MAX_PHYS_CORES = 256;
 pub const TIMER_INFINITY: u64 = 0xffffffffffffffff;
 pub const TIMESLICE_TICKS: u64 = 100_000; // 10ms at standard 10MHz RISC-V clock
 pub const WATCHDOG_TICKS: u64 = 100_000_000; // 10s at standard 10MHz RISC-V clock
-pub var cpu_to_hart_map = std.mem.zeroes([MAX_PHYS_CORES]usize);
+fn init_cpu_to_hart_map() [MAX_PHYS_CORES]usize {
+    var map: [MAX_PHYS_CORES]usize = undefined;
+    for (0..MAX_PHYS_CORES) |i| {
+        map[i] = i;
+    }
+    return map;
+}
+pub var cpu_to_hart_map: [MAX_PHYS_CORES]usize = init_cpu_to_hart_map();
 pub var cpu_contexts = std.mem.zeroes([MAX_PHYS_CORES]?*CpuContext);
 
 // Mock CSR state for tests.
@@ -187,7 +194,7 @@ pub const CpuContext = struct {
     active_vcore: ?*anyopaque,
 
     // Per-CPU lock-free (contention-free) run queue.
-    run_queue: dsa.RedBlackTree(u64, dsa.compareU64),
+    run_queue: dsa.LinkedList(*anyopaque),
     run_queue_count: usize,
 
     // Blocked queue for vcores waiting for interrupts (WFI).

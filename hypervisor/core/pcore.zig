@@ -23,9 +23,15 @@ pub extern fn hw_run_vcore(
 // This sets up the physical core to run the guest on the next exception return
 pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     const cpu = this();
+    if (cpu.active_vcore) |active| {
+        if (@intFromPtr(active) == @intFromPtr(to_vcore) and to_vcore.running_on_cpu == cpu.cpu_core_id) {
+            return;
+        }
+    }
     if (@intFromPtr(to_vcore) & 7 != 0) @import("debug.zig").printf("!!! contextSwitch given misaligned to_vcore 0x{x}\n", .{@intFromPtr(to_vcore)});
     cpu.active_vcore = to_vcore;
     to_vcore.running_on_cpu = cpu.cpu_core_id;
+    to_vcore.state = .running;
 
     const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
     switch (to_vcore.exec_path) {

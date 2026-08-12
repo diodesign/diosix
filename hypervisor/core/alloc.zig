@@ -36,6 +36,7 @@
 // SPDX-License-Identifier: MIT
 
 const debug = @import("debug.zig");
+const atomic = @import("atomic.zig");
 const std = @import("std");
 const Alignment = std.mem.Alignment;
 pub const Allocator = std.mem.Allocator;
@@ -69,6 +70,7 @@ pub const HeapAllocator = struct {
     first: *HeapBlock, // there must be at least one block in the list (either in-use or free)
     free_size: usize,
     inuse_size: usize,
+    lock: atomic.SpinLock = atomic.SpinLock.init(),
 
     // initialize the allocator struct for an area of contiguous physical memory
     // base = address of the start of the memory area
@@ -77,6 +79,7 @@ pub const HeapAllocator = struct {
     //        size must be enough to hold at least one HeapBlock
     // returns an error if the initialization failed
     pub fn init(self: *HeapAllocator, base: usize, size: usize) !void {
+        self.lock = atomic.SpinLock.init();
         const heap_block_size_multiple_align = Alignment.fromByteUnits(@sizeOf(*anyopaque));
         if (!Alignment.check(heap_block_size_multiple_align, base)) return HeapAllocError.bad_alignment;
         if (size < @sizeOf(HeapBlock)) return HeapAllocError.not_enough_free_space;
@@ -114,6 +117,8 @@ pub const HeapAllocator = struct {
     //
     pub fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
         const self: *HeapAllocator = @ptrCast(@alignCast(ctx));
+        const prev_flags = self.lock.lock();
+        defer self.lock.unlock(prev_flags);
 
         var prev: ?*HeapBlock = null;
         var search: ?*HeapBlock = self.first;
@@ -133,7 +138,9 @@ pub const HeapAllocator = struct {
     }
 
     pub fn resize(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
-        _ = ctx;
+        const self: *HeapAllocator = @ptrCast(@alignCast(ctx));
+        const prev_flags = self.lock.lock();
+        defer self.lock.unlock(prev_flags);
         _ = ret_addr;
         const block: *HeapBlock = @ptrCast(@alignCast(memory.ptr - @sizeOf(HeapBlock)));
 
@@ -178,6 +185,8 @@ pub const HeapAllocator = struct {
         _ = alignment;
         _ = ret_addr;
         const self: *HeapAllocator = @ptrCast(@alignCast(ctx));
+        const prev_flags = self.lock.lock();
+        defer self.lock.unlock(prev_flags);
         const victim: *HeapBlock = @ptrCast(@alignCast(memory.ptr - @sizeOf(HeapBlock)));
 
         if (victim.state != .in_use) {

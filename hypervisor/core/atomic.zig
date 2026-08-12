@@ -44,7 +44,7 @@ inline fn restoreInterrupts(prev: usize) void {
 // Acquiring the lock disables M-mode interrupts to prevent re-entrant
 // deadlock (e.g., timer interrupt handler trying to acquire a lock
 // already held by the interrupted code on the same hart).
-const SpinLock = struct {
+pub const SpinLock = struct {
     lock_value: value(u32),
 
     pub fn init() SpinLock {

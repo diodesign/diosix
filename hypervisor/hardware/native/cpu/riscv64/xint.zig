@@ -173,7 +173,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
 
     const cpu = pcore.this();
     const is_ecall = (irq.cause == .virtual_supervisor_environment_call or irq.cause == .supervisor_environment_call or irq.cause == .user_environment_call or irq.cause == .machine_environment_call);
-    if (!is_ecall and !is_interrupt and cpu.last_trap_pc == irq.pc and cpu.last_trap_val == irq.val) {
+    if (irq.privilege_mode == .machine and !is_ecall and !is_interrupt and cpu.last_trap_pc == irq.pc and cpu.last_trap_val == irq.val) {
         cpu.trap_loop_count += 1;
         if (cpu.trap_loop_count > TRAP_LOOP_HARD_LIMIT) {
             debug.printf("!!! TRAP LOOP EXCEEDED HARD LIMIT on Core {}: pc=0x{x} cause={s} count={} — terminating guest\n", .{ cpu.cpu_core_id, irq.pc, @tagName(irq.cause), cpu.trap_loop_count });
@@ -286,7 +286,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
         .interrupt => handle_interrupt(irq, context),
     }
 
-    // If the trap came from a guest (not machine mode), handle rescheduling and idle loops
+    // If the trap came from a guest (not machine mode), handle rescheduling
     if (is_guest) {
         // If the active vcore was stopped (e.g., guest VM exited/terminated), reschedule immediately.
         if (pcpu.active_vcore) |vc_raw| {
@@ -295,12 +295,11 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 scheduler.schedule();
             }
         }
+    }
 
-        // If there is no active vcore to run, enter a low-power scheduling loop in machine mode
-        // until a virtual core becomes ready (e.g. via timer or hardware interrupt).
-        // IMPORTANT: Minimize MMIO writes to CLINT (setTimer). In QEMU TCG mode,
-        // MMIO accesses acquire the BQL and serialize ALL vCPUs, causing massive slowdowns.
-        while (pcpu.active_vcore == null) {
+    // If there is no active vcore to run, enter a low-power scheduling loop in machine mode
+    // until a virtual core becomes ready (e.g. via timer or hardware interrupt).
+    while (pcpu.active_vcore == null) {
             var min_timer: u64 = ~@as(u64, 0);
             var it = pcpu.blocked_queue.start;
             
@@ -378,16 +377,12 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 riscv.pause(); // Execute WFI
             }
         }
-    }
 
     // Refresh context if we're returning to a vcore from a lower privilege mode.
-    // If we trapped from M-mode (e.g. nested trap during memory probing),
-    // we must NOT overwrite the hardware state with the guest's state,
+    // If we trapped from M-mode (e.g. nested trap during memory probing or IPIs),
+    // we must NOT overwrite the hardware stack frame with the guest's state,
     // as we need to return directly back to the interrupted M-mode code.
-    var restore_context = irq.privilege_mode != .machine;
-    if (pcpu.active_vcore != null) {
-        restore_context = true;
-    }
+    const restore_context = (irq.privilege_mode != .machine) and (pcpu.active_vcore != null);
 
     if (restore_context) {
         if (pcpu.active_vcore) |vc_raw| {
@@ -538,6 +533,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeVscause(gs.vscause);
         riscv.writeVstval(gs.vstval);
         riscv.writeVsatp(gs.vsatp);
+
         if (!config.legacy_cpu) {
             if (riscv.riscv_supports_sstc) riscv.writeVstimecmp(gs.vstimecmp);
             if (riscv.riscv_supports_smstateen) riscv.writeVsenvcfg(gs.vsenvcfg);
@@ -826,12 +822,11 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     vc.getNativeMachine().mepc += 4;
                     pcore.this().trap_loop_count = 0;
 
-                    // If virtual interrupts are already pending (e.g., VSTIP from a timer
-                    // that fired between SBI SET_TIMER and WFI), don't block.
-                    // On real hardware, WFI would complete immediately.
+                    // If virtual interrupts are already pending (e.g. VSTIP from timer), do not block.
                     const gs = vc.getNativeGuestState();
                     const timer_expired = (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY and riscv.readTime() >= gs.vstimecmp);
                     const pending_virt = vc.getNativeMachine().hvip & vc.getNativeMachine().hideleg;
+
                     if (pending_virt != 0 or @atomicLoad(bool, &vc.pending_ipi, .acquire) or timer_expired) {
                         // Spurious wakeup — resume guest at mepc+4 immediately.
                         riscv.writeMepc(vc.getNativeMachine().mepc);
@@ -1084,6 +1079,9 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                             } else {
                                 if (gs.vstimecmp < next_timer) next_timer = gs.vstimecmp;
                             }
+                        } else {
+                            const poll_target = riscv.readTime() + 5000;
+                            if (poll_target < next_timer) next_timer = poll_target;
                         }
                     }
                 }

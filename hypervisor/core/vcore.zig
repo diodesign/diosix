@@ -24,7 +24,7 @@ pub const VirtualCoreState = enum {
     stopped,
 };
 
-pub const SchedulerTree = dsa.RedBlackTree(u64, dsa.compareU64);
+pub const SchedulerList = dsa.LinkedList(*VirtualCore);
 
 pub const VirtualCoreType = enum {
     native,
@@ -158,7 +158,7 @@ pub const VirtualCore = struct {
 
     // Node for the scheduler's Red-Black Tree.
     // We order by vruntime.
-    scheduler_node: SchedulerTree.Node,
+    scheduler_node: SchedulerList.Node,
 
     // Node for the physical core's blocked queue (WFI).
     blocked_node: dsa.LinkedList(*anyopaque).Node,
@@ -293,8 +293,8 @@ pub const VirtualCore = struct {
             std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[0xf0..0xf4], 0x000000ff, .little); // Spurious Vector
         }
 
-        // Initialize the scheduler node's contents to the vruntime for ordering.
-        vcore.scheduler_node.contents = 0;
+        // Initialize the scheduler node's contents to self pointer.
+        vcore.scheduler_node.contents = undefined;
 
         return vcore;
     }
@@ -402,9 +402,9 @@ pub const VirtualCore = struct {
         return false;
     }
 
-    // Update the scheduler node with latest vruntime before insertion.
+    // Update the scheduler node with self pointer before insertion.
     pub fn updateSchedulerWeight(self: *VirtualCore) void {
-        self.scheduler_node.contents = self.vruntime;
+        self.scheduler_node.contents = self;
     }
 
     pub fn fork(self: *const VirtualCore, child_guest: *guest.Guest) !*VirtualCore {

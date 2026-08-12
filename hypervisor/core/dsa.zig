@@ -73,6 +73,8 @@ pub fn LinkedList(comptime T: type) type {
                     self.end = null;
                 }
 
+                start.next = null;
+                start.previous = null;
                 return start;
             } else return null;
         }
@@ -89,6 +91,8 @@ pub fn LinkedList(comptime T: type) type {
                     self.end = null;
                 }
 
+                end.next = null;
+                end.previous = null;
                 return end;
             } else return null;
         }
@@ -110,11 +114,11 @@ pub fn LinkedList(comptime T: type) type {
 
         // remove the given item from the list, which must have already been added to the list
         pub fn remove(self: *Self, node: *Node) void {
-            if (node.previous == null) {
+            if (self.start == node) {
                 _ = self.popStart();
                 return;
             }
-            if (node.next == null) {
+            if (self.end == node) {
                 _ = self.popEnd();
                 return;
             }
@@ -122,6 +126,8 @@ pub fn LinkedList(comptime T: type) type {
             // clear to remove node from between two existing nodes
             if (node.previous) |p| p.next = node.next;
             if (node.next) |n| n.previous = node.previous;
+            node.previous = null;
+            node.next = null;
         }
 
         // count and return the number of items in the list

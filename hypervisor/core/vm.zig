@@ -156,7 +156,11 @@ pub const GuestSpace = struct {
     // Load hgatp for paging or set PMP regs for fallback
     pub fn apply(self: *GuestSpace, vmid: u16) void {
         if (self.mode == .h_paging) {
-            riscv.writeHgatp(self.paging.?.hgatp(vmid));
+            const new_hgatp = self.paging.?.hgatp(vmid);
+            if (riscv.readHgatp() != new_hgatp) {
+                riscv.writeHgatp(new_hgatp);
+                riscv.hfenceGvma();
+            }
         } else {
             self.pmp_config.?.apply();
         }
