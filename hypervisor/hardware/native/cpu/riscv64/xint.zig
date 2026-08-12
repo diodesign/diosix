@@ -363,11 +363,8 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 it = next_it;
             }
             
-            // Check if a hardware MSIP IPI is pending on this physical core
-            var msip_pending = false;
-            if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
-                if (ptr.* != 0) msip_pending = true;
-            }
+            // Check if a hardware MSIP IPI is pending on this physical core via in-register mip CSR
+            const msip_pending = (riscv.readMip() & (1 << 3)) != 0;
             
             // Try to schedule any newly woken vcores
             scheduler.schedule();
@@ -377,13 +374,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             
             // Sleep the physical CPU only if no IPI is pending
             if (!msip_pending) {
-                if (min_timer != riscv.TIMER_INFINITY) {
-                    riscv.setTimer(min_timer);
-                } else {
-                    // If no timers are scheduled, set the timer to TIMER_INFINITY to prevent spurious wakeups,
-                    // avoiding repeatedly resetting a rolling watchdog timer that spams MMIO writes.
-                    riscv.setTimer(riscv.TIMER_INFINITY);
-                }
+                riscv.setTimer(min_timer);
                 riscv.pause(); // Execute WFI
             }
         }
@@ -448,16 +439,10 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         // software-injected VSTIP bit in hvip so the hardware can manage the interrupt natively.
         // On legacy CPUs lacking Sstc, emulate the timer interrupt in software by setting VSTIP.
         var hvip_val = ms.hvip;
-        if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
-            if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY) {
-                if (riscv.readTime() >= gs.vstimecmp) {
-                    hvip_val |= riscv.HVIP.VSTIP;
-                } else {
-                    hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
-                }
-            }
-        } else {
-            if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY) {
+        if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY) {
+            if (riscv.readTime() >= gs.vstimecmp) {
+                hvip_val |= riscv.HVIP.VSTIP;
+            } else if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
                 hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
             }
         }
@@ -1114,9 +1099,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 it = next_it;
             }
             
-            if (next_timer != ~@as(u64, 0)) {
-                riscv.setTimer(next_timer);
-            }
+            riscv.setTimer(next_timer);
 
             // Asynchronous preemption: if dynarec is running on this core, signal preemption.
             if (pcpu.active_vcore) |opaque_vc| {

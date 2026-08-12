@@ -57,6 +57,10 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     if (@atomicLoad(bool, &vc.wfi_blocked, .acquire)) return;
     // Only schedulable states may be queued.
     if (vc.state != .ready and vc.state != .running) return;
+
+    // Atomically claim queuing rights. If already queued, do not insert again.
+    if (@atomicRmw(bool, &vc.is_queued, .Xchg, true, .acq_rel)) return;
+
     vc.state = .ready;
     vc.running_on_cpu = null;
 
@@ -82,9 +86,10 @@ pub fn queue(vc: *vcore.VirtualCore) void {
         guard.get().run_queue.insert(&vc.scheduler_node);
         guard.release();
 
-        // Wake up all physical CPUs so any idle core can pick up the work
+        // Wake up active physical CPUs so any idle core can pick up the work
         for (0..riscv.MAX_PHYS_CORES) |target_cpu| {
-            const hw_hart = if (riscv.cpu_contexts[target_cpu] != null) riscv.cpu_to_hart_map[target_cpu] else target_cpu;
+            if (riscv.cpu_contexts[target_cpu] == null) continue;
+            const hw_hart = riscv.cpu_to_hart_map[target_cpu];
             if (hw_hart != pc.hardware_hart_id) {
                 if (riscv.CLINT.msip(hw_hart)) |ptr| {
                     ptr.* = 1;
@@ -124,6 +129,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
         pc.run_queue.remove(node);
         pc.run_queue_count -= 1;
+        @atomicStore(bool, &vc.is_queued, false, .release);
         global_min_vruntime.store(vc.vruntime, .monotonic);
         return vc;
     }
@@ -133,6 +139,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
         pc.run_queue.remove(node);
         pc.run_queue_count -= 1;
+        @atomicStore(bool, &vc.is_queued, false, .release);
         global_min_vruntime.store(vc.vruntime, .monotonic);
         return vc;
     }
@@ -145,6 +152,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     if (searchNodeById(state.run_queue.root, pc.cpu_core_id, misa)) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
         state.run_queue.remove(node);
+        @atomicStore(bool, &vc.is_queued, false, .release);
         global_min_vruntime.store(vc.vruntime, .monotonic);
         return vc;
     }
@@ -153,6 +161,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     if (searchNodeAny(state.run_queue.root, misa)) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
         state.run_queue.remove(node);
+        @atomicStore(bool, &vc.is_queued, false, .release);
         global_min_vruntime.store(vc.vruntime, .monotonic);
         return vc;
     }

@@ -263,6 +263,8 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
                 if (hart_id < guest.Guest.max_vcores) {
                     if (g.vcore_lookup[hart_id]) |target_vc| {
                         _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
+                        var ipi_sent = false;
+
                         if (target_vc.blocked_on_cpu) |home_cpu| {
                             if (home_cpu == pcore.this().cpu_core_id) {
                                 if (target_vc.tryWake()) {
@@ -270,20 +272,32 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
                                     target_vc.blocked_on_cpu = null;
                                     scheduler.queue(target_vc);
                                 }
+                                ipi_sent = true;
                             } else {
                                 if (home_cpu < riscv.cpu_to_hart_map.len) {
                                     if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
                                         ptr.* = 1;
+                                        ipi_sent = true;
                                     }
                                 }
                             }
-                        } else {
-                            if (target_vc.running_on_cpu) |target_cpu| {
-                                if (target_cpu != pcore.this().cpu_core_id and target_cpu < riscv.cpu_to_hart_map.len) {
-                                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
-                                        ptr.* = 1;
-                                    }
+                        } else if (target_vc.running_on_cpu) |target_cpu| {
+                            if (target_cpu != pcore.this().cpu_core_id and target_cpu < riscv.cpu_to_hart_map.len) {
+                                if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
+                                    ptr.* = 1;
+                                    ipi_sent = true;
                                 }
+                            }
+                        }
+
+                        // GUARANTEE DELIVERY: If no targeted physical IPI was dispatched (e.g. transient state),
+                        // send IPI directly to the target hardware hart or broadcast to prevent sleeping deadlocks.
+                        if (!ipi_sent) {
+                            const target_hw_hart = if (target_vc.id < riscv.cpu_to_hart_map.len) riscv.cpu_to_hart_map[target_vc.id] else target_vc.id;
+                            if (riscv.CLINT.msip(target_hw_hart)) |ptr| {
+                                ptr.* = 1;
+                            } else {
+                                broadcastPhysicalIPI();
                             }
                         }
                     }
@@ -579,7 +593,8 @@ fn terminateOrRestart(g: *guest.Guest) void {
 fn broadcastPhysicalIPI() void {
     const my_hart = riscv.getCPUContext().hardware_hart_id;
     for (0..riscv.MAX_PHYS_CORES) |cpu_id| {
-        const hw_hart = if (riscv.cpu_contexts[cpu_id] != null) riscv.cpu_to_hart_map[cpu_id] else cpu_id;
+        if (riscv.cpu_contexts[cpu_id] == null) continue;
+        const hw_hart = riscv.cpu_to_hart_map[cpu_id];
         if (hw_hart == my_hart) continue; // Don't IPI ourselves
         if (riscv.CLINT.msip(hw_hart)) |ptr| {
             ptr.* = 1;
