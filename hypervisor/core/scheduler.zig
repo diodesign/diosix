@@ -60,8 +60,6 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     vc.state = .ready;
     vc.running_on_cpu = null;
 
-    const pc = pcore.this();
-
     // Ensure the vcore's vruntime isn't too far behind to prevent it
     // from hogging the CPU if it's been sleeping for a long time.
     const min_vr = global_min_vruntime.load(.monotonic);
@@ -70,24 +68,31 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     }
 
     vc.updateSchedulerWeight();
-
-    // Record the time at which this vcore was last queued (for accounting).
     vc.last_queued_time = riscv.readTime();
 
-    if (pc.run_queue_count < MAX_LOCAL_VCORES and (builtin.is_test or (if (pc.active_vcore) |active| @intFromPtr(active) == @intFromPtr(vc) else true))) {
+    const pc = pcore.this();
+    const is_local = (vc.id == pc.cpu_core_id) or (if (pc.active_vcore) |active| @intFromPtr(active) == @intFromPtr(vc) else false) or builtin.is_test;
+
+    if (is_local and pc.run_queue_count < MAX_LOCAL_VCORES) {
         pc.run_queue.insert(&vc.scheduler_node);
         pc.run_queue_count += 1;
     } else {
-        // Offload to the global queue
+        // Offload to lock-protected global queue for cross-CPU work or overflow
         const guard = global_scheduler.acquire();
         guard.get().run_queue.insert(&vc.scheduler_node);
-        guard.release(); // release early to minimize lock hold time during IPI loop
+        guard.release();
 
-        // Wake up all physical CPUs so one can pick this up from the global queue
-        for (0..riscv.MAX_PHYS_CORES) |target_cpu| {
-            if (riscv.cpu_contexts[target_cpu] != null) {
-                if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
-                    ptr.* = 1;
+        // Wake up target physical CPU via CLINT MSIP
+        if (vc.id < riscv.MAX_PHYS_CORES and riscv.cpu_contexts[vc.id] != null) {
+            if (riscv.CLINT.msip(riscv.cpu_to_hart_map[vc.id])) |ptr| {
+                ptr.* = 1;
+            }
+        } else {
+            for (0..riscv.MAX_PHYS_CORES) |target_cpu| {
+                if (riscv.cpu_contexts[target_cpu] != null) {
+                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
+                        ptr.* = 1;
+                    }
                 }
             }
         }
@@ -99,49 +104,56 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
     const misa = riscv.readMisa();
 
-    // Try to pick from the local run queue first
+    // 1. Try to pick matching vcore (vcore.id == cpu_core_id) from local run queue first
     var it = pc.run_queue.findMin();
+    while (it) |node| {
+        const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
+        if (vc.id == pc.cpu_core_id and (vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
+            pc.run_queue.remove(node);
+            pc.run_queue_count -= 1;
+            global_min_vruntime.store(vc.vruntime, .monotonic);
+            return vc;
+        }
+        it = pc.run_queue.findNext(node);
+    }
+
+    // 2. Otherwise pick any compatible vcore from local run queue
+    it = pc.run_queue.findMin();
     while (it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
         if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
             pc.run_queue.remove(node);
             pc.run_queue_count -= 1;
             global_min_vruntime.store(vc.vruntime, .monotonic);
-            if (@intFromPtr(vc) & 7 != 0) @import("debug.zig").printf("!!! pickNext returning misaligned vc 0x{x}\n", .{@intFromPtr(vc)});
             return vc;
         }
         it = pc.run_queue.findNext(node);
     }
 
-    // Local queue is empty or incompatible, try to pull from the global queue
+    // 3. Local queue is empty or incompatible, try to pull from the global queue
     const guard = global_scheduler.acquire();
     defer guard.release();
     const state = guard.get();
 
+    // First check global queue for matching vcore.id == cpu_core_id
     var g_it = state.run_queue.findMin();
+    while (g_it) |node| {
+        const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
+        if (vc.id == pc.cpu_core_id and (vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
+            state.run_queue.remove(node);
+            global_min_vruntime.store(vc.vruntime, .monotonic);
+            return vc;
+        }
+        g_it = state.run_queue.findNext(node);
+    }
+
+    // Otherwise pick the first compatible vcore from global queue
+    g_it = state.run_queue.findMin();
     while (g_it) |node| {
         const vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", node);
         if ((vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
             state.run_queue.remove(node);
             global_min_vruntime.store(vc.vruntime, .monotonic);
-
-            // Greedy pull: fill local queue with some more compatible work from global
-            var pulled: usize = 0;
-            var next_g = state.run_queue.findMin();
-            while (pulled < PULL_BATCH and next_g != null) {
-                const g_node = next_g.?;
-                next_g = state.run_queue.findNext(g_node);
-
-                const g_vc: *vcore.VirtualCore = @fieldParentPtr("scheduler_node", g_node);
-                if ((g_vc.requiredExtensions() & misa) == g_vc.requiredExtensions()) {
-                    state.run_queue.remove(g_node);
-                    pc.run_queue.insert(g_node);
-                    pc.run_queue_count += 1;
-                    pulled += 1;
-                }
-            }
-
-            if (@intFromPtr(vc) & 7 != 0) @import("debug.zig").printf("!!! pickNext returning misaligned vc 0x{x}\n", .{@intFromPtr(vc)});
             return vc;
         }
         g_it = state.run_queue.findNext(node);

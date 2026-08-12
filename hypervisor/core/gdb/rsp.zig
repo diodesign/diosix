@@ -211,19 +211,21 @@ pub fn handlePacketPayload(payload: []const u8) void {
                 return;
             };
             if (active_vc) |vc| {
-                if (vc.exec_path.emulated.uc) |uc| {
-                    if (reg_num == 16) { // RIP
-                        var bytes: [8]u8 = undefined;
-                        var idx: usize = 0;
-                        while (idx < 8 and idx * 2 + 1 < val_str.len) : (idx += 1) {
-                            if (parseHexByte(val_str[idx * 2 .. idx * 2 + 2])) |b| {
-                                bytes[idx] = b;
+                if (vc.exec_path == .emulated) {
+                    if (vc.exec_path.emulated.vcpu) |vcpu| {
+                        if (reg_num == 16) { // RIP / PC
+                            var bytes: [8]u8 = undefined;
+                            var idx: usize = 0;
+                            while (idx < 8 and idx * 2 + 1 < val_str.len) : (idx += 1) {
+                                if (parseHexByte(val_str[idx * 2 .. idx * 2 + 2])) |b| {
+                                    bytes[idx] = b;
+                                }
                             }
+                            const new_rip = std.mem.readInt(u64, &bytes, .little);
+                            vcpu.pc = @truncate(new_rip);
+                            sendPacket("OK");
+                            return;
                         }
-                        const new_rip = std.mem.readInt(u64, &bytes, .little);
-                        x86_64.writePC(uc, new_rip);
-                        sendPacket("OK");
-                        return;
                     }
                 }
             }
@@ -261,11 +263,8 @@ pub fn handlePacketPayload(payload: []const u8) void {
             }
 
             if (active_vc) |vc| {
-                if (vc.exec_path.emulated.uc) |uc| {
-                    var target_gpa = addr;
-                    if (x86_64.translateVA(uc, vc.guest.space.base_hpa, addr)) |translated| {
-                        target_gpa = translated;
-                    }
+                if (vc.exec_path == .emulated) {
+                    const target_gpa = addr;
                     if (target_gpa < vc.guest.space.range_size) {
                         const host_ptr = @as([*]const u8, @ptrFromInt(vc.guest.space.base_hpa + target_gpa));
                         @memcpy(mem_buf[0..read_len], host_ptr[0..read_len]);
@@ -312,11 +311,8 @@ pub fn handlePacketPayload(payload: []const u8) void {
             }
 
             if (active_vc) |vc| {
-                if (vc.exec_path.emulated.uc) |uc| {
-                    var target_gpa = addr;
-                    if (x86_64.translateVA(uc, vc.guest.space.base_hpa, addr)) |translated| {
-                        target_gpa = translated;
-                    }
+                if (vc.exec_path == .emulated) {
+                    const target_gpa = addr;
                     if (target_gpa < vc.guest.space.range_size) {
                         const host_ptr = @as([*]u8, @ptrFromInt(vc.guest.space.base_hpa + target_gpa));
                         var idx: usize = 0;
@@ -428,9 +424,12 @@ pub fn handlePacketPayload(payload: []const u8) void {
         's' => {
             // Single step 1 instruction
             if (active_vc) |vc| {
-                if (vc.exec_path.emulated.uc) |uc| {
-                    const rip = x86_64.readPC(uc);
-                    _ = glue.uc_emu_start(uc, rip, 0, 0, 1);
+                if (vc.exec_path == .emulated) {
+                    if (vc.exec_path.emulated.vcpu != null) {
+                        if (vc.exec_path.emulated.engine) |engine| {
+                            _ = engine.step();
+                        }
+                    }
                 }
             }
             sendPacket("S05");
@@ -448,11 +447,8 @@ const SwBreakpoint = struct {
 };
 var sw_breakpoints: [16]SwBreakpoint = undefined;
 
-fn readByte(uc: ?*anyopaque, vc: *vcore.VirtualCore, addr: u64) ?u8 {
-    var target_gpa = addr;
-    if (x86_64.translateVA(uc, vc.guest.space.base_hpa, addr)) |translated| {
-        target_gpa = translated;
-    }
+fn readByte(vc: *vcore.VirtualCore, addr: u64) ?u8 {
+    const target_gpa = addr;
     if (target_gpa < vc.guest.space.range_size) {
         const host_ptr = @as([*]u8, @ptrFromInt(vc.guest.space.base_hpa + target_gpa));
         return host_ptr[0];
@@ -460,11 +456,8 @@ fn readByte(uc: ?*anyopaque, vc: *vcore.VirtualCore, addr: u64) ?u8 {
     return null;
 }
 
-fn writeByte(uc: ?*anyopaque, vc: *vcore.VirtualCore, addr: u64, val: u8) bool {
-    var target_gpa = addr;
-    if (x86_64.translateVA(uc, vc.guest.space.base_hpa, addr)) |translated| {
-        target_gpa = translated;
-    }
+fn writeByte(vc: *vcore.VirtualCore, addr: u64, val: u8) bool {
+    const target_gpa = addr;
     if (target_gpa < vc.guest.space.range_size) {
         const host_ptr = @as([*]u8, @ptrFromInt(vc.guest.space.base_hpa + target_gpa));
         host_ptr[0] = val;
@@ -474,10 +467,9 @@ fn writeByte(uc: ?*anyopaque, vc: *vcore.VirtualCore, addr: u64, val: u8) bool {
 }
 
 fn insertSwBreakpoint(addr: u64) bool {
-    if (active_vc == null or active_vc.?.exec_path.emulated.uc == null) return false;
+    if (active_vc == null or active_vc.?.exec_path != .emulated) return false;
     const vc = active_vc.?;
-    const uc = vc.exec_path.emulated.uc.?;
-    const orig = readByte(uc, vc, addr) orelse return false;
+    const orig = readByte(vc, addr) orelse return false;
 
     var slot: ?usize = null;
     for (&sw_breakpoints, 0..) |*bp, i| {
@@ -486,19 +478,18 @@ fn insertSwBreakpoint(addr: u64) bool {
     }
     if (slot == null) return false;
 
-    if (!writeByte(uc, vc, addr, 0xCC)) return false;
+    if (!writeByte(vc, addr, 0xCC)) return false;
 
     sw_breakpoints[slot.?] = .{ .addr = addr, .orig_byte = orig, .active = true };
     return true;
 }
 
 fn removeSwBreakpoint(addr: u64) bool {
-    if (active_vc == null or active_vc.?.exec_path.emulated.uc == null) return false;
+    if (active_vc == null or active_vc.?.exec_path != .emulated) return false;
     const vc = active_vc.?;
-    const uc = vc.exec_path.emulated.uc.?;
     for (&sw_breakpoints) |*bp| {
         if (bp.active and bp.addr == addr) {
-            _ = writeByte(uc, vc, addr, bp.orig_byte);
+            _ = writeByte(vc, addr, bp.orig_byte);
             bp.active = false;
             return true;
         }
@@ -507,12 +498,11 @@ fn removeSwBreakpoint(addr: u64) bool {
 }
 
 pub fn removeAllBreakpoints() void {
-    if (active_vc == null or active_vc.?.exec_path.emulated.uc == null) return;
+    if (active_vc == null or active_vc.?.exec_path != .emulated) return;
     const vc = active_vc.?;
-    const uc = vc.exec_path.emulated.uc.?;
     for (&sw_breakpoints) |*bp| {
         if (bp.active) {
-            _ = writeByte(uc, vc, bp.addr, bp.orig_byte);
+            _ = writeByte(vc, bp.addr, bp.orig_byte);
             bp.active = false;
         }
     }
@@ -549,14 +539,15 @@ pub fn handleSerialByte(ch: u8) void {
     gdb_connected = true;
     if (active_vc) |vc| {
         @atomicStore(bool, &vc.wfi_blocked, false, .release);
-        vc.exec_path.emulated.sub_vcores[0].wfi_blocked = false;
     }
 
     // Check for raw 0x03 (Control-C) interrupt byte
     if (ch == 0x03) {
         if (active_vc) |vc| {
-            if (vc.exec_path.emulated.uc) |uc| {
-                _ = glue.uc_emu_stop(uc);
+            if (vc.exec_path == .emulated) {
+                if (vc.exec_path.emulated.vcpu) |vcpu| {
+                    vcpu.running = false;
+                }
             }
         }
         sendPacket("S02"); // SIGINT

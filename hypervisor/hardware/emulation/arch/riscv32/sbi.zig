@@ -579,8 +579,8 @@ fn terminateOrRestart(g: *guest.Guest) void {
 fn broadcastPhysicalIPI() void {
     const my_hart = riscv.getCPUContext().hardware_hart_id;
     for (0..riscv.MAX_PHYS_CORES) |cpu_id| {
+        if (riscv.cpu_contexts[cpu_id] == null) continue;
         const hw_hart = riscv.cpu_to_hart_map[cpu_id];
-        if (hw_hart == 0 and cpu_id != 0) break; // End of initialized entries
         if (hw_hart == my_hart) continue; // Don't IPI ourselves
         if (riscv.CLINT.msip(hw_hart)) |ptr| {
             ptr.* = 1;

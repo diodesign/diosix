@@ -274,7 +274,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 gs.vstval = riscv.readStval();
                 gs.vsatp = riscv.readSatp();
                 if (!config.legacy_cpu) {
-                    if (riscv.riscv_supports_sstc) gs.vstimecmp = riscv.readStimecmp();
+                    if (riscv.riscv_supports_sstc) gs.vstimecmp = riscv.readVstimecmp();
                     if (riscv.riscv_supports_smstateen) gs.vsenvcfg = riscv.readSenvcfg();
                 }
             }

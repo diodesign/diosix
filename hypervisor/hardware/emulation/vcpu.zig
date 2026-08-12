@@ -52,6 +52,7 @@ pub const VCpu = struct {
     priv_mode: u2 = 3, // Alias for compatibility
     softtlb: struct { privilege_mode: u2 = 1 } = .{},
     time: u64 = 0,
+    running: bool = true,
 
     // Machine-mode CSRs
     mstatus: u32 = 0,
