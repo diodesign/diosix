@@ -266,14 +266,7 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
                         var ipi_sent = false;
 
                         if (target_vc.tryWake()) {
-                            if (target_vc.blocked_on_cpu) |home_cpu| {
-                                if (home_cpu < riscv.MAX_PHYS_CORES) {
-                                    if (riscv.cpu_contexts[home_cpu]) |target_pcpu| {
-                                        target_pcpu.blocked_queue.remove(&target_vc.blocked_node);
-                                    }
-                                }
-                                target_vc.blocked_on_cpu = null;
-                            }
+                            target_vc.blocked_on_cpu = null;
                             scheduler.queue(target_vc);
                         }
 

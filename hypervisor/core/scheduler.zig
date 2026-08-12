@@ -176,13 +176,13 @@ pub fn schedule() void {
     // If there's an active vcore, update its runtime before putting it back
     if (pc.active_vcore) |ptr| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
-        // Calculate actual time spent running using the hardware timer.
-        const now = riscv.readTime();
-        const actual_time = if (now > vc.last_queued_time) now - vc.last_queued_time else 1;
-        // Weight the runtime: heavier processes accumulate vruntime more slowly.
-        const delta: u64 = actual_time * 1024 / vc.weight;
-        vc.vruntime += delta;
-        queue(vc);
+        if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
+            const now = riscv.readTime();
+            const actual_time = if (now > vc.last_queued_time) now - vc.last_queued_time else 1;
+            const delta: u64 = actual_time * 1024 / vc.weight;
+            vc.vruntime += delta;
+            queue(vc);
+        }
         pc.active_vcore = null;
     }
 
