@@ -977,6 +977,9 @@ pub const UC_HOOK_INSN: c_int = 2;
 pub const UC_X86_INS_SYSCALL: c_int = 699;
 pub const UC_X86_INS_IN: c_int = 218;
 pub const UC_X86_INS_OUT: c_int = 500;
+pub const UC_X86_INS_CPUID: c_int = 114;
+pub const UC_X86_INS_RDMSR: c_int = 604;
+pub const UC_X86_INS_WRMSR: c_int = 1305;
 
 pub const uc_cb_hookintr_t = *const fn (uc: ?*anyopaque, intno: u32, user_data: ?*anyopaque) callconv(.c) void;
 

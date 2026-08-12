@@ -57,14 +57,19 @@ pub const SubVcoreState = struct {
     timer_target: u64 = 0,
     wfi_blocked: bool = false,
     pending_ipi: bool = false,
+    pending_ipi_vector: u8 = 0,
 
     start_pc: u64 = 0,
     start_a0: u64 = 0,
     start_a1: u64 = 0,
     last_pc: u64 = 0,
     lapic_timer: LapicTimerState = .{},
+    icr_dest: u32 = 0,
     last_page_fault_addr: u64 = 0,
     freeze_count: u32 = 0,
+    fs_base: u64 = 0,
+    gs_base: u64 = 0,
+    kernel_gs_base: u64 = 0,
 };
 
 
@@ -127,6 +132,7 @@ pub const VirtualCore = struct {
             idle_hook_addr: u64 = 0,
             icr_dest: u32 = 0,
             ioapic_reg_sel: u8 = 0,
+            ioapic_written: bool = false,
             ioapic_redtbl: [24]u64 = init_ioapic_redtbl(),
         },
     },

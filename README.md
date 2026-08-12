@@ -4,10 +4,10 @@
 
 Diosix is a type-1 bare-metal hypervisor written in the Zig programming language
 for multi-core 64-bit RISC-V systems. It allows machines large and small to run
-multiple hardware-isolated operating systems at the same time.
+multiple hardware-isolated guest operating systems simultaneously.
 
-This hypervisor supports 64-bit Arm and x86 guest operating systems as well as
-32-bit and 64-bit RISC-V.
+The hypervisor seamlessly supports 64-bit Arm and x86 guests, as well as 32-bit and
+64-bit RISC-V guests.
 
 This project is an ongoing work-in-progress. By using Zig, we aim to innovate and
 iterate quickly while maintaining a strict focus on safety, security, and

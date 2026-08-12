@@ -178,11 +178,9 @@ pub const Loader = struct {
             }
         }
 
-        // Look up early_top_pgt for x86_64 guest to configure the initial page tables.
+        // Look up early_top_pgt for non-x86_64 guests to configure the initial page tables.
         if (findSymbol(source, "early_top_pgt")) |pgt_vaddr| {
-            if (root_vm.target_arch == .x86_64) {
-                root_vm.early_pgt_gpa = root_vm.space.base_gpa + @as(usize, @intCast(pgt_vaddr -% min_vaddr + min_paddr));
-            } else {
+            if (root_vm.target_arch != .x86_64) {
                 const pgt_offset = pgt_vaddr -% min_vaddr;
                 root_vm.early_pgt_gpa = root_vm.space.base_gpa + @as(usize, @intCast(pgt_offset));
             }

@@ -120,6 +120,76 @@ Press `Ctrl-a` followed by `c` again to return to the hypervisor console.
 
 ---
 
+## Remote debugging with GDB
+
+Diosix includes an embedded GNU Debugger (GDB) Remote Serial Protocol (RSP)
+stub for real-time inspection of hypervisor execution and guest Virtual Machine
+(VM) state.
+
+The embedded GDB RSP stub communicates over a UART serial interface.
+
+### Enable debug mode
+
+To build with debug optimizations and activate the embedded GDB RSP stub, pass
+the `--debug` flag to the build wrapper (or set `-Doptimize=Debug -Dgdb=true`
+when invoking `zig build`):
+
+```bash
+./scripts/build.sh run --debug
+```
+
+You can combine `--debug` with custom guest target architectures or hardware
+parameters:
+
+```bash
+# Debug an x86_64 guest VM in QEMU
+./scripts/build.sh run -Dguest-arch=x86_64 --debug
+
+# Debug with Physical Memory Protection (PMP) isolation
+./scripts/build.sh run -Dpmp=true --debug
+```
+
+### Connect GDB in QEMU emulation
+
+When running inside QEMU with `--debug`, the build wrapper automatically
+redirects the emulated serial console to a local TCP socket listening on port
+`1234` (`-serial tcp::1234,server,nowait`).
+
+Connect using `gdb` targeting the host TCP socket and appropriate guest ELF payload:
+
+```bash
+# For an x86_64 guest VM in QEMU
+gdb zig-out/guest-x86_64/bin/rootvm.elf -ex "target remote localhost:1234"
+
+# For a 64-bit RISC-V guest VM in QEMU
+gdb zig-out/guest-riscv64/bin/rootvm.elf -ex "target remote localhost:1234"
+```
+
+### Connect GDB on physical target hardware
+
+When booting on physical hardware compiled with `-Dgdb=true`, the hypervisor's
+GDB RSP stub listens directly on the physical serial port (UART). Connect `gdb`
+over the host machine's serial interface (such as `/dev/ttyUSB0` or `/dev/ttyACM0`):
+
+```bash
+# Connect to target hardware via physical serial device
+gdb zig-out/guest-riscv64/bin/rootvm.elf -ex "target remote /dev/ttyUSB0"
+```
+
+### Useful GDB commands
+
+*   **Inspect stack backtrace**: `bt`
+*   **View register state**: `info registers` or `info r`
+*   **Set breakpoints**: `break *0xffffffff816c860b` or `break start_kernel`
+*   **Single-step instructions**: `stepi` or `nexti`
+*   **Continue execution**: `continue` (or `c`)
+*   **Batch execution non-interactively**:
+    ```bash
+    gdb -batch -ex "target remote localhost:1234" -ex "bt" -ex "info registers" zig-out/guest-x86_64/bin/rootvm.elf
+    ```
+
+---
+
 ## Target hardware configurations
 
 Diosix compiles to a universal binary that runs on various physical and emulated RISC-V hardware systems, discovering its environment dynamically at boot using the Device Tree Blob (DTB) and registering corresponding device drivers.

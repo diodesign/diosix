@@ -149,7 +149,6 @@ fn idleEnableInterruptsHook(uc: ?*anyopaque, address: u64, size: u32, user_data:
     _ = glue.uc_reg_write(uc, rv32.UC_REG_PRIV, &current_priv);
 }
 
-
 fn x86_64SyscallCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
     const guard = glue.TpGuard.init();
     defer guard.deinit();
@@ -157,6 +156,85 @@ fn x86_64SyscallCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) v
     const rip = x86_64.readPC(uc);
     if (x86_64.handleCleanStop(uc, vc, rip)) {
         _ = glue.uc_emu_stop(uc);
+    }
+}
+
+fn x86_64CpuidCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(user_data.?)));
+    x86_64.emulateCpuId(uc, vc);
+    const rip = x86_64.readPC(uc);
+    x86_64.writePC(uc, rip + 2);
+}
+
+fn x86_64MsrReadCallback(uc: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(user_data.?)));
+    var rcx: u64 = 0;
+    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RCX), &rcx);
+    const msr_id = @as(u32, @truncate(rcx));
+    const val = x86_64.emulateMsrRead(uc, vc, msr_id);
+    debug.printf("RDMSR: msr 0x{x} -> 0x{x}\n", .{ msr_id, val });
+    var eax: u64 = @as(u32, @truncate(val));
+    var edx: u64 = @as(u32, @truncate(val >> 32));
+    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RAX), &eax);
+    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RDX), &edx);
+    const rip = x86_64.readPC(uc);
+    x86_64.writePC(uc, rip + 2);
+}
+
+fn x86_64CodeHook(uc: ?*anyopaque, address: u64, size: u32, user_data: ?*anyopaque) callconv(.c) void {
+    _ = size;
+    const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(user_data.?)));
+    const em = &vc.exec_path.emulated;
+    if (em.target_arch != .x86_64) return;
+
+    const phys = x86_64.translateVA(uc, vc.guest.space.base_hpa, address) orelse return;
+    const ptr = @as([*]const u8, @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(vc.guest.space.base_hpa + phys)))));
+
+    var idx: usize = 0;
+    while (idx < 6) : (idx += 1) {
+        const b = ptr[idx];
+        if (b == 0x66 or b == 0x67 or (b >= 0x40 and b <= 0x4f) or b == 0xf0 or b == 0xf2 or b == 0xf3) {
+            continue;
+        }
+        break;
+    }
+    if (ptr[idx] != 0x0F) return;
+
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+
+    const op1 = ptr[idx + 1];
+    const insn_len = idx + 2;
+
+    if (op1 == 0x32) {
+        // RDMSR (0x0F 0x32)
+        var rcx: u64 = 0;
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RCX), &rcx);
+        const msr_id = @as(u32, @truncate(rcx));
+        const val = x86_64.emulateMsrRead(uc, vc, msr_id);
+        var eax: u64 = @as(u32, @truncate(val));
+        var edx: u64 = @as(u32, @truncate(val >> 32));
+        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RAX), &eax);
+        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RDX), &edx);
+        var new_rip: u64 = address + insn_len;
+        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RIP), &new_rip);
+    } else if (op1 == 0x30) {
+        // WRMSR (0x0F 0x30)
+        var rcx: u64 = 0;
+        var eax: u64 = 0;
+        var edx: u64 = 0;
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RCX), &rcx);
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RAX), &eax);
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RDX), &edx);
+        const msr_id = @as(u32, @truncate(rcx));
+        const val = (@as(u64, @truncate(edx)) << 32) | @as(u64, @truncate(eax));
+        x86_64.emulateMsrWrite(uc, vc, msr_id, val);
+        var new_rip: u64 = address + insn_len;
+        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RIP), &new_rip);
     }
 }
 
@@ -202,43 +280,74 @@ fn x86_64DelayLoopHook(uc: ?*anyopaque, address: u64, size: u32, user_data: ?*an
                 ret_addr = host_ptr.*;
             }
 
-            const ns = loops *| 2900;
+            const total_ns = loops / 4; // ~0.25ns per loop iteration
 
-            const ioapic_entry = em.ioapic_redtbl[2];
-            const ioapic_masked = (ioapic_entry & (1 << 16)) != 0;
-            const pic_masked = (vc.guest.pit.pic_master_imr & 0x01) != 0;
-            const masked = ioapic_masked and pic_masked;
             var rflags: u64 = 0;
             _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_EFLAGS), &rflags);
             const irq_enabled = (rflags & (1 << 9)) != 0;
 
-            const target_vt = sub.timer_target;
-
-            const timer_pending = sub.timer_scheduled and vc.virtual_time >= target_vt;
-            const timer_expires_during_delay = sub.timer_scheduled and vc.virtual_time < target_vt and (vc.virtual_time +| ns) >= target_vt;
-
-            if (irq_enabled and !masked and (timer_pending or timer_expires_during_delay)) {
-                if (timer_pending) {
-                    _ = glue.uc_emu_stop(uc);
-                } else {
-                    const elapsed_ns = target_vt -| vc.virtual_time;
-                    const elapsed_loops = elapsed_ns / 2900;
-                    const remaining_loops = if (loops > elapsed_loops) loops - elapsed_loops else 0;
-
-                    vc.virtual_time = target_vt;
-
-                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RDI), &remaining_loops);
-                    _ = glue.uc_emu_stop(uc);
+            var target_vt: u64 = 0;
+            var has_timer = false;
+            if (sub.timer_scheduled) {
+                target_vt = sub.timer_target;
+                has_timer = true;
+            }
+            if (sub.lapic_timer.init_count > 0 and (sub.lapic_timer.lvt_timer & 0x10000) == 0 and (sub.lapic_timer.lvt_timer & 0xff) >= 32) {
+                const lapic_target = sub.lapic_timer.start_time +| sub.lapic_timer.period_ticks;
+                if (!has_timer or lapic_target < target_vt) {
+                    target_vt = lapic_target;
+                    has_timer = true;
                 }
-            } else {
-                if (ret_addr == 0) return; // Do not jump to 0 if stack read failed
+            }
 
-                vc.virtual_time +|= ns;
+            const timer_pending = has_timer and vc.virtual_time >= target_vt;
+            const timer_expires_during_delay = has_timer and vc.virtual_time < target_vt and (vc.virtual_time +| total_ns) >= target_vt;
 
+            if (irq_enabled and (timer_pending or timer_expires_during_delay)) {
+                const ns_to_target = if (target_vt > vc.virtual_time) target_vt - vc.virtual_time else 0;
+                vc.virtual_time = target_vt;
+                const consumed_loops = if (total_ns > 0) (ns_to_target *| loops) / total_ns else loops;
+                var remaining_loops = if (loops > consumed_loops) loops - consumed_loops else 0;
+                _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RDI), &remaining_loops);
+
+                if (sub.lapic_timer.init_count > 0) {
+                    const elapsed = vc.virtual_time - sub.lapic_timer.start_time;
+                    const elapsed_ticks = elapsed / 10;
+                    var cur_val = if (sub.lapic_timer.init_count > elapsed_ticks) sub.lapic_timer.init_count - @as(u32, @truncate(elapsed_ticks)) else 0;
+                    _ = glue.uc_mem_write(uc, 0xfee00390, @ptrCast(&cur_val), 4);
+                }
+
+                if (remaining_loops == 0 and ret_addr != 0) {
+                    rsp +|= 8;
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RSP), &rsp);
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RIP), &ret_addr);
+                }
+
+                _ = glue.uc_emu_stop(uc);
+                return;
+            }
+
+            vc.virtual_time +|= total_ns;
+
+            if (sub.timer_scheduled and sub.timer_target <= vc.virtual_time) {
+                const pit_ch0 = &vc.guest.pit.channels[0];
+                const ticks = if (pit_ch0.period_ticks > 0) pit_ch0.period_ticks else 100000;
+                updatePitTimerTarget(sub, ticks, vc.virtual_time);
+            }
+
+            if (sub.lapic_timer.init_count > 0) {
+                const elapsed = vc.virtual_time - sub.lapic_timer.start_time;
+                const elapsed_ticks = elapsed / 10;
+                var cur_val = if (sub.lapic_timer.init_count > elapsed_ticks) sub.lapic_timer.init_count - @as(u32, @truncate(elapsed_ticks)) else 0;
+                _ = glue.uc_mem_write(uc, 0xfee00390, @ptrCast(&cur_val), 4);
+            }
+
+            if (ret_addr != 0) {
                 rsp +|= 8;
                 _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RSP), &rsp);
                 _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RIP), &ret_addr);
             }
+            _ = glue.uc_emu_stop(uc);
             return;
         }
     }
@@ -256,9 +365,15 @@ fn x86_64OutCallback(uc: ?*anyopaque, port: u32, size: c_int, value: u32, user_d
     const ch2_elapsed = if (current_time >= ch2.start_time) current_time - ch2.start_time else 0;
     em.pit_calibration_active = (ch2.start_time > 0) and (ch2.latch > 0) and (ch2_elapsed < 1_000_000);
 
-    // COM1 (0x3f8) serial output
+    // COM1 (0x3f8) serial output and register writes
     if (port == 0x3f8) {
         debug.putcharFromGuest(vc.guest_id, @as(u8, @intCast(value & 0xff)));
+    } else if (port >= 0x3f8 and port <= 0x3ff) {
+        // COM1 UART register writes (IER, FCR, LCR, MCR, etc.) — ignore
+    } else if (port == 0x20) {
+        // 8259A Master PIC command (ICW1/OCW2/OCW3 — ignore for emulation)
+    } else if (port == 0xa0) {
+        // 8259A Slave PIC command (ICW1/OCW2/OCW3 — ignore for emulation)
     } else if (port == 0x21) {
         pit.pic_master_imr = @as(u8, @intCast(value & 0xff));
     } else if (port == 0xa1) {
@@ -280,9 +395,10 @@ fn x86_64OutCallback(uc: ?*anyopaque, port: u32, size: c_int, value: u32, user_d
                     ch.latched_val = ch.latch - @as(u16, @intCast(em.pit_calibration_ticks));
                 } else {
                     const elapsed = current_time - ch.start_time;
-                    const elapsed_pit = @as(u64, @truncate((@as(u128, elapsed) * 1_193_182) / 10_000_000));
+                    const elapsed_pit = @as(u64, @truncate((@as(u128, elapsed) * 1_193_182) / 1_000_000_000));
                     const effective_latch: u64 = if (ch.latch == 0) 65536 else ch.latch;
-                    const current_count = if (elapsed_pit >= effective_latch) 0 else @as(u16, @truncate(effective_latch - elapsed_pit));
+                    const count_rem = elapsed_pit % effective_latch;
+                    const current_count = @as(u16, @truncate(effective_latch - count_rem));
                     ch.latched_val = current_count;
                 }
                 ch.count_latched = true;
@@ -308,7 +424,7 @@ fn x86_64OutCallback(uc: ?*anyopaque, port: u32, size: c_int, value: u32, user_d
             if (ch_idx == 2) em.pit_calibration_ticks = 0;
             if (ch_idx == 0) {
                 const effective_latch: u64 = if (ch.latch == 0) 65536 else ch.latch;
-                ch.period_ticks = (effective_latch * 10_000_000) / 1_193_182;
+                ch.period_ticks = (effective_latch * 1_000_000_000) / 1_193_182;
                 const sub = &vc.exec_path.emulated.sub_vcores[vc.exec_path.emulated.active_sub_vcore];
                 sub.timer_target = current_time + ch.period_ticks;
                 sub.timer_scheduled = true;
@@ -320,7 +436,7 @@ fn x86_64OutCallback(uc: ?*anyopaque, port: u32, size: c_int, value: u32, user_d
             if (ch_idx == 2) em.pit_calibration_ticks = 0;
             if (ch_idx == 0) {
                 const effective_latch: u64 = if (ch.latch == 0) 65536 else ch.latch;
-                ch.period_ticks = (effective_latch * 10_000_000) / 1_193_182;
+                ch.period_ticks = (effective_latch * 1_000_000_000) / 1_193_182;
                 const sub = &vc.exec_path.emulated.sub_vcores[vc.exec_path.emulated.active_sub_vcore];
                 sub.timer_target = current_time + ch.period_ticks;
                 sub.timer_scheduled = true;
@@ -336,7 +452,7 @@ fn x86_64OutCallback(uc: ?*anyopaque, port: u32, size: c_int, value: u32, user_d
                 if (ch_idx == 2) em.pit_calibration_ticks = 0;
                 if (ch_idx == 0) {
                     const effective_latch: u64 = if (ch.latch == 0) 65536 else ch.latch;
-                    ch.period_ticks = (effective_latch * 10_000_000) / 1_193_182;
+                    ch.period_ticks = (effective_latch * 1_000_000_000) / 1_193_182;
                     const sub = &vc.exec_path.emulated.sub_vcores[vc.exec_path.emulated.active_sub_vcore];
                     sub.timer_target = current_time + ch.period_ticks;
                     sub.timer_scheduled = true;
@@ -348,6 +464,14 @@ fn x86_64OutCallback(uc: ?*anyopaque, port: u32, size: c_int, value: u32, user_d
         const val = @as(u8, @intCast(value & 0xff));
         pit.port_61 = val;
         pit.channels[2].gate = val & 0x01;
+    } else if (port == 0x80) {
+        // POST diagnostic port — ignore writes silently
+    } else if (port == 0x70) {
+        // CMOS/RTC Index register — ignore
+    } else if (port == 0x71) {
+        // CMOS/RTC Data register — ignore
+    } else if (port == 0xcf9) {
+        // System Reset Control register — ignore
     }
 
     const elapsed_val = if (current_time >= ch2.start_time) current_time - ch2.start_time else 0;
@@ -368,13 +492,35 @@ fn x86_64InCallback(uc: ?*anyopaque, port: u32, size: c_int, user_data: ?*anyopa
     em.pit_calibration_active = (ch2.start_time > 0) and (ch2.latch > 0) and (ch2_elapsed < 1_000_000);
 
     var result: u32 = 0;
-    // COM1 (0x3f8) line status register (LSR) read
-    if (port == 0x3f8 + 5) {
-        result = 0x60; // LSR empty status (0x60 = THRE | TEMT)
+    // COM1 UART register reads
+    if (port == 0x3f8 + 2) {
+        result = 0x01; // IIR: No interrupt pending (bit 0 = 1)
+    } else if (port == 0x3f8 + 3) {
+        result = 0x03; // LCR: 8 bits, no parity, 1 stop bit
+    } else if (port == 0x3f8 + 4) {
+        result = 0x0b; // MCR: DTR + RTS + OUT2
+    } else if (port == 0x3f8 + 5) {
+        result = 0x60; // LSR: TX FIFO empty + TX holding empty
+    } else if (port == 0x3f8 + 6) {
+        result = 0xb0; // MSR: DSR + CTS + RI
+    } else if (port >= 0x3f8 and port <= 0x3ff) {
+        result = 0; // Other COM1 registers
+    } else if (port == 0x20) {
+        result = 0; // 8259A Master PIC status: no interrupt pending
+    } else if (port == 0xa0) {
+        result = 0; // 8259A Slave PIC status: no interrupt pending
     } else if (port == 0x21) {
         result = pit.pic_master_imr;
     } else if (port == 0xa1) {
         result = pit.pic_slave_imr;
+    } else if (port == 0x70) {
+        result = 0; // CMOS index register (NMI bit)
+    } else if (port == 0x71) {
+        result = 0; // CMOS data: return 0 for all RTC reads
+    } else if (port == 0x80) {
+        result = 0; // POST diagnostic port
+    } else if (port == 0xcf9) {
+        result = 0; // System Reset Control
     } else if (port == 0x40 or port == 0x42) {
         // PIT Data Ports
         const ch_idx = if (port == 0x40) @as(usize, 0) else @as(usize, 2);
@@ -421,7 +567,8 @@ fn x86_64InCallback(uc: ?*anyopaque, port: u32, size: c_int, user_data: ?*anyopa
                 const elapsed = if (current_time >= ch.start_time) current_time - ch.start_time else 0;
                 const elapsed_pit = @as(u64, @truncate((@as(u128, elapsed) * 1_193_182) / 10_000_000));
                 const effective_latch: u64 = if (ch.latch == 0) 65536 else ch.latch;
-                const current_count = if (elapsed_pit >= effective_latch) 0 else @as(u16, @truncate(effective_latch - elapsed_pit));
+                const count_rem = elapsed_pit % effective_latch;
+                const current_count = @as(u16, @truncate(effective_latch - count_rem));
 
                 if (ch.access == 1) {
                     result = current_count & 0xff;
@@ -537,6 +684,15 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         const max_alias_size = 0xffffffff - kernel_va_base;
         const alias_size = if (ram_size > max_alias_size) max_alias_size else ram_size;
         _ = glue.uc_mem_map_ptr(uc, kernel_va_base, alias_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
+    } else if (em.target_arch == .x86_64) {
+        // x86_64 kernel VA alias: Linux maps kernel code at 0xffffffff80000000,
+        // page structures at 0xffffea0000000000, and direct physical memory map
+        // at 0xffff888000000000 / 0xffff880000000000 / 0xffff800000000000.
+        _ = glue.uc_mem_map_ptr(uc, 0xffffffff80000000, ram_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
+        _ = glue.uc_mem_map_ptr(uc, 0xffff888000000000, ram_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
+        _ = glue.uc_mem_map_ptr(uc, 0xffff880000000000, ram_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
+        _ = glue.uc_mem_map_ptr(uc, 0xffff800000000000, ram_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
+        _ = glue.uc_mem_map_ptr(uc, 0xffffea0000000000, ram_size, glue.uc_prot.UC_PROT_ALL, @ptrFromInt(hpa_base));
     }
 
     // Register hooks.
@@ -602,8 +758,36 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     }
 
     if (em.target_arch == .x86_64) {
+        const elf_base = @intFromPtr(&__rootvm_start);
+        const elf_size = @intFromPtr(&__rootvm_end) - elf_base;
+        const elf_bytes = @as([*]const u8, @ptrFromInt(elf_base))[0..elf_size];
+
+        if (loader.Loader.findSymbol(elf_bytes, "delay_loop")) |delay_gva| {
+            debug.printf("x86_64 delay_loop GVA = 0x{x}\n", .{delay_gva});
+            var hook_delay: glue.uc_hook = null;
+            _ = glue.uc_hook_add(uc, &hook_delay, glue.UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&x86_64DelayLoopHook)), @as(?*anyopaque, @ptrCast(vc)), delay_gva, delay_gva);
+        } else {
+            debug.printf("x86_64 delay_loop symbol NOT found!\n", .{});
+        }
+        if (loader.Loader.findSymbol(elf_bytes, "__delay")) |delay_gva| {
+            debug.printf("x86_64 __delay GVA = 0x{x}\n", .{delay_gva});
+            var hook_delay2: glue.uc_hook = null;
+            _ = glue.uc_hook_add(uc, &hook_delay2, glue.UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&x86_64DelayLoopHook)), @as(?*anyopaque, @ptrCast(vc)), delay_gva, delay_gva);
+        }
+        if (loader.Loader.findSymbol(elf_bytes, "__const_delay")) |delay_gva| {
+            debug.printf("x86_64 __const_delay GVA = 0x{x}\n", .{delay_gva});
+            var hook_delay3: glue.uc_hook = null;
+            _ = glue.uc_hook_add(uc, &hook_delay3, glue.UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&x86_64DelayLoopHook)), @as(?*anyopaque, @ptrCast(vc)), delay_gva, delay_gva);
+        }
+
         var hook_syscall: glue.uc_hook = null;
         _ = glue.uc_hook_add(uc, &hook_syscall, glue.UC_HOOK_INSN, @as(?*const anyopaque, @ptrCast(&x86_64SyscallCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 1), @as(u64, 0), glue.UC_X86_INS_SYSCALL);
+
+        var hook_cpuid: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_cpuid, glue.UC_HOOK_INSN, @as(?*const anyopaque, @ptrCast(&x86_64CpuidCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 1), @as(u64, 0), glue.UC_X86_INS_CPUID);
+
+        var hook_code: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_code, glue.UC_HOOK_CODE, @as(?*const anyopaque, @ptrCast(&x86_64CodeHook)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 1), @as(u64, 0));
 
         var hook_out: glue.uc_hook = null;
         _ = glue.uc_hook_add(uc, &hook_out, glue.UC_HOOK_INSN, @as(?*const anyopaque, @ptrCast(&x86_64OutCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 1), @as(u64, 0), glue.UC_X86_INS_OUT);
@@ -613,6 +797,8 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 
         var hook_mmio_write: glue.uc_hook = null;
         _ = glue.uc_hook_add(uc, &hook_mmio_write, glue.UC_HOOK_MEM_WRITE, @as(?*const anyopaque, @ptrCast(&mmioWriteCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0xfec00000), @as(u64, 0xfeefffff));
+        var hook_mmio_read: glue.uc_hook = null;
+        _ = glue.uc_hook_add(uc, &hook_mmio_read, glue.UC_HOOK_MEM_READ, @as(?*const anyopaque, @ptrCast(&mmioReadCallback)), @as(?*anyopaque, @ptrCast(vc)), @as(u64, 0xfee00390), @as(u64, 0xfee00393));
     }
 
     // Block hook: DISABLED — using uc_emu_start count parameter for
@@ -631,7 +817,7 @@ pub fn init(vc: *vcore.VirtualCore) !void {
                 rv32.initRegisters(uc, em.entry, em.dtb, i);
             },
             .aarch64 => aarch64.initRegisters(uc, em.entry, em.dtb, i),
-            .x86_64 => x86_64.initRegisters(uc, em.entry, vc.guest.space.base_gpa, vc.guest.space.range_size, vc.guest.early_pgt_gpa, em.sub_vcore_count),
+            .x86_64 => x86_64.initRegisters(uc, em.entry, vc.guest.space.base_gpa, vc.guest.space.range_size, vc.guest.early_pgt_gpa, em.sub_vcore_count, i),
             else => {},
         }
         _ = glue.uc_context_save(uc, sub.context.?);
@@ -692,7 +878,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
         else => return,
     };
 
-    // One-shot trace for aarch64 to verify initial guest state.
+    // One-shot trace for aarch64 / x86_64 to verify initial guest state.
     if (em.target_arch == .aarch64) {
         const S_trace = struct {
             var traced: bool = false;
@@ -702,6 +888,16 @@ pub fn run(vc: *vcore.VirtualCore) void {
             var x0: u64 = 0;
             _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_arm64_reg.UC_ARM64_REG_X0), &x0);
             debug.printf("aarch64: first run PC=0x{x} X0(DTB)=0x{x}\n", .{ pc, x0 });
+        }
+    } else if (em.target_arch == .x86_64) {
+        const S_trace = struct {
+            var traced: bool = false;
+        };
+        if (!S_trace.traced) {
+            S_trace.traced = true;
+            var rsi: u64 = 0;
+            _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RSI), &rsi);
+            debug.printf("x86_64: first run PC=0x{x} RSI(boot_params)=0x{x}\n", .{ pc, rsi });
         }
     }
 
@@ -728,7 +924,8 @@ pub fn run(vc: *vcore.VirtualCore) void {
             curr_idx = (curr_idx + 1) % em.sub_vcore_count;
             sub = &em.sub_vcores[curr_idx];
             if (sub.state == .ready or sub.state == .running) {
-                if (!sub.wfi_blocked or sub.pending_ipi or (sub.timer_scheduled and vc.virtual_time >= sub.timer_target)) {
+                const lapic_expired = (sub.lapic_timer.init_count > 0 and (sub.lapic_timer.lvt_timer & 0x10000) == 0 and vc.virtual_time >= (sub.lapic_timer.start_time +| sub.lapic_timer.period_ticks));
+                if (!sub.wfi_blocked or sub.pending_ipi or (sub.timer_scheduled and vc.virtual_time >= sub.timer_target) or lapic_expired) {
                     sub.wfi_blocked = false;
                     em.active_sub_vcore = curr_idx;
                     found_ready = true;
@@ -745,36 +942,46 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 found_ready = true;
             } else {
                 var nearest_timer: u64 = ~@as(u64, 0);
-            var any_timer_scheduled = false;
-            for (0..em.sub_vcore_count) |i| {
-                const s = &em.sub_vcores[i];
-                if (s.timer_scheduled and s.timer_target < nearest_timer) {
-                    nearest_timer = s.timer_target;
-                    any_timer_scheduled = true;
+                var any_timer_scheduled = false;
+                for (0..em.sub_vcore_count) |i| {
+                    const s = &em.sub_vcores[i];
+                    if (s.timer_scheduled and s.timer_target < nearest_timer) {
+                        nearest_timer = s.timer_target;
+                        any_timer_scheduled = true;
+                    }
+                    if (s.lapic_timer.init_count > 0 and (s.lapic_timer.lvt_timer & 0x10000) == 0) {
+                        const lapic_target = s.lapic_timer.start_time +| s.lapic_timer.period_ticks;
+                        if (lapic_target > vc.virtual_time and lapic_target < nearest_timer) {
+                            nearest_timer = lapic_target;
+                            any_timer_scheduled = true;
+                        }
+                    }
                 }
-            }
-            if (any_timer_scheduled) {
-                vc.timer_target = nearest_timer;
-                vc.timer_scheduled = true;
-            } else {
-                vc.timer_scheduled = false;
-            }
+                if (any_timer_scheduled) {
+                    vc.timer_target = nearest_timer;
+                    vc.timer_scheduled = true;
+                } else {
+                    vc.timer_scheduled = false;
+                }
 
-            // All sub_vcores are blocked or stopped.
-            // Block the entire VirtualCore so the physical core can sleep.
+                // All sub_vcores are blocked or stopped.
+                // Block the entire VirtualCore so the physical core can sleep.
 
-            const pcpu = pcore.this();
-            vc.blocked_node.contents = vc;
-            pcpu.blocked_queue.pushStart(&vc.blocked_node);
-            vc.blocked_on_cpu = pcpu.cpu_core_id;
+                const pcpu = pcore.this();
+                vc.blocked_node.contents = vc;
+                pcpu.blocked_queue.pushStart(&vc.blocked_node);
+                vc.blocked_on_cpu = pcpu.cpu_core_id;
 
-            @atomicStore(bool, &vc.wfi_blocked, true, .release);
-            break;
+                @atomicStore(bool, &vc.wfi_blocked, true, .release);
+                break;
             }
         }
         vc.exec_path.emulated.active_sub_vcore = em.active_sub_vcore;
 
         if (em.target_arch == .x86_64) {
+            var apic_id = @as(u32, @intCast(em.active_sub_vcore)) << 24;
+            _ = glue.uc_mem_write(uc, 0xfee00020, @ptrCast(&apic_id), 4);
+
             if (em.active_sub_vcore != old_idx) {
                 // Save old sub-vcore state
                 const old_sub = &em.sub_vcores[old_idx];
@@ -785,16 +992,30 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 old_sub.lapic_timer.lvt_timer = lvt_val;
                 old_sub.lapic_timer.init_count = init_val;
 
+                if (em.target_arch == .x86_64) {
+                    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_FS_BASE), &old_sub.fs_base);
+                    _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_GS_BASE), &old_sub.gs_base);
+                }
+
                 // Restore new sub-vcore state
                 const new_sub = &em.sub_vcores[em.active_sub_vcore];
+                if (em.target_arch == .x86_64) {
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_FS_BASE), &new_sub.fs_base);
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_GS_BASE), &new_sub.gs_base);
+                    var kernel_gs_msr = glue.uc_x86_msr{ .rid = 0xc0000102, .value = new_sub.kernel_gs_base };
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_MSR), &kernel_gs_msr);
+                }
                 var new_lvt = new_sub.lapic_timer.lvt_timer;
                 var new_init = new_sub.lapic_timer.init_count;
                 _ = glue.uc_mem_write(uc, 0xfee00320, @ptrCast(&new_lvt), 4);
                 _ = glue.uc_mem_write(uc, 0xfee00380, @ptrCast(&new_init), 4);
 
-                // Update APIC ID for the active sub-vcore
-                var apic_id = @as(u32, @intCast(em.active_sub_vcore)) << 24;
-                _ = glue.uc_mem_write(uc, 0xfee00000 + 0x20, @ptrCast(&apic_id), 4);
+                // Update IA32_APIC_BASE MSR (0x1b) for the active sub-vcore (BSP bit set only for vcore 0)
+                var apic_base_msr = glue.uc_x86_msr{
+                    .rid = 0x1b,
+                    .value = if (em.active_sub_vcore == 0) 0xfee00900 else 0xfee00800,
+                };
+                _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_MSR), &apic_base_msr);
 
                 // Update Current Count Register
                 var cur_val: u32 = 0;
@@ -850,6 +1071,28 @@ pub fn run(vc: *vcore.VirtualCore) void {
                     _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X10), &a0);
                     var a1: u64 = sub.start_a1;
                     _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_riscv_reg.UC_RISCV_REG_X11), &a1);
+                } else if (em.target_arch == .x86_64 and sub.start_pc != 0) {
+                    if (em.active_sub_vcore != 0) {
+                        var efer_msr = glue.uc_x86_msr{
+                            .rid = 0xc0000080, // IA32_EFER
+                            .value = 0, // Clear Long Mode for Real Mode trampoline
+                        };
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_MSR), &efer_msr);
+                        var cr4_val: u64 = 0;
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_CR4), &cr4_val);
+                        var cr0_val: u64 = 0x00000010; // Real mode for SIPI trampoline on secondary CPUs
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_CR0), &cr0_val);
+                        var cs_val: u64 = sub.start_pc >> 4;
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_CS), &cs_val);
+                        var rip_val: u64 = 0;
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RIP), &rip_val);
+                    } else {
+                        var rip: u64 = sub.start_pc;
+                        _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RIP), &rip);
+                    }
+                    var rflags: u64 = 0x2;
+                    _ = glue.uc_reg_write(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_EFLAGS), &rflags);
+                    sub.start_pc = 0;
                 }
                 sub.state = .running;
             }
@@ -921,41 +1164,63 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 aarch64.deliverInterrupt(uc, pc, 0);
             }
         } else if (em.target_arch == .x86_64) {
-            x86_64.syncKernelPageTables(uc, vc.guest.space.base_hpa, vc.guest.early_pgt_gpa);
+            _ = x86_64.syncKernelPageTables(uc, vc.guest.space.base_hpa, vc.guest.early_pgt_gpa);
             var rflags: u64 = 0;
             _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_EFLAGS), &rflags);
             const irq_enabled = (rflags & (1 << 9)) != 0;
 
-            if (irq_enabled) {
-                // 1. PIT Channel 0 timer interrupt
-                if (sub.timer_scheduled and vc.virtual_time >= sub.timer_target) {
-                    const ioapic_entry = em.ioapic_redtbl[2];
-                    const ioapic_masked = (ioapic_entry & (1 << 16)) != 0;
-                    const pic_masked = (vc.guest.pit.pic_master_imr & 0x01) != 0;
+            // 0. Pending Fixed / Lowest Priority IPI delivery
+            if (irq_enabled and sub.pending_ipi and sub.pending_ipi_vector != 0) {
+                const vec = sub.pending_ipi_vector;
+                sub.pending_ipi = false;
+                sub.pending_ipi_vector = 0;
+                x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, pc, vec);
+            }
 
-                    const pit_ch0 = &vc.guest.pit.channels[0];
-                    if (!ioapic_masked) {
-                        const vector = @as(u8, @intCast(ioapic_entry & 0xff));
+            // 1. PIT Channel 0 timer interrupt
+            if (!sub.timer_scheduled) {
+                sub.timer_scheduled = true;
+                sub.timer_target = vc.virtual_time +| 100000;
+            }
+            if (sub.timer_scheduled and vc.virtual_time >= sub.timer_target) {
+                const entry2 = em.ioapic_redtbl[2];
+                const entry0 = em.ioapic_redtbl[0];
+                const entry8 = em.ioapic_redtbl[8];
+                const entry2_unmasked = (entry2 & (1 << 16)) == 0;
+                const entry0_unmasked = (entry0 & (1 << 16)) == 0;
+                const entry8_unmasked = (entry8 & (1 << 16)) == 0;
+                const ioapic_timer_unmasked = entry2_unmasked or entry0_unmasked or entry8_unmasked;
+                const pic_unmasked = !ioapic_timer_unmasked and ((vc.guest.pit.pic_master_imr & 0x01) == 0);
+
+                const pit_ch0 = &vc.guest.pit.channels[0];
+                const ticks = if (pit_ch0.period_ticks > 0) pit_ch0.period_ticks else 100000;
+
+                if (irq_enabled) {
+                    if (entry2_unmasked and (entry2 & 0xff) >= 32) {
+                        const vector = @as(u8, @intCast(entry2 & 0xff));
                         x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, pc, vector);
-                        updatePitTimerTarget(sub, pit_ch0.period_ticks, vc.virtual_time);
-                    } else if (!pic_masked) {
+                    } else if (entry0_unmasked and (entry0 & 0xff) >= 32) {
+                        const vector = @as(u8, @intCast(entry0 & 0xff));
+                        x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, pc, vector);
+                    } else if (pic_unmasked) {
                         x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, pc, 32);
-                        updatePitTimerTarget(sub, pit_ch0.period_ticks, vc.virtual_time);
-                    } else {
-                        updatePitTimerTarget(sub, pit_ch0.period_ticks, vc.virtual_time);
                     }
                 }
+                updatePitTimerTarget(sub, ticks, vc.virtual_time);
+            }
 
                 // 2. Local APIC timer interrupt
                 if (sub.lapic_timer.init_count > 0 and (sub.lapic_timer.lvt_timer & 0x10000) == 0) {
                     if (vc.virtual_time >= sub.lapic_timer.start_time +| sub.lapic_timer.period_ticks) {
                         const vector = @as(u8, @intCast(sub.lapic_timer.lvt_timer & 0xff));
-                        x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, pc, vector);
+                        if (vector >= 32) {
+                            x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, pc, vector);
+                        }
 
                         const is_periodic = (sub.lapic_timer.lvt_timer & 0x20000) != 0;
                         if (is_periodic and sub.lapic_timer.period_ticks > 0) {
                             if ((sub.lapic_timer.start_time +| (sub.lapic_timer.period_ticks *| 10)) < vc.virtual_time) {
-                                sub.lapic_timer.start_time = vc.virtual_time;
+                                sub.lapic_timer.start_time = vc.virtual_time +| sub.lapic_timer.period_ticks;
                             } else {
                                 sub.lapic_timer.start_time +|= sub.lapic_timer.period_ticks;
                             }
@@ -965,7 +1230,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
                     }
                 }
             }
-        }
 
         em.emu_running = true;
         const current_pc = switch (em.target_arch) {
@@ -977,14 +1241,15 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
         var saved_tp: usize = undefined;
         var err: glue.uc_err = undefined;
+        const emu_count: u64 = 10000;
         if (comptime @import("builtin").is_test) {
-            err = glue.uc_emu_start(uc, current_pc, 0, 0, 50000);
+            err = glue.uc_emu_start(uc, current_pc, 0, 0, emu_count);
         } else {
             asm volatile (
                 \\mv %[saved], tp
                 : [saved] "=r" (saved_tp),
             );
-            err = glue.uc_emu_start(uc, current_pc, 0, 0, 50000);
+            err = glue.uc_emu_start(uc, current_pc, 0, 0, emu_count);
             asm volatile (
                 \\mv tp, %[saved]
                 :
@@ -992,6 +1257,13 @@ pub fn run(vc: *vcore.VirtualCore) void {
             );
         }
         em.emu_running = false;
+        if (err != .UC_ERR_OK) {
+            debug.printf("x86_64: uc_emu_start err = {} at PC 0x{x}\n", .{ err, current_pc });
+        }
+
+        if (em.target_arch == .x86_64) {
+            _ = x86_64.syncKernelPageTables(uc, vc.guest.space.base_hpa, vc.guest.early_pgt_gpa);
+        }
 
         glue.diosix_uc_clear_stop(uc);
         var new_pc: u64 = switch (em.target_arch) {
@@ -1002,20 +1274,14 @@ pub fn run(vc: *vcore.VirtualCore) void {
         };
         sub.last_pc = new_pc;
 
-        if (err == .UC_ERR_OK) {
-            if (new_pc == current_pc) {
-                sub.freeze_count += 1;
-                if (sub.freeze_count >= 50) {
-                    _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
-                    sub.freeze_count = 0;
-                }
-            } else {
-                sub.freeze_count = 0;
-            }
+        const vt_now = glue.readSModeTime();
+        if (vt_now > vc.virtual_time) {
+            vc.virtual_time = vt_now;
         } else {
-            sub.freeze_count = 0;
+            vc.virtual_time +|= 100_000; // 100µs per step minimum progress
         }
-        vc.virtual_time = glue.readSModeTime();
+
+        sub.freeze_count = 0;
 
         if (err == .UC_ERR_OK) {
             if (em.target_arch == .riscv32) {
@@ -1061,56 +1327,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
                     aarch64.deliverInterrupt(uc, new_pc, 0);
                     new_pc = aarch64.readPC(uc);
                     sub.last_pc = new_pc;
-                }
-            } else if (em.target_arch == .x86_64) {
-                var rflags: u64 = 0;
-                _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_EFLAGS), &rflags);
-                const irq_enabled = (rflags & (1 << 9)) != 0;
-
-                if (irq_enabled) {
-                    // 1. PIT Channel 0 timer interrupt
-                    if (sub.timer_scheduled and vc.virtual_time >= sub.timer_target) {
-                        const ioapic_entry = em.ioapic_redtbl[2];
-                        const ioapic_masked = (ioapic_entry & (1 << 16)) != 0;
-                        const pic_masked = (vc.guest.pit.pic_master_imr & 0x01) != 0;
-
-                        const pit_ch0 = &vc.guest.pit.channels[0];
-                        if (!ioapic_masked) {
-                            const vector = @as(u8, @intCast(ioapic_entry & 0xff));
-                            x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, new_pc, vector);
-                            updatePitTimerTarget(sub, pit_ch0.period_ticks, vc.virtual_time);
-                            new_pc = x86_64.readPC(uc);
-                            sub.last_pc = new_pc;
-                        } else if (!pic_masked) {
-                            x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, new_pc, 32);
-                            updatePitTimerTarget(sub, pit_ch0.period_ticks, vc.virtual_time);
-                            new_pc = x86_64.readPC(uc);
-                            sub.last_pc = new_pc;
-                        } else {
-                            updatePitTimerTarget(sub, pit_ch0.period_ticks, vc.virtual_time);
-                        }
-                    }
-
-                    // 2. Local APIC timer interrupt
-                    if (sub.lapic_timer.init_count > 0 and (sub.lapic_timer.lvt_timer & 0x10000) == 0) {
-                        if (vc.virtual_time >= sub.lapic_timer.start_time +| sub.lapic_timer.period_ticks) {
-                            const vector = @as(u8, @intCast(sub.lapic_timer.lvt_timer & 0xff));
-                            x86_64.deliverInterrupt(uc, vc.guest.space.base_hpa, new_pc, vector);
-
-                            const is_periodic = (sub.lapic_timer.lvt_timer & 0x20000) != 0;
-                            if (is_periodic and sub.lapic_timer.period_ticks > 0) {
-                                if ((sub.lapic_timer.start_time +| (sub.lapic_timer.period_ticks *| 10)) < vc.virtual_time) {
-                                    sub.lapic_timer.start_time = vc.virtual_time;
-                                } else {
-                                    sub.lapic_timer.start_time +|= sub.lapic_timer.period_ticks;
-                                }
-                            } else {
-                                sub.lapic_timer.init_count = 0;
-                            }
-                            new_pc = x86_64.readPC(uc);
-                            sub.last_pc = new_pc;
-                        }
-                    }
                 }
             }
 
@@ -1504,7 +1720,21 @@ fn intrCallbackAarch64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void
 fn intrCallbackX86_64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void {
     // EXCP_HALTED is 65539. QEMU fires this when it encounters HLT.
     if (intno == 65539) {
-        @atomicStore(bool, &vc.wfi_blocked, true, .release);
+        const em = &vc.exec_path.emulated;
+        const sub = &em.sub_vcores[em.active_sub_vcore];
+        var next_target: u64 = vc.virtual_time +| 100_000;
+        if (sub.timer_scheduled and sub.timer_target > vc.virtual_time) {
+            next_target = sub.timer_target;
+        }
+        if (sub.lapic_timer.init_count > 0 and (sub.lapic_timer.lvt_timer & 0x10000) == 0) {
+            const lapic_target = sub.lapic_timer.start_time +| sub.lapic_timer.period_ticks;
+            if (lapic_target > vc.virtual_time and (next_target == vc.virtual_time +| 100_000 or lapic_target < next_target)) {
+                next_target = lapic_target;
+            }
+        }
+        vc.virtual_time = next_target;
+        const pc = x86_64.readPC(uc);
+        x86_64.writePC(uc, pc + 1);
         _ = glue.uc_emu_stop(uc);
         return;
     }
@@ -1516,7 +1746,55 @@ fn intrCallbackX86_64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void 
         return;
     }
 
-    // Check if the guest has initialized an IDT. If so, let Unicorn deliver the exception to the guest's IDT handler.
+    if (intno < 32) {
+        const pc = x86_64.readPC(uc);
+        var cr2: u64 = 0;
+        var rsi: u64 = 0;
+        var rdi: u64 = 0;
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_CR2), &cr2);
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RSI), &rsi);
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_RDI), &rdi);
+        debug.printf("x86_64: exception {} at PC 0x{x} CR2=0x{x} RSI=0x{x} RDI=0x{x}\n", .{ intno, pc, cr2, rsi, rdi });
+
+        if (intno == 14 or intno == 8) {
+            const updated = x86_64.syncKernelPageTables(uc, vc.guest.space.base_hpa, vc.guest.early_pgt_gpa);
+            if (updated) {
+                _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
+                return;
+            }
+
+            if (cr2 >= 0xffffffffff000000) {
+                x86_64.mapFixmapInCR3(uc, vc.guest.space.base_hpa, cr2);
+                _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
+                return;
+            }
+        }
+
+        if (intno == 13 or intno == 6) {
+            if (x86_64.handleInvalidInsn(uc, vc)) {
+                _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
+                return;
+            }
+        }
+
+        var idtr = glue.uc_x86_mmr{};
+        _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_IDTR), &idtr);
+        if (idtr.base != 0 and idtr.limit > 0) {
+            const err_code: ?u32 = if (intno == 14)
+                x86_64.getPageFaultErrorCode(uc, pc)
+            else if (intno == 8 or intno == 10 or intno == 11 or intno == 12 or intno == 13 or intno == 17)
+                0
+            else
+                null;
+            x86_64.deliverFault(uc, vc.guest.space.base_hpa, pc, intno, err_code, cr2);
+            _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
+            return;
+        }
+    }
+
+    // CPU exceptions (vector 0-31): let Unicorn deliver natively via the IDT.
+    // This requires the kernel stack to be in Unicorn's mapped memory space.
+    // The memCallback demand-maps kernel VAs >= 0xffff000000000000 on access.
     var idtr = glue.uc_x86_mmr{};
     _ = glue.uc_reg_read(uc, @intFromEnum(glue.uc_x86_reg.UC_X86_REG_IDTR), &idtr);
     if (idtr.limit > 0 and intno < 32) {
@@ -1538,6 +1816,28 @@ fn intrCallbackX86_64(uc: ?*anyopaque, intno: u32, vc: *vcore.VirtualCore) void 
     _ = glue.uc_emu_stop(uc);
 }
 
+fn mmioReadCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) void {
+    const guard = glue.TpGuard.init();
+    defer guard.deinit();
+    _ = mem_type; _ = size; _ = value;
+    if (user_data) |ud| {
+        const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(ud)));
+        const em = &vc.exec_path.emulated;
+        const sub = &em.sub_vcores[em.active_sub_vcore];
+
+        if (address >= 0xfee00390 and address < 0xfee00394) {
+            if (sub.lapic_timer.init_count > 0) {
+                const step_ns: u64 = if (sub.lapic_timer.init_count >= 10_000_000) 10_000_000 else 100_000;
+                vc.virtual_time +|= step_ns;
+                const elapsed = vc.virtual_time - sub.lapic_timer.start_time;
+                const elapsed_ticks = elapsed / 10;
+                var cur_val = if (sub.lapic_timer.init_count > elapsed_ticks) sub.lapic_timer.init_count - @as(u32, @truncate(elapsed_ticks)) else 0;
+                _ = glue.uc_mem_write(uc, 0xfee00390, @ptrCast(&cur_val), 4);
+            }
+        }
+    }
+}
+
 fn mmioWriteCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: c_int, value: i64, user_data: ?*anyopaque) callconv(.c) void {
     const guard = glue.TpGuard.init();
     defer guard.deinit();
@@ -1550,11 +1850,12 @@ fn mmioWriteCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, 
 
         // 1. I/O APIC registers
         if (address >= 0xfec00000 and address < 0xfec01000) {
+            em.ioapic_written = true;
             const offset = address - 0xfec00000;
             if (offset == 0) {
                 // IOREGSEL
                 em.ioapic_reg_sel = @as(u8, @truncate(@as(u64, @intCast(value))));
-                
+
                 // Sync read value to IOWIN offset in mapped memory
                 const regsel = em.ioapic_reg_sel;
                 var win_val: u32 = 0;
@@ -1576,12 +1877,16 @@ fn mmioWriteCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, 
                 const regsel = em.ioapic_reg_sel;
                 if (regsel >= 0x10 and regsel < 0x40) {
                     const idx = (regsel - 0x10) / 2;
+                    var win_val: u32 = 0;
                     if (regsel % 2 == 0) {
                         em.ioapic_redtbl[idx] = (em.ioapic_redtbl[idx] & 0xffffffff00000000) | (@as(u64, @intCast(value)) & 0xffffffff);
+                        win_val = @as(u32, @truncate(em.ioapic_redtbl[idx]));
                     } else {
                         em.ioapic_redtbl[idx] = (em.ioapic_redtbl[idx] & 0x00000000ffffffff) | (@as(u64, @intCast(value)) << 32);
+                        win_val = @as(u32, @truncate(em.ioapic_redtbl[idx] >> 32));
                     }
-                    debug.printf("IOAPIC REDirection write: entry={} val=0x{x}\n", .{idx, em.ioapic_redtbl[idx]});
+                    _ = glue.uc_mem_write(uc, 0xfec00010, @ptrCast(&win_val), 4);
+                    debug.printf("IOAPIC REDirection write: entry={} val=0x{x}\n", .{ idx, em.ioapic_redtbl[idx] });
                 }
             }
         }
@@ -1589,12 +1894,65 @@ fn mmioWriteCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, 
         // 2. Local APIC registers
         if (address >= 0xfee00000 and address < 0xfee01000) {
             const offset = address - 0xfee00000;
-            if (offset == 0x380) {
+            if (offset == 0x310) {
+                // ICR High: Destination field (bits 24..31)
+                const val32 = @as(u32, @truncate(@as(u64, @intCast(value))));
+                sub.icr_dest = (val32 >> 24) & 0xff;
+            } else if (offset == 0x300) {
+                // ICR Low: Command field & trigger IPI delivery
+                const val32 = @as(u32, @truncate(@as(u64, @intCast(value))));
+                const vector = val32 & 0xff;
+                const delivery_mode = (val32 >> 8) & 0x7;
+                const dest_shorthand = (val32 >> 18) & 0x3;
+
+                var target_mask: u32 = 0;
+                if (dest_shorthand == 0) {
+                    const target_id = sub.icr_dest;
+                    if (target_id < em.sub_vcore_count) {
+                        target_mask |= (@as(u32, 1) << @as(u5, @intCast(target_id)));
+                    }
+                } else if (dest_shorthand == 1) {
+                    target_mask |= (@as(u32, 1) << @as(u5, @intCast(em.active_sub_vcore)));
+                } else if (dest_shorthand == 2) {
+                    target_mask = (@as(u32, 1) << @as(u5, @intCast(em.sub_vcore_count))) - 1;
+                } else if (dest_shorthand == 3) {
+                    target_mask = ((@as(u32, 1) << @as(u5, @intCast(em.sub_vcore_count))) - 1) & ~(@as(u32, 1) << @as(u5, @intCast(em.active_sub_vcore)));
+                }
+
+                for (0..em.sub_vcore_count) |target_idx| {
+                    if ((target_mask & (@as(u32, 1) << @as(u5, @intCast(target_idx)))) != 0) {
+                        const target_sub = &em.sub_vcores[target_idx];
+                        if (delivery_mode == 0 or delivery_mode == 1) {
+                            // Fixed / Lowest Priority IPI
+                            target_sub.pending_ipi = true;
+                            target_sub.pending_ipi_vector = @as(u8, @truncate(vector));
+                            target_sub.wfi_blocked = false;
+                            debug.printf("Local APIC IPI: Delivered vector {} to vCPU {}\n", .{ vector, target_idx });
+                        } else if (delivery_mode == 5) {
+                            // INIT IPI: Reset vCPU state
+                            target_sub.state = .stopped;
+                            target_sub.wfi_blocked = false;
+                        } else if (delivery_mode == 6) {
+                            // Start-up IPI (SIPI): Set entry vector and bring vCPU up
+                            const sipi_vector = vector;
+                            const startup_ip = @as(u64, sipi_vector) << 12;
+
+                            target_sub.start_pc = startup_ip;
+                            target_sub.state = .ready;
+                            target_sub.wfi_blocked = false;
+
+                            debug.printf("Local APIC SIPI: Delivered to vCPU {}, startup IP=0x{x}\n", .{ target_idx, startup_ip });
+                        }
+                    }
+                }
+            } else if (offset == 0x380) {
                 // Initial Count Register
                 const init_val = @as(u32, @truncate(@as(u64, @intCast(value))));
                 sub.lapic_timer.init_count = init_val;
                 sub.lapic_timer.start_time = vc.virtual_time;
                 sub.lapic_timer.period_ticks = @as(u64, init_val) *| 10;
+                var cur_val = init_val;
+                _ = glue.uc_mem_write(uc, 0xfee00390, @ptrCast(&cur_val), 4);
             } else if (offset == 0x320) {
                 // LVT Timer Register
                 const lvt_val = @as(u32, @truncate(@as(u64, @intCast(value))));
@@ -1612,6 +1970,7 @@ fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: 
     defer guard.deinit();
     _ = size;
     const vc = @as(*vcore.VirtualCore, @ptrCast(@alignCast(user_data.?)));
+    const em = &vc.exec_path.emulated;
 
     // NS16550A UART console output (RISC-V QEMU virt platform).
     if (address >= QEMU_VIRT_UART_BASE and address < QEMU_VIRT_UART_BASE + 8) {
@@ -1657,8 +2016,9 @@ fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: 
 
             // If mapping local APIC page (0xfee00000), set up realistic registers
             if (page_base == 0xfee00000) {
-                // APIC ID register at offset 0x20: CPU ID 0
-                std.mem.writeInt(u32, apic_buf[0x20..0x24], 0x00000000, .little);
+                // APIC ID register at offset 0x20: CPU ID
+                const apic_id = @as(u32, @intCast(em.active_sub_vcore)) << 24;
+                std.mem.writeInt(u32, apic_buf[0x20..0x24], apic_id, .little);
                 // APIC Version register at offset 0x30: version 0x14 (integrated APIC), max LVT 5
                 std.mem.writeInt(u32, apic_buf[0x30..0x34], 0x00050014, .little);
                 // Spurious Interrupt Vector register at offset 0xf0: default 0x000000ff after reset
@@ -1673,11 +2033,7 @@ fn memCallback(uc: ?*anyopaque, mem_type: glue.uc_mem_type, address: u64, size: 
         return false;
     }
 
-    // AArch64 kernel virtual address space: demand-map zero-filled pages
-    // for per-CPU data, stacks, vmalloc, fixmap etc. that aren't in our
-    // direct VA mapping. Unicorn requires actual mapped memory (not just
-    // a callback returning true) for the JIT to re-execute the access.
-    if (address >= 0xffff000000000000) {
+    if (em.target_arch != .x86_64 and address >= 0xffff000000000000) {
         // Align down to 4KB page boundary and map a 2MB chunk.
         const page_size: u64 = 0x200000; // 2MB
         const page_base = address & ~(page_size - 1);

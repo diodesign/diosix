@@ -30,8 +30,9 @@ const RFLAGS_IF: u64 = 1 << 9; // Interrupt flag
 const RFLAGS_TF: u64 = 1 << 8; // Trap flag
 
 /// Set up initial x86_64 register state for a new emulated vcore.
-pub fn initRegisters(uc: ?*anyopaque, entry: usize, ram_base: usize, ram_size: usize, early_pgt_gpa: usize, cpu_count: usize) void {
-    var rip_val: u64 = entry;
+pub fn initRegisters(uc: ?*anyopaque, entry: usize, ram_base: usize, ram_size: usize, early_pgt_gpa: usize, cpu_count: usize, sub_vcore_id: usize) void {
+    const entry_va: u64 = if (entry >= 0xffffffff80000000) entry else 0xffffffff80000000 + (entry -% ram_base);
+    var rip_val: u64 = entry_va;
     _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_RIP), &rip_val);
 
     // Set up standard GDT segment selectors to execute flat 64-bit mode code.
@@ -56,8 +57,11 @@ pub fn initRegisters(uc: ?*anyopaque, entry: usize, ram_base: usize, ram_size: u
     _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_RDI), &zero_val);
 
     if (early_pgt_gpa != 0) {
-        const entry_va: u64 = if (entry >= 0xffffffff80000000) entry else 0xffffffff80000000 + (entry -% ram_base);
-        setupBootPageTables(uc, ram_base, ram_size, ram_base + 0x10000, entry_va);
+        setupBootPageTables(uc, ram_base, ram_size, early_pgt_gpa, entry_va);
+
+        // Map MMIO physical GPA ranges in Unicorn so guest page table translations to APIC/IOAPIC succeed
+        _ = glue.uc_mem_map(uc, 0xFEC00000, 0x100000, glue.uc_prot.UC_PROT_ALL);
+        _ = glue.uc_mem_map(uc, 0xFEE00000, 0x100000, glue.uc_prot.UC_PROT_ALL);
 
         var efer_msr = glue.uc_x86_msr{
             .rid = 0xc0000080, // IA32_EFER
@@ -65,20 +69,20 @@ pub fn initRegisters(uc: ?*anyopaque, entry: usize, ram_base: usize, ram_size: u
         };
         _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_MSR), &efer_msr);
 
-        var cr3_val: u64 = ram_base + 0x10000;
+        var cr3_val: u64 = early_pgt_gpa;
         var cr4_val: u64 = 0x20; // PAE
         var cr0_val: u64 = 0x80010011; // PG, WP, PE, ET
         _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3_val);
         _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR4), &cr4_val);
         _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR0), &cr0_val);
 
-        // RSI must point to boot_params GPA (0x90000 in low 1MB memory) for the 64-bit boot protocol.
+        // RSI must point to boot_params physical GPA (0x90000) for the 64-bit boot protocol.
         var rsi_val: u64 = 0x90000;
         _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_RSI), &rsi_val);
 
         var apic_base_msr = glue.uc_x86_msr{
             .rid = 0x1b, // IA32_APIC_BASE
-            .value = 0xfee00900, // base=0xfee00000, enable=1, bsp=1
+            .value = if (sub_vcore_id == 0) 0xfee00900 else 0xfee00800, // base=0xfee00000, enable=1, bsp=(sub_vcore_id == 0)
         };
         _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_MSR), &apic_base_msr);
     }
@@ -144,6 +148,51 @@ fn mapRange2MB(uc: ?*anyopaque, page_alloc: *BootPageAllocator, pml4_gpa: u64, v
     }
 }
 
+fn mapRange4KB(uc: ?*anyopaque, page_alloc: *BootPageAllocator, pml4_gpa: u64, va: u64, pa: u64) void {
+    const flags_dir: u64 = 0x7; // Present | Write | User
+    const flags_page: u64 = 0x7; // Present | Write | User
+
+    const pml4_idx = (va >> 39) & 0x1ff;
+    var pml4_entry: u64 = 0;
+    _ = glue.uc_mem_read(uc, pml4_gpa + pml4_idx * 8, @ptrCast(&pml4_entry), 8);
+    var pdpt_gpa: u64 = 0;
+    if ((pml4_entry & 1) == 0) {
+        pdpt_gpa = page_alloc.allocPage(uc) catch return;
+        pml4_entry = pdpt_gpa | flags_dir;
+        _ = glue.uc_mem_write(uc, pml4_gpa + pml4_idx * 8, @ptrCast(&pml4_entry), 8);
+    } else {
+        pdpt_gpa = pml4_entry & 0x000ffffffffff000;
+    }
+
+    const pdpt_idx = (va >> 30) & 0x1ff;
+    var pdpt_entry: u64 = 0;
+    _ = glue.uc_mem_read(uc, pdpt_gpa + pdpt_idx * 8, @ptrCast(&pdpt_entry), 8);
+    var pd_gpa: u64 = 0;
+    if ((pdpt_entry & 1) == 0) {
+        pd_gpa = page_alloc.allocPage(uc) catch return;
+        pdpt_entry = pd_gpa | flags_dir;
+        _ = glue.uc_mem_write(uc, pdpt_gpa + pdpt_idx * 8, @ptrCast(&pdpt_entry), 8);
+    } else {
+        pd_gpa = pdpt_entry & 0x000ffffffffff000;
+    }
+
+    const pd_idx = (va >> 21) & 0x1ff;
+    var pd_entry: u64 = 0;
+    _ = glue.uc_mem_read(uc, pd_gpa + pd_idx * 8, @ptrCast(&pd_entry), 8);
+    var pt_gpa: u64 = 0;
+    if ((pd_entry & 1) == 0 or (pd_entry & (1 << 7)) != 0) {
+        pt_gpa = page_alloc.allocPage(uc) catch return;
+        pd_entry = pt_gpa | flags_dir;
+        _ = glue.uc_mem_write(uc, pd_gpa + pd_idx * 8, @ptrCast(&pd_entry), 8);
+    } else {
+        pt_gpa = pd_entry & 0x000ffffffffff000;
+    }
+
+    const pt_idx = (va >> 12) & 0x1ff;
+    const pt_entry = pa | flags_page;
+    _ = glue.uc_mem_write(uc, pt_gpa + pt_idx * 8, @ptrCast(&pt_entry), 8);
+}
+
 fn setupBootPageTables(uc: ?*anyopaque, ram_base: u64, ram_size: u64, early_pgt_gpa: u64, entry_va: u64) void {
     const pml4_gpa = early_pgt_gpa;
     var page_alloc = BootPageAllocator{
@@ -181,80 +230,125 @@ fn setupBootPageTables(uc: ?*anyopaque, ram_base: u64, ram_size: u64, early_pgt_
     if (trunc_kernel_va != kernel_va) {
         mapRange2MB(uc, &page_alloc, pml4_gpa, trunc_kernel_va, ram_base, ram_size, flags_2mb);
     }
+
+    // 5. Pre-map Fixmap MMIO regions (0xffffffffff200000 -> 0xFEC00000, 0xffffffffff201000 -> 0xFEE00000)
+    var fix_i: u64 = 0;
+    while (fix_i < 16) : (fix_i += 1) {
+        mapRange4KB(uc, &page_alloc, pml4_gpa, 0xffffffffff200000 + fix_i * 4096, 0xFEC00000 + fix_i * 4096);
+        mapRange4KB(uc, &page_alloc, pml4_gpa, 0xffffffffff201000 + fix_i * 4096, 0xFEE00000 + fix_i * 4096);
+    }
+
+    // Pre-populate early_top_pgt in the kernel ELF image (GPA = ram_base + 0x22ba000)
+    // with direct-map & vmemmap PML4 entries (256, 272, 273, 468). Keep kernel's index 511 intact.
+    const early_top_pgt_gpa = ram_base + 0x22ba000;
+    const copy_indices = [_]usize{ 256, 272, 273, 468 };
+    for (copy_indices) |idx_c| {
+        var entry: u64 = 0;
+        _ = glue.uc_mem_read(uc, pml4_gpa + idx_c * 8, @ptrCast(&entry), 8);
+        if (entry != 0) {
+            _ = glue.uc_mem_write(uc, early_top_pgt_gpa + idx_c * 8, @ptrCast(&entry), 8);
+        }
+    }
+}
+
+pub fn readCR3(uc: ?*anyopaque) u64 {
+    var cr3: u64 = 0;
+    _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3);
+    return cr3 & 0x000FFFFFFFFFF000;
 }
 
 // Synchronize identity and direct-map PML4 entries from early_pgt_gpa into the current CR3 table.
-pub fn syncKernelPageTables(uc: ?*anyopaque, hpa_base: u64, early_pgt_gpa: u64) void {
+pub fn syncKernelPageTables(uc: ?*anyopaque, hpa_base: u64, early_pgt_gpa: u64) bool {
     var cr3: u64 = 0;
     _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3);
     const pml4_base = cr3 & 0x000FFFFFFFFFF000;
-    if (pml4_base == 0 or pml4_base == early_pgt_gpa) return;
+    if (pml4_base == 0 or pml4_base == early_pgt_gpa) return false;
 
     var updated = false;
 
-    // Copy PML4 index 0 (identity mapping 0..256MB) if empty
-    var pml4_entry0_new: u64 = 0;
-    _ = readPhysMem(hpa_base, pml4_base + 0, std.mem.asBytes(&pml4_entry0_new));
-    if (pml4_entry0_new == 0) {
-        var pml4_entry0_orig: u64 = 0;
-        _ = readPhysMem(hpa_base, early_pgt_gpa + 0, std.mem.asBytes(&pml4_entry0_orig));
-        if (pml4_entry0_orig != 0) {
-            _ = writePhysMem(hpa_base, pml4_base + 0, std.mem.asBytes(&pml4_entry0_orig));
+    // Copy all kernel-space PML4 entries (256..511) bidirectionally between early_pgt_gpa and new CR3
+    var idx_d: usize = 256;
+    while (idx_d < 512) : (idx_d += 1) {
+        var pml4_new: u64 = 0;
+        var pml4_orig: u64 = 0;
+        _ = readPhysMem(hpa_base, pml4_base + idx_d * 8, std.mem.asBytes(&pml4_new));
+        _ = readPhysMem(hpa_base, early_pgt_gpa + idx_d * 8, std.mem.asBytes(&pml4_orig));
+
+        if (pml4_new != pml4_orig) {
+            if (pml4_orig != 0) {
+                _ = writePhysMem(hpa_base, pml4_base + idx_d * 8, std.mem.asBytes(&pml4_orig));
+            } else if (pml4_new != 0) {
+                _ = writePhysMem(hpa_base, early_pgt_gpa + idx_d * 8, std.mem.asBytes(&pml4_new));
+            }
             updated = true;
         }
     }
 
-    // Copy PML4 direct-map indices if empty
-    const direct_vas = [_]u64{
-        0xffff888000000000,
-        0xffff880000000000,
-        0xffff800000000000,
-        0xffffea0000000000,
-        0xffffffff80000000,
-    };
-    for (direct_vas) |dva| {
-        const idx = (dva >> 39) & 0x1ff;
-        var new_entry: u64 = 0;
-        _ = readPhysMem(hpa_base, pml4_base + idx * 8, std.mem.asBytes(&new_entry));
-        if (new_entry == 0) {
-            var orig_entry: u64 = 0;
-            _ = readPhysMem(hpa_base, early_pgt_gpa + idx * 8, std.mem.asBytes(&orig_entry));
-            if (orig_entry != 0) {
-                _ = writePhysMem(hpa_base, pml4_base + idx * 8, std.mem.asBytes(&orig_entry));
-                updated = true;
-            }
-        } else {
-            const new_pdpt_base = new_entry & 0x000FFFFFFFFFF000;
-            var orig_pml4_entry: u64 = 0;
-            _ = readPhysMem(hpa_base, early_pgt_gpa + idx * 8, std.mem.asBytes(&orig_pml4_entry));
-            if (orig_pml4_entry != 0) {
-                const orig_pdpt_base = orig_pml4_entry & 0x000FFFFFFFFFF000;
-                const pdpt_idx = (dva >> 30) & 0x1ff;
-                var new_pdpt_entry: u64 = 0;
-                _ = readPhysMem(hpa_base, new_pdpt_base + pdpt_idx * 8, std.mem.asBytes(&new_pdpt_entry));
-                if (new_pdpt_entry == 0) {
-                    var orig_pdpt_entry: u64 = 0;
-                    _ = readPhysMem(hpa_base, orig_pdpt_base + pdpt_idx * 8, std.mem.asBytes(&orig_pdpt_entry));
-                    if (orig_pdpt_entry != 0) {
-                        _ = writePhysMem(hpa_base, new_pdpt_base + pdpt_idx * 8, std.mem.asBytes(&orig_pdpt_entry));
-                        updated = true;
-                    }
-                }
-            }
+    if (updated) {
+        var dummy_cr3: u64 = cr3 ^ 0x1000;
+        _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR3), &dummy_cr3);
+        _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3);
+    }
+    return updated;
+}
+
+pub fn mapFixmapInCR3(uc: ?*anyopaque, hpa_base: u64, va: u64) void {
+    var cr3: u64 = 0;
+    _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3);
+    const pml4_base = cr3 & 0x000FFFFFFFFFF000;
+    if (pml4_base == 0) return;
+
+    const flags_dir: u64 = 0x7; // Present | Write | User
+    const flags_page: u64 = 0x7; // Present | Write | User
+
+    const pml4_idx = (va >> 39) & 0x1FF;
+    var pml4_entry: u64 = 0;
+    _ = readPhysMem(hpa_base, pml4_base + pml4_idx * 8, std.mem.asBytes(&pml4_entry));
+    if ((pml4_entry & 1) == 0) return;
+
+    const pdpt_base = pml4_entry & 0x000FFFFFFFFFF000;
+    const pdpt_idx = (va >> 30) & 0x1FF;
+    var pdpt_entry: u64 = 0;
+    _ = readPhysMem(hpa_base, pdpt_base + pdpt_idx * 8, std.mem.asBytes(&pdpt_entry));
+    if ((pdpt_entry & 1) == 0) return;
+
+    const pd_base = pdpt_entry & 0x000FFFFFFFFFF000;
+    const pd_idx = (va >> 21) & 0x1FF;
+    var pd_entry: u64 = 0;
+    _ = readPhysMem(hpa_base, pd_base + pd_idx * 8, std.mem.asBytes(&pd_entry));
+
+    var pt_base: u64 = 0;
+    if ((pd_entry & 1) == 0 or (pd_entry & (1 << 7)) != 0) {
+        pt_base = if (pd_idx == 504) 0x7d000 else 0x7e000;
+        const new_pd_entry = pt_base | flags_dir;
+        _ = writePhysMem(hpa_base, pd_base + pd_idx * 8, std.mem.asBytes(&new_pd_entry));
+    } else {
+        pt_base = pd_entry & 0x000FFFFFFFFFF000;
+    }
+
+    const base_gpa: u64 = if (pd_idx == 504) 0xFEC00000 else 0xFEE00000;
+    var pt_i: usize = 0;
+    while (pt_i < 512) : (pt_i += 1) {
+        var pt_ent: u64 = 0;
+        _ = readPhysMem(hpa_base, pt_base + pt_i * 8, std.mem.asBytes(&pt_ent));
+        if ((pt_ent & 1) == 0) {
+            const page_entry: u64 = (base_gpa + pt_i * 4096) | flags_page;
+            _ = writePhysMem(hpa_base, pt_base + pt_i * 8, std.mem.asBytes(&page_entry));
         }
     }
 
-    if (updated) {
-        _ = glue.uc_ctl(uc, @as(c_uint, glue.UC_CTL_FLUSH_TB), 0);
-    }
+    var dummy_cr3: u64 = cr3 ^ 0x1000;
+    _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR3), &dummy_cr3);
+    _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3);
 }
 
 fn setupBootParams(uc: ?*anyopaque, ram_base: u64, ram_size: u64) void {
+    _ = ram_base;
     const boot_params_gpa: u64 = 0x90000; // 576KB offset in low 1MB memory
     const cmdline_gpa: u64 = boot_params_gpa + 4096;
 
     // 1. Write the command line string
-    const cmdline = "console=ttyS0 earlyprintk=serial,ttyS0,115200,keep loglevel=8 root=/dev/ram0 rw mitigations=off";
+    const cmdline = "console=ttyS0 earlyprintk=serial,ttyS0,115200,keep loglevel=8 root=/dev/ram0 rw mitigations=off lpj=50000 nokaslr";
     _ = glue.uc_mem_write(uc, cmdline_gpa, @ptrCast(cmdline.ptr), cmdline.len + 1);
 
     // 2. Setup boot_params buffer
@@ -264,29 +358,35 @@ fn setupBootParams(uc: ?*anyopaque, ram_base: u64, ram_size: u64) void {
     params[0x210] = 0xFF; // type_of_loader = 0xFF (custom bootloader)
     params[0x211] |= 0x01; // loadflags: LOADED_HIGH = 1
 
-    // Set e820_entries = 2
-    params[0x1e8] = 2;
+    // Set e820_entries = 3
+    params[0x1e8] = 3;
 
     // Set cmd_line_ptr
     const cmdline_ptr_u32 = @as(u32, @truncate(cmdline_gpa));
     std.mem.writeInt(u32, params[0x228..0x22c], cmdline_ptr_u32, .little);
 
-    // E820 Entry 0: Low RAM (0x0 .. 0x9f000)
+    // E820 Entry 0: Low RAM (0x0 .. 0x9f000) - Usable (Type 1)
     var entry_offset: usize = 0x2d0;
     std.mem.writeInt(u64, params[entry_offset..][0..8], 0, .little);
     std.mem.writeInt(u64, params[entry_offset + 8 ..][0..8], 0x9f000, .little);
     std.mem.writeInt(u32, params[entry_offset + 16 ..][0..4], @as(u32, 1), .little);
 
-    // E820 Entry 1: Main VM RAM (ram_base .. ram_base + ram_size)
+    // E820 Entry 1: BIOS/EBDA/VGA Gap (0x9f000 .. 0x100000) - Reserved (Type 2)
     entry_offset += 20;
-    std.mem.writeInt(u64, params[entry_offset..][0..8], ram_base, .little);
-    std.mem.writeInt(u64, params[entry_offset + 8 ..][0..8], ram_size, .little);
+    std.mem.writeInt(u64, params[entry_offset..][0..8], 0x9f000, .little);
+    std.mem.writeInt(u64, params[entry_offset + 8 ..][0..8], 0x61000, .little);
+    std.mem.writeInt(u32, params[entry_offset + 16 ..][0..4], @as(u32, 2), .little);
+
+    // E820 Entry 2: Main VM RAM (0x100000 .. ram_size) - Usable (Type 1)
+    entry_offset += 20;
+    std.mem.writeInt(u64, params[entry_offset..][0..8], 0x100000, .little);
+    std.mem.writeInt(u64, params[entry_offset + 8 ..][0..8], ram_size - 0x100000, .little);
     std.mem.writeInt(u32, params[entry_offset + 16 ..][0..4], @as(u32, 1), .little);
 
     // Write boot_params to guest memory
     _ = glue.uc_mem_write(uc, boot_params_gpa, &params, params.len);
 
-    // 3. Set %rsi to boot_params_gpa
+    // 3. Set %rsi to boot_params physical address (boot_params_gpa = 0x90000)
     var rsi_val: u64 = boot_params_gpa;
     _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_RSI), &rsi_val);
 }
@@ -369,7 +469,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque, vc: *vcore.VirtualCore) bool {
         }
         // Check for CPUID (0x0F 0xA2)
         if (op0 == 0x0F and op1 == 0xA2) {
-            emulateCpuId(uc);
+            emulateCpuId(uc, vc);
             writePC(uc, rip + idx + 2);
             return true;
         }
@@ -377,7 +477,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque, vc: *vcore.VirtualCore) bool {
         if (op0 == 0x0F and op1 == 0x32) {
             var ecx_val: u64 = 0;
             _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_RCX), &ecx_val);
-            const msr_val = emulateMsrRead(uc, @as(u32, @truncate(ecx_val)));
+            const msr_val = emulateMsrRead(uc, vc, @as(u32, @truncate(ecx_val)));
             var eax_val: u64 = @as(u32, @truncate(msr_val));
             var edx_val: u64 = @as(u32, @truncate(msr_val >> 32));
             _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_RAX), &eax_val);
@@ -385,6 +485,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque, vc: *vcore.VirtualCore) bool {
             writePC(uc, rip + idx + 2);
             return true;
         }
+
         // Check for WRMSR (0x0F 0x30)
         if (op0 == 0x0F and op1 == 0x30) {
             var ecx_val: u64 = 0;
@@ -394,7 +495,7 @@ pub fn handleInvalidInsn(uc: ?*anyopaque, vc: *vcore.VirtualCore) bool {
             _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_RAX), &eax_val);
             _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_RDX), &edx_val);
             const msr_val = (@as(u64, @truncate(edx_val)) << 32) | @as(u64, @truncate(eax_val));
-            emulateMsrWrite(uc, @as(u32, @truncate(ecx_val)), msr_val);
+            emulateMsrWrite(uc, vc, @as(u32, @truncate(ecx_val)), msr_val);
             writePC(uc, rip + idx + 2);
             return true;
         }
@@ -408,9 +509,20 @@ pub fn handleInvalidInsn(uc: ?*anyopaque, vc: *vcore.VirtualCore) bool {
     // Single-byte instructions
     const op = insn[idx];
     if (op == 0xF4) {
-        // HLT: Advance past HLT and mark current vcpu idle
+        // HLT: Advance PC past HLT instruction
         writePC(uc, rip + idx + 1);
-        vc.exec_path.emulated.sub_vcores[0].wfi_blocked = true;
+
+        var rflags: u64 = 0;
+        _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_EFLAGS), &rflags);
+        const irq_enabled = (rflags & (1 << 9)) != 0;
+
+        const sub = &vc.exec_path.emulated.sub_vcores[vc.exec_path.emulated.active_sub_vcore];
+        if (irq_enabled and sub.timer_scheduled) {
+            sub.wfi_blocked = true;
+            if (vc.virtual_time < sub.timer_target) {
+                vc.virtual_time = sub.timer_target;
+            }
+        }
         return true;
     } else if (op == 0xFA or op == 0xFB) {
         // CLI / STI: Advance PC past instruction
@@ -440,7 +552,28 @@ pub fn handleInvalidInsn(uc: ?*anyopaque, vc: *vcore.VirtualCore) bool {
     return false;
 }
 
-fn emulateCpuId(uc: ?*anyopaque) void {
+// CPUID Leaf Numbers
+const CPUID_LEAF_VENDOR_AND_MAX_LEAF: u32 = 0x00000000;
+const CPUID_LEAF_PROCESSOR_INFO: u32 = 0x00000001;
+const CPUID_LEAF_EXTENDED_TOPOLOGY: u32 = 0x0000000b;
+const CPUID_LEAF_HYPERVISOR_INFO: u32 = 0x40000000;
+const CPUID_LEAF_EXT_MAX_LEAF: u32 = 0x80000000;
+const CPUID_LEAF_EXT_PROCESSOR_INFO: u32 = 0x80000001;
+const CPUID_LEAF_ADDRESS_SIZES: u32 = 0x80000008;
+
+// CPUID 0x80000001 Extended Feature Flags
+const CPUID_EXT_ECX_LAHF_LM: u32 = 1 << 0; // LAHF/SAHF in 64-bit mode supported
+const CPUID_EXT_EDX_SYSCALL: u32 = 1 << 11; // SYSCALL/SYSRET instructions supported
+const CPUID_EXT_EDX_NX: u32 = 1 << 20; // Execute Disable / No-Execute bit supported
+const CPUID_EXT_EDX_RDTSCP: u32 = 1 << 27; // RDTSCP instruction supported
+const CPUID_EXT_EDX_LM: u32 = 1 << 29; // Long Mode (64-bit architecture) supported
+
+// CPUID 0x80000008 Address Sizes: (linear_bits << 8) | phys_bits
+const CPUID_PHYS_ADDR_BITS: u32 = 40; // 40-bit physical address space (1 TB)
+const CPUID_VIRT_ADDR_BITS: u32 = 48; // 48-bit virtual/linear address space (256 TB)
+const CPUID_ADDRESS_SIZES_EAX: u32 = (CPUID_VIRT_ADDR_BITS << 8) | CPUID_PHYS_ADDR_BITS; // 0x00003028
+
+pub fn emulateCpuId(uc: ?*anyopaque, vc: *vcore.VirtualCore) void {
     var eax: u64 = 0;
     var ecx: u64 = 0;
     _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_RAX), &eax);
@@ -454,34 +587,60 @@ fn emulateCpuId(uc: ?*anyopaque) void {
     var res_edx: u32 = 0;
 
     switch (leaf) {
-        0x00000000 => {
+        CPUID_LEAF_VENDOR_AND_MAX_LEAF => {
             res_eax = 0x0d;
             res_ebx = 0x756e6547; // "Genu"
             res_edx = 0x49656e69; // "ineI"
             res_ecx = 0x6c65746e; // "ntel"
         },
-        0x00000001 => {
-            res_eax = 0x000206a7;
-            res_ebx = 0x00100800;
-            res_ecx = 0x7ffefbbf;
-            res_edx = 0xbfebfbff;
+        CPUID_LEAF_PROCESSOR_INFO => {
+            const apic_id = @as(u32, @intCast(vc.exec_path.emulated.active_sub_vcore));
+            const cpu_count = @as(u32, @intCast(if (vc.exec_path.emulated.sub_vcore_count > 0) vc.exec_path.emulated.sub_vcore_count else 1));
+            res_eax = 0x000206a7; // Family 6, Model 42, Stepping 7 (Core i7 / Sandy Bridge)
+            res_ebx = (apic_id << 24) | (cpu_count << 16) | (8 << 8); // APIC ID (bits 24..31), Logical CPUs (bits 16..23), CLFLUSH (bits 8..15)
+            res_ecx = 0x7fdefbbf; // Feature flags (SSE3, SSSE3, SSE4.1, SSE4.2, AVX, hypervisor - x2APIC bit 21 cleared for standard MMIO APIC)
+            res_edx = 0xbfebfbff; // Standard CPU features (FPU, VME, DE, PSE, TSC, MSR, PAE, MCE, CX8, APIC, SEP, MTRR, PGE, MCA, CMOV, PAT, PSE36, CLFSH, MMX, FXSR, SSE, SSE2)
         },
-        0x40000000 => {
-            res_eax = 0x40000001;
-            res_ebx = 0x73696f44; // "Dios"
-            res_ecx = 0x48786978; // "xixH"
-            res_edx = 0x36385876; // "vX86"
+        CPUID_LEAF_EXTENDED_TOPOLOGY => {
+            const sub_leaf = @as(u32, @truncate(ecx));
+            const apic_id = @as(u32, @intCast(vc.exec_path.emulated.active_sub_vcore));
+            const cpu_count = @as(u32, @intCast(if (vc.exec_path.emulated.sub_vcore_count > 0) vc.exec_path.emulated.sub_vcore_count else 1));
+            res_edx = apic_id;
+            if (sub_leaf == 0) {
+                // SMT Level (Level Type 1)
+                res_eax = 0; // Shift bits for next level
+                res_ebx = 1; // 1 logical CPU per SMT unit
+                res_ecx = (sub_leaf & 0xff) | (1 << 8); // Level 0, type SMT
+            } else if (sub_leaf == 1) {
+                // Core Level (Level Type 2)
+                res_eax = 2; // Shift bits for next level (4 logical CPUs = shift 2)
+                res_ebx = cpu_count; // logical CPUs at core level
+                res_ecx = (sub_leaf & 0xff) | (2 << 8); // Level 1, type Core
+            } else {
+                res_eax = 0;
+                res_ebx = 0;
+                res_ecx = sub_leaf & 0xff;
+            }
         },
-        0x80000000 => {
-            res_eax = 0x80000008;
+        CPUID_LEAF_HYPERVISOR_INFO => {
+            res_eax = 0x40000001; // Max hypervisor leaf
+            res_ebx = 0x736f6944; // "Dios"
+            res_ecx = 0x79487869; // "ixHy"
+            res_edx = 0x34365876; // "vX64"
         },
-        0x80000001 => {
-            res_eax = 0x000206a7;
-            res_ecx = 0x00000001;
-            res_edx = 0x2c100800;
+        CPUID_LEAF_EXT_MAX_LEAF => {
+            // Highest extended leaf supported: 0x80000008
+            res_eax = CPUID_LEAF_ADDRESS_SIZES;
         },
-        0x80000008 => {
-            res_eax = 0x00003028;
+        CPUID_LEAF_EXT_PROCESSOR_INFO => {
+            // Extended processor features
+            res_eax = 0x000206a7; // Family/Model signature
+            res_ecx = CPUID_EXT_ECX_LAHF_LM; // LAHF/SAHF in 64-bit mode supported
+            res_edx = CPUID_EXT_EDX_SYSCALL | CPUID_EXT_EDX_NX | CPUID_EXT_EDX_RDTSCP | CPUID_EXT_EDX_LM; // 0x2c100800: SYSCALL, NX, RDTSCP, 64-bit Long Mode
+        },
+        CPUID_LEAF_ADDRESS_SIZES => {
+            // Physical and linear address width: 40-bit physical (1 TB), 48-bit linear (256 TB) -> 0x00003028
+            res_eax = CPUID_ADDRESS_SIZES_EAX;
         },
         else => {},
     }
@@ -496,31 +655,57 @@ fn emulateCpuId(uc: ?*anyopaque) void {
     _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_RDX), &v_edx);
 }
 
-fn emulateMsrRead(_: ?*anyopaque, msr_id: u32) u64 {
-    return switch (msr_id) {
-        0xc0000080 => 0x500, // IA32_EFER
-        0x1a0 => 0x1, // IA32_MISC_ENABLE
-        0x1b => 0xfee00900, // IA32_APIC_BASE
-        0x277 => 0x0007040600070406, // IA32_PAT
-        else => 0,
-    };
+pub fn emulateMsrRead(uc: ?*anyopaque, vc: *vcore.VirtualCore, msr_id: u32) u64 {
+    if (msr_id == 0xc0000100) {
+        var base: u64 = 0;
+        _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_FS_BASE), &base);
+        return base;
+    } else if (msr_id == 0xc0000101) {
+        var base: u64 = 0;
+        _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_GS_BASE), &base);
+        return base;
+    }
+
+    switch (msr_id) {
+        0x10 => return vc.virtual_time, // IA32_TIME_STAMP_COUNTER
+        0xc0000080 => return 0x500, // IA32_EFER: LME | LMA
+        0x1a0 => return 0x00000001, // IA32_MISC_ENABLE: fast strings enabled
+        0x1b => return if (vc.exec_path.emulated.active_sub_vcore == 0) 0xfee00900 else 0xfee00800, // IA32_APIC_BASE: base=0xfee00000, APIC EN (bit 11), BSP (bit 8 for vcore 0)
+        0x277 => return 0x0007040600070406, // IA32_PAT
+        0x3a => return 0x00, // IA32_FEATURE_CONTROL: VMX disabled
+        0x8b => return 0x00, // IA32_BIOS_SIGN_ID: no microcode update
+        else => {},
+    }
+
+    var msr = glue.uc_x86_msr{ .rid = msr_id, .value = 0 };
+    if (glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_MSR), &msr) == .UC_ERR_OK and msr.value != 0) {
+        return msr.value;
+    }
+    return 0;
 }
 
-fn emulateMsrWrite(uc: ?*anyopaque, msr_id: u32, val: u64) void {
+pub fn emulateMsrWrite(uc: ?*anyopaque, vc: *vcore.VirtualCore, msr_id: u32, val: u64) void {
+    const sub = &vc.exec_path.emulated.sub_vcores[vc.exec_path.emulated.active_sub_vcore];
     switch (msr_id) {
-        0xc0000080 => {
-            var msr = glue.uc_x86_msr{ .rid = 0xc0000080, .value = val };
-            _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_MSR), &msr);
-        },
         0xc0000100 => {
             var base = val;
+            sub.fs_base = val;
             _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_FS_BASE), &base);
         },
         0xc0000101 => {
             var base = val;
+            sub.gs_base = val;
             _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_GS_BASE), &base);
         },
-        else => {},
+        0xc0000102 => {
+            sub.kernel_gs_base = val;
+            var msr = glue.uc_x86_msr{ .rid = msr_id, .value = val };
+            _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_MSR), &msr);
+        },
+        else => {
+            var msr = glue.uc_x86_msr{ .rid = msr_id, .value = val };
+            _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_MSR), &msr);
+        },
     }
 }
 
@@ -562,25 +747,36 @@ pub fn handleCleanStop(uc: ?*anyopaque, vc: *vcore.VirtualCore, pc: u64) bool {
     return false;
 }
 
-/// Handle a guest exception. Currently a stub.
-pub fn handleException(_: ?*anyopaque, pc: u64) ExceptionAction {
-    debug.printf("x86_64: exception at PC 0x{x}, handler not yet implemented\n", .{pc});
+/// Handle a guest exception for x86_64.
+/// If the IDT is set up, return .delivered so the exception budget is charged
+/// but execution continues. If the IDT hasn't been set up yet (early boot),
+/// advance past the faulting instruction and continue.
+pub fn handleException(uc: ?*anyopaque, pc: u64) ExceptionAction {
+    var idtr = glue.uc_x86_mmr{};
+    _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_IDTR), &idtr);
+    if (idtr.limit > 0) {
+        // IDT is set up — let the exception budget mechanism handle repeated faults.
+        return .delivered;
+    }
+    debug.printf("x86_64: early-boot exception at PC 0x{x} (no IDT)\n", .{pc});
     return .unhandled;
 }
 
-fn readPhysMem(hpa_base: u64, phys_addr: u64, buf: []u8) bool {
+pub fn readPhysMem(hpa_base: u64, phys_addr: u64, buf: []u8) bool {
+    if (phys_addr + buf.len > 512 * 1024 * 1024) return false;
     const host_ptr = @as([*]const u8, @ptrFromInt(hpa_base + phys_addr));
     @memcpy(buf, host_ptr[0..buf.len]);
     return true;
 }
 
-fn writePhysMem(hpa_base: u64, phys_addr: u64, buf: []const u8) bool {
+pub fn writePhysMem(hpa_base: u64, phys_addr: u64, buf: []const u8) bool {
+    if (phys_addr + buf.len > 512 * 1024 * 1024) return false;
     const host_ptr = @as([*]u8, @ptrFromInt(hpa_base + phys_addr));
     @memcpy(host_ptr[0..buf.len], buf);
     return true;
 }
 
-fn translateVAWithPML4(hpa_base: u64, pml4_base: u64, va: u64) ?u64 {
+pub fn translateVAWithPML4(hpa_base: u64, pml4_base: u64, va: u64) ?u64 {
     // PML4 (Level 4): bits 47:39
     const pml4_idx = (va >> 39) & 0x1FF;
     var pml4_entry: u64 = 0;
@@ -629,7 +825,7 @@ pub fn translateVA(uc: ?*anyopaque, hpa_base: u64, va: u64) ?u64 {
     if ((cr0 & (1 << 31)) == 0) return va; // Paging disabled -> flat mapping.
 
     // Auto-sync direct-map and kernel PML4 entries from boot page table if needed
-    syncKernelPageTables(uc, hpa_base, 0x10000);
+    _ = syncKernelPageTables(uc, hpa_base, 0x70000);
 
     var cr3: u64 = 0;
     _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3);
@@ -639,9 +835,9 @@ pub fn translateVA(uc: ?*anyopaque, hpa_base: u64, va: u64) ?u64 {
         return phys;
     }
 
-    // Fallback for kernel space (va >= 0xffff800000000000) using early boot page tables
+    // Direct physical offset fallback for canonical Linux kernel virtual address regions
     if (va >= 0xffff800000000000) {
-        return translateVAWithPML4(hpa_base, 0x10000, va);
+        return va & (512 * 1024 * 1024 - 1);
     }
 
     return null;
@@ -729,11 +925,48 @@ pub fn deliverInterrupt(uc: ?*anyopaque, hpa_base: u64, pc: u64, cause: u32) voi
     _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_EFLAGS), &new_rflags);
 }
 
+/// Decodes instruction at PC to determine if it is a write operation, returning x86_64 #PF error code (2 for write fault, 0 for read fault).
+pub fn getPageFaultErrorCode(uc: ?*anyopaque, pc: u64) u32 {
+    var insn: [15]u8 = undefined;
+    const ok = glue.uc_mem_read(uc, pc, &insn, 15) == .UC_ERR_OK;
+    if (!ok) return 2; // Default to write fault on read error
+
+    var idx: usize = 0;
+    while (idx < 15) {
+        const b = insn[idx];
+        if (b == 0x66 or b == 0x67 or (b >= 0x40 and b <= 0x4f) or b == 0xf0 or b == 0xf2 or b == 0xf3) {
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    if (idx >= 15) return 2;
+    const op0 = insn[idx];
+
+    var is_write = false;
+    if (op0 == 0x88 or op0 == 0x89 or op0 == 0xc6 or op0 == 0xc7 or op0 == 0xaa or op0 == 0xab) {
+        is_write = true;
+    } else if (op0 >= 0x50 and op0 <= 0x57) {
+        is_write = true;
+    } else if (op0 == 0xe8 or op0 == 0xff) {
+        is_write = true;
+    } else if (op0 == 0x01 or op0 == 0x09 or op0 == 0x11 or op0 == 0x19 or op0 == 0x21 or op0 == 0x29 or op0 == 0x31 or op0 == 0x39) {
+        is_write = true;
+    } else if (op0 == 0x80 or op0 == 0x81 or op0 == 0x83 or op0 == 0xfe) {
+        is_write = true;
+    }
+
+    return if (is_write) 2 else 0;
+}
+
 pub fn deliverFault(uc: ?*anyopaque, hpa_base: u64, pc: u64, vector: u32, error_code: ?u32, cr2: ?u64) void {
     var idtr = glue.uc_x86_mmr{};
     _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_IDTR), &idtr);
-
     if (vector * 16 > idtr.limit) return;
+    if (cr2) |c| {
+        _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR2), &c);
+    }
 
     const gate_addr = idtr.base + vector * 16;
     var gate: [16]u8 = undefined;
@@ -754,6 +987,7 @@ pub fn deliverFault(uc: ?*anyopaque, hpa_base: u64, pc: u64, vector: u32, error_
     const offset_high = @as(u64, gate[8]) | (@as(u64, gate[9]) << 8) | (@as(u64, gate[10]) << 16) | (@as(u64, gate[11]) << 24);
 
     const target_rip = offset_low | (offset_mid << 16) | (offset_high << 32);
+    if (target_rip == 0) return;
 
     // Read current stack frame registers.
     var rsp: u64 = 0;
@@ -808,6 +1042,15 @@ pub fn deliverFault(uc: ?*anyopaque, hpa_base: u64, pc: u64, vector: u32, error_
 
     var new_rflags = rflags & ~(RFLAGS_IF | RFLAGS_TF);
     _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_EFLAGS), &new_rflags);
+
+    // Flush Unicorn softmmu TLB so updated physical page tables take effect immediately.
+    var cr3_cur: u64 = 0;
+    _ = glue.uc_reg_read(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3_cur);
+    if (cr3_cur != 0) {
+        var dummy_cr3: u64 = cr3_cur ^ 0x1000;
+        _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR3), &dummy_cr3);
+        _ = glue.uc_reg_write(uc, @intFromEnum(REG.UC_X86_REG_CR3), &cr3_cur);
+    }
 }
 
 pub fn writeAcpiTables(uc: ?*anyopaque, cpu_count: usize) void {
@@ -911,6 +1154,12 @@ pub fn writeAcpiTables(uc: ?*anyopaque, cpu_count: usize) void {
     // Write to guest RAM at physical 0xe0000
     _ = glue.uc_mem_write(uc, 0xe0000, &acpi_buf, acpi_buf.len);
 
+    // Set BDA (BIOS Data Area) EBDA pointer at 0x040e -> segment 0x9f00 (physical 0x9f000)
+    var ebda_seg: u16 = 0x9f00;
+    _ = glue.uc_mem_write(uc, 0x040e, @ptrCast(&ebda_seg), 2);
+    // Write ACPI tables at 0x9f000 so EBDA RSDP scan succeeds
+    _ = glue.uc_mem_write(uc, 0x9f000, &acpi_buf, acpi_buf.len);
+
     // Write MP tables at physical 0xf0000
     var mp_buf = std.mem.zeroes([512]u8);
     const mpp_offset = 0x0;
@@ -927,8 +1176,8 @@ pub fn writeAcpiTables(uc: ?*anyopaque, cpu_count: usize) void {
         mp_buf[mp_off + 1] = id; // Local APIC ID
         mp_buf[mp_off + 2] = 0x15; // Local APIC Version
         mp_buf[mp_off + 3] = if (id == 0) @as(u8, 3) else @as(u8, 1); // Flags (Enabled, BSP status)
-        std.mem.writeInt(u32, mp_buf[mp_off + 4 ..][0..4], 0x00000600, .little); // CPU Signature
-        std.mem.writeInt(u32, mp_buf[mp_off + 8 ..][0..4], 0x000001ff, .little); // Feature Flags
+        std.mem.writeInt(u32, mp_buf[mp_off + 4 ..][0..4], 0x000206a7, .little); // CPU Signature (Family 6, Model 42, Stepping 7)
+        std.mem.writeInt(u32, mp_buf[mp_off + 8 ..][0..4], 0xbfebfbff, .little); // Feature Flags (matching CPUID Leaf 1 EDX, including Bit 9 APIC)
         mp_off += 20;
     }
 
@@ -968,8 +1217,8 @@ pub fn writeAcpiTables(uc: ?*anyopaque, cpu_count: usize) void {
     mp_buf[mpc_offset + 6] = 4; // Spec Rev 4
     @memcpy(mp_buf[mpc_offset + 8 .. mpc_offset + 16], "DIOSIX  ");
     @memcpy(mp_buf[mpc_offset + 16 .. mpc_offset + 28], "0.1         ");
-    std.mem.writeInt(u16, mp_buf[mpc_offset + 32 ..][0..2], mp_entry_count, .little); // Entry count
-    std.mem.writeInt(u32, mp_buf[mpc_offset + 34 ..][0..4], 0xfee00000, .little); // Local APIC addr
+    std.mem.writeInt(u16, mp_buf[mpc_offset + 34 ..][0..2], mp_entry_count, .little); // Entry count at offset 34 (0x22)
+    std.mem.writeInt(u32, mp_buf[mpc_offset + 36 ..][0..4], 0xfee00000, .little); // Local APIC addr at offset 36 (0x24)
 
     // Checksum MP Configuration Table
     const mpc_slice = mp_buf[mpc_offset .. mpc_offset + mpc_len];
