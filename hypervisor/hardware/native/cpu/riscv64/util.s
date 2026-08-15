@@ -12,6 +12,9 @@
 .global hw_heap_size
 .global hw_pause
 .global hw_pmp_init
+.global hw_dynarec_run_block
+.global hw_dynarec_exit1
+.global hw_dynarec_exit2
 
 # hypervisor constants, such as stack and lock locations
 .include "hypervisor/hardware/native/cpu/riscv64/consts.s"
@@ -220,4 +223,193 @@ siglongjmp:
   bnez a0, 1f
   li a0, 1
 1:
+  ret
+
+# Execute JIT translated code block with native host registers
+# a0 = pointer to [32]u64 (vcpu.regs)
+.section .bss
+.align 8
+hw_dynarec_host_sp:
+  .space 8 * 8   # up to 8 harts
+hw_dynarec_regs_ptr:
+  .space 8 * 8
+hw_dynarec_saved_mstatus:
+  .space 8 * 8
+
+.section .text
+.globl hw_dynarec_run_block
+.type hw_dynarec_run_block, @function
+# a0 = pointer to guest regs: [32]u64
+# a1 = host code function pointer
+# returns a0 = branch exit code / target pc
+hw_dynarec_run_block:
+  # 1. Disable machine-mode interrupts while running JIT basic block
+  csrrci t2, mstatus, 8   # Clear MIE, t2 = previous mstatus
+
+  # 2. Save host callee-saved registers on host stack
+  addi sp, sp, -128
+  sd ra, 0(sp)
+  sd s0, 8(sp)
+  sd s1, 16(sp)
+  sd s2, 24(sp)
+  sd s3, 32(sp)
+  sd s4, 40(sp)
+  sd s5, 48(sp)
+  sd s6, 56(sp)
+  sd s7, 64(sp)
+  sd s8, 72(sp)
+  sd s9, 80(sp)
+  sd s10, 88(sp)
+  sd s11, 96(sp)
+  sd tp, 104(sp)
+  sd gp, 112(sp)
+
+  # 3. Get hardware hart ID for per-hart storage
+  csrr t0, mhartid
+  slli t0, t0, 3
+
+  # 4. Save host stack pointer
+  la t1, hw_dynarec_host_sp
+  add t1, t1, t0
+  sd sp, 0(t1)
+
+  # 5. Save regs pointer in mtval (CSR 0x343)
+  csrw mtval, a0
+
+  # 6. Save previous mstatus
+  la t1, hw_dynarec_saved_mstatus
+  add t1, t1, t0
+  sd t2, 0(t1)
+
+  # 7. Move target block entry pointer to t0
+  mv t0, a1
+
+  # 8. Put guest t0 (x5) into sscratch for block prologue
+  ld t1, 40(a0)
+  csrw sscratch, t1
+
+  # 9. Load guest registers from a0 (regs pointer)
+  ld x1, 8(a0)
+  ld x3, 24(a0)
+  ld x4, 32(a0)
+  ld x6, 48(a0)
+  ld x7, 56(a0)
+  ld x8, 64(a0)
+  ld x9, 72(a0)
+  ld x11, 88(a0)
+  ld x12, 96(a0)
+  ld x13, 104(a0)
+  ld x14, 112(a0)
+  ld x15, 120(a0)
+  ld x16, 128(a0)
+  ld x17, 136(a0)
+  ld x18, 144(a0)
+  ld x19, 152(a0)
+  ld x20, 160(a0)
+  ld x21, 168(a0)
+  ld x22, 176(a0)
+  ld x23, 184(a0)
+  ld x24, 192(a0)
+  ld x25, 200(a0)
+  ld x26, 208(a0)
+  ld x27, 216(a0)
+  ld x28, 224(a0)
+  ld x29, 232(a0)
+  ld x30, 240(a0)
+  ld x31, 248(a0)
+
+  # Load guest sp (x2) and guest a0 (x10) last using a0
+  ld x2, 16(a0)
+  ld x10, 80(a0)
+
+  # 10. Jump to translated block
+  jr t0
+
+.globl hw_dynarec_exit
+.type hw_dynarec_exit, @function
+hw_dynarec_exit:
+  # On entry:
+  # mepc holds target_pc (saved by emitExit)
+  # sscratch holds guest t0 (saved by emitExit)
+  # mtval (0x343) holds regs_ptr (&self.vcpu.regs)
+  # All other registers x1..x4, x6..x31 hold pristine guest registers!
+
+  # 1. Load regs_ptr into t0 directly from mtval (CSR 0x343)
+  csrr t0, mtval
+
+  # 3. Store all 30 pristine guest registers to regs_ptr (t0)
+  sd x1, 8(t0)       # guest ra (x1)
+  sd x2, 16(t0)      # guest sp (x2)
+  sd x3, 24(t0)      # guest gp (x3)
+  sd x4, 32(t0)      # guest tp (x4)
+  sd x6, 48(t0)      # guest t1 (x6)
+  sd x7, 56(t0)      # guest t2 (x7)
+  sd x8, 64(t0)      # guest s0/fp (x8)
+  sd x9, 72(t0)      # guest s1 (x9)
+  sd x10, 80(t0)     # guest a0 (x10)
+  sd x11, 88(t0)     # guest a1 (x11)
+  sd x12, 96(t0)     # guest a2 (x12)
+  sd x13, 104(t0)    # guest a3 (x13)
+  sd x14, 112(t0)    # guest a4 (x14)
+  sd x15, 120(t0)    # guest a5 (x15)
+  sd x16, 128(t0)    # guest a6 (x16)
+  sd x17, 136(t0)    # guest a7 (x17)
+  sd x18, 144(t0)    # guest s2 (x18)
+  sd x19, 152(t0)    # guest s3 (x19)
+  sd x20, 160(t0)    # guest s4 (x20)
+  sd x21, 168(t0)    # guest s5 (x21)
+  sd x22, 176(t0)    # guest s6 (x22)
+  sd x23, 184(t0)    # guest s7 (x23)
+  sd x24, 192(t0)    # guest s8 (x24)
+  sd x25, 200(t0)    # guest s9 (x25)
+  sd x26, 208(t0)    # guest s10 (x26)
+  sd x27, 216(t0)    # guest s11 (x27)
+  sd x28, 224(t0)    # guest t3 (x28)
+  sd x29, 232(t0)    # guest t4 (x29)
+  sd x30, 240(t0)    # guest t5 (x30)
+  sd x31, 248(t0)    # guest t6 (x31)
+
+  # 5. Read saved guest t0 (from sscratch) and store to 40(t0)
+  csrr t1, sscratch
+  sd t1, 40(t0)
+
+  # 6. Read target_pc from mepc and store to vcpu.pc (offset 256)
+  csrr t1, mepc
+  sw t1, 256(t0)
+
+  # 7. Restore host stack pointer
+  csrr t0, mhartid
+  slli t0, t0, 3
+
+  la t2, hw_dynarec_host_sp
+  add t2, t2, t0
+  ld sp, 0(t2)
+
+  # 8. Restore host callee-saved registers from host stack
+  ld ra, 0(sp)
+  ld s0, 8(sp)
+  ld s1, 16(sp)
+  ld s2, 24(sp)
+  ld s3, 32(sp)
+  ld s4, 40(sp)
+  ld s5, 48(sp)
+  ld s6, 56(sp)
+  ld s7, 64(sp)
+  ld s8, 72(sp)
+  ld s9, 80(sp)
+  ld s10, 88(sp)
+  ld s11, 96(sp)
+  ld tp, 104(sp)
+  ld gp, 112(sp)
+  addi sp, sp, 128
+
+  # 9. Return target_pc in a0 for C ABI
+  mv a0, t1
+
+  # 10. Restore saved mstatus (re-enables interrupts if they were enabled)
+  la t2, hw_dynarec_saved_mstatus
+  add t2, t2, t0
+  ld t2, 0(t2)
+  csrw mstatus, t2
+
   ret

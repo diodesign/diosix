@@ -409,8 +409,12 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     }
 
     // Provide a devicetree for the guest.
-    // Place it 1MB from the end of the guest's physical RAM reservation.
-    const guest_dtb_gpa = root_vm_gpa_base + rootvm_ram_size - 1024 * 1024;
+    // For riscv32, place DTB at 64MB offset (0x84000000) within early linear mapping.
+    // For 64-bit guests, place 1MB from the end of the guest's physical RAM reservation.
+    const guest_dtb_gpa = if (guest_arch == .riscv32)
+        root_vm_gpa_base + 0x04000000
+    else
+        root_vm_gpa_base + rootvm_ram_size - 1024 * 1024;
     const guest_dtb_hpa = try root_vm.space.translateGPA(guest_dtb_gpa);
     @memcpy(@as([*]u8, @ptrFromInt(guest_dtb_hpa))[0..guest_dtb.len], guest_dtb);
 
@@ -430,7 +434,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         const vcore_id = if (guest_arch == .aarch64) i else guest_hart_ids[i];
         const vc = try root_vm.addVcore(vcore_id, entry_point, guest_dtb_gpa, .high, null);
         
-        if (is_emulated and i == 0) {
+        if (is_emulated) {
             try emulation.init(vc);
         }
 

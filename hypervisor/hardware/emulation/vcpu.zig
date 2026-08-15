@@ -91,10 +91,12 @@ pub const VCpu = struct {
     vstimecmp: u64 = 0xffffffffffffffff,
     load_res_addr: usize = 0,
     load_res_val: u32 = 0,
+    needs_tlb_flush: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    needs_cache_flush: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn getGpr(self: *const VCpu, reg: u5) u64 {
         if (reg == 0) return 0;
-        return self.regs[reg];
+        return @as(u64, @bitCast(@as(i64, @as(i32, @truncate(@as(i64, @bitCast(self.regs[reg])))))));
     }
 
     pub fn getReg(self: *const VCpu, reg: u5) u64 {
@@ -103,24 +105,66 @@ pub const VCpu = struct {
 
     pub fn setGpr(self: *VCpu, reg: u5, val: u64) void {
         if (reg == 0) return;
-        self.regs[reg] = @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(val))))));
+        self.regs[reg] = @as(u64, @bitCast(@as(i64, @as(i32, @truncate(@as(i64, @bitCast(val)))))));
     }
 
     pub fn setReg(self: *VCpu, reg: u5, val: u64) void {
         self.setGpr(reg, val);
     }
 
-    pub var time_offset: u64 = 0;
+    pub var time_offset: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
     pub var max_guest_time: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+    pub var guest_insn_time: std.atomic.Value(u64) = std.atomic.Value(u64).init(10_000_000);
+
+    pub var global_reservation_addr: [4]std.atomic.Value(usize) = .{
+        std.atomic.Value(usize).init(0),
+        std.atomic.Value(usize).init(0),
+        std.atomic.Value(usize).init(0),
+        std.atomic.Value(usize).init(0),
+    };
+
+    pub fn setReservation(hart_id: usize, paddr: usize) void {
+        if (hart_id < 4) {
+            global_reservation_addr[hart_id].store(paddr & ~@as(usize, 0x3F), .release);
+        }
+    }
+
+    pub fn checkAndClearReservation(hart_id: usize, paddr: usize) bool {
+        if (hart_id >= 4) return false;
+        const line = paddr & ~@as(usize, 0x3F);
+        const cur = global_reservation_addr[hart_id].swap(0, .acq_rel);
+        return (cur == line and line != 0);
+    }
+
+    pub fn invalidateReservations(paddr: usize) void {
+        const line = paddr & ~@as(usize, 0x3F);
+        for (0..4) |i| {
+            if (global_reservation_addr[i].load(.monotonic) == line) {
+                global_reservation_addr[i].store(0, .monotonic);
+            }
+        }
+    }
+
+    pub fn setMipBit(self: *VCpu, bit: u5) void {
+        _ = @atomicRmw(u32, &self.mip, .Or, @as(u32, 1) << bit, .seq_cst);
+    }
+
+    pub fn clearMipBit(self: *VCpu, bit: u5) void {
+        _ = @atomicRmw(u32, &self.mip, .And, ~(@as(u32, 1) << bit), .seq_cst);
+    }
+
+    pub fn getMip(self: *const VCpu) u32 {
+        return @atomicLoad(u32, &self.mip, .seq_cst);
+    }
 
     pub fn readGuestTime() u64 {
-        const host_time = readHostTime();
-        const raw_time = if (host_time >= time_offset) (host_time - time_offset) else 0;
-        var current_max = max_guest_time.load(.monotonic);
-        while (raw_time > current_max) {
-            current_max = max_guest_time.cmpxchgWeak(current_max, raw_time, .monotonic, .monotonic) orelse return raw_time;
+        const now = readHostTime();
+        const offset = time_offset.load(.monotonic);
+        if (now >= offset) {
+            return now - offset;
+        } else {
+            return 0;
         }
-        return current_max;
     }
 
     pub fn readCsr(self: *VCpu, csr: u12) u32 {
@@ -232,6 +276,7 @@ pub const VCpu = struct {
     }
 
     pub fn injectException(self: *VCpu, cause: u32, fault_pc: u32, stval: u32) void {
+        if (self.id < 4) global_reservation_addr[self.id].store(0, .monotonic);
         self.load_res_addr = 0;
         const is_interrupt = (cause & 0x80000000) != 0;
         const code = cause & 0x7fffffff;

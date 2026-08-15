@@ -5,11 +5,13 @@
 
 const std = @import("std");
 const bus_mod = @import("devices/bus.zig");
+const vcpu_mod = @import("vcpu.zig");
 
 pub const SoftTlbEntry = struct {
     guest_vaddr_page: u32 = 0,
     host_paddr_page: usize = 0,
     flags: u8 = 0, // [0]: Valid, [1]: Read, [2]: Write, [3]: Execute, [4]: User
+    epoch: u32 = 0,
 };
 
 pub const AccessResult = struct {
@@ -32,6 +34,7 @@ pub const ContiguousRegion = struct {
 pub const SoftTlb = struct {
     entries: [TLB_ENTRIES]SoftTlbEntry = std.mem.zeroes([TLB_ENTRIES]SoftTlbEntry),
     contiguous_regions: [MAX_CONTIGUOUS_REGIONS]ContiguousRegion = std.mem.zeroes([MAX_CONTIGUOUS_REGIONS]ContiguousRegion),
+    epoch: u32 = 1,
     satp: u32 = 0,
     mstatus: u32 = 0,
     privilege_mode: u2 = 1, // Default Supervisor mode
@@ -57,6 +60,7 @@ pub const SoftTlb = struct {
     pub fn initOnPtr(self: *SoftTlb, gpa_base: usize, hpa_base: usize, ram_size: usize) void {
         @memset(std.mem.sliceAsBytes(self.entries[0..]), 0);
         @memset(std.mem.sliceAsBytes(self.contiguous_regions[0..]), 0);
+        self.epoch = 1;
         self.satp = 0;
         self.privilege_mode = 1;
         self.guest_gpa_base = gpa_base;
@@ -65,8 +69,14 @@ pub const SoftTlb = struct {
     }
 
     pub fn flush(self: *SoftTlb) void {
-        @memset(std.mem.sliceAsBytes(self.entries[0..]), 0);
-        @memset(std.mem.sliceAsBytes(self.contiguous_regions[0..]), 0);
+        self.epoch +%= 1;
+        if (self.epoch == 0) {
+            @memset(std.mem.sliceAsBytes(self.entries[0..]), 0);
+            self.epoch = 1;
+        }
+        for (self.contiguous_regions[0..]) |*r| {
+            r.valid = false;
+        }
     }
 
     pub fn ppnToGpa(self: *SoftTlb, ppn: usize) usize {
@@ -129,7 +139,7 @@ pub const SoftTlb = struct {
         const slot = page & TLB_MASK;
         const entry = &self.entries[slot];
 
-        if ((entry.flags & 1) != 0 and entry.guest_vaddr_page == page) {
+        if (entry.epoch == self.epoch and (entry.flags & 1) != 0 and entry.guest_vaddr_page == page) {
             const is_user_page = (entry.flags & (1 << 4)) != 0;
             if (self.privilege_mode == 0) {
                 if (!is_user_page) return null; // User mode cannot access supervisor pages
@@ -174,6 +184,7 @@ pub const SoftTlb = struct {
                         .guest_vaddr_page = page,
                         .host_paddr_page = paddr & ~@as(usize, 0xFFF),
                         .flags = region.flags,
+                        .epoch = self.epoch,
                     };
                     return paddr;
                 }
@@ -203,6 +214,7 @@ pub const SoftTlb = struct {
                     .guest_vaddr_page = page,
                     .host_paddr_page = hpa & ~@as(usize, 0xFFF),
                     .flags = flags,
+                    .epoch = self.epoch,
                 };
             }
             return hpa;
@@ -215,12 +227,40 @@ pub const SoftTlb = struct {
         const pte1_gpa = root_gpa + (vpn1 * 4);
         const pte1_hpa = self.translateGpaToHpa(pte1_gpa) orelse return null;
 
-        const pte1_ptr = @as(*align(1) const u32, @ptrFromInt(pte1_hpa));
-        const pte1 = pte1_ptr.*;
+        const pte1_ptr = @as(*align(4) const u32, @ptrFromInt(pte1_hpa));
+        const pte1 = @atomicLoad(u32, pte1_ptr, .acquire);
 
         if ((pte1 & 1) == 0) {
             self.last_null_vaddr = vaddr;
             self.last_null_pte1 = pte1;
+            if (self.privilege_mode >= 1) {
+                if (vaddr >= 0xC000_0000 and vaddr < 0xC000_0000 + self.guest_ram_size) {
+                    const gpa = self.guest_gpa_base + (vaddr - 0xC000_0000);
+                    if (self.translateGpaToHpa(gpa)) |hpa| {
+                        const page = vaddr >> 12;
+                        const slot = page & TLB_MASK;
+                        self.entries[slot] = .{
+                            .guest_vaddr_page = page,
+                            .host_paddr_page = hpa & ~@as(usize, 0xFFF),
+                            .flags = 1 | (1 << 1) | (1 << 2) | (1 << 3),
+                            .epoch = self.epoch,
+                        };
+                        return hpa;
+                    }
+                } else if (vaddr >= self.guest_gpa_base and vaddr < self.guest_gpa_base + self.guest_ram_size) {
+                    if (self.translateGpaToHpa(vaddr)) |hpa| {
+                        const page = vaddr >> 12;
+                        const slot = page & TLB_MASK;
+                        self.entries[slot] = .{
+                            .guest_vaddr_page = page,
+                            .host_paddr_page = hpa & ~@as(usize, 0xFFF),
+                            .flags = 1 | (1 << 1) | (1 << 2) | (1 << 3),
+                            .epoch = self.epoch,
+                        };
+                        return hpa;
+                    }
+                }
+            }
             return null;
         }
 
@@ -235,13 +275,29 @@ pub const SoftTlb = struct {
             const pte0_gpa = pte0_table_gpa + (vpn0 * 4);
             const pte0_hpa = self.translateGpaToHpa(pte0_gpa) orelse return null;
 
-            const pte0_ptr = @as(*align(1) const u32, @ptrFromInt(pte0_hpa));
-            const pte0 = pte0_ptr.*;
+            const pte0_ptr = @as(*align(4) const u32, @ptrFromInt(pte0_hpa));
+            const pte0 = @atomicLoad(u32, pte0_ptr, .acquire);
 
             if ((pte0 & 1) == 0) {
                 self.last_null_vaddr = vaddr;
                 self.last_null_pte1 = pte1;
                 self.last_null_pte0 = pte0;
+                if (self.privilege_mode >= 1) {
+                    if (vaddr >= 0xC000_0000 and vaddr < 0xC000_0000 + self.guest_ram_size) {
+                        const gpa = self.guest_gpa_base + (vaddr - 0xC000_0000);
+                        if (self.translateGpaToHpa(gpa)) |hpa| {
+                            const page = vaddr >> 12;
+                            const slot = page & TLB_MASK;
+                            self.entries[slot] = .{
+                                .guest_vaddr_page = page,
+                                .host_paddr_page = hpa & ~@as(usize, 0xFFF),
+                                .flags = 1 | (1 << 1) | (1 << 2) | (1 << 3),
+                                .epoch = self.epoch,
+                            };
+                            return hpa;
+                        }
+                    }
+                }
                 return null;
             }
 
@@ -299,6 +355,7 @@ pub const SoftTlb = struct {
                 .guest_vaddr_page = page,
                 .host_paddr_page = final_hpa & ~@as(usize, 0xFFF),
                 .flags = pte_flags,
+                .epoch = self.epoch,
             };
         }
         return final_hpa;
@@ -313,7 +370,7 @@ pub const SoftTlb = struct {
             return .{ .val = @truncate(bus.read(p32, 1)) };
         }
         const ptr = @as(*align(1) const u8, @ptrFromInt(paddr));
-        return .{ .val = ptr.* };
+        return .{ .val = @atomicLoad(u8, ptr, .acquire) };
     }
 
     pub fn readU16(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
@@ -333,10 +390,13 @@ pub const SoftTlb = struct {
         }
         if ((paddr & 1) == 0) {
             const ptr = @as(*align(2) const u16, @ptrFromInt(paddr));
-            return .{ .val = ptr.* };
+            return .{ .val = @atomicLoad(u16, ptr, .acquire) };
         }
-        const ptr = @as(*align(1) const u16, @ptrFromInt(paddr));
-        return .{ .val = ptr.* };
+        const ptr_lo = @as(*align(1) const u8, @ptrFromInt(paddr));
+        const ptr_hi = @as(*align(1) const u8, @ptrFromInt(paddr + 1));
+        const lo = @atomicLoad(u8, ptr_lo, .acquire);
+        const hi = @atomicLoad(u8, ptr_hi, .acquire);
+        return .{ .val = @as(u32, lo) | (@as(u32, hi) << 8) };
     }
 
     pub fn fetchU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
@@ -353,13 +413,13 @@ pub const SoftTlb = struct {
             if (bus.isMmio(p32_1)) {
                 val |= @as(u32, @truncate(bus.read(p32_1, 2)));
             } else {
-                const ptr1 = @as(*align(1) const u16, @ptrFromInt(paddr1));
+                const ptr1 = @as(*align(1) const volatile u16, @ptrFromInt(paddr1));
                 val |= @as(u32, ptr1.*);
             }
             if (bus.isMmio(p32_2)) {
                 val |= (@as(u32, @truncate(bus.read(p32_2, 2))) << 16);
             } else {
-                const ptr2 = @as(*align(1) const u16, @ptrFromInt(paddr2));
+                const ptr2 = @as(*align(1) const volatile u16, @ptrFromInt(paddr2));
                 val |= (@as(u32, ptr2.*) << 16);
             }
             return .{ .val = val };
@@ -373,9 +433,9 @@ pub const SoftTlb = struct {
         }
         if ((paddr & 3) == 0) {
             const ptr = @as(*align(4) const u32, @ptrFromInt(paddr));
-            return .{ .val = ptr.* };
+            return .{ .val = @atomicLoad(u32, ptr, .acquire) };
         }
-        const ptr = @as(*align(1) const u32, @ptrFromInt(paddr));
+        const ptr = @as(*align(1) const volatile u32, @ptrFromInt(paddr));
         return .{ .val = ptr.* };
     }
 
@@ -399,10 +459,15 @@ pub const SoftTlb = struct {
         }
         if ((paddr & 3) == 0) {
             const ptr = @as(*align(4) const u32, @ptrFromInt(paddr));
-            return .{ .val = ptr.* };
+            return .{ .val = @atomicLoad(u32, ptr, .acquire) };
         }
-        const ptr = @as(*align(1) const u32, @ptrFromInt(paddr));
-        return .{ .val = ptr.* };
+        var val: u32 = 0;
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            const b = @atomicLoad(u8, @as(*align(1) const u8, @ptrFromInt(paddr + i)), .acquire);
+            val |= (@as(u32, b) << @as(u5, @truncate(i * 8)));
+        }
+        return .{ .val = val };
     }
 
     pub fn writeU8(self: *SoftTlb, vaddr: u32, val: u8, bus: *bus_mod.Bus) ?u32 {
@@ -419,7 +484,8 @@ pub const SoftTlb = struct {
             self.last_trampoline_pgd_write_val = @as(u32, val);
         }
         const ptr = @as(*align(1) u8, @ptrFromInt(paddr));
-        ptr.* = val;
+        @atomicStore(u8, ptr, val, .release);
+        vcpu_mod.VCpu.invalidateReservations(paddr);
         return null;
     }
 
@@ -439,11 +505,15 @@ pub const SoftTlb = struct {
         }
         if ((paddr & 1) == 0) {
             const ptr = @as(*align(2) u16, @ptrFromInt(paddr));
-            ptr.* = val;
+            @atomicStore(u16, ptr, val, .release);
+            vcpu_mod.VCpu.invalidateReservations(paddr);
             return null;
         }
-        const ptr = @as(*align(1) u16, @ptrFromInt(paddr));
-        ptr.* = val;
+        const ptr_lo = @as(*align(1) u8, @ptrFromInt(paddr));
+        const ptr_hi = @as(*align(1) u8, @ptrFromInt(paddr + 1));
+        @atomicStore(u8, ptr_lo, @truncate(val), .release);
+        @atomicStore(u8, ptr_hi, @truncate(val >> 8), .release);
+        vcpu_mod.VCpu.invalidateReservations(paddr);
         return null;
     }
 
@@ -470,11 +540,15 @@ pub const SoftTlb = struct {
         }
         if ((paddr & 3) == 0) {
             const ptr = @as(*align(4) u32, @ptrFromInt(paddr));
-            ptr.* = val;
+            @atomicStore(u32, ptr, val, .release);
+            vcpu_mod.VCpu.invalidateReservations(paddr);
             return null;
         }
-        const ptr = @as(*align(1) u32, @ptrFromInt(paddr));
-        ptr.* = val;
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            @atomicStore(u8, @as(*align(1) u8, @ptrFromInt(paddr + i)), @truncate(val >> @as(u5, @truncate(i * 8))), .release);
+        }
+        vcpu_mod.VCpu.invalidateReservations(paddr);
         return null;
     }
 
@@ -526,10 +600,11 @@ pub const SoftTlb = struct {
             .minu => @atomicRmw(u32, ptr, .Min, val, .seq_cst),
             .maxu => @atomicRmw(u32, ptr, .Max, val, .seq_cst),
         };
+        vcpu_mod.VCpu.invalidateReservations(paddr);
         return .{ .val = old_val };
     }
 
-    pub fn lrU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) struct { trap: ?u32 = null, val: u32 = 0, paddr: usize = 0 } {
+    pub fn lrU32(self: *SoftTlb, vaddr: u32, hart_id: usize, bus: *bus_mod.Bus) struct { trap: ?u32 = null, val: u32 = 0, paddr: usize = 0 } {
         if ((vaddr & 3) != 0) {
             return .{ .trap = 4 }; // Load address misaligned
         }
@@ -540,30 +615,30 @@ pub const SoftTlb = struct {
         if (bus.isMmio(p32)) {
             return .{ .val = bus.read(p32, 4), .paddr = paddr };
         }
+        vcpu_mod.VCpu.setReservation(hart_id, paddr);
         const ptr = @as(*align(4) const u32, @ptrFromInt(paddr));
         const val = @atomicLoad(u32, ptr, .seq_cst);
         return .{ .val = val, .paddr = paddr };
     }
 
-    pub fn scU32(self: *SoftTlb, vaddr: u32, val: u32, expected_paddr: usize, expected_val: u32, bus: *bus_mod.Bus) struct { trap: ?u32 = null, success: bool = false } {
+    pub fn scU32(self: *SoftTlb, vaddr: u32, val: u32, hart_id: usize, bus: *bus_mod.Bus) struct { trap: ?u32 = null, success: bool = false } {
         if ((vaddr & 3) != 0) {
             return .{ .trap = 6 }; // Store/AMO address misaligned
         }
         const paddr = self.translateFast(vaddr, true, false) orelse (self.translateFull(vaddr, true, false, bus) orelse {
             return .{ .trap = 15 }; // Store page fault
         });
-        if (paddr != expected_paddr or expected_paddr == 0) {
-            return .{ .success = false };
-        }
         const p32: u32 = @truncate(paddr);
         if (bus.isMmio(p32)) {
             bus.write(p32, val, 4);
             return .{ .success = true };
         }
-        const ptr = @as(*align(4) u32, @ptrFromInt(paddr));
-        if (@cmpxchgStrong(u32, ptr, expected_val, val, .seq_cst, .seq_cst)) |_| {
+        if (!vcpu_mod.VCpu.checkAndClearReservation(hart_id, paddr)) {
             return .{ .success = false };
         }
+        const ptr = @as(*align(4) u32, @ptrFromInt(paddr));
+        @atomicStore(u32, ptr, val, .seq_cst);
+        vcpu_mod.VCpu.invalidateReservations(paddr);
         return .{ .success = true };
     }
 };

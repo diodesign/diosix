@@ -131,6 +131,18 @@ pub fn sllw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.o
 pub fn srlw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x00); }
 pub fn sraw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x20); }
 
+// ---- RV64 M-Extension Instructions ----
+pub fn mul(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x0, rs1, rs2, 0x01); }
+pub fn mulw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x0, rs1, rs2, 0x01); }
+pub fn div(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x4, rs1, rs2, 0x01); }
+pub fn divw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x4, rs1, rs2, 0x01); }
+pub fn divu(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x5, rs1, rs2, 0x01); }
+pub fn divuw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x01); }
+pub fn rem(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x6, rs1, rs2, 0x01); }
+pub fn remw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x6, rs1, rs2, 0x01); }
+pub fn remu(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x7, rs1, rs2, 0x01); }
+pub fn remuw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x7, rs1, rs2, 0x01); }
+
 // ---- Specific I-Type RV64 Instructions ----
 pub fn addi(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x0, rs1, imm); }
 pub fn slti(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x2, rs1, imm); }
@@ -138,6 +150,9 @@ pub fn sltiu(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode
 pub fn xori(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x4, rs1, imm); }
 pub fn ori(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x6, rs1, imm); }
 pub fn andi(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x7, rs1, imm); }
+pub fn slli(rd: u5, rs1: u5, shamt: u6) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x1, rs1, @as(i12, shamt)); }
+pub fn srli(rd: u5, rs1: u5, shamt: u6) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x5, rs1, @as(i12, shamt)); }
+pub fn srai(rd: u5, rs1: u5, shamt: u6) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x5, rs1, @as(i12, shamt) | 0x400); }
 
 // ---- RV64 32-bit Word Variant I-Type Instructions ----
 pub fn addiw(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x0, rs1, imm); }

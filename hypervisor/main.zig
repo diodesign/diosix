@@ -160,6 +160,9 @@ pub export fn main(cpu_core_id: usize, fdt_paddr: usize) void {
             riscv.setTimer(riscv.TIMER_INFINITY);
             gdb_stub.stub.pollSerialInput();
             riscv.pause(); // WFI — sleep only when no active vcore
+            if (riscv.CLINT.msip(pcore.this().hardware_hart_id)) |ptr| {
+                ptr.* = 0;
+            }
         }
     }
 }

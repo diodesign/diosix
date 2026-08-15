@@ -40,4 +40,12 @@ pub const VirtualTimer = struct {
             }
         }
     }
+
+    pub fn getEarliestDeadline(self: *const VirtualTimer) u64 {
+        var min: u64 = ~@as(u64, 0);
+        for (self.mtimecmp) |deadline| {
+            if (deadline < min) min = deadline;
+        }
+        return min;
+    }
 };

@@ -73,6 +73,19 @@ const JIT_CODE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 const MAX_EMULATED_VCORES: usize = 4;
 
 var jit_buffer_pools: [MAX_EMULATED_VCORES][JIT_CODE_BUFFER_SIZE]u8 = undefined;
+var vcpu_pools: [MAX_EMULATED_VCORES]VCpu = undefined;
+var softtlb_pools: [MAX_EMULATED_VCORES]emulation_native.SoftTlb = undefined;
+var bus_pools: [MAX_EMULATED_VCORES]emulation_native.Bus = undefined;
+var shared_uart: emulation_native.VirtualUart = undefined;
+var shared_timer: emulation_native.VirtualTimer = undefined;
+var shared_pic: emulation_native.VirtualPlic = undefined;
+var engine_pools: [MAX_EMULATED_VCORES]Engine = undefined;
+
+pub var global_insn_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub var global_wfi_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub var global_ecall_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub var global_yield_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub var last_telemetry_time: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 
 pub fn getVirtualSModeTime(vc: *vcore.VirtualCore) u64 {
     const host_time = riscv.readTime();
@@ -92,35 +105,11 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     if (em.vcpu != null and em.engine != null) return;
     debug.printf("DEBUG emulation.init: vc=0x{x} target_arch={s}\n", .{ @intFromPtr(vc), @tagName(vc.guest.target_arch) });
 
-    const allocator = pcore.this().allocator.allocator();
-    const vcpu_ptr = allocator.create(VCpu) catch |err| {
-        debug.printf("ERROR init: failed to allocate VCpu: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    const softtlb_ptr = allocator.create(emulation_native.SoftTlb) catch |err| {
-        debug.printf("ERROR init: failed to allocate SoftTlb: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    const bus_ptr = allocator.create(emulation_native.Bus) catch |err| {
-        debug.printf("ERROR init: failed to allocate Bus: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    const uart_ptr = allocator.create(emulation_native.VirtualUart) catch |err| {
-        debug.printf("ERROR init: failed to allocate VirtualUart: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    const timer_ptr = allocator.create(emulation_native.VirtualTimer) catch |err| {
-        debug.printf("ERROR init: failed to allocate VirtualTimer: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    const pic_ptr = allocator.create(emulation_native.VirtualPlic) catch |err| {
-        debug.printf("ERROR init: failed to allocate VirtualPlic: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    const engine_ptr = allocator.create(Engine) catch |err| {
-        debug.printf("ERROR init: failed to allocate Engine: {s}\n", .{@errorName(err)});
-        return err;
-    };
+    const vcore_idx = if (vc.id < MAX_EMULATED_VCORES) vc.id else 0;
+    const vcpu_ptr = &vcpu_pools[vcore_idx];
+    const softtlb_ptr = &softtlb_pools[vcore_idx];
+    const bus_ptr = &bus_pools[vcore_idx];
+    const engine_ptr = &engine_pools[vcore_idx];
 
     const gpa_base = vc.guest.space.base_gpa;
     const hpa_base = vc.guest.space.base_hpa;
@@ -130,8 +119,9 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     if (vc.id == 0) {
         const now = riscv.readTime();
         vcore.time_offset = now;
-        VCpu.time_offset = now;
+        VCpu.time_offset.store(now, .release);
         VCpu.max_guest_time.store(0, .monotonic);
+        VCpu.guest_insn_time.store(10_000_000, .monotonic);
         @memset(@as([*]u8, @ptrCast(vcpu_ptr))[0..@sizeOf(VCpu)], 0);
         vcpu_ptr.pc = @truncate(em.entry);
         vcpu_ptr.id = vc.id;
@@ -143,31 +133,34 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         vcpu_ptr.mideleg = 0xFFFF;
         vcpu_ptr.stvec = 0;
         vcpu_ptr.mtvec = 0;
+        vcpu_ptr.vstimecmp = ~@as(u64, 0);
         vcpu_ptr.misa = (1 << 30) | (1 << 8) | (1 << 12) | (1 << 0) | (1 << 5) | (1 << 3) | (1 << 2);
         vcpu_ptr.running = true;
+
+        @memset(@as([*]u8, @ptrCast(&shared_uart))[0..@sizeOf(emulation_native.VirtualUart)], 0);
+        shared_uart.guest_id = vc.guest_id;
+        shared_uart.out_fn = uartOutputCallback;
+
+        shared_timer = emulation_native.VirtualTimer{};
+        @memset(@as([*]u8, @ptrCast(&shared_pic))[0..@sizeOf(emulation_native.VirtualPlic)], 0);
     } else {
+        @memset(@as([*]u8, @ptrCast(vcpu_ptr))[0..@sizeOf(VCpu)], 0);
         vcpu_ptr.id = vc.id;
         vcpu_ptr.privilege_mode = 1;
         vcpu_ptr.priv_mode = 1;
         vcpu_ptr.medeleg = 0xFFFF;
         vcpu_ptr.mideleg = 0xFFFF;
+        vcpu_ptr.vstimecmp = ~@as(u64, 0);
+        vcpu_ptr.misa = (1 << 30) | (1 << 8) | (1 << 12) | (1 << 0) | (1 << 5) | (1 << 3) | (1 << 2);
         vcpu_ptr.running = false;
     }
 
     softtlb_ptr.initOnPtr(gpa_base, hpa_base, ram_size);
 
-    @memset(@as([*]u8, @ptrCast(uart_ptr))[0..@sizeOf(emulation_native.VirtualUart)], 0);
-    uart_ptr.guest_id = vc.guest_id;
-    uart_ptr.out_fn = uartOutputCallback;
-
-    @memset(@as([*]u8, @ptrCast(timer_ptr))[0..@sizeOf(emulation_native.VirtualTimer)], 0);
-    @memset(@as([*]u8, @ptrCast(pic_ptr))[0..@sizeOf(emulation_native.VirtualPlic)], 0);
-
-    bus_ptr.uart = uart_ptr;
-    bus_ptr.timer = timer_ptr;
-    bus_ptr.pic = pic_ptr;
-
-    const vcore_idx = vc.id % MAX_EMULATED_VCORES;
+    bus_ptr.uart = &shared_uart;
+    bus_ptr.timer = &shared_timer;
+    bus_ptr.pic = &shared_pic;
+    debug.printf("DEBUG emulation.init: jit_buffer_pool[{}] ptr=0x{x}\n", .{ vcore_idx, @intFromPtr(&jit_buffer_pools[vcore_idx]) });
     engine_ptr.initOnPtr(&jit_buffer_pools[vcore_idx], vcpu_ptr, softtlb_ptr, bus_ptr);
 
     if (em.target_arch == .riscv32 and vc.id == 0) {
@@ -241,32 +234,38 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                 if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
                     wake = true;
                     if (vc.exec_path == .emulated and vc.exec_path.emulated.vcpu != null) {
-                        vc.exec_path.emulated.vcpu.?.mip |= (1 << 1); // SSIP
+                        vc.exec_path.emulated.vcpu.?.setMipBit(1); // SSIP
                     }
                 } else {
-                    var target: u64 = std.math.maxInt(u64);
-                    if (vc.timer_scheduled) {
-                        target = vc.timer_target;
-                    }
                     if (vc.exec_path == .emulated and vc.exec_path.emulated.vcpu != null) {
                         const v = vc.exec_path.emulated.vcpu.?;
                         const vtimecmp = v.vstimecmp;
                         const mtimecmp = if (vc.id < 4 and vc.exec_path.emulated.engine != null) vc.exec_path.emulated.engine.?.bus.timer.mtimecmp[vc.id] else ~@as(u64, 0);
                         const guest_target = @min(vtimecmp, mtimecmp);
                         if (guest_target != ~@as(u64, 0)) {
-                            const host_target = guest_target +% vcore.time_offset;
-                            if (host_target < target) target = host_target;
-                        }
-                    }
-                    if (target != std.math.maxInt(u64)) {
-                        if (now >= target) {
-                            wake = true;
-                            vc.timer_scheduled = false;
-                            if (vc.exec_path == .emulated and vc.exec_path.emulated.vcpu != null) {
-                                vc.exec_path.emulated.vcpu.?.mip |= (1 << 5); // STIP
+                            const cur_guest_time = VCpu.readGuestTime();
+                            if (cur_guest_time >= guest_target) {
+                                wake = true;
+                                v.setMipBit(5); // STIP
+                            } else {
+                                // Fast-forward virtual time to the scheduled timer deadline so idle WFI wakes
+                                VCpu.guest_insn_time.store(guest_target, .monotonic);
+                                wake = true;
+                                v.setMipBit(5); // STIP
                             }
-                        } else if (target < min_target) {
-                            min_target = target;
+                        }
+                    } else {
+                        var target: u64 = std.math.maxInt(u64);
+                        if (vc.timer_scheduled) {
+                            target = vc.timer_target;
+                        }
+                        if (target != std.math.maxInt(u64)) {
+                            if (now >= target) {
+                                wake = true;
+                                vc.timer_scheduled = false;
+                            } else if (target < min_target) {
+                                min_target = target;
+                            }
                         }
                     }
                 }
@@ -286,7 +285,7 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
             }
 
             if (current_vc == null) {
-                const safety_target = if (min_target != std.math.maxInt(u64)) min_target else (now + 10_000);
+                const safety_target = now + 10_000;
                 riscv.setTimer(safety_target);
                 riscv.pause();
                 if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
@@ -328,16 +327,47 @@ pub fn run(vc: *vcore.VirtualCore) void {
     gdb_stub.stub.active_vc = vc;
 
     if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
-        vcpu_ptr.mip |= (1 << 1); // SSIP
+        vcpu_ptr.setMipBit(1); // SSIP
     }
 
     const budget: usize = 2_000_000;
+    const insns_before = engine_ptr.total_insn_count;
     const exit_reason = engine_ptr.run(vcpu_ptr, budget);
+    const insns_delta = engine_ptr.total_insn_count -% insns_before;
+    _ = global_insn_count.fetchAdd(insns_delta, .monotonic);
+
+    switch (exit_reason) {
+        .wfi => _ = global_wfi_count.fetchAdd(1, .monotonic),
+        .ecall => _ = global_ecall_count.fetchAdd(1, .monotonic),
+        .yield, .normal => _ = global_yield_count.fetchAdd(1, .monotonic),
+        else => {},
+    }
+
+    const now_time = riscv.readTime();
+    const last_time = last_telemetry_time.load(.monotonic);
+    if (now_time > last_time + 50_000_000) {
+        if (last_telemetry_time.cmpxchgStrong(last_time, now_time, .acq_rel, .monotonic) == null) {
+            const elapsed_secs = (now_time - vcore.time_offset) / 10_000_000;
+            const total_insns = global_insn_count.load(.monotonic);
+            const wfi_c = global_wfi_count.load(.monotonic);
+            const ecall_c = global_ecall_count.load(.monotonic);
+            const yield_c = global_yield_count.load(.monotonic);
+            var total_blocks: usize = 0;
+            for (0..MAX_EMULATED_VCORES) |i| {
+                total_blocks += engine_pools[i].cache.block_count;
+            }
+            debug.printf("\n[HYPERVISOR TELEMETRY] Uptime: {}s | Total Guest Insns: {} | JIT Blocks: {} | Exits: {} WFI, {} ECALL, {} Yield\n\n", .{
+                elapsed_secs,
+                total_insns,
+                total_blocks,
+                wfi_c,
+                ecall_c,
+                yield_c,
+            });
+        }
+    }
 
     em.exit_count += 1;
-    if (em.exit_count <= 20 or em.exit_count % 100 == 0 or vc.id == 0) {
-        debug.printf("EMU PROGRESS: vc={} pc=0x{x} irq_pc=0x{x} satp=0x{x} priv={} exit={s} exits={}\n", .{ vc.id, vcpu_ptr.pc, engine_ptr.last_irq_pc, vcpu_ptr.satp, vcpu_ptr.privilege_mode, @tagName(exit_reason), em.exit_count });
-    }
 
     if (exit_reason == .unhandled or exit_reason == .illegal_instruction) {
         debug.printf("EMU UNHANDLED EXIT: pc=0x{x} last_pc=0x{x} exit={s} cause={} fault_pc=0x{x}\n", .{
