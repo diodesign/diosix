@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const dsa = @import("dsa.zig");
 const guest = @import("guest.zig");
@@ -12,6 +13,7 @@ const native_emu = @import("emulation");
 const glue = @import("emulation.zig");
 
 pub const VirtualCoreID = usize;
+pub var time_offset: u64 = 0;
 
 pub const Priority = enum {
     high,
@@ -22,6 +24,7 @@ pub const VirtualCoreState = enum {
     running,
     ready,
     stopped,
+    blocked,
 };
 
 pub const SchedulerList = dsa.LinkedList(*VirtualCore);
@@ -198,15 +201,15 @@ pub const VirtualCore = struct {
                     .context = std.mem.zeroes(riscv.ThreadContext),
                     .machine = .{
                         .mepc = entry,
-                        .mstatus = (1 << 11) | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPV=1 (Virtualization), VS=Dirty, FS=Dirty
-                        .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP | riscv.HSTATUS.VTW,
-                        .hgatp = 0,
+                        .mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPIE=1, MPV=1 (Virtualization), VS=Dirty, FS=Dirty
+                        .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
+                        .hgatp = if (parent.space.mode == .h_paging) parent.space.paging.?.hgatp(parent.vmid) else 0,
                         .hedeleg = 0xb1fb, // Delegate exceptions to guest: includes breakpoint (bit 3)
-                        .hideleg = 0x644, // Delegate VS interrupts and physical SEIP
+                        .hideleg = 0x1666, // Delegate VS interrupts (VSSIP, VSTIP, VSEIP, SGEIP)
                         .hvip = 0,
                     },
                     .guest_state = .{
-                        .vsstatus = (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
+                        .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
                         .vsie = 0,
                         .vstvec = 0,
                         .vsscratch = 0,
@@ -303,29 +306,31 @@ pub const VirtualCore = struct {
         // Trigger a wake to dequeue it if it's blocked, preventing re-queueing
         _ = @atomicRmw(bool, &self.wfi_blocked, .Xchg, false, .acq_rel);
 
-        // Spin wait until the home CPU removes it from the blocked_queue
-        while ((@as(*volatile ?usize, &self.blocked_on_cpu)).*) |home_cpu| {
-            if (home_cpu < riscv.cpu_to_hart_map.len) {
-                if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
-                    ptr.* = 1; // Send IPI to wake the home CPU
+        if (!builtin.is_test) {
+            // Spin wait until the home CPU removes it from the blocked_queue
+            while ((@as(*volatile ?usize, &self.blocked_on_cpu)).*) |home_cpu| {
+                if (home_cpu < riscv.cpu_to_hart_map.len) {
+                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
+                        ptr.* = 1; // Send IPI to wake the home CPU
+                    }
                 }
+                std.atomic.spinLoopHint();
             }
-            std.atomic.spinLoopHint();
-        }
 
-        // Spin wait until the vcore is no longer running on a physical CPU
-        while ((@as(*volatile ?usize, &self.running_on_cpu)).* != null) {
-            std.atomic.spinLoopHint();
-        }
+            // Spin wait until the vcore is no longer running on a physical CPU
+            while ((@as(*volatile ?usize, &self.running_on_cpu)).* != null) {
+                std.atomic.spinLoopHint();
+            }
 
-        // Spin wait until the vcore is no longer in a blocked queue
-        while ((@as(*volatile ?usize, &self.blocked_on_cpu)).* != null) {
-            std.atomic.spinLoopHint();
-        }
+            // Spin wait until the vcore is no longer in a blocked queue
+            while ((@as(*volatile ?usize, &self.blocked_on_cpu)).* != null) {
+                std.atomic.spinLoopHint();
+            }
 
-        // Spin wait until the vcore is removed from any run_queue
-        while ((@as(*volatile bool, &self.is_queued)).*) {
-            std.atomic.spinLoopHint();
+            // Spin wait until the vcore is removed from any run_queue
+            while ((@as(*volatile bool, &self.is_queued)).*) {
+                std.atomic.spinLoopHint();
+            }
         }
 
         switch (self.exec_path) {
@@ -389,8 +394,7 @@ pub const VirtualCore = struct {
         const old = @cmpxchgStrong(bool, &self.wfi_blocked, true, false, .acq_rel, .monotonic);
         if (old == null) {
             // We won — set the vcore ready for scheduling.
-            _ = @cmpxchgStrong(VirtualCoreState, &self.state, .running, .ready, .seq_cst, .seq_cst);
-            // It might already be .ready, which is fine.
+            self.state = .ready;
             if (self.exec_path == .emulated) {
                 const host_time = riscv.readTime();
                 if (host_time > self.virtual_time) {

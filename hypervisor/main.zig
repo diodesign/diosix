@@ -50,8 +50,8 @@ var global_dtb: [*]u8 = undefined;
 /// Thread-safe entry point for the hypervisor.
 /// hartid: Physical CPU hart ID passed by OpenSBI/bootloader in a0
 /// fdt_paddr: Physical address of host FDT/DTB blob passed in a1
-pub export fn main(hartid: usize, fdt_paddr: usize) void {
-    const cpu_core_id = hartid;
+pub export fn main(cpu_core_id: usize, fdt_paddr: usize) void {
+    const hw_hartid = riscv.readMhartid();
     const dtb = @as([*]u8, @ptrFromInt(fdt_paddr));
 
     if (cpu_core_id == BootCpuID) {
@@ -73,9 +73,9 @@ pub export fn main(hartid: usize, fdt_paddr: usize) void {
     }
     cpu_ctx.in_m_mode = true; // Boot code runs in M-mode
 
-    cpu_ctx.hardware_hart_id = hartid;
+    cpu_ctx.hardware_hart_id = hw_hartid;
     if (cpu_core_id < riscv.cpu_to_hart_map.len) {
-        riscv.cpu_to_hart_map[cpu_core_id] = hartid;
+        riscv.cpu_to_hart_map[cpu_core_id] = hw_hartid;
     }
 
     // Initialize the heap allocator for this core.
@@ -94,7 +94,7 @@ pub export fn main(hartid: usize, fdt_paddr: usize) void {
             };
 
             features_probed.store(true, .release);
-            debug.printf("Physical boot CPU hart {} finished initialization, releasing other cores\n", .{hartid});
+            debug.printf("Physical boot CPU ID {} (hardware hart {}) finished initialization, releasing other cores\n", .{ cpu_core_id, hw_hartid });
             boot_complete_flag.store(true, .release);
         },
 
@@ -110,7 +110,7 @@ pub export fn main(hartid: usize, fdt_paddr: usize) void {
 
     xint.initCpuFeatures();
 
-    debug.printf("Physical CPU hart ID {} ready for work\n", .{hartid});
+    debug.printf("Physical CPU ID {} (hardware hart ID {}) ready for work\n", .{ cpu_core_id, hw_hartid });
     while (true) {
         if (pcore.this().active_vcore == null) {
             scheduler.schedule();
@@ -143,21 +143,24 @@ pub export fn main(hartid: usize, fdt_paddr: usize) void {
                         }
                     }
 
+                    if (riscv.CLINT.msip(pcore.this().hardware_hart_id)) |ptr| {
+                        ptr.* = 0;
+                    }
                     pcore.this().in_m_mode = false;
                     pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
                 },
                 .emulated => {
                     vc.exec_path.emulated.context[@intFromEnum(riscv.Register.a0)] = @intFromPtr(vc);
                     vc.exec_path.emulated.context[@intFromEnum(riscv.Register.tp)] = @intFromPtr(pcore.this());
-                    pcore.this().in_m_mode = false;
+                    pcore.this().in_m_mode = true;
                     pcore.hw_run_vcore(vc.getNativeContext(), vc.getNativeMachine(), vc.getNativeGuestState());
                 },
             }
+        } else {
+            riscv.setTimer(riscv.TIMER_INFINITY);
+            gdb_stub.stub.pollSerialInput();
+            riscv.pause(); // WFI — sleep only when no active vcore
         }
-
-        riscv.setTimer(riscv.TIMER_INFINITY);
-        gdb_stub.stub.pollSerialInput();
-        riscv.pause(); // WFI — sleep until IPI
     }
 }
 

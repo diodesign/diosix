@@ -1748,12 +1748,12 @@ The dynarec engine, code cache, block chainer, and tiered compilation infrastruc
 - [x] SBI call interception.
 - [x] Secondary vcore boot (HSM HART_START).
 - [x] MMIO cache bypass in SoftTLB.
-- [ ] **Interrupt-driven execution model** (remove budget, replace with hardware timer preemption).
-- [ ] **Block chaining** (direct, conditional, indirect with inline cache).
-- [ ] **`fence.i` after translation** (I-cache coherence).
-- [ ] **Self-modifying code detection** (write-protect translated pages + `sfence.vma` hook).
-- [ ] **Emulated vcores as first-class scheduler entities** (not sub-vcores).
-- [ ] **Host atomic operations** for guest AMO/LR/SC.
+- [x] **Interrupt-driven execution model** (hardware timer preemption & time offset sync).
+- [x] **Block chaining** (direct, conditional, indirect with inline cache).
+- [x] **`fence.i` after translation** (I-cache coherence).
+- [x] **Self-modifying code detection** (write-protect translated pages + `sfence.vma` hook).
+- [x] **Emulated vcores as first-class scheduler entities** (not sub-vcores).
+- [x] **Host atomic operations** for guest AMO/LR/SC.
 - [ ] Linux riscv32 boots to `login:`.
 
 ### Phase 3: Performance & Hardening

@@ -9,8 +9,8 @@
 
 const std = @import("std");
 const emulation_native = @import("emulation");
-const VCpu = emulation_native.VCpu;
-const Engine = emulation_native.Engine;
+pub const VCpu = emulation_native.VCpu;
+pub const Engine = emulation_native.Engine;
 const vcore = @import("../../../../core/vcore.zig");
 const pcore = @import("../../../../core/pcore.zig");
 const guest = @import("../../../../core/guest.zig");
@@ -37,9 +37,10 @@ pub fn initRegisters(vcpu: *VCpu, entry: usize, dtb: usize, vcore_id: usize) voi
 
     vcpu.medeleg = MEDELEG_DEFAULT;
     vcpu.mideleg = MIDELEG_DEFAULT;
+    vcpu.privilege_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
     vcpu.priv_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
     vcpu.softtlb.privilege_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
-    vcpu.mstatus = (1 << 11) | (1 << 7) | (1 << 21); // MPP=S, MPIE=1, TW=1
+    vcpu.mstatus = (1 << 11) | (1 << 8) | (1 << 7) | (1 << 5) | (1 << 21) | (3 << 13) | (3 << 9); // MPP=S, SPP=S, MPIE=1, SPIE=1, TW=1, FS=Dirty, VS=Dirty
     vcpu.time = riscv.readTime();
 }
 

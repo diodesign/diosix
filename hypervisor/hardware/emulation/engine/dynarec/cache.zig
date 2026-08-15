@@ -8,8 +8,8 @@ const block_mod = @import("block.zig");
 const TranslationBlock = block_mod.TranslationBlock;
 const rv64 = @import("../emitters/rv64.zig");
 
-pub const MAX_BLOCKS: usize = 4096;
-pub const JIT_CACHE_SIZE: usize = 2 * 1024 * 1024; // 2MB JIT code buffer pool
+pub const MAX_BLOCKS: usize = 2048;
+pub const JIT_CACHE_SIZE: usize = 8 * 1024 * 1024; // 8MB JIT code buffer pool
 
 pub const Cache = struct {
     code_buffer: []u8,
@@ -24,6 +24,13 @@ pub const Cache = struct {
             .code_offset = 0,
             .block_count = 0,
         };
+    }
+
+    pub fn initOnPtr(self: *Cache, buffer: []u8) void {
+        self.code_buffer = buffer;
+        self.code_offset = 0;
+        self.block_count = 0;
+        @memset(std.mem.sliceAsBytes(self.hash_table[0..]), 0);
     }
 
     fn hash(guest_pc: u32) usize {
@@ -65,10 +72,43 @@ pub const Cache = struct {
         rv64.fenceI();
     }
 
+    pub fn chainBlock(self: *Cache, new_tb: *TranslationBlock) void {
+        // Forward chaining: patch outgoing branches to already compiled targets
+        if (new_tb.exit_branch1) |b1| {
+            if (self.lookup(b1.target_guest_pc)) |target| {
+                new_tb.patchBranch(0, target);
+            }
+        }
+        if (new_tb.exit_branch2) |b2| {
+            if (self.lookup(b2.target_guest_pc)) |target| {
+                new_tb.patchBranch(1, target);
+            }
+        }
+
+        // Backward chaining: patch incoming branches from existing blocks waiting for new_tb
+        for (self.blocks[0..self.block_count]) |*existing| {
+            if (existing == new_tb) continue;
+            if (existing.exit_branch1) |b1| {
+                if (existing.chained_block1 == null and b1.target_guest_pc == new_tb.guest_pc) {
+                    existing.patchBranch(0, new_tb);
+                }
+            }
+            if (existing.exit_branch2) |b2| {
+                if (existing.chained_block2 == null and b2.target_guest_pc == new_tb.guest_pc) {
+                    existing.patchBranch(1, new_tb);
+                }
+            }
+        }
+    }
+
     pub fn clear(self: *Cache) void {
         self.code_offset = 0;
         self.block_count = 0;
         @memset(std.mem.sliceAsBytes(self.hash_table[0..]), 0);
         rv64.fenceI();
+    }
+
+    pub fn flush(self: *Cache) void {
+        self.clear();
     }
 };

@@ -22,6 +22,9 @@ pub const Instruction = union(enum) {
     or_: struct { rd: u5, rs1: u5, rs2: u5 },
     and_: struct { rd: u5, rs1: u5, rs2: u5 },
     mul: struct { rd: u5, rs1: u5, rs2: u5 },
+    mulh: struct { rd: u5, rs1: u5, rs2: u5 },
+    mulhsu: struct { rd: u5, rs1: u5, rs2: u5 },
+    mulhu: struct { rd: u5, rs1: u5, rs2: u5 },
     div: struct { rd: u5, rs1: u5, rs2: u5 },
     divu: struct { rd: u5, rs1: u5, rs2: u5 },
     rem: struct { rd: u5, rs1: u5, rs2: u5 },
@@ -84,6 +87,25 @@ pub const Instruction = union(enum) {
     csrrsi: struct { rd: u5, uimm: u5, csr: u12 },
     csrrci: struct { rd: u5, uimm: u5, csr: u12 },
 
+    // Atomic instructions (A-extension)
+    lr_w: struct { rd: u5, rs1: u5, aq: u1, rl: u1 },
+    sc_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amoswap_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amoadd_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amoxor_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amoand_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amoor_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amomin_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amomax_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amominu_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+    amomaxu_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
+
+    // Vector instructions
+    vsetvli: struct { rd: u5, rs1: u5, vtype: u12 },
+    vload: struct { vd: u5, rs1: u5, width: u3 },
+    vstore: struct { vs3: u5, rs1: u5, width: u3 },
+    vector_op: struct { rd: u5, rs1: u5, rs2: u5 },
+
     unknown: u32,
 };
 
@@ -104,11 +126,14 @@ pub fn decompressRvc(code16: u16) ?u32 {
     const op = code16 & 0x3;
     const funct3 = (code16 >> 13) & 0x7;
 
-    switch (op) {
+    return switch (op) {
         0b00 => switch (funct3) {
             0b000 => {
                 // C.ADDI4SPN
-                const nzuimm = (((code16 >> 7) & 0x3B) | ((code16 >> 11) & 0x4) | ((code16 >> 5) & 0x1) | ((code16 >> 6) & 0x2)) << 2;
+                const nzuimm: u32 = (((code16 >> 6) & 1) << 2) |
+                                    (((code16 >> 5) & 1) << 3) |
+                                    (((code16 >> 11) & 3) << 4) |
+                                    (((code16 >> 7) & 15) << 6);
                 const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 if (nzuimm == 0) return null;
                 // addi rd, x2, nzuimm
@@ -116,7 +141,9 @@ pub fn decompressRvc(code16: u16) ?u32 {
             },
             0b010 => {
                 // C.LW
-                const offset: u32 = (((code16 >> 6) & 0x1) | ((code16 >> 10) & 0x7) | ((code16 >> 5) & 0x1)) << 2;
+                const offset: u32 = (((code16 >> 6) & 1) << 2) |
+                                    (((code16 >> 10) & 7) << 3) |
+                                    (((code16 >> 5) & 1) << 6);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // lw rd, offset(rs1)
@@ -124,7 +151,9 @@ pub fn decompressRvc(code16: u16) ?u32 {
             },
             0b110 => {
                 // C.SW
-                const offset: u32 = (((code16 >> 6) & 0x1) | ((code16 >> 10) & 0x7) | ((code16 >> 5) & 0x1)) << 2;
+                const offset: u32 = (((code16 >> 6) & 1) << 2) |
+                                    (((code16 >> 10) & 7) << 3) |
+                                    (((code16 >> 5) & 1) << 6);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const rs2 = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // sw rs2, offset(rs1)
@@ -145,7 +174,14 @@ pub fn decompressRvc(code16: u16) ?u32 {
             },
             0b001 => {
                 // C.JAL
-                const offset = (((code16 >> 3) & 0x7) | ((code16 >> 11) & 0x1) | ((code16 >> 2) & 0x1) | ((code16 >> 7) & 0x1) | ((code16 >> 6) & 0x1) | ((code16 >> 9) & 0x2) | ((code16 >> 8) & 0x1) | ((code16 >> 12) & 0x1)) << 1;
+                const offset: u32 = (((code16 >> 3) & 7) << 1) |
+                                    (((code16 >> 11) & 1) << 4) |
+                                    (((code16 >> 2) & 1) << 5) |
+                                    (((code16 >> 7) & 1) << 6) |
+                                    (((code16 >> 6) & 1) << 7) |
+                                    (((code16 >> 9) & 3) << 8) |
+                                    (((code16 >> 8) & 1) << 10) |
+                                    (((code16 >> 12) & 1) << 11);
                 const imm = signExtend(offset, 12);
                 const uimm = @as(u32, @bitCast(imm)) & 0x1FFFFF;
                 const imm20: u32 = (uimm >> 20) & 1;
@@ -168,7 +204,12 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 const rd = @as(u5, @truncate((code16 >> 7) & 0x1F));
                 if (rd == 2) {
                     // C.ADDI16SP
-                    const offset = (((code16 >> 6) & 0x1) | ((code16 >> 2) & 0x1) | ((code16 >> 5) & 0x1) | ((code16 >> 3) & 0x3) | ((code16 >> 12) & 0x1)) << 4;
+                    const offset: u32 = (((code16 >> 6) & 1) << 4) |
+                                        (((code16 >> 2) & 1) << 5) |
+                                        (((code16 >> 5) & 1) << 6) |
+                                        (((code16 >> 3) & 3) << 7) |
+                                        (((code16 >> 4) & 1) << 8) |
+                                        (((code16 >> 12) & 1) << 9);
                     const imm = signExtend(offset, 10);
                     const uimm = @as(u32, @bitCast(imm)) & 0xFFF;
                     return 0x13 | (2 << 7) | (2 << 15) | (uimm << 20);
@@ -180,9 +221,50 @@ pub fn decompressRvc(code16: u16) ?u32 {
                     return 0x37 | (@as(u32, rd) << 7) | (uimm << 12);
                 }
             },
+            0b100 => {
+                const funct2 = @as(u2, @truncate((code16 >> 10) & 0x3));
+                const rd = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
+                switch (funct2) {
+                    0b00 => {
+                        // C.SRLI: srli rd', rd', shamt
+                        const shamt: u32 = ((code16 >> 2) & 0x1F) | (((code16 >> 12) & 0x1) << 5);
+                        return 0x13 | (@as(u32, rd) << 7) | (0x5 << 12) | (@as(u32, rd) << 15) | (shamt << 20);
+                    },
+                    0b01 => {
+                        // C.SRAI: srai rd', rd', shamt
+                        const shamt: u32 = ((code16 >> 2) & 0x1F) | (((code16 >> 12) & 0x1) << 5);
+                        return 0x13 | (@as(u32, rd) << 7) | (0x5 << 12) | (@as(u32, rd) << 15) | (shamt << 20) | (0x20 << 25);
+                    },
+                    0b10 => {
+                        // C.ANDI: andi rd', rd', imm
+                        const imm6 = ((code16 >> 2) & 0x1F) | (((code16 >> 12) & 0x1) << 5);
+                        const imm = signExtend(imm6, 6);
+                        const uimm = @as(u32, @bitCast(imm)) & 0xFFF;
+                        return 0x13 | (@as(u32, rd) << 7) | (0x7 << 12) | (@as(u32, rd) << 15) | (uimm << 20);
+                    },
+                    0b11 => {
+                        const rs2 = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
+                        const sub_op = (code16 >> 5) & 0x3;
+                        return switch (sub_op) {
+                            0b00 => 0x33 | (@as(u32, rd) << 7) | (0x0 << 12) | (@as(u32, rd) << 15) | (@as(u32, rs2) << 20) | (0x20 << 25), // sub
+                            0b01 => 0x33 | (@as(u32, rd) << 7) | (0x4 << 12) | (@as(u32, rd) << 15) | (@as(u32, rs2) << 20), // xor
+                            0b10 => 0x33 | (@as(u32, rd) << 7) | (0x6 << 12) | (@as(u32, rd) << 15) | (@as(u32, rs2) << 20), // or
+                            0b11 => 0x33 | (@as(u32, rd) << 7) | (0x7 << 12) | (@as(u32, rd) << 15) | (@as(u32, rs2) << 20), // and
+                            else => null,
+                        };
+                    },
+                }
+            },
             0b101 => {
                 // C.J
-                const offset = (((code16 >> 3) & 0x7) | ((code16 >> 11) & 0x1) | ((code16 >> 2) & 0x1) | ((code16 >> 7) & 0x1) | ((code16 >> 6) & 0x1) | ((code16 >> 9) & 0x2) | ((code16 >> 8) & 0x1) | ((code16 >> 12) & 0x1)) << 1;
+                const offset: u32 = (((code16 >> 3) & 7) << 1) |
+                                    (((code16 >> 11) & 1) << 4) |
+                                    (((code16 >> 2) & 1) << 5) |
+                                    (((code16 >> 7) & 1) << 6) |
+                                    (((code16 >> 6) & 1) << 7) |
+                                    (((code16 >> 9) & 3) << 8) |
+                                    (((code16 >> 8) & 1) << 10) |
+                                    (((code16 >> 12) & 1) << 11);
                 const imm = signExtend(offset, 12);
                 const uimm = @as(u32, @bitCast(imm)) & 0x1FFFFF;
                 const imm20: u32 = (uimm >> 20) & 1;
@@ -194,7 +276,11 @@ pub fn decompressRvc(code16: u16) ?u32 {
             },
             0b110 => {
                 // C.BEQZ
-                const offset = (((code16 >> 3) & 0x3) | ((code16 >> 10) & 0x3) | ((code16 >> 2) & 0x1) | ((code16 >> 5) & 0x2) | ((code16 >> 12) & 0x1)) << 1;
+                const offset: u32 = (((code16 >> 3) & 3) << 1) |
+                                    (((code16 >> 10) & 3) << 3) |
+                                    (((code16 >> 2) & 1) << 5) |
+                                    (((code16 >> 5) & 3) << 6) |
+                                    (((code16 >> 12) & 1) << 8);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const imm = signExtend(offset, 9);
                 const uimm = @as(u32, @bitCast(imm)) & 0x1FFF;
@@ -207,7 +293,11 @@ pub fn decompressRvc(code16: u16) ?u32 {
             },
             0b111 => {
                 // C.BNEZ
-                const offset = (((code16 >> 3) & 0x3) | ((code16 >> 10) & 0x3) | ((code16 >> 2) & 0x1) | ((code16 >> 5) & 0x2) | ((code16 >> 12) & 0x1)) << 1;
+                const offset: u32 = (((code16 >> 3) & 3) << 1) |
+                                    (((code16 >> 10) & 3) << 3) |
+                                    (((code16 >> 2) & 1) << 5) |
+                                    (((code16 >> 5) & 3) << 6) |
+                                    (((code16 >> 12) & 1) << 8);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const imm = signExtend(offset, 9);
                 const uimm = @as(u32, @bitCast(imm)) & 0x1FFF;
@@ -231,7 +321,9 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b010 => {
                 // C.LWSP
                 const rd = @as(u5, @truncate((code16 >> 7) & 0x1F));
-                const offset: u32 = (((code16 >> 4) & 0x7) | ((code16 >> 12) & 0x1) | ((code16 >> 2) & 0x3)) << 2;
+                const offset: u32 = (((code16 >> 4) & 7) << 2) |
+                                    (((code16 >> 12) & 1) << 5) |
+                                    (((code16 >> 2) & 3) << 6);
                 // lw rd, offset(x2)
                 return 0x03 | (@as(u32, rd) << 7) | (0x2 << 12) | (2 << 15) | (offset << 20);
             },
@@ -260,7 +352,8 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b110 => {
                 // C.SWSP
                 const rs2 = @as(u5, @truncate((code16 >> 2) & 0x1F));
-                const offset = (((code16 >> 9) & 0x3) | ((code16 >> 7) & 0xF)) << 2;
+                const offset: u32 = (((code16 >> 9) & 15) << 2) |
+                                    (((code16 >> 7) & 3) << 6);
                 const imm5: u32 = offset & 0x1F;
                 const imm7: u32 = (offset >> 5) & 0x7F;
                 // sw rs2, offset(x2)
@@ -269,7 +362,7 @@ pub fn decompressRvc(code16: u16) ?u32 {
             else => return null,
         },
         else => return null,
-    }
+    };
 }
 
 /// Main entry point: Decode standard 32-bit RV32I or decompressed 16-bit RV32C instruction
@@ -283,7 +376,7 @@ pub fn decode(raw_code: u32) DecodedInsn {
             code = decompressed;
             len = 2;
         } else {
-            return .{ .insn = .{ .unknown = raw_code }, .len = 2 };
+            return .{ .insn = .{ .unknown = code }, .len = 2 };
         }
     }
 
@@ -315,9 +408,9 @@ pub fn decode(raw_code: u32) DecodedInsn {
     const parsed: Instruction = switch (opcode) {
         0x33 => switch (funct3) {
             0x0 => if (funct7 == 0x20) .{ .sub = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else if (funct7 == 0x01) .{ .mul = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else .{ .add = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
-            0x1 => .{ .sll = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
-            0x2 => .{ .slt = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
-            0x3 => .{ .sltu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
+            0x1 => if (funct7 == 0x01) .{ .mulh = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else .{ .sll = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
+            0x2 => if (funct7 == 0x01) .{ .mulhsu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else .{ .slt = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
+            0x3 => if (funct7 == 0x01) .{ .mulhu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else .{ .sltu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
             0x4 => if (funct7 == 0x01) .{ .div = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else .{ .xor_ = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
             0x5 => if (funct7 == 0x20) .{ .sra = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else if (funct7 == 0x01) .{ .divu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else .{ .srl = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
             0x6 => if (funct7 == 0x01) .{ .rem = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } } else .{ .or_ = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
@@ -361,13 +454,22 @@ pub fn decode(raw_code: u32) DecodedInsn {
         0x37 => .{ .lui = .{ .rd = rd, .imm = u_imm } },
         0x17 => .{ .auipc = .{ .rd = rd, .imm = u_imm } },
         0x73 => switch (funct3) {
-            0x0 => switch (i_imm) {
-                0x000 => .ecall,
-                0x001 => .ebreak,
-                0x102 => .sret,
-                0x302 => .mret,
-                0x105 => .{ .sfence_vma = .{ .rs1 = rs1, .rs2 = rs2 } },
-                0x104 => .wfi,
+            0x0 => switch (i_imm >> 5) {
+                0x000 => switch (i_imm & 0x1F) {
+                    0x00 => .ecall,
+                    0x01 => .ebreak,
+                    else => .{ .unknown = code },
+                },
+                0x008 => switch (i_imm & 0x1F) {
+                    0x02 => .sret,
+                    0x05 => .wfi,
+                    else => .{ .unknown = code },
+                },
+                0x018 => switch (i_imm & 0x1F) {
+                    0x02 => .mret,
+                    else => .{ .unknown = code },
+                },
+                0x009 => .{ .sfence_vma = .{ .rs1 = rs1, .rs2 = rs2 } },
                 else => .{ .unknown = code },
             },
             0x1 => .{ .csrrw = .{ .rd = rd, .rs1 = rs1, .csr = @truncate(@as(u32, @bitCast(i_imm))) } },
@@ -382,6 +484,31 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x0 => .fence,
             0x1 => .fence_i,
             else => .{ .unknown = code },
+        },
+        0x07 => .{ .vload = .{ .vd = rd, .rs1 = rs1, .width = funct3 } },
+        0x27 => .{ .vstore = .{ .vs3 = rd, .rs1 = rs1, .width = funct3 } },
+        0x57 => switch (funct3) {
+            0x7 => .{ .vsetvli = .{ .rd = rd, .rs1 = rs1, .vtype = @truncate(@as(u32, @bitCast(i_imm))) } },
+            else => .{ .vector_op = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
+        },
+        0x2F => {
+            const funct5 = @as(u5, @truncate((code >> 27) & 0x1F));
+            const aq = @as(u1, @truncate((code >> 26) & 0x1));
+            const rl = @as(u1, @truncate((code >> 25) & 0x1));
+            return switch (funct5) {
+                0x01 => .{ .insn = .{ .amoswap_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x00 => .{ .insn = .{ .amoadd_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x02 => .{ .insn = .{ .lr_w = .{ .rd = rd, .rs1 = rs1, .aq = aq, .rl = rl } }, .len = len },
+                0x03 => .{ .insn = .{ .sc_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x04 => .{ .insn = .{ .amoxor_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x0C => .{ .insn = .{ .amoand_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x08 => .{ .insn = .{ .amoor_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x10 => .{ .insn = .{ .amomin_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x14 => .{ .insn = .{ .amomax_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x18 => .{ .insn = .{ .amominu_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                0x1C => .{ .insn = .{ .amomaxu_w = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2, .aq = aq, .rl = rl } }, .len = len },
+                else => .{ .insn = .{ .unknown = code }, .len = len },
+            };
         },
         else => .{ .unknown = code },
     };

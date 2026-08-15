@@ -56,7 +56,9 @@ pub const SiFiveTest = struct {
 
 const is_test = builtin.is_test;
 
-pub const MAX_PHYS_CORES = 256;
+pub const MAX_PHYS_CORES = 16;
+pub const CPU_SLAB_SHIFT = 22;
+pub const CPU_SLAB_SIZE = 1 << CPU_SLAB_SHIFT;
 
 // Timer configuration constants
 pub const TIMER_INFINITY: u64 = 0xffffffffffffffff;
@@ -215,6 +217,7 @@ pub const CpuContext = struct {
     // cleared before mret to S-mode. Used by IRQ-safe spinlocks to decide
     // whether mstatus CSR access is safe (only valid from M-mode).
     in_m_mode: bool,
+    in_emulation_runner: bool = false,
 
     // The vcore that went WFI-blocked on this physical core.
     // Only THIS core monitors its timer to avoid thundering herd.
@@ -770,7 +773,6 @@ pub fn auditCpuFeatures() !void {
 pub fn setTimer(stime: u64) void {
     if (is_test) return;
     const pcpu = getCPUContext();
-    if (pcpu.last_timer_val == stime) return;
     pcpu.last_timer_val = stime;
 
     const drivers = @import("../../../../core/drivers.zig");
@@ -801,7 +803,7 @@ pub fn isHostTp(tp_val: usize) bool {
 
     const hv_end = @intFromPtr(&__hypervisor_end);
     const max_cores = MAX_PHYS_CORES;
-    const cpu_slab_shift = 20; // 1MB per CPU slab
+    const cpu_slab_shift = CPU_SLAB_SHIFT; // 4MB per CPU slab
     const max_slab_end = hv_end + (max_cores << cpu_slab_shift);
 
     if (tp_val < hv_end or tp_val >= max_slab_end) return false;
@@ -914,6 +916,21 @@ pub inline fn readVsie() usize {
 pub inline fn writeVsie(val: usize) void {
     if (is_test) return;
     asm volatile ("csrw vsie, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
+pub inline fn readVsip() usize {
+    if (is_test) return 0;
+    return asm volatile ("csrr %[ret], vsip"
+        : [ret] "=r" (-> usize),
+    );
+}
+
+pub inline fn writeVsip(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw vsip, %[val]"
         :
         : [val] "r" (val),
     );

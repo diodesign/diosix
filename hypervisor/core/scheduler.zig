@@ -46,6 +46,7 @@ pub fn initCpu() void {
     pc.last_trap_pc = 0;
     pc.last_trap_val = 0;
     pc.trap_loop_count = 0;
+    pc.in_emulation_runner = false;
 }
 
 // Add a virtual core to a run queue (local preferred, global for overflow).
@@ -74,7 +75,7 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     vc.last_queued_time = riscv.readTime();
 
     const pc = pcore.this();
-    const is_local = (vc.id == pc.cpu_core_id) or (if (pc.active_vcore) |active| @intFromPtr(active) == @intFromPtr(vc) else false) or builtin.is_test;
+    const is_local = (vc.id == pc.cpu_core_id) or builtin.is_test;
 
     vc.scheduler_node.contents = vc;
     if (is_local and pc.run_queue_count < MAX_LOCAL_VCORES) {
@@ -87,11 +88,16 @@ pub fn queue(vc: *vcore.VirtualCore) void {
         guard.get().run_queue.pushEnd(&vc.scheduler_node);
         guard.release();
 
-        // Wake up active physical CPUs so any idle core can pick up the work
-        for (0..riscv.MAX_PHYS_CORES) |hw_hart| {
-            if (hw_hart != pc.hardware_hart_id) {
-                if (riscv.CLINT.msip(hw_hart)) |ptr| {
-                    ptr.* = 1;
+        // Wake up idle physical CPUs so an idle core can pick up the work
+        for (0..riscv.MAX_PHYS_CORES) |target_cpu| {
+            if (riscv.cpu_contexts[target_cpu]) |target_ctx| {
+                if (target_ctx.active_vcore == null) {
+                    const hw_hart = riscv.cpu_to_hart_map[target_cpu];
+                    if (hw_hart != pc.hardware_hart_id) {
+                        if (riscv.CLINT.msip(hw_hart)) |ptr| {
+                            ptr.* = 1;
+                        }
+                    }
                 }
             }
         }
@@ -122,11 +128,15 @@ pub fn pickNext() ?*vcore.VirtualCore {
         it = node.next;
     }
 
-    // 2. Otherwise pick any compatible vcore from local run queue
+    // 2. Otherwise pick any compatible vcore from local run queue (only if not dedicated to another core)
     it = pc.run_queue.start;
     while (it) |node| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
         if (vc.running_on_cpu != null) {
+            it = node.next;
+            continue;
+        }
+        if (!builtin.is_test and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
             it = node.next;
             continue;
         }
@@ -163,11 +173,15 @@ pub fn pickNext() ?*vcore.VirtualCore {
         g_it = node.next;
     }
 
-    // 4. Fallback: pull any compatible vcore from global queue
+    // 4. Fallback: pull any compatible vcore from global queue (only if not dedicated to another physical CPU)
     g_it = state.run_queue.start;
     while (g_it) |node| {
         const vc: *vcore.VirtualCore = node.contents;
         if (vc.running_on_cpu != null) {
+            g_it = node.next;
+            continue;
+        }
+        if (!builtin.is_test and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
             g_it = node.next;
             continue;
         }
@@ -205,6 +219,10 @@ pub fn schedule() void {
 
     if (pickNext()) |next_vc| {
         pcore.contextSwitch(next_vc);
+        if (next_vc.exec_path == .emulated and !pc.in_emulation_runner) {
+            pc.in_emulation_runner = true;
+            @import("emulation.zig").emulatedRunnerSMode(next_vc);
+        }
     } else {
         // Nothing to run.
         if (pc.cpu_core_id == 0 and pc.trap_count < 1) {
@@ -227,6 +245,9 @@ pub fn yield(vc: *vcore.VirtualCore) void {
             vc.vruntime += delta;
             queue(vc);
         }
+    }
+    if (pickNext()) |next_vc| {
+        pcore.contextSwitch(next_vc);
     }
 }
 

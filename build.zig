@@ -84,6 +84,7 @@ pub fn build(b: *std.Build) !void {
     const emulation_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/hardware/emulation/mod.zig"),
     });
+    emulation_module.addImport("interface", interface_module);
 
     const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/main.zig"),
@@ -198,12 +199,8 @@ pub fn build(b: *std.Build) !void {
     defer qemu_args.deinit(b.allocator);
 
     try qemu_args.append(b.allocator, "qemu-system-riscv64");
-    if (enable_gdb) {
-        try qemu_args.append(b.allocator, "-serial");
-        try qemu_args.append(b.allocator, "tcp::1234,server,nowait");
-    } else {
-        try qemu_args.append(b.allocator, "-nographic");
-    }
+    try qemu_args.append(b.allocator, "-nographic");
+    try qemu_args.append(b.allocator, "-s");
     try qemu_args.append(b.allocator, "-machine");
     try qemu_args.append(b.allocator, "virt");
     try qemu_args.append(b.allocator, "-cpu");

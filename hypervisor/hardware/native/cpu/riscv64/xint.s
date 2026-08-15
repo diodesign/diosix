@@ -34,10 +34,15 @@ hw_xint_init:
     li      t0, 0xb1fb
     csrrw   x0, medeleg, t0
   
-    # 0x133 = delegate the following interrupts to their modes (excluding external interrupts):
-    # bit 0: User software interrupt
-    # bit 1: Supervisor software interrupt
-    li      t0, 0x133
+    # Delegate supervisor and virtual supervisor interrupts:
+    # bit 1: Supervisor software interrupt (SSIP)
+    # bit 2: Virtual supervisor software interrupt (VSSIP)
+    # bit 5: Supervisor timer interrupt (STIP)
+    # bit 6: Virtual supervisor timer interrupt (VSTIP)
+    # bit 9: Supervisor external interrupt (SEIP)
+    # bit 10: Virtual supervisor external interrupt (VSEIP)
+    # bit 12: Supervisor guest external interrupt (SGEIP)
+    li      t0, 0x1666
     csrrw   x0, mideleg, t0
 
     ret
@@ -82,9 +87,8 @@ xint_machine_entry_handler:
     addi    t0, sp, XINT_REGISTER_FRAME_SIZE
     csrrw   x0, mscratch, t0
 
-    # Also restore tp to the hypervisor's CPU context (which is what mscratch points to)
-    # so that pcore.this() works correctly inside xint_handler
-    csrr    tp, mscratch
+    # Ensure tp points to this CPU's host CpuContext
+    mv      tp, t0
 
 continue:
     # pass current sp to exception/hw handler as a pointer in a0. this'll allow

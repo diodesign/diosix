@@ -15,6 +15,7 @@ pub const Opcode = enum(u7) {
     auipc = 0x17,
     op_imm_32 = 0x1B,
     store = 0x23,
+    amo = 0x2F,
     op = 0x33,
     lui = 0x37,
     op_32 = 0x3B,
@@ -172,6 +173,32 @@ pub fn jalr(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.
 pub fn lui(rd: u5, imm: i20) u32 { return encodeU(@intFromEnum(Opcode.lui), rd, imm); }
 pub fn auipc(rd: u5, imm: i20) u32 { return encodeU(@intFromEnum(Opcode.auipc), rd, imm); }
 
+// ---- Atomic Instructions (RV32A/RV64A) ----
+pub fn encodeA(funct5: u5, aq: u1, rl: u1, rd: u5, rs1: u5, rs2: u5) u32 {
+    const opcode: u7 = @intFromEnum(Opcode.amo);
+    const funct3: u3 = 0x2; // .w (32-bit word)
+    return @as(u32, opcode) |
+        (@as(u32, rd) << 7) |
+        (@as(u32, funct3) << 12) |
+        (@as(u32, rs1) << 15) |
+        (@as(u32, rs2) << 20) |
+        (@as(u32, rl) << 25) |
+        (@as(u32, aq) << 26) |
+        (@as(u32, funct5) << 27);
+}
+
+pub fn lr_w(rd: u5, rs1: u5, aq: u1, rl: u1) u32 { return encodeA(0x02, aq, rl, rd, rs1, 0); }
+pub fn sc_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x03, aq, rl, rd, rs1, rs2); }
+pub fn amoswap_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x01, aq, rl, rd, rs1, rs2); }
+pub fn amoadd_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x00, aq, rl, rd, rs1, rs2); }
+pub fn amoxor_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x04, aq, rl, rd, rs1, rs2); }
+pub fn amoand_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x0C, aq, rl, rd, rs1, rs2); }
+pub fn amoor_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x08, aq, rl, rd, rs1, rs2); }
+pub fn amomin_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x10, aq, rl, rd, rs1, rs2); }
+pub fn amomax_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x14, aq, rl, rd, rs1, rs2); }
+pub fn amominu_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x18, aq, rl, rd, rs1, rs2); }
+pub fn amomaxu_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x1C, aq, rl, rd, rs1, rs2); }
+
 // ---- System & Memory Synchronization ----
 pub fn ecall() u32 { return encodeI(@intFromEnum(Opcode.system), 0, 0x0, 0, 0x000); }
 pub fn ebreak() u32 { return encodeI(@intFromEnum(Opcode.system), 0, 0x0, 0, 0x001); }
@@ -189,4 +216,7 @@ test "RV64 instruction encoding" {
 
     const addiw_insn = addiw(10, 11, 42);
     try std.testing.expectEqual(@as(u32, 0x02a5851b), addiw_insn);
+
+    const amoadd_insn = amoadd_w(10, 11, 12, 0, 0);
+    try std.testing.expectEqual(@as(u32, 0x00c5a52f), amoadd_insn);
 }

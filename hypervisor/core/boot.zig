@@ -201,8 +201,8 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         // Inject boot arguments into the guest DTB.
         // Use hvc0 as the primary console and SBI for early boot output.
         // maxcpus limits the number of CPUs the guest will bring online.
-        const mitigations = if (guest_arch != .riscv64) " mitigations=off" else "";
-        const bootargs = try std.fmt.allocPrint(cpu_allocator, "console=hvc0 earlycon=sbi maxcpus={} unaligned_scalar_speed=fast{s}", .{ cpu_count, mitigations });
+        const mitigations = if (guest_arch != .riscv64) " mitigations=off clocksource=riscv_clocksource" else "";
+        const bootargs = try std.fmt.allocPrint(cpu_allocator, "console=hvc0 earlycon=sbi maxcpus={} lpj=1000000 unaligned_scalar_speed=fast{s}", .{ cpu_count, mitigations });
         defer cpu_allocator.free(bootargs);
         device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, bootargs)) catch |err| {
             debug.printf("Warning: Failed to inject bootargs into guest DTB: {s}\n", .{@errorName(err)});
@@ -237,6 +237,9 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
         var disabled_phandles = std.ArrayList(u32).empty;
         defer disabled_phandles.deinit(cpu_allocator);
+
+        // Ensure /cpus has timebase-frequency set (10MHz = 0x00989680)
+        try device_tree.editProperty("/cpus", "timebase-frequency", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, &[_]u8{ 0x00, 0x98, 0x96, 0x80 }));
 
         // Keep only virtual CPU 0 active in the guest DTB by marking any extra `/cpus/cpu@` node as disabled.
         var cpu_it = device_tree.iter("/cpus/cpu@", 10);
@@ -419,7 +422,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     // Create virtual cores for the Root VM matching host count.
     // The loader returns the entry point as a GPA, so no masking is needed.
     const is_emulated = (guest_arch != .riscv64);
-    const hypervisor_vcore_count = if (is_emulated) 1 else cpu_count;
+    const hypervisor_vcore_count = cpu_count;
 
     for (0..hypervisor_vcore_count) |i| {
         // Core 0 starts executing immediately and is enrolled in the scheduler.
@@ -427,12 +430,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         const vcore_id = if (guest_arch == .aarch64) i else guest_hart_ids[i];
         const vc = try root_vm.addVcore(vcore_id, entry_point, guest_dtb_gpa, .high, null);
         
-        if (is_emulated) {
-            vc.exec_path.emulated.sub_vcore_count = cpu_count;
-            vc.exec_path.emulated.sub_vcores[0].start_pc = entry_point;
-            vc.exec_path.emulated.sub_vcores[0].start_a0 = vcore_id;
-            vc.exec_path.emulated.sub_vcores[0].start_a1 = guest_dtb_gpa;
-            vc.exec_path.emulated.sub_vcores[0].state = .ready;
+        if (is_emulated and i == 0) {
             try emulation.init(vc);
         }
 

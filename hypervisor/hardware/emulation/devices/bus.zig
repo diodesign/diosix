@@ -13,12 +13,16 @@ pub const Bus = struct {
     timer: *vtimer_mod.VirtualTimer,
     pic: *vpic_mod.VirtualPlic,
 
-    pub fn isMmio(self: *const Bus, addr: u32) bool {
-        _ = self;
+    pub fn isMmioAddr(addr: u32) bool {
         if (addr >= 0x10000000 and addr < 0x10000100) return true; // 16550 UART
         if (addr >= 0x02000000 and addr < 0x02010000) return true; // CLINT Timer
         if (addr >= 0x0c000000 and addr < 0x10000000) return true; // PLIC
         return false;
+    }
+
+    pub fn isMmio(self: *const Bus, addr: u32) bool {
+        _ = self;
+        return isMmioAddr(addr);
     }
 
     pub fn read(self: *Bus, addr: u32, size: u8) u32 {

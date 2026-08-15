@@ -64,6 +64,7 @@ pub const MSTATUS = struct {
     pub const MPP_SHIFT = 11;
     pub const MPP_MASK = 0b11 << MPP_SHIFT;
     pub const MIE = 1 << 3;
+    pub const MPIE = 1 << 7;
     pub const SIE = 1 << 1;
     pub const MPV: u64 = 1 << 39;
 

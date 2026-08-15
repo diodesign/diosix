@@ -34,6 +34,10 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     to_vcore.state = .running;
 
     const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
+    pmp.PMPConfig.clearAllPmp();
+    pmp.PMPConfig.writePmpAddr(0, ~@as(usize, 0));
+    pmp.PMPConfig.writePmpCfg(0, 0x1f); // NAPOT, RWX
+
     switch (to_vcore.exec_path) {
         .native => {
             to_vcore.guest.space.apply(to_vcore.guest.vmid);
@@ -43,10 +47,6 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
             if (!e.emu_running) {
                 e.context[@intFromEnum(riscv.Register.tp)] = @intFromPtr(cpu);
             }
-
-            pmp.PMPConfig.clearAllPmp();
-            pmp.PMPConfig.writePmpAddr(0, ~@as(usize, 0));
-            pmp.PMPConfig.writePmpCfg(0, 0x1f); // NAPOT, RWX
         },
     }
 }
