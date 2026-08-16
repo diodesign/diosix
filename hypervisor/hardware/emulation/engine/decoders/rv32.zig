@@ -100,6 +100,13 @@ pub const Instruction = union(enum) {
     amominu_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
     amomaxu_w: struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 },
 
+    // Floating-Point instructions (F/D extensions)
+    flw: struct { rd: u5, rs1: u5, offset: i32 },
+    fld: struct { rd: u5, rs1: u5, offset: i32 },
+    fsw: struct { rs1: u5, rs2: u5, offset: i32 },
+    fsd: struct { rs1: u5, rs2: u5, offset: i32 },
+    fp_op: struct { raw: u32 },
+
     // Vector instructions
     vsetvli: struct { rd: u5, rs1: u5, vtype: u12 },
     vload: struct { vd: u5, rs1: u5, width: u3 },
@@ -108,6 +115,7 @@ pub const Instruction = union(enum) {
 
     unknown: u32,
 };
+
 
 pub const DecodedInsn = struct {
     insn: Instruction,
@@ -139,6 +147,15 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // addi rd, x2, nzuimm
                 return 0x13 | (@as(u32, rd) << 7) | (2 << 15) | (@as(u32, nzuimm) << 20);
             },
+            0b001 => {
+                // C.FLD
+                const offset: u32 = (((code16 >> 10) & 7) << 3) |
+                                    (((code16 >> 5) & 3) << 6);
+                const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
+                const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
+                // fld rd, offset(rs1)
+                return 0x07 | (@as(u32, rd) << 7) | (0x3 << 12) | (@as(u32, rs1) << 15) | (offset << 20);
+            },
             0b010 => {
                 // C.LW
                 const offset: u32 = (((code16 >> 6) & 1) << 2) |
@@ -148,6 +165,27 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // lw rd, offset(rs1)
                 return 0x03 | (@as(u32, rd) << 7) | (0x2 << 12) | (@as(u32, rs1) << 15) | (offset << 20);
+            },
+            0b011 => {
+                // C.FLW (in RV32)
+                const offset: u32 = (((code16 >> 6) & 1) << 2) |
+                                    (((code16 >> 10) & 7) << 3) |
+                                    (((code16 >> 5) & 1) << 6);
+                const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
+                const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
+                // flw rd, offset(rs1)
+                return 0x07 | (@as(u32, rd) << 7) | (0x2 << 12) | (@as(u32, rs1) << 15) | (offset << 20);
+            },
+            0b101 => {
+                // C.FSD
+                const offset: u32 = (((code16 >> 10) & 7) << 3) |
+                                    (((code16 >> 5) & 3) << 6);
+                const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
+                const rs2 = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
+                // fsd rs2, offset(rs1)
+                const imm5 = offset & 0x1F;
+                const imm7 = (offset >> 5) & 0x7F;
+                return 0x27 | (imm5 << 7) | (0x3 << 12) | (@as(u32, rs1) << 15) | (@as(u32, rs2) << 20) | (imm7 << 25);
             },
             0b110 => {
                 // C.SW
@@ -161,8 +199,21 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 const imm7 = (offset >> 5) & 0x7F;
                 return 0x23 | (imm5 << 7) | (0x2 << 12) | (@as(u32, rs1) << 15) | (@as(u32, rs2) << 20) | (imm7 << 25);
             },
+            0b111 => {
+                // C.FSW (in RV32)
+                const offset: u32 = (((code16 >> 6) & 1) << 2) |
+                                    (((code16 >> 10) & 7) << 3) |
+                                    (((code16 >> 5) & 1) << 6);
+                const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
+                const rs2 = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
+                // fsw rs2, offset(rs1)
+                const imm5 = offset & 0x1F;
+                const imm7 = (offset >> 5) & 0x7F;
+                return 0x27 | (imm5 << 7) | (0x2 << 12) | (@as(u32, rs1) << 15) | (@as(u32, rs2) << 20) | (imm7 << 25);
+            },
             else => return null,
         },
+
         0b01 => switch (funct3) {
             0b000 => {
                 // C.NOP / C.ADDI
@@ -318,6 +369,15 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // slli rd, rd, shamt
                 return 0x13 | (@as(u32, rd) << 7) | (0x1 << 12) | (@as(u32, rd) << 15) | (shamt << 20);
             },
+            0b001 => {
+                // C.FLDSP
+                const rd = @as(u5, @truncate((code16 >> 7) & 0x1F));
+                const offset: u32 = (((code16 >> 5) & 3) << 3) |
+                                    (((code16 >> 12) & 1) << 5) |
+                                    (((code16 >> 2) & 7) << 6);
+                // fld rd, offset(x2)
+                return 0x07 | (@as(u32, rd) << 7) | (0x3 << 12) | (2 << 15) | (offset << 20);
+            },
             0b010 => {
                 // C.LWSP
                 const rd = @as(u5, @truncate((code16 >> 7) & 0x1F));
@@ -326,6 +386,15 @@ pub fn decompressRvc(code16: u16) ?u32 {
                                     (((code16 >> 2) & 3) << 6);
                 // lw rd, offset(x2)
                 return 0x03 | (@as(u32, rd) << 7) | (0x2 << 12) | (2 << 15) | (offset << 20);
+            },
+            0b011 => {
+                // C.FLWSP (in RV32)
+                const rd = @as(u5, @truncate((code16 >> 7) & 0x1F));
+                const offset: u32 = (((code16 >> 4) & 7) << 2) |
+                                    (((code16 >> 12) & 1) << 5) |
+                                    (((code16 >> 2) & 3) << 6);
+                // flw rd, offset(x2)
+                return 0x07 | (@as(u32, rd) << 7) | (0x2 << 12) | (2 << 15) | (offset << 20);
             },
             0b100 => {
                 const bit12 = (code16 >> 12) & 0x1;
@@ -340,7 +409,10 @@ pub fn decompressRvc(code16: u16) ?u32 {
                         return 0x33 | (@as(u32, rs1) << 7) | (0 << 15) | (@as(u32, rs2) << 20);
                     }
                 } else {
-                    if (rs2 == 0) {
+                    if (rs1 == 0 and rs2 == 0) {
+                        // C.EBREAK (ebreak)
+                        return 0x00100073;
+                    } else if (rs2 == 0) {
                         // C.JALR (jalr x1, rs1, 0)
                         return 0x67 | (1 << 7) | (@as(u32, rs1) << 15) | (0 << 20);
                     } else {
@@ -348,6 +420,16 @@ pub fn decompressRvc(code16: u16) ?u32 {
                         return 0x33 | (@as(u32, rs1) << 7) | (@as(u32, rs1) << 15) | (@as(u32, rs2) << 20);
                     }
                 }
+            },
+            0b101 => {
+                // C.FSDSP
+                const rs2 = @as(u5, @truncate((code16 >> 2) & 0x1F));
+                const offset: u32 = (((code16 >> 10) & 7) << 3) |
+                                    (((code16 >> 7) & 7) << 6);
+                const imm5: u32 = offset & 0x1F;
+                const imm7: u32 = (offset >> 5) & 0x7F;
+                // fsd rs2, offset(x2)
+                return 0x27 | (imm5 << 7) | (0x3 << 12) | (@as(u32, 2) << 15) | (@as(u32, rs2) << 20) | (imm7 << 25);
             },
             0b110 => {
                 // C.SWSP
@@ -359,8 +441,19 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // sw rs2, offset(x2)
                 return 0x23 | (imm5 << 7) | (0x2 << 12) | (@as(u32, 2) << 15) | (@as(u32, rs2) << 20) | (imm7 << 25);
             },
+            0b111 => {
+                // C.FSWSP (in RV32)
+                const rs2 = @as(u5, @truncate((code16 >> 2) & 0x1F));
+                const offset: u32 = (((code16 >> 9) & 15) << 2) |
+                                    (((code16 >> 7) & 3) << 6);
+                const imm5: u32 = offset & 0x1F;
+                const imm7: u32 = (offset >> 5) & 0x7F;
+                // fsw rs2, offset(x2)
+                return 0x27 | (imm5 << 7) | (0x2 << 12) | (@as(u32, 2) << 15) | (@as(u32, rs2) << 20) | (imm7 << 25);
+            },
             else => return null,
         },
+
         else => return null,
     };
 }
@@ -434,12 +527,25 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x5 => .{ .lhu = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
             else => .{ .unknown = code },
         },
+        0x07 => switch (funct3) {
+            0x2 => .{ .flw = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
+            0x3 => .{ .fld = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
+            else => .{ .vload = .{ .vd = rd, .rs1 = rs1, .width = funct3 } },
+        },
         0x23 => switch (funct3) {
             0x0 => .{ .sb = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             0x1 => .{ .sh = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             0x2 => .{ .sw = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             else => .{ .unknown = code },
         },
+        0x27 => switch (funct3) {
+            0x2 => .{ .fsw = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
+            0x3 => .{ .fsd = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
+            else => .{ .vstore = .{ .vs3 = rd, .rs1 = rs1, .width = funct3 } },
+        },
+        0x53, 0x43, 0x47, 0x4B, 0x4F => .{ .fp_op = .{ .raw = code } },
+
+
         0x63 => switch (funct3) {
             0x0 => .{ .beq = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
             0x1 => .{ .bne = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
@@ -485,9 +591,8 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x1 => .fence_i,
             else => .{ .unknown = code },
         },
-        0x07 => .{ .vload = .{ .vd = rd, .rs1 = rs1, .width = funct3 } },
-        0x27 => .{ .vstore = .{ .vs3 = rd, .rs1 = rs1, .width = funct3 } },
         0x57 => switch (funct3) {
+
             0x7 => .{ .vsetvli = .{ .rd = rd, .rs1 = rs1, .vtype = @truncate(@as(u32, @bitCast(i_imm))) } },
             else => .{ .vector_op = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
         },
@@ -642,6 +747,14 @@ test "RV32C Compressed Instruction Decompression" {
     try std.testing.expectEqual(@as(usize, 2), cjalr_dec.len);
     try std.testing.expectEqual(@as(u5, 1), cjalr_dec.insn.jalr.rd);
     try std.testing.expectEqual(@as(u5, 15), cjalr_dec.insn.jalr.rs1);
+
+    // c.ebreak (0x9002) -> ebreak
+    const cebreak_dec = decode(0x9002);
+    try std.testing.expectEqual(@as(usize, 2), cebreak_dec.len);
+    try std.testing.expect(switch (cebreak_dec.insn) {
+        .ebreak => true,
+        else => false,
+    });
 }
 
 test "Barriers & CSR Instructions Decoding" {

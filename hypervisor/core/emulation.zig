@@ -363,7 +363,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
             const jit_pct = if (total_eng_cyc > 0) (total_jit_cyc * 1000 / total_eng_cyc) else 0;
             const overhead_pct = if (jit_pct <= 1000) (1000 - jit_pct) else 0;
 
-            debug.printf("\n[HYPERVISOR TELEMETRY] Uptime: {}s | Total Guest Insns: {} | JIT Blocks: {} | Native JIT: {}.{}% | Overhead: {}.{}% | Exits: {} WFI, {} ECALL, {} Yield\n\n", .{
+            debug.printf("\n[HYPERVISOR TELEMETRY] Uptime: {}s | Total Guest Insns: {} | JIT Blocks: {} | Native JIT: {}.{}% | Overhead: {}.{}% | Exits: {} WFI, {} ECALL, {} Yield | PCs: 0x{x} 0x{x} 0x{x} 0x{x}\n\n", .{
                 elapsed_secs,
                 total_insns,
                 total_blocks,
@@ -374,6 +374,10 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 wfi_c,
                 ecall_c,
                 yield_c,
+                vcpu_pools[0].pc,
+                vcpu_pools[1].pc,
+                vcpu_pools[2].pc,
+                vcpu_pools[3].pc,
             });
         }
     }

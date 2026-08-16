@@ -14,6 +14,29 @@ pub inline fn readHostTime() u64 {
     return host_time;
 }
 
+fn printUart(msg: []const u8) void {
+    if (comptime builtin.target.cpu.arch.isRISCV()) {
+        const uart_ptr: *volatile u8 = @ptrFromInt(0x10000000);
+        for (msg) |c| {
+            uart_ptr.* = c;
+        }
+    }
+}
+
+fn printHex(val: u32) void {
+    const hex = "0123456789abcdef";
+    var buf: [10]u8 = undefined;
+    buf[0] = '0';
+    buf[1] = 'x';
+    var v = val;
+    var i: usize = 9;
+    while (i >= 2) : (i -= 1) {
+        buf[i] = hex[v & 0xf];
+        v >>= 4;
+    }
+    printUart(&buf);
+}
+
 /// Privilege levels for virtual CPU
 pub const PrivilegeMode = enum(u2) {
     user = 0,
@@ -51,21 +74,30 @@ pub const PRIV_SUPERVISOR: u2 = 1;
 pub const PRIV_MACHINE: u2 = 3;
 
 /// Virtual CPU State
-pub const VCpu = struct {
-    /// Guest general purpose registers x0-x31 (x0 is hardwired to 0)
+pub const VCpu = extern struct {
+    /// Guest general purpose registers x0-x31 (x0 is hardwired to 0) -> offset 0..256
     regs: [32]u64 = std.mem.zeroes([32]u64),
-    /// Guest program counter
+    /// Guest program counter -> offset 256..260
     pc: u32 = 0,
-    id: usize = 0,
-    /// Current privilege level
-    privilege_mode: u2 = 3,
-    priv_mode: u2 = 3, // Alias for compatibility
-    softtlb: struct { privilege_mode: u2 = 1 } = .{},
+    _pad0: u32 = 0,
+    id: usize = 0, // offset 264..272
+    tlb_entries_ptr: usize = 0, // offset 272..280
+    host_sp: usize = 0, // offset 280..288
+    scratch_t1: u64 = 0, // offset 288..296
+    scratch_t2: u64 = 0, // offset 296..304
+    privilege_mode: u8 = 3,
+    priv_mode: u8 = 3,
+    _pad2: u16 = 0,
+    _pad4: u32 = 0,
     time: u64 = 0,
     running: bool = true,
+    _pad5: u8 = 0,
+    _pad6: u16 = 0,
     last_sepc_when_stvec_zero: u32 = 0,
     vregs: [32][32]u8 = std.mem.zeroes([32][32]u8),
     vl: u32 = 32,
+    fpregs: [32]u64 = std.mem.zeroes([32]u64),
+    fcsr: u32 = 0,
 
     // Machine-mode CSRs
     mstatus: u32 = 0,
@@ -88,11 +120,30 @@ pub const VCpu = struct {
     stval: u32 = 0,
     satp: u32 = 0,
     sie: u32 = 0,
+    _pad7: u32 = 0,
     vstimecmp: u64 = 0xffffffffffffffff,
     load_res_addr: usize = 0,
     load_res_val: u32 = 0,
-    needs_tlb_flush: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    needs_cache_flush: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    needs_tlb_flush_flag: bool = false,
+    needs_cache_flush_flag: bool = false,
+    _pad8: u16 = 0,
+    softtlb: extern struct { privilege_mode: u8 = 1 } = .{},
+
+    pub fn setNeedsTlbFlush(self: *VCpu) void {
+        @atomicStore(bool, &self.needs_tlb_flush_flag, true, .release);
+    }
+
+    pub fn checkAndClearTlbFlush(self: *VCpu) bool {
+        return @atomicRmw(bool, &self.needs_tlb_flush_flag, .Xchg, false, .acquire);
+    }
+
+    pub fn setNeedsCacheFlush(self: *VCpu) void {
+        @atomicStore(bool, &self.needs_cache_flush_flag, true, .release);
+    }
+
+    pub fn checkAndClearCacheFlush(self: *VCpu) bool {
+        return @atomicRmw(bool, &self.needs_cache_flush_flag, .Xchg, false, .acquire);
+    }
 
     pub fn getGpr(self: *const VCpu, reg: u5) u64 {
         if (reg == 0) return 0;
@@ -111,6 +162,13 @@ pub const VCpu = struct {
     pub fn setReg(self: *VCpu, reg: u5, val: u64) void {
         self.setGpr(reg, val);
     }
+
+comptime {
+    std.debug.assert(@offsetOf(VCpu, "regs") == 0);
+    std.debug.assert(@offsetOf(VCpu, "pc") == 256);
+    std.debug.assert(@offsetOf(VCpu, "host_sp") == 280);
+    std.debug.assert(@offsetOf(VCpu, "scratch_t1") == 288);
+}
 
     pub var time_offset: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
     pub var max_guest_time: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
@@ -169,7 +227,13 @@ pub const VCpu = struct {
 
     pub fn readCsr(self: *VCpu, csr: u12) u32 {
         return switch (csr) {
-            CsrAddr.mstatus => self.mstatus,
+            CsrAddr.mstatus => blk: {
+                var m = self.mstatus;
+                if ((self.misa & ((1 << 5) | (1 << 3))) == 0) {
+                    m &= ~@as(u32, 3 << 13);
+                }
+                break :blk m;
+            },
             CsrAddr.misa => self.misa,
             CsrAddr.medeleg => self.medeleg,
             CsrAddr.mideleg => self.mideleg,
@@ -190,7 +254,13 @@ pub const VCpu = struct {
                 break :blk m;
             },
 
-            CsrAddr.sstatus => self.mstatus & 0x800DE762,
+            CsrAddr.sstatus => blk: {
+                var m = self.mstatus & 0x800DE762;
+                if ((self.misa & ((1 << 5) | (1 << 3))) == 0) {
+                    m &= ~@as(u32, 3 << 13);
+                }
+                break :blk m;
+            },
             CsrAddr.sie => self.mie & self.mideleg,
             CsrAddr.stvec => self.stvec,
             CsrAddr.sscratch => self.sscratch,
@@ -208,6 +278,10 @@ pub const VCpu = struct {
                 break :blk m & self.mideleg;
             },
             CsrAddr.satp => self.satp,
+
+            0x001 => self.fcsr & 0x1F, // fflags
+            0x002 => (self.fcsr >> 5) & 0x7, // frm
+            0x003 => self.fcsr & 0xFF, // fcsr
 
             0x14D => @truncate(self.vstimecmp),
             0x15D => @truncate(self.vstimecmp >> 32),
@@ -227,7 +301,26 @@ pub const VCpu = struct {
 
     pub fn writeCsr(self: *VCpu, csr: u12, val: u32) void {
         switch (csr) {
-            CsrAddr.mstatus => self.mstatus = val,
+            0x001 => { // fflags
+                self.fcsr = (self.fcsr & ~@as(u32, 0x1F)) | (val & 0x1F);
+                self.mstatus |= (3 << 13); // Mark FS dirty
+            },
+            0x002 => { // frm
+                self.fcsr = (self.fcsr & ~@as(u32, 0xE0)) | ((val & 0x7) << 5);
+                self.mstatus |= (3 << 13); // Mark FS dirty
+            },
+            0x003 => { // fcsr
+                self.fcsr = val & 0xFF;
+                self.mstatus |= (3 << 13); // Mark FS dirty
+            },
+
+            CsrAddr.mstatus => {
+                var v = val;
+                if ((self.misa & ((1 << 5) | (1 << 3))) == 0) {
+                    v &= ~@as(u32, 3 << 13);
+                }
+                self.mstatus = v;
+            },
             CsrAddr.medeleg => self.medeleg = val,
             CsrAddr.mideleg => {
                 self.mideleg = val;
@@ -245,7 +338,10 @@ pub const VCpu = struct {
             CsrAddr.mip => self.mip = val,
 
             CsrAddr.sstatus => {
-                const mask: u32 = 0x800DE762;
+                var mask: u32 = 0x800DE762;
+                if ((self.misa & ((1 << 5) | (1 << 3))) == 0) {
+                    mask &= ~@as(u32, 3 << 13);
+                }
                 self.mstatus = (self.mstatus & ~mask) | (val & mask);
             },
             CsrAddr.sie => {

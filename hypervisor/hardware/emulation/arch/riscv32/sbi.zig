@@ -336,9 +336,9 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
     const g = vc.getGuest();
     const hart_mask = a0;
     const hart_mask_base = a1;
+    const is_fence_i = (function == 0);
 
     if (vc.exec_path == .emulated) {
-        const is_fence_i = (function == 0);
         if (hart_mask_base == std.math.maxInt(usize) or (hart_mask_base & 0xffffffff) == 0xffffffff) {
             for (0..guest.Guest.max_vcores) |vid| {
                 if (g.vcore_lookup[vid]) |target_vc| {
@@ -349,8 +349,8 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                         }
                     } else if (target_vc.exec_path == .emulated) {
                         if (target_vc.exec_path.emulated.vcpu) |v| {
-                            v.needs_tlb_flush.store(true, .release);
-                            if (is_fence_i) v.needs_cache_flush.store(true, .release);
+                            v.setNeedsTlbFlush();
+                            if (is_fence_i) v.setNeedsCacheFlush();
                         }
                     }
                 }
@@ -370,8 +370,8 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                                 }
                             } else if (target_vc.exec_path == .emulated) {
                                 if (target_vc.exec_path.emulated.vcpu) |v| {
-                                    v.needs_tlb_flush.store(true, .release);
-                                    if (is_fence_i) v.needs_cache_flush.store(true, .release);
+                                    v.setNeedsTlbFlush();
+                                    if (is_fence_i) v.setNeedsCacheFlush();
                                 }
                             }
                         }

@@ -8,10 +8,11 @@ const bus_mod = @import("devices/bus.zig");
 const vcpu_mod = @import("vcpu.zig");
 
 pub const SoftTlbEntry = struct {
-    guest_vaddr_page: u32 = 0,
-    host_paddr_page: usize = 0,
+    guest_vaddr_page: u32 = 0xFFFF_FFFF,
     flags: u8 = 0, // [0]: Valid, [1]: Read, [2]: Write, [3]: Execute, [4]: User
-    epoch: u32 = 0,
+    _pad: u8 = 0,
+    epoch: u16 = 0,
+    host_paddr_page: usize = 0,
 };
 
 pub const AccessResult = struct {
@@ -32,12 +33,12 @@ pub const ContiguousRegion = struct {
 };
 
 pub const SoftTlb = struct {
-    entries: [TLB_ENTRIES]SoftTlbEntry = std.mem.zeroes([TLB_ENTRIES]SoftTlbEntry),
+    entries: [TLB_ENTRIES]SoftTlbEntry = undefined,
     contiguous_regions: [MAX_CONTIGUOUS_REGIONS]ContiguousRegion = std.mem.zeroes([MAX_CONTIGUOUS_REGIONS]ContiguousRegion),
-    epoch: u32 = 1,
+    epoch: u16 = 1,
     satp: u32 = 0,
     mstatus: u32 = 0,
-    privilege_mode: u2 = 1, // Default Supervisor mode
+    privilege_mode: u8 = 1, // Default Supervisor mode
     guest_gpa_base: usize = 0x80000000,
     guest_hpa_base: usize = 0xe0000000,
     guest_ram_size: usize = 0x20000000,
@@ -50,15 +51,22 @@ pub const SoftTlb = struct {
     last_trampoline_pgd_write_val: u32 = 0,
 
     pub fn init(gpa_base: usize, hpa_base: usize, ram_size: usize) SoftTlb {
-        return SoftTlb{
+        var tlb = SoftTlb{
             .guest_gpa_base = gpa_base,
             .guest_hpa_base = hpa_base,
             .guest_ram_size = ram_size,
         };
+        tlb.initOnPtr(gpa_base, hpa_base, ram_size);
+        return tlb;
     }
 
     pub fn initOnPtr(self: *SoftTlb, gpa_base: usize, hpa_base: usize, ram_size: usize) void {
-        @memset(std.mem.sliceAsBytes(self.entries[0..]), 0);
+        for (self.entries[0..]) |*entry| {
+            entry.guest_vaddr_page = 0xFFFF_FFFF;
+            entry.flags = 0;
+            entry.epoch = 0;
+            entry.host_paddr_page = 0;
+        }
         @memset(std.mem.sliceAsBytes(self.contiguous_regions[0..]), 0);
         self.epoch = 1;
         self.satp = 0;
@@ -70,9 +78,9 @@ pub const SoftTlb = struct {
 
     pub fn flush(self: *SoftTlb) void {
         self.epoch +%= 1;
-        if (self.epoch == 0) {
-            @memset(std.mem.sliceAsBytes(self.entries[0..]), 0);
-            self.epoch = 1;
+        for (self.entries[0..]) |*entry| {
+            entry.guest_vaddr_page = 0xFFFF_FFFF;
+            entry.flags = 0;
         }
         for (self.contiguous_regions[0..]) |*r| {
             r.valid = false;
@@ -126,6 +134,7 @@ pub const SoftTlb = struct {
                     .guest_vaddr_page = page,
                     .host_paddr_page = hpa & ~@as(usize, 0xFFF),
                     .flags = 1 | (1 << 1) | (1 << 2) | (1 << 3),
+                    .epoch = self.epoch,
                 };
                 return hpa;
                 }
@@ -233,34 +242,6 @@ pub const SoftTlb = struct {
         if ((pte1 & 1) == 0) {
             self.last_null_vaddr = vaddr;
             self.last_null_pte1 = pte1;
-            if (self.privilege_mode >= 1) {
-                if (vaddr >= 0xC000_0000 and vaddr < 0xC000_0000 + self.guest_ram_size) {
-                    const gpa = self.guest_gpa_base + (vaddr - 0xC000_0000);
-                    if (self.translateGpaToHpa(gpa)) |hpa| {
-                        const page = vaddr >> 12;
-                        const slot = page & TLB_MASK;
-                        self.entries[slot] = .{
-                            .guest_vaddr_page = page,
-                            .host_paddr_page = hpa & ~@as(usize, 0xFFF),
-                            .flags = 1 | (1 << 1) | (1 << 2) | (1 << 3),
-                            .epoch = self.epoch,
-                        };
-                        return hpa;
-                    }
-                } else if (vaddr >= self.guest_gpa_base and vaddr < self.guest_gpa_base + self.guest_ram_size) {
-                    if (self.translateGpaToHpa(vaddr)) |hpa| {
-                        const page = vaddr >> 12;
-                        const slot = page & TLB_MASK;
-                        self.entries[slot] = .{
-                            .guest_vaddr_page = page,
-                            .host_paddr_page = hpa & ~@as(usize, 0xFFF),
-                            .flags = 1 | (1 << 1) | (1 << 2) | (1 << 3),
-                            .epoch = self.epoch,
-                        };
-                        return hpa;
-                    }
-                }
-            }
             return null;
         }
 
@@ -282,22 +263,6 @@ pub const SoftTlb = struct {
                 self.last_null_vaddr = vaddr;
                 self.last_null_pte1 = pte1;
                 self.last_null_pte0 = pte0;
-                if (self.privilege_mode >= 1) {
-                    if (vaddr >= 0xC000_0000 and vaddr < 0xC000_0000 + self.guest_ram_size) {
-                        const gpa = self.guest_gpa_base + (vaddr - 0xC000_0000);
-                        if (self.translateGpaToHpa(gpa)) |hpa| {
-                            const page = vaddr >> 12;
-                            const slot = page & TLB_MASK;
-                            self.entries[slot] = .{
-                                .guest_vaddr_page = page,
-                                .host_paddr_page = hpa & ~@as(usize, 0xFFF),
-                                .flags = 1 | (1 << 1) | (1 << 2) | (1 << 3),
-                                .epoch = self.epoch,
-                            };
-                            return hpa;
-                        }
-                    }
-                }
                 return null;
             }
 
@@ -326,7 +291,7 @@ pub const SoftTlb = struct {
             }
         }
 
-        const final_hpa = self.translateGpaToHpa(final_gpa) orelse (self.fallbackIdentity(vaddr) orelse return null);
+        const final_hpa = self.translateGpaToHpa(final_gpa) orelse (if (bus_mod.Bus.isMmioAddr(@truncate(final_gpa))) final_gpa else return null);
 
         // Check RISC-V privilege rules for Sv32
         const is_user_page = (pte_flags & (1 << 4)) != 0;

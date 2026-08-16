@@ -260,19 +260,18 @@ hw_dynarec_run_block:
   sd tp, 104(sp)
   sd gp, 112(sp)
 
-  # 2. Save S-mode host stack pointer
-  la t1, hw_dynarec_host_sp
-  sd sp, 0(t1)
+  # 2. Save S-mode host stack pointer in vcpu.host_sp (offset 280)
+  sd sp, 280(a0)
 
-  # 3. Save regs pointer in stval (S-Mode CSR 0x143)
-  csrw stval, a0
+  # 3. Save regs pointer in vstval (Hypervisor CSR 0x243)
+  csrw 0x243, a0
 
   # 4. Move target block entry pointer to t0
   mv t0, a1
 
-  # 5. Put guest t0 (x5) into sscratch for block prologue
+  # 5. Put guest t0 (x5) into vsscratch (Hypervisor CSR 0x240) for block prologue
   ld t1, 40(a0)
-  csrw sscratch, t1
+  csrw 0x240, t1
 
   # 6. Load guest registers from a0 (regs pointer)
   ld x1, 8(a0)
@@ -315,13 +314,13 @@ hw_dynarec_run_block:
 .type hw_dynarec_exit, @function
 hw_dynarec_exit:
   # On entry from S-mode JIT block exit:
-  # sepc (CSR 0x141) holds target_pc (saved by emitExit)
-  # sscratch (CSR 0x140) holds guest t0 (saved by emitExit)
-  # stval (CSR 0x143) holds regs_ptr (&self.vcpu.regs)
+  # target_pc is already stored in vcpu.pc (256(t0)) or loaded by emitExit
+  # vsscratch (CSR 0x240) holds guest t0 (saved by emitExit)
+  # vstval (CSR 0x243) holds regs_ptr (&self.vcpu.regs)
   # All other registers x1..x4, x6..x31 hold pristine guest registers!
 
-  # 1. Load regs_ptr into t0 directly from stval (CSR 0x143)
-  csrr t0, stval
+  # 1. Load regs_ptr into t0 directly from vstval (CSR 0x243)
+  csrr t0, 0x243
 
   # 2. Store all 30 pristine guest registers to regs_ptr (t0)
   sd x1, 8(t0)       # guest ra (x1)
@@ -355,17 +354,15 @@ hw_dynarec_exit:
   sd x30, 240(t0)    # guest t5 (x30)
   sd x31, 248(t0)    # guest t6 (x31)
 
-  # 3. Read saved guest t0 (from sscratch) and store to 40(t0)
-  csrr t1, sscratch
+  # 3. Read saved guest t0 (from vsscratch CSR 0x240) and store to 40(t0)
+  csrr t1, 0x240
   sd t1, 40(t0)
 
-  # 4. Read target_pc from sepc (CSR 0x141) and store to vcpu.pc (offset 256)
-  csrr t1, sepc
-  sw t1, 256(t0)
+  # 4. Read target_pc from vcpu.pc (offset 256)
+  lwu t1, 256(t0)
 
-  # 5. Restore host stack pointer
-  la t2, hw_dynarec_host_sp
-  ld sp, 0(t2)
+  # 5. Restore host stack pointer from vcpu.host_sp (offset 280)
+  ld sp, 280(t0)
 
   # 6. Restore host callee-saved registers from S-mode host stack
   ld ra, 0(sp)

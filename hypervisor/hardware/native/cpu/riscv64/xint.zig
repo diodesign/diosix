@@ -282,6 +282,8 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 }
             } else if (vc.exec_path == .emulated) {
                 @memcpy(vc.getNativeContext(), context);
+                vc.getNativeMachine().mepc = irq.pc;
+                vc.getNativeMachine().mstatus = riscv.readMstatus();
             }
         }
     }

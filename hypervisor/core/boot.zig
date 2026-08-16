@@ -281,6 +281,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                         }
                         try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, minimal_exts.items));
                     }
+
                 }
             }
 

@@ -174,6 +174,13 @@ pub fn sh(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(@intFromEnum(Opcode.s
 pub fn sw(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(@intFromEnum(Opcode.store), 0x2, rs1, rs2, imm); }
 pub fn sd(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(@intFromEnum(Opcode.store), 0x3, rs1, rs2, imm); }
 
+// ---- Floating-Point Load & Store Instructions ----
+pub fn flw(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(0x07, rd, 0x2, rs1, imm); }
+pub fn fld(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(0x07, rd, 0x3, rs1, imm); }
+pub fn fsw(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(0x27, 0x2, rs1, rs2, imm); }
+pub fn fsd(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(0x27, 0x3, rs1, rs2, imm); }
+
+
 // ---- Branch & Control Flow Instructions ----
 pub fn beq(rs1: u5, rs2: u5, imm: i13) u32 { return encodeB(@intFromEnum(Opcode.branch), 0x0, rs1, rs2, imm); }
 pub fn bne(rs1: u5, rs2: u5, imm: i13) u32 { return encodeB(@intFromEnum(Opcode.branch), 0x1, rs1, rs2, imm); }
