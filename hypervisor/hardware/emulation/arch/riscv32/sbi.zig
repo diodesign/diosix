@@ -351,6 +351,10 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                             v.setNeedsTlbFlush();
                             v.setNeedsCacheFlush();
                         }
+                        const target_hw_hart = if (target_vc.id < riscv.cpu_to_hart_map.len) riscv.cpu_to_hart_map[target_vc.id] else target_vc.id;
+                        if (riscv.CLINT.msip(target_hw_hart)) |ptr| {
+                            ptr.* = 1;
+                        }
                     }
                 }
             }
@@ -371,6 +375,10 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                                 if (target_vc.exec_path.emulated.vcpu) |v| {
                                     v.setNeedsTlbFlush();
                                     v.setNeedsCacheFlush();
+                                }
+                                const target_hw_hart = if (target_vc.id < riscv.cpu_to_hart_map.len) riscv.cpu_to_hart_map[target_vc.id] else target_vc.id;
+                                if (riscv.CLINT.msip(target_hw_hart)) |ptr| {
+                                    ptr.* = 1;
                                 }
                             }
                         }

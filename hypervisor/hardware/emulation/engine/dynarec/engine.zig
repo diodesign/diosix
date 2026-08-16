@@ -188,112 +188,125 @@ pub const Engine = struct {
         };
     }
 
-    fn emitDirectLoad(tb: *block_mod.TranslationBlock, host_offset: *usize, op: u3, rd: u5, rs1: u5, imm: i12) void {
+    fn emitFastLoad(tb: *block_mod.TranslationBlock, host_offset: *usize, op: u3, rd: u5, rs1: u5, imm: i12, delta: i64) void {
         if (rd == 0) return;
 
-        // 1. Save host t0 (x5) and t1 (x6)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48));
+        const total_offset = @as(i64, @intCast(imm)) + delta;
+        const needs_t1 = (rs1 == 5 or rs1 == 27 or rd == 5 or rd == 27);
 
-        // 2. Compute effective GVA into t0 (x5)
-        if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
-        } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
-        } else if (rs1 == 27) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
-        } else if (rs1 == 0) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
-        } else {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, rs1, imm));
+        if (needs_t1) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
         }
 
-        // Host Physical Address = (vaddr & 0x1FFFFFFF) + 0x00000000E0000000
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 35));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 35));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(6, @as(i20, @bitCast(@as(u20, 0xE0000)))));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
+        // 1. Calculate offset in host t0 (x5)
+        const off_i32 = @as(i32, @truncate(total_offset));
+        const upper = @as(i20, @truncate((off_i32 +% 0x800) >> 12));
+        const lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(off_i32)) & 0xFFF))));
 
-        const target_reg: u5 = if (rd == 5 or rd == 6 or rd == 27) 6 else rd;
-        const load_insn: u32 = switch (op) {
-            0 => emitter_rv64.lb(target_reg, 5, 0),
-            1 => emitter_rv64.lh(target_reg, 5, 0),
-            2 => emitter_rv64.lw(target_reg, 5, 0),
-            4 => emitter_rv64.lbu(target_reg, 5, 0),
-            5 => emitter_rv64.lhu(target_reg, 5, 0),
-            else => emitter_rv64.lw(target_reg, 5, 0),
-        };
-        emitter_rv64.emit(tb.host_code, host_offset, load_insn);
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, lower));
 
-        if (rd == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 40)); // save loaded val for t0
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // restore t1
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // load result into t0
-        } else if (rd == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // restore t0 (t1 has result)
-        } else if (rd == 27) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, target_reg, 216)); // save to 216(s11)
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // restore t1
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // restore t0
+        // 2. Add base register rs1
+        if (rs1 == 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
+        } else if (rs1 != 0) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, rs1));
+        }
+
+        // 3. Zero-extend 32-bit host physical address in t0
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
+
+        // 4. Perform load
+        if (op == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.flw(rd, 5, 0));
+        } else if (op == 7) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fld(rd, 5, 0));
         } else {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // restore t1
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // restore t0
+            const dest_reg: u5 = if (rd == 5 or rd == 27) 6 else rd;
+            const load_insn: u32 = switch (op) {
+                0 => emitter_rv64.lb(dest_reg, 5, 0),
+                1 => emitter_rv64.lh(dest_reg, 5, 0),
+                2 => emitter_rv64.lw(dest_reg, 5, 0),
+                4 => emitter_rv64.lbu(dest_reg, 5, 0),
+                5 => emitter_rv64.lhu(dest_reg, 5, 0),
+                else => emitter_rv64.lw(dest_reg, 5, 0),
+            };
+            emitter_rv64.emit(tb.host_code, host_offset, load_insn);
+
+            if (rd == 5) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 40));
+            } else if (rd == 27) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 216));
+            }
+        }
+
+        if (needs_t1) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
         }
     }
 
-    fn emitDirectStore(tb: *block_mod.TranslationBlock, host_offset: *usize, op: u3, rs1: u5, rs2: u5, imm: i12) void {
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
+    fn emitFastStore(tb: *block_mod.TranslationBlock, host_offset: *usize, op: u3, rs1: u5, rs2: u5, imm: i12, delta: i64) void {
+        const total_offset = @as(i64, @intCast(imm)) + delta;
+        const needs_t1 = (rs1 == 5 or rs1 == 27 or (op != 6 and op != 7 and (rs2 == 5 or rs2 == 27)));
 
-        if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
-        } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
-        } else if (rs1 == 27) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
-        } else if (rs1 == 0) {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
-        } else {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, rs1, imm));
+        if (needs_t1) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
         }
 
-        // Host Physical Address = (vaddr & 0x1FFFFFFF) + 0x00000000E0000000
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 35));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 35));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(6, @as(i20, @bitCast(@as(u20, 0xE0000)))));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
+        // 1. Calculate offset in host t0 (x5)
+        const off_i32 = @as(i32, @truncate(total_offset));
+        const upper = @as(i20, @truncate((off_i32 +% 0x800) >> 12));
+        const lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(off_i32)) & 0xFFF))));
 
-        const src_reg: u5 = if (rs2 == 5) blk: {
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, lower));
+
+        // 2. Add base register rs1
+        if (rs1 == 5) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
-            break :blk 6;
-        } else if (rs2 == 6) blk: {
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
-            break :blk 6;
-        } else if (rs2 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
+        } else if (rs1 == 27) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
-            break :blk 6;
-        } else rs2;
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
+        } else if (rs1 != 0) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, rs1));
+        }
 
-        const store_insn: u32 = switch (op) {
-            0 => emitter_rv64.sb(5, src_reg, 0),
-            1 => emitter_rv64.sh(5, src_reg, 0),
-            2 => emitter_rv64.sw(5, src_reg, 0),
-            else => emitter_rv64.sw(5, src_reg, 0),
-        };
-        emitter_rv64.emit(tb.host_code, host_offset, store_insn);
+        // 3. Zero-extend 32-bit host physical address in t0
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
 
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
+        // 4. Perform store
+        if (op == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fsw(5, rs2, 0));
+        } else if (op == 7) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fsd(5, rs2, 0));
+        } else {
+            var val_reg: u5 = rs2;
+            if (rs2 == 5) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
+                val_reg = 6;
+            } else if (rs2 == 27) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
+                val_reg = 6;
+            }
+            const store_insn: u32 = switch (op) {
+                0 => emitter_rv64.sb(5, val_reg, 0),
+                1 => emitter_rv64.sh(5, val_reg, 0),
+                2 => emitter_rv64.sw(5, val_reg, 0),
+                else => emitter_rv64.sw(5, val_reg, 0),
+            };
+            emitter_rv64.emit(tb.host_code, host_offset, store_insn);
+        }
+
+        if (needs_t1) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+        }
     }
 
     fn emitSoftTlbLoad(self: *Engine, tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, op: u3, rd: u5, rs1: u5, imm: i12) void {
@@ -1227,7 +1240,26 @@ pub const Engine = struct {
 
                 // ---- I-Type Integer Operations ----
                 .addi => |d| emitIType(tb, &host_offset, emitter_rv64.addiw, d.rd, d.rs1, @as(i12, @truncate(d.imm))),
-                .slli => |d| emitShiftI(tb, &host_offset, emitter_rv64.slliw, d.rd, d.rs1, @as(u5, @truncate(d.shamt))),
+                .slli => |d| {
+                    const next_pc = current_pc + decoded.len;
+                    var fused = false;
+                    if (d.rd != 0 and (d.shamt == 1 or d.shamt == 2 or d.shamt == 3) and (next_pc - start_pc) < (max_instructions * 4)) {
+                        const next_fetch = self.tlb.fetchU32(next_pc, self.bus);
+                        if (next_fetch.trap == null) {
+                            const next_dec = decoder_rv32.decode(next_fetch.val);
+                            if (next_dec.insn == .add and next_dec.insn.add.rd == d.rd and (next_dec.insn.add.rs1 == d.rd or next_dec.insn.add.rs2 == d.rd)) {
+                                const other_rs: u5 = if (next_dec.insn.add.rs1 == d.rd) next_dec.insn.add.rs2 else next_dec.insn.add.rs1;
+                                emitShiftI(tb, &host_offset, emitter_rv64.slliw, d.rd, d.rs1, @as(u5, @truncate(d.shamt)));
+                                emitRType(tb, &host_offset, emitter_rv64.addw, d.rd, d.rd, other_rs);
+                                current_pc += next_dec.len;
+                                fused = true;
+                            }
+                        }
+                    }
+                    if (!fused) {
+                        emitShiftI(tb, &host_offset, emitter_rv64.slliw, d.rd, d.rs1, @as(u5, @truncate(d.shamt)));
+                    }
+                },
                 .srli => |d| emitShiftI(tb, &host_offset, emitter_rv64.srliw, d.rd, d.rs1, @as(u5, @truncate(d.shamt))),
                 .srai => |d| emitShiftI(tb, &host_offset, emitter_rv64.sraiw, d.rd, d.rs1, @as(u5, @truncate(d.shamt))),
                 .andi => |d| emitBitwiseI(tb, &host_offset, emitter_rv64.andi, d.rd, d.rs1, @as(i12, @truncate(d.imm))),
@@ -1239,13 +1271,43 @@ pub const Engine = struct {
                 // ---- Upper Immediate Operations ----
                 .lui => |d| {
                     if (d.rd == 0) {}
-                    else if (d.rd == 27) {
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(5, @as(i20, @truncate(d.imm))));
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 216));
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(5, 27, 40));
-                    } else {
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(d.imm))));
+                    else {
+                        // Check for lui + addi fusion: lui rd, upper followed by addi rd, rd, lower
+                        const next_pc = current_pc + decoded.len;
+                        var fused = false;
+                        if ((next_pc - start_pc) < (max_instructions * 4)) {
+                            const next_fetch = self.tlb.fetchU32(next_pc, self.bus);
+                            if (next_fetch.trap == null) {
+                                const next_dec = decoder_rv32.decode(next_fetch.val);
+                                if (next_dec.insn == .addi and next_dec.insn.addi.rd == d.rd and next_dec.insn.addi.rs1 == d.rd) {
+                                    const imm32 = (@as(u32, @bitCast(d.imm)) << 12) +% @as(u32, @bitCast(@as(i32, @intCast(next_dec.insn.addi.imm))));
+                                    const val_offset = imm32 +% 0x800;
+                                    if (d.rd == 27) {
+                                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
+                                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(5, @as(i20, @truncate(@as(i32, @bitCast(val_offset >> 12))))));
+                                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(5, 5, @as(i12, @truncate(@as(i32, @bitCast(imm32 & 0xFFF))))));
+                                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 216));
+                                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(5, 27, 40));
+                                    } else {
+                                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(@as(i32, @bitCast(val_offset >> 12))))));
+                                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, @as(i12, @truncate(@as(i32, @bitCast(imm32 & 0xFFF))))));
+                                    }
+                                    current_pc += next_dec.len;
+                                    fused = true;
+                                }
+                            }
+                        }
+
+                        if (!fused) {
+                            if (d.rd == 27) {
+                                emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
+                                emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(5, @as(i20, @truncate(d.imm))));
+                                emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 216));
+                                emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(5, 27, 40));
+                            } else {
+                                emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(d.imm))));
+                            }
+                        }
                     }
                 },
                 .auipc => |d| {
@@ -1266,20 +1328,116 @@ pub const Engine = struct {
                     }
                 },
 
-                // ---- Inlined SoftTLB Fast-Path Load & Store Operations ----
-                .lw => |d| self.emitSoftTlbLoad(tb, &host_offset, current_pc, 2, d.rd, d.rs1, @as(i12, @truncate(d.offset))),
-                .lh => |d| self.emitSoftTlbLoad(tb, &host_offset, current_pc, 1, d.rd, d.rs1, @as(i12, @truncate(d.offset))),
-                .lb => |d| self.emitSoftTlbLoad(tb, &host_offset, current_pc, 0, d.rd, d.rs1, @as(i12, @truncate(d.offset))),
-                .lhu => |d| self.emitSoftTlbLoad(tb, &host_offset, current_pc, 5, d.rd, d.rs1, @as(i12, @truncate(d.offset))),
-                .lbu => |d| self.emitSoftTlbLoad(tb, &host_offset, current_pc, 4, d.rd, d.rs1, @as(i12, @truncate(d.offset))),
-                .flw => |d| self.emitSoftTlbLoad(tb, &host_offset, current_pc, 6, d.rd, d.rs1, @as(i12, @truncate(d.offset))),
-                .fld => |d| self.emitSoftTlbLoad(tb, &host_offset, current_pc, 7, d.rd, d.rs1, @as(i12, @truncate(d.offset))),
+                // ---- Fast-Path Direct RAM Load & Store for Stack/Frame with Inlined SoftTLB Fallback ----
+                .lw => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastLoad(tb, &host_offset, 2, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbLoad(tb, &host_offset, current_pc, 2, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .lh => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastLoad(tb, &host_offset, 1, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbLoad(tb, &host_offset, current_pc, 1, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .lb => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastLoad(tb, &host_offset, 0, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbLoad(tb, &host_offset, current_pc, 0, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .lhu => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastLoad(tb, &host_offset, 5, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbLoad(tb, &host_offset, current_pc, 5, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .lbu => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastLoad(tb, &host_offset, 4, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbLoad(tb, &host_offset, current_pc, 4, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .flw => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastLoad(tb, &host_offset, 6, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbLoad(tb, &host_offset, current_pc, 6, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .fld => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastLoad(tb, &host_offset, 7, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbLoad(tb, &host_offset, current_pc, 7, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
+                    }
+                },
 
-                .sw => |d| self.emitSoftTlbStore(tb, &host_offset, current_pc, 2, d.rs1, d.rs2, @as(i12, @truncate(d.offset))),
-                .sh => |d| self.emitSoftTlbStore(tb, &host_offset, current_pc, 1, d.rs1, d.rs2, @as(i12, @truncate(d.offset))),
-                .sb => |d| self.emitSoftTlbStore(tb, &host_offset, current_pc, 0, d.rs1, d.rs2, @as(i12, @truncate(d.offset))),
-                .fsw => |d| self.emitSoftTlbStore(tb, &host_offset, current_pc, 6, d.rs1, d.rs2, @as(i12, @truncate(d.offset))),
-                .fsd => |d| self.emitSoftTlbStore(tb, &host_offset, current_pc, 7, d.rs1, d.rs2, @as(i12, @truncate(d.offset))),
+                .sw => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastStore(tb, &host_offset, 2, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbStore(tb, &host_offset, current_pc, 2, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .sh => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastStore(tb, &host_offset, 1, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbStore(tb, &host_offset, current_pc, 1, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .sb => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastStore(tb, &host_offset, 0, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbStore(tb, &host_offset, current_pc, 0, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .fsw => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastStore(tb, &host_offset, 6, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbStore(tb, &host_offset, current_pc, 6, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
+                    }
+                },
+                .fsd => |d| {
+                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
+                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                        tb.is_fast_path = true;
+                        emitFastStore(tb, &host_offset, 7, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                    } else {
+                        self.emitSoftTlbStore(tb, &host_offset, current_pc, 7, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
+                    }
+                },
 
                 // ---- Floating-Point Operations (Direct Native JIT Execution) ----
                 .fp_op => |d| emitter_rv64.emit(tb.host_code, &host_offset, d.raw),

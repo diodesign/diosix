@@ -194,6 +194,31 @@ pub const SoftTlb = struct {
         return null;
     }
 
+    /// Query the dynamic direct-mapped host physical delta for a virtual address.
+    /// Returns delta if the address falls within a verified linear contiguous RAM region.
+    pub fn getDirectMappingDelta(self: *SoftTlb, vaddr: u32) ?i64 {
+        // 1. Bare mode (satp == 0) or M-mode
+        const satp_mode = (self.satp >> 31) & 1;
+        if (satp_mode == 0 or self.privilege_mode == 3) {
+            if (vaddr >= self.guest_gpa_base and vaddr < self.guest_gpa_base + self.guest_ram_size) {
+                const hpa = self.guest_hpa_base + (vaddr - self.guest_gpa_base);
+                const vaddr_sign_ext = @as(i64, @as(i32, @bitCast(vaddr)));
+                return @as(i64, @intCast(hpa)) - vaddr_sign_ext;
+            }
+            return null;
+        }
+
+        // 2. Sv32 mode: Check verified contiguous regions
+        const reg_slot = (vaddr >> 22) & (MAX_CONTIGUOUS_REGIONS - 1);
+        const region = &self.contiguous_regions[reg_slot];
+        if (region.valid and vaddr >= region.vaddr_start and vaddr < region.vaddr_end) {
+            const vstart_sign_ext = @as(i64, @as(i32, @bitCast(region.vaddr_start)));
+            return @as(i64, @intCast(region.hpa_start)) - vstart_sign_ext;
+        }
+
+        return null;
+    }
+
     /// Translate virtual address to host physical address via direct mapping or Sv32 page table walk
     pub fn translateFull(self: *SoftTlb, vaddr: u32, is_write: bool, is_exec: bool, bus: *bus_mod.Bus) ?usize {
         _ = bus;

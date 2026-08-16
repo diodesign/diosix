@@ -18,6 +18,8 @@ pub const TranslationBlock = struct {
     guest_size: u32,
     host_code: []u8,
     host_len: usize,
+    layout_epoch: u32 = 0,
+    is_fast_path: bool = false,
     exit_branch1: ?ExitBranch = null,
     exit_branch2: ?ExitBranch = null,
     chained_block1: ?*TranslationBlock = null,
@@ -27,6 +29,9 @@ pub const TranslationBlock = struct {
         const branch = if (branch_idx == 0) self.exit_branch1 else self.exit_branch2;
         if (branch) |b| {
             if (!b.is_direct) return;
+            // Prevent closed native loops across basic blocks so that backward branches
+            // exit to the Engine dispatcher to promptly service interrupts, timer ticks, and IPIs.
+            if (b.target_guest_pc <= self.guest_pc) return;
             if (b.patch_offset + 8 > self.host_code.len) return;
             const src_host_addr = @intFromPtr(self.host_code.ptr) + b.patch_offset;
             const target_host_addr = @intFromPtr(target_tb.host_code.ptr);

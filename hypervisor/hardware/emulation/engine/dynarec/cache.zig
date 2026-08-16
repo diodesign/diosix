@@ -31,11 +31,13 @@ pub const Cache = struct {
     blocks: [MAX_BLOCKS]TranslationBlock = undefined,
     block_count: usize = 0,
     hash_table: [HASH_SIZE]?*TranslationBlock = std.mem.zeroes([HASH_SIZE]?*TranslationBlock),
+    layout_epoch: u32 = 1,
 
     pub fn initOnPtr(self: *Cache, buffer: []u8) void {
         self.code_buffer = buffer;
         self.code_offset = 0;
         self.block_count = 0;
+        self.layout_epoch = 1;
         @memset(std.mem.sliceAsBytes(self.hash_table[0..]), 0);
         self.initTrampolines();
     }
@@ -43,6 +45,7 @@ pub const Cache = struct {
     pub fn flush(self: *Cache) void {
         self.code_offset = 0;
         self.block_count = 0;
+        self.layout_epoch +%= 1;
         @memset(std.mem.sliceAsBytes(self.hash_table[0..]), 0);
         self.initTrampolines();
     }
@@ -61,7 +64,7 @@ pub const Cache = struct {
         var tries: usize = 0;
         while (tries < 8) : (tries += 1) {
             if (self.hash_table[slot]) |tb| {
-                if (tb.guest_pc == guest_pc and (guest_pc >= 0xC0000000 or tb.satp == satp)) return tb;
+                if (tb.layout_epoch == self.layout_epoch and tb.guest_pc == guest_pc and (guest_pc >= 0xC0000000 or tb.satp == satp)) return tb;
                 slot = (slot + 1) & (HASH_SIZE - 1);
             } else {
                 return null;
@@ -84,6 +87,8 @@ pub const Cache = struct {
             .guest_size = 0,
             .host_code = self.code_buffer[aligned_offset .. aligned_offset + max_host_len],
             .host_len = 0,
+            .layout_epoch = self.layout_epoch,
+            .is_fast_path = false,
         };
 
         return tb;
@@ -119,28 +124,32 @@ pub const Cache = struct {
     }
 
     pub fn chainBlock(self: *Cache, new_tb: *TranslationBlock) void {
-        // Forward chaining: patch outgoing branches to already compiled targets
+        // Forward chaining: patch outgoing forward branches to already compiled targets
         if (new_tb.exit_branch1) |b1| {
-            if (self.lookup(b1.target_guest_pc, new_tb.satp)) |target| {
-                new_tb.patchBranch(0, target);
+            if (b1.target_guest_pc > new_tb.guest_pc) {
+                if (self.lookup(b1.target_guest_pc, new_tb.satp)) |target| {
+                    new_tb.patchBranch(0, target);
+                }
             }
         }
         if (new_tb.exit_branch2) |b2| {
-            if (self.lookup(b2.target_guest_pc, new_tb.satp)) |target| {
-                new_tb.patchBranch(1, target);
+            if (b2.target_guest_pc > new_tb.guest_pc) {
+                if (self.lookup(b2.target_guest_pc, new_tb.satp)) |target| {
+                    new_tb.patchBranch(1, target);
+                }
             }
         }
 
-        // Backward chaining: check if any existing blocks can now jump to new_tb
+        // Backward chaining: check if any existing blocks can now jump forward to new_tb
         for (self.blocks[0..self.block_count]) |*tb| {
             if (tb == new_tb) continue;
             if (tb.exit_branch1) |b1| {
-                if (b1.target_guest_pc == new_tb.guest_pc and (new_tb.guest_pc >= 0xC0000000 or tb.satp == new_tb.satp)) {
+                if (b1.target_guest_pc == new_tb.guest_pc and new_tb.guest_pc > tb.guest_pc and (new_tb.guest_pc >= 0xC0000000 or tb.satp == new_tb.satp)) {
                     tb.patchBranch(0, new_tb);
                 }
             }
             if (tb.exit_branch2) |b2| {
-                if (b2.target_guest_pc == new_tb.guest_pc and (new_tb.guest_pc >= 0xC0000000 or tb.satp == new_tb.satp)) {
+                if (b2.target_guest_pc == new_tb.guest_pc and new_tb.guest_pc > tb.guest_pc and (new_tb.guest_pc >= 0xC0000000 or tb.satp == new_tb.satp)) {
                     tb.patchBranch(1, new_tb);
                 }
             }
