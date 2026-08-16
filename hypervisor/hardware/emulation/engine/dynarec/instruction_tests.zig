@@ -350,6 +350,31 @@ test "RV32 Floating-Point (F/D) Decoding, Decompression & Emission" {
     const c_fld: u16 = 0x25a0;
     const c_fld_dec = decoder_rv32.decode(c_fld);
     try std.testing.expect(c_fld_dec.insn == .fld);
+
+    // 6. Floating-point computational opcodes (0x53, 0x43, 0x47, 0x4b, 0x4f)
+    // fadd.s ft0, ft1, ft2: 0x0020f053
+    const fadd_s = decoder_rv32.decode(0x0020f053);
+    try std.testing.expectEqual(decoder_rv32.Instruction{ .fp_op = .{ .raw = 0x0020f053 } }, fadd_s.insn);
+
+    // fmul.d ft0, ft1, ft2: 0x1220f053
+    const fmul_d = decoder_rv32.decode(0x1220f053);
+    try std.testing.expectEqual(decoder_rv32.Instruction{ .fp_op = .{ .raw = 0x1220f053 } }, fmul_d.insn);
+
+    // fmadd.s ft0, ft1, ft2, ft3: 0x1a20f043
+    const fmadd_s = decoder_rv32.decode(0x1a20f043);
+    try std.testing.expectEqual(decoder_rv32.Instruction{ .fp_op = .{ .raw = 0x1a20f043 } }, fmadd_s.insn);
+
+    // fsqrt.s ft0, ft1: 0x5800f053
+    const fsqrt_s = decoder_rv32.decode(0x5800f053);
+    try std.testing.expectEqual(decoder_rv32.Instruction{ .fp_op = .{ .raw = 0x5800f053 } }, fsqrt_s.insn);
+
+    // feq.s a0, ft0, ft1: 0xa0102553
+    const feq_s = decoder_rv32.decode(0xa0102553);
+    try std.testing.expectEqual(decoder_rv32.Instruction{ .fp_op = .{ .raw = 0xa0102553 } }, feq_s.insn);
+
+    // fcvt.w.s a0, ft0: 0xc0000553
+    const fcvt_w_s = decoder_rv32.decode(0xc0000553);
+    try std.testing.expectEqual(decoder_rv32.Instruction{ .fp_op = .{ .raw = 0xc0000553 } }, fcvt_w_s.insn);
 }
 
 

@@ -90,6 +90,7 @@ pub const Cache = struct {
 
     pub fn commitBlock(self: *Cache, tb: *TranslationBlock, code_bytes: usize) void {
         const aligned = (code_bytes + 7) & ~@as(usize, 7);
+        tb.host_code = tb.host_code[0..aligned];
         self.code_offset += aligned;
 
         var slot = hash(tb.guest_pc);

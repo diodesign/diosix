@@ -26,6 +26,7 @@ pub const TranslationBlock = struct {
         const branch = if (branch_idx == 0) self.exit_branch1 else self.exit_branch2;
         if (branch) |b| {
             if (!b.is_direct) return;
+            if (b.patch_offset + 8 > self.host_code.len) return;
             const src_host_addr = @intFromPtr(self.host_code.ptr) + b.patch_offset;
             const target_host_addr = @intFromPtr(target_tb.host_code.ptr);
             const rel_offset = @as(isize, @bitCast(target_host_addr)) - @as(isize, @bitCast(src_host_addr));

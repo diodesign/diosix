@@ -912,7 +912,7 @@ pub const Engine = struct {
         if (self.cache.lookup(start_pc)) |existing| return existing;
 
         const max_instructions: usize = 32;
-        const max_host_bytes: usize = max_instructions * 160 + 256;
+        const max_host_bytes: usize = max_instructions * 200 + 512;
         const tb = try self.cache.allocateBlock(start_pc, max_host_bytes);
 
         var current_pc = start_pc;
@@ -923,7 +923,7 @@ pub const Engine = struct {
         emitter_rv64.emit(tb.host_code, &host_offset, 0x240022f3); // csrr t0, vsscratch
 
         while ((current_pc - start_pc) < (max_instructions * 4)) {
-            if (host_offset + 180 >= tb.host_code.len) break;
+            if (host_offset + 256 >= tb.host_code.len) break;
 
             const fetch_res = self.tlb.fetchU32(current_pc, self.bus);
             if (fetch_res.trap) |cause| {
