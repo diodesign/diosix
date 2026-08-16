@@ -333,10 +333,10 @@ fn handleSystemReset(vc: *vcore.VirtualCore, _: *riscv.ThreadContext, function: 
 }
 
 fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize) void {
+    _ = function;
     const g = vc.getGuest();
     const hart_mask = a0;
     const hart_mask_base = a1;
-    const is_fence_i = (function == 0);
 
     if (vc.exec_path == .emulated) {
         if (hart_mask_base == std.math.maxInt(usize) or (hart_mask_base & 0xffffffff) == 0xffffffff) {
@@ -345,12 +345,12 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                     if (target_vc == vc) {
                         if (target_vc.exec_path.emulated.engine) |eng| {
                             eng.tlb.flush();
-                            if (is_fence_i) eng.cache.flush();
+                            eng.cache.flush();
                         }
                     } else if (target_vc.exec_path == .emulated) {
                         if (target_vc.exec_path.emulated.vcpu) |v| {
                             v.setNeedsTlbFlush();
-                            if (is_fence_i) v.setNeedsCacheFlush();
+                            v.setNeedsCacheFlush();
                         }
                     }
                 }
@@ -366,12 +366,12 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                             if (target_vc == vc) {
                                 if (target_vc.exec_path.emulated.engine) |eng| {
                                     eng.tlb.flush();
-                                    if (is_fence_i) eng.cache.flush();
+                                    eng.cache.flush();
                                 }
                             } else if (target_vc.exec_path == .emulated) {
                                 if (target_vc.exec_path.emulated.vcpu) |v| {
                                     v.setNeedsTlbFlush();
-                                    if (is_fence_i) v.setNeedsCacheFlush();
+                                    v.setNeedsCacheFlush();
                                 }
                             }
                         }

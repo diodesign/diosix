@@ -909,11 +909,11 @@ pub const Engine = struct {
 
     /// Compile guest basic block starting at `guest_pc` directly into RV64 machine code
     pub fn translateBlock(self: *Engine, start_pc: u32) !*block_mod.TranslationBlock {
-        if (self.cache.lookup(start_pc)) |existing| return existing;
+        if (self.cache.lookup(start_pc, self.vcpu.satp)) |existing| return existing;
 
         const max_instructions: usize = 32;
         const max_host_bytes: usize = max_instructions * 200 + 512;
-        const tb = try self.cache.allocateBlock(start_pc, max_host_bytes);
+        const tb = try self.cache.allocateBlock(start_pc, self.vcpu.satp, max_host_bytes);
 
         var current_pc = start_pc;
         var host_offset: usize = 0;
@@ -1028,7 +1028,17 @@ pub const Engine = struct {
 
                 // ---- Barriers & CSRs ----
                 .fence => emitter_rv64.emit(tb.host_code, &host_offset, 0x0ff0000f),
-                .fence_i => emitter_rv64.emit(tb.host_code, &host_offset, 0x0000100f),
+                .fence_i => {
+                    emitter_rv64.emit(tb.host_code, &host_offset, 0x0000100f);
+                    tb.exit_branch1 = emitExit(tb, &host_offset, current_pc + 4);
+                    has_explicit_exit = true;
+                    break;
+                },
+                .sfence_vma => {
+                    tb.exit_branch1 = emitExit(tb, &host_offset, current_pc);
+                    has_explicit_exit = true;
+                    break;
+                },
 
                 .csrrs => |d| {
                     if (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02) { // rdtime / rdcycle / rdinstret
@@ -2163,7 +2173,7 @@ pub const ExitReason = enum {
                 }
             }
             // ---- Tier 1 Dynarec: Lookup or translate basic block ----
-            if (self.cache.lookup(pc_before)) |tb| {
+            if (self.cache.lookup(pc_before, self.vcpu.satp)) |tb| {
                 const ret_pc = @as(u32, @truncate(runBlock(&self.vcpu.regs, @intFromPtr(tb.host_code.ptr))));
                 const insn_approx = @max(1, tb.guest_size / 2);
                 self.jit_cycles +%= insn_approx;

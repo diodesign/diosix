@@ -7,6 +7,7 @@ const std = @import("std");
 const vuart_mod = @import("vuart.zig");
 const vtimer_mod = @import("vtimer.zig");
 const vpic_mod = @import("vpic.zig");
+const vcpu_mod = @import("../vcpu.zig");
 
 pub const Bus = struct {
     uart: *vuart_mod.VirtualUart,
@@ -18,6 +19,7 @@ pub const Bus = struct {
         if (addr >= 0x10001000 and addr < 0x10009000) return true; // VirtIO MMIO slots 0..7
         if (addr >= 0x02000000 and addr < 0x02010000) return true; // CLINT Timer
         if (addr >= 0x0c000000 and addr < 0x10000000) return true; // PLIC
+        if (addr >= 0x00100000 and addr < 0x00102000) return true; // Test & Goldfish RTC
         return false;
     }
 
@@ -44,6 +46,13 @@ pub const Bus = struct {
             return self.timer.read(@truncate(addr - 0x02000000));
         } else if (addr >= 0x0c000000 and addr < 0x10000000) {
             return self.pic.read(@truncate(addr - 0x0c000000));
+        } else if (addr >= 0x00101000 and addr < 0x00102000) {
+            // Goldfish RTC: offset 0x00 = TIME_LOW, offset 0x04 = TIME_HIGH (nanoseconds since epoch)
+            const reg_offset = addr & 0xFFF;
+            const time_ns: u64 = vcpu_mod.readHostTime() *% 100;
+            if (reg_offset == 0x00) return @truncate(time_ns);
+            if (reg_offset == 0x04) return @truncate(time_ns >> 32);
+            return 0;
         }
         return 0;
     }
@@ -58,6 +67,8 @@ pub const Bus = struct {
             self.timer.write(@truncate(addr - 0x02000000), val);
         } else if (addr >= 0x0c000000 and addr < 0x10000000) {
             self.pic.write(@truncate(addr - 0x0c000000), val);
+        } else if (addr >= 0x00100000 and addr < 0x00102000) {
+            // Test & Goldfish RTC writes
         }
     }
 };

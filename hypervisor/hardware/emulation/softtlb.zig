@@ -88,17 +88,8 @@ pub const SoftTlb = struct {
     }
 
     pub fn ppnToGpa(self: *SoftTlb, ppn: usize) usize {
-        const addr = ppn << 12;
-        if (bus_mod.Bus.isMmioAddr(@truncate(addr))) {
-            return addr;
-        }
-        if (ppn >= (self.guest_gpa_base >> 12) and ppn < ((self.guest_gpa_base + self.guest_ram_size) >> 12)) {
-            return addr;
-        }
-        if (ppn < (self.guest_ram_size >> 12)) {
-            return self.guest_gpa_base + addr;
-        }
-        return addr;
+        _ = self;
+        return ppn << 12;
     }
 
     pub fn translateGpaToHpa(self: *SoftTlb, gpa: usize) ?usize {
