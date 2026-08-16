@@ -577,41 +577,36 @@ For each guest basic block:
 3. **Emit**: Generate host RV64 instructions directly into the code buffer. No intermediate representation.
 4. **Terminate**: End the block at any control flow change, privileged instruction, or MMIO-touching instruction.
 
-#### 8.4.2 Block Termination Points
+#### 8.4.2 Inlined vs. Block Termination Actions
 
-A translated block ends when the decoder encounters:
+The dynarec maximizes basic block length by compiling all non-exiting instruction categories directly into host RV64 machine instructions:
 
-| Guest Instruction | Block Termination Action |
+| Guest Instruction Category | Dynarec Action |
 |---|---|
-| Conditional branch (`beq`, `bne`, etc.) | Emit: test condition → branch to chained target or fallthrough |
-| Unconditional jump (`jal`, `jalr`) | Emit: update `vcpu.pc`, jump to chained target or return to dispatcher |
-| `ecall` | Emit: set `vcpu.pc`, execute `ecall` instruction (traps to M-mode) |
-| `ebreak` | Emit: inject breakpoint exception into VCpu |
-| `mret` / `sret` | Emit: call interpreter for privilege transition, return to dispatcher |
-| `wfi` | Emit: set `vcpu.pc`, execute `ecall` with WFI indicator (traps to M-mode) |
-| `sfence.vma` | Emit: flush SoftTLB + invalidate code cache, return to dispatcher |
-| MMIO load/store | Emit: call `bus.read()`/`bus.write()`, continue (does not end block) |
-| CSR access | Emit: call interpreter `stepCsr()` for the single instruction, continue |
-| AMO/LR/SC | Emit: call interpreter `stepAtomic()`, continue |
+| R-Type / I-Type Arithmetic (`add`, `sub`, `sll`, `slt`, `xor`, `srl`, `sra`, `or`, `and`, `addi`, etc.) | Emit direct RV64 word operations (`addw`, `subw`, `sllw`, `srlw`, `sraw`, `andi`, `ori`, `xori`, etc.) |
+| M-Extension Multiply & Divide (`mul`, `div`, `divu`, `rem`, `remu`) | Emit direct RV64 32-bit hardware instructions (`mulw`, `divw`, `divuw`, `remw`, `remuw`) |
+| M-Extension High-Half Multiply (`mulh`, `mulhu`, `mulhsu`) | Terminate block, fall back to interpreter (`executeDecoded`) for 64-bit precision without register clobbering |
+| A-Extension Atomics (`lr.w`, `sc.w`, `amoswap.w`, `amoadd.w`, `amoxor.w`, `amoand.w`, `amoor.w`, `amomin.w`, `amomax.w`, `amominu.w`, `amomaxu.w`) | Emit native RV64 host atomic instructions with 512MB RAM windowing |
+| Stack & Frame Loads/Stores (`lw`, `lh`, `lb`, `lhu`, `lbu`, `sw`, `sh`, `sb` on `sp`, `gp`, `s0`) | Emit direct-mapped RAM loads and stores (`(vaddr & 0x1FFFFFFF) + 0x00000000E0000000`) |
+| Memory Barriers (`fence`, `fence.i`) | Emit host hardware barrier instructions |
+| Timer & Cycle CSRs (`rdtime`, `rdtimeh`, `rdcycle`, `rdcycleh`) | Emit host CSR read (`0xC01` / `0xC00`) with word sign/zero extension |
+| Conditional Branches (`beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`) | Terminate block, emit 2-way direct block chaining |
+| Unconditional Jumps (`jal`, `jalr`) | Terminate block, update `vcpu.pc`, emit direct jump chaining |
+| Privileged & System (`ecall`, `mret`, `sret`, `sfence.vma`, `wfi`, non-timer CSRs) | Terminate block, exit to M-mode hypervisor or SoftTLB |
 
-#### 8.4.3 Host Code Emission
+#### 8.4.3 Host Code Emission & Direct Register Mapping
 
-The emitter generates raw RV64 instruction words. Guest register accesses are emitted as loads/stores to the `VCpu.regs[]` array, with hot registers pinned to host registers within the block (see §8.7).
+The emitter generates raw RV64 instruction words. Guest general-purpose registers `x1..x31` map directly 1-to-1 to host physical registers during basic block execution, yielding zero load/store overhead between operations.
+
+- `stval` (CSR `0x143`): Preserves the `regs_ptr` base pointer across block boundaries.
+- `sscratch` (CSR `0x140`): Saves/restores guest `t0` (`x5`) during scratch address computations.
+- `scause` (CSR `0x142`): Saves/restores guest `t1` (`x6`) during scratch address computations.
 
 Example: translating `add a0, a1, a2` (RV32) → RV64 host code:
 
 ```
-// Load guest a1 into host t0
-ld t0, offsetof(VCpu.regs[11])(s0)    // s0 = VCpu base pointer
-// Load guest a2 into host t1
-ld t1, offsetof(VCpu.regs[12])(s0)
-// 32-bit add with sign extension
-addw t0, t0, t1
-// Store result to guest a0
-sd t0, offsetof(VCpu.regs[10])(s0)
+addw a0, a1, a2    // Single native 32-bit arithmetic instruction!
 ```
-
-With register pinning (§8.7), if a1 and a2 are pinned to host registers, this reduces to a single `addw` instruction.
 
 ### 8.5 Block Chaining
 
@@ -1604,6 +1599,23 @@ Run via `./scripts/build.sh test`:
 - Device registers: read/write behavior for 16550, CLINT, PLIC, virtio.
 - Serialization: round-trip serialize/deserialize for all state types.
 - Fault tracker: classification accuracy for all fault types.
+
+#### 18.1.1 Dynamic Binary Recompiler (Dynarec) Instruction Unit Test Suite
+
+All dynamically translated instruction categories must be backed by comprehensive unit tests that verify bit-exact host RV64 code generation, register safety invariants, and architectural correctness against the reference interpreter.
+
+| Instruction Suite | Coverage & Validation Requirements | Test Location |
+|---|---|---|
+| **RV32I Base Integer** | R-type arithmetic (`add`, `sub`, `sll`, `slt`, `sltu`, `xor`, `srl`, `sra`, `or`, `and`), I-type immediates (`addi`, `slli`, `srli`, `srai`, `andi`, `ori`, `xori`, `slti`, `sltiu`), upper immediates (`lui`, `auipc`). | `decoders/rv32.zig`, `dynarec/engine.zig` |
+| **RV32M Multiply/Divide** | 32-bit hardware ops (`mulw`, `divw`, `divuw`, `remw`, `remuw`), high-half ops (`mulh`, `mulhu`, `mulhsu`) verified for clean fallback and 64-bit precision. | `decoders/rv32.zig`, `dynarec/engine.zig` |
+| **RV32A Atomic Memory** | `lr.w`, `sc.w`, `amoswap.w`, `amoadd.w`, `amoxor.w`, `amoand.w`, `amoor.w`, `amomin.w`, `amomax.w`, `amominu.w`, `amomaxu.w` with 512MB RAM windowing and scratch CSR preservation (`sscratch`/`scause`). | `decoders/rv32.zig`, `dynarec/engine.zig` |
+| **RV32C Compressed (RVC)** | Decompression for stack/register ops (`c.li`, `c.lui`, `c.addi`, `c.addi16sp`, `c.mv`, `c.jr`, `c.jalr`, `c.lwsp`, `c.swsp`, etc.). | `decoders/rv32.zig` |
+| **Memory Operations** | Fast direct loads and stores (`lw`, `lh`, `lb`, `lhu`, `lbu`, `sw`, `sh`, `sb` on `sp`, `gp`, `s0`) with 35-bit shift 512MB DRAM bounds check (`0xE0000000..0xFFFFFFFF`). | `dynarec/engine.zig` |
+| **Barriers & CSRs** | `fence`, `fence.i`, `rdtime`, `rdtimeh`, `rdcycle`, `rdcycleh` emission and register writeback. | `decoders/rv32.zig`, `dynarec/engine.zig` |
+| **Control Flow & Chaining** | Conditional branch 2-way chaining (`beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`) and direct jump chaining (`jal`, `jalr`). | `dynarec/engine.zig` |
+
+> [!IMPORTANT]
+> **Mandatory Extension Policy**: Any newly added instruction or foreign architecture decoder (e.g. AArch64, x86_64) must provide matching decoder tests and dynarec emission unit tests before integration into the JIT engine.
 
 ### 18.2 Integration Tests (QEMU)
 

@@ -43,9 +43,11 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
             to_vcore.guest.space.apply(to_vcore.guest.vmid);
         },
         .emulated => |*e| {
-            // Store physical CPU core context pointer in emulated runner's tp register
+            to_vcore.guest.space.apply(to_vcore.guest.vmid);
+            // Store physical CPU core context pointer in emulated runner's tp register and vcore in a0
             if (!e.emu_running) {
                 e.context[@intFromEnum(riscv.Register.tp)] = @intFromPtr(cpu);
+                e.context[@intFromEnum(riscv.Register.a0)] = @intFromPtr(to_vcore);
             }
         },
     }

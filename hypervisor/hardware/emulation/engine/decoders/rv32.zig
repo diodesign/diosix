@@ -515,3 +515,153 @@ pub fn decode(raw_code: u32) DecodedInsn {
 
     return .{ .insn = parsed, .len = len };
 }
+
+test "RV32I Base Integer Instructions Decoding" {
+    // add a0, a1, a2 (0x00c58533: rd=10, rs1=11, rs2=12)
+    const add_dec = decode(0x00c58533);
+    try std.testing.expectEqual(@as(usize, 4), add_dec.len);
+    try std.testing.expectEqual(@as(u5, 10), add_dec.insn.add.rd);
+    try std.testing.expectEqual(@as(u5, 11), add_dec.insn.add.rs1);
+    try std.testing.expectEqual(@as(u5, 12), add_dec.insn.add.rs2);
+
+    // sub a0, a1, a2 (0x40c58533)
+    const sub_dec = decode(0x40c58533);
+    try std.testing.expectEqual(@as(u5, 10), sub_dec.insn.sub.rd);
+
+    // sll, slt, sltu, xor, srl, sra, or, and
+    try std.testing.expectEqual(@as(u5, 10), decode(0x00c59533).insn.sll.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x00c5a533).insn.slt.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x00c5b533).insn.sltu.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x00c5c533).insn.xor_.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x00c5d533).insn.srl.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x40c5d533).insn.sra.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x00c5e533).insn.or_.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x00c5f533).insn.and_.rd);
+
+    // addi sp, sp, -16 (0xff010113)
+    const addi_dec = decode(0xff010113);
+    try std.testing.expectEqual(@as(u5, 2), addi_dec.insn.addi.rd);
+    try std.testing.expectEqual(@as(u5, 2), addi_dec.insn.addi.rs1);
+    try std.testing.expectEqual(@as(i32, -16), addi_dec.insn.addi.imm);
+
+    // lui a0, 0x12345 (0x12345537)
+    const lui_dec = decode(0x12345537);
+    try std.testing.expectEqual(@as(u5, 10), lui_dec.insn.lui.rd);
+    try std.testing.expectEqual(@as(i32, 0x12345), lui_dec.insn.lui.imm);
+
+    // auipc a0, 0x1000 (0x01000517)
+    const auipc_dec = decode(0x01000517);
+    try std.testing.expectEqual(@as(u5, 10), auipc_dec.insn.auipc.rd);
+    try std.testing.expectEqual(@as(i32, 0x1000), auipc_dec.insn.auipc.imm);
+
+    // lw a0, 8(sp) (0x00812503)
+    const lw_dec = decode(0x00812503);
+    try std.testing.expectEqual(@as(u5, 10), lw_dec.insn.lw.rd);
+    try std.testing.expectEqual(@as(u5, 2), lw_dec.insn.lw.rs1);
+    try std.testing.expectEqual(@as(i32, 8), lw_dec.insn.lw.offset);
+
+    // sw a0, 12(sp) (0x00a12623)
+    const sw_dec = decode(0x00a12623);
+    try std.testing.expectEqual(@as(u5, 2), sw_dec.insn.sw.rs1);
+    try std.testing.expectEqual(@as(u5, 10), sw_dec.insn.sw.rs2);
+    try std.testing.expectEqual(@as(i32, 12), sw_dec.insn.sw.offset);
+}
+
+test "RV32M Multiply & Divide Decoding" {
+    // mul a0, a1, a2 (0x02c58533)
+    const mul_dec = decode(0x02c58533);
+    try std.testing.expectEqual(@as(u5, 10), mul_dec.insn.mul.rd);
+    try std.testing.expectEqual(@as(u5, 11), mul_dec.insn.mul.rs1);
+    try std.testing.expectEqual(@as(u5, 12), mul_dec.insn.mul.rs2);
+
+    // mulh, mulhsu, mulhu
+    try std.testing.expectEqual(@as(u5, 10), decode(0x02c59533).insn.mulh.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x02c5a533).insn.mulhsu.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x02c5b533).insn.mulhu.rd);
+
+    // div, divu, rem, remu
+    try std.testing.expectEqual(@as(u5, 10), decode(0x02c5c533).insn.div.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x02c5d533).insn.divu.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x02c5e533).insn.rem.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x02c5f533).insn.remu.rd);
+}
+
+test "RV32A Atomic Memory Instructions Decoding" {
+    // lr.w a0, (a1) (0x1005a52f)
+    const lr_dec = decode(0x1005a52f);
+    try std.testing.expectEqual(@as(u5, 10), lr_dec.insn.lr_w.rd);
+    try std.testing.expectEqual(@as(u5, 11), lr_dec.insn.lr_w.rs1);
+
+    // sc.w a0, a2, (a1) (0x18c5a52f)
+    const sc_dec = decode(0x18c5a52f);
+    try std.testing.expectEqual(@as(u5, 10), sc_dec.insn.sc_w.rd);
+    try std.testing.expectEqual(@as(u5, 11), sc_dec.insn.sc_w.rs1);
+    try std.testing.expectEqual(@as(u5, 12), sc_dec.insn.sc_w.rs2);
+
+    // amoswap.w, amoadd.w, amoxor.w, amoand.w, amoor.w, amomin.w, amomax.w, amominu.w, amomaxu.w
+    try std.testing.expectEqual(@as(u5, 10), decode(0x08c5a52f).insn.amoswap_w.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x00c5a52f).insn.amoadd_w.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x20c5a52f).insn.amoxor_w.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x60c5a52f).insn.amoand_w.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x40c5a52f).insn.amoor_w.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0x80c5a52f).insn.amomin_w.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0xa0c5a52f).insn.amomax_w.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0xc0c5a52f).insn.amominu_w.rd);
+    try std.testing.expectEqual(@as(u5, 10), decode(0xe0c5a52f).insn.amomaxu_w.rd);
+}
+
+test "RV32C Compressed Instruction Decompression" {
+    // c.li a0, 5 (0x4515) -> addi a0, x0, 5 (len=2)
+    const cli_dec = decode(0x4515);
+    try std.testing.expectEqual(@as(usize, 2), cli_dec.len);
+    try std.testing.expectEqual(@as(u5, 10), cli_dec.insn.addi.rd);
+    try std.testing.expectEqual(@as(u5, 0), cli_dec.insn.addi.rs1);
+    try std.testing.expectEqual(@as(i32, 5), cli_dec.insn.addi.imm);
+
+    // c.addi sp, -16 (0x1141) -> addi sp, sp, -16
+    const caddi16sp_dec = decode(0x7179);
+    try std.testing.expectEqual(@as(usize, 2), caddi16sp_dec.len);
+    try std.testing.expectEqual(@as(u5, 2), caddi16sp_dec.insn.addi.rd);
+    try std.testing.expectEqual(@as(u5, 2), caddi16sp_dec.insn.addi.rs1);
+
+    // c.mv a0, a1 (0x852e) -> addi a0, a1, 0
+    const cmv_dec = decode(0x852e);
+    try std.testing.expectEqual(@as(usize, 2), cmv_dec.len);
+    try std.testing.expectEqual(@as(u5, 10), cmv_dec.insn.addi.rd);
+    try std.testing.expectEqual(@as(u5, 11), cmv_dec.insn.addi.rs1);
+    try std.testing.expectEqual(@as(i32, 0), cmv_dec.insn.addi.imm);
+
+    // c.jr ra (0x8082) -> jalr x0, 0(ra)
+    const cjr_dec = decode(0x8082);
+    try std.testing.expectEqual(@as(usize, 2), cjr_dec.len);
+    try std.testing.expectEqual(@as(u5, 0), cjr_dec.insn.jalr.rd);
+    try std.testing.expectEqual(@as(u5, 1), cjr_dec.insn.jalr.rs1);
+
+    // c.jalr a5 (0x9782) -> jalr ra, 0(a5)
+    const cjalr_dec = decode(0x9782);
+    try std.testing.expectEqual(@as(usize, 2), cjalr_dec.len);
+    try std.testing.expectEqual(@as(u5, 1), cjalr_dec.insn.jalr.rd);
+    try std.testing.expectEqual(@as(u5, 15), cjalr_dec.insn.jalr.rs1);
+}
+
+test "Barriers & CSR Instructions Decoding" {
+    // fence (0x0ff0000f)
+    const fence_dec = decode(0x0ff0000f);
+    try std.testing.expect(switch (fence_dec.insn) {
+        .fence => true,
+        else => false,
+    });
+
+    // fence.i (0x0000100f)
+    const fence_i_dec = decode(0x0000100f);
+    try std.testing.expect(switch (fence_i_dec.insn) {
+        .fence_i => true,
+        else => false,
+    });
+
+    // csrrs a0, time, x0 (0xc0102573: rd=10, rs1=0, csr=0xC01)
+    const csr_dec = decode(0xc0102573);
+    try std.testing.expectEqual(@as(u5, 10), csr_dec.insn.csrrs.rd);
+    try std.testing.expectEqual(@as(u5, 0), csr_dec.insn.csrrs.rs1);
+    try std.testing.expectEqual(@as(u12, 0xC01), csr_dec.insn.csrrs.csr);
+}

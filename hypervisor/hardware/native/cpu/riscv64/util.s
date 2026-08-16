@@ -225,15 +225,14 @@ siglongjmp:
 1:
   ret
 
-# Execute JIT translated code block with native host registers
+# Execute JIT translated code block in Supervisor (S) Mode
 # a0 = pointer to [32]u64 (vcpu.regs)
+# a1 = host code function pointer
 .section .bss
 .align 8
 hw_dynarec_host_sp:
   .space 8 * 8   # up to 8 harts
-hw_dynarec_regs_ptr:
-  .space 8 * 8
-hw_dynarec_saved_mstatus:
+hw_dynarec_saved_sstatus:
   .space 8 * 8
 
 .section .text
@@ -243,10 +242,7 @@ hw_dynarec_saved_mstatus:
 # a1 = host code function pointer
 # returns a0 = branch exit code / target pc
 hw_dynarec_run_block:
-  # 1. Disable machine-mode interrupts while running JIT basic block
-  csrrci t2, mstatus, 8   # Clear MIE, t2 = previous mstatus
-
-  # 2. Save host callee-saved registers on host stack
+  # 1. Save host callee-saved registers on S-mode host stack
   addi sp, sp, -128
   sd ra, 0(sp)
   sd s0, 8(sp)
@@ -264,31 +260,21 @@ hw_dynarec_run_block:
   sd tp, 104(sp)
   sd gp, 112(sp)
 
-  # 3. Get hardware hart ID for per-hart storage
-  csrr t0, mhartid
-  slli t0, t0, 3
-
-  # 4. Save host stack pointer
+  # 2. Save S-mode host stack pointer
   la t1, hw_dynarec_host_sp
-  add t1, t1, t0
   sd sp, 0(t1)
 
-  # 5. Save regs pointer in mtval (CSR 0x343)
-  csrw mtval, a0
+  # 3. Save regs pointer in stval (S-Mode CSR 0x143)
+  csrw stval, a0
 
-  # 6. Save previous mstatus
-  la t1, hw_dynarec_saved_mstatus
-  add t1, t1, t0
-  sd t2, 0(t1)
-
-  # 7. Move target block entry pointer to t0
+  # 4. Move target block entry pointer to t0
   mv t0, a1
 
-  # 8. Put guest t0 (x5) into sscratch for block prologue
+  # 5. Put guest t0 (x5) into sscratch for block prologue
   ld t1, 40(a0)
   csrw sscratch, t1
 
-  # 9. Load guest registers from a0 (regs pointer)
+  # 6. Load guest registers from a0 (regs pointer)
   ld x1, 8(a0)
   ld x3, 24(a0)
   ld x4, 32(a0)
@@ -322,22 +308,22 @@ hw_dynarec_run_block:
   ld x2, 16(a0)
   ld x10, 80(a0)
 
-  # 10. Jump to translated block
+  # 7. Jump to translated block in S-mode
   jr t0
 
 .globl hw_dynarec_exit
 .type hw_dynarec_exit, @function
 hw_dynarec_exit:
-  # On entry:
-  # mepc holds target_pc (saved by emitExit)
-  # sscratch holds guest t0 (saved by emitExit)
-  # mtval (0x343) holds regs_ptr (&self.vcpu.regs)
+  # On entry from S-mode JIT block exit:
+  # sepc (CSR 0x141) holds target_pc (saved by emitExit)
+  # sscratch (CSR 0x140) holds guest t0 (saved by emitExit)
+  # stval (CSR 0x143) holds regs_ptr (&self.vcpu.regs)
   # All other registers x1..x4, x6..x31 hold pristine guest registers!
 
-  # 1. Load regs_ptr into t0 directly from mtval (CSR 0x343)
-  csrr t0, mtval
+  # 1. Load regs_ptr into t0 directly from stval (CSR 0x143)
+  csrr t0, stval
 
-  # 3. Store all 30 pristine guest registers to regs_ptr (t0)
+  # 2. Store all 30 pristine guest registers to regs_ptr (t0)
   sd x1, 8(t0)       # guest ra (x1)
   sd x2, 16(t0)      # guest sp (x2)
   sd x3, 24(t0)      # guest gp (x3)
@@ -369,23 +355,19 @@ hw_dynarec_exit:
   sd x30, 240(t0)    # guest t5 (x30)
   sd x31, 248(t0)    # guest t6 (x31)
 
-  # 5. Read saved guest t0 (from sscratch) and store to 40(t0)
+  # 3. Read saved guest t0 (from sscratch) and store to 40(t0)
   csrr t1, sscratch
   sd t1, 40(t0)
 
-  # 6. Read target_pc from mepc and store to vcpu.pc (offset 256)
-  csrr t1, mepc
+  # 4. Read target_pc from sepc (CSR 0x141) and store to vcpu.pc (offset 256)
+  csrr t1, sepc
   sw t1, 256(t0)
 
-  # 7. Restore host stack pointer
-  csrr t0, mhartid
-  slli t0, t0, 3
-
+  # 5. Restore host stack pointer
   la t2, hw_dynarec_host_sp
-  add t2, t2, t0
   ld sp, 0(t2)
 
-  # 8. Restore host callee-saved registers from host stack
+  # 6. Restore host callee-saved registers from S-mode host stack
   ld ra, 0(sp)
   ld s0, 8(sp)
   ld s1, 16(sp)
@@ -403,13 +385,7 @@ hw_dynarec_exit:
   ld gp, 112(sp)
   addi sp, sp, 128
 
-  # 9. Return target_pc in a0 for C ABI
+  # 7. Return target_pc in a0 for C ABI
   mv a0, t1
-
-  # 10. Restore saved mstatus (re-enables interrupts if they were enabled)
-  la t2, hw_dynarec_saved_mstatus
-  add t2, t2, t0
-  ld t2, 0(t2)
-  csrw mstatus, t2
 
   ret

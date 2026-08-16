@@ -249,7 +249,7 @@ pub const VirtualCore = struct {
                     .context = std.mem.zeroes(riscv.ThreadContext),
                     .machine = .{
                         .mepc = @intFromPtr(&@import("emulation.zig").emulatedRunnerSMode),
-                        .mstatus = (3 << 11) | (1 << 7) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=3 (Machine Mode), MPIE=1 (enable M-mode interrupts after mret), MPV=0, FS=3
+                        .mstatus = (1 << 11) | (1 << 7) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor Mode), MPIE=1 (enable S-mode interrupts after mret), MPV=0, FS=3
                         .hstatus = 0,
                         .hgatp = 0,
                         .hedeleg = 0,
@@ -275,6 +275,7 @@ pub const VirtualCore = struct {
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.sp)] = @intFromPtr(stack.ptr) + stack.len;
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.gp)] = hypervisor_gp;
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.tp)] = tls_phys + 2048;
+            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.a0)] = 0;
         }
 
         if (parent.target_arch == .x86_64) {

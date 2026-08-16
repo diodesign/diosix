@@ -30,12 +30,14 @@ pub const TranslationBlock = struct {
             const target_host_addr = @intFromPtr(target_tb.host_code.ptr);
             const rel_offset = @as(isize, @bitCast(target_host_addr)) - @as(isize, @bitCast(src_host_addr));
 
-            if (rel_offset >= -1048576 and rel_offset <= 1048575) {
-                const jal_insn = rv64.jal(0, @as(i21, @truncate(rel_offset)));
-                std.mem.writeInt(u32, self.host_code[b.patch_offset..][0..4], jal_insn, .little);
-                rv64.fenceI();
-                if (branch_idx == 0) self.chained_block1 = target_tb else self.chained_block2 = target_tb;
-            }
+            const j_upper = @as(i20, @truncate((rel_offset + 0x800) >> 12));
+            const j_lower = @as(i12, @bitCast(@as(u12, @truncate(@as(usize, @bitCast(rel_offset)) & 0xFFF))));
+            const auipc_insn = rv64.auipc(5, j_upper);
+            const jalr_insn = rv64.jalr(0, 5, j_lower);
+            std.mem.writeInt(u32, self.host_code[b.patch_offset..][0..4], auipc_insn, .little);
+            std.mem.writeInt(u32, self.host_code[b.patch_offset + 4..][0..4], jalr_insn, .little);
+            rv64.fenceI();
+            if (branch_idx == 0) self.chained_block1 = target_tb else self.chained_block2 = target_tb;
         }
     }
 };
