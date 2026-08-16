@@ -282,11 +282,10 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
 
 fn handleTimer(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadContext, stime: u64) void {
     if (vc.exec_path == .emulated) {
-        const host_target = if (stime == 0 or stime == ~@as(u64, 0)) stime else (stime +% vcore.time_offset);
-        vc.timer_target = host_target;
+        vc.timer_target = stime;
         vc.timer_scheduled = (stime != 0 and stime != ~@as(u64, 0));
         const sub = &vc.exec_path.emulated.sub_vcores[sub_idx];
-        sub.timer_target = host_target;
+        sub.timer_target = stime;
         sub.timer_scheduled = vc.timer_scheduled;
 
         if (vc.exec_path.emulated.vcpu) |v| {
@@ -294,7 +293,7 @@ fn handleTimer(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCon
             v.clearMipBit(5); // Clear MIP_STIP until Engine evaluates deadline
         }
         if (vc.timer_scheduled) {
-            riscv.setTimer(host_target);
+            riscv.setTimer(stime);
         }
     } else {
         vc.getNativeGuestState().vstimecmp = stime;

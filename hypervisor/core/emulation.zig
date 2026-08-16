@@ -117,9 +117,8 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     debug.printf("DEBUG emulation.init: vc=0x{x} id={} gpa_base=0x{x} hpa_base=0x{x} ram_size=0x{x}\n", .{ @intFromPtr(vc), vc.id, gpa_base, hpa_base, ram_size });
 
     if (vc.id == 0) {
-        const now = riscv.readTime();
-        vcore.time_offset = now;
-        VCpu.time_offset.store(now, .release);
+        vcore.time_offset = 0;
+        VCpu.time_offset.store(0, .release);
         VCpu.max_guest_time.store(0, .monotonic);
         VCpu.guest_insn_time.store(10_000_000, .monotonic);
         @memset(@as([*]u8, @ptrCast(vcpu_ptr))[0..@sizeOf(VCpu)], 0);

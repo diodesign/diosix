@@ -163,21 +163,15 @@ pub const Engine = struct {
         const upper = @as(i20, @truncate((pc_i32 +% 0x800) >> 12));
         const lower = @as(i12, @bitCast(@as(u12, @truncate(target_pc & 0xFFF))));
 
-        // 1. csrw vsscratch, t0 (x5) - preserves original guest t0
-        emitter_rv64.emit(tb.host_code, host_offset, 0x24029073);
-        // 2. csrr t0, vstval (loads &vcpu.regs into t0)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3);
-        // 3. sd t1, 288(t0) (saves guest t1)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(5, 6, 288));
-        // 4. lui t1, upper + addiw t1, t1, lower
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(6, upper));
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, lower));
-        // 5. sw t1, 256(t0) (saves target_pc directly into vcpu.pc!)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sw(5, 6, 256));
-        // 6. ld t1, 288(t0) (restores guest t1)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288));
+        // 1. Save guest t0 (x5) to 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+        // 2. Load target_pc into t0
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, lower));
+        // 3. Save target_pc directly into vcpu.pc (offset 256)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sw(27, 5, 256));
 
-        // 7. Jump directly to hw_dynarec_exit using auipc + jalr (±2GB reach)
+        // 4. Jump directly to hw_dynarec_exit using auipc + jalr (±2GB reach)
         const exit_addr = cache_mod.getExitAddr();
         const patch_off = host_offset.*;
         const src = @intFromPtr(tb.host_code.ptr) + patch_off;
@@ -197,92 +191,76 @@ pub const Engine = struct {
     fn emitDirectLoad(tb: *block_mod.TranslationBlock, host_offset: *usize, op: u3, rd: u5, rs1: u5, imm: i12) void {
         if (rd == 0) return;
 
-        if (rd != 5 and rs1 != 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(rd, rs1, imm));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(rd, rd, 32));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(rd, rd, 32));
-            
-            // Host Physical Address = (vaddr & 0x1FFFFFFF) + 0x00000000E0000000
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(rd, rd, 35));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(rd, rd, 35));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, @as(i20, @bitCast(@as(u20, 0xE0000)))));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(rd, rd, 5));
+        // 1. Save host t0 (x5) and t1 (x6)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48));
 
-            const load_insn: u32 = switch (op) {
-                0 => emitter_rv64.lb(rd, rd, 0),
-                1 => emitter_rv64.lh(rd, rd, 0),
-                2 => emitter_rv64.lw(rd, rd, 0),
-                4 => emitter_rv64.lbu(rd, rd, 0),
-                5 => emitter_rv64.lhu(rd, rd, 0),
-                else => emitter_rv64.lw(rd, rd, 0),
-            };
-            emitter_rv64.emit(tb.host_code, host_offset, load_insn);
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+        // 2. Compute effective GVA into t0 (x5)
+        if (rs1 == 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 0) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
         } else {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval (t0 = &vcpu.regs)
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(5, 6, 288)); // sd t1, 288(t0) (save t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, rs1, imm));
+        }
 
-            if (rs1 == 5) {
-                emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
-                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
-            } else if (rs1 == 6) {
-                emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0)
-                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 6, imm));
-            } else {
-                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, rs1, imm));
-            }
+        // Host Physical Address = (vaddr & 0x1FFFFFFF) + 0x00000000E0000000
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 35));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 35));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(6, @as(i20, @bitCast(@as(u20, 0xE0000)))));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
 
-            // Host Physical Address = (vaddr & 0x1FFFFFFF) + 0x00000000E0000000
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 35));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 35));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(6, @as(i20, @bitCast(@as(u20, 0xE0000)))));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
+        const target_reg: u5 = if (rd == 5 or rd == 6 or rd == 27) 6 else rd;
+        const load_insn: u32 = switch (op) {
+            0 => emitter_rv64.lb(target_reg, 5, 0),
+            1 => emitter_rv64.lh(target_reg, 5, 0),
+            2 => emitter_rv64.lw(target_reg, 5, 0),
+            4 => emitter_rv64.lbu(target_reg, 5, 0),
+            5 => emitter_rv64.lhu(target_reg, 5, 0),
+            else => emitter_rv64.lw(target_reg, 5, 0),
+        };
+        emitter_rv64.emit(tb.host_code, host_offset, load_insn);
 
-            const target_reg: u5 = if (rd == 5 or rd == 6) 6 else rd;
-            const load_insn: u32 = switch (op) {
-                0 => emitter_rv64.lb(target_reg, 5, 0),
-                1 => emitter_rv64.lh(target_reg, 5, 0),
-                2 => emitter_rv64.lw(target_reg, 5, 0),
-                4 => emitter_rv64.lbu(target_reg, 5, 0),
-                5 => emitter_rv64.lhu(target_reg, 5, 0),
-                else => emitter_rv64.lw(target_reg, 5, 0),
-            };
-            emitter_rv64.emit(tb.host_code, host_offset, load_insn);
-
-            if (rd == 5) {
-                emitter_rv64.emit(tb.host_code, host_offset, 0x24031073); // csrw vsscratch, t1 (save loaded value for t0)
-                emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-                emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore loaded val to t0)
-            } else if (rd == 6) {
-                emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
-            } else {
-                emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-                emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
-            }
+        if (rd == 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 40)); // save loaded val for t0
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // restore t1
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // load result into t0
+        } else if (rd == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // restore t0 (t1 has result)
+        } else if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, target_reg, 216)); // save to 216(s11)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // restore t1
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // restore t0
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // restore t1
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // restore t0
         }
     }
 
     fn emitDirectStore(tb: *block_mod.TranslationBlock, host_offset: *usize, op: u3, rs1: u5, rs2: u5, imm: i12) void {
-        emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval (t0 = &vcpu.regs)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(5, 6, 288)); // sd t1, 288(t0) (save t1)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
 
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0)
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 6, imm));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 0) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
         } else {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, rs1, imm));
         }
@@ -296,11 +274,13 @@ pub const Engine = struct {
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
 
         const src_reg: u5 = if (rs2 == 5) blk: {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24002373); // csrr t1, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             break :blk 6;
         } else if (rs2 == 6) blk: {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24302373); // csrr t1, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 6, 288)); // ld t1, 288(t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            break :blk 6;
+        } else if (rs2 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
             break :blk 6;
         } else rs2;
 
@@ -312,9 +292,8 @@ pub const Engine = struct {
         };
         emitter_rv64.emit(tb.host_code, host_offset, store_insn);
 
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
     }
 
     fn emitSoftTlbLoad(self: *Engine, tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, op: u3, rd: u5, rs1: u5, imm: i12) void {
@@ -324,19 +303,20 @@ pub const Engine = struct {
         const tlb_upper = @as(i20, @truncate((@as(i32, @bitCast(@as(u32, @truncate(tlb_addr)))) +% 0x800) >> 12));
         const tlb_lower = @as(i12, @bitCast(@as(u12, @truncate(tlb_addr & 0xFFF))));
 
-        // 1. Save host t0 (x5) and t1 (x6)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval (t0 = &vcpu.regs)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(5, 6, 288)); // sd t1, 288(t0) (save t1)
+        // 1. Save host t0 (x5) and t1 (x6) into vcpu.regs
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
 
         // 2. Compute effective GVA into t0 (x5)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0)
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 6, imm));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
         } else {
@@ -362,11 +342,13 @@ pub const Engine = struct {
 
         // 7. Compute expected GVA page number into t1 (x6)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24002373); // csrr t1, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, imm));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24302373); // csrr t1, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 6, 288)); // ld t1, 288(t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, imm));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 0, imm));
@@ -399,11 +381,13 @@ pub const Engine = struct {
 
         // 10. Recompute GVA and add page offset to t1: HPA = host_paddr_page + (GVA & 0xFFF)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 5, 288)); // ld t0, 288(t0) (original t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
@@ -420,7 +404,7 @@ pub const Engine = struct {
         } else if (op == 7) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fld(rd, 5, 0));
         } else {
-            const target_reg: u5 = if (rd == 5 or rd == 6) 6 else rd;
+            const target_reg: u5 = if (rd == 5 or rd == 6 or rd == 27) 6 else rd;
             const load_insn: u32 = switch (op) {
                 0 => emitter_rv64.lb(target_reg, 5, 0),
                 1 => emitter_rv64.lh(target_reg, 5, 0),
@@ -434,20 +418,21 @@ pub const Engine = struct {
 
         // 12. Restore scratch registers and write back rd
         if (op == 6 or op == 7) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         } else if (rd == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24031073); // csrw vsscratch, t1 (save loaded val for t0)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore loaded val to t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 40)); // sd target_reg, 40(s11)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         } else if (rd == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
+        } else if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 216)); // sd target_reg, 216(s11)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         } else {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         }
 
 
@@ -462,9 +447,8 @@ pub const Engine = struct {
         const beqz_rel = @as(i13, @truncate(@as(isize, @intCast(slow_exit_pos - beqz_patch_pos))));
         std.mem.writeInt(u32, tb.host_code[beqz_patch_pos..][0..4], emitter_rv64.beq(5, 0, beqz_rel), .little);
 
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore original guest t1)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore original guest t0)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         _ = emitExit(tb, host_offset, current_pc);
 
         const cont_pos = host_offset.*;
@@ -477,19 +461,20 @@ pub const Engine = struct {
         const tlb_upper = @as(i20, @truncate((@as(i32, @bitCast(@as(u32, @truncate(tlb_addr)))) +% 0x800) >> 12));
         const tlb_lower = @as(i12, @bitCast(@as(u12, @truncate(tlb_addr & 0xFFF))));
 
-        // 1. Save host t0 (x5) and t1 (x6)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval (t0 = &vcpu.regs)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(5, 6, 288)); // sd t1, 288(t0) (save t1)
+        // 1. Save host t0 (x5) and t1 (x6) into vcpu.regs
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
 
         // 2. Compute effective GVA into t0 (x5)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0)
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 6, imm));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
         } else {
@@ -515,11 +500,13 @@ pub const Engine = struct {
 
         // 7. Compute expected GVA page number into t1 (x6)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24002373); // csrr t1, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, imm));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24302373); // csrr t1, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 6, 288)); // ld t1, 288(t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, imm));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 0, imm));
@@ -552,11 +539,13 @@ pub const Engine = struct {
 
         // 10. Recompute GVA and add page offset to t1: HPA = host_paddr_page + (GVA & 0xFFF)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 5, 288)); // ld t0, 288(t0) (original t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
@@ -574,11 +563,13 @@ pub const Engine = struct {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fsd(5, rs2, 0));
         } else {
             const src_reg: u5 = if (rs2 == 5) blk: {
-                emitter_rv64.emit(tb.host_code, host_offset, 0x24002373); // csrr t1, vsscratch
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
                 break :blk 6;
             } else if (rs2 == 6) blk: {
-                emitter_rv64.emit(tb.host_code, host_offset, 0x24302373); // csrr t1, vstval
-                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 6, 288)); // ld t1, 288(t1)
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+                break :blk 6;
+            } else if (rs2 == 27) blk: {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
                 break :blk 6;
             } else rs2;
 
@@ -593,9 +584,8 @@ pub const Engine = struct {
 
 
         // 12. Restore scratch registers
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
 
         // 13. Jump over slow_exit
         const jal_patch_pos = host_offset.*;
@@ -608,9 +598,8 @@ pub const Engine = struct {
         const beqz_rel = @as(i13, @truncate(@as(isize, @intCast(slow_exit_pos - beqz_patch_pos))));
         std.mem.writeInt(u32, tb.host_code[beqz_patch_pos..][0..4], emitter_rv64.beq(5, 0, beqz_rel), .little);
 
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore original guest t1)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore original guest t0)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         _ = emitExit(tb, host_offset, current_pc);
 
         const cont_pos = host_offset.*;
@@ -627,18 +616,20 @@ pub const Engine = struct {
     fn emitMulhu(tb: *block_mod.TranslationBlock, host_offset: *usize, rd: u5, rs1: u5, rs2: u5) void {
         if (rd == 0) return;
         // 1. Save host t0 (x5) and t1 (x6)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval (t0 = &vcpu.regs)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(5, 6, 288)); // sd t1, 288(t0) (save t1)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
 
         // 2. Zero-extend rs1 into t0
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 5, 288)); // ld t0, 288(t0) (original t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
         } else if (rs1 == 0) {
@@ -650,12 +641,15 @@ pub const Engine = struct {
 
         // 3. Zero-extend rs2 into t1
         if (rs2 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24002373); // csrr t1, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
         } else if (rs2 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24302373); // csrr t1, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 6, 288)); // ld t1, 288(t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
+        } else if (rs2 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
         } else if (rs2 == 0) {
@@ -671,35 +665,38 @@ pub const Engine = struct {
 
         // 5. Write back to rd and restore scratch
         if (rd == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0 (save computed result as t0)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore result to t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         } else if (rd == 6) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 5, 0)); // t1 = result
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // restore t0
+        } else if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         } else {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(rd, 5, 0));
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         }
     }
 
     fn emitMulhsu(tb: *block_mod.TranslationBlock, host_offset: *usize, rd: u5, rs1: u5, rs2: u5) void {
         if (rd == 0) return;
         // 1. Save host t0 (x5) and t1 (x6)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval (t0 = &vcpu.regs)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(5, 6, 288)); // sd t1, 288(t0) (save t1)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
 
         // 2. Sign-extend rs1 (signed) into t0
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 5, 288)); // ld t0, 288(t0) (original t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, 0));
@@ -709,12 +706,15 @@ pub const Engine = struct {
 
         // 3. Zero-extend rs2 (unsigned) into t1
         if (rs2 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24002373); // csrr t1, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
         } else if (rs2 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24302373); // csrr t1, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 6, 288)); // ld t1, 288(t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
+        } else if (rs2 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32));
         } else if (rs2 == 0) {
@@ -730,18 +730,20 @@ pub const Engine = struct {
 
         // 5. Write back to rd and restore scratch
         if (rd == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0 (save computed result as t0)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore result to t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         } else if (rd == 6) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 5, 0)); // t1 = result
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // restore t0
+        } else if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         } else {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(rd, 5, 0));
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         }
     }
 
@@ -750,19 +752,20 @@ pub const Engine = struct {
         const tlb_upper = @as(i20, @truncate((@as(i32, @bitCast(@as(u32, @truncate(tlb_addr)))) +% 0x800) >> 12));
         const tlb_lower = @as(i12, @bitCast(@as(u12, @truncate(tlb_addr & 0xFFF))));
 
-        // 1. Save host t0 (x5) and t1 (x6)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x24029073); // csrw vsscratch, t0
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval (t0 = &vcpu.regs)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(5, 6, 288)); // sd t1, 288(t0) (save t1)
+        // 1. Save host t0 (x5) and t1 (x6) into vcpu.regs
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
 
         // 2. Compute effective GVA into t0 (x5)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 6, 0));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, 0));
         } else {
@@ -788,11 +791,13 @@ pub const Engine = struct {
 
         // 7. Compute expected GVA page number into t1 (x6)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24002373); // csrr t1, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, 0));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24302373); // csrr t1, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 6, 288)); // ld t1, 288(t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, 0));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, 0));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 0, 0));
@@ -832,11 +837,13 @@ pub const Engine = struct {
 
         // 10. Recompute GVA and add page offset to t1: HPA = host_paddr_page + (GVA & 0xFFF)
         if (rs1 == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
         } else if (rs1 == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 5, 288)); // ld t0, 288(t0) (original t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
         } else if (rs1 == 0) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, 0));
@@ -849,16 +856,18 @@ pub const Engine = struct {
 
         // 11. Prepare source operand register (rs2) if needed
         const src_reg: u5 = if (funct5 == 0x02) 0 else if (rs2 == 5) blk: {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24002373); // csrr t1, vsscratch
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             break :blk 6;
         } else if (rs2 == 6) blk: {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24302373); // csrr t1, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 6, 288)); // ld t1, 288(t1)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            break :blk 6;
+        } else if (rs2 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
             break :blk 6;
         } else rs2;
 
         // Destination register
-        const dest_reg: u5 = if (rd == 5 or rd == 6 or rd == 0) 6 else rd;
+        const dest_reg: u5 = if (rd == 5 or rd == 6 or rd == 27 or rd == 0) 6 else rd;
 
         // Perform atomic instruction: base address is in t0 (x5)
         const atomic_insn = emitter_rv64.encodeA(funct5, aq, rl, dest_reg, 5, src_reg);
@@ -866,16 +875,18 @@ pub const Engine = struct {
 
         // 12. Restore scratch registers and write back rd
         if (rd == 5) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x24031073); // csrw vsscratch, t1 (save loaded val for t0)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore loaded val to t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         } else if (rd == 6) {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         } else {
-            emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore t1)
-            emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore t0)
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
         }
 
         // 13. Jump over slow_exit
@@ -893,14 +904,271 @@ pub const Engine = struct {
             std.mem.writeInt(u32, tb.host_code[beqz_patch_pos..][0..4], emitter_rv64.beq(5, 0, beqz_rel), .little);
         }
 
-        emitter_rv64.emit(tb.host_code, host_offset, 0x243022f3); // csrr t0, vstval
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore original guest t1)
-        emitter_rv64.emit(tb.host_code, host_offset, 0x240022f3); // csrr t0, vsscratch (restore original guest t0)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         _ = emitExit(tb, host_offset, current_pc);
 
         const cont_pos = host_offset.*;
         const jal_rel = @as(i21, @truncate(@as(isize, @intCast(cont_pos - jal_patch_pos))));
         std.mem.writeInt(u32, tb.host_code[jal_patch_pos..][0..4], emitter_rv64.jal(0, jal_rel), .little);
+    }
+
+    inline fn emitRType(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, u5) u32, rd: u5, rs1: u5, rs2: u5) void {
+        if (rd == 0) return;
+        if (rd != 27 and rs1 != 27 and rs2 != 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, rs2));
+            return;
+        }
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48));
+
+        const r1: u5 = if (rs1 == 5) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+            break :blk 5;
+        } else if (rs1 == 6) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            break :blk 5;
+        } else if (rs1 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            break :blk 5;
+        } else rs1;
+
+        const r2: u5 = if (rs2 == 5) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
+            break :blk 6;
+        } else if (rs2 == 6) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            break :blk 6;
+        } else if (rs2 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
+            break :blk 6;
+        } else rs2;
+
+        const target_reg: u5 = if (rd == 27 or rd == 5 or rd == 6) 5 else rd;
+        emitter_rv64.emit(tb.host_code, host_offset, op_fn(target_reg, r1, r2));
+
+        if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else if (rd == 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+        } else if (rd == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 5, 0));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        }
+    }
+
+    inline fn emitIType(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, i12) u32, rd: u5, rs1: u5, imm: i12) void {
+        if (rd == 0) return;
+        if (rd != 27 and rs1 != 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, imm));
+            return;
+        }
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+        const r1: u5 = if (rs1 == 5) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+            break :blk 5;
+        } else if (rs1 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            break :blk 5;
+        } else rs1;
+
+        const target_reg: u5 = if (rd == 27 or rd == 5) 5 else rd;
+        emitter_rv64.emit(tb.host_code, host_offset, op_fn(target_reg, r1, imm));
+
+        if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else if (rd == 5) {
+            // rd is 5, already in host t0
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        }
+    }
+
+    inline fn emitShiftI(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, u5) u32, rd: u5, rs1: u5, shamt: u5) void {
+        if (rd == 0) return;
+        if (rd != 27 and rs1 != 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, shamt));
+            return;
+        }
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+        const r1: u5 = if (rs1 == 5) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+            break :blk 5;
+        } else if (rs1 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            break :blk 5;
+        } else rs1;
+
+        const target_reg: u5 = if (rd == 27 or rd == 5) 5 else rd;
+        emitter_rv64.emit(tb.host_code, host_offset, op_fn(target_reg, r1, shamt));
+
+        if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else if (rd == 5) {
+            // rd is 5, already in host t0
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        }
+    }
+
+    inline fn emitBitwiseR(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, u5) u32, rd: u5, rs1: u5, rs2: u5) void {
+        if (rd == 0) return;
+        if (rd != 27 and rs1 != 27 and rs2 != 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, rs2));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(rd, rd, 0));
+            return;
+        }
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48));
+
+        const r1: u5 = if (rs1 == 5) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+            break :blk 5;
+        } else if (rs1 == 6) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            break :blk 5;
+        } else if (rs1 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            break :blk 5;
+        } else rs1;
+
+        const r2: u5 = if (rs2 == 5) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
+            break :blk 6;
+        } else if (rs2 == 6) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            break :blk 6;
+        } else if (rs2 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
+            break :blk 6;
+        } else rs2;
+
+        const target_reg: u5 = if (rd == 27 or rd == 5 or rd == 6) 5 else rd;
+        emitter_rv64.emit(tb.host_code, host_offset, op_fn(target_reg, r1, r2));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(target_reg, target_reg, 0));
+
+        if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else if (rd == 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+        } else if (rd == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 5, 0));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        }
+    }
+
+    inline fn emitBitwiseI(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, i12) u32, rd: u5, rs1: u5, imm: i12) void {
+        if (rd == 0) return;
+        if (rd != 27 and rs1 != 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, imm));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(rd, rd, 0));
+            return;
+        }
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+        const r1: u5 = if (rs1 == 5) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+            break :blk 5;
+        } else if (rs1 == 27) blk: {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            break :blk 5;
+        } else rs1;
+
+        const target_reg: u5 = if (rd == 27 or rd == 5) 5 else rd;
+        emitter_rv64.emit(tb.host_code, host_offset, op_fn(target_reg, r1, imm));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(target_reg, target_reg, 0));
+
+        if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else if (rd == 5) {
+            // rd is 5, already in host t0
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        }
+    }
+
+    inline fn emitCsrRead(tb: *block_mod.TranslationBlock, host_offset: *usize, rd: u5, host_csr: u32, is_high: bool) void {
+        if (rd == 0) return;
+        if (rd == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, (host_csr << 20) | (5 << 7) | 0x2073);
+            if (is_high) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
+            }
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, 0));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, (host_csr << 20) | (@as(u32, rd) << 7) | 0x2073);
+            if (is_high) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(rd, rd, 32));
+            }
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(rd, rd, 0));
+        }
+    }
+
+    inline fn emitBranch(tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, offset: i32, decoded_len: u32, rs1: u5, rs2: u5, comptime branch_fn: fn(u5, u5, i13) u32) struct { exit1: block_mod.ExitBranch, exit2: block_mod.ExitBranch } {
+        const target = current_pc +% @as(u32, @bitCast(offset));
+        const fallthrough = current_pc + decoded_len;
+
+        var r1: u5 = rs1;
+        var r2: u5 = rs2;
+
+        if (rs1 == 27 or rs2 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48));
+
+            r1 = if (rs1 == 5) blk: {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+                break :blk 5;
+            } else if (rs1 == 6) blk: {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+                break :blk 5;
+            } else if (rs1 == 27) blk: {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+                break :blk 5;
+            } else rs1;
+
+            r2 = if (rs2 == 5) blk: {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
+                break :blk 6;
+            } else if (rs2 == 6) blk: {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+                break :blk 6;
+            } else if (rs2 == 27) blk: {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
+                break :blk 6;
+            } else rs2;
+        }
+
+        const branch_patch_pos = host_offset.*;
+        emitter_rv64.emit(tb.host_code, host_offset, 0); // placeholder
+        if (rs1 == 27 or rs2 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        }
+        const exit2 = emitExit(tb, host_offset, fallthrough);
+        const target_pos = host_offset.*;
+        const branch_rel = @as(i13, @truncate(@as(isize, @intCast(target_pos - branch_patch_pos))));
+        std.mem.writeInt(u32, tb.host_code[branch_patch_pos..][0..4], branch_fn(r1, r2, branch_rel), .little);
+        if (rs1 == 27 or rs2 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        }
+        const exit1 = emitExit(tb, host_offset, target);
+        return .{ .exit1 = exit1, .exit2 = exit2 };
     }
 
     inline fn isRamPointer(reg: u5) bool {
@@ -919,8 +1187,8 @@ pub const Engine = struct {
         var host_offset: usize = 0;
         var has_explicit_exit: bool = false;
 
-        // Block prologue: restore guest t0 (x5) from vsscratch
-        emitter_rv64.emit(tb.host_code, &host_offset, 0x240022f3); // csrr t0, vsscratch
+        // Restore guest t0 from 40(s11) at block start
+        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(5, 27, 40));
 
         while ((current_pc - start_pc) < (max_instructions * 4)) {
             if (host_offset + 256 >= tb.host_code.len) break;
@@ -936,63 +1204,66 @@ pub const Engine = struct {
 
             switch (decoded.insn) {
                 // ---- R-Type Integer Operations ----
-                .add => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addw(d.rd, d.rs1, d.rs2)),
-                .sub => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.subw(d.rd, d.rs1, d.rs2)),
-                .sll => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sllw(d.rd, d.rs1, d.rs2)),
-                .slt => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.slt(d.rd, d.rs1, d.rs2)),
-                .sltu => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sltu(d.rd, d.rs1, d.rs2)),
-                .xor_ => |d| {
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.xor_(d.rd, d.rs1, d.rs2));
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                },
-                .srl => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srlw(d.rd, d.rs1, d.rs2)),
-                .sra => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sraw(d.rd, d.rs1, d.rs2)),
-                .or_ => |d| {
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.or_(d.rd, d.rs1, d.rs2));
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                },
-                .and_ => |d| {
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.and_(d.rd, d.rs1, d.rs2));
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                },
+                .add => |d| emitRType(tb, &host_offset, emitter_rv64.addw, d.rd, d.rs1, d.rs2),
+                .sub => |d| emitRType(tb, &host_offset, emitter_rv64.subw, d.rd, d.rs1, d.rs2),
+                .sll => |d| emitRType(tb, &host_offset, emitter_rv64.sllw, d.rd, d.rs1, d.rs2),
+                .slt => |d| emitRType(tb, &host_offset, emitter_rv64.slt, d.rd, d.rs1, d.rs2),
+                .sltu => |d| emitRType(tb, &host_offset, emitter_rv64.sltu, d.rd, d.rs1, d.rs2),
+                .xor_ => |d| emitBitwiseR(tb, &host_offset, emitter_rv64.xor_, d.rd, d.rs1, d.rs2),
+                .srl => |d| emitRType(tb, &host_offset, emitter_rv64.srlw, d.rd, d.rs1, d.rs2),
+                .sra => |d| emitRType(tb, &host_offset, emitter_rv64.sraw, d.rd, d.rs1, d.rs2),
+                .or_ => |d| emitBitwiseR(tb, &host_offset, emitter_rv64.or_, d.rd, d.rs1, d.rs2),
+                .and_ => |d| emitBitwiseR(tb, &host_offset, emitter_rv64.and_, d.rd, d.rs1, d.rs2),
 
                 // ---- M-Extension Multiply & Divide Operations ----
-                .mul => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.mulw(d.rd, d.rs1, d.rs2)),
+                .mul => |d| emitRType(tb, &host_offset, emitter_rv64.mulw, d.rd, d.rs1, d.rs2),
                 .mulh => |d| emitMulh(tb, &host_offset, d.rd, d.rs1, d.rs2),
                 .mulhu => |d| emitMulhu(tb, &host_offset, d.rd, d.rs1, d.rs2),
                 .mulhsu => |d| emitMulhsu(tb, &host_offset, d.rd, d.rs1, d.rs2),
-                .div => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.divw(d.rd, d.rs1, d.rs2)),
-                .divu => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.divuw(d.rd, d.rs1, d.rs2)),
-                .rem => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.remw(d.rd, d.rs1, d.rs2)),
-                .remu => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.remuw(d.rd, d.rs1, d.rs2)),
+                .div => |d| emitRType(tb, &host_offset, emitter_rv64.divw, d.rd, d.rs1, d.rs2),
+                .divu => |d| emitRType(tb, &host_offset, emitter_rv64.divuw, d.rd, d.rs1, d.rs2),
+                .rem => |d| emitRType(tb, &host_offset, emitter_rv64.remw, d.rd, d.rs1, d.rs2),
+                .remu => |d| emitRType(tb, &host_offset, emitter_rv64.remuw, d.rd, d.rs1, d.rs2),
 
                 // ---- I-Type Integer Operations ----
-                .addi => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rs1, @as(i12, @truncate(d.imm)))),
-                .slli => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.slliw(d.rd, d.rs1, @as(u5, @truncate(d.shamt)))),
-                .srli => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srliw(d.rd, d.rs1, @as(u5, @truncate(d.shamt)))),
-                .srai => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sraiw(d.rd, d.rs1, @as(u5, @truncate(d.shamt)))),
-                .andi => |d| {
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.andi(d.rd, d.rs1, @as(i12, @truncate(d.imm))));
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                },
-                .ori => |d| {
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ori(d.rd, d.rs1, @as(i12, @truncate(d.imm))));
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                },
-                .xori => |d| {
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.xori(d.rd, d.rs1, @as(i12, @truncate(d.imm))));
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                },
-                .slti => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.slti(d.rd, d.rs1, @as(i12, @truncate(d.imm)))),
-                .sltiu => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sltiu(d.rd, d.rs1, @as(i12, @truncate(d.imm)))),
+                .addi => |d| emitIType(tb, &host_offset, emitter_rv64.addiw, d.rd, d.rs1, @as(i12, @truncate(d.imm))),
+                .slli => |d| emitShiftI(tb, &host_offset, emitter_rv64.slliw, d.rd, d.rs1, @as(u5, @truncate(d.shamt))),
+                .srli => |d| emitShiftI(tb, &host_offset, emitter_rv64.srliw, d.rd, d.rs1, @as(u5, @truncate(d.shamt))),
+                .srai => |d| emitShiftI(tb, &host_offset, emitter_rv64.sraiw, d.rd, d.rs1, @as(u5, @truncate(d.shamt))),
+                .andi => |d| emitBitwiseI(tb, &host_offset, emitter_rv64.andi, d.rd, d.rs1, @as(i12, @truncate(d.imm))),
+                .ori => |d| emitBitwiseI(tb, &host_offset, emitter_rv64.ori, d.rd, d.rs1, @as(i12, @truncate(d.imm))),
+                .xori => |d| emitBitwiseI(tb, &host_offset, emitter_rv64.xori, d.rd, d.rs1, @as(i12, @truncate(d.imm))),
+                .slti => |d| emitIType(tb, &host_offset, emitter_rv64.slti, d.rd, d.rs1, @as(i12, @truncate(d.imm))),
+                .sltiu => |d| emitIType(tb, &host_offset, emitter_rv64.sltiu, d.rd, d.rs1, @as(i12, @truncate(d.imm))),
 
                 // ---- Upper Immediate Operations ----
-                .lui => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(d.imm)))),
+                .lui => |d| {
+                    if (d.rd == 0) {}
+                    else if (d.rd == 27) {
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(5, @as(i20, @truncate(d.imm))));
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 216));
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(5, 27, 40));
+                    } else {
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(d.imm))));
+                    }
+                },
                 .auipc => |d| {
-                    const val = @as(u32, @bitCast(@as(i32, @bitCast(current_pc)) +% (d.imm << 12)));
-                    const val_offset = val +% 0x800;
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(@as(i32, @bitCast(val_offset >> 12))))));
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, @as(i12, @truncate(@as(i32, @bitCast(val & 0xFFF))))));
+                    if (d.rd == 0) {}
+                    else {
+                        const val = @as(u32, @bitCast(@as(i32, @bitCast(current_pc)) +% (d.imm << 12)));
+                        const val_offset = val +% 0x800;
+                        if (d.rd == 27) {
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(5, @as(i20, @truncate(@as(i32, @bitCast(val_offset >> 12))))));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(5, 5, @as(i12, @truncate(@as(i32, @bitCast(val & 0xFFF))))));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 216));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(5, 27, 40));
+                        } else {
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(@as(i32, @bitCast(val_offset >> 12))))));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, @as(i12, @truncate(@as(i32, @bitCast(val & 0xFFF))))));
+                        }
+                    }
                 },
 
                 // ---- Inlined SoftTLB Fast-Path Load & Store Operations ----
@@ -1042,90 +1313,55 @@ pub const Engine = struct {
 
                 .csrrs => |d| {
                     if (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02) { // rdtime / rdcycle / rdinstret
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
                     } else if (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82) { // rdtimeh / rdcycleh / rdinstreth
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srli(d.rd, d.rd, 32));
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
                     } else {
                         break;
                     }
                 },
                 .csrrw => |d| {
                     if (d.rs1 == 0 and (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02)) {
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
                     } else if (d.rs1 == 0 and (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82)) {
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srli(d.rd, d.rd, 32));
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
                     } else {
                         break;
                     }
                 },
                 .csrrc => |d| {
                     if (d.rs1 == 0 and (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02)) {
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
                     } else if (d.rs1 == 0 and (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82)) {
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srli(d.rd, d.rd, 32));
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
                     } else {
                         break;
                     }
                 },
                 .csrrsi => |d| {
                     if (d.uimm == 0 and (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02)) {
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
                     } else if (d.uimm == 0 and (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82)) {
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srli(d.rd, d.rd, 32));
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
                     } else {
                         break;
                     }
                 },
                 .csrrci => |d| {
                     if (d.uimm == 0 and (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02)) {
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
                     } else if (d.uimm == 0 and (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82)) {
-                        if (d.rd != 0) {
-                            const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                            emitter_rv64.emit(tb.host_code, &host_offset, (host_csr << 20) | (@as(u32, d.rd) << 7) | 0x2073);
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srli(d.rd, d.rd, 32));
-                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
-                        }
+                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
+                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
                     } else {
                         break;
                     }
@@ -1137,8 +1373,16 @@ pub const Engine = struct {
                     if (d.rd != 0) {
                         const link_pc = current_pc + decoded.len;
                         const link_offset = link_pc +% 0x800;
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(@as(i32, @bitCast(link_offset >> 12))))));
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, @as(i12, @truncate(@as(i32, @bitCast(link_pc & 0xFFF))))));
+                        if (d.rd == 27) {
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(5, @as(i20, @truncate(@as(i32, @bitCast(link_offset >> 12))))));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(5, 5, @as(i12, @truncate(@as(i32, @bitCast(link_pc & 0xFFF))))));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 216));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(5, 27, 40));
+                        } else {
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(@as(i32, @bitCast(link_offset >> 12))))));
+                            emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, @as(i12, @truncate(@as(i32, @bitCast(link_pc & 0xFFF))))));
+                        }
                     }
                     tb.exit_branch1 = emitExit(tb, &host_offset, target);
                     has_explicit_exit = true;
@@ -1147,19 +1391,19 @@ pub const Engine = struct {
                 },
 
                 .jalr => |d| {
-                    // 1. Preserve original guest t0 (x5) into vsscratch
-                    emitter_rv64.emit(tb.host_code, &host_offset, 0x24029073); // csrw vsscratch, t0
-                    // 2. Load &vcpu.regs into t0
-                    emitter_rv64.emit(tb.host_code, &host_offset, 0x243022f3); // csrr t0, vstval
-                    // 3. Save guest t1 (x6) to 288(t0)
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(5, 6, 288));
+                    // 1. Save guest t0 (x5) and t1 (x6) into vcpu.regs
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 6, 48));
 
-                    // 4. Calculate target PC into t1 (x6): (rs1 + offset) & ~1
+                    // 2. Calculate target PC into t1 (x6): (rs1 + offset) & ~1
                     if (d.rs1 == 5) {
-                        emitter_rv64.emit(tb.host_code, &host_offset, 0x24002373); // csrr t1, vsscratch
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 27, 40));
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(6, 6, @as(i12, @truncate(d.offset))));
                     } else if (d.rs1 == 6) {
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0)
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 27, 48));
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(6, 6, @as(i12, @truncate(d.offset))));
+                    } else if (d.rs1 == 27) {
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 27, 216));
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(6, 6, @as(i12, @truncate(d.offset))));
                     } else if (d.rs1 != 0) {
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(6, d.rs1, @as(i12, @truncate(d.offset))));
@@ -1168,30 +1412,34 @@ pub const Engine = struct {
                     }
                     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.andi(6, 6, -2));
 
-                    // 5. Save target_pc directly into vcpu.pc (offset 256)
-                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sw(5, 6, 256));
+                    // 3. Save target_pc directly into vcpu.pc (offset 256)
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sw(27, 6, 256));
 
-                    // 6. Save link PC into rd
+                    // 4. Save link PC into rd
                     const link_pc = current_pc + decoded.len;
                     const link_offset = link_pc +% 0x800;
                     if (d.rd == 5) {
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(6, @as(i20, @truncate(@as(i32, @bitCast(link_offset >> 12))))));
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(6, 6, @as(i12, @truncate(@as(i32, @bitCast(link_pc & 0xFFF))))));
-                        emitter_rv64.emit(tb.host_code, &host_offset, 0x24031073); // csrw vsscratch, t1 (store link_pc as guest t0)
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore original guest t1)
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 6, 40)); // store link_pc as guest t0
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 27, 48)); // restore original guest t1
                     } else if (d.rd == 6) {
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(6, @as(i20, @truncate(@as(i32, @bitCast(link_offset >> 12))))));
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(6, 6, @as(i12, @truncate(@as(i32, @bitCast(link_pc & 0xFFF))))));
-                        // t1 already has link_pc which will be saved to vcpu.regs[6] by hw_dynarec_exit!
+                    } else if (d.rd == 27) {
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(6, @as(i20, @truncate(@as(i32, @bitCast(link_offset >> 12))))));
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(6, 6, @as(i12, @truncate(@as(i32, @bitCast(link_pc & 0xFFF))))));
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 6, 216)); // store link_pc to 216(s11)
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 27, 48)); // restore original guest t1
                     } else if (d.rd != 0) {
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.lui(d.rd, @as(i20, @truncate(@as(i32, @bitCast(link_offset >> 12))))));
                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, @as(i12, @truncate(@as(i32, @bitCast(link_pc & 0xFFF))))));
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore original guest t1)
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 27, 48)); // restore original guest t1
                     } else {
-                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 5, 288)); // ld t1, 288(t0) (restore original guest t1)
+                        emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ld(6, 27, 48)); // restore original guest t1
                     }
 
-                    // 7. Jump to hw_dynarec_exit using auipc + jalr (t0 is free)
+                    // 5. Jump to hw_dynarec_exit using auipc + jalr (t0 is free)
                     const exit_addr = cache_mod.getExitAddr();
                     const patch_off = host_offset;
                     const src = @intFromPtr(tb.host_code.ptr) + patch_off;
@@ -1207,90 +1455,54 @@ pub const Engine = struct {
                 },
 
                 .beq => |d| {
-                    const target = current_pc +% @as(u32, @bitCast(d.offset));
-                    const fallthrough = current_pc + decoded.len;
-                    const branch_patch_pos = host_offset;
-                    emitter_rv64.emit(tb.host_code, &host_offset, 0); // placeholder
-                    tb.exit_branch2 = emitExit(tb, &host_offset, fallthrough);
-                    const target_pos = host_offset;
-                    const branch_rel = @as(i13, @truncate(@as(isize, @intCast(target_pos - branch_patch_pos))));
-                    std.mem.writeInt(u32, tb.host_code[branch_patch_pos..][0..4], emitter_rv64.beq(d.rs1, d.rs2, branch_rel), .little);
-                    tb.exit_branch1 = emitExit(tb, &host_offset, target);
+                    const exits = emitBranch(tb, &host_offset, current_pc, d.offset, decoded.len, d.rs1, d.rs2, emitter_rv64.beq);
+                    tb.exit_branch1 = exits.exit1;
+                    tb.exit_branch2 = exits.exit2;
                     has_explicit_exit = true;
                     current_pc += decoded.len;
                     break;
                 },
 
                 .bne => |d| {
-                    const target = current_pc +% @as(u32, @bitCast(d.offset));
-                    const fallthrough = current_pc + decoded.len;
-                    const branch_patch_pos = host_offset;
-                    emitter_rv64.emit(tb.host_code, &host_offset, 0); // placeholder
-                    tb.exit_branch2 = emitExit(tb, &host_offset, fallthrough);
-                    const target_pos = host_offset;
-                    const branch_rel = @as(i13, @truncate(@as(isize, @intCast(target_pos - branch_patch_pos))));
-                    std.mem.writeInt(u32, tb.host_code[branch_patch_pos..][0..4], emitter_rv64.bne(d.rs1, d.rs2, branch_rel), .little);
-                    tb.exit_branch1 = emitExit(tb, &host_offset, target);
+                    const exits = emitBranch(tb, &host_offset, current_pc, d.offset, decoded.len, d.rs1, d.rs2, emitter_rv64.bne);
+                    tb.exit_branch1 = exits.exit1;
+                    tb.exit_branch2 = exits.exit2;
                     has_explicit_exit = true;
                     current_pc += decoded.len;
                     break;
                 },
 
                 .blt => |d| {
-                    const target = current_pc +% @as(u32, @bitCast(d.offset));
-                    const fallthrough = current_pc + decoded.len;
-                    const branch_patch_pos = host_offset;
-                    emitter_rv64.emit(tb.host_code, &host_offset, 0); // placeholder
-                    tb.exit_branch2 = emitExit(tb, &host_offset, fallthrough);
-                    const target_pos = host_offset;
-                    const branch_rel = @as(i13, @truncate(@as(isize, @intCast(target_pos - branch_patch_pos))));
-                    std.mem.writeInt(u32, tb.host_code[branch_patch_pos..][0..4], emitter_rv64.blt(d.rs1, d.rs2, branch_rel), .little);
-                    tb.exit_branch1 = emitExit(tb, &host_offset, target);
+                    const exits = emitBranch(tb, &host_offset, current_pc, d.offset, decoded.len, d.rs1, d.rs2, emitter_rv64.blt);
+                    tb.exit_branch1 = exits.exit1;
+                    tb.exit_branch2 = exits.exit2;
                     has_explicit_exit = true;
                     current_pc += decoded.len;
                     break;
                 },
 
                 .bge => |d| {
-                    const target = current_pc +% @as(u32, @bitCast(d.offset));
-                    const fallthrough = current_pc + decoded.len;
-                    const branch_patch_pos = host_offset;
-                    emitter_rv64.emit(tb.host_code, &host_offset, 0); // placeholder
-                    tb.exit_branch2 = emitExit(tb, &host_offset, fallthrough);
-                    const target_pos = host_offset;
-                    const branch_rel = @as(i13, @truncate(@as(isize, @intCast(target_pos - branch_patch_pos))));
-                    std.mem.writeInt(u32, tb.host_code[branch_patch_pos..][0..4], emitter_rv64.bge(d.rs1, d.rs2, branch_rel), .little);
-                    tb.exit_branch1 = emitExit(tb, &host_offset, target);
+                    const exits = emitBranch(tb, &host_offset, current_pc, d.offset, decoded.len, d.rs1, d.rs2, emitter_rv64.bge);
+                    tb.exit_branch1 = exits.exit1;
+                    tb.exit_branch2 = exits.exit2;
                     has_explicit_exit = true;
                     current_pc += decoded.len;
                     break;
                 },
 
                 .bltu => |d| {
-                    const target = current_pc +% @as(u32, @bitCast(d.offset));
-                    const fallthrough = current_pc + decoded.len;
-                    const branch_patch_pos = host_offset;
-                    emitter_rv64.emit(tb.host_code, &host_offset, 0); // placeholder
-                    tb.exit_branch2 = emitExit(tb, &host_offset, fallthrough);
-                    const target_pos = host_offset;
-                    const branch_rel = @as(i13, @truncate(@as(isize, @intCast(target_pos - branch_patch_pos))));
-                    std.mem.writeInt(u32, tb.host_code[branch_patch_pos..][0..4], emitter_rv64.bltu(d.rs1, d.rs2, branch_rel), .little);
-                    tb.exit_branch1 = emitExit(tb, &host_offset, target);
+                    const exits = emitBranch(tb, &host_offset, current_pc, d.offset, decoded.len, d.rs1, d.rs2, emitter_rv64.bltu);
+                    tb.exit_branch1 = exits.exit1;
+                    tb.exit_branch2 = exits.exit2;
                     has_explicit_exit = true;
                     current_pc += decoded.len;
                     break;
                 },
 
                 .bgeu => |d| {
-                    const target = current_pc +% @as(u32, @bitCast(d.offset));
-                    const fallthrough = current_pc + decoded.len;
-                    const branch_patch_pos = host_offset;
-                    emitter_rv64.emit(tb.host_code, &host_offset, 0); // placeholder
-                    tb.exit_branch2 = emitExit(tb, &host_offset, fallthrough);
-                    const target_pos = host_offset;
-                    const branch_rel = @as(i13, @truncate(@as(isize, @intCast(target_pos - branch_patch_pos))));
-                    std.mem.writeInt(u32, tb.host_code[branch_patch_pos..][0..4], emitter_rv64.bgeu(d.rs1, d.rs2, branch_rel), .little);
-                    tb.exit_branch1 = emitExit(tb, &host_offset, target);
+                    const exits = emitBranch(tb, &host_offset, current_pc, d.offset, decoded.len, d.rs1, d.rs2, emitter_rv64.bgeu);
+                    tb.exit_branch1 = exits.exit1;
+                    tb.exit_branch2 = exits.exit2;
                     has_explicit_exit = true;
                     current_pc += decoded.len;
                     break;
@@ -2316,16 +2528,14 @@ test "Dynarec RV32A Atomic Memory Instructions Emission" {
     var host_offset: usize = 0;
 
     // Emit atomic amoadd.w a0, a2, (a1)
-    Engine.emitAtomic(tb, &host_offset, 0x00, 10, 11, 12);
+    Engine.emitSoftTlbAtomic(tb, &host_offset, 0x80000000, 0x00, false, false, 10, 11, 12);
     try std.testing.expect(host_offset > 0);
 
-    // Verify vsscratch (0x240) and vstval (0x243) + scratch_t1 saving
+    // Verify s11 scratch saving: sd t0, 40(s11) and sd t1, 48(s11)
     const save_t0 = @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).* ;
-    const load_stval = @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).* ;
-    const save_t1 = @as(*const align(1) u32, @ptrCast(&tb.host_code[8])).* ;
-    try std.testing.expectEqual(@as(u32, 0x24029073), save_t0); // csrw vsscratch, t0
-    try std.testing.expectEqual(@as(u32, 0x243022f3), load_stval); // csrr t0, vstval
-    try std.testing.expectEqual(emitter_rv64.sd(5, 6, 288), save_t1); // sd t1, 288(t0)
+    const save_t1 = @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).* ;
+    try std.testing.expectEqual(emitter_rv64.sd(27, 5, 40), save_t0); // sd t0, 40(s11)
+    try std.testing.expectEqual(emitter_rv64.sd(27, 6, 48), save_t1); // sd t1, 48(s11)
 }
 
 test "Dynarec Direct Stack Load & Store 512MB Windowing" {
@@ -2341,8 +2551,8 @@ test "Dynarec Direct Stack Load & Store 512MB Windowing" {
     // Verify 35-bit shift (512MB RAM mask)
     // slli a0, a0, 35 -> 0x02351513
     // srli a0, a0, 35 -> 0x02355513
-    try std.testing.expectEqual(@as(u32, 0x02351513), @as(*const align(1) u32, @ptrCast(&tb.host_code[16])).*);
-    try std.testing.expectEqual(@as(u32, 0x02355513), @as(*const align(1) u32, @ptrCast(&tb.host_code[20])).*);
+    try std.testing.expectEqual(@as(u32, 0x02351513), @as(*const align(1) u32, @ptrCast(&tb.host_code[12])).*);
+    try std.testing.expectEqual(@as(u32, 0x02355513), @as(*const align(1) u32, @ptrCast(&tb.host_code[16])).*);
 }
 
 test "Dynarec Inlined SoftTLB Fast-Path Load & Store Emission" {
@@ -2356,9 +2566,8 @@ test "Dynarec Inlined SoftTLB Fast-Path Load & Store Emission" {
     try std.testing.expect(host_offset > 0);
 
     // Verify scratch register saves:
-    try std.testing.expectEqual(@as(u32, 0x24029073), @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).*); // csrw vsscratch, t0
-    try std.testing.expectEqual(@as(u32, 0x243022f3), @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).*); // csrr t0, vstval
-    try std.testing.expectEqual(emitter_rv64.sd(5, 6, 288), @as(*const align(1) u32, @ptrCast(&tb.host_code[8])).*); // sd t1, 288(t0)
+    try std.testing.expectEqual(emitter_rv64.sd(27, 5, 40), @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).*); // sd t0, 40(s11)
+    try std.testing.expectEqual(emitter_rv64.sd(27, 6, 48), @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).*); // sd t1, 48(s11)
 
     // Emit sw a0, 4(a1) via SoftTLB Fast-Path
     const prev_offset = host_offset;

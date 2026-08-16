@@ -263,108 +263,97 @@ hw_dynarec_run_block:
   # 2. Save S-mode host stack pointer in vcpu.host_sp (offset 280)
   sd sp, 280(a0)
 
-  # 3. Save regs pointer in vstval (Hypervisor CSR 0x243)
-  csrw 0x243, a0
+  # 3. Dedicated context base pointer in s11 (x27)
+  mv s11, a0
 
   # 4. Move target block entry pointer to t0
   mv t0, a1
 
-  # 5. Put guest t0 (x5) into vsscratch (Hypervisor CSR 0x240) for block prologue
-  ld t1, 40(a0)
-  csrw 0x240, t1
+  # 5. Load guest registers from s11 (regs pointer)
+  ld x1, 8(s11)
+  ld x2, 16(s11)
+  ld x3, 24(s11)
+  ld x4, 32(s11)
+  # x5 (t0) holds target block entry address - guest t0 is loaded at block entry from 40(s11)
+  ld x6, 48(s11)
+  ld x7, 56(s11)
+  ld x8, 64(s11)
+  ld x9, 72(s11)
+  ld x10, 80(s11)
+  ld x11, 88(s11)
+  ld x12, 96(s11)
+  ld x13, 104(s11)
+  ld x14, 112(s11)
+  ld x15, 120(s11)
+  ld x16, 128(s11)
+  ld x17, 136(s11)
+  ld x18, 144(s11)
+  ld x19, 152(s11)
+  ld x20, 160(s11)
+  ld x21, 168(s11)
+  ld x22, 176(s11)
+  ld x23, 184(s11)
+  ld x24, 192(s11)
+  ld x25, 200(s11)
+  ld x26, 208(s11)
+  # guest x27 (s11) is already in 216(s11)
+  ld x28, 224(s11)
+  ld x29, 232(s11)
+  ld x30, 240(s11)
+  ld x31, 248(s11)
 
-  # 6. Load guest registers from a0 (regs pointer)
-  ld x1, 8(a0)
-  ld x3, 24(a0)
-  ld x4, 32(a0)
-  ld x6, 48(a0)
-  ld x7, 56(a0)
-  ld x8, 64(a0)
-  ld x9, 72(a0)
-  ld x11, 88(a0)
-  ld x12, 96(a0)
-  ld x13, 104(a0)
-  ld x14, 112(a0)
-  ld x15, 120(a0)
-  ld x16, 128(a0)
-  ld x17, 136(a0)
-  ld x18, 144(a0)
-  ld x19, 152(a0)
-  ld x20, 160(a0)
-  ld x21, 168(a0)
-  ld x22, 176(a0)
-  ld x23, 184(a0)
-  ld x24, 192(a0)
-  ld x25, 200(a0)
-  ld x26, 208(a0)
-  ld x27, 216(a0)
-  ld x28, 224(a0)
-  ld x29, 232(a0)
-  ld x30, 240(a0)
-  ld x31, 248(a0)
-
-  # Load guest sp (x2) and guest a0 (x10) last using a0
-  ld x2, 16(a0)
-  ld x10, 80(a0)
-
-  # 7. Jump to translated block in S-mode
+  # 6. Jump to translated block in S-mode
   jr t0
 
 .globl hw_dynarec_exit
 .type hw_dynarec_exit, @function
 hw_dynarec_exit:
   # On entry from S-mode JIT block exit:
-  # target_pc is already stored in vcpu.pc (256(t0)) or loaded by emitExit
-  # vsscratch (CSR 0x240) holds guest t0 (saved by emitExit)
-  # vstval (CSR 0x243) holds regs_ptr (&self.vcpu.regs)
-  # All other registers x1..x4, x6..x31 hold pristine guest registers!
+  # s11 (x27) holds &vcpu.regs (context pointer)
+  # All registers x1..x4, x6..x26, x28..x31 hold guest registers!
+  # guest t0 (x5) was already saved to 40(s11) before exit jump
+  # target_pc is already saved in vcpu.pc (offset 256)
 
-  # 1. Load regs_ptr into t0 directly from vstval (CSR 0x243)
-  csrr t0, 0x243
+  # 1. Store all guest registers to regs_ptr (s11)
+  sd x1, 8(s11)       # guest ra (x1)
+  sd x2, 16(s11)      # guest sp (x2)
+  sd x3, 24(s11)      # guest gp (x3)
+  sd x4, 32(s11)      # guest tp (x4)
+  # x5 (t0) already in 40(s11)
+  sd x6, 48(s11)      # guest t1 (x6)
+  sd x7, 56(s11)      # guest t2 (x7)
+  sd x8, 64(s11)      # guest s0/fp (x8)
+  sd x9, 72(s11)      # guest s1 (x9)
+  sd x10, 80(s11)     # guest a0 (x10)
+  sd x11, 88(s11)     # guest a1 (x11)
+  sd x12, 96(s11)     # guest a2 (x12)
+  sd x13, 104(s11)    # guest a3 (x13)
+  sd x14, 112(s11)    # guest a4 (x14)
+  sd x15, 120(s11)    # guest a5 (x15)
+  sd x16, 128(s11)    # guest a6 (x16)
+  sd x17, 136(s11)    # guest a7 (x17)
+  sd x18, 144(s11)    # guest s2 (x18)
+  sd x19, 152(s11)    # guest s3 (x19)
+  sd x20, 160(s11)    # guest s4 (x20)
+  sd x21, 168(s11)    # guest s5 (x21)
+  sd x22, 176(s11)    # guest s6 (x22)
+  sd x23, 184(s11)    # guest s7 (x23)
+  sd x24, 192(s11)    # guest s8 (x24)
+  sd x25, 200(s11)    # guest s9 (x25)
+  sd x26, 208(s11)    # guest s10 (x26)
+  # guest x27 (s11) is already at 216(s11)
+  sd x28, 224(s11)    # guest t3 (x28)
+  sd x29, 232(s11)    # guest t4 (x29)
+  sd x30, 240(s11)    # guest t5 (x30)
+  sd x31, 248(s11)    # guest t6 (x31)
 
-  # 2. Store all 30 pristine guest registers to regs_ptr (t0)
-  sd x1, 8(t0)       # guest ra (x1)
-  sd x2, 16(t0)      # guest sp (x2)
-  sd x3, 24(t0)      # guest gp (x3)
-  sd x4, 32(t0)      # guest tp (x4)
-  sd x6, 48(t0)      # guest t1 (x6)
-  sd x7, 56(t0)      # guest t2 (x7)
-  sd x8, 64(t0)      # guest s0/fp (x8)
-  sd x9, 72(t0)      # guest s1 (x9)
-  sd x10, 80(t0)     # guest a0 (x10)
-  sd x11, 88(t0)     # guest a1 (x11)
-  sd x12, 96(t0)     # guest a2 (x12)
-  sd x13, 104(t0)    # guest a3 (x13)
-  sd x14, 112(t0)    # guest a4 (x14)
-  sd x15, 120(t0)    # guest a5 (x15)
-  sd x16, 128(t0)    # guest a6 (x16)
-  sd x17, 136(t0)    # guest a7 (x17)
-  sd x18, 144(t0)    # guest s2 (x18)
-  sd x19, 152(t0)    # guest s3 (x19)
-  sd x20, 160(t0)    # guest s4 (x20)
-  sd x21, 168(t0)    # guest s5 (x21)
-  sd x22, 176(t0)    # guest s6 (x22)
-  sd x23, 184(t0)    # guest s7 (x23)
-  sd x24, 192(t0)    # guest s8 (x24)
-  sd x25, 200(t0)    # guest s9 (x25)
-  sd x26, 208(t0)    # guest s10 (x26)
-  sd x27, 216(t0)    # guest s11 (x27)
-  sd x28, 224(t0)    # guest t3 (x28)
-  sd x29, 232(t0)    # guest t4 (x29)
-  sd x30, 240(t0)    # guest t5 (x30)
-  sd x31, 248(t0)    # guest t6 (x31)
+  # 2. Read target_pc from vcpu.pc (offset 256)
+  lwu t1, 256(s11)
 
-  # 3. Read saved guest t0 (from vsscratch CSR 0x240) and store to 40(t0)
-  csrr t1, 0x240
-  sd t1, 40(t0)
+  # 3. Restore host stack pointer from vcpu.host_sp (offset 280)
+  ld sp, 280(s11)
 
-  # 4. Read target_pc from vcpu.pc (offset 256)
-  lwu t1, 256(t0)
-
-  # 5. Restore host stack pointer from vcpu.host_sp (offset 280)
-  ld sp, 280(t0)
-
-  # 6. Restore host callee-saved registers from S-mode host stack
+  # 4. Restore host callee-saved registers from S-mode host stack
   ld ra, 0(sp)
   ld s0, 8(sp)
   ld s1, 16(sp)
@@ -382,7 +371,7 @@ hw_dynarec_exit:
   ld gp, 112(sp)
   addi sp, sp, 128
 
-  # 7. Return target_pc in a0 for C ABI
+  # 5. Return target_pc in a0 for C ABI
   mv a0, t1
 
   ret
