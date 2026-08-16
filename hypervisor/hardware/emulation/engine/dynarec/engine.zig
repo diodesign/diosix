@@ -925,7 +925,7 @@ pub const Engine = struct {
         while ((current_pc - start_pc) < (max_instructions * 4)) {
             if (host_offset + 180 >= tb.host_code.len) break;
 
-            const fetch_res = self.tlb.readU32(current_pc, self.bus);
+            const fetch_res = self.tlb.fetchU32(current_pc, self.bus);
             if (fetch_res.trap) |cause| {
                 self.vcpu.injectException(cause, current_pc, current_pc);
                 return error.GuestFetchFault;
@@ -941,11 +941,20 @@ pub const Engine = struct {
                 .sll => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sllw(d.rd, d.rs1, d.rs2)),
                 .slt => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.slt(d.rd, d.rs1, d.rs2)),
                 .sltu => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sltu(d.rd, d.rs1, d.rs2)),
-                .xor_ => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.xor_(d.rd, d.rs1, d.rs2)),
+                .xor_ => |d| {
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.xor_(d.rd, d.rs1, d.rs2));
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
+                },
                 .srl => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srlw(d.rd, d.rs1, d.rs2)),
                 .sra => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sraw(d.rd, d.rs1, d.rs2)),
-                .or_ => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.or_(d.rd, d.rs1, d.rs2)),
-                .and_ => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.and_(d.rd, d.rs1, d.rs2)),
+                .or_ => |d| {
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.or_(d.rd, d.rs1, d.rs2));
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
+                },
+                .and_ => |d| {
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.and_(d.rd, d.rs1, d.rs2));
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
+                },
 
                 // ---- M-Extension Multiply & Divide Operations ----
                 .mul => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.mulw(d.rd, d.rs1, d.rs2)),
@@ -962,9 +971,18 @@ pub const Engine = struct {
                 .slli => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.slliw(d.rd, d.rs1, @as(u5, @truncate(d.shamt)))),
                 .srli => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srliw(d.rd, d.rs1, @as(u5, @truncate(d.shamt)))),
                 .srai => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sraiw(d.rd, d.rs1, @as(u5, @truncate(d.shamt)))),
-                .andi => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.andi(d.rd, d.rs1, @as(i12, @truncate(d.imm)))),
-                .ori => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ori(d.rd, d.rs1, @as(i12, @truncate(d.imm)))),
-                .xori => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.xori(d.rd, d.rs1, @as(i12, @truncate(d.imm)))),
+                .andi => |d| {
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.andi(d.rd, d.rs1, @as(i12, @truncate(d.imm))));
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
+                },
+                .ori => |d| {
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.ori(d.rd, d.rs1, @as(i12, @truncate(d.imm))));
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
+                },
+                .xori => |d| {
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.xori(d.rd, d.rs1, @as(i12, @truncate(d.imm))));
+                    emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(d.rd, d.rd, 0));
+                },
                 .slti => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.slti(d.rd, d.rs1, @as(i12, @truncate(d.imm)))),
                 .sltiu => |d| emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sltiu(d.rd, d.rs1, @as(i12, @truncate(d.imm)))),
 
@@ -1282,7 +1300,7 @@ pub const Engine = struct {
         }
 
         if (!has_explicit_exit) {
-            _ = emitExit(tb, &host_offset, current_pc);
+            tb.exit_branch1 = emitExit(tb, &host_offset, current_pc);
         }
 
         tb.guest_size = current_pc - start_pc;
@@ -2141,13 +2159,11 @@ pub const ExitReason = enum {
                         self.vcpu.injectException(0x80000001, pc_before, 0);
                         continue;
                     } else if ((pending & (1 << 5)) != 0) {
-                        if (self.total_insn_count -% self.last_timer_inject_count >= 100_000) {
-                            self.vcpu.clearMipBit(5);
-                            self.last_timer_inject_count = self.total_insn_count;
-                            self.last_irq_pc = pc_before;
-                            self.vcpu.injectException(0x80000005, pc_before, 0);
-                            continue;
-                        }
+                        self.vcpu.clearMipBit(5);
+                        self.last_timer_inject_count = self.total_insn_count;
+                        self.last_irq_pc = pc_before;
+                        self.vcpu.injectException(0x80000005, pc_before, 0);
+                        continue;
                     } else if ((pending & (1 << 9)) != 0) {
                         self.vcpu.clearMipBit(9);
                         self.vcpu.injectException(0x80000009, pc_before, 0);
@@ -2157,12 +2173,10 @@ pub const ExitReason = enum {
             }
             // ---- Tier 1 Dynarec: Lookup or translate basic block ----
             if (self.cache.lookup(pc_before)) |tb| {
-                const t0 = vcpu_mod.readHostTime();
                 const ret_pc = @as(u32, @truncate(runBlock(&self.vcpu.regs, @intFromPtr(tb.host_code.ptr))));
-                const t1 = vcpu_mod.readHostTime();
-                self.jit_cycles +%= (t1 -% t0);
-                self.vcpu.pc = ret_pc;
                 const insn_approx = @max(1, tb.guest_size / 2);
+                self.jit_cycles +%= insn_approx;
+                self.vcpu.pc = ret_pc;
                 count += insn_approx;
                 self.total_insn_count +%= insn_approx;
 
@@ -2215,12 +2229,10 @@ pub const ExitReason = enum {
             // Attempt basic block compilation for ALU/branch sequence
             if (self.translateBlock(pc_before)) |tb| {
                 if (tb.guest_size > 0 and tb.host_len > 0) {
-                    const t0 = vcpu_mod.readHostTime();
                     const ret_pc = @as(u32, @truncate(runBlock(&self.vcpu.regs, @intFromPtr(tb.host_code.ptr))));
-                    const t1 = vcpu_mod.readHostTime();
-                    self.jit_cycles +%= (t1 -% t0);
-                    self.vcpu.pc = ret_pc;
                     const insn_approx = @max(1, tb.guest_size / 2);
+                    self.jit_cycles +%= insn_approx;
+                    self.vcpu.pc = ret_pc;
                     count += insn_approx;
                     self.total_insn_count +%= insn_approx;
 

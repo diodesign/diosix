@@ -212,7 +212,12 @@ comptime {
     }
 
     pub fn getMip(self: *const VCpu) u32 {
-        return @atomicLoad(u32, &self.mip, .seq_cst);
+        var m = @atomicLoad(u32, &self.mip, .seq_cst);
+        const now = readGuestTime();
+        if (self.vstimecmp != ~@as(u64, 0) and now >= self.vstimecmp) {
+            m |= (1 << 5); // STIP
+        }
+        return m;
     }
 
     pub fn readGuestTime() u64 {

@@ -247,11 +247,8 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                             if (cur_guest_time >= guest_target) {
                                 wake = true;
                                 v.setMipBit(5); // STIP
-                            } else {
-                                // Fast-forward virtual time to the scheduled timer deadline so idle WFI wakes
-                                VCpu.guest_insn_time.store(guest_target, .monotonic);
-                                wake = true;
-                                v.setMipBit(5); // STIP
+                            } else if (guest_target < min_target) {
+                                min_target = guest_target;
                             }
                         }
                     } else {
@@ -354,13 +351,11 @@ pub fn run(vc: *vcore.VirtualCore) void {
             const yield_c = global_yield_count.load(.monotonic);
             var total_blocks: usize = 0;
             var total_jit_cyc: u64 = 0;
-            var total_eng_cyc: u64 = 0;
             for (0..MAX_EMULATED_VCORES) |i| {
                 total_blocks += engine_pools[i].cache.block_count;
                 total_jit_cyc +%= engine_pools[i].jit_cycles;
-                total_eng_cyc +%= engine_pools[i].engine_cycles;
             }
-            const jit_pct = if (total_eng_cyc > 0) (total_jit_cyc * 1000 / total_eng_cyc) else 0;
+            const jit_pct = if (total_insns > 0) @min(@as(u64, 1000), (total_jit_cyc * 1000 / total_insns)) else 0;
             const overhead_pct = if (jit_pct <= 1000) (1000 - jit_pct) else 0;
 
             debug.printf("\n[HYPERVISOR TELEMETRY] Uptime: {}s | Total Guest Insns: {} | JIT Blocks: {} | Native JIT: {}.{}% | Overhead: {}.{}% | Exits: {} WFI, {} ECALL, {} Yield | PCs: 0x{x} 0x{x} 0x{x} 0x{x}\n\n", .{
