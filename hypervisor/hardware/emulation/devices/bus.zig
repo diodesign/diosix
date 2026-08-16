@@ -15,6 +15,7 @@ pub const Bus = struct {
 
     pub fn isMmioAddr(addr: u32) bool {
         if (addr >= 0x10000000 and addr < 0x10000100) return true; // 16550 UART
+        if (addr >= 0x10001000 and addr < 0x10009000) return true; // VirtIO MMIO slots 0..7
         if (addr >= 0x02000000 and addr < 0x02010000) return true; // CLINT Timer
         if (addr >= 0x0c000000 and addr < 0x10000000) return true; // PLIC
         return false;
@@ -29,6 +30,16 @@ pub const Bus = struct {
         _ = size;
         if (addr >= 0x10000000 and addr < 0x10000100) {
             return self.uart.read(@truncate(addr - 0x10000000));
+        } else if (addr >= 0x10001000 and addr < 0x10009000) {
+            // VirtIO MMIO transport probe
+            const reg_offset = (addr - 0x10001000) & 0xFFF;
+            return switch (reg_offset) {
+                0x000 => 0x74726976, // MagicValue: "virt" in little-endian (0x74726976)
+                0x004 => 0x00000002, // Version: 2 (Modern VirtIO)
+                0x008 => 0x00000000, // DeviceID: 0 (No device connected / empty slot)
+                0x00c => 0x554d4551, // VendorID: "QEMU" in ASCII
+                else => 0,
+            };
         } else if (addr >= 0x02000000 and addr < 0x02010000) {
             return self.timer.read(@truncate(addr - 0x02000000));
         } else if (addr >= 0x0c000000 and addr < 0x10000000) {
@@ -41,6 +52,8 @@ pub const Bus = struct {
         _ = size;
         if (addr >= 0x10000000 and addr < 0x10000100) {
             self.uart.write(@truncate(addr - 0x10000000), @truncate(val));
+        } else if (addr >= 0x10001000 and addr < 0x10009000) {
+            // Read-only configuration or control writes for empty slots are ignored
         } else if (addr >= 0x02000000 and addr < 0x02010000) {
             self.timer.write(@truncate(addr - 0x02000000), val);
         } else if (addr >= 0x0c000000 and addr < 0x10000000) {

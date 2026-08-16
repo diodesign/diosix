@@ -110,7 +110,7 @@ pub const SoftTlb = struct {
 
     pub fn fallbackIdentity(self: *SoftTlb, vaddr: u32) ?usize {
         if (vaddr < 0x1000) return null; // NULL pointer dereference must trap
-        if ((vaddr >= 0x10000000 and vaddr < 0x10000100) or
+        if ((vaddr >= 0x10000000 and vaddr < 0x10009000) or
             (vaddr >= 0x02000000 and vaddr < 0x02010000) or
             (vaddr >= 0x0c000000 and vaddr < 0x10000000))
         {
