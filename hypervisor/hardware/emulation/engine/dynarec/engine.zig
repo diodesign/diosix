@@ -2137,16 +2137,7 @@ pub const ExitReason = enum {
             self.history_idx += 1;
             self.last_pc = pc_before;
 
-            if (self.vcpu.satp != 0 and pc_before >= 0xC0000000) {
-                const gp = @as(u32, @truncate(self.vcpu.getGpr(3)));
-                if (gp >= 0x80000000 and gp < 0xC0000000) {
-                    self.vcpu.setGpr(3, gp +% 0x40000000);
-                }
-                const tp = @as(u32, @truncate(self.vcpu.getGpr(4)));
-                if (tp >= 0x80000000 and tp < 0xC0000000) {
-                    self.vcpu.setGpr(4, tp +% 0x40000000);
-                }
-            }
+
 
             // Check if supervisor interrupts can be delivered (only when stvec is set and an interrupt is pending)
             const sie = (self.vcpu.mstatus >> 1) & 1;
