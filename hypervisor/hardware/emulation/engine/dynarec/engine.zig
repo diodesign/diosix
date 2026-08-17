@@ -105,54 +105,6 @@ pub const Engine = struct {
     }
 
     pub fn trap(self: *Engine, cause: u32, fault_pc: u32, stval: u32) void {
-        if (cause != 8 and cause != 9) {
-            printUart("\n[TRAP] cause=");
-            printHex(cause);
-            printUart(" pc=");
-            printHex(fault_pc);
-            printUart(" stval=");
-            printHex(stval);
-            printUart(" stvec=");
-            printHex(self.vcpu.stvec);
-            printUart(" tp=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[4])));
-            printUart(" sscratch=");
-            printHex(self.vcpu.sscratch);
-            printUart(" sepc=");
-            printHex(self.vcpu.sepc);
-            printUart(" sp=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[2])));
-            printUart(" ra=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[1])));
-            printUart(" a0=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[10])));
-            printUart(" a1=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[11])));
-            printUart(" a5=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[15])));
-            printUart(" s0=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[8])));
-            printUart(" s1=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[9])));
-            printUart(" t0=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[5])));
-            printUart(" t1=");
-            printHex(@as(u32, @truncate(self.vcpu.regs[6])));
-            printUart(" satp=");
-            printHex(self.tlb.satp);
-            printUart(" priv=");
-            printHex(self.tlb.privilege_mode);
-            printUart(" pte1=");
-            printHex(self.tlb.last_null_pte1);
-            printUart(" pte0=");
-            printHex(self.tlb.last_null_pte0);
-            printUart(" pte_fl=");
-            printHex(self.tlb.last_null_pte_flags);
-            printUart(" req_fl=");
-            printHex(self.tlb.last_null_req_flag);
-            printUart("\n");
-        }
-
         self.vcpu.injectException(cause, fault_pc, stval);
         self.tlb.privilege_mode = self.vcpu.privilege_mode;
         self.tlb.mstatus = self.vcpu.mstatus;
@@ -1162,7 +1114,7 @@ pub const Engine = struct {
         std.mem.writeInt(u32, tb.host_code[jal_patch_pos..][0..4], emitter_rv64.jal(0, jal_rel), .little);
     }
 
-    inline fn emitRType(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, u5) u32, rd: u5, rs1: u5, rs2: u5) void {
+    inline fn emitRType(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn (u5, u5, u5) u32, rd: u5, rs1: u5, rs2: u5) void {
         if (rd == 0) return;
         if (rd != 27 and rs1 != 27 and rs2 != 27) {
             emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, rs2));
@@ -1211,7 +1163,7 @@ pub const Engine = struct {
         }
     }
 
-    inline fn emitIType(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, i12) u32, rd: u5, rs1: u5, imm: i12) void {
+    inline fn emitIType(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn (u5, u5, i12) u32, rd: u5, rs1: u5, imm: i12) void {
         if (rd == 0) return;
         if (rd != 27 and rs1 != 27) {
             emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, imm));
@@ -1239,7 +1191,7 @@ pub const Engine = struct {
         }
     }
 
-    inline fn emitShiftI(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, u5) u32, rd: u5, rs1: u5, shamt: u5) void {
+    inline fn emitShiftI(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn (u5, u5, u5) u32, rd: u5, rs1: u5, shamt: u5) void {
         if (rd == 0) return;
         if (rd != 27 and rs1 != 27) {
             emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, shamt));
@@ -1267,7 +1219,7 @@ pub const Engine = struct {
         }
     }
 
-    inline fn emitBitwiseR(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, u5) u32, rd: u5, rs1: u5, rs2: u5) void {
+    inline fn emitBitwiseR(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn (u5, u5, u5) u32, rd: u5, rs1: u5, rs2: u5) void {
         if (rd == 0) return;
         if (rd != 27 and rs1 != 27 and rs2 != 27) {
             emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, rs2));
@@ -1318,7 +1270,7 @@ pub const Engine = struct {
         }
     }
 
-    inline fn emitBitwiseI(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn(u5, u5, i12) u32, rd: u5, rs1: u5, imm: i12) void {
+    inline fn emitBitwiseI(tb: *block_mod.TranslationBlock, host_offset: *usize, comptime op_fn: fn (u5, u5, i12) u32, rd: u5, rs1: u5, imm: i12) void {
         if (rd == 0) return;
         if (rd != 27 and rs1 != 27) {
             emitter_rv64.emit(tb.host_code, host_offset, op_fn(rd, rs1, imm));
@@ -1368,7 +1320,7 @@ pub const Engine = struct {
         }
     }
 
-    inline fn emitBranch(tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, offset: i32, decoded_len: u32, rs1: u5, rs2: u5, comptime branch_fn: fn(u5, u5, i13) u32) struct { exit1: block_mod.ExitBranch, exit2: block_mod.ExitBranch } {
+    inline fn emitBranch(tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, offset: i32, decoded_len: u32, rs1: u5, rs2: u5, comptime branch_fn: fn (u5, u5, i13) u32) struct { exit1: block_mod.ExitBranch, exit2: block_mod.ExitBranch } {
         const target = current_pc +% @as(u32, @bitCast(offset));
         const fallthrough = current_pc + decoded_len;
 
@@ -1507,8 +1459,7 @@ pub const Engine = struct {
 
                 // ---- Upper Immediate Operations ----
                 .lui => |d| {
-                    if (d.rd == 0) {}
-                    else {
+                    if (d.rd == 0) {} else {
                         // Check for lui + addi fusion: lui rd, upper followed by addi rd, rd, lower
                         const next_pc = current_pc + decoded.len;
                         var fused = false;
@@ -1548,8 +1499,7 @@ pub const Engine = struct {
                     }
                 },
                 .auipc => |d| {
-                    if (d.rd == 0) {}
-                    else {
+                    if (d.rd == 0) {} else {
                         const val = @as(u32, @bitCast(@as(i32, @bitCast(current_pc)) +% (d.imm << 12)));
                         const val_offset = val +% 0x800;
                         if (d.rd == 27) {
@@ -2277,7 +2227,6 @@ pub const Engine = struct {
                 }
             },
 
-
             // ---- Control Flow ----
             .jal => |d| {
                 const target = pc_before +% @as(u32, @bitCast(d.offset));
@@ -2755,15 +2704,15 @@ pub const Engine = struct {
         return true;
     }
 
-pub const ExitReason = enum {
-    normal,
-    yield,
-    wfi,
-    ecall,
-    page_fault,
-    illegal_instruction,
-    unhandled,
-};
+    pub const ExitReason = enum {
+        normal,
+        yield,
+        wfi,
+        ecall,
+        page_fault,
+        illegal_instruction,
+        unhandled,
+    };
 
     /// Run JIT/stepped execution loop for a given instruction budget
     pub fn run(self: *Engine, vcpu: *vcpu_mod.VCpu, budget: usize) ExitReason {
@@ -2945,17 +2894,17 @@ test "Dynarec RV32I Arithmetic & Immediate Emission" {
     // Test addw emission (add a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addw(10, 11, 12));
     try std.testing.expectEqual(@as(usize, 4), host_offset);
-    try std.testing.expectEqual(@as(u32, 0x00c5853b), @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).*);
+    try std.testing.expectEqual(@as(u32, 0x00c5853b), @as(*align(1) const u32, @ptrCast(&tb.host_code[0])).*);
 
     // Test subw emission (sub a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.subw(10, 11, 12));
     try std.testing.expectEqual(@as(usize, 8), host_offset);
-    try std.testing.expectEqual(@as(u32, 0x40c5853b), @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).*);
+    try std.testing.expectEqual(@as(u32, 0x40c5853b), @as(*align(1) const u32, @ptrCast(&tb.host_code[4])).*);
 
     // Test addiw emission (addi sp, sp, -16)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.addiw(2, 2, -16));
     try std.testing.expectEqual(@as(usize, 12), host_offset);
-    try std.testing.expectEqual(@as(u32, 0xff01011b), @as(*const align(1) u32, @ptrCast(&tb.host_code[8])).*);
+    try std.testing.expectEqual(@as(u32, 0xff01011b), @as(*align(1) const u32, @ptrCast(&tb.host_code[8])).*);
 }
 
 test "Dynarec RV32M Multiply & Divide Emission" {
@@ -2967,23 +2916,23 @@ test "Dynarec RV32M Multiply & Divide Emission" {
 
     // mulw (mul a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.mulw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5853b), @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).*);
+    try std.testing.expectEqual(@as(u32, 0x02c5853b), @as(*align(1) const u32, @ptrCast(&tb.host_code[0])).*);
 
     // divw (div a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.divw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5c53b), @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).*);
+    try std.testing.expectEqual(@as(u32, 0x02c5c53b), @as(*align(1) const u32, @ptrCast(&tb.host_code[4])).*);
 
     // divuw (divu a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.divuw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5d53b), @as(*const align(1) u32, @ptrCast(&tb.host_code[8])).*);
+    try std.testing.expectEqual(@as(u32, 0x02c5d53b), @as(*align(1) const u32, @ptrCast(&tb.host_code[8])).*);
 
     // remw (rem a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.remw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5e53b), @as(*const align(1) u32, @ptrCast(&tb.host_code[12])).*);
+    try std.testing.expectEqual(@as(u32, 0x02c5e53b), @as(*align(1) const u32, @ptrCast(&tb.host_code[12])).*);
 
     // remuw (remu a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.remuw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5f53b), @as(*const align(1) u32, @ptrCast(&tb.host_code[16])).*);
+    try std.testing.expectEqual(@as(u32, 0x02c5f53b), @as(*align(1) const u32, @ptrCast(&tb.host_code[16])).*);
 }
 
 test "Dynarec RV32A Atomic Memory Instructions Emission" {
@@ -2998,8 +2947,8 @@ test "Dynarec RV32A Atomic Memory Instructions Emission" {
     try std.testing.expect(host_offset > 0);
 
     // Verify s11 scratch saving: sd t0, 40(s11) and sd t1, 48(s11)
-    const save_t0 = @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).* ;
-    const save_t1 = @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).* ;
+    const save_t0 = @as(*align(1) const u32, @ptrCast(&tb.host_code[0])).*;
+    const save_t1 = @as(*align(1) const u32, @ptrCast(&tb.host_code[4])).*;
     try std.testing.expectEqual(emitter_rv64.sd(27, 5, 40), save_t0); // sd t0, 40(s11)
     try std.testing.expectEqual(emitter_rv64.sd(27, 6, 48), save_t1); // sd t1, 48(s11)
 }
@@ -3018,8 +2967,8 @@ test "Dynarec Direct Stack Load & Store 512MB Windowing" {
     // Verify 35-bit shift (512MB RAM mask)
     // slli a0, a0, 35 -> 0x02351513
     // srli a0, a0, 35 -> 0x02355513
-    try std.testing.expectEqual(@as(u32, 0x02351513), @as(*const align(1) u32, @ptrCast(&tb.host_code[12])).*);
-    try std.testing.expectEqual(@as(u32, 0x02355513), @as(*const align(1) u32, @ptrCast(&tb.host_code[16])).*);
+    try std.testing.expectEqual(@as(u32, 0x02351513), @as(*align(1) const u32, @ptrCast(&tb.host_code[12])).*);
+    try std.testing.expectEqual(@as(u32, 0x02355513), @as(*align(1) const u32, @ptrCast(&tb.host_code[16])).*);
 }
 
 test "Dynarec Inlined SoftTLB Fast-Path Load & Store Emission" {
@@ -3034,8 +2983,8 @@ test "Dynarec Inlined SoftTLB Fast-Path Load & Store Emission" {
     try std.testing.expect(host_offset > 0);
 
     // Verify scratch register saves:
-    try std.testing.expectEqual(emitter_rv64.sd(27, 5, 40), @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).*); // sd t0, 40(s11)
-    try std.testing.expectEqual(emitter_rv64.sd(27, 6, 48), @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).*); // sd t1, 48(s11)
+    try std.testing.expectEqual(emitter_rv64.sd(27, 5, 40), @as(*align(1) const u32, @ptrCast(&tb.host_code[0])).*); // sd t0, 40(s11)
+    try std.testing.expectEqual(emitter_rv64.sd(27, 6, 48), @as(*align(1) const u32, @ptrCast(&tb.host_code[4])).*); // sd t1, 48(s11)
 
     // Emit sw a0, 4(a1) via SoftTLB Fast-Path
     const prev_offset = host_offset;
@@ -3052,47 +3001,47 @@ test "Dynarec RV32I Logical, Shift & Comparison Emission" {
 
     // sllw (sll a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sllw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x00c5953b), @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).*);
+    try std.testing.expectEqual(@as(u32, 0x00c5953b), @as(*align(1) const u32, @ptrCast(&tb.host_code[0])).*);
 
     // srlw (srl a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srlw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x00c5d53b), @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).*);
+    try std.testing.expectEqual(@as(u32, 0x00c5d53b), @as(*align(1) const u32, @ptrCast(&tb.host_code[4])).*);
 
     // sraw (sra a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sraw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x40c5d53b), @as(*const align(1) u32, @ptrCast(&tb.host_code[8])).*);
+    try std.testing.expectEqual(@as(u32, 0x40c5d53b), @as(*align(1) const u32, @ptrCast(&tb.host_code[8])).*);
 
     // slliw (slli a0, a1, 4)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.slliw(10, 11, 4));
-    try std.testing.expectEqual(@as(u32, 0x0045951b), @as(*const align(1) u32, @ptrCast(&tb.host_code[12])).*);
+    try std.testing.expectEqual(@as(u32, 0x0045951b), @as(*align(1) const u32, @ptrCast(&tb.host_code[12])).*);
 
     // srliw (srli a0, a1, 4)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.srliw(10, 11, 4));
-    try std.testing.expectEqual(@as(u32, 0x0045d51b), @as(*const align(1) u32, @ptrCast(&tb.host_code[16])).*);
+    try std.testing.expectEqual(@as(u32, 0x0045d51b), @as(*align(1) const u32, @ptrCast(&tb.host_code[16])).*);
 
     // sraiw (srai a0, a1, 4)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sraiw(10, 11, 4));
-    try std.testing.expectEqual(@as(u32, 0x4045d51b), @as(*const align(1) u32, @ptrCast(&tb.host_code[20])).*);
+    try std.testing.expectEqual(@as(u32, 0x4045d51b), @as(*align(1) const u32, @ptrCast(&tb.host_code[20])).*);
 
     // slt (slt a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.slt(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x00c5a533), @as(*const align(1) u32, @ptrCast(&tb.host_code[24])).*);
+    try std.testing.expectEqual(@as(u32, 0x00c5a533), @as(*align(1) const u32, @ptrCast(&tb.host_code[24])).*);
 
     // sltu (sltu a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sltu(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x00c5b533), @as(*const align(1) u32, @ptrCast(&tb.host_code[28])).*);
+    try std.testing.expectEqual(@as(u32, 0x00c5b533), @as(*align(1) const u32, @ptrCast(&tb.host_code[28])).*);
 
     // xor (xor a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.xor_(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x00c5c533), @as(*const align(1) u32, @ptrCast(&tb.host_code[32])).*);
+    try std.testing.expectEqual(@as(u32, 0x00c5c533), @as(*align(1) const u32, @ptrCast(&tb.host_code[32])).*);
 
     // or (or a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.or_(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x00c5e533), @as(*const align(1) u32, @ptrCast(&tb.host_code[36])).*);
+    try std.testing.expectEqual(@as(u32, 0x00c5e533), @as(*align(1) const u32, @ptrCast(&tb.host_code[36])).*);
 
     // and (and a0, a1, a2)
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.and_(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x00c5f533), @as(*const align(1) u32, @ptrCast(&tb.host_code[40])).*);
+    try std.testing.expectEqual(@as(u32, 0x00c5f533), @as(*align(1) const u32, @ptrCast(&tb.host_code[40])).*);
 }
 
 test "Dynarec RV32 Branch & Control Flow Emission" {
@@ -3104,31 +3053,29 @@ test "Dynarec RV32 Branch & Control Flow Emission" {
 
     // beq a0, a1, +28
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.beq(10, 11, 28));
-    try std.testing.expectEqual(@as(u32, 0x00b50e63), @as(*const align(1) u32, @ptrCast(&tb.host_code[0])).*);
+    try std.testing.expectEqual(@as(u32, 0x00b50e63), @as(*align(1) const u32, @ptrCast(&tb.host_code[0])).*);
 
     // bne a0, a1, +28
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.bne(10, 11, 28));
-    try std.testing.expectEqual(@as(u32, 0x00b51e63), @as(*const align(1) u32, @ptrCast(&tb.host_code[4])).*);
+    try std.testing.expectEqual(@as(u32, 0x00b51e63), @as(*align(1) const u32, @ptrCast(&tb.host_code[4])).*);
 
     // blt a0, a1, +28
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.blt(10, 11, 28));
-    try std.testing.expectEqual(@as(u32, 0x00b54e63), @as(*const align(1) u32, @ptrCast(&tb.host_code[8])).*);
+    try std.testing.expectEqual(@as(u32, 0x00b54e63), @as(*align(1) const u32, @ptrCast(&tb.host_code[8])).*);
 
     // bge a0, a1, +28
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.bge(10, 11, 28));
-    try std.testing.expectEqual(@as(u32, 0x00b55e63), @as(*const align(1) u32, @ptrCast(&tb.host_code[12])).*);
+    try std.testing.expectEqual(@as(u32, 0x00b55e63), @as(*align(1) const u32, @ptrCast(&tb.host_code[12])).*);
 
     // bltu a0, a1, +28
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.bltu(10, 11, 28));
-    try std.testing.expectEqual(@as(u32, 0x00b56e63), @as(*const align(1) u32, @ptrCast(&tb.host_code[16])).*);
+    try std.testing.expectEqual(@as(u32, 0x00b56e63), @as(*align(1) const u32, @ptrCast(&tb.host_code[16])).*);
 
     // bgeu a0, a1, +28
     emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.bgeu(10, 11, 28));
-    try std.testing.expectEqual(@as(u32, 0x00b57e63), @as(*const align(1) u32, @ptrCast(&tb.host_code[20])).*);
+    try std.testing.expectEqual(@as(u32, 0x00b57e63), @as(*align(1) const u32, @ptrCast(&tb.host_code[20])).*);
 }
 
 comptime {
     _ = @import("instruction_tests.zig");
 }
-
-

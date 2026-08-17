@@ -339,43 +339,6 @@ pub fn run(vc: *vcore.VirtualCore) void {
         else => {},
     }
 
-    const now_time = riscv.readTime();
-    const last_time = last_telemetry_time.load(.monotonic);
-    if (now_time > last_time + 50_000_000) {
-        if (last_telemetry_time.cmpxchgStrong(last_time, now_time, .acq_rel, .monotonic) == null) {
-            const elapsed_secs = (now_time - vcore.time_offset) / 10_000_000;
-            const total_insns = global_insn_count.load(.monotonic);
-            const wfi_c = global_wfi_count.load(.monotonic);
-            const ecall_c = global_ecall_count.load(.monotonic);
-            const yield_c = global_yield_count.load(.monotonic);
-            var total_blocks: usize = 0;
-            var total_jit_cyc: u64 = 0;
-            for (0..MAX_EMULATED_VCORES) |i| {
-                total_blocks += engine_pools[i].cache.block_count;
-                total_jit_cyc +%= engine_pools[i].jit_cycles;
-            }
-            const jit_pct = if (total_insns > 0) @min(@as(u64, 1000), (total_jit_cyc * 1000 / total_insns)) else 0;
-            const overhead_pct = if (jit_pct <= 1000) (1000 - jit_pct) else 0;
-
-            debug.printf("\n[HYPERVISOR TELEMETRY] Uptime: {}s | Total Guest Insns: {} | JIT Blocks: {} | Native JIT: {}.{}% | Overhead: {}.{}% | Exits: {} WFI, {} ECALL, {} Yield | PCs: 0x{x} 0x{x} 0x{x} 0x{x}\n\n", .{
-                elapsed_secs,
-                total_insns,
-                total_blocks,
-                jit_pct / 10,
-                jit_pct % 10,
-                overhead_pct / 10,
-                overhead_pct % 10,
-                wfi_c,
-                ecall_c,
-                yield_c,
-                vcpu_pools[0].pc,
-                vcpu_pools[1].pc,
-                vcpu_pools[2].pc,
-                vcpu_pools[3].pc,
-            });
-        }
-    }
-
     em.exit_count += 1;
 
     if (exit_reason == .unhandled or exit_reason == .illegal_instruction) {
