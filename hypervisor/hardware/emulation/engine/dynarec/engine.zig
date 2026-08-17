@@ -88,19 +88,6 @@ pub const Engine = struct {
         self.history_idx = 0;
         self.jit_cycles = 0;
         self.engine_cycles = 0;
-        printUart("\n[VCPU_LAYOUT] vcpu=");
-        printHex(@as(u32, @truncate(@intFromPtr(vcpu))));
-        printUart(" regs=");
-        printHex(@as(u32, @truncate(@intFromPtr(&vcpu.regs[0]))));
-        printUart(" pc=");
-        printHex(@as(u32, @truncate(@intFromPtr(&vcpu.pc))));
-        printUart(" sscratch=");
-        printHex(@as(u32, @truncate(@intFromPtr(&vcpu.sscratch))));
-        printUart(" host_sp=");
-        printHex(@as(u32, @truncate(@intFromPtr(&vcpu.host_sp))));
-        printUart(" scratch_t1=");
-        printHex(@as(u32, @truncate(@intFromPtr(&vcpu.scratch_t1))));
-        printUart("\n");
         self.cache.initOnPtr(buffer);
     }
 

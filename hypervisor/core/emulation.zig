@@ -103,7 +103,6 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         else => return error.InvalidExecPath,
     };
     if (em.vcpu != null and em.engine != null) return;
-    debug.printf("DEBUG emulation.init: vc=0x{x} target_arch={s}\n", .{ @intFromPtr(vc), @tagName(vc.guest.target_arch) });
 
     const vcore_idx = if (vc.id < MAX_EMULATED_VCORES) vc.id else 0;
     const vcpu_ptr = &vcpu_pools[vcore_idx];
@@ -114,7 +113,6 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     const gpa_base = vc.guest.space.base_gpa;
     const hpa_base = vc.guest.space.base_hpa;
     const ram_size = vc.guest.space.range_size;
-    debug.printf("DEBUG emulation.init: vc=0x{x} id={} gpa_base=0x{x} hpa_base=0x{x} ram_size=0x{x}\n", .{ @intFromPtr(vc), vc.id, gpa_base, hpa_base, ram_size });
 
     if (vc.id == 0) {
         vcore.time_offset = 0;
@@ -159,7 +157,6 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     bus_ptr.uart = &shared_uart;
     bus_ptr.timer = &shared_timer;
     bus_ptr.pic = &shared_pic;
-    debug.printf("DEBUG emulation.init: jit_buffer_pool[{}] ptr=0x{x}\n", .{ vcore_idx, @intFromPtr(&jit_buffer_pools[vcore_idx]) });
     engine_ptr.initOnPtr(&jit_buffer_pools[vcore_idx], vcpu_ptr, softtlb_ptr, bus_ptr);
 
     if (em.target_arch == .riscv32 and vc.id == 0) {

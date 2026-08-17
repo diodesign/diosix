@@ -434,7 +434,6 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
             const target_hart = a0;
             const start_addr = a1;
             const opaque_param = a2;
-            debug.printf("SBI HSM HART_START: vc={} target_hart={} start=0x{x} opaque=0x{x}\n", .{ vc.id, target_hart, start_addr, opaque_param });
 
             if (g.findVcore(target_hart)) |target_vc| {
                 if (target_vc.state != .stopped) {
