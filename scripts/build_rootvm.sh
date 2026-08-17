@@ -19,7 +19,7 @@ fi
 GUEST_ARCH="${4:-riscv64}"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$(sha256sum "$CONFIG_FILE" "$0" | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$(sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment 2>/dev/null | sha256sum | cut -d' ' -f1)
 
 # Check if a rebuild is necessary using the configuration hash.
 if [ -f "$OUT_FILE" ] && [ -f "$HASH_FILE" ]; then
@@ -65,6 +65,7 @@ echo "BR2_TARGET_GENERIC_GETTY_PORT=\"$GETTY_PORT\"" >> "$BUILDROOT_DIR/.config"
 
 # Fixup step for modern buildroot: olddefconfig updates the config for new versions silently
 make -C "$BUILDROOT_DIR" olddefconfig
+make -C "$BUILDROOT_DIR" linux-dirclean 2>/dev/null || true
 
 if [ -f "$BUILDROOT_DIR/.config.old" ]; then
     OLD_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config.old" | cut -d'"' -f2)

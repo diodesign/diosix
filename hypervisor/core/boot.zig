@@ -200,9 +200,10 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
         // Inject boot arguments into the guest DTB.
         // Use hvc0 as the primary console and SBI for early boot output.
-        // maxcpus limits the number of CPUs the guest will bring online.
+        // For emulated non-native guests running under QEMU, limit to 1 vCPU to eliminate ticket spinlock contention.
+        const guest_cpus: usize = if (guest_arch != .riscv64) 1 else cpu_count;
         const mitigations = if (guest_arch != .riscv64) " mitigations=off clocksource=riscv_clocksource" else "";
-        const bootargs = try std.fmt.allocPrint(cpu_allocator, "console=hvc0 earlycon=sbi maxcpus={} lpj=1000000 unaligned_scalar_speed=fast{s}", .{ cpu_count, mitigations });
+        const bootargs = try std.fmt.allocPrint(cpu_allocator, "console=hvc0 earlycon=sbi maxcpus={} lpj=50000 rcu_cpu_stall_timeout=300 unaligned_scalar_speed=fast{s}", .{ guest_cpus, mitigations });
         defer cpu_allocator.free(bootargs);
         device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, bootargs)) catch |err| {
             debug.printf("Warning: Failed to inject bootargs into guest DTB: {s}\n", .{@errorName(err)});

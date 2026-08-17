@@ -377,4 +377,77 @@ test "RV32 Floating-Point (F/D) Decoding, Decompression & Emission" {
     try std.testing.expectEqual(decoder_rv32.Instruction{ .fp_op = .{ .raw = 0xc0000553 } }, fcvt_w_s.insn);
 }
 
+test "Dynarec Global vs ASID-Specific Block Retention Across Context Switches" {
+    var raw_pool: [8192]u8 align(4096) = undefined;
+    var cache_inst: block_mod.Cache = undefined;
+    cache_inst.initOnPtr(&raw_pool);
+
+    // 1. Allocate a global kernel block (e.g. supervisor __schedule @ 0xC004F61E)
+    const tb_kernel = try cache_inst.allocateBlock(0xC004F61E, 0x80001111, true, 256);
+    cache_inst.commitBlock(tb_kernel, 64);
+
+    // 2. Allocate a process-specific user block (e.g. user main @ 0x00010000, satp=0x80001111)
+    const tb_user_proc1 = try cache_inst.allocateBlock(0x00010000, 0x80001111, false, 256);
+    cache_inst.commitBlock(tb_user_proc1, 64);
+
+    // 3. Lookup with satp=0x80001111 -> both should hit
+    const hit_kernel_1 = cache_inst.lookup(0xC004F61E, 0x80001111);
+    try std.testing.expect(hit_kernel_1 != null);
+    try std.testing.expectEqual(@as(u32, 0xC004F61E), hit_kernel_1.?.guest_pc);
+
+    const hit_user_1 = cache_inst.lookup(0x00010000, 0x80001111);
+    try std.testing.expect(hit_user_1 != null);
+    try std.testing.expectEqual(@as(u32, 0x00010000), hit_user_1.?.guest_pc);
+
+    // 4. Context switch: satp changes to 0x80002222 (Process 2)
+    // Global kernel block MUST still hit; Process 1 user block MUST miss!
+    const hit_kernel_2 = cache_inst.lookup(0xC004F61E, 0x80002222);
+    try std.testing.expect(hit_kernel_2 != null);
+    try std.testing.expectEqual(@as(u32, 0xC004F61E), hit_kernel_2.?.guest_pc);
+
+    const hit_user_2 = cache_inst.lookup(0x00010000, 0x80002222);
+    try std.testing.expect(hit_user_2 == null);
+}
+
+test "Dynarec Zihintpause Instruction Decoding & Verification" {
+    // 0x0100000F is standard RISC-V PAUSE (fence w, 0)
+    const pause_raw: u32 = 0x0100000F;
+    const pause_dec = decoder_rv32.decode(pause_raw);
+    try std.testing.expectEqual(decoder_rv32.Instruction.pause, pause_dec.insn);
+
+    // Regular fence (e.g. fence rw, rw: 0x0FF0000F) must decode as .fence
+    const fence_raw: u32 = 0x0FF0000F;
+    const fence_dec = decoder_rv32.decode(fence_raw);
+    try std.testing.expectEqual(decoder_rv32.Instruction.fence, fence_dec.insn);
+}
+
+test "Dynamic Direct RAM Mapping Region Resolution" {
+    const softtlb_mod = @import("../../softtlb.zig");
+    var tlb: softtlb_mod.SoftTlb = undefined;
+    const gpa_base: usize = 0x80000000;
+    const hpa_base: usize = 0xe0000000;
+    const ram_size: usize = 512 * 1024 * 1024; // 512MB
+    tlb.initOnPtr(gpa_base, hpa_base, ram_size);
+
+    // 1. Direct physical RAM address in direct window [0x80000000, 0xA0000000)
+    const ram_region = tlb.getDirectMappingRegion(0x80001000);
+    try std.testing.expect(ram_region != null);
+    try std.testing.expectEqual(@as(u32, 0x80000000), ram_region.?.vaddr_start);
+    try std.testing.expectEqual(@as(u32, 0xa0000000), ram_region.?.vaddr_end);
+    try std.testing.expectEqual(hpa_base, ram_region.?.hpa_start);
+
+    // 2. Linear kernel Sv32 mapping [0xC0000000, 0xE0000000)
+    const kernel_region = tlb.getDirectMappingRegion(0xC0017BC4);
+    try std.testing.expect(kernel_region != null);
+    try std.testing.expectEqual(@as(u32, 0xc0000000), kernel_region.?.vaddr_start);
+    try std.testing.expectEqual(@as(u32, 0xe0000000), kernel_region.?.vaddr_end);
+    try std.testing.expectEqual(hpa_base, kernel_region.?.hpa_start);
+
+    // 3. MMIO Regions (UART 0x10000000, PLIC 0x0C000000, NULL 0x0) MUST return null (no direct RAM fast-path)
+    try std.testing.expect(tlb.getDirectMappingRegion(0x10000000) == null);
+    try std.testing.expect(tlb.getDirectMappingRegion(0x0C000000) == null);
+    try std.testing.expect(tlb.getDirectMappingRegion(0x00000000) == null);
+}
+
+
 

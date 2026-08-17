@@ -68,6 +68,7 @@ pub const Engine = struct {
     history_idx: usize = 0,
     jit_cycles: u64 = 0,
     engine_cycles: u64 = 0,
+    consecutive_backward_jumps: u32 = 0,
 
     pub fn initOnPtr(self: *Engine, buffer: []u8, vcpu: *vcpu_mod.VCpu, tlb: *softtlb_mod.SoftTlb, bus: *bus_mod.Bus) void {
         self.vcpu = vcpu;
@@ -194,11 +195,13 @@ pub const Engine = struct {
         const total_offset = @as(i64, @intCast(imm)) + delta;
         const needs_t1 = (rs1 == 5 or rs1 == 27 or rd == 5 or rd == 27);
 
+        // 1. Save host t0 (x5) and optionally t1 (x6) to vcpu.regs
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
         if (needs_t1) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
         }
 
-        // 1. Calculate offset in host t0 (x5)
+        // 2. Calculate offset in host t0 (x5)
         const off_i32 = @as(i32, @truncate(total_offset));
         const upper = @as(i20, @truncate((off_i32 +% 0x800) >> 12));
         const lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(off_i32)) & 0xFFF))));
@@ -206,7 +209,7 @@ pub const Engine = struct {
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, upper));
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, lower));
 
-        // 2. Add base register rs1
+        // 3. Add base register rs1
         if (rs1 == 5) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
@@ -217,11 +220,11 @@ pub const Engine = struct {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, rs1));
         }
 
-        // 3. Zero-extend 32-bit host physical address in t0
+        // 4. Zero-extend 32-bit host physical address in t0
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
 
-        // 4. Perform load
+        // 5. Perform load
         if (op == 6) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.flw(rd, 5, 0));
         } else if (op == 7) {
@@ -239,14 +242,19 @@ pub const Engine = struct {
             emitter_rv64.emit(tb.host_code, host_offset, load_insn);
 
             if (rd == 5) {
-                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 40));
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addi(5, 6, 0)); // addi t0, t1, 0
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
             } else if (rd == 27) {
                 emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 216));
             }
         }
 
-        if (needs_t1) {
+        // 6. Restore scratch registers
+        if (needs_t1 and rd != 6) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
+        }
+        if (rd != 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         }
     }
 
@@ -254,11 +262,13 @@ pub const Engine = struct {
         const total_offset = @as(i64, @intCast(imm)) + delta;
         const needs_t1 = (rs1 == 5 or rs1 == 27 or (op != 6 and op != 7 and (rs2 == 5 or rs2 == 27)));
 
+        // 1. Save host t0 (x5) and optionally t1 (x6)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
         if (needs_t1) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
         }
 
-        // 1. Calculate offset in host t0 (x5)
+        // 2. Calculate offset in host t0 (x5)
         const off_i32 = @as(i32, @truncate(total_offset));
         const upper = @as(i20, @truncate((off_i32 +% 0x800) >> 12));
         const lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(off_i32)) & 0xFFF))));
@@ -266,7 +276,7 @@ pub const Engine = struct {
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, upper));
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, lower));
 
-        // 2. Add base register rs1
+        // 3. Add base register rs1
         if (rs1 == 5) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6));
@@ -277,11 +287,11 @@ pub const Engine = struct {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, rs1));
         }
 
-        // 3. Zero-extend 32-bit host physical address in t0
+        // 4. Zero-extend 32-bit host physical address in t0
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
 
-        // 4. Perform store
+        // 5. Perform store
         if (op == 6) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fsw(5, rs2, 0));
         } else if (op == 7) {
@@ -304,21 +314,27 @@ pub const Engine = struct {
             emitter_rv64.emit(tb.host_code, host_offset, store_insn);
         }
 
+        // 6. Restore scratch registers
         if (needs_t1) {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
         }
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
     }
 
     fn emitSoftTlbLoad(self: *Engine, tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, op: u3, rd: u5, rs1: u5, imm: i12) void {
+        if (rd == 0) return;
+        // 1. Save host t0 (x5) and t1 (x6) into vcpu.regs
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
+        self.emitSoftTlbLoadBody(tb, host_offset, current_pc, op, rd, rs1, imm);
+    }
+
+    fn emitSoftTlbLoadBody(self: *Engine, tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, op: u3, rd: u5, rs1: u5, imm: i12) void {
         if (rd == 0) return;
 
         const tlb_addr = @intFromPtr(&self.tlb.entries[0]);
         const tlb_upper = @as(i20, @truncate((@as(i32, @bitCast(@as(u32, @truncate(tlb_addr)))) +% 0x800) >> 12));
         const tlb_lower = @as(i12, @bitCast(@as(u12, @truncate(tlb_addr & 0xFFF))));
-
-        // 1. Save host t0 (x5) and t1 (x6) into vcpu.regs
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
-        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
 
         // 2. Compute effective GVA into t0 (x5)
         if (rs1 == 5) {
@@ -448,7 +464,6 @@ pub const Engine = struct {
             emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
         }
 
-
         // 13. Jump over slow_exit
         const jal_patch_pos = host_offset.*;
         emitter_rv64.emit(tb.host_code, host_offset, 0); // placeholder
@@ -470,13 +485,16 @@ pub const Engine = struct {
     }
 
     fn emitSoftTlbStore(self: *Engine, tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, op: u3, rs1: u5, rs2: u5, imm: i12) void {
-        const tlb_addr = @intFromPtr(&self.tlb.entries[0]);
-        const tlb_upper = @as(i20, @truncate((@as(i32, @bitCast(@as(u32, @truncate(tlb_addr)))) +% 0x800) >> 12));
-        const tlb_lower = @as(i12, @bitCast(@as(u12, @truncate(tlb_addr & 0xFFF))));
-
         // 1. Save host t0 (x5) and t1 (x6) into vcpu.regs
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
+        self.emitSoftTlbStoreBody(tb, host_offset, current_pc, op, rs1, rs2, imm);
+    }
+
+    fn emitSoftTlbStoreBody(self: *Engine, tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, op: u3, rs1: u5, rs2: u5, imm: i12) void {
+        const tlb_addr = @intFromPtr(&self.tlb.entries[0]);
+        const tlb_upper = @as(i20, @truncate((@as(i32, @bitCast(@as(u32, @truncate(tlb_addr)))) +% 0x800) >> 12));
+        const tlb_lower = @as(i12, @bitCast(@as(u12, @truncate(tlb_addr & 0xFFF))));
 
         // 2. Compute effective GVA into t0 (x5)
         if (rs1 == 5) {
@@ -595,7 +613,6 @@ pub const Engine = struct {
             emitter_rv64.emit(tb.host_code, host_offset, store_insn);
         }
 
-
         // 12. Restore scratch registers
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48)); // ld t1, 48(s11)
         emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40)); // ld t0, 40(s11)
@@ -618,6 +635,225 @@ pub const Engine = struct {
         const cont_pos = host_offset.*;
         const jal_rel = @as(i21, @truncate(@as(isize, @intCast(cont_pos - jal_patch_pos))));
         std.mem.writeInt(u32, tb.host_code[jal_patch_pos..][0..4], emitter_rv64.jal(0, jal_rel), .little);
+    }
+
+    fn emitFastLoadWithFallback(self: *Engine, tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, op: u3, rd: u5, rs1: u5, imm: i12, vaddr_start: u32, vaddr_end: u32, hpa_start: usize) void {
+        if (rd == 0) return;
+
+        // 1. Save host t0 (x5) and t1 (x6) to vcpu.regs
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
+
+        // 2. Compute effective 32-bit guest address in t0:
+        if (rs1 == 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 0) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, rs1, imm));
+        }
+
+        // 3. Dynamic RAM range check based on guest's active memory layout [vaddr_start, vaddr_end):
+        // Compute offset = guest_addr - vaddr_start in t1 (x6)
+        const vstart_i32 = @as(i32, @bitCast(vaddr_start));
+        const vstart_upper = @as(i20, @truncate((vstart_i32 +% 0x800) >> 12));
+        const vstart_lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(vstart_i32)) & 0xFFF))));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(6, vstart_upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, vstart_lower));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.subw(6, 5, 6)); // t1 = guest_addr - vaddr_start
+
+        // Materialize size (vaddr_end - vaddr_start) in t0 (x5)
+        const size = vaddr_end -% vaddr_start;
+        const size_i32 = @as(i32, @bitCast(size));
+        const size_upper = @as(i20, @truncate((size_i32 +% 0x800) >> 12));
+        const size_lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(size_i32)) & 0xFFF))));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, size_upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, size_lower));
+
+        // Zero-extend 32-bit offset and size for unsigned comparison:
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32)); // t1 = unsigned offset
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32)); // t0 = unsigned size
+
+        // If offset >= size (outside tracked direct RAM), branch to slow SoftTLB path:
+        const bgeu_patch_pos = host_offset.*;
+        emitter_rv64.emit(tb.host_code, host_offset, 0); // placeholder for bgeu t1, t0, slow_path
+
+        // ---- FAST RAM PATH ----
+        // Compute host physical address in t0: HPA = hpa_start + offset (t1)
+        const hpa_i32 = @as(i32, @truncate(@as(isize, @bitCast(hpa_start))));
+        const hpa_upper = @as(i20, @truncate((hpa_i32 +% 0x800) >> 12));
+        const hpa_lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(hpa_i32)) & 0xFFF))));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, hpa_upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, hpa_lower));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6)); // t0 = HPA!
+
+        // Perform load into dest register (or t1 if rd == 5 or rd == 27):
+        if (op == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.flw(rd, 5, 0));
+        } else if (op == 7) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fld(rd, 5, 0));
+        } else {
+            const dest_reg: u5 = if (rd == 5 or rd == 27) 6 else rd;
+            const load_insn: u32 = switch (op) {
+                0 => emitter_rv64.lb(dest_reg, 5, 0),
+                1 => emitter_rv64.lh(dest_reg, 5, 0),
+                2 => emitter_rv64.lw(dest_reg, 5, 0),
+                4 => emitter_rv64.lbu(dest_reg, 5, 0),
+                5 => emitter_rv64.lhu(dest_reg, 5, 0),
+                else => emitter_rv64.lw(dest_reg, 5, 0),
+            };
+            emitter_rv64.emit(tb.host_code, host_offset, load_insn);
+
+            if (rd == 5) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addi(5, 6, 0));
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40));
+            } else if (rd == 27) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 216));
+            }
+        }
+
+        // Restore scratch registers on fast path:
+        if (rd != 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+        }
+        if (rd != 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+        }
+
+        // Jump past slow path:
+        const jal_done_pos = host_offset.*;
+        emitter_rv64.emit(tb.host_code, host_offset, 0); // placeholder for jal x0, done
+
+        // ---- SLOW PATH ----
+        const slow_path_target = host_offset.*;
+        const bgeu_rel = @as(i32, @intCast(slow_path_target - bgeu_patch_pos));
+        std.mem.writeInt(u32, tb.host_code[bgeu_patch_pos..][0..4], emitter_rv64.bgeu(6, 5, @as(i13, @truncate(bgeu_rel))), .little);
+
+        // Emit SoftTLB load body (scratch registers are already saved in 40(s11) and 48(s11)):
+        self.emitSoftTlbLoadBody(tb, host_offset, current_pc, op, rd, rs1, imm);
+
+        // ---- DONE ----
+        const done_target = host_offset.*;
+        const jal_rel = @as(i32, @intCast(done_target - jal_done_pos));
+        std.mem.writeInt(u32, tb.host_code[jal_done_pos..][0..4], emitter_rv64.jal(0, @as(i21, @truncate(jal_rel))), .little);
+    }
+
+    fn emitFastStoreWithFallback(self: *Engine, tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, op: u3, rs1: u5, rs2: u5, imm: i12, vaddr_start: u32, vaddr_end: u32, hpa_start: usize) void {
+        // 1. Save host t0 (x5) and t1 (x6)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 5, 40)); // sd t0, 40(s11)
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.sd(27, 6, 48)); // sd t1, 48(s11)
+
+        // 2. Compute effective 32-bit guest address in t0:
+        if (rs1 == 5) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 48));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 27) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 216));
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, imm));
+        } else if (rs1 == 0) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 0, imm));
+        } else {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, rs1, imm));
+        }
+
+        // 3. Dynamic RAM range check based on guest's active memory layout [vaddr_start, vaddr_end):
+        // Compute offset = guest_addr - vaddr_start in t1 (x6)
+        const vstart_i32 = @as(i32, @bitCast(vaddr_start));
+        const vstart_upper = @as(i20, @truncate((vstart_i32 +% 0x800) >> 12));
+        const vstart_lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(vstart_i32)) & 0xFFF))));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(6, vstart_upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(6, 6, vstart_lower));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.subw(6, 5, 6)); // t1 = guest_addr - vaddr_start
+
+        // Materialize size (vaddr_end - vaddr_start) in t0 (x5)
+        const size = vaddr_end -% vaddr_start;
+        const size_i32 = @as(i32, @bitCast(size));
+        const size_upper = @as(i20, @truncate((size_i32 +% 0x800) >> 12));
+        const size_lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(size_i32)) & 0xFFF))));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, size_upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, size_lower));
+
+        // Zero-extend 32-bit offset and size for unsigned comparison:
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(6, 6, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(6, 6, 32)); // t1 = unsigned offset
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32)); // t0 = unsigned size
+
+        // If offset >= size (outside tracked direct RAM), branch to slow SoftTLB path:
+        const bgeu_patch_pos = host_offset.*;
+        emitter_rv64.emit(tb.host_code, host_offset, 0); // placeholder for bgeu t1, t0, slow_path
+
+        // ---- FAST RAM PATH ----
+        // Compute host physical address in t0: HPA = hpa_start + offset (t1)
+        const hpa_i32 = @as(i32, @truncate(@as(isize, @bitCast(hpa_start))));
+        const hpa_upper = @as(i20, @truncate((hpa_i32 +% 0x800) >> 12));
+        const hpa_lower = @as(i12, @bitCast(@as(u12, @truncate(@as(u32, @bitCast(hpa_i32)) & 0xFFF))));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.lui(5, hpa_upper));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.addiw(5, 5, hpa_lower));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.slli(5, 5, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.srli(5, 5, 32));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.add(5, 5, 6)); // t0 = HPA!
+
+        // Perform store:
+        if (op == 6) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fsw(5, rs2, 0));
+        } else if (op == 7) {
+            emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.fsd(5, rs2, 0));
+        } else {
+            var val_reg: u5 = rs2;
+            if (rs2 == 5) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 40));
+                val_reg = 6;
+            } else if (rs2 == 6) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+                val_reg = 6;
+            } else if (rs2 == 27) {
+                emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 216));
+                val_reg = 6;
+            }
+            const store_insn: u32 = switch (op) {
+                0 => emitter_rv64.sb(5, val_reg, 0),
+                1 => emitter_rv64.sh(5, val_reg, 0),
+                2 => emitter_rv64.sw(5, val_reg, 0),
+                else => emitter_rv64.sw(5, val_reg, 0),
+            };
+            emitter_rv64.emit(tb.host_code, host_offset, store_insn);
+        }
+
+        // Restore scratch registers on fast path:
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(6, 27, 48));
+        emitter_rv64.emit(tb.host_code, host_offset, emitter_rv64.ld(5, 27, 40));
+
+        // Jump past slow path:
+        const jal_done_pos = host_offset.*;
+        emitter_rv64.emit(tb.host_code, host_offset, 0); // placeholder for jal x0, done
+
+        // ---- SLOW PATH ----
+        const slow_path_target = host_offset.*;
+        const bgeu_rel = @as(i32, @intCast(slow_path_target - bgeu_patch_pos));
+        std.mem.writeInt(u32, tb.host_code[bgeu_patch_pos..][0..4], emitter_rv64.bgeu(6, 5, @as(i13, @truncate(bgeu_rel))), .little);
+
+        // Emit SoftTLB store body (scratch registers are already saved in 40(s11) and 48(s11)):
+        self.emitSoftTlbStoreBody(tb, host_offset, current_pc, op, rs1, rs2, imm);
+
+        // ---- DONE ----
+        const done_target = host_offset.*;
+        const jal_rel = @as(i32, @intCast(done_target - jal_done_pos));
+        std.mem.writeInt(u32, tb.host_code[jal_done_pos..][0..4], emitter_rv64.jal(0, @as(i21, @truncate(jal_rel))), .little);
     }
 
     fn emitMulh(tb: *block_mod.TranslationBlock, host_offset: *usize, rd: u5, rs1: u5, rs2: u5) void {
@@ -1194,7 +1430,8 @@ pub const Engine = struct {
 
         const max_instructions: usize = 32;
         const max_host_bytes: usize = max_instructions * 200 + 512;
-        const tb = try self.cache.allocateBlock(start_pc, self.vcpu.satp, max_host_bytes);
+        const is_global = (self.vcpu.privilege_mode != 0) or (self.tlb.getDirectMappingRegion(start_pc) != null);
+        const tb = try self.cache.allocateBlock(start_pc, self.vcpu.satp, is_global, max_host_bytes);
 
         var current_pc = start_pc;
         var host_offset: usize = 0;
@@ -1328,112 +1565,148 @@ pub const Engine = struct {
                     }
                 },
 
-                // ---- Fast-Path Direct RAM Load & Store for Stack/Frame with Inlined SoftTLB Fallback ----
+                // ---- Fast-Path Direct RAM Load & Store with Inlined SoftTLB Fallback ----
                 .lw => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastLoad(tb, &host_offset, 2, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastLoad(tb, &host_offset, 2, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastLoadWithFallback(tb, &host_offset, current_pc, 2, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbLoad(tb, &host_offset, current_pc, 2, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .lh => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastLoad(tb, &host_offset, 1, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastLoad(tb, &host_offset, 1, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastLoadWithFallback(tb, &host_offset, current_pc, 1, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbLoad(tb, &host_offset, current_pc, 1, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .lb => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastLoad(tb, &host_offset, 0, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastLoad(tb, &host_offset, 0, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastLoadWithFallback(tb, &host_offset, current_pc, 0, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbLoad(tb, &host_offset, current_pc, 0, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .lhu => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastLoad(tb, &host_offset, 5, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastLoad(tb, &host_offset, 5, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastLoadWithFallback(tb, &host_offset, current_pc, 5, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbLoad(tb, &host_offset, current_pc, 5, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .lbu => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastLoad(tb, &host_offset, 4, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastLoad(tb, &host_offset, 4, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastLoadWithFallback(tb, &host_offset, current_pc, 4, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbLoad(tb, &host_offset, current_pc, 4, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .flw => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastLoad(tb, &host_offset, 6, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastLoad(tb, &host_offset, 6, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastLoadWithFallback(tb, &host_offset, current_pc, 6, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbLoad(tb, &host_offset, current_pc, 6, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .fld => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastLoad(tb, &host_offset, 7, d.rd, d.rs1, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastLoad(tb, &host_offset, 7, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastLoadWithFallback(tb, &host_offset, current_pc, 7, d.rd, d.rs1, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbLoad(tb, &host_offset, current_pc, 7, d.rd, d.rs1, @as(i12, @truncate(d.offset)));
                     }
                 },
 
                 .sw => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastStore(tb, &host_offset, 2, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastStore(tb, &host_offset, 2, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastStoreWithFallback(tb, &host_offset, current_pc, 2, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbStore(tb, &host_offset, current_pc, 2, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .sh => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastStore(tb, &host_offset, 1, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastStore(tb, &host_offset, 1, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastStoreWithFallback(tb, &host_offset, current_pc, 1, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbStore(tb, &host_offset, current_pc, 1, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .sb => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastStore(tb, &host_offset, 0, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastStore(tb, &host_offset, 0, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastStoreWithFallback(tb, &host_offset, current_pc, 0, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbStore(tb, &host_offset, current_pc, 0, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .fsw => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastStore(tb, &host_offset, 6, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastStore(tb, &host_offset, 6, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastStoreWithFallback(tb, &host_offset, current_pc, 6, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbStore(tb, &host_offset, current_pc, 6, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
                     }
                 },
                 .fsd => |d| {
-                    if ((d.rs1 == 2 or d.rs1 == 8) and self.tlb.getDirectMappingDelta(current_pc) != null) {
-                        const delta = self.tlb.getDirectMappingDelta(current_pc).?;
+                    if (self.tlb.getDirectMappingRegion(current_pc)) |region| {
                         tb.is_fast_path = true;
-                        emitFastStore(tb, &host_offset, 7, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), delta);
+                        if (d.rs1 == 2 or d.rs1 == 8) {
+                            emitFastStore(tb, &host_offset, 7, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.delta);
+                        } else {
+                            self.emitFastStoreWithFallback(tb, &host_offset, current_pc, 7, d.rs1, d.rs2, @as(i12, @truncate(d.offset)), region.vaddr_start, region.vaddr_end, region.hpa_start);
+                        }
                     } else {
                         self.emitSoftTlbStore(tb, &host_offset, current_pc, 7, d.rs1, d.rs2, @as(i12, @truncate(d.offset)));
                     }
@@ -1443,8 +1716,7 @@ pub const Engine = struct {
                 .fp_op => |d| emitter_rv64.emit(tb.host_code, &host_offset, d.raw),
 
                 // ---- Atomic Operations (A-Extension) via Inlined SoftTLB ----
-                .lr_w => |d| self.emitSoftTlbAtomic(tb, &host_offset, current_pc, 0x02, d.aq, d.rl, d.rd, d.rs1, 0),
-                .sc_w => |d| self.emitSoftTlbAtomic(tb, &host_offset, current_pc, 0x03, d.aq, d.rl, d.rd, d.rs1, d.rs2),
+                .lr_w, .sc_w => break, // Fallback to software reservation tracking to prevent local JIT store spills from invalidating host reservations
                 .amoswap_w => |d| self.emitSoftTlbAtomic(tb, &host_offset, current_pc, 0x01, d.aq, d.rl, d.rd, d.rs1, d.rs2),
                 .amoadd_w => |d| self.emitSoftTlbAtomic(tb, &host_offset, current_pc, 0x00, d.aq, d.rl, d.rd, d.rs1, d.rs2),
                 .amoxor_w => |d| self.emitSoftTlbAtomic(tb, &host_offset, current_pc, 0x04, d.aq, d.rl, d.rd, d.rs1, d.rs2),
@@ -1459,6 +1731,11 @@ pub const Engine = struct {
                 .fence => emitter_rv64.emit(tb.host_code, &host_offset, 0x0ff0000f),
                 .fence_i => {
                     emitter_rv64.emit(tb.host_code, &host_offset, 0x0000100f);
+                    tb.exit_branch1 = emitExit(tb, &host_offset, current_pc + 4);
+                    has_explicit_exit = true;
+                    break;
+                },
+                .pause => {
                     tb.exit_branch1 = emitExit(tb, &host_offset, current_pc + 4);
                     has_explicit_exit = true;
                     break;
@@ -2457,6 +2734,11 @@ pub const Engine = struct {
                 self.vcpu.pc = next_pc;
                 return true;
             },
+            .pause => {
+                std.atomic.spinLoopHint();
+                self.vcpu.pc = next_pc;
+                return true;
+            },
 
             // Unknown instruction -> Illegal Instruction Trap
             else => {
@@ -2517,8 +2799,6 @@ pub const ExitReason = enum {
             self.history_idx += 1;
             self.last_pc = pc_before;
 
-
-
             // Check if supervisor interrupts can be delivered (only when stvec is set and an interrupt is pending)
             const sie = (self.vcpu.mstatus >> 1) & 1;
             if (self.vcpu.stvec != 0 and (self.vcpu.privilege_mode == 0 or (self.vcpu.privilege_mode == 1 and sie != 0))) {
@@ -2551,6 +2831,17 @@ pub const ExitReason = enum {
                 count += insn_approx;
                 self.total_insn_count +%= insn_approx;
 
+                // Adaptive spinlock throttling: if looping backward extensively, yield slice to other cores
+                if (ret_pc <= pc_before) {
+                    self.consecutive_backward_jumps += 1;
+                    if (self.consecutive_backward_jumps >= 16384) {
+                        self.consecutive_backward_jumps = 0;
+                        return ExitReason.yield;
+                    }
+                } else {
+                    self.consecutive_backward_jumps = 0;
+                }
+
                 // If block exited on first instruction due to TLB miss, single-step to refill TLB
                 if (ret_pc == pc_before) {
                     const fetch_step = self.tlb.fetchU32(ret_pc, self.bus);
@@ -2559,7 +2850,7 @@ pub const ExitReason = enum {
                         continue;
                     }
                     const dec_step = decoder_rv32.decode(fetch_step.val);
-                    if (dec_step.insn == .ecall or dec_step.insn == .wfi) {
+                    if (dec_step.insn == .ecall or dec_step.insn == .wfi or dec_step.insn == .pause) {
                         // Handled in regular loop
                     } else {
                         _ = self.executeDecoded(dec_step, fetch_step.val, ret_pc);
@@ -2596,6 +2887,10 @@ pub const ExitReason = enum {
                 self.vcpu.pc = pc_before + decoded.len;
                 return ExitReason.wfi;
             }
+            if (decoded.insn == .pause) {
+                self.vcpu.pc = pc_before + decoded.len;
+                return ExitReason.yield;
+            }
 
             // Attempt basic block compilation for ALU/branch sequence
             if (self.translateBlock(pc_before)) |tb| {
@@ -2607,6 +2902,16 @@ pub const ExitReason = enum {
                     count += insn_approx;
                     self.total_insn_count +%= insn_approx;
 
+                    if (ret_pc <= pc_before) {
+                        self.consecutive_backward_jumps += 1;
+                        if (self.consecutive_backward_jumps >= 16384) {
+                            self.consecutive_backward_jumps = 0;
+                            return ExitReason.yield;
+                        }
+                    } else {
+                        self.consecutive_backward_jumps = 0;
+                    }
+
                     if (ret_pc == pc_before) {
                         const fetch_step = self.tlb.fetchU32(ret_pc, self.bus);
                         if (fetch_step.trap) |cause| {
@@ -2614,7 +2919,7 @@ pub const ExitReason = enum {
                             continue;
                         }
                         const dec_step = decoder_rv32.decode(fetch_step.val);
-                        if (dec_step.insn == .ecall or dec_step.insn == .wfi) {
+                        if (dec_step.insn == .ecall or dec_step.insn == .wfi or dec_step.insn == .pause) {
                             // Handled in regular loop
                         } else {
                             _ = self.executeDecoded(dec_step, fetch_step.val, ret_pc);
@@ -2632,8 +2937,9 @@ pub const ExitReason = enum {
 
 test "Dynarec RV32I Arithmetic & Immediate Emission" {
     var raw_pool: [4096]u8 align(4096) = undefined;
-    var cache_inst = block_mod.Cache.init(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x80000000, 512);
+    var cache_inst: block_mod.Cache = undefined;
+    cache_inst.initOnPtr(&raw_pool);
+    const tb = try cache_inst.allocateBlock(0x80000000, 0, false, 512);
     var host_offset: usize = 0;
 
     // Test addw emission (add a0, a1, a2)
@@ -2654,8 +2960,9 @@ test "Dynarec RV32I Arithmetic & Immediate Emission" {
 
 test "Dynarec RV32M Multiply & Divide Emission" {
     var raw_pool: [4096]u8 align(4096) = undefined;
-    var cache_inst = block_mod.Cache.init(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x80000000, 512);
+    var cache_inst: block_mod.Cache = undefined;
+    cache_inst.initOnPtr(&raw_pool);
+    const tb = try cache_inst.allocateBlock(0x80000000, 0, false, 512);
     var host_offset: usize = 0;
 
     // mulw (mul a0, a1, a2)
@@ -2681,8 +2988,9 @@ test "Dynarec RV32M Multiply & Divide Emission" {
 
 test "Dynarec RV32A Atomic Memory Instructions Emission" {
     var raw_pool: [4096]u8 align(4096) = undefined;
-    var cache_inst = block_mod.Cache.init(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x80000000, 512);
+    var cache_inst: block_mod.Cache = undefined;
+    cache_inst.initOnPtr(&raw_pool);
+    const tb = try cache_inst.allocateBlock(0x80000000, 0, false, 512);
     var host_offset: usize = 0;
 
     // Emit atomic amoadd.w a0, a2, (a1)
@@ -2698,8 +3006,9 @@ test "Dynarec RV32A Atomic Memory Instructions Emission" {
 
 test "Dynarec Direct Stack Load & Store 512MB Windowing" {
     var raw_pool: [4096]u8 align(4096) = undefined;
-    var cache_inst = block_mod.Cache.init(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x80000000, 512);
+    var cache_inst: block_mod.Cache = undefined;
+    cache_inst.initOnPtr(&raw_pool);
+    const tb = try cache_inst.allocateBlock(0x80000000, 0, false, 512);
     var host_offset: usize = 0;
 
     // Emit lw a0, 8(sp)
@@ -2715,8 +3024,9 @@ test "Dynarec Direct Stack Load & Store 512MB Windowing" {
 
 test "Dynarec Inlined SoftTLB Fast-Path Load & Store Emission" {
     var raw_pool: [4096]u8 align(4096) = undefined;
-    var cache_inst = block_mod.Cache.init(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x80000000, 1024);
+    var cache_inst: block_mod.Cache = undefined;
+    cache_inst.initOnPtr(&raw_pool);
+    const tb = try cache_inst.allocateBlock(0x80000000, 0, false, 1024);
     var host_offset: usize = 0;
 
     // Emit lw a0, 0(a1) via SoftTLB Fast-Path
@@ -2735,8 +3045,9 @@ test "Dynarec Inlined SoftTLB Fast-Path Load & Store Emission" {
 
 test "Dynarec RV32I Logical, Shift & Comparison Emission" {
     var raw_pool: [4096]u8 align(4096) = undefined;
-    var cache_inst = block_mod.Cache.init(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x80000000, 512);
+    var cache_inst: block_mod.Cache = undefined;
+    cache_inst.initOnPtr(&raw_pool);
+    const tb = try cache_inst.allocateBlock(0x80000000, 0, false, 512);
     var host_offset: usize = 0;
 
     // sllw (sll a0, a1, a2)
@@ -2786,8 +3097,9 @@ test "Dynarec RV32I Logical, Shift & Comparison Emission" {
 
 test "Dynarec RV32 Branch & Control Flow Emission" {
     var raw_pool: [4096]u8 align(4096) = undefined;
-    var cache_inst = block_mod.Cache.init(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x80000000, 512);
+    var cache_inst: block_mod.Cache = undefined;
+    cache_inst.initOnPtr(&raw_pool);
+    const tb = try cache_inst.allocateBlock(0x80000000, 0, false, 512);
     var host_offset: usize = 0;
 
     // beq a0, a1, +28

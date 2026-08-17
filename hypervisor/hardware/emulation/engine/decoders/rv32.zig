@@ -74,6 +74,7 @@ pub const Instruction = union(enum) {
     ebreak,
     fence,
     fence_i,
+    pause,
     mret,
     sret,
     wfi,
@@ -587,7 +588,7 @@ pub fn decode(raw_code: u32) DecodedInsn {
             else => .{ .unknown = code },
         },
         0x0F => switch (funct3) {
-            0x0 => .fence,
+            0x0 => if (code == 0x0100000F) .pause else .fence,
             0x1 => .fence_i,
             else => .{ .unknown = code },
         },

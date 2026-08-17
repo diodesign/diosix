@@ -64,7 +64,7 @@ pub const Cache = struct {
         var tries: usize = 0;
         while (tries < 8) : (tries += 1) {
             if (self.hash_table[slot]) |tb| {
-                if (tb.layout_epoch == self.layout_epoch and tb.guest_pc == guest_pc and (guest_pc >= 0xC0000000 or tb.satp == satp)) return tb;
+                if (tb.layout_epoch == self.layout_epoch and tb.guest_pc == guest_pc and (tb.is_global or tb.satp == satp)) return tb;
                 slot = (slot + 1) & (HASH_SIZE - 1);
             } else {
                 return null;
@@ -73,7 +73,7 @@ pub const Cache = struct {
         return null;
     }
 
-    pub fn allocateBlock(self: *Cache, guest_pc: u32, satp: u32, max_host_len: usize) !*TranslationBlock {
+    pub fn allocateBlock(self: *Cache, guest_pc: u32, satp: u32, is_global: bool, max_host_len: usize) !*TranslationBlock {
         if (self.block_count >= MAX_BLOCKS) return error.CacheFull;
         const aligned_offset = (self.code_offset + 7) & ~@as(usize, 7);
         if (aligned_offset + max_host_len > self.code_buffer.len) return error.CodeBufferFull;
@@ -84,6 +84,7 @@ pub const Cache = struct {
         tb.* = .{
             .guest_pc = guest_pc,
             .satp = satp,
+            .is_global = is_global,
             .guest_size = 0,
             .host_code = self.code_buffer[aligned_offset .. aligned_offset + max_host_len],
             .host_len = 0,
@@ -103,7 +104,7 @@ pub const Cache = struct {
         var tries: usize = 0;
         while (tries < 8) : (tries += 1) {
             if (self.hash_table[slot]) |existing| {
-                if (existing.guest_pc == tb.guest_pc and (tb.guest_pc >= 0xC0000000 or existing.satp == tb.satp)) {
+                if (existing.guest_pc == tb.guest_pc and (existing.is_global or existing.satp == tb.satp)) {
                     self.hash_table[slot] = tb;
                     break;
                 }
@@ -144,12 +145,12 @@ pub const Cache = struct {
         for (self.blocks[0..self.block_count]) |*tb| {
             if (tb == new_tb) continue;
             if (tb.exit_branch1) |b1| {
-                if (b1.target_guest_pc == new_tb.guest_pc and new_tb.guest_pc > tb.guest_pc and (new_tb.guest_pc >= 0xC0000000 or tb.satp == new_tb.satp)) {
+                if (b1.target_guest_pc == new_tb.guest_pc and new_tb.guest_pc > tb.guest_pc and (new_tb.is_global or tb.satp == new_tb.satp)) {
                     tb.patchBranch(0, new_tb);
                 }
             }
             if (tb.exit_branch2) |b2| {
-                if (b2.target_guest_pc == new_tb.guest_pc and new_tb.guest_pc > tb.guest_pc and (new_tb.guest_pc >= 0xC0000000 or tb.satp == new_tb.satp)) {
+                if (b2.target_guest_pc == new_tb.guest_pc and new_tb.guest_pc > tb.guest_pc and (new_tb.is_global or tb.satp == new_tb.satp)) {
                     tb.patchBranch(1, new_tb);
                 }
             }

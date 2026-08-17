@@ -15,6 +15,7 @@ pub const ExitBranch = struct {
 pub const TranslationBlock = struct {
     guest_pc: u32,
     satp: u32 = 0,
+    is_global: bool = false,
     guest_size: u32,
     host_code: []u8,
     host_len: usize,

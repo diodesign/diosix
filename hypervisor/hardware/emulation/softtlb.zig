@@ -194,16 +194,29 @@ pub const SoftTlb = struct {
         return null;
     }
 
-    /// Query the dynamic direct-mapped host physical delta for a virtual address.
-    /// Returns delta if the address falls within a verified linear contiguous RAM region.
-    pub fn getDirectMappingDelta(self: *SoftTlb, vaddr: u32) ?i64 {
+    pub const DirectMappingRegion = struct {
+        vaddr_start: u32,
+        vaddr_end: u32,
+        hpa_start: usize,
+        delta: i64,
+    };
+
+    /// Query the dynamic direct-mapped host physical region for a virtual address.
+    /// Returns the region metadata if the address falls within a verified linear contiguous RAM region.
+    pub fn getDirectMappingRegion(self: *SoftTlb, vaddr: u32) ?DirectMappingRegion {
         // 1. Bare mode (satp == 0) or M-mode
         const satp_mode = (self.satp >> 31) & 1;
         if (satp_mode == 0 or self.privilege_mode == 3) {
             if (vaddr >= self.guest_gpa_base and vaddr < self.guest_gpa_base + self.guest_ram_size) {
-                const hpa = self.guest_hpa_base + (vaddr - self.guest_gpa_base);
-                const vaddr_sign_ext = @as(i64, @as(i32, @bitCast(vaddr)));
-                return @as(i64, @intCast(hpa)) - vaddr_sign_ext;
+                const vstart = @as(u32, @truncate(self.guest_gpa_base));
+                const vend = @as(u32, @truncate(self.guest_gpa_base + self.guest_ram_size));
+                const vstart_sign_ext = @as(i64, @as(i32, @bitCast(vstart)));
+                return .{
+                    .vaddr_start = vstart,
+                    .vaddr_end = vend,
+                    .hpa_start = self.guest_hpa_base,
+                    .delta = @as(i64, @intCast(self.guest_hpa_base)) - vstart_sign_ext,
+                };
             }
             return null;
         }
@@ -213,9 +226,23 @@ pub const SoftTlb = struct {
         const region = &self.contiguous_regions[reg_slot];
         if (region.valid and vaddr >= region.vaddr_start and vaddr < region.vaddr_end) {
             const vstart_sign_ext = @as(i64, @as(i32, @bitCast(region.vaddr_start)));
-            return @as(i64, @intCast(region.hpa_start)) - vstart_sign_ext;
+            return .{
+                .vaddr_start = region.vaddr_start,
+                .vaddr_end = region.vaddr_end,
+                .hpa_start = region.hpa_start,
+                .delta = @as(i64, @intCast(region.hpa_start)) - vstart_sign_ext,
+            };
         }
 
+        return null;
+    }
+
+    /// Query the dynamic direct-mapped host physical delta for a virtual address.
+    /// Returns delta if the address falls within a verified linear contiguous RAM region.
+    pub fn getDirectMappingDelta(self: *SoftTlb, vaddr: u32) ?i64 {
+        if (self.getDirectMappingRegion(vaddr)) |r| {
+            return r.delta;
+        }
         return null;
     }
 

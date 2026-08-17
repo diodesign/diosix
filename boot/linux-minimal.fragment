@@ -3,7 +3,6 @@
 # CONFIG_PCI is not set
 # CONFIG_USB is not set
 # CONFIG_SOUND is not set
-# CONFIG_SCSI is not set
 # CONFIG_THERMAL is not set
 # CONFIG_VGA_ARB is not set
 # CONFIG_DRM is not set
@@ -15,3 +14,65 @@
 # CONFIG_SERIO is not set
 # CONFIG_HPET is not set
 # CONFIG_ACPI is not set
+
+# Disable Block & SCSI storage stack
+# CONFIG_BLOCK is not set
+# CONFIG_SCSI_MOD is not set
+# CONFIG_SCSI is not set
+# CONFIG_SCSI_VIRTIO is not set
+# CONFIG_ATA is not set
+# CONFIG_VIRTIO_BLK is not set
+# CONFIG_VIRTIO_SCSI is not set
+
+# Disable unused storage & bus peripherals
+# CONFIG_MMC is not set
+# CONFIG_SPI is not set
+# CONFIG_I2C is not set
+# CONFIG_MTD is not set
+# CONFIG_RTC_CLASS is not set
+# CONFIG_HID is not set
+# CONFIG_WATCHDOG is not set
+# CONFIG_HWMON is not set
+# CONFIG_POWER_SUPPLY is not set
+# CONFIG_POWER_RESET is not set
+# CONFIG_REGULATOR is not set
+# CONFIG_RESET_CONTROLLER is not set
+# CONFIG_PM_DEVFREQ is not set
+# CONFIG_CPU_FREQ is not set
+# CONFIG_EXTCON is not set
+# CONFIG_PWM is not set
+# CONFIG_MAILBOX is not set
+# CONFIG_BLK_DEV_BSG is not set
+
+# Disable vendor SoC platform drivers & pinctrl
+# CONFIG_PINCTRL is not set
+# CONFIG_SOC_STARFIVE is not set
+# CONFIG_SOC_SIFIVE is not set
+# CONFIG_SOC_SUNXI is not set
+# CONFIG_SOC_THEAD is not set
+# CONFIG_SOC_CANAAN is not set
+# CONFIG_SOC_MICROCHIP_POLARFIRE is not set
+# CONFIG_CLK_SIFIVE is not set
+# CONFIG_CLK_STARFIVE_JH71X0 is not set
+# CONFIG_CLK_STARFIVE_JH7100 is not set
+# CONFIG_CLK_STARFIVE_JH7110_PLL is not set
+# CONFIG_CLK_STARFIVE_JH7110_SYS is not set
+# CONFIG_CLK_SOPHGO_CV1800 is not set
+# CONFIG_CLK_SOPHGO_SG2042_PLL is not set
+
+# Disable tracing, BPF and debug overhead
+# CONFIG_FTRACE is not set
+# CONFIG_BPF_SYSCALL is not set
+# CONFIG_DEBUG_FS is not set
+
+# Uncompressed rootfs / initramfs for high-performance guest execution
+CONFIG_INITRAMFS_COMPRESSION_NONE=y
+# CONFIG_INITRAMFS_COMPRESSION_GZIP is not set
+# CONFIG_INITRAMFS_COMPRESSION_BZIP2 is not set
+# CONFIG_INITRAMFS_COMPRESSION_LZMA is not set
+# CONFIG_INITRAMFS_COMPRESSION_XZ is not set
+# CONFIG_INITRAMFS_COMPRESSION_LZO is not set
+# CONFIG_INITRAMFS_COMPRESSION_LZ4 is not set
+# CONFIG_INITRAMFS_COMPRESSION_ZSTD is not set
+
+

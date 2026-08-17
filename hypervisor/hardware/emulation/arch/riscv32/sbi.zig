@@ -293,7 +293,7 @@ fn handleTimer(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCon
             v.clearMipBit(5); // Clear MIP_STIP until Engine evaluates deadline
         }
         if (vc.timer_scheduled) {
-            riscv.setTimer(stime);
+            riscv.setTimer(stime +% vcore.time_offset);
         }
     } else {
         vc.getNativeGuestState().vstimecmp = stime;
@@ -344,12 +344,10 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                     if (target_vc == vc) {
                         if (target_vc.exec_path.emulated.engine) |eng| {
                             eng.tlb.flush();
-                            eng.cache.flush();
                         }
                     } else if (target_vc.exec_path == .emulated) {
                         if (target_vc.exec_path.emulated.vcpu) |v| {
                             v.setNeedsTlbFlush();
-                            v.setNeedsCacheFlush();
                         }
                         const target_hw_hart = if (target_vc.id < riscv.cpu_to_hart_map.len) riscv.cpu_to_hart_map[target_vc.id] else target_vc.id;
                         if (riscv.CLINT.msip(target_hw_hart)) |ptr| {
@@ -369,12 +367,10 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                             if (target_vc == vc) {
                                 if (target_vc.exec_path.emulated.engine) |eng| {
                                     eng.tlb.flush();
-                                    eng.cache.flush();
                                 }
                             } else if (target_vc.exec_path == .emulated) {
                                 if (target_vc.exec_path.emulated.vcpu) |v| {
                                     v.setNeedsTlbFlush();
-                                    v.setNeedsCacheFlush();
                                 }
                                 const target_hw_hart = if (target_vc.id < riscv.cpu_to_hart_map.len) riscv.cpu_to_hart_map[target_vc.id] else target_vc.id;
                                 if (riscv.CLINT.msip(target_hw_hart)) |ptr| {
@@ -560,54 +556,20 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
             // hypervisor in this loop. The guest can make multiple calls.
             const DBCN_MAX_WRITE: usize = 4096;
             const num_bytes = if (a0 > DBCN_MAX_WRITE) DBCN_MAX_WRITE else a0;
-            const gpa: usize = if (vc.exec_path == .emulated)
-                (a1 & 0xffffffff) | ((@as(usize, @intCast(a2)) & 0xffffffff) << 32)
-            else
-                a1;
+            const gpa: usize = (a1 & 0xffffffff) | ((@as(usize, @intCast(a2)) & 0xffffffff) << 32);
 
             var written: usize = 0;
             var buf: [256]u8 = undefined;
             var buf_idx: usize = 0;
 
             while (written < num_bytes) {
-                const target_addr: usize = if (vc.exec_path == .emulated)
-                    ((gpa + written) & 0xffffffff)
-                else
-                    (gpa + written);
-
+                const target_addr = gpa + written;
                 var char: u8 = 0;
                 if (g.space.translateGPA(target_addr)) |hpa| {
                     char = @as(*u8, @ptrFromInt(hpa)).*;
                 } else |_| {
-                    if (g.space.handleFault(vc, target_addr, 23)) |_| {
-                        if (g.space.translateGPA(target_addr)) |hpa| {
-                            char = @as(*u8, @ptrFromInt(hpa)).*;
-                        } else |_| {
-                            if (vc.exec_path == .emulated and vc.exec_path.emulated.engine != null) {
-                                const res = vc.exec_path.emulated.engine.?.tlb.readU8(@truncate(target_addr), vc.exec_path.emulated.engine.?.bus);
-                                if (res.trap != null) {
-                                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, written);
-                                    return;
-                                }
-                                char = @truncate(res.val);
-                            } else {
-                                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, written);
-                                return;
-                            }
-                        }
-                    } else |_| {
-                        if (vc.exec_path == .emulated and vc.exec_path.emulated.engine != null) {
-                            const res = vc.exec_path.emulated.engine.?.tlb.readU8(@truncate(target_addr), vc.exec_path.emulated.engine.?.bus);
-                            if (res.trap != null) {
-                                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, written);
-                                return;
-                            }
-                            char = @truncate(res.val);
-                        } else {
-                            setResult(vc, context, SBI_ERR_INVALID_ADDRESS, written);
-                            return;
-                        }
-                    }
+                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, written);
+                    return;
                 }
                 buf[buf_idx] = char;
                 buf_idx += 1;
@@ -625,39 +587,18 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
         },
         interface.DBCN.CONSOLE_READ => {
             const num_bytes = a0;
-            const gpa: usize = if (vc.exec_path == .emulated)
-                (a1 & 0xffffffff) | ((@as(usize, @intCast(a2)) & 0xffffffff) << 32)
-            else
-                a1;
+            const gpa: usize = (a1 & 0xffffffff) | ((@as(usize, @intCast(a2)) & 0xffffffff) << 32);
             var read: usize = 0;
             while (read < num_bytes) : (read += 1) {
                 const c = debug.getchar(vc.guest_id);
                 if (c < 0) break;
-                const target_addr: usize = if (vc.exec_path == .emulated)
-                    ((gpa + read) & 0xffffffff)
-                else
-                    (gpa + read);
-                const hpa = blk: {
-                    if (vc.exec_path == .emulated) {
-                        if (target_addr >= g.space.base_gpa and target_addr < g.space.base_gpa + g.space.range_size) {
-                            break :blk (target_addr - g.space.base_gpa) + g.space.base_hpa;
-                        }
-                        setResult(vc, context, SBI_ERR_INVALID_ADDRESS, read);
-                        return;
-                    } else {
-                        break :blk g.space.translateGPA(target_addr) catch blk2: {
-                            g.space.handleFault(vc, target_addr, 23) catch {
-                                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, read);
-                                return;
-                            };
-                            break :blk2 g.space.translateGPA(target_addr) catch {
-                                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, read);
-                                return;
-                            };
-                        };
-                    }
-                };
-                @as(*u8, @ptrFromInt(hpa)).* = @truncate(@as(u16, @bitCast(c)));
+                const target_addr = gpa + read;
+                if (g.space.translateGPA(target_addr)) |hpa| {
+                    @as(*u8, @ptrFromInt(hpa)).* = @truncate(@as(u16, @bitCast(c)));
+                } else |_| {
+                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, read);
+                    return;
+                }
             }
             setResult(vc, context, SBI_SUCCESS, read);
         },
