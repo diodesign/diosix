@@ -58,14 +58,14 @@ fn printUsage() void {
         \\  diosix-ctl info                           Display current VM state, ID, and quotas
         \\  diosix-ctl fork                           Fork current VM to create a child VM
         \\  diosix-ctl spawn <id> <elf> [dtb] [arch]  Load a new guest image into child VM and start it
-        \\  diosix-ctl terminate [vm_id]              Terminate current VM (or specific child VM)
-        \\  diosix-ctl kill <child_id>                Terminate specific child VM and all descendants
+        \\  diosix-ctl terminate [vm_id]              Terminate specified child VM ID (or 0 for self)
         \\  diosix-ctl drop-trust                     Irrevocably drop hardware trust privileges
         \\  diosix-ctl help                           Show this help message
         \\
     ;
     printStr(usage);
 }
+
 
 fn cmdTerminate(client: *api.DiosixClient, target_id: usize) !void {
     if (target_id == 0) {
@@ -83,11 +83,15 @@ fn cmdTerminate(client: *api.DiosixClient, target_id: usize) !void {
 }
 
 fn cmdInfo(client: *api.DiosixClient) !void {
-
-    const info = client.getInfo() catch {
-        printStr("Error querying hypervisor info.\n");
+    const info = client.getInfo() catch |err| {
+        if (err == error.DeviceNotFound) {
+            printStr("Error: /dev/diosix not found. Ensure diosix kernel driver is enabled.\n");
+        } else {
+            printStr("Error: Hypercall failed querying hypervisor info.\n");
+        }
         return;
     };
+
 
     const arch_name = switch (info.target_arch) {
         0 => "riscv64",

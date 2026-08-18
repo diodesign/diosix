@@ -13,6 +13,8 @@
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
 #include <linux/uaccess.h>
+#include <linux/slab.h>
+#include <linux/io.h>
 #include <asm/sbi.h>
 
 #define EXT_DIOSIX 0x0A000005
@@ -37,7 +39,6 @@
 #define IOCTL_EXIT        0x1006
 #define IOCTL_KILL        0x1006
 #define IOCTL_YIELD       0x1007
-
 
 struct spawn_args {
     unsigned long child_id;
@@ -86,27 +87,93 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     }
 
     case IOCTL_GET_INFO: {
-        struct guest_info info;
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_INFO, (unsigned long)&info, sizeof(info), 0, 0, 0, 0);
-        if (ret.error)
+        struct guest_info *kinfo = kzalloc(sizeof(*kinfo), GFP_KERNEL);
+        phys_addr_t pa;
+        if (!kinfo)
+            return -ENOMEM;
+        pa = virt_to_phys(kinfo);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_INFO, (unsigned long)pa, sizeof(*kinfo), 0, 0, 0, 0);
+        if (ret.error) {
+            kfree(kinfo);
             return -EIO;
-        if (copy_to_user((void __user *)arg, &info, sizeof(info)))
+        }
+        if (copy_to_user((void __user *)arg, kinfo, sizeof(*kinfo))) {
+            kfree(kinfo);
             return -EFAULT;
+        }
+        kfree(kinfo);
         return 0;
     }
 
     case IOCTL_SPAWN: {
         struct spawn_args kargs;
-        if (copy_from_user(&kargs, (void __user *)arg, sizeof(kargs)))
+        void *elf_kbuf = NULL;
+        void *dtb_kbuf = NULL;
+        phys_addr_t elf_pa = 0, dtb_pa = 0;
+        struct spawn_args *sbi_args = kzalloc(sizeof(*sbi_args), GFP_KERNEL);
+        phys_addr_t sbi_args_pa;
+
+        if (!sbi_args)
+            return -ENOMEM;
+
+        if (copy_from_user(&kargs, (void __user *)arg, sizeof(kargs))) {
+            kfree(sbi_args);
             return -EFAULT;
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_SPAWN, (unsigned long)&kargs, 0, 0, 0, 0, 0);
+        }
+
+        if (kargs.elf_size > 0 && kargs.elf_ptr) {
+            elf_kbuf = kmalloc(kargs.elf_size, GFP_KERNEL);
+            if (!elf_kbuf) {
+                kfree(sbi_args);
+                return -ENOMEM;
+            }
+            if (copy_from_user(elf_kbuf, (void __user *)kargs.elf_ptr, kargs.elf_size)) {
+                kfree(elf_kbuf);
+                kfree(sbi_args);
+                return -EFAULT;
+            }
+            elf_pa = virt_to_phys(elf_kbuf);
+        }
+
+        if (kargs.dtb_size > 0 && kargs.dtb_ptr) {
+            dtb_kbuf = kmalloc(kargs.dtb_size, GFP_KERNEL);
+            if (!dtb_kbuf) {
+                if (elf_kbuf) kfree(elf_kbuf);
+                kfree(sbi_args);
+                return -ENOMEM;
+            }
+            if (copy_from_user(dtb_kbuf, (void __user *)kargs.dtb_ptr, kargs.dtb_size)) {
+                if (elf_kbuf) kfree(elf_kbuf);
+                kfree(dtb_kbuf);
+                kfree(sbi_args);
+                return -EFAULT;
+            }
+            dtb_pa = virt_to_phys(dtb_kbuf);
+        }
+
+        sbi_args->child_id = kargs.child_id;
+        sbi_args->elf_ptr = (unsigned long)elf_pa;
+        sbi_args->elf_size = kargs.elf_size;
+        sbi_args->dtb_ptr = (unsigned long)dtb_pa;
+        sbi_args->dtb_size = kargs.dtb_size;
+        sbi_args->target_arch = kargs.target_arch;
+        sbi_args_pa = virt_to_phys(sbi_args);
+
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_SPAWN, (unsigned long)sbi_args_pa, 0, 0, 0, 0, 0);
+
+        if (elf_kbuf) kfree(elf_kbuf);
+        if (dtb_kbuf) kfree(dtb_kbuf);
+        kfree(sbi_args);
+
         if (ret.error)
             return -EIO;
         return 0;
     }
 
-    case IOCTL_EXIT: {
-        sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_EXIT, arg, 0, 0, 0, 0, 0);
+    case IOCTL_TERMINATE: {
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_TERMINATE, arg, 0, 0, 0, 0, 0);
+        if (ret.error)
+            return -EPERM;
         return 0;
     }
 

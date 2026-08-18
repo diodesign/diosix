@@ -65,11 +65,24 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("hypervisor/interface/lib.zig"),
     });
 
-    // Allow user to select the guest Root VM architecture
+    // Allow user to select the guest Root VM architecture and profile
     const guest_arch_opt = b.option([]const u8, "guest-arch", "Select the guest architecture to build for: riscv64, riscv32, aarch64, aarch32, x86_64, mips, mips64, ppc") orelse "riscv64";
+    const guest_config_opt = b.option([]const u8, "guest-config", "Path to custom Buildroot defconfig");
+    const guest_profile_opt = b.option([]const u8, "guest-profile", "Select guest profile: rootvm, usable, minimal") orelse "rootvm";
 
-    const config_filename = try std.fmt.allocPrint(b.allocator, "boot/{s}-linux-busybox-micropython.config", .{guest_arch_opt});
+    const config_filename = if (guest_config_opt) |cfg|
+        try b.allocator.dupe(u8, cfg)
+    else if (std.mem.eql(u8, guest_profile_opt, "rootvm") and std.mem.eql(u8, guest_arch_opt, "riscv64"))
+        try b.allocator.dupe(u8, "boot/riscv64-linux-rootvm.config")
+    else if (std.mem.eql(u8, guest_profile_opt, "usable") and std.mem.eql(u8, guest_arch_opt, "riscv64"))
+        try b.allocator.dupe(u8, "boot/riscv64-linux-usable.config")
+    else if (std.mem.eql(u8, guest_profile_opt, "minimal") and std.mem.eql(u8, guest_arch_opt, "riscv32"))
+        try b.allocator.dupe(u8, "boot/riscv32-linux-minimal.config")
+    else
+        try std.fmt.allocPrint(b.allocator, "boot/{s}-linux-{s}.config", .{ guest_arch_opt, guest_profile_opt });
     defer b.allocator.free(config_filename);
+
+
 
     const rootvm_elf_path = b.fmt("zig-out/guest-{s}/bin/rootvm.elf", .{guest_arch_opt});
     const buildroot_dir = b.fmt("zig-out/buildroot-{s}", .{guest_arch_opt});

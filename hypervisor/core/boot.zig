@@ -90,10 +90,11 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                         if (try device_tree.readAddress(path)) |addr| {
                             riscv.uart_base = addr;
                         }
-                    } else if (std.mem.indexOf(u8, compat_text, "sifive,test0") != null) {
+                    } else if (std.mem.indexOf(u8, compat_text, "sifive,test") != null) {
                         if (try device_tree.readAddress(path)) |addr| {
                             riscv.test_device_base = addr;
                         }
+
                     } else if (std.mem.indexOf(u8, compat_text, "plic") != null or std.mem.indexOf(u8, compat_text, "sifive,plic") != null) {
                         if (try device_tree.readAddress(path)) |addr| {
                             riscv.plic_base = addr;

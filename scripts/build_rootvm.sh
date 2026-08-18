@@ -19,7 +19,7 @@ fi
 GUEST_ARCH="${4:-riscv64}"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$(sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment 2>/dev/null | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$(sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/driver/diosix.c 2>/dev/null | sha256sum | cut -d' ' -f1)
 
 # Check if a rebuild is necessary using the configuration hash.
 if [ -f "$OUT_FILE" ] && [ -f "$HASH_FILE" ]; then
@@ -30,8 +30,9 @@ if [ -f "$OUT_FILE" ] && [ -f "$HASH_FILE" ]; then
     fi
 fi
 
-
 echo "Root VM binary missing or outdated. Running BuildRoot..."
+make -C "$BUILDROOT_DIR" linux-rebuild 2>/dev/null || true
+
 
 # Get BuildRoot
 if [ ! -d "$BUILDROOT_DIR/.git" ]; then
@@ -43,8 +44,19 @@ if [ ! -d "$BUILDROOT_DIR/.git" ]; then
     mv "$TEMP_CLONE" "$BUILDROOT_DIR"
 fi
 
+# Compile diosix-ctl for target guest architecture and stage into overlay
+mkdir -p tools/overlay-common/usr/sbin
+rm -rf tools/overlay-common/sbin 2>/dev/null || true
+
+ZIG_TARGET="${GUEST_ARCH}-linux-musl"
+echo "Cross-compiling diosix-ctl for $ZIG_TARGET..."
+zig build-exe tools/diosix-ctl/src/main.zig -target "$ZIG_TARGET" -O ReleaseSmall --name diosix-ctl -femit-bin=tools/overlay-common/usr/sbin/diosix-ctl
+
+
+
 # Need to provide absolute path for defconfig if it's outside
 ABS_CONFIG=$(realpath "$CONFIG_FILE")
+
 
 # Configure BuildRoot, tracking version changes to trigger clean rebuilds
 if [ -f "$BUILDROOT_DIR/.config" ]; then
@@ -86,9 +98,23 @@ if wget --version 2>&1 | head -1 | grep -q "Wget2"; then
     WGET_EXTRA_ARGS='BR2_WGET="wget -nd -t 3"'
 fi
 
+# Inject diosix character driver into Linux kernel
+echo "Preparing Linux kernel source tree..."
+eval make -C "$BUILDROOT_DIR" linux-patch $WGET_EXTRA_ARGS 2>/dev/null || true
+for linux_dir in "$BUILDROOT_DIR"/output/build/linux-*; do
+    if [ -d "$linux_dir/drivers/char" ]; then
+        echo "Injecting /dev/diosix driver into $linux_dir..."
+        cp tools/driver/diosix.c "$linux_dir/drivers/char/diosix.c"
+        if ! grep -q "diosix.o" "$linux_dir/drivers/char/Makefile"; then
+            echo "obj-y += diosix.o" >> "$linux_dir/drivers/char/Makefile"
+        fi
+    fi
+done
+
 # Build it
 echo "Building Root VM (this may take a while)..."
 eval make -C "$BUILDROOT_DIR" -j"$(nproc)" $WGET_EXTRA_ARGS
+
 
 # Ensure the output directory exists
 mkdir -p "$(dirname "$OUT_FILE")"

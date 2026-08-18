@@ -303,6 +303,51 @@ pub const VirtualCore = struct {
         return vcore;
     }
 
+    pub fn reset(self: *VirtualCore, entry: usize, dtb: usize) void {
+        self.state = .stopped;
+        self.wfi_blocked = false;
+        self.is_queued = false;
+        self.running_on_cpu = null;
+
+        switch (self.exec_path) {
+            .native => |*n| {
+                n.context = std.mem.zeroes(riscv.ThreadContext);
+                n.context[@intFromEnum(riscv.Register.a0)] = self.id;
+                n.context[@intFromEnum(riscv.Register.a1)] = dtb;
+                n.machine.mepc = entry;
+                n.machine.mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
+                n.machine.hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
+                n.machine.hgatp = if (self.guest.space.mode == .h_paging) self.guest.space.paging.?.hgatp(self.guest.vmid) else 0;
+                n.guest_state = .{
+                    .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
+                    .vsie = 0,
+                    .vstvec = 0,
+                    .vsscratch = 0,
+                    .vsepc = 0,
+                    .vscause = 0,
+                    .vstval = 0,
+                    .vsatp = 0,
+                    .vstimecmp = 0xffffffffffffffff,
+                    .vsenvcfg = (@as(usize, 1) << 63) | 240,
+                };
+            },
+            .emulated => |*e| {
+                e.entry = entry;
+                e.dtb = dtb;
+                if (e.engine) |eng| {
+                    eng.tlb.flush();
+                }
+                e.sub_vcores = std.mem.zeroes([max_sub_vcores]SubVcoreState);
+                e.sub_vcore_count = 1;
+                e.active_sub_vcore = 0;
+                e.last_run_sub_vcore = null;
+                e.preempt_pending = false;
+                e.hsm_started = false;
+            },
+        }
+    }
+
+
     pub fn deinit(self: *VirtualCore) void {
         // Trigger a wake to dequeue it if it's blocked, preventing re-queueing
         _ = @atomicRmw(bool, &self.wfi_blocked, .Xchg, false, .acq_rel);
@@ -422,13 +467,17 @@ pub const VirtualCore = struct {
 
         switch (vc.exec_path) {
             .native => |*n| {
-                n.context[@intFromEnum(riscv.Register.a0)] = 0; // Return 0 in the child (A0 is X10).
+                n.context[@intFromEnum(riscv.Register.a0)] = 0; // SBI error code = SBI_SUCCESS (0)
+                n.context[@intFromEnum(riscv.Register.a1)] = 0; // Return value = 0 (Child marker)
             },
             .emulated => |*e| {
                 e.vcpu = null;
                 e.engine = null;
+                e.context[@intFromEnum(riscv.Register.a0)] = 0;
+                e.context[@intFromEnum(riscv.Register.a1)] = 0;
             },
         }
+
 
         // Reset scheduler node for the new vcore.
         vc.running_on_cpu = null;

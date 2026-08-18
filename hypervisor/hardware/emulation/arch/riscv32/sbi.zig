@@ -15,8 +15,10 @@ const arch = @import("interface").riscv;
 const config = @import("config");
 const rv32 = @import("mod.zig");
 const glue = @import("../../../../core/emulation.zig");
+const loader = @import("../../../../core/loader.zig");
 const em_mod = @import("emulation");
 const vcpu_mod = em_mod.vcpu;
+
 
 // SBI Error Codes.
 pub const SBI_SUCCESS = interface.SUCCESS;
@@ -148,7 +150,7 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
             debug.printf("SBI: Guest {} requested legacy shutdown\n", .{vc.guest_id});
             terminateOrRestart(vc.getGuest());
         },
-        interface.EXT.DIOSIX => handleDiosix(vc, context, function),
+        interface.EXT.DIOSIX => handleDiosix(vc, context, function, a0, a1, a2),
         else => {
             debug.printf("SBI: Unknown extension 0x{x} func {} from guest {}\n", .{ extension, function, vc.id });
             setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0);
@@ -393,18 +395,39 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
     setResult(vc, context, SBI_SUCCESS, 0);
 }
 
-fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize) void {
+fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
+    _ = a2;
+    const g = vc.getGuest();
     switch (function) {
-        interface.DIOSIX.EXIT => {
-            const g = vc.getGuest();
-            debug.printf("SBI: Diosix Exit requested by guest {}\n", .{g.id});
-            terminateOrRestart(g);
+        interface.DIOSIX.TERMINATE => {
+            const target_id = a0;
+            if (target_id == 0 or target_id == g.id) {
+                debug.printf("SBI: Diosix Terminate (self) requested by guest {}\n", .{g.id});
+                terminateOrRestart(g);
+            } else {
+                // Find child
+                var it_child = g.children.start;
+                var found_child: ?*guest.Guest = null;
+                while (it_child) |node| {
+                    if (node.contents.id == target_id) {
+                        found_child = node.contents;
+                        break;
+                    }
+                    it_child = node.next;
+                }
+                if (found_child) |child| {
+                    debug.printf("SBI: Guest {} terminating child VM {}\n", .{ g.id, child.id });
+                    child.terminate();
+                    setResult(vc, context, SBI_SUCCESS, 0);
+                } else {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                }
+            }
         },
         interface.DIOSIX.YIELD => {
             scheduler.yield(vc);
         },
         interface.DIOSIX.FORK => {
-            const g = vc.getGuest();
             const child = g.fork() catch |err| {
                 debug.printf("SBI: Diosix Fork failed: {s}\n", .{@errorName(err)});
                 setResult(vc, context, SBI_ERR_FAILED, 0);
@@ -420,12 +443,127 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             setResult(vc, context, SBI_SUCCESS, child.id);
         },
         interface.DIOSIX.DROP_TRUST => {
-            vc.getGuest().dropTrust();
+            g.dropTrust();
             setResult(vc, context, SBI_SUCCESS, 0);
+        },
+        interface.DIOSIX.GET_INFO => {
+            const info_gpa = a0;
+            const info_len = a1;
+            const GuestInfo = extern struct {
+                guest_id: usize,
+                parent_id: usize,
+                is_trusted: u8,
+                is_root: u8,
+                target_arch: u8,
+                _reserved: u8 = 0,
+                used_ram_pages: usize,
+                max_ram_pages: usize,
+                used_vcpus: usize,
+                max_vcpus: usize,
+                child_count: usize,
+            };
+
+            if (info_len < @sizeOf(GuestInfo)) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+
+            if (g.space.translateGPA(info_gpa) catch null) |hpa| {
+                const info_ptr: *GuestInfo = @ptrFromInt(hpa);
+                info_ptr.* = .{
+                    .guest_id = g.id,
+                    .parent_id = if (g.parent) |p| p.id else g.id,
+                    .is_trusted = if (g.is_trusted) 1 else 0,
+                    .is_root = if (g.is_root) 1 else 0,
+                    .target_arch = @intFromEnum(g.target_arch),
+                    ._reserved = 0,
+                    .used_ram_pages = g.quotas.used_ram_pages,
+                    .max_ram_pages = g.quotas.max_ram_pages,
+                    .used_vcpus = g.quotas.used_vcpus,
+                    .max_vcpus = g.quotas.max_vcpus,
+                    .child_count = g.children.count(),
+                };
+                setResult(vc, context, SBI_SUCCESS, 0);
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.SPAWN => {
+            if (!g.is_trusted) {
+                setResult(vc, context, SBI_ERR_DENIED, 0);
+                return;
+            }
+            const SpawnArgs = extern struct {
+                child_id: usize,
+                elf_ptr: usize,
+                elf_size: usize,
+                dtb_ptr: usize,
+                dtb_size: usize,
+                target_arch: usize,
+            };
+            if (g.space.translateGPA(a0) catch null) |args_hpa| {
+                const args: *const SpawnArgs = @ptrFromInt(args_hpa);
+                // Find child
+                var it_child = g.children.start;
+                var found_child: ?*guest.Guest = null;
+                while (it_child) |node| {
+                    if (node.contents.id == args.child_id) {
+                        found_child = node.contents;
+                        break;
+                    }
+                    it_child = node.next;
+                }
+
+                if (found_child) |child| {
+                    // 1. Stop all virtual cores of the child VM and wait for physical cores to relinquish them
+                    child.stop();
+
+                    // 2. Invalidate TLB and G-stage translation cache
+                    if (riscv.hasHExtension()) {
+                        riscv.hfenceGvma();
+                    } else {
+                        riscv.sfenceVma();
+                    }
+
+                    if (g.space.translateGPA(args.elf_ptr) catch null) |elf_hpa| {
+                        const elf_data = @as([*]const u8, @ptrFromInt(elf_hpa))[0..args.elf_size];
+                        
+                        // 3. Detect and update target architecture if necessary
+                        if (loader.Loader.detectArch(elf_data) catch null) |detected_arch| {
+                            child.target_arch = detected_arch;
+                        }
+
+                        // 4. Load the ELF binary segments into child GPA space
+                        const entry_point = loader.Loader.load(child, elf_data) catch |err| {
+                            debug.printf("SBI: Spawn loader failed: {s}\n", .{@errorName(err)});
+                            setResult(vc, context, SBI_ERR_FAILED, 0);
+                            return;
+                        };
+
+                        // 5. Reset all child virtual cores (Hart 0 = .ready, Hart 1..N = .stopped)
+                        child.resetForSpawn(entry_point, args.dtb_ptr);
+
+                        // 6. Enqueue only the primary bootstrap core (Hart 0) into scheduler
+                        if (child.vcores.start) |vc_node| {
+                            scheduler.queue(vc_node.contents);
+                        }
+
+                        setResult(vc, context, SBI_SUCCESS, 0);
+                    } else {
+                        setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                    }
+                } else {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                }
+
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
         },
         else => setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0),
     }
 }
+
 
 fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
     const g = vc.getGuest();

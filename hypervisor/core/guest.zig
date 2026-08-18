@@ -4,7 +4,9 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
 const atomic = @import("atomic.zig");
+
 const vcore = @import("vcore.zig");
 const physmem = @import("physmem.zig");
 const dsa = @import("dsa.zig");
@@ -372,7 +374,58 @@ pub const Guest = struct {
 
         return child;
     }
+
+    // Stop all virtual cores and wait for physical cores to relinquish them
+    pub fn stop(self: *Guest) void {
+        var it = self.vcores.start;
+        while (it) |node| {
+            const vc = node.contents;
+            vc.state = .stopped;
+            @atomicStore(bool, &vc.wfi_blocked, false, .release);
+
+            if (!builtin.is_test) {
+                if (vc.running_on_cpu) |home_cpu| {
+                    if (home_cpu < riscv.cpu_to_hart_map.len) {
+                        if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
+                            ptr.* = 1;
+                        }
+                    }
+                }
+            }
+            it = node.next;
+        }
+
+        if (!builtin.is_test) {
+            it = self.vcores.start;
+            while (it) |node| {
+                const vc = node.contents;
+                while ((@as(*volatile ?usize, &vc.running_on_cpu)).* != null) {
+                    std.atomic.spinLoopHint();
+                }
+                it = node.next;
+            }
+        }
+    }
+
+    // Reset all vcore contexts after new image is loaded
+    // Primary vcore 0 is set to .ready, secondary vcores set to .stopped
+    pub fn resetForSpawn(self: *Guest, entry: usize, dtb: usize) void {
+        var it = self.vcores.start;
+        var is_primary = true;
+        while (it) |node| {
+            const vc = node.contents;
+            vc.reset(entry, dtb);
+            if (is_primary) {
+                vc.state = .ready;
+                is_primary = false;
+            } else {
+                vc.state = .stopped;
+            }
+            it = node.next;
+        }
+    }
 };
+
 
 // Global guest manager state to encapsulate VMIDs and guest ID counters.
 const GuestManagerState = struct {
@@ -547,3 +600,42 @@ test "guest cascading termination and lineage" {
     try testing.expect(child.state == .dying);
     try testing.expect(grandchild.state == .dying);
 }
+
+test "guest stop and resetForSpawn on multicore" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
+
+    const parent = try createGuest(allocator, true, true, null, 0, 0, 0, .riscv64);
+    defer parent.deinit();
+
+    const vc0 = try parent.addVcore(0, 0x80200000, 0x81000000, .normal, null);
+    const vc1 = try parent.addVcore(1, 0x80200000, 0x81000000, .normal, null);
+    vc0.state = .running;
+    vc1.state = .running;
+
+    // Stop all vcores
+    parent.stop();
+    try testing.expect(vc0.state == .stopped);
+    try testing.expect(vc1.state == .stopped);
+
+    // Reset for spawn
+    const new_entry: usize = 0x80400000;
+    const new_dtb: usize = 0x82000000;
+    parent.resetForSpawn(new_entry, new_dtb);
+
+    // Bootstrap core (vc0) must be .ready, with updated PC and DTB
+    try testing.expect(vc0.state == .ready);
+    try testing.expectEqual(new_entry, vc0.exec_path.native.machine.mepc);
+    try testing.expectEqual(@as(usize, 0), vc0.exec_path.native.context[@intFromEnum(riscv.Register.a0)]);
+    try testing.expectEqual(new_dtb, vc0.exec_path.native.context[@intFromEnum(riscv.Register.a1)]);
+
+    // Secondary core (vc1) must be .stopped awaiting SBI HSM start
+    try testing.expect(vc1.state == .stopped);
+    try testing.expectEqual(new_entry, vc1.exec_path.native.machine.mepc);
+    try testing.expectEqual(@as(usize, 1), vc1.exec_path.native.context[@intFromEnum(riscv.Register.a0)]);
+    try testing.expectEqual(new_dtb, vc1.exec_path.native.context[@intFromEnum(riscv.Register.a1)]);
+}
+

@@ -89,43 +89,31 @@ pub const DiosixClient = struct {
         }
     }
 
-    /// Perform a hypercall via /dev/diosix ioctl or direct S-mode SBI fallback
+    /// Perform a hypercall via /dev/diosix ioctl
     pub fn fork(self: *DiosixClient) !usize {
-        if (self.dev_fd) |fd| {
-            var child_id: usize = 0;
-            const rc = linux.ioctl(fd, IOCTL_FORK, @intFromPtr(&child_id));
-            if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
-            return child_id;
-        }
-        // Direct SBI ecall fallback (if running in supervisor mode)
-        const res = sbiCall(EXT_DIOSIX, DIOSIX_FUNC.FORK, 0, 0, 0);
-        if (res.err != 0) return error.HypercallFailed;
-        return res.value;
+        const fd = self.dev_fd orelse return error.DeviceNotFound;
+        var child_id: usize = 0;
+        const rc = linux.ioctl(fd, IOCTL_FORK, @intFromPtr(&child_id));
+        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
+        return child_id;
     }
 
     pub fn dropTrust(self: *DiosixClient) !void {
-        if (self.dev_fd) |fd| {
-            const rc = linux.ioctl(fd, IOCTL_DROP_TRUST, 0);
-            if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
-            return;
-        }
-        const res = sbiCall(EXT_DIOSIX, DIOSIX_FUNC.DROP_TRUST, 0, 0, 0);
-        if (res.err != 0) return error.HypercallFailed;
+        const fd = self.dev_fd orelse return error.DeviceNotFound;
+        const rc = linux.ioctl(fd, IOCTL_DROP_TRUST, 0);
+        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
     }
 
     pub fn getInfo(self: *DiosixClient) !GuestInfo {
+        const fd = self.dev_fd orelse return error.DeviceNotFound;
         var info: GuestInfo = undefined;
-        if (self.dev_fd) |fd| {
-            const rc = linux.ioctl(fd, IOCTL_GET_INFO, @intFromPtr(&info));
-            if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
-            return info;
-        }
-        const res = sbiCall(EXT_DIOSIX, DIOSIX_FUNC.GET_INFO, @intFromPtr(&info), @sizeOf(GuestInfo), 0);
-        if (res.err != 0) return error.HypercallFailed;
+        const rc = linux.ioctl(fd, IOCTL_GET_INFO, @intFromPtr(&info));
+        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
         return info;
     }
 
     pub fn spawn(self: *DiosixClient, child_id: usize, elf_data: []const u8, dtb_data: []const u8, arch: usize) !void {
+        const fd = self.dev_fd orelse return error.DeviceNotFound;
         var args = SpawnArgs{
             .child_id = child_id,
             .elf_ptr = @intFromPtr(elf_data.ptr),
@@ -134,29 +122,20 @@ pub const DiosixClient = struct {
             .dtb_size = dtb_data.len,
             .target_arch = arch,
         };
-
-        if (self.dev_fd) |fd| {
-            const rc = linux.ioctl(fd, IOCTL_SPAWN, @intFromPtr(&args));
-            if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
-            return;
-        }
-        const res = sbiCall(EXT_DIOSIX, DIOSIX_FUNC.SPAWN, @intFromPtr(&args), 0, 0);
-        if (res.err != 0) return error.HypercallFailed;
+        const rc = linux.ioctl(fd, IOCTL_SPAWN, @intFromPtr(&args));
+        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
     }
 
     pub fn terminate(self: *DiosixClient, target_id: usize) !void {
-        if (self.dev_fd) |fd| {
-            const rc = linux.ioctl(fd, IOCTL_TERMINATE, target_id);
-            if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
-            return;
-        }
-        const res = sbiCall(EXT_DIOSIX, DIOSIX_FUNC.TERMINATE, target_id, 0, 0);
-        if (res.err != 0) return error.HypercallFailed;
+        const fd = self.dev_fd orelse return error.DeviceNotFound;
+        const rc = linux.ioctl(fd, IOCTL_TERMINATE, target_id);
+        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
     }
 
     pub fn exit(self: *DiosixClient, code: usize) void {
         _ = self.terminate(code) catch {};
     }
+
 
 };
 

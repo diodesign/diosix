@@ -1079,10 +1079,10 @@ pub fn reboot() void {
     const drivers = @import("../../../../core/drivers.zig");
     if (drivers.reset) |drv| {
         drv.reset();
-    } else if (test_device_base) |base| {
-        const ptr = @as(*volatile u32, @ptrFromInt(base));
-        ptr.* = SiFiveTest.FINISHER_RESET;
     }
+    const base = test_device_base orelse 0x100000;
+    const ptr = @as(*volatile u32, @ptrFromInt(base));
+    ptr.* = SiFiveTest.FINISHER_RESET;
     while (true) {}
 }
 
@@ -1092,12 +1092,13 @@ pub fn shutdown() void {
     const drivers = @import("../../../../core/drivers.zig");
     if (drivers.reset) |drv| {
         drv.shutdown();
-    } else if (test_device_base) |base| {
-        const ptr = @as(*volatile u32, @ptrFromInt(base));
-        ptr.* = SiFiveTest.FINISHER_PASS;
     }
+    const base = test_device_base orelse 0x100000;
+    const ptr = @as(*volatile u32, @ptrFromInt(base));
+    ptr.* = SiFiveTest.FINISHER_PASS;
     while (true) {}
 }
+
 
 pub fn pause() void {
     if (builtin.is_test) return;

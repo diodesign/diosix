@@ -52,11 +52,19 @@ pub const BASE = struct {
 
 // Diosix Extension Function IDs
 pub const DIOSIX = struct {
+    pub const TERMINATE = 0;
     pub const EXIT = 0;
     pub const YIELD = 1;
     pub const FORK = 2;
     pub const DROP_TRUST = 3;
+    pub const SPAWN = 4;
+    pub const GET_INFO = 5;
+    pub const SET_QUOTA = 6;
+    pub const IPC_SEND = 7;
+    pub const IPC_RECV = 8;
 };
+
+
 
 // Debug Console Extension Function IDs
 pub const DBCN = struct {
