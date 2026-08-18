@@ -2,10 +2,15 @@
 CONFIG_EXPERT=y
 CONFIG_EMBEDDED=y
 
+# Networking & UNIX Domain Sockets
+CONFIG_NET=y
+CONFIG_UNIX=y
+CONFIG_INET=y
+
 # Disable unused subsystems
-# CONFIG_NET is not set
 # CONFIG_PCI is not set
 # CONFIG_USB is not set
+
 # CONFIG_SOUND is not set
 # CONFIG_THERMAL is not set
 # CONFIG_VGA_ARB is not set

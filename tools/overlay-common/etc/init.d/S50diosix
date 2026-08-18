@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# S50diosix: Diosix guest initialization and management service
+#
+
+case "$1" in
+  start)
+    echo "Starting Diosix guest services..."
+    # Ensure /dev/diosix device node exists if needed
+    if [ ! -c /dev/diosix ] && [ -f /lib/modules/$(uname -r)/extra/diosix.ko ]; then
+        modprobe diosix 2>/dev/null || insmod /lib/modules/$(uname -r)/extra/diosix.ko 2>/dev/null || true
+    fi
+    # Set up loopback and internal networking if available
+    ifconfig lo 127.0.0.1 up 2>/dev/null || true
+    ;;
+  stop)
+    echo "Stopping Diosix guest services..."
+    ;;
+  restart|reload)
+    "$0" stop
+    "$0" start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac
+
+exit 0
