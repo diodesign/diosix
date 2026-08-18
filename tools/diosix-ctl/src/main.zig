@@ -92,7 +92,6 @@ fn cmdInfo(client: *api.DiosixClient) !void {
         return;
     };
 
-
     const arch_name = switch (info.target_arch) {
         0 => "riscv64",
         1 => "riscv32",
@@ -101,34 +100,37 @@ fn cmdInfo(client: *api.DiosixClient) !void {
         else => "unknown",
     };
 
+    const is_root_str = if (info.is_root != 0) "yes" else "no";
+    const is_trusted_str = if (info.is_trusted != 0) "yes" else "no";
+    const ram_mb = (info.used_ram_pages * 4) / 1024;
+
     var buf: [512]u8 = undefined;
     const out = std.fmt.bufPrint(&buf,
         \\=== Diosix Guest VM Info ===
         \\Guest ID       : {d}
         \\Parent ID      : {d}
         \\Architecture   : {s}
-        \\Root Progenitor: {d}
-        \\Hardware Trust : {d}
-        \\RAM Usage      : {d} pages / {d} max ({d} KB)
-        \\Virtual CPUs   : {d} used / {d} max
-        \\Child Count    : {d}
+        \\Root VM        : {s}
+        \\Hardware Trust : {s}
+        \\RAM Allocation : {d} MB ({d} pages)
+        \\Virtual CPUs   : {d}
+        \\Child VMs      : {d}
         \\
     , .{
         info.guest_id,
         info.parent_id,
         arch_name,
-        info.is_root,
-        info.is_trusted,
+        is_root_str,
+        is_trusted_str,
+        ram_mb,
         info.used_ram_pages,
-        info.max_ram_pages,
-        info.used_ram_pages * 4,
         info.used_vcpus,
-        info.max_vcpus,
         info.child_count,
     }) catch return;
 
     printStr(out);
 }
+
 
 fn cmdFork(client: *api.DiosixClient) !void {
     printStr("Forking current VM...\n");

@@ -104,19 +104,26 @@ pub const Guest = struct {
         const self = try allocator.create(Guest);
         errdefer allocator.destroy(self);
 
+        const ram_pages = range_size / physmem.PageSize;
         self.* = .{
             .id = id,
             .state = .valid,
             .is_trusted = is_trusted,
             .is_root = is_root,
             .target_arch = target_arch,
-            .quotas = if (parent) |p| p.quotas else .{},
+            .quotas = if (parent) |p| p.quotas else .{
+                .max_ram_pages = ram_pages,
+                .used_ram_pages = ram_pages,
+                .max_vcpus = 16,
+                .used_vcpus = 0,
+            },
             .parent = parent,
             .children = .{ .start = null, .end = null },
             .vcores = .{ .start = null, .end = null },
             .vmid = try allocVmid(),
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = try vm_space.GuestSpace.init(allocator, is_trusted, base_gpa, base_hpa, range_size),
+
             .early_pgt_gpa = if (target_arch == .x86_64) base_gpa + 0x70000 else 0,
             .pit = .{},
             .ioapic_mem = std.mem.zeroes([4096]u8),
@@ -269,6 +276,8 @@ pub const Guest = struct {
             .contents = vc,
         };
         self.vcores.pushEnd(node);
+        self.quotas.used_vcpus = self.vcores.count();
+
 
         // Register in the O(1) lookup table if the hart ID fits.
         if (vid < max_vcores) {

@@ -10,7 +10,9 @@ const guest = @import("../../../../core/guest.zig");
 const debug = @import("../../../../core/debug.zig");
 const scheduler = @import("../../../../core/scheduler.zig");
 const pcore = @import("../../../../core/pcore.zig");
+const physmem = @import("../../../../core/physmem.zig");
 const interface = @import("interface").sbi;
+
 const arch = @import("interface").riscv;
 const config = @import("config");
 const rv32 = @import("mod.zig");
@@ -477,12 +479,13 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                     .is_root = if (g.is_root) 1 else 0,
                     .target_arch = @intFromEnum(g.target_arch),
                     ._reserved = 0,
-                    .used_ram_pages = g.quotas.used_ram_pages,
-                    .max_ram_pages = g.quotas.max_ram_pages,
-                    .used_vcpus = g.quotas.used_vcpus,
-                    .max_vcpus = g.quotas.max_vcpus,
+                    .used_ram_pages = if (g.quotas.used_ram_pages > 0) g.quotas.used_ram_pages else g.space.range_size / physmem.PageSize,
+                    .max_ram_pages = if (g.quotas.max_ram_pages == std.math.maxInt(usize)) g.space.range_size / physmem.PageSize else g.quotas.max_ram_pages,
+                    .used_vcpus = if (g.quotas.used_vcpus > 0) g.quotas.used_vcpus else g.vcores.count(),
+                    .max_vcpus = if (g.quotas.max_vcpus == std.math.maxInt(usize)) g.vcores.count() else g.quotas.max_vcpus,
                     .child_count = g.children.count(),
                 };
+
                 setResult(vc, context, SBI_SUCCESS, 0);
             } else {
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
