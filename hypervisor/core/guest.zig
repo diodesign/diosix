@@ -13,8 +13,11 @@ const dsa = @import("dsa.zig");
 const vm_space = @import("vm.zig");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const debug = @import("debug.zig");
+const interface = @import("interface");
+const sbi = interface.sbi;
 
 pub const GuestID = usize;
+
 
 pub const GuestState = enum {
     valid, // healthy and running
@@ -61,6 +64,92 @@ pub const PitState = struct {
     pic_slave_imr: u8 = 0xff,
 };
 
+pub const CID_PARENT: usize = 0;
+pub const CID_SELF: usize = 1;
+pub const CID_FIRST_CHILD: usize = 2;
+pub const max_child_handles: usize = 64;
+pub const max_events: usize = 32;
+
+pub const EventQueue = struct {
+    events: [max_events]sbi.Event = std.mem.zeroes([max_events]sbi.Event),
+    head: usize = 0,
+
+    tail: usize = 0,
+    count: usize = 0,
+
+    pub fn push(self: *EventQueue, ev: sbi.Event) void {
+        if (self.count >= max_events) {
+            self.tail = (self.tail + 1) % max_events;
+            self.count -= 1;
+        }
+        self.events[self.head] = ev;
+        self.head = (self.head + 1) % max_events;
+        self.count += 1;
+    }
+
+    pub fn pop(self: *EventQueue) ?sbi.Event {
+        if (self.count == 0) return null;
+        const ev = self.events[self.tail];
+        self.tail = (self.tail + 1) % max_events;
+        self.count -= 1;
+        return ev;
+    }
+};
+
+pub const max_ipc_messages: usize = 16;
+pub const max_ipc_msg_len: usize = 4096;
+
+pub const IpcMessage = struct {
+    sender_cid: usize,
+    len: usize,
+    data: [max_ipc_msg_len]u8,
+};
+
+pub const IpcInbox = struct {
+    messages: [max_ipc_messages]IpcMessage = std.mem.zeroes([max_ipc_messages]IpcMessage),
+    head: usize = 0,
+    tail: usize = 0,
+    count: usize = 0,
+
+    pub fn push(self: *IpcInbox, sender_cid: usize, slice: []const u8) bool {
+        if (self.count >= max_ipc_messages) return false;
+        const copy_len = @min(slice.len, max_ipc_msg_len);
+        self.messages[self.head].sender_cid = sender_cid;
+        self.messages[self.head].len = copy_len;
+        @memcpy(self.messages[self.head].data[0..copy_len], slice[0..copy_len]);
+        self.head = (self.head + 1) % max_ipc_messages;
+        self.count += 1;
+        return true;
+    }
+
+    pub fn pop(self: *IpcInbox, sender_filter: usize) ?IpcMessage {
+        if (self.count == 0) return null;
+        if (sender_filter == 0) {
+            const msg = self.messages[self.tail];
+            self.tail = (self.tail + 1) % max_ipc_messages;
+            self.count -= 1;
+            return msg;
+        } else {
+            var idx = self.tail;
+            for (0..self.count) |_| {
+                if (self.messages[idx].sender_cid == sender_filter) {
+                    const msg = self.messages[idx];
+                    if (idx == self.tail) {
+                        self.tail = (self.tail + 1) % max_ipc_messages;
+                        self.count -= 1;
+                        return msg;
+                    }
+                }
+                idx = (idx + 1) % max_ipc_messages;
+            }
+            const msg = self.messages[self.tail];
+            self.tail = (self.tail + 1) % max_ipc_messages;
+            self.count -= 1;
+            return msg;
+        }
+    }
+};
+
 pub const Guest = struct {
     id: GuestID,
     state: GuestState,
@@ -74,6 +163,22 @@ pub const Guest = struct {
     // Lineage tracking
     parent: ?*Guest,
     children: dsa.LinkedList(*Guest),
+    child_node: ?*dsa.LinkedList(*Guest).Node = null,
+
+    // Context ID assigned by parent (1 for Root VM)
+    local_cid: usize = CID_SELF,
+
+    // Fast array mapping child CID (CID >= 2) to *Guest
+    child_handles: [max_child_handles]?*Guest = std.mem.zeroes([max_child_handles]?*Guest),
+
+    // Event queue for asynchronous child notifications
+    events: EventQueue = .{},
+
+    // Inter-VM IPC message inbox
+    inbox: IpcInbox = .{},
+
+    // Exit code recorded upon termination
+    exit_code: usize = 0,
 
     // Virtual CPU cores belonging to this guest
     vcores: dsa.LinkedList(*vcore.VirtualCore),
@@ -100,6 +205,75 @@ pub const Guest = struct {
     // allocator for heap-allocated Guest structures
     allocator: std.mem.Allocator,
 
+    pub fn allocChildHandle(self: *Guest, child: *Guest) !usize {
+        for (&self.child_handles, 0..) |*slot, i| {
+            if (slot.* == null) {
+                slot.* = child;
+                return i + CID_FIRST_CHILD;
+            }
+        }
+        return error.QuotaExceeded;
+    }
+
+    pub fn freeChildHandle(self: *Guest, child: *Guest) void {
+        for (&self.child_handles) |*slot| {
+            if (slot.* == child) {
+                slot.* = null;
+                break;
+            }
+        }
+    }
+
+    pub fn getGuestByCid(self: *Guest, cid: usize) ?*Guest {
+        if (cid == CID_PARENT) {
+            return self.parent;
+        } else if (cid == CID_SELF) {
+            return self;
+        } else if (cid >= CID_FIRST_CHILD) {
+            const idx = cid - CID_FIRST_CHILD;
+            if (idx < max_child_handles) {
+                return self.child_handles[idx];
+            }
+        }
+        return null;
+    }
+
+    pub fn setQuota(self: *Guest, args: sbi.QuotaArgs) !void {
+        if (args.target_cid == CID_SELF) {
+            if (args.max_ram_pages > 0) self.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
+            if (args.max_vcpus > 0) self.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
+            if (args.max_child_depth > 0) self.quotas.max_child_depth = @min(self.quotas.max_child_depth, args.max_child_depth);
+            if (args.max_descendants > 0) self.quotas.max_descendants = @min(self.quotas.max_descendants, args.max_descendants);
+        } else if (args.target_cid >= CID_FIRST_CHILD) {
+            if (self.getGuestByCid(args.target_cid)) |child| {
+                if (args.max_ram_pages > 0) child.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
+                if (args.max_vcpus > 0) child.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
+                if (args.max_child_depth > 0) child.quotas.max_child_depth = @min(self.quotas.max_child_depth, args.max_child_depth);
+                if (args.max_descendants > 0) child.quotas.max_descendants = @min(self.quotas.max_descendants, args.max_descendants);
+            } else {
+                return error.InvalidParam;
+            }
+        } else {
+            return error.AccessDenied;
+        }
+    }
+
+    pub fn sendIpc(self: *Guest, target_cid: usize, payload: []const u8) !void {
+        const target = self.getGuestByCid(target_cid) orelse return error.InvalidParam;
+        const sender_cid_for_target: usize = if (target_cid == CID_PARENT) self.local_cid else CID_PARENT;
+
+        if (!target.inbox.push(sender_cid_for_target, payload)) {
+            return error.QueueFull;
+        }
+
+        target.events.push(.{
+            .cid = sender_cid_for_target,
+            .event_type = @intFromEnum(sbi.EventType.ipc_message),
+            .exit_code = @truncate(payload.len),
+        });
+    }
+
+
     pub fn init(allocator: std.mem.Allocator, id: GuestID, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize, target_arch: TargetArch) !*Guest {
         const self = try allocator.create(Guest);
         errdefer allocator.destroy(self);
@@ -119,6 +293,10 @@ pub const Guest = struct {
             },
             .parent = parent,
             .children = .{ .start = null, .end = null },
+            .child_node = null,
+            .local_cid = CID_SELF,
+            .child_handles = std.mem.zeroes([max_child_handles]?*Guest),
+            .exit_code = 0,
             .vcores = .{ .start = null, .end = null },
             .vmid = try allocVmid(),
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
@@ -141,6 +319,8 @@ pub const Guest = struct {
             const node = try allocator.create(dsa.LinkedList(*Guest).Node);
             node.* = .{ .next = null, .previous = null, .contents = self };
             p.children.pushEnd(node);
+            self.child_node = node;
+            self.local_cid = try p.allocChildHandle(self);
             self.quotas.current_depth = p.quotas.current_depth + 1;
 
             // Increment descendants count up the lineage
@@ -154,17 +334,25 @@ pub const Guest = struct {
         return self;
     }
 
+
     pub fn terminate(self: *Guest) void {
+        self.terminateWithCode(0);
+    }
+
+    pub fn terminateWithCode(self: *Guest, exit_code: usize) void {
+        if (self.state == .dying) return;
         self.state = .dying;
+        self.exit_code = exit_code;
 
         // Release console focus
         debug.destroyGuestState(self.id);
 
         // Recursive termination of all children (cascading)
-        var it_child = self.children.start;
-        while (it_child) |node| {
-            node.contents.terminate();
-            it_child = node.next;
+        while (self.children.popStart()) |node| {
+            const child = node.contents;
+            child.child_node = null;
+            child.terminateWithCode(exit_code);
+            self.allocator.destroy(node);
         }
 
         // Stop and free all vcores
@@ -181,15 +369,45 @@ pub const Guest = struct {
             }
         }
 
+        // Unlink from parent's children list and free child handle if still attached
+        if (self.parent) |p| {
+            p.events.push(.{
+                .cid = self.local_cid,
+                .event_type = @intFromEnum(sbi.EventType.child_terminated),
+                .exit_code = @truncate(exit_code),
+            });
+            p.freeChildHandle(self);
+            if (self.child_node) |node| {
+                p.children.remove(node);
+                p.allocator.destroy(node);
+                self.child_node = null;
+            }
+        }
+
+
+
         // Reclaim resources in used counters up the lineage
+        const ram_reclaim = self.quotas.used_ram_pages;
+        const vcpus_reclaim = self.quotas.used_vcpus;
         var p_opt = self.parent;
         while (p_opt) |p| {
-            p.quotas.used_ram_pages -= self.quotas.used_ram_pages;
-            p.quotas.used_vcpus -= self.vcores.count();
-            p.quotas.used_descendants -= 1;
+            if (p.quotas.used_ram_pages >= ram_reclaim) {
+                p.quotas.used_ram_pages -= ram_reclaim;
+            } else {
+                p.quotas.used_ram_pages = 0;
+            }
+            if (p.quotas.used_vcpus >= vcpus_reclaim) {
+                p.quotas.used_vcpus -= vcpus_reclaim;
+            } else {
+                p.quotas.used_vcpus = 0;
+            }
+            if (p.quotas.used_descendants > 0) {
+                p.quotas.used_descendants -= 1;
+            }
             p_opt = p.parent;
         }
     }
+
 
     pub fn dropTrust(self: *Guest) void {
         self.is_trusted = false;
@@ -243,10 +461,17 @@ pub const Guest = struct {
         var it_child = self.children.start;
         while (it_child) |node| {
             const next = node.next;
-            // node.contents should be deinitialized by the caller if they are the root,
-            // or here if we want deep deinit. But tests usually deinit each guest manually.
             self.allocator.destroy(node);
             it_child = next;
+        }
+
+        if (self.parent) |p| {
+            p.freeChildHandle(self);
+            if (self.child_node) |node| {
+                p.children.remove(node);
+                self.allocator.destroy(node);
+                self.child_node = null;
+            }
         }
 
         freeVmid(self.vmid);
@@ -342,6 +567,10 @@ pub const Guest = struct {
             .quotas = self.quotas,
             .parent = self,
             .children = .{ .start = null, .end = null },
+            .child_node = null,
+            .local_cid = CID_SELF,
+            .child_handles = std.mem.zeroes([max_child_handles]?*Guest),
+            .exit_code = 0,
             .vcores = .{ .start = null, .end = null },
             .vmid = try allocVmid(),
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
@@ -358,7 +587,11 @@ pub const Guest = struct {
         const line_node = try self.allocator.create(dsa.LinkedList(*Guest).Node);
         line_node.* = .{ .next = null, .previous = null, .contents = child };
         self.children.pushEnd(line_node);
+        child.child_node = line_node;
+        child.local_cid = try self.allocChildHandle(child);
         child.quotas.current_depth = self.quotas.current_depth + 1;
+        child.quotas.used_vcpus = vcpu_count;
+        child.quotas.used_ram_pages = 0;
 
         // Ancestor tracking: consumed descendants and vcpus
         var p_opt: ?*Guest = self;
@@ -367,6 +600,8 @@ pub const Guest = struct {
             p.quotas.used_vcpus += vcpu_count;
             p_opt = p.parent;
         }
+
+
 
         // Clone vcores
         var it_vcore = self.vcores.start;
@@ -647,4 +882,194 @@ test "guest stop and resetForSpawn on multicore" {
     try testing.expectEqual(@as(usize, 1), vc1.exec_path.native.context[@intFromEnum(riscv.Register.a0)]);
     try testing.expectEqual(new_dtb, vc1.exec_path.native.context[@intFromEnum(riscv.Register.a1)]);
 }
+
+test "child termination unlinking and quota reclamation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const scheduler = @import("scheduler.zig");
+    scheduler.init();
+    scheduler.initCpu();
+
+    {
+        const guard = guest_manager.acquire();
+        defer guard.release();
+        const state = guard.get();
+        state.guest_id_next = 0;
+        state.vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+    }
+
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
+
+    const parent = try createGuest(allocator, true, true, null, 0, 0, 0x10000, .riscv64);
+    defer parent.deinit();
+
+    _ = try parent.addVcore(0, 0, 0, .normal, null);
+
+    const initial_vcpus = parent.quotas.used_vcpus;
+    const initial_ram = parent.quotas.used_ram_pages;
+
+    // Fork 3 children
+    const child1 = try parent.fork();
+    defer child1.deinit();
+    const child2 = try parent.fork();
+    defer child2.deinit();
+    const child3 = try parent.fork();
+    defer child3.deinit();
+
+    // Verify Context IDs
+    try testing.expectEqual(@as(usize, 2), child1.local_cid);
+    try testing.expectEqual(@as(usize, 3), child2.local_cid);
+    try testing.expectEqual(@as(usize, 4), child3.local_cid);
+
+    // Verify CID resolution
+    try testing.expectEqual(parent, child1.getGuestByCid(CID_PARENT).?);
+    try testing.expectEqual(child1, child1.getGuestByCid(CID_SELF).?);
+    try testing.expectEqual(child1, parent.getGuestByCid(2).?);
+    try testing.expectEqual(child2, parent.getGuestByCid(3).?);
+    try testing.expectEqual(child3, parent.getGuestByCid(4).?);
+
+    try testing.expectEqual(@as(usize, 3), parent.children.count());
+    try testing.expectEqual(@as(usize, 3), parent.quotas.used_descendants);
+
+    // Terminate child 1
+    child1.terminateWithCode(42);
+    try testing.expectEqual(@as(usize, 42), child1.exit_code);
+    try testing.expectEqual(@as(usize, 2), parent.children.count());
+    try testing.expectEqual(@as(usize, 2), parent.quotas.used_descendants);
+    try testing.expect(parent.getGuestByCid(2) == null);
+
+    // Terminate child 2
+    child2.terminateWithCode(0);
+    try testing.expectEqual(@as(usize, 0), child2.exit_code);
+    try testing.expectEqual(@as(usize, 1), parent.children.count());
+    try testing.expectEqual(@as(usize, 1), parent.quotas.used_descendants);
+    try testing.expect(parent.getGuestByCid(3) == null);
+
+    // Child 3 must be the only remaining child
+    try testing.expectEqual(child3, parent.children.start.?.contents);
+    try testing.expectEqual(child3, parent.getGuestByCid(4).?);
+
+    // Terminate child 3
+    child3.terminateWithCode(1);
+    try testing.expectEqual(@as(usize, 1), child3.exit_code);
+    try testing.expectEqual(@as(usize, 0), parent.children.count());
+    try testing.expectEqual(@as(usize, 0), parent.quotas.used_descendants);
+    try testing.expect(parent.getGuestByCid(4) == null);
+    try testing.expectEqual(initial_vcpus, parent.quotas.used_vcpus);
+    try testing.expectEqual(initial_ram, parent.quotas.used_ram_pages);
+
+    // Verify asynchronous event delivery in FIFO order
+    try testing.expectEqual(@as(usize, 3), parent.events.count);
+    const ev1 = parent.events.pop().?;
+    try testing.expectEqual(@as(usize, 2), ev1.cid);
+    try testing.expectEqual(@as(u32, 1), ev1.event_type);
+    try testing.expectEqual(@as(u32, 42), ev1.exit_code);
+
+    const ev2 = parent.events.pop().?;
+    try testing.expectEqual(@as(usize, 3), ev2.cid);
+    try testing.expectEqual(@as(u32, 1), ev2.event_type);
+    try testing.expectEqual(@as(u32, 0), ev2.exit_code);
+
+    const ev3 = parent.events.pop().?;
+    try testing.expectEqual(@as(usize, 4), ev3.cid);
+    try testing.expectEqual(@as(u32, 1), ev3.event_type);
+    try testing.expectEqual(@as(u32, 1), ev3.exit_code);
+
+    try testing.expect(parent.events.pop() == null);
+}
+
+test "guest quota management and inter-VM IPC" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const scheduler = @import("scheduler.zig");
+    scheduler.init();
+    scheduler.initCpu();
+
+    {
+        const guard = guest_manager.acquire();
+        defer guard.release();
+        const state = guard.get();
+        state.guest_id_next = 0;
+        state.vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+    }
+
+    var phys_test = try physmem.initForTest(allocator, 4096);
+    defer phys_test.deinit();
+
+    const parent = try createGuest(allocator, true, true, null, 0, 0, 0x1000000, .riscv64);
+    defer parent.deinit();
+
+    _ = try parent.addVcore(0, 0, 0, .normal, null);
+
+    const child = try parent.fork();
+    defer child.deinit();
+
+    // Parent sets child quota
+    try parent.setQuota(.{
+        .target_cid = 2,
+        .max_ram_pages = 1024,
+        .max_vcpus = 2,
+        .max_child_depth = 4,
+        .max_descendants = 10,
+    });
+    try testing.expectEqual(@as(usize, 1024), child.quotas.max_ram_pages);
+    try testing.expectEqual(@as(usize, 2), child.quotas.max_vcpus);
+
+    // Child lowers own quota (self-sandboxing)
+    try child.setQuota(.{
+        .target_cid = CID_SELF,
+        .max_ram_pages = 512,
+        .max_vcpus = 1,
+        .max_child_depth = 2,
+        .max_descendants = 5,
+    });
+    try testing.expectEqual(@as(usize, 512), child.quotas.max_ram_pages);
+    try testing.expectEqual(@as(usize, 1), child.quotas.max_vcpus);
+
+    // Child cannot modify parent quota
+    try testing.expectError(error.AccessDenied, child.setQuota(.{
+        .target_cid = CID_PARENT,
+        .max_ram_pages = 100,
+        .max_vcpus = 1,
+        .max_child_depth = 1,
+        .max_descendants = 1,
+    }));
+
+    // Child sends IPC message to parent (CID 0)
+    const child_msg = "Hello parent from child";
+    try child.sendIpc(CID_PARENT, child_msg);
+
+    // Parent receives event notification
+    const p_ev = parent.events.pop().?;
+    try testing.expectEqual(@as(usize, 2), p_ev.cid);
+    try testing.expectEqual(@as(u32, 4), p_ev.event_type); // ipc_message
+
+    // Parent pops message from inbox
+    const received_by_parent = parent.inbox.pop(0).?;
+    try testing.expectEqual(@as(usize, 2), received_by_parent.sender_cid);
+    try testing.expectEqual(child_msg.len, received_by_parent.len);
+    try testing.expectEqualStrings(child_msg, received_by_parent.data[0..received_by_parent.len]);
+
+    // Parent sends reply to child (CID 2)
+    const parent_msg = "Hello child from parent";
+    try parent.sendIpc(2, parent_msg);
+
+    // Child receives event notification
+    const c_ev = child.events.pop().?;
+    try testing.expectEqual(@as(usize, 0), c_ev.cid); // From parent (CID 0)
+    try testing.expectEqual(@as(u32, 4), c_ev.event_type);
+
+    // Child pops message from inbox
+    const received_by_child = child.inbox.pop(0).?;
+    try testing.expectEqual(@as(usize, 0), received_by_child.sender_cid);
+    try testing.expectEqual(parent_msg.len, received_by_child.len);
+    try testing.expectEqualStrings(parent_msg, received_by_child.data[0..received_by_child.len]);
+}
+
+
+
+
 

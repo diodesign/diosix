@@ -11,6 +11,12 @@ fn printStr(str: []const u8) void {
     _ = linux.write(1, str.ptr, str.len);
 }
 
+fn parseCid(str: []const u8) !usize {
+    if (std.mem.eql(u8, str, "self")) return 1;
+    if (std.mem.eql(u8, str, "parent")) return 0;
+    return std.fmt.parseInt(usize, str, 10);
+}
+
 pub fn main(init: std.process.Init.Minimal) !void {
     const argv = init.args.vector;
 
@@ -25,23 +31,174 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const command = std.mem.span(argv[1]);
 
     if (std.mem.eql(u8, command, "info")) {
-        try cmdInfo(&client);
+        var host_mode = false;
+        for (argv[2..]) |arg| {
+            const span = std.mem.span(arg);
+            if (std.mem.eql(u8, span, "--host") or std.mem.eql(u8, span, "-h")) {
+                host_mode = true;
+            }
+        }
+        if (host_mode) {
+            try cmdHostInfo(&client);
+        } else {
+            try cmdInfo(&client);
+        }
     } else if (std.mem.eql(u8, command, "fork")) {
-        try cmdFork(&client);
+        var spawn_mode = false;
+        var spawn_idx: usize = 0;
+        var untrusted = false;
+        for (argv[2..], 2..) |arg, i| {
+            const span = std.mem.span(arg);
+            if (std.mem.eql(u8, span, "--spawn")) {
+                spawn_mode = true;
+                spawn_idx = i;
+            } else if (std.mem.eql(u8, span, "--untrusted") or std.mem.eql(u8, span, "--drop-trust")) {
+                untrusted = true;
+            }
+        }
+        if (spawn_mode) {
+            if (argv.len <= spawn_idx + 1) {
+                printStr("Usage: diosix-ctl fork --spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
+                return;
+            }
+            const elf_path = std.mem.span(argv[spawn_idx + 1]);
+            var dtb_path: ?[]const u8 = null;
+            var arch_str: []const u8 = "riscv64";
+            var flags: usize = 0;
+            for (argv[spawn_idx + 2 ..]) |arg| {
+                const span = std.mem.span(arg);
+                if (std.mem.eql(u8, span, "--trusted")) {
+                    flags |= api.SpawnFlags.TRUSTED;
+                } else if (isArch(span)) {
+                    arch_str = span;
+                } else if (dtb_path == null) {
+                    dtb_path = span;
+                }
+            }
+            try cmdSpawn(&client, 0, elf_path, dtb_path, arch_str, flags);
+        } else {
+            const fork_flags: usize = if (untrusted) api.ForkFlags.UNTRUSTED else 0;
+            try cmdFork(&client, fork_flags);
+        }
     } else if (std.mem.eql(u8, command, "drop-trust")) {
         try cmdDropTrust(&client);
     } else if (std.mem.eql(u8, command, "spawn")) {
-        if (argv.len < 4) {
-            printStr("Usage: diosix-ctl spawn <child_id> <elf_path> [dtb_path] [arch]\n");
+        if (argv.len < 3) {
+            printStr("Usage: diosix-ctl spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
+            printStr("       diosix-ctl spawn <cid> <elf_path> [dtb_path] [arch] [--trusted]\n");
             return;
         }
-        const child_id = try std.fmt.parseInt(usize, std.mem.span(argv[2]), 10);
-        const elf_path = std.mem.span(argv[3]);
-        const dtb_path: ?[]const u8 = if (argv.len > 4) std.mem.span(argv[4]) else null;
-        const arch_str = if (argv.len > 5) std.mem.span(argv[5]) else "riscv64";
-        try cmdSpawn(&client, child_id, elf_path, dtb_path, arch_str);
+        var child_id: usize = 0;
+        var elf_path: ?[]const u8 = null;
+        var dtb_path: ?[]const u8 = null;
+        var arch_str: []const u8 = "riscv64";
+        var flags: usize = 0;
+
+        var non_flag_args: [8][]const u8 = undefined;
+        var non_flag_count: usize = 0;
+
+        for (argv[2..]) |arg| {
+            const span = std.mem.span(arg);
+            if (std.mem.eql(u8, span, "--trusted")) {
+                flags |= api.SpawnFlags.TRUSTED;
+            } else if (std.mem.eql(u8, span, "--untrusted")) {
+                flags &= ~api.SpawnFlags.TRUSTED;
+            } else if (non_flag_count < non_flag_args.len) {
+                non_flag_args[non_flag_count] = span;
+                non_flag_count += 1;
+            }
+        }
+
+        if (non_flag_count == 0) {
+            printStr("Usage: diosix-ctl spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
+            return;
+        }
+
+        if (parseCid(non_flag_args[0])) |cid| {
+            if (cid >= 2 and non_flag_count >= 2) {
+                child_id = cid;
+                elf_path = non_flag_args[1];
+                if (non_flag_count > 2) {
+                    if (isArch(non_flag_args[2])) {
+                        arch_str = non_flag_args[2];
+                    } else {
+                        dtb_path = non_flag_args[2];
+                        if (non_flag_count > 3) arch_str = non_flag_args[3];
+                    }
+                }
+            } else {
+                child_id = 0;
+                elf_path = non_flag_args[0];
+                if (non_flag_count > 1) {
+                    if (isArch(non_flag_args[1])) {
+                        arch_str = non_flag_args[1];
+                    } else {
+                        dtb_path = non_flag_args[1];
+                        if (non_flag_count > 2) arch_str = non_flag_args[2];
+                    }
+                }
+            }
+        } else |_| {
+            child_id = 0;
+            elf_path = non_flag_args[0];
+            if (non_flag_count > 1) {
+                if (isArch(non_flag_args[1])) {
+                    arch_str = non_flag_args[1];
+                } else {
+                    dtb_path = non_flag_args[1];
+                    if (non_flag_count > 2) arch_str = non_flag_args[2];
+                }
+            }
+        }
+
+        if (elf_path) |ep| {
+            try cmdSpawn(&client, child_id, ep, dtb_path, arch_str, flags);
+        } else {
+            printStr("Missing ELF file path.\n");
+        }
+
+
+    } else if (std.mem.eql(u8, command, "quota")) {
+        if (argv.len < 3) {
+            printStr("Usage: diosix-ctl quota <cid|self> [--ram <MB>] [--vcpus <N>] [--depth <N>] [--descendants <N>]\n");
+            return;
+        }
+        const target_cid = try parseCid(std.mem.span(argv[2]));
+        try cmdQuota(&client, target_cid, argv);
+    } else if (std.mem.eql(u8, command, "send")) {
+        if (argv.len < 4) {
+            printStr("Usage: diosix-ctl send <cid|parent> <message>\n");
+            return;
+        }
+        const target_cid = try parseCid(std.mem.span(argv[2]));
+        const message = std.mem.span(argv[3]);
+        try cmdSend(&client, target_cid, message);
+    } else if (std.mem.eql(u8, command, "recv")) {
+        var sender_cid: usize = 0;
+        var nohang: bool = false;
+        for (argv[2..]) |arg| {
+            const span = std.mem.span(arg);
+            if (std.mem.eql(u8, span, "--nohang") or std.mem.eql(u8, span, "-n")) {
+                nohang = true;
+            } else if (parseCid(span)) |cid| {
+                sender_cid = cid;
+            } else |_| {}
+        }
+        try cmdRecv(&client, sender_cid, nohang);
+    } else if (std.mem.eql(u8, command, "wait")) {
+        var target_cid: usize = 0;
+        var nohang: bool = false;
+        for (argv[2..]) |arg| {
+            const span = std.mem.span(arg);
+            if (std.mem.eql(u8, span, "--nohang") or std.mem.eql(u8, span, "-n")) {
+                nohang = true;
+            } else if (parseCid(span)) |cid| {
+                target_cid = cid;
+            } else |_| {}
+        }
+        try cmdWait(&client, target_cid, nohang);
     } else if (std.mem.eql(u8, command, "terminate")) {
-        const target_id = if (argv.len > 2) try std.fmt.parseInt(usize, std.mem.span(argv[2]), 10) else 0;
+        const target_id = if (argv.len > 2) try parseCid(std.mem.span(argv[2])) else 1;
         const exit_code = if (argv.len > 3) try std.fmt.parseInt(usize, std.mem.span(argv[3]), 10) else 0;
         try cmdTerminate(&client, target_id, exit_code);
     } else if (std.mem.eql(u8, command, "exit")) {
@@ -63,11 +220,16 @@ fn printUsage() void {
         \\diosix-ctl: Diosix Hypervisor Guest Management Tool
         \\
         \\Usage:
-        \\  diosix-ctl info                           Display current VM state, ID, and quotas
-        \\  diosix-ctl fork                           Fork current VM to create a child VM
-        \\  diosix-ctl spawn <id> <elf> [dtb] [arch]  Load a new guest image into child VM and start it
-        \\  diosix-ctl terminate [vm_id] [code]       Terminate specified child VM ID (or 0 for self)
-        \\  diosix-ctl exit [code]                    Exit the current non-root VM
+        \\  diosix-ctl info [--host]                  Display current VM state (or host hypervisor info)
+        \\  diosix-ctl spawn <elf> [opts] [--trusted] Create and boot a child VM directly from image
+        \\  diosix-ctl fork [--untrusted]             Fork current VM to clone state (returns CID >= 2)
+        \\  diosix-ctl fork --spawn <elf> [options]   Alias to create and boot a new child VM
+        \\  diosix-ctl quota <cid|self> [options]     Set or lower VM resource quotas (--ram, --vcpus, --descendants)
+        \\  diosix-ctl send <cid|parent> <msg>        Send an inter-VM IPC message to target VM
+        \\  diosix-ctl recv [cid|parent] [--nohang]   Receive an inter-VM IPC message
+        \\  diosix-ctl wait [cid|self] [--nohang]     Wait for child VM state changes / exit events
+        \\  diosix-ctl terminate [cid|self] [code]    Terminate target VM (self or child CID)
+        \\  diosix-ctl exit [code]                    Exit the current non-root VM (calls terminate self [code])
         \\  diosix-ctl poweroff                       Power off the host machine (Root VM only)
         \\  diosix-ctl reboot                         Reboot the host machine (Root VM only)
         \\  diosix-ctl drop-trust                     Irrevocably drop hardware trust privileges
@@ -76,6 +238,11 @@ fn printUsage() void {
     ;
     printStr(usage);
 }
+
+
+
+
+
 
 fn printApiError(action: []const u8, err: anyerror) void {
     var buf: [128]u8 = undefined;
@@ -89,8 +256,99 @@ fn printApiError(action: []const u8, err: anyerror) void {
     }
 }
 
+fn cmdQuota(client: *api.DiosixClient, target_cid: usize, argv: []const [*:0]const u8) !void {
+    var ram_pages: usize = 0;
+    var vcpus: usize = 0;
+    var depth: usize = 0;
+    var descendants: usize = 0;
+
+    var i: usize = 3;
+    while (i < argv.len) : (i += 1) {
+        const flag = std.mem.span(argv[i]);
+        if (std.mem.eql(u8, flag, "--ram") and i + 1 < argv.len) {
+            i += 1;
+            const mb = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
+            ram_pages = (mb * 1024) / 4;
+        } else if (std.mem.eql(u8, flag, "--vcpus") and i + 1 < argv.len) {
+            i += 1;
+            vcpus = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
+        } else if (std.mem.eql(u8, flag, "--depth") and i + 1 < argv.len) {
+            i += 1;
+            depth = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
+        } else if (std.mem.eql(u8, flag, "--descendants") and i + 1 < argv.len) {
+            i += 1;
+            descendants = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
+        }
+    }
+
+    client.setQuota(target_cid, ram_pages, vcpus, depth, descendants) catch |err| {
+        printApiError("Set quota", err);
+        return;
+    };
+    printStr("Quotas updated successfully.\n");
+}
+
+fn cmdSend(client: *api.DiosixClient, target_cid: usize, message: []const u8) !void {
+    client.sendIpc(target_cid, message) catch |err| {
+        printApiError("Send IPC message", err);
+        return;
+    };
+    printStr("Message sent successfully.\n");
+}
+
+fn cmdRecv(client: *api.DiosixClient, sender_cid: usize, nohang: bool) !void {
+    var buffer: [4096]u8 = undefined;
+    if (!nohang) {
+        _ = client.waitEvent(0, false) catch {};
+    }
+    const maybe_msg = client.recvIpc(sender_cid, &buffer) catch |err| {
+        printApiError("Receive IPC message", err);
+        return;
+    };
+    if (maybe_msg) |msg| {
+        var header: [64]u8 = undefined;
+        const hmsg = std.fmt.bufPrint(&header, "[IPC Message from CID {d} ({d} bytes)]:\n", .{ msg.sender_cid, msg.data.len }) catch return;
+        printStr(hmsg);
+        printStr(msg.data);
+        printStr("\n");
+    } else {
+        printStr("No messages received.\n");
+    }
+}
+
+fn cmdWait(client: *api.DiosixClient, target_cid: usize, nohang: bool) !void {
+
+    if (!nohang) {
+        if (target_cid > 0) {
+            var buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Waiting for child VM (CID {d}) event...\n", .{target_cid}) catch return;
+            printStr(msg);
+        } else {
+            printStr("Waiting for child VM events...\n");
+        }
+    }
+    const maybe_event = client.waitEvent(target_cid, nohang) catch |err| {
+        printApiError("Wait", err);
+        return;
+    };
+    if (maybe_event) |ev| {
+        var buf: [128]u8 = undefined;
+        const type_str = switch (ev.event_type) {
+            1 => "terminated",
+            2 => "stopped",
+            3 => "spawned",
+            else => "event",
+        };
+        const msg = std.fmt.bufPrint(&buf, "Child VM (CID {d}) {s} with exit code {d}.\n", .{ ev.cid, type_str, ev.exit_code }) catch return;
+        printStr(msg);
+    } else {
+        printStr("No child events pending.\n");
+    }
+}
+
 fn cmdTerminate(client: *api.DiosixClient, target_id: usize, exit_code: usize) !void {
-    if (target_id == 0) {
+
+    if (target_id == 1 or target_id == 0) {
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Terminating current VM (exit code {d})...\n", .{exit_code}) catch return;
         printStr(msg);
@@ -116,7 +374,7 @@ fn cmdExit(client: *api.DiosixClient, exit_code: usize) !void {
         printApiError("Query VM info", err);
         return;
     }
-    try cmdTerminate(client, 0, exit_code);
+    try cmdTerminate(client, 1, exit_code);
 }
 
 fn cmdPoweroff(client: *api.DiosixClient) !void {
@@ -130,7 +388,7 @@ fn cmdPoweroff(client: *api.DiosixClient) !void {
         return;
     }
     printStr("Powering off host...\n");
-    client.terminate(0, 0) catch |err| {
+    client.terminate(1, 0) catch |err| {
         printApiError("Poweroff", err);
         return;
     };
@@ -146,8 +404,7 @@ fn cmdReboot(client: *api.DiosixClient) !void {
         printApiError("Query VM info", err);
         return;
     }
-    printStr("Rebooting host...\n");
-    client.terminate(0, 1) catch |err| {
+    client.terminate(1, 1) catch |err| {
         printApiError("Reboot", err);
         return;
     };
@@ -158,7 +415,6 @@ fn cmdInfo(client: *api.DiosixClient) !void {
         printApiError("Query VM info", err);
         return;
     };
-
 
     const arch_name = switch (info.target_arch) {
         0 => "riscv64",
@@ -175,8 +431,8 @@ fn cmdInfo(client: *api.DiosixClient) !void {
     var buf: [512]u8 = undefined;
     const out = std.fmt.bufPrint(&buf,
         \\=== Diosix Guest VM Info ===
-        \\Guest ID       : {d}
-        \\Parent ID      : {d}
+        \\Context ID     : {d}
+        \\Parent CID     : {d}
         \\Architecture   : {s}
         \\Root VM        : {s}
         \\Hardware Trust : {s}
@@ -199,15 +455,68 @@ fn cmdInfo(client: *api.DiosixClient) !void {
     printStr(out);
 }
 
+fn cmdHostInfo(client: *api.DiosixClient) !void {
+    const info = client.getHypervisorInfo() catch |err| {
+        printApiError("Query host hypervisor info", err);
+        return;
+    };
 
-fn cmdFork(client: *api.DiosixClient) !void {
-    printStr("Forking current VM...\n");
-    const child_id = client.fork() catch |err| {
+    var buf: [512]u8 = undefined;
+    const commit_str = std.mem.sliceTo(&info.build_commit, 0);
+    const out = std.fmt.bufPrint(&buf,
+        \\=== Diosix Hypervisor Information ===
+        \\Diosix Version  : {d}.{d} (Commit {s})
+        \\ABI Version     : v{d}.{d}.{d}
+        \\Host Cores      : {d} Physical Hart(s)
+        \\Host RAM        : {d} MB Total / {d} MB Free
+        \\Timer Frequency : {d} Hz
+        \\Capabilities    :
+        \\  [{c}] Hardware H-Extension (Nested Virtualization)
+        \\  [{c}] Stage-2 Sv39x4 Paging
+        \\  [{c}] Copy-on-Write VM Forking
+        \\  [{c}] Cross-Arch JIT Dynamic Recompilation
+        \\  [{c}] Inter-VM Fast IPC
+        \\
+    , .{
+        info.version_major,
+        info.version_minor,
+        if (commit_str.len > 0) commit_str else "release",
+        info.abi_version_major,
+        info.abi_version_minor,
+        info.abi_version_patch,
+        info.host_physical_cores,
+        info.host_total_ram_kb / 1024,
+        info.host_free_ram_kb / 1024,
+        info.host_timer_freq_hz,
+        if ((info.features & api.HypervisorFeature.HARDWARE_VIRT) != 0) @as(u8, 'x') else @as(u8, ' '),
+        if ((info.features & api.HypervisorFeature.STAGE2_PAGING) != 0) @as(u8, 'x') else @as(u8, ' '),
+        if ((info.features & api.HypervisorFeature.COW_FORK) != 0) @as(u8, 'x') else @as(u8, ' '),
+        if ((info.features & api.HypervisorFeature.DYNAREC) != 0) @as(u8, 'x') else @as(u8, ' '),
+        if ((info.features & api.HypervisorFeature.INTER_VM_IPC) != 0) @as(u8, 'x') else @as(u8, ' '),
+    }) catch return;
+
+    printStr(out);
+}
+
+fn isArch(str: []const u8) bool {
+    return std.mem.eql(u8, str, "riscv64") or
+        std.mem.eql(u8, str, "riscv32") or
+        std.mem.eql(u8, str, "aarch64") or
+        std.mem.eql(u8, str, "x86_64");
+}
+
+fn cmdFork(client: *api.DiosixClient, flags: usize) !void {
+    if ((flags & api.ForkFlags.UNTRUSTED) != 0) {
+        printStr("Forking current VM (dropping hardware trust for child)...\n");
+    } else {
+        printStr("Forking current VM...\n");
+    }
+    const child_cid = client.fork(flags) catch |err| {
         printApiError("Fork", err);
         return;
     };
     var buf: [64]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Successfully forked child VM with ID: {d}\n", .{child_id}) catch return;
+    const msg = std.fmt.bufPrint(&buf, "Successfully forked child VM with CID: {d}\n", .{child_cid}) catch return;
     printStr(msg);
 }
 
@@ -220,9 +529,19 @@ fn cmdDropTrust(client: *api.DiosixClient) !void {
     printStr("Hardware trust successfully relinquished.\n");
 }
 
-
-fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dtb_path: ?[]const u8, arch_str: []const u8) !void {
-    printStr("Loading guest ELF image...\n");
+fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dtb_path: ?[]const u8, arch_str: []const u8, flags: usize) !void {
+    const is_trusted_req = (flags & api.SpawnFlags.TRUSTED) != 0;
+    if (child_id == 0) {
+        if (is_trusted_req) {
+            printStr("Creating clean trusted child VM and loading guest image...\n");
+        } else {
+            printStr("Creating clean sandboxed child VM and loading guest image...\n");
+        }
+    } else {
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Loading guest image into child VM {d}...\n", .{child_id}) catch return;
+        printStr(msg);
+    }
 
     var path_buf: [256]u8 = undefined;
     if (elf_path.len >= path_buf.len) return error.PathTooLong;
@@ -265,7 +584,6 @@ fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dt
     const dtb_data: []u8 = &[_]u8{};
     _ = dtb_path;
 
-
     var arch_num: usize = 0;
     if (std.mem.eql(u8, arch_str, "riscv32")) {
         arch_num = 1;
@@ -275,10 +593,13 @@ fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dt
         arch_num = 3;
     }
 
-    printStr("Spawning child VM...\n");
-    client.spawn(child_id, buf[0..total_read], dtb_data, arch_num) catch {
-        printStr("Spawn failed.\n");
+    const spawned_cid = client.spawn(child_id, buf[0..total_read], dtb_data, arch_num, flags) catch |err| {
+        printApiError("Spawn VM", err);
         return;
     };
-    printStr("Child VM successfully spawned and started.\n");
+    var buf2: [64]u8 = undefined;
+    const msg2 = std.fmt.bufPrint(&buf2, "Child VM (CID {d}) successfully spawned and started.\n", .{spawned_cid}) catch return;
+    printStr(msg2);
 }
+
+

@@ -24,10 +24,13 @@ technical guides:
   hierarchical forking model, resource quotas, and guest VM lifecycles.
 - **[Security model](security.md)**: Details the TCB, hardware isolation 
   mechanisms, and the "least privilege" workflow.
-- **[Interface and constants](interface.md)**: Documents the standardized 
-  Supervisor Binary Interface (SBI) extensions, RISC-V register mappings, 
-  and Executable and Linkable Format (ELF) loading protocols.
+- **[Interface and ABI](interface.md)**: Documents the standardized 
+  Supervisor Binary Interface (SBI) extensions, Context ID (CID) capability 
+  model, data structures, and kernel driver interface.
+- **[Command-line interface](cli.md)**: Provides a user guide and reference 
+  for the `diosix-ctl` guest VM management utility.
 
 ---
 *For contributors, refer to the [Diosix style guide](style-guide.md) 
 before writing new documentation or code.*
+

@@ -423,10 +423,19 @@ pub fn decrementPageRef(addr: usize) void {
     }
 }
 
+pub fn getTotalRamBytes() usize {
+    return phys_mem_state.total_pages * PageSize;
+}
+
+pub fn getFreeRamBytes() usize {
+    return phys_mem_state.free_pages * PageSize;
+}
+
 pub fn isHypervisorMemory(base: usize, size: usize) bool {
     const end = base + size;
     const hv_start = phys_mem_state.hv_region.base;
     const hv_end = phys_mem_state.hv_region.end();
+
 
     // Check for overlap
     return (base < hv_end and end > hv_start);

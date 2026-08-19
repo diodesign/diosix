@@ -20,6 +20,10 @@ const glue = @import("../../../../core/emulation.zig");
 const loader = @import("../../../../core/loader.zig");
 const em_mod = @import("emulation");
 const vcpu_mod = em_mod.vcpu;
+const builtin = @import("builtin");
+
+extern const project_version: [*:0]const u8;
+extern const git_revision: [*:0]const u8;
 
 
 // SBI Error Codes.
@@ -403,29 +407,24 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
     const g = vc.getGuest();
     switch (function) {
         interface.DIOSIX.TERMINATE => {
-            const target_id = a0;
+            const target_cid = a0;
             const exit_code = a1;
-            if (target_id == 0 or target_id == g.id) {
-                debug.printf("SBI: Diosix Terminate (self) requested by guest {} with exit code {}\n", .{ g.id, exit_code });
+            if (target_cid == guest.CID_SELF or (target_cid == guest.CID_PARENT and g.is_root)) {
+                debug.printf("SBI: Diosix Terminate (self) requested by guest (CID {}) with exit code {}\n", .{ g.local_cid, exit_code });
                 terminateOrRestart(g, exit_code);
-            } else {
-                // Find child
-                var it_child = g.children.start;
-                var found_child: ?*guest.Guest = null;
-                while (it_child) |node| {
-                    if (node.contents.id == target_id) {
-                        found_child = node.contents;
-                        break;
-                    }
-                    it_child = node.next;
-                }
-                if (found_child) |child| {
-                    debug.printf("SBI: Guest {} terminating child VM {}\n", .{ g.id, child.id });
-                    child.terminate();
+            } else if (target_cid == guest.CID_PARENT) {
+                // Non-root VM cannot terminate its parent
+                setResult(vc, context, SBI_ERR_DENIED, 0);
+            } else if (target_cid >= guest.CID_FIRST_CHILD) {
+                if (g.getGuestByCid(target_cid)) |child| {
+                    debug.printf("SBI: Guest terminating child (CID {}) with exit code {}\n", .{ target_cid, exit_code });
+                    child.terminateWithCode(exit_code);
                     setResult(vc, context, SBI_SUCCESS, 0);
                 } else {
                     setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
                 }
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
             }
         },
 
@@ -433,11 +432,16 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             scheduler.yield(vc);
         },
         interface.DIOSIX.FORK => {
+            const flags = a0;
             const child = g.fork() catch |err| {
                 debug.printf("SBI: Diosix Fork failed: {s}\n", .{@errorName(err)});
                 setResult(vc, context, SBI_ERR_FAILED, 0);
                 return;
             };
+
+            if ((flags & interface.ForkFlags.UNTRUSTED) != 0) {
+                child.dropTrust();
+            }
 
             // Register all child vcores with the scheduler.
             var it_vcore = child.vcores.start;
@@ -445,7 +449,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 scheduler.queue(node.contents);
                 it_vcore = node.next;
             }
-            setResult(vc, context, SBI_SUCCESS, child.id);
+            setResult(vc, context, SBI_SUCCESS, child.local_cid);
         },
         interface.DIOSIX.DROP_TRUST => {
             g.dropTrust();
@@ -476,8 +480,8 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             if (g.space.translateGPA(info_gpa) catch null) |hpa| {
                 const info_ptr: *GuestInfo = @ptrFromInt(hpa);
                 info_ptr.* = .{
-                    .guest_id = g.id,
-                    .parent_id = if (g.parent) |p| p.id else g.id,
+                    .guest_id = g.local_cid,
+                    .parent_id = if (g.parent != null) guest.CID_PARENT else 0,
                     .is_trusted = if (g.is_trusted) 1 else 0,
                     .is_root = if (g.is_root) 1 else 0,
                     .target_arch = @intFromEnum(g.target_arch),
@@ -499,28 +503,29 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 setResult(vc, context, SBI_ERR_DENIED, 0);
                 return;
             }
-            const SpawnArgs = extern struct {
-                child_id: usize,
-                elf_ptr: usize,
-                elf_size: usize,
-                dtb_ptr: usize,
-                dtb_size: usize,
-                target_arch: usize,
-            };
             if (g.space.translateGPA(a0) catch null) |args_hpa| {
-                const args: *const SpawnArgs = @ptrFromInt(args_hpa);
-                // Find child
-                var it_child = g.children.start;
-                var found_child: ?*guest.Guest = null;
-                while (it_child) |node| {
-                    if (node.contents.id == args.child_id) {
-                        found_child = node.contents;
-                        break;
-                    }
-                    it_child = node.next;
-                }
+                const args: *const interface.SpawnArgs = @ptrFromInt(args_hpa);
+                // Look up child by CID (>= CID_FIRST_CHILD) or create a fresh child on the fly (child_id == 0)
+                const child_to_spawn: ?*guest.Guest = if (args.child_id >= guest.CID_FIRST_CHILD)
+                    g.getGuestByCid(args.child_id)
+                else if (args.child_id == 0)
+                    g.fork() catch null
+                else
+                    null;
 
-                if (found_child) |child| {
+                if (child_to_spawn) |child| {
+                    // Set trust level: default is untrusted unless SPAWN_FLAG_TRUSTED is explicitly passed
+                    if ((args.flags & interface.SpawnFlags.TRUSTED) != 0) {
+                        if (!g.is_trusted) {
+                            setResult(vc, context, SBI_ERR_DENIED, 0);
+                            return;
+                        }
+                        child.is_trusted = true;
+                        child.space.is_trusted = true;
+                    } else {
+                        child.dropTrust();
+                    }
+
                     // 1. Stop all virtual cores of the child VM and wait for physical cores to relinquish them
                     child.stop();
 
@@ -554,7 +559,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                             scheduler.queue(vc_node.contents);
                         }
 
-                        setResult(vc, context, SBI_SUCCESS, 0);
+                        setResult(vc, context, SBI_SUCCESS, child.local_cid);
                     } else {
                         setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
                     }
@@ -562,6 +567,124 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                     setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
                 }
 
+
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.POLL_EVENT => {
+            const event_gpa = a0;
+            const event_len = a1;
+            if (event_len < @sizeOf(interface.Event)) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+            if (g.events.pop()) |ev| {
+                if (g.space.translateGPA(event_gpa) catch null) |hpa| {
+                    const ev_ptr: *interface.Event = @ptrFromInt(hpa);
+                    ev_ptr.* = ev;
+                    setResult(vc, context, SBI_SUCCESS, 1);
+                } else {
+                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                }
+            } else {
+                setResult(vc, context, SBI_SUCCESS, 0);
+            }
+        },
+        interface.DIOSIX.SET_QUOTA => {
+            if (g.space.translateGPA(a0) catch null) |hpa| {
+                const qargs: *const interface.QuotaArgs = @ptrFromInt(hpa);
+                g.setQuota(qargs.*) catch |err| {
+                    switch (err) {
+                        error.AccessDenied => setResult(vc, context, SBI_ERR_DENIED, 0),
+                        error.InvalidParam => setResult(vc, context, SBI_ERR_INVALID_PARAM, 0),
+                    }
+                    return;
+                };
+                setResult(vc, context, SBI_SUCCESS, 0);
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.IPC_SEND => {
+            if (g.space.translateGPA(a0) catch null) |hpa| {
+                const sargs: *const interface.IpcSendArgs = @ptrFromInt(hpa);
+                if (sargs.data_len == 0 or sargs.data_len > guest.max_ipc_msg_len) {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                }
+                if (g.space.translateGPA(sargs.data_ptr) catch null) |data_hpa| {
+                    const data_slice: []const u8 = @as([*]const u8, @ptrFromInt(data_hpa))[0..sargs.data_len];
+                    g.sendIpc(sargs.target_cid, data_slice) catch |err| {
+                        switch (err) {
+                            error.InvalidParam => setResult(vc, context, SBI_ERR_INVALID_PARAM, 0),
+                            error.QueueFull => setResult(vc, context, SBI_ERR_FAILED, 0),
+                        }
+                        return;
+                    };
+                    setResult(vc, context, SBI_SUCCESS, 0);
+                } else {
+                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                }
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+
+        interface.DIOSIX.IPC_RECV => {
+            if (g.space.translateGPA(a0) catch null) |hpa| {
+                const rargs: *interface.IpcRecvArgs = @ptrFromInt(hpa);
+                if (g.inbox.pop(rargs.sender_cid)) |msg| {
+                    const copy_len = @min(rargs.max_len, msg.len);
+                    if (g.space.translateGPA(rargs.data_ptr) catch null) |data_hpa| {
+                        const dst_slice: [*]u8 = @ptrFromInt(data_hpa);
+                        @memcpy(dst_slice[0..copy_len], msg.data[0..copy_len]);
+                        rargs.actual_len = copy_len;
+                        rargs.actual_sender_cid = msg.sender_cid;
+                        setResult(vc, context, SBI_SUCCESS, 1);
+                    } else {
+                        setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                    }
+                } else {
+                    setResult(vc, context, SBI_SUCCESS, 0);
+                }
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.GET_HV_INFO => {
+
+            const buf_gpa = a0;
+            const buf_len = a1;
+            if (buf_len < @sizeOf(interface.HypervisorInfo)) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+            if (g.space.translateGPA(buf_gpa) catch null) |hpa| {
+                const info_ptr: *interface.HypervisorInfo = @ptrFromInt(hpa);
+                var info = interface.HypervisorInfo{};
+
+                const v_str = std.mem.span(project_version);
+                if (std.mem.indexOfScalar(u8, v_str, '.')) |dot| {
+                    info.version_major = std.fmt.parseInt(u16, v_str[0..dot], 10) catch 26;
+                    info.version_minor = std.fmt.parseInt(u16, v_str[dot + 1 ..], 10) catch 1;
+                }
+
+                const rev_str = std.mem.span(git_revision);
+                const copy_len = @min(rev_str.len, 15);
+                @memcpy(info.build_commit[0..copy_len], rev_str[0..copy_len]);
+
+                info.features = interface.HypervisorFeature.COW_FORK |
+                    interface.HypervisorFeature.DYNAREC |
+                    interface.HypervisorFeature.INTER_VM_IPC;
+
+                info.host_physical_cores = 1;
+                info.host_timer_freq_hz = 10_000_000;
+                info.host_total_ram_kb = @intCast(physmem.getTotalRamBytes() / 1024);
+                info.host_free_ram_kb = @intCast(physmem.getFreeRamBytes() / 1024);
+
+                info_ptr.* = info;
+                setResult(vc, context, SBI_SUCCESS, 0);
             } else {
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
             }
@@ -569,6 +692,9 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
         else => setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0),
     }
 }
+
+
+
 
 
 fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {

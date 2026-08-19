@@ -3,7 +3,10 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
+
 pub const SPEC_VERSION: usize = 0x02000000; // v2.0
+
 pub const IMPL_ID: usize = 5; // Diosix official implementation ID
 pub const IMPL_VERSION: usize = 1;
 
@@ -62,7 +65,94 @@ pub const DIOSIX = struct {
     pub const SET_QUOTA = 6;
     pub const IPC_SEND = 7;
     pub const IPC_RECV = 8;
+    pub const POLL_EVENT = 9;
+    pub const GET_HV_INFO = 10;
 };
+
+pub const HypervisorFeature = struct {
+    pub const HARDWARE_VIRT: u64 = 1 << 0;
+    pub const STAGE2_PAGING: u64 = 1 << 1;
+    pub const COW_FORK: u64      = 1 << 2;
+    pub const DYNAREC: u64       = 1 << 3;
+    pub const INTER_VM_IPC: u64  = 1 << 4;
+    pub const IOMMU: u64         = 1 << 5;
+};
+
+pub const HypervisorInfo = extern struct {
+    abi_version_major: u16 = 0,
+    abi_version_minor: u16 = 2,
+    abi_version_patch: u16 = 0,
+    version_major: u16 = 26,
+    version_minor: u16 = 1,
+    _reserved0: u16 = 0,
+    _reserved1: u32 = 0,
+    build_commit: [16]u8 = std.mem.zeroes([16]u8),
+
+    features: u64 = 0,
+    host_physical_cores: u32 = 0,
+    host_timer_freq_hz: u32 = 0,
+    host_total_ram_kb: u64 = 0,
+    host_free_ram_kb: u64 = 0,
+};
+
+pub const EventType = enum(u32) {
+    none = 0,
+    child_terminated = 1,
+    child_stopped = 2,
+    child_spawned = 3,
+    ipc_message = 4,
+};
+
+pub const Event = extern struct {
+    cid: usize,
+    event_type: u32,
+    exit_code: u32,
+    _reserved: u64 = 0,
+};
+
+pub const SpawnFlags = struct {
+    pub const TRUSTED: usize = 1 << 0;
+};
+
+pub const ForkFlags = struct {
+    pub const UNTRUSTED: usize = 1 << 0;
+};
+
+pub const SpawnArgs = extern struct {
+    child_id: usize,
+    elf_ptr: usize,
+    elf_size: usize,
+    dtb_ptr: usize,
+    dtb_size: usize,
+    target_arch: usize,
+    flags: usize = 0,
+};
+
+pub const QuotaArgs = extern struct {
+    target_cid: usize,
+    max_ram_pages: usize,
+    max_vcpus: usize,
+    max_child_depth: usize,
+    max_descendants: usize,
+};
+
+pub const IpcSendArgs = extern struct {
+    target_cid: usize,
+    data_ptr: usize,
+    data_len: usize,
+};
+
+pub const IpcRecvArgs = extern struct {
+    sender_cid: usize,
+    data_ptr: usize,
+    max_len: usize,
+    actual_len: usize = 0,
+    actual_sender_cid: usize = 0,
+};
+
+
+
+
 
 
 
