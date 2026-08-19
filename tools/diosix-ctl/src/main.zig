@@ -40,9 +40,17 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const dtb_path: ?[]const u8 = if (argv.len > 4) std.mem.span(argv[4]) else null;
         const arch_str = if (argv.len > 5) std.mem.span(argv[5]) else "riscv64";
         try cmdSpawn(&client, child_id, elf_path, dtb_path, arch_str);
-    } else if (std.mem.eql(u8, command, "terminate") or std.mem.eql(u8, command, "kill") or std.mem.eql(u8, command, "exit")) {
+    } else if (std.mem.eql(u8, command, "terminate")) {
         const target_id = if (argv.len > 2) try std.fmt.parseInt(usize, std.mem.span(argv[2]), 10) else 0;
-        try cmdTerminate(&client, target_id);
+        const exit_code = if (argv.len > 3) try std.fmt.parseInt(usize, std.mem.span(argv[3]), 10) else 0;
+        try cmdTerminate(&client, target_id, exit_code);
+    } else if (std.mem.eql(u8, command, "exit")) {
+        const exit_code = if (argv.len > 2) try std.fmt.parseInt(usize, std.mem.span(argv[2]), 10) else 0;
+        try cmdExit(&client, exit_code);
+    } else if (std.mem.eql(u8, command, "poweroff")) {
+        try cmdPoweroff(&client);
+    } else if (std.mem.eql(u8, command, "reboot")) {
+        try cmdReboot(&client);
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help")) {
         printUsage();
     } else {
@@ -58,7 +66,10 @@ fn printUsage() void {
         \\  diosix-ctl info                           Display current VM state, ID, and quotas
         \\  diosix-ctl fork                           Fork current VM to create a child VM
         \\  diosix-ctl spawn <id> <elf> [dtb] [arch]  Load a new guest image into child VM and start it
-        \\  diosix-ctl terminate [vm_id]              Terminate specified child VM ID (or 0 for self)
+        \\  diosix-ctl terminate [vm_id] [code]       Terminate specified child VM ID (or 0 for self)
+        \\  diosix-ctl exit [code]                    Exit the current non-root VM
+        \\  diosix-ctl poweroff                       Power off the host machine (Root VM only)
+        \\  diosix-ctl reboot                         Reboot the host machine (Root VM only)
         \\  diosix-ctl drop-trust                     Irrevocably drop hardware trust privileges
         \\  diosix-ctl help                           Show this help message
         \\
@@ -66,31 +77,88 @@ fn printUsage() void {
     printStr(usage);
 }
 
+fn printApiError(action: []const u8, err: anyerror) void {
+    var buf: [128]u8 = undefined;
+    if (err == error.PermissionDenied) {
+        printStr("Error: Permission denied. Only the root user is allowed to communicate with the hypervisor.\n");
+    } else if (err == error.DeviceNotFound) {
+        printStr("Error: /dev/diosix not found. Ensure the diosix kernel driver is enabled.\n");
+    } else {
+        const msg = std.fmt.bufPrint(&buf, "Error: {s} failed (hypercall or permission error).\n", .{action}) catch return;
+        printStr(msg);
+    }
+}
 
-fn cmdTerminate(client: *api.DiosixClient, target_id: usize) !void {
+fn cmdTerminate(client: *api.DiosixClient, target_id: usize, exit_code: usize) !void {
     if (target_id == 0) {
-        printStr("Terminating current VM...\n");
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Terminating current VM (exit code {d})...\n", .{exit_code}) catch return;
+        printStr(msg);
     } else {
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Terminating child VM {d} and all descendants...\n", .{target_id}) catch return;
         printStr(msg);
     }
-    client.terminate(target_id) catch {
-        printStr("Terminate failed (permission denied or invalid VM ID).\n");
+    client.terminate(target_id, exit_code) catch |err| {
+        printApiError("Terminate", err);
         return;
     };
     printStr("VM successfully terminated.\n");
 }
 
-fn cmdInfo(client: *api.DiosixClient) !void {
-    const info = client.getInfo() catch |err| {
-        if (err == error.DeviceNotFound) {
-            printStr("Error: /dev/diosix not found. Ensure diosix kernel driver is enabled.\n");
-        } else {
-            printStr("Error: Hypercall failed querying hypervisor info.\n");
+fn cmdExit(client: *api.DiosixClient, exit_code: usize) !void {
+    if (client.getInfo()) |info| {
+        if (info.is_root != 0) {
+            printStr("Root VM cannot use 'exit'. Use 'poweroff' or 'reboot' to stop the host.\n");
+            return;
         }
+    } else |err| {
+        printApiError("Query VM info", err);
+        return;
+    }
+    try cmdTerminate(client, 0, exit_code);
+}
+
+fn cmdPoweroff(client: *api.DiosixClient) !void {
+    if (client.getInfo()) |info| {
+        if (info.is_root == 0) {
+            printStr("Command 'poweroff' is only available on the Root VM.\n");
+            return;
+        }
+    } else |err| {
+        printApiError("Query VM info", err);
+        return;
+    }
+    printStr("Powering off host...\n");
+    client.terminate(0, 0) catch |err| {
+        printApiError("Poweroff", err);
         return;
     };
+}
+
+fn cmdReboot(client: *api.DiosixClient) !void {
+    if (client.getInfo()) |info| {
+        if (info.is_root == 0) {
+            printStr("Command 'reboot' is only available on the Root VM.\n");
+            return;
+        }
+    } else |err| {
+        printApiError("Query VM info", err);
+        return;
+    }
+    printStr("Rebooting host...\n");
+    client.terminate(0, 1) catch |err| {
+        printApiError("Reboot", err);
+        return;
+    };
+}
+
+fn cmdInfo(client: *api.DiosixClient) !void {
+    const info = client.getInfo() catch |err| {
+        printApiError("Query VM info", err);
+        return;
+    };
+
 
     const arch_name = switch (info.target_arch) {
         0 => "riscv64",
@@ -134,8 +202,8 @@ fn cmdInfo(client: *api.DiosixClient) !void {
 
 fn cmdFork(client: *api.DiosixClient) !void {
     printStr("Forking current VM...\n");
-    const child_id = client.fork() catch {
-        printStr("Fork failed.\n");
+    const child_id = client.fork() catch |err| {
+        printApiError("Fork", err);
         return;
     };
     var buf: [64]u8 = undefined;
@@ -145,12 +213,13 @@ fn cmdFork(client: *api.DiosixClient) !void {
 
 fn cmdDropTrust(client: *api.DiosixClient) !void {
     printStr("Dropping hardware trust...\n");
-    client.dropTrust() catch {
-        printStr("Drop trust failed.\n");
+    client.dropTrust() catch |err| {
+        printApiError("Drop trust", err);
         return;
     };
     printStr("Hardware trust successfully relinquished.\n");
 }
+
 
 fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dtb_path: ?[]const u8, arch_str: []const u8) !void {
     printStr("Loading guest ELF image...\n");

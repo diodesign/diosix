@@ -1,5 +1,36 @@
 # Diosix Native Root VM Hardware Driver Fragment
-# Enables host physical device drivers (PCIe, Storage, USB, Network, Display)
+# Dedicated exclusively to RISC-V 64-bit host hardware.
+# Disables ARM, x86_64, ACPI, EFI, and non-generic vendor SoC legacy code.
+
+# Core Architecture & Pure RV64 target
+CONFIG_64BIT=y
+CONFIG_ARCH_RV64I=y
+CONFIG_RISCV=y
+CONFIG_ARCH_VIRT=y
+# CONFIG_COMPAT is not set
+# CONFIG_ARCH_ANDES is not set
+# CONFIG_ARCH_ANLOGIC is not set
+# CONFIG_ARCH_MICROCHIP_POLARFIRE is not set
+# CONFIG_ARCH_MICROCHIP is not set
+# CONFIG_ARCH_SIFIVE is not set
+# CONFIG_ARCH_SOPHGO is not set
+# CONFIG_ARCH_SPACEMIT is not set
+# CONFIG_ARCH_SUNXI is not set
+# CONFIG_ARCH_TENSTORRENT is not set
+# CONFIG_ARCH_THEAD is not set
+# CONFIG_ARCH_CANAAN is not set
+# CONFIG_SOC_STARFIVE is not set
+# CONFIG_SOC_SIFIVE is not set
+# CONFIG_SOC_SUNXI is not set
+# CONFIG_SOC_THEAD is not set
+# CONFIG_SOC_CANAAN is not set
+# CONFIG_SOC_MICROCHIP_POLARFIRE is not set
+
+# Disable non-RISC-V firmware & platform features
+# CONFIG_ACPI is not set
+# CONFIG_EFI is not set
+# CONFIG_HPET is not set
+# CONFIG_VGA_ARB is not set
 
 # Core Bus & PCIe
 CONFIG_PCI=y

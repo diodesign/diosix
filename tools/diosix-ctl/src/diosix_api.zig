@@ -50,7 +50,13 @@ pub const SpawnArgs = extern struct {
     target_arch: usize,
 };
 
+pub const TerminateArgs = extern struct {
+    target_id: usize,
+    exit_code: usize,
+};
+
 pub const QuotaArgs = extern struct {
+
     child_id: usize,
     max_ram_pages: usize,
     max_vcpus: usize,
@@ -71,15 +77,16 @@ pub const IOCTL_YIELD = 0x1007;
 
 pub const DiosixClient = struct {
     dev_fd: ?i32,
+    open_err: ?isize,
 
     pub fn init() DiosixClient {
         const path = "/dev/diosix";
         const rc = linux.open(path, .{ .ACCMODE = .RDWR }, 0);
         const signed_rc: isize = @bitCast(rc);
         if (signed_rc >= 0) {
-            return .{ .dev_fd = @intCast(signed_rc) };
+            return .{ .dev_fd = @intCast(signed_rc), .open_err = null };
         }
-        return .{ .dev_fd = null };
+        return .{ .dev_fd = null, .open_err = signed_rc };
     }
 
     pub fn deinit(self: *DiosixClient) void {
@@ -89,31 +96,45 @@ pub const DiosixClient = struct {
         }
     }
 
+    fn getFd(self: *DiosixClient) !i32 {
+        if (self.dev_fd) |fd| return fd;
+        if (self.open_err) |err| {
+            if (err == -1 or err == -13) return error.PermissionDenied;
+        }
+        return error.DeviceNotFound;
+    }
+
     /// Perform a hypercall via /dev/diosix ioctl
     pub fn fork(self: *DiosixClient) !usize {
-        const fd = self.dev_fd orelse return error.DeviceNotFound;
+        const fd = try self.getFd();
         var child_id: usize = 0;
         const rc = linux.ioctl(fd, IOCTL_FORK, @intFromPtr(&child_id));
-        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
+        const signed_rc: isize = @bitCast(rc);
+        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc < 0) return error.HypercallFailed;
         return child_id;
     }
 
     pub fn dropTrust(self: *DiosixClient) !void {
-        const fd = self.dev_fd orelse return error.DeviceNotFound;
+        const fd = try self.getFd();
         const rc = linux.ioctl(fd, IOCTL_DROP_TRUST, 0);
-        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
+        const signed_rc: isize = @bitCast(rc);
+        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc < 0) return error.HypercallFailed;
     }
 
     pub fn getInfo(self: *DiosixClient) !GuestInfo {
-        const fd = self.dev_fd orelse return error.DeviceNotFound;
+        const fd = try self.getFd();
         var info: GuestInfo = undefined;
         const rc = linux.ioctl(fd, IOCTL_GET_INFO, @intFromPtr(&info));
-        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
+        const signed_rc: isize = @bitCast(rc);
+        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc < 0) return error.HypercallFailed;
         return info;
     }
 
     pub fn spawn(self: *DiosixClient, child_id: usize, elf_data: []const u8, dtb_data: []const u8, arch: usize) !void {
-        const fd = self.dev_fd orelse return error.DeviceNotFound;
+        const fd = try self.getFd();
         var args = SpawnArgs{
             .child_id = child_id,
             .elf_ptr = @intFromPtr(elf_data.ptr),
@@ -123,18 +144,28 @@ pub const DiosixClient = struct {
             .target_arch = arch,
         };
         const rc = linux.ioctl(fd, IOCTL_SPAWN, @intFromPtr(&args));
-        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
+        const signed_rc: isize = @bitCast(rc);
+        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc < 0) return error.HypercallFailed;
     }
 
-    pub fn terminate(self: *DiosixClient, target_id: usize) !void {
-        const fd = self.dev_fd orelse return error.DeviceNotFound;
-        const rc = linux.ioctl(fd, IOCTL_TERMINATE, target_id);
-        if (@as(isize, @bitCast(rc)) < 0) return error.HypercallFailed;
+    pub fn terminate(self: *DiosixClient, target_id: usize, exit_code: usize) !void {
+        const fd = try self.getFd();
+        var args = TerminateArgs{
+            .target_id = target_id,
+            .exit_code = exit_code,
+        };
+        const rc = linux.ioctl(fd, IOCTL_TERMINATE, @intFromPtr(&args));
+        const signed_rc: isize = @bitCast(rc);
+        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc < 0) return error.HypercallFailed;
     }
 
     pub fn exit(self: *DiosixClient, code: usize) void {
-        _ = self.terminate(code) catch {};
+        _ = self.terminate(0, code) catch {};
     }
+
+
 
 
 };

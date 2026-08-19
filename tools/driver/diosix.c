@@ -15,6 +15,7 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/io.h>
+#include <linux/capability.h>
 #include <asm/sbi.h>
 
 #define EXT_DIOSIX 0x0A000005
@@ -49,6 +50,11 @@ struct spawn_args {
     unsigned long target_arch;
 };
 
+struct terminate_args {
+    unsigned long target_id;
+    unsigned long exit_code;
+};
+
 struct guest_info {
     unsigned long guest_id;
     unsigned long parent_id;
@@ -63,9 +69,21 @@ struct guest_info {
     unsigned long child_count;
 };
 
+static int diosix_open(struct inode *inode, struct file *file)
+{
+    // Restrict access strictly to root / administrative capabilities
+    if (!capable(CAP_SYS_ADMIN))
+        return -EPERM;
+    return 0;
+}
+
 static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct sbiret ret;
+
+    // Defense-in-depth: enforce root/admin capability for all hypervisor ioctls
+    if (!capable(CAP_SYS_ADMIN))
+        return -EPERM;
 
     switch (cmd) {
     case IOCTL_FORK: {
@@ -171,7 +189,10 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     }
 
     case IOCTL_TERMINATE: {
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_TERMINATE, arg, 0, 0, 0, 0, 0);
+        struct terminate_args targs;
+        if (copy_from_user(&targs, (void __user *)arg, sizeof(targs)))
+            return -EFAULT;
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_TERMINATE, targs.target_id, targs.exit_code, 0, 0, 0, 0);
         if (ret.error)
             return -EPERM;
         return 0;
@@ -189,6 +210,7 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 static const struct file_operations diosix_fops = {
     .owner          = THIS_MODULE,
+    .open           = diosix_open,
     .unlocked_ioctl = diosix_ioctl,
     .compat_ioctl   = diosix_ioctl,
 };
@@ -197,7 +219,7 @@ static struct miscdevice diosix_dev = {
     .minor = MISC_DYNAMIC_MINOR,
     .name  = "diosix",
     .fops  = &diosix_fops,
-    .mode  = 0666,
+    .mode  = 0600,
 };
 
 static int __init diosix_init(void)

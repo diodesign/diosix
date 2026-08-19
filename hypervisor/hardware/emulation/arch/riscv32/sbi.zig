@@ -150,8 +150,9 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
         },
         interface.EXT.LEGACY_SHUTDOWN => {
             debug.printf("SBI: Guest {} requested legacy shutdown\n", .{vc.guest_id});
-            terminateOrRestart(vc.getGuest());
+            terminateOrRestart(vc.getGuest(), 0);
         },
+
         interface.EXT.DIOSIX => handleDiosix(vc, context, function, a0, a1, a2),
         else => {
             debug.printf("SBI: Unknown extension 0x{x} func {} from guest {}\n", .{ extension, function, vc.id });
@@ -403,9 +404,10 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
     switch (function) {
         interface.DIOSIX.TERMINATE => {
             const target_id = a0;
+            const exit_code = a1;
             if (target_id == 0 or target_id == g.id) {
-                debug.printf("SBI: Diosix Terminate (self) requested by guest {}\n", .{g.id});
-                terminateOrRestart(g);
+                debug.printf("SBI: Diosix Terminate (self) requested by guest {} with exit code {}\n", .{ g.id, exit_code });
+                terminateOrRestart(g, exit_code);
             } else {
                 // Find child
                 var it_child = g.children.start;
@@ -426,6 +428,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 }
             }
         },
+
         interface.DIOSIX.YIELD => {
             scheduler.yield(vc);
         },
@@ -765,14 +768,20 @@ fn setResult(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, err: isize, 
 }
 
 /// Terminate a guest. If the guest is the Root VM, the architecture requires
-/// that the host is restarted because the system is no longer manageable.
-fn terminateOrRestart(g: *guest.Guest) void {
+/// that the host is powered off (exit_code == 0) or rebooted (exit_code == 1).
+fn terminateOrRestart(g: *guest.Guest, exit_code: usize) void {
     g.terminate();
     if (g.is_root) {
-        debug.printf("Root VM terminated. Rebooting host as per architecture policy.\n", .{});
-        riscv.reboot();
+        if (exit_code == 0) {
+            debug.printf("Root VM terminated with exit code 0. Powering off host.\n", .{});
+            riscv.shutdown();
+        } else {
+            debug.printf("Root VM terminated with exit code {}. Rebooting host.\n", .{exit_code});
+            riscv.reboot();
+        }
     }
 }
+
 
 /// Send a physical IPI to all other physical cores to wake them from WFI.
 /// This is necessary when a WFI-blocked vcore is woken and queued: since
