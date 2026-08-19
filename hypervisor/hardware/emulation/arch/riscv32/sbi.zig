@@ -678,10 +678,16 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                     interface.HypervisorFeature.DYNAREC |
                     interface.HypervisorFeature.INTER_VM_IPC;
 
-                info.host_physical_cores = 1;
+                if (!builtin.is_test and riscv.hasHExtension()) {
+                    info.features |= interface.HypervisorFeature.HARDWARE_VIRT |
+                        interface.HypervisorFeature.STAGE2_PAGING;
+                }
+
+                info.host_physical_cores = riscv.getOnlineCpuCount();
                 info.host_timer_freq_hz = 10_000_000;
                 info.host_total_ram_kb = @intCast(physmem.getTotalRamBytes() / 1024);
                 info.host_free_ram_kb = @intCast(physmem.getFreeRamBytes() / 1024);
+
 
                 info_ptr.* = info;
                 setResult(vc, context, SBI_SUCCESS, 0);

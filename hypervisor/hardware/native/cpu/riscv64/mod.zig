@@ -823,6 +823,16 @@ pub fn isHostTp(tp_val: usize) bool {
     return cpu_contexts[core_id] == ctx;
 }
 
+pub fn getOnlineCpuCount() u32 {
+    if (is_test) return 1;
+    var count: u32 = 0;
+    for (cpu_contexts) |ctx| {
+        if (ctx != null) count += 1;
+    }
+    return if (count > 0) count else 1;
+}
+
+
 pub const TpGuard = struct {
     saved_tp: usize = 0,
     swapped: bool = false,

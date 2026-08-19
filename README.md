@@ -121,9 +121,16 @@ logging into and interacting with the Root VM running on the hypervisor.
 
 For more information about Diosix, see the following documentation:
 
+*  **[Technical background](docs/background.md):** Understand the design philosophy,
+   minimal Trusted Computing Base (TCB), and directory of deep-dive technical guides.
 *  **[Diosix architecture](docs/architecture.md):** Learn about the hypervisor's
    hierarchical forking model, privileged Root VM design, security boundary rules,
    and memory address space terminology.
+*  **[Interface and ABI](docs/interface.md):** Discover the hypervisor's Supervisor
+   Binary Interface (SBI) extensions, Context ID (CID) capability model, and
+   Linux driver interface.
+*  **[Command-line interface](docs/cli.md):** Learn how to use the `diosix-ctl` utility
+   to spawn, fork, control, and communicate with guest virtual machines.
 *  **[Build Diosix](docs/build.md):** Learn about the build system, build commands,
    and incremental build caching.
 *  **[Run Diosix](docs/run.md):** Learn how to run the hypervisor, use target
@@ -134,6 +141,7 @@ For more information about Diosix, see the following documentation:
    branching workflows, and CalVer release versioning.
 
 For more information about the technology used by the hypervisor, see the
+
 following external documentation:
 
 *  [Learn about Zig](https://ziglang.org/learn/).
