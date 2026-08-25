@@ -18,7 +18,6 @@ const sbi = interface.sbi;
 
 pub const GuestID = usize;
 
-
 pub const GuestState = enum {
     valid, // healthy and running
     dying, // being terminated
@@ -30,19 +29,37 @@ pub const QuotaSet = struct {
     used_ram_pages: usize = 0,
     max_vcpus: usize = std.math.maxInt(usize),
     used_vcpus: usize = 0,
-    max_priority: u8 = 255,
+    max_priority: u8 = std.math.maxInt(u8),
     max_child_depth: usize = std.math.maxInt(usize),
     current_depth: usize = 0,
     max_descendants: usize = std.math.maxInt(usize),
     used_descendants: usize = 0,
 };
 
-pub const TargetArch = enum {
-    riscv64,
-    riscv32,
-    aarch64,
-    x86_64,
-};
+pub const TargetArch = sbi.TargetArch;
+
+pub const CID_PARENT: usize = sbi.CID_PARENT;
+pub const CID_SELF: usize = sbi.CID_SELF;
+pub const CID_FIRST_CHILD: usize = sbi.CID_FIRST_CHILD;
+
+pub const max_child_handles: usize = 64;
+pub const max_events: usize = 32;
+pub const max_ipc_messages: usize = 16;
+pub const max_ipc_msg_len: usize = 4096;
+pub const max_vcores: usize = 128;
+pub const max_vmids: u16 = 4096;
+
+pub const DEFAULT_ROOT_MAX_VCPUS: usize = 16;
+pub const IOAPIC_PAGE_SIZE: usize = physmem.PageSize;
+pub const X86_EARLY_PGT_GPA_OFFSET: usize = 0x70000;
+
+pub const PIT_NUM_CHANNELS: usize = 3;
+pub const PIT_ACCESS_LSB_MSB: u8 = 3;
+pub const PIT_PORT61_GATE2_ENABLED: u8 = 0x01;
+pub const PIC_ALL_IRQS_MASKED: u8 = 0xFF;
+
+pub const BITS_PER_WORD: usize = @bitSizeOf(u64);
+pub const VMID_BITMAP_WORDS: usize = max_vmids / BITS_PER_WORD;
 
 pub const PitChannel = struct {
     latch: u16 = 0,
@@ -51,29 +68,22 @@ pub const PitChannel = struct {
     read_state: u8 = 0, // 0 = LSB, 1 = MSB
     write_state: u8 = 0, // 0 = LSB, 1 = MSB
     mode: u8 = 0,
-    access: u8 = 3, // 1 = LSB, 2 = MSB, 3 = LSB/MSB
+    access: u8 = PIT_ACCESS_LSB_MSB,
     start_time: u64 = 0,
     period_ticks: u64 = 0,
     gate: u8 = 1,
 };
 
 pub const PitState = struct {
-    channels: [3]PitChannel = [_]PitChannel{ .{}, .{}, .{} },
-    port_61: u8 = 0x01, // gate 2 enabled
-    pic_master_imr: u8 = 0xff,
-    pic_slave_imr: u8 = 0xff,
+    channels: [PIT_NUM_CHANNELS]PitChannel = [_]PitChannel{ .{}, .{}, .{} },
+    port_61: u8 = PIT_PORT61_GATE2_ENABLED,
+    pic_master_imr: u8 = PIC_ALL_IRQS_MASKED,
+    pic_slave_imr: u8 = PIC_ALL_IRQS_MASKED,
 };
-
-pub const CID_PARENT: usize = 0;
-pub const CID_SELF: usize = 1;
-pub const CID_FIRST_CHILD: usize = 2;
-pub const max_child_handles: usize = 64;
-pub const max_events: usize = 32;
 
 pub const EventQueue = struct {
     events: [max_events]sbi.Event = std.mem.zeroes([max_events]sbi.Event),
     head: usize = 0,
-
     tail: usize = 0,
     count: usize = 0,
 
@@ -95,9 +105,6 @@ pub const EventQueue = struct {
         return ev;
     }
 };
-
-pub const max_ipc_messages: usize = 16;
-pub const max_ipc_msg_len: usize = 4096;
 
 pub const IpcMessage = struct {
     sender_cid: usize,
@@ -129,26 +136,29 @@ pub const IpcInbox = struct {
             self.tail = (self.tail + 1) % max_ipc_messages;
             self.count -= 1;
             return msg;
-        } else {
-            var idx = self.tail;
-            for (0..self.count) |_| {
-                if (self.messages[idx].sender_cid == sender_filter) {
-                    const msg = self.messages[idx];
-                    if (idx == self.tail) {
-                        self.tail = (self.tail + 1) % max_ipc_messages;
-                        self.count -= 1;
-                        return msg;
-                    }
-                }
-                idx = (idx + 1) % max_ipc_messages;
-            }
-            const msg = self.messages[self.tail];
-            self.tail = (self.tail + 1) % max_ipc_messages;
-            self.count -= 1;
-            return msg;
         }
+
+        // Search for the oldest matching message in the ring buffer
+        for (0..self.count) |offset| {
+            const idx = (self.tail + offset) % max_ipc_messages;
+            if (self.messages[idx].sender_cid == sender_filter) {
+                const msg = self.messages[idx];
+                // Shift preceding elements from tail forward to fill the hole
+                var cur = idx;
+                while (cur != self.tail) {
+                    const prev = if (cur == 0) max_ipc_messages - 1 else cur - 1;
+                    self.messages[cur] = self.messages[prev];
+                    cur = prev;
+                }
+                self.tail = (self.tail + 1) % max_ipc_messages;
+                self.count -= 1;
+                return msg;
+            }
+        }
+        return null;
     }
 };
+
 
 pub const Guest = struct {
     id: GuestID,
@@ -200,12 +210,14 @@ pub const Guest = struct {
     pit: PitState,
 
     // Shared IO-APIC backing memory for x86_64 guests
-    ioapic_mem: [4096]u8,
+    ioapic_mem: [IOAPIC_PAGE_SIZE]u8,
 
     // allocator for heap-allocated Guest structures
     allocator: std.mem.Allocator,
 
     pub fn allocChildHandle(self: *Guest, child: *Guest) !usize {
+
+
         for (&self.child_handles, 0..) |*slot, i| {
             if (slot.* == null) {
                 slot.* = child;
@@ -273,7 +285,6 @@ pub const Guest = struct {
         });
     }
 
-
     pub fn init(allocator: std.mem.Allocator, id: GuestID, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize, target_arch: TargetArch) !*Guest {
         const self = try allocator.create(Guest);
         errdefer allocator.destroy(self);
@@ -288,7 +299,7 @@ pub const Guest = struct {
             .quotas = if (parent) |p| p.quotas else .{
                 .max_ram_pages = ram_pages,
                 .used_ram_pages = ram_pages,
-                .max_vcpus = 16,
+                .max_vcpus = DEFAULT_ROOT_MAX_VCPUS,
                 .used_vcpus = 0,
             },
             .parent = parent,
@@ -302,9 +313,9 @@ pub const Guest = struct {
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = try vm_space.GuestSpace.init(allocator, is_trusted, base_gpa, base_hpa, range_size),
 
-            .early_pgt_gpa = if (target_arch == .x86_64) base_gpa + 0x70000 else 0,
+            .early_pgt_gpa = if (target_arch == .x86_64) base_gpa + X86_EARLY_PGT_GPA_OFFSET else 0,
             .pit = .{},
-            .ioapic_mem = std.mem.zeroes([4096]u8),
+            .ioapic_mem = std.mem.zeroes([IOAPIC_PAGE_SIZE]u8),
             .allocator = allocator,
         };
         self.children.init();
@@ -334,7 +345,6 @@ pub const Guest = struct {
         return self;
     }
 
-
     pub fn terminate(self: *Guest) void {
         self.terminateWithCode(0);
     }
@@ -363,11 +373,12 @@ pub const Guest = struct {
         }
 
         // Send an IPI to all CPUs to force them to reschedule and drop stopped vcores from their run_queues
-        for (0..@import("../hardware/native/cpu/riscv64/mod.zig").cpu_to_hart_map.len) |target_cpu| {
-            if (@import("../hardware/native/cpu/riscv64/mod.zig").CLINT.msip(@import("../hardware/native/cpu/riscv64/mod.zig").cpu_to_hart_map[target_cpu])) |ptr| {
+        for (0..riscv.cpu_to_hart_map.len) |target_cpu| {
+            if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
                 ptr.* = 1;
             }
         }
+
 
         // Unlink from parent's children list and free child handle if still attached
         if (self.parent) |p| {
@@ -519,9 +530,8 @@ pub const Guest = struct {
         return vc;
     }
 
-    pub const max_vcores: usize = 128;
-
     pub fn findVcore(self: *const Guest, vid: vcore.VirtualCoreID) ?*vcore.VirtualCore {
+
         var it = self.vcores.start;
         while (it) |node| {
             if (node.contents.id == vid) return node.contents;
@@ -575,9 +585,9 @@ pub const Guest = struct {
             .vmid = try allocVmid(),
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = child_space,
-            .early_pgt_gpa = if (self.target_arch == .x86_64) child_space.base_gpa + 0x70000 else 0,
+            .early_pgt_gpa = if (self.target_arch == .x86_64) child_space.base_gpa + X86_EARLY_PGT_GPA_OFFSET else 0,
             .pit = .{},
-            .ioapic_mem = std.mem.zeroes([4096]u8),
+            .ioapic_mem = std.mem.zeroes([IOAPIC_PAGE_SIZE]u8),
             .allocator = self.allocator,
         };
         child.children.init();
@@ -602,8 +612,8 @@ pub const Guest = struct {
         }
 
 
-
         // Clone vcores
+
         var it_vcore = self.vcores.start;
         while (it_vcore) |node| {
             const vc = try node.contents.fork(child);
@@ -651,11 +661,10 @@ pub const Guest = struct {
         }
     }
 
-    // Reset all vcore contexts after new image is loaded
-    // Primary vcore 0 is set to .ready, secondary vcores set to .stopped
+    // Reset all vcores for booting a new ELF entry point
     pub fn resetForSpawn(self: *Guest, entry: usize, dtb: usize) void {
-        var it = self.vcores.start;
         var is_primary = true;
+        var it = self.vcores.start;
         while (it) |node| {
             const vc = node.contents;
             vc.reset(entry, dtb);
@@ -673,12 +682,12 @@ pub const Guest = struct {
 
 // Global guest manager state to encapsulate VMIDs and guest ID counters.
 const GuestManagerState = struct {
-    vmid_bitmap: [max_vmids / 64]u64 = std.mem.zeroes([max_vmids / 64]u64),
+    vmid_bitmap: [VMID_BITMAP_WORDS]u64 = std.mem.zeroes([VMID_BITMAP_WORDS]u64),
     guest_id_next: usize = 0,
 };
 
-const max_vmids: u16 = 4096; // Practical limit; hardware may support fewer.
 var guest_manager = atomic.LockPayload(GuestManagerState).init("Global guest manager state", .{});
+
 
 fn allocVmid() !u16 {
     const guard = guest_manager.acquire();
@@ -689,7 +698,7 @@ fn allocVmid() !u16 {
     for (&state.vmid_bitmap, 0..) |*word, wi| {
         if (word.* == ~@as(u64, 0)) continue; // All bits set, skip.
         const free_bit = @ctz(~word.*);
-        const vmid: u16 = @intCast(wi * 64 + free_bit);
+        const vmid: u16 = @intCast(wi * BITS_PER_WORD + free_bit);
         if (vmid == 0) {
             // VMID 0 is reserved; mark it used and continue searching.
             word.* |= @as(u64, 1) << @intCast(free_bit);
@@ -708,8 +717,8 @@ fn freeVmid(id: u16) void {
     defer guard.release();
     const state = guard.get();
     if (id == 0 or id >= max_vmids) return;
-    const wi = id / 64;
-    const bit: u6 = @intCast(id % 64);
+    const wi = id / BITS_PER_WORD;
+    const bit: u6 = @intCast(id % BITS_PER_WORD);
     state.vmid_bitmap[wi] &= ~(@as(u64, 1) << bit);
 }
 
@@ -735,7 +744,7 @@ test "guest fork and memory sharing" {
         defer guard.release();
         const state = guard.get();
         state.guest_id_next = 0;
-        state.vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+        state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
     }
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
@@ -777,7 +786,7 @@ test "guest creation and vcore management" {
         defer guard.release();
         const state = guard.get();
         state.guest_id_next = 0;
-        state.vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+        state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
     }
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
@@ -896,7 +905,7 @@ test "child termination unlinking and quota reclamation" {
         defer guard.release();
         const state = guard.get();
         state.guest_id_next = 0;
-        state.vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+        state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
     }
 
     var phys_test = try physmem.initForTest(allocator, 128);
@@ -993,7 +1002,7 @@ test "guest quota management and inter-VM IPC" {
         defer guard.release();
         const state = guard.get();
         state.guest_id_next = 0;
-        state.vmid_bitmap = std.mem.zeroes([max_vmids / 64]u64);
+        state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
     }
 
     var phys_test = try physmem.initForTest(allocator, 4096);

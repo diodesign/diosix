@@ -1,12 +1,14 @@
-# Diosix command-line interface (`diosix-ctl`)
+# Diosix command-line interface (`dsx` / `diosix-ctl`)
 
-The `diosix-ctl` utility is the userspace command-line tool for managing 
-guest Virtual Machines (VMs) on the Diosix hypervisor. It communicates with 
-the hypervisor through the `/dev/diosix` character device driver using standard 
-Supervisor Binary Interface (SBI) hypercalls.
+The `dsx` utility (also available as `diosix-ctl`) is the userspace 
+command-line tool for managing guest Virtual Machines (VMs) on the Diosix 
+hypervisor. It communicates with the hypervisor through the `/dev/diosix` 
+character device driver using standard Supervisor Binary Interface (SBI) 
+hypercalls.
 
-Running `diosix-ctl` requires root privileges inside the guest operating system 
+Running `dsx` requires root privileges inside the guest operating system 
 to access `/dev/diosix`.
+
 
 ---
 

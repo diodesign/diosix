@@ -7,13 +7,26 @@ const std = @import("std");
 const api = @import("diosix_api.zig");
 const linux = std.os.linux;
 
+pub const CID_PARENT: usize = api.CID_PARENT;
+pub const CID_SELF: usize = api.CID_SELF;
+pub const CID_FIRST_CHILD: usize = api.CID_FIRST_CHILD;
+
+pub const MAX_POSITIONAL_ARGS: usize = 8;
+pub const MAX_IPC_BUF_LEN: usize = 4096;
+pub const MAX_PATH_LEN: usize = 256;
+pub const MAX_ELF_FILE_SIZE: usize = 64 * 1024 * 1024;
+pub const MAX_DTB_FILE_SIZE: usize = 2 * 1024 * 1024;
+
+pub const PAGE_SIZE_KB: usize = 4;
+pub const KB_PER_MB: usize = 1024;
+
 fn printStr(str: []const u8) void {
-    _ = linux.write(1, str.ptr, str.len);
+    _ = linux.write(linux.STDOUT_FILENO, str.ptr, str.len);
 }
 
 fn parseCid(str: []const u8) !usize {
-    if (std.mem.eql(u8, str, "self")) return 1;
-    if (std.mem.eql(u8, str, "parent")) return 0;
+    if (std.mem.eql(u8, str, "self")) return CID_SELF;
+    if (std.mem.eql(u8, str, "parent")) return CID_PARENT;
     return std.fmt.parseInt(usize, str, 10);
 }
 
@@ -58,7 +71,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
         if (spawn_mode) {
             if (argv.len <= spawn_idx + 1) {
-                printStr("Usage: diosix-ctl fork --spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
+                printStr("Usage: dsx fork --spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
                 return;
             }
             const elf_path = std.mem.span(argv[spawn_idx + 1]);
@@ -84,8 +97,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
         try cmdDropTrust(&client);
     } else if (std.mem.eql(u8, command, "spawn")) {
         if (argv.len < 3) {
-            printStr("Usage: diosix-ctl spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
-            printStr("       diosix-ctl spawn <cid> <elf_path> [dtb_path] [arch] [--trusted]\n");
+            printStr("Usage: dsx spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
+            printStr("       dsx spawn <cid> <elf_path> [dtb_path] [arch] [--trusted]\n");
             return;
         }
         var child_id: usize = 0;
@@ -94,7 +107,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         var arch_str: []const u8 = "riscv64";
         var flags: usize = 0;
 
-        var non_flag_args: [8][]const u8 = undefined;
+        var non_flag_args: [MAX_POSITIONAL_ARGS][]const u8 = undefined;
         var non_flag_count: usize = 0;
 
         for (argv[2..]) |arg| {
@@ -110,12 +123,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
 
         if (non_flag_count == 0) {
-            printStr("Usage: diosix-ctl spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
+            printStr("Usage: dsx spawn <elf_path> [dtb_path] [arch] [--trusted]\n");
             return;
         }
 
         if (parseCid(non_flag_args[0])) |cid| {
-            if (cid >= 2 and non_flag_count >= 2) {
+            if (cid >= CID_FIRST_CHILD and non_flag_count >= 2) {
                 child_id = cid;
                 elf_path = non_flag_args[1];
                 if (non_flag_count > 2) {
@@ -157,17 +170,16 @@ pub fn main(init: std.process.Init.Minimal) !void {
             printStr("Missing ELF file path.\n");
         }
 
-
     } else if (std.mem.eql(u8, command, "quota")) {
         if (argv.len < 3) {
-            printStr("Usage: diosix-ctl quota <cid|self> [--ram <MB>] [--vcpus <N>] [--depth <N>] [--descendants <N>]\n");
+            printStr("Usage: dsx quota <cid|self> [--ram <MB>] [--vcpus <N>] [--depth <N>] [--descendants <N>]\n");
             return;
         }
         const target_cid = try parseCid(std.mem.span(argv[2]));
         try cmdQuota(&client, target_cid, argv);
     } else if (std.mem.eql(u8, command, "send")) {
         if (argv.len < 4) {
-            printStr("Usage: diosix-ctl send <cid|parent> <message>\n");
+            printStr("Usage: dsx send <cid|parent> <message>\n");
             return;
         }
         const target_cid = try parseCid(std.mem.span(argv[2]));
@@ -198,7 +210,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
         try cmdWait(&client, target_cid, nohang);
     } else if (std.mem.eql(u8, command, "terminate")) {
-        const target_id = if (argv.len > 2) try parseCid(std.mem.span(argv[2])) else 1;
+        const target_id = if (argv.len > 2) try parseCid(std.mem.span(argv[2])) else CID_SELF;
         const exit_code = if (argv.len > 3) try std.fmt.parseInt(usize, std.mem.span(argv[3]), 10) else 0;
         try cmdTerminate(&client, target_id, exit_code);
     } else if (std.mem.eql(u8, command, "exit")) {
@@ -211,38 +223,33 @@ pub fn main(init: std.process.Init.Minimal) !void {
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help")) {
         printUsage();
     } else {
-        printStr("Unknown command. Use 'diosix-ctl help' for available commands.\n");
+        printStr("Unknown command. Use 'dsx help' for available commands.\n");
     }
 }
 
 fn printUsage() void {
     const usage =
-        \\diosix-ctl: Diosix Hypervisor Guest Management Tool
+        \\dsx / diosix-ctl: Diosix Hypervisor Guest Management Tool
         \\
         \\Usage:
-        \\  diosix-ctl info [--host]                  Display current VM state (or host hypervisor info)
-        \\  diosix-ctl spawn <elf> [opts] [--trusted] Create and boot a child VM directly from image
-        \\  diosix-ctl fork [--untrusted]             Fork current VM to clone state (returns CID >= 2)
-        \\  diosix-ctl fork --spawn <elf> [options]   Alias to create and boot a new child VM
-        \\  diosix-ctl quota <cid|self> [options]     Set or lower VM resource quotas (--ram, --vcpus, --descendants)
-        \\  diosix-ctl send <cid|parent> <msg>        Send an inter-VM IPC message to target VM
-        \\  diosix-ctl recv [cid|parent] [--nohang]   Receive an inter-VM IPC message
-        \\  diosix-ctl wait [cid|self] [--nohang]     Wait for child VM state changes / exit events
-        \\  diosix-ctl terminate [cid|self] [code]    Terminate target VM (self or child CID)
-        \\  diosix-ctl exit [code]                    Exit the current non-root VM (calls terminate self [code])
-        \\  diosix-ctl poweroff                       Power off the host machine (Root VM only)
-        \\  diosix-ctl reboot                         Reboot the host machine (Root VM only)
-        \\  diosix-ctl drop-trust                     Irrevocably drop hardware trust privileges
-        \\  diosix-ctl help                           Show this help message
+        \\  dsx info [--host]                  Display current VM state (or host hypervisor info)
+        \\  dsx spawn <elf> [opts] [--trusted] Create and boot a child VM directly from image
+        \\  dsx fork [--untrusted]             Fork current VM to clone state (returns CID >= 2)
+        \\  dsx fork --spawn <elf> [options]   Alias to create and boot a new child VM
+        \\  dsx quota <cid|self> [options]     Set or lower VM resource quotas (--ram, --vcpus, --descendants)
+        \\  dsx send <cid|parent> <msg>        Send an inter-VM IPC message to target VM
+        \\  dsx recv [cid|parent] [--nohang]   Receive an inter-VM IPC message
+        \\  dsx wait [cid|self] [--nohang]     Wait for child VM state changes / exit events
+        \\  dsx terminate [cid|self] [code]    Terminate target VM (self or child CID)
+        \\  dsx exit [code]                    Exit the current non-root VM (calls terminate self [code])
+        \\  dsx poweroff                       Power off the host machine (Root VM only)
+        \\  dsx reboot                         Reboot the host machine (Root VM only)
+        \\  dsx drop-trust                     Irrevocably drop hardware trust privileges
+        \\  dsx help                           Show this help message
         \\
     ;
     printStr(usage);
 }
-
-
-
-
-
 
 fn printApiError(action: []const u8, err: anyerror) void {
     var buf: [128]u8 = undefined;
@@ -268,7 +275,7 @@ fn cmdQuota(client: *api.DiosixClient, target_cid: usize, argv: []const [*:0]con
         if (std.mem.eql(u8, flag, "--ram") and i + 1 < argv.len) {
             i += 1;
             const mb = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
-            ram_pages = (mb * 1024) / 4;
+            ram_pages = (mb * KB_PER_MB) / PAGE_SIZE_KB;
         } else if (std.mem.eql(u8, flag, "--vcpus") and i + 1 < argv.len) {
             i += 1;
             vcpus = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
@@ -297,7 +304,7 @@ fn cmdSend(client: *api.DiosixClient, target_cid: usize, message: []const u8) !v
 }
 
 fn cmdRecv(client: *api.DiosixClient, sender_cid: usize, nohang: bool) !void {
-    var buffer: [4096]u8 = undefined;
+    var buffer: [MAX_IPC_BUF_LEN]u8 = undefined;
     if (!nohang) {
         _ = client.waitEvent(0, false) catch {};
     }
@@ -317,7 +324,6 @@ fn cmdRecv(client: *api.DiosixClient, sender_cid: usize, nohang: bool) !void {
 }
 
 fn cmdWait(client: *api.DiosixClient, target_cid: usize, nohang: bool) !void {
-
     if (!nohang) {
         if (target_cid > 0) {
             var buf: [64]u8 = undefined;
@@ -333,11 +339,12 @@ fn cmdWait(client: *api.DiosixClient, target_cid: usize, nohang: bool) !void {
     };
     if (maybe_event) |ev| {
         var buf: [128]u8 = undefined;
-        const type_str = switch (ev.event_type) {
-            1 => "terminated",
-            2 => "stopped",
-            3 => "spawned",
-            else => "event",
+        const type_str = switch (@as(api.EventType, @enumFromInt(ev.event_type))) {
+            .child_terminated => "terminated",
+            .child_stopped => "stopped",
+            .child_spawned => "spawned",
+            .ipc_message => "ipc_message",
+            .none => "none",
         };
         const msg = std.fmt.bufPrint(&buf, "Child VM (CID {d}) {s} with exit code {d}.\n", .{ ev.cid, type_str, ev.exit_code }) catch return;
         printStr(msg);
@@ -347,8 +354,7 @@ fn cmdWait(client: *api.DiosixClient, target_cid: usize, nohang: bool) !void {
 }
 
 fn cmdTerminate(client: *api.DiosixClient, target_id: usize, exit_code: usize) !void {
-
-    if (target_id == 1 or target_id == 0) {
+    if (target_id == CID_SELF or target_id == CID_PARENT) {
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Terminating current VM (exit code {d})...\n", .{exit_code}) catch return;
         printStr(msg);
@@ -374,7 +380,7 @@ fn cmdExit(client: *api.DiosixClient, exit_code: usize) !void {
         printApiError("Query VM info", err);
         return;
     }
-    try cmdTerminate(client, 1, exit_code);
+    try cmdTerminate(client, CID_SELF, exit_code);
 }
 
 fn cmdPoweroff(client: *api.DiosixClient) !void {
@@ -388,7 +394,7 @@ fn cmdPoweroff(client: *api.DiosixClient) !void {
         return;
     }
     printStr("Powering off host...\n");
-    client.terminate(1, 0) catch |err| {
+    client.terminate(CID_SELF, 0) catch |err| {
         printApiError("Poweroff", err);
         return;
     };
@@ -404,7 +410,7 @@ fn cmdReboot(client: *api.DiosixClient) !void {
         printApiError("Query VM info", err);
         return;
     }
-    client.terminate(1, 1) catch |err| {
+    client.terminate(CID_SELF, 1) catch |err| {
         printApiError("Reboot", err);
         return;
     };
@@ -416,17 +422,19 @@ fn cmdInfo(client: *api.DiosixClient) !void {
         return;
     };
 
-    const arch_name = switch (info.target_arch) {
-        0 => "riscv64",
-        1 => "riscv32",
-        2 => "aarch64",
-        3 => "x86_64",
-        else => "unknown",
+    const arch_name = switch (@as(api.TargetArch, @enumFromInt(info.target_arch))) {
+        .riscv64 => "riscv64",
+        .riscv32 => "riscv32",
+        .aarch64 => "aarch64",
+        .x86_64 => "x86_64",
     };
+
+
+
 
     const is_root_str = if (info.is_root != 0) "yes" else "no";
     const is_trusted_str = if (info.is_trusted != 0) "yes" else "no";
-    const ram_mb = (info.used_ram_pages * 4) / 1024;
+    const ram_mb = (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
 
     var buf: [512]u8 = undefined;
     const out = std.fmt.bufPrint(&buf,
@@ -485,8 +493,8 @@ fn cmdHostInfo(client: *api.DiosixClient) !void {
         info.abi_version_minor,
         info.abi_version_patch,
         info.host_physical_cores,
-        info.host_total_ram_kb / 1024,
-        info.host_free_ram_kb / 1024,
+        info.host_total_ram_kb / KB_PER_MB,
+        info.host_free_ram_kb / KB_PER_MB,
         info.host_timer_freq_hz,
         if ((info.features & api.HypervisorFeature.HARDWARE_VIRT) != 0) @as(u8, 'x') else @as(u8, ' '),
         if ((info.features & api.HypervisorFeature.STAGE2_PAGING) != 0) @as(u8, 'x') else @as(u8, ' '),
@@ -529,6 +537,33 @@ fn cmdDropTrust(client: *api.DiosixClient) !void {
     printStr("Hardware trust successfully relinquished.\n");
 }
 
+fn readBinaryFile(path: []const u8, max_size: usize) ![]u8 {
+    var path_buf: [MAX_PATH_LEN]u8 = undefined;
+    if (path.len >= path_buf.len) return error.PathTooLong;
+    @memcpy(path_buf[0..path.len], path);
+    path_buf[path.len] = 0;
+
+    const fd_res = linux.open(@ptrCast(path_buf[0..path.len :0]), .{ .ACCMODE = .RDONLY }, 0);
+    const fd_signed: isize = @bitCast(fd_res);
+    if (fd_signed < 0) return error.FileNotFound;
+    const fd: i32 = @intCast(fd_signed);
+    defer _ = linux.close(fd);
+
+    const mmap_res = linux.mmap(null, max_size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+    const mmap_signed: isize = @bitCast(mmap_res);
+    if (mmap_signed < 0) return error.OutOfMemory;
+    const buf: [*]u8 = @ptrFromInt(mmap_res);
+
+    var total_read: usize = 0;
+    while (total_read < max_size) {
+        const read_res = linux.read(fd, buf + total_read, max_size - total_read);
+        const r_signed: isize = @bitCast(read_res);
+        if (r_signed <= 0) break;
+        total_read += @intCast(r_signed);
+    }
+    return buf[0..total_read];
+}
+
 fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dtb_path: ?[]const u8, arch_str: []const u8, flags: usize) !void {
     const is_trusted_req = (flags & api.SpawnFlags.TRUSTED) != 0;
     if (child_id == 0) {
@@ -543,57 +578,48 @@ fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dt
         printStr(msg);
     }
 
-    var path_buf: [256]u8 = undefined;
-    if (elf_path.len >= path_buf.len) return error.PathTooLong;
-    @memcpy(path_buf[0..elf_path.len], elf_path);
-    path_buf[elf_path.len] = 0;
-
-    const fd_res = linux.open(@ptrCast(path_buf[0..elf_path.len :0]), .{ .ACCMODE = .RDONLY }, 0);
-    const fd_signed: isize = @bitCast(fd_res);
-    if (fd_signed < 0) {
-        printStr("Failed to open ELF file.\n");
+    const elf_data = readBinaryFile(elf_path, MAX_ELF_FILE_SIZE) catch |err| {
+        if (err == error.FileNotFound) {
+            printStr("Failed to open ELF file: file not found.\n");
+        } else if (err == error.PathTooLong) {
+            printStr("ELF file path exceeds maximum path length.\n");
+        } else {
+            printStr("Failed to read ELF file.\n");
+        }
         return;
-    }
-    const fd: i32 = @intCast(fd_signed);
-    defer _ = linux.close(fd);
+    };
+    defer _ = linux.munmap(elf_data.ptr, MAX_ELF_FILE_SIZE);
 
-    // Read up to 64MB using page allocation via mmap
-    const max_len: usize = 64 * 1024 * 1024;
-    const mmap_res = linux.mmap(null, max_len, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
-    const mmap_signed: isize = @bitCast(mmap_res);
-    if (mmap_signed < 0) {
-        printStr("Memory allocation failed.\n");
-        return;
-    }
-    const buf: [*]u8 = @ptrFromInt(mmap_res);
-    defer _ = linux.munmap(buf, max_len);
-
-    var total_read: usize = 0;
-    while (total_read < max_len) {
-        const read_res = linux.read(fd, buf + total_read, max_len - total_read);
-        const r_signed: isize = @bitCast(read_res);
-        if (r_signed <= 0) break;
-        total_read += @intCast(r_signed);
-    }
-
-    if (total_read == 0) {
+    if (elf_data.len == 0) {
         printStr("ELF file is empty or unreadable.\n");
         return;
     }
 
-    const dtb_data: []u8 = &[_]u8{};
-    _ = dtb_path;
+    var dtb_data: []u8 = &[_]u8{};
+    if (dtb_path) |dp| {
+        dtb_data = readBinaryFile(dp, MAX_DTB_FILE_SIZE) catch |err| {
+            if (err == error.FileNotFound) {
+                printStr("Failed to open DTB file: file not found.\n");
+            } else {
+                printStr("Failed to read DTB file.\n");
+            }
+            return;
+        };
+    }
+    defer if (dtb_data.len > 0) {
+        _ = linux.munmap(dtb_data.ptr, MAX_DTB_FILE_SIZE);
+    };
 
-    var arch_num: usize = 0;
+    var arch_num: usize = @intFromEnum(api.TargetArch.riscv64);
     if (std.mem.eql(u8, arch_str, "riscv32")) {
-        arch_num = 1;
+        arch_num = @intFromEnum(api.TargetArch.riscv32);
     } else if (std.mem.eql(u8, arch_str, "aarch64")) {
-        arch_num = 2;
+        arch_num = @intFromEnum(api.TargetArch.aarch64);
     } else if (std.mem.eql(u8, arch_str, "x86_64")) {
-        arch_num = 3;
+        arch_num = @intFromEnum(api.TargetArch.x86_64);
     }
 
-    const spawned_cid = client.spawn(child_id, buf[0..total_read], dtb_data, arch_num, flags) catch |err| {
+    const spawned_cid = client.spawn(child_id, elf_data, dtb_data, arch_num, flags) catch |err| {
         printApiError("Spawn VM", err);
         return;
     };
@@ -601,5 +627,6 @@ fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dt
     const msg2 = std.fmt.bufPrint(&buf2, "Child VM (CID {d}) successfully spawned and started.\n", .{spawned_cid}) catch return;
     printStr(msg2);
 }
+
 
 

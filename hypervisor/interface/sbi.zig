@@ -69,6 +69,22 @@ pub const DIOSIX = struct {
     pub const GET_HV_INFO = 10;
 };
 
+pub const CID_PARENT: usize = 0;
+pub const CID_SELF: usize = 1;
+pub const CID_FIRST_CHILD: usize = 2;
+
+pub const DEFAULT_VERSION_MAJOR: u16 = 26;
+pub const DEFAULT_VERSION_MINOR: u16 = 1;
+pub const BUILD_COMMIT_LEN: usize = 16;
+pub const HOST_TIMER_FREQ_HZ: u32 = 10_000_000;
+
+pub const TargetArch = enum(u8) {
+    riscv64 = 0,
+    riscv32 = 1,
+    aarch64 = 2,
+    x86_64 = 3,
+};
+
 pub const HypervisorFeature = struct {
     pub const HARDWARE_VIRT: u64 = 1 << 0;
     pub const STAGE2_PAGING: u64 = 1 << 1;
@@ -82,17 +98,31 @@ pub const HypervisorInfo = extern struct {
     abi_version_major: u16 = 0,
     abi_version_minor: u16 = 2,
     abi_version_patch: u16 = 0,
-    version_major: u16 = 26,
-    version_minor: u16 = 1,
+    version_major: u16 = DEFAULT_VERSION_MAJOR,
+    version_minor: u16 = DEFAULT_VERSION_MINOR,
     _reserved0: u16 = 0,
     _reserved1: u32 = 0,
-    build_commit: [16]u8 = std.mem.zeroes([16]u8),
+    build_commit: [BUILD_COMMIT_LEN]u8 = std.mem.zeroes([BUILD_COMMIT_LEN]u8),
 
     features: u64 = 0,
     host_physical_cores: u32 = 0,
-    host_timer_freq_hz: u32 = 0,
+    host_timer_freq_hz: u32 = HOST_TIMER_FREQ_HZ,
     host_total_ram_kb: u64 = 0,
     host_free_ram_kb: u64 = 0,
+};
+
+pub const GuestInfo = extern struct {
+    guest_id: usize,
+    parent_id: usize,
+    is_trusted: u8,
+    is_root: u8,
+    target_arch: u8, // TargetArch enum value
+    _reserved: u8 = 0,
+    used_ram_pages: usize,
+    max_ram_pages: usize,
+    used_vcpus: usize,
+    max_vcpus: usize,
+    child_count: usize,
 };
 
 pub const EventType = enum(u32) {
@@ -149,6 +179,7 @@ pub const IpcRecvArgs = extern struct {
     actual_len: usize = 0,
     actual_sender_cid: usize = 0,
 };
+
 
 
 

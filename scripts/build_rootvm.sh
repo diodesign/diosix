@@ -72,6 +72,8 @@ rm -rf tools/overlay-common/sbin 2>/dev/null || true
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 echo "Cross-compiling diosix-ctl for $ZIG_TARGET..."
 zig build-exe tools/diosix-ctl/src/main.zig -target "$ZIG_TARGET" -O ReleaseSmall --name diosix-ctl -femit-bin=tools/overlay-common/usr/sbin/diosix-ctl
+ln -sf diosix-ctl tools/overlay-common/usr/sbin/dsx
+
 
 
 

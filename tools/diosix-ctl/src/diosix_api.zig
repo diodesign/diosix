@@ -8,6 +8,17 @@ const linux = std.os.linux;
 
 pub const EXT_DIOSIX: usize = 0x0A000005;
 
+pub const CID_PARENT: usize = 0;
+pub const CID_SELF: usize = 1;
+pub const CID_FIRST_CHILD: usize = 2;
+
+pub const TargetArch = enum(u8) {
+    riscv64 = 0,
+    riscv32 = 1,
+    aarch64 = 2,
+    x86_64 = 3,
+};
+
 pub const DIOSIX_FUNC = struct {
     pub const TERMINATE: usize = 0;
     pub const EXIT: usize = 0;
@@ -56,17 +67,19 @@ pub const EventType = enum(u32) {
     ipc_message = 4,
 };
 
-pub const DiosixEvent = extern struct {
+pub const Event = extern struct {
     cid: usize,
     event_type: u32,
     exit_code: u32,
     _reserved: u64 = 0,
 };
 
+pub const DiosixEvent = Event;
+
 pub const WaitEventArgs = extern struct {
     target_cid: usize,
     flags: usize,
-    event: DiosixEvent = std.mem.zeroes(DiosixEvent),
+    event: Event = std.mem.zeroes(Event),
 };
 
 pub const SbiResult = struct {
@@ -79,7 +92,7 @@ pub const GuestInfo = extern struct {
     parent_id: usize,
     is_trusted: u8,
     is_root: u8,
-    target_arch: u8, // 0 = rv64, 1 = rv32, 2 = aarch64, 3 = x86_64
+    target_arch: u8, // TargetArch enum value
     _reserved: u8 = 0,
     used_ram_pages: usize,
     max_ram_pages: usize,
@@ -105,7 +118,6 @@ pub const SpawnArgs = extern struct {
     target_arch: usize,
     flags: usize = 0,
 };
-
 
 pub const TerminateArgs = extern struct {
     target_id: usize,
@@ -135,23 +147,24 @@ pub const IpcRecvArgs = extern struct {
 };
 
 // IOCTL command definitions for /dev/diosix
-pub const IOCTL_FORK = 0x1001;
-pub const IOCTL_DROP_TRUST = 0x1002;
-pub const IOCTL_SPAWN = 0x1003;
-pub const IOCTL_GET_INFO = 0x1004;
-pub const IOCTL_SET_QUOTA = 0x1005;
-pub const IOCTL_TERMINATE = 0x1006;
-pub const IOCTL_EXIT = 0x1006;
-pub const IOCTL_KILL = 0x1006;
-pub const IOCTL_YIELD = 0x1007;
-pub const IOCTL_WAIT_EVENT = 0x1008;
-pub const IOCTL_IPC_SEND = 0x1009;
-pub const IOCTL_IPC_RECV = 0x100A;
-pub const IOCTL_GET_HV_INFO = 0x100B;
+pub const IOCTL_BASE: u32 = 0x1000;
+pub const IOCTL_FORK: u32         = IOCTL_BASE + 1;
+pub const IOCTL_DROP_TRUST: u32   = IOCTL_BASE + 2;
+pub const IOCTL_SPAWN: u32        = IOCTL_BASE + 3;
+pub const IOCTL_GET_INFO: u32     = IOCTL_BASE + 4;
+pub const IOCTL_SET_QUOTA: u32    = IOCTL_BASE + 5;
+pub const IOCTL_TERMINATE: u32    = IOCTL_BASE + 6;
+pub const IOCTL_EXIT: u32         = IOCTL_TERMINATE;
+pub const IOCTL_KILL: u32         = IOCTL_TERMINATE;
+pub const IOCTL_YIELD: u32        = IOCTL_BASE + 7;
+pub const IOCTL_WAIT_EVENT: u32   = IOCTL_BASE + 8;
+pub const IOCTL_IPC_SEND: u32     = IOCTL_BASE + 9;
+pub const IOCTL_IPC_RECV: u32     = IOCTL_BASE + 10;
+pub const IOCTL_GET_HV_INFO: u32  = IOCTL_BASE + 11;
 
-
-
-
+const EPERM_NEG: isize = -@as(isize, @intFromEnum(linux.E.PERM));
+const EACCES_NEG: isize = -@as(isize, @intFromEnum(linux.E.ACCES));
+const EAGAIN_NEG: isize = -@as(isize, @intFromEnum(linux.E.AGAIN));
 
 pub const DiosixClient = struct {
     dev_fd: ?i32,
@@ -177,7 +190,7 @@ pub const DiosixClient = struct {
     fn getFd(self: *DiosixClient) !i32 {
         if (self.dev_fd) |fd| return fd;
         if (self.open_err) |err| {
-            if (err == -1 or err == -13) return error.PermissionDenied;
+            if (err == EPERM_NEG or err == EACCES_NEG) return error.PermissionDenied;
         }
         return error.DeviceNotFound;
     }
@@ -188,7 +201,7 @@ pub const DiosixClient = struct {
         var child_id: usize = flags;
         const rc = linux.ioctl(fd, IOCTL_FORK, @intFromPtr(&child_id));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc < 0) return error.HypercallFailed;
         return if (child_id > 0) child_id else @intCast(signed_rc);
     }
@@ -197,7 +210,7 @@ pub const DiosixClient = struct {
         const fd = try self.getFd();
         const rc = linux.ioctl(fd, IOCTL_DROP_TRUST, 0);
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc < 0) return error.HypercallFailed;
     }
 
@@ -206,7 +219,7 @@ pub const DiosixClient = struct {
         var info: GuestInfo = undefined;
         const rc = linux.ioctl(fd, IOCTL_GET_INFO, @intFromPtr(&info));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc < 0) return error.HypercallFailed;
         return info;
     }
@@ -224,12 +237,10 @@ pub const DiosixClient = struct {
         };
         const rc = linux.ioctl(fd, IOCTL_SPAWN, @intFromPtr(&args));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc < 0) return error.HypercallFailed;
         return if (args.child_id > 0) args.child_id else @intCast(signed_rc);
     }
-
-
 
     pub fn terminate(self: *DiosixClient, target_id: usize, exit_code: usize) !void {
         const fd = try self.getFd();
@@ -239,7 +250,7 @@ pub const DiosixClient = struct {
         };
         const rc = linux.ioctl(fd, IOCTL_TERMINATE, @intFromPtr(&args));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc < 0) return error.HypercallFailed;
     }
 
@@ -247,17 +258,17 @@ pub const DiosixClient = struct {
         _ = self.terminate(0, code) catch {};
     }
 
-    pub fn waitEvent(self: *DiosixClient, target_cid: usize, nohang: bool) !?DiosixEvent {
+    pub fn waitEvent(self: *DiosixClient, target_cid: usize, nohang: bool) !?Event {
         const fd = try self.getFd();
         var args = WaitEventArgs{
             .target_cid = target_cid,
             .flags = if (nohang) 1 else 0,
-            .event = std.mem.zeroes(DiosixEvent),
+            .event = std.mem.zeroes(Event),
         };
         const rc = linux.ioctl(fd, IOCTL_WAIT_EVENT, @intFromPtr(&args));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
-        if (signed_rc == -11) return null; // -EAGAIN on non-blocking check
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
+        if (signed_rc == EAGAIN_NEG) return null; // -EAGAIN on non-blocking check
         if (signed_rc < 0) return error.HypercallFailed;
         return args.event;
     }
@@ -273,7 +284,7 @@ pub const DiosixClient = struct {
         };
         const rc = linux.ioctl(fd, IOCTL_SET_QUOTA, @intFromPtr(&args));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc < 0) return error.HypercallFailed;
     }
 
@@ -286,7 +297,7 @@ pub const DiosixClient = struct {
         };
         const rc = linux.ioctl(fd, IOCTL_IPC_SEND, @intFromPtr(&args));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc < 0) return error.HypercallFailed;
     }
 
@@ -306,7 +317,7 @@ pub const DiosixClient = struct {
         };
         const rc = linux.ioctl(fd, IOCTL_IPC_RECV, @intFromPtr(&args));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc <= 0) return null; // 0 = no message
         return .{
             .sender_cid = args.actual_sender_cid,
@@ -319,37 +330,9 @@ pub const DiosixClient = struct {
         var info = std.mem.zeroes(HypervisorInfo);
         const rc = linux.ioctl(fd, IOCTL_GET_HV_INFO, @intFromPtr(&info));
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == -1 or signed_rc == -13) return error.PermissionDenied;
+        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;
         if (signed_rc < 0) return error.HypercallFailed;
         return info;
     }
 };
 
-
-
-
-fn sbiCall(ext: usize, func: usize, a0: usize, a1: usize, a2: usize) SbiResult {
-    var err: isize = undefined;
-    var val: usize = undefined;
-
-    switch (@import("builtin").cpu.arch) {
-        .riscv64, .riscv32 => {
-            asm volatile (
-                \\ecall
-                : [err] "={x10}" (err),
-                  [val] "={x11}" (val),
-                : [a0] "{x10}" (a0),
-                  [a1] "{x11}" (a1),
-                  [a2] "{x12}" (a2),
-                  [func] "{x16}" (func),
-                  [ext] "{x17}" (ext),
-            );
-        },
-        else => {
-            err = -1;
-            val = 0;
-        },
-    }
-
-    return .{ .err = err, .value = val };
-}

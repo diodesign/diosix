@@ -4,17 +4,75 @@
 // SPDX-License-Identifier: MIT
 
 pub const MAGIC = "\x7fELF";
+pub const MIN_HEADER_LEN: usize = 24;
+pub const ELF32_EHDR_SIZE: usize = 52;
+pub const ELF64_EHDR_SIZE: usize = 64;
 
-pub const CLASS_64 = 2;
-pub const DATA_LSB = 1;
-pub const EV_CURRENT = 1;
+// Identification (e_ident) byte indices
+pub const EI_MAG0 = 0;
+pub const EI_MAG1 = 1;
+pub const EI_MAG2 = 2;
+pub const EI_MAG3 = 3;
+pub const EI_CLASS = 4;
+pub const EI_DATA = 5;
+pub const EI_VERSION = 6;
+pub const EI_OSABI = 7;
+pub const EI_ABIVERSION = 8;
+pub const EI_PAD = 9;
+pub const EI_NIDENT = 16;
 
-pub const TYPE_EXEC = 2;
-pub const MACHINE_RISCV = 0xF3;
+// File classes (e_ident[EI_CLASS])
+pub const CLASS_32: u8 = 1;
+pub const CLASS_64: u8 = 2;
 
-pub const PT_LOAD = 1;
+// Data encodings (e_ident[EI_DATA])
+pub const DATA_LSB: u8 = 1; // 2's complement, little endian
+pub const DATA_MSB: u8 = 2; // 2's complement, big endian
 
-// Offsets within ELF Header (EHDR)
+// Version
+pub const EV_CURRENT: u32 = 1;
+
+// Object file types (e_type)
+pub const TYPE_NONE: u16 = 0;
+pub const TYPE_REL: u16 = 1;
+pub const TYPE_EXEC: u16 = 2;
+pub const TYPE_DYN: u16 = 3;
+pub const TYPE_CORE: u16 = 4;
+
+// Target machine architectures (e_machine)
+pub const MACHINE_NONE: u16 = 0;
+pub const MACHINE_X86_64: u16 = 62;    // AMD x86-64 / EM_X86_64
+pub const MACHINE_AARCH64: u16 = 183;  // ARM 64-bit / EM_AARCH64
+pub const MACHINE_RISCV: u16 = 0xF3;   // RISC-V / EM_RISCV (243)
+
+// Segment types (p_type)
+pub const PT_NULL: u32 = 0;
+pub const PT_LOAD: u32 = 1;
+pub const PT_DYNAMIC: u32 = 2;
+pub const PT_INTERP: u32 = 3;
+pub const PT_NOTE: u32 = 4;
+pub const PT_SHLIB: u32 = 5;
+pub const PT_PHDR: u32 = 6;
+pub const PT_TLS: u32 = 7;
+
+// Segment permission flags (p_flags)
+pub const PF_X: u32 = 1 << 0; // Execute
+pub const PF_W: u32 = 1 << 1; // Write
+pub const PF_R: u32 = 1 << 2; // Read
+
+// Section header types (sh_type)
+pub const SHT_NULL: u32 = 0;
+pub const SHT_PROGBITS: u32 = 1;
+pub const SHT_SYMTAB: u32 = 2;
+pub const SHT_STRTAB: u32 = 3;
+pub const SHT_RELA: u32 = 4;
+pub const SHT_HASH: u32 = 5;
+pub const SHT_DYNAMIC: u32 = 6;
+pub const SHT_NOTE: u32 = 7;
+pub const SHT_NOBITS: u32 = 8;
+pub const SHT_REL: u32 = 9;
+
+// Offsets within 64-bit ELF Header (EHDR64)
 pub const EHDR = struct {
     pub const IDENT = 0;
     pub const TYPE = 16;
@@ -32,7 +90,25 @@ pub const EHDR = struct {
     pub const SHSTRNDX = 62;
 };
 
-// Offsets within Program Header (PHDR)
+// Offsets within 32-bit ELF Header (EHDR32)
+pub const EHDR32 = struct {
+    pub const IDENT = 0;
+    pub const TYPE = 16;
+    pub const MACHINE = 18;
+    pub const VERSION = 20;
+    pub const ENTRY = 24;
+    pub const PHOFF = 28;
+    pub const SHOFF = 32;
+    pub const FLAGS = 36;
+    pub const EHSIZE = 40;
+    pub const PHENTSIZE = 42;
+    pub const PHNUM = 44;
+    pub const SHENTSIZE = 46;
+    pub const SHNUM = 48;
+    pub const SHSTRNDX = 50;
+};
+
+// Offsets within 64-bit Program Header (PHDR64)
 pub const PHDR = struct {
     pub const TYPE = 0;
     pub const FLAGS = 4;
@@ -43,3 +119,16 @@ pub const PHDR = struct {
     pub const MEMSZ = 40;
     pub const ALIGN = 48;
 };
+
+// Offsets within 32-bit Program Header (PHDR32)
+pub const PHDR32 = struct {
+    pub const TYPE = 0;
+    pub const OFFSET = 4;
+    pub const VADDR = 8;
+    pub const PADDR = 12;
+    pub const FILESZ = 16;
+    pub const MEMSZ = 20;
+    pub const FLAGS = 24;
+    pub const ALIGN = 28;
+};
+
