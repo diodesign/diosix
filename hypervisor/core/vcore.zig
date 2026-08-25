@@ -34,10 +34,38 @@ pub const VirtualCoreType = enum {
     emulated,
 };
 
-fn init_ioapic_redtbl() [24]u64 {
-    var tbl: [24]u64 = undefined;
+pub const WEIGHT_HIGH: u32 = 2048;
+pub const WEIGHT_NORMAL: u32 = 1024;
+
+pub const IOAPIC_NUM_REDIR_ENTRIES: usize = 24;
+pub const IOAPIC_REDIR_MASKED: u64 = 0x00010000;
+
+pub const LAPIC_PAGE_SIZE: usize = 4096;
+pub const LAPIC_LVT_MASKED: u32 = 0x00010000;
+pub const LAPIC_REG_ID: usize = 0x20;
+pub const LAPIC_REG_VERSION: usize = 0x30;
+pub const LAPIC_REG_SPURIOUS: usize = 0xf0;
+pub const LAPIC_VERSION_INTEGRATED: u32 = 0x00050014;
+pub const LAPIC_SPURIOUS_ALL_MASKED: u32 = 0x000000ff;
+
+pub const EMULATOR_STACK_SIZE_BYTES: usize = 2 * 1024 * 1024; // 2MB stack
+pub const EMULATOR_STACK_PAGE_ORDER: usize = 9;
+pub const EMULATOR_TLS_SIZE_BYTES: usize = 4096;
+pub const EMULATOR_TLS_PAGE_ORDER: usize = 0;
+pub const EMULATOR_TLS_TP_OFFSET: usize = 2048;
+
+pub const PIT_BASE_FREQUENCY_HZ: u64 = 1_193_182;
+pub const PIT_DEFAULT_LATCH_100HZ: u64 = 11932;
+pub const PIT_TIMER_ACCESS_LSB_MSB: u8 = 3;
+pub const PIT_TIMER_MODE_SQUARE_WAVE: u8 = 3;
+
+pub const HEDELEG_GUEST_DELEGATE: usize = 0xb1fb;
+pub const HIDELEG_VS_INTERRUPTS: usize = 0x1666;
+
+fn init_ioapic_redtbl() [IOAPIC_NUM_REDIR_ENTRIES]u64 {
+    var tbl: [IOAPIC_NUM_REDIR_ENTRIES]u64 = undefined;
     for (&tbl) |*entry| {
-        entry.* = 0x00010000;
+        entry.* = IOAPIC_REDIR_MASKED;
     }
     return tbl;
 }
@@ -46,12 +74,13 @@ pub const max_sub_vcores: usize = 8;
 pub const emulation_timeslice_instructions: u32 = 2_000_000;
 
 pub const LapicTimerState = struct {
-    lvt_timer: u32 = 0x10000, // Masked (disabled) by default
+    lvt_timer: u32 = LAPIC_LVT_MASKED, // Masked (disabled) by default
     init_count: u32 = 0,
     divide_cfg: u32 = 0,
     start_time: u64 = 0,
     period_ticks: u64 = 0,
 };
+
 
 pub const SubVcoreState = struct {
     id: usize = 0,
@@ -132,13 +161,13 @@ pub const VirtualCore = struct {
 
             exception_cause: u32 = 0,
             hsm_started: bool = false,
-            lapic_mem: [4096]u8 = std.mem.zeroes([4096]u8),
+            lapic_mem: [LAPIC_PAGE_SIZE]u8 = std.mem.zeroes([LAPIC_PAGE_SIZE]u8),
             sc_hook_addr: u64 = 0,
             idle_hook_addr: u64 = 0,
             icr_dest: u32 = 0,
             ioapic_reg_sel: u8 = 0,
             ioapic_written: bool = false,
-            ioapic_redtbl: [24]u64 = init_ioapic_redtbl(),
+            ioapic_redtbl: [IOAPIC_NUM_REDIR_ENTRIES]u64 = init_ioapic_redtbl(),
         },
     },
 
@@ -184,8 +213,8 @@ pub const VirtualCore = struct {
             .priority = priority,
             .vruntime = 0,
             .weight = switch (priority) {
-                .high => 2048,
-                .normal => 1024,
+                .high => WEIGHT_HIGH,
+                .normal => WEIGHT_NORMAL,
             },
             .last_queued_time = 0,
             .scheduler_node = undefined,
@@ -204,8 +233,8 @@ pub const VirtualCore = struct {
                         .mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPIE=1, MPV=1 (Virtualization), VS=Dirty, FS=Dirty
                         .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
                         .hgatp = if (parent.space.mode == .h_paging) parent.space.paging.?.hgatp(parent.vmid) else 0,
-                        .hedeleg = 0xb1fb, // Delegate exceptions to guest: includes breakpoint (bit 3)
-                        .hideleg = 0x1666, // Delegate VS interrupts (VSSIP, VSTIP, VSEIP, SGEIP)
+                        .hedeleg = HEDELEG_GUEST_DELEGATE, // Delegate exceptions to guest: includes breakpoint (bit 3)
+                        .hideleg = HIDELEG_VS_INTERRUPTS, // Delegate VS interrupts (VSSIP, VSTIP, VSEIP, SGEIP)
                         .hvip = 0,
                     },
                     .guest_state = .{
@@ -217,7 +246,7 @@ pub const VirtualCore = struct {
                         .vscause = 0,
                         .vstval = 0,
                         .vsatp = 0,
-                        .vstimecmp = 0xffffffffffffffff,
+                        .vstimecmp = std.math.maxInt(u64),
                         .vsenvcfg = (@as(usize, 1) << 63) | 240,
                     },
                 },
@@ -225,14 +254,12 @@ pub const VirtualCore = struct {
             vcore.exec_path.native.context[@intFromEnum(riscv.Register.a0)] = id; // A0 = VCPU ID.
             vcore.exec_path.native.context[@intFromEnum(riscv.Register.a1)] = dtb; // A1 = DTB address.
         } else {
-            const stack_size = 2 * 1024 * 1024; // 2MB stack
-            const stack_phys = physmem.allocPageSelection(9) catch @panic("Failed to allocate S-mode stack for emulator");
-            const stack = @as([*]align(16) u8, @ptrFromInt(stack_phys))[0..stack_size];
+            const stack_phys = physmem.allocPageSelection(EMULATOR_STACK_PAGE_ORDER) catch @panic("Failed to allocate S-mode stack for emulator");
+            const stack = @as([*]align(16) u8, @ptrFromInt(stack_phys))[0..EMULATOR_STACK_SIZE_BYTES];
 
             // Allocate a dummy TLS block for emulation runner context.
-            const tls_size = 4096;
-            const tls_phys = physmem.allocPageSelection(0) catch @panic("Failed to allocate TLS for emulator");
-            @memset(@as([*]u8, @ptrFromInt(tls_phys))[0..tls_size], 0);
+            const tls_phys = physmem.allocPageSelection(EMULATOR_TLS_PAGE_ORDER) catch @panic("Failed to allocate TLS for emulator");
+            @memset(@as([*]u8, @ptrFromInt(tls_phys))[0..EMULATOR_TLS_SIZE_BYTES], 0);
 
             var hypervisor_gp: usize = 0;
             if (comptime !@import("builtin").is_test) {
@@ -265,26 +292,26 @@ pub const VirtualCore = struct {
                         .vscause = 0,
                         .vstval = 0,
                         .vsatp = 0,
-                        .vstimecmp = 0xffffffffffffffff,
+                        .vstimecmp = std.math.maxInt(u64),
                         .vsenvcfg = 0,
                     },
                     .stack = stack,
-                    .tls_pointer = tls_phys + 2048,
+                    .tls_pointer = tls_phys + EMULATOR_TLS_TP_OFFSET,
                 },
             };
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.sp)] = @intFromPtr(stack.ptr) + stack.len;
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.gp)] = hypervisor_gp;
-            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.tp)] = tls_phys + 2048;
+            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.tp)] = tls_phys + EMULATOR_TLS_TP_OFFSET;
             vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.a0)] = 0;
         }
 
         if (parent.target_arch == .x86_64) {
-            const init_latch: u64 = 11932; // 100 Hz default (10ms period)
-            const period_clint: u64 = (init_latch * 10_000_000) / 1_193_182;
+            const init_latch: u64 = PIT_DEFAULT_LATCH_100HZ; // 100 Hz default (10ms period)
+            const period_clint: u64 = (init_latch * 10_000_000) / PIT_BASE_FREQUENCY_HZ;
             parent.pit.channels[0] = .{
                 .latch = @intCast(init_latch),
-                .access = 3,
-                .mode = 3,
+                .access = PIT_TIMER_ACCESS_LSB_MSB,
+                .mode = PIT_TIMER_MODE_SQUARE_WAVE,
                 .period_ticks = period_clint,
             };
             vcore.exec_path.emulated.sub_vcores[0].timer_scheduled = true;
@@ -292,12 +319,13 @@ pub const VirtualCore = struct {
         }
 
         if (parent.target_arch == .x86_64) {
-            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[0x20..0x24], @as(u32, @intCast(id)) << 24, .little); // APIC ID
-            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[0x30..0x34], 0x00050014, .little); // APIC Version
-            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[0xf0..0xf4], 0x000000ff, .little); // Spurious Vector
+            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[LAPIC_REG_ID .. LAPIC_REG_ID + @sizeOf(u32)], @as(u32, @intCast(id)) << 24, .little); // APIC ID
+            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[LAPIC_REG_VERSION .. LAPIC_REG_VERSION + @sizeOf(u32)], LAPIC_VERSION_INTEGRATED, .little); // APIC Version
+            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[LAPIC_REG_SPURIOUS .. LAPIC_REG_SPURIOUS + @sizeOf(u32)], LAPIC_SPURIOUS_ALL_MASKED, .little); // Spurious Vector
         }
 
         // Initialize the scheduler node's contents to self pointer.
+
         vcore.scheduler_node.contents = undefined;
 
         return vcore;

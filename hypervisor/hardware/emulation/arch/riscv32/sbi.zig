@@ -915,3 +915,75 @@ fn broadcastPhysicalIPI() void {
         }
     }
 }
+
+test "SBI Base extension dispatch" {
+    const testing = std.testing;
+
+    var phys_test = try physmem.initForTest(testing.allocator, 128);
+    defer phys_test.deinit();
+
+    const g = try guest.createGuest(testing.allocator, true, true, null, 0, 0, 0, .riscv64);
+    defer g.deinit();
+
+    var vc = vcore.VirtualCore.init(0, g, 0x80000000, 0, .normal);
+    var ctx: riscv.ThreadContext = std.mem.zeroes(riscv.ThreadContext);
+
+    // 1. Test GET_SPEC_VERSION (Base Ext 0x10, FID 0)
+    ctx[@intFromEnum(arch.Register.a7)] = interface.EXT.BASE;
+    ctx[@intFromEnum(arch.Register.a6)] = interface.BASE.GET_SPEC_VERSION;
+    handle(&vc, 0, &ctx);
+    try testing.expectEqual(@as(usize, 0), ctx[@intFromEnum(arch.Register.a0)]); // SUCCESS
+    try testing.expectEqual(@as(usize, interface.SPEC_VERSION), ctx[@intFromEnum(arch.Register.a1)]);
+
+    // 2. Test GET_IMPL_ID (Base Ext 0x10, FID 1)
+    ctx[@intFromEnum(arch.Register.a7)] = interface.EXT.BASE;
+    ctx[@intFromEnum(arch.Register.a6)] = interface.BASE.GET_IMPL_ID;
+    handle(&vc, 0, &ctx);
+    try testing.expectEqual(@as(usize, 0), ctx[@intFromEnum(arch.Register.a0)]); // SUCCESS
+    try testing.expectEqual(@as(usize, interface.IMPL_ID), ctx[@intFromEnum(arch.Register.a1)]);
+
+    // 3. Test PROBE_EXTENSION for Diosix Extension (0x0A000005)
+    ctx[@intFromEnum(arch.Register.a7)] = interface.EXT.BASE;
+    ctx[@intFromEnum(arch.Register.a6)] = interface.BASE.PROBE_EXTENSION;
+    ctx[@intFromEnum(arch.Register.a0)] = interface.EXT.DIOSIX;
+    handle(&vc, 0, &ctx);
+    try testing.expectEqual(@as(usize, 0), ctx[@intFromEnum(arch.Register.a0)]); // SUCCESS
+    try testing.expectEqual(@as(usize, 1), ctx[@intFromEnum(arch.Register.a1)]); // Available
+
+    // 4. Test Unsupported extension ID
+    ctx[@intFromEnum(arch.Register.a7)] = 0x99999999;
+    ctx[@intFromEnum(arch.Register.a6)] = 0;
+    handle(&vc, 0, &ctx);
+    try testing.expectEqual(@as(usize, @bitCast(SBI_ERR_NOT_SUPPORTED)), ctx[@intFromEnum(arch.Register.a0)]);
+}
+
+test "SBI Diosix hypervisor extension get info and drop trust" {
+    const testing = std.testing;
+
+    var phys_test = try physmem.initForTest(testing.allocator, 128);
+    defer phys_test.deinit();
+
+    const g = try guest.createGuest(testing.allocator, true, true, null, 0, 0, 0, .riscv64);
+    defer g.deinit();
+
+    var vc = vcore.VirtualCore.init(0, g, 0x80000000, 0, .normal);
+    var ctx: riscv.ThreadContext = std.mem.zeroes(riscv.ThreadContext);
+
+    // Verify initial guest trust state
+    try testing.expect(g.is_trusted);
+
+    // 1. Test DROP_TRUST (FID 3)
+    ctx[@intFromEnum(arch.Register.a7)] = interface.EXT.DIOSIX;
+    ctx[@intFromEnum(arch.Register.a6)] = interface.DIOSIX.DROP_TRUST;
+    handle(&vc, 0, &ctx);
+    try testing.expectEqual(@as(usize, 0), ctx[@intFromEnum(arch.Register.a0)]); // SUCCESS
+    try testing.expect(!g.is_trusted); // Trust successfully dropped
+
+    // 2. Test Calling DROP_TRUST again when already untrusted -> still SUCCESS and remains untrusted
+    handle(&vc, 0, &ctx);
+    try testing.expectEqual(@as(usize, 0), ctx[@intFromEnum(arch.Register.a0)]);
+    try testing.expect(!g.is_trusted);
+}
+
+
+

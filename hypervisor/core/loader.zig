@@ -295,7 +295,7 @@ pub const Loader = struct {
             const sym_name = sym_name_ptr[0..name_len];
 
             if (std.mem.eql(u8, sym_name, name)) {
-                if (class == 1) { // ELF32_Sym
+                if (class == elf_spec.CLASS_32) { // ELF32_Sym
                     return readU32(source, sym_off + 4); // st_value
                 } else { // ELF64_Sym
                     return readU64(source, sym_off + 8); // st_value
@@ -320,3 +320,134 @@ pub const Loader = struct {
             (@as(u64, buf[off + 4]) << 32) | (@as(u64, buf[off + 5]) << 40) | (@as(u64, buf[off + 6]) << 48) | (@as(u64, buf[off + 7]) << 56);
     }
 };
+
+test "ELF header validation and arch detection" {
+    const testing = std.testing;
+
+    // Test 1: Truncated header
+    const truncated = [_]u8{ 0x7f, 'E', 'L' };
+    try testing.expectError(error.InvalidElfHeader, Loader.detectArch(&truncated));
+
+
+    // Test 2: Invalid magic
+    var bad_magic: [64]u8 = std.mem.zeroes([64]u8);
+    @memcpy(bad_magic[0..4], "NOPE");
+    try testing.expectError(error.InvalidElfHeader, Loader.detectArch(&bad_magic));
+
+
+    // Helper to create a valid 64-bit ELF header
+    var rv64_hdr: [64]u8 = std.mem.zeroes([64]u8);
+    @memcpy(rv64_hdr[0..4], elf_spec.MAGIC);
+    rv64_hdr[elf_spec.EI_CLASS] = elf_spec.CLASS_64;
+    rv64_hdr[elf_spec.EI_DATA] = elf_spec.DATA_LSB;
+    rv64_hdr[elf_spec.EI_VERSION] = 1;
+    // e_type = ET_EXEC (2)
+    rv64_hdr[elf_spec.EHDR.TYPE] = elf_spec.TYPE_EXEC;
+    // e_machine = EM_RISCV (243 = 0xF3)
+    rv64_hdr[elf_spec.EHDR.MACHINE] = @truncate(elf_spec.MACHINE_RISCV);
+    rv64_hdr[elf_spec.EHDR.MACHINE + 1] = @truncate(elf_spec.MACHINE_RISCV >> 8);
+    // e_version = 1
+    rv64_hdr[elf_spec.EHDR.VERSION] = 1;
+    // e_ehsize = 64
+    rv64_hdr[elf_spec.EHDR.EHSIZE] = elf_spec.ELF64_EHDR_SIZE;
+
+    try testing.expectEqual(guest.TargetArch.riscv64, try Loader.detectArch(&rv64_hdr));
+
+    // Test 3: RV32 ELF Header
+    var rv32_hdr: [52]u8 = std.mem.zeroes([52]u8);
+    @memcpy(rv32_hdr[0..4], elf_spec.MAGIC);
+    rv32_hdr[elf_spec.EI_CLASS] = elf_spec.CLASS_32;
+    rv32_hdr[elf_spec.EI_DATA] = elf_spec.DATA_LSB;
+    rv32_hdr[elf_spec.EI_VERSION] = 1;
+    rv32_hdr[elf_spec.EHDR32.TYPE] = elf_spec.TYPE_EXEC;
+    rv32_hdr[elf_spec.EHDR32.MACHINE] = @truncate(elf_spec.MACHINE_RISCV);
+    rv32_hdr[elf_spec.EHDR32.MACHINE + 1] = @truncate(elf_spec.MACHINE_RISCV >> 8);
+    rv32_hdr[elf_spec.EHDR32.VERSION] = 1;
+    rv32_hdr[elf_spec.EHDR32.EHSIZE] = elf_spec.ELF32_EHDR_SIZE;
+
+    try testing.expectEqual(guest.TargetArch.riscv32, try Loader.detectArch(&rv32_hdr));
+
+    // Test 4: AArch64 ELF Header
+    var aarch64_hdr = rv64_hdr;
+    aarch64_hdr[elf_spec.EHDR.MACHINE] = @truncate(elf_spec.MACHINE_AARCH64);
+    aarch64_hdr[elf_spec.EHDR.MACHINE + 1] = @truncate(elf_spec.MACHINE_AARCH64 >> 8);
+    try testing.expectEqual(guest.TargetArch.aarch64, try Loader.detectArch(&aarch64_hdr));
+
+    // Test 5: x86_64 ELF Header
+    var x86_hdr = rv64_hdr;
+    x86_hdr[elf_spec.EHDR.MACHINE] = @truncate(elf_spec.MACHINE_X86_64);
+    x86_hdr[elf_spec.EHDR.MACHINE + 1] = @truncate(elf_spec.MACHINE_X86_64 >> 8);
+    try testing.expectEqual(guest.TargetArch.x86_64, try Loader.detectArch(&x86_hdr));
+
+    // Test 6: Unsupported machine architecture
+    var bad_arch_hdr = rv64_hdr;
+    bad_arch_hdr[elf_spec.EHDR.MACHINE] = 0x99;
+    bad_arch_hdr[elf_spec.EHDR.MACHINE + 1] = 0x00;
+    try testing.expectError(error.UnsupportedElfMachine, Loader.detectArch(&bad_arch_hdr));
+}
+
+
+test "ELF symbol resolution" {
+    const testing = std.testing;
+
+    // Reject non-ELF buffer
+    const non_elf = "Hello world";
+    try testing.expect(Loader.findSymbol(non_elf, "main") == null);
+
+    // Build a mock 64-bit ELF image with 1 symtab and 1 strtab
+    // Layout:
+    // [0..64]: ELF Header
+    // [64..128]: Section Header 0 (Null)
+    // [128..192]: Section Header 1 (SHT_SYMTAB)
+    // [192..256]: Section Header 2 (SHT_STRTAB)
+    // [256..280]: Symtab entry 0 (null sym)
+    // [280..304]: Symtab entry 1 (symbol "start_kernel" @ 0x80200000)
+    // [304..330]: Strtab ("\x00start_kernel\x00")
+    var elf_buf: [512]u8 = std.mem.zeroes([512]u8);
+
+    @memcpy(elf_buf[0..4], elf_spec.MAGIC);
+    elf_buf[elf_spec.EI_CLASS] = elf_spec.CLASS_64;
+    elf_buf[elf_spec.EI_DATA] = elf_spec.DATA_LSB;
+    elf_buf[elf_spec.EI_VERSION] = 1;
+    elf_buf[elf_spec.EHDR.TYPE] = elf_spec.TYPE_EXEC;
+    elf_buf[elf_spec.EHDR.MACHINE] = @truncate(elf_spec.MACHINE_RISCV);
+    elf_buf[elf_spec.EHDR.MACHINE + 1] = @truncate(elf_spec.MACHINE_RISCV >> 8);
+    elf_buf[elf_spec.EHDR.VERSION] = 1;
+    elf_buf[elf_spec.EHDR.EHSIZE] = 64;
+
+    // Section header table offset = 64, shentsize = 64, shnum = 3
+    std.mem.writeInt(u64, elf_buf[elf_spec.EHDR.SHOFF..][0..8], 64, .little);
+    std.mem.writeInt(u16, elf_buf[elf_spec.EHDR.SHENTSIZE..][0..2], 64, .little);
+    std.mem.writeInt(u16, elf_buf[elf_spec.EHDR.SHNUM..][0..2], 3, .little);
+
+    // Section 1: SHT_SYMTAB @ offset 128
+    const sh1 = 128;
+    std.mem.writeInt(u32, elf_buf[sh1 + 4 ..][0..4], elf_spec.SHT_SYMTAB, .little); // sh_type
+    std.mem.writeInt(u64, elf_buf[sh1 + 24 ..][0..8], 256, .little); // sh_offset (symtab data)
+    std.mem.writeInt(u64, elf_buf[sh1 + 32 ..][0..8], 48, .little); // sh_size (2 * 24 bytes)
+    std.mem.writeInt(u32, elf_buf[sh1 + 40 ..][0..4], 2, .little); // sh_link (index of strtab section = 2)
+    std.mem.writeInt(u64, elf_buf[sh1 + 56 ..][0..8], 24, .little); // sh_entsize (ELF64_Sym = 24 bytes)
+
+    // Section 2: SHT_STRTAB @ offset 192
+    const sh2 = 192;
+    std.mem.writeInt(u32, elf_buf[sh2 + 4 ..][0..4], elf_spec.SHT_STRTAB, .little); // sh_type
+    std.mem.writeInt(u64, elf_buf[sh2 + 24 ..][0..8], 304, .little); // sh_offset (strtab data)
+    std.mem.writeInt(u64, elf_buf[sh2 + 32 ..][0..8], 32, .little); // sh_size
+
+    // Symtab entry 1 @ offset 280 (st_name = 1, st_value = 0x80200000)
+    std.mem.writeInt(u32, elf_buf[280..284], 1, .little); // st_name = 1
+    std.mem.writeInt(u64, elf_buf[288..296], 0x80200000, .little); // st_value = 0x80200000
+
+    // Strtab @ offset 304: "\x00start_kernel\x00"
+    const strtab_data = "\x00start_kernel\x00";
+    @memcpy(elf_buf[304 .. 304 + strtab_data.len], strtab_data);
+
+    // Look up existing symbol
+    const sym_addr = Loader.findSymbol(&elf_buf, "start_kernel");
+    try testing.expect(sym_addr != null);
+    try testing.expectEqual(@as(u64, 0x80200000), sym_addr.?);
+
+    // Look up non-existent symbol
+    try testing.expect(Loader.findSymbol(&elf_buf, "nonexistent") == null);
+}
+

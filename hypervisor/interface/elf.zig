@@ -3,10 +3,16 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
+
 pub const MAGIC = "\x7fELF";
+
 pub const MIN_HEADER_LEN: usize = 24;
 pub const ELF32_EHDR_SIZE: usize = 52;
 pub const ELF64_EHDR_SIZE: usize = 64;
+pub const ELF32_PHDR_SIZE: usize = 32;
+pub const ELF64_PHDR_SIZE: usize = 56;
+
 
 // Identification (e_ident) byte indices
 pub const EI_MAG0 = 0;
@@ -131,4 +137,20 @@ pub const PHDR32 = struct {
     pub const FLAGS = 24;
     pub const ALIGN = 28;
 };
+
+test "ELF specification constants and header layout validation" {
+    const testing = std.testing;
+
+    try testing.expectEqualStrings("\x7fELF", MAGIC);
+    try testing.expectEqual(@as(usize, 52), ELF32_EHDR_SIZE);
+    try testing.expectEqual(@as(usize, 64), ELF64_EHDR_SIZE);
+    try testing.expectEqual(@as(usize, 32), ELF32_PHDR_SIZE);
+    try testing.expectEqual(@as(usize, 56), ELF64_PHDR_SIZE);
+
+    // Verify machine identifiers
+    try testing.expectEqual(@as(u16, 243), MACHINE_RISCV);
+    try testing.expectEqual(@as(u16, 183), MACHINE_AARCH64);
+    try testing.expectEqual(@as(u16, 62), MACHINE_X86_64);
+}
+
 

@@ -9,17 +9,34 @@ const vtimer_mod = @import("vtimer.zig");
 const vpic_mod = @import("vpic.zig");
 const vcpu_mod = @import("../vcpu.zig");
 
+pub const MMIO_UART_BASE: u32      = 0x10000000;
+pub const MMIO_UART_SIZE: u32      = 0x100;
+pub const MMIO_VIRTIO_BASE: u32    = 0x10001000;
+pub const MMIO_VIRTIO_END: u32     = 0x10009000;
+pub const MMIO_CLINT_BASE: u32     = 0x02000000;
+pub const MMIO_CLINT_SIZE: u32     = 0x00010000;
+pub const MMIO_PLIC_BASE: u32      = 0x0c000000;
+pub const MMIO_PLIC_END: u32       = 0x10000000;
+pub const MMIO_TEST_RTC_BASE: u32  = 0x00100000;
+pub const MMIO_RTC_BASE: u32       = 0x00101000;
+pub const MMIO_TEST_RTC_END: u32   = 0x00102000;
+
+pub const VIRTIO_MMIO_MAGIC: u32       = 0x74726976; // "virt" in little-endian
+pub const VIRTIO_MMIO_VERSION_2: u32   = 0x00000002; // Modern VirtIO
+pub const VIRTIO_MMIO_DEVICE_NONE: u32 = 0x00000000; // Empty slot
+pub const VIRTIO_MMIO_VENDOR_QEMU: u32 = 0x554d4551; // "QEMU"
+
 pub const Bus = struct {
     uart: *vuart_mod.VirtualUart,
     timer: *vtimer_mod.VirtualTimer,
     pic: *vpic_mod.VirtualPlic,
 
     pub fn isMmioAddr(addr: u32) bool {
-        if (addr >= 0x10000000 and addr < 0x10000100) return true; // 16550 UART
-        if (addr >= 0x10001000 and addr < 0x10009000) return true; // VirtIO MMIO slots 0..7
-        if (addr >= 0x02000000 and addr < 0x02010000) return true; // CLINT Timer
-        if (addr >= 0x0c000000 and addr < 0x10000000) return true; // PLIC
-        if (addr >= 0x00100000 and addr < 0x00102000) return true; // Test & Goldfish RTC
+        if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) return true; // 16550 UART
+        if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) return true; // VirtIO MMIO slots 0..7
+        if (addr >= MMIO_CLINT_BASE and addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE) return true; // CLINT Timer
+        if (addr >= MMIO_PLIC_BASE and addr < MMIO_PLIC_END) return true; // PLIC
+        if (addr >= MMIO_TEST_RTC_BASE and addr < MMIO_TEST_RTC_END) return true; // Test & Goldfish RTC
         return false;
     }
 
@@ -30,23 +47,23 @@ pub const Bus = struct {
 
     pub fn read(self: *Bus, addr: u32, size: u8) u32 {
         _ = size;
-        if (addr >= 0x10000000 and addr < 0x10000100) {
-            return self.uart.read(@truncate(addr - 0x10000000));
-        } else if (addr >= 0x10001000 and addr < 0x10009000) {
+        if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) {
+            return self.uart.read(@truncate(addr - MMIO_UART_BASE));
+        } else if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) {
             // VirtIO MMIO transport probe
-            const reg_offset = (addr - 0x10001000) & 0xFFF;
+            const reg_offset = (addr - MMIO_VIRTIO_BASE) & 0xFFF;
             return switch (reg_offset) {
-                0x000 => 0x74726976, // MagicValue: "virt" in little-endian (0x74726976)
-                0x004 => 0x00000002, // Version: 2 (Modern VirtIO)
-                0x008 => 0x00000000, // DeviceID: 0 (No device connected / empty slot)
-                0x00c => 0x554d4551, // VendorID: "QEMU" in ASCII
+                0x000 => VIRTIO_MMIO_MAGIC,
+                0x004 => VIRTIO_MMIO_VERSION_2,
+                0x008 => VIRTIO_MMIO_DEVICE_NONE,
+                0x00c => VIRTIO_MMIO_VENDOR_QEMU,
                 else => 0,
             };
-        } else if (addr >= 0x02000000 and addr < 0x02010000) {
-            return self.timer.read(@truncate(addr - 0x02000000));
-        } else if (addr >= 0x0c000000 and addr < 0x10000000) {
-            return self.pic.read(@truncate(addr - 0x0c000000));
-        } else if (addr >= 0x00101000 and addr < 0x00102000) {
+        } else if (addr >= MMIO_CLINT_BASE and addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE) {
+            return self.timer.read(@truncate(addr - MMIO_CLINT_BASE));
+        } else if (addr >= MMIO_PLIC_BASE and addr < MMIO_PLIC_END) {
+            return self.pic.read(@truncate(addr - MMIO_PLIC_BASE));
+        } else if (addr >= MMIO_RTC_BASE and addr < MMIO_TEST_RTC_END) {
             // Goldfish RTC: offset 0x00 = TIME_LOW, offset 0x04 = TIME_HIGH (nanoseconds since epoch)
             const reg_offset = addr & 0xFFF;
             const time_ns: u64 = vcpu_mod.readHostTime() *% 100;
@@ -59,16 +76,44 @@ pub const Bus = struct {
 
     pub fn write(self: *Bus, addr: u32, val: u32, size: u8) void {
         _ = size;
-        if (addr >= 0x10000000 and addr < 0x10000100) {
-            self.uart.write(@truncate(addr - 0x10000000), @truncate(val));
-        } else if (addr >= 0x10001000 and addr < 0x10009000) {
+        if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) {
+            self.uart.write(@truncate(addr - MMIO_UART_BASE), @truncate(val));
+        } else if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) {
             // Read-only configuration or control writes for empty slots are ignored
-        } else if (addr >= 0x02000000 and addr < 0x02010000) {
-            self.timer.write(@truncate(addr - 0x02000000), val);
-        } else if (addr >= 0x0c000000 and addr < 0x10000000) {
-            self.pic.write(@truncate(addr - 0x0c000000), val);
-        } else if (addr >= 0x00100000 and addr < 0x00102000) {
+        } else if (addr >= MMIO_CLINT_BASE and addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE) {
+            self.timer.write(@truncate(addr - MMIO_CLINT_BASE), val);
+        } else if (addr >= MMIO_PLIC_BASE and addr < MMIO_PLIC_END) {
+            self.pic.write(@truncate(addr - MMIO_PLIC_BASE), val);
+        } else if (addr >= MMIO_TEST_RTC_BASE and addr < MMIO_TEST_RTC_END) {
             // Test & Goldfish RTC writes
         }
     }
 };
+
+test "MMIO Bus address classification and VirtIO transport probe" {
+    const testing = std.testing;
+
+    // Test MMIO range classification
+    try testing.expect(Bus.isMmioAddr(0x10000000)); // UART
+    try testing.expect(Bus.isMmioAddr(0x10001000)); // VirtIO slot 0
+    try testing.expect(Bus.isMmioAddr(0x02000000)); // CLINT
+    try testing.expect(Bus.isMmioAddr(0x0c000000)); // PLIC
+    try testing.expect(Bus.isMmioAddr(0x00101000)); // RTC
+    try testing.expect(!Bus.isMmioAddr(0x80000000)); // DRAM is not MMIO
+
+    var uart = vuart_mod.VirtualUart{};
+    var timer = vtimer_mod.VirtualTimer{};
+    var pic = vpic_mod.VirtualPlic{};
+    var bus = Bus{
+        .uart = &uart,
+        .timer = &timer,
+        .pic = &pic,
+    };
+
+    // Test VirtIO probe headers
+    try testing.expectEqual(VIRTIO_MMIO_MAGIC, bus.read(MMIO_VIRTIO_BASE + 0x000, 4));
+    try testing.expectEqual(VIRTIO_MMIO_VERSION_2, bus.read(MMIO_VIRTIO_BASE + 0x004, 4));
+    try testing.expectEqual(VIRTIO_MMIO_DEVICE_NONE, bus.read(MMIO_VIRTIO_BASE + 0x008, 4));
+    try testing.expectEqual(VIRTIO_MMIO_VENDOR_QEMU, bus.read(MMIO_VIRTIO_BASE + 0x00c, 4));
+}
+

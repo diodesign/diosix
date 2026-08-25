@@ -222,3 +222,21 @@ pub const Result = struct {
     err: isize,
     value: usize,
 };
+
+test "SBI interface structures and extension IDs" {
+    const testing = std.testing;
+
+    // Verify GuestInfo C-ABI compatibility
+    try testing.expectEqual(@sizeOf(usize) * 7, @sizeOf(GuestInfo));
+
+    // Verify HypervisorInfo structure size
+    try testing.expectEqual(64, @sizeOf(HypervisorInfo));
+
+    // Verify Extension IDs
+    try testing.expectEqual(@as(usize, 0x10), EXT.BASE);
+    try testing.expectEqual(@as(usize, 0x0A000005), EXT.DIOSIX);
+    try testing.expectEqual(@as(usize, 0x4442434E), EXT.DBCN);
+    try testing.expectEqual(@as(usize, 0x48534D), EXT.HSM);
+    try testing.expectEqual(@as(usize, 0x53525354), EXT.SRST);
+}
+

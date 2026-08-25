@@ -10,6 +10,8 @@ const sv39x4 = @import("../hardware/native/cpu/riscv64/sv39x4.zig");
 const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 
+pub const ALL_PHYSICAL_MEMORY: usize = std.math.maxInt(usize);
+
 pub const GuestSpace = struct {
     mode: enum { h_paging, pmp_fallback },
     paging: ?sv39x4.PageTable,
@@ -41,13 +43,14 @@ pub const GuestSpace = struct {
             const ram_base = physmem.getRamBase();
             const hv_size = base_hpa - ram_base;
             if (hv_size > 0) {
-                try pmp_config.addRegion(ram_base, hv_size, 0); // flags = 0 (no access)
+                try pmp_config.addRegion(ram_base, hv_size, pmp.PMPAccess.none);
             }
 
             // 2. Allow access to the entire 64-bit physical address space for everything else.
             // Under PMP check ordering, the hypervisor range denial is matched first,
             // so this securely enables direct guest S-mode/U-mode access to RAM and all MMIO peripherals.
-            try pmp_config.addRegion(0, ~@as(usize, 0), pmp.PMPAccess.read | pmp.PMPAccess.write | pmp.PMPAccess.execute);
+            try pmp_config.addRegion(0, ALL_PHYSICAL_MEMORY, pmp.PMPAccess.rwx);
+
 
             return GuestSpace{
                 .mode = .pmp_fallback,
@@ -121,11 +124,12 @@ pub const GuestSpace = struct {
             const ram_base = physmem.getRamBase();
             const hv_size = child_base_hpa - ram_base;
             if (hv_size > 0) {
-                try pmp_config.addRegion(ram_base, hv_size, 0); // flags = 0 (no access)
+                try pmp_config.addRegion(ram_base, hv_size, pmp.PMPAccess.none);
             }
 
             // 2. Allow access to the entire 64-bit physical address space for everything else.
-            try pmp_config.addRegion(0, ~@as(usize, 0), pmp.PMPAccess.read | pmp.PMPAccess.write | pmp.PMPAccess.execute);
+            try pmp_config.addRegion(0, ALL_PHYSICAL_MEMORY, pmp.PMPAccess.rwx);
+
 
             return GuestSpace{
                 .mode = .pmp_fallback,
@@ -187,3 +191,30 @@ pub const GuestSpace = struct {
         }
     }
 };
+
+
+test "GuestSpace GPA to HPA translation and bounds checking" {
+    const testing = std.testing;
+
+    var phys_test = try physmem.initForTest(testing.allocator, 128);
+    defer phys_test.deinit();
+
+    // Initialize a mock GuestSpace with 1MB DRAM at GPA 0x80000000 -> HPA 0x80200000
+    const base_gpa: usize = 0x80000000;
+    const base_hpa: usize = 0x80200000;
+    const size: usize = 1024 * 1024; // 1MB
+
+    var space = try GuestSpace.init(testing.allocator, true, base_gpa, base_hpa, size);
+    defer space.deinit();
+
+    // 1. Valid GPA in range
+    const hpa = try space.translateGPA(0x80001000);
+    try testing.expectEqual(@as(usize, 0x80201000), hpa);
+
+    // 2. GPA out of bounds (below base) -> TranslationFailed
+    try testing.expectError(error.TranslationFailed, space.translateGPA(0x7FFFFFFF));
+
+    // 3. GPA out of bounds (above limit) -> TranslationFailed
+    try testing.expectError(error.TranslationFailed, space.translateGPA(base_gpa + size));
+}
+

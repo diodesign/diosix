@@ -23,11 +23,14 @@ pub const PMPError = error{
 };
 
 pub const PMPAccess = struct {
+    pub const none: u8 = 0;
     pub const read: u8 = 1 << 0;
     pub const write: u8 = 1 << 1;
     pub const execute: u8 = 1 << 2;
+    pub const rwx: u8 = read | write | execute;
     pub const tor: u8 = 1 << 3; // Top of Range mode
 };
+
 
 pub const Region = struct {
     base: usize,
@@ -273,3 +276,29 @@ pub fn applyEmulatorPmp(cpu_core_id: usize, base_hpa: usize, range_size: usize) 
     PMPConfig.writePmpAddr(8, ~@as(usize, 0));
     PMPConfig.writePmpCfg(8, 0x18); // NAPOT mode (bits 4:3 = 11), no R/W/X
 }
+
+test "PMP configuration regions and capacity limits" {
+    const testing = std.testing;
+
+    var config = try PMPConfig.init(testing.allocator);
+    defer config.deinit();
+
+    try testing.expectEqual(@as(usize, 0), config.regions.items.len);
+
+    // Add regions up to MAX_REGIONS (7)
+    var i: usize = 0;
+    while (i < MAX_REGIONS) : (i += 1) {
+        try config.addRegion(0x80000000 + (i * 0x100000), 0x100000, PMPAccess.rwx);
+    }
+
+    try testing.expectEqual(MAX_REGIONS, config.regions.items.len);
+
+    // Attempting to add an 8th region must fail with TooManyRegions
+    try testing.expectError(error.TooManyRegions, config.addRegion(0x90000000, 0x100000, PMPAccess.rwx));
+
+    // Verify first region attributes
+    try testing.expectEqual(@as(usize, 0x80000000), config.regions.items[0].base);
+    try testing.expectEqual(@as(usize, 0x100000), config.regions.items[0].size);
+    try testing.expectEqual(PMPAccess.rwx, config.regions.items[0].flags);
+}
+

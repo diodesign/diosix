@@ -198,6 +198,9 @@ pub fn pickNext() ?*vcore.VirtualCore {
     return null;
 }
 
+pub const NICE_0_WEIGHT: u64 = vcore.WEIGHT_NORMAL;
+pub const MIN_RUNTIME_DELTA: u64 = 1;
+
 // Called when a physical core is ready for more work
 pub fn schedule() void {
     const pc = pcore.this();
@@ -210,8 +213,8 @@ pub fn schedule() void {
         pc.active_vcore = null;
         if (!was_wfi) {
             const now = riscv.readTime();
-            const actual_time = if (now > vc.last_queued_time) now - vc.last_queued_time else 1;
-            const delta: u64 = actual_time * 1024 / vc.weight;
+            const actual_time = if (now > vc.last_queued_time) now - vc.last_queued_time else MIN_RUNTIME_DELTA;
+            const delta: u64 = actual_time * NICE_0_WEIGHT / vc.weight;
             vc.vruntime += delta;
             queue(vc);
         }
@@ -240,8 +243,8 @@ pub fn yield(vc: *vcore.VirtualCore) void {
             vc.running_on_cpu = null;
             pc.active_vcore = null;
             const now = riscv.readTime();
-            const actual_time = if (now > vc.last_queued_time) now - vc.last_queued_time else 1;
-            const delta: u64 = actual_time * 1024 / vc.weight;
+            const actual_time = if (now > vc.last_queued_time) now - vc.last_queued_time else MIN_RUNTIME_DELTA;
+            const delta: u64 = actual_time * NICE_0_WEIGHT / vc.weight;
             vc.vruntime += delta;
             queue(vc);
         }
@@ -250,6 +253,7 @@ pub fn yield(vc: *vcore.VirtualCore) void {
         pcore.contextSwitch(next_vc);
     }
 }
+
 
 test "scheduler basic queuing and picking" {
     const testing = std.testing;
