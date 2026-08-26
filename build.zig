@@ -93,6 +93,8 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addArg(buildroot_dir);
     run_buildroot.addArg(guest_arch_opt);
     const rootvm_s_file = run_buildroot.addOutputFileArg("rootvm.s");
+    run_buildroot.stdio = .inherit;
+
 
     const emulation_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/hardware/emulation/mod.zig"),

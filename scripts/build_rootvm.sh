@@ -1,23 +1,57 @@
 #!/usr/bin/env bash
 # BuildRoot integration script for Diosix
 #
-# Usage: build_rootvm.sh <path_to_config> <path_to_output_binary> <path_to_buildroot_dir>
+# Usage: build_rootvm.sh <path_to_config> <path_to_output_binary> <path_to_buildroot_dir> [guest_arch] [rootvm_s_path]
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
 
-set -e
+set -eo pipefail
 
 CONFIG_FILE="$1"
 OUT_FILE="$2"
 BUILDROOT_DIR="$3"
+GUEST_ARCH="${4:-riscv64}"
+ROOTVM_S_PATH="$5"
 BUILDROOT_URL="https://gitlab.com/buildroot.org/buildroot.git"
 BUILDROOT_BRANCH="2026.02.x"
 
+# Terminal Formatting
+BOLD="\033[1m"
+DIM="\033[2m"
+GREEN="\033[32m"
+CYAN="\033[36m"
+YELLOW="\033[33m"
+BLUE="\033[34m"
+RESET="\033[0m"
+
+log_banner() {
+    echo -e "${BOLD}${BLUE}=== Diosix Root VM Build Pipeline ===${RESET}"
+}
+
+log_step() {
+    echo -e "${BOLD}${CYAN}==>${RESET} ${BOLD}$1${RESET}"
+}
+
+log_info() {
+    echo -e "    ${DIM}->${RESET} $1"
+}
+
+log_ok() {
+    echo -e "    ${GREEN}✓${RESET} $1"
+}
+
+log_warn() {
+    echo -e "    ${YELLOW}!${RESET} $1"
+}
+
 if [ -z "$CONFIG_FILE" ] || [ -z "$OUT_FILE" ] || [ -z "$BUILDROOT_DIR" ]; then
-    echo "Usage: $0 <config_file> <out_file> <buildroot_dir> [guest_arch]"
+    echo "Usage: $0 <config_file> <out_file> <buildroot_dir> [guest_arch] [rootvm_s_path]"
     exit 1
 fi
 
-GUEST_ARCH="${4:-riscv64}"
-ROOTVM_S_PATH="$5"
+mkdir -p "$(dirname "$OUT_FILE")"
+mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
 CURRENT_HASH=$(sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/driver/diosix.c 2>/dev/null | sha256sum | cut -d' ' -f1)
@@ -40,56 +74,59 @@ EOF
     fi
 }
 
-# Check if a rebuild is necessary using the configuration hash.
+# 1. Cache Check
 if [ -f "$OUT_FILE" ] && [ -f "$HASH_FILE" ]; then
     RECORDED_HASH=$(cat "$HASH_FILE")
     if [ "$CURRENT_HASH" = "$RECORDED_HASH" ]; then
-        echo "Root VM binary is up to date. Skipping BuildRoot."
+        SIZE=$(du -h "$OUT_FILE" | cut -f1)
+        log_ok "Root VM binary is up-to-date (${BOLD}${GUEST_ARCH}${RESET} | ${SIZE} | Hash: ${CURRENT_HASH:0:12}...). Rebuild skipped."
         write_rootvm_s
         exit 0
     fi
 fi
 
+log_banner
+log_info "Target Architecture : ${BOLD}${GUEST_ARCH}${RESET}"
+log_info "Config Profile      : $(basename "$CONFIG_FILE")"
+log_info "Parallel Jobs       : $(nproc) host CPU cores"
+log_info "Destination ELF     : $OUT_FILE"
 
-echo "Root VM binary missing or outdated. Running BuildRoot..."
-make -C "$BUILDROOT_DIR" linux-rebuild 2>/dev/null || true
+# 2. Build Guest Utilities
+log_step "[1/5] Cross-compiling guest management tools (diosix-ctl / dsx)..."
+mkdir -p tools/overlay-common/usr/sbin
+rm -rf tools/overlay-common/sbin 2>/dev/null || true
 
+ZIG_TARGET="${GUEST_ARCH}-linux-musl"
+log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
+zig build-exe tools/diosix-ctl/src/main.zig -target "$ZIG_TARGET" -O ReleaseSmall --name diosix-ctl -femit-bin=tools/overlay-common/usr/sbin/diosix-ctl >/dev/null 2>&1
+ln -sf diosix-ctl tools/overlay-common/usr/sbin/dsx
 
-# Get BuildRoot
+log_ok "Installed diosix-ctl and staged 'dsx' shortcut in rootfs overlay."
+
+# 3. BuildRoot Workspace Setup
+log_step "[2/5] Preparing Buildroot workspace..."
 if [ ! -d "$BUILDROOT_DIR/.git" ]; then
-    echo "Cloning BuildRoot ($BUILDROOT_BRANCH) into $BUILDROOT_DIR..."
+    log_info "Cloning BuildRoot (${BUILDROOT_BRANCH}) into ${BUILDROOT_DIR}..."
     TEMP_CLONE=$(mktemp -d -p "$(dirname "$BUILDROOT_DIR")")
     git clone --depth 1 -b "$BUILDROOT_BRANCH" "$BUILDROOT_URL" "$TEMP_CLONE"
     mv "$BUILDROOT_DIR/dl" "$TEMP_CLONE/dl" 2>/dev/null || true
     rm -rf "$BUILDROOT_DIR"
     mv "$TEMP_CLONE" "$BUILDROOT_DIR"
+    log_ok "Buildroot repository cloned."
+else
+    log_ok "Buildroot workspace found."
 fi
 
-# Compile diosix-ctl for target guest architecture and stage into overlay
-mkdir -p tools/overlay-common/usr/sbin
-rm -rf tools/overlay-common/sbin 2>/dev/null || true
-
-ZIG_TARGET="${GUEST_ARCH}-linux-musl"
-echo "Cross-compiling diosix-ctl for $ZIG_TARGET..."
-zig build-exe tools/diosix-ctl/src/main.zig -target "$ZIG_TARGET" -O ReleaseSmall --name diosix-ctl -femit-bin=tools/overlay-common/usr/sbin/diosix-ctl
-ln -sf diosix-ctl tools/overlay-common/usr/sbin/dsx
-
-
-
-
-# Need to provide absolute path for defconfig if it's outside
+# 4. Configure BuildRoot
+log_step "[3/5] Applying Buildroot & Linux kernel defconfig..."
 ABS_CONFIG=$(realpath "$CONFIG_FILE")
 
-
-# Configure BuildRoot, tracking version changes to trigger clean rebuilds
 if [ -f "$BUILDROOT_DIR/.config" ]; then
     cp "$BUILDROOT_DIR/.config" "$BUILDROOT_DIR/.config.old"
 fi
 
-echo "Configuring BuildRoot..."
-make -C "$BUILDROOT_DIR" BR2_DEFCONFIG="$ABS_CONFIG" defconfig
+make -C "$BUILDROOT_DIR" BR2_DEFCONFIG="$ABS_CONFIG" defconfig >/dev/null
 
-# Enforce the use of the appropriate console for the root login prompt
 GETTY_PORT="hvc0"
 if [ "$GUEST_ARCH" = "aarch64" ]; then
     GETTY_PORT="ttyAMA0"
@@ -97,65 +134,174 @@ elif [ "$GUEST_ARCH" = "x86_64" ]; then
     GETTY_PORT="ttyS0"
 fi
 echo "BR2_TARGET_GENERIC_GETTY_PORT=\"$GETTY_PORT\"" >> "$BUILDROOT_DIR/.config"
+echo "BR2_JLEVEL=0" >> "$BUILDROOT_DIR/.config"
 
-# Fixup step for modern buildroot: olddefconfig updates the config for new versions silently
-make -C "$BUILDROOT_DIR" olddefconfig
-make -C "$BUILDROOT_DIR" linux-dirclean 2>/dev/null || true
+make -C "$BUILDROOT_DIR" olddefconfig >/dev/null
+make -C "$BUILDROOT_DIR" linux-dirclean 2>/dev/null >/dev/null || true
 
 if [ -f "$BUILDROOT_DIR/.config.old" ]; then
-    OLD_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config.old" | cut -d'"' -f2)
-    NEW_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config" | cut -d'"' -f2)
+    OLD_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config.old" | cut -d'"' -f2 || true)
+    NEW_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config" | cut -d'"' -f2 || true)
     if [ "$OLD_KV" != "$NEW_KV" ] && [ -n "$OLD_KV" ]; then
-        echo "Linux kernel version changed from '$OLD_KV' to '$NEW_KV'. Cleaning old kernel build..."
-        make -C "$BUILDROOT_DIR" linux-dirclean linux-headers-dirclean
+        log_info "Linux kernel version changed ($OLD_KV -> $NEW_KV). Cleaning old build artifacts..."
+        make -C "$BUILDROOT_DIR" linux-dirclean linux-headers-dirclean >/dev/null 2>&1 || true
     fi
-    rm "$BUILDROOT_DIR/.config.old"
+    rm -f "$BUILDROOT_DIR/.config.old"
 fi
+log_ok "Configured guest environment (login getty: ${GETTY_PORT}, concurrency: $(nproc))."
 
-# Detect wget2 (e.g. Fedora 39+) which dropped --passive-ftp support.
-# BuildRoot's download rules pass --passive-ftp by default and will fail
-# if the system wget is actually wget2. Override BR2_WGET in that case.
+# 5. Fetch & Patch Kernel
+log_step "[4/5] Preparing Linux kernel & injecting /dev/diosix character driver..."
 WGET_EXTRA_ARGS=""
 if wget --version 2>&1 | head -1 | grep -q "Wget2"; then
-    echo "Detected wget2: overriding BR2_WGET to drop --passive-ftp..."
     WGET_EXTRA_ARGS='BR2_WGET="wget -nd -t 3"'
 fi
 
-# Inject diosix character driver into Linux kernel
-echo "Preparing Linux kernel source tree..."
-eval make -C "$BUILDROOT_DIR" linux-patch $WGET_EXTRA_ARGS 2>/dev/null || true
+if ! ls -d "$BUILDROOT_DIR"/output/build/linux-[0-9]* >/dev/null 2>&1; then
+    eval make -C "$BUILDROOT_DIR" -j"$(nproc)" linux-patch $WGET_EXTRA_ARGS >/dev/null 2>&1 || true
+fi
+
+
+INJECTED=0
 for linux_dir in "$BUILDROOT_DIR"/output/build/linux-*; do
     if [ -d "$linux_dir/drivers/char" ]; then
-        echo "Injecting /dev/diosix driver into $linux_dir..."
         cp tools/driver/diosix.c "$linux_dir/drivers/char/diosix.c"
         if ! grep -q "diosix.o" "$linux_dir/drivers/char/Makefile"; then
             echo "obj-y += diosix.o" >> "$linux_dir/drivers/char/Makefile"
         fi
+        INJECTED=1
+        log_ok "Injected /dev/diosix driver into $(basename "$linux_dir")."
     fi
 done
 
-# Build it
-echo "Building Root VM (this may take a while)..."
-eval make -C "$BUILDROOT_DIR" -j"$(nproc)" $WGET_EXTRA_ARGS
+if [ "$INJECTED" -eq 0 ]; then
+    log_info "Kernel tree will be patched during package build."
+fi
+
+# 6. Build Root VM with Real-Time Progress Monitor
+log_step "[5/5] Compiling Linux kernel & Root VM packages (using $(nproc) parallel jobs)..."
+
+START_TIME=$(date +%s)
+
+TOTAL_PACKAGES=$(make -C "$BUILDROOT_DIR" show-targets 2>/dev/null | wc -w || echo "44")
+[ "$TOTAL_PACKAGES" -lt 1 ] && TOTAL_PACKAGES=44
+
+BUILD_LOG="$BUILDROOT_DIR/output/build/build-time.log"
+
+# Background animated heartbeat monitor
+MONITOR_FIFO=$(mktemp -u)
+mkfifo "$MONITOR_FIFO" 2>/dev/null || true
+
+cleanup_monitor() {
+    if [ -n "$MONITOR_PID" ] && kill -0 "$MONITOR_PID" 2>/dev/null; then
+        kill "$MONITOR_PID" 2>/dev/null || true
+        wait "$MONITOR_PID" 2>/dev/null || true
+    fi
+    printf "\r\033[K"
+    rm -f "$MONITOR_FIFO" 2>/dev/null || true
+}
+trap cleanup_monitor EXIT INT TERM
+
+# Run make in background capturing output
+eval make -C "$BUILDROOT_DIR" -j"$(nproc)" $WGET_EXTRA_ARGS > "$BUILDROOT_DIR/output/build/make_exec.log" 2>&1 &
+MAKE_PID=$!
+
+SPIN_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+SPIN_IDX=0
+LAST_DONE_COUNT=0
+LAST_REPORTED_PKG=""
+
+while kill -0 "$MAKE_PID" 2>/dev/null; do
+    NOW_TS=$(date +%s)
+    ELAPSED=$((NOW_TS - START_TIME))
+    MINS=$((ELAPSED / 60))
+    SECS=$((ELAPSED % 60))
+    TIME_STR=$(printf "%02d:%02d" "$MINS" "$SECS")
+
+    DONE_COUNT=0
+    CUR_PKG="toolchain"
+    if [ -f "$BUILD_LOG" ]; then
+        DONE_COUNT=$(grep -E ':end  :install-target' "$BUILD_LOG" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+        LATEST_LINE=$(tail -n 1 "$BUILD_LOG" 2>/dev/null || true)
+        if [ -n "$LATEST_LINE" ]; then
+            CUR_PKG=$(echo "$LATEST_LINE" | awk -F':' '{print $NF}' | tr -d ' ' || echo "compiling")
+        fi
+    fi
+
+    # Adjust TOTAL_PACKAGES dynamically if needed
+    if [ "$DONE_COUNT" -gt "$TOTAL_PACKAGES" ]; then
+        TOTAL_PACKAGES=$DONE_COUNT
+    fi
+
+    # Print milestone line if a new package finished
+    if [ "$DONE_COUNT" -gt "$LAST_DONE_COUNT" ]; then
+        LAST_PKG=$(tail -n 2 "$BUILD_LOG" 2>/dev/null | grep ':end  :' | tail -n 1 | awk -F':' '{print $NF}' | tr -d ' ' || true)
+        if [ -n "$LAST_PKG" ] && [ "$LAST_PKG" != "$LAST_REPORTED_PKG" ]; then
+            PCT=$(( (DONE_COUNT * 100) / TOTAL_PACKAGES ))
+            [ "$PCT" -gt 99 ] && PCT=99
+            printf "\r\033[K    [%2d/%d] [%2d%%] ${GREEN}✓${RESET} %s\n" "$DONE_COUNT" "$TOTAL_PACKAGES" "$PCT" "$LAST_PKG"
+            LAST_REPORTED_PKG="$LAST_PKG"
+        fi
+        LAST_DONE_COUNT="$DONE_COUNT"
+    fi
+
+    PCT=0
+    if [ "$TOTAL_PACKAGES" -gt 0 ]; then
+        PCT=$(( (DONE_COUNT * 100) / TOTAL_PACKAGES ))
+        [ "$PCT" -gt 99 ] && PCT=99
+    fi
+
+    SPIN_CHAR="${SPIN_CHARS:$SPIN_IDX:1}"
+    SPIN_IDX=$(( (SPIN_IDX + 1) % 10 ))
+
+    EXTRA=""
+    if [[ "$CUR_PKG" =~ linux ]]; then
+        OBJ_COUNT=$(find "$BUILDROOT_DIR/output/build/linux-7.0.10" -name "*.o" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+        if [ -n "$OBJ_COUNT" ] && [ "$OBJ_COUNT" -gt 0 ] 2>/dev/null; then
+            EXTRA=" ($OBJ_COUNT kernel objects)"
+        fi
+    fi
+
+    printf "\r    ${CYAN}%s${RESET} [Elapsed: ${BOLD}%s${RESET}] [%2d/%d packages | %2d%%] Building ${BOLD}%s${RESET}%s\033[K" \
+        "$SPIN_CHAR" "$TIME_STR" "$DONE_COUNT" "$TOTAL_PACKAGES" "$PCT" "$CUR_PKG" "$EXTRA"
+
+    sleep 0.25
+done
 
 
-# Ensure the output directory exists
+# Wait for make to get exit code
+set +e
+wait "$MAKE_PID"
+MAKE_EXIT_CODE=$?
+set -e
+
+printf "\r\033[K"
+
+if [ "$MAKE_EXIT_CODE" -ne 0 ]; then
+    echo -e "\n${BOLD}\033[31mError:${RESET} BuildRoot compilation failed with exit code $MAKE_EXIT_CODE!"
+    echo -e "Last 25 log lines:"
+    tail -n 25 "$BUILDROOT_DIR/output/build/make_exec.log" 2>/dev/null || true
+    exit "$MAKE_EXIT_CODE"
+fi
+
+# Ensure the output directory exists and copy the final image
 mkdir -p "$(dirname "$OUT_FILE")"
-
-# The output from a RISC-V buildroot Linux build with BR2_LINUX_KERNEL_VMLINUX=y is usually output/images/vmlinux
 IMAGE_PATH="$BUILDROOT_DIR/output/images/vmlinux"
 if [ ! -f "$IMAGE_PATH" ]; then
-    echo "Error: BuildRoot finished but expected output image '$IMAGE_PATH' was not found!"
+    echo -e "\n${BOLD}\033[31mError:${RESET} BuildRoot completed but expected kernel image '$IMAGE_PATH' was not found!"
     exit 1
 fi
 
-echo "Copying built image to $OUT_FILE..."
 cp "$IMAGE_PATH" "$OUT_FILE"
 echo "$CURRENT_HASH" > "$HASH_FILE"
-
 write_rootvm_s
 
-echo "Root VM build complete!"
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+SIZE=$(du -h "$OUT_FILE" | cut -f1)
 
-
+echo -e "\n${BOLD}${GREEN}✓ Root VM build complete!${RESET} (${BOLD}${SIZE}${RESET} in ${ELAPSED}s)"
+log_info "Kernel Image : ${BOLD}$OUT_FILE${RESET}"
+log_info "Hash Check   : ${CURRENT_HASH:0:16}..."
+log_info "Descriptor   : $ROOTVM_S_PATH\n"
 
