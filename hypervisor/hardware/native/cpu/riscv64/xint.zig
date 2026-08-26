@@ -10,22 +10,22 @@ const debug = @import("../../../../core/debug.zig");
 const riscv = @import("mod.zig");
 const pcore = @import("../../../../core/pcore.zig");
 const vcore = @import("../../../../core/vcore.zig");
-const sbi = @import("../../../emulation/arch/riscv32/sbi.zig");
+const sbi = @import("../../../../core/sbi.zig");
 const vm_space = @import("../../../../core/vm.zig");
 const scheduler = @import("../../../../core/scheduler.zig");
 const emu_vcpu = @import("emulation").vcpu;
 const config = @import("config");
 
-fn raw_print_char(c: u8) void {
+fn rawPrintChar(c: u8) void {
     debug.hw_putchar(c);
 }
 
-fn raw_print_hex(val: usize) void {
+fn rawPrintHex(val: usize) void {
     const chars = "0123456789abcdef";
     var i: usize = 16;
     while (i > 0) {
         i -= 1;
-        raw_print_char(chars[(val >> @intCast(i * 4)) & 0xf]);
+        rawPrintChar(chars[(val >> @intCast(i * 4)) & 0xf]);
     }
 }
 
@@ -40,11 +40,11 @@ pub fn init() void {
     // Especially stimecmp (Sstc) timer interrupts must trap to M-mode.
     riscv.writeMideleg(0);
     // Enable physical timer, software, and external interrupts (both machine and supervisor mode)
-    riscv.writeMie(0xAAA);
+    riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
 
-    // Enable M-mode delegation of cycle, time, and instret counters (bits 0, 1, 2 = 7)
+    // Enable M-mode delegation of cycle, time, and instret counters
     // to lower privilege modes (HS, VS, VU, U).
-    riscv.writeMcounteren(7);
+    riscv.writeMcounteren(riscv.MCOUNTEREN.DEFAULT_COUNTERS);
 
     // Enable physical Vector (VS) and Floating-point (FS) extensions (set to 3 = Dirty)
     var mstatus = riscv.readMstatus();
@@ -61,20 +61,19 @@ pub fn initCpuFeatures() void {
     var envcfg_val: usize = 0;
     
     if (riscv.riscv_supports_sstc) {
-        // Enable STCE (bit 63) to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
-        envcfg_val |= (@as(usize, 1) << 63);
+        // Enable STCE to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
+        envcfg_val |= riscv.ENVCFG.STCE;
     }
     
     if (riscv.riscv_supports_smstateen) {
         // Enable Cache Block Operations: CBZE (bit 7), CBCFE (bit 6), and CBIE (bits 4-5) = 240 (0xF0).
-        envcfg_val |= 240;
+        envcfg_val |= riscv.ENVCFG.CACHE_OPS_ALL;
         
-        // Enable state-enables for AIA (bit 59), IMSIC (bit 58), and CSRIND (bit 60),
-        // as well as ENVCFG (bit 62) to delegate native hardware register access to lower privilege levels (HS/VS/U).
-        const stateen_base = (@as(usize, 1) << 62) | (@as(usize, 1) << 60) | (@as(usize, 1) << 59) | (@as(usize, 1) << 58);
+        // Enable state-enables for AIA, IMSIC, CSRIND, and ENVCFG to delegate native register access
+        const stateen_base = riscv.STATEEN.BASE_FEATURES;
         
         // For mstateen0 (0x30c), we also enable bit 63 (SE0) to control/enable lower-level stateen.
-        riscv.writeMstateen0(stateen_base | (@as(usize, 1) << 63));
+        riscv.writeMstateen0(stateen_base | riscv.STATEEN.SE0);
         
         if (riscv.hasHExtension()) {
             riscv.writeHstateen0(stateen_base);
@@ -92,7 +91,7 @@ pub fn initCpuFeatures() void {
     // immediately fire a physical STIP trap storm. The hypervisor will program this
     // dynamically when it needs to wake up from WFI.
     if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-        riscv.writeStimecmp(0xffffffffffffffff);
+        riscv.writeStimecmp(std.math.maxInt(u64));
     }
 
     // For PMP fallback guests (native without H-extension), we must delegate supervisor

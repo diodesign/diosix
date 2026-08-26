@@ -32,15 +32,15 @@ const MIDELEG_DEFAULT: u32 = 0x222;
 /// Set up initial RISC-V register state for a new emulated vcore.
 pub fn initRegisters(vcpu: *VCpu, entry: usize, dtb: usize, vcore_id: usize) void {
     vcpu.pc = @truncate(entry);
-    vcpu.setReg(10, @truncate(vcore_id)); // a0
-    vcpu.setReg(11, @truncate(dtb)); // a1
+    vcpu.setReg(@intFromEnum(riscv.Register.a0), @truncate(vcore_id)); // a0
+    vcpu.setReg(@intFromEnum(riscv.Register.a1), @truncate(dtb)); // a1
 
     vcpu.medeleg = MEDELEG_DEFAULT;
     vcpu.mideleg = MIDELEG_DEFAULT;
     vcpu.privilege_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
     vcpu.priv_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
     vcpu.softtlb.privilege_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
-    vcpu.mstatus = (1 << 11) | (1 << 8) | (1 << 7) | (1 << 5) | (1 << 21) | (3 << 13) | (3 << 9); // MPP=S, SPP=S, MPIE=1, SPIE=1, TW=1, FS=Dirty, VS=Dirty
+    vcpu.mstatus = (1 << riscv.MSTATUS.MPP_SHIFT) | (1 << riscv.SSTATUS.SPP_SHIFT) | riscv.MSTATUS.MPIE | riscv.SSTATUS.SPIE | (1 << 21) | (3 << riscv.MSTATUS.FS_SHIFT) | (3 << riscv.MSTATUS.VS_SHIFT);
     vcpu.time = riscv.readTime();
 }
 

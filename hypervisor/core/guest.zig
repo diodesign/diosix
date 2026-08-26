@@ -212,8 +212,25 @@ pub const Guest = struct {
     // Shared IO-APIC backing memory for x86_64 guests
     ioapic_mem: [IOAPIC_PAGE_SIZE]u8,
 
+    // Attenuated guest VM manifest buffer
+    manifest: ?[]u8 = null,
+
     // allocator for heap-allocated Guest structures
     allocator: std.mem.Allocator,
+
+    pub fn setManifest(self: *Guest, data: []const u8) !void {
+        if (self.manifest) |m| {
+            self.allocator.free(m);
+            self.manifest = null;
+        }
+        const buf = try self.allocator.alloc(u8, data.len);
+        @memcpy(buf, data);
+        self.manifest = buf;
+    }
+
+    pub fn getManifest(self: *const Guest) ?[]const u8 {
+        return self.manifest;
+    }
 
     pub fn allocChildHandle(self: *Guest, child: *Guest) !usize {
 
@@ -483,6 +500,11 @@ pub const Guest = struct {
                 self.allocator.destroy(node);
                 self.child_node = null;
             }
+        }
+
+        if (self.manifest) |m| {
+            self.allocator.free(m);
+            self.manifest = null;
         }
 
         freeVmid(self.vmid);
@@ -1076,6 +1098,12 @@ test "guest quota management and inter-VM IPC" {
     try testing.expectEqual(@as(usize, 0), received_by_child.sender_cid);
     try testing.expectEqual(parent_msg.len, received_by_child.len);
     try testing.expectEqualStrings(parent_msg, received_by_child.data[0..received_by_child.len]);
+
+    // Test Guest manifest storage and retrieval
+    const sample_manifest = "[vm]\nname = \"test-child\"\ncid = 2\n";
+    try child.setManifest(sample_manifest);
+    try testing.expect(child.getManifest() != null);
+    try testing.expectEqualStrings(sample_manifest, child.getManifest().?);
 }
 
 

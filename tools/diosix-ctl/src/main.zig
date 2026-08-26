@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const api = @import("diosix_api.zig");
+const manifest = @import("manifest.zig");
 const linux = std.os.linux;
 
 pub const CID_PARENT: usize = api.CID_PARENT;
@@ -16,6 +17,7 @@ pub const MAX_IPC_BUF_LEN: usize = 4096;
 pub const MAX_PATH_LEN: usize = 256;
 pub const MAX_ELF_FILE_SIZE: usize = 64 * 1024 * 1024;
 pub const MAX_DTB_FILE_SIZE: usize = 2 * 1024 * 1024;
+pub const MAX_MANIFEST_SIZE: usize = 64 * 1024;
 
 pub const PAGE_SIZE_KB: usize = 4;
 pub const KB_PER_MB: usize = 1024;
@@ -220,6 +222,24 @@ pub fn main(init: std.process.Init.Minimal) !void {
         try cmdPoweroff(&client);
     } else if (std.mem.eql(u8, command, "reboot")) {
         try cmdReboot(&client);
+    } else if (std.mem.eql(u8, command, "manifest")) {
+        try cmdManifest(&client, argv[2..]);
+    } else if (std.mem.eql(u8, command, "resolve")) {
+        if (argv.len < 3) {
+            printStr("Usage: dsx resolve <service_alias> [--manifest <file.toml>]\n");
+            return;
+        }
+        const service_name = std.mem.span(argv[2]);
+        var m_path: ?[]const u8 = null;
+        for (argv[3..], 3..) |arg, i| {
+            const span = std.mem.span(arg);
+            if (std.mem.eql(u8, span, "--manifest") or std.mem.eql(u8, span, "-m")) {
+                if (argv.len > i + 1) {
+                    m_path = std.mem.span(argv[i + 1]);
+                }
+            }
+        }
+        try cmdResolve(&client, service_name, m_path);
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help")) {
         printUsage();
     } else {
@@ -233,6 +253,12 @@ fn printUsage() void {
         \\
         \\Usage:
         \\  dsx info [--host]                  Display current VM state (or host hypervisor info)
+        \\  dsx manifest <subcmd> [options]    Manage hierarchical system & VM manifests
+        \\      show [--file <path>] [--hv]    Display active or file manifest
+        \\      validate <file.toml>           Validate system or child manifest syntax
+        \\      prune <sys.toml> --domain <d>  Attenuate system manifest for a child VM domain
+        \\      set <cid> <file.toml>          Stage attenuated manifest in hypervisor for child
+        \\  dsx resolve <service_alias>        Resolve service alias or endpoint in current manifest
         \\  dsx spawn <elf> [opts] [--trusted] Create and boot a child VM directly from image
         \\  dsx fork [--untrusted]             Fork current VM to clone state (returns CID >= 2)
         \\  dsx fork --spawn <elf> [options]   Alias to create and boot a new child VM
@@ -626,6 +652,322 @@ fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dt
     var buf2: [64]u8 = undefined;
     const msg2 = std.fmt.bufPrint(&buf2, "Child VM (CID {d}) successfully spawned and started.\n", .{spawned_cid}) catch return;
     printStr(msg2);
+}
+
+fn writeFile(path: []const u8, content: []const u8) !void {
+    var path_buf: [MAX_PATH_LEN]u8 = undefined;
+    if (path.len >= path_buf.len) return error.PathTooLong;
+    @memcpy(path_buf[0..path.len], path);
+    path_buf[path.len] = 0;
+
+    const fd_res = linux.open(@ptrCast(path_buf[0..path.len :0]), .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    const fd_signed: isize = @bitCast(fd_res);
+    if (fd_signed < 0) return error.CannotOpenFile;
+    const fd: i32 = @intCast(fd_signed);
+    defer _ = linux.close(fd);
+
+    var written: usize = 0;
+    while (written < content.len) {
+        const rc = linux.write(fd, content.ptr + written, content.len - written);
+        const signed_rc: isize = @bitCast(rc);
+        if (signed_rc <= 0) break;
+        written += @intCast(signed_rc);
+    }
+}
+
+fn cmdManifest(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
+    if (args.len == 0) {
+        printStr("Usage: dsx manifest <show|validate|prune|set> [options]\n");
+        return;
+    }
+    const subcmd = std.mem.span(args[0]);
+    const allocator = std.heap.page_allocator;
+
+    if (std.mem.eql(u8, subcmd, "show")) {
+        var file_path: ?[]const u8 = null;
+        var use_hv: bool = false;
+        var target_cid: usize = CID_SELF;
+
+        for (args[1..], 1..) |arg, i| {
+            const span = std.mem.span(arg);
+            if (std.mem.eql(u8, span, "--file") or std.mem.eql(u8, span, "-f")) {
+                if (args.len > i + 1) {
+                    file_path = std.mem.span(args[i + 1]);
+                }
+            } else if (std.mem.eql(u8, span, "--hypervisor") or std.mem.eql(u8, span, "--hv")) {
+                use_hv = true;
+            } else if (std.mem.eql(u8, span, "--cid") or std.mem.eql(u8, span, "-c")) {
+                if (args.len > i + 1) {
+                    target_cid = parseCid(std.mem.span(args[i + 1])) catch CID_SELF;
+                }
+            }
+        }
+
+        if (file_path) |fp| {
+            const content = readBinaryFile(fp, MAX_MANIFEST_SIZE) catch |err| {
+                printStr("Failed to read manifest file: ");
+                printStr(@errorName(err));
+                printStr("\n");
+                return;
+            };
+            defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+            printStr(content);
+            if (content.len > 0 and content[content.len - 1] != '\n') {
+                printStr("\n");
+            }
+        } else if (use_hv) {
+            var m_buf: [MAX_MANIFEST_SIZE]u8 = undefined;
+            const actual_len = client.getManifest(target_cid, &m_buf) catch |err| {
+                printApiError("Get hypervisor manifest", err);
+                return;
+            };
+            if (actual_len == 0) {
+                printStr("# (No manifest attached to this VM in hypervisor)\n");
+            } else {
+                printStr(m_buf[0..actual_len]);
+                if (m_buf[actual_len - 1] != '\n') printStr("\n");
+            }
+        } else {
+            if (readBinaryFile("/etc/diosix/manifest.toml", MAX_MANIFEST_SIZE)) |content| {
+                defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+                printStr(content);
+                if (content.len > 0 and content[content.len - 1] != '\n') printStr("\n");
+            } else |_| {
+                if (readBinaryFile("/etc/diosix/system.toml", MAX_MANIFEST_SIZE)) |content| {
+                    defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+                    printStr(content);
+                    if (content.len > 0 and content[content.len - 1] != '\n') printStr("\n");
+                } else |_| {
+                    var m_buf: [MAX_MANIFEST_SIZE]u8 = undefined;
+                    if (client.getManifest(target_cid, &m_buf)) |actual_len| {
+                        if (actual_len > 0) {
+                            printStr(m_buf[0..actual_len]);
+                            if (m_buf[actual_len - 1] != '\n') printStr("\n");
+                            return;
+                        }
+                    } else |_| {}
+                    printStr("No manifest found at /etc/diosix/manifest.toml or in hypervisor.\n");
+                }
+            }
+        }
+    } else if (std.mem.eql(u8, subcmd, "validate")) {
+        if (args.len < 2) {
+            printStr("Usage: dsx manifest validate <path/to/manifest.toml>\n");
+            return;
+        }
+        const file_path = std.mem.span(args[1]);
+        const content = readBinaryFile(file_path, MAX_MANIFEST_SIZE) catch |err| {
+            printStr("Failed to read manifest file: ");
+            printStr(@errorName(err));
+            printStr("\n");
+            return;
+        };
+        defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+
+        if (std.mem.indexOf(u8, content, "[system]") != null or std.mem.indexOf(u8, content, "[domains.") != null or std.mem.indexOf(u8, content, "[subtrees.") != null) {
+            var sys = manifest.parseSystemManifest(allocator, content) catch |err| {
+                printStr("System manifest parse error: ");
+                printStr(@errorName(err));
+                printStr("\n");
+                return;
+            };
+            defer sys.deinit();
+            manifest.validateSystemManifest(&sys) catch |err| {
+                printStr("System manifest validation failed: ");
+                printStr(@errorName(err));
+                printStr("\n");
+                return;
+            };
+            printStr("✓ System manifest is valid.\n");
+        } else {
+            var child = manifest.parseChildManifest(allocator, content) catch |err| {
+                printStr("Child manifest parse error: ");
+                printStr(@errorName(err));
+                printStr("\n");
+                return;
+            };
+            defer child.deinit();
+            manifest.validateChildManifest(&child) catch |err| {
+                printStr("Child manifest validation failed: ");
+                printStr(@errorName(err));
+                printStr("\n");
+                return;
+            };
+            printStr("✓ Child VM manifest is valid.\n");
+        }
+    } else if (std.mem.eql(u8, subcmd, "prune")) {
+        if (args.len < 2) {
+            printStr("Usage: dsx manifest prune <system.toml> --domain <name> [-o <out.toml>] [--cid <cid>]\n");
+            return;
+        }
+        const sys_path = std.mem.span(args[1]);
+        var domain_name: ?[]const u8 = null;
+        var out_file: ?[]const u8 = null;
+        var child_cid: usize = CID_FIRST_CHILD;
+        var parent_cid: usize = CID_SELF;
+
+        for (args[2..], 2..) |arg, i| {
+            const span = std.mem.span(arg);
+            if (std.mem.eql(u8, span, "--domain") or std.mem.eql(u8, span, "-d")) {
+                if (args.len > i + 1) domain_name = std.mem.span(args[i + 1]);
+            } else if (std.mem.eql(u8, span, "-o") or std.mem.eql(u8, span, "--out")) {
+                if (args.len > i + 1) out_file = std.mem.span(args[i + 1]);
+            } else if (std.mem.eql(u8, span, "--cid") or std.mem.eql(u8, span, "-c")) {
+                if (args.len > i + 1) child_cid = parseCid(std.mem.span(args[i + 1])) catch CID_FIRST_CHILD;
+            } else if (std.mem.eql(u8, span, "--parent") or std.mem.eql(u8, span, "-p")) {
+                if (args.len > i + 1) parent_cid = parseCid(std.mem.span(args[i + 1])) catch CID_SELF;
+            }
+        }
+
+        if (domain_name == null) {
+            printStr("Error: --domain <name> is required for prune.\n");
+            return;
+        }
+
+        const content = readBinaryFile(sys_path, MAX_MANIFEST_SIZE) catch |err| {
+            printStr("Failed to read system manifest: ");
+            printStr(@errorName(err));
+            printStr("\n");
+            return;
+        };
+        defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+
+        var sys = manifest.parseSystemManifest(allocator, content) catch |err| {
+            printStr("Failed to parse system manifest: ");
+            printStr(@errorName(err));
+            printStr("\n");
+            return;
+        };
+        defer sys.deinit();
+
+        var child = manifest.pruneSystemManifest(allocator, &sys, domain_name.?, child_cid, parent_cid, null) catch |err| {
+            printStr("Failed to prune manifest: ");
+            printStr(@errorName(err));
+            printStr("\n");
+            return;
+        };
+        defer child.deinit();
+
+        const serialized = manifest.serializeChildManifest(allocator, &child) catch |err| {
+            printStr("Failed to serialize attenuated manifest: ");
+            printStr(@errorName(err));
+            printStr("\n");
+            return;
+        };
+        defer allocator.free(serialized);
+
+        if (out_file) |out_path| {
+            writeFile(out_path, serialized) catch |err| {
+                printStr("Failed to write output manifest: ");
+                printStr(@errorName(err));
+                printStr("\n");
+                return;
+            };
+            printStr("✓ Attenuated manifest written to ");
+            printStr(out_path);
+            printStr("\n");
+        } else {
+            printStr(serialized);
+        }
+    } else if (std.mem.eql(u8, subcmd, "set")) {
+        if (args.len < 3) {
+            printStr("Usage: dsx manifest set <target_cid> <path/to/manifest.toml>\n");
+            return;
+        }
+        const target_cid = parseCid(std.mem.span(args[1])) catch {
+            printStr("Invalid target CID\n");
+            return;
+        };
+        const file_path = std.mem.span(args[2]);
+        const content = readBinaryFile(file_path, MAX_MANIFEST_SIZE) catch |err| {
+            printStr("Failed to read manifest file: ");
+            printStr(@errorName(err));
+            printStr("\n");
+            return;
+        };
+        defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+
+        client.setManifest(target_cid, content) catch |err| {
+            printApiError("Set manifest", err);
+            return;
+        };
+        printStr("✓ Manifest successfully staged in hypervisor for CID ");
+        var cid_buf: [16]u8 = undefined;
+        const cid_str = std.fmt.bufPrint(&cid_buf, "{d}\n", .{target_cid}) catch return;
+        printStr(cid_str);
+    } else {
+        printStr("Unknown manifest subcommand. Available: show, validate, prune, set\n");
+    }
+}
+
+fn cmdResolve(client: *api.DiosixClient, service_alias: []const u8, manifest_path: ?[]const u8) !void {
+    const allocator = std.heap.page_allocator;
+    var content_slice: ?[]u8 = null;
+    var unmap_len: usize = 0;
+    defer {
+        if (content_slice) |cs| {
+            if (unmap_len > 0) {
+                _ = linux.munmap(cs.ptr, unmap_len);
+            }
+        }
+    }
+
+    if (manifest_path) |mp| {
+        if (readBinaryFile(mp, MAX_MANIFEST_SIZE)) |c| {
+            content_slice = c;
+            unmap_len = MAX_MANIFEST_SIZE;
+        } else |_| {}
+    } else {
+        if (readBinaryFile("/etc/diosix/manifest.toml", MAX_MANIFEST_SIZE)) |c| {
+            content_slice = c;
+            unmap_len = MAX_MANIFEST_SIZE;
+        } else |_| {
+            if (readBinaryFile("/etc/diosix/system.toml", MAX_MANIFEST_SIZE)) |c| {
+                content_slice = c;
+                unmap_len = MAX_MANIFEST_SIZE;
+            } else |_| {
+                var m_buf = try allocator.alloc(u8, MAX_MANIFEST_SIZE);
+                defer allocator.free(m_buf);
+                if (client.getManifest(CID_SELF, m_buf)) |actual_len| {
+                    if (actual_len > 0) {
+                        content_slice = try allocator.dupe(u8, m_buf[0..actual_len]);
+                    }
+                } else |_| {}
+            }
+        }
+    }
+
+    if (content_slice == null) {
+        printStr("Error: No manifest found to resolve service against.\n");
+        return;
+    }
+
+    const toml_str = content_slice.?;
+    var child = manifest.parseChildManifest(allocator, toml_str) catch |err| {
+        printStr("Error parsing manifest: ");
+        printStr(@errorName(err));
+        printStr("\n");
+        return;
+    };
+    defer child.deinit();
+
+    if (manifest.resolveService(&child, service_alias)) |req| {
+        printStr("Service Resolution:\n");
+        printStr("  Service : "); printStr(req.service); printStr("\n");
+        printStr("  Alias   : "); printStr(req.as_alias); printStr("\n");
+        var buf: [32]u8 = undefined;
+        const cid_str = std.fmt.bufPrint(&buf, "  CID     : {d}\n", .{req.target_cid}) catch return;
+        printStr(cid_str);
+        if (req.target_domain.len > 0) {
+            printStr("  Domain  : "); printStr(req.target_domain); printStr("\n");
+        }
+        printStr("  Channel : "); printStr(req.channel); printStr("\n");
+        printStr("  Mode    : "); printStr(req.mode); printStr("\n");
+    } else {
+        printStr("Error: Service '");
+        printStr(service_alias);
+        printStr("' not found in current VM manifest.\n");
+    }
 }
 
 

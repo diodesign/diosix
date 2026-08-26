@@ -1,0 +1,47 @@
+# Diosix System Bootstrap Manifest (system.toml)
+#
+# Defines the top-level domain hierarchy, hardware partitions,
+# and service capabilities passed down the VM tree.
+
+[system]
+version = "1.0"
+domain = "diosix.local"
+
+# ------------------------------------------------------------------------------
+# System Domain: Hosts core system services (network stack, graphics server, etc.)
+# ------------------------------------------------------------------------------
+[domains.sys]
+name = "sys-supervisor"
+image = "/boot/sys-supervisor.elf"
+vcpus = 2
+ram = "2GiB"
+can_provide = ["net.*", "gui.*", "fs.*", "storage.*"]
+can_require = ["crypto.rng", "clock.tai"]
+
+provides = [
+  { service = "net.wan", channel = "shmem", type = "ethernet" },
+  { service = "gui.wayland", channel = "ipc", type = "display" },
+  { service = "fs.home", channel = "9p", type = "filesystem" }
+]
+
+routes = [
+  { require = "crypto.rng", resolve_to = "root.hw.rng" },
+  { require = "clock.tai", resolve_to = "root.hw.timer" }
+]
+
+# ------------------------------------------------------------------------------
+# User Application Domain: Standard sandboxed userland environment
+# ------------------------------------------------------------------------------
+[domains.user]
+name = "user-supervisor"
+image = "/boot/user-supervisor.elf"
+vcpus = 4
+ram = "14GiB"
+can_provide = ["app.*"]
+can_require = ["net.*", "gui.*", "fs.*"]
+
+routes = [
+  { require = "net.wan", resolve_to = "sys.net.wan" },
+  { require = "gui.display", resolve_to = "sys.gui.wayland" },
+  { require = "fs.user", resolve_to = "sys.fs.home" }
+]

@@ -18,7 +18,7 @@ pub const VCpu = emulation_native.VCpu;
 pub const SoftTlb = emulation_native.SoftTlb;
 pub const Engine = emulation_native.Engine;
 const rv32_arch = @import("../hardware/emulation/arch/riscv32/mod.zig");
-const sbi32 = @import("../hardware/emulation/arch/riscv32/sbi.zig");
+const sbi = @import("sbi.zig");
 
 pub const TpGuard = struct {
     saved_tp: usize = 0,
@@ -367,7 +367,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
                 context[i] = @truncate(vcpu_ptr.regs[i]);
             }
 
-            sbi32.handle(vc, 0, &context);
+            sbi.handle(vc, 0, &context);
 
             inline for (0..32) |i| {
                 vcpu_ptr.regs[i] = context[i];

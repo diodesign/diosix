@@ -29,6 +29,11 @@ pub const HSTATUS = struct {
     pub const VTSR: usize = 1 << 22;
 };
 pub const HVIP = interface.HVIP;
+pub const MIE = interface.MIE;
+pub const MIP = interface.MIP;
+pub const MCOUNTEREN = interface.MCOUNTEREN;
+pub const ENVCFG = interface.ENVCFG;
+pub const STATEEN = interface.STATEEN;
 pub const toCause = interface.toCause;
 pub const CSR = interface.CSR;
 pub const Instr = interface.Instr;

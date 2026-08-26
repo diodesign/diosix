@@ -32,6 +32,8 @@
 #define DIOSIX_FUNC_IPC_RECV    8
 #define DIOSIX_FUNC_POLL_EVENT  9
 #define DIOSIX_FUNC_GET_HV_INFO 10
+#define DIOSIX_FUNC_GET_MANIFEST 11
+#define DIOSIX_FUNC_SET_MANIFEST 12
 
 #define IOCTL_FORK        0x1001
 #define IOCTL_DROP_TRUST  0x1002
@@ -46,6 +48,8 @@
 #define IOCTL_IPC_SEND    0x1009
 #define IOCTL_IPC_RECV    0x100A
 #define IOCTL_GET_HV_INFO 0x100B
+#define IOCTL_GET_MANIFEST 0x100C
+#define IOCTL_SET_MANIFEST 0x100D
 
 
 struct hypervisor_info {
@@ -98,6 +102,13 @@ struct ipc_recv_args {
     unsigned long max_len;
     unsigned long actual_len;
     unsigned long actual_sender_cid;
+};
+
+struct manifest_args {
+    unsigned long target_cid;
+    unsigned long data_ptr;
+    unsigned long max_len;
+    unsigned long actual_len;
 };
 
 
@@ -480,6 +491,114 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
 
         kfree(hv_info);
+        return 0;
+    }
+
+    case IOCTL_GET_MANIFEST: {
+        struct manifest_args args;
+        struct manifest_args *sbi_margs;
+        char *kbuf = NULL;
+        phys_addr_t margs_pa, kbuf_pa = 0;
+
+        if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+            return -EFAULT;
+
+        if (args.max_len > 64 * 1024)
+            return -EINVAL;
+
+        sbi_margs = kzalloc(sizeof(*sbi_margs), GFP_KERNEL);
+        if (!sbi_margs)
+            return -ENOMEM;
+
+        if (args.max_len > 0) {
+            kbuf = kzalloc(args.max_len, GFP_KERNEL);
+            if (!kbuf) {
+                kfree(sbi_margs);
+                return -ENOMEM;
+            }
+            kbuf_pa = virt_to_phys(kbuf);
+        }
+
+        sbi_margs->target_cid = args.target_cid;
+        sbi_margs->data_ptr = (unsigned long)kbuf_pa;
+        sbi_margs->max_len = args.max_len;
+
+        margs_pa = virt_to_phys(sbi_margs);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_MANIFEST, (unsigned long)margs_pa, 0, 0, 0, 0, 0);
+
+        if (ret.error) {
+            if (kbuf) kfree(kbuf);
+            kfree(sbi_margs);
+            return -EIO;
+        }
+
+        args.actual_len = sbi_margs->actual_len;
+        if (sbi_margs->actual_len > 0 && args.data_ptr && kbuf) {
+            unsigned long copy_len = min(args.max_len, sbi_margs->actual_len);
+            if (copy_to_user((void __user *)args.data_ptr, kbuf, copy_len)) {
+                kfree(kbuf);
+                kfree(sbi_margs);
+                return -EFAULT;
+            }
+        }
+
+        if (copy_to_user((void __user *)arg, &args, sizeof(args))) {
+            if (kbuf) kfree(kbuf);
+            kfree(sbi_margs);
+            return -EFAULT;
+        }
+
+        if (kbuf) kfree(kbuf);
+        kfree(sbi_margs);
+        return 0;
+    }
+
+    case IOCTL_SET_MANIFEST: {
+        struct manifest_args args;
+        struct manifest_args *sbi_margs;
+        char *kbuf = NULL;
+        phys_addr_t margs_pa, kbuf_pa = 0;
+
+        if (!capable(CAP_SYS_ADMIN))
+            return -EPERM;
+
+        if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+            return -EFAULT;
+
+        if (args.max_len > 64 * 1024)
+            return -EINVAL;
+
+        sbi_margs = kzalloc(sizeof(*sbi_margs), GFP_KERNEL);
+        if (!sbi_margs)
+            return -ENOMEM;
+
+        if (args.max_len > 0) {
+            kbuf = kzalloc(args.max_len, GFP_KERNEL);
+            if (!kbuf) {
+                kfree(sbi_margs);
+                return -ENOMEM;
+            }
+            if (copy_from_user(kbuf, (void __user *)args.data_ptr, args.max_len)) {
+                kfree(kbuf);
+                kfree(sbi_margs);
+                return -EFAULT;
+            }
+            kbuf_pa = virt_to_phys(kbuf);
+        }
+
+        sbi_margs->target_cid = args.target_cid;
+        sbi_margs->data_ptr = (unsigned long)kbuf_pa;
+        sbi_margs->max_len = args.max_len;
+
+        margs_pa = virt_to_phys(sbi_margs);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_SET_MANIFEST, (unsigned long)margs_pa, 0, 0, 0, 0, 0);
+
+        if (kbuf) kfree(kbuf);
+        kfree(sbi_margs);
+
+        if (ret.error)
+            return -EIO;
+
         return 0;
     }
 

@@ -98,7 +98,7 @@ rm -rf tools/overlay-common/sbin 2>/dev/null || true
 
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
-zig build-exe tools/diosix-ctl/src/main.zig -target "$ZIG_TARGET" -O ReleaseSmall --name diosix-ctl -femit-bin=tools/overlay-common/usr/sbin/diosix-ctl >/dev/null 2>&1
+zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools/diosix-ctl/src/main.zig -Minterface=hypervisor/interface/lib.zig --name diosix-ctl -femit-bin=tools/overlay-common/usr/sbin/diosix-ctl >/dev/null 2>&1
 ln -sf diosix-ctl tools/overlay-common/usr/sbin/dsx
 
 log_ok "Installed diosix-ctl and staged 'dsx' shortcut in rootfs overlay."

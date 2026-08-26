@@ -67,6 +67,8 @@ pub const DIOSIX = struct {
     pub const IPC_RECV = 8;
     pub const POLL_EVENT = 9;
     pub const GET_HV_INFO = 10;
+    pub const GET_MANIFEST = 11;
+    pub const SET_MANIFEST = 12;
 };
 
 pub const CID_PARENT: usize = 0;
@@ -158,6 +160,17 @@ pub const SpawnArgs = extern struct {
     flags: usize = 0,
 };
 
+pub const TerminateArgs = extern struct {
+    target_id: usize,
+    exit_code: usize,
+};
+
+pub const WaitEventArgs = extern struct {
+    target_cid: usize,
+    flags: usize,
+    event: Event = std.mem.zeroes(Event),
+};
+
 pub const QuotaArgs = extern struct {
     target_cid: usize,
     max_ram_pages: usize,
@@ -178,6 +191,13 @@ pub const IpcRecvArgs = extern struct {
     max_len: usize,
     actual_len: usize = 0,
     actual_sender_cid: usize = 0,
+};
+
+pub const ManifestArgs = extern struct {
+    target_cid: usize,
+    data_ptr: usize,
+    max_len: usize,
+    actual_len: usize = 0,
 };
 
 

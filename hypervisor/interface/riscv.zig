@@ -93,6 +93,52 @@ pub const HVIP = struct {
     pub const VSEIP: usize = 1 << 10;
 };
 
+pub const MIE = struct {
+    pub const SSIE: usize = 1 << 1;
+    pub const MSIE: usize = 1 << 3;
+    pub const STIE: usize = 1 << 5;
+    pub const MTIE: usize = 1 << 7;
+    pub const SEIE: usize = 1 << 9;
+    pub const MEIE: usize = 1 << 11;
+    pub const ALL_PHYSICAL: usize = SSIE | MSIE | STIE | MTIE | SEIE | MEIE; // 0xAAA
+};
+
+pub const MIP = struct {
+    pub const SSIP_BIT: u6 = 1;
+    pub const MSIE_BIT: u6 = 3;
+    pub const STIP_BIT: u6 = 5;
+    pub const MTIE_BIT: u6 = 7;
+    pub const SEIP_BIT: u6 = 9;
+    pub const MEIP_BIT: u6 = 11;
+};
+
+pub const MCOUNTEREN = struct {
+    pub const CY: usize = 1 << 0;
+    pub const TM: usize = 1 << 1;
+    pub const IR: usize = 1 << 2;
+    pub const DEFAULT_COUNTERS: usize = CY | TM | IR; // 7
+};
+
+pub const ENVCFG = struct {
+    pub const FIOM: usize = 1 << 0;
+    pub const CBIE_SHIFT: u6 = 4;
+    pub const CBIE_MASK: usize = 3 << 4;
+    pub const CBCFE: usize = 1 << 6;
+    pub const CBZE: usize = 1 << 7;
+    pub const STCE: usize = @as(usize, 1) << 63;
+    pub const CACHE_OPS_ALL: usize = CBZE | CBCFE | (3 << CBIE_SHIFT); // 240 (0xF0)
+};
+
+pub const STATEEN = struct {
+    pub const IMSIC: usize = @as(usize, 1) << 58;
+    pub const AIA: usize = @as(usize, 1) << 59;
+    pub const CSRIND: usize = @as(usize, 1) << 60;
+    pub const ENVCFG: usize = @as(usize, 1) << 62;
+    pub const SE0: usize = @as(usize, 1) << 63;
+    pub const BASE_FEATURES: usize = STATEEN.ENVCFG | STATEEN.CSRIND | STATEEN.AIA | STATEEN.IMSIC;
+};
+
+
 pub const Cause = enum(usize) {
     pub const INTERRUPT_BIT = 1 << 63;
 
