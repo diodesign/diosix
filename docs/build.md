@@ -105,6 +105,24 @@ options, run:
 
 ---
 
+## Incremental build caching
+
+To ensure responsive development cycles, the build system leverages multi-tier
+caching:
+
+*   **Hypervisor core**: Zig caches compiled objects in `.zig-cache/`. Recompiling
+    hypervisor source changes takes ~1 second.
+*   **Guest userland utilities (`diosix-ctl`)**: The `dsx` binary is compiled
+    via `zig build-exe` directly against the shared `hypervisor/interface/` module
+    and staged into the dynamic build overlay (`zig-out/buildroot-<arch>/overlay-dynamic/usr/sbin/`).
+*   **Buildroot workspace**: Buildroot stores toolchains, source tarballs, and
+    intermediate build objects under `zig-out/buildroot-<arch>/`. Once the initial
+    Linux kernel and packages are built, subsequent invocations reuse the
+    cached toolchain and objects, rebuilding only updated overlay files and
+    packaging the final `rootvm.elf` in ~10–20 seconds.
+
+---
+
 ## Containerized build process using Docker
 
 For a highly reproducible and isolated build environment that automatically

@@ -632,7 +632,7 @@ pub fn serializeChildManifest(allocator: std.mem.Allocator, child: *const ChildM
 
     var writer_buf: [256]u8 = undefined;
 
-    try out.appendSlice(allocator, "# Diosix Attenuated Guest VM Manifest (Generated)\n[vm]\n");
+    try out.appendSlice(allocator, "# Diosix attenuated guest VM manifest (generated)\n[vm]\n");
 
     const name_line = try std.fmt.bufPrint(&writer_buf, "name = \"{s}\"\n", .{child.name});
     try out.appendSlice(allocator, name_line);

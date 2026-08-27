@@ -38,31 +38,31 @@ diosix-ctl info [--host]
 
 Default guest VM info output:
 ```text
-=== Diosix Guest VM Info ===
+=== Diosix guest VM info ===
 Context ID     : 1
 Parent CID     : 0
 Architecture   : riscv64
 Root VM        : yes
-Hardware Trust : yes
-RAM Allocation : 64 MB (16384 pages)
+Hardware trust : yes
+RAM allocation : 64 MB (16384 pages)
 Virtual CPUs   : 1
 Child VMs      : 2
 ```
 
 Host hypervisor info output (`diosix-ctl info --host`):
 ```text
-=== Diosix Hypervisor Information ===
-Diosix Version  : 26.1 (Commit b3d4773)
-ABI Version     : v0.2.0
-Host Cores      : 1 Physical Hart(s)
-Host RAM        : 2048 MB Total / 1536 MB Free
-Timer Frequency : 10000000 Hz
+=== Diosix hypervisor information ===
+Diosix version  : 26.1 (Commit b3d4773)
+ABI version     : 0.2.0
+Host cores      : 1 physical hart(s)
+Host RAM        : 2048 MB total / 1536 MB free
+Timer frequency : 10000000 Hz
 Capabilities    :
-  [x] Hardware H-Extension (Nested Virtualization)
-  [x] Stage-2 Sv39x4 Paging
-  [x] Copy-on-Write VM Forking
-  [x] Cross-Arch JIT Dynamic Recompilation
-  [x] Inter-VM Fast IPC
+  [x] Hardware H-extension (nested virtualization)
+  [x] Stage-2 Sv39x4 paging
+  [x] Copy-on-write VM forking
+  [x] Cross-arch JIT dynamic recompilation
+  [x] Inter-VM fast IPC
 ```
 
 ---
@@ -260,6 +260,71 @@ direct interrupt routing for the VM.
 
 ```bash
 diosix-ctl drop-trust
+```
+
+---
+
+### `diosix-ctl manifest`
+Manages system-wide bootstrap manifests (`/etc/diosix/system.toml`), validates
+syntax, generates attenuated least-privilege child VM manifests, and stages
+manifests in hypervisor memory.
+
+```bash
+diosix-ctl manifest <show|validate|prune|set> [options]
+```
+
+*   `show [--file <path>] [--hv] [--cid <cid>]`: Displays the active manifest from
+    the local filesystem (`/etc/diosix/system.toml` or `/etc/diosix/manifest.toml`),
+    an explicit file path, or queries hypervisor staging memory (`--hv`).
+*   `validate <path/to/manifest.toml>`: Validates a system or child manifest
+    against the schema, verifying domain declarations, route patterns, and channel
+    modes.
+*   `prune <system.toml> --domain <name> [-o <out.toml>]`: Extracts and attenuates
+    the system manifest for a specific child domain, resolving its capability
+    routes and stripping out unrelated domain definitions.
+*   `set <cid> <path/to/manifest.toml>`: Uploads and stages an attenuated child
+    manifest into hypervisor memory for the specified child VM CID using the
+    `SET_MANIFEST` hypercall.
+
+Examples:
+```bash
+# Validate system bootstrap manifest
+diosix-ctl manifest validate /etc/diosix/system.toml
+
+# Generate attenuated manifest for child domain 'sys'
+diosix-ctl manifest prune /etc/diosix/system.toml --domain sys -o /tmp/sys-child.toml
+
+# Stage attenuated manifest in hypervisor for child VM 2
+diosix-ctl manifest set 2 /tmp/sys-child.toml
+
+# Inspect manifest staged in hypervisor for child VM 2
+diosix-ctl manifest show --cid 2 --hv
+```
+
+---
+
+### `diosix-ctl resolve`
+Resolves a required service alias against the VM's active manifest to discover
+target Context IDs, routing domains, IPC channels, and access modes.
+
+```bash
+diosix-ctl resolve <service_alias> [--manifest <file.toml>]
+```
+
+*   `service_alias`: Required capability or alias (for example, `gui.display` or
+    `net.wan`).
+*   `--manifest` / `-m` *(optional)*: Explicit manifest file to resolve against.
+    Defaults to `/etc/diosix/manifest.toml` or the hypervisor-staged manifest.
+
+Example output:
+```text
+Service resolution:
+  Service : gui.display
+  Alias   : gui.wayland
+  CID     : 0
+  Domain  : sys
+  Channel : ipc
+  Mode    : rw
 ```
 
 ---

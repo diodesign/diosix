@@ -26,7 +26,7 @@ BLUE="\033[34m"
 RESET="\033[0m"
 
 log_banner() {
-    echo -e "${BOLD}${BLUE}=== Diosix Root VM Build Pipeline ===${RESET}"
+    echo -e "${BOLD}${BLUE}=== Diosix Root VM build pipeline ===${RESET}"
 }
 
 log_step() {
@@ -93,15 +93,15 @@ log_info "Destination ELF     : $OUT_FILE"
 
 # 2. Build Guest Utilities
 log_step "[1/5] Cross-compiling guest management tools (diosix-ctl / dsx)..."
-mkdir -p tools/overlay-common/usr/sbin
-rm -rf tools/overlay-common/sbin 2>/dev/null || true
+DYNAMIC_OVERLAY="$(realpath "$BUILDROOT_DIR")/overlay-dynamic"
+mkdir -p "$DYNAMIC_OVERLAY/usr/sbin"
 
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
-zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools/diosix-ctl/src/main.zig -Minterface=hypervisor/interface/lib.zig --name diosix-ctl -femit-bin=tools/overlay-common/usr/sbin/diosix-ctl >/dev/null 2>&1
-ln -sf diosix-ctl tools/overlay-common/usr/sbin/dsx
+zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools/diosix-ctl/src/main.zig -Minterface=hypervisor/interface/lib.zig --name diosix-ctl -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
+ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
 
-log_ok "Installed diosix-ctl and staged 'dsx' shortcut in rootfs overlay."
+log_ok "Installed diosix-ctl and staged 'dsx' shortcut in dynamic overlay."
 
 # 3. BuildRoot Workspace Setup
 log_step "[2/5] Preparing Buildroot workspace..."
@@ -118,7 +118,7 @@ else
 fi
 
 # 4. Configure BuildRoot
-log_step "[3/5] Applying Buildroot & Linux kernel defconfig..."
+log_step "[3/5] Applying Buildroot and Linux kernel defconfig..."
 ABS_CONFIG=$(realpath "$CONFIG_FILE")
 
 if [ -f "$BUILDROOT_DIR/.config" ]; then
@@ -126,6 +126,9 @@ if [ -f "$BUILDROOT_DIR/.config" ]; then
 fi
 
 make -C "$BUILDROOT_DIR" BR2_DEFCONFIG="$ABS_CONFIG" defconfig >/dev/null
+
+STATIC_OVERLAY=$(realpath tools/overlay-common)
+echo "BR2_ROOTFS_OVERLAY=\"$STATIC_OVERLAY $DYNAMIC_OVERLAY\"" >> "$BUILDROOT_DIR/.config"
 
 GETTY_PORT="hvc0"
 if [ "$GUEST_ARCH" = "aarch64" ]; then
@@ -150,8 +153,8 @@ if [ -f "$BUILDROOT_DIR/.config.old" ]; then
 fi
 log_ok "Configured guest environment (login getty: ${GETTY_PORT}, concurrency: $(nproc))."
 
-# 5. Fetch & Patch Kernel
-log_step "[4/5] Preparing Linux kernel & injecting /dev/diosix character driver..."
+# 5. Fetch and patch Kernel
+log_step "[4/5] Preparing Linux kernel with /dev/diosix character driver..."
 WGET_EXTRA_ARGS=""
 if wget --version 2>&1 | head -1 | grep -q "Wget2"; then
     WGET_EXTRA_ARGS='BR2_WGET="wget -nd -t 3"'
@@ -179,7 +182,7 @@ if [ "$INJECTED" -eq 0 ]; then
 fi
 
 # 6. Build Root VM with Real-Time Progress Monitor
-log_step "[5/5] Compiling Linux kernel & Root VM packages (using $(nproc) parallel jobs)..."
+log_step "[5/5] Compiling Linux kernel and Root VM packages (using $(nproc) parallel jobs)..."
 
 START_TIME=$(date +%s)
 
@@ -206,7 +209,8 @@ trap cleanup_monitor EXIT INT TERM
 eval make -C "$BUILDROOT_DIR" -j"$(nproc)" $WGET_EXTRA_ARGS > "$BUILDROOT_DIR/output/build/make_exec.log" 2>&1 &
 MAKE_PID=$!
 
-SPIN_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+SPIN_CHARS=("⣾" "⣽" "⣻" "⢿" "⡿" "⣟" "⣯" "⣷")
+SPIN_CHARS_TOTAL=${#SPIN_CHARS[@]}
 SPIN_IDX=0
 LAST_DONE_COUNT=0
 LAST_REPORTED_PKG=""
@@ -251,8 +255,8 @@ while kill -0 "$MAKE_PID" 2>/dev/null; do
         [ "$PCT" -gt 99 ] && PCT=99
     fi
 
-    SPIN_CHAR="${SPIN_CHARS:$SPIN_IDX:1}"
-    SPIN_IDX=$(( (SPIN_IDX + 1) % 10 ))
+    SPIN_CHAR="${SPIN_CHARS[$SPIN_IDX]}"
+    SPIN_IDX=$(( (SPIN_IDX + 1) % SPIN_CHARS_TOTAL ))
 
     EXTRA=""
     if [[ "$CUR_PKG" =~ linux ]]; then

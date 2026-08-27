@@ -1,5 +1,8 @@
-// Unified guest memory space management
-// High-level abstraction that handles either H-extension paging or PMP.
+// Unified guest memory space management (GuestSpace)
+//
+// Manages memory address translation (Stage-2 Sv39x4 hardware paging or
+// physical memory protection PMP fallback). Overall VM lifecycle,
+// quotas, and execution context are managed by Guest in core/guest.zig.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -50,7 +53,6 @@ pub const GuestSpace = struct {
             // Under PMP check ordering, the hypervisor range denial is matched first,
             // so this securely enables direct guest S-mode/U-mode access to RAM and all MMIO peripherals.
             try pmp_config.addRegion(0, ALL_PHYSICAL_MEMORY, pmp.PMPAccess.rwx);
-
 
             return GuestSpace{
                 .mode = .pmp_fallback,
@@ -130,7 +132,6 @@ pub const GuestSpace = struct {
             // 2. Allow access to the entire 64-bit physical address space for everything else.
             try pmp_config.addRegion(0, ALL_PHYSICAL_MEMORY, pmp.PMPAccess.rwx);
 
-
             return GuestSpace{
                 .mode = .pmp_fallback,
                 .paging = null,
@@ -192,7 +193,6 @@ pub const GuestSpace = struct {
     }
 };
 
-
 test "GuestSpace GPA to HPA translation and bounds checking" {
     const testing = std.testing;
 
@@ -217,4 +217,3 @@ test "GuestSpace GPA to HPA translation and bounds checking" {
     // 3. GPA out of bounds (above limit) -> TranslationFailed
     try testing.expectError(error.TranslationFailed, space.translateGPA(base_gpa + size));
 }
-

@@ -171,7 +171,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
         } else {
             printStr("Missing ELF file path.\n");
         }
-
     } else if (std.mem.eql(u8, command, "quota")) {
         if (argv.len < 3) {
             printStr("Usage: dsx quota <cid|self> [--ram <MB>] [--vcpus <N>] [--depth <N>] [--descendants <N>]\n");
@@ -340,7 +339,7 @@ fn cmdRecv(client: *api.DiosixClient, sender_cid: usize, nohang: bool) !void {
     };
     if (maybe_msg) |msg| {
         var header: [64]u8 = undefined;
-        const hmsg = std.fmt.bufPrint(&header, "[IPC Message from CID {d} ({d} bytes)]:\n", .{ msg.sender_cid, msg.data.len }) catch return;
+        const hmsg = std.fmt.bufPrint(&header, "[IPC message from CID {d} ({d} bytes)]:\n", .{ msg.sender_cid, msg.data.len }) catch return;
         printStr(hmsg);
         printStr(msg.data);
         printStr("\n");
@@ -455,22 +454,19 @@ fn cmdInfo(client: *api.DiosixClient) !void {
         .x86_64 => "x86_64",
     };
 
-
-
-
     const is_root_str = if (info.is_root != 0) "yes" else "no";
     const is_trusted_str = if (info.is_trusted != 0) "yes" else "no";
     const ram_mb = (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
 
     var buf: [512]u8 = undefined;
     const out = std.fmt.bufPrint(&buf,
-        \\=== Diosix Guest VM Info ===
+        \\=== Diosix guest VM info ===
         \\Context ID     : {d}
         \\Parent CID     : {d}
         \\Architecture   : {s}
         \\Root VM        : {s}
-        \\Hardware Trust : {s}
-        \\RAM Allocation : {d} MB ({d} pages)
+        \\Hardware trust : {s}
+        \\RAM allocation : {d} MB ({d} pages)
         \\Virtual CPUs   : {d}
         \\Child VMs      : {d}
         \\
@@ -498,18 +494,18 @@ fn cmdHostInfo(client: *api.DiosixClient) !void {
     var buf: [512]u8 = undefined;
     const commit_str = std.mem.sliceTo(&info.build_commit, 0);
     const out = std.fmt.bufPrint(&buf,
-        \\=== Diosix Hypervisor Information ===
-        \\Diosix Version  : {d}.{d} (Commit {s})
-        \\ABI Version     : v{d}.{d}.{d}
-        \\Host Cores      : {d} Physical Hart(s)
-        \\Host RAM        : {d} MB Total / {d} MB Free
-        \\Timer Frequency : {d} Hz
+        \\=== Diosix hypervisor information ===
+        \\Diosix version  : {d}.{d} (Commit {s})
+        \\ABI version     : {d}.{d}.{d}
+        \\Host cores      : {d} physical hart(s)
+        \\Host RAM        : {d} MB total / {d} MB free
+        \\Timer frequency : {d} Hz
         \\Capabilities    :
-        \\  [{c}] Hardware H-Extension (Nested Virtualization)
-        \\  [{c}] Stage-2 Sv39x4 Paging
-        \\  [{c}] Copy-on-Write VM Forking
-        \\  [{c}] Cross-Arch JIT Dynamic Recompilation
-        \\  [{c}] Inter-VM Fast IPC
+        \\  [{c}] Hardware H-extension (nested virtualization)
+        \\  [{c}] Stage-2 Sv39x4 paging
+        \\  [{c}] Copy-on-write VM forking
+        \\  [{c}] Cross-arch JIT dynamic recompilation
+        \\  [{c}] Inter-VM fast IPC
         \\
     , .{
         info.version_major,
@@ -952,23 +948,30 @@ fn cmdResolve(client: *api.DiosixClient, service_alias: []const u8, manifest_pat
     defer child.deinit();
 
     if (manifest.resolveService(&child, service_alias)) |req| {
-        printStr("Service Resolution:\n");
-        printStr("  Service : "); printStr(req.service); printStr("\n");
-        printStr("  Alias   : "); printStr(req.as_alias); printStr("\n");
+        printStr("Service resolution:\n");
+        printStr("  Service : ");
+        printStr(req.service);
+        printStr("\n");
+        printStr("  Alias   : ");
+        printStr(req.as_alias);
+        printStr("\n");
         var buf: [32]u8 = undefined;
         const cid_str = std.fmt.bufPrint(&buf, "  CID     : {d}\n", .{req.target_cid}) catch return;
         printStr(cid_str);
         if (req.target_domain.len > 0) {
-            printStr("  Domain  : "); printStr(req.target_domain); printStr("\n");
+            printStr("  Domain  : ");
+            printStr(req.target_domain);
+            printStr("\n");
         }
-        printStr("  Channel : "); printStr(req.channel); printStr("\n");
-        printStr("  Mode    : "); printStr(req.mode); printStr("\n");
+        printStr("  Channel : ");
+        printStr(req.channel);
+        printStr("\n");
+        printStr("  Mode    : ");
+        printStr(req.mode);
+        printStr("\n");
     } else {
         printStr("Error: Service '");
         printStr(service_alias);
         printStr("' not found in current VM manifest.\n");
     }
 }
-
-
-

@@ -13,6 +13,14 @@ const Target = std.Target;
 const RISCVextensions = Target.Cpu.Feature.Set;
 
 pub fn build(b: *std.Build) !void {
+    // Ensure the host compiler meets minimum version requirements (Zig 0.17.0+)
+    const min_zig_version = std.SemanticVersion.parse("0.17.0-dev") catch unreachable;
+    const current_zig_version = @import("builtin").zig_version;
+    if (current_zig_version.order(min_zig_version) == .lt) {
+        std.debug.print("\nError: Diosix requires Zig 0.17.0 or newer. Found Zig {}.\n\n", .{current_zig_version});
+        return error.UnsupportedZigVersion;
+    }
+
     const git_branch = b.option([]const u8, "git_branch", "Current git branch") orelse "unknown branch";
     const git_revision = b.option([]const u8, "git_revision", "Current git revision") orelse "unknown revision";
     const zig_version_opt = b.option([]const u8, "zig_version", "Current zig version") orelse "unknown zig version";
@@ -82,8 +90,6 @@ pub fn build(b: *std.Build) !void {
         try std.fmt.allocPrint(b.allocator, "boot/{s}-linux-{s}.config", .{ guest_arch_opt, guest_profile_opt });
     defer b.allocator.free(config_filename);
 
-
-
     const rootvm_elf_path = b.fmt("zig-out/guest-{s}/bin/rootvm.elf", .{guest_arch_opt});
     const buildroot_dir = b.fmt("zig-out/buildroot-{s}", .{guest_arch_opt});
 
@@ -94,7 +100,6 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addArg(guest_arch_opt);
     const rootvm_s_file = run_buildroot.addOutputFileArg("rootvm.s");
     run_buildroot.stdio = .inherit;
-
 
     const emulation_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/hardware/emulation/mod.zig"),
@@ -122,7 +127,6 @@ pub fn build(b: *std.Build) !void {
     vmdiosix.root_module.addAssemblyFile(rootvm_s_file);
 
     vmdiosix.setLinkerScript(b.path("hypervisor/hardware/native/cpu/riscv64/linker.ld"));
-
 
     // Register all dependencies (like consts.s) so modifying any of them triggers a full rebuild
     var dep_step = b.addWriteFiles();
@@ -178,9 +182,7 @@ pub fn build(b: *std.Build) !void {
     metadata_obj.root_module.addOptions("metadata", metadata);
     vmdiosix.root_module.addObjectFile(metadata_obj.getEmittedBin());
 
-    const install_step = b.addInstallArtifact(vmdiosix, .{
-        .dest_dir = .{ .override = .{ .custom = b.fmt("guest-{s}/bin", .{guest_arch_opt}) } }
-    });
+    const install_step = b.addInstallArtifact(vmdiosix, .{ .dest_dir = .{ .override = .{ .custom = b.fmt("guest-{s}/bin", .{guest_arch_opt}) } } });
     b.getInstallStep().dependOn(&install_step.step);
 
     // create a 'zig build run' command to execute the hypervisor in a suitable emulator

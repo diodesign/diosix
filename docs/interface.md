@@ -92,6 +92,8 @@ event notifications.
 | `IPC_RECV` | `8` | Read a message payload from the caller's inbox |
 | `POLL_EVENT` | `9` | Pop the oldest asynchronous event from the VM's event queue |
 | `GET_HV_INFO` | `10` | Retrieve hypervisor version, ABI version, host specs, and capabilities |
+| `SET_MANIFEST` | `11` | Stage an attenuated capability manifest for a child VM (`CID >= 2`) |
+| `GET_MANIFEST` | `12` | Retrieve the staged capability manifest for self (`CID 1`) or child (`CID >= 2`) |
 
 ---
 
@@ -176,6 +178,20 @@ hardware specifications, and feature capability flags.
 *   `a0`: GPA pointer to a destination `HypervisorInfo` struct.
 *   `a1`: Size of the `HypervisorInfo` buffer in bytes.
 *   **Returns**: `SBI_SUCCESS` (`0`) on success.
+
+#### `SET_MANIFEST` (`FID 11`)
+Stages an attenuated capability manifest string in hypervisor memory for a
+direct child VM (`CID >= 2`).
+*   `a0`: GPA pointer to a `struct manifest_args`.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success, `SBI_ERR_DENIED` if not a direct
+    parent, or `SBI_ERR_INVALID_PARAM` if the manifest exceeds 64 KiB.
+
+#### `GET_MANIFEST` (`FID 12`)
+Retrieves the staged capability manifest string from hypervisor memory for the
+calling VM (`CID 1`) or a direct child VM (`CID >= 2`).
+*   `a0`: GPA pointer to a `struct manifest_args`.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success, with `actual_len` populated in
+    the argument structure.
 
 ---
 
@@ -288,6 +304,16 @@ struct diosix_event {
 };
 ```
 
+### `ManifestArgs`
+```c
+struct manifest_args {
+    unsigned long target_cid;   /* 1 for self (GET only), >= 2 for child */
+    unsigned long manifest_ptr; /* GPA pointer to manifest UTF-8 string */
+    unsigned long manifest_len; /* Buffer capacity or string length (up to 64 KiB) */
+    unsigned long actual_len;   /* Output: Staged manifest length */
+};
+```
+
 ---
 
 ## Linux kernel driver interface (`/dev/diosix`)
@@ -307,3 +333,5 @@ calls to hypervisor SBI extensions via standard `ioctl` numbers:
 | `IOCTL_IPC_SEND` | `0x1009` | Transmits an IPC message |
 | `IOCTL_IPC_RECV` | `0x100A` | Receives an IPC message |
 | `IOCTL_GET_HV_INFO` | `0x100B` | Queries hypervisor and host system info |
+| `IOCTL_SET_MANIFEST` | `0x100C` | Stages an attenuated manifest for a child VM |
+| `IOCTL_GET_MANIFEST` | `0x100D` | Reads the staged manifest from the hypervisor |

@@ -1,4 +1,8 @@
-// Guest VM management
+// Guest Virtual Machine control block (Guest)
+//
+// Manages VM lifecycle, parent/child hierarchical trees, relative Context IDs
+// (CIDs), resource quotas, manifest attachments, and inter-VM IPC mailboxes.
+// Memory address translation is delegated to GuestSpace in core/vm.zig.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -159,7 +163,6 @@ pub const IpcInbox = struct {
     }
 };
 
-
 pub const Guest = struct {
     id: GuestID,
     state: GuestState,
@@ -233,8 +236,6 @@ pub const Guest = struct {
     }
 
     pub fn allocChildHandle(self: *Guest, child: *Guest) !usize {
-
-
         for (&self.child_handles, 0..) |*slot, i| {
             if (slot.* == null) {
                 slot.* = child;
@@ -396,7 +397,6 @@ pub const Guest = struct {
             }
         }
 
-
         // Unlink from parent's children list and free child handle if still attached
         if (self.parent) |p| {
             p.events.push(.{
@@ -411,8 +411,6 @@ pub const Guest = struct {
                 self.child_node = null;
             }
         }
-
-
 
         // Reclaim resources in used counters up the lineage
         const ram_reclaim = self.quotas.used_ram_pages;
@@ -435,7 +433,6 @@ pub const Guest = struct {
             p_opt = p.parent;
         }
     }
-
 
     pub fn dropTrust(self: *Guest) void {
         self.is_trusted = false;
@@ -536,7 +533,6 @@ pub const Guest = struct {
         self.vcores.pushEnd(node);
         self.quotas.used_vcpus = self.vcores.count();
 
-
         // Register in the O(1) lookup table if the hart ID fits.
         if (vid < max_vcores) {
             self.vcore_lookup[vid] = vc;
@@ -553,7 +549,6 @@ pub const Guest = struct {
     }
 
     pub fn findVcore(self: *const Guest, vid: vcore.VirtualCoreID) ?*vcore.VirtualCore {
-
         var it = self.vcores.start;
         while (it) |node| {
             if (node.contents.id == vid) return node.contents;
@@ -633,7 +628,6 @@ pub const Guest = struct {
             p_opt = p.parent;
         }
 
-
         // Clone vcores
 
         var it_vcore = self.vcores.start;
@@ -701,7 +695,6 @@ pub const Guest = struct {
     }
 };
 
-
 // Global guest manager state to encapsulate VMIDs and guest ID counters.
 const GuestManagerState = struct {
     vmid_bitmap: [VMID_BITMAP_WORDS]u64 = std.mem.zeroes([VMID_BITMAP_WORDS]u64),
@@ -709,7 +702,6 @@ const GuestManagerState = struct {
 };
 
 var guest_manager = atomic.LockPayload(GuestManagerState).init("Global guest manager state", .{});
-
 
 fn allocVmid() !u16 {
     const guard = guest_manager.acquire();
@@ -1105,8 +1097,3 @@ test "guest quota management and inter-VM IPC" {
     try testing.expect(child.getManifest() != null);
     try testing.expectEqualStrings(sample_manifest, child.getManifest().?);
 }
-
-
-
-
-

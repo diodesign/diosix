@@ -16,18 +16,40 @@ using Zig's `defer` and `errdefer` mechanisms.
 
 ---
 
-## Unit testing
+## Testing and verification
+
+Diosix maintains two tiers of automated tests: fast host-native unit tests
+and a full-stack live QEMU integration test suite.
+
+### Unit testing
 
 All new core logic must include unit tests. The test suite compiles and runs
-natively on the host development machine. 
+natively on the host development machine without requiring an emulator. 
 
-To run the test suite, use the build wrapper script:
+To run the unit test suite, use the build wrapper script:
 
 ```bash
 ./scripts/build.sh test
 ```
 
-Ensure all tests pass before submitting changes for review.
+### Full-stack integration testing
+
+For changes affecting the SBI hypercall interface, the `/dev/diosix` driver,
+manifest attenuation, or the `dsx` command-line utility, run the live QEMU
+integration test harness:
+
+```bash
+# Compile the hypervisor and run the 11-stage live guest integration suite
+./scripts/build.sh
+./scripts/test_manifest_integration.py
+```
+
+This automated test boots QEMU, logs into the Root VM, and validates all
+hypercalls, quotas, manifest attenuation rules, service resolution, IPC
+messaging loops, and guest-initiated shutdown.
+
+Ensure both unit tests and integration tests pass before submitting changes
+for review.
 
 ---
 
