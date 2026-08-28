@@ -1,6 +1,7 @@
 const std = @import("std");
 const guest = @import("guest.zig");
 const debug = @import("debug.zig");
+const physmem = @import("physmem.zig");
 const sv39x4 = @import("../hardware/native/cpu/riscv64/sv39x4.zig");
 const elf_spec = @import("interface").elf;
 
@@ -158,23 +159,43 @@ pub const Loader = struct {
                 else
                     root_vm.space.base_gpa + @as(usize, @intCast(p_vaddr - min_vaddr));
 
-                const hpa = try root_vm.space.translateGPA(gpa);
+                // Ensure physical memory is mapped in the guest's address space for this segment
+                const page_offset = gpa % physmem.PageSize;
+                const aligned_gpa = gpa - page_offset;
+                const aligned_size = std.mem.alignForward(usize, p_memsz + page_offset, physmem.PageSize);
+                const rwx_flags = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
 
-                // Map and load the segment.
-                if (p_filesz > 0) {
-                    const segment_data = source[p_offset .. p_offset + p_filesz];
-                    @memcpy(@as([*]u8, @ptrFromInt(hpa))[0..p_filesz], segment_data);
+                var map_offset: usize = 0;
+                while (map_offset < aligned_size) : (map_offset += physmem.PageSize) {
+                    const page_gpa = aligned_gpa + map_offset;
+                    if (root_vm.space.translateGPA(page_gpa) catch null) |_| {
+                        continue;
+                    }
+                    const new_page_hpa = try physmem.allocPage();
+                    @memset(@as([*]u8, @ptrFromInt(new_page_hpa))[0..physmem.PageSize], 0);
+                    try root_vm.space.map(page_gpa, new_page_hpa, physmem.PageSize, rwx_flags);
                 }
 
-                // Map the segment in the guest's address space as RWX.
-                const rwx_flags = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
-                try root_vm.space.map(gpa, hpa, p_memsz, rwx_flags);
+                // Copy segment file data into guest physical address space
+                var copied: usize = 0;
+                while (copied < p_filesz) {
+                    const cur_gpa = gpa + copied;
+                    const cur_page_offset = cur_gpa % physmem.PageSize;
+                    const chunk = @min(p_filesz - copied, physmem.PageSize - cur_page_offset);
+                    const cur_hpa = try root_vm.space.translateGPA(cur_gpa);
+                    @memcpy(@as([*]u8, @ptrFromInt(cur_hpa))[0..chunk], source[p_offset + copied .. p_offset + copied + chunk]);
+                    copied += chunk;
+                }
 
-                // Zero out any remaining memory in the segment (BSS).
-                if (p_memsz > p_filesz) {
-                    const bss_gpa = gpa + p_filesz;
-                    const bss_hpa = try root_vm.space.translateGPA(bss_gpa);
-                    @memset(@as([*]u8, @ptrFromInt(bss_hpa))[0 .. p_memsz - p_filesz], 0);
+                // Zero any remaining memory in the segment (BSS)
+                var zeroed: usize = p_filesz;
+                while (zeroed < p_memsz) {
+                    const cur_gpa = gpa + zeroed;
+                    const cur_page_offset = cur_gpa % physmem.PageSize;
+                    const chunk = @min(p_memsz - zeroed, physmem.PageSize - cur_page_offset);
+                    const cur_hpa = try root_vm.space.translateGPA(cur_gpa);
+                    @memset(@as([*]u8, @ptrFromInt(cur_hpa))[0..chunk], 0);
+                    zeroed += chunk;
                 }
             }
         }

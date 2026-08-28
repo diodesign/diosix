@@ -206,7 +206,7 @@ pub const PageTable = struct {
         }
 
         // Root VM identity mapping
-        if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + self.root_range_size) {
+        if (self.root_range_size > 0 and gpa >= self.root_base_gpa and gpa < self.root_base_gpa + self.root_range_size) {
             const hpa = gpa - self.root_base_gpa + self.root_base_hpa;
             // Round down to page boundaries to ensure idempotency and alignment.
             const gpa_page = gpa & ~(physmem.PageSize - 1);
@@ -235,6 +235,15 @@ pub const PageTable = struct {
         // Recursive thawing from shadow chain
         if (self.shadow_source) |shadow| {
             try self.thawFromShadow(shadow, gpa, is_trusted);
+            return;
+        }
+
+        // On-demand anonymous page allocation for guest DRAM
+        if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + (512 * 1024 * 1024)) {
+            const gpa_page = gpa & ~(physmem.PageSize - 1);
+            const new_hpa = try physmem.allocPage();
+            @memset(@as([*]u8, @ptrFromInt(new_hpa))[0..physmem.PageSize], 0);
+            try self.mapPage(gpa_page, new_hpa, PTEFlags.read | PTEFlags.write | PTEFlags.execute | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
             return;
         }
 

@@ -67,6 +67,92 @@ Capabilities    :
 
 ---
 
+### `diosix-ctl run`
+Launches an unprivileged or privileged child VM in the background with private SSH 
+networking and optional manifest attenuation.
+
+```bash
+diosix-ctl run <elf_path> [options]
+diosix-ctl run --manifest <system.toml> --domain <domain_name> [options]
+```
+
+*   `elf_path`: Absolute or relative path to the guest ELF binary.
+*   `--name <name>` *(optional)*: Friendly name for the VM (defaults to domain name or binary filename).
+*   `--domain <name>` *(optional)*: Attenuates and stages domain configuration from the system manifest.
+*   `--manifest <path>` *(optional)*: Path to system manifest (defaults to `/etc/diosix/system.toml`).
+*   `--vcpus <N>` *(optional)*: Virtual CPU limit (default: 1).
+*   `--ram <size>` *(optional)*: Memory allocation limit (e.g. `256M`, `2GiB`).
+*   `--ip <address>` *(optional)*: Private static IP address (default: `10.0.3.<cid>`).
+*   `--trusted` *(optional)*: Grants physical host MMIO and hardware interrupt access. Default is unprivileged/sandboxed (`untrusted`).
+*   `--arch <arch>` *(optional)*: Target architecture (`riscv64`, `riscv32`, `aarch64`, `x86_64`).
+
+Examples:
+```bash
+# Launch a sandboxed user VM with 2 vCPUs and 256 MB RAM
+diosix-ctl run /boot/user-supervisor.elf --name user --vcpus 2 --ram 256M
+
+# Launch directly from system manifest domain definition
+diosix-ctl run --manifest /etc/diosix/system.toml --domain user
+```
+
+---
+
+### `diosix-ctl list` / `diosix-ctl ps`
+Lists all active virtual machines within the domain hierarchy, including resource 
+quotas, status, trust level, and connection endpoints.
+
+```bash
+diosix-ctl list
+diosix-ctl ps
+```
+
+Example output:
+```text
+=== Diosix guest VMs ===
+CID   Name             vCPUs   RAM       Status    Trust       IP / Endpoint
+1     root (self)      4       512 MB    running   trusted     local
+2     user             2       256 MB    running   untrusted   10.0.3.3 (ssh)
+```
+
+---
+
+### `diosix-ctl login` / `diosix-ctl ssh`
+Establishes a secure, passwordless SSH session into a running child VM using the 
+pre-shared Diosix internal ED25519 keypair.
+
+```bash
+diosix-ctl login <name|cid> [-- [command...]]
+diosix-ctl ssh <name|cid> [-- [command...]]
+```
+
+*   `name|cid`: Friendly VM name (e.g. `user`) or Context ID (e.g. `2`).
+*   `command` *(optional)*: Remote command to execute non-interactively.
+
+Examples:
+```bash
+# Open interactive login shell into child VM 'user'
+diosix-ctl login user
+
+# Execute command non-interactively on child VM 2
+diosix-ctl login 2 -- uname -a
+```
+
+---
+
+### `diosix-ctl stop` / `diosix-ctl kill`
+Terminates and tears down a running child VM.
+
+```bash
+diosix-ctl stop <name|cid>
+```
+
+Example:
+```bash
+diosix-ctl stop user
+```
+
+---
+
 
 ### `diosix-ctl spawn`
 Atomically creates a new child VM and boots a guest Executable and Linkable 

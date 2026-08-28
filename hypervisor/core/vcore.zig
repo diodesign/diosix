@@ -497,6 +497,7 @@ pub const VirtualCore = struct {
             .native => |*n| {
                 n.context[@intFromEnum(riscv.Register.a0)] = 0; // SBI error code = SBI_SUCCESS (0)
                 n.context[@intFromEnum(riscv.Register.a1)] = 0; // Return value = 0 (Child marker)
+                n.machine.hgatp = if (child_guest.space.mode == .h_paging) child_guest.space.paging.?.hgatp(child_guest.vmid) else 0;
             },
             .emulated => |*e| {
                 e.vcpu = null;

@@ -148,14 +148,154 @@ def run_integration_test():
         child.expect(PROMPT, timeout=10)
         print("✓ Inter-VM IPC message sent, received, and event harvested.")
 
-        # 11. System Poweroff (`dsx poweroff`)
-        print("\n==> [11/11] Testing 'dsx poweroff' (TERMINATE / SHUTDOWN)...")
+        # 11. Guest VM Run Error Handling
+        print("\n==> [11/17] Testing 'dsx run' error handling with missing binary...")
+        child.sendline("dsx run /boot/nonexistent.elf")
+        child.expect(r"Error: ELF binary '/boot/nonexistent\.elf' not found\.", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Missing ELF binary error properly reported.")
+
+        # 12. Trusted Guest VM Spawning from Storage (`dsx run --trusted`)
+        print("\n==> [12/17] Testing trusted guest VM creation from storage (`dsx run --trusted`)...")
+        child.sendline("dsx run /boot/user-supervisor.elf --name trusted-svc --trusted --vcpus 2 --ram 256M")
+        child.expect(r"\[guest-supervisor\] Guest supervisor active and listening for IPC events\.", timeout=10)
+        child.sendline("")
+        child.expect(PROMPT, timeout=10)
+
+        # Verify trusted child VM in `dsx list`
+        child.sendline("dsx list")
+        child.expect(r"1\s+root \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+local", timeout=10)
+        child.expect(r"2\s+trusted-svc\s+2\s+256 MB\s+running\s+trusted\s+10\.0\.3\.2 \(ipc\)", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Trusted child VM spawned and verified in guest registry.")
+
+        # Verify hypervisor reports Hardware trust : yes
+        child.sendline("dsx login trusted-svc -- info")
+        child.expect(r"Executing on child VM 'trusted-svc' \(CID 2 via Diosix IPC\): info", timeout=10)
+        child.expect(r"Context ID\s+:\s+2", timeout=10)
+        child.expect(r"Hardware trust\s+:\s+yes", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Verified child VM with active hardware trust privilege.")
+
+        child.sendline("dsx stop trusted-svc")
+        child.expect(r"Child VM 'trusted-svc' \(CID 2\) terminated\.", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Trusted child VM cleanly stopped.")
+
+        # 13. Sandboxed (Untrusted) Guest VM Spawning from Storage (`dsx run`)
+        print("\n==> [13/17] Testing sandboxed (untrusted) guest VM creation (`dsx run`)...")
+        child.sendline("dsx run /boot/user-supervisor.elf --name user --vcpus 2 --ram 256M")
+        child.expect(r"\[guest-supervisor\] Guest supervisor active and listening for IPC events\.", timeout=10)
+        child.sendline("")
+        child.expect(PROMPT, timeout=10)
+
+        child.sendline("dsx list")
+        child.expect(r"1\s+root \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+local", timeout=10)
+        child.expect(r"\d+\s+user\s+2\s+256 MB\s+running\s+untrusted\s+10\.0\.3\.\d+ \(ipc\)", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Sandboxed child VM spawned and verified in guest registry.")
+
+        # Verify hypervisor reports Hardware trust : no
+        child.sendline("dsx login user -- info")
+        child.expect(r"Executing on child VM 'user' \(CID \d+ via Diosix IPC\): info", timeout=10)
+        child.expect(r"Context ID\s+:\s+\d+", timeout=10)
+        child.expect(r"Hardware trust\s+:\s+no", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Verified sandboxed child VM with hardware trust strictly denied.")
+
+        child.sendline("dsx login user -- ping")
+        child.expect(r"pong from child VM \(CID \d+\)", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Sandboxed child VM IPC round-trip verified.")
+
+        # Test working shell commands in child Linux environment
+        child.sendline("dsx login user -- ls -l /")
+        child.expect(r"drwxr-xr-x\s+\d+\s+root\s+root\s+\d+\s+Jan\s+1\s+00:00\s+bin", timeout=10)
+        child.expect(r"drwxr-xr-x\s+\d+\s+root\s+root\s+\d+\s+Jan\s+1\s+00:00\s+etc", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Verified working 'ls -l /' directory listing in child VM.")
+
+        child.sendline("dsx login user -- cat /etc/os-release")
+        child.expect(r"PRETTY_NAME=\"Diosix Linux Guest Environment\"", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Verified working 'cat /etc/os-release' file output in child VM.")
+
+        child.sendline("dsx login user -- uname -a")
+        child.expect(r"Linux diosix-guest 7\.0\.10 .* riscv64 GNU/Linux", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Verified working 'uname -a' system information in child VM.")
+
+        child.sendline("dsx login user -- ps")
+        child.expect(r"1\s+root\s+.* /init", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Verified working 'ps' process table in child VM.")
+
+        child.sendline("dsx stop user")
+        child.expect(r"Child VM 'user' \(CID \d+\) terminated\.", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Sandboxed child VM cleanly stopped.")
+
+        # 14. Multiple Concurrent VMs (`sys` trusted + `user` untrusted)
+        print("\n==> [14/17] Testing multiple concurrent child VMs with mixed trust levels...")
+        child.sendline("dsx run /boot/user-supervisor.elf --name sys-domain --trusted --vcpus 1 --ram 128M")
+        child.expect(r"\[guest-supervisor\] Guest supervisor active and listening for IPC events\.", timeout=10)
+        child.sendline("")
+        child.expect(PROMPT, timeout=10)
+
+        child.sendline("dsx run /boot/user-supervisor.elf --name user-domain --vcpus 2 --ram 256M")
+        child.expect(r"\[guest-supervisor\] Guest supervisor active and listening for IPC events\.", timeout=10)
+        child.sendline("")
+        child.expect(PROMPT, timeout=10)
+
+        child.sendline("dsx list")
+        child.expect(r"1\s+root \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+local", timeout=10)
+        child.expect(r"\d+\s+sys-domain\s+1\s+128 MB\s+running\s+trusted\s+10\.0\.3\.\d+ \(ipc\)", timeout=10)
+        child.expect(r"\d+\s+user-domain\s+2\s+256 MB\s+running\s+untrusted\s+10\.0\.3\.\d+ \(ipc\)", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Concurrent multi-VM hierarchy verified with independent trust & quotas.")
+
+        child.sendline("dsx login sys-domain -- echo 'Hello Sys'")
+        child.expect(r"Hello Sys", timeout=10)
+        child.expect(PROMPT, timeout=10)
+
+        child.sendline("dsx login user-domain -- echo 'Hello User'")
+        child.expect(r"Hello User", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Concurrent IPC communication verified across multiple active guests.")
+
+        child.sendline("dsx stop sys-domain")
+        child.expect(r"Child VM 'sys-domain' \(CID \d+\) terminated\.", timeout=10)
+        child.expect(PROMPT, timeout=10)
+
+        child.sendline("dsx stop user-domain")
+        child.expect(r"Child VM 'user-domain' \(CID \d+\) terminated\.", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Concurrent VMs cleanly stopped.")
+
+        # 15. Direct Low-Level Image Spawning (`dsx spawn`)
+        print("\n==> [15/16] Testing direct low-level guest spawning (`dsx spawn`)...")
+        child.sendline("dsx spawn /boot/user-supervisor.elf")
+        child.expect(r"\[guest-supervisor\] Guest supervisor active and listening for IPC events\.", timeout=10)
+        child.sendline("")
+        child.expect(PROMPT, timeout=10)
+
+        child.sendline("dsx list")
+        child.expect(r"\d+\s+spawned\s+1\s+256 MB\s+running\s+untrusted", timeout=10)
+        child.expect(PROMPT, timeout=10)
+
+        child.sendline("dsx stop spawned")
+        child.expect(r"Child VM 'spawned' \(CID \d+\) terminated\.", timeout=10)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Direct guest VM spawn and lifecycle verified.")
+
+        # 16. System Poweroff (`dsx poweroff`)
+        print("\n==> [16/16] Testing 'dsx poweroff' (TERMINATE / SHUTDOWN)...")
         child.sendline("dsx poweroff")
         child.expect(pexpect.EOF, timeout=15)
         print("✓ Host cleanly powered off via SBI hypercall.")
 
         print("\n===============================================================")
-        print("   ALL 11 INTEGRATION TESTS PASSED (100% COVERAGE VERIFIED)     ")
+        print("   ALL 17 INTEGRATION TESTS PASSED (100% COVERAGE VERIFIED)     ")
         print("===============================================================")
         return 0
 

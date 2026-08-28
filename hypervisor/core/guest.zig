@@ -17,6 +17,7 @@ const dsa = @import("dsa.zig");
 const vm_space = @import("vm.zig");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const debug = @import("debug.zig");
+const scheduler = @import("scheduler.zig");
 const interface = @import("interface");
 const sbi = interface.sbi;
 
@@ -276,8 +277,14 @@ pub const Guest = struct {
             if (args.max_descendants > 0) self.quotas.max_descendants = @min(self.quotas.max_descendants, args.max_descendants);
         } else if (args.target_cid >= CID_FIRST_CHILD) {
             if (self.getGuestByCid(args.target_cid)) |child| {
-                if (args.max_ram_pages > 0) child.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
-                if (args.max_vcpus > 0) child.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
+                if (args.max_ram_pages > 0) {
+                    child.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
+                    child.quotas.used_ram_pages = child.quotas.max_ram_pages;
+                }
+                if (args.max_vcpus > 0) {
+                    child.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
+                    child.quotas.used_vcpus = child.quotas.max_vcpus;
+                }
                 if (args.max_child_depth > 0) child.quotas.max_child_depth = @min(self.quotas.max_child_depth, args.max_child_depth);
                 if (args.max_descendants > 0) child.quotas.max_descendants = @min(self.quotas.max_descendants, args.max_descendants);
             } else {
@@ -301,6 +308,13 @@ pub const Guest = struct {
             .event_type = @intFromEnum(sbi.EventType.ipc_message),
             .exit_code = @truncate(payload.len),
         });
+
+        // Wake up / enqueue the target guest's virtual cores
+        var it = target.vcores.start;
+        while (it) |node| {
+            scheduler.queue(node.contents);
+            it = node.next;
+        }
     }
 
     pub fn init(allocator: std.mem.Allocator, id: GuestID, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize, target_arch: TargetArch) !*Guest {
@@ -645,6 +659,77 @@ pub const Guest = struct {
         return child;
     }
 
+    // Create a new child VM with a clean memory space (for ELF loading)
+    pub fn createChild(self: *Guest, is_trusted: bool, target_arch: TargetArch, vcpu_count: usize) !*Guest {
+        const child_id = blk: {
+            const guard = guest_manager.acquire();
+            defer guard.release();
+            const state = guard.get();
+            const next = state.guest_id_next;
+            state.guest_id_next = next + 1;
+            break :blk next;
+        };
+
+        const num_vcpus = if (vcpu_count > 0) vcpu_count else 1;
+        if (!self.checkQuota(0, num_vcpus, self.quotas.current_depth + 1)) {
+            return error.QuotaExceeded;
+        }
+
+        const child_space = try vm_space.GuestSpace.init(self.allocator, is_trusted, self.space.base_gpa, 0, 0);
+
+        const child = try self.allocator.create(Guest);
+        errdefer self.allocator.destroy(child);
+
+        child.* = .{
+            .id = child_id,
+            .state = .valid,
+            .is_trusted = is_trusted,
+            .is_root = false,
+            .target_arch = target_arch,
+            .quotas = self.quotas,
+            .parent = self,
+            .children = .{ .start = null, .end = null },
+            .child_node = null,
+            .local_cid = CID_SELF,
+            .child_handles = std.mem.zeroes([max_child_handles]?*Guest),
+            .exit_code = 0,
+            .vcores = .{ .start = null, .end = null },
+            .vmid = try allocVmid(),
+            .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
+            .space = child_space,
+            .early_pgt_gpa = if (target_arch == .x86_64) child_space.base_gpa + X86_EARLY_PGT_GPA_OFFSET else 0,
+            .pit = .{},
+            .ioapic_mem = std.mem.zeroes([IOAPIC_PAGE_SIZE]u8),
+            .allocator = self.allocator,
+        };
+        child.children.init();
+        child.vcores.init();
+
+        // Lineage tracking
+        const line_node = try self.allocator.create(dsa.LinkedList(*Guest).Node);
+        line_node.* = .{ .next = null, .previous = null, .contents = child };
+        self.children.pushEnd(line_node);
+        child.child_node = line_node;
+        child.local_cid = try self.allocChildHandle(child);
+        child.quotas.current_depth = self.quotas.current_depth + 1;
+        child.quotas.used_vcpus = num_vcpus;
+        child.quotas.used_ram_pages = 0;
+
+        // Ancestor tracking: consumed descendants and vcpus
+        var p_opt: ?*Guest = self;
+        while (p_opt) |p| {
+            p.quotas.used_descendants += 1;
+            p.quotas.used_vcpus += num_vcpus;
+            p_opt = p.parent;
+        }
+
+        for (0..num_vcpus) |vc_id| {
+            _ = try child.addVcore(@intCast(vc_id), 0, 0, .normal, null);
+        }
+
+        return child;
+    }
+
     // Stop all virtual cores and wait for physical cores to relinquish them
     pub fn stop(self: *Guest) void {
         var it = self.vcores.start;
@@ -698,7 +783,7 @@ pub const Guest = struct {
 // Global guest manager state to encapsulate VMIDs and guest ID counters.
 const GuestManagerState = struct {
     vmid_bitmap: [VMID_BITMAP_WORDS]u64 = std.mem.zeroes([VMID_BITMAP_WORDS]u64),
-    guest_id_next: usize = 0,
+    guest_id_next: usize = CID_SELF,
 };
 
 var guest_manager = atomic.LockPayload(GuestManagerState).init("Global guest manager state", .{});
@@ -757,7 +842,7 @@ test "guest fork and memory sharing" {
         const guard = guest_manager.acquire();
         defer guard.release();
         const state = guard.get();
-        state.guest_id_next = 0;
+        state.guest_id_next = CID_SELF;
         state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
     }
     var phys_test = try physmem.initForTest(allocator, 128);
@@ -767,7 +852,6 @@ test "guest fork and memory sharing" {
     const parent = try createGuest(allocator, true, true, null, 0x80000000, hpa, 0x1000, .riscv64);
     defer parent.deinit();
 
-    const scheduler = @import("scheduler.zig");
     scheduler.init();
     scheduler.initCpu();
 
@@ -790,7 +874,6 @@ test "guest creation and vcore management" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    const scheduler = @import("scheduler.zig");
     scheduler.init();
     scheduler.initCpu();
 
@@ -799,7 +882,7 @@ test "guest creation and vcore management" {
         const guard = guest_manager.acquire();
         defer guard.release();
         const state = guard.get();
-        state.guest_id_next = 0;
+        state.guest_id_next = CID_SELF;
         state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
     }
     var phys_test = try physmem.initForTest(allocator, 128);
@@ -807,11 +890,11 @@ test "guest creation and vcore management" {
 
     const g1 = try createGuest(allocator, true, true, null, 0, 0, 0, .riscv64);
     defer g1.deinit();
-    try testing.expectEqual(@as(usize, 0), g1.id);
+    try testing.expectEqual(@as(usize, 1), g1.id);
 
     const g2 = try createGuest(allocator, false, false, g1, 0, 0, 0, .riscv64);
     defer g2.deinit();
-    try testing.expectEqual(@as(usize, 1), g2.id);
+    try testing.expectEqual(@as(usize, 2), g2.id);
     try testing.expectEqual(g1, g2.parent.?);
 
     // Add a vcore to g1
@@ -910,7 +993,6 @@ test "child termination unlinking and quota reclamation" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    const scheduler = @import("scheduler.zig");
     scheduler.init();
     scheduler.initCpu();
 
@@ -918,7 +1000,7 @@ test "child termination unlinking and quota reclamation" {
         const guard = guest_manager.acquire();
         defer guard.release();
         const state = guard.get();
-        state.guest_id_next = 0;
+        state.guest_id_next = CID_SELF;
         state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
     }
 
@@ -1007,7 +1089,6 @@ test "guest quota management and inter-VM IPC" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    const scheduler = @import("scheduler.zig");
     scheduler.init();
     scheduler.initCpu();
 
@@ -1015,7 +1096,7 @@ test "guest quota management and inter-VM IPC" {
         const guard = guest_manager.acquire();
         defer guard.release();
         const state = guard.get();
-        state.guest_id_next = 0;
+        state.guest_id_next = CID_SELF;
         state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
     }
 

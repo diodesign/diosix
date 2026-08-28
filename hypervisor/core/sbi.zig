@@ -474,8 +474,8 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             if (g.space.translateGPA(info_gpa) catch null) |hpa| {
                 const info_ptr: *interface.GuestInfo = @ptrFromInt(hpa);
                 info_ptr.* = .{
-                    .guest_id = g.local_cid,
-                    .parent_id = if (g.parent != null) guest.CID_PARENT else 0,
+                    .guest_id = g.id,
+                    .parent_id = if (g.parent) |p| p.id else 0,
                     .is_trusted = if (g.is_trusted) 1 else 0,
                     .is_root = if (g.is_root) 1 else 0,
                     .target_arch = @intFromEnum(g.target_arch),
@@ -504,7 +504,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 const child_to_spawn: ?*guest.Guest = if (args.child_id >= guest.CID_FIRST_CHILD)
                     g.getGuestByCid(args.child_id)
                 else if (args.child_id == 0)
-                    g.fork() catch null
+                    g.createChild((args.flags & interface.SpawnFlags.TRUSTED) != 0, .riscv64, 1) catch null
                 else
                     null;
 

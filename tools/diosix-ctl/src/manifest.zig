@@ -36,6 +36,7 @@ pub const DomainSpec = struct {
     image: []const u8 = "",
     vcpus: usize = 1,
     ram: []const u8 = "",
+    ip: []const u8 = "",
     pci_devices: std.ArrayList([]const u8) = std.ArrayList([]const u8).empty,
     can_provide: std.ArrayList([]const u8) = std.ArrayList([]const u8).empty,
     can_require: std.ArrayList([]const u8) = std.ArrayList([]const u8).empty,
@@ -98,6 +99,7 @@ pub const ChildManifest = struct {
     parent_cid: usize = 0,
     vcpus: usize = 1,
     ram: []const u8 = "",
+    ip: []const u8 = "",
     required: std.ArrayList(ServiceRequirement) = std.ArrayList(ServiceRequirement).empty,
     provided: std.ArrayList(ServiceOffer) = std.ArrayList(ServiceOffer).empty,
     strings: std.ArrayList([]const u8) = std.ArrayList([]const u8).empty,
@@ -327,6 +329,8 @@ pub fn parseSystemManifest(allocator: std.mem.Allocator, toml_str: []const u8) !
                         }
                     } else if (std.mem.eql(u8, key, "ram")) {
                         dom.ram = try manifest.addString(val_tok.val);
+                    } else if (std.mem.eql(u8, key, "ip") or std.mem.eql(u8, key, "address")) {
+                        dom.ip = try manifest.addString(val_tok.val);
                     } else if (std.mem.eql(u8, key, "pci_devices") or std.mem.eql(u8, key, "grant_devices")) {
                         if (val_tok.tag == .bracket_open) {
                             while (true) {
@@ -480,6 +484,8 @@ pub fn parseChildManifest(allocator: std.mem.Allocator, toml_str: []const u8) !C
                         manifest.vcpus = std.fmt.parseInt(usize, val_tok.val, 10) catch 1;
                     } else if (std.mem.eql(u8, key, "ram")) {
                         manifest.ram = try manifest.addString(val_tok.val);
+                    } else if (std.mem.eql(u8, key, "ip") or std.mem.eql(u8, key, "address")) {
+                        manifest.ip = try manifest.addString(val_tok.val);
                     }
                 } else if (std.mem.eql(u8, sec, "require") or std.mem.eql(u8, sec, "services.require")) {
                     if (val_tok.tag == .brace_open) {
@@ -557,6 +563,9 @@ pub fn pruneSystemManifest(
     child.name = try child.addString(dom_spec.name);
     child.vcpus = dom_spec.vcpus;
     child.ram = try child.addString(dom_spec.ram);
+    if (dom_spec.ip.len > 0) {
+        child.ip = try child.addString(dom_spec.ip);
+    }
 
     // 1. Export declared provided services if permitted by can_provide
     for (dom_spec.provides.items) |prov| {
@@ -649,6 +658,10 @@ pub fn serializeChildManifest(allocator: std.mem.Allocator, child: *const ChildM
     if (child.ram.len > 0) {
         const ram_line = try std.fmt.bufPrint(&writer_buf, "ram = \"{s}\"\n", .{child.ram});
         try out.appendSlice(allocator, ram_line);
+    }
+    if (child.ip.len > 0) {
+        const ip_line = try std.fmt.bufPrint(&writer_buf, "ip = \"{s}\"\n", .{child.ip});
+        try out.appendSlice(allocator, ip_line);
     }
     try out.appendSlice(allocator, "\n");
 
@@ -828,3 +841,43 @@ test "manifest: TOML parsing and capability attenuation roundtrip" {
     try testing.expectEqual(@as(usize, 3), parsed_child.cid);
     try testing.expectEqual(@as(usize, 2), parsed_child.required.items.len);
 }
+
+test "manifest: private IP address parsing and attenuation propagation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const sample_toml =
+        \\[system]
+        \\version = "1.0"
+        \\domain = "diosix.local"
+        \\
+        \\[domains.user]
+        \\name = "user-supervisor"
+        \\image = "/boot/user-supervisor.elf"
+        \\vcpus = 2
+        \\ram = "256MB"
+        \\ip = "10.0.3.3"
+    ;
+
+    var sys = try parseSystemManifest(allocator, sample_toml);
+    defer sys.deinit();
+
+    const user_dom = sys.domains.get("user").?;
+    try testing.expectEqualStrings("10.0.3.3", user_dom.ip);
+
+    var child = try pruneSystemManifest(allocator, &sys, "user", 2, 1, null);
+    defer child.deinit();
+
+    try testing.expectEqualStrings("10.0.3.3", child.ip);
+
+    const serialized = try serializeChildManifest(allocator, &child);
+    defer allocator.free(serialized);
+
+    try testing.expect(std.mem.indexOf(u8, serialized, "ip = \"10.0.3.3\"") != null);
+
+    var parsed = try parseChildManifest(allocator, serialized);
+    defer parsed.deinit();
+
+    try testing.expectEqualStrings("10.0.3.3", parsed.ip);
+}
+

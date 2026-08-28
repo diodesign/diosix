@@ -75,7 +75,7 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     vc.last_queued_time = riscv.readTime();
 
     const pc = pcore.this();
-    const is_local = (vc.id == pc.cpu_core_id) or builtin.is_test;
+    const is_local = if (vc.guest.is_root) ((vc.id == pc.cpu_core_id) or builtin.is_test) else true;
 
     vc.scheduler_node.contents = vc;
     if (is_local and pc.run_queue_count < MAX_LOCAL_VCORES) {
@@ -109,7 +109,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
     const misa = riscv.readMisa();
 
-    // 1. Try to pick matching vcore (vcore.id == cpu_core_id) from local run queue first
+    // 1. Pick next compatible vcore from local run queue in FIFO order
     var it = pc.run_queue.start;
     while (it) |node| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
@@ -117,26 +117,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
             it = node.next;
             continue;
         }
-        if (vc.id == pc.cpu_core_id and (vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
-            pc.run_queue.remove(node);
-            pc.run_queue_count -= 1;
-            vc.running_on_cpu = pc.cpu_core_id;
-            @atomicStore(bool, &vc.is_queued, false, .release);
-            global_min_vruntime.store(vc.vruntime, .monotonic);
-            return vc;
-        }
-        it = node.next;
-    }
-
-    // 2. Otherwise pick any compatible vcore from local run queue (only if not dedicated to another core)
-    it = pc.run_queue.start;
-    while (it) |node| {
-        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
-        if (vc.running_on_cpu != null) {
-            it = node.next;
-            continue;
-        }
-        if (!builtin.is_test and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
+        if (!builtin.is_test and vc.guest.is_root and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
             it = node.next;
             continue;
         }
@@ -151,7 +132,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
         it = node.next;
     }
 
-    // 3. Local queue is empty, pull matching vcore from global queue under lock
+    // 2. Local queue has no compatible vcores, pull from global queue under lock
     const guard = global_scheduler.acquire();
     defer guard.release();
     const state = guard.get();
@@ -163,25 +144,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
             g_it = node.next;
             continue;
         }
-        if (vc.id == pc.cpu_core_id and (vc.requiredExtensions() & misa) == vc.requiredExtensions()) {
-            state.run_queue.remove(node);
-            vc.running_on_cpu = pc.cpu_core_id;
-            @atomicStore(bool, &vc.is_queued, false, .release);
-            global_min_vruntime.store(vc.vruntime, .monotonic);
-            return vc;
-        }
-        g_it = node.next;
-    }
-
-    // 4. Fallback: pull any compatible vcore from global queue (only if not dedicated to another physical CPU)
-    g_it = state.run_queue.start;
-    while (g_it) |node| {
-        const vc: *vcore.VirtualCore = node.contents;
-        if (vc.running_on_cpu != null) {
-            g_it = node.next;
-            continue;
-        }
-        if (!builtin.is_test and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
+        if (!builtin.is_test and vc.guest.is_root and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
             g_it = node.next;
             continue;
         }

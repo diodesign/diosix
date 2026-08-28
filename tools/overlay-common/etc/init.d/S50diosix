@@ -10,7 +10,19 @@ case "$1" in
     if [ ! -c /dev/diosix ] && [ -f /lib/modules/$(uname -r)/extra/diosix.ko ]; then
         modprobe diosix 2>/dev/null || insmod /lib/modules/$(uname -r)/extra/diosix.ko 2>/dev/null || true
     fi
-    # Set up loopback and internal networking if available
+    # Set up runtime directories and SSH key permissions
+    mkdir -p /run/dropbear /var/run/dropbear /etc/dropbear /var/run/diosix /etc/diosix/keys /root/.ssh
+    chmod 700 /run/dropbear /var/run/dropbear /etc/dropbear /root/.ssh /etc/diosix/keys 2>/dev/null || true
+
+    # Generate internal Dropbear client key if not present and authorize it
+    if [ ! -f /etc/diosix/keys/id_dropbear ] && [ -x /usr/bin/dropbearkey ]; then
+        /usr/bin/dropbearkey -t ed25519 -f /etc/diosix/keys/id_dropbear >/dev/null 2>&1 || true
+        /usr/bin/dropbearkey -y -f /etc/diosix/keys/id_dropbear 2>/dev/null | grep "^ssh-ed25519" >> /root/.ssh/authorized_keys 2>/dev/null || true
+    fi
+
+    chmod 600 /root/.ssh/authorized_keys /etc/diosix/keys/id_dropbear /etc/diosix/keys/id_ed25519 2>/dev/null || true
+
+    # Set up standard loopback networking
     ifconfig lo 127.0.0.1 up 2>/dev/null || true
     ;;
   stop)

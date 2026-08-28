@@ -2,6 +2,18 @@
 .zig-cache/
 zig-out/
 
+# binaries and build outputs
+*.elf
+*.bin
+*.iso
+*.img
+*.tmp*
+tools/overlay-common/boot/
+tools/overlay-common/usr/
+tools/overlay-common/root/
+tools/overlay-common/etc/diosix/keys/*
+!tools/overlay-common/etc/diosix/keys/.gitkeep
+
 # log text files from debugging
 *.txt
 *.log

@@ -54,7 +54,7 @@ mkdir -p "$(dirname "$OUT_FILE")"
 mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$(sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/driver/diosix.c 2>/dev/null | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/guest-supervisor/* tools/driver/diosix.c 2>/dev/null) | sha256sum | cut -d' ' -f1)
 
 write_rootvm_s() {
     if [ -n "$ROOTVM_S_PATH" ]; then
@@ -86,22 +86,29 @@ if [ -f "$OUT_FILE" ] && [ -f "$HASH_FILE" ]; then
 fi
 
 log_banner
-log_info "Target Architecture : ${BOLD}${GUEST_ARCH}${RESET}"
-log_info "Config Profile      : $(basename "$CONFIG_FILE")"
-log_info "Parallel Jobs       : $(nproc) host CPU cores"
+log_info "Target architecture : ${BOLD}${GUEST_ARCH}${RESET}"
+log_info "Config profile      : $(basename "$CONFIG_FILE")"
+log_info "Parallel jobs       : $(nproc) host CPU cores"
 log_info "Destination ELF     : $OUT_FILE"
 
-# 2. Build Guest Utilities
-log_step "[1/5] Cross-compiling guest management tools (diosix-ctl / dsx)..."
+# 2. Build Guest Utilities & Guest Supervisor Payloads
+log_step "[1/5] Cross-compiling guest management tools (diosix-ctl / dsx) and guest supervisors..."
 DYNAMIC_OVERLAY="$(realpath "$BUILDROOT_DIR")/overlay-dynamic"
-mkdir -p "$DYNAMIC_OVERLAY/usr/sbin"
+mkdir -p "$DYNAMIC_OVERLAY/usr/sbin" "$DYNAMIC_OVERLAY/boot"
 
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
 zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools/diosix-ctl/src/main.zig -Minterface=hypervisor/interface/lib.zig --name diosix-ctl -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
 
-log_ok "Installed diosix-ctl and staged 'dsx' shortcut in dynamic overlay."
+log_info "Compiling guest supervisor ELF binaries for ${BOLD}${GUEST_ARCH}${RESET}..."
+SUPERVISOR_TARGET="${GUEST_ARCH}-freestanding-none"
+zig build-exe -target "$SUPERVISOR_TARGET" -mcmodel=medany -O ReleaseSmall -Ttools/guest-supervisor/linker.ld --dep interface -Mroot=tools/guest-supervisor/main.zig -Minterface=hypervisor/interface/lib.zig --name user-supervisor.elf -femit-bin="$DYNAMIC_OVERLAY/boot/user-supervisor.elf" >/dev/null 2>&1
+cp "$DYNAMIC_OVERLAY/boot/user-supervisor.elf" "$DYNAMIC_OVERLAY/boot/sys-supervisor.elf"
+mkdir -p tools/overlay-common/boot
+cp "$DYNAMIC_OVERLAY/boot/user-supervisor.elf" tools/overlay-common/boot/user-supervisor.elf
+cp "$DYNAMIC_OVERLAY/boot/sys-supervisor.elf" tools/overlay-common/boot/sys-supervisor.elf
+log_ok "Installed diosix-ctl, 'dsx', and guest supervisors in /boot/."
 
 # 3. BuildRoot Workspace Setup
 log_step "[2/5] Preparing Buildroot workspace..."
@@ -140,7 +147,6 @@ echo "BR2_TARGET_GENERIC_GETTY_PORT=\"$GETTY_PORT\"" >> "$BUILDROOT_DIR/.config"
 echo "BR2_JLEVEL=0" >> "$BUILDROOT_DIR/.config"
 
 make -C "$BUILDROOT_DIR" olddefconfig >/dev/null
-make -C "$BUILDROOT_DIR" linux-dirclean 2>/dev/null >/dev/null || true
 
 if [ -f "$BUILDROOT_DIR/.config.old" ]; then
     OLD_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config.old" | cut -d'"' -f2 || true)
@@ -164,7 +170,6 @@ if ! ls -d "$BUILDROOT_DIR"/output/build/linux-[0-9]* >/dev/null 2>&1; then
     eval make -C "$BUILDROOT_DIR" -j"$(nproc)" linux-patch $WGET_EXTRA_ARGS >/dev/null 2>&1 || true
 fi
 
-
 INJECTED=0
 for linux_dir in "$BUILDROOT_DIR"/output/build/linux-*; do
     if [ -d "$linux_dir/drivers/char" ]; then
@@ -173,7 +178,7 @@ for linux_dir in "$BUILDROOT_DIR"/output/build/linux-*; do
             echo "obj-y += diosix.o" >> "$linux_dir/drivers/char/Makefile"
         fi
         INJECTED=1
-        log_ok "Injected /dev/diosix driver into $(basename "$linux_dir")."
+        log_ok "Installed /dev/diosix driver in $(basename "$linux_dir")."
     fi
 done
 
@@ -305,7 +310,7 @@ ELAPSED=$((END_TIME - START_TIME))
 SIZE=$(du -h "$OUT_FILE" | cut -f1)
 
 echo -e "\n${BOLD}${GREEN}✓ Root VM build complete!${RESET} (${BOLD}${SIZE}${RESET} in ${ELAPSED}s)"
-log_info "Kernel Image : ${BOLD}$OUT_FILE${RESET}"
-log_info "Hash Check   : ${CURRENT_HASH:0:16}..."
+log_info "Kernel image : ${BOLD}$OUT_FILE${RESET}"
+log_info "Hash check   : ${CURRENT_HASH:0:16}..."
 log_info "Descriptor   : $ROOTVM_S_PATH\n"
 

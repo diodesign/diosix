@@ -261,6 +261,28 @@ pub fn build(b: *std.Build) !void {
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
+    const ctl_test_module = b.createModule(.{
+        .root_source_file = b.path("tools/diosix-ctl/src/main.zig"),
+        .optimize = optimize,
+        .target = b.graph.host,
+    });
+    ctl_test_module.addImport("interface", interface_module);
+    const ctl_unit_tests = b.addTest(.{
+        .root_module = ctl_test_module,
+        .name = "diosix-ctl-unit-tests",
+    });
+    const run_ctl_unit_tests = b.addRunArtifact(ctl_unit_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+    test_step.dependOn(&run_ctl_unit_tests.step);
+
+    const run_integration_tests = b.addSystemCommand(&[_][]const u8{
+        "python3",
+        "scripts/test_manifest_integration.py",
+    });
+    run_integration_tests.step.dependOn(b.getInstallStep());
+    const integration_test_step = b.step("test-integration", "Run full-stack QEMU integration test suite");
+    integration_test_step.dependOn(&run_integration_tests.step);
 }
+

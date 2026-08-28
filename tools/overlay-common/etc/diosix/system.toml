@@ -15,6 +15,7 @@ name = "sys-supervisor"
 image = "/boot/sys-supervisor.elf"
 vcpus = 2
 ram = "2GiB"
+ip = "10.0.3.2"
 can_provide = ["net.*", "gui.*", "fs.*", "storage.*"]
 can_require = ["crypto.rng", "clock.tai"]
 
@@ -37,6 +38,7 @@ name = "user-supervisor"
 image = "/boot/user-supervisor.elf"
 vcpus = 4
 ram = "14GiB"
+ip = "10.0.3.3"
 can_provide = ["app.*"]
 can_require = ["net.*", "gui.*", "fs.*"]
 

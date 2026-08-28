@@ -221,6 +221,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
         try cmdPoweroff(&client);
     } else if (std.mem.eql(u8, command, "reboot")) {
         try cmdReboot(&client);
+    } else if (std.mem.eql(u8, command, "run") or std.mem.eql(u8, command, "create")) {
+        try cmdRun(&client, argv[2..]);
+    } else if (std.mem.eql(u8, command, "list") or std.mem.eql(u8, command, "ps") or std.mem.eql(u8, command, "ls")) {
+        try cmdList(&client);
+    } else if (std.mem.eql(u8, command, "login") or std.mem.eql(u8, command, "ssh") or std.mem.eql(u8, command, "console") or std.mem.eql(u8, command, "exec")) {
+        try cmdLogin(&client, argv[2..]);
+    } else if (std.mem.eql(u8, command, "stop") or std.mem.eql(u8, command, "kill")) {
+        try cmdStop(&client, argv[2..]);
     } else if (std.mem.eql(u8, command, "manifest")) {
         try cmdManifest(&client, argv[2..]);
     } else if (std.mem.eql(u8, command, "resolve")) {
@@ -248,10 +256,22 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
 fn printUsage() void {
     const usage =
-        \\dsx / diosix-ctl: Diosix Hypervisor Guest Management Tool
+        \\dsx / diosix-ctl: Diosix hypervisor guest management tool
         \\
         \\Usage:
         \\  dsx info [--host]                  Display current VM state (or host hypervisor info)
+        \\  dsx run <elf> [options]            Launch child VM in background with private SSH networking
+        \\      [--name <name>]                Assign human-friendly VM name (e.g. 'user')
+        \\      [--vcpus <N>]                  Allocate virtual CPUs (default: 1)
+        \\      [--ram <size>]                 Allocate RAM limit (e.g. '256M', '2GiB')
+        \\      [--ip <addr>]                  Assign private IP address (default: '10.0.3.<cid>')
+        \\      [--manifest <file.toml>]       Stage attenuated domain manifest for child
+        \\      [--domain <name>]              Extract domain configuration from system manifest
+        \\      [--trusted]                    Grant hardware trust (default: untrusted)
+        \\  dsx list / dsx ps                  List all active virtual machines and their endpoints
+        \\  dsx login <name|cid> [-- [cmd]]    Log into child VM securely via private SSH (or run cmd)
+        \\  dsx ssh <name|cid> [-- [cmd]]      Alias for dsx login
+        \\  dsx stop <name|cid>                Terminate and stop running child VM
         \\  dsx manifest <subcmd> [options]    Manage hierarchical system & VM manifests
         \\      show [--file <path>] [--hv]    Display active or file manifest
         \\      validate <file.toml>           Validate system or child manifest syntax
@@ -282,8 +302,17 @@ fn printApiError(action: []const u8, err: anyerror) void {
         printStr("Error: Permission denied. Only the root user is allowed to communicate with the hypervisor.\n");
     } else if (err == error.DeviceNotFound) {
         printStr("Error: /dev/diosix not found. Ensure the diosix kernel driver is enabled.\n");
+    } else if (err == error.FileNotFound) {
+        const msg = std.fmt.bufPrint(&buf, "Error: {s} failed: file not found.\n", .{action}) catch return;
+        printStr(msg);
+    } else if (err == error.PathTooLong) {
+        const msg = std.fmt.bufPrint(&buf, "Error: {s} failed: file path exceeds maximum length.\n", .{action}) catch return;
+        printStr(msg);
+    } else if (err == error.OutOfMemory) {
+        const msg = std.fmt.bufPrint(&buf, "Error: {s} failed: out of memory.\n", .{action}) catch return;
+        printStr(msg);
     } else {
-        const msg = std.fmt.bufPrint(&buf, "Error: {s} failed (hypercall or permission error).\n", .{action}) catch return;
+        const msg = std.fmt.bufPrint(&buf, "Error: {s} failed ({s}).\n", .{ action, @errorName(err) }) catch return;
         printStr(msg);
     }
 }
@@ -536,7 +565,8 @@ fn isArch(str: []const u8) bool {
 }
 
 fn cmdFork(client: *api.DiosixClient, flags: usize) !void {
-    if ((flags & api.ForkFlags.UNTRUSTED) != 0) {
+    const is_untrusted = (flags & api.ForkFlags.UNTRUSTED) != 0;
+    if (is_untrusted) {
         printStr("Forking current VM (dropping hardware trust for child)...\n");
     } else {
         printStr("Forking current VM...\n");
@@ -545,6 +575,10 @@ fn cmdFork(client: *api.DiosixClient, flags: usize) !void {
         printApiError("Fork", err);
         return;
     };
+    if (child_cid == 0) {
+        return;
+    }
+    saveGuestRegistry(child_cid, if (is_untrusted) "fork-untrusted" else "fork-trusted", 1, "512 MB", "", if (is_untrusted) "untrusted" else "trusted", "running");
     var buf: [64]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Successfully forked child VM with CID: {d}\n", .{child_cid}) catch return;
     printStr(msg);
@@ -645,6 +679,7 @@ fn cmdSpawn(client: *api.DiosixClient, child_id: usize, elf_path: []const u8, dt
         printApiError("Spawn VM", err);
         return;
     };
+    saveGuestRegistry(spawned_cid, "spawned", 1, "256 MB", "", if (is_trusted_req) "trusted" else "untrusted", "running");
     var buf2: [64]u8 = undefined;
     const msg2 = std.fmt.bufPrint(&buf2, "Child VM (CID {d}) successfully spawned and started.\n", .{spawned_cid}) catch return;
     printStr(msg2);
@@ -975,3 +1010,940 @@ fn cmdResolve(client: *api.DiosixClient, service_alias: []const u8, manifest_pat
         printStr("' not found in current VM manifest.\n");
     }
 }
+
+fn parseMemorySizeMb(str: []const u8) usize {
+    if (str.len == 0) return 256;
+    var num_len: usize = 0;
+    while (num_len < str.len and std.ascii.isDigit(str[num_len])) {
+        num_len += 1;
+    }
+    if (num_len == 0) return 256;
+    const base_val = std.fmt.parseInt(usize, str[0..num_len], 10) catch 256;
+    const unit = str[num_len..];
+
+    if (std.mem.startsWith(u8, unit, "G") or std.mem.startsWith(u8, unit, "g")) {
+        return base_val * 1024;
+    } else if (std.mem.startsWith(u8, unit, "K") or std.mem.startsWith(u8, unit, "k")) {
+        return @max(1, base_val / 1024);
+    }
+    return base_val;
+}
+
+fn removeGuestFromRegistry(target_cid: usize) void {
+    const content = readBinaryFile("/var/run/diosix/guests.toml", MAX_MANIFEST_SIZE) catch return;
+    defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+
+    var out_buf: [MAX_MANIFEST_SIZE]u8 = undefined;
+    var out_len: usize = 0;
+
+    var lexer = manifest.ManifestLexer.init(content);
+    var cur_cid: usize = 0;
+    var cur_name: []const u8 = "";
+    var cur_vcpus: usize = 1;
+    var cur_ram: []const u8 = "256 MB";
+    var cur_ip: []const u8 = "";
+    var cur_trust: []const u8 = "untrusted";
+    var cur_status: []const u8 = "running";
+
+    while (true) {
+        const tok = lexer.next();
+        if (tok.tag == .eof or tok.tag == .bracket_open) {
+            if (cur_cid >= CID_FIRST_CHILD and cur_cid != target_cid) {
+                var entry_buf: [512]u8 = undefined;
+                const entry = std.fmt.bufPrint(&entry_buf,
+                    \\[[guest]]
+                    \\cid = {d}
+                    \\name = "{s}"
+                    \\vcpus = {d}
+                    \\ram = "{s}"
+                    \\ip = "{s}"
+                    \\trust = "{s}"
+                    \\status = "{s}"
+                    \\
+                    \\
+                , .{ cur_cid, cur_name, cur_vcpus, cur_ram, cur_ip, cur_trust, cur_status }) catch "";
+                if (out_len + entry.len < out_buf.len) {
+                    @memcpy(out_buf[out_len .. out_len + entry.len], entry);
+                    out_len += entry.len;
+                }
+            }
+            if (tok.tag == .eof) break;
+            cur_cid = 0;
+            cur_name = "";
+            cur_vcpus = 1;
+            cur_ram = "256 MB";
+            cur_ip = "";
+            cur_trust = "untrusted";
+            cur_status = "running";
+            continue;
+        }
+        if (tok.tag == .ident or tok.tag == .string) {
+            const key = tok.val;
+            const eq = lexer.next();
+            if (eq.tag != .equals) continue;
+            const val = lexer.next();
+            if (std.mem.eql(u8, key, "cid")) {
+                cur_cid = std.fmt.parseInt(usize, val.val, 10) catch 0;
+            } else if (std.mem.eql(u8, key, "name")) {
+                cur_name = val.val;
+            } else if (std.mem.eql(u8, key, "vcpus")) {
+                cur_vcpus = std.fmt.parseInt(usize, val.val, 10) catch 1;
+            } else if (std.mem.eql(u8, key, "ram")) {
+                cur_ram = val.val;
+            } else if (std.mem.eql(u8, key, "ip")) {
+                cur_ip = val.val;
+            } else if (std.mem.eql(u8, key, "trust")) {
+                cur_trust = val.val;
+            } else if (std.mem.eql(u8, key, "status")) {
+                cur_status = val.val;
+            }
+        }
+    }
+
+    _ = writeFile("/var/run/diosix/guests.toml", out_buf[0..out_len]) catch {};
+}
+
+fn saveGuestRegistry(cid: usize, name: []const u8, vcpus: usize, ram: []const u8, ip: []const u8, trust: []const u8, status: []const u8) void {
+    removeGuestFromRegistry(cid);
+    _ = linux.mkdir("/var/run/diosix", 0o755);
+
+    var entry_buf: [512]u8 = undefined;
+    const entry = std.fmt.bufPrint(&entry_buf,
+        \\[[guest]]
+        \\cid = {d}
+        \\name = "{s}"
+        \\vcpus = {d}
+        \\ram = "{s}"
+        \\ip = "{s}"
+        \\trust = "{s}"
+        \\status = "{s}"
+        \\
+        \\
+    , .{ cid, name, vcpus, ram, ip, trust, status }) catch return;
+
+    var path_buf: [MAX_PATH_LEN]u8 = undefined;
+    const path = "/var/run/diosix/guests.toml";
+    @memcpy(path_buf[0..path.len], path);
+    path_buf[path.len] = 0;
+
+    const fd_res = linux.open(@ptrCast(path_buf[0..path.len :0]), .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, 0o644);
+    const fd_signed: isize = @bitCast(fd_res);
+    if (fd_signed >= 0) {
+        const fd: i32 = @intCast(fd_signed);
+        defer _ = linux.close(fd);
+        _ = linux.write(fd, entry.ptr, entry.len);
+    }
+}
+
+fn printGuestLine(cid: usize, name: []const u8, vcpus: usize, ram: []const u8, status: []const u8, trust: []const u8, ip: []const u8) void {
+    var line_buf: [256]u8 = undefined;
+    var ep_buf: [64]u8 = undefined;
+    const ep_str = if (std.mem.eql(u8, ip, "local") or cid == 1)
+        "local"
+    else if (ip.len > 0)
+        std.fmt.bufPrint(&ep_buf, "{s} (ipc)", .{ip}) catch ip
+    else
+        "dsx login";
+
+    const display_name = if (name.len > 0) name else "guest";
+    const line = std.fmt.bufPrint(&line_buf, "{d:<5} {s:<16} {d:<7} {s:<9} {s:<9} {s:<11} {s}\n", .{
+        cid,
+        display_name,
+        vcpus,
+        ram,
+        status,
+        trust,
+        ep_str,
+    }) catch return;
+    printStr(line);
+}
+
+fn copyStr(buf: []u8, src: []const u8) []const u8 {
+    const copy_len = @min(buf.len, src.len);
+    @memcpy(buf[0..copy_len], src[0..copy_len]);
+    return buf[0..copy_len];
+}
+
+fn matchTarget(target_str: []const u8, target_cid: usize, entry_cid: usize, entry_name: []const u8) bool {
+    if (target_cid > 0 and entry_cid == target_cid) return true;
+    if (entry_name.len > 0 and std.mem.eql(u8, target_str, entry_name)) return true;
+    if (entry_name.len > 0 and std.mem.startsWith(u8, entry_name, target_str)) return true;
+    return false;
+}
+
+fn findPrivateKey() ?[]const u8 {
+    const paths = [_][]const u8{
+        "/etc/diosix/keys/id_dropbear",
+        "/etc/diosix/keys/id_ed25519",
+        "/root/.ssh/id_dropbear",
+        "/root/.ssh/id_ed25519",
+        "/etc/diosix/id_ed25519",
+        "tools/overlay-common/etc/diosix/keys/id_ed25519",
+    };
+    for (paths) |p| {
+        var p_buf: [MAX_PATH_LEN]u8 = undefined;
+        @memcpy(p_buf[0..p.len], p);
+        p_buf[p.len] = 0;
+        const fd_res = linux.open(@ptrCast(p_buf[0..p.len :0]), .{ .ACCMODE = .RDONLY }, 0);
+        const signed_rc: isize = @bitCast(fd_res);
+        if (signed_rc >= 0) {
+            _ = linux.close(@intCast(signed_rc));
+            return p;
+        }
+    }
+    return null;
+}
+
+fn execSsh(key_path: []const u8, ip_addr: []const u8, remote_cmd: ?[]const u8) !void {
+    var key_buf: [128]u8 = undefined;
+    if (key_path.len >= key_buf.len) return error.PathTooLong;
+    @memcpy(key_buf[0..key_path.len], key_path);
+    key_buf[key_path.len] = 0;
+    const key_str: [:0]const u8 = key_buf[0..key_path.len :0];
+
+    var dest_buf: [128]u8 = undefined;
+    const dest_slice = try std.fmt.bufPrint(dest_buf[0 .. dest_buf.len - 1], "root@{s}", .{ip_addr});
+    dest_buf[dest_slice.len] = 0;
+    const dest_str: [:0]const u8 = dest_buf[0..dest_slice.len :0];
+
+    var cmd_buf: [512]u8 = undefined;
+    const cmd_str: ?[:0]const u8 = if (remote_cmd) |rc| blk: {
+        const cs = try std.fmt.bufPrint(cmd_buf[0 .. cmd_buf.len - 1], "{s}", .{rc});
+        cmd_buf[cs.len] = 0;
+        break :blk cmd_buf[0..cs.len :0];
+    } else null;
+
+    const ssh_bins = [_][*:0]const u8{
+        "/usr/bin/ssh",
+        "/usr/bin/dbclient",
+        "/bin/ssh",
+        "/usr/sbin/dropbear",
+    };
+
+    const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+        "TERM=xterm",
+        "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+        null,
+    };
+
+    for (ssh_bins) |bin| {
+        if (cmd_str) |cs| {
+            const exec_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+                bin,
+                "-i",
+                key_str.ptr,
+                "-y",
+                dest_str.ptr,
+                cs.ptr,
+                null,
+            };
+            _ = linux.execve(bin, exec_argv, envp);
+        } else {
+            const exec_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+                bin,
+                "-i",
+                key_str.ptr,
+                "-y",
+                dest_str.ptr,
+                null,
+            };
+            _ = linux.execve(bin, exec_argv, envp);
+        }
+    }
+
+    printStr("Error: Unable to launch SSH client (tried /usr/bin/ssh, /usr/bin/dbclient, /bin/ssh).\n");
+    printStr("Ensure dropbear or openssh client is installed in guest environment.\n");
+}
+
+fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
+    const allocator = std.heap.page_allocator;
+    if (args.len == 0) {
+        printStr("Usage: dsx run <elf_path> [--name <name>] [--vcpus <N>] [--ram <size>] [--ip <ip>] [--manifest <path>] [--domain <domain>] [--trusted] [--arch <arch>]\n");
+        printStr("       dsx run --manifest <path> --domain <domain> [--trusted] [--arch <arch>]\n");
+        return;
+    }
+
+    var elf_path: ?[]const u8 = null;
+    var vm_name: ?[]const u8 = null;
+    var domain_name: ?[]const u8 = null;
+    var manifest_path: ?[]const u8 = null;
+    var vcpus: usize = 1;
+    var ram_str: []const u8 = "256 MB";
+    var ip_str: []const u8 = "";
+    var trusted: bool = false;
+    var arch_str: []const u8 = "riscv64";
+    var dtb_path: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const span = std.mem.span(args[i]);
+        if (std.mem.eql(u8, span, "--name") and i + 1 < args.len) {
+            i += 1;
+            vm_name = std.mem.span(args[i]);
+        } else if (std.mem.eql(u8, span, "--domain") and i + 1 < args.len) {
+            i += 1;
+            domain_name = std.mem.span(args[i]);
+        } else if ((std.mem.eql(u8, span, "--manifest") or std.mem.eql(u8, span, "-m")) and i + 1 < args.len) {
+            i += 1;
+            manifest_path = std.mem.span(args[i]);
+        } else if (std.mem.eql(u8, span, "--vcpus") and i + 1 < args.len) {
+            i += 1;
+            vcpus = std.fmt.parseInt(usize, std.mem.span(args[i]), 10) catch 1;
+        } else if (std.mem.eql(u8, span, "--ram") and i + 1 < args.len) {
+            i += 1;
+            ram_str = std.mem.span(args[i]);
+        } else if (std.mem.eql(u8, span, "--ip") and i + 1 < args.len) {
+            i += 1;
+            ip_str = std.mem.span(args[i]);
+        } else if (std.mem.eql(u8, span, "--trusted")) {
+            trusted = true;
+        } else if (std.mem.eql(u8, span, "--untrusted")) {
+            trusted = false;
+        } else if (std.mem.eql(u8, span, "--dtb") and i + 1 < args.len) {
+            i += 1;
+            dtb_path = std.mem.span(args[i]);
+        } else if (isArch(span)) {
+            arch_str = span;
+        } else if (!std.mem.startsWith(u8, span, "-")) {
+            if (elf_path == null) {
+                elf_path = span;
+            }
+        }
+    }
+
+    if (domain_name) |dname| {
+        if (vm_name == null) vm_name = dname;
+        const m_file = manifest_path orelse "/etc/diosix/system.toml";
+        if (readBinaryFile(m_file, MAX_MANIFEST_SIZE)) |m_content| {
+            defer _ = linux.munmap(m_content.ptr, MAX_MANIFEST_SIZE);
+            if (manifest.parseSystemManifest(allocator, m_content)) |sys_m| {
+                if (sys_m.domains.get(dname)) |dom| {
+                    if (elf_path == null and dom.image.len > 0) elf_path = dom.image;
+                    if (dom.vcpus > 0 and vcpus == 1) vcpus = dom.vcpus;
+                    if (dom.ram.len > 0 and std.mem.eql(u8, ram_str, "256 MB")) ram_str = dom.ram;
+                    if (dom.ip.len > 0 and ip_str.len == 0) ip_str = dom.ip;
+                }
+            } else |_| {}
+        } else |_| {}
+    }
+
+    if (elf_path == null) {
+        printStr("Error: No ELF binary specified. Use 'dsx run <elf_path>' or specify --manifest and --domain.\n");
+        return;
+    }
+
+    if (vm_name == null) {
+        const ep = elf_path.?;
+        if (std.mem.lastIndexOfScalar(u8, ep, '/')) |slash| {
+            vm_name = ep[slash + 1 ..];
+        } else {
+            vm_name = ep;
+        }
+    }
+
+    const elf_data = readBinaryFile(elf_path.?, MAX_ELF_FILE_SIZE) catch |err| {
+        if (err == error.FileNotFound) {
+            var err_buf: [MAX_PATH_LEN + 64]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: ELF binary '{s}' not found.\n", .{elf_path.?}) catch "Error: ELF binary not found.\n";
+            printStr(err_msg);
+        } else {
+            printApiError("Read ELF", err);
+        }
+        return;
+    };
+    defer _ = linux.munmap(elf_data.ptr, MAX_ELF_FILE_SIZE);
+
+    var dtb_data: []u8 = &[_]u8{};
+    if (dtb_path) |dp| {
+        if (readBinaryFile(dp, MAX_DTB_FILE_SIZE)) |dd| {
+            dtb_data = dd;
+        } else |_| {}
+    }
+    defer if (dtb_data.len > 0) {
+        _ = linux.munmap(dtb_data.ptr, MAX_DTB_FILE_SIZE);
+    };
+
+    var arch_num: usize = @intFromEnum(api.TargetArch.riscv64);
+    if (std.mem.eql(u8, arch_str, "riscv32")) {
+        arch_num = @intFromEnum(api.TargetArch.riscv32);
+    } else if (std.mem.eql(u8, arch_str, "aarch64")) {
+        arch_num = @intFromEnum(api.TargetArch.aarch64);
+    } else if (std.mem.eql(u8, arch_str, "x86_64")) {
+        arch_num = @intFromEnum(api.TargetArch.x86_64);
+    }
+
+    const spawn_flags: usize = if (trusted) api.SpawnFlags.TRUSTED else 0;
+    const spawned_cid = client.spawn(0, elf_data, dtb_data, arch_num, spawn_flags) catch |err| {
+        printApiError("Spawn VM", err);
+        return;
+    };
+
+    const ram_mb = parseMemorySizeMb(ram_str);
+    const ram_pages = (ram_mb * KB_PER_MB) / PAGE_SIZE_KB;
+    _ = client.setQuota(spawned_cid, ram_pages, vcpus, 0, 0) catch {};
+
+    if (domain_name) |dname| {
+        const m_file = manifest_path orelse "/etc/diosix/system.toml";
+        if (readBinaryFile(m_file, MAX_MANIFEST_SIZE)) |m_content| {
+            defer _ = linux.munmap(m_content.ptr, MAX_MANIFEST_SIZE);
+            if (manifest.parseSystemManifest(allocator, m_content)) |sys_m_val| {
+                var sys_m = sys_m_val;
+                defer sys_m.deinit();
+                if (manifest.pruneSystemManifest(allocator, &sys_m, dname, spawned_cid, CID_SELF, null)) |child_m_val| {
+                    var child_m = child_m_val;
+                    defer child_m.deinit();
+                    if (manifest.serializeChildManifest(allocator, &child_m)) |child_toml| {
+                        defer allocator.free(child_toml);
+                        _ = client.setManifest(spawned_cid, child_toml) catch {};
+                    } else |_| {}
+                } else |_| {}
+            } else |_| {}
+        } else |_| {}
+    }
+
+    var final_ip_buf: [64]u8 = undefined;
+    const final_ip: []const u8 = if (ip_str.len > 0)
+        ip_str
+    else
+        std.fmt.bufPrint(&final_ip_buf, "10.0.3.{d}", .{spawned_cid}) catch "10.0.3.2";
+
+    var final_ram_buf: [32]u8 = undefined;
+    const final_ram_str = std.fmt.bufPrint(&final_ram_buf, "{d} MB", .{ram_mb}) catch "256 MB";
+
+    saveGuestRegistry(spawned_cid, vm_name.?, vcpus, final_ram_str, final_ip, if (trusted) "trusted" else "untrusted", "running");
+
+    var msg_buf: [256]u8 = undefined;
+    const out_msg = std.fmt.bufPrint(&msg_buf, "✓ Child VM '{s}' (CID {d}, {d} vCPUs, {s} RAM, IP: {s}) started in background.\n", .{
+        vm_name.?,
+        spawned_cid,
+        vcpus,
+        final_ram_str,
+        final_ip,
+    }) catch return;
+    printStr(out_msg);
+}
+
+fn cmdList(client: *api.DiosixClient) !void {
+    const info_res = client.getInfo() catch null;
+    const is_trusted = if (info_res) |info| info.is_trusted != 0 else true;
+    const used_vcpus = if (info_res) |info| (if (info.used_vcpus > 0) info.used_vcpus else 4) else 4;
+    const ram_mb = if (info_res) |info| ((info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB) else 512;
+    const child_count = if (info_res) |info| info.child_count else 0;
+
+    printStr("=== Diosix guest VMs ===\n");
+    printStr("CID   Name             vCPUs   RAM       Status    Trust       IP / Endpoint\n");
+
+    var self_ram_buf: [32]u8 = undefined;
+    const self_ram_str = std.fmt.bufPrint(&self_ram_buf, "{d} MB", .{if (ram_mb > 0) ram_mb else 512}) catch "512 MB";
+    printGuestLine(1, "root (self)", used_vcpus, self_ram_str, "running", if (is_trusted) "trusted" else "untrusted", "local");
+
+    var guest_count: usize = 0;
+    if (readBinaryFile("/var/run/diosix/guests.toml", MAX_MANIFEST_SIZE)) |content| {
+        defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+        var lexer = manifest.ManifestLexer.init(content);
+
+        var cur_cid: usize = 0;
+        var cur_name: []const u8 = "";
+        var cur_vcpus: usize = 1;
+        var cur_ram: []const u8 = "256 MB";
+        var cur_ip: []const u8 = "";
+        var cur_trust: []const u8 = "untrusted";
+        var cur_status: []const u8 = "running";
+
+        while (true) {
+            const tok = lexer.next();
+            if (tok.tag == .eof) {
+                if (cur_cid >= CID_FIRST_CHILD) {
+                    const c_mb = parseMemorySizeMb(cur_ram);
+                    var child_ram_buf: [32]u8 = undefined;
+                    const child_ram_str = std.fmt.bufPrint(&child_ram_buf, "{d} MB", .{c_mb}) catch cur_ram;
+                    printGuestLine(cur_cid, cur_name, cur_vcpus, child_ram_str, cur_status, cur_trust, cur_ip);
+                    guest_count += 1;
+                }
+                break;
+            }
+            if (tok.tag == .bracket_open) {
+                if (cur_cid >= CID_FIRST_CHILD) {
+                    const c_mb = parseMemorySizeMb(cur_ram);
+                    var child_ram_buf: [32]u8 = undefined;
+                    const child_ram_str = std.fmt.bufPrint(&child_ram_buf, "{d} MB", .{c_mb}) catch cur_ram;
+                    printGuestLine(cur_cid, cur_name, cur_vcpus, child_ram_str, cur_status, cur_trust, cur_ip);
+                    guest_count += 1;
+                    cur_cid = 0;
+                    cur_name = "";
+                    cur_vcpus = 1;
+                    cur_ram = "256 MB";
+                    cur_ip = "";
+                    cur_trust = "untrusted";
+                    cur_status = "running";
+                }
+                continue;
+            }
+            if (tok.tag == .ident or tok.tag == .string) {
+                const key = tok.val;
+                const eq = lexer.next();
+                if (eq.tag != .equals) continue;
+                const val = lexer.next();
+                if (std.mem.eql(u8, key, "cid")) {
+                    cur_cid = std.fmt.parseInt(usize, val.val, 10) catch 0;
+                } else if (std.mem.eql(u8, key, "name")) {
+                    cur_name = val.val;
+                } else if (std.mem.eql(u8, key, "vcpus")) {
+                    cur_vcpus = std.fmt.parseInt(usize, val.val, 10) catch 1;
+                } else if (std.mem.eql(u8, key, "ram")) {
+                    cur_ram = val.val;
+                } else if (std.mem.eql(u8, key, "ip")) {
+                    cur_ip = val.val;
+                } else if (std.mem.eql(u8, key, "trust")) {
+                    cur_trust = val.val;
+                } else if (std.mem.eql(u8, key, "status")) {
+                    cur_status = val.val;
+                }
+            }
+        }
+    } else |_| {}
+
+    if (guest_count == 0 and child_count == 0) {
+        printStr("\nNo child VMs running.\n");
+    }
+}
+
+fn trimWhitespace(s: []const u8) []const u8 {
+    var start: usize = 0;
+    while (start < s.len and (s[start] == ' ' or s[start] == '\t' or s[start] == '\r' or s[start] == '\n')) : (start += 1) {}
+    var end: usize = s.len;
+    while (end > start and (s[end - 1] == ' ' or s[end - 1] == '\t' or s[end - 1] == '\r' or s[end - 1] == '\n')) : (end -= 1) {}
+    return s[start..end];
+}
+
+var g_ipc_resp_buf: [2048]u8 = undefined;
+
+fn sendIpcCommand(client: *api.DiosixClient, target_cid: usize, cmd: []const u8) ![]const u8 {
+    try client.sendIpc(target_cid, cmd);
+
+    var tries: usize = 0;
+    while (tries < 100) : (tries += 1) {
+        if (client.recvIpc(0, &g_ipc_resp_buf) catch null) |msg| {
+            if (msg.data.len > 0) {
+                return msg.data;
+            }
+        }
+        const ts = linux.timespec{ .sec = 0, .nsec = 10_000_000 }; // 10ms
+        _ = linux.nanosleep(&ts, null);
+    }
+    return "Error: No response from child VM (timed out).";
+}
+
+fn readStdinLine(buf: []u8) !usize {
+    var total_read: usize = 0;
+    while (total_read < buf.len) {
+        var byte_buf: [1]u8 = undefined;
+        const n = linux.read(linux.STDIN_FILENO, &byte_buf, 1);
+        if (n <= 0) {
+            if (total_read == 0) return 0; // EOF
+            break;
+        }
+        const c = byte_buf[0];
+        if (c == '\n' or c == '\r') {
+            break;
+        }
+        buf[total_read] = c;
+        total_read += 1;
+    }
+    return total_read;
+}
+
+fn cmdLogin(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
+    if (args.len == 0) {
+        printStr("Usage: dsx login <name|cid> [-- [command...]]\n");
+        printStr("       dsx ssh <name|cid> [-- [command...]]\n");
+        printStr("       dsx console <name|cid>\n");
+        return;
+    }
+
+    const target_str = std.mem.span(args[0]);
+    var remote_cmd: ?[]const u8 = null;
+
+    if (args.len > 1) {
+        var start_idx: usize = 1;
+        if (std.mem.eql(u8, std.mem.span(args[1]), "--")) {
+            start_idx = 2;
+        }
+        if (args.len > start_idx) {
+            var cmd_buf = std.ArrayList(u8).empty;
+            const allocator = std.heap.page_allocator;
+            for (args[start_idx..]) |arg| {
+                const s = std.mem.span(arg);
+                if (cmd_buf.items.len > 0) try cmd_buf.append(allocator, ' ');
+                try cmd_buf.appendSlice(allocator, s);
+            }
+            remote_cmd = cmd_buf.items;
+        }
+    }
+
+    var resolved_cid: usize = parseCid(target_str) catch 0;
+    var resolved_name: []const u8 = target_str;
+    var resolved_ip: []const u8 = "";
+
+    var ip_storage: [64]u8 = undefined;
+    var name_storage: [64]u8 = undefined;
+
+    if (std.mem.eql(u8, target_str, "root") or std.mem.eql(u8, target_str, "self") or resolved_cid == 1) {
+        resolved_cid = 1;
+        resolved_name = "root";
+        resolved_ip = "127.0.0.1";
+    }
+
+    if (readBinaryFile("/var/run/diosix/guests.toml", MAX_MANIFEST_SIZE)) |content| {
+        defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+        var lexer = manifest.ManifestLexer.init(content);
+
+        var cur_cid: usize = 0;
+        var cur_name: []const u8 = "";
+        var cur_ip: []const u8 = "";
+
+        while (true) {
+            const tok = lexer.next();
+            if (tok.tag == .eof) {
+                if (matchTarget(target_str, resolved_cid, cur_cid, cur_name)) {
+                    resolved_cid = cur_cid;
+                    resolved_name = copyStr(&name_storage, cur_name);
+                    resolved_ip = copyStr(&ip_storage, cur_ip);
+                }
+                break;
+            }
+            if (tok.tag == .bracket_open) {
+                if (matchTarget(target_str, resolved_cid, cur_cid, cur_name)) {
+                    resolved_cid = cur_cid;
+                    resolved_name = copyStr(&name_storage, cur_name);
+                    resolved_ip = copyStr(&ip_storage, cur_ip);
+                    break;
+                }
+                cur_cid = 0;
+                cur_name = "";
+                cur_ip = "";
+                continue;
+            }
+            if (tok.tag == .ident or tok.tag == .string) {
+                const key = tok.val;
+                const eq = lexer.next();
+                if (eq.tag != .equals) continue;
+                const val = lexer.next();
+                if (std.mem.eql(u8, key, "cid")) {
+                    cur_cid = std.fmt.parseInt(usize, val.val, 10) catch 0;
+                } else if (std.mem.eql(u8, key, "name")) {
+                    cur_name = val.val;
+                } else if (std.mem.eql(u8, key, "ip")) {
+                    cur_ip = val.val;
+                }
+            }
+        }
+    } else |_| {}
+
+    if (resolved_ip.len == 0) {
+        if (readBinaryFile("/etc/diosix/system.toml", MAX_MANIFEST_SIZE)) |content| {
+            defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+            const allocator = std.heap.page_allocator;
+            if (manifest.parseSystemManifest(allocator, content)) |sys_m_val| {
+                var sys_m = sys_m_val;
+                defer sys_m.deinit();
+                if (sys_m.domains.get(target_str)) |dom| {
+                    if (dom.ip.len > 0) resolved_ip = copyStr(&ip_storage, dom.ip);
+                    if (dom.name.len > 0) resolved_name = copyStr(&name_storage, dom.name);
+                }
+            } else |_| {}
+        } else |_| {}
+    }
+
+    if (resolved_ip.len == 0) {
+        if (resolved_cid >= CID_FIRST_CHILD) {
+            resolved_ip = std.fmt.bufPrint(&ip_storage, "10.0.3.{d}", .{resolved_cid}) catch "10.0.3.2";
+        } else {
+            resolved_ip = "127.0.0.1";
+        }
+    }
+
+    // Direct Hypervisor Inter-VM IPC communication for child VMs
+    if (resolved_cid >= CID_FIRST_CHILD) {
+        if (remote_cmd) |rc| {
+            var msg_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Executing on child VM '{s}' (CID {d} via Diosix IPC): {s}\n", .{
+                resolved_name,
+                resolved_cid,
+                rc,
+            }) catch return;
+            printStr(msg);
+
+            const resp = sendIpcCommand(client, resolved_cid, rc) catch |err| {
+                printApiError("IPC send to guest", err);
+                return;
+            };
+            printStr(resp);
+            printStr("\n");
+            return;
+        }
+
+        var banner_buf: [256]u8 = undefined;
+        const banner = std.fmt.bufPrint(&banner_buf,
+            \\Connected to child VM '{s}' (CID {d} via Diosix IPC).
+            \\Type 'help' for available commands, 'exit' or Ctrl+D to disconnect.
+            \\
+            \\
+        , .{ resolved_name, resolved_cid }) catch "";
+        printStr(banner);
+
+        var line_buf: [256]u8 = undefined;
+        while (true) {
+            var prompt_buf: [64]u8 = undefined;
+            const prompt = std.fmt.bufPrint(&prompt_buf, "{s}# ", .{resolved_name}) catch "> ";
+            printStr(prompt);
+
+            const line_len = readStdinLine(&line_buf) catch break;
+            if (line_len == 0) {
+                printStr("\nConnection closed.\n");
+                break;
+            }
+
+            const line = trimWhitespace(line_buf[0..line_len]);
+            if (std.mem.eql(u8, line, "exit") or std.mem.eql(u8, line, "quit")) {
+                printStr("Connection closed.\n");
+                break;
+            }
+            if (line.len == 0) continue;
+
+            const resp = sendIpcCommand(client, resolved_cid, line) catch |err| {
+                printApiError("IPC send to guest", err);
+                continue;
+            };
+            if (resp.len > 0) {
+                printStr(resp);
+                printStr("\n");
+            }
+        }
+        return;
+    }
+
+    // Local Root VM SSH fallback
+    const key_file = findPrivateKey() orelse {
+        printStr("Error: No SSH private key found (/etc/diosix/keys/id_ed25519 or /root/.ssh/id_ed25519).\n");
+        return;
+    };
+
+    if (remote_cmd) |rc| {
+        var msg_buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "Executing on local Root VM (CID 1): {s}\n", .{rc}) catch return;
+        printStr(msg);
+    } else {
+        printStr("Logging into local Root VM (CID 1)...\n");
+    }
+
+    try execSsh(key_file, "127.0.0.1", remote_cmd);
+}
+
+fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
+    if (args.len == 0) {
+        printStr("Usage: dsx stop <name|cid>\n");
+        return;
+    }
+    const target_str = std.mem.span(args[0]);
+    var target_cid = parseCid(target_str) catch 0;
+    var target_name: []const u8 = target_str;
+
+    var name_storage: [64]u8 = undefined;
+
+    if (readBinaryFile("/var/run/diosix/guests.toml", MAX_MANIFEST_SIZE)) |content| {
+        defer _ = linux.munmap(content.ptr, MAX_MANIFEST_SIZE);
+        var lexer = manifest.ManifestLexer.init(content);
+
+        var cur_cid: usize = 0;
+        var cur_name: []const u8 = "";
+
+        while (true) {
+            const tok = lexer.next();
+            if (tok.tag == .eof) {
+                if (matchTarget(target_str, target_cid, cur_cid, cur_name)) {
+                    target_cid = cur_cid;
+                    target_name = copyStr(&name_storage, cur_name);
+                }
+                break;
+            }
+            if (tok.tag == .bracket_open) {
+                if (matchTarget(target_str, target_cid, cur_cid, cur_name)) {
+                    target_cid = cur_cid;
+                    target_name = copyStr(&name_storage, cur_name);
+                    break;
+                }
+                cur_cid = 0;
+                cur_name = "";
+                continue;
+            }
+            if (tok.tag == .ident or tok.tag == .string) {
+                const key = tok.val;
+                const eq = lexer.next();
+                if (eq.tag != .equals) continue;
+                const val = lexer.next();
+                if (std.mem.eql(u8, key, "cid")) {
+                    cur_cid = std.fmt.parseInt(usize, val.val, 10) catch 0;
+                } else if (std.mem.eql(u8, key, "name")) {
+                    cur_name = val.val;
+                }
+            }
+        }
+    } else |_| {}
+
+    if (target_cid < CID_FIRST_CHILD) {
+        printStr("Error: Invalid or unknown child VM identifier.\n");
+        return;
+    }
+
+    client.terminate(target_cid, 0) catch |err| {
+        printApiError("Stop VM", err);
+        return;
+    };
+    removeGuestFromRegistry(target_cid);
+
+    var msg_buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "✓ Child VM '{s}' (CID {d}) terminated.\n", .{ target_name, target_cid }) catch return;
+    printStr(msg);
+}
+
+// -----------------------------------------------------------------------------
+// Unit Tests
+// -----------------------------------------------------------------------------
+const testing = std.testing;
+
+test "parseCid resolution" {
+    try testing.expectEqual(CID_SELF, try parseCid("self"));
+    try testing.expectEqual(CID_PARENT, try parseCid("parent"));
+    try testing.expectEqual(@as(usize, 2), try parseCid("2"));
+    try testing.expectEqual(@as(usize, 42), try parseCid("42"));
+    try testing.expectError(error.InvalidCharacter, parseCid("invalid"));
+}
+
+test "isArch target detection" {
+    try testing.expect(isArch("riscv64"));
+    try testing.expect(isArch("riscv32"));
+    try testing.expect(isArch("aarch64"));
+    try testing.expect(isArch("x86_64"));
+    try testing.expect(!isArch("x86"));
+    try testing.expect(!isArch("arm"));
+    try testing.expect(!isArch("mips"));
+    try testing.expect(!isArch("other"));
+}
+
+test "parseMemorySizeMb unit conversions" {
+    try testing.expectEqual(@as(usize, 256), parseMemorySizeMb("256 MB"));
+    try testing.expectEqual(@as(usize, 256), parseMemorySizeMb("256MB"));
+    try testing.expectEqual(@as(usize, 256), parseMemorySizeMb("256M"));
+    try testing.expectEqual(@as(usize, 2048), parseMemorySizeMb("2GiB"));
+    try testing.expectEqual(@as(usize, 2048), parseMemorySizeMb("2GB"));
+    try testing.expectEqual(@as(usize, 2048), parseMemorySizeMb("2G"));
+    try testing.expectEqual(@as(usize, 1), parseMemorySizeMb("1024KB"));
+    try testing.expectEqual(@as(usize, 1), parseMemorySizeMb("1024K"));
+    try testing.expectEqual(@as(usize, 512), parseMemorySizeMb("512"));
+}
+
+test "readBinaryFile error handling" {
+    try testing.expectError(error.FileNotFound, readBinaryFile("/nonexistent/file/path/here.bin", 4096));
+
+    // Valid file reading test
+    const content = try readBinaryFile("VERSION", 1024);
+    defer _ = linux.munmap(content.ptr, 1024);
+    try testing.expect(content.len > 0);
+}
+
+test "guest registry serialization and query parsing" {
+    const test_registry =
+        \\[[guests]]
+        \\cid = 2
+        \\name = "user"
+        \\vcpus = 2
+        \\ram = "256 MB"
+        \\ip = "10.0.3.2"
+        \\trust = "untrusted"
+        \\status = "running"
+        \\
+        \\[[guests]]
+        \\cid = 3
+        \\name = "sys-supervisor"
+        \\vcpus = 4
+        \\ram = "2GiB"
+        \\ip = "10.0.3.3"
+        \\trust = "trusted"
+        \\status = "running"
+        \\
+    ;
+
+    var lexer = manifest.ManifestLexer.init(test_registry);
+    var guest_count: usize = 0;
+    var found_user = false;
+    var found_sys = false;
+
+    var cur_cid: usize = 0;
+    var cur_name: []const u8 = "";
+    var cur_ip: []const u8 = "";
+
+    while (true) {
+        const tok = lexer.next();
+        if (tok.tag == .eof) {
+            if (cur_cid >= CID_FIRST_CHILD) {
+                guest_count += 1;
+                if (std.mem.eql(u8, cur_name, "user")) found_user = true;
+                if (std.mem.eql(u8, cur_name, "sys-supervisor")) found_sys = true;
+            }
+            break;
+        }
+        if (tok.tag == .bracket_open) {
+            if (cur_cid >= CID_FIRST_CHILD) {
+                guest_count += 1;
+                if (std.mem.eql(u8, cur_name, "user")) found_user = true;
+                if (std.mem.eql(u8, cur_name, "sys-supervisor")) found_sys = true;
+                cur_cid = 0;
+                cur_name = "";
+                cur_ip = "";
+            }
+            continue;
+        }
+        if (tok.tag == .ident or tok.tag == .string) {
+            const key = tok.val;
+            const eq = lexer.next();
+            if (eq.tag != .equals) continue;
+            const val = lexer.next();
+            if (std.mem.eql(u8, key, "cid")) {
+                cur_cid = try std.fmt.parseInt(usize, val.val, 10);
+            } else if (std.mem.eql(u8, key, "name")) {
+                cur_name = val.val;
+            } else if (std.mem.eql(u8, key, "ip")) {
+                cur_ip = val.val;
+            }
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 2), guest_count);
+    try testing.expect(found_user);
+    try testing.expect(found_sys);
+}
+
+test "matchTarget resolution" {
+    try testing.expect(matchTarget("user", 0, 2, "user"));
+    try testing.expect(matchTarget("user", 2, 2, "user"));
+    try testing.expect(matchTarget("2", 2, 2, "user"));
+    try testing.expect(matchTarget("sys", 0, 3, "sys-supervisor"));
+    try testing.expect(!matchTarget("other", 0, 2, "user"));
+}
+
+test "RAM string formatting normalization" {
+    var buf1: [32]u8 = undefined;
+    var buf2: [32]u8 = undefined;
+    var buf3: [32]u8 = undefined;
+
+    const s1 = std.fmt.bufPrint(&buf1, "{d} MB", .{parseMemorySizeMb("256M")}) catch "";
+    const s2 = std.fmt.bufPrint(&buf2, "{d} MB", .{parseMemorySizeMb("512 MB")}) catch "";
+    const s3 = std.fmt.bufPrint(&buf3, "{d} MB", .{parseMemorySizeMb("2GiB")}) catch "";
+
+    try testing.expectEqualStrings("256 MB", s1);
+    try testing.expectEqualStrings("512 MB", s2);
+    try testing.expectEqualStrings("2048 MB", s3);
+}
+
+

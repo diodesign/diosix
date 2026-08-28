@@ -1,0 +1,51 @@
+#!/bin/sh
+#
+# Starts dropbear sshd for Diosix guests and root VM.
+#
+
+start() {
+    printf "Starting dropbear sshd: "
+    mkdir -p /run/dropbear /var/run/dropbear /etc/dropbear /root/.ssh
+    chmod 700 /run/dropbear /var/run/dropbear /etc/dropbear /root/.ssh 2>/dev/null || true
+
+    if [ ! -f /etc/dropbear/dropbear_ed25519_host_key ] && [ -x /usr/bin/dropbearkey ]; then
+        /usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key >/dev/null 2>&1 || true
+    fi
+
+    if pgrep dropbear >/dev/null 2>&1; then
+        echo "OK"
+        return 0
+    fi
+
+    start-stop-daemon -S -q -p /var/run/dropbear.pid \
+        --exec /usr/sbin/dropbear -- -R -B -p 22
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+    printf "Stopping dropbear sshd: "
+    start-stop-daemon -K -q -p /var/run/dropbear.pid 2>/dev/null || killall dropbear 2>/dev/null || true
+    echo "OK"
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  restart|reload)
+    restart
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac
+
+exit 0

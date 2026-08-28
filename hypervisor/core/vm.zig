@@ -176,16 +176,18 @@ pub const GuestSpace = struct {
         if (self.mode == .h_paging) {
             const pt = self.paging.?;
             // Check if it's within the optimized identity/offset range
-            if (gpa >= pt.root_base_gpa and gpa < pt.root_base_gpa + pt.root_range_size) {
+            if (pt.root_range_size > 0 and gpa >= pt.root_base_gpa and gpa < pt.root_base_gpa + pt.root_range_size) {
                 return gpa - pt.root_base_gpa + pt.root_base_hpa;
             }
             // Otherwise, perform a page table walk
             const pte_ptr = pt.walk(gpa, false) catch return error.TranslationFailed;
+            if (pte_ptr.* & sv39x4.PTEFlags.valid == 0) return error.TranslationFailed;
             const hpa = (pte_ptr.* >> 10) << 12;
+            if (hpa == 0) return error.TranslationFailed;
             return hpa + (gpa % physmem.PageSize);
         } else {
             // PMP mode: resolve the GPA through the optimized identity mapping.
-            if (gpa >= self.base_gpa and gpa < self.base_gpa + self.range_size) {
+            if (self.range_size > 0 and gpa >= self.base_gpa and gpa < self.base_gpa + self.range_size) {
                 return self.base_hpa + (gpa - self.base_gpa);
             }
             return error.TranslationFailed;
