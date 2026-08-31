@@ -9,16 +9,16 @@ pub const MAX_CONTEXTS: usize = 8;
 pub const MAX_IRQS: usize = 128; // Standard QEMU virt PLIC has 96 IRQs (indices 1..96)
 
 pub const BITS_PER_WORD: usize = 32;
-pub const BYTES_PER_WORD: u32  = 4;
+pub const BYTES_PER_WORD: u32 = 4;
 
-pub const PLIC_PRIORITY_BASE: u32      = 0x0000;
-pub const PLIC_PENDING_BASE: u32       = 0x1000;
-pub const PLIC_ENABLE_BASE: u32        = 0x2000;
-pub const PLIC_ENABLE_CTX_STRIDE: u32  = 0x80;
-pub const PLIC_CONTEXT_BASE: u32       = 0x200000;
-pub const PLIC_CONTEXT_STRIDE: u32     = 0x1000;
+pub const PLIC_PRIORITY_BASE: u32 = 0x0000;
+pub const PLIC_PENDING_BASE: u32 = 0x1000;
+pub const PLIC_ENABLE_BASE: u32 = 0x2000;
+pub const PLIC_ENABLE_CTX_STRIDE: u32 = 0x80;
+pub const PLIC_CONTEXT_BASE: u32 = 0x200000;
+pub const PLIC_CONTEXT_STRIDE: u32 = 0x1000;
 
-pub const PLIC_REG_THRESHOLD: u32      = 0;
+pub const PLIC_REG_THRESHOLD: u32 = 0;
 pub const PLIC_REG_CLAIM_COMPLETE: u32 = 4;
 
 pub const VirtualPlic = struct {
@@ -169,5 +169,3 @@ test "PLIC interrupt priority, enable, pending, claim and complete" {
     plic.write(ctx0_claim_addr, 11);
     try testing.expectEqual(@as(u32, 0), plic.claimed_irq[0]);
 }
-
-

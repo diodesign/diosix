@@ -39,14 +39,14 @@ manifest attenuation, or the `dsx` command-line utility, run the live QEMU
 integration test harness:
 
 ```bash
-# Compile the hypervisor and run the 11-stage live guest integration suite
+# Compile the hypervisor and run the 14-stage live guest integration suite
 ./scripts/build.sh
 ./scripts/test_manifest_integration.py
 ```
 
 This automated test boots QEMU, logs into the Root VM, and validates all
-hypercalls, quotas, manifest attenuation rules, service resolution, IPC
-messaging loops, and guest-initiated shutdown.
+hypercalls, quotas, manifest attenuation rules, service resolution, SSH
+lifecycle management, and guest-initiated shutdown.
 
 Ensure both unit tests and integration tests pass before submitting changes
 for review.

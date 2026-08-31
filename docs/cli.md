@@ -19,7 +19,7 @@ symbolic aliases:
 
 *   **`self`** or **`1`**: Refers to the calling VM.
 *   **`parent`** or **`0`**: Refers to the immediate parent VM.
-*   **`2..N`**: Refers to a specific direct child VM created by `fork`.
+*   **`2..N`**: Refers to a specific direct child VM created by the calling VM.
 
 ---
 
@@ -60,9 +60,8 @@ Timer frequency : 10000000 Hz
 Capabilities    :
   [x] Hardware H-extension (nested virtualization)
   [x] Stage-2 Sv39x4 paging
-  [x] Copy-on-write VM forking
   [x] Cross-arch JIT dynamic recompilation
-  [x] Inter-VM fast IPC
+  [x] VirtIO-vsock (AF_VSOCK in-hypervisor networking)
 ```
 
 ---
@@ -89,7 +88,7 @@ diosix-ctl run --manifest <system.toml> --domain <domain_name> [options]
 Examples:
 ```bash
 # Launch a sandboxed user VM with 2 vCPUs and 256 MB RAM
-diosix-ctl run /boot/user-supervisor.elf --name user --vcpus 2 --ram 256M
+diosix-ctl run /boot/vmlinux.elf --name user --vcpus 2 --ram 256M
 
 # Launch directly from system manifest domain definition
 diosix-ctl run --manifest /etc/diosix/system.toml --domain user
@@ -153,64 +152,6 @@ diosix-ctl stop user
 
 ---
 
-
-### `diosix-ctl spawn`
-Atomically creates a new child VM and boots a guest Executable and Linkable 
-Format (ELF) binary (and optional DTB). It can also reload an image into an 
-existing child VM (`CID >= 2`).
-
-```bash
-diosix-ctl spawn <elf_path> [dtb_path] [arch] [--trusted]
-diosix-ctl spawn <cid> <elf_path> [dtb_path] [arch] [--trusted]
-```
-
-*   `elf_path`: Absolute or relative path to the guest ELF binary.
-*   `cid` *(optional)*: Existing child CID (`>= 2`) to reload. If omitted, a 
-    brand new clean child VM is created and started.
-*   `dtb_path` *(optional)*: Path to the guest device tree blob.
-*   `arch` *(optional)*: Target architecture (`riscv64`, `riscv32`, `aarch64`, 
-    `x86_64`). Defaults to `riscv64`.
-*   `--trusted` *(optional)*: Grants the spawned VM physical host MMIO and 
-    hardware interrupt access (only permitted from hardware-trusted parents). 
-    By default, spawned guests are untrusted.
-
-Examples:
-```bash
-# Atomically create and launch a sandboxed guest VM (default untrusted)
-diosix-ctl spawn /root/app.elf /root/app.dtb riscv64
-
-# Spawn a trusted hardware driver VM (Root VM only)
-diosix-ctl spawn /root/driver.elf --trusted
-
-# Reload a new binary into existing child VM 2
-diosix-ctl spawn 2 /root/app_v2.elf
-```
-
----
-
-### `diosix-ctl fork`
-Clones the calling VM's memory using Stage-2 Copy-on-Write (COW) page tables 
-and duplicates its primary Virtual CPU (VCPU) state. Returns a new child CID.
-
-```bash
-diosix-ctl fork [--untrusted]
-diosix-ctl fork --spawn <elf_path> [options]
-```
-
-*   `--untrusted` / `--drop-trust` *(optional)*: Drops hardware trust in the child 
-    VM immediately before it executes.
-*   `--spawn <elf_path>`: Alias for `diosix-ctl spawn <elf_path>` to create and 
-    boot a new VM image in one step.
-
-Example output:
-```text
-VM successfully forked. Child CID: 2
-```
-
----
-
-
-
 ### `diosix-ctl quota`
 Applies or lowers resource ceilings on the calling VM or its direct children.
 
@@ -235,87 +176,12 @@ diosix-ctl quota 2 --ram 128 --vcpus 2
 diosix-ctl quota self --ram 256
 ```
 
----
-
-### `diosix-ctl send`
-Sends an Inter-Process Communication (IPC) message payload to a target VM.
-
-```bash
-diosix-ctl send <cid|parent> <message>
-```
-
-*   `cid`: Destination Context ID (`parent` or `0` for parent, `>= 2` for a 
-    child).
-*   `message`: Text or payload string (up to 4096 bytes).
-
-Example:
-```bash
-diosix-ctl send parent "PING"
-diosix-ctl send 2 "START_WORKER"
-```
-
----
-
-### `diosix-ctl recv`
-Receives an IPC message from the caller's inbox ring buffer.
-
-```bash
-diosix-ctl recv [cid|parent] [--nohang]
-```
-
-*   `cid` *(optional)*: Filters incoming messages for a specific sender CID.
-*   `--nohang` / `-n` *(optional)*: Returns immediately without blocking if no 
-    messages are present. By default, `recv` blocks until a message arrives.
-
-Example:
-```bash
-diosix-ctl recv
-```
-
-Example output:
-```text
-[IPC Message from CID 2 (12 bytes)]:
-START_WORKER
-```
-
----
-
-### `diosix-ctl wait`
-Waits for state changes or exit events from child VMs.
-
-```bash
-diosix-ctl wait [cid|self] [--nohang]
-```
-
-*   `cid` *(optional)*: Specific child CID to wait on. Omit to wait for any 
-    child event.
-*   `--nohang` / `-n` *(optional)*: Checks for pending events without blocking.
-
-Example:
-```bash
-diosix-ctl wait 2
-```
-
-Example output:
-```text
-Waiting for child VM (CID 2) event...
-Child VM (CID 2) terminated with exit code 0.
-```
-
----
-
 ### `diosix-ctl terminate`
-Terminates a target VM and recursively tears down all of its descendants, 
-reclaiming its memory and VCPU allocations.
+Terminates a target virtual machine (the calling VM or a direct child VM) along with all of its descendants.
 
 ```bash
 diosix-ctl terminate [cid|self] [exit_code]
 ```
-
-*   `cid`: `self` (or `1`) to terminate the current non-root VM, or `>= 2` to 
-    terminate a child.
-*   `exit_code` *(optional)*: Status code reported to the parent's event queue. 
-    Defaults to `0`.
 
 Examples:
 ```bash
@@ -391,7 +257,7 @@ diosix-ctl manifest show --cid 2 --hv
 
 ### `diosix-ctl resolve`
 Resolves a required service alias against the VM's active manifest to discover
-target Context IDs, routing domains, IPC channels, and access modes.
+target Context IDs, routing domains, network endpoints, and access modes.
 
 ```bash
 diosix-ctl resolve <service_alias> [--manifest <file.toml>]
@@ -409,7 +275,6 @@ Service resolution:
   Alias   : gui.wayland
   CID     : 0
   Domain  : sys
-  Channel : ipc
   Mode    : rw
 ```
 

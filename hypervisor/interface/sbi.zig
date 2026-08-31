@@ -58,17 +58,20 @@ pub const DIOSIX = struct {
     pub const TERMINATE = 0;
     pub const EXIT = 0;
     pub const YIELD = 1;
-    pub const FORK = 2;
     pub const DROP_TRUST = 3;
-    pub const SPAWN = 4;
+    pub const RUN = 4;
     pub const GET_INFO = 5;
     pub const SET_QUOTA = 6;
-    pub const IPC_SEND = 7;
-    pub const IPC_RECV = 8;
     pub const POLL_EVENT = 9;
     pub const GET_HV_INFO = 10;
     pub const GET_MANIFEST = 11;
     pub const SET_MANIFEST = 12;
+    pub const MAP_CHILD_MEM = 13;
+    pub const UNMAP_CHILD_MEM = 14;
+    pub const START = 15;
+    pub const NET_SEND = 16;
+    pub const NET_RECV = 17;
+    pub const NET_POLL = 18;
 };
 
 pub const CID_PARENT: usize = 0;
@@ -90,10 +93,9 @@ pub const TargetArch = enum(u8) {
 pub const HypervisorFeature = struct {
     pub const HARDWARE_VIRT: u64 = 1 << 0;
     pub const STAGE2_PAGING: u64 = 1 << 1;
-    pub const COW_FORK: u64      = 1 << 2;
-    pub const DYNAREC: u64       = 1 << 3;
-    pub const INTER_VM_IPC: u64  = 1 << 4;
-    pub const IOMMU: u64         = 1 << 5;
+    pub const DYNAREC: u64 = 1 << 2;
+    pub const VIRTIO_VSOCK: u64 = 1 << 3;
+    pub const IOMMU: u64 = 1 << 4;
 };
 
 pub const HypervisorInfo = extern struct {
@@ -131,8 +133,7 @@ pub const EventType = enum(u32) {
     none = 0,
     child_terminated = 1,
     child_stopped = 2,
-    child_spawned = 3,
-    ipc_message = 4,
+    child_started = 3,
 };
 
 pub const Event = extern struct {
@@ -142,15 +143,11 @@ pub const Event = extern struct {
     _reserved: u64 = 0,
 };
 
-pub const SpawnFlags = struct {
+pub const RunFlags = struct {
     pub const TRUSTED: usize = 1 << 0;
 };
 
-pub const ForkFlags = struct {
-    pub const UNTRUSTED: usize = 1 << 0;
-};
-
-pub const SpawnArgs = extern struct {
+pub const RunArgs = extern struct {
     child_id: usize,
     elf_ptr: usize,
     elf_size: usize,
@@ -179,20 +176,6 @@ pub const QuotaArgs = extern struct {
     max_descendants: usize,
 };
 
-pub const IpcSendArgs = extern struct {
-    target_cid: usize,
-    data_ptr: usize,
-    data_len: usize,
-};
-
-pub const IpcRecvArgs = extern struct {
-    sender_cid: usize,
-    data_ptr: usize,
-    max_len: usize,
-    actual_len: usize = 0,
-    actual_sender_cid: usize = 0,
-};
-
 pub const ManifestArgs = extern struct {
     target_cid: usize,
     data_ptr: usize,
@@ -200,12 +183,24 @@ pub const ManifestArgs = extern struct {
     actual_len: usize = 0,
 };
 
+pub const MapChildMemArgs = extern struct {
+    child_id: usize,
+    child_gpa: usize,
+    parent_gpa: usize,
+    size: usize,
+    flags: usize,
+};
 
+pub const UnmapChildMemArgs = extern struct {
+    parent_gpa: usize,
+    size: usize,
+};
 
-
-
-
-
+pub const StartArgs = extern struct {
+    child_id: usize,
+    entry_point: usize,
+    dtb_ptr: usize,
+};
 
 // Debug Console Extension Function IDs
 pub const DBCN = struct {
@@ -259,4 +254,3 @@ test "SBI interface structures and extension IDs" {
     try testing.expectEqual(@as(usize, 0x48534D), EXT.HSM);
     try testing.expectEqual(@as(usize, 0x53525354), EXT.SRST);
 }
-

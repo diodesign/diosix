@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const alloc = @import("../../../../core/alloc.zig");
+const atomic = @import("../../../../core/atomic.zig");
 const dsa = @import("../../../../core/dsa.zig");
 const debug = @import("../../../../core/debug.zig");
 const interface = @import("interface").riscv;
@@ -216,6 +217,7 @@ pub const CpuContext = struct {
     // Blocked queue for vcores waiting for interrupts (WFI).
     // Uses *anyopaque to avoid circular dependencies with vcore.zig.
     blocked_queue: dsa.LinkedList(*anyopaque),
+    blocked_lock: atomic.SpinLock = atomic.SpinLock.init(),
 
     trap_count: usize,
 
@@ -837,7 +839,6 @@ pub fn getOnlineCpuCount() u32 {
     return if (count > 0) count else 1;
 }
 
-
 pub const TpGuard = struct {
     saved_tp: usize = 0,
     swapped: bool = false,
@@ -1113,7 +1114,6 @@ pub fn shutdown() void {
     ptr.* = SiFiveTest.FINISHER_PASS;
     while (true) {}
 }
-
 
 pub fn pause() void {
     if (builtin.is_test) return;

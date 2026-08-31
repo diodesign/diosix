@@ -13,7 +13,6 @@ pub const ELF64_EHDR_SIZE: usize = 64;
 pub const ELF32_PHDR_SIZE: usize = 32;
 pub const ELF64_PHDR_SIZE: usize = 56;
 
-
 // Identification (e_ident) byte indices
 pub const EI_MAG0 = 0;
 pub const EI_MAG1 = 1;
@@ -47,9 +46,9 @@ pub const TYPE_CORE: u16 = 4;
 
 // Target machine architectures (e_machine)
 pub const MACHINE_NONE: u16 = 0;
-pub const MACHINE_X86_64: u16 = 62;    // AMD x86-64 / EM_X86_64
-pub const MACHINE_AARCH64: u16 = 183;  // ARM 64-bit / EM_AARCH64
-pub const MACHINE_RISCV: u16 = 0xF3;   // RISC-V / EM_RISCV (243)
+pub const MACHINE_X86_64: u16 = 62; // AMD x86-64 / EM_X86_64
+pub const MACHINE_AARCH64: u16 = 183; // ARM 64-bit / EM_AARCH64
+pub const MACHINE_RISCV: u16 = 0xF3; // RISC-V / EM_RISCV (243)
 
 // Segment types (p_type)
 pub const PT_NULL: u32 = 0;
@@ -152,5 +151,3 @@ test "ELF specification constants and header layout validation" {
     try testing.expectEqual(@as(u16, 183), MACHINE_AARCH64);
     try testing.expectEqual(@as(u16, 62), MACHINE_X86_64);
 }
-
-

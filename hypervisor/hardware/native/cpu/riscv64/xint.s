@@ -21,6 +21,7 @@ hw_xint_init:
     # point this CPU core at default machine-level xint handler (see below)
     la      t0, xint_machine_entry_handler
     csrrw   x0, mtvec, t0
+    csrrw   x0, stvec, t0
   
     # delegate most supervisor-level exceptions to the supervisor-level guest,
     # so that the guest can deal with its exception direct. for a given exception,
@@ -34,15 +35,12 @@ hw_xint_init:
     li      t0, 0xb1fb
     csrrw   x0, medeleg, t0
   
-    # Delegate supervisor and virtual supervisor interrupts:
-    # bit 1: Supervisor software interrupt (SSIP)
+    # Delegate virtual supervisor interrupts to VS-mode:
     # bit 2: Virtual supervisor software interrupt (VSSIP)
-    # bit 5: Supervisor timer interrupt (STIP)
     # bit 6: Virtual supervisor timer interrupt (VSTIP)
-    # bit 9: Supervisor external interrupt (SEIP)
     # bit 10: Virtual supervisor external interrupt (VSEIP)
-    # bit 12: Supervisor guest external interrupt (SGEIP)
-    li      t0, 0x1666
+    # Physical interrupts (SSIP bit 1, STIP bit 5, SEIP bit 9) remain in M-mode.
+    li      t0, 0x0444
     csrrw   x0, mideleg, t0
 
     ret

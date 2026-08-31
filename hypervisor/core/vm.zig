@@ -94,59 +94,20 @@ pub const GuestSpace = struct {
             if (hpa >= self.base_hpa and hpa + size <= self.base_hpa + self.range_size) {
                 return; // Already covered by main RAM container
             }
-            try self.pmp_config.?.addRegion(hpa, size, @intCast(flags));
         }
     }
 
-    // Fork this memory space
-    pub fn fork(self: *GuestSpace) !GuestSpace {
+    // Unmap physical memory from guest address space
+    pub fn unmap(self: *GuestSpace, gpa: usize, size: usize) void {
         if (self.mode == .h_paging) {
-            return GuestSpace{
-                .mode = .h_paging,
-                .paging = try self.paging.?.fork(),
-                .pmp_config = null,
-                .is_trusted = self.is_trusted,
-                .base_gpa = self.base_gpa,
-                .base_hpa = self.base_hpa,
-                .range_size = self.range_size,
-                .is_ram_allocated = false,
-                .allocator = self.allocator,
-            };
-        } else {
-            const child_base_hpa = if (self.range_size > 0) blk: {
-                const order: u8 = @intCast(std.math.log2(self.range_size / physmem.PageSize));
-                const new_base = try physmem.allocPageSelection(order);
-                @memcpy(@as([*]u8, @ptrFromInt(new_base))[0..self.range_size], @as([*]const u8, @ptrFromInt(self.base_hpa))[0..self.range_size]);
-                break :blk new_base;
-            } else 0;
-
-            var pmp_config = try pmp.PMPConfig.init(self.allocator);
-
-            // 1. Deny access to the hypervisor's private DRAM region [ram_base, child_base_hpa)
-            const ram_base = physmem.getRamBase();
-            const hv_size = child_base_hpa - ram_base;
-            if (hv_size > 0) {
-                try pmp_config.addRegion(ram_base, hv_size, pmp.PMPAccess.none);
+            var offset: usize = 0;
+            while (offset < size) : (offset += physmem.PageSize) {
+                self.paging.?.unmapPage(gpa + offset);
             }
-
-            // 2. Allow access to the entire 64-bit physical address space for everything else.
-            try pmp_config.addRegion(0, ALL_PHYSICAL_MEMORY, pmp.PMPAccess.rwx);
-
-            return GuestSpace{
-                .mode = .pmp_fallback,
-                .paging = null,
-                .pmp_config = pmp_config,
-                .is_trusted = self.is_trusted,
-                .base_gpa = self.base_gpa,
-                .base_hpa = child_base_hpa,
-                .range_size = self.range_size,
-                .is_ram_allocated = if (self.range_size > 0) true else false,
-                .allocator = self.allocator,
-            };
         }
     }
 
-    // Handle a guest physical page fault (CoW, shadow thawing, or error)
+    // Handle a guest physical page fault (dynamic paging, MMIO, or error)
     pub fn handleFault(self: *GuestSpace, vc: *anyopaque, gpa: usize, cause: usize) !void {
         _ = vc;
         _ = cause;

@@ -35,9 +35,7 @@ extern fn hw_xint_init() void;
 pub fn init() void {
     hw_xint_init();
 
-
-    // Do not delegate physical interrupts to S-mode, as the hypervisor needs to handle them in M-mode.
-    // Especially stimecmp (Sstc) timer interrupts must trap to M-mode.
+    // Keep physical interrupts in M-mode so the hypervisor can handle core wakeups and injection
     riscv.writeMideleg(0);
     // Enable physical timer, software, and external interrupts (both machine and supervisor mode)
     riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
@@ -49,6 +47,7 @@ pub fn init() void {
     // Enable physical Vector (VS) and Floating-point (FS) extensions (set to 3 = Dirty)
     var mstatus = riscv.readMstatus();
     mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
+    mstatus |= (@as(usize, 1) << 21); // Set TW bit so VS-mode WFI traps to M-mode
     riscv.writeMstatus(mstatus);
 }
 
@@ -59,22 +58,22 @@ pub fn initCpuFeatures() void {
     if (config.legacy_cpu) return;
 
     var envcfg_val: usize = 0;
-    
+
     if (riscv.riscv_supports_sstc) {
         // Enable STCE to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
         envcfg_val |= riscv.ENVCFG.STCE;
     }
-    
+
     if (riscv.riscv_supports_smstateen) {
         // Enable Cache Block Operations: CBZE (bit 7), CBCFE (bit 6), and CBIE (bits 4-5) = 240 (0xF0).
         envcfg_val |= riscv.ENVCFG.CACHE_OPS_ALL;
-        
+
         // Enable state-enables for AIA, IMSIC, CSRIND, and ENVCFG to delegate native register access
         const stateen_base = riscv.STATEEN.BASE_FEATURES;
-        
+
         // For mstateen0 (0x30c), we also enable bit 63 (SE0) to control/enable lower-level stateen.
         riscv.writeMstateen0(stateen_base | riscv.STATEEN.SE0);
-        
+
         if (riscv.hasHExtension()) {
             riscv.writeHstateen0(stateen_base);
         }
@@ -87,20 +86,19 @@ pub fn initCpuFeatures() void {
         }
     }
 
-    // Initialize the physical supervisor timer (stimecmp) to infinity so it doesn't 
+    // Initialize the physical supervisor timer (stimecmp) to infinity so it doesn't
     // immediately fire a physical STIP trap storm. The hypervisor will program this
     // dynamically when it needs to wake up from WFI.
     if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
         riscv.writeStimecmp(std.math.maxInt(u64));
     }
 
-    // For PMP fallback guests (native without H-extension), we must delegate supervisor
-    // interrupts directly to S-mode since the guest runs natively in S-mode.
-    if (!riscv.hasHExtension()) {
-        const current_mideleg = riscv.readMideleg();
-        const sip_mask = (1 << 1) | (1 << 5) | (1 << 9); // SSIP, STIP, SEIP
-        riscv.writeMideleg(current_mideleg | sip_mask);
-    }
+    // Delegate virtual supervisor interrupts (VSSIP, VSTIP, VSEIP) to VS-mode.
+    // Physical interrupts (SSIP, STIP, SEIP) remain in M-mode so the hypervisor
+    // can receive physical PLIC/CLINT traps and inject virtual interrupts into hvip.
+    const current_mideleg = riscv.readMideleg();
+    const virt_sip_mask = (1 << 2) | (1 << 6) | (1 << 10); // VSSIP, VSTIP, VSEIP
+    riscv.writeMideleg((current_mideleg & ~@as(usize, (1 << 1) | (1 << 5) | (1 << 9))) | virt_sip_mask);
 }
 
 pub const Type = enum {
@@ -219,21 +217,9 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
 pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (builtin.is_test) return;
 
-
     const pcpu = pcore.this();
     pcpu.in_m_mode = true; // Trap entry is always in M-mode
     const irq = dispatch(context);
-    if (pcpu.active_vcore) |vc_raw| {
-        if (@intFromPtr(vc_raw) & 7 != 0) {
-            @import("../../../../core/debug.zig").printf("!!! xint_handler misaligned pcpu 0x{x} vc_raw 0x{x}\n", .{@intFromPtr(pcpu), @intFromPtr(vc_raw)});
-        }
-        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-        if (vc.exec_path == .emulated) {
-            // Emulated core trap
-        }
-    }
-
-
 
     // If we're coming from a guest or emulator, save its context
     var is_guest = irq.privilege_mode != .machine;
@@ -250,7 +236,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 vc.getNativeMachine().mepc = irq.pc;
                 vc.getNativeMachine().mstatus = riscv.readMstatus();
                 if (riscv.hasHExtension()) {
-                    vc.getNativeMachine().hvip = riscv.readHvip();
+                    vc.getNativeMachine().hvip = (vc.getNativeMachine().hvip & (riscv.HVIP.VSEIP | riscv.HVIP.VSSIP)) | riscv.readHvip();
                     const gs = vc.getNativeGuestState();
                     gs.vsstatus = riscv.readVsstatus();
                     gs.vsie = riscv.readVsie();
@@ -307,31 +293,39 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
         while (pcpu.active_vcore == null) {
             const now_time = riscv.readTime();
             const timeslice_limit = now_time +% riscv.TIMESLICE_TICKS;
+            const b_prev = pcpu.blocked_lock.lock();
             var min_timer: u64 = if (pcpu.blocked_queue.start != null) timeslice_limit else ~@as(u64, 0);
             var it = pcpu.blocked_queue.start;
-            
+
             while (it) |node| {
                 const next_it = node.next;
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
-                
-                // If it was woken up by another vCore on the same CPU, remove it from the blocked queue
+
+                // If it was woken up by another vCore, remove it from the blocked queue
                 if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
                     pcpu.blocked_queue.remove(node);
+                    vc.blocked_on_cpu = null;
                     it = next_it;
                     continue;
                 }
 
                 var wake = false;
-                
+
                 // Check pending IPIs
                 if (@atomicLoad(bool, &vc.pending_ipi, .acquire)) {
                     wake = true;
                 } else if (vc.exec_path == .native) {
+                    // Check physical external interrupts (MEIP bit 11, SEIP bit 9) from PLIC
+                    const mip_val = riscv.readMip();
+                    if ((mip_val & ((1 << 9) | (1 << 11))) != 0) {
+                        wake = true;
+                    }
+
                     // Check unhandled hardware virtual interrupts (VSSIP, VSTIP, VSEIP)
                     const virt_mask = riscv.HVIP.VSSIP | riscv.HVIP.VSTIP | riscv.HVIP.VSEIP;
                     if ((vc.getNativeMachine().hvip & virt_mask) != 0) wake = true;
                 }
-                
+
                 // Check Native Timer (Sstc hardware or software emulated)
                 if (!wake and vc.exec_path == .native) {
                     const vstc = vc.getNativeGuestState().vstimecmp;
@@ -367,27 +361,28 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                         wake = true;
                     }
                 }
-                
+
                 if (wake) {
                     pcpu.blocked_queue.remove(node);
-                    if (vc.tryWake()) {
-                        vc.blocked_on_cpu = null;
-                        scheduler.queue(vc);
-                    }
+                    vc.blocked_on_cpu = null;
+                    @atomicStore(bool, &vc.wfi_blocked, false, .release);
+                    vc.state = .ready;
+                    scheduler.queue(vc);
                 }
-                
+
                 it = next_it;
             }
-            
+            pcpu.blocked_lock.unlock(b_prev);
+
             // Check if a hardware MSIP IPI is pending on this physical core via in-register mip CSR
             const msip_pending = (riscv.readMip() & (1 << 3)) != 0;
-            
+
             // Try to schedule any newly woken vcores
             scheduler.schedule();
             if (pcpu.active_vcore != null) {
                 break;
             }
-            
+
             // Sleep the physical CPU only if no IPI is pending
             if (!msip_pending) {
                 riscv.setTimer(min_timer);
@@ -396,33 +391,20 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
         }
     }
 
-    // Refresh context if we're returning to a vcore from a lower privilege mode.
-    // If we trapped from M-mode (e.g. nested trap during memory probing or IPIs),
-    // we must NOT overwrite the hardware stack frame with the guest's state,
-    // as we need to return directly back to the interrupted M-mode code.
-    const restore_context = (irq.privilege_mode != .machine) and (pcpu.active_vcore != null);
+    // Refresh context if we have an active vcore to run.
+    if (pcpu.active_vcore) |vc_raw| {
+        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
 
-    if (restore_context) {
-        if (pcpu.active_vcore) |vc_raw| {
-            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-
-            if (vc.exec_path == .native) {
-                @memcpy(context, vc.getNativeContext());
-                pcore.contextSwitch(vc);
-                syncGuestStateToHardware(vc);
-            } else if (vc.exec_path == .emulated) {
-                @memcpy(context, vc.getNativeContext());
-                pcore.contextSwitch(vc);
-                riscv.writeMstatus(vc.getNativeMachine().mstatus);
-                riscv.writeMepc(vc.getNativeMachine().mepc);
-            }
+        if (vc.exec_path == .native) {
+            @memcpy(context, vc.getNativeContext());
+            pcore.contextSwitch(vc);
+            syncGuestStateToHardware(vc);
+        } else if (vc.exec_path == .emulated) {
+            @memcpy(context, vc.getNativeContext());
+            pcore.contextSwitch(vc);
+            riscv.writeMstatus(vc.getNativeMachine().mstatus);
+            riscv.writeMepc(vc.getNativeMachine().mepc);
         }
-    }
-
-
-    // Clear in_m_mode before mret returns to a lower privilege mode.
-    // If we're returning to M-mode (idle hart WFI loop), keep it true.
-    if (restore_context) {
         pcpu.in_m_mode = false;
     }
 }
@@ -437,6 +419,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         ms.hvip |= riscv.HVIP.VSSIP;
     }
 
+    ms.mstatus |= (@as(usize, 1) << 21); // Set TW bit so VS-mode WFI traps to M-mode
     riscv.writeMepc(ms.mepc);
     riscv.writeMstatus(ms.mstatus);
 
@@ -462,16 +445,23 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
             }
         }
 
-        // Dynamically assert or clear VSEIP in hvip based on the physical mip MEIP/SEIP bits
-        const mip_val = riscv.readMip();
-        if ((mip_val & ((1 << 9) | (1 << 11))) != 0) {
-            hvip_val |= riscv.HVIP.VSEIP;
+        ms.hvip = hvip_val;
+        riscv.writeHvip(hvip_val);
+
+        var ext_irq_pending = false;
+        if (main.global_root_vm) |root_g| {
+            if (root_g.vcores.start) |node| {
+                if ((node.contents.getNativeMachine().hvip & riscv.HVIP.VSEIP) != 0) {
+                    ext_irq_pending = true;
+                }
+            }
+        }
+        if (!ext_irq_pending and (hvip_val & riscv.HVIP.VSEIP) == 0) {
+            riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
         } else {
-            hvip_val &= ~@as(usize, riscv.HVIP.VSEIP);
+            riscv.writeMie(riscv.MIE.ALL_PHYSICAL & ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE));
         }
 
-        riscv.writeHvip(hvip_val);
-        
         // Ensure that the physical timer is programmed correctly for this core
         // because the vcore might have migrated from another physical core, or
         // the timer might have been cleared by another vcore's timer expiring.
@@ -498,8 +488,9 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
                 }
             }
         }
-        
+
         // Include blocked vcores on this physical core
+        const b_scan_prev = pcore.this().blocked_lock.lock();
         var it = pcore.this().blocked_queue.start;
         while (it) |node| {
             const blocked_vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
@@ -515,7 +506,8 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
             }
             it = node.next;
         }
-        
+        pcore.this().blocked_lock.unlock(b_scan_prev);
+
         // Clamp the next_timer to enforce a preemptive timeslice (10ms at 10MHz = 100,000 ticks)
         // This ensures that native guests don't monopolize the physical CPU and starve
         // other vcores (e.g. during SMP bringup when spinning in WFI/Zawrs loops).
@@ -533,16 +525,9 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeHedeleg(ms.hedeleg);
         riscv.writeHideleg(ms.hideleg);
 
-        // Hierarchical trust-based counter delegation
-        // Grant direct native access to cycle, time, and instret (bits 0, 1, 2 = 7)
-        // to trusted guests (such as the Root VM) to run at full hardware speed with zero trap overhead.
-        // Untrusted/less-privileged guests are forced to trap (hcounteren = 0) so their time access
-        // can be emulated safely in software without exposing security timing weaknesses.
-        if (vc.getGuest().is_trusted) {
-            riscv.writeHcounteren(7);
-        } else {
-            riscv.writeHcounteren(0);
-        }
+        // Delegate cycle, time, and instret (bits 0, 1, 2 = 7) directly to guests
+        // to run at full hardware speed with zero trap overhead.
+        riscv.writeHcounteren(7);
 
         // Sync VS-mode (Guest Supervisor) CSRs
         riscv.writeVsstatus(gs.vsstatus);
@@ -664,7 +649,6 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
         }
         // If it's an interrupt, let it fall through and be handled normally!
     }
-
 
     switch (irq.cause) {
         .illegal_instruction, .virtual_instruction => {
@@ -848,17 +832,25 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                 // In VS-mode, WFI traps as virtual instruction when hstatus.VTW=1.
                 if (instr == riscv.Instr.WFI) {
                     pcore.this().trap_loop_count = 0;
+                    vc.getNativeMachine().mepc += 4;
 
-                    // If virtual interrupts are already pending (e.g. VSTIP from timer, VSSIP from IPI), do not block.
+                    // If physical PLIC interrupt is pending on this hart, inject VSEIP; otherwise clear it
+                    const mip_val = riscv.readMip();
+                    const ext_pending = (mip_val & ((1 << 9) | (1 << 11))) != 0;
+                    if (ext_pending) {
+                        vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
+                    } else {
+                        vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSEIP);
+                    }
+
+                    // If virtual or physical interrupts are already pending (e.g. VSTIP, VSSIP, VSEIP, or hardware PLIC), do not block.
                     const gs = vc.getNativeGuestState();
                     const timer_expired = (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY and riscv.readTime() >= gs.vstimecmp);
                     const virt_mask = riscv.HVIP.VSSIP | riscv.HVIP.VSTIP | riscv.HVIP.VSEIP;
                     const has_pending_ipi = @atomicLoad(bool, &vc.pending_ipi, .acquire);
-                    const pending_virt = ((vc.getNativeMachine().hvip | (if (has_pending_ipi) @as(usize, riscv.HVIP.VSSIP) else 0)) & virt_mask) != 0;
+                    const pending_virt = (((vc.getNativeMachine().hvip | (if (has_pending_ipi) @as(usize, riscv.HVIP.VSSIP) else 0)) & virt_mask) != 0) or ext_pending;
 
                     if (pending_virt or timer_expired) {
-                        // Spurious wakeup / pending interrupt exists — advance mepc past WFI and resume immediately.
-                        vc.getNativeMachine().mepc += 4;
                         if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
                             vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
                         }
@@ -872,10 +864,12 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     // No pending interrupts — block the vcore.
                     // Record this vcore as blocked on THIS physical core.
                     // Only this core will monitor the vcore's timer (avoids thundering herd).
+                    const b_wfi_prev = pcpu.blocked_lock.lock();
                     vc.blocked_node.contents = vc;
-                    pcore.this().blocked_queue.pushStart(&vc.blocked_node);
-                    vc.blocked_on_cpu = pcore.this().cpu_core_id;
+                    pcpu.blocked_queue.pushStart(&vc.blocked_node);
+                    vc.blocked_on_cpu = pcpu.cpu_core_id;
                     @atomicStore(bool, &vc.wfi_blocked, true, .release);
+                    pcpu.blocked_lock.unlock(b_wfi_prev);
                     scheduler.schedule();
                     // Fall through to the idle loop below the switch statement
                 } else {
@@ -922,10 +916,6 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                                 0xF13 => 0, // mimpid
                                 0x301 => 0, // misa: return 0 to indicate not available
                                 else => {
-                                    // Truly unrecognized — fall through to reflection
-                                    if (pcore.this().trap_loop_count < 2) {
-                                        debug.printf("Unhandled illegal instruction 0x{x} at PC=0x{x} — reflecting to guest\n", .{ instr, irq.pc });
-                                    }
                                     var csr_reflect_irq = irq;
                                     csr_reflect_irq.val = instr;
                                     reflectExceptionToGuest(vc, csr_reflect_irq) catch |err| {
@@ -950,9 +940,6 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                     }
 
                     {
-                        if (pcore.this().trap_loop_count < 2) {
-                            debug.printf("Unhandled illegal instruction 0x{x} at PC=0x{x} — reflecting to guest\n", .{ instr, irq.pc });
-                        }
                         // Override irq.val with the decoded instruction so vstval is
                         // always correct, even if mtval was 0 for virtual_instruction traps.
                         var reflect_irq = irq;
@@ -1063,7 +1050,25 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
         .machine_timer, .supervisor_timer => {
             riscv.setTimer(0xffffffffffffffff);
             var next_timer: u64 = ~@as(u64, 0);
-            
+
+            // Check if physical external interrupt has been claimed and deasserted:
+            const mip_val = riscv.readMip();
+            if ((mip_val & ((1 << 9) | (1 << 11))) == 0) {
+                if (main.global_root_vm) |g| {
+                    if (g.vcores.start) |node| {
+                        node.contents.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSEIP);
+                    }
+                }
+                if (pcpu.active_vcore) |opaque_vc| {
+                    const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                    vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSEIP);
+                    if (riscv.hasHExtension()) {
+                        riscv.writeHvip(vc.getNativeMachine().hvip);
+                    }
+                }
+                riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
+            }
+
             // 1. Deliver to the active vCore if applicable
             if (pcpu.active_vcore) |opaque_vc| {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
@@ -1094,13 +1099,15 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             }
 
             // 2. Deliver to any blocked vcores whose timers expired, and calculate next_timer
+            const b_timer_prev = pcpu.blocked_lock.lock();
             var it = pcpu.blocked_queue.start;
             while (it) |node| {
                 const next_it = node.next;
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
-                
+
                 if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
                     pcpu.blocked_queue.remove(node);
+                    vc.blocked_on_cpu = null;
                     it = next_it;
                     continue;
                 }
@@ -1155,15 +1162,16 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
 
                 if (wake) {
                     pcpu.blocked_queue.remove(node);
-                    if (vc.tryWake()) {
-                        vc.blocked_on_cpu = null;
-                        scheduler.queue(vc);
-                    }
+                    vc.blocked_on_cpu = null;
+                    @atomicStore(bool, &vc.wfi_blocked, false, .release);
+                    vc.state = .ready;
+                    scheduler.queue(vc);
                 }
 
                 it = next_it;
             }
-            
+            pcpu.blocked_lock.unlock(b_timer_prev);
+
             riscv.setTimer(next_timer);
 
             // Asynchronous preemption: if dynarec is running on this core, signal preemption.
@@ -1182,15 +1190,21 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
                 ptr.* = 0;
             }
+            if (riscv.hasHExtension()) {
+                riscv.hfenceGvma();
+            }
+            pcpu.gstage_dirty = true;
             // Wake any WFI-blocked vcores on this physical core that have pending software interrupts
+            const b_swi_prev = pcpu.blocked_lock.lock();
             var it = pcpu.blocked_queue.start;
             while (it) |node| {
                 const next_it = node.next;
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
-                
+
                 // If it was woken up by another CPU, clean it up
                 if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
                     pcpu.blocked_queue.remove(node);
+                    vc.blocked_on_cpu = null;
                     it = next_it;
                     continue;
                 }
@@ -1202,13 +1216,14 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
 
                 if (wake) {
                     pcpu.blocked_queue.remove(node);
-                    if (vc.tryWake()) {
-                        vc.blocked_on_cpu = null;
-                        scheduler.queue(vc);
-                    }
+                    vc.blocked_on_cpu = null;
+                    @atomicStore(bool, &vc.wfi_blocked, false, .release);
+                    vc.state = .ready;
+                    scheduler.queue(vc);
                 }
                 it = next_it;
             }
+            pcpu.blocked_lock.unlock(b_swi_prev);
 
             // Asynchronous preemption: if dynarec is running on this core, signal preemption.
             if (pcpu.active_vcore) |opaque_vc| {
@@ -1218,49 +1233,59 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
                 } else {
                     if (@atomicRmw(bool, &active_vc.pending_ipi, .Xchg, false, .acq_rel)) {
                         active_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
-                        if (riscv.hasHExtension()) {
-                            riscv.writeHvip(riscv.readHvip() | riscv.HVIP.VSSIP);
-                        } else {
-                            riscv.writeMip(riscv.readMip() | (1 << 1));
-                        }
+                    }
+                    if (riscv.hasHExtension()) {
+                        riscv.writeHvip(active_vc.getNativeMachine().hvip);
+                    } else {
+                        riscv.writeMip(riscv.readMip() | @as(usize, if ((active_vc.getNativeMachine().hvip & riscv.HVIP.VSSIP) != 0) (1 << 1) else 0));
                     }
                 }
             }
 
-            // Schedule any ready vcore picked up via IPI only if this physical CPU is currently idle
-            if (pcpu.active_vcore == null) {
-                scheduler.schedule();
-            }
+            // Preemptive rescheduling on IPI: allow newly queued/woken vcores to be scheduled
+            scheduler.schedule();
         },
         .machine_interrupt, .supervisor_interrupt => {
-            // Machine/Supervisor external interrupt from the PLIC.
-            // Route it to the guest vcores globally.
+            // Physical external interrupt from PLIC or host hardware.
             if (main.global_root_vm) |g| {
-                var it_vcore = g.vcores.start;
-                while (it_vcore) |node| {
-                    const vc = node.contents;
-                    if (vc.blocked_on_cpu) |home_cpu| {
-                        if (vc.tryWake()) {
-                            if (home_cpu != pcpu.cpu_core_id and home_cpu < riscv.cpu_to_hart_map.len) {
-                                if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
-                                    ptr.* = 1;
-                                }
-                            } else {
-                                scheduler.queue(vc);
+                if (g.vcores.start) |node| {
+                    const vc0 = node.contents;
+                    vc0.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
+                    if (vc0.tryWake()) {
+                        vc0.blocked_on_cpu = null;
+                        scheduler.queue(vc0);
+                    }
+
+                    if (pcpu.active_vcore) |opaque_vc| {
+                        const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+                        if (active_vc == vc0) {
+                            if (riscv.hasHExtension()) {
+                                riscv.writeHvip(riscv.readHvip() | riscv.HVIP.VSEIP);
                             }
+                        } else if (active_vc.exec_path == .emulated) {
+                            active_vc.exec_path.emulated.preempt_pending = true;
                         }
                     }
-                    it_vcore = node.next;
                 }
             }
 
-            // Asynchronous preemption: if dynarec is running on this core, signal preemption.
-            if (pcpu.active_vcore) |opaque_vc| {
-                const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-                if (active_vc.exec_path == .emulated) {
-                    active_vc.exec_path.emulated.preempt_pending = true;
+            // Disable MEIE and SEIE in M-mode so M-mode won't loop re-trapping
+            // before the guest can read the PLIC claim register.
+            riscv.writeMie(riscv.readMie() & ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE));
+
+            // Arm a fast timer interrupt (500us) to quickly detect when the guest has claimed the IRQ,
+            // clear VSEIP, and re-enable physical external interrupts.
+            riscv.setTimer(riscv.readTime() + 5000);
+
+            const my_hart = riscv.getCPUContext().hardware_hart_id;
+            for (0..riscv.MAX_PHYS_CORES) |hw_hart| {
+                if (hw_hart == my_hart) continue;
+                if (riscv.CLINT.msip(hw_hart)) |ptr| {
+                    ptr.* = 1;
                 }
             }
+
+            scheduler.schedule();
         },
         else => {
             debug.printf("Unhandled interrupt: 0x{x}\n", .{@intFromEnum(irq.cause)});
@@ -1316,7 +1341,6 @@ fn reflectExceptionToGuest(vc: *vcore.VirtualCore, irq: IRQ) !void {
 
     // Synchronous exceptions always jump to the base address, even in vectored mode
     ms.mepc = base;
-
 
     if (riscv.hasHExtension()) {
         // Update hstatus.SPVP to reflect the privilege mode we're coming from

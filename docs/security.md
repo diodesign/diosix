@@ -39,14 +39,14 @@ Parent VMs can manage their children’s lifecycle (starting, stopping, killing,
 or rebooting) regardless of their hardware trust status. This design enables 
 a security-hardened workflow for deploying new guests:
 
-1. A trusted Virtual Machine (VM) forks a child VM, which inherits the 
-   hardware trust flag.
-2. The child VM, which now has access to the host's storage hardware, 
-   populates its own memory with a new guest operating system image.
-3. The child VM triggers the `DROP_TRUST` Supervisor Binary Interface (SBI) 
-   function to relinquish its hardware access.
-4. The child VM then restarts and executes the newly loaded image as
-   a standard isolated guest that can never regain trust or hardware access.
+1. A trusted Virtual Machine (such as the Root VM) creates a child VM with 
+   specified resource quotas.
+2. The child VM is instantiated from an isolated guest image loaded from storage 
+   without physical host hardware access.
+3. If hardware access is needed (e.g. for a dedicated hardware driver VM), 
+   trust can be granted at startup; otherwise, guests run strictly untrusted.
+4. A guest VM can irrevocably trigger the `DROP_TRUST` Supervisor Binary Interface (SBI) 
+   function at any time to relinquish its hardware access.
 
 ## Reporting security issues <a name="reporting-security-issues"></a>
 

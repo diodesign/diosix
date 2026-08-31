@@ -31,7 +31,6 @@ pub const PMPAccess = struct {
     pub const tor: u8 = 1 << 3; // Top of Range mode
 };
 
-
 pub const Region = struct {
     base: usize,
     size: usize,
@@ -301,4 +300,3 @@ test "PMP configuration regions and capacity limits" {
     try testing.expectEqual(@as(usize, 0x100000), config.regions.items[0].size);
     try testing.expectEqual(PMPAccess.rwx, config.regions.items[0].flags);
 }
-

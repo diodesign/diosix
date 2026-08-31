@@ -9,13 +9,13 @@ const vcpu_mod = @import("../vcpu.zig");
 pub const MAX_HARTS: usize = 4;
 
 pub const CLINT_MTIMECMP_BASE: u32 = 0x4000;
-pub const CLINT_MTIME_LOW: u32     = 0xbff8;
-pub const CLINT_MTIME_HIGH: u32    = 0xbffc;
+pub const CLINT_MTIME_LOW: u32 = 0xbff8;
+pub const CLINT_MTIME_HIGH: u32 = 0xbffc;
 
-pub const BYTES_PER_MTIMECMP: u32  = 8;
-pub const HIGH_WORD_SHIFT: u6      = 32;
-pub const LOW_WORD_MASK: u64       = 0x00000000FFFFFFFF;
-pub const HIGH_WORD_MASK: u64      = 0xFFFFFFFF00000000;
+pub const BYTES_PER_MTIMECMP: u32 = 8;
+pub const HIGH_WORD_SHIFT: u6 = 32;
+pub const LOW_WORD_MASK: u64 = 0x00000000FFFFFFFF;
+pub const HIGH_WORD_MASK: u64 = 0xFFFFFFFF00000000;
 
 pub const VirtualTimer = struct {
     mtime: u64 = 0,
@@ -81,5 +81,3 @@ test "CLINT virtual timer mtimecmp read write and earliest deadline" {
     // Earliest deadline should now be Hart 1 (0x100 < 0x0000ABCD12345678)
     try testing.expectEqual(@as(u64, 0x100), timer.getEarliestDeadline());
 }
-
-

@@ -6,20 +6,20 @@
 const std = @import("std");
 
 pub const UART_REG_RBR_THR_DLL: u8 = 0;
-pub const UART_REG_IER_DLM: u8     = 1;
-pub const UART_REG_IIR_FCR: u8     = 2;
-pub const UART_REG_LCR: u8         = 3;
-pub const UART_REG_MCR: u8         = 4;
-pub const UART_REG_LSR: u8         = 5;
-pub const UART_REG_MSR: u8         = 6;
-pub const UART_REG_SCR: u8         = 7;
+pub const UART_REG_IER_DLM: u8 = 1;
+pub const UART_REG_IIR_FCR: u8 = 2;
+pub const UART_REG_LCR: u8 = 3;
+pub const UART_REG_MCR: u8 = 4;
+pub const UART_REG_LSR: u8 = 5;
+pub const UART_REG_MSR: u8 = 6;
+pub const UART_REG_SCR: u8 = 7;
 
-pub const LCR_DLAB: u8                 = 0x80;
-pub const LCR_8N1: u8                  = 0x03;
-pub const IIR_NO_INT: u8               = 0x01;
-pub const IIR_FIFO_ENABLED_16550A: u8  = 0xc1;
-pub const LSR_THRE_TEMT: u8            = 0x60; // Transmit holding and shift register empty
-pub const MSR_CARRIER_DSR_CTS: u8      = 0xb0; // Carrier detect, Data set ready, Clear to send
+pub const LCR_DLAB: u8 = 0x80;
+pub const LCR_8N1: u8 = 0x03;
+pub const IIR_NO_INT: u8 = 0x01;
+pub const IIR_FIFO_ENABLED_16550A: u8 = 0xc1;
+pub const LSR_THRE_TEMT: u8 = 0x60; // Transmit holding and shift register empty
+pub const MSR_CARRIER_DSR_CTS: u8 = 0xb0; // Carrier detect, Data set ready, Clear to send
 
 pub const VirtualUart = struct {
     ier: u8 = 0,
@@ -52,11 +52,11 @@ pub const VirtualUart = struct {
                 }
             },
             UART_REG_IIR_FCR => self.fcr = val,
-            UART_REG_LCR     => self.lcr = val,
-            UART_REG_MCR     => self.mcr = val,
-            UART_REG_LSR     => {}, // LSR is read-only
-            UART_REG_MSR     => {}, // MSR is read-only
-            UART_REG_SCR     => self.scr = val,
+            UART_REG_LCR => self.lcr = val,
+            UART_REG_MCR => self.mcr = val,
+            UART_REG_LSR => {}, // LSR is read-only
+            UART_REG_MSR => {}, // MSR is read-only
+            UART_REG_SCR => self.scr = val,
             else => {},
         }
     }
@@ -64,13 +64,13 @@ pub const VirtualUart = struct {
     pub fn read(self: *VirtualUart, offset: u8) u8 {
         return switch (offset) {
             UART_REG_RBR_THR_DLL => if ((self.lcr & LCR_DLAB) != 0) self.dll else 0,
-            UART_REG_IER_DLM     => if ((self.lcr & LCR_DLAB) != 0) self.dlm else self.ier,
-            UART_REG_IIR_FCR     => IIR_FIFO_ENABLED_16550A,
-            UART_REG_LCR         => self.lcr,
-            UART_REG_MCR         => self.mcr,
-            UART_REG_LSR         => LSR_THRE_TEMT,
-            UART_REG_MSR         => MSR_CARRIER_DSR_CTS,
-            UART_REG_SCR         => self.scr,
+            UART_REG_IER_DLM => if ((self.lcr & LCR_DLAB) != 0) self.dlm else self.ier,
+            UART_REG_IIR_FCR => IIR_FIFO_ENABLED_16550A,
+            UART_REG_LCR => self.lcr,
+            UART_REG_MCR => self.mcr,
+            UART_REG_LSR => LSR_THRE_TEMT,
+            UART_REG_MSR => MSR_CARRIER_DSR_CTS,
+            UART_REG_SCR => self.scr,
             else => 0,
         };
     }
@@ -88,7 +88,6 @@ test "16550 UART read write and DLAB latching" {
     var uart = VirtualUart{
         .out_fn = TestHelper.out,
     };
-
 
     // Test default status values
     try testing.expectEqual(LSR_THRE_TEMT, uart.read(UART_REG_LSR));
@@ -119,6 +118,3 @@ test "16550 UART read write and DLAB latching" {
     try testing.expectEqual(@as(u8, 0x05), uart.read(UART_REG_IER_DLM)); // Original IER restored
     try testing.expectEqual(@as(u8, 0x00), uart.read(UART_REG_RBR_THR_DLL)); // RBR empty
 }
-
-
-

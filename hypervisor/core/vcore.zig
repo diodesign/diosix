@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const dsa = @import("dsa.zig");
 const guest = @import("guest.zig");
+const pcore = @import("pcore.zig");
 const physmem = @import("physmem.zig");
 const native_emu = @import("emulation");
 const glue = @import("emulation.zig");
@@ -81,7 +82,6 @@ pub const LapicTimerState = struct {
     period_ticks: u64 = 0,
 };
 
-
 pub const SubVcoreState = struct {
     id: usize = 0,
     state: VirtualCoreState = .stopped,
@@ -104,7 +104,6 @@ pub const SubVcoreState = struct {
     gs_base: u64 = 0,
     kernel_gs_base: u64 = 0,
 };
-
 
 // Represents a virtual CPU core's context and state.
 pub const VirtualCore = struct {
@@ -142,7 +141,7 @@ pub const VirtualCore = struct {
             stack: []u8,
             emu_running: bool = false,
             tls_pointer: usize = 0,
-            
+
             virtual_smode_time: u64 = 0,
             pit_calibration_active: bool = false,
             pit_calibration_ticks: u32 = 0,
@@ -187,6 +186,7 @@ pub const VirtualCore = struct {
     vruntime: u64,
     weight: u32, // For weighting vruntime increments.
     last_queued_time: u64, // Timestamp (rdtime) when last queued, for accounting.
+    last_dispatched_time: u64, // Timestamp (rdtime) when dispatched to physical core.
 
     // Node for the scheduler's Red-Black Tree.
     // We order by vruntime.
@@ -217,6 +217,7 @@ pub const VirtualCore = struct {
                 .normal => WEIGHT_NORMAL,
             },
             .last_queued_time = 0,
+            .last_dispatched_time = 0,
             .scheduler_node = undefined,
             .blocked_node = undefined,
             .exec_path = undefined,
@@ -263,7 +264,9 @@ pub const VirtualCore = struct {
 
             var hypervisor_gp: usize = 0;
             if (comptime !@import("builtin").is_test) {
-                asm volatile ("mv %[g], gp" : [g] "=r" (hypervisor_gp));
+                asm volatile ("mv %[g], gp"
+                    : [g] "=r" (hypervisor_gp),
+                );
             }
 
             vcore.exec_path = .{
@@ -346,6 +349,9 @@ pub const VirtualCore = struct {
                 n.machine.mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
                 n.machine.hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
                 n.machine.hgatp = if (self.guest.space.mode == .h_paging) self.guest.space.paging.?.hgatp(self.guest.vmid) else 0;
+                n.machine.hedeleg = HEDELEG_GUEST_DELEGATE;
+                n.machine.hideleg = HIDELEG_VS_INTERRUPTS;
+                n.machine.hvip = 0;
                 n.guest_state = .{
                     .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
                     .vsie = 0,
@@ -374,7 +380,6 @@ pub const VirtualCore = struct {
             },
         }
     }
-
 
     pub fn deinit(self: *VirtualCore) void {
         // Trigger a wake to dequeue it if it's blocked, preventing re-queueing
@@ -467,7 +472,21 @@ pub const VirtualCore = struct {
         // Only one caller can succeed; others see it's already false.
         const old = @cmpxchgStrong(bool, &self.wfi_blocked, true, false, .acq_rel, .monotonic);
         if (old == null) {
-            // We won — set the vcore ready for scheduling.
+            // We won — unhook from the physical CPU's blocked queue under lock
+            if (self.blocked_on_cpu) |home_cpu| {
+                if (pcore.fromId(home_cpu)) |home_pcpu| {
+                    const prev = home_pcpu.blocked_lock.lock();
+                    if (self.blocked_on_cpu == home_cpu) {
+                        home_pcpu.blocked_queue.remove(&self.blocked_node);
+                        self.blocked_on_cpu = null;
+                    }
+                    home_pcpu.blocked_lock.unlock(prev);
+                } else {
+                    self.blocked_on_cpu = null;
+                }
+            }
+
+            // Set the vcore ready for scheduling.
             self.state = .ready;
             if (self.exec_path == .emulated) {
                 const host_time = riscv.readTime();
@@ -483,39 +502,6 @@ pub const VirtualCore = struct {
     // Update the scheduler node with self pointer before insertion.
     pub fn updateSchedulerWeight(self: *VirtualCore) void {
         self.scheduler_node.contents = self;
-    }
-
-    pub fn fork(self: *const VirtualCore, child_guest: *guest.Guest) !*VirtualCore {
-        const vc = try child_guest.allocator.create(VirtualCore);
-        errdefer child_guest.allocator.destroy(vc);
-
-        vc.* = self.*;
-        vc.guest = child_guest;
-        vc.guest_id = child_guest.id;
-
-        switch (vc.exec_path) {
-            .native => |*n| {
-                n.context[@intFromEnum(riscv.Register.a0)] = 0; // SBI error code = SBI_SUCCESS (0)
-                n.context[@intFromEnum(riscv.Register.a1)] = 0; // Return value = 0 (Child marker)
-                n.machine.hgatp = if (child_guest.space.mode == .h_paging) child_guest.space.paging.?.hgatp(child_guest.vmid) else 0;
-            },
-            .emulated => |*e| {
-                e.vcpu = null;
-                e.engine = null;
-                e.context[@intFromEnum(riscv.Register.a0)] = 0;
-                e.context[@intFromEnum(riscv.Register.a1)] = 0;
-            },
-        }
-
-
-        // Reset scheduler node for the new vcore.
-        vc.running_on_cpu = null;
-        vc.pending_ipi = false;
-        vc.is_queued = false;
-        vc.scheduler_node = undefined;
-        vc.updateSchedulerWeight();
-
-        return vc;
     }
 };
 

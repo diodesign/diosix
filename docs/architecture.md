@@ -6,13 +6,13 @@ organizes them into a tree-like lineage.
 
 ---
 
-## Hierarchical forking model
+## Hierarchical guest model
 
 The first VM loaded by the hypervisor at boot is known as the Root VM. This VM
 acts as the progenitor for all other guests, similar to how the `init` process
 functions in Unix-like operating systems.
 
-Any guest VM, starting with the Root VM, can fork itself or manage its direct
+Any guest VM, starting with the Root VM, can run and manage its direct
 children, including starting, stopping, killing, or rebooting them. A parent VM is
 entirely responsible for the lifecycle and resources of its descendants. This
 recursive structure delegates resource management to the parent VMs rather than
@@ -141,10 +141,9 @@ directly to itself.
 
 By default, the Root VM has hardware trust. This is so that hardware drivers can be provided by the Root VM for the rest of the system, rather than the hypervisor itself. When a guest VM needs access to the underlying host, such as accessing storage or network resources, it must coordinate with the Root VM for that access.
 
-A guest can relinquish this privilege using the `DROP_TRUST` call in the Supervisor Binary Interface (SBI) extension. This allows a trusted loader to fork a guest, write
-the guest image, and drop trust before executing the guest code.
+A guest can relinquish this privilege using the `DROP_TRUST` call in the Supervisor Binary Interface (SBI) extension. This allows a trusted loader to launch a guest, configure access to hardware devices if necessary, and drop trust before executing untrusted guest code.
 
-As such, the Root VM can fork to create a trusted child VM, which then loads in a guest image from storage, drops its trusted staus, and then acts as a normal, untrusted guest VM managed by its Root VM parent.
+As such, the Root VM can create a child VM from a guest image in storage, configure its trust privileges and quotas, and manage it as an isolated guest VM.
 
 For more information, see [Diosix shared interface](interface.md).
 

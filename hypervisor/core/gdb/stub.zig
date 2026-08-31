@@ -11,21 +11,22 @@ const config = @import("config");
 
 pub const stub = if (config.enable_gdb)
     @import("rsp.zig")
-else struct {
-    pub var active_vc: ?*anyopaque = null;
-    pub var gdb_connected: bool = false;
-    pub inline fn init() void {}
-    pub inline fn handleSerialByte(byte: u8) void {
-        _ = byte;
-    }
-    pub inline fn pollSerialInput() void {}
-    pub inline fn onException(context: anytype) void {
-        _ = context;
-    }
-    pub inline fn notifyTrap(sig: u8) void {
-        _ = sig;
-    }
-    pub inline fn sendOutputPacket(text: []const u8) void {
-        _ = text;
-    }
-};
+else
+    struct {
+        pub var active_vc: ?*anyopaque = null;
+        pub var gdb_connected: bool = false;
+        pub inline fn init() void {}
+        pub inline fn handleSerialByte(byte: u8) void {
+            _ = byte;
+        }
+        pub inline fn pollSerialInput() void {}
+        pub inline fn onException(context: anytype) void {
+            _ = context;
+        }
+        pub inline fn notifyTrap(sig: u8) void {
+            _ = sig;
+        }
+        pub inline fn sendOutputPacket(text: []const u8) void {
+            _ = text;
+        }
+    };

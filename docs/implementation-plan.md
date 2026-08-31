@@ -165,13 +165,13 @@ On trap, `xint_machine_entry_handler`:
 
 ### 4.1 Creation
 
-A `Guest` is created during boot (for the Root VM) or via the `FORK` SBI call:
+A `Guest` is created during boot (for the Root VM) or via the `RUN` SBI call:
 
-1. **Allocate `Guest` struct** from the slab allocator (O(1), zero fragmentation).
+1. **Allocate `Guest` struct** from the allocator.
 2. **Assign unique VM ID** (`vmid`) via an atomic global counter. This ID is embedded into `hgatp` for TLB tagging.
-3. **Initialize memory space**: Either allocate fresh G-stage page tables (Sv39x4) or clone the parent's tables with Copy-on-Write (CoW) semantics during fork.
+3. **Initialize memory space**: Allocate fresh G-stage page tables (Sv39x4).
 4. **Set quotas**: Inherit parent quotas, optionally reduced. Quotas cover RAM pages, vCPU count, and descendant depth.
-5. **Create vcores**: Allocate `VirtualCore` structs from the slab allocator and link them to the guest. The boot vcore (id=0) is initialized with the guest's entry point and device tree pointer.
+5. **Create vcores**: Allocate `VirtualCore` structs and link them to the guest. The boot vcore (id=0) is initialized with the guest's entry point and device tree pointer.
 
 ### 4.2 States
 
@@ -183,7 +183,7 @@ Restarting → Valid
 
 - **Valid**: Guest is executing normally.
 - **Dying**: Cascading teardown in progress. All vcores are descheduled, children are recursively terminated, memory is reclaimed.
-- **Restarting**: Guest is being rebooted (e.g., after `DROP_TRUST` + SRST reboot).
+- **Restarting**: Guest is being rebooted.
 
 ### 4.3 Termination
 
@@ -192,21 +192,22 @@ Restarting → Valid
 1. Set guest state to `.dying`.
 2. Recursively terminate all child VMs (depth-first).
 3. For each vcore: set state to `.stopped`, clear `running_on_cpu`, send IPI to the physical core running it.
-4. Release all physical pages (decrement refcounts; CoW-shared pages are freed only when refcount hits zero).
+4. Release all physical pages.
 5. For emulated vcores: deallocate JIT code buffer, SoftTLB, Engine, VCpu state.
 6. Return quota to parent.
-7. Return `Guest` struct to slab allocator.
+7. Return `Guest` struct to allocator.
 
-### 4.4 Forking
+### 4.4 Guest Execution (`RUN`)
 
-The `FORK` SBI call implements lazy VM cloning:
+The `RUN` SBI call instantiates and launches an isolated child VM from an image:
 
-1. Create a new child `Guest` under the calling guest's lineage.
-2. Clone the parent's G-stage page tables, marking all writable pages as read-only and incrementing their refcounts. This enables Copy-on-Write.
-3. Clone all parent vcores (copying register state, CSRs, execution path). For emulated vcores, the JIT code cache is *not* shared — the child gets a fresh cache that will warm up as it executes.
-4. The child inherits the parent's quotas (minus what the parent has already consumed).
-5. Queue the child's boot vcore into the scheduler.
-6. Return the child's ID to the parent, and 0 to the child (like Unix `fork()`).
+1. Create a clean child `Guest` under the calling guest's lineage.
+2. Map the guest ELF binary into the child's Stage-2 memory space.
+3. If provided, map the Device Tree Blob (DTB) into the child's space.
+4. Set the child's primary vCPU program counter (`mepc`) to the ELF entry point, `a0` to hart ID, and `a1` to DTB guest physical address.
+5. Apply parent-specified resource quotas.
+6. Enroll the child's primary vcore into the scheduler (`.ready`).
+7. Return the child's Context ID to the parent.
 
 ---
 
@@ -330,7 +331,7 @@ For native riscv64 guests with the H-extension:
 - **Page table format**: Sv39x4 — 39-bit guest virtual addresses, 41-bit guest physical addresses, three-level page table with a 16KB root (4 contiguous pages).
 - **`hgatp` programming**: The G-stage page table root physical address and the guest's `vmid` are encoded into `hgatp`. The CPU uses this for hardware-accelerated GPA→HPA translation.
 - **Protection**: The hypervisor's own physical pages are never mapped into any guest's G-stage tables. MMIO regions are identity-mapped only for the Root VM (which holds hardware trust).
-- **Copy-on-Write**: During `fork()`, the parent's G-stage entries are duplicated with write permission cleared. On a guest write fault, the hypervisor allocates a fresh page, copies the content, and remaps with write permission.
+- **Dynamic Stage-2 Allocation**: The hypervisor dynamically allocates physical pages on demand when a guest physical address is faulted in, mapping it directly into the guest Stage-2 page table.
 - **TLB management**: `hfence.gvma` flushes the G-stage TLB. A `gstage_dirty` flag tracks whether the tables were modified since the last flush, avoiding unnecessary flushes.
 
 #### 6.3.2 Native Guests (PMP Fallback)
@@ -1795,7 +1796,7 @@ The dynarec engine, code cache, block chainer, and tiered compilation infrastruc
 - [ ] **Checkpoint/restore** (snapshot running guest, resume later).
 - [ ] **Live migration** (iterative pre-copy with dirty page tracking).
 - [ ] **Fast VM cloning** via serialization.
-- [ ] **Child VM lifecycle** (restart, terminate, re-fork).
+- [ ] **Child VM lifecycle** (run, stop, restart, terminate).
 
 ### Phase 6: AArch64 Emulation
 

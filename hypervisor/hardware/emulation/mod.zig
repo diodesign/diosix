@@ -18,6 +18,8 @@ pub const Bus = @import("devices/bus.zig").Bus;
 pub const VirtualUart = @import("devices/vuart.zig").VirtualUart;
 pub const VirtualTimer = @import("devices/vtimer.zig").VirtualTimer;
 pub const VirtualPlic = @import("devices/vpic.zig").VirtualPlic;
+pub const VirtioVsock = @import("devices/vsock.zig").VirtioVsock;
+pub const VsockRouter = @import("devices/vsock.zig").VsockRouter;
+pub const global_vsock_router = &@import("devices/vsock.zig").global_vsock_router;
 pub const decoder_rv32 = @import("engine/decoders/rv32.zig");
 pub const emitter_rv64 = @import("engine/emitters/rv64.zig");
-

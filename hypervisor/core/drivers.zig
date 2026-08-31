@@ -35,9 +35,7 @@ pub var reset: ?ResetDriver = null;
 // NS16550 UART Driver
 fn ns16550_putchar(c: u8) void {
     if (riscv.uart_base) |base| {
-        const status_reg = @as(*volatile u8, @ptrFromInt(base + 5)); // LSR register offset 5
         const tx_reg = @as(*volatile u8, @ptrFromInt(base + 0)); // THR register offset 0
-        while (status_reg.* & 0x20 == 0) {} // LSR_THRE is 0x20
         tx_reg.* = c;
     }
 }

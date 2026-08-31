@@ -27,16 +27,10 @@
 # => a0 = per-system unique CPU core ID, aka hart ID
 #    a1 = pointer to device tree describing the environment
 _start:
-    # each core should grab a slab of memory starting from the end of the hypervisor.
-    # each slab contains a per-CPU stack and variables. see consts.s for layout and sizing.
-    # in order to scale to many cores, not waste too much memory, and to cope with non-linear
-    # CPU ID / hart ID, each core will take memory using an atomic counter.
-    # thus, memory is allocated on a first come, first served basis.
-    la        t1, cpu_core_id_counter
-    li        t2, 1
-    amoadd.w  t3, t2, (t1)
+    # use hardware hart ID directly as the linear CPU core ID
+    csrr      t3, mhartid
     mv        a0, t3
-    # now a0, t3 = runtime-assigned linear CPU core ID, counting from 0
+    # now a0, t3 = deterministic hardware hart ID (0..MAX_PHYS_CORES-1)
 
     # DEBUG: every core prints a dot to the serial port to indicate it got this far
     # li        t1, 0x10000000

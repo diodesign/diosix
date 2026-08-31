@@ -24,6 +24,50 @@ case "$1" in
 
     # Set up standard loopback networking
     ifconfig lo 127.0.0.1 up 2>/dev/null || true
+
+    # Set up dedicated virtual VM network device (diosix0) for 10.0.3.0/24 subnet
+    SELF_CID=1
+    DSX_BIN=""
+    for bin_path in /usr/sbin/dsx /sbin/dsx /usr/bin/dsx /bin/dsx; do
+        if [ -x "$bin_path" ]; then
+            DSX_BIN="$bin_path"
+            break
+        fi
+    done
+    if [ -n "$DSX_BIN" ]; then
+        CID_VAL=$("$DSX_BIN" info 2>/dev/null | grep -i "^Context ID" | awk '{print $NF}')
+        if [ -n "$CID_VAL" ]; then
+            SELF_CID=$CID_VAL
+        fi
+    fi
+
+    # Bring up diosix0 virtual network interface with 10.0.3.<cid>
+    if ip link show diosix0 >/dev/null 2>&1; then
+        ip addr flush dev diosix0 2>/dev/null || true
+        ip addr add 10.0.3.${SELF_CID}/24 dev diosix0 2>/dev/null || ifconfig diosix0 10.0.3.${SELF_CID} netmask 255.255.255.0 up 2>/dev/null || true
+        ip link set diosix0 up 2>/dev/null || true
+        ip route add 10.0.3.0/24 dev diosix0 2>/dev/null || true
+    fi
+
+    # Automount host storage disk if available (e.g. /dev/vda, /dev/sda, /dev/nvme0n1)
+    mkdir -p /mnt/storage /var/lib/diosix/images /boot
+    for dev in /dev/vda /dev/vda1 /dev/sda /dev/sda1 /dev/nvme0n1 /dev/nvme0n1p1; do
+        if [ -b "$dev" ]; then
+            echo "Mounting host storage volume $dev on /mnt/storage..."
+            mount -o rw "$dev" /mnt/storage 2>/dev/null || mount "$dev" /mnt/storage 2>/dev/null || true
+            if [ -d /mnt/storage/var/lib/diosix/images ]; then
+                mount --bind /mnt/storage/var/lib/diosix/images /var/lib/diosix/images 2>/dev/null || true
+            fi
+            if [ -f /mnt/storage/var/lib/diosix/images/vmlinux.elf ] && [ ! -f /boot/vmlinux.elf ]; then
+                ln -sf /mnt/storage/var/lib/diosix/images/vmlinux.elf /boot/vmlinux.elf
+            elif [ -f /mnt/storage/boot/vmlinux.elf ] && [ ! -f /boot/vmlinux.elf ]; then
+                ln -sf /mnt/storage/boot/vmlinux.elf /boot/vmlinux.elf
+            elif [ -f /mnt/storage/vmlinux.elf ] && [ ! -f /boot/vmlinux.elf ]; then
+                ln -sf /mnt/storage/vmlinux.elf /boot/vmlinux.elf
+            fi
+            break
+        fi
+    done
     ;;
   stop)
     echo "Stopping Diosix guest services..."

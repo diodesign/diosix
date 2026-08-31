@@ -16,9 +16,9 @@ graph TD
         RootVM[Type 1: Native Root VM<br/>riscv64 S/U-Mode<br/>is_root=true, is_trusted=true<br/>Storage, PCIe, USB, Net, GPU]
     end
 
-    RootVM -. Fork + Drop Trust .-> DisplayVM[Display / Wayland VM<br/>is_trusted=false]
-    RootVM -. Fork + Drop Trust .-> NativeVM[Type 2: Usable Native VM<br/>riscv64 S/U-Mode<br/>Full Userspace Toolchain]
-    RootVM -. Fork + Dynarec .-> NonNativeVM[Type 3: Lightweight Emulated VM<br/>riscv32 / aarch64 / x86_64<br/>Fast-Boot Dynarec]
+    RootVM -. Run + Drop Trust .-> DisplayVM[Display / Wayland VM<br/>is_trusted=false]
+    RootVM -. Run + Drop Trust .-> NativeVM[Type 2: Usable Native VM<br/>riscv64 S/U-Mode<br/>Full Userspace Toolchain]
+    RootVM -. Run + Dynarec .-> NonNativeVM[Type 3: Lightweight Emulated VM<br/>riscv32 / aarch64 / x86_64<br/>Fast-Boot Dynarec]
 
     NativeVM <-->|vNet / vsock| RootVM
     NonNativeVM <-->|vNet / vsock| RootVM
@@ -26,9 +26,9 @@ graph TD
 ```
 
 ### Core Security & Privilege Principles
-1. **The Hypervisor (M/HS-Mode)**: Small, secure, and isolated. Manages CPU scheduling, Stage-2 page tables, Dynarec JIT translation, and inter-VM IPC channels. It does not contain complex host device drivers.
+1. **The Hypervisor (M/HS-Mode)**: Small, secure, and isolated. Manages CPU scheduling, Stage-2 page tables, and Dynarec JIT translation. It does not contain complex host device drivers.
 2. **Type 1 (Native Root VM)**: The trusted progenitor VM (`is_root = true`, `is_trusted = true`). Holds authority to manage physical hardware (PCIe, USB, storage, Ethernet, GPU) and initiate hypervisor-level guest lifecycle actions.
-3. **Type 2 & Type 3 (Unprivileged Guests)**: Sandboxed (`is_trusted = false`). They see only standardized virtual hardware (timers, virtual interrupt controller, virtual console, and virtual networking/vsock).
+3. **Type 2 & Type 3 (Unprivileged Guests)**: Sandboxed (`is_trusted = false`). They communicate with other VMs and storage via standardized IP networking (VirtIO-net / SSH / network file systems).
 
 ---
 
@@ -157,39 +157,35 @@ The hypervisor implements a clean extension to standard RISC-V SBI (`hypervisor/
 | :--- | :--- | :--- | :--- |
 | `0` | `DIOSIX_EXIT` | `status` | Terminate the calling guest VM and reclaim resources. |
 | `1` | `DIOSIX_YIELD` | — | Yield remaining vCPU time slice to other runnable vcores. |
-| `2` | `DIOSIX_FORK` | — | Copy-on-write fork the current guest into a child VM. Returns `child_id`. |
 | `3` | `DIOSIX_DROP_TRUST` | — | Irrevocably drop Root/Trusted privilege for the calling VM. |
-| `4` | `DIOSIX_SPAWN` | `elf_gpa, elf_len, dtb_gpa, dtb_len, arch` | Replace child memory image with a new guest binary and start it. |
+| `4` | `DIOSIX_RUN` | `RunArgs GPA pointer` | Create or reset child memory image with a new guest binary and start it. |
 | `5` | `DIOSIX_GET_INFO` | `out_buf_gpa, buf_len` | Query hypervisor telemetry, guest VM list, and resource quotas. |
 | `6` | `DIOSIX_SET_QUOTA` | `target_id, max_ram, max_vcpus, max_prio` | Adjust resource quota limits for a child VM. |
-| `7` | `DIOSIX_IPC_SEND` | `target_id, channel_id, data_gpa, len` | Send a non-blocking IPC message to a parent/child channel. |
-| `8` | `DIOSIX_IPC_RECV` | `channel_id, out_buf_gpa, max_len` | Receive an IPC message from a channel. |
 
 ### 4.2 Guest Kernel Driver: `/dev/diosix`
 Userspace applications in Linux (U-mode) cannot execute SBI `ecall` instructions directly to M-mode (they trap to S-mode). A minimal kernel character driver (`diosix.ko` or built into `drivers/virt/diosix.c`) bridges this gap:
 
 ```
-[Userspace diosix-ctl]  ---> ioctl(/dev/diosix, DIOSIX_IOC_FORK)
+[Userspace diosix-ctl]  ---> ioctl(/dev/diosix, IOCTL_RUN)
                                      │
                                      ▼ (Kernel S-Mode)
-                          sbi_ecall(0x0A000005, DIOSIX_FORK)
+                          sbi_ecall(0x0A000005, DIOSIX_RUN)
                                      │
                                      ▼ (Hypervisor M-Mode)
-                          handleDiosix() -> Guest.fork()
+                          handleDiosix() -> Guest.createChild()
 ```
 
 #### Supported `ioctl` Operations:
-* `DIOSIX_IOC_FORK`: Triggers SBI fork.
-* `DIOSIX_IOC_DROP_TRUST`: Drops VM privilege.
-* `DIOSIX_IOC_SPAWN`: Loads replacement image into child memory.
-* `DIOSIX_IOC_IPC_SEND` / `DIOSIX_IOC_IPC_RECV`: Channel messaging.
-* `DIOSIX_IOC_TELEMETRY`: Reads system telemetry and child stats.
+* `IOCTL_DROP_TRUST`: Drops VM privilege.
+* `IOCTL_RUN`: Instantiates clean child VM and loads guest image.
+* `IOCTL_GET_HV_INFO`: Reads system telemetry and host info.
+* `IOCTL_SET_MANIFEST` / `IOCTL_GET_MANIFEST`: Stages/retrieves VM capabilities.
 
 ---
 
-## 5. VM Provisioning & "Fork-to-Replace" Lifecycle
+## 5. VM Provisioning & Guest Execution Lifecycle
 
-To start a new guest, the Root VM uses the **Fork-to-Replace** pattern:
+To start a new guest, the Root VM uses the **`dsx run`** command:
 
 ```mermaid
 sequenceDiagram
@@ -198,22 +194,13 @@ sequenceDiagram
     participant Hyp as Diosix Hypervisor
     participant Child as New Child VM
 
-    User->>Kernel: ioctl(DIOSIX_IOC_FORK)
-    Kernel->>Hyp: SBI_DIOSIX_FORK
-    Hyp->>Hyp: Guest.fork() [Lazy CoW Space, Clone vCores]
-    Hyp-->>Kernel: Return child_id
-    Kernel-->>User: child_id
-
-    User->>User: Read guest ELF from /var/lib/diosix/guests/
-    User->>Kernel: ioctl(DIOSIX_IOC_SPAWN, child_id, elf_buf, dtb_buf, arch)
-    Kernel->>Hyp: SBI_DIOSIX_SPAWN
-    Hyp->>Child: Reset Child Address Space & Map New ELF/DTB
-    Hyp->>Child: Set Child PC = ELF Entry Point
-    
-    User->>Kernel: ioctl(DIOSIX_IOC_DROP_TRUST, child_id)
-    Kernel->>Hyp: SBI_DIOSIX_DROP_TRUST
-    Hyp->>Child: child.is_trusted = false, child.space.is_trusted = false
+    User->>Kernel: ioctl(IOCTL_RUN, elf_buf, dtb_buf, arch, flags)
+    Kernel->>Hyp: SBI_DIOSIX_RUN
+    Hyp->>Child: Allocate Child VM Space & Load ELF/DTB
+    Hyp->>Child: Set Child PC = ELF Entry Point, a0 = hartid, a1 = DTB GPA
     Hyp->>Child: Enroll Child vCores in Scheduler
+    Hyp-->>Kernel: Return child_cid
+    Kernel-->>User: child_cid
     Child->>Child: Boots cleanly as isolated Type 2 / Type 3 VM
 ```
 
@@ -265,8 +252,8 @@ sequenceDiagram
 * [ ] Add Buildroot overlay scripts to automatically package `diosix-ctl` and `/dev/diosix` module into all guest rootfs builds.
 
 ### Milestone 3: Hypervisor SBI Extension & Spawn API
-* [ ] Extend `handleDiosix` in `hypervisor/hardware/emulation/arch/riscv32/sbi.zig` with `SPAWN`, `GET_INFO`, `SET_QUOTA`, and `IPC` function IDs.
-* [ ] Implement the `SPAWN` ELF loader routine in `hypervisor/core/guest.zig` to overwrite a child VM's address space with a new guest image and initialize its entry state.
+* [ ] Extend `handleDiosix` in `hypervisor/hardware/emulation/arch/riscv32/sbi.zig` with `RUN`, `GET_INFO`, `SET_QUOTA`, and `MANIFEST` function IDs.
+* [ ] Implement the `RUN` ELF loader routine in `hypervisor/core/guest.zig` to overwrite a child VM's address space with a new guest image and initialize its entry state.
 
 ### Milestone 4: Storage Packaging & Multi-VM Build Options
 * [ ] Update `build.zig` with `-Dwith-native-guest` and `-Dwith-nonnative-guest` options.

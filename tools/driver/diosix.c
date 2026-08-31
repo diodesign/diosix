@@ -16,6 +16,13 @@
 #include <linux/slab.h>
 #include <linux/io.h>
 #include <linux/capability.h>
+#include <linux/gfp.h>
+#include <linux/dma-mapping.h>
+#include <linux/netdevice.h>
+#include <linux/etherdevice.h>
+#include <linux/skbuff.h>
+#include <linux/kthread.h>
+#include <linux/delay.h>
 #include <asm/sbi.h>
 
 #define EXT_DIOSIX 0x0A000005
@@ -23,20 +30,24 @@
 #define DIOSIX_FUNC_TERMINATE   0
 #define DIOSIX_FUNC_EXIT        0
 #define DIOSIX_FUNC_YIELD       1
-#define DIOSIX_FUNC_FORK        2
 #define DIOSIX_FUNC_DROP_TRUST  3
+#define DIOSIX_FUNC_RUN         4
 #define DIOSIX_FUNC_SPAWN       4
 #define DIOSIX_FUNC_GET_INFO    5
 #define DIOSIX_FUNC_SET_QUOTA   6
-#define DIOSIX_FUNC_IPC_SEND    7
-#define DIOSIX_FUNC_IPC_RECV    8
 #define DIOSIX_FUNC_POLL_EVENT  9
 #define DIOSIX_FUNC_GET_HV_INFO 10
 #define DIOSIX_FUNC_GET_MANIFEST 11
 #define DIOSIX_FUNC_SET_MANIFEST 12
+#define DIOSIX_FUNC_MAP_CHILD_MEM   13
+#define DIOSIX_FUNC_UNMAP_CHILD_MEM 14
+#define DIOSIX_FUNC_START           15
+#define DIOSIX_FUNC_NET_SEND        16
+#define DIOSIX_FUNC_NET_RECV        17
+#define DIOSIX_FUNC_NET_POLL        18
 
-#define IOCTL_FORK        0x1001
 #define IOCTL_DROP_TRUST  0x1002
+#define IOCTL_RUN         0x1003
 #define IOCTL_SPAWN       0x1003
 #define IOCTL_GET_INFO    0x1004
 #define IOCTL_SET_QUOTA   0x1005
@@ -45,11 +56,31 @@
 #define IOCTL_KILL        0x1006
 #define IOCTL_YIELD       0x1007
 #define IOCTL_WAIT_EVENT  0x1008
-#define IOCTL_IPC_SEND    0x1009
-#define IOCTL_IPC_RECV    0x100A
 #define IOCTL_GET_HV_INFO 0x100B
 #define IOCTL_GET_MANIFEST 0x100C
 #define IOCTL_SET_MANIFEST 0x100D
+#define IOCTL_MAP_CHILD_MEM    0x100E
+#define IOCTL_UNMAP_CHILD_MEM  0x100F
+#define IOCTL_START            0x1010
+
+struct map_child_mem_args {
+    unsigned long child_id;
+    unsigned long child_gpa;
+    unsigned long parent_gpa;
+    unsigned long size;
+    unsigned long flags;
+};
+
+struct unmap_child_mem_args {
+    unsigned long parent_gpa;
+    unsigned long size;
+};
+
+struct start_args {
+    unsigned long child_id;
+    unsigned long entry_point;
+    unsigned long dtb_ptr;
+};
 
 
 struct hypervisor_info {
@@ -90,20 +121,6 @@ struct quota_args {
     unsigned long max_descendants;
 };
 
-struct ipc_send_args {
-    unsigned long target_cid;
-    unsigned long data_ptr;
-    unsigned long data_len;
-};
-
-struct ipc_recv_args {
-    unsigned long sender_cid;
-    unsigned long data_ptr;
-    unsigned long max_len;
-    unsigned long actual_len;
-    unsigned long actual_sender_cid;
-};
-
 struct manifest_args {
     unsigned long target_cid;
     unsigned long data_ptr;
@@ -113,7 +130,7 @@ struct manifest_args {
 
 
 
-struct spawn_args {
+struct run_args {
     unsigned long child_id;
     unsigned long elf_ptr;
     unsigned long elf_size;
@@ -122,7 +139,6 @@ struct spawn_args {
     unsigned long target_arch;
     unsigned long flags;
 };
-
 
 struct terminate_args {
     unsigned long target_id;
@@ -143,6 +159,8 @@ struct guest_info {
     unsigned long child_count;
 };
 
+static struct miscdevice diosix_dev;
+
 static int diosix_open(struct inode *inode, struct file *file)
 {
     // Restrict access strictly to root / administrative capabilities
@@ -160,26 +178,6 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         return -EPERM;
 
     switch (cmd) {
-    case IOCTL_FORK: {
-        unsigned long child_id;
-        unsigned long fork_flags = 0;
-        if (arg) {
-            if (copy_from_user(&fork_flags, (void __user *)arg, sizeof(fork_flags)))
-                fork_flags = (unsigned long)arg;
-        }
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_FORK, fork_flags, 0, 0, 0, 0, 0);
-        if (ret.error)
-            return -EIO;
-        child_id = ret.value;
-        if (arg) {
-            if (copy_to_user((void __user *)arg, &child_id, sizeof(child_id))) {
-                // If arg was a direct int rather than pointer, ignore fault
-            }
-        }
-        return (int)child_id;
-    }
-
-
     case IOCTL_DROP_TRUST: {
         ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_DROP_TRUST, 0, 0, 0, 0, 0, 0);
         if (ret.error)
@@ -206,12 +204,14 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         return 0;
     }
 
-    case IOCTL_SPAWN: {
-        struct spawn_args kargs;
+    case IOCTL_RUN: {
+        struct run_args kargs;
         void *elf_kbuf = NULL;
         void *dtb_kbuf = NULL;
         phys_addr_t elf_pa = 0, dtb_pa = 0;
-        struct spawn_args *sbi_args = kzalloc(sizeof(*sbi_args), GFP_KERNEL);
+        dma_addr_t elf_dma_handle = 0;
+        bool elf_is_dma = false;
+        struct run_args *sbi_args = kzalloc(sizeof(*sbi_args), GFP_KERNEL);
         phys_addr_t sbi_args_pa;
 
         if (!sbi_args)
@@ -223,29 +223,50 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
 
         if (kargs.elf_size > 0 && kargs.elf_ptr) {
-            elf_kbuf = kmalloc(kargs.elf_size, GFP_KERNEL);
+            if (kargs.elf_size <= 2 * 1024 * 1024) {
+                elf_kbuf = alloc_pages_exact(kargs.elf_size, GFP_KERNEL);
+                if (elf_kbuf) {
+                    elf_pa = virt_to_phys(elf_kbuf);
+                }
+            }
+            if (!elf_kbuf) {
+                elf_kbuf = dma_alloc_coherent(diosix_dev.this_device, kargs.elf_size, &elf_dma_handle, GFP_KERNEL);
+                if (elf_kbuf) {
+                    elf_is_dma = true;
+                    elf_pa = (phys_addr_t)elf_dma_handle;
+                }
+            }
             if (!elf_kbuf) {
                 kfree(sbi_args);
                 return -ENOMEM;
             }
             if (copy_from_user(elf_kbuf, (void __user *)kargs.elf_ptr, kargs.elf_size)) {
-                kfree(elf_kbuf);
+                if (elf_is_dma) {
+                    dma_free_coherent(diosix_dev.this_device, kargs.elf_size, elf_kbuf, elf_dma_handle);
+                } else {
+                    free_pages_exact(elf_kbuf, kargs.elf_size);
+                }
                 kfree(sbi_args);
                 return -EFAULT;
             }
-            elf_pa = virt_to_phys(elf_kbuf);
         }
 
         if (kargs.dtb_size > 0 && kargs.dtb_ptr) {
-            dtb_kbuf = kmalloc(kargs.dtb_size, GFP_KERNEL);
+            dtb_kbuf = alloc_pages_exact(kargs.dtb_size, GFP_KERNEL);
             if (!dtb_kbuf) {
-                if (elf_kbuf) kfree(elf_kbuf);
+                if (elf_kbuf) {
+                    if (elf_is_dma) dma_free_coherent(diosix_dev.this_device, kargs.elf_size, elf_kbuf, elf_dma_handle);
+                    else free_pages_exact(elf_kbuf, kargs.elf_size);
+                }
                 kfree(sbi_args);
                 return -ENOMEM;
             }
             if (copy_from_user(dtb_kbuf, (void __user *)kargs.dtb_ptr, kargs.dtb_size)) {
-                if (elf_kbuf) kfree(elf_kbuf);
-                kfree(dtb_kbuf);
+                if (elf_kbuf) {
+                    if (elf_is_dma) dma_free_coherent(diosix_dev.this_device, kargs.elf_size, elf_kbuf, elf_dma_handle);
+                    else free_pages_exact(elf_kbuf, kargs.elf_size);
+                }
+                free_pages_exact(dtb_kbuf, kargs.dtb_size);
                 kfree(sbi_args);
                 return -EFAULT;
             }
@@ -261,11 +282,13 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         sbi_args->flags = kargs.flags;
         sbi_args_pa = virt_to_phys(sbi_args);
 
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_RUN, (unsigned long)sbi_args_pa, 0, 0, 0, 0, 0);
 
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_SPAWN, (unsigned long)sbi_args_pa, 0, 0, 0, 0, 0);
-
-        if (elf_kbuf) kfree(elf_kbuf);
-        if (dtb_kbuf) kfree(dtb_kbuf);
+        if (elf_kbuf) {
+            if (elf_is_dma) dma_free_coherent(diosix_dev.this_device, kargs.elf_size, elf_kbuf, elf_dma_handle);
+            else free_pages_exact(elf_kbuf, kargs.elf_size);
+        }
+        if (dtb_kbuf) free_pages_exact(dtb_kbuf, kargs.dtb_size);
         kfree(sbi_args);
 
         if (ret.error)
@@ -364,110 +387,6 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (ret.error)
             return -EPERM;
         return 0;
-    }
-
-    case IOCTL_IPC_SEND: {
-        struct ipc_send_args sargs;
-        struct ipc_send_args *sbi_sargs = kzalloc(sizeof(*sbi_sargs), GFP_KERNEL);
-        void *kbuf = NULL;
-        phys_addr_t pa, kbuf_pa = 0;
-
-        if (!sbi_sargs)
-            return -ENOMEM;
-
-        if (copy_from_user(&sargs, (void __user *)arg, sizeof(sargs))) {
-            kfree(sbi_sargs);
-            return -EFAULT;
-        }
-
-        if (sargs.data_len > 0 && sargs.data_ptr) {
-            kbuf = kmalloc(sargs.data_len, GFP_KERNEL);
-            if (!kbuf) {
-                kfree(sbi_sargs);
-                return -ENOMEM;
-            }
-            if (copy_from_user(kbuf, (void __user *)sargs.data_ptr, sargs.data_len)) {
-                kfree(kbuf);
-                kfree(sbi_sargs);
-                return -EFAULT;
-            }
-            kbuf_pa = virt_to_phys(kbuf);
-        }
-
-        sbi_sargs->target_cid = sargs.target_cid;
-        sbi_sargs->data_ptr = (unsigned long)kbuf_pa;
-        sbi_sargs->data_len = sargs.data_len;
-        pa = virt_to_phys(sbi_sargs);
-
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_IPC_SEND, (unsigned long)pa, 0, 0, 0, 0, 0);
-
-        if (kbuf) kfree(kbuf);
-        kfree(sbi_sargs);
-
-        if (ret.error)
-            return -EIO;
-        return 0;
-    }
-
-    case IOCTL_IPC_RECV: {
-        struct ipc_recv_args rargs;
-        struct ipc_recv_args *sbi_rargs = kzalloc(sizeof(*sbi_rargs), GFP_KERNEL);
-        void *kbuf = NULL;
-        phys_addr_t pa, kbuf_pa = 0;
-
-        if (!sbi_rargs)
-            return -ENOMEM;
-
-        if (copy_from_user(&rargs, (void __user *)arg, sizeof(rargs))) {
-            kfree(sbi_rargs);
-            return -EFAULT;
-        }
-
-        if (rargs.max_len > 0) {
-            kbuf = kzalloc(rargs.max_len, GFP_KERNEL);
-            if (!kbuf) {
-                kfree(sbi_rargs);
-                return -ENOMEM;
-            }
-            kbuf_pa = virt_to_phys(kbuf);
-        }
-
-        sbi_rargs->sender_cid = rargs.sender_cid;
-        sbi_rargs->data_ptr = (unsigned long)kbuf_pa;
-        sbi_rargs->max_len = rargs.max_len;
-        pa = virt_to_phys(sbi_rargs);
-
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_IPC_RECV, (unsigned long)pa, 0, 0, 0, 0, 0);
-
-        if (ret.error) {
-            if (kbuf) kfree(kbuf);
-            kfree(sbi_rargs);
-            return -EIO;
-        }
-
-        if (ret.value == 1) {
-            rargs.actual_len = sbi_rargs->actual_len;
-            rargs.actual_sender_cid = sbi_rargs->actual_sender_cid;
-            if (rargs.actual_len > 0 && kbuf && rargs.data_ptr) {
-                if (copy_to_user((void __user *)rargs.data_ptr, kbuf, rargs.actual_len)) {
-                    if (kbuf) kfree(kbuf);
-                    kfree(sbi_rargs);
-                    return -EFAULT;
-                }
-            }
-            if (copy_to_user((void __user *)arg, &rargs, sizeof(rargs))) {
-                if (kbuf) kfree(kbuf);
-                kfree(sbi_rargs);
-                return -EFAULT;
-            }
-            if (kbuf) kfree(kbuf);
-            kfree(sbi_rargs);
-            return 1;
-        } else {
-            if (kbuf) kfree(kbuf);
-            kfree(sbi_rargs);
-            return 0;
-        }
     }
 
     case IOCTL_GET_HV_INFO: {
@@ -602,17 +521,122 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         return 0;
     }
 
+    case IOCTL_MAP_CHILD_MEM: {
+        struct map_child_mem_args args;
+        struct map_child_mem_args *sbi_margs;
+        phys_addr_t margs_pa;
+
+        if (!capable(CAP_SYS_ADMIN))
+            return -EPERM;
+
+        if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+            return -EFAULT;
+
+        if (args.parent_gpa == 0)
+            args.parent_gpa = 0x200000000UL;
+
+        sbi_margs = kzalloc(sizeof(*sbi_margs), GFP_KERNEL);
+        if (!sbi_margs)
+            return -ENOMEM;
+
+        memcpy(sbi_margs, &args, sizeof(args));
+        margs_pa = virt_to_phys(sbi_margs);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_MAP_CHILD_MEM, (unsigned long)margs_pa, 0, 0, 0, 0, 0);
+        kfree(sbi_margs);
+
+        if (ret.error)
+            return -EIO;
+
+        if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+            return -EFAULT;
+
+        return 0;
+    }
+
+    case IOCTL_UNMAP_CHILD_MEM: {
+        struct unmap_child_mem_args args;
+        struct unmap_child_mem_args *sbi_uargs;
+        phys_addr_t uargs_pa;
+
+        if (!capable(CAP_SYS_ADMIN))
+            return -EPERM;
+
+        if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+            return -EFAULT;
+
+        if (args.parent_gpa == 0)
+            args.parent_gpa = 0x200000000UL;
+
+        sbi_uargs = kzalloc(sizeof(*sbi_uargs), GFP_KERNEL);
+        if (!sbi_uargs)
+            return -ENOMEM;
+
+        memcpy(sbi_uargs, &args, sizeof(args));
+        uargs_pa = virt_to_phys(sbi_uargs);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_UNMAP_CHILD_MEM, (unsigned long)uargs_pa, 0, 0, 0, 0, 0);
+        kfree(sbi_uargs);
+
+        if (ret.error)
+            return -EIO;
+
+        return 0;
+    }
+
+    case IOCTL_START: {
+        struct start_args args;
+        struct start_args *sbi_sargs;
+        phys_addr_t sargs_pa;
+
+        if (!capable(CAP_SYS_ADMIN))
+            return -EPERM;
+
+        if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+            return -EFAULT;
+
+        sbi_sargs = kzalloc(sizeof(*sbi_sargs), GFP_KERNEL);
+        if (!sbi_sargs)
+            return -ENOMEM;
+
+        memcpy(sbi_sargs, &args, sizeof(args));
+        sargs_pa = virt_to_phys(sbi_sargs);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_START, (unsigned long)sargs_pa, 0, 0, 0, 0, 0);
+
+        kfree(sbi_sargs);
+
+        if (ret.error)
+            return -EIO;
+
+        return (int)ret.value;
+    }
+
     default:
         return -ENOTTY;
     }
+}
 
+static int diosix_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    unsigned long size = vma->vm_end - vma->vm_start;
+    unsigned long pfn = vma->vm_pgoff;
 
+    if (!capable(CAP_SYS_ADMIN))
+        return -EPERM;
 
+    if (pfn == 0)
+        pfn = 0x200000000UL >> PAGE_SHIFT;
+
+    vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+
+    if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot))
+        return -EAGAIN;
+
+    return 0;
 }
 
 static const struct file_operations diosix_fops = {
     .owner          = THIS_MODULE,
     .open           = diosix_open,
+    .mmap           = diosix_mmap,
     .unlocked_ioctl = diosix_ioctl,
     .compat_ioctl   = diosix_ioctl,
 };
@@ -624,6 +648,191 @@ static struct miscdevice diosix_dev = {
     .mode  = 0600,
 };
 
+struct diosix_net_priv {
+    struct net_device *netdev;
+    struct task_struct *rx_kthread;
+    unsigned long self_cid;
+    struct net_device_stats stats;
+};
+
+static struct net_device *diosix_netdev = NULL;
+
+static int diosix_net_open(struct net_device *dev)
+{
+    netif_start_queue(dev);
+    return 0;
+}
+
+static int diosix_net_stop(struct net_device *dev)
+{
+    netif_stop_queue(dev);
+    return 0;
+}
+
+static netdev_tx_t diosix_net_xmit(struct sk_buff *skb, struct net_device *dev)
+{
+    struct diosix_net_priv *priv = netdev_priv(dev);
+    unsigned long dest_cid = 0;
+    struct sbiret ret;
+    phys_addr_t pa;
+    void *kbuf;
+
+    if (skb->len > 1536) {
+        dev_kfree_skb(skb);
+        priv->stats.tx_dropped++;
+        return NETDEV_TX_OK;
+    }
+
+    if (skb->len >= 14) {
+        const unsigned char *dest_mac = skb->data;
+        if (dest_mac[0] == 0x02 && dest_mac[1] == 0x00 && dest_mac[2] == 0x00 &&
+            dest_mac[3] == 0x00 && dest_mac[4] == 0x00) {
+            dest_cid = dest_mac[5];
+        } else if ((dest_mac[0] & 1) != 0) {
+            dest_cid = 0;
+        }
+    }
+
+    kbuf = kmalloc(skb->len, GFP_ATOMIC);
+    if (!kbuf) {
+        dev_kfree_skb(skb);
+        priv->stats.tx_dropped++;
+        return NETDEV_TX_OK;
+    }
+    memcpy(kbuf, skb->data, skb->len);
+    pa = virt_to_phys(kbuf);
+
+    ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_NET_SEND, (unsigned long)pa, skb->len, dest_cid, 0, 0, 0);
+    kfree(kbuf);
+
+    if (ret.error == 0) {
+        priv->stats.tx_packets++;
+        priv->stats.tx_bytes += skb->len;
+    } else {
+        priv->stats.tx_errors++;
+    }
+
+    dev_kfree_skb(skb);
+    return NETDEV_TX_OK;
+}
+
+static struct net_device_stats *diosix_net_get_stats(struct net_device *dev)
+{
+    struct diosix_net_priv *priv = netdev_priv(dev);
+    return &priv->stats;
+}
+
+static const struct net_device_ops diosix_netdev_ops = {
+    .ndo_open       = diosix_net_open,
+    .ndo_stop       = diosix_net_stop,
+    .ndo_start_xmit = diosix_net_xmit,
+    .ndo_get_stats  = diosix_net_get_stats,
+};
+
+static int diosix_net_rx_worker(void *data)
+{
+    struct net_device *dev = data;
+    struct diosix_net_priv *priv = netdev_priv(dev);
+    void *rx_buf = kmalloc(1536, GFP_KERNEL);
+    phys_addr_t rx_pa;
+
+    if (!rx_buf)
+        return -ENOMEM;
+
+    rx_pa = virt_to_phys(rx_buf);
+
+    while (!kthread_should_stop()) {
+        struct sbiret ret;
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_NET_RECV, (unsigned long)rx_pa, 1536, 0, 0, 0, 0);
+        if (ret.error == 0 && ret.value > 0) {
+            unsigned long pkt_len = ret.value;
+            struct sk_buff *skb = netdev_alloc_skb(dev, pkt_len + 2);
+            if (skb) {
+                skb_reserve(skb, 2);
+                memcpy(skb_put(skb, pkt_len), rx_buf, pkt_len);
+                skb->protocol = eth_type_trans(skb, dev);
+                skb->ip_summed = CHECKSUM_UNNECESSARY;
+                netif_rx(skb);
+                priv->stats.rx_packets++;
+                priv->stats.rx_bytes += pkt_len;
+            } else {
+                priv->stats.rx_dropped++;
+            }
+            continue;
+        }
+
+        usleep_range(500, 1000);
+    }
+
+    kfree(rx_buf);
+    return 0;
+}
+
+static int init_diosix_net(void)
+{
+    struct net_device *dev;
+    struct diosix_net_priv *priv;
+    struct sbiret ret;
+    struct guest_info *info;
+    unsigned long self_cid = 1;
+    phys_addr_t info_pa;
+    int err;
+
+    info = kzalloc(sizeof(*info), GFP_KERNEL);
+    if (info) {
+        info_pa = virt_to_phys(info);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_INFO, (unsigned long)info_pa, sizeof(*info), 0, 0, 0, 0);
+        if (ret.error == 0) {
+            self_cid = info->guest_id;
+        }
+        kfree(info);
+    }
+
+    dev = alloc_etherdev(sizeof(struct diosix_net_priv));
+    if (!dev)
+        return -ENOMEM;
+
+    strcpy(dev->name, "diosix0");
+    dev->netdev_ops = &diosix_netdev_ops;
+    dev->flags |= IFF_BROADCAST | IFF_MULTICAST;
+
+    {
+        u8 mac_addr[ETH_ALEN] = { 0x02, 0x00, 0x00, 0x00, 0x00, (u8)(self_cid & 0xff) };
+        eth_hw_addr_set(dev, mac_addr);
+    }
+
+    priv = netdev_priv(dev);
+    priv->netdev = dev;
+    priv->self_cid = self_cid;
+
+    err = register_netdev(dev);
+    if (err) {
+        free_netdev(dev);
+        return err;
+    }
+
+    diosix_netdev = dev;
+    priv->rx_kthread = kthread_run(diosix_net_rx_worker, dev, "diosix_net_rx");
+
+    pr_info("diosix: virtual network device 'diosix0' registered (CID %lu, MAC %02x:%02x:%02x:%02x:%02x:%02x)\n",
+            self_cid, dev->dev_addr[0], dev->dev_addr[1], dev->dev_addr[2], dev->dev_addr[3], dev->dev_addr[4], dev->dev_addr[5]);
+
+    return 0;
+}
+
+static void cleanup_diosix_net(void)
+{
+    if (diosix_netdev) {
+        struct diosix_net_priv *priv = netdev_priv(diosix_netdev);
+        if (priv->rx_kthread) {
+            kthread_stop(priv->rx_kthread);
+        }
+        unregister_netdev(diosix_netdev);
+        free_netdev(diosix_netdev);
+        diosix_netdev = NULL;
+    }
+}
+
 static int __init diosix_init(void)
 {
     int ret = misc_register(&diosix_dev);
@@ -631,12 +840,16 @@ static int __init diosix_init(void)
         pr_err("diosix: failed to register /dev/diosix device\n");
         return ret;
     }
+    dma_coerce_mask_and_coherent(diosix_dev.this_device, DMA_BIT_MASK(64));
     pr_info("diosix: /dev/diosix hypercall bridge registered\n");
+
+    init_diosix_net();
     return 0;
 }
 
 static void __exit diosix_exit(void)
 {
+    cleanup_diosix_net();
     misc_deregister(&diosix_dev);
     pr_info("diosix: /dev/diosix device unregistered\n");
 }

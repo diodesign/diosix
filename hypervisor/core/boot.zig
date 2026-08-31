@@ -94,7 +94,6 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                         if (try device_tree.readAddress(path)) |addr| {
                             riscv.test_device_base = addr;
                         }
-
                     } else if (std.mem.indexOf(u8, compat_text, "plic") != null or std.mem.indexOf(u8, compat_text, "sifive,plic") != null) {
                         if (try device_tree.readAddress(path)) |addr| {
                             riscv.plic_base = addr;
@@ -144,7 +143,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
     const rootvm_elf = @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size];
     const guest_arch = try loader.Loader.detectArch(rootvm_elf);
-    const root_vm_gpa_base = if (guest_arch == .x86_64) 0 else if (riscv.hasHExtension()) 0x80000000 else rootvm_hpa_base;
+    const root_vm_gpa_base: usize = if (guest_arch == .x86_64) 0 else rootvm_hpa_base;
     debug.printf("Detected guest VM target architecture: {s}\n", .{@tagName(guest_arch)});
     const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size, guest_arch);
     ctx.root_vm = root_vm;
@@ -204,7 +203,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         // For emulated non-native guests running under QEMU, limit to 1 vCPU to eliminate ticket spinlock contention.
         const guest_cpus: usize = if (guest_arch != .riscv64) 1 else cpu_count;
         const mitigations = if (guest_arch != .riscv64) " mitigations=off clocksource=riscv_clocksource" else "";
-        const bootargs = try std.fmt.allocPrint(cpu_allocator, "console=hvc0 earlycon=sbi rootfstype=ramfs maxcpus={} lpj=50000 rcu_cpu_stall_timeout=300 unaligned_scalar_speed=fast{s}", .{ guest_cpus, mitigations });
+        const bootargs = try std.fmt.allocPrint(cpu_allocator, "console=hvc0 earlycon=sbi rootfstype=ramfs cma=32M no4lvl maxcpus={} lpj=50000 rcupdate.rcu_cpu_stall_suppress=1 rcutree.kthread_prio=1 unaligned_scalar_speed=fast{s}", .{ guest_cpus, mitigations });
         defer cpu_allocator.free(bootargs);
         device_tree.editProperty("/chosen", "bootargs", try dt.DeviceTreeProperty.fromText(cpu_allocator, bootargs)) catch |err| {
             debug.printf("Warning: Failed to inject bootargs into guest DTB: {s}\n", .{@errorName(err)});
@@ -283,7 +282,6 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                         }
                         try device_tree.editProperty(path, "riscv,isa-extensions", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, minimal_exts.items));
                     }
-
                 }
             }
 
@@ -374,40 +372,6 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
             } else break;
         }
 
-        // Filter PLIC interrupts-extended to remove references to disabled CPUs
-        var plic_it = device_tree.iter("/", 10);
-        while (plic_it.next()) |path| {
-            if (std.mem.indexOf(u8, path, "plic") != null or std.mem.indexOf(u8, path, "interrupt-controller") != null) {
-                if (device_tree.getProperty(path, "interrupts-extended")) |prop| {
-                    if (prop.data) |data| {
-                        var new_data = std.ArrayList(u8).empty;
-                        defer new_data.deinit(cpu_allocator);
-
-                        var offset: usize = 0;
-                        while (offset + 7 < data.len) : (offset += 8) {
-                            const phandle = (@as(u32, data[offset]) << 24) | (@as(u32, data[offset + 1]) << 16) | (@as(u32, data[offset + 2]) << 8) | data[offset + 3];
-
-                            // Check if this phandle is in the disabled list
-                            var is_disabled = false;
-                            for (disabled_phandles.items) |dp| {
-                                if (dp == phandle) {
-                                    is_disabled = true;
-                                    break;
-                                }
-                            }
-
-                            if (!is_disabled) {
-                                try new_data.appendSlice(cpu_allocator, data[offset .. offset + 8]);
-                            }
-                        }
-
-                        // Replace the property
-                        try device_tree.editProperty(path, "interrupts-extended", try dt.DeviceTreeProperty.fromBytes(cpu_allocator, new_data.items));
-                    }
-                } else |_| {}
-            }
-        }
-
         guest_dtb = try device_tree.toBlob();
     }
 
@@ -436,7 +400,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         // Other cores wait for HSM HART_START, so they are not queued here.
         const vcore_id = if (guest_arch == .aarch64) i else guest_hart_ids[i];
         const vc = try root_vm.addVcore(vcore_id, entry_point, guest_dtb_gpa, .high, null);
-        
+
         if (is_emulated) {
             try emulation.init(vc);
         }

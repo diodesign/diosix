@@ -100,7 +100,7 @@ pub const MIE = struct {
     pub const MTIE: usize = 1 << 7;
     pub const SEIE: usize = 1 << 9;
     pub const MEIE: usize = 1 << 11;
-    pub const ALL_PHYSICAL: usize = SSIE | MSIE | STIE | MTIE | SEIE | MEIE; // 0xAAA
+    pub const ALL_PHYSICAL: usize = MSIE | MTIE | MEIE | SEIE; // 0xa88
 };
 
 pub const MIP = struct {
@@ -110,6 +110,13 @@ pub const MIP = struct {
     pub const MTIE_BIT: u6 = 7;
     pub const SEIP_BIT: u6 = 9;
     pub const MEIP_BIT: u6 = 11;
+
+    pub const SSIP: usize = 1 << SSIP_BIT;
+    pub const MSIP: usize = 1 << MSIE_BIT;
+    pub const STIP: usize = 1 << STIP_BIT;
+    pub const MTIP: usize = 1 << MTIE_BIT;
+    pub const SEIP: usize = 1 << SEIP_BIT;
+    pub const MEIP: usize = 1 << MEIP_BIT;
 };
 
 pub const MCOUNTEREN = struct {
@@ -137,7 +144,6 @@ pub const STATEEN = struct {
     pub const SE0: usize = @as(usize, 1) << 63;
     pub const BASE_FEATURES: usize = STATEEN.ENVCFG | STATEEN.CSRIND | STATEEN.AIA | STATEEN.IMSIC;
 };
-
 
 pub const Cause = enum(usize) {
     pub const INTERRUPT_BIT = 1 << 63;
@@ -269,4 +275,3 @@ pub const Instr = struct {
 };
 
 // (End of interface/riscv.zig)
-

@@ -117,7 +117,6 @@ pub const Instruction = union(enum) {
     unknown: u32,
 };
 
-
 pub const DecodedInsn = struct {
     insn: Instruction,
     len: u8, // 2 for 16-bit compressed instruction, 4 for standard 32-bit
@@ -140,9 +139,9 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b000 => {
                 // C.ADDI4SPN
                 const nzuimm: u32 = (((code16 >> 6) & 1) << 2) |
-                                    (((code16 >> 5) & 1) << 3) |
-                                    (((code16 >> 11) & 3) << 4) |
-                                    (((code16 >> 7) & 15) << 6);
+                    (((code16 >> 5) & 1) << 3) |
+                    (((code16 >> 11) & 3) << 4) |
+                    (((code16 >> 7) & 15) << 6);
                 const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 if (nzuimm == 0) return null;
                 // addi rd, x2, nzuimm
@@ -151,7 +150,7 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b001 => {
                 // C.FLD
                 const offset: u32 = (((code16 >> 10) & 7) << 3) |
-                                    (((code16 >> 5) & 3) << 6);
+                    (((code16 >> 5) & 3) << 6);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // fld rd, offset(rs1)
@@ -160,8 +159,8 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b010 => {
                 // C.LW
                 const offset: u32 = (((code16 >> 6) & 1) << 2) |
-                                    (((code16 >> 10) & 7) << 3) |
-                                    (((code16 >> 5) & 1) << 6);
+                    (((code16 >> 10) & 7) << 3) |
+                    (((code16 >> 5) & 1) << 6);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // lw rd, offset(rs1)
@@ -170,8 +169,8 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b011 => {
                 // C.FLW (in RV32)
                 const offset: u32 = (((code16 >> 6) & 1) << 2) |
-                                    (((code16 >> 10) & 7) << 3) |
-                                    (((code16 >> 5) & 1) << 6);
+                    (((code16 >> 10) & 7) << 3) |
+                    (((code16 >> 5) & 1) << 6);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const rd = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // flw rd, offset(rs1)
@@ -180,7 +179,7 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b101 => {
                 // C.FSD
                 const offset: u32 = (((code16 >> 10) & 7) << 3) |
-                                    (((code16 >> 5) & 3) << 6);
+                    (((code16 >> 5) & 3) << 6);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const rs2 = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // fsd rs2, offset(rs1)
@@ -191,8 +190,8 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b110 => {
                 // C.SW
                 const offset: u32 = (((code16 >> 6) & 1) << 2) |
-                                    (((code16 >> 10) & 7) << 3) |
-                                    (((code16 >> 5) & 1) << 6);
+                    (((code16 >> 10) & 7) << 3) |
+                    (((code16 >> 5) & 1) << 6);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const rs2 = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // sw rs2, offset(rs1)
@@ -203,8 +202,8 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b111 => {
                 // C.FSW (in RV32)
                 const offset: u32 = (((code16 >> 6) & 1) << 2) |
-                                    (((code16 >> 10) & 7) << 3) |
-                                    (((code16 >> 5) & 1) << 6);
+                    (((code16 >> 10) & 7) << 3) |
+                    (((code16 >> 5) & 1) << 6);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const rs2 = @as(u5, @truncate((code16 >> 2) & 0x7)) + 8;
                 // fsw rs2, offset(rs1)
@@ -227,13 +226,13 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b001 => {
                 // C.JAL
                 const offset: u32 = (((code16 >> 3) & 7) << 1) |
-                                    (((code16 >> 11) & 1) << 4) |
-                                    (((code16 >> 2) & 1) << 5) |
-                                    (((code16 >> 7) & 1) << 6) |
-                                    (((code16 >> 6) & 1) << 7) |
-                                    (((code16 >> 9) & 3) << 8) |
-                                    (((code16 >> 8) & 1) << 10) |
-                                    (((code16 >> 12) & 1) << 11);
+                    (((code16 >> 11) & 1) << 4) |
+                    (((code16 >> 2) & 1) << 5) |
+                    (((code16 >> 7) & 1) << 6) |
+                    (((code16 >> 6) & 1) << 7) |
+                    (((code16 >> 9) & 3) << 8) |
+                    (((code16 >> 8) & 1) << 10) |
+                    (((code16 >> 12) & 1) << 11);
                 const imm = signExtend(offset, 12);
                 const uimm = @as(u32, @bitCast(imm)) & 0x1FFFFF;
                 const imm20: u32 = (uimm >> 20) & 1;
@@ -257,11 +256,11 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 if (rd == 2) {
                     // C.ADDI16SP
                     const offset: u32 = (((code16 >> 6) & 1) << 4) |
-                                        (((code16 >> 2) & 1) << 5) |
-                                        (((code16 >> 5) & 1) << 6) |
-                                        (((code16 >> 3) & 3) << 7) |
-                                        (((code16 >> 4) & 1) << 8) |
-                                        (((code16 >> 12) & 1) << 9);
+                        (((code16 >> 2) & 1) << 5) |
+                        (((code16 >> 5) & 1) << 6) |
+                        (((code16 >> 3) & 3) << 7) |
+                        (((code16 >> 4) & 1) << 8) |
+                        (((code16 >> 12) & 1) << 9);
                     const imm = signExtend(offset, 10);
                     const uimm = @as(u32, @bitCast(imm)) & 0xFFF;
                     return 0x13 | (2 << 7) | (2 << 15) | (uimm << 20);
@@ -310,13 +309,13 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b101 => {
                 // C.J
                 const offset: u32 = (((code16 >> 3) & 7) << 1) |
-                                    (((code16 >> 11) & 1) << 4) |
-                                    (((code16 >> 2) & 1) << 5) |
-                                    (((code16 >> 7) & 1) << 6) |
-                                    (((code16 >> 6) & 1) << 7) |
-                                    (((code16 >> 9) & 3) << 8) |
-                                    (((code16 >> 8) & 1) << 10) |
-                                    (((code16 >> 12) & 1) << 11);
+                    (((code16 >> 11) & 1) << 4) |
+                    (((code16 >> 2) & 1) << 5) |
+                    (((code16 >> 7) & 1) << 6) |
+                    (((code16 >> 6) & 1) << 7) |
+                    (((code16 >> 9) & 3) << 8) |
+                    (((code16 >> 8) & 1) << 10) |
+                    (((code16 >> 12) & 1) << 11);
                 const imm = signExtend(offset, 12);
                 const uimm = @as(u32, @bitCast(imm)) & 0x1FFFFF;
                 const imm20: u32 = (uimm >> 20) & 1;
@@ -329,10 +328,10 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b110 => {
                 // C.BEQZ
                 const offset: u32 = (((code16 >> 3) & 3) << 1) |
-                                    (((code16 >> 10) & 3) << 3) |
-                                    (((code16 >> 2) & 1) << 5) |
-                                    (((code16 >> 5) & 3) << 6) |
-                                    (((code16 >> 12) & 1) << 8);
+                    (((code16 >> 10) & 3) << 3) |
+                    (((code16 >> 2) & 1) << 5) |
+                    (((code16 >> 5) & 3) << 6) |
+                    (((code16 >> 12) & 1) << 8);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const imm = signExtend(offset, 9);
                 const uimm = @as(u32, @bitCast(imm)) & 0x1FFF;
@@ -346,10 +345,10 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b111 => {
                 // C.BNEZ
                 const offset: u32 = (((code16 >> 3) & 3) << 1) |
-                                    (((code16 >> 10) & 3) << 3) |
-                                    (((code16 >> 2) & 1) << 5) |
-                                    (((code16 >> 5) & 3) << 6) |
-                                    (((code16 >> 12) & 1) << 8);
+                    (((code16 >> 10) & 3) << 3) |
+                    (((code16 >> 2) & 1) << 5) |
+                    (((code16 >> 5) & 3) << 6) |
+                    (((code16 >> 12) & 1) << 8);
                 const rs1 = @as(u5, @truncate((code16 >> 7) & 0x7)) + 8;
                 const imm = signExtend(offset, 9);
                 const uimm = @as(u32, @bitCast(imm)) & 0x1FFF;
@@ -374,8 +373,8 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // C.FLDSP
                 const rd = @as(u5, @truncate((code16 >> 7) & 0x1F));
                 const offset: u32 = (((code16 >> 5) & 3) << 3) |
-                                    (((code16 >> 12) & 1) << 5) |
-                                    (((code16 >> 2) & 7) << 6);
+                    (((code16 >> 12) & 1) << 5) |
+                    (((code16 >> 2) & 7) << 6);
                 // fld rd, offset(x2)
                 return 0x07 | (@as(u32, rd) << 7) | (0x3 << 12) | (2 << 15) | (offset << 20);
             },
@@ -383,8 +382,8 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // C.LWSP
                 const rd = @as(u5, @truncate((code16 >> 7) & 0x1F));
                 const offset: u32 = (((code16 >> 4) & 7) << 2) |
-                                    (((code16 >> 12) & 1) << 5) |
-                                    (((code16 >> 2) & 3) << 6);
+                    (((code16 >> 12) & 1) << 5) |
+                    (((code16 >> 2) & 3) << 6);
                 // lw rd, offset(x2)
                 return 0x03 | (@as(u32, rd) << 7) | (0x2 << 12) | (2 << 15) | (offset << 20);
             },
@@ -392,8 +391,8 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // C.FLWSP (in RV32)
                 const rd = @as(u5, @truncate((code16 >> 7) & 0x1F));
                 const offset: u32 = (((code16 >> 4) & 7) << 2) |
-                                    (((code16 >> 12) & 1) << 5) |
-                                    (((code16 >> 2) & 3) << 6);
+                    (((code16 >> 12) & 1) << 5) |
+                    (((code16 >> 2) & 3) << 6);
                 // flw rd, offset(x2)
                 return 0x07 | (@as(u32, rd) << 7) | (0x2 << 12) | (2 << 15) | (offset << 20);
             },
@@ -426,7 +425,7 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // C.FSDSP
                 const rs2 = @as(u5, @truncate((code16 >> 2) & 0x1F));
                 const offset: u32 = (((code16 >> 10) & 7) << 3) |
-                                    (((code16 >> 7) & 7) << 6);
+                    (((code16 >> 7) & 7) << 6);
                 const imm5: u32 = offset & 0x1F;
                 const imm7: u32 = (offset >> 5) & 0x7F;
                 // fsd rs2, offset(x2)
@@ -436,7 +435,7 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // C.SWSP
                 const rs2 = @as(u5, @truncate((code16 >> 2) & 0x1F));
                 const offset: u32 = (((code16 >> 9) & 15) << 2) |
-                                    (((code16 >> 7) & 3) << 6);
+                    (((code16 >> 7) & 3) << 6);
                 const imm5: u32 = offset & 0x1F;
                 const imm7: u32 = (offset >> 5) & 0x7F;
                 // sw rs2, offset(x2)
@@ -446,7 +445,7 @@ pub fn decompressRvc(code16: u16) ?u32 {
                 // C.FSWSP (in RV32)
                 const rs2 = @as(u5, @truncate((code16 >> 2) & 0x1F));
                 const offset: u32 = (((code16 >> 9) & 15) << 2) |
-                                    (((code16 >> 7) & 3) << 6);
+                    (((code16 >> 7) & 3) << 6);
                 const imm5: u32 = offset & 0x1F;
                 const imm7: u32 = (offset >> 5) & 0x7F;
                 // fsw rs2, offset(x2)
@@ -546,7 +545,6 @@ pub fn decode(raw_code: u32) DecodedInsn {
         },
         0x53, 0x43, 0x47, 0x4B, 0x4F => .{ .fp_op = .{ .raw = code } },
 
-
         0x63 => switch (funct3) {
             0x0 => .{ .beq = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
             0x1 => .{ .bne = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
@@ -593,7 +591,6 @@ pub fn decode(raw_code: u32) DecodedInsn {
             else => .{ .unknown = code },
         },
         0x57 => switch (funct3) {
-
             0x7 => .{ .vsetvli = .{ .rd = rd, .rs1 = rs1, .vtype = @truncate(@as(u32, @bitCast(i_imm))) } },
             else => .{ .vector_op = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
         },

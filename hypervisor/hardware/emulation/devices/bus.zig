@@ -7,22 +7,23 @@ const std = @import("std");
 const vuart_mod = @import("vuart.zig");
 const vtimer_mod = @import("vtimer.zig");
 const vpic_mod = @import("vpic.zig");
+const vsock_mod = @import("vsock.zig");
 const vcpu_mod = @import("../vcpu.zig");
 
-pub const MMIO_UART_BASE: u32      = 0x10000000;
-pub const MMIO_UART_SIZE: u32      = 0x100;
-pub const MMIO_VIRTIO_BASE: u32    = 0x10001000;
-pub const MMIO_VIRTIO_END: u32     = 0x10009000;
-pub const MMIO_CLINT_BASE: u32     = 0x02000000;
-pub const MMIO_CLINT_SIZE: u32     = 0x00010000;
-pub const MMIO_PLIC_BASE: u32      = 0x0c000000;
-pub const MMIO_PLIC_END: u32       = 0x10000000;
-pub const MMIO_TEST_RTC_BASE: u32  = 0x00100000;
-pub const MMIO_RTC_BASE: u32       = 0x00101000;
-pub const MMIO_TEST_RTC_END: u32   = 0x00102000;
+pub const MMIO_UART_BASE: u32 = 0x10000000;
+pub const MMIO_UART_SIZE: u32 = 0x100;
+pub const MMIO_VIRTIO_BASE: u32 = 0x10001000;
+pub const MMIO_VIRTIO_END: u32 = 0x10009000;
+pub const MMIO_CLINT_BASE: u32 = 0x02000000;
+pub const MMIO_CLINT_SIZE: u32 = 0x00010000;
+pub const MMIO_PLIC_BASE: u32 = 0x0c000000;
+pub const MMIO_PLIC_END: u32 = 0x10000000;
+pub const MMIO_TEST_RTC_BASE: u32 = 0x00100000;
+pub const MMIO_RTC_BASE: u32 = 0x00101000;
+pub const MMIO_TEST_RTC_END: u32 = 0x00102000;
 
-pub const VIRTIO_MMIO_MAGIC: u32       = 0x74726976; // "virt" in little-endian
-pub const VIRTIO_MMIO_VERSION_2: u32   = 0x00000002; // Modern VirtIO
+pub const VIRTIO_MMIO_MAGIC: u32 = 0x74726976; // "virt" in little-endian
+pub const VIRTIO_MMIO_VERSION_2: u32 = 0x00000002; // Modern VirtIO
 pub const VIRTIO_MMIO_DEVICE_NONE: u32 = 0x00000000; // Empty slot
 pub const VIRTIO_MMIO_VENDOR_QEMU: u32 = 0x554d4551; // "QEMU"
 
@@ -30,6 +31,7 @@ pub const Bus = struct {
     uart: *vuart_mod.VirtualUart,
     timer: *vtimer_mod.VirtualTimer,
     pic: *vpic_mod.VirtualPlic,
+    vsock: ?*vsock_mod.VirtioVsock = null,
 
     pub fn isMmioAddr(addr: u32) bool {
         if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) return true; // 16550 UART
@@ -50,8 +52,13 @@ pub const Bus = struct {
         if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) {
             return self.uart.read(@truncate(addr - MMIO_UART_BASE));
         } else if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) {
-            // VirtIO MMIO transport probe
+            const slot_idx = (addr - MMIO_VIRTIO_BASE) / 0x1000;
             const reg_offset = (addr - MMIO_VIRTIO_BASE) & 0xFFF;
+            if (slot_idx == 0) {
+                if (self.vsock) |v| {
+                    return v.readReg(reg_offset);
+                }
+            }
             return switch (reg_offset) {
                 0x000 => VIRTIO_MMIO_MAGIC,
                 0x004 => VIRTIO_MMIO_VERSION_2,
@@ -79,7 +86,14 @@ pub const Bus = struct {
         if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) {
             self.uart.write(@truncate(addr - MMIO_UART_BASE), @truncate(val));
         } else if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) {
-            // Read-only configuration or control writes for empty slots are ignored
+            const slot_idx = (addr - MMIO_VIRTIO_BASE) / 0x1000;
+            const reg_offset = (addr - MMIO_VIRTIO_BASE) & 0xFFF;
+            if (slot_idx == 0) {
+                if (self.vsock) |v| {
+                    v.writeReg(reg_offset, val);
+                    return;
+                }
+            }
         } else if (addr >= MMIO_CLINT_BASE and addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE) {
             self.timer.write(@truncate(addr - MMIO_CLINT_BASE), val);
         } else if (addr >= MMIO_PLIC_BASE and addr < MMIO_PLIC_END) {
@@ -116,4 +130,3 @@ test "MMIO Bus address classification and VirtIO transport probe" {
     try testing.expectEqual(VIRTIO_MMIO_DEVICE_NONE, bus.read(MMIO_VIRTIO_BASE + 0x008, 4));
     try testing.expectEqual(VIRTIO_MMIO_VENDOR_QEMU, bus.read(MMIO_VIRTIO_BASE + 0x00c, 4));
 }
-

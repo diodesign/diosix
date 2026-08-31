@@ -130,6 +130,7 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
     // Register this RAM region so isRam() works in tests
     phys_mem_state.region_count = 1;
     phys_mem_state.regions[0] = .{ .base = phys_mem_state.ram_base, .size = phys_mem_state.ram_size };
+    phys_mem_state.hv_region = .{ .base = 0x80000000, .size = 0x200000 };
 
     return TestState{ .allocator = allocator, .metadata = metadata, .ram = ram };
 }
@@ -403,6 +404,12 @@ pub fn freePage(addr: usize) void {
     decrementPageRef(addr);
 }
 
+// Get reference count of a page.
+pub fn getPageRef(addr: usize) u32 {
+    const desc = getPageDescriptor(addr);
+    return @atomicLoad(u32, &desc.refcount, .seq_cst);
+}
+
 // Increment reference count of a page. Used for Copy-on-Write sharing.
 pub fn incrementPageRef(addr: usize) void {
     const desc = getPageDescriptor(addr);
@@ -431,11 +438,14 @@ pub fn getFreeRamBytes() usize {
     return phys_mem_state.free_pages * PageSize;
 }
 
+pub fn getHvRegion() Region {
+    return phys_mem_state.hv_region;
+}
+
 pub fn isHypervisorMemory(base: usize, size: usize) bool {
     const end = base + size;
     const hv_start = phys_mem_state.hv_region.base;
     const hv_end = phys_mem_state.hv_region.end();
-
 
     // Check for overlap
     return (base < hv_end and end > hv_start);

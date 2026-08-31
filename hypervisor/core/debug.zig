@@ -42,25 +42,12 @@ pub fn GenericQueue(comptime T: type, comptime size: usize) type {
     };
 }
 
-const QueueEntry = struct {
-    source_id: ?usize,
-    char: u8,
-};
-
 const ConsoleState = struct {
-    // Single shared output queue for Hypervisor and all Guest VMs (infinitely scaling)
-    output_queue: GenericQueue(QueueEntry, queue_size) = .{},
+    // Single shared output queue for hypervisor console output
+    output_queue: GenericQueue(u8, queue_size) = .{},
 
-    // Single shared input queue for console keyboard input
+    // Shared input queue for console keyboard input
     stdin_queue: GenericQueue(u8, 256) = .{},
-
-    // Hardware console state
-    line_start: bool = true,
-    active_drain_source: ?usize = null,
-    active_drain_source_valid: bool = false,
-
-    // Dynamic selected reader guest ID
-    selected_reader_guest_id: ?usize = null,
 };
 
 // Global thread-safe debug console state
@@ -74,8 +61,6 @@ var console_lock_saved_mstatus = std.mem.zeroes([MAX_CPUS]usize);
 
 // Top-level crash bypass flag to guarantee panic messages get printed immediately
 pub var panic_mode: bool = false;
-// Allow designated reader guest to read from the console (compat with guest.zig)
-pub var last_reader_guest_id: ?usize = null;
 
 pub const UART = struct {
     // 16550 UART Register Offsets
@@ -84,7 +69,7 @@ pub const UART = struct {
     pub const LSR = 5; // Line Status Register
 
     // LSR Bitmasks
-    pub const LSR_DR = 0x01;   // Data Ready
+    pub const LSR_DR = 0x01; // Data Ready
     pub const LSR_THRE = 0x20; // Transmitter Holding Register Empty
 };
 
@@ -94,9 +79,7 @@ pub fn hw_putchar(c: u8) void {
         drv.putchar(c);
     } else {
         const uart = riscv.uart_base orelse 0x10000000;
-        const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
         const tx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.THR));
-        while (status_reg.* & UART.LSR_THRE == 0) {}
         tx_reg.* = c;
     }
 }
@@ -147,65 +130,10 @@ fn releaseConsole() void {
     }
 }
 
-fn getColorCode(source_id: ?usize) []const u8 {
-    if (source_id) |id| {
-        const colors = [_][]const u8{
-            "\x1b[1;32m", // Bold Green (Root VM)
-            "\x1b[1;31m", // Bold Red
-            "\x1b[1;33m", // Bold Yellow
-            "\x1b[1;34m", // Bold Blue
-            "\x1b[1;35m", // Bold Magenta
-            "\x1b[1;36m", // Bold Cyan
-        };
-        return colors[id % colors.len];
-    } else {
-        return "\x1b[1;37m"; // Bold White for Hypervisor
-    }
-}
-
-fn hwWriteStr(s: []const u8) void {
-    for (s) |c| {
-        hw_putchar(c);
-    }
-}
-
-fn hwWriteDecimal(val: usize) void {
-    if (val == 0) {
-        hw_putchar('0');
-        return;
-    }
-    var temp = val;
-    var buf: [20]u8 = undefined;
-    var i: usize = 0;
-    while (temp > 0) {
-        buf[i] = @intCast('0' + (temp % 10));
-        temp /= 10;
-        i += 1;
-    }
-    while (i > 0) {
-        i -= 1;
-        hw_putchar(buf[i]);
-    }
-}
-
-// Drains characters from the single shared output queue to the UART
+// Drains characters from output queue to the physical console
 fn drainQueuesInternal(state: *ConsoleState) void {
-    while (state.output_queue.pop()) |entry| {
-        const source_id = entry.source_id;
-        const c = entry.char;
-
-        if (!state.active_drain_source_valid or state.active_drain_source != source_id) {
-            hwWriteStr(getColorCode(source_id));
-            state.active_drain_source = source_id;
-            state.active_drain_source_valid = true;
-        }
-
+    while (state.output_queue.pop()) |c| {
         hw_putchar(c);
-
-        if (c == '\n') {
-            hwWriteStr("\x1b[0m");
-            state.active_drain_source_valid = false;
-        }
     }
 }
 
@@ -249,7 +177,7 @@ fn basicDrain(_: *Writer, data: []const []const u8, splat: usize) Writer.Error!u
 
     for (data) |buf| {
         for (buf) |c| {
-            _ = state.output_queue.push(.{ .source_id = null, .char = c });
+            _ = state.output_queue.push(c);
         }
         total += buf.len;
     }
@@ -258,7 +186,7 @@ fn basicDrain(_: *Writer, data: []const []const u8, splat: usize) Writer.Error!u
         var i: usize = 0;
         while (i < splat - 1) : (i += 1) {
             for (last) |c| {
-                _ = state.output_queue.push(.{ .source_id = null, .char = c });
+                _ = state.output_queue.push(c);
             }
             total += last.len;
         }
@@ -284,22 +212,11 @@ pub fn putchar(c: u8) void {
     }
     const state = acquireConsole();
     defer releaseConsole();
-    _ = state.output_queue.push(.{ .source_id = null, .char = c });
+    _ = state.output_queue.push(c);
     drainQueuesInternal(state);
 }
 
-pub fn putcharFromGuest(source_id: usize, c: u8) void {
-    if (panic_mode) {
-        hw_putchar(c);
-        return;
-    }
-    const state = acquireConsole();
-    defer releaseConsole();
-    _ = state.output_queue.push(.{ .source_id = source_id, .char = c });
-    drainQueuesInternal(state);
-}
-
-pub fn writeFromGuest(source_id: usize, s: []const u8) void {
+pub fn write(s: []const u8) void {
     if (panic_mode) {
         for (s) |c| hw_putchar(c);
         return;
@@ -307,65 +224,23 @@ pub fn writeFromGuest(source_id: usize, s: []const u8) void {
     const state = acquireConsole();
     defer releaseConsole();
     for (s) |c| {
-        _ = state.output_queue.push(.{ .source_id = source_id, .char = c });
+        _ = state.output_queue.push(c);
     }
     drainQueuesInternal(state);
 }
 
-pub fn getchar(source_id: usize) i16 {
+pub fn getchar() i16 {
     if (panic_mode) {
         return hw_getchar();
     }
     const state = acquireConsole();
     defer releaseConsole();
 
-    if (state.selected_reader_guest_id == null) {
-        state.selected_reader_guest_id = last_reader_guest_id;
-    }
-
-    if (state.selected_reader_guest_id == null) {
-        state.selected_reader_guest_id = source_id;
-    }
-
-    if (state.selected_reader_guest_id.? != source_id) {
-        return -1;
-    }
-
     if (state.stdin_queue.pop()) |c| {
         return c;
     }
 
     return hw_getchar();
-}
-
-pub fn sendInputToGuest(guest_id: usize, c: u8) void {
-    if (panic_mode) return;
-    const state = acquireConsole();
-    defer releaseConsole();
-
-    if (state.selected_reader_guest_id == null) {
-        state.selected_reader_guest_id = last_reader_guest_id;
-    }
-
-    if (state.selected_reader_guest_id == null) {
-        state.selected_reader_guest_id = guest_id;
-    }
-
-    if (state.selected_reader_guest_id.? == guest_id) {
-        _ = state.stdin_queue.push(c);
-    }
-}
-
-pub fn destroyGuestState(guest_id: usize) void {
-    if (panic_mode) return;
-    const state = acquireConsole();
-    defer releaseConsole();
-
-    if (state.selected_reader_guest_id) |reader_id| {
-        if (reader_id == guest_id) {
-            state.selected_reader_guest_id = null;
-        }
-    }
 }
 
 // ----------------------- unit tests ---------------------
@@ -380,11 +255,4 @@ test "debug console circular queue" {
     try testing.expect(!q.isEmpty());
     try testing.expect(q.pop() == 'A');
     try testing.expect(q.isEmpty());
-}
-
-test "debug console colors and mapping" {
-    const testing = std.testing;
-    try testing.expectEqualStrings("\x1b[1;37m", getColorCode(null));
-    try testing.expectEqualStrings("\x1b[1;32m", getColorCode(0));
-    try testing.expectEqualStrings("\x1b[1;31m", getColorCode(1));
 }

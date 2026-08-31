@@ -216,6 +216,7 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
             const pcpu = pcore.this();
             const now = riscv.readTime();
             var min_target: u64 = std.math.maxInt(u64);
+            const b_emu_prev = pcpu.blocked_lock.lock();
             var it = pcpu.blocked_queue.start;
             while (it) |node| {
                 const next_it = node.next;
@@ -223,6 +224,7 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                 if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
                     // Woken by remote CPU / IPI
                     pcpu.blocked_queue.remove(node);
+                    vc.blocked_on_cpu = null;
                     it = next_it;
                     continue;
                 }
@@ -264,18 +266,19 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                 }
                 if (wake) {
                     pcpu.blocked_queue.remove(node);
-                    if (vc.tryWake()) {
-                        vc.blocked_on_cpu = null;
-                        if (current_vc == null) {
-                            pcore.contextSwitch(vc);
-                            current_vc = vc;
-                        } else {
-                            scheduler.queue(vc);
-                        }
+                    vc.blocked_on_cpu = null;
+                    @atomicStore(bool, &vc.wfi_blocked, false, .release);
+                    vc.state = .ready;
+                    if (current_vc == null) {
+                        pcore.contextSwitch(vc);
+                        current_vc = vc;
+                    } else {
+                        scheduler.queue(vc);
                     }
                 }
                 it = next_it;
             }
+            pcpu.blocked_lock.unlock(b_emu_prev);
 
             if (current_vc == null) {
                 const safety_target = now + 10_000;
@@ -352,10 +355,13 @@ pub fn run(vc: *vcore.VirtualCore) void {
         .yield, .normal => {},
         .wfi => {
             vc.state = .blocked;
+            const pcpu = pcore.this();
+            const b_wfi_emu_prev = pcpu.blocked_lock.lock();
             vc.blocked_node.contents = vc;
-            pcore.this().blocked_queue.pushStart(&vc.blocked_node);
-            vc.blocked_on_cpu = pcore.this().cpu_core_id;
+            pcpu.blocked_queue.pushStart(&vc.blocked_node);
+            vc.blocked_on_cpu = pcpu.cpu_core_id;
             @atomicStore(bool, &vc.wfi_blocked, true, .release);
+            pcpu.blocked_lock.unlock(b_wfi_emu_prev);
             return;
         },
         .page_fault, .illegal_instruction, .unhandled => {

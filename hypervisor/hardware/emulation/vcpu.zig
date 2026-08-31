@@ -9,7 +9,9 @@ const builtin = @import("builtin");
 pub inline fn readHostTime() u64 {
     var host_time: u64 = 0;
     if (comptime builtin.target.cpu.arch.isRISCV()) {
-        asm volatile ("rdtime %[host_time]" : [host_time] "=r" (host_time));
+        asm volatile ("rdtime %[host_time]"
+            : [host_time] "=r" (host_time),
+        );
     }
     return host_time;
 }
@@ -163,12 +165,12 @@ pub const VCpu = extern struct {
         self.setGpr(reg, val);
     }
 
-comptime {
-    std.debug.assert(@offsetOf(VCpu, "regs") == 0);
-    std.debug.assert(@offsetOf(VCpu, "pc") == 256);
-    std.debug.assert(@offsetOf(VCpu, "host_sp") == 280);
-    std.debug.assert(@offsetOf(VCpu, "scratch_t1") == 288);
-}
+    comptime {
+        std.debug.assert(@offsetOf(VCpu, "regs") == 0);
+        std.debug.assert(@offsetOf(VCpu, "pc") == 256);
+        std.debug.assert(@offsetOf(VCpu, "host_sp") == 280);
+        std.debug.assert(@offsetOf(VCpu, "scratch_t1") == 288);
+    }
 
     pub var time_offset: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
     pub var max_guest_time: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);

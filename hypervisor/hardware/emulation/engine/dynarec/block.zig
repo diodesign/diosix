@@ -43,7 +43,7 @@ pub const TranslationBlock = struct {
             const auipc_insn = rv64.auipc(5, j_upper);
             const jalr_insn = rv64.jalr(0, 5, j_lower);
             std.mem.writeInt(u32, self.host_code[b.patch_offset..][0..4], auipc_insn, .little);
-            std.mem.writeInt(u32, self.host_code[b.patch_offset + 4..][0..4], jalr_insn, .little);
+            std.mem.writeInt(u32, self.host_code[b.patch_offset + 4 ..][0..4], jalr_insn, .little);
             rv64.fenceI();
             if (branch_idx == 0) self.chained_block1 = target_tb else self.chained_block2 = target_tb;
         }

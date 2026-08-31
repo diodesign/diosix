@@ -21,7 +21,7 @@ To learn more about the internals of the hypervisor, explore our detailed
 technical guides:
 
 - **[Hypervisor architecture](architecture.md)**: Describes the 
-  hierarchical forking model, resource quotas, and guest VM lifecycles.
+  hierarchical guest model, resource quotas, and guest VM lifecycles.
 - **[Security model](security.md)**: Details the TCB, hardware isolation 
   mechanisms, and the "least privilege" workflow.
 - **[Interface and ABI](interface.md)**: Documents the standardized 

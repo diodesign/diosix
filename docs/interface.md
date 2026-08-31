@@ -47,7 +47,7 @@ relative **Context IDs (CIDs)** scoped to the calling VM:
 *   **`CID 0` (`CID_PARENT` / `parent`)**: The direct parent VM of the caller.
 *   **`CID 1` (`CID_SELF` / `self`)**: The calling VM itself.
 *   **`CID 2..N` (`CID_FIRST_CHILD` and above)**: Direct child handles 
-    allocated when the calling VM executes a `FORK` operation.
+    allocated when the calling VM creates child VMs.
 
 A guest VM cannot reference siblings, grandparents, or unrelated VM subtrees.
 
@@ -83,17 +83,20 @@ event notifications.
 | :--- | :--- | :--- |
 | `TERMINATE` | `0` | Terminate self (`CID 1`) or child (`CID >= 2`) with an exit code |
 | `YIELD` | `1` | Voluntarily yield the remaining VCPU execution quantum |
-| `FORK` | `2` | Clone calling VM with Copy-on-Write (COW) memory (returns new CID) |
 | `DROP_TRUST` | `3` | Irrevocably surrender hardware trust and MMIO access |
-| `SPAWN` | `4` | Load a new guest binary and DTB into a child VM and start it |
+| `RUN` | `4` | Load a new guest binary and DTB into a child VM and start it |
 | `GET_INFO` | `5` | Retrieve VM metadata, quotas, architecture, and child count |
 | `SET_QUOTA` | `6` | Set or clamp RAM, VCPU, and descendant quotas |
-| `IPC_SEND` | `7` | Send a message payload to parent (`CID 0`) or child (`CID >= 2`) |
-| `IPC_RECV` | `8` | Read a message payload from the caller's inbox |
 | `POLL_EVENT` | `9` | Pop the oldest asynchronous event from the VM's event queue |
 | `GET_HV_INFO` | `10` | Retrieve hypervisor version, ABI version, host specs, and capabilities |
-| `SET_MANIFEST` | `11` | Stage an attenuated capability manifest for a child VM (`CID >= 2`) |
-| `GET_MANIFEST` | `12` | Retrieve the staged capability manifest for self (`CID 1`) or child (`CID >= 2`) |
+| `GET_MANIFEST` | `11` | Retrieve the staged capability manifest for self (`CID 1`) or child (`CID >= 2`) |
+| `SET_MANIFEST` | `12` | Stage an attenuated capability manifest for a child VM (`CID >= 2`) |
+| `MAP_CHILD_MEM` | `13` | Map a child VM's physical RAM region into parent Stage-2 GPA space for direct zero-copy access |
+| `UNMAP_CHILD_MEM` | `14` | Revoke foreign memory mapping from parent Stage-2 page tables |
+| `START` | `15` | Boot child VM virtual cores at specified entry point and DTB GPA |
+| `NET_SEND` | `16` | Transmit an Ethernet frame to a target child VM (`CID >= 2`), parent (`CID 0`), or broadcast (`CID 0` destination) |
+| `NET_RECV` | `17` | Retrieve an incoming Ethernet frame from the VM's receive ring buffer |
+| `NET_POLL` | `18` | Query the number of queued incoming Ethernet frames |
 
 ---
 
@@ -110,34 +113,25 @@ Terminates a target VM and recursively tears down all of its descendants.
 Relinquishes the current VCPU's time slice to allow other ready VCPUs to run.
 *   **Returns**: `SBI_SUCCESS` (`0`).
 
-#### `FORK` (`FID 2`)
-Clones the calling VM's address space using Stage-2 Copy-on-Write (COW) page 
-tables and duplicates its primary VCPU state.
-*   `a0` *(optional)*: Flags bitmask (`FORK_FLAG_UNTRUSTED = 1 << 0`). Passing 
-    `1` causes the child VM to immediately drop hardware trust before running.
-*   **Returns**: Error code in `a0`, new child Context ID (`>= 2`) in `a1`.
-
 #### `DROP_TRUST` (`FID 3`)
 Irrevocably revokes hardware trust for the calling VM, unmapping host physical 
 memory-mapped I/O (MMIO) and blocking direct interrupt routing.
 *   **Returns**: `SBI_SUCCESS` (`0`).
 
-#### `SPAWN` (`FID 4`)
+#### `RUN` (`FID 4`)
 Loads an Executable and Linkable Format (ELF) binary and an optional Device 
 Tree Blob (DTB) into a child VM's address space, resetting its primary VCPU 
 to the entry point.
-*   `a0`: Guest Physical Address (GPA) pointing to `SpawnArgs` struct.
+*   `a0`: Guest Physical Address (GPA) pointing to `RunArgs` struct.
 *   **Behavior**: When `child_id == 0`, the hypervisor atomically allocates a 
     new child VM and boots the image directly. When `child_id >= 2`, the 
     hypervisor resets and reboots the specified existing child VM.
-*   **Hardware Trust**: Spawned guest VMs are untrusted by default. Passing 
-    `SPAWN_FLAG_TRUSTED (1 << 0)` in `SpawnArgs.flags` grants hardware MMIO 
+*   **Hardware Trust**: Guest VMs are untrusted by default. Passing 
+    `RUN_FLAG_TRUSTED (1 << 0)` in `RunArgs.flags` grants hardware MMIO 
     access if and only if the caller is hardware-trusted. Untrusted callers 
     requesting trust receive `SBI_ERR_DENIED`.
 *   **Returns**: `SBI_SUCCESS` (`0`) in `a0` on success with the child CID in 
     `a1`, or an error code on failure.
-
-
 
 #### `GET_INFO` (`FID 5`)
 Queries execution state, resource limits, and metadata for the calling VM.
@@ -151,19 +145,6 @@ Applies resource ceilings to a target VM.
 *   **Permissions**: A VM may set quotas on direct children (`CID >= 2`) up 
     to its own ceiling, or lower its own quotas (`CID 1`) to sandbox itself. 
     Calls targeting `CID 0` (parent) return `SBI_ERR_DENIED`.
-
-#### `IPC_SEND` (`FID 7`)
-Transfers an Inter-Process Communication (IPC) message payload directly into 
-the inbox of a target VM.
-*   `a0`: GPA pointer to an `IpcSendArgs` struct.
-*   **Returns**: `SBI_SUCCESS` on delivery. Enqueues an `ipc_message` event in 
-    the recipient VM's event queue.
-
-#### `IPC_RECV` (`FID 8`)
-Retrieves an incoming IPC message from the caller's inbox ring buffer.
-*   `a0`: GPA pointer to an `IpcRecvArgs` struct.
-*   **Returns**: `value = 1` in `a1` if a message was retrieved, `value = 0` 
-    if the inbox was empty.
 
 #### `POLL_EVENT` (`FID 9`)
 Pops the oldest pending event from the VM's event queue.
@@ -179,19 +160,60 @@ hardware specifications, and feature capability flags.
 *   `a1`: Size of the `HypervisorInfo` buffer in bytes.
 *   **Returns**: `SBI_SUCCESS` (`0`) on success.
 
-#### `SET_MANIFEST` (`FID 11`)
+#### `GET_MANIFEST` (`FID 11`)
+Retrieves the staged capability manifest string from hypervisor memory for the
+calling VM (`CID 1`) or a direct child VM (`CID >= 2`).
+*   `a0`: GPA pointer to a `struct manifest_args`.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success, with `actual_len` populated in
+    the argument structure.
+
+#### `SET_MANIFEST` (`FID 12`)
 Stages an attenuated capability manifest string in hypervisor memory for a
 direct child VM (`CID >= 2`).
 *   `a0`: GPA pointer to a `struct manifest_args`.
 *   **Returns**: `SBI_SUCCESS` (`0`) on success, `SBI_ERR_DENIED` if not a direct
     parent, or `SBI_ERR_INVALID_PARAM` if the manifest exceeds 64 KiB.
 
-#### `GET_MANIFEST` (`FID 12`)
-Retrieves the staged capability manifest string from hypervisor memory for the
-calling VM (`CID 1`) or a direct child VM (`CID >= 2`).
-*   `a0`: GPA pointer to a `struct manifest_args`.
-*   **Returns**: `SBI_SUCCESS` (`0`) on success, with `actual_len` populated in
-    the argument structure.
+#### `MAP_CHILD_MEM` (`FID 13`)
+Maps a direct child VM's physical RAM region into the parent VM's Stage-2 GPA address
+space for zero-copy binary staging or direct shared-memory IPC.
+*   `a0`: Target child Context ID (`CID >= 2`).
+*   `a1`: Base GPA in child address space.
+*   `a2`: Destination GPA in parent address space.
+*   `a3`: Mapping size in bytes.
+*   `a4`: Permission flags.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success, or an error code on failure.
+
+#### `UNMAP_CHILD_MEM` (`FID 14`)
+Revokes a foreign child memory mapping from the parent VM's Stage-2 address space.
+*   `a0`: Parent GPA base address to unmap.
+*   `a1`: Unmapping size in bytes.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success.
+
+#### `START` (`FID 15`)
+Starts execution of a child VM's virtual cores at a specified entry point and DTB.
+*   `a0`: Target child Context ID (`CID >= 2`).
+*   `a1`: Initial entry point GPA.
+*   `a2`: Initial Device Tree Blob (DTB) GPA.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success.
+
+#### `NET_SEND` (`FID 16`)
+Transmits a raw Ethernet frame to a target child VM, parent VM, or broadcast.
+*   `a0`: GPA pointer to packet payload buffer.
+*   `a1`: Packet length in bytes (up to 1536 bytes).
+*   `a2`: Destination Context ID (`0` for broadcast, `1` or `parent` for parent, `2..N` for child).
+*   **Returns**: `SBI_SUCCESS` (`0`) on success.
+
+#### `NET_RECV` (`FID 17`)
+Retrieves the next pending Ethernet frame from the VM's receive ring buffer.
+*   `a0`: GPA pointer to destination receive buffer.
+*   `a1`: Capacity of destination receive buffer in bytes.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success with copied packet length in `a1`,
+    or `0` in `a1` if the receive queue is empty.
+
+#### `NET_POLL` (`FID 18`)
+Queries the number of unread Ethernet frames in the VM's receive ring buffer.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success with unread packet count in `a1`.
 
 ---
 
@@ -239,21 +261,20 @@ struct hypervisor_info {
 ### Capability Feature Flags
 *   `CAP_HARDWARE_VIRT` (`1 << 0`): Hardware RISC-V H-extension active.
 *   `CAP_STAGE2_PAGING` (`1 << 1`): Nested Stage-2 Sv39x4 hardware paging active.
-*   `CAP_COW_FORK` (`1 << 2`): Instant Copy-on-Write memory cloning enabled.
-*   `CAP_DYNAREC` (`1 << 3`): Transparent JIT cross-architecture emulation available.
-*   `CAP_INTER_VM_IPC` (`1 << 4`): Hypervisor-routed fast zero-copy IPC supported.
-*   `CAP_IOMMU` (`1 << 5`): Hardware Stage-2 DMA / IOMMU protection active.
+*   `CAP_DYNAREC` (`1 << 2`): Transparent JIT cross-architecture emulation available.
+*   `CAP_VIRTIO_VSOCK` (`1 << 3`): In-hypervisor zero-copy VirtIO-vsock (`AF_VSOCK`) socket networking active.
+*   `CAP_IOMMU` (`1 << 4`): Hardware Stage-2 DMA / IOMMU protection active.
 
-### `SpawnArgs`
+### `RunArgs`
 ```c
-struct spawn_args {
+struct run_args {
     unsigned long child_id;    /* Target child Context ID (0 = new child, >= 2 = reload) */
     unsigned long elf_ptr;     /* GPA pointer to ELF binary buffer */
     unsigned long elf_size;    /* Size of ELF binary in bytes */
     unsigned long dtb_ptr;     /* GPA pointer to DTB buffer (or 0) */
     unsigned long dtb_size;    /* Size of DTB in bytes */
     unsigned long target_arch; /* Target architecture enum */
-    unsigned long flags;       /* Flags: SPAWN_FLAG_TRUSTED (1 << 0) */
+    unsigned long flags;       /* Flags: RUN_FLAG_TRUSTED (1 << 0) */
 };
 ```
 
@@ -269,37 +290,19 @@ struct quota_args {
 };
 ```
 
-### `IpcSendArgs` and `IpcRecvArgs`
-```c
-struct ipc_send_args {
-    unsigned long target_cid; /* 0 for parent, >= 2 for child */
-    unsigned long data_ptr;   /* GPA pointer to payload buffer */
-    unsigned long data_len;   /* Length of payload (up to 4096 bytes) */
-};
-
-struct ipc_recv_args {
-    unsigned long sender_cid;         /* 0 for any, or specific sender CID */
-    unsigned long data_ptr;           /* GPA pointer to destination buffer */
-    unsigned long max_len;            /* Capacity of destination buffer */
-    unsigned long actual_len;         /* Output: Received payload size */
-    unsigned long actual_sender_cid;  /* Output: Sender CID */
-};
-```
-
 ### `Event` and `EventType`
 ```c
 enum event_type {
     EVENT_NONE             = 0,
     EVENT_CHILD_TERMINATED = 1,
     EVENT_CHILD_STOPPED    = 2,
-    EVENT_CHILD_SPAWNED    = 3,
-    EVENT_IPC_MESSAGE      = 4,
+    EVENT_CHILD_STARTED    = 3,
 };
 
 struct diosix_event {
     unsigned long cid;         /* Source Context ID */
     uint32_t      event_type;  /* Value from enum event_type */
-    uint32_t      exit_code;   /* Exit code or IPC message length */
+    uint32_t      exit_code;   /* Exit code */
     uint64_t      _reserved;   /* Alignment padding */
 };
 ```
@@ -323,15 +326,15 @@ calls to hypervisor SBI extensions via standard `ioctl` numbers:
 
 | IOCTL Name | Value | Description |
 | :--- | :--- | :--- |
-| `IOCTL_FORK` | `0x1001` | Forks current VM |
 | `IOCTL_DROP_TRUST` | `0x1002` | Relinquishes hardware trust |
-| `IOCTL_SPAWN` | `0x1003` | Loads ELF and boots child VM |
+| `IOCTL_RUN` | `0x1003` | Loads ELF and boots child VM |
 | `IOCTL_GET_INFO` | `0x1004` | Queries current VM info |
 | `IOCTL_SET_QUOTA` | `0x1005` | Updates resource quotas |
 | `IOCTL_TERMINATE` | `0x1006` | Terminates self or child VM |
 | `IOCTL_WAIT_EVENT` | `0x1008` | Blocks/polls for asynchronous events |
-| `IOCTL_IPC_SEND` | `0x1009` | Transmits an IPC message |
-| `IOCTL_IPC_RECV` | `0x100A` | Receives an IPC message |
 | `IOCTL_GET_HV_INFO` | `0x100B` | Queries hypervisor and host system info |
-| `IOCTL_SET_MANIFEST` | `0x100C` | Stages an attenuated manifest for a child VM |
-| `IOCTL_GET_MANIFEST` | `0x100D` | Reads the staged manifest from the hypervisor |
+| `IOCTL_GET_MANIFEST` | `0x100C` | Reads the staged manifest from the hypervisor |
+| `IOCTL_SET_MANIFEST` | `0x100D` | Stages an attenuated manifest for a child VM |
+| `IOCTL_MAP_CHILD_MEM` | `0x100E` | Maps child VM memory into parent address space |
+| `IOCTL_UNMAP_CHILD_MEM` | `0x100F` | Unmaps child VM foreign memory region |
+| `IOCTL_START` | `0x1010` | Starts child VM at specified entry point and DTB |

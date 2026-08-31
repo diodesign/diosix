@@ -218,12 +218,26 @@ pub fn build(b: *std.Build) !void {
     try qemu_args.append(b.allocator, b.fmt("{d}", .{smp_cores}));
     try qemu_args.append(b.allocator, "-m");
     try qemu_args.append(b.allocator, mem_size);
+    // Step to generate storage.img containing secondary guest VM images
+    const storage_img_path = "zig-out/storage.img";
+    const create_storage_cmd = b.addSystemCommand(&.{ "bash", "scripts/create_storage_disk.sh" });
+    create_storage_cmd.addArg(rootvm_elf_path);
+    create_storage_cmd.addArg(storage_img_path);
+    create_storage_cmd.addArg("256M");
+    create_storage_cmd.step.dependOn(&run_buildroot.step);
+
+    try qemu_args.append(b.allocator, "-drive");
+    try qemu_args.append(b.allocator, "file=" ++ storage_img_path ++ ",if=none,format=raw,id=hd0");
+    try qemu_args.append(b.allocator, "-device");
+    try qemu_args.append(b.allocator, "virtio-blk-device,drive=hd0");
+
     try qemu_args.append(b.allocator, "-bios");
     try qemu_args.append(b.allocator, "none");
     try qemu_args.append(b.allocator, "-kernel");
 
     const run_step = b.addSystemCommand(qemu_args.items);
     run_step.step.dependOn(b.getInstallStep());
+    run_step.step.dependOn(&create_storage_cmd.step);
 
     // the last argument to qemu is the kernel file to run
     run_step.addArtifactArg(vmdiosix);
@@ -285,4 +299,3 @@ pub fn build(b: *std.Build) !void {
     const integration_test_step = b.step("test-integration", "Run full-stack QEMU integration test suite");
     integration_test_step.dependOn(&run_integration_tests.step);
 }
-

@@ -11,6 +11,7 @@ const debug = @import("debug.zig");
 const scheduler = @import("scheduler.zig");
 const pcore = @import("pcore.zig");
 const physmem = @import("physmem.zig");
+const sv39x4 = @import("../hardware/native/cpu/riscv64/sv39x4.zig");
 const interface = @import("interface").sbi;
 
 const arch = @import("interface").riscv;
@@ -65,12 +66,14 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
         interface.EXT.IPI => handleIPI(vc, context, a0, a1),
         interface.EXT.RFENCE => handleRFENCE(vc, context, function, a0, a1),
         interface.EXT.LEGACY_CONSOLE_PUTCHAR => {
-            const c: u8 = @truncate(a0);
-            debug.putcharFromGuest(vc.guest_id, c);
+            if (vc.guest_id == 1) {
+                const c: u8 = @truncate(a0);
+                debug.putchar(c);
+            }
             // Legacy SBI v0.1 sbi_console_putchar does not return values in a0/a1.
         },
         interface.EXT.LEGACY_CONSOLE_GETCHAR => {
-            const char_val = @as(isize, debug.getchar(vc.guest_id));
+            const char_val: isize = if (vc.guest_id == 1) @as(isize, debug.getchar()) else -1;
             context[@intFromEnum(arch.Register.a0)] = @bitCast(char_val);
             if (vc.exec_path == .native) {
                 vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = @bitCast(char_val);
@@ -225,8 +228,6 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
                     if (target_vc.exec_path.emulated.vcpu) |v| {
                         v.setMipBit(MIP_SSIP_BIT); // Set SSIP
                     }
-                } else {
-                    target_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
                 }
                 _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
                 if (target_vc.tryWake()) {
@@ -253,8 +254,6 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
                             if (target_vc.exec_path.emulated.vcpu) |v| {
                                 v.setMipBit(MIP_SSIP_BIT); // Set SSIP
                             }
-                        } else {
-                            target_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
                         }
                         _ = @atomicRmw(bool, &target_vc.pending_ipi, .Xchg, true, .acq_rel);
                         var ipi_sent = false;
@@ -405,12 +404,45 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             riscv.sfenceVma();
         }
         riscv.getCPUContext().gstage_dirty = false;
+
+        // Broadcast IPI to remote harts in the mask so they also flush their TLBs
+        if (hart_mask_base == std.math.maxInt(usize)) {
+            broadcastPhysicalIPI();
+        } else {
+            for (0..@bitSizeOf(usize)) |bit_pos| {
+                if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
+                    const hart_id = hart_mask_base + bit_pos;
+                    if (hart_id < riscv.cpu_to_hart_map.len) {
+                        if (riscv.CLINT.msip(riscv.cpu_to_hart_map[hart_id])) |ptr| {
+                            ptr.* = 1;
+                        }
+                    }
+                }
+            }
+        }
     }
     setResult(vc, context, SBI_SUCCESS, 0);
 }
 
+fn deliverPacket(target: *guest.Guest, pkt_data: []const u8) void {
+    if (target.net_rx.push(pkt_data)) {
+        var it = target.vcores.start;
+        while (it) |node| {
+            const target_vc = node.contents;
+            @atomicStore(bool, &target_vc.pending_ipi, true, .release);
+            if (target_vc.exec_path == .native) {
+                target_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
+            }
+            if (target_vc.tryWake()) {
+                scheduler.queue(target_vc);
+            }
+            it = node.next;
+        }
+        broadcastPhysicalIPI();
+    }
+}
+
 fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
-    _ = a2;
     const g = vc.getGuest();
     switch (function) {
         interface.DIOSIX.TERMINATE => {
@@ -438,26 +470,6 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
         interface.DIOSIX.YIELD => {
             scheduler.yield(vc);
         },
-        interface.DIOSIX.FORK => {
-            const flags = a0;
-            const child = g.fork() catch |err| {
-                debug.printf("SBI: Diosix Fork failed: {s}\n", .{@errorName(err)});
-                setResult(vc, context, SBI_ERR_FAILED, 0);
-                return;
-            };
-
-            if ((flags & interface.ForkFlags.UNTRUSTED) != 0) {
-                child.dropTrust();
-            }
-
-            // Register all child vcores with the scheduler.
-            var it_vcore = child.vcores.start;
-            while (it_vcore) |node| {
-                scheduler.queue(node.contents);
-                it_vcore = node.next;
-            }
-            setResult(vc, context, SBI_SUCCESS, child.local_cid);
-        },
         interface.DIOSIX.DROP_TRUST => {
             g.dropTrust();
             setResult(vc, context, SBI_SUCCESS, 0);
@@ -466,7 +478,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             const info_gpa = a0;
             const info_len = a1;
 
-            if (info_len < @sizeOf(interface.GuestInfo)) {
+            if (info_len != 0 and info_len < @sizeOf(interface.GuestInfo)) {
                 setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
                 return;
             }
@@ -475,7 +487,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 const info_ptr: *interface.GuestInfo = @ptrFromInt(hpa);
                 info_ptr.* = .{
                     .guest_id = g.id,
-                    .parent_id = if (g.parent) |p| p.id else 0,
+                    .parent_id = if (g.parent != null) guest.CID_PARENT else 0,
                     .is_trusted = if (g.is_trusted) 1 else 0,
                     .is_root = if (g.is_root) 1 else 0,
                     .target_arch = @intFromEnum(g.target_arch),
@@ -493,24 +505,24 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             }
         },
 
-        interface.DIOSIX.SPAWN => {
+        interface.DIOSIX.RUN => {
             if (!g.is_trusted) {
                 setResult(vc, context, SBI_ERR_DENIED, 0);
                 return;
             }
             if (g.space.translateGPA(a0) catch null) |args_hpa| {
-                const args: *const interface.SpawnArgs = @ptrFromInt(args_hpa);
+                const args: *const interface.RunArgs = @ptrFromInt(args_hpa);
                 // Look up child by CID (>= CID_FIRST_CHILD) or create a fresh child on the fly (child_id == 0)
-                const child_to_spawn: ?*guest.Guest = if (args.child_id >= guest.CID_FIRST_CHILD)
+                const child_to_run: ?*guest.Guest = if (args.child_id >= guest.CID_FIRST_CHILD)
                     g.getGuestByCid(args.child_id)
                 else if (args.child_id == 0)
-                    g.createChild((args.flags & interface.SpawnFlags.TRUSTED) != 0, .riscv64, 1) catch null
+                    g.createChild((args.flags & interface.RunFlags.TRUSTED) != 0, .riscv64, 1) catch null
                 else
                     null;
 
-                if (child_to_spawn) |child| {
-                    // Set trust level: default is untrusted unless SPAWN_FLAG_TRUSTED is explicitly passed
-                    if ((args.flags & interface.SpawnFlags.TRUSTED) != 0) {
+                if (child_to_run) |child| {
+                    // Set trust level: default is untrusted unless RunFlags.TRUSTED is explicitly passed
+                    if ((args.flags & interface.RunFlags.TRUSTED) != 0) {
                         if (!g.is_trusted) {
                             setResult(vc, context, SBI_ERR_DENIED, 0);
                             return;
@@ -531,9 +543,14 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                         riscv.sfenceVma();
                     }
 
+                    if (args.elf_size == 0) {
+                        setResult(vc, context, SBI_SUCCESS, child.local_cid);
+                        return;
+                    }
+
                     if (g.space.translateGPA(args.elf_ptr) catch null) |elf_hpa| {
                         const elf_data = @as([*]const u8, @ptrFromInt(elf_hpa))[0..args.elf_size];
-                        
+
                         // 3. Detect and update target architecture if necessary
                         if (loader.Loader.detectArch(elf_data) catch null) |detected_arch| {
                             child.target_arch = detected_arch;
@@ -541,13 +558,13 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
 
                         // 4. Load the ELF binary segments into child GPA space
                         const entry_point = loader.Loader.load(child, elf_data) catch |err| {
-                            debug.printf("SBI: Spawn loader failed: {s}\n", .{@errorName(err)});
+                            debug.printf("SBI: Run loader failed: {s}\n", .{@errorName(err)});
                             setResult(vc, context, SBI_ERR_FAILED, 0);
                             return;
                         };
 
                         // 5. Reset all child virtual cores (Hart 0 = .ready, Hart 1..N = .stopped)
-                        child.resetForSpawn(entry_point, args.dtb_ptr);
+                        child.resetForRun(entry_point, args.dtb_ptr);
 
                         // 6. Enqueue only the primary bootstrap core (Hart 0) into scheduler
                         if (child.vcores.start) |vc_node| {
@@ -561,8 +578,6 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 } else {
                     setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
                 }
-
-
             } else {
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
             }
@@ -601,54 +616,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
             }
         },
-        interface.DIOSIX.IPC_SEND => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const sargs: *const interface.IpcSendArgs = @ptrFromInt(hpa);
-                if (sargs.data_len == 0 or sargs.data_len > guest.max_ipc_msg_len) {
-                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                    return;
-                }
-                if (g.space.translateGPA(sargs.data_ptr) catch null) |data_hpa| {
-                    const data_slice: []const u8 = @as([*]const u8, @ptrFromInt(data_hpa))[0..sargs.data_len];
-                    g.sendIpc(sargs.target_cid, data_slice) catch |err| {
-                        switch (err) {
-                            error.InvalidParam => setResult(vc, context, SBI_ERR_INVALID_PARAM, 0),
-                            error.QueueFull => setResult(vc, context, SBI_ERR_FAILED, 0),
-                        }
-                        return;
-                    };
-                    setResult(vc, context, SBI_SUCCESS, 0);
-                } else {
-                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-                }
-            } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
-        },
-
-        interface.DIOSIX.IPC_RECV => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const rargs: *interface.IpcRecvArgs = @ptrFromInt(hpa);
-                if (g.inbox.pop(rargs.sender_cid)) |msg| {
-                    const copy_len = @min(rargs.max_len, msg.len);
-                    if (g.space.translateGPA(rargs.data_ptr) catch null) |data_hpa| {
-                        const dst_slice: [*]u8 = @ptrFromInt(data_hpa);
-                        @memcpy(dst_slice[0..copy_len], msg.data[0..copy_len]);
-                        rargs.actual_len = copy_len;
-                        rargs.actual_sender_cid = msg.sender_cid;
-                        setResult(vc, context, SBI_SUCCESS, 1);
-                    } else {
-                        setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-                    }
-                } else {
-                    setResult(vc, context, SBI_SUCCESS, 0);
-                }
-            } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
-        },
         interface.DIOSIX.GET_HV_INFO => {
-
             const buf_gpa = a0;
             const buf_len = a1;
             if (buf_len < @sizeOf(interface.HypervisorInfo)) {
@@ -669,9 +637,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 const copy_len = @min(rev_str.len, 15);
                 @memcpy(info.build_commit[0..copy_len], rev_str[0..copy_len]);
 
-                info.features = interface.HypervisorFeature.COW_FORK |
-                    interface.HypervisorFeature.DYNAREC |
-                    interface.HypervisorFeature.INTER_VM_IPC;
+                info.features = interface.HypervisorFeature.DYNAREC | interface.HypervisorFeature.VIRTIO_VSOCK;
 
                 if (!builtin.is_test and riscv.hasHExtension()) {
                     info.features |= interface.HypervisorFeature.HARDWARE_VIRT |
@@ -682,7 +648,6 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 info.host_timer_freq_hz = interface.HOST_TIMER_FREQ_HZ;
                 info.host_total_ram_kb = @intCast(physmem.getTotalRamBytes() / 1024);
                 info.host_free_ram_kb = @intCast(physmem.getFreeRamBytes() / 1024);
-
 
                 info_ptr.* = info;
                 setResult(vc, context, SBI_SUCCESS, 0);
@@ -748,13 +713,165 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
             }
         },
+        interface.DIOSIX.MAP_CHILD_MEM => {
+            // Security Shield 1: Caller must be trusted / root or ancestor
+            if (!g.is_trusted and !g.is_root) {
+                setResult(vc, context, SBI_ERR_DENIED, 0);
+                return;
+            }
+            if (g.space.translateGPA(a0) catch null) |hpa| {
+                const margs: *const interface.MapChildMemArgs = @ptrFromInt(hpa);
+                const target_guest = g.getGuestByCid(margs.child_id);
+                if (target_guest) |child| {
+                    // Security Shield 2: Caller must be direct parent or ancestor of child
+                    if (child == g or (child.parent != g and !g.is_root)) {
+                        setResult(vc, context, SBI_ERR_DENIED, 0);
+                        return;
+                    }
+                    if (margs.size == 0 or (margs.size % physmem.PageSize) != 0) {
+                        setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                        return;
+                    }
+                    // Limit foreign mapping size to 512MB per call for safety
+                    if (margs.size > 512 * 1024 * 1024) {
+                        setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                        return;
+                    }
+
+                    const parent_rwx = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
+                    var offset: usize = 0;
+                    while (offset < margs.size) : (offset += physmem.PageSize) {
+                        const cur_child_gpa = margs.child_gpa + offset;
+                        const cur_parent_gpa = margs.parent_gpa + offset;
+
+                        // Ensure child page exists (allocate on demand if needed)
+                        const child_hpa = child.space.translateGPA(cur_child_gpa) catch blk: {
+                            const new_page = physmem.allocPage() catch {
+                                setResult(vc, context, SBI_ERR_FAILED, 0);
+                                return;
+                            };
+                            @memset(@as([*]u8, @ptrFromInt(new_page))[0..physmem.PageSize], 0);
+                            const child_pte_flags = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
+                            child.space.map(cur_child_gpa, new_page, physmem.PageSize, child_pte_flags) catch {
+                                setResult(vc, context, SBI_ERR_FAILED, 0);
+                                return;
+                            };
+                            break :blk new_page;
+                        };
+
+                        // Map child_hpa into parent's Stage-2 page table
+                        g.space.map(cur_parent_gpa, child_hpa, physmem.PageSize, parent_rwx) catch {
+                            setResult(vc, context, SBI_ERR_FAILED, 0);
+                            return;
+                        };
+                    }
+
+                    riscv.hfenceGvma();
+                    setResult(vc, context, SBI_SUCCESS, margs.size);
+                } else {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                }
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.UNMAP_CHILD_MEM => {
+            if (!g.is_trusted and !g.is_root) {
+                setResult(vc, context, SBI_ERR_DENIED, 0);
+                return;
+            }
+            if (g.space.translateGPA(a0) catch null) |hpa| {
+                const uargs: *const interface.UnmapChildMemArgs = @ptrFromInt(hpa);
+                if (uargs.size == 0 or (uargs.size % physmem.PageSize) != 0) {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                }
+                g.space.unmap(uargs.parent_gpa, uargs.size);
+                riscv.hfenceGvma();
+                setResult(vc, context, SBI_SUCCESS, 0);
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.START => {
+            if (!g.is_trusted) {
+                setResult(vc, context, SBI_ERR_DENIED, 0);
+                return;
+            }
+            if (g.space.translateGPA(a0) catch null) |hpa| {
+                const sargs: *const interface.StartArgs = @ptrFromInt(hpa);
+                const target_guest = g.getGuestByCid(sargs.child_id);
+                if (target_guest) |child| {
+                    child.resetForRun(sargs.entry_point, sargs.dtb_ptr);
+                    if (child.vcores.start) |vc_node| {
+                        scheduler.queue(vc_node.contents);
+                        broadcastPhysicalIPI();
+                    }
+                    setResult(vc, context, SBI_SUCCESS, child.local_cid);
+                } else {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                }
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.NET_SEND => {
+            if (g.space.translateGPA(a0) catch null) |hpa| {
+                const pkt_len = @min(a1, guest.MAX_PACKET_LEN);
+                if (pkt_len == 0) {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                }
+                const pkt_data = @as([*]const u8, @ptrFromInt(hpa))[0..pkt_len];
+                const dest_cid = a2;
+
+                if (dest_cid == 0) {
+                    // Broadcast packet: send to all peers
+                    var it = g.children.start;
+                    while (it) |node| {
+                        deliverPacket(node.contents, pkt_data);
+                        it = node.next;
+                    }
+                    if (g.parent) |p| {
+                        deliverPacket(p, pkt_data);
+                    }
+                } else if (dest_cid == guest.CID_PARENT or (dest_cid == 1 and !g.is_root)) {
+                    if (g.parent) |p| {
+                        deliverPacket(p, pkt_data);
+                    }
+                } else if (dest_cid >= guest.CID_FIRST_CHILD) {
+                    if (g.getGuestByCid(dest_cid)) |target| {
+                        deliverPacket(target, pkt_data);
+                    } else if (g.parent) |p| {
+                        if (p.getGuestByCid(dest_cid)) |target| {
+                            deliverPacket(target, pkt_data);
+                        }
+                    }
+                }
+                setResult(vc, context, SBI_SUCCESS, 0);
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.NET_RECV => {
+            if (g.space.translateGPA(a0) catch null) |hpa| {
+                const max_len = @min(a1, guest.MAX_PACKET_LEN);
+                const out_buf = @as([*]u8, @ptrFromInt(hpa))[0..max_len];
+                if (g.net_rx.pop(out_buf)) |copied| {
+                    setResult(vc, context, SBI_SUCCESS, copied);
+                } else {
+                    setResult(vc, context, SBI_SUCCESS, 0);
+                }
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            }
+        },
+        interface.DIOSIX.NET_POLL => {
+            setResult(vc, context, SBI_SUCCESS, g.net_rx.count);
+        },
         else => setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0),
     }
 }
-
-
-
-
 
 fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
     _ = sub_idx;
@@ -871,6 +988,10 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
     const g = vc.getGuest();
     switch (function) {
         interface.DBCN.CONSOLE_WRITE => {
+            if (vc.guest_id != 1) {
+                setResult(vc, context, SBI_SUCCESS, a0);
+                return;
+            }
             // Cap bytes-per-call to prevent a guest from monopolizing the
             // hypervisor in this loop. The guest can make multiple calls.
             const num_bytes = if (a0 > DBCN_MAX_WRITE_BYTES) DBCN_MAX_WRITE_BYTES else a0;
@@ -894,12 +1015,14 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
                 written += 1;
 
                 if (buf_idx == buf.len) {
-                    debug.writeFromGuest(vc.guest_id, buf[0..buf_idx]);
+                    if (vc.guest_id == 1) {
+                        debug.write(buf[0..buf_idx]);
+                    }
                     buf_idx = 0;
                 }
             }
-            if (buf_idx > 0) {
-                debug.writeFromGuest(vc.guest_id, buf[0..buf_idx]);
+            if (buf_idx > 0 and vc.guest_id == 1) {
+                debug.write(buf[0..buf_idx]);
             }
             setResult(vc, context, SBI_SUCCESS, written);
         },
@@ -908,7 +1031,7 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
             const gpa: usize = (a1 & RV32_WORD_MASK) | ((@as(usize, @intCast(a2)) & RV32_WORD_MASK) << RV32_HIGH_SHIFT);
             var read: usize = 0;
             while (read < num_bytes) : (read += 1) {
-                const c = debug.getchar(vc.guest_id);
+                const c = if (vc.guest_id == 1) debug.getchar() else -1;
                 if (c < 0) break;
                 const target_addr = gpa + read;
                 if (g.space.translateGPA(target_addr)) |hpa| {
@@ -919,10 +1042,11 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
                 }
             }
             setResult(vc, context, SBI_SUCCESS, read);
-
         },
         interface.DBCN.CONSOLE_WRITE_BYTE => {
-            debug.putcharFromGuest(vc.guest_id, @truncate(a0));
+            if (vc.guest_id == 1) {
+                debug.putchar(@truncate(a0));
+            }
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         else => setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0),
@@ -958,14 +1082,13 @@ fn terminateOrRestart(g: *guest.Guest, exit_code: usize) void {
     }
 }
 
-
 /// Send a physical IPI to all other physical cores to wake them from WFI.
 /// This is necessary when a WFI-blocked vcore is woken and queued: since
 /// running_on_cpu is null for blocked vcores, we can't target a specific
 /// physical core. Broadcasting ensures an idle core picks up the vcore.
 fn broadcastPhysicalIPI() void {
     const my_hart = riscv.getCPUContext().hardware_hart_id;
-    for (0..riscv.MAX_PHYS_CORES) |hw_hart| {
+    for (riscv.cpu_to_hart_map) |hw_hart| {
         if (hw_hart == my_hart) continue; // Don't IPI ourselves
         if (riscv.CLINT.msip(hw_hart)) |ptr| {
             ptr.* = 1;
@@ -1041,6 +1164,3 @@ test "SBI Diosix hypervisor extension get info and drop trust" {
     try testing.expectEqual(@as(usize, 0), ctx[@intFromEnum(arch.Register.a0)]);
     try testing.expect(!g.is_trusted);
 }
-
-
-

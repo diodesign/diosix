@@ -54,7 +54,7 @@ mkdir -p "$(dirname "$OUT_FILE")"
 mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/guest-supervisor/* tools/driver/diosix.c 2>/dev/null) | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/driver/diosix.c 2>/dev/null) | sha256sum | cut -d' ' -f1)
 
 write_rootvm_s() {
     if [ -n "$ROOTVM_S_PATH" ]; then
@@ -91,24 +91,16 @@ log_info "Config profile      : $(basename "$CONFIG_FILE")"
 log_info "Parallel jobs       : $(nproc) host CPU cores"
 log_info "Destination ELF     : $OUT_FILE"
 
-# 2. Build Guest Utilities & Guest Supervisor Payloads
-log_step "[1/5] Cross-compiling guest management tools (diosix-ctl / dsx) and guest supervisors..."
+# 2. Build Guest Management Utilities
+log_step "[1/5] Cross-compiling guest management tools (diosix-ctl / dsx)..."
 DYNAMIC_OVERLAY="$(realpath "$BUILDROOT_DIR")/overlay-dynamic"
-mkdir -p "$DYNAMIC_OVERLAY/usr/sbin" "$DYNAMIC_OVERLAY/boot"
+mkdir -p "$DYNAMIC_OVERLAY/usr/sbin"
 
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
 zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools/diosix-ctl/src/main.zig -Minterface=hypervisor/interface/lib.zig --name diosix-ctl -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
-
-log_info "Compiling guest supervisor ELF binaries for ${BOLD}${GUEST_ARCH}${RESET}..."
-SUPERVISOR_TARGET="${GUEST_ARCH}-freestanding-none"
-zig build-exe -target "$SUPERVISOR_TARGET" -mcmodel=medany -O ReleaseSmall -Ttools/guest-supervisor/linker.ld --dep interface -Mroot=tools/guest-supervisor/main.zig -Minterface=hypervisor/interface/lib.zig --name user-supervisor.elf -femit-bin="$DYNAMIC_OVERLAY/boot/user-supervisor.elf" >/dev/null 2>&1
-cp "$DYNAMIC_OVERLAY/boot/user-supervisor.elf" "$DYNAMIC_OVERLAY/boot/sys-supervisor.elf"
-mkdir -p tools/overlay-common/boot
-cp "$DYNAMIC_OVERLAY/boot/user-supervisor.elf" tools/overlay-common/boot/user-supervisor.elf
-cp "$DYNAMIC_OVERLAY/boot/sys-supervisor.elf" tools/overlay-common/boot/sys-supervisor.elf
-log_ok "Installed diosix-ctl, 'dsx', and guest supervisors in /boot/."
+log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
 
 # 3. BuildRoot Workspace Setup
 log_step "[2/5] Preparing Buildroot workspace..."
@@ -135,6 +127,9 @@ fi
 make -C "$BUILDROOT_DIR" BR2_DEFCONFIG="$ABS_CONFIG" defconfig >/dev/null
 
 STATIC_OVERLAY=$(realpath tools/overlay-common)
+SHARED_DL_DIR="$(realpath "$(dirname "$BUILDROOT_DIR")")/dl"
+mkdir -p "$SHARED_DL_DIR"
+echo "BR2_DL_DIR=\"$SHARED_DL_DIR\"" >> "$BUILDROOT_DIR/.config"
 echo "BR2_ROOTFS_OVERLAY=\"$STATIC_OVERLAY $DYNAMIC_OVERLAY\"" >> "$BUILDROOT_DIR/.config"
 
 GETTY_PORT="hvc0"
@@ -191,8 +186,10 @@ log_step "[5/5] Compiling Linux kernel and Root VM packages (using $(nproc) para
 
 START_TIME=$(date +%s)
 
-TOTAL_PACKAGES=$(make -C "$BUILDROOT_DIR" show-targets 2>/dev/null | wc -w || echo "44")
-[ "$TOTAL_PACKAGES" -lt 1 ] && TOTAL_PACKAGES=44
+TOTAL_PACKAGES=$(make -s -C "$BUILDROOT_DIR" show-targets 2>/dev/null | tr '\n' ' ' | awk '{print NF}')
+if [ -z "$TOTAL_PACKAGES" ] || [ "$TOTAL_PACKAGES" -lt 1 ] 2>/dev/null; then
+    TOTAL_PACKAGES=44
+fi
 
 BUILD_LOG="$BUILDROOT_DIR/output/build/build-time.log"
 
@@ -230,7 +227,8 @@ while kill -0 "$MAKE_PID" 2>/dev/null; do
     DONE_COUNT=0
     CUR_PKG="toolchain"
     if [ -f "$BUILD_LOG" ]; then
-        DONE_COUNT=$(grep -E ':end  :install-target' "$BUILD_LOG" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+        DONE_COUNT=$(grep -E ':end  :install-target' "$BUILD_LOG" 2>/dev/null | wc -l | tr -dc '0-9' || echo "0")
+        [ -z "$DONE_COUNT" ] && DONE_COUNT=0
         LATEST_LINE=$(tail -n 1 "$BUILD_LOG" 2>/dev/null || true)
         if [ -n "$LATEST_LINE" ]; then
             CUR_PKG=$(echo "$LATEST_LINE" | awk -F':' '{print $NF}' | tr -d ' ' || echo "compiling")
@@ -265,7 +263,8 @@ while kill -0 "$MAKE_PID" 2>/dev/null; do
 
     EXTRA=""
     if [[ "$CUR_PKG" =~ linux ]]; then
-        OBJ_COUNT=$(find "$BUILDROOT_DIR/output/build/linux-7.0.10" -name "*.o" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+        OBJ_COUNT=$(find "$BUILDROOT_DIR/output/build/linux-7.0.10" -name "*.o" 2>/dev/null | wc -l | tr -dc '0-9' || echo "0")
+        [ -z "$OBJ_COUNT" ] && OBJ_COUNT=0
         if [ -n "$OBJ_COUNT" ] && [ "$OBJ_COUNT" -gt 0 ] 2>/dev/null; then
             EXTRA=" ($OBJ_COUNT kernel objects)"
         fi

@@ -113,87 +113,212 @@ pub fn encodeJ(opcode: u7, rd: u5, imm: i21) u32 {
 }
 
 // ---- Specific R-Type RV64 Instructions ----
-pub fn add(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x0, rs1, rs2, 0x00); }
-pub fn sub(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x0, rs1, rs2, 0x20); }
-pub fn sll(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x1, rs1, rs2, 0x00); }
-pub fn slt(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x2, rs1, rs2, 0x00); }
-pub fn sltu(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x3, rs1, rs2, 0x00); }
-pub fn xor_(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x4, rs1, rs2, 0x00); }
-pub fn srl(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x5, rs1, rs2, 0x00); }
-pub fn sra(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x5, rs1, rs2, 0x20); }
-pub fn or_(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x6, rs1, rs2, 0x00); }
-pub fn and_(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x7, rs1, rs2, 0x00); }
+pub fn add(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x0, rs1, rs2, 0x00);
+}
+pub fn sub(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x0, rs1, rs2, 0x20);
+}
+pub fn sll(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x1, rs1, rs2, 0x00);
+}
+pub fn slt(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x2, rs1, rs2, 0x00);
+}
+pub fn sltu(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x3, rs1, rs2, 0x00);
+}
+pub fn xor_(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x4, rs1, rs2, 0x00);
+}
+pub fn srl(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x5, rs1, rs2, 0x00);
+}
+pub fn sra(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x5, rs1, rs2, 0x20);
+}
+pub fn or_(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x6, rs1, rs2, 0x00);
+}
+pub fn and_(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x7, rs1, rs2, 0x00);
+}
 
 // ---- RV64 32-bit Word Variant R-Type Instructions ----
-pub fn addw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x0, rs1, rs2, 0x00); }
-pub fn subw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x0, rs1, rs2, 0x20); }
-pub fn sllw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x1, rs1, rs2, 0x00); }
-pub fn srlw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x00); }
-pub fn sraw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x20); }
+pub fn addw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x0, rs1, rs2, 0x00);
+}
+pub fn subw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x0, rs1, rs2, 0x20);
+}
+pub fn sllw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x1, rs1, rs2, 0x00);
+}
+pub fn srlw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x00);
+}
+pub fn sraw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x20);
+}
 
 // ---- RV64 M-Extension Instructions ----
-pub fn mul(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x0, rs1, rs2, 0x01); }
-pub fn mulw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x0, rs1, rs2, 0x01); }
-pub fn div(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x4, rs1, rs2, 0x01); }
-pub fn divw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x4, rs1, rs2, 0x01); }
-pub fn divu(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x5, rs1, rs2, 0x01); }
-pub fn divuw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x01); }
-pub fn rem(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x6, rs1, rs2, 0x01); }
-pub fn remw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x6, rs1, rs2, 0x01); }
-pub fn remu(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op), rd, 0x7, rs1, rs2, 0x01); }
-pub fn remuw(rd: u5, rs1: u5, rs2: u5) u32 { return encodeR(@intFromEnum(Opcode.op_32), rd, 0x7, rs1, rs2, 0x01); }
+pub fn mul(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x0, rs1, rs2, 0x01);
+}
+pub fn mulw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x0, rs1, rs2, 0x01);
+}
+pub fn div(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x4, rs1, rs2, 0x01);
+}
+pub fn divw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x4, rs1, rs2, 0x01);
+}
+pub fn divu(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x5, rs1, rs2, 0x01);
+}
+pub fn divuw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x5, rs1, rs2, 0x01);
+}
+pub fn rem(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x6, rs1, rs2, 0x01);
+}
+pub fn remw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x6, rs1, rs2, 0x01);
+}
+pub fn remu(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op), rd, 0x7, rs1, rs2, 0x01);
+}
+pub fn remuw(rd: u5, rs1: u5, rs2: u5) u32 {
+    return encodeR(@intFromEnum(Opcode.op_32), rd, 0x7, rs1, rs2, 0x01);
+}
 
 // ---- Specific I-Type RV64 Instructions ----
-pub fn addi(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x0, rs1, imm); }
-pub fn slti(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x2, rs1, imm); }
-pub fn sltiu(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x3, rs1, imm); }
-pub fn xori(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x4, rs1, imm); }
-pub fn ori(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x6, rs1, imm); }
-pub fn andi(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x7, rs1, imm); }
-pub fn slli(rd: u5, rs1: u5, shamt: u6) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x1, rs1, @as(i12, shamt)); }
-pub fn srli(rd: u5, rs1: u5, shamt: u6) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x5, rs1, @as(i12, shamt)); }
-pub fn srai(rd: u5, rs1: u5, shamt: u6) u32 { return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x5, rs1, @as(i12, shamt) | 0x400); }
+pub fn addi(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x0, rs1, imm);
+}
+pub fn slti(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x2, rs1, imm);
+}
+pub fn sltiu(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x3, rs1, imm);
+}
+pub fn xori(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x4, rs1, imm);
+}
+pub fn ori(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x6, rs1, imm);
+}
+pub fn andi(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x7, rs1, imm);
+}
+pub fn slli(rd: u5, rs1: u5, shamt: u6) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x1, rs1, @as(i12, shamt));
+}
+pub fn srli(rd: u5, rs1: u5, shamt: u6) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x5, rs1, @as(i12, shamt));
+}
+pub fn srai(rd: u5, rs1: u5, shamt: u6) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm), rd, 0x5, rs1, @as(i12, shamt) | 0x400);
+}
 
 // ---- RV64 32-bit Word Variant I-Type Instructions ----
-pub fn addiw(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x0, rs1, imm); }
-pub fn slliw(rd: u5, rs1: u5, shamt: u5) u32 { return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x1, rs1, @as(i12, shamt)); }
-pub fn srliw(rd: u5, rs1: u5, shamt: u5) u32 { return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x5, rs1, @as(i12, shamt)); }
-pub fn sraiw(rd: u5, rs1: u5, shamt: u5) u32 { return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x5, rs1, @as(i12, shamt) | 0x400); }
+pub fn addiw(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x0, rs1, imm);
+}
+pub fn slliw(rd: u5, rs1: u5, shamt: u5) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x1, rs1, @as(i12, shamt));
+}
+pub fn srliw(rd: u5, rs1: u5, shamt: u5) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x5, rs1, @as(i12, shamt));
+}
+pub fn sraiw(rd: u5, rs1: u5, shamt: u5) u32 {
+    return encodeI(@intFromEnum(Opcode.op_imm_32), rd, 0x5, rs1, @as(i12, shamt) | 0x400);
+}
 
 // ---- Load & Store Instructions ----
-pub fn lb(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.load), rd, 0x0, rs1, imm); }
-pub fn lh(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.load), rd, 0x1, rs1, imm); }
-pub fn lw(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.load), rd, 0x2, rs1, imm); }
-pub fn ld(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.load), rd, 0x3, rs1, imm); }
-pub fn lbu(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.load), rd, 0x4, rs1, imm); }
-pub fn lhu(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.load), rd, 0x5, rs1, imm); }
-pub fn lwu(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.load), rd, 0x6, rs1, imm); }
+pub fn lb(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.load), rd, 0x0, rs1, imm);
+}
+pub fn lh(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.load), rd, 0x1, rs1, imm);
+}
+pub fn lw(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.load), rd, 0x2, rs1, imm);
+}
+pub fn ld(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.load), rd, 0x3, rs1, imm);
+}
+pub fn lbu(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.load), rd, 0x4, rs1, imm);
+}
+pub fn lhu(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.load), rd, 0x5, rs1, imm);
+}
+pub fn lwu(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.load), rd, 0x6, rs1, imm);
+}
 
-pub fn sb(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(@intFromEnum(Opcode.store), 0x0, rs1, rs2, imm); }
-pub fn sh(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(@intFromEnum(Opcode.store), 0x1, rs1, rs2, imm); }
-pub fn sw(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(@intFromEnum(Opcode.store), 0x2, rs1, rs2, imm); }
-pub fn sd(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(@intFromEnum(Opcode.store), 0x3, rs1, rs2, imm); }
+pub fn sb(rs1: u5, rs2: u5, imm: i12) u32 {
+    return encodeS(@intFromEnum(Opcode.store), 0x0, rs1, rs2, imm);
+}
+pub fn sh(rs1: u5, rs2: u5, imm: i12) u32 {
+    return encodeS(@intFromEnum(Opcode.store), 0x1, rs1, rs2, imm);
+}
+pub fn sw(rs1: u5, rs2: u5, imm: i12) u32 {
+    return encodeS(@intFromEnum(Opcode.store), 0x2, rs1, rs2, imm);
+}
+pub fn sd(rs1: u5, rs2: u5, imm: i12) u32 {
+    return encodeS(@intFromEnum(Opcode.store), 0x3, rs1, rs2, imm);
+}
 
 // ---- Floating-Point Load & Store Instructions ----
-pub fn flw(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(0x07, rd, 0x2, rs1, imm); }
-pub fn fld(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(0x07, rd, 0x3, rs1, imm); }
-pub fn fsw(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(0x27, 0x2, rs1, rs2, imm); }
-pub fn fsd(rs1: u5, rs2: u5, imm: i12) u32 { return encodeS(0x27, 0x3, rs1, rs2, imm); }
-
+pub fn flw(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(0x07, rd, 0x2, rs1, imm);
+}
+pub fn fld(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(0x07, rd, 0x3, rs1, imm);
+}
+pub fn fsw(rs1: u5, rs2: u5, imm: i12) u32 {
+    return encodeS(0x27, 0x2, rs1, rs2, imm);
+}
+pub fn fsd(rs1: u5, rs2: u5, imm: i12) u32 {
+    return encodeS(0x27, 0x3, rs1, rs2, imm);
+}
 
 // ---- Branch & Control Flow Instructions ----
-pub fn beq(rs1: u5, rs2: u5, imm: i13) u32 { return encodeB(@intFromEnum(Opcode.branch), 0x0, rs1, rs2, imm); }
-pub fn bne(rs1: u5, rs2: u5, imm: i13) u32 { return encodeB(@intFromEnum(Opcode.branch), 0x1, rs1, rs2, imm); }
-pub fn blt(rs1: u5, rs2: u5, imm: i13) u32 { return encodeB(@intFromEnum(Opcode.branch), 0x4, rs1, rs2, imm); }
-pub fn bge(rs1: u5, rs2: u5, imm: i13) u32 { return encodeB(@intFromEnum(Opcode.branch), 0x5, rs1, rs2, imm); }
-pub fn bltu(rs1: u5, rs2: u5, imm: i13) u32 { return encodeB(@intFromEnum(Opcode.branch), 0x6, rs1, rs2, imm); }
-pub fn bgeu(rs1: u5, rs2: u5, imm: i13) u32 { return encodeB(@intFromEnum(Opcode.branch), 0x7, rs1, rs2, imm); }
+pub fn beq(rs1: u5, rs2: u5, imm: i13) u32 {
+    return encodeB(@intFromEnum(Opcode.branch), 0x0, rs1, rs2, imm);
+}
+pub fn bne(rs1: u5, rs2: u5, imm: i13) u32 {
+    return encodeB(@intFromEnum(Opcode.branch), 0x1, rs1, rs2, imm);
+}
+pub fn blt(rs1: u5, rs2: u5, imm: i13) u32 {
+    return encodeB(@intFromEnum(Opcode.branch), 0x4, rs1, rs2, imm);
+}
+pub fn bge(rs1: u5, rs2: u5, imm: i13) u32 {
+    return encodeB(@intFromEnum(Opcode.branch), 0x5, rs1, rs2, imm);
+}
+pub fn bltu(rs1: u5, rs2: u5, imm: i13) u32 {
+    return encodeB(@intFromEnum(Opcode.branch), 0x6, rs1, rs2, imm);
+}
+pub fn bgeu(rs1: u5, rs2: u5, imm: i13) u32 {
+    return encodeB(@intFromEnum(Opcode.branch), 0x7, rs1, rs2, imm);
+}
 
-pub fn jal(rd: u5, imm: i21) u32 { return encodeJ(@intFromEnum(Opcode.jal), rd, imm); }
-pub fn jalr(rd: u5, rs1: u5, imm: i12) u32 { return encodeI(@intFromEnum(Opcode.jalr), rd, 0x0, rs1, imm); }
+pub fn jal(rd: u5, imm: i21) u32 {
+    return encodeJ(@intFromEnum(Opcode.jal), rd, imm);
+}
+pub fn jalr(rd: u5, rs1: u5, imm: i12) u32 {
+    return encodeI(@intFromEnum(Opcode.jalr), rd, 0x0, rs1, imm);
+}
 
-pub fn lui(rd: u5, imm: i20) u32 { return encodeU(@intFromEnum(Opcode.lui), rd, imm); }
-pub fn auipc(rd: u5, imm: i20) u32 { return encodeU(@intFromEnum(Opcode.auipc), rd, imm); }
+pub fn lui(rd: u5, imm: i20) u32 {
+    return encodeU(@intFromEnum(Opcode.lui), rd, imm);
+}
+pub fn auipc(rd: u5, imm: i20) u32 {
+    return encodeU(@intFromEnum(Opcode.auipc), rd, imm);
+}
 
 // ---- Atomic Instructions (RV32A/RV64A) ----
 pub fn encodeA(funct5: u5, aq: u1, rl: u1, rd: u5, rs1: u5, rs2: u5) u32 {
@@ -209,22 +334,50 @@ pub fn encodeA(funct5: u5, aq: u1, rl: u1, rd: u5, rs1: u5, rs2: u5) u32 {
         (@as(u32, funct5) << 27);
 }
 
-pub fn lr_w(rd: u5, rs1: u5, aq: u1, rl: u1) u32 { return encodeA(0x02, aq, rl, rd, rs1, 0); }
-pub fn sc_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x03, aq, rl, rd, rs1, rs2); }
-pub fn amoswap_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x01, aq, rl, rd, rs1, rs2); }
-pub fn amoadd_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x00, aq, rl, rd, rs1, rs2); }
-pub fn amoxor_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x04, aq, rl, rd, rs1, rs2); }
-pub fn amoand_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x0C, aq, rl, rd, rs1, rs2); }
-pub fn amoor_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x08, aq, rl, rd, rs1, rs2); }
-pub fn amomin_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x10, aq, rl, rd, rs1, rs2); }
-pub fn amomax_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x14, aq, rl, rd, rs1, rs2); }
-pub fn amominu_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x18, aq, rl, rd, rs1, rs2); }
-pub fn amomaxu_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 { return encodeA(0x1C, aq, rl, rd, rs1, rs2); }
+pub fn lr_w(rd: u5, rs1: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x02, aq, rl, rd, rs1, 0);
+}
+pub fn sc_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x03, aq, rl, rd, rs1, rs2);
+}
+pub fn amoswap_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x01, aq, rl, rd, rs1, rs2);
+}
+pub fn amoadd_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x00, aq, rl, rd, rs1, rs2);
+}
+pub fn amoxor_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x04, aq, rl, rd, rs1, rs2);
+}
+pub fn amoand_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x0C, aq, rl, rd, rs1, rs2);
+}
+pub fn amoor_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x08, aq, rl, rd, rs1, rs2);
+}
+pub fn amomin_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x10, aq, rl, rd, rs1, rs2);
+}
+pub fn amomax_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x14, aq, rl, rd, rs1, rs2);
+}
+pub fn amominu_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x18, aq, rl, rd, rs1, rs2);
+}
+pub fn amomaxu_w(rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1) u32 {
+    return encodeA(0x1C, aq, rl, rd, rs1, rs2);
+}
 
 // ---- System & Memory Synchronization ----
-pub fn ecall() u32 { return encodeI(@intFromEnum(Opcode.system), 0, 0x0, 0, 0x000); }
-pub fn ebreak() u32 { return encodeI(@intFromEnum(Opcode.system), 0, 0x0, 0, 0x001); }
-pub fn fence_i() u32 { return encodeI(@intFromEnum(Opcode.system), 0, 0x1, 0, 0x000); }
+pub fn ecall() u32 {
+    return encodeI(@intFromEnum(Opcode.system), 0, 0x0, 0, 0x000);
+}
+pub fn ebreak() u32 {
+    return encodeI(@intFromEnum(Opcode.system), 0, 0x0, 0, 0x001);
+}
+pub fn fence_i() u32 {
+    return encodeI(@intFromEnum(Opcode.system), 0, 0x1, 0, 0x000);
+}
 
 pub inline fn fenceI() void {
     if (comptime @import("builtin").target.cpu.arch.isRISCV()) {

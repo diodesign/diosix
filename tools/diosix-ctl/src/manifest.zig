@@ -771,12 +771,12 @@ test "manifest: TOML parsing and capability attenuation roundtrip" {
         \\can_provide = ["net.*", "gui.*", "fs.*"]
         \\provides = [
         \\  { service = "net.wan", channel = "shmem", type = "ethernet" },
-        \\  { service = "gui.wayland", channel = "ipc", type = "display" }
+        \\  { service = "gui.wayland", channel = "vsock", type = "display" }
         \\]
         \\
         \\[domains.user]
-        \\name = "user-supervisor"
-        \\image = "/boot/user-supervisor.elf"
+        \\name = "user-domain"
+        \\image = "/boot/vmlinux.elf"
         \\vcpus = 4
         \\ram = "14GiB"
         \\can_require = ["net.*", "gui.*", "fs.*"]
@@ -814,7 +814,7 @@ test "manifest: TOML parsing and capability attenuation roundtrip" {
     var child_user = try pruneSystemManifest(allocator, &sys, "user", 3, 1, &cid_map);
     defer child_user.deinit();
 
-    try testing.expectEqualStrings("user-supervisor", child_user.name);
+    try testing.expectEqualStrings("user-domain", child_user.name);
     try testing.expectEqual(@as(usize, 3), child_user.cid);
     try testing.expectEqual(@as(usize, 1), child_user.parent_cid);
     try testing.expectEqual(@as(usize, 2), child_user.required.items.len);
@@ -830,14 +830,14 @@ test "manifest: TOML parsing and capability attenuation roundtrip" {
     defer allocator.free(serialized);
 
     try testing.expect(std.mem.indexOf(u8, serialized, "[vm]") != null);
-    try testing.expect(std.mem.indexOf(u8, serialized, "name = \"user-supervisor\"") != null);
+    try testing.expect(std.mem.indexOf(u8, serialized, "name = \"user-domain\"") != null);
     try testing.expect(std.mem.indexOf(u8, serialized, "target_cid = 2") != null);
 
     // Parse back serialized child manifest
     var parsed_child = try parseChildManifest(allocator, serialized);
     defer parsed_child.deinit();
 
-    try testing.expectEqualStrings("user-supervisor", parsed_child.name);
+    try testing.expectEqualStrings("user-domain", parsed_child.name);
     try testing.expectEqual(@as(usize, 3), parsed_child.cid);
     try testing.expectEqual(@as(usize, 2), parsed_child.required.items.len);
 }
@@ -852,8 +852,8 @@ test "manifest: private IP address parsing and attenuation propagation" {
         \\domain = "diosix.local"
         \\
         \\[domains.user]
-        \\name = "user-supervisor"
-        \\image = "/boot/user-supervisor.elf"
+        \\name = "user-domain"
+        \\image = "/boot/vmlinux.elf"
         \\vcpus = 2
         \\ram = "256MB"
         \\ip = "10.0.3.3"
@@ -878,6 +878,6 @@ test "manifest: private IP address parsing and attenuation propagation" {
     var parsed = try parseChildManifest(allocator, serialized);
     defer parsed.deinit();
 
+    try testing.expectEqualStrings("user-domain", parsed.name);
     try testing.expectEqualStrings("10.0.3.3", parsed.ip);
 }
-

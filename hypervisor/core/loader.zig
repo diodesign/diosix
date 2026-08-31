@@ -86,7 +86,7 @@ pub const Loader = struct {
         while (i < ph_num) : (i += 1) {
             const off = ph_off + (i * ph_size);
             if (off + ph_size > source.len) return LoaderError.InvalidProgramHeader;
-            
+
             var p_type: u32 = 0;
             var p_vaddr: u64 = 0;
             var p_paddr: u64 = 0;
@@ -118,7 +118,7 @@ pub const Loader = struct {
         i = 0;
         while (i < ph_num) : (i += 1) {
             const off = ph_off + (i * ph_size);
-            
+
             var p_type: u32 = 0;
             var p_offset: u64 = 0;
             var p_vaddr: u64 = 0;
@@ -199,7 +199,6 @@ pub const Loader = struct {
                 }
             }
         }
-
 
         // Look up early_top_pgt for non-x86_64 guests to configure the initial page tables.
         if (findSymbol(source, "early_top_pgt")) |pgt_vaddr| {
@@ -296,7 +295,6 @@ pub const Loader = struct {
             strtab_size = readU64(source, strtab_sh_off + 32);
         }
 
-
         if (strtab_offset == 0 or strtab_size == 0) return null;
         if (strtab_offset + strtab_size > source.len) return null;
         if (symtab_sh_offset + symtab_sh_size > source.len) return null;
@@ -349,12 +347,10 @@ test "ELF header validation and arch detection" {
     const truncated = [_]u8{ 0x7f, 'E', 'L' };
     try testing.expectError(error.InvalidElfHeader, Loader.detectArch(&truncated));
 
-
     // Test 2: Invalid magic
     var bad_magic: [64]u8 = std.mem.zeroes([64]u8);
     @memcpy(bad_magic[0..4], "NOPE");
     try testing.expectError(error.InvalidElfHeader, Loader.detectArch(&bad_magic));
-
 
     // Helper to create a valid 64-bit ELF header
     var rv64_hdr: [64]u8 = std.mem.zeroes([64]u8);
@@ -406,7 +402,6 @@ test "ELF header validation and arch detection" {
     bad_arch_hdr[elf_spec.EHDR.MACHINE + 1] = 0x00;
     try testing.expectError(error.UnsupportedElfMachine, Loader.detectArch(&bad_arch_hdr));
 }
-
 
 test "ELF symbol resolution" {
     const testing = std.testing;
@@ -471,4 +466,3 @@ test "ELF symbol resolution" {
     // Look up non-existent symbol
     try testing.expect(Loader.findSymbol(&elf_buf, "nonexistent") == null);
 }
-

@@ -448,6 +448,3 @@ test "Dynamic Direct RAM Mapping Region Resolution" {
     try std.testing.expect(tlb.getDirectMappingRegion(0x0C000000) == null);
     try std.testing.expect(tlb.getDirectMappingRegion(0x00000000) == null);
 }
-
-
-

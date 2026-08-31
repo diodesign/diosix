@@ -11,8 +11,8 @@ domain = "diosix.local"
 # System Domain: Hosts core system services (network stack, graphics server, etc.)
 # ------------------------------------------------------------------------------
 [domains.sys]
-name = "sys-supervisor"
-image = "/boot/sys-supervisor.elf"
+name = "sys-domain"
+image = "/boot/vmlinux.elf"
 vcpus = 2
 ram = "2GiB"
 ip = "10.0.3.2"
@@ -21,7 +21,7 @@ can_require = ["crypto.rng", "clock.tai"]
 
 provides = [
   { service = "net.wan", channel = "shmem", type = "ethernet" },
-  { service = "gui.wayland", channel = "ipc", type = "display" },
+  { service = "gui.wayland", channel = "vsock", type = "display" },
   { service = "fs.home", channel = "9p", type = "filesystem" }
 ]
 
@@ -34,8 +34,8 @@ routes = [
 # User Application Domain: Standard sandboxed userland environment
 # ------------------------------------------------------------------------------
 [domains.user]
-name = "user-supervisor"
-image = "/boot/user-supervisor.elf"
+name = "user-domain"
+image = "/boot/vmlinux.elf"
 vcpus = 4
 ram = "14GiB"
 ip = "10.0.3.3"

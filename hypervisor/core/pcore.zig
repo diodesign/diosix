@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const vcore = @import("vcore.zig");
 const alloc = @import("alloc.zig");
@@ -11,6 +12,14 @@ const alloc = @import("alloc.zig");
 // Return the CPU context for the physical core running this code
 pub fn this() *riscv.CpuContext {
     return riscv.getCPUContext();
+}
+
+// Return the CPU context for the given physical core ID, or null
+pub fn fromId(id: usize) ?*riscv.CpuContext {
+    if (id < riscv.cpu_contexts.len) {
+        return riscv.cpu_contexts[id];
+    }
+    return null;
 }
 
 pub extern fn hw_run_vcore(
@@ -32,6 +41,7 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     cpu.active_vcore = to_vcore;
     to_vcore.running_on_cpu = cpu.cpu_core_id;
     to_vcore.state = .running;
+    to_vcore.last_dispatched_time = if (builtin.is_test) 0 else riscv.readTime();
 
     const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
     pmp.PMPConfig.clearAllPmp();
