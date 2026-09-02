@@ -122,10 +122,12 @@ pub const GuestInfo = extern struct {
     is_root: u8,
     target_arch: u8, // TargetArch enum value
     _reserved: u8 = 0,
-    used_ram_pages: usize,
-    max_ram_pages: usize,
+    vcpus: usize,
+    self_ram_pages: usize,
     used_vcpus: usize,
     max_vcpus: usize,
+    used_ram_pages: usize,
+    max_ram_pages: usize,
     child_count: usize,
 };
 
@@ -242,7 +244,7 @@ test "SBI interface structures and extension IDs" {
     const testing = std.testing;
 
     // Verify GuestInfo C-ABI compatibility
-    try testing.expectEqual(@sizeOf(usize) * 7, @sizeOf(GuestInfo));
+    try testing.expectEqual(@sizeOf(usize) * 10, @sizeOf(GuestInfo));
 
     // Verify HypervisorInfo structure size
     try testing.expectEqual(64, @sizeOf(HypervisorInfo));

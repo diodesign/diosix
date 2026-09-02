@@ -29,6 +29,11 @@ hw_run_vcore:
   ld t0, 0(a1)      # mepc
   csrw mepc, t0
   ld t0, 8(a1)      # mstatus
+  li t1, 0x6600     # VS (bits 9-10) and FS (bits 13-14)
+  or t0, t0, t1
+  li t1, 1
+  slli t1, t1, 21   # TW (bit 21)
+  or t0, t0, t1
   csrw mstatus, t0
 
   # set H-extension CSRs if H-paging is enabled (hgatp != 0)
@@ -62,16 +67,15 @@ hw_run_vcore:
   ld t0, 56(a2)     # vsatp
   csrw vsatp, t0
   .if LEGACY_CPU == 0
-  la t0, riscv_supports_smstateen
-  lbu t0, 0(t0)
-  beqz t0, 1f
-  ld t0, 72(a2)     # vsenvcfg
-  csrw 0x10a, t0    # senvcfg
-  li t0, 1
-  slli t0, t0, 63   # STCE
-  ori t0, t0, 240   # Cache block ops
-  csrw 0x60a, t0    # henvcfg
+  li t0, 240        # Cache block ops (CBZE, CBCFE, CBIE)
+  la t1, riscv_supports_sstc
+  lbu t1, 0(t1)
+  beqz t1, 1f
+  li t1, 1
+  slli t1, t1, 63   # STCE
+  or t0, t0, t1
 1:
+  csrw 0x60a, t0    # henvcfg (0x60a)
   la t0, riscv_supports_sstc
   lbu t0, 0(t0)
   beqz t0, 2f

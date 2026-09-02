@@ -96,6 +96,16 @@ extensions, see the following commands:
 ./scripts/build.sh -Dlegacy-cpu=true
 ```
 
+#### Build the live media and installer disk image
+
+To generate a bootable GUID Partition Table (GPT) disk image containing the Extensible Firmware Interface (EFI) System Partition, hypervisor, Root VM, and persistent guest storage datastore, run:
+
+```bash
+./scripts/build.sh live-image
+```
+
+The output image is saved to `zig-out/diosix-live-riscv64.img`.
+
 To list all available build targets, configuration parameters, and help
 options, run:
 

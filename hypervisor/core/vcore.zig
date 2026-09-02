@@ -231,7 +231,7 @@ pub const VirtualCore = struct {
                     .context = std.mem.zeroes(riscv.ThreadContext),
                     .machine = .{
                         .mepc = entry,
-                        .mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPIE=1, MPV=1 (Virtualization), VS=Dirty, FS=Dirty
+                        .mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPIE=1, MPV=1 (Virtualization), FS=Dirty
                         .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
                         .hgatp = if (parent.space.mode == .h_paging) parent.space.paging.?.hgatp(parent.vmid) else 0,
                         .hedeleg = HEDELEG_GUEST_DELEGATE, // Delegate exceptions to guest: includes breakpoint (bit 3)
@@ -239,7 +239,7 @@ pub const VirtualCore = struct {
                         .hvip = 0,
                     },
                     .guest_state = .{
-                        .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
+                        .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.FS_SHIFT),
                         .vsie = 0,
                         .vstvec = 0,
                         .vsscratch = 0,
@@ -346,14 +346,14 @@ pub const VirtualCore = struct {
                 n.context[@intFromEnum(riscv.Register.a0)] = self.id;
                 n.context[@intFromEnum(riscv.Register.a1)] = dtb;
                 n.machine.mepc = entry;
-                n.machine.mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
+                n.machine.mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.FS_SHIFT);
                 n.machine.hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
                 n.machine.hgatp = if (self.guest.space.mode == .h_paging) self.guest.space.paging.?.hgatp(self.guest.vmid) else 0;
                 n.machine.hedeleg = HEDELEG_GUEST_DELEGATE;
                 n.machine.hideleg = HIDELEG_VS_INTERRUPTS;
                 n.machine.hvip = 0;
                 n.guest_state = .{
-                    .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT),
+                    .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.FS_SHIFT),
                     .vsie = 0,
                     .vstvec = 0,
                     .vsscratch = 0,

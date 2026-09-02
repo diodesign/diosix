@@ -36,6 +36,9 @@ pub const DomainSpec = struct {
     image: []const u8 = "",
     vcpus: usize = 1,
     ram: []const u8 = "",
+    disk: []const u8 = "",
+    storage_size: []const u8 = "",
+    cdrom: []const u8 = "",
     ip: []const u8 = "",
     pci_devices: std.ArrayList([]const u8) = std.ArrayList([]const u8).empty,
     can_provide: std.ArrayList([]const u8) = std.ArrayList([]const u8).empty,
@@ -99,6 +102,9 @@ pub const ChildManifest = struct {
     parent_cid: usize = 0,
     vcpus: usize = 1,
     ram: []const u8 = "",
+    disk: []const u8 = "",
+    storage_size: []const u8 = "",
+    cdrom: []const u8 = "",
     ip: []const u8 = "",
     required: std.ArrayList(ServiceRequirement) = std.ArrayList(ServiceRequirement).empty,
     provided: std.ArrayList(ServiceOffer) = std.ArrayList(ServiceOffer).empty,
@@ -329,6 +335,12 @@ pub fn parseSystemManifest(allocator: std.mem.Allocator, toml_str: []const u8) !
                         }
                     } else if (std.mem.eql(u8, key, "ram")) {
                         dom.ram = try manifest.addString(val_tok.val);
+                    } else if (std.mem.eql(u8, key, "disk")) {
+                        dom.disk = try manifest.addString(val_tok.val);
+                    } else if (std.mem.eql(u8, key, "storage_size") or std.mem.eql(u8, key, "storage") or std.mem.eql(u8, key, "disk_size")) {
+                        dom.storage_size = try manifest.addString(val_tok.val);
+                    } else if (std.mem.eql(u8, key, "cdrom") or std.mem.eql(u8, key, "iso") or std.mem.eql(u8, key, "media")) {
+                        dom.cdrom = try manifest.addString(val_tok.val);
                     } else if (std.mem.eql(u8, key, "ip") or std.mem.eql(u8, key, "address")) {
                         dom.ip = try manifest.addString(val_tok.val);
                     } else if (std.mem.eql(u8, key, "pci_devices") or std.mem.eql(u8, key, "grant_devices")) {
@@ -484,6 +496,12 @@ pub fn parseChildManifest(allocator: std.mem.Allocator, toml_str: []const u8) !C
                         manifest.vcpus = std.fmt.parseInt(usize, val_tok.val, 10) catch 1;
                     } else if (std.mem.eql(u8, key, "ram")) {
                         manifest.ram = try manifest.addString(val_tok.val);
+                    } else if (std.mem.eql(u8, key, "disk")) {
+                        manifest.disk = try manifest.addString(val_tok.val);
+                    } else if (std.mem.eql(u8, key, "storage_size") or std.mem.eql(u8, key, "storage") or std.mem.eql(u8, key, "disk_size")) {
+                        manifest.storage_size = try manifest.addString(val_tok.val);
+                    } else if (std.mem.eql(u8, key, "cdrom") or std.mem.eql(u8, key, "iso") or std.mem.eql(u8, key, "media")) {
+                        manifest.cdrom = try manifest.addString(val_tok.val);
                     } else if (std.mem.eql(u8, key, "ip") or std.mem.eql(u8, key, "address")) {
                         manifest.ip = try manifest.addString(val_tok.val);
                     }
@@ -563,6 +581,15 @@ pub fn pruneSystemManifest(
     child.name = try child.addString(dom_spec.name);
     child.vcpus = dom_spec.vcpus;
     child.ram = try child.addString(dom_spec.ram);
+    if (dom_spec.disk.len > 0) {
+        child.disk = try child.addString(dom_spec.disk);
+    }
+    if (dom_spec.storage_size.len > 0) {
+        child.storage_size = try child.addString(dom_spec.storage_size);
+    }
+    if (dom_spec.cdrom.len > 0) {
+        child.cdrom = try child.addString(dom_spec.cdrom);
+    }
     if (dom_spec.ip.len > 0) {
         child.ip = try child.addString(dom_spec.ip);
     }
@@ -658,6 +685,18 @@ pub fn serializeChildManifest(allocator: std.mem.Allocator, child: *const ChildM
     if (child.ram.len > 0) {
         const ram_line = try std.fmt.bufPrint(&writer_buf, "ram = \"{s}\"\n", .{child.ram});
         try out.appendSlice(allocator, ram_line);
+    }
+    if (child.disk.len > 0) {
+        const disk_line = try std.fmt.bufPrint(&writer_buf, "disk = \"{s}\"\n", .{child.disk});
+        try out.appendSlice(allocator, disk_line);
+    }
+    if (child.storage_size.len > 0) {
+        const storage_line = try std.fmt.bufPrint(&writer_buf, "storage_size = \"{s}\"\n", .{child.storage_size});
+        try out.appendSlice(allocator, storage_line);
+    }
+    if (child.cdrom.len > 0) {
+        const cdrom_line = try std.fmt.bufPrint(&writer_buf, "cdrom = \"{s}\"\n", .{child.cdrom});
+        try out.appendSlice(allocator, cdrom_line);
     }
     if (child.ip.len > 0) {
         const ip_line = try std.fmt.bufPrint(&writer_buf, "ip = \"{s}\"\n", .{child.ip});
@@ -776,7 +815,7 @@ test "manifest: TOML parsing and capability attenuation roundtrip" {
         \\
         \\[domains.user]
         \\name = "user-domain"
-        \\image = "/boot/vmlinux.elf"
+        \\image = "/var/lib/diosix/images/linux-guest.elf"
         \\vcpus = 4
         \\ram = "14GiB"
         \\can_require = ["net.*", "gui.*", "fs.*"]
@@ -853,7 +892,7 @@ test "manifest: private IP address parsing and attenuation propagation" {
         \\
         \\[domains.user]
         \\name = "user-domain"
-        \\image = "/boot/vmlinux.elf"
+        \\image = "/var/lib/diosix/images/linux-guest.elf"
         \\vcpus = 2
         \\ram = "256MB"
         \\ip = "10.0.3.3"
@@ -881,3 +920,91 @@ test "manifest: private IP address parsing and attenuation propagation" {
     try testing.expectEqualStrings("user-domain", parsed.name);
     try testing.expectEqualStrings("10.0.3.3", parsed.ip);
 }
+
+test "manifest: domain storage and disk attenuation propagation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const sample_toml =
+        \\[system]
+        \\version = "1.0"
+        \\domain = "diosix.local"
+        \\
+        \\[domains.user]
+        \\name = "user-domain"
+        \\image = "/var/lib/diosix/images/linux-guest.elf"
+        \\vcpus = 2
+        \\ram = "512MB"
+        \\disk = "/var/lib/diosix/disks/user.img"
+        \\storage_size = "4GiB"
+        \\ip = "10.0.3.5"
+    ;
+
+    var sys = try parseSystemManifest(allocator, sample_toml);
+    defer sys.deinit();
+
+    const user_dom = sys.domains.get("user").?;
+    try testing.expectEqualStrings("/var/lib/diosix/disks/user.img", user_dom.disk);
+    try testing.expectEqualStrings("4GiB", user_dom.storage_size);
+
+    var child = try pruneSystemManifest(allocator, &sys, "user", 2, 1, null);
+    defer child.deinit();
+
+    try testing.expectEqualStrings("/var/lib/diosix/disks/user.img", child.disk);
+    try testing.expectEqualStrings("4GiB", child.storage_size);
+
+    const serialized = try serializeChildManifest(allocator, &child);
+    defer allocator.free(serialized);
+
+    try testing.expect(std.mem.indexOf(u8, serialized, "disk = \"/var/lib/diosix/disks/user.img\"") != null);
+    try testing.expect(std.mem.indexOf(u8, serialized, "storage_size = \"4GiB\"") != null);
+
+    var parsed = try parseChildManifest(allocator, serialized);
+    defer parsed.deinit();
+
+    try testing.expectEqualStrings("/var/lib/diosix/disks/user.img", parsed.disk);
+    try testing.expectEqualStrings("4GiB", parsed.storage_size);
+}
+
+test "manifest: domain cdrom attenuation propagation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const sample_toml =
+        \\[system]
+        \\version = "1.0"
+        \\domain = "diosix.local"
+        \\
+        \\[domains.installer]
+        \\name = "installer-domain"
+        \\image = "/var/lib/diosix/images/debian-installer.elf"
+        \\vcpus = 2
+        \\ram = "1GiB"
+        \\disk = "/var/lib/diosix/disks/target.img"
+        \\cdrom = "/var/lib/diosix/iso/debian-12.iso"
+        \\ip = "10.0.3.9"
+    ;
+
+    var sys = try parseSystemManifest(allocator, sample_toml);
+    defer sys.deinit();
+
+    const inst_dom = sys.domains.get("installer").?;
+    try testing.expectEqualStrings("/var/lib/diosix/disks/target.img", inst_dom.disk);
+    try testing.expectEqualStrings("/var/lib/diosix/iso/debian-12.iso", inst_dom.cdrom);
+
+    var child = try pruneSystemManifest(allocator, &sys, "installer", 2, 1, null);
+    defer child.deinit();
+
+    try testing.expectEqualStrings("/var/lib/diosix/iso/debian-12.iso", child.cdrom);
+
+    const serialized = try serializeChildManifest(allocator, &child);
+    defer allocator.free(serialized);
+
+    try testing.expect(std.mem.indexOf(u8, serialized, "cdrom = \"/var/lib/diosix/iso/debian-12.iso\"") != null);
+
+    var parsed = try parseChildManifest(allocator, serialized);
+    defer parsed.deinit();
+
+    try testing.expectEqualStrings("/var/lib/diosix/iso/debian-12.iso", parsed.cdrom);
+}
+

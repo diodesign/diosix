@@ -137,12 +137,15 @@ pub const ENVCFG = struct {
 };
 
 pub const STATEEN = struct {
+    pub const C: usize = 1 << 0;
+    pub const FCSR: usize = 1 << 1;
+    pub const V: usize = 1 << 2;
     pub const IMSIC: usize = @as(usize, 1) << 58;
     pub const AIA: usize = @as(usize, 1) << 59;
     pub const CSRIND: usize = @as(usize, 1) << 60;
     pub const ENVCFG: usize = @as(usize, 1) << 62;
     pub const SE0: usize = @as(usize, 1) << 63;
-    pub const BASE_FEATURES: usize = STATEEN.ENVCFG | STATEEN.CSRIND | STATEEN.AIA | STATEEN.IMSIC;
+    pub const BASE_FEATURES: usize = STATEEN.ENVCFG | STATEEN.CSRIND | STATEEN.AIA | STATEEN.IMSIC | STATEEN.V | STATEEN.FCSR | STATEEN.C;
 };
 
 pub const Cause = enum(usize) {

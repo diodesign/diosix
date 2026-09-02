@@ -492,10 +492,12 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                     .is_root = if (g.is_root) 1 else 0,
                     .target_arch = @intFromEnum(g.target_arch),
                     ._reserved = 0,
-                    .used_ram_pages = if (g.quotas.used_ram_pages > 0) g.quotas.used_ram_pages else g.space.range_size / physmem.PageSize,
-                    .max_ram_pages = if (g.quotas.max_ram_pages == std.math.maxInt(usize)) g.space.range_size / physmem.PageSize else g.quotas.max_ram_pages,
+                    .vcpus = g.vcores.count(),
+                    .self_ram_pages = if (g.space.range_size > 0) g.space.range_size / physmem.PageSize else (512 * 1024 * 1024 / physmem.PageSize),
                     .used_vcpus = if (g.quotas.used_vcpus > 0) g.quotas.used_vcpus else g.vcores.count(),
                     .max_vcpus = if (g.quotas.max_vcpus == std.math.maxInt(usize)) g.vcores.count() else g.quotas.max_vcpus,
+                    .used_ram_pages = if (g.quotas.used_ram_pages > 0) g.quotas.used_ram_pages else g.space.range_size / physmem.PageSize,
+                    .max_ram_pages = if (g.quotas.max_ram_pages == std.math.maxInt(usize)) g.space.range_size / physmem.PageSize else g.quotas.max_ram_pages,
                     .child_count = g.children.count(),
                 };
 
@@ -925,7 +927,7 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
                     target_vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = target_hart;
                     target_vc.getNativeContext()[@intFromEnum(arch.Register.a1)] = opaque_param;
                     target_vc.getNativeMachine().mepc = start_addr;
-                    target_vc.getNativeMachine().mstatus = (1 << riscv.MSTATUS.MPP_SHIFT) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
+                    target_vc.getNativeMachine().mstatus = (1 << riscv.MSTATUS.MPP_SHIFT) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.FS_SHIFT);
                     target_vc.getNativeMachine().hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
                     target_vc.getNativeMachine().hedeleg = 0xb1fb;
                     target_vc.getNativeMachine().hideleg = 0x1666;
@@ -933,7 +935,7 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
                     if (target_vc.guest.space.mode == .h_paging) {
                         target_vc.getNativeMachine().hgatp = target_vc.guest.space.paging.?.hgatp(target_vc.guest.vmid);
                     }
-                    target_vc.getNativeGuestState().vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
+                    target_vc.getNativeGuestState().vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.FS_SHIFT);
                     target_vc.getNativeGuestState().vsatp = 0;
                     target_vc.getNativeGuestState().vstimecmp = std.math.maxInt(u64);
                     target_vc.getNativeGuestState().vsenvcfg = riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL;
@@ -985,13 +987,21 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
 }
 
 fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function: usize, a0: usize, a1: usize, a2: usize) void {
+    // Only Root VM (guest_id == 1) has direct access to the physical host serial console.
+    // Child guest VMs communicate out-of-band via virtual networking (diosix0 / SSH).
+    if (vc.guest_id != 1) {
+        switch (function) {
+            interface.DBCN.CONSOLE_WRITE => setResult(vc, context, SBI_SUCCESS, a0),
+            interface.DBCN.CONSOLE_READ => setResult(vc, context, SBI_SUCCESS, 0),
+            interface.DBCN.CONSOLE_WRITE_BYTE => setResult(vc, context, SBI_SUCCESS, 0),
+            else => setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0),
+        }
+        return;
+    }
+
     const g = vc.getGuest();
     switch (function) {
         interface.DBCN.CONSOLE_WRITE => {
-            if (vc.guest_id != 1) {
-                setResult(vc, context, SBI_SUCCESS, a0);
-                return;
-            }
             // Cap bytes-per-call to prevent a guest from monopolizing the
             // hypervisor in this loop. The guest can make multiple calls.
             const num_bytes = if (a0 > DBCN_MAX_WRITE_BYTES) DBCN_MAX_WRITE_BYTES else a0;
@@ -1015,13 +1025,11 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
                 written += 1;
 
                 if (buf_idx == buf.len) {
-                    if (vc.guest_id == 1) {
-                        debug.write(buf[0..buf_idx]);
-                    }
+                    debug.write(buf[0..buf_idx]);
                     buf_idx = 0;
                 }
             }
-            if (buf_idx > 0 and vc.guest_id == 1) {
+            if (buf_idx > 0) {
                 debug.write(buf[0..buf_idx]);
             }
             setResult(vc, context, SBI_SUCCESS, written);
@@ -1031,7 +1039,7 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
             const gpa: usize = (a1 & RV32_WORD_MASK) | ((@as(usize, @intCast(a2)) & RV32_WORD_MASK) << RV32_HIGH_SHIFT);
             var read: usize = 0;
             while (read < num_bytes) : (read += 1) {
-                const c = if (vc.guest_id == 1) debug.getchar() else -1;
+                const c = debug.getchar();
                 if (c < 0) break;
                 const target_addr = gpa + read;
                 if (g.space.translateGPA(target_addr)) |hpa| {
@@ -1044,9 +1052,7 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
             setResult(vc, context, SBI_SUCCESS, read);
         },
         interface.DBCN.CONSOLE_WRITE_BYTE => {
-            if (vc.guest_id == 1) {
-                debug.putchar(@truncate(a0));
-            }
+            debug.putchar(@truncate(a0));
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         else => setResult(vc, context, SBI_ERR_NOT_SUPPORTED, 0),

@@ -99,6 +99,9 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addArg(buildroot_dir);
     run_buildroot.addArg(guest_arch_opt);
     const rootvm_s_file = run_buildroot.addOutputFileArg("rootvm.s");
+    run_buildroot.addFileInput(b.path("scripts/build_rootvm.sh"));
+    run_buildroot.addFileInput(b.path("tools/diosix-ctl/src/main.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-ctl/src/manifest.zig"));
     run_buildroot.stdio = .inherit;
 
     const emulation_module = b.createModule(.{
@@ -241,10 +244,41 @@ pub fn build(b: *std.Build) !void {
 
     // the last argument to qemu is the kernel file to run
     run_step.addArtifactArg(vmdiosix);
-    run_step.stdio = .inherit;
-
     const run_option = b.step("run", "Run the hypervisor");
     run_option.dependOn(&run_step.step);
+
+    // Step to generate bootable hybrid GPT live disk image
+    const live_img_path = "zig-out/diosix-live-riscv64.img";
+    const create_live_cmd = b.addSystemCommand(&.{ "bash", "scripts/make_live_image.sh" });
+    create_live_cmd.addFileArg(vmdiosix.getEmittedBin());
+    create_live_cmd.addArg(rootvm_elf_path);
+    create_live_cmd.addArg(live_img_path);
+    create_live_cmd.addArg("512");
+    create_live_cmd.step.dependOn(b.getInstallStep());
+    create_live_cmd.step.dependOn(&run_buildroot.step);
+
+    const live_image_option = b.step("live-image", "Build bootable hybrid GPT live & installer disk image");
+    live_image_option.dependOn(&create_live_cmd.step);
+
+    // Create a 'zig build run-live' command to execute with the live GPT disk image
+    var qemu_live_args = ArrayList([]const u8).empty;
+    defer qemu_live_args.deinit(b.allocator);
+    for (qemu_args.items) |arg| {
+        if (std.mem.eql(u8, arg, "file=" ++ storage_img_path ++ ",if=none,format=raw,id=hd0")) {
+            try qemu_live_args.append(b.allocator, "file=" ++ live_img_path ++ ",if=none,format=raw,id=hd0");
+        } else {
+            try qemu_live_args.append(b.allocator, arg);
+        }
+    }
+
+    const run_live_step = b.addSystemCommand(qemu_live_args.items);
+    run_live_step.step.dependOn(b.getInstallStep());
+    run_live_step.step.dependOn(&create_live_cmd.step);
+    run_live_step.addArtifactArg(vmdiosix);
+    run_live_step.stdio = .inherit;
+
+    const run_live_option = b.step("run-live", "Run the hypervisor with the live GPT disk image attached");
+    run_live_option.dependOn(&run_live_step.step);
 
     // run all the unit tests on the host system
     // tests use a separate module targeting native so the test runner has OS support
@@ -287,9 +321,33 @@ pub fn build(b: *std.Build) !void {
     });
     const run_ctl_unit_tests = b.addRunArtifact(ctl_unit_tests);
 
+    const wm_test_module = b.createModule(.{
+        .root_source_file = b.path("tools/diosix-wm/src/main.zig"),
+        .optimize = optimize,
+        .target = b.graph.host,
+    });
+    const wm_unit_tests = b.addTest(.{
+        .root_module = wm_test_module,
+        .name = "diosix-wm-unit-tests",
+    });
+    const run_wm_unit_tests = b.addRunArtifact(wm_unit_tests);
+
+    const config_test_module = b.createModule(.{
+        .root_source_file = b.path("tools/diosix-config/src/main.zig"),
+        .optimize = optimize,
+        .target = b.graph.host,
+    });
+    const config_unit_tests = b.addTest(.{
+        .root_module = config_test_module,
+        .name = "diosix-config-unit-tests",
+    });
+    const run_config_unit_tests = b.addRunArtifact(config_unit_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_ctl_unit_tests.step);
+    test_step.dependOn(&run_wm_unit_tests.step);
+    test_step.dependOn(&run_config_unit_tests.step);
 
     const run_integration_tests = b.addSystemCommand(&[_][]const u8{
         "python3",

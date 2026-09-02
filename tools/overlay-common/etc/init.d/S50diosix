@@ -49,23 +49,45 @@ case "$1" in
         ip route add 10.0.3.0/24 dev diosix0 2>/dev/null || true
     fi
 
-    # Automount host storage disk if available (e.g. /dev/vda, /dev/sda, /dev/nvme0n1)
-    mkdir -p /mnt/storage /var/lib/diosix/images /boot
-    for dev in /dev/vda /dev/vda1 /dev/sda /dev/sda1 /dev/nvme0n1 /dev/nvme0n1p1; do
+    # Network routing and gateway configuration
+    if [ "$SELF_CID" = "1" ]; then
+        # Root VM (Domain 0): Enable IPv4 packet forwarding and NAT masquerade for child guests
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+        if command -v iptables >/dev/null 2>&1; then
+            iptables -t nat -C POSTROUTING -s 10.0.3.0/24 ! -d 10.0.3.0/24 -j MASQUERADE 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -s 10.0.3.0/24 ! -d 10.0.3.0/24 -j MASQUERADE 2>/dev/null || true
+            iptables -C FORWARD -s 10.0.3.0/24 -j ACCEPT 2>/dev/null || \
+            iptables -A FORWARD -s 10.0.3.0/24 -j ACCEPT 2>/dev/null || true
+            iptables -C FORWARD -d 10.0.3.0/24 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+            iptables -A FORWARD -d 10.0.3.0/24 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        fi
+    else
+        # Child VM: Set default route via Root VM (10.0.3.1)
+        ip route add default via 10.0.3.1 dev diosix0 2>/dev/null || route add default gw 10.0.3.1 diosix0 2>/dev/null || true
+        # Configure DNS fallback if resolv.conf is empty or unconfigured
+        if [ ! -s /etc/resolv.conf ] || grep -q "127.0.0.1" /etc/resolv.conf 2>/dev/null; then
+            printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\n" > /etc/resolv.conf
+        fi
+    fi
+
+    # Automount host storage disk at /var/lib/diosix (e.g. GPT partition 2 /dev/vda2, /dev/sda2, /dev/nvme0n1p2, /dev/mmcblk0p2)
+    mkdir -p /var/lib/diosix /boot /etc/diosix
+    for dev in /dev/vda2 /dev/vda1 /dev/vda /dev/sda2 /dev/sda1 /dev/sda /dev/nvme0n1p2 /dev/nvme0n1p1 /dev/nvme0n1 /dev/mmcblk0p2 /dev/mmcblk0p1 /dev/mmcblk0; do
         if [ -b "$dev" ]; then
-            echo "Mounting host storage volume $dev on /mnt/storage..."
-            mount -o rw "$dev" /mnt/storage 2>/dev/null || mount "$dev" /mnt/storage 2>/dev/null || true
-            if [ -d /mnt/storage/var/lib/diosix/images ]; then
-                mount --bind /mnt/storage/var/lib/diosix/images /var/lib/diosix/images 2>/dev/null || true
+            if mount -o rw "$dev" /var/lib/diosix 2>/dev/null || mount "$dev" /var/lib/diosix 2>/dev/null; then
+                echo "Mounted persistent storage volume $dev on /var/lib/diosix."
+                if [ -f /var/lib/diosix/manifests/system.toml ] && [ ! -f /etc/diosix/system.toml ]; then
+                    ln -sf /var/lib/diosix/manifests/system.toml /etc/diosix/system.toml 2>/dev/null || true
+                fi
+                if [ -f /var/lib/diosix/images/linux-guest.elf ]; then
+                    ln -sf /var/lib/diosix/images/linux-guest.elf /boot/linux-guest.elf 2>/dev/null || true
+                    ln -sf /var/lib/diosix/images/linux-guest.elf /boot/default.elf 2>/dev/null || true
+                    ln -sf /var/lib/diosix/images/linux-guest.elf /boot/vmlinux.elf 2>/dev/null || true
+                elif [ -f /var/lib/diosix/images/vmlinux.elf ]; then
+                    ln -sf /var/lib/diosix/images/vmlinux.elf /boot/vmlinux.elf 2>/dev/null || true
+                fi
+                break
             fi
-            if [ -f /mnt/storage/var/lib/diosix/images/vmlinux.elf ] && [ ! -f /boot/vmlinux.elf ]; then
-                ln -sf /mnt/storage/var/lib/diosix/images/vmlinux.elf /boot/vmlinux.elf
-            elif [ -f /mnt/storage/boot/vmlinux.elf ] && [ ! -f /boot/vmlinux.elf ]; then
-                ln -sf /mnt/storage/boot/vmlinux.elf /boot/vmlinux.elf
-            elif [ -f /mnt/storage/vmlinux.elf ] && [ ! -f /boot/vmlinux.elf ]; then
-                ln -sf /mnt/storage/vmlinux.elf /boot/vmlinux.elf
-            fi
-            break
         fi
     done
     ;;

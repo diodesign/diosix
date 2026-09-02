@@ -139,6 +139,9 @@ For more information about Diosix, see the following documentation:
 *  **[Develop Diosix](docs/development.md):** View the project's programming
    guidelines, memory ownership rules, unit testing commands, Git
    branching workflows, and CalVer release versioning.
+*  **[Live media and installation plan](docs/live-and-install-plan.md):** Explore
+   the roadmap for bootable live/installer images, external networking gateways,
+   and disaggregated security domains.
 
 For more information about the technology used by the hypervisor, see the
 

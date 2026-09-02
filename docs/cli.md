@@ -1,60 +1,87 @@
 # Diosix command-line interface (`dsx` / `diosix-ctl`)
 
-The `dsx` utility (also available as `diosix-ctl`) is the userspace 
-command-line tool for managing guest Virtual Machines (VMs) on the Diosix 
-hypervisor. It communicates with the hypervisor through the `/dev/diosix` 
-character device driver using standard Supervisor Binary Interface (SBI) 
+The `dsx` utility (also available via the `diosix-ctl` symlink) is the primary
+command-line interface for managing guest Virtual Machines (VMs) on the Diosix
+Type-1 hypervisor. It communicates with the hypervisor kernel through the
+`/dev/diosix` character device driver using Supervisor Binary Interface (SBI)
 hypercalls.
 
-Running `dsx` requires root privileges inside the guest operating system 
-to access `/dev/diosix`.
-
+Running `dsx` requires superuser (`root`) privileges inside the guest operating
+system to access the `/dev/diosix` interface.
 
 ---
 
 ## Context ID (CID) syntax
 
-Commands that accept a `<cid>` argument support both numeric identifiers and 
-symbolic aliases:
+Commands accepting a `<cid>` or `<target>` argument support numeric IDs,
+friendly VM names, and symbolic aliases:
 
-*   **`self`** or **`1`**: Refers to the calling VM.
-*   **`parent`** or **`0`**: Refers to the immediate parent VM.
-*   **`2..N`**: Refers to a specific direct child VM created by the calling VM.
+*   **`self`** or **`1`**: Refers to the calling Virtual Machine.
+*   **`parent`** or **`0`**: Refers to the immediate parent Virtual Machine.
+*   **`2..N`**: Numeric Context ID of a direct child Virtual Machine.
+*   **`<name>`**: Human-friendly domain or VM name registered at creation
+    (for example, `sys`, `user`, or `debian-cloud`).
 
 ---
 
 ## Command reference
 
-### `diosix-ctl info`
-Displays status, Context ID (CID), hardware trust status, architecture, 
-active child count, and resource quota usage for the calling VM.
+### `dsx info`
+Displays status, Context ID (CID), hardware trust status, architecture,
+active child count, and resource quota usage for the current VM or a target
+guest VM.
 
 ```bash
-diosix-ctl info [--host]
+dsx info [name|cid|self]
 ```
 
-*   `--host` / `-h` *(optional)*: Queries hypervisor release version, ABI 
-    version, host physical hardware metrics, and active capability flags.
+*   `name|cid|self` *(optional)*: Target VM to inspect. Defaults to `self`.
 
-Default guest VM info output:
+Example output for calling VM (`dsx info`):
 ```text
-=== Diosix guest VM info ===
 Context ID     : 1
 Parent CID     : 0
 Architecture   : riscv64
 Root VM        : yes
 Hardware trust : yes
-RAM allocation : 64 MB (16384 pages)
-Virtual CPUs   : 1
+RAM allocation : 512 MB (131072 pages)
+Virtual CPUs   : 4
 Child VMs      : 2
 ```
 
-Host hypervisor info output (`diosix-ctl info --host`):
+Example output for child VM (`dsx info user`):
 ```text
-=== Diosix hypervisor information ===
+Name           : user
+Context ID     : 2
+Status         : running
+Hardware trust : untrusted
+RAM allocation : 256 MB
+Virtual CPUs   : 2
+IP / Endpoint  : 10.0.3.2
+```
+
+---
+
+### `dsx host`
+Inspects and manages the physical host machine and hypervisor kernel. Physical
+reset operations are restricted exclusively to the Root VM via the SBI System
+Reset (`SRST`) extension.
+
+```bash
+dsx host <info|reboot|poweroff|shutdown>
+```
+
+*   `host info`: Queries hypervisor release version, Git commit hash, ABI
+    version, physical host CPU core count, host RAM totals, and hardware
+    virtualization capabilities.
+*   `host reboot`: Performs a clean hardware reset of the physical host machine.
+*   `host poweroff` (or `host shutdown`): Powers off the physical host hardware.
+
+Host hypervisor info output (`dsx host info`):
+```text
 Diosix version  : 26.1 (Commit b3d4773)
 ABI version     : 0.2.0
-Host cores      : 1 physical hart(s)
+Host cores      : 4 physical hart(s)
 Host RAM        : 2048 MB total / 1536 MB free
 Timer frequency : 10000000 Hz
 Capabilities    :
@@ -66,225 +93,302 @@ Capabilities    :
 
 ---
 
-### `diosix-ctl run`
-Launches an unprivileged or privileged child VM in the background with private SSH 
-networking and optional manifest attenuation.
+### `dsx run`
+Launches an isolated child Virtual Machine in the background with private SSH
+networking, Device Tree blob configuration, and optional manifest staging.
 
 ```bash
-diosix-ctl run <elf_path> [options]
-diosix-ctl run --manifest <system.toml> --domain <domain_name> [options]
+dsx run <image|name> [options]
+dsx run --manifest <system.toml> --domain <domain_name> [options]
 ```
 
-*   `elf_path`: Absolute or relative path to the guest ELF binary.
-*   `--name <name>` *(optional)*: Friendly name for the VM (defaults to domain name or binary filename).
-*   `--domain <name>` *(optional)*: Attenuates and stages domain configuration from the system manifest.
-*   `--manifest <path>` *(optional)*: Path to system manifest (defaults to `/etc/diosix/system.toml`).
-*   `--vcpus <N>` *(optional)*: Virtual CPU limit (default: 1).
-*   `--ram <size>` *(optional)*: Memory allocation limit (e.g. `256M`, `2GiB`).
-*   `--ip <address>` *(optional)*: Private static IP address (default: `10.0.3.<cid>`).
-*   `--trusted` *(optional)*: Grants physical host MMIO and hardware interrupt access. Default is unprivileged/sandboxed (`untrusted`).
-*   `--arch <arch>` *(optional)*: Target architecture (`riscv64`, `riscv32`, `aarch64`, `x86_64`).
+*   `image|name`: Name or path of the guest ELF binary. If a bare name is
+    provided (such as `linux-guest`), `dsx` automatically searches the
+    current working directory, `/var/lib/diosix/images/`, and `/boot/`.
+*   `--name <name>` *(optional)*: Friendly name for the VM (defaults to the
+    domain name or image name).
+*   `--vcpus <N>` *(optional)*: Number of virtual CPU cores (default: 1).
+*   `--ram <size>` *(optional)*: RAM allocation ceiling (e.g. `256M`, `2GiB`).
+*   `--disk <name|size>` *(optional)*: Attach an existing virtual disk image or auto-provision sparse capacity.
+*   `--cdrom <iso|path>` (or `--iso <path>` / `--media <path>`) *(optional)*: Attach a read-only installer ISO or live media.
+*   `--ip <address>` *(optional)*: Static private IP (default: `10.0.3.<cid>`).
+*   `--domain <name>` *(optional)*: Extracts configuration and policies for the
+    domain from `/etc/diosix/system.toml`.
+*   `--manifest <path>` *(optional)*: System manifest path.
+*   `--trusted` *(optional)*: Grants physical hardware trust (default: untrusted).
+*   `--arch <arch>` *(optional)*: Target architecture (`riscv64`, `riscv32`,
+    `aarch64`, `x86_64`).
 
 Examples:
 ```bash
-# Launch a sandboxed user VM with 2 vCPUs and 256 MB RAM
-diosix-ctl run /boot/vmlinux.elf --name user --vcpus 2 --ram 256M
+# Launch an OS installer attaching an installation ISO and a new 8 GB target disk
+dsx run debian-installer --cdrom debian-12.iso --disk debian-root --disk-size 8GiB
 
-# Launch directly from system manifest domain definition
-diosix-ctl run --manifest /etc/diosix/system.toml --domain user
+# Launch a sandboxed user VM with 1 GB persistent storage disk attached
+dsx run linux-guest --name user --vcpus 2 --ram 256M --disk 1G
+
+# Launch a trusted driver domain with 1 vCPU and 128 MB RAM
+dsx run linux-guest --name sys-domain --trusted --vcpus 1 --ram 128M
+
+# Launch using a declarative domain manifest
+dsx run --manifest /etc/diosix/system.toml --domain user
 ```
 
 ---
 
-### `diosix-ctl list` / `diosix-ctl ps`
-Lists all active virtual machines within the domain hierarchy, including resource 
-quotas, status, trust level, and connection endpoints.
+### `dsx list` / `dsx ps`
+Displays a tabular list of all active virtual machines, including Context IDs,
+virtual CPU counts, RAM quotas, runtime status, trust levels, and IP endpoints.
 
 ```bash
-diosix-ctl list
-diosix-ctl ps
+dsx list
+dsx ps
 ```
 
 Example output:
 ```text
-=== Diosix guest VMs ===
 CID   Name             vCPUs   RAM       Status    Trust       IP / Endpoint
 1     root (self)      4       512 MB    running   trusted     local
-2     user             2       256 MB    running   untrusted   10.0.3.3 (ssh)
+2     sys-domain       1       128 MB    running   trusted     10.0.3.2
+3     user             2       256 MB    running   untrusted   10.0.3.3
 ```
 
 ---
 
-### `diosix-ctl login` / `diosix-ctl ssh`
-Establishes a secure, passwordless SSH session into a running child VM using the 
-pre-shared Diosix internal ED25519 keypair.
+### `dsx ssh` (aliases: `dsx login`, `dsx exec`)
+Opens an interactive login shell or runs a remote command in a child VM over
+private point-to-point network channels using pre-shared ED25519 authentication.
 
 ```bash
-diosix-ctl login <name|cid> [-- [command...]]
-diosix-ctl ssh <name|cid> [-- [command...]]
+dsx ssh [user@]<name|cid> [-- [command...]]
+dsx ssh [--user <username>] <name|cid> [-- [command...]]
 ```
 
-*   `name|cid`: Friendly VM name (e.g. `user`) or Context ID (e.g. `2`).
-*   `command` *(optional)*: Remote command to execute non-interactively.
+*   `[user@]target`: Optional remote username (defaults to `root`) and target
+    VM friendly name or numeric Context ID.
+*   `--user <username>` / `-u <username>` *(optional)*: Alternative flag to
+    specify the SSH user account.
+*   `-- [command...]` *(optional)*: Remote command string to execute
+    non-interactively.
 
 Examples:
 ```bash
-# Open interactive login shell into child VM 'user'
-diosix-ctl login user
+# Open an interactive root shell on child VM 'user'
+dsx ssh user
 
-# Execute command non-interactively on child VM 2
-diosix-ctl login 2 -- uname -a
+# Log in as user 'debian' on child VM 'user'
+dsx ssh debian@user
+
+# Execute a remote command non-interactively
+dsx ssh debian@user -- uname -a
+
+# Access child VM 2 directly by numeric Context ID
+dsx ssh root@2 -- cat /etc/os-release
 ```
 
 ---
 
-### `diosix-ctl stop` / `diosix-ctl kill`
-Terminates and tears down a running child VM.
+### `dsx stop` / `dsx kill`
+Stops and terminates a running guest Virtual Machine and its descendants,
+reclaiming allocated physical memory and scheduler quotas back to the parent VM.
 
 ```bash
-diosix-ctl stop <name|cid>
+dsx stop <name|cid|self>
+dsx kill <name|cid|self>
+```
+
+*   `name|cid`: Target child VM to terminate.
+*   `self`: Terminates the calling non-root VM. (The Root VM cannot be stopped
+    directly; use `dsx host poweroff` instead).
+
+Examples:
+```bash
+# Terminate child VM 'user'
+dsx stop user
+
+# Terminate child VM with CID 3
+dsx kill 3
+
+# Self-terminate calling child VM
+dsx stop self
+```
+
+---
+
+### `dsx restart`
+Stops a running child Virtual Machine and restarts it with its configured image
+and quota parameters.
+
+```bash
+dsx restart <name|cid>
 ```
 
 Example:
 ```bash
-diosix-ctl stop user
+dsx restart user
 ```
 
 ---
 
-### `diosix-ctl quota`
-Applies or lowers resource ceilings on the calling VM or its direct children.
+### `dsx quota`
+Inspects or lowers resource ceilings on the calling VM or its direct children.
+When invoked without resource modification flags, displays the current subtree
+quota allocation.
 
 ```bash
-diosix-ctl quota <cid|self> [--ram <MB>] [--vcpus <N>] [--depth <N>] [--descendants <N>]
+dsx quota [cid|self] [--ram <MB>] [--vcpus <N>] [--depth <N>] [--descendants <N>]
 ```
 
-*   `--ram <MB>`: Sets maximum RAM capacity in megabytes.
-*   `--vcpus <N>`: Sets maximum number of VCPUs.
-*   `--depth <N>`: Sets maximum child nesting depth.
-*   `--descendants <N>`: Sets maximum total descendant VMs.
+*   `cid|self` *(optional)*: Target VM to inspect or configure (default: `self`).
+*   `--ram <MB>` *(optional)*: Sets maximum physical RAM ceiling in megabytes.
+*   `--vcpus <N>` *(optional)*: Sets maximum virtual CPU count.
+*   `--depth <N>` *(optional)*: Sets maximum child nesting depth.
+*   `--descendants <N>` *(optional)*: Sets maximum descendant VM count.
 
-**Self-sandboxing**: Passing `self` allows a VM to voluntarily ratchet down 
-its own quotas before running untrusted workloads.
+**Self-sandboxing**: Specifying `self` allows a privileged VM to voluntarily
+lower its own resource quotas and capabilities before running untrusted code.
 
 Examples:
 ```bash
-# Limit child VM 2 to 128 MB RAM and 2 VCPUs
-diosix-ctl quota 2 --ram 128 --vcpus 2
+# Query active resource quotas and child allocations
+dsx quota
 
-# Self-sandbox the current VM to 256 MB RAM
-diosix-ctl quota self --ram 256
-```
+# Limit child VM 2 to 128 MB RAM and 1 VCPU
+dsx quota 2 --ram 128 --vcpus 1
 
-### `diosix-ctl terminate`
-Terminates a target virtual machine (the calling VM or a direct child VM) along with all of its descendants.
-
-```bash
-diosix-ctl terminate [cid|self] [exit_code]
-```
-
-Examples:
-```bash
-# Terminate child VM 2 with exit code 0
-diosix-ctl terminate 2 0
-
-# Terminate calling VM with exit code 42
-diosix-ctl terminate self 42
+# Self-sandbox calling VM to 256 MB RAM
+dsx quota self --ram 256
 ```
 
 ---
 
-### `diosix-ctl exit`
-Convenience alias to terminate the current non-root VM.
+### `dsx manifest`
+Inspects, validates, attenuates, and stages hierarchical capability manifests.
 
 ```bash
-diosix-ctl exit [exit_code]
+dsx manifest <subcmd> [options]
 ```
 
-*Note: The Root VM cannot terminate itself; use `poweroff` or `reboot`.*
-
----
-
-### `diosix-ctl drop-trust`
-Irrevocably revokes hardware trust for the calling VM. Once dropped, the 
-hypervisor unmaps host physical memory-mapped I/O (MMIO) regions and disables 
-direct interrupt routing for the VM.
-
-```bash
-diosix-ctl drop-trust
-```
-
----
-
-### `diosix-ctl manifest`
-Manages system-wide bootstrap manifests (`/etc/diosix/system.toml`), validates
-syntax, generates attenuated least-privilege child VM manifests, and stages
-manifests in hypervisor memory.
-
-```bash
-diosix-ctl manifest <show|validate|prune|set> [options]
-```
-
-*   `show [--file <path>] [--hv] [--cid <cid>]`: Displays the active manifest from
-    the local filesystem (`/etc/diosix/system.toml` or `/etc/diosix/manifest.toml`),
-    an explicit file path, or queries hypervisor staging memory (`--hv`).
-*   `validate <path/to/manifest.toml>`: Validates a system or child manifest
-    against the schema, verifying domain declarations, route patterns, and channel
-    modes.
-*   `prune <system.toml> --domain <name> [-o <out.toml>]`: Extracts and attenuates
-    the system manifest for a specific child domain, resolving its capability
-    routes and stripping out unrelated domain definitions.
-*   `set <cid> <path/to/manifest.toml>`: Uploads and stages an attenuated child
-    manifest into hypervisor memory for the specified child VM CID using the
-    `SET_MANIFEST` hypercall.
+Subcommands:
+*   `show [--file <path>] [--hv] [--cid <cid>]`: Displays the active manifest
+    from `/etc/diosix/system.toml`, a local file, or hypervisor memory (`--hv`).
+*   `validate <file.toml>`: Validates system or child manifest syntax and
+    capability constraints.
+*   `prune <system.toml> --domain <name> [-o <out.toml>]`: Attenuates the system
+    manifest for a target child domain, filtering out unneeded domains.
+*   `resolve <service_alias> [--manifest <file.toml>]`: Resolves a required
+    service alias against active policy to locate target Context IDs and routes.
+*   `set <cid> <file.toml>`: Stages an attenuated domain manifest in hypervisor
+    memory for a child VM via the `SET_MANIFEST` SBI call.
 
 Examples:
 ```bash
 # Validate system bootstrap manifest
-diosix-ctl manifest validate /etc/diosix/system.toml
+dsx manifest validate /etc/diosix/system.toml
 
 # Generate attenuated manifest for child domain 'sys'
-diosix-ctl manifest prune /etc/diosix/system.toml --domain sys -o /tmp/sys-child.toml
+dsx manifest prune /etc/diosix/system.toml --domain sys -o /tmp/sys-child.toml
 
-# Stage attenuated manifest in hypervisor for child VM 2
-diosix-ctl manifest set 2 /tmp/sys-child.toml
+# Stage manifest in hypervisor for child VM 2
+dsx manifest set 2 /tmp/sys-child.toml
 
-# Inspect manifest staged in hypervisor for child VM 2
-diosix-ctl manifest show --cid 2 --hv
+# Resolve a service alias across domain boundaries
+dsx manifest resolve gui.display --manifest /tmp/user-child.toml
 ```
 
 ---
 
-### `diosix-ctl resolve`
-Resolves a required service alias against the VM's active manifest to discover
-target Context IDs, routing domains, network endpoints, and access modes.
+### `dsx disk` (alias: `dsx storage`)
+Manages persistent virtual block storage images in `/var/lib/diosix/disks/` for
+child virtual machines.
 
 ```bash
-diosix-ctl resolve <service_alias> [--manifest <file.toml>]
+dsx disk <subcmd> [options]
 ```
 
-*   `service_alias`: Required capability or alias (for example, `gui.display` or
-    `net.wan`).
-*   `--manifest` / `-m` *(optional)*: Explicit manifest file to resolve against.
-    Defaults to `/etc/diosix/manifest.toml` or the hypervisor-staged manifest.
+Subcommands:
+*   `create <name> [--size <size>]`: Creates a sparse virtual disk image (default: `1GiB`).
+*   `list` (or `ls`): Lists all available virtual disk images, capacities, and paths.
+*   `delete <name>` (or `rm`): Deletes a virtual disk image.
+*   `resize <name> --size <size>`: Adjusts disk image capacity.
 
-Example output:
-```text
-Service resolution:
-  Service : gui.display
-  Alias   : gui.wayland
-  CID     : 0
-  Domain  : sys
-  Mode    : rw
+Examples:
+```bash
+# Create a 2 GB virtual disk for a child VM
+dsx disk create user-data --size 2GiB
+
+# List all provisioned virtual disk images
+dsx disk list
+
+# Resize a virtual disk to 4 GB
+dsx disk resize user-data --size 4GiB
+
+# Delete a virtual disk image
+dsx disk delete user-data
 ```
 
 ---
 
-### `diosix-ctl poweroff` and `diosix-ctl reboot`
-Powers off or restarts the host hardware machine. This command is restricted 
-exclusively to the Root VM via the SBI System Reset (`SRST`) extension.
+### `dsx snapshot`
+Manages VM state checkpoints and snapshots in `/var/lib/diosix/snapshots/`.
 
 ```bash
-diosix-ctl poweroff
-diosix-ctl reboot
+dsx snapshot <subcmd> [options]
 ```
+
+Subcommands:
+*   `save <name|cid> [snap_id]`: Saves a running VM state checkpoint.
+*   `list` (or `ls`): Lists saved snapshots and target VMs.
+*   `restore <snap_id>`: Restores VM state from a snapshot checkpoint.
+*   `delete <snap_id>` (or `rm`): Deletes a saved snapshot.
+
+Examples:
+```bash
+# Save a snapshot checkpoint for VM 'user'
+dsx snapshot save user backup-1
+
+# List all saved VM snapshots
+dsx snapshot list
+
+# Restore VM state from a snapshot
+dsx snapshot restore backup-1
+
+# Delete a snapshot checkpoint
+dsx snapshot delete backup-1
+```
+
+### `dsx image` (alias: `dsx iso`)
+Manages guest OS kernel binaries in `/var/lib/diosix/images/` and installer ISOs in `/var/lib/diosix/iso/`.
+
+```bash
+dsx image <subcmd> [options]
+```
+
+Subcommands:
+*   `list` (or `ls`): Lists all available OS kernels, installer ISOs, file formats, and paths.
+*   `import <file> [--name <name>]` (or `add`): Imports a downloaded ISO or ELF kernel into the repository.
+*   `delete <name>` (or `rm`): Deletes an image or ISO from the repository.
+
+Examples:
+```bash
+# Import a downloaded Debian installer ISO into the canonical repository
+dsx image import debian-12.0-riscv64-netinst.iso --name debian-12.iso
+
+# List available images and ISO media
+dsx image list
+
+# Delete an image from repository
+dsx image delete debian-12.iso
+```
+
+---
+
+### `dsx drop-trust`
+Irrevocably revokes hardware trust for the calling Virtual Machine. Once
+dropped, the hypervisor unmaps host physical memory-mapped I/O (MMIO) pages and
+disables direct interrupt routing for the VM.
+
+```bash
+dsx drop-trust
+```
+

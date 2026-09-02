@@ -57,7 +57,7 @@ pub fn init() void {
 pub fn initCpuFeatures() void {
     if (config.legacy_cpu) return;
 
-    var envcfg_val: usize = 0;
+    var envcfg_val: usize = riscv.ENVCFG.CACHE_OPS_ALL;
 
     if (riscv.riscv_supports_sstc) {
         // Enable STCE to allow supervisor/guest timer compare registers (stimecmp/vstimecmp)
@@ -65,9 +65,6 @@ pub fn initCpuFeatures() void {
     }
 
     if (riscv.riscv_supports_smstateen) {
-        // Enable Cache Block Operations: CBZE (bit 7), CBCFE (bit 6), and CBIE (bits 4-5) = 240 (0xF0).
-        envcfg_val |= riscv.ENVCFG.CACHE_OPS_ALL;
-
         // Enable state-enables for AIA, IMSIC, CSRIND, and ENVCFG to delegate native register access
         const stateen_base = riscv.STATEEN.BASE_FEATURES;
 
@@ -402,6 +399,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
         } else if (vc.exec_path == .emulated) {
             @memcpy(context, vc.getNativeContext());
             pcore.contextSwitch(vc);
+            vc.getNativeMachine().mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT) | (@as(usize, 1) << 21);
             riscv.writeMstatus(vc.getNativeMachine().mstatus);
             riscv.writeMepc(vc.getNativeMachine().mepc);
         }
@@ -419,7 +417,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         ms.hvip |= riscv.HVIP.VSSIP;
     }
 
-    ms.mstatus |= (@as(usize, 1) << 21); // Set TW bit so VS-mode WFI traps to M-mode
+    ms.mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT) | (@as(usize, 1) << 21); // Ensure physical VS, FS, TW are set
     riscv.writeMepc(ms.mepc);
     riscv.writeMstatus(ms.mstatus);
 
@@ -540,10 +538,9 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeVsatp(gs.vsatp);
 
         if (!config.legacy_cpu) {
-            if (riscv.riscv_supports_smstateen) {
-                riscv.writeVsenvcfg(gs.vsenvcfg);
-                riscv.writeHenvcfg((1 << 63) | 240);
-            }
+            var henvcfg_val: usize = riscv.ENVCFG.CACHE_OPS_ALL;
+            if (riscv.riscv_supports_sstc) henvcfg_val |= riscv.ENVCFG.STCE;
+            riscv.writeHenvcfg(henvcfg_val);
             if (riscv.riscv_supports_sstc) riscv.writeVstimecmp(gs.vstimecmp);
         }
 

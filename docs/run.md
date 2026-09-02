@@ -67,6 +67,19 @@ password.
 
 Rebooting the Root VM reboots the hypervisor.
 
+### Run with live storage media
+
+To boot Diosix in QEMU with the full GUID Partition Table (GPT) live storage image attached as primary virtio-blk block storage:
+
+```bash
+./scripts/build.sh run-live
+```
+
+In this mode, the Root VM automatically detects and mounts the persistent guest storage partition at `/var/lib/diosix`. The storage partition provides:
+*   Pre-seeded base guest OS images at `/var/lib/diosix/images/` (such as `linux-guest.elf`).
+*   System domain manifests at `/var/lib/diosix/manifests/` (such as `system.toml`).
+*   Persistent disk space for stateful guest virtual machines.
+
 ---
 
 ## Run inside a Docker container

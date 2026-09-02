@@ -152,10 +152,12 @@ struct guest_info {
     unsigned char is_root;
     unsigned char target_arch;
     unsigned char _reserved;
-    unsigned long used_ram_pages;
-    unsigned long max_ram_pages;
+    unsigned long vcpus;
+    unsigned long self_ram_pages;
     unsigned long used_vcpus;
     unsigned long max_vcpus;
+    unsigned long used_ram_pages;
+    unsigned long max_ram_pages;
     unsigned long child_count;
 };
 

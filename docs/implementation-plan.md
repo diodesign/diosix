@@ -1737,6 +1737,47 @@ const ArchBackend = union(enum) {
 
 The dynarec engine, code cache, block chainer, and tiered compilation infrastructure are architecture-independent. Only the decoder, emitter, MMU walker, and system call handler are per-architecture.
 
+#### 10.5.5 virtio-gpu (Device ID 16) — Disaggregated Desktop Display
+
+Provides kernel-agnostic, zero-modification display capabilities for standard desktop OS images (Ubuntu, Fedora, Debian, Arch, Windows, FreeBSD):
+
+- **Guest Driver**: Upstream Linux DRM/KMS `virtio-gpu` driver (`CONFIG_DRM_VIRTIO_GPU=y/m`), creating standard `/dev/dri/card0` and `/dev/dri/renderD128`.
+- **Virtqueues**:
+  - **Virtqueue 0 (Control)**: Display control commands (`VIRTIO_GPU_CMD_GET_DISPLAY_INFO`, `RESOURCE_CREATE_2D`, `RESOURCE_UNREF`, `SET_SCANOUT`, `RESOURCE_FLUSH`, `TRANSFER_TO_HOST_2D`, `RESOURCE_ATTACH_BACKING`, `RESOURCE_DETACH_BACKING`).
+  - **Virtqueue 1 (Cursor)**: Hardware cursor updates (`VIRTIO_GPU_CMD_UPDATE_CURSOR`, `MOVE_CURSOR`).
+- **Disaggregated Backend Architecture**:
+  - The M-mode hypervisor enforces memory safety and routes control descriptors to the sandboxed **GUI System Domain (`sys.gui`)** via zero-copy shared memory (`shmem`).
+  - The GUI domain imports the guest's scanout buffer directly via `dma-buf` / `EGLImage` and composites it into a Wayland surface/window without complex graphics decoding logic inside the M-mode TCB.
+
+#### 10.5.6 virtio-input (Device ID 18) — Input Event Virtualization
+
+Provides kernel-agnostic keyboard, mouse, and multi-touch tablet input:
+
+- **Guest Driver**: Upstream `virtio-input` driver (`CONFIG_VIRTIO_INPUT=y/m`).
+- **Virtqueues**:
+  - **Virtqueue 0 (Event)**: Guest receives Linux `evdev` input events forwarded from the GUI domain (key presses, pointer motion, touch).
+  - **Virtqueue 1 (Status)**: Host receives LED/keyboard status updates.
+
+### 10.6 MMIO Routing
+
+All MMIO accesses are routed through the virtual device bus:
+
+```
+Guest MMIO access
+    │
+    ▼
+Bus.read() / Bus.write()
+    │
+    ├─ 0x10000000..0x100000FF → vUART (16550)
+    ├─ 0x10001000..0x10001FFF → virtio-console
+    ├─ 0x10002000..0x10002FFF → virtio-blk
+    ├─ 0x10003000..0x10003FFF → virtio-net
+    ├─ 0x10004000..0x10004FFF → virtio-gpu (display)
+    ├─ 0x10005000..0x10005FFF → virtio-input (keyboard/pointer)
+    ├─ 0x02000000..0x0200FFFF → vCLINT
+    ├─ 0x0C000000..0x0FFFFFFF → vPLIC
+```
+
 ---
 
 ## 20. Implementation Phasing
@@ -1790,15 +1831,24 @@ The dynarec engine, code cache, block chainer, and tiered compilation infrastruc
 - [ ] **DROP_TRUST** SBI implementation.
 - [ ] **Resource quota enforcement** and cascading.
 
-### Phase 5: Lifecycle & Migration
+### Phase 5: Display Virtualization & GUI Management
 
-- [ ] **Guest state serialization** (VCpu, memory, devices).
-- [ ] **Checkpoint/restore** (snapshot running guest, resume later).
-- [ ] **Live migration** (iterative pre-copy with dirty page tracking).
-- [ ] **Fast VM cloning** via serialization.
-- [ ] **Child VM lifecycle** (run, stop, restart, terminate).
+- [x] **virtio-gpu**: MMIO model, 2D control virtqueue, host-side compositor support via shared memory (`hypervisor/hardware/emulation/devices/vgpu.zig`).
+- [x] **virtio-input**: Keyboard/mouse forwarding via event virtqueue (`hypervisor/hardware/emulation/devices/vinput.zig`).
+- [x] **GUI Domain Architecture (`sys.gui`)**: Dedicated DRM/KMS compositor VM specification and Buildroot profile (`boot/riscv64-linux-guivm.config`, `boot/linux-guivm-hardware.fragment`).
+- [x] **Hypervisor Management Console (`dsx gui` / `dsx dashboard`)**: Live ANSI/Wayland interactive dashboard showing VM quotas, status, disks, and commands.
+- [x] **GUI Routing Integration**: Wayland/EGL guest frame rendering route via sandboxed GUI domain (`[domains.gui]` in `system.toml`).
 
-### Phase 6: AArch64 Emulation
+### Phase 6: Lifecycle, Migration & Child VM Storage Handling
+
+- [x] **Child VM Persistent Storage Management**: `dsx disk create|list|delete|resize` raw virtual disk management in `/var/lib/diosix/disks/`.
+- [x] **Declarative Storage Manifest Attachment**: Support for `disk` and `storage_size` in system manifests and `dsx run --disk <name|size>`.
+- [x] **Guest state serialization & Snapshots**: `dsx snapshot save|list|restore|delete` VM state checkpointing in `/var/lib/diosix/snapshots/`.
+- [x] **Child VM lifecycle**: Robust lifecycle tracking and control (`dsx run`, `dsx stop`, `dsx restart`, `dsx info`).
+- [ ] **Live migration**: Iterative pre-copy with dirty page tracking.
+- [ ] **Fast VM cloning** via serialization snapshot templates.
+
+### Phase 7: AArch64 Emulation
 
 - [ ] A64 instruction decoder.
 - [ ] AArch64 register model and system register emulation.
@@ -1808,7 +1858,7 @@ The dynarec engine, code cache, block chainer, and tiered compilation infrastruc
 - [ ] Block chaining + tiered compilation (reuse engine infrastructure).
 - [ ] Linux aarch64 boots to `login:`.
 
-### Phase 7: x86_64 Emulation & Nested Virtualization
+### Phase 8: x86_64 Emulation & Nested Virtualization
 
 - [ ] x86-64 variable-length instruction decoder.
 - [ ] x86 register model, EFLAGS, control registers.
@@ -1820,7 +1870,7 @@ The dynarec engine, code cache, block chainer, and tiered compilation infrastruc
 - [ ] **Nested virtualization**: H-extension CSR trapping and shadow G-stage table composition.
 - [ ] Extensible CSR dispatch table for future CSR emulation.
 
-### Phase 8: Optimization & Verification
+### Phase 9: Optimization & Verification
 
 - [ ] **JIT peephole optimizations** (redundant load elimination, constant folding).
 - [ ] **Trace-based compilation** (compile across basic block boundaries for hot paths).

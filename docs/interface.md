@@ -231,10 +231,12 @@ struct guest_info {
     unsigned char is_root;        /* 1 if Root VM, 0 otherwise */
     unsigned char target_arch;    /* 0=rv64, 1=rv32, 2=aarch64, 3=x86_64 */
     unsigned char _reserved;      /* Padding byte */
-    unsigned long used_ram_pages; /* Physical 4 KB pages currently mapped */
-    unsigned long max_ram_pages;  /* Maximum 4 KB page ceiling */
-    unsigned long used_vcpus;     /* Active VCPUs */
-    unsigned long max_vcpus;      /* Maximum VCPUs allowed */
+    unsigned long vcpus;          /* Calling VM's own active Virtual CPUs */
+    unsigned long self_ram_pages; /* Calling VM's own allocated 4 KB RAM pages */
+    unsigned long used_vcpus;     /* Total subtree VCPUs consumed (self + children) */
+    unsigned long max_vcpus;      /* Maximum VCPUs quota ceiling */
+    unsigned long used_ram_pages; /* Total subtree 4 KB RAM pages consumed */
+    unsigned long max_ram_pages;  /* Maximum 4 KB RAM page quota ceiling */
     unsigned long child_count;    /* Number of active child VMs */
 };
 ```

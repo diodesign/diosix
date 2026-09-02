@@ -12,7 +12,7 @@ domain = "diosix.local"
 # ------------------------------------------------------------------------------
 [domains.sys]
 name = "sys-domain"
-image = "/boot/vmlinux.elf"
+image = "/var/lib/diosix/images/linux-guest.elf"
 vcpus = 2
 ram = "2GiB"
 ip = "10.0.3.2"
@@ -31,11 +31,50 @@ routes = [
 ]
 
 # ------------------------------------------------------------------------------
+# GUI Domain: Dedicated display compositor, seat input, and window management
+# ------------------------------------------------------------------------------
+[domains.gui]
+name = "gui-domain"
+image = "/var/lib/diosix/images/gui-guest.elf"
+vcpus = 2
+ram = "512 MB"
+ip = "10.0.3.4"
+can_provide = ["gui.*", "display.*", "seat.*"]
+can_require = ["net.*", "fs.*"]
+
+provides = [
+  { service = "gui.wayland", channel = "vsock", type = "display" },
+  { service = "gui.seat", channel = "shmem", type = "input" }
+]
+
+routes = [
+  { require = "net.wan", resolve_to = "sys.net.wan" },
+  { require = "fs.user", resolve_to = "sys.fs.home" }
+]
+
+# ------------------------------------------------------------------------------
+# Config Domain: Dedicated graphical host management & configuration app
+# ------------------------------------------------------------------------------
+[domains.config]
+name = "config-domain"
+image = "/var/lib/diosix/images/config-guest.elf"
+vcpus = 2
+ram = "512 MB"
+ip = "10.0.3.5"
+can_provide = ["config.*", "admin.*"]
+can_require = ["gui.*", "host.manage"]
+
+routes = [
+  { require = "gui.display", resolve_to = "gui.gui.wayland" },
+  { require = "host.manage", resolve_to = "root.ctl" }
+]
+
+# ------------------------------------------------------------------------------
 # User Application Domain: Standard sandboxed userland environment
 # ------------------------------------------------------------------------------
 [domains.user]
 name = "user-domain"
-image = "/boot/vmlinux.elf"
+image = "/var/lib/diosix/images/linux-guest.elf"
 vcpus = 4
 ram = "14GiB"
 ip = "10.0.3.3"
@@ -44,6 +83,7 @@ can_require = ["net.*", "gui.*", "fs.*"]
 
 routes = [
   { require = "net.wan", resolve_to = "sys.net.wan" },
-  { require = "gui.display", resolve_to = "sys.gui.wayland" },
+  { require = "gui.display", resolve_to = "gui.gui.wayland" },
   { require = "fs.user", resolve_to = "sys.fs.home" }
 ]
+

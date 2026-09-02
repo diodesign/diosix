@@ -39,14 +39,23 @@ manifest attenuation, or the `dsx` command-line utility, run the live QEMU
 integration test harness:
 
 ```bash
-# Compile the hypervisor and run the 14-stage live guest integration suite
+# Compile the hypervisor and run the 15-stage live guest integration suite
 ./scripts/build.sh
 ./scripts/test_manifest_integration.py
 ```
 
-This automated test boots QEMU, logs into the Root VM, and validates all
-hypercalls, quotas, manifest attenuation rules, service resolution, SSH
-lifecycle management, and guest-initiated shutdown.
+### Live media generation and testing
+
+To build a standalone, bootable hybrid GUID Partition Table (GPT) disk image
+suitable for flashing to SD cards/eMMC or booting directly in QEMU:
+
+```bash
+# Build the bootable hybrid GPT live disk image (zig-out/diosix-live-riscv64.img)
+./scripts/build.sh live-image
+
+# Boot QEMU with the live disk image attached as primary storage
+./scripts/build.sh run-live
+```
 
 Ensure both unit tests and integration tests pass before submitting changes
 for review.
