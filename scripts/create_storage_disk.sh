@@ -21,7 +21,8 @@ fi
 mkdir -p "$(dirname "$OUT_IMG")"
 STAGING_DIR="$(dirname "$OUT_IMG")/storage-staging"
 rm -rf "$STAGING_DIR"
-mkdir -p "$STAGING_DIR/images" "$STAGING_DIR/manifests"
+mkdir -p "$STAGING_DIR/images" "$STAGING_DIR/manifests" "$STAGING_DIR/keys"
+chmod 700 "$STAGING_DIR/keys"
 
 # Copy kernel image to standard locations on the storage disk (strip if possible)
 if [ -f "$KERNEL_ELF" ]; then

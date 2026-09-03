@@ -134,10 +134,20 @@ to the entry point.
     `a1`, or an error code on failure.
 
 #### `GET_INFO` (`FID 5`)
-Queries execution state, resource limits, and metadata for the calling VM.
-*   `a0`: GPA pointer to a destination `GuestInfo` struct.
-*   `a1`: Size of the `GuestInfo` buffer in bytes.
-*   **Returns**: `SBI_SUCCESS` (`0`) on success.
+Queries execution state, resource limits, and metadata for the calling VM or a
+direct child VM.
+*   `a0`: Target Context ID (CID). Passing `1` queries the calling VM itself;
+    passing `2..N` queries a direct child VM. Target CID `0` (the caller's parent)
+    is not inspectable and returns `SBI_ERR_DENIED`. (To maintain backwards
+    compatibility, passing a GPA buffer address in `a0` where `a0 >= 4096`
+    defaults to inspecting the calling VM).
+*   `a1`: Guest Physical Address (GPA) pointer to a destination `GuestInfo`
+    struct.
+*   `a2`: Size of the `GuestInfo` buffer in bytes.
+*   **Returns**: `SBI_SUCCESS` (`0`) on success, `SBI_ERR_DENIED` if `a0` is `0`
+    (parent query denied), `SBI_ERR_INVALID_PARAM` if the specified target CID
+    does not exist or the buffer is too small, or `SBI_ERR_INVALID_ADDRESS` if
+    the GPA buffer pointer is invalid.
 
 #### `SET_QUOTA` (`FID 6`)
 Applies resource ceilings to a target VM.
@@ -225,14 +235,14 @@ alignment.
 ### `GuestInfo`
 ```c
 struct guest_info {
-    unsigned long guest_id;       /* Context ID (1 for caller) */
-    unsigned long parent_id;      /* Parent Context ID (0) */
+    unsigned long guest_id;       /* Context ID (1 for caller, or child CID) */
+    unsigned long parent_id;      /* Parent Context ID (0 for caller's parent) */
     unsigned char is_trusted;     /* 1 if trusted for MMIO, 0 otherwise */
     unsigned char is_root;        /* 1 if Root VM, 0 otherwise */
     unsigned char target_arch;    /* 0=rv64, 1=rv32, 2=aarch64, 3=x86_64 */
-    unsigned char _reserved;      /* Padding byte */
-    unsigned long vcpus;          /* Calling VM's own active Virtual CPUs */
-    unsigned long self_ram_pages; /* Calling VM's own allocated 4 KB RAM pages */
+    unsigned char assigned_cid;   /* Handle assigned to this VM by its parent */
+    unsigned long vcpus;          /* VM's own active Virtual CPUs */
+    unsigned long self_ram_pages; /* VM's own allocated 4 KB RAM pages */
     unsigned long used_vcpus;     /* Total subtree VCPUs consumed (self + children) */
     unsigned long max_vcpus;      /* Maximum VCPUs quota ceiling */
     unsigned long used_ram_pages; /* Total subtree 4 KB RAM pages consumed */

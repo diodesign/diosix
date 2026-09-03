@@ -131,6 +131,8 @@ For more information about Diosix, see the following documentation:
    Linux driver interface.
 *  **[Command-line interface](docs/cli.md):** Learn how to use the `diosix-ctl` (`dsx`) utility
    to run, control, and communicate with guest virtual machines.
+*  **[Security model](docs/security.md):** Understand hardware-enforced isolation,
+   tree-based segmentation, asymmetric credential management, and network containment.
 *  **[Build Diosix](docs/build.md):** Learn about the build system, build commands,
    and incremental build caching.
 *  **[Run Diosix](docs/run.md):** Learn how to run the hypervisor, use target

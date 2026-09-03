@@ -126,9 +126,27 @@ and its future descendants.
 
 ## Communication and lineage isolation
 
-VMs are isolated and can only communicate with their immediate parent and
-direct children. Guests that do not share a direct parent-child relationship
-cannot interact or detect each other.
+VMs are organized into a strict hierarchical tree. To maintain strict isolation
+and prevent lateral movement across the infrastructure, the hypervisor enforces
+tree-based segmentation:
+
+*   **Relative Context IDs (CIDs)**: Guest VMs address adjacent nodes using
+    relative Context IDs rather than global system identifiers:
+    *   `CID 0` represents the immediate parent VM.
+    *   `CID 1` represents the calling VM itself.
+    *   `CID 2..N` represent direct children of the calling VM.
+    Guests are blind to ancestors beyond their immediate parent and blind to
+    siblings or unrelated branches.
+*   **Asymmetric downward management**: Control and remote management sessions
+    flow strictly downward from parent to child (`Parent -> Child`). The Root VM
+    retains private management credentials, while child VMs retain only
+    authorized public keys (`authorized_keys`).
+*   **Virtual network isolation**: Network packets over the virtual network
+    device (`diosix0`) are statefully filtered. The parent router drops all
+    inbound connection attempts initiated by child VMs (`ctstate NEW`) and drops
+    all lateral packet forwarding between sibling child VMs. Sibling VMs cannot
+    communicate across the virtual network unless explicitly connected via
+    attenuated manifest capabilities.
 
 ---
 

@@ -102,6 +102,11 @@ zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
 log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
 
+# Clean any lingering private keys from previous target builds
+if [ -d "$BUILDROOT_DIR/output/target/etc/diosix/keys" ]; then
+    rm -f "$BUILDROOT_DIR"/output/target/etc/diosix/keys/id_*
+fi
+
 # 3. BuildRoot Workspace Setup
 log_step "[2/5] Preparing Buildroot workspace..."
 if [ ! -d "$BUILDROOT_DIR/.git" ]; then

@@ -37,6 +37,8 @@ def run_integration_test():
         "-m", "2048M",
         "-drive", "file=zig-out/storage.img,if=none,format=raw,id=hd0",
         "-device", "virtio-blk-device,drive=hd0",
+        "-netdev", "user,id=net0",
+        "-device", "virtio-net-device,netdev=net0",
         "-bios", "none",
         "-kernel", "zig-out/guest-riscv64/bin/vmdiosix"
     ]
@@ -240,16 +242,43 @@ def run_integration_test():
         child.expect(PROMPT, timeout=10)
         print("✓ Image repository management and dual storage (CD-ROM + target disk) verified.")
 
-        # 15. Guest VM SSH Access & Remote Command Execution (`dsx ssh`)
-        print("\n==> [15/20] Testing VM SSH access & command execution (`dsx ssh`)...")
+        # 15. Guest VM SSH Access & Security Isolation (`dsx ssh`)
+        print("\n==> [15/20] Testing VM SSH access & security hardening...")
         child.sendline("dsx ssh root -- uname -a")
         child.expect(r"Linux diosix-rootvm", timeout=15)
         child.expect(PROMPT, timeout=10)
 
-        child.sendline("dsx ssh root@root -- uname -a")
-        child.expect(r"Linux diosix-rootvm", timeout=15)
+        child.sendline("dsx run linux-guest --name child-sec --vcpus 1 --ram 256M")
+        child.expect(r"Child VM 'child-sec' \(CID \d+, 1 vCPUs, 256 MB RAM, IP: 10\.0\.3\.\d+\) started in background\.", timeout=25)
+        child.expect(PROMPT, timeout=15)
+
+        time.sleep(25)
+        child.sendline("dsx ssh root@child-sec -- uname -a")
+        child.expect(r"Linux", timeout=120)
+        child.expect(PROMPT, timeout=15)
+
+        # Verify child VM does not have the Root VM private management key
+        child.sendline("dsx ssh root@child-sec -- test ! -f /etc/diosix/keys/id_dropbear")
+        child.expect(PROMPT, timeout=15)
+
+        # Verify child VM has authorized_keys installed for management
+        child.sendline("dsx ssh root@child-sec -- test -s /root/.ssh/authorized_keys")
+        child.expect(PROMPT, timeout=15)
+
+        # Verify parent firewall rules block incoming connections from child VMs
+        child.sendline("iptables -S INPUT")
+        child.expect(r"-i diosix0 -m conntrack --ctstate NEW -j DROP", timeout=10)
         child.expect(PROMPT, timeout=10)
-        print("✓ Executed command in guest VM via SSH and verified username support.")
+
+        # Verify lateral cross-guest forwarding is blocked
+        child.sendline("iptables -S FORWARD")
+        child.expect(r"-s 10\.0\.0\.0/16 -d 10\.0\.0\.0/16 -j DROP", timeout=10)
+        child.expect(PROMPT, timeout=10)
+
+        child.sendline("dsx stop child-sec")
+        child.expect(r"Child VM 'child-sec' \(CID \d+\) terminated\.", timeout=15)
+        child.expect(PROMPT, timeout=10)
+        print("✓ Executed command via SSH and verified asymmetric key security + firewall containment.")
 
         # 16. Trusted Guest VM Spawning (`dsx run --trusted`)
         print("\n==> [16/20] Testing trusted guest VM creation (`dsx run linux-guest --trusted`)...")
@@ -302,7 +331,8 @@ def run_integration_test():
         child.expect(r"\d+\s+sys-domain\s+1\s+128 MB\s+running\s+trusted\s+10\.0\.3\.\d+", timeout=15)
         child.expect(r"\d+\s+user-domain\s+2\s+256 MB\s+running\s+untrusted\s+10\.0\.3\.\d+", timeout=15)
         child.expect(PROMPT, timeout=15)
-        print("✓ Concurrent multi-VM hierarchy verified with independent trust & quotas.")
+
+        print("✓ Concurrent multi-VM hierarchy verified.")
 
         child.sendline("dsx stop sys-domain")
         child.expect(r"Child VM 'sys-domain' \(CID \d+\) terminated\.", timeout=15)

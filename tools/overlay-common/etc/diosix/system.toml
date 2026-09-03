@@ -87,3 +87,20 @@ routes = [
   { require = "fs.user", resolve_to = "sys.fs.home" }
 ]
 
+# ------------------------------------------------------------------------------
+# Air-Gapped Vault Domain: Highly isolated cryptographic / secure storage vault
+# (Zero network capabilities, zero WAN routes; display output only)
+# ------------------------------------------------------------------------------
+[domains.vault]
+name = "vault-domain"
+image = "/var/lib/diosix/images/linux-guest.elf"
+vcpus = 1
+ram = "256 MB"
+ip = "10.0.3.6"
+can_provide = ["crypto.vault"]
+can_require = ["gui.*"]
+
+routes = [
+  { require = "gui.display", resolve_to = "gui.gui.wayland" }
+]
+

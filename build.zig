@@ -233,6 +233,10 @@ pub fn build(b: *std.Build) !void {
     try qemu_args.append(b.allocator, "file=" ++ storage_img_path ++ ",if=none,format=raw,id=hd0");
     try qemu_args.append(b.allocator, "-device");
     try qemu_args.append(b.allocator, "virtio-blk-device,drive=hd0");
+    try qemu_args.append(b.allocator, "-netdev");
+    try qemu_args.append(b.allocator, "user,id=net0");
+    try qemu_args.append(b.allocator, "-device");
+    try qemu_args.append(b.allocator, "virtio-net-device,netdev=net0");
 
     try qemu_args.append(b.allocator, "-bios");
     try qemu_args.append(b.allocator, "none");
@@ -279,6 +283,33 @@ pub fn build(b: *std.Build) !void {
 
     const run_live_option = b.step("run-live", "Run the hypervisor with the live GPT disk image attached");
     run_live_option.dependOn(&run_live_step.step);
+
+    // Create a 'zig build run-gui' command to launch with VirtIO-GPU and graphical window
+    var qemu_gui_args = ArrayList([]const u8).empty;
+    defer qemu_gui_args.deinit(b.allocator);
+    for (qemu_args.items) |arg| {
+        if (std.mem.eql(u8, arg, "-nographic")) {
+            try qemu_gui_args.append(b.allocator, "-serial");
+            try qemu_gui_args.append(b.allocator, "mon:stdio");
+        } else {
+            try qemu_gui_args.append(b.allocator, arg);
+        }
+    }
+    try qemu_gui_args.append(b.allocator, "-device");
+    try qemu_gui_args.append(b.allocator, "virtio-gpu-pci");
+    try qemu_gui_args.append(b.allocator, "-device");
+    try qemu_gui_args.append(b.allocator, "virtio-keyboard-pci");
+    try qemu_gui_args.append(b.allocator, "-device");
+    try qemu_gui_args.append(b.allocator, "virtio-tablet-pci");
+
+    const run_gui_step = b.addSystemCommand(qemu_gui_args.items);
+    run_gui_step.step.dependOn(b.getInstallStep());
+    run_gui_step.step.dependOn(&create_storage_cmd.step);
+    run_gui_step.addArtifactArg(vmdiosix);
+    run_gui_step.stdio = .inherit;
+
+    const run_gui_option = b.step("run-gui", "Run the hypervisor with VirtIO-GPU and graphical window enabled");
+    run_gui_option.dependOn(&run_gui_step.step);
 
     // run all the unit tests on the host system
     // tests use a separate module targeting native so the test runner has OS support

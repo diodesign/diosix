@@ -94,9 +94,11 @@ pub const DiosixClient = struct {
         if (signed_rc < 0) return error.HypercallFailed;
     }
 
-    pub fn getInfo(self: *DiosixClient) !GuestInfo {
+    pub fn getInfo(self: *DiosixClient, target_cid: usize) !GuestInfo {
         const fd = try self.getFd();
         var info: GuestInfo = undefined;
+        @memset(std.mem.asBytes(&info), 0);
+        info.guest_id = target_cid;
         const rc = linux.ioctl(fd, IOCTL_GET_INFO, @intFromPtr(&info));
         const signed_rc: isize = @bitCast(rc);
         if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) return error.PermissionDenied;

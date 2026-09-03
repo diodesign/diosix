@@ -266,7 +266,13 @@ pub const Guest = struct {
 
     pub fn setQuota(self: *Guest, args: sbi.QuotaArgs) !void {
         if (args.target_cid == CID_SELF) {
-            if (args.max_ram_pages > 0) self.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
+            if (args.max_ram_pages > 0) {
+                self.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
+                self.quotas.used_ram_pages = @min(self.quotas.used_ram_pages, self.quotas.max_ram_pages);
+                if (self.space.range_size == 0 or self.space.range_size > self.quotas.max_ram_pages * physmem.PageSize) {
+                    self.space.range_size = self.quotas.max_ram_pages * physmem.PageSize;
+                }
+            }
             if (args.max_vcpus > 0) self.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
             if (args.max_child_depth > 0) self.quotas.max_child_depth = @min(self.quotas.max_child_depth, args.max_child_depth);
             if (args.max_descendants > 0) self.quotas.max_descendants = @min(self.quotas.max_descendants, args.max_descendants);
@@ -275,6 +281,7 @@ pub const Guest = struct {
                 if (args.max_ram_pages > 0) {
                     child.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
                     child.quotas.used_ram_pages = child.quotas.max_ram_pages;
+                    child.space.range_size = child.quotas.max_ram_pages * physmem.PageSize;
                 }
                 if (args.max_vcpus > 0) {
                     child.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
@@ -599,7 +606,16 @@ pub const Guest = struct {
             .is_trusted = is_trusted,
             .is_root = false,
             .target_arch = target_arch,
-            .quotas = self.quotas,
+            .quotas = .{
+                .max_ram_pages = self.quotas.max_ram_pages,
+                .used_ram_pages = 0,
+                .max_vcpus = num_vcpus,
+                .used_vcpus = num_vcpus,
+                .max_child_depth = if (self.quotas.max_child_depth > 0) self.quotas.max_child_depth - 1 else 0,
+                .current_depth = self.quotas.current_depth + 1,
+                .max_descendants = if (self.quotas.max_descendants > 0) self.quotas.max_descendants - 1 else 0,
+                .used_descendants = 0,
+            },
             .parent = self,
             .children = .{ .start = null, .end = null },
             .child_node = null,

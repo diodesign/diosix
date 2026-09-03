@@ -151,7 +151,7 @@ struct guest_info {
     unsigned char is_trusted;
     unsigned char is_root;
     unsigned char target_arch;
-    unsigned char _reserved;
+    unsigned char assigned_cid;
     unsigned long vcpus;
     unsigned long self_ram_pages;
     unsigned long used_vcpus;
@@ -190,10 +190,16 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     case IOCTL_GET_INFO: {
         struct guest_info *kinfo = kzalloc(sizeof(*kinfo), GFP_KERNEL);
         phys_addr_t pa;
+        unsigned long target_cid = 1;
         if (!kinfo)
             return -ENOMEM;
+        if (copy_from_user(kinfo, (void __user *)arg, sizeof(*kinfo)) == 0) {
+            if (kinfo->guest_id > 0) {
+                target_cid = kinfo->guest_id;
+            }
+        }
         pa = virt_to_phys(kinfo);
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_INFO, (unsigned long)pa, sizeof(*kinfo), 0, 0, 0, 0);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_INFO, target_cid, (unsigned long)pa, sizeof(*kinfo), 0, 0, 0);
         if (ret.error) {
             kfree(kinfo);
             return -EIO;
@@ -783,9 +789,9 @@ static int init_diosix_net(void)
     info = kzalloc(sizeof(*info), GFP_KERNEL);
     if (info) {
         info_pa = virt_to_phys(info);
-        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_INFO, (unsigned long)info_pa, sizeof(*info), 0, 0, 0, 0);
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_INFO, 1, (unsigned long)info_pa, sizeof(*info), 0, 0, 0);
         if (ret.error == 0) {
-            self_cid = info->guest_id;
+            self_cid = (info->assigned_cid > 0) ? info->assigned_cid : 1;
         }
         kfree(info);
     }

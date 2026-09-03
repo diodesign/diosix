@@ -429,10 +429,6 @@ fn deliverPacket(target: *guest.Guest, pkt_data: []const u8) void {
         var it = target.vcores.start;
         while (it) |node| {
             const target_vc = node.contents;
-            @atomicStore(bool, &target_vc.pending_ipi, true, .release);
-            if (target_vc.exec_path == .native) {
-                target_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
-            }
             if (target_vc.tryWake()) {
                 scheduler.queue(target_vc);
             }
@@ -475,30 +471,63 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.DIOSIX.GET_INFO => {
-            const info_gpa = a0;
-            const info_len = a1;
+            const target_cid = if (a0 < 4096) a0 else 1;
+            const info_gpa = if (a0 < 4096) a1 else a0;
+            const info_len = if (a0 < 4096) a2 else a1;
 
             if (info_len != 0 and info_len < @sizeOf(interface.GuestInfo)) {
                 setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
                 return;
             }
 
+            if (target_cid == 0) {
+                setResult(vc, context, SBI_ERR_DENIED, 0);
+                return;
+            }
+
+            const target_guest: ?*guest.Guest = if (target_cid == 1)
+                g
+            else
+                g.getGuestByCid(target_cid);
+
+            if (target_guest == null) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+            const tg = target_guest.?;
+
             if (g.space.translateGPA(info_gpa) catch null) |hpa| {
                 const info_ptr: *interface.GuestInfo = @ptrFromInt(hpa);
+                const effective_ram_pages: usize = blk: {
+                    if (tg.is_root) {
+                        break :blk if (tg.space.range_size > 0) tg.space.range_size / physmem.PageSize else (512 * 1024 * 1024 / physmem.PageSize);
+                    } else {
+                        if (tg.space.range_size > 0) {
+                            break :blk tg.space.range_size / physmem.PageSize;
+                        } else if (tg.quotas.used_ram_pages > 0 and tg.quotas.used_ram_pages != std.math.maxInt(usize)) {
+                            break :blk tg.quotas.used_ram_pages;
+                        } else if (tg.quotas.max_ram_pages > 0 and tg.quotas.max_ram_pages != std.math.maxInt(usize)) {
+                            break :blk tg.quotas.max_ram_pages;
+                        } else {
+                            break :blk (256 * 1024 * 1024 / physmem.PageSize);
+                        }
+                    }
+                };
+
                 info_ptr.* = .{
-                    .guest_id = g.id,
-                    .parent_id = if (g.parent != null) guest.CID_PARENT else 0,
-                    .is_trusted = if (g.is_trusted) 1 else 0,
-                    .is_root = if (g.is_root) 1 else 0,
-                    .target_arch = @intFromEnum(g.target_arch),
-                    ._reserved = 0,
-                    .vcpus = g.vcores.count(),
-                    .self_ram_pages = if (g.space.range_size > 0) g.space.range_size / physmem.PageSize else (512 * 1024 * 1024 / physmem.PageSize),
-                    .used_vcpus = if (g.quotas.used_vcpus > 0) g.quotas.used_vcpus else g.vcores.count(),
-                    .max_vcpus = if (g.quotas.max_vcpus == std.math.maxInt(usize)) g.vcores.count() else g.quotas.max_vcpus,
-                    .used_ram_pages = if (g.quotas.used_ram_pages > 0) g.quotas.used_ram_pages else g.space.range_size / physmem.PageSize,
-                    .max_ram_pages = if (g.quotas.max_ram_pages == std.math.maxInt(usize)) g.space.range_size / physmem.PageSize else g.quotas.max_ram_pages,
-                    .child_count = g.children.count(),
+                    .guest_id = if (tg == g) 1 else target_cid,
+                    .parent_id = if (tg == g) (if (g.parent != null) guest.CID_PARENT else 0) else 1,
+                    .is_trusted = if (tg.is_trusted) 1 else 0,
+                    .is_root = if (tg.is_root) 1 else 0,
+                    .target_arch = @intFromEnum(tg.target_arch),
+                    .assigned_cid = if (tg.is_root) 1 else @truncate(tg.local_cid),
+                    .vcpus = tg.vcores.count(),
+                    .self_ram_pages = effective_ram_pages,
+                    .used_vcpus = if (tg.quotas.used_vcpus > 0) tg.quotas.used_vcpus else tg.vcores.count(),
+                    .max_vcpus = if (tg.quotas.max_vcpus == std.math.maxInt(usize)) tg.vcores.count() else tg.quotas.max_vcpus,
+                    .used_ram_pages = if (tg.quotas.used_ram_pages > 0 and tg.quotas.used_ram_pages != std.math.maxInt(usize)) tg.quotas.used_ram_pages else effective_ram_pages,
+                    .max_ram_pages = if (tg.quotas.max_ram_pages == std.math.maxInt(usize)) effective_ram_pages else tg.quotas.max_ram_pages,
+                    .child_count = tg.children.count(),
                 };
 
                 setResult(vc, context, SBI_SUCCESS, 0);

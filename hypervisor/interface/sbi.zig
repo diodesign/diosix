@@ -121,7 +121,7 @@ pub const GuestInfo = extern struct {
     is_trusted: u8,
     is_root: u8,
     target_arch: u8, // TargetArch enum value
-    _reserved: u8 = 0,
+    assigned_cid: u8 = 0,
     vcpus: usize,
     self_ram_pages: usize,
     used_vcpus: usize,

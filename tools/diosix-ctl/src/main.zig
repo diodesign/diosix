@@ -65,7 +65,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     } else if (std.mem.eql(u8, command, "ssh") or std.mem.eql(u8, command, "login") or std.mem.eql(u8, command, "console") or std.mem.eql(u8, command, "exec")) {
         try cmdSsh(&client, argv[2..], exe_name);
     } else if (std.mem.eql(u8, command, "stop") or std.mem.eql(u8, command, "kill") or std.mem.eql(u8, command, "terminate")) {
-        try cmdStop(&client, argv[2..], exe_name);
+        _ = try cmdStop(&client, argv[2..], exe_name);
     } else if (std.mem.eql(u8, command, "restart")) {
         try cmdRestart(&client, argv[2..], exe_name);
     } else if (std.mem.eql(u8, command, "disk") or std.mem.eql(u8, command, "storage")) {
@@ -95,10 +95,20 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
         try cmdResolve(&client, service_name, m_path);
     } else if (std.mem.eql(u8, command, "quota")) {
-        const target_cid = if (argv.len >= 3 and !std.mem.startsWith(u8, std.mem.span(argv[2]), "-"))
-            parseCid(std.mem.span(argv[2])) catch 1
-        else
-            1;
+        var target_cid: usize = 1;
+        if (argv.len >= 3 and !std.mem.startsWith(u8, std.mem.span(argv[2]), "-")) {
+            const span = std.mem.span(argv[2]);
+            if (std.mem.eql(u8, span, "parent") or std.mem.eql(u8, span, "0")) {
+                printStr("Error: Cannot query or set quotas on parent VM (CID 0).\n");
+                return;
+            }
+            target_cid = parseCid(span) catch {
+                var err_buf: [128]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "Error: Invalid target CID '{s}'.\n", .{span}) catch "Error: Invalid target CID.\n";
+                printStr(err_msg);
+                return;
+            };
+        }
         try cmdQuota(&client, target_cid, argv, exe_name);
     } else if (std.mem.eql(u8, command, "drop-trust")) {
         try cmdDropTrust(&client);
@@ -223,31 +233,73 @@ fn cmdQuota(client: *api.DiosixClient, target_cid: usize, argv: []const [*:0]con
     var descendants: usize = 0;
     var has_update = false;
 
+    if (target_cid == CID_PARENT) {
+        printStr("Error: Cannot query or set quotas on parent VM (CID 0).\n");
+        return;
+    }
+
     var i: usize = 2;
     while (i < argv.len) : (i += 1) {
         const flag = std.mem.span(argv[i]);
-        if (std.mem.eql(u8, flag, "--ram") and i + 1 < argv.len) {
+        if (i == 2 and !std.mem.startsWith(u8, flag, "-")) {
+            // Already parsed as target_cid
+            continue;
+        }
+        if (std.mem.eql(u8, flag, "--ram")) {
+            if (i + 1 >= argv.len) {
+                printStr("Error: Option '--ram' requires a value in megabytes.\n");
+                return;
+            }
             i += 1;
-            const mb = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
+            const mb = std.fmt.parseInt(usize, std.mem.span(argv[i]), 10) catch {
+                printStr("Error: Invalid numeric value for '--ram'.\n");
+                return;
+            };
             ram_pages = (mb * KB_PER_MB) / PAGE_SIZE_KB;
             has_update = true;
-        } else if (std.mem.eql(u8, flag, "--vcpus") and i + 1 < argv.len) {
+        } else if (std.mem.eql(u8, flag, "--vcpus")) {
+            if (i + 1 >= argv.len) {
+                printStr("Error: Option '--vcpus' requires a value.\n");
+                return;
+            }
             i += 1;
-            vcpus = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
+            vcpus = std.fmt.parseInt(usize, std.mem.span(argv[i]), 10) catch {
+                printStr("Error: Invalid numeric value for '--vcpus'.\n");
+                return;
+            };
             has_update = true;
-        } else if (std.mem.eql(u8, flag, "--depth") and i + 1 < argv.len) {
+        } else if (std.mem.eql(u8, flag, "--depth")) {
+            if (i + 1 >= argv.len) {
+                printStr("Error: Option '--depth' requires a value.\n");
+                return;
+            }
             i += 1;
-            depth = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
+            depth = std.fmt.parseInt(usize, std.mem.span(argv[i]), 10) catch {
+                printStr("Error: Invalid numeric value for '--depth'.\n");
+                return;
+            };
             has_update = true;
-        } else if (std.mem.eql(u8, flag, "--descendants") and i + 1 < argv.len) {
+        } else if (std.mem.eql(u8, flag, "--descendants")) {
+            if (i + 1 >= argv.len) {
+                printStr("Error: Option '--descendants' requires a value.\n");
+                return;
+            }
             i += 1;
-            descendants = try std.fmt.parseInt(usize, std.mem.span(argv[i]), 10);
+            descendants = std.fmt.parseInt(usize, std.mem.span(argv[i]), 10) catch {
+                printStr("Error: Invalid numeric value for '--descendants'.\n");
+                return;
+            };
             has_update = true;
+        } else if (std.mem.startsWith(u8, flag, "-")) {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unknown option '{s}'. Available options: --ram, --vcpus, --depth, --descendants.\n", .{flag}) catch "Error: Unknown option.\n";
+            printStr(err_msg);
+            return;
         }
     }
 
     if (!has_update) {
-        if (client.getInfo()) |info| {
+        if (client.getInfo(target_cid)) |info| {
             var buf: [512]u8 = undefined;
             const used_ram_mb = (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
             const max_ram_mb = if (info.max_ram_pages == std.math.maxInt(usize)) 0 else (info.max_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
@@ -330,7 +382,7 @@ fn cmdHost(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
 }
 
 fn cmdPoweroff(client: *api.DiosixClient) !void {
-    if (client.getInfo()) |info| {
+    if (client.getInfo(1)) |info| {
         if (info.is_root == 0) {
             printStr("Command 'poweroff' is only available on the Root VM.\n");
             return;
@@ -347,7 +399,7 @@ fn cmdPoweroff(client: *api.DiosixClient) !void {
 }
 
 fn cmdReboot(client: *api.DiosixClient) !void {
-    if (client.getInfo()) |info| {
+    if (client.getInfo(1)) |info| {
         if (info.is_root == 0) {
             printStr("Command 'reboot' is only available on the Root VM.\n");
             return;
@@ -409,7 +461,7 @@ fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
     }
 
     if (target_str == null or std.mem.eql(u8, target_str.?, "self") or std.mem.eql(u8, target_str.?, "root")) {
-        const info = client.getInfo() catch |err| {
+        const info = client.getInfo(1) catch |err| {
             printApiError("Query VM info", err);
             return;
         };
@@ -423,14 +475,17 @@ fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
 
         const is_root_str = if (info.is_root != 0) "yes" else "no";
         const is_trusted_str = if (info.is_trusted != 0) "yes" else "no";
-        const vcpus = if (info.vcpus > 0) info.vcpus else 4;
-        const ram_mb = if (info.self_ram_pages > 0) (info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB else 512;
+        const default_vcpus: usize = if (info.is_root != 0) 4 else 1;
+        const vcpus = if (info.vcpus > 0) info.vcpus else default_vcpus;
+        const default_ram_mb: usize = if (info.is_root != 0) 512 else 256;
+        const ram_mb = if (info.self_ram_pages > 0) (info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB else default_ram_mb;
         const self_ram_pages = if (info.self_ram_pages > 0) info.self_ram_pages else (ram_mb * 1024 / 4);
 
         var buf: [512]u8 = undefined;
         const out = std.fmt.bufPrint(&buf,
             \\Context ID     : {d}
             \\Parent CID     : {d}
+            \\Assigned CID   : {d}
             \\Architecture   : {s}
             \\Root VM        : {s}
             \\Hardware trust : {s}
@@ -441,6 +496,7 @@ fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
         , .{
             info.guest_id,
             info.parent_id,
+            if (info.assigned_cid > 0) info.assigned_cid else 1,
             arch_name,
             is_root_str,
             is_trusted_str,
@@ -453,6 +509,10 @@ fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
         printStr(out);
     } else {
         const t_str = target_str.?;
+        if (std.mem.eql(u8, t_str, "0") or std.mem.eql(u8, t_str, "parent")) {
+            printStr("Error: Cannot query parent VM (CID 0). Inspection is restricted to self or direct children.\n");
+            return;
+        }
         const target_cid = parseCid(t_str) catch 0;
         var found = false;
 
@@ -523,6 +583,16 @@ fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
                 }
             }
         } else |_| {}
+        if (!found and target_cid >= 2) {
+            if (client.getInfo(target_cid)) |info| {
+                found = true;
+                const is_trusted_str = if (info.is_trusted != 0) "trusted" else "untrusted";
+                const ram_mb = if (info.self_ram_pages > 0) (info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB else 256;
+                var ram_buf: [32]u8 = undefined;
+                const ram_str = std.fmt.bufPrint(&ram_buf, "{d} MB", .{ram_mb}) catch "256 MB";
+                printGuestDetail(info.guest_id, t_str, info.vcpus, ram_str, "", is_trusted_str, "running", "", "");
+            } else |_| {}
+        }
 
         if (!found) {
             printStr("Error: Guest VM not found.\n");
@@ -672,18 +742,30 @@ fn cmdManifest(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name:
         var use_hv: bool = false;
         var target_cid: usize = CID_SELF;
 
-        for (args[1..], 1..) |arg, i| {
-            const span = std.mem.span(arg);
+        var i: usize = 1;
+        while (i < args.len) : (i += 1) {
+            const span = std.mem.span(args[i]);
             if (std.mem.eql(u8, span, "--file") or std.mem.eql(u8, span, "-f")) {
-                if (args.len > i + 1) {
-                    file_path = std.mem.span(args[i + 1]);
+                if (i + 1 >= args.len) {
+                    printStr("Error: Option '--file' requires a file path.\n");
+                    return;
                 }
+                i += 1;
+                file_path = std.mem.span(args[i]);
             } else if (std.mem.eql(u8, span, "--hypervisor") or std.mem.eql(u8, span, "--hv")) {
                 use_hv = true;
             } else if (std.mem.eql(u8, span, "--cid") or std.mem.eql(u8, span, "-c")) {
-                if (args.len > i + 1) {
-                    target_cid = parseCid(std.mem.span(args[i + 1])) catch CID_SELF;
+                if (i + 1 >= args.len) {
+                    printStr("Error: Option '--cid' requires a CID value.\n");
+                    return;
                 }
+                i += 1;
+                target_cid = parseCid(std.mem.span(args[i])) catch CID_SELF;
+            } else if (std.mem.startsWith(u8, span, "-")) {
+                var err_buf: [128]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unknown option '{s}'. Usage: {s} manifest show [--file <path>] [--hv] [--cid <cid>]\n", .{ span, exe_name }) catch "Error: Unknown option.\n";
+                printStr(err_msg);
+                return;
             }
         }
 
@@ -794,16 +876,42 @@ fn cmdManifest(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name:
         var child_cid: usize = CID_FIRST_CHILD;
         var parent_cid: usize = CID_SELF;
 
-        for (args[2..], 2..) |arg, i| {
-            const span = std.mem.span(arg);
+        var i: usize = 2;
+        while (i < args.len) : (i += 1) {
+            const span = std.mem.span(args[i]);
             if (std.mem.eql(u8, span, "--domain") or std.mem.eql(u8, span, "-d")) {
-                if (args.len > i + 1) domain_name = std.mem.span(args[i + 1]);
+                if (i + 1 >= args.len) {
+                    printStr("Error: Option '--domain' requires a domain name.\n");
+                    return;
+                }
+                i += 1;
+                domain_name = std.mem.span(args[i]);
             } else if (std.mem.eql(u8, span, "-o") or std.mem.eql(u8, span, "--out")) {
-                if (args.len > i + 1) out_file = std.mem.span(args[i + 1]);
+                if (i + 1 >= args.len) {
+                    printStr("Error: Option '-o' requires an output file path.\n");
+                    return;
+                }
+                i += 1;
+                out_file = std.mem.span(args[i]);
             } else if (std.mem.eql(u8, span, "--cid") or std.mem.eql(u8, span, "-c")) {
-                if (args.len > i + 1) child_cid = parseCid(std.mem.span(args[i + 1])) catch CID_FIRST_CHILD;
+                if (i + 1 >= args.len) {
+                    printStr("Error: Option '--cid' requires a CID value.\n");
+                    return;
+                }
+                i += 1;
+                child_cid = parseCid(std.mem.span(args[i])) catch CID_FIRST_CHILD;
             } else if (std.mem.eql(u8, span, "--parent") or std.mem.eql(u8, span, "-p")) {
-                if (args.len > i + 1) parent_cid = parseCid(std.mem.span(args[i + 1])) catch CID_SELF;
+                if (i + 1 >= args.len) {
+                    printStr("Error: Option '--parent' requires a parent CID value.\n");
+                    return;
+                }
+                i += 1;
+                parent_cid = parseCid(std.mem.span(args[i])) catch CID_SELF;
+            } else if (std.mem.startsWith(u8, span, "-")) {
+                var err_buf: [128]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unknown option '{s}'. Usage: {s} manifest prune <sys.toml> --domain <name> [-o <out.toml>] [--cid <cid>]\n", .{ span, exe_name }) catch "Error: Unknown option.\n";
+                printStr(err_msg);
+                return;
             }
         }
 
@@ -865,9 +973,13 @@ fn cmdManifest(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name:
             return;
         }
         const target_cid = parseCid(std.mem.span(args[1])) catch {
-            printStr("Invalid target CID\n");
+            printStr("Error: Invalid target CID\n");
             return;
         };
+        if (target_cid == CID_PARENT or target_cid == 0) {
+            printStr("Error: Cannot stage manifest for parent VM (CID 0).\n");
+            return;
+        }
         const file_path = std.mem.span(args[2]);
         const content = readBinaryFile(file_path, MAX_MANIFEST_SIZE) catch |err| {
             printStr("Failed to read manifest file: ");
@@ -1028,9 +1140,18 @@ fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
         var idx: usize = 2;
         while (idx < args.len) : (idx += 1) {
             const span = std.mem.span(args[idx]);
-            if ((std.mem.eql(u8, span, "--size") or std.mem.eql(u8, span, "-s")) and idx + 1 < args.len) {
+            if (std.mem.eql(u8, span, "--size") or std.mem.eql(u8, span, "-s")) {
+                if (idx + 1 >= args.len) {
+                    printStr("Error: Option '--size' requires a capacity (e.g. '1GiB', '512M').\n");
+                    return;
+                }
                 idx += 1;
                 size_str = std.mem.span(args[idx]);
+            } else if (std.mem.startsWith(u8, span, "-")) {
+                var err_buf: [128]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unknown option '{s}'. Usage: {s} disk create <name> [--size <size>]\n", .{ span, exe_name }) catch "Error: Unknown option.\n";
+                printStr(err_msg);
+                return;
             }
         }
 
@@ -1158,7 +1279,14 @@ fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
         @memcpy(z_path[0..path.len], path);
         z_path[path.len] = 0;
 
-        _ = linux.unlink(@ptrCast(z_path[0..path.len :0]));
+        const un_res = linux.unlink(@ptrCast(z_path[0..path.len :0]));
+        const un_signed: isize = @bitCast(un_res);
+        if (un_signed < 0) {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Virtual disk '{s}' not found.\n", .{disk_name}) catch "Error: Disk not found.\n";
+            printStr(err_msg);
+            return;
+        }
         var out_buf: [256]u8 = undefined;
         const out_msg = std.fmt.bufPrint(&out_buf, "✓ Virtual disk '{s}' deleted.\n", .{disk_name}) catch return;
         printStr(out_msg);
@@ -1168,16 +1296,29 @@ fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
             return;
         }
         const disk_name = std.mem.span(args[1]);
-        var size_str: []const u8 = "2GiB";
+        var size_str: ?[]const u8 = null;
         var idx: usize = 2;
         while (idx < args.len) : (idx += 1) {
             const span = std.mem.span(args[idx]);
-            if ((std.mem.eql(u8, span, "--size") or std.mem.eql(u8, span, "-s")) and idx + 1 < args.len) {
+            if (std.mem.eql(u8, span, "--size") or std.mem.eql(u8, span, "-s")) {
+                if (idx + 1 >= args.len) {
+                    printStr("Error: Option '--size' requires a capacity.\n");
+                    return;
+                }
                 idx += 1;
                 size_str = std.mem.span(args[idx]);
+            } else if (std.mem.startsWith(u8, span, "-")) {
+                var err_buf: [128]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unknown option '{s}'. Usage: {s} disk resize <name> --size <size>\n", .{ span, exe_name }) catch "Error: Unknown option.\n";
+                printStr(err_msg);
+                return;
             }
         }
-        const size_mb = parseMemorySizeMb(size_str);
+        if (size_str == null) {
+            printStr("Error: Option '--size <size>' is required for disk resize.\n");
+            return;
+        }
+        const size_mb = parseMemorySizeMb(size_str.?);
         const size_bytes: u64 = @as(u64, size_mb) * 1024 * 1024;
 
         var path_buf: [MAX_PATH_LEN]u8 = undefined;
@@ -1205,7 +1346,7 @@ fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
 
         _ = linux.ftruncate(fd, @intCast(size_bytes));
         var out_buf: [256]u8 = undefined;
-        const out_msg = std.fmt.bufPrint(&out_buf, "✓ Virtual disk '{s}' resized to {d} MB ({s}).\n", .{ disk_name, size_mb, size_str }) catch return;
+        const out_msg = std.fmt.bufPrint(&out_buf, "✓ Virtual disk '{s}' resized to {d} MB ({s}).\n", .{ disk_name, size_mb, size_str.? }) catch return;
         printStr(out_msg);
     } else {
         var buf: [128]u8 = undefined;
@@ -1311,9 +1452,18 @@ fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []
         var idx: usize = 2;
         while (idx < args.len) : (idx += 1) {
             const span = std.mem.span(args[idx]);
-            if ((std.mem.eql(u8, span, "--name") or std.mem.eql(u8, span, "-n")) and idx + 1 < args.len) {
+            if (std.mem.eql(u8, span, "--name") or std.mem.eql(u8, span, "-n")) {
+                if (idx + 1 >= args.len) {
+                    printStr("Error: Option '--name' requires a destination filename.\n");
+                    return;
+                }
                 idx += 1;
                 custom_name = std.mem.span(args[idx]);
+            } else if (std.mem.startsWith(u8, span, "-")) {
+                var err_buf: [128]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unknown option '{s}'. Usage: {s} image import <file> [--name <name>]\n", .{ span, exe_name }) catch "Error: Unknown option.\n";
+                printStr(err_msg);
+                return;
             }
         }
 
@@ -1367,7 +1517,14 @@ fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []
         @memcpy(z_path[0..path.len], path);
         z_path[path.len] = 0;
 
-        _ = linux.unlink(@ptrCast(z_path[0..path.len :0]));
+        const un_res = linux.unlink(@ptrCast(z_path[0..path.len :0]));
+        const un_signed: isize = @bitCast(un_res);
+        if (un_signed < 0) {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Image '{s}' not found.\n", .{img_name}) catch "Error: Image not found.\n";
+            printStr(err_msg);
+            return;
+        }
         var out_buf: [256]u8 = undefined;
         const out_msg = std.fmt.bufPrint(&out_buf, "✓ Image '{s}' deleted.\n", .{img_name}) catch return;
         printStr(out_msg);
@@ -1685,12 +1842,13 @@ fn matchTarget(target_str: []const u8, target_cid: usize, entry_cid: usize, entr
 
 fn findPrivateKey() ?[]const u8 {
     const paths = [_][]const u8{
+        "/var/lib/diosix/keys/id_management",
+        "/etc/diosix/keys/id_management",
         "/etc/diosix/keys/id_dropbear",
         "/etc/diosix/keys/id_ed25519",
         "/root/.ssh/id_dropbear",
         "/root/.ssh/id_ed25519",
         "/etc/diosix/id_ed25519",
-        "tools/overlay-common/etc/diosix/keys/id_ed25519",
     };
     for (paths) |p| {
         var p_buf: [MAX_PATH_LEN]u8 = undefined;
@@ -1793,6 +1951,68 @@ fn runSshCommand(key_str: ?[:0]const u8, dest_str: [:0]const u8, cmd_str: ?[:0]c
     return if (status == 0) 0 else 1;
 }
 
+fn parseIpv4(s: []const u8) ?u32 {
+    var parts: [4]u8 = undefined;
+    var part_idx: usize = 0;
+    var cur_val: u32 = 0;
+    var has_digits = false;
+
+    for (s) |c| {
+        if (c >= '0' and c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+            if (cur_val > 255) return null;
+            has_digits = true;
+        } else if (c == '.') {
+            if (!has_digits or part_idx >= 3) return null;
+            parts[part_idx] = @intCast(cur_val);
+            part_idx += 1;
+            cur_val = 0;
+            has_digits = false;
+        } else {
+            return null;
+        }
+    }
+    if (!has_digits or part_idx != 3) return null;
+    parts[3] = @intCast(cur_val);
+    return @as(u32, parts[0]) | (@as(u32, parts[1]) << 8) | (@as(u32, parts[2]) << 16) | (@as(u32, parts[3]) << 24);
+}
+
+fn isSshPortOpen(ip_str: []const u8) bool {
+    const ip_addr = parseIpv4(ip_str) orelse return false;
+    const fd_res = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC, 0);
+    const fd_signed: isize = @bitCast(fd_res);
+    if (fd_signed < 0) return false;
+    const fd: i32 = @intCast(fd_signed);
+    defer _ = linux.close(fd);
+
+    var addr: linux.sockaddr.in = undefined;
+    addr.family = linux.AF.INET;
+    addr.port = std.mem.nativeToBig(u16, 22);
+    addr.addr = ip_addr;
+
+    const connect_res = linux.connect(fd, @ptrCast(&addr), @sizeOf(linux.sockaddr.in));
+    const connect_signed: isize = @bitCast(connect_res);
+    if (connect_signed == 0) return true;
+
+    const err_code = @as(u32, @truncate(@as(usize, @bitCast(-connect_signed))));
+    if (err_code == @intFromEnum(linux.E.INPROGRESS)) {
+        var pfd = [_]linux.pollfd{.{
+            .fd = fd,
+            .events = linux.POLL.OUT,
+            .revents = 0,
+        }};
+        const poll_res = linux.poll(&pfd, 1, 1000);
+        const poll_signed: isize = @bitCast(poll_res);
+        if (poll_signed > 0 and (pfd[0].revents & linux.POLL.OUT != 0) and (pfd[0].revents & (linux.POLL.ERR | linux.POLL.HUP) == 0)) {
+            var so_error: i32 = 0;
+            var optlen: u32 = @sizeOf(i32);
+            _ = linux.getsockopt(fd, linux.SOL.SOCKET, linux.SO.ERROR, @ptrCast(&so_error), &optlen);
+            return so_error == 0;
+        }
+    }
+    return false;
+}
+
 fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, remote_cmd: ?[]const u8) !void {
     var key_buf: [128]u8 = undefined;
     const key_str: ?[:0]const u8 = if (key_path) |kp| blk: {
@@ -1814,24 +2034,23 @@ fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, rem
         break :blk cmd_buf[0..cs.len :0];
     } else null;
 
-    const max_attempts: usize = if (std.mem.eql(u8, ip_addr, "127.0.0.1") or std.mem.eql(u8, ip_addr, "localhost")) 1 else 30;
-    var attempts: usize = 0;
-    var printed_waiting = false;
-
-    while (attempts < max_attempts) : (attempts += 1) {
-        const silence = (attempts < max_attempts - 1);
-        const status = runSshCommand(key_str, dest_str, cmd_str, silence);
-        if (status == 0) return;
-
-        if (!printed_waiting and attempts < max_attempts - 1) {
-            printStr("Waiting for guest to finish booting and start SSH service...\n");
-            printed_waiting = true;
+    const is_local = std.mem.eql(u8, ip_addr, "127.0.0.1") or std.mem.eql(u8, ip_addr, "localhost");
+    if (!is_local) {
+        var attempts: usize = 0;
+        var printed_waiting = false;
+        while (attempts < 60) : (attempts += 1) {
+            if (isSshPortOpen(ip_addr)) break;
+            if (!printed_waiting) {
+                printStr("Waiting for guest to finish booting and start SSH service...\n");
+                printed_waiting = true;
+            }
+            var req = linux.timespec{ .sec = 1, .nsec = 0 };
+            var rem: linux.timespec = undefined;
+            _ = linux.nanosleep(&req, &rem);
         }
-
-        var req = linux.timespec{ .sec = 2, .nsec = 0 };
-        var rem: linux.timespec = undefined;
-        _ = linux.nanosleep(&req, &rem);
     }
+
+    _ = runSshCommand(key_str, dest_str, cmd_str, false);
 }
 
 fn patchChildDtb(dtb: []u8, base_gpa: u64, ram_bytes: u64, vcpus: usize) void {
@@ -2078,40 +2297,104 @@ fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const span = std.mem.span(args[i]);
-        if (std.mem.eql(u8, span, "--name") and i + 1 < args.len) {
+        if (std.mem.eql(u8, span, "--name")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--name' requires a VM name.\n");
+                return;
+            }
             i += 1;
             vm_name = std.mem.span(args[i]);
-        } else if (std.mem.eql(u8, span, "--domain") and i + 1 < args.len) {
+        } else if (std.mem.eql(u8, span, "--domain")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--domain' requires a domain name.\n");
+                return;
+            }
             i += 1;
             domain_name = std.mem.span(args[i]);
-        } else if ((std.mem.eql(u8, span, "--manifest") or std.mem.eql(u8, span, "-m")) and i + 1 < args.len) {
+        } else if (std.mem.eql(u8, span, "--manifest") or std.mem.eql(u8, span, "-m")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--manifest' requires a file path.\n");
+                return;
+            }
             i += 1;
             manifest_path = std.mem.span(args[i]);
-        } else if (std.mem.eql(u8, span, "--vcpus") and i + 1 < args.len) {
+        } else if (std.mem.eql(u8, span, "--vcpus")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--vcpus' requires a numeric value.\n");
+                return;
+            }
             i += 1;
-            vcpus = std.fmt.parseInt(usize, std.mem.span(args[i]), 10) catch 1;
-        } else if (std.mem.eql(u8, span, "--ram") and i + 1 < args.len) {
+            vcpus = std.fmt.parseInt(usize, std.mem.span(args[i]), 10) catch {
+                printStr("Error: Invalid numeric value for '--vcpus'.\n");
+                return;
+            };
+            if (vcpus == 0) {
+                printStr("Error: Option '--vcpus' must be at least 1.\n");
+                return;
+            }
+        } else if (std.mem.eql(u8, span, "--ram")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--ram' requires a size (e.g. '256M', '1G').\n");
+                return;
+            }
             i += 1;
             ram_str = std.mem.span(args[i]);
-        } else if ((std.mem.eql(u8, span, "--disk") or std.mem.eql(u8, span, "-d")) and i + 1 < args.len) {
+        } else if (std.mem.eql(u8, span, "--disk") or std.mem.eql(u8, span, "-d")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--disk' requires a disk name or size.\n");
+                return;
+            }
             i += 1;
             disk_str = std.mem.span(args[i]);
-        } else if ((std.mem.eql(u8, span, "--cdrom") or std.mem.eql(u8, span, "--iso") or std.mem.eql(u8, span, "--media")) and i + 1 < args.len) {
+        } else if (std.mem.eql(u8, span, "--cdrom") or std.mem.eql(u8, span, "--iso") or std.mem.eql(u8, span, "--media")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--cdrom' requires a media path.\n");
+                return;
+            }
             i += 1;
             cdrom_str = std.mem.span(args[i]);
-        } else if (std.mem.eql(u8, span, "--ip") and i + 1 < args.len) {
+        } else if (std.mem.eql(u8, span, "--ip")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--ip' requires an IP address.\n");
+                return;
+            }
             i += 1;
             ip_str = std.mem.span(args[i]);
         } else if (std.mem.eql(u8, span, "--trusted")) {
             trusted = true;
         } else if (std.mem.eql(u8, span, "--untrusted")) {
             trusted = false;
-        } else if (std.mem.eql(u8, span, "--dtb") and i + 1 < args.len) {
+        } else if (std.mem.eql(u8, span, "--dtb")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--dtb' requires a device tree blob path.\n");
+                return;
+            }
             i += 1;
             dtb_path = std.mem.span(args[i]);
+        } else if (std.mem.eql(u8, span, "--arch") or std.mem.eql(u8, span, "-a")) {
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--arch' requires an architecture name.\n");
+                return;
+            }
+            i += 1;
+            arch_str = std.mem.span(args[i]);
         } else if (isArch(span)) {
             arch_str = span;
-        } else if (!std.mem.startsWith(u8, span, "-")) {
+        } else if (std.mem.eql(u8, span, "--user")) {
+            if (i + 1 < args.len) {
+                var err_buf: [128]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unrecognized option '--user'. To specify a VM name, use '--name {s}'.\n", .{std.mem.span(args[i + 1])}) catch "Error: Unrecognized option '--user'. Use '--name'.\n";
+                printStr(err_msg);
+            } else {
+                printStr("Error: Unrecognized option '--user'. To specify a VM name, use '--name <name>'.\n");
+            }
+            return;
+        } else if (std.mem.startsWith(u8, span, "-")) {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unknown option '{s}'. Use '{s} run' without arguments for usage.\n", .{ span, exe_name }) catch "Error: Unknown option.\n";
+            printStr(err_msg);
+            return;
+        } else {
             if (elf_path == null) {
                 elf_path = span;
             }
@@ -2284,6 +2567,22 @@ fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
             final_disk = path;
         } else {
             final_disk = std.fmt.bufPrint(&final_disk_buf, "/var/lib/diosix/disks/{s}.img", .{d}) catch d;
+            _ = linux.mkdir("/var/lib/diosix", 0o755);
+            _ = linux.mkdir("/var/lib/diosix/disks", 0o755);
+            var z_path: [MAX_PATH_LEN]u8 = undefined;
+            @memcpy(z_path[0..final_disk.len], final_disk);
+            z_path[final_disk.len] = 0;
+            const fd_res = linux.open(@ptrCast(z_path[0..final_disk.len :0]), .{ .ACCMODE = .RDWR, .CREAT = true }, 0o644);
+            const fd_signed: isize = @bitCast(fd_res);
+            if (fd_signed >= 0) {
+                const fd: i32 = @intCast(fd_signed);
+                const end_off = linux.lseek(fd, 0, 2); // SEEK_END
+                const end_signed: isize = @bitCast(end_off);
+                if (end_signed == 0) {
+                    _ = linux.ftruncate(fd, 1024 * 1024 * 1024); // 1GiB default
+                }
+                _ = linux.close(fd);
+            }
         }
     }
 
@@ -2355,17 +2654,21 @@ fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
 }
 
 fn cmdList(client: *api.DiosixClient) !void {
-    const info_res = client.getInfo() catch null;
+    const info_res = client.getInfo(1) catch null;
+    const is_root = if (info_res) |info| info.is_root != 0 else true;
     const is_trusted = if (info_res) |info| info.is_trusted != 0 else true;
-    const self_vcpus = if (info_res) |info| (if (info.vcpus > 0) info.vcpus else 4) else 4;
-    const ram_mb = if (info_res) |info| (if (info.self_ram_pages > 0) ((info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB) else 512) else 512;
+    const default_self_vcpus: usize = if (is_root) 4 else 1;
+    const self_vcpus = if (info_res) |info| (if (info.vcpus > 0) info.vcpus else default_self_vcpus) else 4;
+    const default_ram: usize = if (is_root) 512 else 256;
+    const ram_mb = if (info_res) |info| (if (info.self_ram_pages > 0) ((info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB) else default_ram) else default_ram;
     const child_count = if (info_res) |info| info.child_count else 0;
 
     printStr("CID   Name             vCPUs   RAM       Status    Trust       IP / Endpoint\n");
 
     var self_ram_buf: [32]u8 = undefined;
-    const self_ram_str = std.fmt.bufPrint(&self_ram_buf, "{d} MB", .{if (ram_mb > 0) ram_mb else 512}) catch "512 MB";
-    printGuestLine(1, "root (self)", self_vcpus, self_ram_str, "running", if (is_trusted) "trusted" else "untrusted", "local");
+    const self_ram_str = std.fmt.bufPrint(&self_ram_buf, "{d} MB", .{if (ram_mb > 0) ram_mb else default_ram}) catch "256 MB";
+    const self_name = if (is_root) "root (self)" else "self";
+    printGuestLine(1, self_name, self_vcpus, self_ram_str, "running", if (is_trusted) "trusted" else "untrusted", "local");
 
     var guest_count: usize = 0;
     if (readBinaryFile("/var/run/diosix/guests.toml", MAX_MANIFEST_SIZE)) |content| {
@@ -2472,10 +2775,12 @@ fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
     while (i < args.len) : (i += 1) {
         const span = std.mem.span(args[i]);
         if (std.mem.eql(u8, span, "--user") or std.mem.eql(u8, span, "-u")) {
-            if (i + 1 < args.len) {
-                i += 1;
-                username = std.mem.span(args[i]);
+            if (i + 1 >= args.len) {
+                printStr("Error: Option '--user' requires a username.\n");
+                return;
             }
+            i += 1;
+            username = std.mem.span(args[i]);
         } else if (std.mem.eql(u8, span, "--")) {
             if (i + 1 < args.len) {
                 var buf_len: usize = 0;
@@ -2494,7 +2799,7 @@ fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
             break;
         } else if (target_arg.len == 0 and !std.mem.startsWith(u8, span, "-")) {
             target_arg = span;
-        } else if (target_arg.len > 0 and remote_cmd == null) {
+        } else if (target_arg.len > 0 and remote_cmd == null and !std.mem.startsWith(u8, span, "-")) {
             var buf_len: usize = 0;
             for (args[i..]) |arg| {
                 const s = std.mem.span(arg);
@@ -2508,6 +2813,11 @@ fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
             }
             remote_cmd = cmd_str_buf[0..buf_len];
             break;
+        } else if (std.mem.startsWith(u8, span, "-")) {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Unknown option '{s}'. Usage: {s} ssh [user@]<name|cid> [-- [cmd...]]\n", .{ span, exe_name }) catch "Error: Unknown option.\n";
+            printStr(err_msg);
+            return;
         }
     }
 
@@ -2531,7 +2841,8 @@ fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
     var ip_storage: [64]u8 = undefined;
     var name_storage: [64]u8 = undefined;
 
-    if (std.mem.eql(u8, target_str, "root") or std.mem.eql(u8, target_str, "self") or resolved_cid == 1) {
+    const is_self = std.mem.eql(u8, target_str, "root") or std.mem.eql(u8, target_str, "self") or resolved_cid == 1;
+    if (is_self) {
         resolved_cid = 1;
         resolved_name = "root";
         resolved_ip = "127.0.0.1";
@@ -2601,8 +2912,13 @@ fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
     if (resolved_ip.len == 0) {
         if (resolved_cid >= CID_FIRST_CHILD) {
             resolved_ip = std.fmt.bufPrint(&ip_storage, "10.0.3.{d}", .{resolved_cid}) catch "10.0.3.2";
-        } else {
+        } else if (is_self) {
             resolved_ip = "127.0.0.1";
+        } else {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Guest '{s}' not found. Use '{s} list' to view running guests.\n", .{ target_str, exe_name }) catch "Error: Guest not found.\n";
+            printStr(err_msg);
+            return;
         }
     }
 
@@ -2621,29 +2937,33 @@ fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
     try execSsh(key_file, username, resolved_ip, remote_cmd);
 }
 
-fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []const u8) !void {
+fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []const u8) !bool {
     if (args.len == 0) {
         var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Usage: {s} stop <name|cid|self>\n", .{exe_name}) catch return;
+        const msg = std.fmt.bufPrint(&buf, "Usage: {s} stop <name|cid|self>\n", .{exe_name}) catch return false;
         printStr(msg);
-        return;
+        return false;
     }
     const target_str = std.mem.span(args[0]);
+    if (std.mem.eql(u8, target_str, "parent") or std.mem.eql(u8, target_str, "0")) {
+        printStr("Error: Cannot stop parent VM (CID 0).\n");
+        return false;
+    }
     if (std.mem.eql(u8, target_str, "self")) {
-        if (client.getInfo()) |info| {
+        if (client.getInfo(1)) |info| {
             if (info.is_root != 0) {
                 var buf: [160]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "Root VM cannot be stopped directly. Use '{s} host poweroff' or '{s} host reboot'.\n", .{ exe_name, exe_name }) catch return;
+                const msg = std.fmt.bufPrint(&buf, "Root VM cannot be stopped directly. Use '{s} host poweroff' or '{s} host reboot'.\n", .{ exe_name, exe_name }) catch return false;
                 printStr(msg);
-                return;
+                return false;
             }
         } else |_| {}
         client.terminate(CID_SELF, 0) catch |err| {
             printApiError("Stop self", err);
-            return;
+            return false;
         };
         printStr("VM self-terminated.\n");
-        return;
+        return true;
     }
 
     var target_cid = parseCid(target_str) catch 0;
@@ -2693,20 +3013,21 @@ fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
 
     if (target_cid < CID_FIRST_CHILD) {
         var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Error: Unknown or invalid child VM '{s}'. Use '{s} list' to inspect active VMs.\n", .{ target_str, exe_name }) catch return;
+        const msg = std.fmt.bufPrint(&buf, "Error: Unknown or invalid child VM '{s}'. Use '{s} list' to inspect active VMs.\n", .{ target_str, exe_name }) catch return false;
         printStr(msg);
-        return;
+        return false;
     }
 
     client.terminate(target_cid, 0) catch |err| {
         printApiError("Stop VM", err);
-        return;
+        return false;
     };
     removeGuestFromRegistry(target_cid);
 
     var msg_buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrint(&msg_buf, "✓ Child VM '{s}' (CID {d}) terminated.\n", .{ target_name, target_cid }) catch return;
+    const msg = std.fmt.bufPrint(&msg_buf, "✓ Child VM '{s}' (CID {d}) terminated.\n", .{ target_name, target_cid }) catch return true;
     printStr(msg);
+    return true;
 }
 
 fn cmdRestart(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []const u8) !void {
@@ -2717,7 +3038,12 @@ fn cmdRestart(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: 
         return;
     }
     const target_str = std.mem.span(args[0]);
-    try cmdStop(client, args, exe_name);
+    if (std.mem.eql(u8, target_str, "parent") or std.mem.eql(u8, target_str, "0")) {
+        printStr("Error: Cannot restart parent VM (CID 0).\n");
+        return;
+    }
+    const stopped = try cmdStop(client, args, exe_name);
+    if (!stopped) return;
     printStr("Restarting guest VM...\n");
     const run_args = [_][*:0]const u8{
         @ptrCast(target_str.ptr),

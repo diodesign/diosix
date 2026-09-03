@@ -35,12 +35,15 @@ guest VM.
 dsx info [name|cid|self]
 ```
 
-*   `name|cid|self` *(optional)*: Target VM to inspect. Defaults to `self`.
+*   `name|cid|self` *(optional)*: Target VM to inspect. Defaults to `self` (Context ID 1).
+    Passing `2..N` or a registered child name queries a direct child VM.
+    Querying the parent VM (`parent` or `0`) is strictly denied and returns an error.
 
 Example output for calling VM (`dsx info`):
 ```text
 Context ID     : 1
 Parent CID     : 0
+Assigned CID   : 1
 Architecture   : riscv64
 Root VM        : yes
 Hardware trust : yes
@@ -157,7 +160,8 @@ CID   Name             vCPUs   RAM       Status    Trust       IP / Endpoint
 
 ### `dsx ssh` (aliases: `dsx login`, `dsx exec`)
 Opens an interactive login shell or runs a remote command in a child VM over
-private point-to-point network channels using pre-shared ED25519 authentication.
+private point-to-point network channels using the cluster management Ed25519
+keypair (with only the public key provisioned in the child VM's authorized keys).
 
 ```bash
 dsx ssh [user@]<name|cid> [-- [command...]]
