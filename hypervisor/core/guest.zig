@@ -280,12 +280,12 @@ pub const Guest = struct {
             if (self.getGuestByCid(args.target_cid)) |child| {
                 if (args.max_ram_pages > 0) {
                     child.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
-                    child.quotas.used_ram_pages = child.quotas.max_ram_pages;
+                    child.quotas.used_ram_pages = @min(child.quotas.used_ram_pages, child.quotas.max_ram_pages);
                     child.space.range_size = child.quotas.max_ram_pages * physmem.PageSize;
                 }
                 if (args.max_vcpus > 0) {
                     child.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
-                    child.quotas.used_vcpus = child.quotas.max_vcpus;
+                    child.quotas.used_vcpus = @min(child.quotas.used_vcpus, child.quotas.max_vcpus);
                 }
                 if (args.max_child_depth > 0) child.quotas.max_child_depth = @min(self.quotas.max_child_depth, args.max_child_depth);
                 if (args.max_descendants > 0) child.quotas.max_descendants = @min(self.quotas.max_descendants, args.max_descendants);
@@ -609,8 +609,8 @@ pub const Guest = struct {
             .quotas = .{
                 .max_ram_pages = self.quotas.max_ram_pages,
                 .used_ram_pages = 0,
-                .max_vcpus = num_vcpus,
-                .used_vcpus = num_vcpus,
+                .max_vcpus = self.quotas.max_vcpus,
+                .used_vcpus = 0,
                 .max_child_depth = if (self.quotas.max_child_depth > 0) self.quotas.max_child_depth - 1 else 0,
                 .current_depth = self.quotas.current_depth + 1,
                 .max_descendants = if (self.quotas.max_descendants > 0) self.quotas.max_descendants - 1 else 0,

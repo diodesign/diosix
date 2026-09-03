@@ -537,10 +537,6 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
         },
 
         interface.DIOSIX.RUN => {
-            if (!g.is_trusted) {
-                setResult(vc, context, SBI_ERR_DENIED, 0);
-                return;
-            }
             if (g.space.translateGPA(a0) catch null) |args_hpa| {
                 const args: *const interface.RunArgs = @ptrFromInt(args_hpa);
                 // Look up child by CID (>= CID_FIRST_CHILD) or create a fresh child on the fly (child_id == 0)
@@ -718,14 +714,14 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             }
         },
         interface.DIOSIX.SET_MANIFEST => {
-            if (!g.is_trusted) {
-                setResult(vc, context, SBI_ERR_DENIED, 0);
-                return;
-            }
             if (g.space.translateGPA(a0) catch null) |hpa| {
                 const margs: *const interface.ManifestArgs = @ptrFromInt(hpa);
                 const target_guest = g.getGuestByCid(margs.target_cid);
                 if (target_guest) |target| {
+                    if (!g.is_trusted and !g.is_root and target.parent != g) {
+                        setResult(vc, context, SBI_ERR_DENIED, 0);
+                        return;
+                    }
                     if (g.space.translateGPA(margs.data_ptr) catch null) |data_hpa| {
                         const src_slice: [*]const u8 = @ptrFromInt(data_hpa);
                         target.setManifest(src_slice[0..margs.max_len]) catch |err| {
@@ -745,16 +741,11 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             }
         },
         interface.DIOSIX.MAP_CHILD_MEM => {
-            // Security Shield 1: Caller must be trusted / root or ancestor
-            if (!g.is_trusted and !g.is_root) {
-                setResult(vc, context, SBI_ERR_DENIED, 0);
-                return;
-            }
             if (g.space.translateGPA(a0) catch null) |hpa| {
                 const margs: *const interface.MapChildMemArgs = @ptrFromInt(hpa);
                 const target_guest = g.getGuestByCid(margs.child_id);
                 if (target_guest) |child| {
-                    // Security Shield 2: Caller must be direct parent or ancestor of child
+                    // Security Shield: Caller must be direct parent or ancestor of child
                     if (child == g or (child.parent != g and !g.is_root)) {
                         setResult(vc, context, SBI_ERR_DENIED, 0);
                         return;
@@ -807,10 +798,6 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             }
         },
         interface.DIOSIX.UNMAP_CHILD_MEM => {
-            if (!g.is_trusted and !g.is_root) {
-                setResult(vc, context, SBI_ERR_DENIED, 0);
-                return;
-            }
             if (g.space.translateGPA(a0) catch null) |hpa| {
                 const uargs: *const interface.UnmapChildMemArgs = @ptrFromInt(hpa);
                 if (uargs.size == 0 or (uargs.size % physmem.PageSize) != 0) {
@@ -825,14 +812,14 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             }
         },
         interface.DIOSIX.START => {
-            if (!g.is_trusted) {
-                setResult(vc, context, SBI_ERR_DENIED, 0);
-                return;
-            }
             if (g.space.translateGPA(a0) catch null) |hpa| {
                 const sargs: *const interface.StartArgs = @ptrFromInt(hpa);
                 const target_guest = g.getGuestByCid(sargs.child_id);
                 if (target_guest) |child| {
+                    if (!g.is_trusted and !g.is_root and child.parent != g) {
+                        setResult(vc, context, SBI_ERR_DENIED, 0);
+                        return;
+                    }
                     child.resetForRun(sargs.entry_point, sargs.dtb_ptr);
                     if (child.vcores.start) |vc_node| {
                         scheduler.queue(vc_node.contents);

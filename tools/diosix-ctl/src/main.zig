@@ -1113,18 +1113,228 @@ const LinuxDirent64 = extern struct {
     d_name: [0]u8,
 };
 
+fn runSubprocess(argv: [*:null]const ?[*:0]const u8) u32 {
+    const pid_res = linux.fork();
+    const pid_signed: isize = @bitCast(pid_res);
+    if (pid_signed < 0) return 255;
+    if (pid_signed == 0) {
+        var devnull_buf: [16]u8 = undefined;
+        @memcpy(devnull_buf[0..9], "/dev/null");
+        devnull_buf[9] = 0;
+        const devnull_res = linux.open(@ptrCast(devnull_buf[0..9 :0]), .{ .ACCMODE = .RDWR }, 0);
+        const devnull_signed: isize = @bitCast(devnull_res);
+        if (devnull_signed >= 0) {
+            _ = linux.dup2(@intCast(devnull_signed), linux.STDOUT_FILENO);
+            _ = linux.dup2(@intCast(devnull_signed), linux.STDERR_FILENO);
+            _ = linux.close(@intCast(devnull_signed));
+        }
+        const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+            "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            null,
+        };
+        _ = linux.execve(argv[0].?, argv, envp);
+        linux.exit(127);
+    }
+    const pid: i32 = @intCast(pid_signed);
+    var status: i32 = 0;
+    while (true) {
+        const wait_res = linux.waitpid(pid, &status, 0);
+        const wait_signed: isize = @bitCast(wait_res);
+        if (wait_signed >= 0) break;
+        if (wait_signed == -@as(isize, @intFromEnum(linux.E.INTR))) continue;
+        return 255;
+    }
+    if ((status & 0x7f) == 0) {
+        return @intCast((status >> 8) & 0xff);
+    }
+    return 1;
+}
+
+fn detectDiskFormat(file_path_z: [*:0]const u8) []const u8 {
+    const fd_res = linux.open(@ptrCast(file_path_z), .{ .ACCMODE = .RDONLY }, 0);
+    const fd_signed: isize = @bitCast(fd_res);
+    if (fd_signed < 0) return "raw";
+    const fd: i32 = @intCast(fd_signed);
+    defer _ = linux.close(fd);
+
+    const seek_res = linux.lseek(fd, 1080, 0); // ext4 superblock magic at offset 1024 + 56 = 1080
+    const seek_signed: isize = @bitCast(seek_res);
+    if (seek_signed == 1080) {
+        var magic_buf: [2]u8 = undefined;
+        const nread_res = linux.read(fd, &magic_buf, 2);
+        const nread: isize = @bitCast(nread_res);
+        if (nread == 2 and magic_buf[0] == 0x53 and magic_buf[1] == 0xef) {
+            return "ext4";
+        }
+    }
+    return "raw";
+}
+
+fn findAttachedGuest(disk_path: []const u8, out_buf: []u8) []const u8 {
+    const content = readBinaryFile("/var/run/diosix/guests.toml", MAX_MANIFEST_SIZE) catch return "-";
+    defer unmapBinaryFile(content);
+
+    var lexer = manifest.ManifestLexer.init(content);
+    var cur_cid: usize = 0;
+    var cur_name: []const u8 = "";
+    var cur_disk: []const u8 = "";
+    var cur_status: []const u8 = "";
+
+    while (true) {
+        const tok = lexer.next();
+        if (tok.tag == .eof or tok.tag == .bracket_open) {
+            if (cur_disk.len > 0 and (std.mem.eql(u8, cur_disk, disk_path) or std.mem.endsWith(u8, disk_path, cur_disk) or std.mem.endsWith(u8, cur_disk, disk_path))) {
+                if (std.mem.eql(u8, cur_status, "running")) {
+                    return std.fmt.bufPrint(out_buf, "{s} (CID {d})", .{ cur_name, cur_cid }) catch cur_name;
+                }
+            }
+            if (tok.tag == .eof) break;
+            cur_cid = 0;
+            cur_name = "";
+            cur_disk = "";
+            cur_status = "";
+            continue;
+        }
+        if (tok.tag == .ident or tok.tag == .string) {
+            const key = tok.val;
+            const eq = lexer.next();
+            if (eq.tag != .equals) continue;
+            const val = lexer.next();
+            if (std.mem.eql(u8, key, "cid")) {
+                cur_cid = std.fmt.parseInt(usize, val.val, 10) catch 0;
+            } else if (std.mem.eql(u8, key, "name")) {
+                cur_name = val.val;
+            } else if (std.mem.eql(u8, key, "disk")) {
+                cur_disk = val.val;
+            } else if (std.mem.eql(u8, key, "status")) {
+                cur_status = val.val;
+            }
+        }
+    }
+    return "-";
+}
+
+fn formatAndSeedDisk(disk_path_z: [*:0]const u8, disk_label: []const u8) void {
+    var label_buf: [64]u8 = undefined;
+    const label_slice = std.fmt.bufPrint(&label_buf, "{s}", .{disk_label}) catch "diosix-data";
+    var label_z: [64]u8 = undefined;
+    @memcpy(label_z[0..label_slice.len], label_slice);
+    label_z[label_slice.len] = 0;
+
+    const mkfs_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+        "/usr/sbin/mkfs.ext4",
+        "-F",
+        "-q",
+        "-L",
+        @ptrCast(label_z[0..label_slice.len :0]),
+        disk_path_z,
+        null,
+    };
+    if (runSubprocess(mkfs_argv) != 0) return;
+
+    const mnt_dir = "/tmp/diosix_staging";
+    _ = linux.mkdir(mnt_dir, 0o755);
+    var mnt_z: [64]u8 = undefined;
+    @memcpy(mnt_z[0..mnt_dir.len], mnt_dir);
+    mnt_z[mnt_dir.len] = 0;
+
+    const mount_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+        "/bin/mount",
+        "-o",
+        "loop",
+        disk_path_z,
+        @ptrCast(mnt_z[0..mnt_dir.len :0]),
+        null,
+    };
+    if (runSubprocess(mount_argv) == 0) {
+        _ = linux.mkdir("/tmp/diosix_staging/images", 0o755);
+        _ = linux.mkdir("/tmp/diosix_staging/disks", 0o755);
+        _ = linux.mkdir("/tmp/diosix_staging/keys", 0o700);
+
+        const copy_sources = [_][]const u8{
+            "/var/lib/diosix/images/default.elf",
+            "/var/lib/diosix/images/linux-guest.elf",
+            "/boot/default.elf",
+        };
+        for (copy_sources) |src| {
+            var src_z: [MAX_PATH_LEN]u8 = undefined;
+            @memcpy(src_z[0..src.len], src);
+            src_z[src.len] = 0;
+
+            const cp_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+                "/bin/cp",
+                "-L",
+                src_z[0..src.len :0].ptr,
+                "/tmp/diosix_staging/images/default.elf",
+                null,
+            };
+            if (runSubprocess(cp_argv) == 0) {
+                const cp2_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+                    "/bin/cp",
+                    "-L",
+                    src_z[0..src.len :0].ptr,
+                    "/tmp/diosix_staging/images/linux-guest.elf",
+                    null,
+                };
+                _ = runSubprocess(cp2_argv);
+                break;
+            }
+        }
+
+        const umount_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+            "/bin/umount",
+            @ptrCast(mnt_z[0..mnt_dir.len :0]),
+            null,
+        };
+        _ = runSubprocess(umount_argv);
+    }
+}
+
+fn provisionVirtualDisk(name: []const u8, size_mb: usize, out_path_buf: []u8) ?[]const u8 {
+    _ = linux.mkdir("/var/lib/diosix", 0o755);
+    _ = linux.mkdir("/var/lib/diosix/disks", 0o755);
+
+    const path = if (std.mem.startsWith(u8, name, "/"))
+        name
+    else blk: {
+        if (std.mem.endsWith(u8, name, ".img") or std.mem.endsWith(u8, name, ".raw")) {
+            break :blk std.fmt.bufPrint(out_path_buf, "/var/lib/diosix/disks/{s}", .{name}) catch return null;
+        } else {
+            break :blk std.fmt.bufPrint(out_path_buf, "/var/lib/diosix/disks/{s}.img", .{name}) catch return null;
+        }
+    };
+
+    var z_path: [MAX_PATH_LEN]u8 = undefined;
+    if (path.len >= z_path.len) return null;
+    @memcpy(z_path[0..path.len], path);
+    z_path[path.len] = 0;
+
+    const fd_res = linux.open(@ptrCast(z_path[0..path.len :0]), .{ .ACCMODE = .RDWR, .CREAT = true }, 0o644);
+    const fd_signed: isize = @bitCast(fd_res);
+    if (fd_signed < 0) return null;
+    const fd: i32 = @intCast(fd_signed);
+    defer _ = linux.close(fd);
+
+    const size_bytes: u64 = @as(u64, size_mb) * 1024 * 1024;
+    _ = linux.ftruncate(fd, @intCast(size_bytes));
+
+    formatAndSeedDisk(@ptrCast(z_path[0..path.len :0]), name);
+    return path;
+}
+
 fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []const u8) !void {
     _ = client;
     if (args.len == 0) {
         var buf: [512]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf,
             \\Usage:
-            \\  {s} disk create <name> [--size <size>]    Create virtual disk image (default: 1GiB)
+            \\  {s} disk create <name> [--size <size>]    Create and format virtual disk image (default: 1GiB)
             \\  {s} disk list                             List virtual disks in /var/lib/diosix/disks/
+            \\  {s} disk info <name>                      Display virtual disk details and attachment status
             \\  {s} disk delete <name>                    Delete a virtual disk image
             \\  {s} disk resize <name> --size <size>      Resize a virtual disk image
             \\
-        , .{ exe_name, exe_name, exe_name, exe_name }) catch return;
+        , .{ exe_name, exe_name, exe_name, exe_name, exe_name }) catch return;
         printStr(msg);
         return;
     }
@@ -1156,48 +1366,17 @@ fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
         }
 
         const size_mb = parseMemorySizeMb(size_str);
-        const size_bytes: u64 = @as(u64, size_mb) * 1024 * 1024;
-
-        _ = linux.mkdir("/var/lib/diosix", 0o755);
-        _ = linux.mkdir("/var/lib/diosix/disks", 0o755);
-
         var path_buf: [MAX_PATH_LEN]u8 = undefined;
-        const path = if (std.mem.startsWith(u8, disk_name, "/"))
-            disk_name
-        else blk: {
-            if (std.mem.endsWith(u8, disk_name, ".img") or std.mem.endsWith(u8, disk_name, ".raw")) {
-                break :blk std.fmt.bufPrint(&path_buf, "/var/lib/diosix/disks/{s}", .{disk_name}) catch "/var/lib/diosix/disks/disk.img";
-            } else {
-                break :blk std.fmt.bufPrint(&path_buf, "/var/lib/diosix/disks/{s}.img", .{disk_name}) catch "/var/lib/diosix/disks/disk.img";
-            }
-        };
-
-        var z_path: [MAX_PATH_LEN]u8 = undefined;
-        @memcpy(z_path[0..path.len], path);
-        z_path[path.len] = 0;
-
-        const fd_res = linux.open(@ptrCast(z_path[0..path.len :0]), .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true }, 0o644);
-        const fd_signed: isize = @bitCast(fd_res);
-        if (fd_signed < 0) {
+        if (provisionVirtualDisk(disk_name, size_mb, &path_buf)) |path| {
+            var out_buf: [256]u8 = undefined;
+            const out_msg = std.fmt.bufPrint(&out_buf, "✓ Virtual disk '{s}' ({d} MB, ext4) created at {s}.\n", .{ disk_name, size_mb, path }) catch return;
+            printStr(out_msg);
+        } else {
             printStr("Error: Failed to create virtual disk file.\n");
-            return;
         }
-        const fd: i32 = @intCast(fd_signed);
-        defer _ = linux.close(fd);
-
-        const trunc_res = linux.ftruncate(fd, @intCast(size_bytes));
-        const trunc_signed: isize = @bitCast(trunc_res);
-        if (trunc_signed < 0) {
-            printStr("Error: Failed to allocate virtual disk capacity.\n");
-            return;
-        }
-
-        var out_buf: [256]u8 = undefined;
-        const out_msg = std.fmt.bufPrint(&out_buf, "✓ Virtual disk '{s}' ({d} MB) created at {s}.\n", .{ disk_name, size_mb, path }) catch return;
-        printStr(out_msg);
     } else if (std.mem.eql(u8, subcmd, "list") or std.mem.eql(u8, subcmd, "ls")) {
-        printStr("Disk Name             Capacity   Format   Path\n");
-        printStr("----------------------------------------------------------------------\n");
+        printStr("Disk Name             Capacity   Format   Attached VM        Path\n");
+        printStr("-------------------------------------------------------------------------------------------\n");
 
         _ = linux.mkdir("/var/lib/diosix", 0o755);
         _ = linux.mkdir("/var/lib/diosix/disks", 0o755);
@@ -1253,12 +1432,65 @@ fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
                     else
                         std.fmt.bufPrint(&size_str_buf, "{d} MB", .{size_mb_val}) catch "256 MB";
 
+                    const fmt_str = detectDiskFormat(@ptrCast(file_z[0..file_path.len :0]));
+                    var att_buf: [64]u8 = undefined;
+                    const att_str = findAttachedGuest(file_path, &att_buf);
+
                     var line_buf: [256]u8 = undefined;
-                    const line = std.fmt.bufPrint(&line_buf, "{s:<21} {s:<10} raw      {s}\n", .{ dname, size_str, file_path }) catch continue;
+                    const line = std.fmt.bufPrint(&line_buf, "{s:<21} {s:<10} {s:<8} {s:<18} {s}\n", .{ dname, size_str, fmt_str, att_str, file_path }) catch continue;
                     printStr(line);
                 }
             }
         }
+    } else if (std.mem.eql(u8, subcmd, "info")) {
+        if (args.len < 2) {
+            printStr("Usage: dsx disk info <name>\n");
+            return;
+        }
+        const disk_name = std.mem.span(args[1]);
+        var path_buf: [MAX_PATH_LEN]u8 = undefined;
+        const path = if (std.mem.startsWith(u8, disk_name, "/"))
+            disk_name
+        else blk: {
+            if (std.mem.endsWith(u8, disk_name, ".img") or std.mem.endsWith(u8, disk_name, ".raw")) {
+                break :blk std.fmt.bufPrint(&path_buf, "/var/lib/diosix/disks/{s}", .{disk_name}) catch "/var/lib/diosix/disks/disk.img";
+            } else {
+                break :blk std.fmt.bufPrint(&path_buf, "/var/lib/diosix/disks/{s}.img", .{disk_name}) catch "/var/lib/diosix/disks/disk.img";
+            }
+        };
+        var file_z: [MAX_PATH_LEN]u8 = undefined;
+        @memcpy(file_z[0..path.len], path);
+        file_z[path.len] = 0;
+
+        const file_fd_res = linux.open(@ptrCast(file_z[0..path.len :0]), .{ .ACCMODE = .RDONLY }, 0);
+        const file_fd_signed: isize = @bitCast(file_fd_res);
+        if (file_fd_signed < 0) {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Virtual disk '{s}' not found.\n", .{disk_name}) catch "Error: Disk not found.\n";
+            printStr(err_msg);
+            return;
+        }
+        const file_fd: i32 = @intCast(file_fd_signed);
+        const end_off = linux.lseek(file_fd, 0, 2);
+        _ = linux.close(file_fd);
+        const end_signed: isize = @bitCast(end_off);
+        const size_bytes: u64 = if (end_signed > 0) @intCast(end_signed) else 0;
+        const size_mb_val = size_bytes / (1024 * 1024);
+
+        const fmt_str = detectDiskFormat(@ptrCast(file_z[0..path.len :0]));
+        var att_buf: [64]u8 = undefined;
+        const att_str = findAttachedGuest(path, &att_buf);
+
+        var out_buf: [512]u8 = undefined;
+        const info_msg = std.fmt.bufPrint(&out_buf,
+            \\Disk Name      : {s}
+            \\Path           : {s}
+            \\Capacity       : {d} MB ({d} bytes)
+            \\Format         : {s}
+            \\Attached VM    : {s}
+            \\
+        , .{ disk_name, path, size_mb_val, size_bytes, fmt_str, att_str }) catch return;
+        printStr(info_msg);
     } else if (std.mem.eql(u8, subcmd, "delete") or std.mem.eql(u8, subcmd, "rm")) {
         if (args.len < 2) {
             printStr("Usage: dsx disk delete <name>\n");
@@ -1278,6 +1510,15 @@ fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []c
         var z_path: [MAX_PATH_LEN]u8 = undefined;
         @memcpy(z_path[0..path.len], path);
         z_path[path.len] = 0;
+
+        var att_buf: [64]u8 = undefined;
+        const att_str = findAttachedGuest(path, &att_buf);
+        if (!std.mem.eql(u8, att_str, "-")) {
+            var err_buf: [256]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Cannot delete virtual disk '{s}': currently attached to running VM '{s}'. Stop the VM first.\n", .{ disk_name, att_str }) catch "Error: Disk in use.\n";
+            printStr(err_msg);
+            return;
+        }
 
         const un_res = linux.unlink(@ptrCast(z_path[0..path.len :0]));
         const un_signed: isize = @bitCast(un_res);
@@ -2013,6 +2254,114 @@ fn isSshPortOpen(ip_str: []const u8) bool {
     return false;
 }
 
+fn copyFileOverSsh(key_str: ?[:0]const u8, dest_str: [:0]const u8, src_path_z: [*:0]const u8, remote_dest: [:0]const u8) bool {
+    const src_fd_res = linux.open(src_path_z, .{ .ACCMODE = .RDONLY }, 0);
+    const src_fd_signed: isize = @bitCast(src_fd_res);
+    if (src_fd_signed < 0) return false;
+    const src_fd: i32 = @intCast(src_fd_signed);
+    defer _ = linux.close(src_fd);
+
+    var remote_cmd_buf: [MAX_PATH_LEN + 32]u8 = undefined;
+    const remote_cmd = std.fmt.bufPrint(&remote_cmd_buf, "cat > {s}", .{remote_dest}) catch return false;
+    var remote_cmd_z: [MAX_PATH_LEN + 32]u8 = undefined;
+    @memcpy(remote_cmd_z[0..remote_cmd.len], remote_cmd);
+    remote_cmd_z[remote_cmd.len] = 0;
+
+    const pid_res = linux.fork();
+    const pid_signed: isize = @bitCast(pid_res);
+    if (pid_signed < 0) return false;
+    if (pid_signed == 0) {
+        _ = linux.dup2(src_fd, linux.STDIN_FILENO);
+        _ = linux.close(src_fd);
+
+        var devnull_buf: [16]u8 = undefined;
+        @memcpy(devnull_buf[0..9], "/dev/null");
+        devnull_buf[9] = 0;
+        const devnull_res = linux.open(@ptrCast(devnull_buf[0..9 :0]), .{ .ACCMODE = .WRONLY }, 0);
+        const devnull_signed: isize = @bitCast(devnull_res);
+        if (devnull_signed >= 0) {
+            _ = linux.dup2(@intCast(devnull_signed), linux.STDOUT_FILENO);
+            _ = linux.dup2(@intCast(devnull_signed), linux.STDERR_FILENO);
+            _ = linux.close(@intCast(devnull_signed));
+        }
+
+        const ssh_bins = [_][*:0]const u8{
+            "/usr/bin/ssh",
+            "/usr/bin/dbclient",
+            "/bin/ssh",
+        };
+        const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+            "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            null,
+        };
+        for (ssh_bins) |bin| {
+            if (key_str) |ks| {
+                const exec_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+                    bin,
+                    "-i",
+                    ks.ptr,
+                    "-y",
+                    dest_str.ptr,
+                    @ptrCast(remote_cmd_z[0..remote_cmd.len :0]),
+                    null,
+                };
+                _ = linux.execve(bin, exec_argv, envp);
+            } else {
+                const exec_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+                    bin,
+                    "-y",
+                    dest_str.ptr,
+                    @ptrCast(remote_cmd_z[0..remote_cmd.len :0]),
+                    null,
+                };
+                _ = linux.execve(bin, exec_argv, envp);
+            }
+        }
+        linux.exit(127);
+    }
+
+    const pid: i32 = @intCast(pid_signed);
+    var status: i32 = 0;
+    while (true) {
+        const wait_res = linux.waitpid(pid, &status, 0);
+        const wait_signed: isize = @bitCast(wait_res);
+        if (wait_signed >= 0) break;
+        if (wait_signed == -@as(isize, @intFromEnum(linux.E.INTR))) continue;
+        return false;
+    }
+    return (status == 0);
+}
+
+fn ensureGuestDefaultImage(key_str: ?[:0]const u8, ip_addr: []const u8) void {
+    const src_path = "/var/lib/diosix/images/default.elf";
+    var src_z: [MAX_PATH_LEN]u8 = undefined;
+    @memcpy(src_z[0..src_path.len], src_path);
+    src_z[src_path.len] = 0;
+
+    const fd_src = linux.open(src_z[0..src_path.len :0].ptr, .{ .ACCMODE = .RDONLY }, 0);
+    const fd_signed: isize = @bitCast(fd_src);
+    if (fd_signed < 0) return;
+    _ = linux.close(@intCast(fd_signed));
+
+    var dest_buf: [128]u8 = undefined;
+    const dest_slice = std.fmt.bufPrint(&dest_buf, "root@{s}", .{ip_addr}) catch return;
+    var dest_z: [128]u8 = undefined;
+    @memcpy(dest_z[0..dest_slice.len], dest_slice);
+    dest_z[dest_slice.len] = 0;
+    const dest_str: [:0]const u8 = dest_z[0..dest_slice.len :0];
+
+    const test_cmd: [:0]const u8 = "test -s /var/lib/diosix/images/default.elf";
+    if (runSshCommand(key_str, dest_str, test_cmd, true) == 0) {
+        return; // Already present!
+    }
+
+    const mkdir_cmd: [:0]const u8 = "mkdir -p /var/lib/diosix/images";
+    _ = runSshCommand(key_str, dest_str, mkdir_cmd, true);
+
+    const remote_dest: [:0]const u8 = "/var/lib/diosix/images/default.elf";
+    _ = copyFileOverSsh(key_str, dest_str, src_z[0..src_path.len :0].ptr, remote_dest);
+}
+
 fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, remote_cmd: ?[]const u8) !void {
     var key_buf: [128]u8 = undefined;
     const key_str: ?[:0]const u8 = if (key_path) |kp| blk: {
@@ -2038,7 +2387,7 @@ fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, rem
     if (!is_local) {
         var attempts: usize = 0;
         var printed_waiting = false;
-        while (attempts < 60) : (attempts += 1) {
+        while (attempts < 120) : (attempts += 1) {
             if (isSshPortOpen(ip_addr)) break;
             if (!printed_waiting) {
                 printStr("Waiting for guest to finish booting and start SSH service...\n");
@@ -2048,6 +2397,7 @@ fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, rem
             var rem: linux.timespec = undefined;
             _ = linux.nanosleep(&req, &rem);
         }
+        ensureGuestDefaultImage(key_str, ip_addr);
     }
 
     _ = runSshCommand(key_str, dest_str, cmd_str, false);
@@ -2547,41 +2897,34 @@ fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
     if (disk_str) |d| {
         if (std.mem.startsWith(u8, d, "/")) {
             final_disk = d;
-        } else if (std.mem.endsWith(u8, d, ".img") or std.mem.endsWith(u8, d, ".raw")) {
-            final_disk = std.fmt.bufPrint(&final_disk_buf, "/var/lib/diosix/disks/{s}", .{d}) catch d;
         } else if (d.len > 0 and std.ascii.isDigit(d[0])) {
             const d_mb = parseMemorySizeMb(d);
-            const path = std.fmt.bufPrint(&final_disk_buf, "/var/lib/diosix/disks/{s}.img", .{vm_name.?}) catch "/var/lib/diosix/disks/disk.img";
-            _ = linux.mkdir("/var/lib/diosix", 0o755);
-            _ = linux.mkdir("/var/lib/diosix/disks", 0o755);
-            var z_path: [MAX_PATH_LEN]u8 = undefined;
-            @memcpy(z_path[0..path.len], path);
-            z_path[path.len] = 0;
-            const fd_res = linux.open(@ptrCast(z_path[0..path.len :0]), .{ .ACCMODE = .RDWR, .CREAT = true }, 0o644);
-            const fd_signed: isize = @bitCast(fd_res);
-            if (fd_signed >= 0) {
-                const fd: i32 = @intCast(fd_signed);
-                _ = linux.ftruncate(fd, @intCast(@as(u64, d_mb) * 1024 * 1024));
-                _ = linux.close(fd);
+            if (provisionVirtualDisk(vm_name.?, d_mb, &final_disk_buf)) |p| {
+                final_disk = p;
+            } else {
+                final_disk = std.fmt.bufPrint(&final_disk_buf, "/var/lib/diosix/disks/{s}.img", .{vm_name.?}) catch "/var/lib/diosix/disks/disk.img";
             }
-            final_disk = path;
         } else {
-            final_disk = std.fmt.bufPrint(&final_disk_buf, "/var/lib/diosix/disks/{s}.img", .{d}) catch d;
-            _ = linux.mkdir("/var/lib/diosix", 0o755);
-            _ = linux.mkdir("/var/lib/diosix/disks", 0o755);
-            var z_path: [MAX_PATH_LEN]u8 = undefined;
-            @memcpy(z_path[0..final_disk.len], final_disk);
-            z_path[final_disk.len] = 0;
-            const fd_res = linux.open(@ptrCast(z_path[0..final_disk.len :0]), .{ .ACCMODE = .RDWR, .CREAT = true }, 0o644);
-            const fd_signed: isize = @bitCast(fd_res);
-            if (fd_signed >= 0) {
-                const fd: i32 = @intCast(fd_signed);
-                const end_off = linux.lseek(fd, 0, 2); // SEEK_END
-                const end_signed: isize = @bitCast(end_off);
-                if (end_signed == 0) {
-                    _ = linux.ftruncate(fd, 1024 * 1024 * 1024); // 1GiB default
+            const disk_base = if (std.mem.endsWith(u8, d, ".img") or std.mem.endsWith(u8, d, ".raw"))
+                d[0 .. d.len - 4]
+            else
+                d;
+            var test_z: [MAX_PATH_LEN]u8 = undefined;
+            const test_path = std.fmt.bufPrint(&test_z, "/var/lib/diosix/disks/{s}.img", .{disk_base}) catch "/var/lib/diosix/disks/disk.img";
+            var z_check: [MAX_PATH_LEN]u8 = undefined;
+            @memcpy(z_check[0..test_path.len], test_path);
+            z_check[test_path.len] = 0;
+            const check_fd = linux.open(@ptrCast(z_check[0..test_path.len :0]), .{ .ACCMODE = .RDONLY }, 0);
+            const check_signed: isize = @bitCast(check_fd);
+            if (check_signed >= 0) {
+                _ = linux.close(@intCast(check_signed));
+                final_disk = std.fmt.bufPrint(&final_disk_buf, "{s}", .{test_path}) catch test_path;
+            } else {
+                if (provisionVirtualDisk(disk_base, 1024, &final_disk_buf)) |p| {
+                    final_disk = p;
+                } else {
+                    final_disk = std.fmt.bufPrint(&final_disk_buf, "{s}", .{test_path}) catch test_path;
                 }
-                _ = linux.close(fd);
             }
         }
     }

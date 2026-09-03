@@ -112,7 +112,11 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
     domain name or image name).
 *   `--vcpus <N>` *(optional)*: Number of virtual CPU cores (default: 1).
 *   `--ram <size>` *(optional)*: RAM allocation ceiling (e.g. `256M`, `2GiB`).
-*   `--disk <name|size>` *(optional)*: Attach an existing virtual disk image or auto-provision sparse capacity.
+*   `--disk <name|size>` *(optional)*: Attaches an existing virtual disk by name
+    (e.g. `--disk user-data`), or auto-provisions and formats an ext4 virtual disk of the
+    specified size (e.g. `--disk 1G`). Auto-provisioned disks are formatted as ext4 and
+    pre-seeded with guest images (`/images/default.elf`) and restricted directories (`/keys` mode 0700)
+    so child VMs can recursively deploy grandchild VMs without leaking parent credentials.
 *   `--cdrom <iso|path>` (or `--iso <path>` / `--media <path>`) *(optional)*: Attach a read-only installer ISO or live media.
 *   `--ip <address>` *(optional)*: Static private IP (default: `10.0.3.<cid>`).
 *   `--domain <name>` *(optional)*: Extracts configuration and policies for the
@@ -311,23 +315,32 @@ dsx disk <subcmd> [options]
 ```
 
 Subcommands:
-*   `create <name> [--size <size>]`: Creates a sparse virtual disk image (default: `1GiB`).
-*   `list` (or `ls`): Lists all available virtual disk images, capacities, and paths.
-*   `delete <name>` (or `rm`): Deletes a virtual disk image.
+*   `create <name> [--size <size>]`: Creates an ext4-formatted virtual disk image
+    (default: `1GiB`) and pre-stages the guest image repository (`/images/default.elf`)
+    and permissions (`/keys` mode 0700) in full parity with `dsx run --disk <size>`.
+*   `list` (or `ls`): Lists all provisioned virtual disks with their capacity, filesystem
+    format (`ext4` or `raw`), currently attached VM (`<name> (CID <N>)` or `-`), and image path.
+*   `info <name>`: Displays detailed properties for a virtual disk, including filesystem format,
+    capacity, path, and attached VM status.
+*   `delete <name>` (or `rm`): Deletes a virtual disk image. Rejects deletion if the disk
+    is currently attached to an active running VM to prevent accidental data loss or VM corruption.
 *   `resize <name> --size <size>`: Adjusts disk image capacity.
 
 Examples:
 ```bash
-# Create a 2 GB virtual disk for a child VM
+# Create a 2 GB ext4-formatted virtual disk pre-seeded with guest images
 dsx disk create user-data --size 2GiB
 
-# List all provisioned virtual disk images
+# List all provisioned virtual disks, formats, and attached VM status
 dsx disk list
+
+# Inspect detailed metadata for a virtual disk
+dsx disk info user-data
 
 # Resize a virtual disk to 4 GB
 dsx disk resize user-data --size 4GiB
 
-# Delete a virtual disk image
+# Delete an unattached virtual disk image
 dsx disk delete user-data
 ```
 
