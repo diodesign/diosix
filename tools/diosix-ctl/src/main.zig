@@ -2860,7 +2860,8 @@ fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
 
     const ram_mb = parseMemorySizeMb(ram_str);
     const ram_pages = (ram_mb * KB_PER_MB) / PAGE_SIZE_KB;
-    _ = client.setQuota(child_cid, ram_pages, vcpus, 0, 0) catch {};
+    // Set child VM's RAM range while allowing subtree VCPU inheritance (max_vcpus=0) so the child can spawn nested VMs
+    _ = client.setQuota(child_cid, ram_pages, 0, 0, 0) catch {};
 
     const base_gpa: usize = switch (arch_num) {
         @intFromEnum(api.TargetArch.x86_64) => 0,
