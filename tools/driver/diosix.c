@@ -749,6 +749,8 @@ static int diosix_net_rx_worker(void *data)
 
     rx_pa = virt_to_phys(rx_buf);
 
+    int idle_count = 0;
+
     while (!kthread_should_stop()) {
         struct sbiret ret;
         ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_NET_RECV, (unsigned long)rx_pa, 1536, 0, 0, 0, 0);
@@ -766,10 +768,18 @@ static int diosix_net_rx_worker(void *data)
             } else {
                 priv->stats.rx_dropped++;
             }
+            idle_count = 0;
             continue;
         }
 
-        usleep_range(500, 1000);
+        idle_count++;
+        if (idle_count < 64) {
+            cpu_relax();
+        } else if (idle_count < 256) {
+            usleep_range(10, 25);
+        } else {
+            usleep_range(50, 100);
+        }
     }
 
     kfree(rx_buf);

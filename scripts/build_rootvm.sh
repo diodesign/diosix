@@ -54,7 +54,7 @@ mkdir -p "$(dirname "$OUT_FILE")"
 mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/driver/diosix.c 2>/dev/null) | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/driver/diosix.c tools/micro-guest/* 2>/dev/null) | sha256sum | cut -d' ' -f1)
 
 write_rootvm_s() {
     if [ -n "$ROOTVM_S_PATH" ]; then
@@ -101,6 +101,22 @@ log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
 zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools/diosix-ctl/src/main.zig -Minterface=hypervisor/interface/lib.zig --name diosix-ctl -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
 log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
+
+# Compile and install lightweight default guest payload for nested virtualization.
+if [ -f "tools/micro-guest/guest.s" ]; then
+    mkdir -p "$DYNAMIC_OVERLAY/boot" tools/overlay-common/boot
+    CC_GUEST="riscv64-linux-gnu-gcc"
+    if [ -x "$BUILDROOT_DIR/output/host/bin/riscv64-buildroot-linux-gnu-gcc" ]; then
+        CC_GUEST="$BUILDROOT_DIR/output/host/bin/riscv64-buildroot-linux-gnu-gcc"
+    fi
+    if command -v "$CC_GUEST" >/dev/null 2>&1; then
+        "$CC_GUEST" -nostdlib -static -Wl,-Ttext=0x80000000,-N,--build-id=none tools/micro-guest/guest.s -o "$DYNAMIC_OVERLAY/boot/default.elf" 2>/dev/null || true
+        cp -f "$DYNAMIC_OVERLAY/boot/default.elf" tools/overlay-common/boot/default.elf 2>/dev/null || true
+        mkdir -p "$DYNAMIC_OVERLAY/var/lib/diosix/images"
+        ln -sf /boot/default.elf "$DYNAMIC_OVERLAY/var/lib/diosix/images/default.elf" 2>/dev/null || true
+        log_ok "Installed default guest payload in overlay (/boot/default.elf)."
+    fi
+fi
 
 # Clean any lingering private keys from previous target builds
 if [ -d "$BUILDROOT_DIR/output/target/etc/diosix/keys" ]; then

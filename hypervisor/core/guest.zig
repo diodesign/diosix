@@ -117,7 +117,7 @@ pub const EventQueue = struct {
 };
 
 pub const MAX_PACKET_LEN: usize = 1536;
-pub const MAX_NET_PACKETS: usize = 64;
+pub const MAX_NET_PACKETS: usize = 512;
 
 pub const Packet = struct {
     len: u16 = 0,

@@ -2341,7 +2341,14 @@ fn ensureGuestDefaultImage(key_str: ?[:0]const u8, ip_addr: []const u8) void {
     const fd_src = linux.open(src_z[0..src_path.len :0].ptr, .{ .ACCMODE = .RDONLY }, 0);
     const fd_signed: isize = @bitCast(fd_src);
     if (fd_signed < 0) return;
-    _ = linux.close(@intCast(fd_signed));
+    const fd: i32 = @intCast(fd_signed);
+    defer _ = linux.close(fd);
+
+    const end_offset = linux.lseek(fd, 0, 2); // SEEK_END
+    _ = linux.lseek(fd, 0, 0); // SEEK_SET
+    const end_signed: isize = @bitCast(end_offset);
+    if (end_signed <= 0) return;
+    const src_size: usize = @intCast(end_signed);
 
     var dest_buf: [128]u8 = undefined;
     const dest_slice = std.fmt.bufPrint(&dest_buf, "root@{s}", .{ip_addr}) catch return;
@@ -2350,16 +2357,49 @@ fn ensureGuestDefaultImage(key_str: ?[:0]const u8, ip_addr: []const u8) void {
     dest_z[dest_slice.len] = 0;
     const dest_str: [:0]const u8 = dest_z[0..dest_slice.len :0];
 
-    const test_cmd: [:0]const u8 = "test -s /var/lib/diosix/images/default.elf";
-    if (runSshCommand(key_str, dest_str, test_cmd, true) == 0) {
-        return; // Already present!
+    // Check if the remote child VM already has a valid default image in /boot or /var/lib/diosix/images.
+    const check_cmd: [:0]const u8 = "test -s /boot/default.elf || test -s /var/lib/diosix/images/default.elf";
+    if (runSshCommand(key_str, dest_str, check_cmd, true) == 0) {
+        return; // Valid guest image already present on child VM.
     }
+
+    // Check if the remote default.elf already exists and has the exact expected byte size.
+    var test_cmd_buf: [128]u8 = undefined;
+    const test_cmd = std.fmt.bufPrint(&test_cmd_buf, "[ $(wc -c < /var/lib/diosix/images/default.elf 2>/dev/null || echo 0) -eq {d} ]", .{src_size}) catch return;
+    var test_cmd_z: [128]u8 = undefined;
+    @memcpy(test_cmd_z[0..test_cmd.len], test_cmd);
+    test_cmd_z[test_cmd.len] = 0;
+    if (runSshCommand(key_str, dest_str, test_cmd_z[0..test_cmd.len :0], true) == 0) {
+        return; // Valid image already present.
+    }
+
+    printStr("Syncing default guest image to child VM for nested virtualization...\n");
 
     const mkdir_cmd: [:0]const u8 = "mkdir -p /var/lib/diosix/images";
     _ = runSshCommand(key_str, dest_str, mkdir_cmd, true);
 
-    const remote_dest: [:0]const u8 = "/var/lib/diosix/images/default.elf";
-    _ = copyFileOverSsh(key_str, dest_str, src_z[0..src_path.len :0].ptr, remote_dest);
+    const remote_tmp: [:0]const u8 = "/var/lib/diosix/images/.default.elf.tmp";
+    if (copyFileOverSsh(key_str, dest_str, src_z[0..src_path.len :0].ptr, remote_tmp)) {
+        var verify_cmd_buf: [128]u8 = undefined;
+        const verify_cmd = std.fmt.bufPrint(&verify_cmd_buf, "[ $(wc -c < /var/lib/diosix/images/.default.elf.tmp 2>/dev/null || echo 0) -eq {d} ]", .{src_size}) catch return;
+        var verify_cmd_z: [128]u8 = undefined;
+        @memcpy(verify_cmd_z[0..verify_cmd.len], verify_cmd);
+        verify_cmd_z[verify_cmd.len] = 0;
+
+        if (runSshCommand(key_str, dest_str, verify_cmd_z[0..verify_cmd.len :0], true) == 0) {
+            const install_cmd: [:0]const u8 = "mv -f /var/lib/diosix/images/.default.elf.tmp /var/lib/diosix/images/default.elf && chmod +x /var/lib/diosix/images/default.elf";
+            _ = runSshCommand(key_str, dest_str, install_cmd, true);
+            printStr("✓ Guest image verified and ready on child VM.\n");
+        } else {
+            const cleanup_cmd: [:0]const u8 = "rm -f /var/lib/diosix/images/.default.elf.tmp";
+            _ = runSshCommand(key_str, dest_str, cleanup_cmd, true);
+            printStr("Warning: Guest image transfer incomplete; temporary file cleaned up.\n");
+        }
+    } else {
+        const cleanup_cmd: [:0]const u8 = "rm -f /var/lib/diosix/images/.default.elf.tmp";
+        _ = runSshCommand(key_str, dest_str, cleanup_cmd, true);
+        printStr("Warning: Failed to copy guest image to child VM.\n");
+    }
 }
 
 fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, remote_cmd: ?[]const u8) !void {
@@ -3563,6 +3603,3 @@ test "image and cdrom path resolution" {
     const full_img_path = std.fmt.bufPrint(&img_buf, "/var/lib/diosix/images/{s}.elf", .{img_name}) catch "";
     try testing.expectEqualStrings("/var/lib/diosix/images/debian-installer.elf", full_img_path);
 }
-
-
-
