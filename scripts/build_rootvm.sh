@@ -54,7 +54,7 @@ mkdir -p "$(dirname "$OUT_FILE")"
 mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/driver/diosix.c tools/micro-guest/* 2>/dev/null) | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/diosix-wm/src/*.zig tools/driver/diosix.c tools/micro-guest/* 2>/dev/null) | sha256sum | cut -d' ' -f1)
 
 write_rootvm_s() {
     if [ -n "$ROOTVM_S_PATH" ]; then
@@ -94,13 +94,19 @@ log_info "Destination ELF     : $OUT_FILE"
 # 2. Build Guest Management Utilities
 log_step "[1/5] Cross-compiling guest management tools (diosix-ctl / dsx)..."
 DYNAMIC_OVERLAY="$(realpath "$BUILDROOT_DIR")/overlay-dynamic"
-mkdir -p "$DYNAMIC_OVERLAY/usr/sbin"
+mkdir -p "$DYNAMIC_OVERLAY/usr/sbin" "$DYNAMIC_OVERLAY/usr/bin"
 
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
 zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools/diosix-ctl/src/main.zig -Minterface=hypervisor/interface/lib.zig --name diosix-ctl -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
 log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
+
+if [ -d "tools/diosix-wm" ]; then
+    log_info "Compiling diosix-wm for ${BOLD}${ZIG_TARGET}${RESET}..."
+    zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall tools/diosix-wm/src/main.zig --name diosix-wm -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-wm" >/dev/null 2>&1 || true
+    log_ok "Installed diosix-wm in overlay (/usr/bin/diosix-wm)."
+fi
 
 # Compile and install lightweight default guest payload for nested virtualization.
 if [ -f "tools/micro-guest/guest.s" ]; then

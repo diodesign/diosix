@@ -2,10 +2,10 @@ const std = @import("std");
 const fb = @import("framebuffer.zig");
 
 pub const DomainTrust = enum {
-    trusted_config,  // sys.config, root
-    work,            // user.work, user.dev
-    untrusted_net,   // user.web, sandboxed apps
-    system_service,  // sys.net, sys.fs
+    trusted_config, // sys.config, root
+    work, // user.work, user.dev
+    untrusted_net, // user.web, sandboxed apps
+    system_service, // sys.net, sys.fs
 
     pub fn getColor(self: DomainTrust) u32 {
         return switch (self) {

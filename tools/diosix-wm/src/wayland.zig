@@ -1,5 +1,5 @@
 const std = @import("std");
-const posix = std.posix;
+const linux = std.os.linux;
 const fb = @import("framebuffer.zig");
 const dec = @import("decorator.zig");
 
@@ -34,22 +34,27 @@ pub const WaylandCompositorServer = struct {
 
     pub fn init(allocator: std.mem.Allocator, socket_path: []const u8) !WaylandCompositorServer {
         var z_path: [256]u8 = undefined;
+        if (socket_path.len >= z_path.len) return error.NameTooLong;
         @memcpy(z_path[0..socket_path.len], socket_path);
         z_path[socket_path.len] = 0;
 
-        _ = posix.unlink(z_path[0..socket_path.len :0]) catch {};
+        _ = linux.unlink(@ptrCast(&z_path));
 
-        var addr = posix.sockaddr.un{
-            .family = posix.AF.UNIX,
+        var addr = linux.sockaddr.un{
+            .family = linux.AF.UNIX,
             .path = undefined,
         };
         @memset(&addr.path, 0);
-        @memcpy(addr.path[0..socket_path.len], socket_path);
+        const copy_len = @min(socket_path.len, addr.path.len - 1);
+        @memcpy(addr.path[0..copy_len], socket_path[0..copy_len]);
 
-        const fd = posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.NONBLOCK, 0) catch -1;
-        if (fd >= 0) {
-            _ = posix.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch {};
-            _ = posix.listen(fd, 16) catch {};
+        const fd_res = linux.socket(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.NONBLOCK, 0);
+        const fd_signed: isize = @bitCast(fd_res);
+        var fd: i32 = -1;
+        if (fd_signed >= 0) {
+            fd = @intCast(fd_signed);
+            _ = linux.bind(fd, @ptrCast(&addr), @sizeOf(linux.sockaddr.un));
+            _ = linux.listen(fd, 16);
         }
 
         return WaylandCompositorServer{
@@ -62,7 +67,7 @@ pub const WaylandCompositorServer = struct {
     pub fn deinit(self: *WaylandCompositorServer) void {
         self.windows.deinit(self.allocator);
         if (self.listen_fd >= 0) {
-            posix.close(self.listen_fd);
+            _ = linux.close(self.listen_fd);
         }
     }
 

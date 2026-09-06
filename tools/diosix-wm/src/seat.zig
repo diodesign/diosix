@@ -14,7 +14,7 @@ pub const Pointer = struct {
     pub fn drawCursor(self: *const Pointer, surface: *fb.Surface) void {
         const px = self.x;
         const py = self.y;
-        
+
         // Render 12x12 arrow cursor
         var row: i32 = 0;
         while (row < 12) : (row += 1) {

@@ -1,5 +1,4 @@
 const std = @import("std");
-const posix = std.posix;
 const linux = std.os.linux;
 
 pub const Color = struct {
@@ -9,13 +8,13 @@ pub const Color = struct {
     pub const PANEL_BG: u32 = 0xFF1E1E24;
     pub const TEXT_PRIMARY: u32 = 0xFFE0E0E6;
     pub const TEXT_MUTED: u32 = 0xFF8A8A96;
-    
+
     // Domain Trust Colors
-    pub const TRUST_TRUSTED: u32 = 0xFF2ECC71;   // Emerald Green (sys.config, root)
-    pub const TRUST_WORK: u32 = 0xFF3498DB;      // Dodger Blue (work domain)
+    pub const TRUST_TRUSTED: u32 = 0xFF2ECC71; // Emerald Green (sys.config, root)
+    pub const TRUST_WORK: u32 = 0xFF3498DB; // Dodger Blue (work domain)
     pub const TRUST_UNTRUSTED: u32 = 0xFFE74C3C; // Alizarin Red (user.web, untrusted)
-    pub const TRUST_SYSTEM: u32 = 0xFF9B59B6;    // Amethyst Purple (sys.net, sys.fs)
-    
+    pub const TRUST_SYSTEM: u32 = 0xFF9B59B6; // Amethyst Purple (sys.net, sys.fs)
+
     pub const BORDER_INACTIVE: u32 = 0xFF3E3E4A;
     pub const TITLEBAR_BG: u32 = 0xFF282832;
     pub const BTN_CLOSE: u32 = 0xFFE74C3C;
@@ -31,7 +30,7 @@ pub const Rect = struct {
 
     pub fn contains(self: Rect, px: i32, py: i32) bool {
         return px >= self.x and px < self.x + @as(i32, @intCast(self.width)) and
-               py >= self.y and py < self.y + @as(i32, @intCast(self.height));
+            py >= self.y and py < self.y + @as(i32, @intCast(self.height));
     }
 };
 
@@ -132,12 +131,14 @@ pub const FramebufferDevice = struct {
 
     pub fn init(allocator: std.mem.Allocator, fb_path: []const u8) !FramebufferDevice {
         var z_path: [256]u8 = undefined;
+        if (fb_path.len >= z_path.len) return error.NameTooLong;
         @memcpy(z_path[0..fb_path.len], fb_path);
         z_path[fb_path.len] = 0;
 
-        const fd = posix.open(z_path[0..fb_path.len :0], .{ .ACCMODE = .RDWR }, 0) catch |err| {
+        const open_rc = linux.open(@ptrCast(&z_path), .{ .ACCMODE = .RDWR }, 0);
+        const signed_rc: isize = @bitCast(open_rc);
+        if (signed_rc < 0) {
             // Fallback to virtual 1024x768 surface for headless testing
-            _ = err;
             const w: u32 = 1024;
             const h: u32 = 768;
             const bb = try Surface.init(allocator, w, h);
@@ -150,25 +151,50 @@ pub const FramebufferDevice = struct {
                 .width = w,
                 .height = h,
             };
+        }
+        const fd: i32 = @intCast(signed_rc);
+
+        // Query screen resolution from driver if available
+        var w: u32 = 1280;
+        var h: u32 = 800;
+
+        const FbVarScreeninfo = extern struct {
+            xres: u32,
+            yres: u32,
+            xres_virtual: u32,
+            yres_virtual: u32,
+            xoffset: u32,
+            yoffset: u32,
+            bits_per_pixel: u32,
+            pad: [128]u8 = undefined,
         };
 
-        const w: u32 = 1280;
-        const h: u32 = 800;
+        var vinfo: FbVarScreeninfo = undefined;
+        const FBIOGET_VSCREENINFO: usize = 0x4600;
+        const ioctl_rc = linux.ioctl(fd, FBIOGET_VSCREENINFO, @intFromPtr(&vinfo));
+        const signed_ioctl: isize = @bitCast(ioctl_rc);
+        if (signed_ioctl == 0 and vinfo.xres > 0 and vinfo.yres > 0) {
+            w = vinfo.xres;
+            h = vinfo.yres;
+        }
+
         const total_bytes = w * h * 4;
 
-        const map = posix.mmap(
+        const map_res = linux.mmap(
             null,
             total_bytes,
-            posix.PROT.READ | posix.PROT.WRITE,
-            .{ .TYPE = .SHARED },
+            linux.PROT{ .READ = true, .WRITE = true },
+            linux.MAP{ .TYPE = .SHARED },
             fd,
             0,
-        ) catch {
-            posix.close(fd);
+        );
+        const signed_map: isize = @bitCast(map_res);
+        if (signed_map < 0) {
+            _ = linux.close(fd);
             return error.MmapFailed;
-        };
+        }
 
-        const pixels: [*]u32 = @ptrCast(@alignCast(map.ptr));
+        const pixels: [*]u32 = @ptrFromInt(map_res);
         const mapped_slice = pixels[0 .. w * h];
         const screen_surf = Surface{
             .width = w,
@@ -190,5 +216,12 @@ pub const FramebufferDevice = struct {
 
     pub fn swapBuffers(self: *FramebufferDevice) void {
         @memcpy(self.screen_surface.pixels, self.backbuffer.pixels);
+        if (self.fb_fd >= 0) {
+            _ = linux.msync(
+                @ptrCast(self.screen_surface.pixels.ptr),
+                self.screen_surface.pixels.len * @sizeOf(u32),
+                linux.MSF.SYNC,
+            );
+        }
     }
 };

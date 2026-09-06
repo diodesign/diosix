@@ -238,11 +238,14 @@ pub fn build(b: *std.Build) !void {
     try qemu_args.append(b.allocator, "-device");
     try qemu_args.append(b.allocator, "virtio-net-device,netdev=net0");
 
-    try qemu_args.append(b.allocator, "-bios");
-    try qemu_args.append(b.allocator, "none");
-    try qemu_args.append(b.allocator, "-kernel");
+    var run_step_args = ArrayList([]const u8).empty;
+    defer run_step_args.deinit(b.allocator);
+    try run_step_args.appendSlice(b.allocator, qemu_args.items);
+    try run_step_args.append(b.allocator, "-bios");
+    try run_step_args.append(b.allocator, "none");
+    try run_step_args.append(b.allocator, "-kernel");
 
-    const run_step = b.addSystemCommand(qemu_args.items);
+    const run_step = b.addSystemCommand(run_step_args.items);
     run_step.step.dependOn(b.getInstallStep());
     run_step.step.dependOn(&create_storage_cmd.step);
 
@@ -274,6 +277,9 @@ pub fn build(b: *std.Build) !void {
             try qemu_live_args.append(b.allocator, arg);
         }
     }
+    try qemu_live_args.append(b.allocator, "-bios");
+    try qemu_live_args.append(b.allocator, "none");
+    try qemu_live_args.append(b.allocator, "-kernel");
 
     const run_live_step = b.addSystemCommand(qemu_live_args.items);
     run_live_step.step.dependOn(b.getInstallStep());
@@ -301,6 +307,9 @@ pub fn build(b: *std.Build) !void {
     try qemu_gui_args.append(b.allocator, "virtio-keyboard-pci");
     try qemu_gui_args.append(b.allocator, "-device");
     try qemu_gui_args.append(b.allocator, "virtio-tablet-pci");
+    try qemu_gui_args.append(b.allocator, "-bios");
+    try qemu_gui_args.append(b.allocator, "none");
+    try qemu_gui_args.append(b.allocator, "-kernel");
 
     const run_gui_step = b.addSystemCommand(qemu_gui_args.items);
     run_gui_step.step.dependOn(b.getInstallStep());

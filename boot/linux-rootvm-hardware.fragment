@@ -105,9 +105,14 @@ CONFIG_IP_NF_RAW=y
 # CONFIG_SOUND is not set
 # CONFIG_SND is not set
 
-# Graphics, Framebuffers & Displays (Disabled - Headless Root VM)
-# CONFIG_DRM is not set
-# CONFIG_FB is not set
+# Graphics, Framebuffers & Displays (VirtIO-GPU & Framebuffer support)
+CONFIG_DRM=y
+CONFIG_DRM_KMS_HELPER=y
+CONFIG_DRM_VIRTIO_GPU=y
+CONFIG_DRM_FBDEV_EMULATION=y
+CONFIG_FB=y
+CONFIG_FB_DEFERRED_IO=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
 # CONFIG_VGA_CONSOLE is not set
 # CONFIG_LOGO is not set
 
