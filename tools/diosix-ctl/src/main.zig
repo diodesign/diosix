@@ -1252,8 +1252,10 @@ fn formatAndSeedDisk(disk_path_z: [*:0]const u8, disk_label: []const u8) void {
         _ = linux.mkdir("/tmp/diosix_staging/keys", 0o700);
 
         const copy_sources = [_][]const u8{
-            "/var/lib/diosix/images/default.elf",
             "/var/lib/diosix/images/linux-guest.elf",
+            "/boot/vmlinux.elf",
+            "/boot/linux-guest.elf",
+            "/var/lib/diosix/images/default.elf",
             "/boot/default.elf",
         };
         for (copy_sources) |src| {
@@ -2409,22 +2411,45 @@ fn copyFileOverSsh(key_str: ?[:0]const u8, dest_str: [:0]const u8, src_path_z: [
 }
 
 fn ensureGuestDefaultImage(key_str: ?[:0]const u8, ip_addr: []const u8) void {
-    const src_path = "/var/lib/diosix/images/default.elf";
+    const candidate_sources = [_][]const u8{
+        "/var/lib/diosix/images/linux-guest.elf",
+        "/boot/vmlinux.elf",
+        "/boot/linux-guest.elf",
+        "/var/lib/diosix/images/default.elf",
+        "/boot/default.elf",
+    };
+    var found_src: ?[]const u8 = null;
+    var found_fd: i32 = -1;
+    var src_size: usize = 0;
+    for (candidate_sources) |src_candidate| {
+        var src_z: [MAX_PATH_LEN]u8 = undefined;
+        if (src_candidate.len >= src_z.len) continue;
+        @memcpy(src_z[0..src_candidate.len], src_candidate);
+        src_z[src_candidate.len] = 0;
+
+        const fd_src = linux.open(src_z[0..src_candidate.len :0].ptr, .{ .ACCMODE = .RDONLY }, 0);
+        const fd_signed: isize = @bitCast(fd_src);
+        if (fd_signed < 0) continue;
+        const fd: i32 = @intCast(fd_signed);
+
+        const end_offset = linux.lseek(fd, 0, 2); // SEEK_END
+        _ = linux.lseek(fd, 0, 0); // SEEK_SET
+        const end_signed: isize = @bitCast(end_offset);
+        if (end_signed <= 0) {
+            _ = linux.close(fd);
+            continue;
+        }
+        found_src = src_candidate;
+        found_fd = fd;
+        src_size = @intCast(end_signed);
+        break;
+    }
+    if (found_src == null or found_fd < 0) return;
+    defer _ = linux.close(found_fd);
+    const src_path = found_src.?;
     var src_z: [MAX_PATH_LEN]u8 = undefined;
     @memcpy(src_z[0..src_path.len], src_path);
     src_z[src_path.len] = 0;
-
-    const fd_src = linux.open(src_z[0..src_path.len :0].ptr, .{ .ACCMODE = .RDONLY }, 0);
-    const fd_signed: isize = @bitCast(fd_src);
-    if (fd_signed < 0) return;
-    const fd: i32 = @intCast(fd_signed);
-    defer _ = linux.close(fd);
-
-    const end_offset = linux.lseek(fd, 0, 2); // SEEK_END
-    _ = linux.lseek(fd, 0, 0); // SEEK_SET
-    const end_signed: isize = @bitCast(end_offset);
-    if (end_signed <= 0) return;
-    const src_size: usize = @intCast(end_signed);
 
     var dest_buf: [128]u8 = undefined;
     const dest_slice = std.fmt.bufPrint(&dest_buf, "root@{s}", .{ip_addr}) catch return;
@@ -2503,8 +2528,12 @@ fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, rem
     if (!is_local) {
         var attempts: usize = 0;
         var printed_waiting = false;
-        while (attempts < 120) : (attempts += 1) {
-            if (isSshPortOpen(ip_addr)) break;
+        var ssh_ready = false;
+        while (attempts < 25) : (attempts += 1) {
+            if (isSshPortOpen(ip_addr)) {
+                ssh_ready = true;
+                break;
+            }
             if (!printed_waiting) {
                 printStr("Waiting for guest to finish booting and start SSH service...\n");
                 printed_waiting = true;
@@ -2512,6 +2541,11 @@ fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, rem
             var req = linux.timespec{ .sec = 1, .nsec = 0 };
             var rem: linux.timespec = undefined;
             _ = linux.nanosleep(&req, &rem);
+        }
+        if (!ssh_ready) {
+            printStr("Error: SSH service not reachable on guest (port 22 closed or timed out).\n");
+            printStr("Note: If the guest is running a minimal payload without an SSH daemon (such as micro-guest), SSH connections are not supported.\n");
+            return;
         }
         if (cmd_str == null) {
             ensureGuestDefaultImage(key_str, ip_addr);
@@ -2906,60 +2940,71 @@ fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
     var resolved_path_buf: [MAX_PATH_LEN]u8 = undefined;
     var resolved_path: []const u8 = elf_path.?;
     var elf_data: []u8 = undefined;
+    var found = false;
 
-    if (readBinaryFile(resolved_path, MAX_ELF_FILE_SIZE)) |data| {
-        elf_data = data;
-    } else |_| {
-        var found = false;
-        const search_prefixes = [_][]const u8{
-            "/var/lib/diosix/images/",
-            "/boot/",
+    // If "default" or "default.elf" is requested, prioritize full Linux guest images first
+    if (std.mem.eql(u8, resolved_path, "default") or std.mem.eql(u8, resolved_path, "default.elf")) {
+        const default_candidates = [_][]const u8{
+            "/var/lib/diosix/images/linux-guest.elf",
+            "/boot/vmlinux.elf",
+            "/boot/linux-guest.elf",
+            "/var/lib/diosix/images/default.elf",
+            "/boot/default.elf",
+            "/var/lib/diosix/images/micro-guest.elf",
+            "/boot/micro-guest.elf",
         };
-        for (search_prefixes) |prefix| {
-            if (prefix.len + resolved_path.len < resolved_path_buf.len) {
-                @memcpy(resolved_path_buf[0..prefix.len], prefix);
-                @memcpy(resolved_path_buf[prefix.len .. prefix.len + resolved_path.len], resolved_path);
-                const candidate = resolved_path_buf[0 .. prefix.len + resolved_path.len];
-                if (readBinaryFile(candidate, MAX_ELF_FILE_SIZE)) |data| {
-                    resolved_path = candidate;
-                    elf_data = data;
-                    found = true;
-                    break;
-                } else |_| {}
+        for (default_candidates) |cand| {
+            if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
+                resolved_path = cand;
+                elf_data = data;
+                found = true;
+                break;
+            } else |_| {}
+        }
+    }
 
-                // Try with .elf suffix if not present
-                if (prefix.len + resolved_path.len + 4 < resolved_path_buf.len and !std.mem.endsWith(u8, resolved_path, ".elf")) {
-                    @memcpy(resolved_path_buf[prefix.len + resolved_path.len .. prefix.len + resolved_path.len + 4], ".elf");
-                    const candidate_elf = resolved_path_buf[0 .. prefix.len + resolved_path.len + 4];
-                    if (readBinaryFile(candidate_elf, MAX_ELF_FILE_SIZE)) |data| {
-                        resolved_path = candidate_elf;
+    if (!found) {
+        if (readBinaryFile(resolved_path, MAX_ELF_FILE_SIZE)) |data| {
+            elf_data = data;
+            found = true;
+        } else |_| {
+            const search_prefixes = [_][]const u8{
+                "/var/lib/diosix/images/",
+                "/boot/",
+            };
+            for (search_prefixes) |prefix| {
+                if (prefix.len + resolved_path.len < resolved_path_buf.len) {
+                    @memcpy(resolved_path_buf[0..prefix.len], prefix);
+                    @memcpy(resolved_path_buf[prefix.len .. prefix.len + resolved_path.len], resolved_path);
+                    const candidate = resolved_path_buf[0 .. prefix.len + resolved_path.len];
+                    if (readBinaryFile(candidate, MAX_ELF_FILE_SIZE)) |data| {
+                        resolved_path = candidate;
                         elf_data = data;
                         found = true;
                         break;
                     } else |_| {}
+
+                    // Try with .elf suffix if not present
+                    if (prefix.len + resolved_path.len + 4 < resolved_path_buf.len and !std.mem.endsWith(u8, resolved_path, ".elf")) {
+                        @memcpy(resolved_path_buf[prefix.len + resolved_path.len .. prefix.len + resolved_path.len + 4], ".elf");
+                        const candidate_elf = resolved_path_buf[0 .. prefix.len + resolved_path.len + 4];
+                        if (readBinaryFile(candidate_elf, MAX_ELF_FILE_SIZE)) |data| {
+                            resolved_path = candidate_elf;
+                            elf_data = data;
+                            found = true;
+                            break;
+                        } else |_| {}
+                    }
                 }
             }
         }
-        if (!found and (std.mem.eql(u8, elf_path.?, "default") or std.mem.eql(u8, elf_path.?, "default.elf"))) {
-            const default_fallbacks = [_][]const u8{
-                "/var/lib/diosix/images/linux-guest.elf",
-                "/boot/vmlinux.elf",
-            };
-            for (default_fallbacks) |cand| {
-                if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
-                    resolved_path = cand;
-                    elf_data = data;
-                    found = true;
-                    break;
-                } else |_| {}
-            }
-        }
-        if (!found) {
-            var err_buf: [MAX_PATH_LEN + 128]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Error: Guest ELF binary '{s}' not found (checked current dir, /var/lib/diosix/images/, /boot/).\n", .{elf_path.?}) catch "Error: ELF binary not found.\n";
-            printStr(err_msg);
-            return;
-        }
+    }
+
+    if (!found) {
+        var err_buf: [MAX_PATH_LEN + 128]u8 = undefined;
+        const err_msg = std.fmt.bufPrint(&err_buf, "Error: Guest ELF binary '{s}' not found (checked current dir, /var/lib/diosix/images/, /boot/).\n", .{elf_path.?}) catch "Error: ELF binary not found.\n";
+        printStr(err_msg);
+        return;
     }
     defer unmapBinaryFile(elf_data);
 

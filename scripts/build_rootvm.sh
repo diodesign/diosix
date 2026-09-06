@@ -112,7 +112,7 @@ if [ -d "tools/diosix-wm" ]; then
     fi
 fi
 
-# Compile and install lightweight default guest payload for nested virtualization.
+# Compile and install lightweight guest payload for nested virtualization or testing.
 if [ -f "tools/micro-guest/guest.s" ]; then
     mkdir -p "$DYNAMIC_OVERLAY/boot" tools/overlay-common/boot
     CC_GUEST="riscv64-linux-gnu-gcc"
@@ -120,11 +120,11 @@ if [ -f "tools/micro-guest/guest.s" ]; then
         CC_GUEST="$BUILDROOT_DIR/output/host/bin/riscv64-buildroot-linux-gnu-gcc"
     fi
     if command -v "$CC_GUEST" >/dev/null 2>&1; then
-        "$CC_GUEST" -nostdlib -static -Wl,-Ttext=0x80000000,-N,--build-id=none tools/micro-guest/guest.s -o "$DYNAMIC_OVERLAY/boot/default.elf" 2>/dev/null || true
-        cp -f "$DYNAMIC_OVERLAY/boot/default.elf" tools/overlay-common/boot/default.elf 2>/dev/null || true
+        "$CC_GUEST" -nostdlib -static -Wl,-Ttext=0x80000000,-N,--build-id=none tools/micro-guest/guest.s -o "$DYNAMIC_OVERLAY/boot/micro-guest.elf" 2>/dev/null || true
+        cp -f "$DYNAMIC_OVERLAY/boot/micro-guest.elf" tools/overlay-common/boot/micro-guest.elf 2>/dev/null || true
         mkdir -p "$DYNAMIC_OVERLAY/var/lib/diosix/images"
-        ln -sf /boot/default.elf "$DYNAMIC_OVERLAY/var/lib/diosix/images/default.elf" 2>/dev/null || true
-        log_ok "Installed default guest payload in overlay (/boot/default.elf)."
+        ln -sf /boot/micro-guest.elf "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest.elf" 2>/dev/null || true
+        log_ok "Installed micro-guest payload in overlay (/boot/micro-guest.elf)."
     fi
 fi
 

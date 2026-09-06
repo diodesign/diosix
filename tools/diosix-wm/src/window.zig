@@ -22,6 +22,7 @@ pub const EventKind = enum {
     close,
     mouse,
     scroll,
+    key,
     quit,
 };
 
@@ -43,6 +44,10 @@ pub const Event = struct {
         scroll: struct {
             point: fb.Point,
             delta: i32,
+        },
+        key: struct {
+            code: u16,
+            value: i32,
         },
         open: void,
         close: void,

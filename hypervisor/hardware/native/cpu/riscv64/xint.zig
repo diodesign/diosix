@@ -995,7 +995,7 @@ fn handle_exception(irq: IRQ, context: *riscv.ThreadContext) void {
                         gpa = irq.val;
                     }
 
-                    if (gpa == 0 or !riscv.hasHExtension()) {
+                    if (!riscv.hasHExtension()) {
                         // First-stage (VS-stage) page fault! Reflect to guest as standard page fault.
                         var reflected_irq = irq;
                         reflected_irq.cause = switch (irq.cause) {

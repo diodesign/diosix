@@ -122,8 +122,12 @@ case "$1" in
                 fi
                 if [ -f /var/lib/diosix/images/linux-guest.elf ]; then
                     ln -sf /var/lib/diosix/images/linux-guest.elf /boot/vmlinux.elf 2>/dev/null || true
+                    ln -sf /var/lib/diosix/images/linux-guest.elf /boot/default.elf 2>/dev/null || true
+                    ln -sf /var/lib/diosix/images/linux-guest.elf /var/lib/diosix/images/default.elf 2>/dev/null || true
                 elif [ -f /var/lib/diosix/images/vmlinux.elf ]; then
                     ln -sf /var/lib/diosix/images/vmlinux.elf /boot/vmlinux.elf 2>/dev/null || true
+                    ln -sf /var/lib/diosix/images/vmlinux.elf /boot/default.elf 2>/dev/null || true
+                    ln -sf /var/lib/diosix/images/vmlinux.elf /var/lib/diosix/images/default.elf 2>/dev/null || true
                 fi
 
                 # Root VM: link persistent management key or initialize fresh keypair

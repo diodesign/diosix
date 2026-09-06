@@ -488,6 +488,27 @@ pub const WindowManager = struct {
         }
     }
 
+    pub fn focusedWindow(self: *WindowManager) ?*Window {
+        if (self.windows.items.len == 0) return null;
+        return self.windows.items[0];
+    }
+
+    pub fn handleKey(self: *WindowManager, code: u16, value: i32) !void {
+        const win = self.focusedWindow() orelse return;
+        if (win.task.handle) |cb| {
+            const ev = Event{
+                .kind = .key,
+                .data = .{
+                    .key = .{
+                        .code = code,
+                        .value = value,
+                    },
+                },
+            };
+            try cb(win, &ev, win.task.task_data);
+        }
+    }
+
     pub fn idle(self: *WindowManager) !void {
         for (self.windows.items) |win| {
             if (win.task.handle) |cb| {

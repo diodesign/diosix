@@ -176,8 +176,12 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
 
     // Move guest to the next instruction after ECALL
     if (vc.exec_path == .native) {
-        vc.getNativeMachine().mepc += ECALL_INSTRUCTION_SIZE_BYTES;
-        riscv.writeMepc(vc.getNativeMachine().mepc);
+        const did_yield = (extension == interface.EXT.DIOSIX and function == interface.DIOSIX.YIELD) or
+            (extension == interface.EXT.HSM and (function == interface.HSM.HART_STOP or function == interface.HSM.HART_SUSPEND));
+        if (!did_yield) {
+            vc.getNativeMachine().mepc += ECALL_INSTRUCTION_SIZE_BYTES;
+            riscv.writeMepc(vc.getNativeMachine().mepc);
+        }
     }
 }
 
@@ -466,6 +470,9 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
         },
 
         interface.DIOSIX.YIELD => {
+            if (vc.exec_path == .native) {
+                vc.getNativeMachine().mepc += ECALL_INSTRUCTION_SIZE_BYTES;
+            }
             scheduler.yield(vc);
         },
         interface.DIOSIX.DROP_TRUST => {
@@ -985,6 +992,9 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
             }
         },
         interface.HSM.HART_STOP => {
+            if (vc.exec_path == .native) {
+                vc.getNativeMachine().mepc += ECALL_INSTRUCTION_SIZE_BYTES;
+            }
             vc.state = .stopped;
             setResult(vc, context, interface.SUCCESS, 0);
             scheduler.yield(vc);
@@ -1002,6 +1012,9 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
             }
         },
         interface.HSM.HART_SUSPEND => {
+            if (vc.exec_path == .native) {
+                vc.getNativeMachine().mepc += ECALL_INSTRUCTION_SIZE_BYTES;
+            }
             vc.state = .blocked;
             setResult(vc, context, interface.SUCCESS, 0);
             scheduler.yield(vc);

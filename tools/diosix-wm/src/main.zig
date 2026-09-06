@@ -108,116 +108,7 @@ pub const Display = struct {
 };
 
 const wm_mod = @import("wm.zig");
-
-// Real System Monitor Task State
-const SystemInfoTask = struct {
-    pub const LINES = [_][]const u8{
-        "Diosix RISC-V 64 Micro-Hypervisor",
-        "Architecture: RV64GC (Hypervisor Extension H/VS Mode)",
-        "Window Manager: Wuss Native Zig Architecture",
-        "Acceleration: DRM/KMS VirtIO-GPU Hardware Cursor Plane",
-        "Multi-Window Management: Z-Ordering & Occlusion Clipping",
-        "Window Furniture: Titlebar, Close [x], Back [v], Toggle [^], Resize Grip",
-        "Scrollbars: Proportional Sausage Thumb & Stepper Arrows",
-        "Memory Protection: PMP & Two-Stage Page Tables Active",
-        "RootVM: Linux Guest Container (VirtIO Console, Net, Block)",
-        "Display Mode: 1280x800 @ 32 bpp TrueColor",
-        "Input Drivers: evdev (Mouse, Tablet, Keyboard)",
-        "Drag Mechanism: Topmost Whole-Window Blit Move",
-        "Event Architecture: Direct Task Delegation Callbacks",
-        "Kernel Status: Nominal, Preemptive Scheduling Active",
-        "----------------------------------------------------------------",
-        "* Drag window titlebar to move window as a whole",
-        "* Drag vertical/horizontal scrollbar sausage to scroll view",
-        "* Click scrollbar arrow buttons to step scroll by 20px",
-        "* Drag bottom-right corner grip to resize window footprint",
-        "* Click [v] to send window to back, [^] to maximize/restore",
-        "* Click [x] to close window; click window body to focus",
-    };
-
-    pub fn handle(win: *win_mod.Window, ev: *const win_mod.Event, _: ?*anyopaque) anyerror!void {
-        switch (ev.kind) {
-            .redraw => {
-                const surf = ev.data.redraw.surface;
-                const clip = ev.data.redraw.content;
-                const bounds = ev.data.redraw.bounds;
-                const scroll = ev.data.redraw.scroll;
-
-                surf.setClip(clip);
-
-                for (LINES, 0..) |line, i| {
-                    const line_y = bounds.y0 + 10 + @as(i32, @intCast(i * 20)) - scroll.y;
-                    const line_x = bounds.x0 + 12 - scroll.x;
-                    if (line_y + @as(i32, @intCast(font.GLYPH_HEIGHT)) >= clip.y0 and line_y <= clip.y1) {
-                        const col = if (i == 0) fb.Color.TEXT_BLACK else if (i < 14) fb.Color.TEXT_BLACK else fb.Color.TEXT_MUTED;
-                        font.drawText(surf, line, line_x, line_y, col);
-                    }
-                }
-
-                surf.resetClip();
-            },
-            .scroll => {
-                win.scrollStep(.{ .x = 0, .y = -ev.data.scroll.delta * win_mod.Window.SCROLL_STEP });
-            },
-            else => {},
-        }
-    }
-};
-
-// Real Diagnostics Task State
-const DiagnosticsData = struct {
-    last_click_x: i32 = 0,
-    last_click_y: i32 = 0,
-    click_count: u32 = 0,
-    last_button: []const u8 = "None",
-};
-
-var global_diag = DiagnosticsData{};
-
-const DiagnosticsTask = struct {
-    pub fn handle(win: *win_mod.Window, ev: *const win_mod.Event, data_ptr: ?*anyopaque) anyerror!void {
-        const diag = if (data_ptr) |p| @as(*DiagnosticsData, @ptrCast(@alignCast(p))) else &global_diag;
-        switch (ev.kind) {
-            .redraw => {
-                const surf = ev.data.redraw.surface;
-                const clip = ev.data.redraw.content;
-                const bounds = ev.data.redraw.bounds;
-
-                surf.setClip(clip);
-
-                var buf: [64]u8 = undefined;
-
-                font.drawText(surf, "Input & Hardware Diagnostics", bounds.x0 + 12, bounds.y0 + 12, fb.Color.TEXT_BLACK);
-
-                const c_str = std.fmt.bufPrint(&buf, "Clicks Count: {d}", .{diag.click_count}) catch "";
-                font.drawText(surf, c_str, bounds.x0 + 12, bounds.y0 + 36, fb.Color.TEXT_BLACK);
-
-                var b_buf: [64]u8 = undefined;
-                const b_str = std.fmt.bufPrint(&b_buf, "Last Click: {s} at ({d}, {d})", .{ diag.last_button, diag.last_click_x, diag.last_click_y }) catch "";
-                font.drawText(surf, b_str, bounds.x0 + 12, bounds.y0 + 58, fb.Color.TEXT_BLACK);
-
-                font.drawText(surf, "Status: Active Event Delivery", bounds.x0 + 12, bounds.y0 + 80, fb.Color.TEXT_MUTED);
-                font.drawText(surf, "Z-Order: Wuss Window Delegation", bounds.x0 + 12, bounds.y0 + 102, fb.Color.TEXT_MUTED);
-
-                surf.resetClip();
-            },
-            .mouse => {
-                if (ev.data.mouse.action == .down) {
-                    diag.click_count += 1;
-                    diag.last_click_x = ev.data.mouse.point.x;
-                    diag.last_click_y = ev.data.mouse.point.y;
-                    diag.last_button = switch (ev.data.mouse.button) {
-                        .select => "Select (Left)",
-                        .adjust => "Adjust (Right)",
-                        .menu => "Menu (Middle)",
-                    };
-                    win.invalidateAll();
-                }
-            },
-            else => {},
-        }
-    }
-};
+const term_mod = @import("terminal.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -256,52 +147,33 @@ pub fn main() !void {
     var wm = wm_mod.WindowManager.init(allocator, sw, sh);
     defer wm.deinit();
 
-    // 4. Create Two Real Windows (Wuss-compliant with Task Delegates)
-    // Window 1: System Monitor (scrollable text task)
-    const win1_w: u32 = @min(sw - 40, @max(480, (sw * 50) / 100));
-    const win1_h: u32 = @min(sh - 60, @max(300, (sh * 55) / 100));
-    const win1_x: i32 = 40;
-    const win1_y: i32 = 30;
+    // 4. Create Terminal Window
+    const win_w: u32 = @min(sw - 40, @max(680, (sw * 65) / 100));
+    const win_h: u32 = @min(sh - 60, @max(440, (sh * 65) / 100));
+    const win_x: i32 = @divTrunc(@as(i32, @intCast(sw - win_w)), 2);
+    const win_y: i32 = @divTrunc(@as(i32, @intCast(sh - win_h)), 2);
 
-    const sys_task = win_mod.Task{
-        .handle = SystemInfoTask.handle,
-        .task_data = null,
-        .bg = fb.Color.WINDOW_BG,
+    term_mod.global_terminal.cols = 80;
+    term_mod.global_terminal.rows = 24;
+    term_mod.global_terminal.spawnShell() catch {};
+
+    const term_task = win_mod.Task{
+        .handle = term_mod.terminalTaskHandle,
+        .task_data = &term_mod.global_terminal,
+        .bg = term_mod.DEFAULT_BG,
     };
-    _ = try wm.createWindow(
-        win1_x,
-        win1_y,
-        win1_w,
-        win1_h,
-        "Diosix System Monitor",
+    const term_win = try wm.createWindow(
+        win_x,
+        win_y,
+        win_w,
+        win_h,
+        "Terminal",
         win_mod.WindowFlags.none,
-        sys_task,
-        640,
-        500,
+        term_task,
+        win_w,
+        5000,
     );
-
-    // Window 2: Diagnostics (interactive task)
-    const win2_w: u32 = @min(sw - 60, 420);
-    const win2_h: u32 = @min(sh - 80, 220);
-    const win2_x: i32 = @as(i32, @intCast(sw)) - @as(i32, @intCast(win2_w)) - 50;
-    const win2_y: i32 = @as(i32, @intCast(sh)) - @as(i32, @intCast(win2_h)) - 60;
-
-    const diag_task = win_mod.Task{
-        .handle = DiagnosticsTask.handle,
-        .task_data = &global_diag,
-        .bg = fb.Color.WINDOW_BG,
-    };
-    _ = try wm.createWindow(
-        win2_x,
-        win2_y,
-        win2_w,
-        win2_h,
-        "Input Diagnostics",
-        win_mod.WindowFlags.none,
-        diag_task,
-        win2_w,
-        win2_h,
-    );
+    _ = term_win;
 
     // 5. Initialize Cursor and Mouse Coordinates
     var mouse_x: i32 = @as(i32, @intCast(sw / 2));
@@ -338,7 +210,7 @@ pub fn main() !void {
 
     // 8. Main Event Loop
     while (true) {
-        var pfds: [8]linux.pollfd = undefined;
+        var pfds: [16]linux.pollfd = undefined;
         for (input_fds[0..input_count], 0..) |fd, i| {
             pfds[i] = linux.pollfd{
                 .fd = fd,
@@ -347,10 +219,31 @@ pub fn main() !void {
             };
         }
 
-        const poll_res = linux.poll(&pfds, input_count, 16);
+        var poll_count = input_count;
+        const term_pfd_idx = poll_count;
+        if (term_mod.global_terminal.master_fd >= 0) {
+            pfds[poll_count] = linux.pollfd{
+                .fd = term_mod.global_terminal.master_fd,
+                .events = linux.POLL.IN,
+                .revents = 0,
+            };
+            poll_count += 1;
+        }
+
+        const poll_res = linux.poll(&pfds, poll_count, 16);
         const signed_poll: isize = @bitCast(poll_res);
 
         if (signed_poll > 0) {
+            // Check terminal master_fd output from subshell
+            if (term_mod.global_terminal.master_fd >= 0 and (pfds[term_pfd_idx].revents & linux.POLL.IN) != 0) {
+                if (term_mod.global_terminal.readMaster()) {
+                    if (wm.focusedWindow()) |fwin| {
+                        fwin.invalidateAll();
+                    }
+                }
+            }
+
+            // Check input devices
             for (pfds[0..input_count], 0..) |pfd, idx| {
                 if ((pfd.revents & linux.POLL.IN) != 0) {
                     const fd = input_fds[idx];
@@ -378,21 +271,26 @@ pub fn main() !void {
                                     const clamped: u64 = @intCast(std.math.clamp(ev.value, 0, 32767));
                                     mouse_y = @as(i32, @intCast((clamped * @as(u64, sh)) / 32767));
                                 }
-                            } else if (ev.type == 0x01) { // EV_KEY (Buttons)
-                                const is_press = (ev.value != 0);
-                                const action: win_mod.MouseAction = if (is_press) .down else .up;
+                            } else if (ev.type == 0x01) { // EV_KEY
+                                if (ev.code == 0x110 or ev.code == 0x14a or ev.code == 0x111 or ev.code == 0x112) {
+                                    const is_press = (ev.value != 0);
+                                    const action: win_mod.MouseAction = if (is_press) .down else .up;
 
-                                var maybe_button: ?win_mod.Button = null;
-                                if (ev.code == 0x110 or ev.code == 0x14a) { // BTN_LEFT or BTN_TOUCH
-                                    maybe_button = .select;
-                                } else if (ev.code == 0x111) { // BTN_RIGHT
-                                    maybe_button = .adjust;
-                                } else if (ev.code == 0x112) { // BTN_MIDDLE
-                                    maybe_button = .menu;
-                                }
+                                    var maybe_button: ?win_mod.Button = null;
+                                    if (ev.code == 0x110 or ev.code == 0x14a) {
+                                        maybe_button = .select;
+                                    } else if (ev.code == 0x111) {
+                                        maybe_button = .adjust;
+                                    } else if (ev.code == 0x112) {
+                                        maybe_button = .menu;
+                                    }
 
-                                if (maybe_button) |btn| {
-                                    try wm.mouseClick(.{ .x = mouse_x, .y = mouse_y }, btn, action);
+                                    if (maybe_button) |btn| {
+                                        try wm.mouseClick(.{ .x = mouse_x, .y = mouse_y }, btn, action);
+                                    }
+                                } else {
+                                    // Deliver keyboard event to focused window
+                                    try wm.handleKey(ev.code, ev.value);
                                 }
                             }
                         }
@@ -482,5 +380,32 @@ test "diosix-wm: clean cursor restoration without trails" {
     try testing.expectEqual(fb.Color.WINDOW_BG, screen.pixels[50 * 200 + 50]);
     try testing.expectEqual(fb.Color.BLACK, screen.pixels[100 * 200 + 100]);
 }
+
+test "diosix-wm: terminal emulator parser and input" {
+    const testing = std.testing;
+    var term = term_mod.Terminal.init();
+    term.cols = 80;
+    term.rows = 24;
+
+    term.feed("Hello Diosix Shell\r\n");
+    try testing.expectEqual(@as(usize, 0), term.cursor_col);
+    try testing.expectEqual(@as(usize, 1), term.cursor_row);
+    try testing.expectEqual(@as(u8, 'H'), term.chars[0][0]);
+    try testing.expectEqual(@as(u8, 'e'), term.chars[0][1]);
+
+    // Test ANSI cursor position CSI 5;10H
+    term.feed("\x1b[5;10H");
+    try testing.expectEqual(@as(usize, 4), term.cursor_row);
+    try testing.expectEqual(@as(usize, 9), term.cursor_col);
+
+    // Test ANSI clear line CSI 2K
+    term.feed("Test\x1b[2K");
+    try testing.expectEqual(@as(usize, 0), term.line_lens[4]);
+
+    // Test key mapping (keystroke when master_fd < 0 is a clean no-op)
+    term.handleKey(30, 1); // 'a'
+    term.handleKey(28, 1); // Enter
+}
+
 
 
