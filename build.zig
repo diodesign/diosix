@@ -33,6 +33,7 @@ pub fn build(b: *std.Build) !void {
     const pmp_fallback = b.option(bool, "pmp", "Run in PMP fallback mode (disable H-extension)") orelse false;
     const smp_cores = b.option(u32, "smp", "Number of SMP CPU cores for emulator") orelse 4;
     const mem_size = b.option([]const u8, "mem", "Memory size for emulator (e.g. 2G)") orelse "2G";
+    const qemu_gl_opt = b.option(bool, "gl", "Enable OpenGL virgl acceleration for QEMU GUI (virtio-gpu-gl-pci)") orelse false;
 
     // Generate config.s dynamically
     const config_s_content = try std.fmt.allocPrint(b.allocator,
@@ -102,6 +103,13 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addFileInput(b.path("scripts/build_rootvm.sh"));
     run_buildroot.addFileInput(b.path("tools/diosix-ctl/src/main.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-ctl/src/manifest.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/main.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/framebuffer.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/font.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/cursor.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/window.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/drm.zig"));
+    run_buildroot.addFileInput(b.path("tools/driver/diosix.c"));
     run_buildroot.stdio = .inherit;
 
     const emulation_module = b.createModule(.{
@@ -301,8 +309,15 @@ pub fn build(b: *std.Build) !void {
             try qemu_gui_args.append(b.allocator, arg);
         }
     }
-    try qemu_gui_args.append(b.allocator, "-device");
-    try qemu_gui_args.append(b.allocator, "virtio-gpu-pci");
+    if (qemu_gl_opt) {
+        try qemu_gui_args.append(b.allocator, "-display");
+        try qemu_gui_args.append(b.allocator, "gtk,gl=on");
+        try qemu_gui_args.append(b.allocator, "-device");
+        try qemu_gui_args.append(b.allocator, "virtio-gpu-gl-pci,xres=1280,yres=800");
+    } else {
+        try qemu_gui_args.append(b.allocator, "-device");
+        try qemu_gui_args.append(b.allocator, "virtio-gpu-pci,xres=1280,yres=800");
+    }
     try qemu_gui_args.append(b.allocator, "-device");
     try qemu_gui_args.append(b.allocator, "virtio-keyboard-pci");
     try qemu_gui_args.append(b.allocator, "-device");

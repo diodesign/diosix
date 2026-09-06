@@ -101,3 +101,12 @@ routes = [
   { require = "host.manage", resolve_to = "root.ctl" }
 ]
 ```
+
+---
+
+## 5. Detailed Desktop Implementation Plan
+
+For the detailed roadmap, window manager primitive specifications, RISC
+OS-inspired Wimp event contracts, iconbar design, and rendering optimizations,
+see [Desktop Implementation Plan](desktop-implementation-plan.md).
+

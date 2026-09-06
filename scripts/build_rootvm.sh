@@ -104,8 +104,12 @@ log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
 
 if [ -d "tools/diosix-wm" ]; then
     log_info "Compiling diosix-wm for ${BOLD}${ZIG_TARGET}${RESET}..."
-    zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall tools/diosix-wm/src/main.zig --name diosix-wm -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-wm" >/dev/null 2>&1 || true
-    log_ok "Installed diosix-wm in overlay (/usr/bin/diosix-wm)."
+    if zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall tools/diosix-wm/src/main.zig --name diosix-wm -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-wm"; then
+        log_ok "Installed diosix-wm in overlay (/usr/bin/diosix-wm)."
+    else
+        log_err "Failed to cross-compile diosix-wm for ${ZIG_TARGET}."
+        exit 1
+    fi
 fi
 
 # Compile and install lightweight default guest payload for nested virtualization.
