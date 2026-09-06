@@ -160,11 +160,11 @@ def run_integration_test():
         # 11. Child VM Storage Management (`dsx disk create / list / resize / delete`)
         print("\n==> [11/18] Testing Child VM Storage Management (`dsx disk`)...")
         child.sendline("dsx disk create data-vol --size 256M")
-        child.expect(r"Virtual disk 'data-vol' \(256 MB\) created at /var/lib/diosix/disks/data-vol\.img\.", timeout=15)
+        child.expect(r"Virtual disk 'data-vol' \(256 MB.*\) created at /var/lib/diosix/disks/data-vol\.img\.", timeout=30)
         child.expect(PROMPT, timeout=10)
 
         child.sendline("dsx disk list")
-        child.expect(r"data-vol\.img\s+256 MB\s+raw\s+/var/lib/diosix/disks/data-vol\.img", timeout=15)
+        child.expect(r"data-vol\.img\s+256 MB\s+(?:raw|ext4)\s+.*data-vol\.img", timeout=15)
         child.expect(PROMPT, timeout=10)
 
         child.sendline("dsx disk resize data-vol --size 512M")

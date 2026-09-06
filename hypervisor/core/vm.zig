@@ -70,11 +70,18 @@ pub const GuestSpace = struct {
 
     pub fn deinit(self: *GuestSpace) void {
         if (self.mode == .h_paging) {
-            self.paging.?.deinit();
+            if (self.paging) |*p| {
+                p.deinit();
+                self.paging = null;
+            }
         } else {
-            self.pmp_config.?.deinit();
+            if (self.pmp_config) |*p| {
+                p.deinit();
+                self.pmp_config = null;
+            }
             if (self.is_ram_allocated and self.range_size > 0) {
                 physmem.freePage(self.base_hpa);
+                self.is_ram_allocated = false;
             }
         }
     }
@@ -82,10 +89,14 @@ pub const GuestSpace = struct {
     // Map physical memory into guest address space
     pub fn map(self: *GuestSpace, gpa: usize, hpa: usize, size: usize, flags: u64) !void {
         if (self.mode == .h_paging) {
-            // Map individual pages for paging (allows fragmentation/CoW)
-            var offset: usize = 0;
-            while (offset < size) : (offset += physmem.PageSize) {
-                try self.paging.?.mapPage(gpa + offset, hpa + offset, flags, self.is_trusted);
+            if (self.paging) |*pt| {
+                // Map individual pages for paging (allows fragmentation/CoW)
+                var offset: usize = 0;
+                while (offset < size) : (offset += physmem.PageSize) {
+                    try pt.mapPage(gpa + offset, hpa + offset, flags, self.is_trusted);
+                }
+            } else {
+                return error.NotSupported;
             }
         } else {
             // Map as one contiguous block for PMP.
@@ -100,9 +111,11 @@ pub const GuestSpace = struct {
     // Unmap physical memory from guest address space
     pub fn unmap(self: *GuestSpace, gpa: usize, size: usize) void {
         if (self.mode == .h_paging) {
-            var offset: usize = 0;
-            while (offset < size) : (offset += physmem.PageSize) {
-                self.paging.?.unmapPage(gpa + offset);
+            if (self.paging) |*pt| {
+                var offset: usize = 0;
+                while (offset < size) : (offset += physmem.PageSize) {
+                    pt.unmapPage(gpa + offset);
+                }
             }
         }
     }
@@ -112,7 +125,11 @@ pub const GuestSpace = struct {
         _ = vc;
         _ = cause;
         if (self.mode == .h_paging) {
-            try self.paging.?.resolveFault(gpa, self.is_trusted);
+            if (self.paging) |*pt| {
+                try pt.resolveFault(gpa, self.is_trusted);
+            } else {
+                return error.NotSupported;
+            }
         } else {
             // PMP mode doesn't support CoW/Demand Paging yet
             return error.NotSupported;
@@ -122,20 +139,20 @@ pub const GuestSpace = struct {
     // Load hgatp for paging or set PMP regs for fallback
     pub fn apply(self: *GuestSpace, vmid: u16) void {
         if (self.mode == .h_paging) {
-            const new_hgatp = self.paging.?.hgatp(vmid);
+            const new_hgatp = if (self.paging) |*pt| pt.hgatp(vmid) else 0;
             if (riscv.readHgatp() != new_hgatp) {
                 riscv.writeHgatp(new_hgatp);
                 riscv.hfenceGvma();
             }
         } else {
-            self.pmp_config.?.apply();
+            if (self.pmp_config) |*p| p.apply();
         }
     }
 
     // Translate a Guest Physical Address to a Host Physical Address
     pub fn translateGPA(self: *const GuestSpace, gpa: usize) !usize {
         if (self.mode == .h_paging) {
-            const pt = self.paging.?;
+            const pt = self.paging orelse return error.TranslationFailed;
             // Check if it's within the optimized identity/offset range
             if (pt.root_range_size > 0 and gpa >= pt.root_base_gpa and gpa < pt.root_base_gpa + pt.root_range_size) {
                 return gpa - pt.root_base_gpa + pt.root_base_hpa;

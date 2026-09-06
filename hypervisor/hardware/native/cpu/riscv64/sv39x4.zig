@@ -71,7 +71,7 @@ pub const PageTable = struct {
                     // Leaf: decrement refcount of the actual data page
                     const hpa = (pte >> 10) << 12;
                     // Only decrement if it was a RAM page (MMIO pages don't have refcounts)
-                    if (physmem.isRam(hpa, physmem.PageSize)) {
+                    if (physmem.isRam(hpa, physmem.PageSize) and physmem.isManaged(hpa)) {
                         physmem.decrementPageRef(hpa);
                     }
                 }
@@ -184,8 +184,8 @@ pub const PageTable = struct {
             return;
         }
 
-        // Allow trusted guests to map host RAM (excluding hypervisor protected memory)
-        if (is_trusted and physmem.isRam(gpa, physmem.PageSize)) {
+        // Allow Root VM to identity-map host RAM (excluding hypervisor protected memory)
+        if (self.root_base_hpa > 0 and is_trusted and physmem.isRam(gpa, physmem.PageSize)) {
             const gpa_page = gpa & ~(physmem.PageSize - 1);
             if (!physmem.isHypervisorMemory(gpa_page, physmem.PageSize)) {
                 try self.mapPage(gpa_page, gpa_page, PTEFlags.read | PTEFlags.write | PTEFlags.execute | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
@@ -219,6 +219,7 @@ pub const PageTable = struct {
             const new_hpa = try physmem.allocPage();
             @memset(@as([*]u8, @ptrFromInt(new_hpa))[0..physmem.PageSize], 0);
             try self.mapPage(gpa_page, new_hpa, PTEFlags.read | PTEFlags.write | PTEFlags.execute | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
+            physmem.decrementPageRef(new_hpa);
             return;
         }
 
@@ -247,6 +248,7 @@ test "stage-2 paging and shielding" {
 
     // Success case: Map RAM for non-trusted guest
     try pt.mapPage(gpa, hpa, PTEFlags.read | PTEFlags.write | PTEFlags.valid, false);
+    physmem.decrementPageRef(hpa);
     const pte = (try pt.walk(gpa, false)).*;
     try testing.expect(pte & PTEFlags.valid != 0);
 

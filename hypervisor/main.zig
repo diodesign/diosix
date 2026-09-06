@@ -137,7 +137,7 @@ pub export fn main(cpu_core_id: usize, fdt_paddr: usize) void {
             switch (vc.exec_path) {
                 .native => {
                     if (vc.guest.space.mode == .h_paging) {
-                        const hgatp_val = vc.guest.space.paging.?.hgatp(vc.guest.vmid);
+                        const hgatp_val = if (vc.guest.space.paging) |*p| p.hgatp(vc.guest.vmid) else 0;
                         if (vc.getNativeMachine().hgatp != hgatp_val) {
                             vc.getNativeMachine().hgatp = hgatp_val;
                         }

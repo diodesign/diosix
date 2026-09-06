@@ -121,8 +121,6 @@ case "$1" in
                     ln -sf /var/lib/diosix/manifests/system.toml /etc/diosix/system.toml 2>/dev/null || true
                 fi
                 if [ -f /var/lib/diosix/images/linux-guest.elf ]; then
-                    ln -sf /var/lib/diosix/images/linux-guest.elf /boot/linux-guest.elf 2>/dev/null || true
-                    ln -sf /var/lib/diosix/images/linux-guest.elf /boot/default.elf 2>/dev/null || true
                     ln -sf /var/lib/diosix/images/linux-guest.elf /boot/vmlinux.elf 2>/dev/null || true
                 elif [ -f /var/lib/diosix/images/vmlinux.elf ]; then
                     ln -sf /var/lib/diosix/images/vmlinux.elf /boot/vmlinux.elf 2>/dev/null || true

@@ -233,7 +233,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 vc.getNativeMachine().mepc = irq.pc;
                 vc.getNativeMachine().mstatus = riscv.readMstatus();
                 if (riscv.hasHExtension()) {
-                    vc.getNativeMachine().hvip = (vc.getNativeMachine().hvip & (riscv.HVIP.VSEIP | riscv.HVIP.VSSIP)) | riscv.readHvip();
+                    vc.getNativeMachine().hvip = riscv.readHvip();
                     const gs = vc.getNativeGuestState();
                     gs.vsstatus = riscv.readVsstatus();
                     gs.vsie = riscv.readVsie();
@@ -423,7 +423,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 
     if (riscv.hasHExtension()) {
         if (vc.guest.space.mode == .h_paging) {
-            ms.hgatp = vc.guest.space.paging.?.hgatp(vc.guest.vmid);
+            ms.hgatp = if (vc.guest.space.paging) |*p| p.hgatp(vc.guest.vmid) else 0;
         }
         riscv.writeHstatus(ms.hstatus);
         riscv.writeHgatp(ms.hgatp);

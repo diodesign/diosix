@@ -1620,8 +1620,9 @@ fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []
         _ = linux.mkdir("/var/lib/diosix/images", 0o755);
         _ = linux.mkdir("/var/lib/diosix/iso", 0o755);
 
-        const dirs = [_][]const u8{ "/var/lib/diosix/images", "/var/lib/diosix/iso", "/boot" };
-        for (dirs) |dir_path| {
+        var total_found: usize = 0;
+        const primary_dirs = [_][]const u8{ "/var/lib/diosix/images", "/var/lib/diosix/iso" };
+        for (primary_dirs) |dir_path| {
             var dir_z: [MAX_PATH_LEN]u8 = undefined;
             @memcpy(dir_z[0..dir_path.len], dir_path);
             dir_z[dir_path.len] = 0;
@@ -1645,13 +1646,19 @@ fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []
                         pos += dent.d_reclen;
                         const dname_ptr: [*:0]const u8 = @ptrCast(&dent.d_name);
                         const dname = std.mem.span(dname_ptr);
-                        if (std.mem.eql(u8, dname, ".") or std.mem.eql(u8, dname, "..")) continue;
+                        if (std.mem.startsWith(u8, dname, ".")) continue;
 
                         var file_path_buf: [MAX_PATH_LEN]u8 = undefined;
                         const file_path = std.fmt.bufPrint(&file_path_buf, "{s}/{s}", .{ dir_path, dname }) catch continue;
                         var file_z: [MAX_PATH_LEN]u8 = undefined;
                         @memcpy(file_z[0..file_path.len], file_path);
                         file_z[file_path.len] = 0;
+
+                        // Skip symbolic links so aliases are not duplicated in the image list.
+                        var link_buf: [MAX_PATH_LEN]u8 = undefined;
+                        const link_res = linux.readlink(@ptrCast(file_z[0..file_path.len :0]), &link_buf, link_buf.len);
+                        const link_signed: isize = @bitCast(link_res);
+                        if (link_signed > 0) continue;
 
                         var size_mb_val: usize = 0;
                         const file_fd_res = linux.open(@ptrCast(file_z[0..file_path.len :0]), .{ .ACCMODE = .RDONLY }, 0);
@@ -1678,6 +1685,75 @@ fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []
 
                         var line_buf: [256]u8 = undefined;
                         const line = std.fmt.bufPrint(&line_buf, "{s:<28} {s:<11} {s:<8} {s:<10} {s}\n", .{ dname, img_type, img_fmt, size_str, file_path }) catch continue;
+                        printStr(line);
+                        total_found += 1;
+                    }
+                }
+            }
+        }
+
+        // Fall back to /boot only if no repository images exist.
+        if (total_found == 0) {
+            const boot_dir = "/boot";
+            var dir_z: [MAX_PATH_LEN]u8 = undefined;
+            @memcpy(dir_z[0..boot_dir.len], boot_dir);
+            dir_z[boot_dir.len] = 0;
+
+            const dir_res = linux.open(@ptrCast(dir_z[0..boot_dir.len :0]), .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
+            const dir_signed: isize = @bitCast(dir_res);
+            if (dir_signed >= 0) {
+                const dir_fd: i32 = @intCast(dir_signed);
+                defer _ = linux.close(dir_fd);
+
+                var dents_buf: [4096]u8 = undefined;
+                while (true) {
+                    const nread_res = linux.getdents64(dir_fd, &dents_buf, dents_buf.len);
+                    const nread: isize = @bitCast(nread_res);
+                    if (nread <= 0) break;
+
+                    var pos: usize = 0;
+                    const total: usize = @intCast(nread);
+                    while (pos < total) {
+                        const dent: *const LinuxDirent64 = @ptrCast(@alignCast(&dents_buf[pos]));
+                        pos += dent.d_reclen;
+                        const dname_ptr: [*:0]const u8 = @ptrCast(&dent.d_name);
+                        const dname = std.mem.span(dname_ptr);
+                        if (std.mem.startsWith(u8, dname, ".")) continue;
+                        if (!std.mem.endsWith(u8, dname, ".elf")) continue;
+
+                        var file_path_buf: [MAX_PATH_LEN]u8 = undefined;
+                        const file_path = std.fmt.bufPrint(&file_path_buf, "{s}/{s}", .{ boot_dir, dname }) catch continue;
+                        var file_z: [MAX_PATH_LEN]u8 = undefined;
+                        @memcpy(file_z[0..file_path.len], file_path);
+                        file_z[file_path.len] = 0;
+
+                        // Skip symbolic links so aliases are not duplicated in the image list.
+                        var link_buf: [MAX_PATH_LEN]u8 = undefined;
+                        const link_res = linux.readlink(@ptrCast(file_z[0..file_path.len :0]), &link_buf, link_buf.len);
+                        const link_signed: isize = @bitCast(link_res);
+                        if (link_signed > 0) continue;
+
+                        var size_mb_val: usize = 0;
+                        const file_fd_res = linux.open(@ptrCast(file_z[0..file_path.len :0]), .{ .ACCMODE = .RDONLY }, 0);
+                        const file_fd_signed: isize = @bitCast(file_fd_res);
+                        if (file_fd_signed >= 0) {
+                            const file_fd: i32 = @intCast(file_fd_signed);
+                            const end_off = linux.lseek(file_fd, 0, 2); // SEEK_END
+                            const end_signed: isize = @bitCast(end_off);
+                            if (end_signed > 0) {
+                                size_mb_val = @intCast(@divTrunc(end_signed, 1024 * 1024));
+                            }
+                            _ = linux.close(file_fd);
+                        }
+
+                        var size_str_buf: [32]u8 = undefined;
+                        const size_str = if (size_mb_val >= 1024)
+                            std.fmt.bufPrint(&size_str_buf, "{d} GB", .{size_mb_val / 1024}) catch "1 GB"
+                        else
+                            std.fmt.bufPrint(&size_str_buf, "{d} MB", .{size_mb_val}) catch "16 MB";
+
+                        var line_buf: [256]u8 = undefined;
+                        const line = std.fmt.bufPrint(&line_buf, "{s:<28} {s:<11} {s:<8} {s:<10} {s}\n", .{ dname, "kernel", "elf", size_str, file_path }) catch continue;
                         printStr(line);
                     }
                 }
@@ -2358,7 +2434,7 @@ fn ensureGuestDefaultImage(key_str: ?[:0]const u8, ip_addr: []const u8) void {
     const dest_str: [:0]const u8 = dest_z[0..dest_slice.len :0];
 
     // Check if the remote child VM already has a valid default image in /boot or /var/lib/diosix/images.
-    const check_cmd: [:0]const u8 = "test -s /boot/default.elf || test -s /var/lib/diosix/images/default.elf";
+    const check_cmd: [:0]const u8 = "test -s /boot/default.elf || test -s /boot/vmlinux.elf || test -s /boot/linux-guest.elf || test -s /var/lib/diosix/images/default.elf || test -s /var/lib/diosix/images/linux-guest.elf";
     if (runSshCommand(key_str, dest_str, check_cmd, true) == 0) {
         return; // Valid guest image already present on child VM.
     }
@@ -2437,7 +2513,9 @@ fn execSsh(key_path: ?[]const u8, username: []const u8, ip_addr: []const u8, rem
             var rem: linux.timespec = undefined;
             _ = linux.nanosleep(&req, &rem);
         }
-        ensureGuestDefaultImage(key_str, ip_addr);
+        if (cmd_str == null) {
+            ensureGuestDefaultImage(key_str, ip_addr);
+        }
     }
 
     _ = runSshCommand(key_str, dest_str, cmd_str, false);
@@ -2860,6 +2938,20 @@ fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8, exe_name: []co
                         break;
                     } else |_| {}
                 }
+            }
+        }
+        if (!found and (std.mem.eql(u8, elf_path.?, "default") or std.mem.eql(u8, elf_path.?, "default.elf"))) {
+            const default_fallbacks = [_][]const u8{
+                "/var/lib/diosix/images/linux-guest.elf",
+                "/boot/vmlinux.elf",
+            };
+            for (default_fallbacks) |cand| {
+                if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
+                    resolved_path = cand;
+                    elf_data = data;
+                    found = true;
+                    break;
+                } else |_| {}
             }
         }
         if (!found) {

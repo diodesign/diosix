@@ -454,6 +454,8 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 if (g.getGuestByCid(target_cid)) |child| {
                     debug.printf("SBI: Guest terminating child (CID {}) with exit code {}\n", .{ target_cid, exit_code });
                     child.terminateWithCode(exit_code);
+                    child.deinit();
+                    debug.printf("SBI: post-terminate free RAM: {} KB\n", .{physmem.getFreeRamBytes() / 1024});
                     setResult(vc, context, SBI_SUCCESS, 0);
                 } else {
                     setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
@@ -543,7 +545,10 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 const child_to_run: ?*guest.Guest = if (args.child_id >= guest.CID_FIRST_CHILD)
                     g.getGuestByCid(args.child_id)
                 else if (args.child_id == 0)
-                    g.createChild((args.flags & interface.RunFlags.TRUSTED) != 0, .riscv64, 1) catch null
+                    g.createChild((args.flags & interface.RunFlags.TRUSTED) != 0, .riscv64, 1) catch |err| blk: {
+                        debug.printf("SBI: createChild failed: {s}\n", .{@errorName(err)});
+                        break :blk null;
+                    }
                 else
                     null;
 
@@ -551,6 +556,7 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                     // Set trust level: default is untrusted unless RunFlags.TRUSTED is explicitly passed
                     if ((args.flags & interface.RunFlags.TRUSTED) != 0) {
                         if (!g.is_trusted) {
+                            debug.printf("SBI: RunFlags.TRUSTED denied: caller not trusted\n", .{});
                             setResult(vc, context, SBI_ERR_DENIED, 0);
                             return;
                         }
@@ -775,9 +781,11 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                             @memset(@as([*]u8, @ptrFromInt(new_page))[0..physmem.PageSize], 0);
                             const child_pte_flags = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
                             child.space.map(cur_child_gpa, new_page, physmem.PageSize, child_pte_flags) catch {
+                                physmem.freePage(new_page);
                                 setResult(vc, context, SBI_ERR_FAILED, 0);
                                 return;
                             };
+                            physmem.decrementPageRef(new_page);
                             break :blk new_page;
                         };
 
@@ -949,7 +957,7 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
                     target_vc.getNativeMachine().hideleg = 0x1666;
                     target_vc.getNativeMachine().hvip = 0;
                     if (target_vc.guest.space.mode == .h_paging) {
-                        target_vc.getNativeMachine().hgatp = target_vc.guest.space.paging.?.hgatp(target_vc.guest.vmid);
+                        target_vc.getNativeMachine().hgatp = if (target_vc.guest.space.paging) |*p| p.hgatp(target_vc.guest.vmid) else 0;
                     }
                     target_vc.getNativeGuestState().vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.FS_SHIFT);
                     target_vc.getNativeGuestState().vsatp = 0;

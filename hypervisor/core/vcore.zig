@@ -233,7 +233,7 @@ pub const VirtualCore = struct {
                         .mepc = entry,
                         .mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPIE=1, MPV=1 (Virtualization), FS=Dirty
                         .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
-                        .hgatp = if (parent.space.mode == .h_paging) parent.space.paging.?.hgatp(parent.vmid) else 0,
+                        .hgatp = if (parent.space.mode == .h_paging) (if (parent.space.paging) |*p| p.hgatp(parent.vmid) else 0) else 0,
                         .hedeleg = HEDELEG_GUEST_DELEGATE, // Delegate exceptions to guest: includes breakpoint (bit 3)
                         .hideleg = HIDELEG_VS_INTERRUPTS, // Delegate VS interrupts (VSSIP, VSTIP, VSEIP, SGEIP)
                         .hvip = 0,
@@ -348,7 +348,7 @@ pub const VirtualCore = struct {
                 n.machine.mepc = entry;
                 n.machine.mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.FS_SHIFT);
                 n.machine.hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
-                n.machine.hgatp = if (self.guest.space.mode == .h_paging) self.guest.space.paging.?.hgatp(self.guest.vmid) else 0;
+                n.machine.hgatp = if (self.guest.space.mode == .h_paging) (if (self.guest.space.paging) |*p| p.hgatp(self.guest.vmid) else 0) else 0;
                 n.machine.hedeleg = HEDELEG_GUEST_DELEGATE;
                 n.machine.hideleg = HIDELEG_VS_INTERRUPTS;
                 n.machine.hvip = 0;

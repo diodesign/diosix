@@ -117,7 +117,7 @@ pub const EventQueue = struct {
 };
 
 pub const MAX_PACKET_LEN: usize = 1536;
-pub const MAX_NET_PACKETS: usize = 512;
+pub const MAX_NET_PACKETS: usize = 64;
 
 pub const Packet = struct {
     len: u16 = 0,
@@ -394,17 +394,22 @@ pub const Guest = struct {
             self.allocator.destroy(node);
         }
 
-        // Stop and free all vcores
-        var it_vcore = self.vcores.start;
-        while (it_vcore) |node| {
-            node.contents.state = .stopped;
-            it_vcore = node.next;
-        }
+        // Stop all virtual cores and wait for physical cores to relinquish them
+        self.stop();
 
-        // Send an IPI to all CPUs to force them to reschedule and drop stopped vcores from their run_queues
-        for (0..riscv.cpu_to_hart_map.len) |target_cpu| {
-            if (riscv.CLINT.msip(riscv.cpu_to_hart_map[target_cpu])) |ptr| {
-                ptr.* = 1;
+        // Release stage-2 memory mappings and allocated RAM pages
+        self.space.deinit();
+
+        // Send an IPI to other CPUs to force them to reschedule if needed
+        if (!builtin.is_test) {
+            const my_hart = riscv.getCPUContext().hardware_hart_id;
+            for (0..riscv.cpu_to_hart_map.len) |target_cpu| {
+                const hw_hart = riscv.cpu_to_hart_map[target_cpu];
+                if (hw_hart != my_hart) {
+                    if (riscv.CLINT.msip(hw_hart)) |ptr| {
+                        ptr.* = 1;
+                    }
+                }
             }
         }
 
@@ -442,6 +447,13 @@ pub const Guest = struct {
                 p.quotas.used_descendants -= 1;
             }
             p_opt = p.parent;
+        }
+
+        vsock_mod.global_vsock_router.unregister(self.local_cid);
+        freeVmid(self.vmid);
+        if (self.manifest) |m| {
+            self.allocator.free(m);
+            self.manifest = null;
         }
     }
 
@@ -490,6 +502,8 @@ pub const Guest = struct {
             self.allocator.destroy(node);
             it_vcore = next;
         }
+        self.vcores.start = null;
+        self.vcores.end = null;
 
         self.space.deinit();
 
@@ -587,6 +601,9 @@ pub const Guest = struct {
 
         const num_vcpus = if (vcpu_count > 0) vcpu_count else 1;
         if (!self.checkQuota(0, num_vcpus, self.quotas.current_depth + 1)) {
+            debug.printf("createChild: checkQuota failed! used_vcpus={} max_vcpus={} used_descendants={} max_descendants={}\n", .{
+                self.quotas.used_vcpus, self.quotas.max_vcpus, self.quotas.used_descendants, self.quotas.max_descendants,
+            });
             return error.QuotaExceeded;
         }
 
@@ -595,9 +612,15 @@ pub const Guest = struct {
             .x86_64 => 0,
             .aarch64 => 0x40000000,
         };
-        const child_space = try vm_space.GuestSpace.init(self.allocator, is_trusted, child_base_gpa, 0, 0);
+        const child_space = vm_space.GuestSpace.init(self.allocator, is_trusted, child_base_gpa, 0, 0) catch |err| {
+            debug.printf("createChild: GuestSpace.init failed: {s}, free RAM: {} KB\n", .{ @errorName(err), physmem.getFreeRamBytes() / 1024 });
+            return err;
+        };
 
-        const child = try self.allocator.create(Guest);
+        const child = self.allocator.create(Guest) catch |err| {
+            debug.printf("createChild: allocator.create(Guest) failed: {s}\n", .{@errorName(err)});
+            return err;
+        };
         errdefer self.allocator.destroy(child);
 
         child.* = .{
@@ -623,7 +646,10 @@ pub const Guest = struct {
             .child_handles = std.mem.zeroes([max_child_handles]?*Guest),
             .exit_code = 0,
             .vcores = .{ .start = null, .end = null },
-            .vmid = try allocVmid(),
+            .vmid = allocVmid() catch |err| {
+                debug.printf("createChild: allocVmid failed: {s}\n", .{@errorName(err)});
+                return err;
+            },
             .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
             .space = child_space,
             .early_pgt_gpa = if (target_arch == .x86_64) child_space.base_gpa + X86_EARLY_PGT_GPA_OFFSET else 0,
@@ -635,7 +661,10 @@ pub const Guest = struct {
         child.vcores.init();
 
         // Lineage tracking
-        const line_node = try self.allocator.create(dsa.LinkedList(*Guest).Node);
+        const line_node = self.allocator.create(dsa.LinkedList(*Guest).Node) catch |err| {
+            debug.printf("createChild: allocator.create(Node) failed: {s}\n", .{@errorName(err)});
+            return err;
+        };
         line_node.* = .{ .next = null, .previous = null, .contents = child };
         self.children.pushEnd(line_node);
         child.child_node = line_node;
@@ -653,7 +682,10 @@ pub const Guest = struct {
         }
 
         for (0..num_vcpus) |vc_id| {
-            _ = try child.addVcore(@intCast(vc_id), 0, 0, .normal, null);
+            _ = child.addVcore(@intCast(vc_id), 0, 0, .normal, null) catch |err| {
+                debug.printf("createChild: addVcore failed: {s}\n", .{@errorName(err)});
+                return err;
+            };
         }
 
         return child;
@@ -661,6 +693,7 @@ pub const Guest = struct {
 
     // Stop all virtual cores and wait for physical cores to relinquish them
     pub fn stop(self: *Guest) void {
+        const my_cpu = if (builtin.is_test) 0 else riscv.getCPUContext().hardware_hart_id;
         var it = self.vcores.start;
         while (it) |node| {
             const vc = node.contents;
@@ -668,8 +701,9 @@ pub const Guest = struct {
             @atomicStore(bool, &vc.wfi_blocked, false, .release);
 
             if (!builtin.is_test) {
+                scheduler.dequeue(vc);
                 if (vc.running_on_cpu) |home_cpu| {
-                    if (home_cpu < riscv.cpu_to_hart_map.len) {
+                    if (home_cpu != my_cpu and home_cpu < riscv.cpu_to_hart_map.len) {
                         if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
                             ptr.* = 1;
                         }
@@ -684,6 +718,7 @@ pub const Guest = struct {
             while (it) |node| {
                 const vc = node.contents;
                 while ((@as(*volatile ?usize, &vc.running_on_cpu)).* != null) {
+                    if (vc.running_on_cpu == my_cpu) break;
                     std.atomic.spinLoopHint();
                 }
                 it = node.next;

@@ -33,7 +33,6 @@ if [ -f "$KERNEL_ELF" ]; then
         STRIP_TOOL="zig-out/buildroot-riscv64/output/host/bin/riscv64-buildroot-linux-gnu-strip"
     fi
     "$STRIP_TOOL" -s "$KERNEL_ELF" -o "$STAGING_DIR/images/linux-guest.elf" 2>/dev/null || cp "$KERNEL_ELF" "$STAGING_DIR/images/linux-guest.elf"
-    ln -sf "linux-guest.elf" "$STAGING_DIR/images/default.elf"
 fi
 
 # Copy system manifest to storage disk

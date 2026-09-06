@@ -102,6 +102,22 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     }
 }
 
+// Remove a virtual core from the run queue if present
+pub fn dequeue(vc: *vcore.VirtualCore) void {
+    const guard = global_scheduler.acquire();
+    defer guard.release();
+    const state = guard.get();
+    var it = state.run_queue.start;
+    while (it) |node| {
+        if (node.contents == vc) {
+            state.run_queue.remove(node);
+            @atomicStore(bool, &vc.is_queued, false, .release);
+            break;
+        }
+        it = node.next;
+    }
+}
+
 // Pick the next virtual core to run, pulling from global if local is empty
 pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
@@ -117,10 +133,18 @@ pub fn pickNext() ?*vcore.VirtualCore {
 
     var it = pc.run_queue.start;
     while (it) |node| {
+        const next_it = node.next;
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
+        if (vc.state == .stopped) {
+            pc.run_queue.remove(node);
+            pc.run_queue_count -= 1;
+            @atomicStore(bool, &vc.is_queued, false, .release);
+            it = next_it;
+            continue;
+        }
         if (vc.running_on_cpu == null and ((vc.requiredExtensions() & misa) == vc.requiredExtensions())) {
             if (!builtin.is_test and vc.guest.is_root and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
-                it = node.next;
+                it = next_it;
                 continue;
             }
             if (vc.vruntime < best_local_vr) {
@@ -128,7 +152,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
                 best_local_node = node;
             }
         }
-        it = node.next;
+        it = next_it;
     }
 
     // Find best candidate in global run queue (lowest vruntime)
@@ -137,10 +161,17 @@ pub fn pickNext() ?*vcore.VirtualCore {
 
     var g_it = state.run_queue.start;
     while (g_it) |node| {
+        const next_git = node.next;
         const vc: *vcore.VirtualCore = node.contents;
+        if (vc.state == .stopped) {
+            state.run_queue.remove(node);
+            @atomicStore(bool, &vc.is_queued, false, .release);
+            g_it = next_git;
+            continue;
+        }
         if (vc.running_on_cpu == null and ((vc.requiredExtensions() & misa) == vc.requiredExtensions())) {
             if (!builtin.is_test and vc.guest.is_root and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
-                g_it = node.next;
+                g_it = next_git;
                 continue;
             }
             if (vc.vruntime < best_global_vr) {
@@ -148,7 +179,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
                 best_global_node = node;
             }
         }
-        g_it = node.next;
+        g_it = next_git;
     }
 
     // Pick lowest vruntime across queues (prefer global when vruntime <= local)

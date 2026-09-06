@@ -174,6 +174,7 @@ pub const Loader = struct {
                     const new_page_hpa = try physmem.allocPage();
                     @memset(@as([*]u8, @ptrFromInt(new_page_hpa))[0..physmem.PageSize], 0);
                     try root_vm.space.map(page_gpa, new_page_hpa, physmem.PageSize, rwx_flags);
+                    physmem.decrementPageRef(new_page_hpa);
                 }
 
                 // Copy segment file data into guest physical address space
