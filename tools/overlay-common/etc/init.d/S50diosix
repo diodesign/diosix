@@ -85,13 +85,17 @@ case "$1" in
             iptables -t nat -C POSTROUTING -s 10.0.0.0/16 ! -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || \
             iptables -t nat -A POSTROUTING -s 10.0.0.0/16 ! -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || true
 
-            # 2. Block all new incoming connection requests from child VMs to the Root VM
+            # 2. Allow Wayland translation bridge connections (port 8484) from child VMs
+            iptables -C INPUT -i diosix0 -p tcp --dport 8484 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || \
+            iptables -A INPUT -i diosix0 -p tcp --dport 8484 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || true
+
+            # 3. Block all other new incoming connection requests from child VMs to the Root VM
             iptables -C INPUT -i diosix0 -m conntrack --ctstate NEW -j DROP 2>/dev/null || \
             iptables -A INPUT -i diosix0 -m conntrack --ctstate NEW -j DROP 2>/dev/null || true
             iptables -C INPUT -s 10.0.0.0/16 -m conntrack --ctstate NEW -j DROP 2>/dev/null || \
             iptables -A INPUT -s 10.0.0.0/16 -m conntrack --ctstate NEW -j DROP 2>/dev/null || true
 
-            # 3. Block lateral traffic between sibling child VMs (no cross-guest communication)
+            # 4. Block lateral traffic between sibling child VMs (no cross-guest communication)
             iptables -C FORWARD -s 10.0.0.0/16 -d 10.0.0.0/16 -j DROP 2>/dev/null || \
             iptables -A FORWARD -s 10.0.0.0/16 -d 10.0.0.0/16 -j DROP 2>/dev/null || true
 

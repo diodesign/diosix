@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# S60diosix-wm: Launch Diosix Window Manager if graphical display device is present
+#
+
+case "$1" in
+  start)
+    if [ -x /usr/bin/diosix-wm ] && [ -c /dev/dri/card0 -o -c /dev/fb0 ]; then
+        echo "Starting Diosix Window Manager (diosix-wm)..."
+        /usr/bin/diosix-wm > /var/log/diosix-wm.log 2>&1 &
+    fi
+    ;;
+  stop)
+    echo "Stopping Diosix Window Manager..."
+    pkill -x diosix-wm 2>/dev/null || true
+    ;;
+  restart)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+
+exit 0

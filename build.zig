@@ -109,6 +109,11 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addFileInput(b.path("tools/diosix-wm/src/cursor.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-wm/src/window.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-wm/src/drm.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/wm.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/sprites.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/terminal.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/remote_desktop.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/wayland.zig"));
     run_buildroot.addFileInput(b.path("tools/driver/diosix.c"));
     run_buildroot.stdio = .inherit;
 

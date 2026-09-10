@@ -182,6 +182,17 @@ pub const Window = struct {
         };
     }
 
+    pub fn setTitle(self: *Window, new_title: []const u8) void {
+        self.title = new_title;
+        self.invalidateFurniture();
+    }
+
+    pub fn setExtent(self: *Window, doc_w: u32, doc_h: u32) void {
+        self.doc_width = doc_w;
+        self.doc_height = doc_h;
+        self.invalidateFurniture();
+    }
+
     pub fn width(self: *const Window) u32 {
         return self.visible.width();
     }

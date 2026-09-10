@@ -109,6 +109,8 @@ pub const Display = struct {
 
 const wm_mod = @import("wm.zig");
 const term_mod = @import("terminal.zig");
+const rd_mod = @import("remote_desktop.zig");
+const wayland_mod = @import("wayland.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -148,10 +150,10 @@ pub fn main() !void {
     defer wm.deinit();
 
     // 4. Create Terminal Window
-    const win_w: u32 = @min(sw - 40, @max(680, (sw * 65) / 100));
-    const win_h: u32 = @min(sh - 60, @max(440, (sh * 65) / 100));
-    const win_x: i32 = @divTrunc(@as(i32, @intCast(sw - win_w)), 2);
-    const win_y: i32 = @divTrunc(@as(i32, @intCast(sh - win_h)), 2);
+    const win_w: u32 = @min(sw - 40, @max(640, (sw * 55) / 100));
+    const win_h: u32 = @min(sh - 60, @max(400, (sh * 55) / 100));
+    const win_x: i32 = 20;
+    const win_y: i32 = 24;
 
     term_mod.global_terminal.cols = 80;
     term_mod.global_terminal.rows = 24;
@@ -175,7 +177,35 @@ pub fn main() !void {
     );
     _ = term_win;
 
-    // 5. Initialize Cursor and Mouse Coordinates
+    // 5. Initialize Remote Desktop (Debian Guest Window)
+    rd_mod.global_remote_desktop = rd_mod.RemoteDesktop.init(allocator, "10.0.3.2", 5900);
+    const debian_w: u32 = @min(sw - 40, @max(680, (sw * 60) / 100));
+    const debian_h: u32 = @min(sh - 60, @max(440, (sh * 60) / 100));
+    const debian_x: i32 = @min(@as(i32, @intCast(sw - debian_w)), 70);
+    const debian_y: i32 = @min(@as(i32, @intCast(sh - debian_h)), 50);
+
+    const debian_task = win_mod.Task{
+        .handle = rd_mod.remoteDesktopTaskHandle,
+        .task_data = if (rd_mod.global_remote_desktop) |*g| g else null,
+        .bg = 0x00181A20,
+    };
+    const debian_win = try wm.createWindow(
+        debian_x,
+        debian_y,
+        debian_w,
+        debian_h,
+        "Debian Desktop [10.0.3.2]",
+        win_mod.WindowFlags.none,
+        debian_task,
+        1024,
+        768,
+    );
+    _ = debian_win;
+
+    // 6. Initialize Wayland Translation Bridge (/tmp/wayland-0 and TCP 8484)
+    wayland_mod.global_wayland_server = wayland_mod.WaylandServer.init(allocator, "/tmp/wayland-0", 8484);
+
+    // 7. Initialize Cursor and Mouse Coordinates
     var mouse_x: i32 = @as(i32, @intCast(sw / 2));
     var mouse_y: i32 = @as(i32, @intCast(sh / 2));
     var cursor = cursor_mod.Cursor{
@@ -183,7 +213,7 @@ pub fn main() !void {
         .y = mouse_y,
     };
 
-    // 6. Open Input Event Devices
+    // 8. Open Input Event Devices
     var input_fds: [8]i32 = undefined;
     var input_count: usize = 0;
     var dev_idx: u8 = 0;
@@ -198,7 +228,7 @@ pub fn main() !void {
         }
     }
 
-    // 7. Render Initial Desktop Frame
+    // 9. Render Initial Desktop Frame
     const initial_damage = wm.redrawAll(&display.backbuffer);
     display.flushDamage(initial_damage);
 
@@ -208,18 +238,19 @@ pub fn main() !void {
         cursor.draw(display.screenSurface());
     }
 
-    // 8. Main Event Loop
+    // 10. Main Event Loop
     while (true) {
-        var pfds: [16]linux.pollfd = undefined;
-        for (input_fds[0..input_count], 0..) |fd, i| {
-            pfds[i] = linux.pollfd{
+        var pfds: [32]linux.pollfd = undefined;
+        var poll_count: usize = 0;
+        for (input_fds[0..input_count]) |fd| {
+            pfds[poll_count] = linux.pollfd{
                 .fd = fd,
                 .events = linux.POLL.IN,
                 .revents = 0,
             };
+            poll_count += 1;
         }
 
-        var poll_count = input_count;
         const term_pfd_idx = poll_count;
         if (term_mod.global_terminal.master_fd >= 0) {
             pfds[poll_count] = linux.pollfd{
@@ -230,8 +261,55 @@ pub fn main() !void {
             poll_count += 1;
         }
 
+        if (rd_mod.global_remote_desktop) |*rd| {
+            if (rd.sock_fd >= 0 and poll_count < pfds.len) {
+                pfds[poll_count] = linux.pollfd{
+                    .fd = rd.sock_fd,
+                    .events = linux.POLL.IN | (if (rd.state == .connecting) @as(i16, linux.POLL.OUT) else 0),
+                    .revents = 0,
+                };
+                poll_count += 1;
+            }
+        }
+
+        if (wayland_mod.global_wayland_server) |*ws| {
+            if (ws.unix_fd >= 0 and poll_count < pfds.len) {
+                pfds[poll_count] = linux.pollfd{
+                    .fd = ws.unix_fd,
+                    .events = linux.POLL.IN,
+                    .revents = 0,
+                };
+                poll_count += 1;
+            }
+            if (ws.tcp_fd >= 0 and poll_count < pfds.len) {
+                pfds[poll_count] = linux.pollfd{
+                    .fd = ws.tcp_fd,
+                    .events = linux.POLL.IN,
+                    .revents = 0,
+                };
+                poll_count += 1;
+            }
+            for (&ws.clients) |*slot| {
+                if (slot.*) |*c| {
+                    if (c.sock_fd >= 0 and poll_count < pfds.len) {
+                        pfds[poll_count] = linux.pollfd{
+                            .fd = c.sock_fd,
+                            .events = linux.POLL.IN | (if (c.out_len > 0) @as(i16, linux.POLL.OUT) else 0),
+                            .revents = 0,
+                        };
+                        poll_count += 1;
+                    }
+                }
+            }
+        }
+
         const poll_res = linux.poll(&pfds, poll_count, 16);
         const signed_poll: isize = @bitCast(poll_res);
+
+        // Process Wayland events and connections
+        if (wayland_mod.global_wayland_server) |*ws| {
+            ws.pollAndProcess(&wm);
+        }
 
         if (signed_poll > 0) {
             // Check terminal master_fd output from subshell
