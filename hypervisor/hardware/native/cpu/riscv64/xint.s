@@ -20,28 +20,19 @@
 hw_xint_init:
     # point this CPU core at default machine-level xint handler (see below)
     la      t0, xint_machine_entry_handler
-    csrrw   x0, mtvec, t0
-    csrrw   x0, stvec, t0
+    csrw    mtvec, t0
+    csrw    stvec, t0
   
     # delegate most supervisor-level exceptions to the supervisor-level guest,
     # so that the guest can deal with its exception direct. for a given exception,
     # bit = 1 to delegate, 0 = pass to the machine-level hypervisor.
-    # 0xb1fb = delegate all exceptions (0-15) apart from:
-    # 02: illegal instruction (catch in case we need to implement it in software)
-    # 09: environment call from supervisor mode
-    # 10: reserved
-    # 11: environment call from machine mode
-    # 14: reserved
-    li      t0, 0xb1fb
-    csrrw   x0, medeleg, t0
+    li      t0, MEDELEG_DELEGATED
+    csrw    medeleg, t0
   
-    # Delegate virtual supervisor interrupts to VS-mode:
-    # bit 2: Virtual supervisor software interrupt (VSSIP)
-    # bit 6: Virtual supervisor timer interrupt (VSTIP)
-    # bit 10: Virtual supervisor external interrupt (VSEIP)
-    # Physical interrupts (SSIP bit 1, STIP bit 5, SEIP bit 9) remain in M-mode.
-    li      t0, 0x0444
-    csrrw   x0, mideleg, t0
+    # Delegate virtual supervisor interrupts to VS-mode (VSSIP, VSTIP, VSEIP).
+    # Physical interrupts (SSIP, STIP, SEIP) remain in M-mode.
+    li      t0, MIDELEG_DELEGATED
+    csrw    mideleg, t0
 
     ret
 
@@ -77,21 +68,20 @@ xint_machine_entry_handler:
     .endr
 
     # stack the interrupted code's sp as x2 (sp) in register block
-    csrrs   t0, mscratch, x0
+    csrr    t0, mscratch
     sd      t0, (2 * 8)(sp)
 
     # right now mscratch is corrupt with the interrupted code's sp.
     # this means hypervisor functions relying on mscratch will break, so restore it.
     addi    t0, sp, XINT_REGISTER_FRAME_SIZE
-    csrrw   x0, mscratch, t0
+    csrw    mscratch, t0
 
     # Ensure tp points to this CPU's host CpuContext
     mv      tp, t0
 
-continue:
     # pass current sp to exception/hw handler as a pointer in a0. this'll allow
     # the higher-level hypervisor access and modify any of the stacked registers
-    add     a0, sp, x0
+    mv      a0, sp
     call    xint_handler
 
     # restore all stacked registers, skipping zero (x0) and sp (x2)

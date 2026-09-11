@@ -47,7 +47,7 @@ pub fn init() void {
     // Enable physical Vector (VS) and Floating-point (FS) extensions (set to 3 = Dirty)
     var mstatus = riscv.readMstatus();
     mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
-    mstatus |= (@as(usize, 1) << 21); // Set TW bit so VS-mode WFI traps to M-mode
+    mstatus |= riscv.MSTATUS.TW; // Set TW bit so VS-mode WFI traps to M-mode
     riscv.writeMstatus(mstatus);
 }
 
@@ -94,8 +94,9 @@ pub fn initCpuFeatures() void {
     // Physical interrupts (SSIP, STIP, SEIP) remain in M-mode so the hypervisor
     // can receive physical PLIC/CLINT traps and inject virtual interrupts into hvip.
     const current_mideleg = riscv.readMideleg();
-    const virt_sip_mask = (1 << 2) | (1 << 6) | (1 << 10); // VSSIP, VSTIP, VSEIP
-    riscv.writeMideleg((current_mideleg & ~@as(usize, (1 << 1) | (1 << 5) | (1 << 9))) | virt_sip_mask);
+    const virt_sip_mask = riscv.HVIP.VSSIP | riscv.HVIP.VSTIP | riscv.HVIP.VSEIP;
+    const phys_sip_mask = riscv.MIP.SSIP | riscv.MIP.STIP | riscv.MIP.SEIP;
+    riscv.writeMideleg((current_mideleg & ~phys_sip_mask) | virt_sip_mask);
 }
 
 pub const Type = enum {

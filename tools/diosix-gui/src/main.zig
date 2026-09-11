@@ -151,6 +151,7 @@ pub const REL_X: u16 = 0x00;
 pub const REL_Y: u16 = 0x01;
 pub const ABS_X: u16 = 0x00;
 pub const ABS_Y: u16 = 0x01;
+pub const EVDEV_ABS_MAX: i64 = 32767;
 
 pub const BTN_LEFT: u16 = 0x110;
 pub const BTN_TOUCH: u16 = 0x14a;
@@ -312,10 +313,10 @@ pub fn main() !void {
                                 EV_ABS => {
                                     // Handle tablet absolute coordinates
                                     if (ev.code == ABS_X) {
-                                        const nx = @divTrunc(@as(i64, ev.value) * @as(i64, @intCast(display.width)), 32767);
+                                        const nx = @divTrunc(@as(i64, ev.value) * @as(i64, @intCast(display.width)), EVDEV_ABS_MAX);
                                         gui.handleMouseMove(@intCast(nx), gui.cursor.y, gui.mouse_left_down);
                                     } else if (ev.code == ABS_Y) {
-                                        const ny = @divTrunc(@as(i64, ev.value) * @as(i64, @intCast(display.height)), 32767);
+                                        const ny = @divTrunc(@as(i64, ev.value) * @as(i64, @intCast(display.height)), EVDEV_ABS_MAX);
                                         gui.handleMouseMove(gui.cursor.x, @intCast(ny), gui.mouse_left_down);
                                     }
                                 },

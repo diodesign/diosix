@@ -21,6 +21,21 @@ const storage_sub = @import("subprograms/storage.zig");
 const power_sub = @import("subprograms/power.zig");
 
 pub const TAB_BAR_HEIGHT: u32 = 42;
+pub const TAB_START_X: i32 = 230;
+pub const TAB_STRIDE: i32 = 204;
+pub const TAB_WIDTH: u32 = 200;
+pub const TAB_HEIGHT: u32 = 32;
+
+pub const Key = struct {
+    pub const BACKSPACE: u16 = 14;
+    pub const TAB: u16 = 15;
+    pub const ENTER: u16 = 28;
+    pub const SPACE: u16 = 57;
+    pub const UP: u16 = 103;
+    pub const LEFT: u16 = 105;
+    pub const RIGHT: u16 = 106;
+    pub const DOWN: u16 = 108;
+};
 
 pub const DiosixGui = struct {
     allocator: std.mem.Allocator,
@@ -45,8 +60,8 @@ pub const DiosixGui = struct {
     blur_strength: u32 = 50,
 
     // Static graduated background colors (default light blue top, dark blue bottom)
-    bg_top_color: u32 = 0x004C8BE0,
-    bg_bot_color: u32 = 0x000C1836,
+    bg_top_color: u32 = fb.Color.SKY_BASE_TOP,
+    bg_bot_color: u32 = fb.Color.GRADIENT_BOT_DEFAULT,
 
     // Damage tracking: dirty bounding box needing redraw
     dirty_box: fb.Box = fb.Box{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 },
@@ -509,14 +524,11 @@ pub const DiosixGui = struct {
 
     fn handleTabBarClick(self: *DiosixGui, px: i32, py: i32) void {
         _ = py;
-        const tab_start_x: i32 = 230;
-        const tab_stride: i32 = 204;
-        const tab_w: i32 = 200;
-        if (px >= tab_start_x) {
-            const rel_x = px - tab_start_x;
-            const clicked_tab = @divTrunc(rel_x, tab_stride);
-            const in_tab_x = @mod(rel_x, tab_stride);
-            if (clicked_tab >= 0 and clicked_tab < self.subprograms.items.len and in_tab_x < tab_w) {
+        if (px >= TAB_START_X) {
+            const rel_x = px - TAB_START_X;
+            const clicked_tab = @divTrunc(rel_x, TAB_STRIDE);
+            const in_tab_x = @mod(rel_x, TAB_STRIDE);
+            if (clicked_tab >= 0 and clicked_tab < self.subprograms.items.len and in_tab_x < @as(i32, @intCast(TAB_WIDTH))) {
                 self.activateSubProgram(@intCast(clicked_tab));
             }
         }
@@ -569,31 +581,30 @@ pub const DiosixGui = struct {
         }
 
         // Global Tab navigation
-        // Linux evdev KEY_TAB = 15
-        if (key_code == 15) {
+        if (key_code == Key.TAB) {
             self.focusNextWindow();
             return;
         }
 
-        // Left / Right arrow navigation (KEY_LEFT = 105, KEY_RIGHT = 106)
+        // Left / Right arrow navigation
         // If focused icon is a slider, adjust slider; otherwise switch tabs
         if (self.getActiveWindow()) |win| {
             if (win.focused_icon_idx) |f_idx| {
                 const icon = &win.icons.items[f_idx];
                 if (icon.icon_type == .slider) {
-                    if (key_code == 105) { // Left
+                    if (key_code == Key.LEFT) {
                         icon.adjustSlider(-5);
                         if (icon.callback) |cb| cb(self, win, icon);
                         self.markDirty(win.getBox());
                         return;
-                    } else if (key_code == 106) { // Right
+                    } else if (key_code == Key.RIGHT) {
                         icon.adjustSlider(5);
                         if (icon.callback) |cb| cb(self, win, icon);
                         self.markDirty(win.getBox());
                         return;
                     }
                 } else if (icon.icon_type == .read_write_text) {
-                    if (key_code == 14) { // Backspace
+                    if (key_code == Key.BACKSPACE) {
                         icon.deleteBackward();
                         if (icon.callback) |cb| cb(self, win, icon);
                         self.markDirty(win.getBox());
@@ -607,19 +618,19 @@ pub const DiosixGui = struct {
                 }
             }
 
-            // Up / Down arrow navigation between icons in the active window (KEY_UP = 103, KEY_DOWN = 108)
-            if (key_code == 103) {
+            // Up / Down arrow navigation between icons in the active window
+            if (key_code == Key.UP) {
                 win.focusPrevIcon();
                 self.markDirty(win.getBox());
                 return;
-            } else if (key_code == 108) {
+            } else if (key_code == Key.DOWN) {
                 win.focusNextIcon();
                 self.markDirty(win.getBox());
                 return;
             }
 
-            // Enter (28) or Space (57) activates the focused icon
-            if (key_code == 28 or key_code == 57) {
+            // Enter or Space activates the focused icon
+            if (key_code == Key.ENTER or key_code == Key.SPACE) {
                 if (win.focused_icon_idx) |f_idx| {
                     win.triggerIcon(self, &win.icons.items[f_idx]);
                     self.markDirty(win.getBox());
@@ -677,7 +688,7 @@ pub const DiosixGui = struct {
             for (self.windows.items) |*win| {
                 if (win.is_onscreen) {
                     const win_box = win.getBox();
-                    clean_surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, 10, self.blur_scratch);
+                    clean_surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
                     win.render(clean_surface, win_alpha);
                 }
             }
@@ -692,7 +703,7 @@ pub const DiosixGui = struct {
             for (self.windows.items) |*win| {
                 if (win.is_onscreen and win.intersectsBox(damage)) {
                     const win_box = win.getBox();
-                    clean_surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, 10, self.blur_scratch);
+                    clean_surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
                     win.render(clean_surface, win_alpha);
                 }
             }
@@ -715,33 +726,28 @@ pub const DiosixGui = struct {
 
         // Header bottom divider line
         const div_box = fb.Box.fromPosSize(0, @as(i32, @intCast(TAB_BAR_HEIGHT - 1)), self.width, 1);
-        surface.fillBox(div_box, 0x003A4C64);
+        surface.fillBox(div_box, fb.Color.TAB_DIVIDER);
 
         // Title Branding: Questrial Regular with Accent Gold
         font.drawTextWithShadow(surface, "DIOSIX SYSTEM MENU", 18, 12, fb.Color.ACCENT_GOLD, fb.Color.BLACK);
 
         // Render Tabs
-        const tab_start_x: i32 = 230;
-        const tab_stride: i32 = 204;
-        const tab_w: u32 = 200;
-        const tab_h: u32 = 32;
-
         for (self.subprograms.items, 0..) |*sub, idx| {
-            const tx = tab_start_x + @as(i32, @intCast(idx)) * tab_stride;
+            const tx = TAB_START_X + @as(i32, @intCast(idx)) * TAB_STRIDE;
             const ty: i32 = 5;
-            const t_box = fb.Box.fromPosSize(tx, ty, tab_w, tab_h);
+            const t_box = fb.Box.fromPosSize(tx, ty, TAB_WIDTH, TAB_HEIGHT);
 
             const title_w = font.measureString(sub.tab_title);
-            const text_x = if (tab_w > title_w) tx + @as(i32, @intCast((tab_w - title_w) / 2)) else tx + 4;
+            const text_x = if (TAB_WIDTH > title_w) tx + @as(i32, @intCast((TAB_WIDTH - title_w) / 2)) else tx + 4;
 
             const is_active = (idx == self.active_sub_idx);
             if (is_active) {
                 // Active tab: Translucent rounded glass pill with bright frosted border
-                surface.drawRoundedTranslucentBox(t_box, 6, 0x002A3C54, 230, fb.Color.GLASS_BTN_BORDER);
+                surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_ACTIVE_BG, 230, fb.Color.GLASS_BTN_BORDER);
                 font.drawTextWithShadow(surface, sub.tab_title, text_x, ty + 7, fb.Color.WHITE, fb.Color.BLACK);
             } else {
                 // Inactive tab: subtle translucent dark pill
-                surface.drawRoundedTranslucentBox(t_box, 6, 0x00101824, 180, 0x0024344A);
+                surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_INACTIVE_BG, 180, fb.Color.TAB_INACTIVE_BORDER);
                 font.drawTextWithShadow(surface, sub.tab_title, text_x, ty + 7, fb.Color.TEXT_MUTED, fb.Color.BLACK);
             }
         }

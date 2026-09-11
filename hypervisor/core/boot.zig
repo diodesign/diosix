@@ -50,7 +50,7 @@ pub var system_ctx_locked = atomic.LockPayload(?*SystemContext).init(
 // This is the core initialization logic for the boot CPU.
 // It is separated from main() to allow for easier testing.
 pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
-    var guest_hart_ids = std.mem.zeroes([8]usize);
+    var guest_hart_ids = std.mem.zeroes([riscv.MAX_PHYS_CORES]usize);
     debug.printf("\n{s}\n", .{banner});
     debug.printf("Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ project_version, git_branch, git_revision, build_date, build_user, build_hostname, zig_version, cpu_arch });
 
@@ -294,13 +294,9 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                     if (device_tree.getProperty(path, "reg")) |reg_prop| {
                         if (reg_prop.data) |reg_data| {
                             if (reg_data.len == 8) {
-                                reg_val = (@as(usize, reg_data[0]) << 56) | (@as(usize, reg_data[1]) << 48) |
-                                    (@as(usize, reg_data[2]) << 40) | (@as(usize, reg_data[3]) << 32) |
-                                    (@as(usize, reg_data[4]) << 24) | (@as(usize, reg_data[5]) << 16) |
-                                    (@as(usize, reg_data[6]) << 8) | reg_data[7];
+                                reg_val = std.mem.readInt(u64, reg_data[0..8], .big);
                             } else if (reg_data.len == 4) {
-                                reg_val = (@as(usize, reg_data[0]) << 24) | (@as(usize, reg_data[1]) << 16) |
-                                    (@as(usize, reg_data[2]) << 8) | reg_data[3];
+                                reg_val = std.mem.readInt(u32, reg_data[0..4], .big);
                             }
                         }
                     } else |_| {}
@@ -319,7 +315,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
                     if (device_tree.getProperty(ic_path, "phandle")) |prop| {
                         if (prop.data) |data| {
                             if (data.len >= 4) {
-                                const phandle = (@as(u32, data[0]) << 24) | (@as(u32, data[1]) << 16) | (@as(u32, data[2]) << 8) | data[3];
+                                const phandle = std.mem.readInt(u32, data[0..4], .big);
                                 try disabled_phandles.append(cpu_allocator, phandle);
                             }
                         }

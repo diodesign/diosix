@@ -247,7 +247,7 @@ pub const Icon = struct {
             .read_write_text => {
                 // Inset editable field box
                 const border_col = if (self.is_focused) fb.Color.ACCENT_CYAN else fb.Color.GLASS_BORDER;
-                surface.drawRoundedTranslucentBox(box, 4, 0x000F1522, 230, border_col);
+                surface.drawRoundedTranslucentBox(box, 4, fb.Color.INPUT_BG, 230, border_col);
 
                 const text_y = sy + @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(font.GLYPH_HEIGHT)), 2);
                 const txt = self.getText();
@@ -282,7 +282,7 @@ pub const Icon = struct {
                 const track_y = sy + 24;
                 const track_h: u32 = 6;
                 const track_box = fb.Box.fromPosSize(sx, track_y, self.width, track_h);
-                surface.drawRoundedTranslucentBox(track_box, 3, 0x000C121D, 240, fb.Color.GLASS_BORDER);
+                surface.drawRoundedTranslucentBox(track_box, 3, fb.Color.TRACK_BG, 240, fb.Color.GLASS_BORDER);
 
                 // 3. Slider Thumb Marker
                 const span = if (self.slider_max > self.slider_min) self.slider_max - self.slider_min else 1;
@@ -293,7 +293,7 @@ pub const Icon = struct {
                 const thumb_y = track_y - 4;
                 const thumb_box = fb.Box.fromPosSize(thumb_x, thumb_y, 16, 14);
 
-                surface.drawRoundedTranslucentBox(thumb_box, 4, if (self.is_focused) fb.Color.ACCENT_CYAN else 0x00D0DCF0, 255, fb.Color.WHITE);
+                surface.drawRoundedTranslucentBox(thumb_box, 4, if (self.is_focused) fb.Color.ACCENT_CYAN else fb.Color.THUMB_BG, 255, fb.Color.WHITE);
             },
 
             .tick_box => {
@@ -302,7 +302,7 @@ pub const Icon = struct {
                 const box_y = sy + @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(box_size)), 2);
                 const tick_box = fb.Box.fromPosSize(sx, box_y, box_size, box_size);
 
-                surface.drawRoundedTranslucentBox(tick_box, 3, 0x000F1522, 230, if (self.is_focused) fb.Color.ACCENT_CYAN else fb.Color.GLASS_BORDER);
+                surface.drawRoundedTranslucentBox(tick_box, 3, fb.Color.INPUT_BG, 230, if (self.is_focused) fb.Color.ACCENT_CYAN else fb.Color.GLASS_BORDER);
 
                 // If ticked, draw glowing check mark
                 if (self.is_ticked) {
@@ -322,11 +322,11 @@ pub const Icon = struct {
             .button => {
                 // Sleek pushable button
                 const btn_bg: u32 = if (self.is_active_press)
-                    0x003A4C68
+                    fb.Color.BTN_PRESS_BG
                 else if (self.is_hovered or (self.is_focused and is_win_active))
-                    0x002C3B52
+                    fb.Color.BTN_HOVER_BG
                 else
-                    0x001C2638;
+                    fb.Color.BTN_NORMAL_BG;
 
                 const border_col: u32 = if (self.is_focused and is_win_active) fb.Color.ACCENT_CYAN else fb.Color.GLASS_BTN_BORDER;
                 surface.drawRoundedTranslucentBox(box, 6, btn_bg, 220, border_col);

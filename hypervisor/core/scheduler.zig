@@ -225,7 +225,8 @@ pub fn schedule() void {
                 now - vc.last_dispatched_time
             else
                 MIN_RUNTIME_DELTA;
-            const delta: u64 = actual_time * NICE_0_WEIGHT / vc.weight;
+            const weight = if (vc.weight > 0) vc.weight else NICE_0_WEIGHT;
+            const delta: u64 = actual_time * NICE_0_WEIGHT / weight;
             vc.vruntime += delta;
             queue(vc);
         }

@@ -136,8 +136,7 @@ fn hw_run_vcore_mock(_: *ThreadContext, _: *const MachineState, _: *const GuestS
 fn hw_dynarec_run_block_mock(_: *[32]u64, _: usize) callconv(.c) usize {
     return 0;
 }
-fn hw_dynarec_exit1_mock() callconv(.c) void {}
-fn hw_dynarec_exit2_mock() callconv(.c) void {}
+fn hw_dynarec_exit_mock() callconv(.c) void {}
 
 comptime {
     if (is_test) {
@@ -153,8 +152,7 @@ comptime {
         @export(&hw_xint_init_mock, .{ .name = "hw_xint_init", .linkage = .strong });
         @export(&hw_run_vcore_mock, .{ .name = "hw_run_vcore", .linkage = .strong });
         @export(&hw_dynarec_run_block_mock, .{ .name = "hw_dynarec_run_block", .linkage = .strong });
-        @export(&hw_dynarec_exit1_mock, .{ .name = "hw_dynarec_exit1", .linkage = .strong });
-        @export(&hw_dynarec_exit2_mock, .{ .name = "hw_dynarec_exit2", .linkage = .strong });
+        @export(&hw_dynarec_exit_mock, .{ .name = "hw_dynarec_exit", .linkage = .strong });
     }
 }
 

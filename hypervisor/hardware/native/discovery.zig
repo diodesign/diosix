@@ -17,26 +17,28 @@ pub const HostHardware = struct {
     plic_base: ?usize,
 };
 
+pub const DEFAULT_RAM_BASE: u64 = 0x80000000;
+pub const DEFAULT_RAM_SIZE: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_UART_BASE: usize = 0x10000000;
+pub const DEFAULT_CLINT_BASE: usize = 0x02000000;
+pub const DEFAULT_PLIC_BASE: usize = 0x0c000000;
+
+pub const DEFAULT_HOST_HARDWARE = HostHardware{
+    .ram_base = DEFAULT_RAM_BASE,
+    .ram_size = DEFAULT_RAM_SIZE,
+    .uart_base = DEFAULT_UART_BASE,
+    .clint_base = DEFAULT_CLINT_BASE,
+    .plic_base = DEFAULT_PLIC_BASE,
+};
+
 pub fn probe(fdt_paddr: usize) HostHardware {
     if (fdt_paddr == 0) {
-        return HostHardware{
-            .ram_base = 0x80000000,
-            .ram_size = 512 * 1024 * 1024,
-            .uart_base = 0x10000000,
-            .clint_base = 0x02000000,
-            .plic_base = 0x0c000000,
-        };
+        return DEFAULT_HOST_HARDWARE;
     }
 
     const dtb_ptr = @as([*]const u8, @ptrFromInt(fdt_paddr));
     const info = fdt.parseHardwareInfo(dtb_ptr) catch {
-        return HostHardware{
-            .ram_base = 0x80000000,
-            .ram_size = 512 * 1024 * 1024,
-            .uart_base = 0x10000000,
-            .clint_base = 0x02000000,
-            .plic_base = 0x0c000000,
-        };
+        return DEFAULT_HOST_HARDWARE;
     };
 
     if (info.uart_base) |u| uart.init(u);

@@ -66,6 +66,7 @@ pub const MSTATUS = struct {
     pub const MIE = 1 << 3;
     pub const MPIE = 1 << 7;
     pub const SIE = 1 << 1;
+    pub const TW = 1 << 21; // Timeout Wait: intercept WFI in S/VS mode
     pub const MPV: u64 = 1 << 39;
 
     // Vector State (VS) and Floating-point State (FS) field definitions
@@ -245,11 +246,13 @@ pub const CSR = struct {
 
     // Execution Environment Config
     pub const SENVCFG = 0x10a;
+    pub const HENVCFG = 0x60a;
     pub const VSENVCFG = 0x20a;
 
     // Timer/Counter CSRs
     pub const TIME = 0xc01;
     pub const STIMECMP = 0x14d;
+    pub const VSTIMECMP = 0x24d;
 };
 
 // RISC-V Instruction Decoding Constants

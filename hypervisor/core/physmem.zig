@@ -259,11 +259,13 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
 }
 
 fn readCells(data: []const u8, count: usize) !u64 {
-    if (count == 1) return @as(u64, @as(u32, data[0]) << 24 | @as(u32, data[1]) << 16 | @as(u32, data[2]) << 8 | @as(u32, data[3]));
+    if (count == 1) {
+        if (data.len < 4) return error.OutOfBounds;
+        return std.mem.readInt(u32, data[0..4], .big);
+    }
     if (count == 2) {
-        const high = @as(u64, @as(u32, data[0]) << 24 | @as(u32, data[1]) << 16 | @as(u32, data[2]) << 8 | @as(u32, data[3]));
-        const low = @as(u64, @as(u32, data[4]) << 24 | @as(u32, data[5]) << 16 | @as(u32, data[6]) << 8 | @as(u32, data[7]));
-        return (high << 32) | low;
+        if (data.len < 8) return error.OutOfBounds;
+        return std.mem.readInt(u64, data[0..8], .big);
     }
     return error.WidthUnsupported;
 }

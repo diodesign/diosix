@@ -13,8 +13,7 @@
 .global hw_pause
 .global hw_pmp_init
 .global hw_dynarec_run_block
-.global hw_dynarec_exit1
-.global hw_dynarec_exit2
+.global hw_dynarec_exit
 
 # hypervisor constants, such as stack and lock locations
 .include "hypervisor/hardware/native/cpu/riscv64/consts.s"
@@ -29,10 +28,7 @@ hw_run_vcore:
   ld t0, 0(a1)      # mepc
   csrw mepc, t0
   ld t0, 8(a1)      # mstatus
-  li t1, 0x6600     # VS (bits 9-10) and FS (bits 13-14)
-  or t0, t0, t1
-  li t1, 1
-  slli t1, t1, 21   # TW (bit 21)
+  li t1, (MSTATUS_VS_DIRTY | MSTATUS_FS_DIRTY | MSTATUS_TW)
   or t0, t0, t1
   csrw mstatus, t0
 
@@ -67,20 +63,20 @@ hw_run_vcore:
   ld t0, 56(a2)     # vsatp
   csrw vsatp, t0
   .if LEGACY_CPU == 0
-  li t0, 240        # Cache block ops (CBZE, CBCFE, CBIE)
+  li t0, HENVCFG_CBO_MASK # Cache block ops (CBZE, CBCFE, CBIE)
   la t1, riscv_supports_sstc
   lbu t1, 0(t1)
   beqz t1, 1f
   li t1, 1
-  slli t1, t1, 63   # STCE
+  slli t1, t1, HENVCFG_STCE_BIT # STCE
   or t0, t0, t1
 1:
-  csrw 0x60a, t0    # henvcfg (0x60a)
+  csrw CSR_HENVCFG, t0    # henvcfg
   la t0, riscv_supports_sstc
   lbu t0, 0(t0)
   beqz t0, 2f
   ld t0, 64(a2)     # vstimecmp
-  csrw 0x24d, t0
+  csrw CSR_VSTIMECMP, t0
 2:
   .endif
 
@@ -93,7 +89,7 @@ hw_run_vcore_no_h:
   lbu t0, 0(t0)
   beqz t0, 3f
   ld t0, 64(a2)     # vstimecmp field is used for stimecmp in PMP fallback
-  csrw 0x14d, t0    # stimecmp
+  csrw CSR_STIMECMP, t0 # stimecmp
 3:
   .endif
 
@@ -177,9 +173,8 @@ hw_pmp_init:
   # Entry 0: covers entire 64-bit address space
   li t0, -1
   csrw pmpaddr0, t0
-  # pmpcfg0: Entry 0 is NAPOT with R, W, and X bits set (0x1f)
-  # NAPOT mode = 11 (bit 3-4), R=1, W=1, X=1 (bits 0-2)
-  li t0, 0x1f
+  # pmpcfg0: Entry 0 is NAPOT with R, W, and X bits set
+  li t0, PMP_RWX_NAPOT
   csrw pmpcfg0, t0
   ret
 
@@ -232,13 +227,6 @@ siglongjmp:
 # Execute JIT translated code block in Supervisor (S) Mode
 # a0 = pointer to [32]u64 (vcpu.regs)
 # a1 = host code function pointer
-.section .bss
-.align 8
-hw_dynarec_host_sp:
-  .space 8 * 8   # up to 8 harts
-hw_dynarec_saved_sstatus:
-  .space 8 * 8
-
 .section .text
 .globl hw_dynarec_run_block
 .type hw_dynarec_run_block, @function

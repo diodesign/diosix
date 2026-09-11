@@ -35,3 +35,36 @@
 .equ CPU_PRIVATE_VARS_SIZE,  (PAGE_SIZE)
 .equ CPU_HEAP_BASE,          (CPU_PRIVATE_VARS_BASE + CPU_PRIVATE_VARS_SIZE)
 .equ CPU_HEAP_AREA_SIZE,     (CPU_SLAB_SIZE - CPU_HEAP_BASE)
+
+# CSR Numbers
+.equ CSR_HENVCFG,            0x60a
+.equ CSR_VSTIMECMP,          0x24d
+.equ CSR_STIMECMP,           0x14d
+
+# mstatus bits
+.equ MSTATUS_VS_DIRTY,       (3 << 9)   # Vector extension dirty state
+.equ MSTATUS_FS_DIRTY,       (3 << 13)  # Floating-point extension dirty state
+.equ MSTATUS_TW,             (1 << 21)  # Timeout Wait (trap WFI in VS-mode)
+
+# henvcfg bits
+.equ HENVCFG_CBO_MASK,       0xf0       # CBZE, CBCFE, CBIE (bits 4..7)
+.equ HENVCFG_STCE_BIT,       63         # STCE enable bit
+
+# PMP entry constants
+.equ PMP_R,                  (1 << 0)
+.equ PMP_W,                  (1 << 1)
+.equ PMP_X,                  (1 << 2)
+.equ PMP_A_NAPOT,            (3 << 3)
+.equ PMP_RWX_NAPOT,          (PMP_R | PMP_W | PMP_X | PMP_A_NAPOT) # 0x1f
+
+# mideleg: Delegate virtual supervisor interrupts (VSSIP=2, VSTIP=6, VSEIP=10)
+.equ MIDELEG_VSSIP,          (1 << 2)
+.equ MIDELEG_VSTIP,          (1 << 6)
+.equ MIDELEG_VSEIP,          (1 << 10)
+.equ MIDELEG_DELEGATED,      (MIDELEG_VSSIP | MIDELEG_VSTIP | MIDELEG_VSEIP) # 0x0444
+
+# medeleg: Delegate guest exceptions (excluding illegal instruction 2, supervisor ecall 9, machine ecall 11)
+.equ MEDELEG_DELEGATED,      0xb1fb
+
+# Device tree header
+.equ DTB_HEADER_TOTALSIZE_OFFSET, 4

@@ -41,6 +41,22 @@ pub const Color = struct {
     pub const ACCENT_RED: u32      = 0x00E03838; // Power / alert
     pub const TEXT_MUTED: u32      = 0x008090A8; // Dimmed / secondary text
     pub const DESKTOP_BG: u32      = 0x004C8BE0; // Light blue base
+
+    // Window Pane and Widget Elements
+    pub const GLASS_DIVIDER: u32   = 0x003A4B62; // Divider under window titles
+    pub const INPUT_BG: u32        = 0x000F1522; // Inset text / tick box background
+    pub const TRACK_BG: u32        = 0x000C121D; // Slider track groove background
+    pub const THUMB_BG: u32        = 0x00D0DCF0; // Slider thumb default fill
+    pub const BTN_PRESS_BG: u32    = 0x003A4C68; // Button active depressed fill
+    pub const BTN_HOVER_BG: u32    = 0x002C3B52; // Button hover / focused fill
+    pub const BTN_NORMAL_BG: u32   = 0x001C2638; // Button normal fill
+
+    // Tab Bar Palette
+    pub const TAB_DIVIDER: u32         = 0x003A4C64; // Horizontal divider under tab bar
+    pub const TAB_ACTIVE_BG: u32       = 0x002A3C54; // Active tab pill fill
+    pub const TAB_INACTIVE_BG: u32     = 0x00101824; // Inactive tab pill fill
+    pub const TAB_INACTIVE_BORDER: u32 = 0x0024344A; // Inactive tab pill border
+    pub const GRADIENT_BOT_DEFAULT: u32= 0x000C1836; // Default backdrop bottom color
 };
 
 pub const Box = struct {
@@ -167,10 +183,14 @@ pub fn getBackdropPixel(x: i32, y: i32, width: u32, height: u32, top_color: u32,
     return (r << 16) | (g << 8) | b;
 }
 
-// Precomputes fixed-point 1D Gaussian kernel weights summing to exactly 65536.
+pub const MAX_BLUR_RADIUS: u32 = 16;
+pub const MAX_KERNEL_LEN: usize = MAX_BLUR_RADIUS * 2 + 1;
+pub const FP_ONE: u32 = 1 << 16; // 65536 in 16.16 fixed point
+
+// Precomputes fixed-point 1D Gaussian kernel weights summing to exactly FP_ONE (65536).
 pub fn computeGaussianKernel(radius: u32, kernel_out: []u32) void {
     if (radius == 0 or kernel_out.len == 0) {
-        if (kernel_out.len > 0) kernel_out[0] = 65536;
+        if (kernel_out.len > 0) kernel_out[0] = FP_ONE;
         return;
     }
     const r_f: f32 = @floatFromInt(radius);
@@ -179,7 +199,7 @@ pub fn computeGaussianKernel(radius: u32, kernel_out: []u32) void {
 
     var sum_f: f32 = 0.0;
     const k_len = radius * 2 + 1;
-    var weights_f: [33]f32 = undefined;
+    var weights_f: [MAX_KERNEL_LEN]f32 = undefined;
 
     var i: usize = 0;
     while (i < k_len and i < weights_f.len) : (i += 1) {
@@ -190,21 +210,22 @@ pub fn computeGaussianKernel(radius: u32, kernel_out: []u32) void {
     }
 
     if (sum_f <= 0.0) {
-        if (radius < kernel_out.len) kernel_out[radius] = 65536;
+        if (radius < kernel_out.len) kernel_out[radius] = FP_ONE;
         return;
     }
 
+    const fp_scale: f32 = @floatFromInt(FP_ONE);
     var int_sum: u32 = 0;
     i = 0;
     while (i < k_len and i < kernel_out.len) : (i += 1) {
-        const norm = (weights_f[i] / sum_f) * 65536.0;
+        const norm = (weights_f[i] / sum_f) * fp_scale;
         const w_int: u32 = @intFromFloat(norm);
         kernel_out[i] = w_int;
         int_sum += w_int;
     }
 
-    if (int_sum != 65536 and radius < kernel_out.len) {
-        const diff: i32 = 65536 - @as(i32, @intCast(int_sum));
+    if (int_sum != FP_ONE and radius < kernel_out.len) {
+        const diff: i32 = @as(i32, @intCast(FP_ONE)) - @as(i32, @intCast(int_sum));
         const center = radius;
         const new_center = @as(i32, @intCast(kernel_out[center])) + diff;
         kernel_out[center] = @intCast(@max(0, new_center));

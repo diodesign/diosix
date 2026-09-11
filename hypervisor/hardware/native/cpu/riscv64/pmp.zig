@@ -29,6 +29,8 @@ pub const PMPAccess = struct {
     pub const execute: u8 = 1 << 2;
     pub const rwx: u8 = read | write | execute;
     pub const tor: u8 = 1 << 3; // Top of Range mode
+    pub const napot: u8 = 3 << 3; // Naturally Aligned Power of Two mode (0x18)
+    pub const rwx_mask: u8 = 0x07;
 };
 
 pub const Region = struct {
@@ -39,6 +41,7 @@ pub const Region = struct {
 
 // Maximum number of PMP regions we support (7 TOR regions = 14 entries + 2 deny-all).
 pub const MAX_REGIONS: usize = 7;
+pub const NUM_PMP_ENTRIES: usize = 16;
 
 pub const PMPConfig = struct {
     regions: std.ArrayList(Region),
@@ -78,15 +81,15 @@ pub const PMPConfig = struct {
         var entry: usize = 0;
         for (self.regions.items) |reg| {
             if (reg.base == 0 and reg.size == ~@as(usize, 0)) {
-                if (entry >= 16) break;
+                if (entry >= NUM_PMP_ENTRIES) break;
                 writePmpAddr(entry, ~@as(usize, 0)); // Entire 64-bit space
-                writePmpCfg(entry, 0x18 | (reg.flags & 0x07)); // NAPOT + RWX bits
+                writePmpCfg(entry, PMPAccess.napot | (reg.flags & PMPAccess.rwx_mask)); // NAPOT + RWX bits
                 entry += 1;
             } else {
-                if (entry + 2 > 16) break; // Hardware limit.
+                if (entry + 2 > NUM_PMP_ENTRIES) break; // Hardware limit.
                 const base_shifted = reg.base >> 2;
                 const top_shifted = (reg.base + reg.size) >> 2;
-                const cfg: u8 = PMPAccess.tor | (reg.flags & 0x07); // TOR + RWX bits
+                const cfg: u8 = PMPAccess.tor | (reg.flags & PMPAccess.rwx_mask); // TOR + RWX bits
 
                 writePmpAddr(entry, base_shifted);
                 writePmpAddr(entry + 1, top_shifted);
@@ -98,9 +101,9 @@ pub const PMPConfig = struct {
 
         // Final entry: deny-all for everything else.
         // Set the last used entry+1 to NAPOT covering all remaining space with no perms.
-        if (entry < 16) {
+        if (entry < NUM_PMP_ENTRIES) {
             writePmpAddr(entry, ~@as(usize, 0)); // All ones = entire address space (NAPOT)
-            writePmpCfg(entry, 0x18); // NAPOT mode (bits 4:3 = 11), no R/W/X
+            writePmpCfg(entry, PMPAccess.napot); // NAPOT mode (bits 4:3 = 11), no R/W/X
         }
     }
 

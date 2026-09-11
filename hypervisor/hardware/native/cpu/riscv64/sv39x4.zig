@@ -32,6 +32,12 @@ pub const PTEFlags = struct {
 
 pub const PTE = u64;
 
+pub const ROOT_PAGE_ORDER: u6 = 2; // 2^2 = 4 pages = 16KB
+pub const ROOT_TABLE_SIZE: usize = physmem.PageSize << ROOT_PAGE_ORDER; // 16384 bytes
+pub const ROOT_ENTRIES: usize = ROOT_TABLE_SIZE / @sizeOf(PTE); // 2048 entries
+pub const LEVEL_ENTRIES: usize = physmem.PageSize / @sizeOf(PTE); // 512 entries
+pub const DEFAULT_GUEST_DRAM_LIMIT: usize = 512 * 1024 * 1024; // 512MB default DRAM limit
+
 pub const PageTable = struct {
     root_phys: usize, // Root table (order 2 block = 16KB)
 
@@ -42,8 +48,8 @@ pub const PageTable = struct {
     root_range_size: usize = 0,
 
     pub fn init(base_gpa: usize, base_hpa: usize, range_size: usize) !PageTable {
-        const addr = try physmem.allocPageSelection(2);
-        @memset(@as([*]u8, @ptrFromInt(addr))[0..16384], 0);
+        const addr = try physmem.allocPageSelection(ROOT_PAGE_ORDER);
+        @memset(@as([*]u8, @ptrFromInt(addr))[0..ROOT_TABLE_SIZE], 0);
         return PageTable{
             .root_phys = addr,
             .root_base_gpa = base_gpa,
@@ -58,7 +64,7 @@ pub const PageTable = struct {
 
     fn destroyTable(self: *PageTable, addr: usize, level: u8) void {
         const ptes = @as([*]PTE, @ptrFromInt(addr));
-        const num_entries = if (level == 2) @as(usize, 2048) else @as(usize, 512);
+        const num_entries = if (level == 2) ROOT_ENTRIES else LEVEL_ENTRIES;
 
         for (0..num_entries) |i| {
             const pte = ptes[i];
@@ -201,8 +207,10 @@ pub const PageTable = struct {
             }
         } else |_| {}
 
+        const dram_limit = if (self.root_range_size > 0) self.root_range_size else DEFAULT_GUEST_DRAM_LIMIT;
+
         // Root VM pre-allocated DRAM mapping
-        if (self.root_base_hpa > 0 and gpa >= self.root_base_gpa and gpa < self.root_base_gpa + (512 * 1024 * 1024)) {
+        if (self.root_base_hpa > 0 and gpa >= self.root_base_gpa and gpa < self.root_base_gpa + dram_limit) {
             const hpa = gpa - self.root_base_gpa + self.root_base_hpa;
             const gpa_page = gpa & ~(physmem.PageSize - 1);
             const hpa_page = hpa & ~(physmem.PageSize - 1);
@@ -214,7 +222,7 @@ pub const PageTable = struct {
         }
 
         // On-demand anonymous page allocation for guest DRAM
-        if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + (512 * 1024 * 1024)) {
+        if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + dram_limit) {
             const gpa_page = gpa & ~(physmem.PageSize - 1);
             const new_hpa = try physmem.allocPage();
             @memset(@as([*]u8, @ptrFromInt(new_hpa))[0..physmem.PageSize], 0);

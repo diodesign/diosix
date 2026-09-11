@@ -37,6 +37,9 @@ pub const Window = struct {
     c_bl: u32 = fb.Color.FF_DARK_BLUE,
     c_br: u32 = fb.Color.FF_BLACK_CORNER,
 
+    pub const CORNER_RADIUS: i32 = 10;
+    pub const DEFAULT_OFFSCREEN_OFFSET: i32 = 2000;
+
     pub fn init(
         allocator: std.mem.Allocator,
         id: u32,
@@ -47,7 +50,7 @@ pub const Window = struct {
         title: ?[]const u8,
     ) Window {
         // Default offscreen parking position is far off to the left/top
-        const off_x: i32 = onscreen_x - 2000;
+        const off_x: i32 = onscreen_x - DEFAULT_OFFSCREEN_OFFSET;
         const off_y: i32 = onscreen_y;
 
         return .{
@@ -259,18 +262,16 @@ pub const Window = struct {
 
         const box = self.getBox();
 
-        // 1. Draw neutral glass pane with dynamic opacity and subtly rounded corners (r=10)
+        // 1. Draw neutral glass pane with dynamic opacity and subtly rounded corners
         const border_col = if (self.is_active) fb.Color.GLASS_BTN_BORDER else fb.Color.GLASS_BORDER;
-        surface.drawRoundedTranslucentBox(box, 10, fb.Color.GLASS_BG, opacity_alpha, border_col);
+        surface.drawRoundedTranslucentBox(box, CORNER_RADIUS, fb.Color.GLASS_BG, opacity_alpha, border_col);
 
         // 2. Optional Title Banner
-        var content_top_y = self.y + 12;
         if (self.title) |t| {
             font.drawTextWithShadow(surface, t, self.x + 18, self.y + 12, fb.Color.ACCENT_GOLD, fb.Color.BLACK);
             // Thin translucent divider line under title
             const div_box = fb.Box.fromPosSize(self.x + 16, self.y + 34, self.width - 32, 1);
-            surface.fillBox(div_box, 0x003A4B62);
-            content_top_y = self.y + 40;
+            surface.fillBox(div_box, fb.Color.GLASS_DIVIDER);
         }
 
         // 3. Render all icons inside window (icons do not overlap)

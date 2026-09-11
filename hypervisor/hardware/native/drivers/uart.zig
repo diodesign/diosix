@@ -7,24 +7,32 @@ const std = @import("std");
 
 pub var base_address: ?usize = null;
 
+// 16550 UART Registers and Flags
+pub const REG_RBR: usize = 0; // Receiver Buffer Register (read)
+pub const REG_THR: usize = 0; // Transmitter Holding Register (write)
+pub const REG_LSR: usize = 5; // Line Status Register
+
+pub const LSR_DR: u8 = 0x01;   // Data Ready
+pub const LSR_THRE: u8 = 0x20; // Transmitter Holding Register Empty
+
 pub fn init(base: usize) void {
     base_address = base;
 }
 
 pub fn putchar(c: u8) void {
     if (base_address) |base| {
-        const status_reg = @as(*volatile u8, @ptrFromInt(base + 5)); // LSR register offset 5
-        const tx_reg = @as(*volatile u8, @ptrFromInt(base + 0)); // THR register offset 0
-        while (status_reg.* & 0x20 == 0) {} // LSR_THRE is 0x20
+        const status_reg = @as(*volatile u8, @ptrFromInt(base + REG_LSR));
+        const tx_reg = @as(*volatile u8, @ptrFromInt(base + REG_THR));
+        while (status_reg.* & LSR_THRE == 0) {}
         tx_reg.* = c;
     }
 }
 
 pub fn getchar() i16 {
     if (base_address) |base| {
-        const status_reg = @as(*volatile u8, @ptrFromInt(base + 5)); // LSR register offset 5
-        const rx_reg = @as(*volatile u8, @ptrFromInt(base + 0)); // RBR register offset 0
-        if (status_reg.* & 0x01 != 0) { // LSR_DR is 0x01
+        const status_reg = @as(*volatile u8, @ptrFromInt(base + REG_LSR));
+        const rx_reg = @as(*volatile u8, @ptrFromInt(base + REG_RBR));
+        if (status_reg.* & LSR_DR != 0) {
             return @as(i16, rx_reg.*);
         }
     }

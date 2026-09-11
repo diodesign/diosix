@@ -45,13 +45,9 @@ _start:
 
     # write the top of the exception and interrupt (xint) stack to mscratch.
     # this allows us to find the stack after an xint fires
-    li        t1, CPU_STACK_SIZE
-    add       t1, t1, t3
-    csrrw     x0, mscratch, t1
-
-    # Restore t2 (stack size) and t4 (top of stack) for the stack pointer calculation below
     li        t2, CPU_STACK_SIZE
-    mv        t4, t1
+    add       t4, t2, t3
+    csrw      mscratch, t4
 
     # tp is used for pcore.this() across C and Zig code.
     # it points to the CPU's private variables
@@ -100,6 +96,7 @@ clear_bss_done:
     # -------------------------------------------------------------
     # Relocate DTB if it overlaps with our max CPU slabs footprint
     # -------------------------------------------------------------
+    beqz      a1, dtb_copy_done # avoid crash if DTB pointer is NULL
     la        t1, __hypervisor_end
     li        t2, MAX_PHYS_CORES
     slli      t2, t2, CPU_SLAB_SHIFT
@@ -107,11 +104,11 @@ clear_bss_done:
 
     bgeu      a1, t1, dtb_copy_done
 
-    # Extract big-endian size from DTB offset 0x4
-    lbu       t0, 4(a1)
-    lbu       t2, 5(a1)
-    lbu       t3, 6(a1)
-    lbu       t4, 7(a1)
+    # Extract big-endian size from DTB offset DTB_HEADER_TOTALSIZE_OFFSET (4)
+    lbu       t0, DTB_HEADER_TOTALSIZE_OFFSET(a1)
+    lbu       t2, (DTB_HEADER_TOTALSIZE_OFFSET + 1)(a1)
+    lbu       t3, (DTB_HEADER_TOTALSIZE_OFFSET + 2)(a1)
+    lbu       t4, (DTB_HEADER_TOTALSIZE_OFFSET + 3)(a1)
     slli      t0, t0, 24
     slli      t2, t2, 16
     slli      t3, t3, 8
@@ -155,10 +152,6 @@ infinite_loop:
 
 # variables
 .section .data
-.align 8
-cpu_core_id_counter:
-    .word 0
-
 .align 8
 early_boot_prep_done:
     .word 0
