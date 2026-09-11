@@ -289,7 +289,6 @@ pub const DrmDevice = struct {
         if (signed_map < 0) return error.MmapFailed;
 
         const fb_pixels: [*]u32 = @ptrFromInt(map_res);
-        const screen_slice = fb_pixels[0 .. w * h];
 
         // 6. Set CRTC mode
         var conn_id_copy = conn_id;
@@ -316,12 +315,7 @@ pub const DrmDevice = struct {
             .width = w,
             .height = h,
             .pitch = pitch,
-            .screen_surface = fb.Surface{
-                .width = w,
-                .height = h,
-                .stride = pitch,
-                .pixels = screen_slice,
-            },
+            .screen_surface = fb.Surface.init(fb_pixels, w, h, pitch),
         };
 
         // 7. Setup Hardware Cursor Plane (64x64 ARGB8888)

@@ -5,14 +5,21 @@
 
 case "$1" in
   start)
-    if [ -x /usr/bin/diosix-wm ] && [ -c /dev/dri/card0 -o -c /dev/fb0 ]; then
-        echo "Starting Diosix Window Manager (diosix-wm)..."
-        /usr/bin/diosix-wm > /var/log/diosix-wm.log 2>&1 &
+    GUI_BIN=""
+    if [ -x /usr/bin/diosix-gui ]; then
+        GUI_BIN="/usr/bin/diosix-gui"
+    elif [ -x /usr/bin/diosix-wm ]; then
+        GUI_BIN="/usr/bin/diosix-wm"
+    fi
+
+    if [ -n "$GUI_BIN" ] && [ -c /dev/dri/card0 -o -c /dev/fb0 ]; then
+        echo "Starting Diosix GUI ($GUI_BIN)..."
+        $GUI_BIN > /var/log/diosix-gui.log 2>&1 &
     fi
     ;;
   stop)
-    echo "Stopping Diosix Window Manager..."
-    pkill -x diosix-wm 2>/dev/null || true
+    echo "Stopping Diosix GUI..."
+    pkill -x diosix-gui 2>/dev/null || pkill -x diosix-wm 2>/dev/null || true
     ;;
   restart)
     $0 stop

@@ -54,7 +54,7 @@ mkdir -p "$(dirname "$OUT_FILE")"
 mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/diosix-wm/src/*.zig tools/driver/diosix.c tools/micro-guest/* 2>/dev/null) | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/diosix-gui/src/*.zig tools/diosix-gui/src/subprograms/*.zig tools/driver/diosix.c tools/micro-guest/* 2>/dev/null) | sha256sum | cut -d' ' -f1)
 
 write_rootvm_s() {
     if [ -n "$ROOTVM_S_PATH" ]; then
@@ -102,12 +102,13 @@ zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
 log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
 
-if [ -d "tools/diosix-wm" ]; then
-    log_info "Compiling diosix-wm for ${BOLD}${ZIG_TARGET}${RESET}..."
-    if zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall tools/diosix-wm/src/main.zig --name diosix-wm -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-wm"; then
-        log_ok "Installed diosix-wm in overlay (/usr/bin/diosix-wm)."
+if [ -d "tools/diosix-gui" ]; then
+    log_info "Compiling diosix-gui for ${BOLD}${ZIG_TARGET}${RESET}..."
+    if zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall tools/diosix-gui/src/main.zig --name diosix-gui -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-gui"; then
+        ln -sf diosix-gui "$DYNAMIC_OVERLAY/usr/bin/diosix-wm"
+        log_ok "Installed diosix-gui and 'diosix-wm' symlink in overlay (/usr/bin/diosix-gui)."
     else
-        log_err "Failed to cross-compile diosix-wm for ${ZIG_TARGET}."
+        log_err "Failed to cross-compile diosix-gui for ${ZIG_TARGET}."
         exit 1
     fi
 fi

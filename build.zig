@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) !void {
     const pmp_fallback = b.option(bool, "pmp", "Run in PMP fallback mode (disable H-extension)") orelse false;
     const smp_cores = b.option(u32, "smp", "Number of SMP CPU cores for emulator") orelse 4;
     const mem_size = b.option([]const u8, "mem", "Memory size for emulator (e.g. 2G)") orelse "2G";
-    const qemu_gl_opt = b.option(bool, "gl", "Enable OpenGL virgl acceleration for QEMU GUI (virtio-gpu-gl-pci)") orelse false;
+    const qemu_gl_opt = b.option(bool, "gl", "Enable OpenGL virgl acceleration for QEMU GUI (virtio-gpu-gl-pci)") orelse true;
 
     // Generate config.s dynamically
     const config_s_content = try std.fmt.allocPrint(b.allocator,
@@ -103,17 +103,20 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addFileInput(b.path("scripts/build_rootvm.sh"));
     run_buildroot.addFileInput(b.path("tools/diosix-ctl/src/main.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-ctl/src/manifest.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/main.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/framebuffer.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/font.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/cursor.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/window.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/drm.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/wm.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/sprites.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/terminal.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/remote_desktop.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-wm/src/wayland.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/main.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/framebuffer.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/font.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/cursor.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/icon.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/window.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/drm.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/gui.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprogram.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/system_info.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/icon_test.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/guests.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/storage.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/power.zig"));
     run_buildroot.addFileInput(b.path("tools/driver/diosix.c"));
     run_buildroot.stdio = .inherit;
 
@@ -381,16 +384,16 @@ pub fn build(b: *std.Build) !void {
     });
     const run_ctl_unit_tests = b.addRunArtifact(ctl_unit_tests);
 
-    const wm_test_module = b.createModule(.{
-        .root_source_file = b.path("tools/diosix-wm/src/main.zig"),
+    const gui_test_module = b.createModule(.{
+        .root_source_file = b.path("tools/diosix-gui/src/main.zig"),
         .optimize = optimize,
         .target = b.graph.host,
     });
-    const wm_unit_tests = b.addTest(.{
-        .root_module = wm_test_module,
-        .name = "diosix-wm-unit-tests",
+    const gui_unit_tests = b.addTest(.{
+        .root_module = gui_test_module,
+        .name = "diosix-gui-unit-tests",
     });
-    const run_wm_unit_tests = b.addRunArtifact(wm_unit_tests);
+    const run_gui_unit_tests = b.addRunArtifact(gui_unit_tests);
 
     const config_test_module = b.createModule(.{
         .root_source_file = b.path("tools/diosix-config/src/main.zig"),
@@ -406,7 +409,7 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_ctl_unit_tests.step);
-    test_step.dependOn(&run_wm_unit_tests.step);
+    test_step.dependOn(&run_gui_unit_tests.step);
     test_step.dependOn(&run_config_unit_tests.step);
 
     const run_integration_tests = b.addSystemCommand(&[_][]const u8{
