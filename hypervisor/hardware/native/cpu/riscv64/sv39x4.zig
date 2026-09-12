@@ -32,6 +32,24 @@ pub const PTEFlags = struct {
 
 pub const PTE = u64;
 
+pub const PTE_PPN_SHIFT: u6 = 10;
+pub const PAGE_SHIFT: u6 = 12;
+
+pub const VPN0_SHIFT: u6 = 12;
+pub const VPN1_SHIFT: u6 = 21;
+pub const VPN2_SHIFT: u6 = 30;
+
+pub const VPN_MASK: usize = 0x1FF;
+pub const ROOT_VPN_MASK: usize = 0x7FF;
+
+pub inline fn pteToHpa(pte: PTE) usize {
+    return (pte >> PTE_PPN_SHIFT) << PAGE_SHIFT;
+}
+
+pub inline fn hpaToPte(hpa: usize) PTE {
+    return (hpa >> PAGE_SHIFT) << PTE_PPN_SHIFT;
+}
+
 pub const ROOT_PAGE_ORDER: u6 = 2; // 2^2 = 4 pages = 16KB
 pub const ROOT_TABLE_SIZE: usize = physmem.PageSize << ROOT_PAGE_ORDER; // 16384 bytes
 pub const ROOT_ENTRIES: usize = ROOT_TABLE_SIZE / @sizeOf(PTE); // 2048 entries
@@ -63,6 +81,7 @@ pub const PageTable = struct {
     }
 
     fn destroyTable(self: *PageTable, addr: usize, level: u8) void {
+        if (addr == 0) return;
         const ptes = @as([*]PTE, @ptrFromInt(addr));
         const num_entries = if (level == 2) ROOT_ENTRIES else LEVEL_ENTRIES;
 
@@ -71,11 +90,11 @@ pub const PageTable = struct {
             if (pte & PTEFlags.valid != 0) {
                 // If not a leaf, recurse
                 if (pte & (PTEFlags.read | PTEFlags.write | PTEFlags.execute) == 0) {
-                    const next_addr = (pte >> 10) << 12;
+                    const next_addr = pteToHpa(pte);
                     self.destroyTable(next_addr, level - 1);
                 } else {
                     // Leaf: decrement refcount of the actual data page
-                    const hpa = (pte >> 10) << 12;
+                    const hpa = pteToHpa(pte);
                     // Only decrement if it was a RAM page (MMIO pages don't have refcounts)
                     if (physmem.isRam(hpa, physmem.PageSize) and physmem.isManaged(hpa)) {
                         physmem.decrementPageRef(hpa);
@@ -88,12 +107,16 @@ pub const PageTable = struct {
 
     // Map a single 4KB page
     pub fn mapPage(self: *PageTable, gpa: usize, hpa: usize, flags: u64, is_trusted: bool) !void {
-        _ = is_trusted;
         if (gpa % physmem.PageSize != 0 or hpa % physmem.PageSize != 0) return SV39x4Error.InvalidAlignment;
 
         // Security Shields:
         // Prevent mapping hypervisor memory
         if (physmem.isHypervisorMemory(hpa, physmem.PageSize)) return error.AccessDenied;
+
+        // Prevent untrusted guests from directly mapping host physical MMIO
+        if (!is_trusted and (hpa < physmem.getRamBase() or physmem.isMmio(hpa, physmem.PageSize))) {
+            return error.AccessDenied;
+        }
 
         var ptes_phys = self.root_phys;
         var level: u8 = 2;
@@ -106,12 +129,12 @@ pub const PageTable = struct {
                 // Create next level table
                 const next_table = try physmem.allocPage();
                 @memset(@as([*]u8, @ptrFromInt(next_table))[0..physmem.PageSize], 0);
-                ptes[index] = ((next_table >> 12) << 10) | PTEFlags.valid;
+                ptes[index] = hpaToPte(next_table) | PTEFlags.valid;
             } else if (ptes[index] & (PTEFlags.read | PTEFlags.write | PTEFlags.execute) != 0) {
                 return SV39x4Error.MappingOverlap;
             }
 
-            ptes_phys = (ptes[index] >> 10) << 12;
+            ptes_phys = pteToHpa(ptes[index]);
         }
 
         // At level 0, set leaf entry
@@ -119,12 +142,12 @@ pub const PageTable = struct {
         const ptes = @as([*]PTE, @ptrFromInt(ptes_phys));
 
         if (ptes[index] & PTEFlags.valid != 0) {
-            const existing_hpa = (ptes[index] >> 10) << 12;
+            const existing_hpa = pteToHpa(ptes[index]);
             if (existing_hpa == hpa) return; // Already correctly mapped
             return SV39x4Error.MappingOverlap;
         }
 
-        ptes[index] = ((hpa >> 12) << 10) | flags | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty;
+        ptes[index] = hpaToPte(hpa) | flags | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty;
         if (physmem.isRam(hpa, physmem.PageSize) and physmem.isManaged(hpa)) {
             physmem.incrementPageRef(hpa);
         }
@@ -135,7 +158,7 @@ pub const PageTable = struct {
         if (self.walk(gpa, false)) |pte_ptr| {
             const pte = pte_ptr.*;
             if (pte & PTEFlags.valid != 0) {
-                const hpa = (pte >> 10) << 12;
+                const hpa = pteToHpa(pte);
                 pte_ptr.* = 0;
                 if (physmem.isRam(hpa, physmem.PageSize) and physmem.isManaged(hpa)) {
                     physmem.decrementPageRef(hpa);
@@ -147,10 +170,12 @@ pub const PageTable = struct {
     // Walk the page table to find the entry for the given GPA.
     // If 'create' is true, intermediate tables are allocated as needed.
     pub fn walk(self: *const PageTable, gpa: usize, create: bool) !*PTE {
+        if (self.root_phys == 0) return error.WalkFailed;
         var ptes_phys = self.root_phys;
         var level: u8 = 2;
 
         while (level > 0) : (level -= 1) {
+            if (ptes_phys == 0) return error.WalkFailed;
             const index = self.getIdx(gpa, level);
             const ptes = @as([*]PTE, @ptrFromInt(ptes_phys));
 
@@ -158,12 +183,12 @@ pub const PageTable = struct {
                 if (!create) return error.WalkFailed;
                 const next_table = try physmem.allocPage();
                 @memset(@as([*]u8, @ptrFromInt(next_table))[0..physmem.PageSize], 0);
-                ptes[index] = ((next_table >> 12) << 10) | PTEFlags.valid;
+                ptes[index] = hpaToPte(next_table) | PTEFlags.valid;
             } else if (ptes[index] & (PTEFlags.read | PTEFlags.write | PTEFlags.execute) != 0) {
                 return SV39x4Error.WalkFailed; // Encountered leaf too early
             }
 
-            ptes_phys = (ptes[index] >> 10) << 12;
+            ptes_phys = pteToHpa(ptes[index]);
         }
 
         const index = self.getIdx(gpa, 0);
@@ -174,9 +199,9 @@ pub const PageTable = struct {
     fn getIdx(self: *const PageTable, gpa: usize, level: u8) usize {
         _ = self;
         return switch (level) {
-            2 => (gpa >> 30) & 0x7FF, // 11 bits for root
-            1 => (gpa >> 21) & 0x1FF, // 9 bits
-            0 => (gpa >> 12) & 0x1FF, // 9 bits
+            2 => (gpa >> VPN2_SHIFT) & ROOT_VPN_MASK, // 11 bits for root
+            1 => (gpa >> VPN1_SHIFT) & VPN_MASK, // 9 bits
+            0 => (gpa >> VPN0_SHIFT) & VPN_MASK, // 9 bits
             else => unreachable,
         };
     }
@@ -185,6 +210,7 @@ pub const PageTable = struct {
     pub fn resolveFault(self: *PageTable, gpa: usize, is_trusted: bool) !void {
         // Identity map standard MMIO/peripheral regions (below RAM or PCIe BARs)
         if (gpa < physmem.getRamBase() or physmem.isMmio(gpa, physmem.PageSize)) {
+            if (!is_trusted) return error.AccessDenied;
             const gpa_page = gpa & ~(physmem.PageSize - 1);
             try self.mapPage(gpa_page, gpa_page, PTEFlags.read | PTEFlags.write | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
             return;
@@ -210,8 +236,9 @@ pub const PageTable = struct {
         const dram_limit = if (self.root_range_size > 0) self.root_range_size else DEFAULT_GUEST_DRAM_LIMIT;
 
         // Root VM pre-allocated DRAM mapping
-        if (self.root_base_hpa > 0 and gpa >= self.root_base_gpa and gpa < self.root_base_gpa + dram_limit) {
-            const hpa = gpa - self.root_base_gpa + self.root_base_hpa;
+        if (self.root_base_hpa > 0 and gpa >= self.root_base_gpa and (gpa - self.root_base_gpa) < dram_limit) {
+            const offset = gpa - self.root_base_gpa;
+            const hpa = std.math.add(usize, self.root_base_hpa, offset) catch return error.UnhandledFault;
             const gpa_page = gpa & ~(physmem.PageSize - 1);
             const hpa_page = hpa & ~(physmem.PageSize - 1);
             if (physmem.isHypervisorMemory(hpa_page, physmem.PageSize)) {
@@ -222,9 +249,10 @@ pub const PageTable = struct {
         }
 
         // On-demand anonymous page allocation for guest DRAM
-        if (gpa >= self.root_base_gpa and gpa < self.root_base_gpa + dram_limit) {
+        if (gpa >= self.root_base_gpa and (gpa - self.root_base_gpa) < dram_limit) {
             const gpa_page = gpa & ~(physmem.PageSize - 1);
             const new_hpa = try physmem.allocPage();
+            errdefer physmem.freePage(new_hpa);
             @memset(@as([*]u8, @ptrFromInt(new_hpa))[0..physmem.PageSize], 0);
             try self.mapPage(gpa_page, new_hpa, PTEFlags.read | PTEFlags.write | PTEFlags.execute | PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty | PTEFlags.user, is_trusted);
             physmem.decrementPageRef(new_hpa);
@@ -265,4 +293,9 @@ test "stage-2 paging and shielding" {
     if (hv_hpa > 0) {
         try testing.expectError(error.AccessDenied, pt.mapPage(gpa + 0x1000, hv_hpa, PTEFlags.read | PTEFlags.valid, false));
     }
+
+    // Shielding: Prevent untrusted guest from mapping host MMIO / peripherals
+    const mmio_hpa: usize = 0x10000000;
+    try testing.expectError(error.AccessDenied, pt.mapPage(mmio_hpa, mmio_hpa, PTEFlags.read | PTEFlags.valid, false));
+    try testing.expectError(error.AccessDenied, pt.resolveFault(mmio_hpa, false));
 }

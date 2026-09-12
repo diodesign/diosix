@@ -1455,7 +1455,7 @@ pub const Engine = struct {
                             if (next_fetch.trap == null) {
                                 const next_dec = decoder_rv32.decode(next_fetch.val);
                                 if (next_dec.insn == .addi and next_dec.insn.addi.rd == d.rd and next_dec.insn.addi.rs1 == d.rd) {
-                                    const imm32 = (@as(u32, @bitCast(d.imm)) << 12) +% @as(u32, @bitCast(@as(i32, @intCast(next_dec.insn.addi.imm))));
+                                    const imm32 = ((@as(u32, @bitCast(d.imm)) & 0xFFFFF) << 12) +% @as(u32, @bitCast(@as(i32, @intCast(next_dec.insn.addi.imm))));
                                     const val_offset = imm32 +% 0x800;
                                     if (d.rd == 27) {
                                         emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
@@ -1487,7 +1487,7 @@ pub const Engine = struct {
                 },
                 .auipc => |d| {
                     if (d.rd == 0) {} else {
-                        const val = @as(u32, @bitCast(@as(i32, @bitCast(current_pc)) +% (d.imm << 12)));
+                        const val = current_pc +% ((@as(u32, @bitCast(d.imm)) & 0xFFFFF) << 12);
                         const val_offset = val +% 0x800;
                         if (d.rd == 27) {
                             emitter_rv64.emit(tb.host_code, &host_offset, emitter_rv64.sd(27, 5, 40));
@@ -1933,7 +1933,7 @@ pub const Engine = struct {
             .sub => |d| self.vcpu.setGpr(d.rd, @as(u32, @truncate(self.vcpu.getGpr(d.rs1) -% self.vcpu.getGpr(d.rs2)))),
             .sll => |d| {
                 const shift: u5 = @truncate(self.vcpu.getGpr(d.rs2) & 0x1F);
-                self.vcpu.setGpr(d.rd, @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) << shift);
+                self.vcpu.setGpr(d.rd, @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) *% (@as(u32, 1) << shift));
             },
             .slt => |d| {
                 const s1 = @as(i32, @bitCast(@as(u32, @truncate(self.vcpu.getGpr(d.rs1)))));
@@ -2047,7 +2047,7 @@ pub const Engine = struct {
                 const uimm = @as(u32, @bitCast(d.imm));
                 self.vcpu.setGpr(d.rd, @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) & uimm);
             },
-            .slli => |d| self.vcpu.setGpr(d.rd, @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) << d.shamt),
+            .slli => |d| self.vcpu.setGpr(d.rd, @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) *% (@as(u32, 1) << d.shamt)),
             .srli => |d| self.vcpu.setGpr(d.rd, @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) >> d.shamt),
             .srai => |d| {
                 const val = @as(i32, @bitCast(@as(u32, @truncate(self.vcpu.getGpr(d.rs1)))));
@@ -2055,8 +2055,8 @@ pub const Engine = struct {
             },
 
             // ---- Upper Immediates ----
-            .lui => |d| self.vcpu.setGpr(d.rd, @as(u32, @bitCast(d.imm << 12))),
-            .auipc => |d| self.vcpu.setGpr(d.rd, pc_before +% @as(u32, @bitCast(d.imm << 12))),
+            .lui => |d| self.vcpu.setGpr(d.rd, (@as(u32, @bitCast(d.imm)) & 0xFFFFF) << 12),
+            .auipc => |d| self.vcpu.setGpr(d.rd, pc_before +% ((@as(u32, @bitCast(d.imm)) & 0xFFFFF) << 12)),
 
             // ---- Loads ----
             .lb => |d| {

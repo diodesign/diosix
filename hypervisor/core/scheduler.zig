@@ -89,16 +89,7 @@ pub fn queue(vc: *vcore.VirtualCore) void {
         guard.release();
 
         // Wake up other physical CPUs so a core can pick up the work
-        for (0..riscv.cpu_to_hart_map.len) |target_cpu| {
-            if (riscv.cpu_contexts[target_cpu]) |_| {
-                const hw_hart = riscv.cpu_to_hart_map[target_cpu];
-                if (hw_hart != pc.hardware_hart_id) {
-                    if (riscv.CLINT.msip(hw_hart)) |ptr| {
-                        ptr.* = 1;
-                    }
-                }
-            }
-        }
+        pcore.broadcastIpi();
     }
 }
 

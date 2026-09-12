@@ -33,6 +33,7 @@ pub const ICON_BTN_REFRESH_ID: u32 = 1101;
 pub const ICON_BTN_SPECS_ID: u32 = 1102;
 pub const ICON_BTN_REBOOT_ID: u32 = 1103;
 pub const ICON_BTN_POWEROFF_ID: u32 = 1104;
+pub const ICON_LABEL_PLATFORM_CTRL_ID: u32 = 1199;
 
 pub const ICON_LOG_TEXT_ID: u32 = 1201;
 
@@ -129,12 +130,16 @@ pub fn onDeactivate(sub: *SubProgram, gui_ctx: *anyopaque) void {
     gui.setWindowOnScreen(WIN_LOG_ID, false);
 }
 
+pub const MS_PER_SECOND: u32 = 1000;
+pub const SECONDS_PER_HOUR: u64 = 3600;
+pub const SECONDS_PER_MINUTE: u64 = 60;
+
 // Preemptive Multitasking Tick: Called every cycle even when this subprogram is not active!
 pub fn tick(sub: *SubProgram, gui_ctx: *anyopaque, dt_ms: u32, is_active: bool) void {
     _ = sub;
     global_sys_data.elapsed_ms += dt_ms;
-    if (global_sys_data.elapsed_ms >= 1000) {
-        global_sys_data.elapsed_ms -= 1000;
+    if (global_sys_data.elapsed_ms >= MS_PER_SECOND) {
+        global_sys_data.elapsed_ms -= MS_PER_SECOND;
         global_sys_data.uptime_seconds += 1;
 
         // If in view, update live uptime text
@@ -142,9 +147,9 @@ pub fn tick(sub: *SubProgram, gui_ctx: *anyopaque, dt_ms: u32, is_active: bool) 
             const gui: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
             if (gui.findIcon(WIN_SPECS_ID, ICON_UPTIME_ID)) |ic| {
                 var up_buf: [64]u8 = undefined;
-                const hrs = global_sys_data.uptime_seconds / 3600;
-                const mins = (global_sys_data.uptime_seconds % 3600) / 60;
-                const secs = global_sys_data.uptime_seconds % 60;
+                const hrs = global_sys_data.uptime_seconds / SECONDS_PER_HOUR;
+                const mins = (global_sys_data.uptime_seconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+                const secs = global_sys_data.uptime_seconds % SECONDS_PER_MINUTE;
                 const up_str = std.fmt.bufPrint(&up_buf, "Uptime: {d}h {d}m {d}s", .{ hrs, mins, secs }) catch "Uptime: 0s";
                 ic.setText(up_str);
             }

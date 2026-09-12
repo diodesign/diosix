@@ -20,6 +20,7 @@ BUILDROOT_BRANCH="2026.02.x"
 BOLD="\033[1m"
 DIM="\033[2m"
 GREEN="\033[32m"
+RED="\033[31m"
 CYAN="\033[36m"
 YELLOW="\033[33m"
 BLUE="\033[34m"
@@ -43,6 +44,10 @@ log_ok() {
 
 log_warn() {
     echo -e "    ${YELLOW}!${RESET} $1"
+}
+
+log_err() {
+    echo -e "    ${RED}✗${RESET} $1"
 }
 
 if [ -z "$CONFIG_FILE" ] || [ -z "$OUT_FILE" ] || [ -z "$BUILDROOT_DIR" ]; then

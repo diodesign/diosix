@@ -36,7 +36,7 @@ pub const Region = struct {
     size: usize,
 
     pub fn end(self: Region) usize {
-        return self.base + self.size;
+        return std.math.add(usize, self.base, self.size) catch std.math.maxInt(usize);
     }
 };
 
@@ -310,14 +310,14 @@ fn addRamBlock(ram: Region, hv: Region, metadata: Region, rootvm: ?Region, reser
 
         // Check reserved memory regions
         for (reserved) |res| {
-            const res_end = res.address + res.size;
+            const res_end = std.math.add(u64, res.address, res.size) catch std.math.maxInt(u64);
             if (current_base >= res.address and current_base < res_end) {
                 if (res_end > next_step or !skip) {
-                    next_step = @intCast(res_end);
+                    next_step = @intCast(@min(res_end, @as(u64, std.math.maxInt(usize))));
                     skip = true;
                 }
             } else if (res.address >= current_base and res.address < next_step) {
-                next_step = @intCast(res.address);
+                next_step = @intCast(@min(res.address, @as(u64, std.math.maxInt(usize))));
             }
         }
 
@@ -347,8 +347,8 @@ fn addRamBlock(ram: Region, hv: Region, metadata: Region, rootvm: ?Region, reser
 }
 
 fn getPageDescriptor(addr: usize) *PageDescriptor {
-    if (addr < phys_mem_state.ram_base or addr >= phys_mem_state.ram_base + phys_mem_state.ram_size) {
-        debug.printf("HPA 0x{x} out of range [0x{x}-0x{x})\n", .{ addr, phys_mem_state.ram_base, phys_mem_state.ram_base + phys_mem_state.ram_size });
+    if (!isManaged(addr)) {
+        debug.printf("HPA 0x{x} out of managed RAM range [0x{x}-0x{x})\n", .{ addr, phys_mem_state.ram_base, phys_mem_state.ram_base +% phys_mem_state.ram_size });
         @panic("Physical address out of range");
     }
     const index = (addr - phys_mem_state.ram_base) / PageSize;
@@ -445,7 +445,8 @@ pub fn getHvRegion() Region {
 }
 
 pub fn isHypervisorMemory(base: usize, size: usize) bool {
-    const end = base + size;
+    if (size == 0) return false;
+    const end = std.math.add(usize, base, size) catch std.math.maxInt(usize);
     const hv_start = phys_mem_state.hv_region.base;
     const hv_end = phys_mem_state.hv_region.end();
 
@@ -496,24 +497,22 @@ pub fn findContiguousRegion(size: usize) !Region {
         // Align to page size
         base = (base + PageSize - 1) & ~(PageSize - 1);
 
-        while (base + size <= reg.end()) {
+        while (true) {
+            const end = std.math.add(usize, base, size) catch break;
+            if (end > reg.end()) break;
+
             const candidate = Region{ .base = base, .size = size };
 
             // Ensure no overlap with hypervisor footprint
             if (!isHypervisorMemory(candidate.base, candidate.size)) {
-                // Also check if we're hitting the metadata (which is at the start of a free block)
-                // For simplicity, we just check if it's within the first 128MB of the hypervisor's base
-                // or similar. In a real system, we'd check against metadata_region saved in init.
-                // But since we are looking for a LARGE block, we can just search from the END backwards.
-
-                // Let's try from the end of the region instead to be safer
-                // about metadata and hypervisor which are usually at the low end.
-                const top_base = (reg.end() - size) & ~(PageSize - 1);
-                if (!isHypervisorMemory(top_base, size)) {
-                    return Region{ .base = top_base, .size = size };
+                if (reg.end() >= size) {
+                    const top_base = (reg.end() - size) & ~(PageSize - 1);
+                    if (top_base >= reg.base and !isHypervisorMemory(top_base, size)) {
+                        return Region{ .base = top_base, .size = size };
+                    }
                 }
             }
-            base += PageSize;
+            base = std.math.add(usize, base, PageSize) catch break;
             if (base > reg.end()) break;
         }
     }
@@ -522,7 +521,8 @@ pub fn findContiguousRegion(size: usize) !Region {
 }
 
 pub fn isRam(base: usize, size: usize) bool {
-    const end = base + size;
+    if (size == 0) return false;
+    const end = std.math.add(usize, base, size) catch return false;
     for (0..phys_mem_state.region_count) |i| {
         const reg = phys_mem_state.regions[i];
         if (base >= reg.base and end <= reg.end()) return true;
@@ -538,7 +538,8 @@ pub fn getRamBase() usize {
 /// the hypervisor's metadata descriptors. Static reservations (like the Root VM)
 /// may be within 'isRam' but outside 'isManaged'.
 pub fn isManaged(addr: usize) bool {
-    return (addr >= phys_mem_state.ram_base and addr < phys_mem_state.ram_base + phys_mem_state.ram_size);
+    if (addr < phys_mem_state.ram_base) return false;
+    return (addr - phys_mem_state.ram_base) < phys_mem_state.ram_size;
 }
 
 pub fn isMmio(base: usize, size: usize) bool {
@@ -659,4 +660,32 @@ test "buddy allocator and refcounting" {
     // Force free for test
     freePage(p1);
     try testing.expectEqual(@as(usize, 4), phys_mem_state.free_pages);
+}
+
+test "physmem arithmetic safety and hypervisor shielding overflow resilience" {
+    const testing = std.testing;
+
+    var phys_test = try initForTest(testing.allocator, 16);
+    defer phys_test.deinit();
+
+    // 1. isHypervisorMemory handles huge overflowing sizes that overlap HV memory
+    // HV region in initForTest is 0x80000000..0x80200000
+    const hv_base = getHvRegion().base;
+    try testing.expect(isHypervisorMemory(hv_base, 0x1000));
+    try testing.expect(isHypervisorMemory(hv_base - 0x1000, 0x2000));
+    // Malicious huge size wrapping past usize max
+    try testing.expect(isHypervisorMemory(hv_base, std.math.maxInt(usize) - 10));
+    // Non-overlapping range above HV region with overflow
+    try testing.expect(!isHypervisorMemory(0x90000000, 0x1000));
+    // Size 0 should never overlap
+    try testing.expect(!isHypervisorMemory(hv_base, 0));
+
+    // 2. isRam handles integer overflow without panic
+    try testing.expect(!isRam(std.math.maxInt(usize) - 0x100, 0x200));
+    try testing.expect(!isRam(phys_mem_state.ram_base, std.math.maxInt(usize)));
+
+    // 3. isManaged handles maxInt and boundary addresses safely
+    try testing.expect(!isManaged(0));
+    try testing.expect(!isManaged(std.math.maxInt(usize)));
+    try testing.expect(isManaged(phys_mem_state.ram_base));
 }

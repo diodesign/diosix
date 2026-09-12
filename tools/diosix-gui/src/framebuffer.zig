@@ -9,6 +9,12 @@ pub const Color = struct {
     pub const BLACK: u32 = 0x00000000;
     pub const WHITE: u32 = 0x00FFFFFF;
     pub const TRANSPARENT: u32 = 0x00000000;
+    pub const GLOVE_SHADING: u32 = 0x00B0B8C8; // Glove shading
+    pub const GLOVE_CUFF: u32    = 0x00284060; // Glove cuff
+
+    pub inline fn rgb(r: u8, g: u8, b: u8) u32 {
+        return (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
+    }
 
     // Translucent Modern Slate Glass Theme (80% opaque, 20% transparent)
     pub const GLASS_BG: u32        = 0x00141A26; // Neutral dark slate glass (uncolored)
@@ -66,11 +72,13 @@ pub const Box = struct {
     y1: i32,
 
     pub fn fromPosSize(x: i32, y: i32, w: u32, h: u32) Box {
+        const iw: i32 = std.math.cast(i32, w) orelse std.math.maxInt(i32);
+        const ih: i32 = std.math.cast(i32, h) orelse std.math.maxInt(i32);
         return .{
             .x0 = x,
             .y0 = y,
-            .x1 = x + @as(i32, @intCast(w)),
-            .y1 = y + @as(i32, @intCast(h)),
+            .x1 = std.math.add(i32, x, iw) catch std.math.maxInt(i32),
+            .y1 = std.math.add(i32, y, ih) catch std.math.maxInt(i32),
         };
     }
 
@@ -164,10 +172,12 @@ pub fn getBackdropPixel(x: i32, y: i32, width: u32, height: u32, top_color: u32,
     const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * cy, den_y), 0, 255));
     const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * cy, den_y), 0, 255));
 
-    const map_y1 = @as(usize, @intCast(@mod(cy, 256))) * 256;
-    const map_y2 = @as(usize, @intCast(@mod(cy * 2, 256))) * 256;
-    const map_x1 = @as(usize, @intCast(@mod(cx, 256)));
-    const map_x2 = @as(usize, @intCast(@mod(cx * 2, 256)));
+    const ucy = @as(usize, @intCast(cy));
+    const ucx = @as(usize, @intCast(cx));
+    const map_y1 = (ucy & 0xFF) * 256;
+    const map_y2 = ((ucy * 2) & 0xFF) * 256;
+    const map_x1 = ucx & 0xFF;
+    const map_x2 = (ucx * 2) & 0xFF;
 
     const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
     const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
@@ -249,6 +259,10 @@ pub const Surface = struct {
         };
     }
 
+    pub inline fn stridePixels(self: Surface) usize {
+        return self.stride / @sizeOf(u32);
+    }
+
     pub fn setClip(self: *Surface, box: Box) void {
         const screen_box = Box.fromPosSize(0, 0, self.width, self.height);
         self.clip = box.intersect(screen_box);
@@ -260,14 +274,14 @@ pub const Surface = struct {
 
     pub fn setPixel(self: *Surface, x: i32, y: i32, color: u32) void {
         if (!self.clip.contains(x, y)) return;
-        const row_start = @as(usize, @intCast(y)) * (self.stride / 4);
+        const row_start = @as(usize, @intCast(y)) * self.stridePixels();
         const col = @as(usize, @intCast(x));
         self.pixels[row_start + col] = color;
     }
 
     pub fn getPixel(self: *const Surface, x: i32, y: i32) u32 {
         if (x < 0 or y < 0 or x >= @as(i32, @intCast(self.width)) or y >= @as(i32, @intCast(self.height))) return 0;
-        const row_start = @as(usize, @intCast(y)) * (self.stride / 4);
+        const row_start = @as(usize, @intCast(y)) * self.stridePixels();
         const col = @as(usize, @intCast(x));
         return self.pixels[row_start + col];
     }
@@ -276,7 +290,7 @@ pub const Surface = struct {
         const active = target.intersect(self.clip);
         if (active.isEmpty()) return;
 
-        const pixels_per_row = self.stride / 4;
+        const pixels_per_row = self.stridePixels();
         const fill_len = active.width();
         var y = active.y0;
         while (y < active.y1) : (y += 1) {
@@ -320,7 +334,7 @@ pub const Surface = struct {
     const bot_g: i32 = @intCast((bot_color >> 8) & 0xFF);
     const bot_b: i32 = @intCast(bot_color & 0xFF);
 
-    const pixels_per_row = self.stride / 4;
+    const pixels_per_row = self.stridePixels();
     const den_y = @as(i32, @intCast(if (h > 1) h - 1 else 1));
 
     const x0 = @as(usize, @intCast(clipped.x0));
@@ -335,15 +349,14 @@ pub const Surface = struct {
         const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * vy, den_y), 0, 255));
         const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * vy, den_y), 0, 255));
 
-        const map_y1 = @as(usize, @intCast(@mod(vy, 256))) * 256;
-        const map_y2 = @as(usize, @intCast(@mod(vy * 2, 256))) * 256;
+        const map_y1 = (y & 0xFF) * 256;
+        const map_y2 = ((y * 2) & 0xFF) * 256;
 
         const row_offset = y * pixels_per_row;
         var x: usize = x0;
         while (x < x1) : (x += 1) {
-            const vx: i32 = @intCast(x);
-            const map_x1 = @as(usize, @intCast(@mod(vx, 256)));
-            const map_x2 = @as(usize, @intCast(@mod(vx * 2, 256)));
+            const map_x1 = x & 0xFF;
+            const map_x2 = (x * 2) & 0xFF;
 
             const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
             const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
@@ -410,13 +423,36 @@ pub fn drawBlurredBackdropInBox(
     }
 
     // Pass 1: Horizontal 1D Gaussian convolution across [y_start, y_end)
+    const top_r: i32 = @intCast((top_color >> 16) & 0xFF);
+    const top_g: i32 = @intCast((top_color >> 8) & 0xFF);
+    const top_b: i32 = @intCast(top_color & 0xFF);
+
+    const bot_r: i32 = @intCast((bot_color >> 16) & 0xFF);
+    const bot_g: i32 = @intCast((bot_color >> 8) & 0xFF);
+    const bot_b: i32 = @intCast(bot_color & 0xFF);
+
+    const den_y = @as(i32, @intCast(if (h > 1) h - 1 else 1));
+    const max_w: i32 = @intCast(if (w > 0) w - 1 else 0);
+
     var y_iter = y_start;
     var src_row_buf: [2048]u32 = undefined;
     const src_row_len = width_int + @as(usize, @intCast(r_blur * 2));
+    if (src_row_len > src_row_buf.len) {
+        self.drawGraduatedBackgroundInBox(clipped, top_color, bot_color);
+        return;
+    }
 
     while (y_iter < y_end) : (y_iter += 1) {
         const cy = std.math.clamp(y_iter, 0, @as(i32, @intCast(h - 1)));
         const scratch_row_idx = @as(usize, @intCast(y_iter - y_start)) * width_int;
+
+        // Precompute row-invariant gradient base and Y map offsets once per row
+        const r_base: u32 = @intCast(std.math.clamp(top_r + @divTrunc((bot_r - top_r) * cy, den_y), 0, 255));
+        const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * cy, den_y), 0, 255));
+        const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * cy, den_y), 0, 255));
+        const ucy = @as(usize, @intCast(cy));
+        const map_y1 = (ucy & 0xFF) * 256;
+        const map_y2 = ((ucy * 2) & 0xFF) * 256;
 
         // Pre-sample source backdrop row for x in [x0 - r_blur, x1 + r_blur)
         var si: usize = 0;
@@ -426,7 +462,22 @@ pub fn drawBlurredBackdropInBox(
             sx_iter += 1;
             si += 1;
         }) {
-            src_row_buf[si] = getBackdropPixel(sx_iter, cy, w, h, top_color, bot_color);
+            const ucx = @as(usize, @intCast(std.math.clamp(sx_iter, 0, max_w)));
+            const map_x1 = ucx & 0xFF;
+            const map_x2 = (ucx * 2) & 0xFF;
+
+            const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
+            const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
+
+            const cd = (c1 * 3 + c2 * 2) / 5;
+            const cloud_alpha = (cd * 90) >> 8;
+            const inv_alpha = 255 - cloud_alpha;
+
+            const r = (r_base * inv_alpha + 255 * cloud_alpha) >> 8;
+            const g = (g_base * inv_alpha + 255 * cloud_alpha) >> 8;
+            const b = (b_base * inv_alpha + 255 * cloud_alpha) >> 8;
+
+            src_row_buf[si] = (r << 16) | (g << 8) | b;
         }
 
         // Convolve horizontally
@@ -457,61 +508,36 @@ pub fn drawBlurredBackdropInBox(
     const win_geom = window_box orelse target;
     const cr: i32 = @intCast(corner_radius);
     const cr_sq = cr * cr;
-    const pixels_per_row = self.stride / 4;
+    const pixels_per_row = self.stridePixels();
 
     var y: i32 = y0;
     while (y < y1) : (y += 1) {
         const uy: usize = @intCast(y);
         const dst_row_offset = uy * pixels_per_row;
-        const is_top_corner = (y < win_geom.y0 + cr);
-        const is_bot_corner = (y >= win_geom.y1 - cr);
+        const is_top_corner = (cr > 0 and y < win_geom.y0 + cr);
+        const is_bot_corner = (cr > 0 and y >= win_geom.y1 - cr);
+        const is_corner_row = is_top_corner or is_bot_corner;
         const y_rel: usize = @intCast(y - y_start);
+        const base_sample_y_rel: usize = @intCast(@as(i32, @intCast(y_rel)) - r_int);
 
-        var x: i32 = x0;
-        var x_rel: usize = 0;
-        while (x < x1) : ({
-            x += 1;
-            x_rel += 1;
-        }) {
-            var inside_corner = true;
-            if (cr > 0) {
-                if (is_top_corner) {
-                    const dy = (win_geom.y0 + cr) - y;
-                    if (x < win_geom.x0 + cr) {
-                        const dx = (win_geom.x0 + cr) - x;
-                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
-                    } else if (x >= win_geom.x1 - cr) {
-                        const dx = x - (win_geom.x1 - cr - 1);
-                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
-                    }
-                } else if (is_bot_corner) {
-                    const dy = y - (win_geom.y1 - cr - 1);
-                    if (x < win_geom.x0 + cr) {
-                        const dx = (win_geom.x0 + cr) - x;
-                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
-                    } else if (x >= win_geom.x1 - cr) {
-                        const dx = x - (win_geom.x1 - cr - 1);
-                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
-                    }
-                }
-            }
-
-            const dst_idx = dst_row_offset + @as(usize, @intCast(x));
-            if (!inside_corner) {
-                self.pixels[dst_idx] = getBackdropPixel(x, y, w, h, top_color, bot_color);
-            } else {
+        if (!is_corner_row) {
+            // Fast path: Row has no rounded corners, convolve all pixels directly
+            var x: i32 = x0;
+            var x_rel: usize = 0;
+            while (x < x1) : ({
+                x += 1;
+                x_rel += 1;
+            }) {
+                const dst_idx = dst_row_offset + @as(usize, @intCast(x));
                 var sum_r: u32 = 0;
                 var sum_g: u32 = 0;
                 var sum_b: u32 = 0;
 
+                var scratch_ptr = base_sample_y_rel * width_int + x_rel;
                 var k_idx: usize = 0;
-                var k: i32 = -r_int;
-                while (k <= r_int) : ({
-                    k += 1;
-                    k_idx += 1;
-                }) {
-                    const sample_y_rel = @as(usize, @intCast(@as(i32, @intCast(y_rel)) + k));
-                    const hp = scratch[sample_y_rel * width_int + x_rel];
+                while (k_idx < kernel_len) : (k_idx += 1) {
+                    const hp = scratch[scratch_ptr];
+                    scratch_ptr += width_int;
                     const weight = kernel[k_idx];
                     sum_r += ((hp >> 16) & 0xFF) * weight;
                     sum_g += ((hp >> 8) & 0xFF) * weight;
@@ -522,6 +548,60 @@ pub fn drawBlurredBackdropInBox(
                 const vg = (sum_g >> 16);
                 const vb = (sum_b >> 16);
                 self.pixels[dst_idx] = (vr << 16) | (vg << 8) | vb;
+            }
+        } else {
+            // Corner row: test rounded corner curvature
+            var x: i32 = x0;
+            var x_rel: usize = 0;
+            while (x < x1) : ({
+                x += 1;
+                x_rel += 1;
+            }) {
+                var inside_corner = true;
+                if (is_top_corner) {
+                    const dy = (win_geom.y0 + cr) - y;
+                    if (x < win_geom.x0 + cr) {
+                        const dx = (win_geom.x0 + cr) - x;
+                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
+                    } else if (x >= win_geom.x1 - cr) {
+                        const dx = x - (win_geom.x1 - cr - 1);
+                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
+                    }
+                } else {
+                    const dy = y - (win_geom.y1 - cr - 1);
+                    if (x < win_geom.x0 + cr) {
+                        const dx = (win_geom.x0 + cr) - x;
+                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
+                    } else if (x >= win_geom.x1 - cr) {
+                        const dx = x - (win_geom.x1 - cr - 1);
+                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
+                    }
+                }
+
+                const dst_idx = dst_row_offset + @as(usize, @intCast(x));
+                if (!inside_corner) {
+                    self.pixels[dst_idx] = getBackdropPixel(x, y, w, h, top_color, bot_color);
+                } else {
+                    var sum_r: u32 = 0;
+                    var sum_g: u32 = 0;
+                    var sum_b: u32 = 0;
+
+                    var scratch_ptr = base_sample_y_rel * width_int + x_rel;
+                    var k_idx: usize = 0;
+                    while (k_idx < kernel_len) : (k_idx += 1) {
+                        const hp = scratch[scratch_ptr];
+                        scratch_ptr += width_int;
+                        const weight = kernel[k_idx];
+                        sum_r += ((hp >> 16) & 0xFF) * weight;
+                        sum_g += ((hp >> 8) & 0xFF) * weight;
+                        sum_b += (hp & 0xFF) * weight;
+                    }
+
+                    const vr = (sum_r >> 16);
+                    const vg = (sum_g >> 16);
+                    const vb = (sum_b >> 16);
+                    self.pixels[dst_idx] = (vr << 16) | (vg << 8) | vb;
+                }
             }
         }
     }
@@ -541,17 +621,27 @@ pub fn drawGraduatedBackground(self: *Surface, top_color: u32, bot_color: u32) v
         if (x0 >= x1 or y0 >= y1) return;
 
         const w: usize = @intCast(x1 - x0);
-        const dst_stride_pixels = self.stride / 4;
-        const src_stride_pixels = src.stride / 4;
+        const dst_stride_pixels = self.stridePixels();
+        const src_stride_pixels = src.stridePixels();
 
         var y: usize = @intCast(y0);
         const end_y: usize = @intCast(y1);
         const ux0: usize = @intCast(x0);
 
+        const max_dst_pixels = self.height * dst_stride_pixels;
+        const max_src_pixels = src.height * src_stride_pixels;
+
         while (y < end_y) : (y += 1) {
-            const dst_offset = y * dst_stride_pixels + ux0;
-            const src_offset = y * src_stride_pixels + ux0;
-            @memcpy(self.pixels[dst_offset .. dst_offset + w], src.pixels[src_offset .. src_offset + w]);
+            const dst_start = std.math.mul(usize, y, dst_stride_pixels) catch break;
+            const dst_offset = std.math.add(usize, dst_start, ux0) catch break;
+            const dst_end = std.math.add(usize, dst_offset, w) catch break;
+
+            const src_start = std.math.mul(usize, y, src_stride_pixels) catch break;
+            const src_offset = std.math.add(usize, src_start, ux0) catch break;
+            const src_end = std.math.add(usize, src_offset, w) catch break;
+
+            if (dst_end > max_dst_pixels or src_end > max_src_pixels) break;
+            @memcpy(self.pixels[dst_offset..dst_end], src.pixels[src_offset..src_end]);
         }
     }
 
@@ -563,7 +653,7 @@ pub fn drawGraduatedBackground(self: *Surface, top_color: u32, bot_color: u32) v
         drift2_x: i32,
         drift2_y: i32,
     ) void {
-        const pixels_per_row = self.stride / 4;
+        const pixels_per_row = self.stridePixels();
         const h = self.height;
         const w = self.width;
 
@@ -625,7 +715,7 @@ pub fn drawGraduatedBackground(self: *Surface, top_color: u32, bot_color: u32) v
         const x1 = box.x1;
         const y1 = box.y1;
 
-        const pixels_per_row = self.stride / 4;
+        const pixels_per_row = self.stridePixels();
 
         var y = active.y0;
         while (y < active.y1) : (y += 1) {

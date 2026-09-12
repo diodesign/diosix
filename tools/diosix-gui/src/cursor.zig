@@ -11,9 +11,9 @@ pub const CURSOR_HEIGHT: u32 = 18;
 
 const K = fb.Color.BLACK;
 const W = fb.Color.WHITE;
-const G = 0x00B0B8C8; // Glove shading
-const C = 0x00284060; // Glove cuff
-const T = 0x00000000; // Transparent
+const G = fb.Color.GLOVE_SHADING;
+const C = fb.Color.GLOVE_CUFF;
+const T = fb.Color.TRANSPARENT;
 
 // Iconic Final Fantasy pointing hand glove cursor (pointing horizontally right/up)
 pub const POINTER_PIXELS = [_]u32{
@@ -80,12 +80,12 @@ pub const Cursor = struct {
         var py = y_start;
         while (py < y_end) : (py += 1) {
             const src_row = @as(usize, @intCast(py - y)) * CURSOR_WIDTH;
-            const dst_row = @as(usize, @intCast(py)) * (screen.stride / 4);
+            const dst_row = @as(usize, @intCast(py)) * (screen.stride / @sizeOf(u32));
             var px = x_start;
             while (px < x_end) : (px += 1) {
                 const src_idx = src_row + @as(usize, @intCast(px - x));
                 const col = POINTER_PIXELS[src_idx];
-                if ((col & 0xFF000000) != 0 or col != 0) {
+                if (col != T) {
                     screen.pixels[dst_row + @as(usize, @intCast(px))] = col;
                 }
             }
@@ -103,12 +103,12 @@ pub const Cursor = struct {
         var py = y_start;
         while (py < y_end) : (py += 1) {
             const src_row = @as(usize, @intCast(py - y)) * MARKER_WIDTH;
-            const dst_row = @as(usize, @intCast(py)) * (screen.stride / 4);
+            const dst_row = @as(usize, @intCast(py)) * (screen.stride / @sizeOf(u32));
             var px = x_start;
             while (px < x_end) : (px += 1) {
                 const src_idx = src_row + @as(usize, @intCast(px - x));
                 const col = HAND_MARKER_PIXELS[src_idx];
-                if ((col & 0xFF000000) != 0 or col != 0) {
+                if (col != T) {
                     screen.pixels[dst_row + @as(usize, @intCast(px))] = col;
                 }
             }

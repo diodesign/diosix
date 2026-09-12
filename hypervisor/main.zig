@@ -100,10 +100,10 @@ pub export fn main(cpu_core_id: usize, fdt_paddr: usize) void {
 
         else => {
             while (!features_probed.load(.acquire)) {
-                asm volatile ("nop");
+                std.atomic.spinLoopHint();
             }
             while (!boot_complete_flag.load(.acquire)) {
-                asm volatile ("nop");
+                std.atomic.spinLoopHint();
             }
         },
     }

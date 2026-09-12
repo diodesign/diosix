@@ -511,11 +511,11 @@ pub fn decode(raw_code: u32) DecodedInsn {
         },
         0x13 => switch (funct3) {
             0x0 => .{ .addi = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
-            0x1 => .{ .slli = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } },
+            0x1 => if (funct7 == 0x00) .{ .slli = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } } else .{ .unknown = code },
             0x2 => .{ .slti = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x3 => .{ .sltiu = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x4 => .{ .xori = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
-            0x5 => if (funct7 == 0x20) .{ .srai = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } } else .{ .srli = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } },
+            0x5 => if (funct7 == 0x20) .{ .srai = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } } else if (funct7 == 0x00) .{ .srli = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } } else .{ .unknown = code },
             0x6 => .{ .ori = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x7 => .{ .andi = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
         },

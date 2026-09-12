@@ -38,6 +38,10 @@ pub const STATEEN = interface.STATEEN;
 pub const toCause = interface.toCause;
 pub const CSR = interface.CSR;
 pub const Instr = interface.Instr;
+pub const HEDELEG_DELEGATED = interface.HEDELEG_DELEGATED;
+pub const HIDELEG_DELEGATED = interface.HIDELEG_DELEGATED;
+pub const MEDELEG_DELEGATED = interface.MEDELEG_DELEGATED;
+pub const MIDELEG_DELEGATED = interface.MIDELEG_DELEGATED;
 pub var clint_base: ?usize = null;
 pub var uart_base: ?usize = null;
 pub var test_device_base: ?usize = null;
@@ -50,7 +54,9 @@ pub const CLINT = struct {
 
     pub fn msip(hart: usize) ?*volatile u32 {
         const base = clint_base orelse return null;
-        return @ptrFromInt(base + 4 * hart);
+        const offset = std.math.mul(usize, 4, hart) catch return null;
+        const addr = std.math.add(usize, base, offset) catch return null;
+        return @ptrFromInt(addr);
     }
 };
 
@@ -818,7 +824,8 @@ pub fn isHostTp(tp_val: usize) bool {
     const hv_end = @intFromPtr(&__hypervisor_end);
     const max_cores = MAX_PHYS_CORES;
     const cpu_slab_shift = CPU_SLAB_SHIFT; // 4MB per CPU slab
-    const max_slab_end = hv_end + (max_cores << cpu_slab_shift);
+    const slab_span = std.math.shl(usize, max_cores, cpu_slab_shift) catch return false;
+    const max_slab_end = std.math.add(usize, hv_end, slab_span) catch return false;
 
     if (tp_val < hv_end or tp_val >= max_slab_end) return false;
 

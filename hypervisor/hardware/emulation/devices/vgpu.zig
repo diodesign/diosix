@@ -237,12 +237,13 @@ pub const VirtioGpu = struct {
             0x030 => self.queue_sel = val,
             0x038 => {
                 if (self.queue_sel < NUM_QUEUES) {
-                    self.queues[self.queue_sel].num = @truncate(@min(val, QUEUE_SIZE_MAX));
+                    const q_num = @min(val, QUEUE_SIZE_MAX);
+                    self.queues[self.queue_sel].num = @truncate(if (q_num > 0) q_num else 1);
                 }
             },
             0x044 => {
                 if (self.queue_sel < NUM_QUEUES) {
-                    self.queues[self.queue_sel].ready = (val & 1) != 0;
+                    self.queues[self.queue_sel].ready = (val & 1) != 0 and self.queues[self.queue_sel].num > 0;
                 }
             },
             0x050 => {
@@ -309,6 +310,10 @@ pub const VirtioGpu = struct {
         if (req.resource_id == 0 or req.resource_id >= MAX_RESOURCES) {
             return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
         }
+        if (req.width == 0 or req.height == 0 or req.width > 4096 or req.height > 4096) {
+            return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        }
+        _ = std.math.mul(u32, req.width, req.height) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
         self.resources[req.resource_id] = .{
             .id = req.resource_id,
             .format = req.format,
@@ -335,6 +340,12 @@ pub const VirtioGpu = struct {
             if (req.resource_id >= MAX_RESOURCES or !self.resources[req.resource_id].is_active) {
                 return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
             }
+            const res = &self.resources[req.resource_id];
+            const end_x = std.math.add(u32, req.r.x, req.r.width) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+            const end_y = std.math.add(u32, req.r.y, req.r.height) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+            if (end_x > res.width or end_y > res.height) {
+                return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+            }
             self.resources[req.resource_id].scanout_id = req.scanout_id;
         }
         return VIRTIO_GPU_RESP_OK_NODATA;
@@ -343,6 +354,12 @@ pub const VirtioGpu = struct {
     pub fn handleResourceFlush(self: *VirtioGpu, req: *const VirtioGpuResourceFlush) u32 {
         if (req.resource_id == 0 or req.resource_id >= MAX_RESOURCES or !self.resources[req.resource_id].is_active) {
             return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        }
+        const res = &self.resources[req.resource_id];
+        const end_x = std.math.add(u32, req.r.x, req.r.width) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        const end_y = std.math.add(u32, req.r.y, req.r.height) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        if (end_x > res.width or end_y > res.height) {
+            return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
         }
         self.flushes_count += 1;
         self.last_flushed_resource = req.resource_id;
@@ -394,4 +411,18 @@ test "VirtIO GPU register probe, display info, and 2D resource management" {
     try testing.expectEqual(VIRTIO_GPU_RESP_OK_NODATA, gpu.handleResourceFlush(&flush_req));
     try testing.expectEqual(@as(usize, 1), gpu.flushes_count);
     try testing.expectEqual(@as(u32, 1), gpu.last_flushed_resource);
+
+    // Test zero queue size rejection
+    gpu.writeReg(0x030, 0); // Queue 0
+    gpu.writeReg(0x038, 0); // QueueNum = 0
+    try testing.expect(gpu.queues[0].num > 0);
+
+    // Test out-of-bounds flush rectangle rejection
+    const bad_flush = VirtioGpuResourceFlush{
+        .hdr = .{ .type = VIRTIO_GPU_CMD_RESOURCE_FLUSH, .flags = 0, .fence_id = 0, .ctx_id = 0, .padding = 0 },
+        .r = .{ .x = 1000, .y = 500, .width = 1280, .height = 720 }, // Exceeds 1280x720
+        .resource_id = 1,
+        .padding = 0,
+    };
+    try testing.expectEqual(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, gpu.handleResourceFlush(&bad_flush));
 }

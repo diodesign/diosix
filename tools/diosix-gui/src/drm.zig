@@ -2,10 +2,22 @@ const std = @import("std");
 const linux = std.os.linux;
 const fb = @import("framebuffer.zig");
 
-const DRM_IOCTL_BASE = 'd';
+const IOC_INOUT: u32 = 3;
+const IOC_DIRSHIFT: u5 = 30;
+const IOC_SIZESHIFT: u5 = 16;
+const IOC_TYPESHIFT: u5 = 8;
+const DRM_IOCTL_BASE: u32 = 'd';
+
 fn DRM_IOWR(nr: u32, comptime T: type) u32 {
-    return (3 << 30) | (@as(u32, @sizeOf(T)) << 16) | (@as(u32, DRM_IOCTL_BASE) << 8) | nr;
+    return (IOC_INOUT << IOC_DIRSHIFT) | (@as(u32, @sizeOf(T)) << IOC_SIZESHIFT) | (DRM_IOCTL_BASE << IOC_TYPESHIFT) | nr;
 }
+
+pub const PREFERRED_WIDTH: u16 = 1280;
+pub const PREFERRED_HEIGHT: u16 = 800;
+pub const DEFAULT_BPP: u32 = 32;
+pub const DEFAULT_DEPTH: u32 = 24;
+pub const HW_CURSOR_WIDTH: u32 = 64;
+pub const HW_CURSOR_HEIGHT: u32 = 64;
 
 pub const drm_version = extern struct {
     version_major: i32 = 0,
@@ -161,8 +173,10 @@ pub const DrmDevice = struct {
     fb_id: u32,
     fb_handle: u32,
     fb_size: u64,
+    fb_pixels: ?[*]u32 = null,
     cursor_handle: u32 = 0,
     cursor_size: u64 = 0,
+    cursor_pixels: ?[*]u32 = null,
     width: u32,
     height: u32,
     pitch: u32,
@@ -229,7 +243,7 @@ pub const DrmDevice = struct {
                 const total_modes = @min(conn.count_modes, modes.len);
                 chosen_mode = modes[0];
                 while (m_idx < total_modes) : (m_idx += 1) {
-                    if (modes[m_idx].hdisplay == 1280 and modes[m_idx].vdisplay == 800) {
+                    if (modes[m_idx].hdisplay == PREFERRED_WIDTH and modes[m_idx].vdisplay == PREFERRED_HEIGHT) {
                         chosen_mode = modes[m_idx];
                         break;
                     }
@@ -251,7 +265,7 @@ pub const DrmDevice = struct {
         var create_dumb = drm_mode_create_dumb{
             .width = w,
             .height = h,
-            .bpp = 32,
+            .bpp = DEFAULT_BPP,
         };
         var ioctl_rc = linux.ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, @intFromPtr(&create_dumb));
         if (@as(isize, @bitCast(ioctl_rc)) < 0) return error.CreateDumbFailed;
@@ -264,8 +278,8 @@ pub const DrmDevice = struct {
             .width = w,
             .height = h,
             .pitch = pitch,
-            .bpp = 32,
-            .depth = 24,
+            .bpp = DEFAULT_BPP,
+            .depth = DEFAULT_DEPTH,
             .handle = fb_handle,
         };
         ioctl_rc = linux.ioctl(fd, DRM_IOCTL_MODE_ADDFB, @intFromPtr(&fb_cmd));
@@ -312,6 +326,7 @@ pub const DrmDevice = struct {
             .fb_id = fb_id,
             .fb_handle = fb_handle,
             .fb_size = fb_size,
+            .fb_pixels = fb_pixels,
             .width = w,
             .height = h,
             .pitch = pitch,
@@ -320,9 +335,9 @@ pub const DrmDevice = struct {
 
         // 7. Setup Hardware Cursor Plane (64x64 ARGB8888)
         var cur_dumb = drm_mode_create_dumb{
-            .width = 64,
-            .height = 64,
-            .bpp = 32,
+            .width = HW_CURSOR_WIDTH,
+            .height = HW_CURSOR_HEIGHT,
+            .bpp = DEFAULT_BPP,
         };
         const cur_create_rc = linux.ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, @intFromPtr(&cur_dumb));
         if (@as(isize, @bitCast(cur_create_rc)) == 0) {
@@ -342,13 +357,14 @@ pub const DrmDevice = struct {
                     dev.cursor_handle = cur_dumb.handle;
                     dev.cursor_size = cur_dumb.size;
                     const cur_pixels: [*]u32 = @ptrFromInt(cur_mmap_res);
-                    @memset(cur_pixels[0 .. 64 * 64], 0x00000000); // transparent
+                    dev.cursor_pixels = cur_pixels;
+                    @memset(cur_pixels[0 .. HW_CURSOR_WIDTH * HW_CURSOR_HEIGHT], fb.Color.TRANSPARENT);
 
                     var cur_cmd = drm_mode_cursor{
                         .flags = DRM_MODE_CURSOR_BO,
                         .crtc_id = crtc_id,
-                        .width = 64,
-                        .height = 64,
+                        .width = HW_CURSOR_WIDTH,
+                        .height = HW_CURSOR_HEIGHT,
                         .handle = cur_dumb.handle,
                     };
                     const set_bo_rc = linux.ioctl(fd, DRM_IOCTL_MODE_CURSOR, @intFromPtr(&cur_cmd));
@@ -369,33 +385,16 @@ pub const DrmDevice = struct {
         sprite_h: u32,
     ) void {
         if (!self.has_hw_cursor or self.cursor_handle == 0) return;
+        const ptr = self.cursor_pixels orelse return;
+        @memset(ptr[0 .. HW_CURSOR_WIDTH * HW_CURSOR_HEIGHT], fb.Color.TRANSPARENT);
 
-        // Map cursor buffer to write pixels
-        var cur_map = drm_mode_map_dumb{ .handle = self.cursor_handle };
-        const rc = linux.ioctl(self.fd, DRM_IOCTL_MODE_MAP_DUMB, @intFromPtr(&cur_map));
-        if (@as(isize, @bitCast(rc)) < 0) return;
-
-        const mmap_res = linux.mmap(
-            null,
-            self.cursor_size,
-            linux.PROT{ .READ = true, .WRITE = true },
-            linux.MAP{ .TYPE = .SHARED },
-            self.fd,
-            @as(i64, @bitCast(cur_map.offset)),
-        );
-        const signed_mmap: isize = @bitCast(mmap_res);
-        if (signed_mmap < 0) return;
-
-        const ptr: [*]u32 = @ptrFromInt(mmap_res);
-        @memset(ptr[0 .. 64 * 64], 0x00000000); // transparent background
-
-        const copy_w = @min(64, sprite_w);
-        const copy_h = @min(64, sprite_h);
+        const copy_w = @min(HW_CURSOR_WIDTH, sprite_w);
+        const copy_h = @min(HW_CURSOR_HEIGHT, sprite_h);
         var y: usize = 0;
         while (y < copy_h) : (y += 1) {
             var x: usize = 0;
             while (x < copy_w) : (x += 1) {
-                ptr[y * 64 + x] = sprite_pixels[y * sprite_w + x];
+                ptr[y * HW_CURSOR_WIDTH + x] = sprite_pixels[y * sprite_w + x];
             }
         }
 
@@ -403,8 +402,8 @@ pub const DrmDevice = struct {
         var cur_cmd = drm_mode_cursor{
             .flags = DRM_MODE_CURSOR_BO,
             .crtc_id = self.crtc_id,
-            .width = 64,
-            .height = 64,
+            .width = HW_CURSOR_WIDTH,
+            .height = HW_CURSOR_HEIGHT,
             .handle = self.cursor_handle,
         };
         _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_CURSOR, @intFromPtr(&cur_cmd));
@@ -445,16 +444,31 @@ pub const DrmDevice = struct {
     }
 
     pub fn deinit(self: *DrmDevice) void {
+        if (self.cursor_pixels) |cp| {
+            if (self.cursor_size > 0) {
+                _ = linux.munmap(@ptrCast(cp), self.cursor_size);
+            }
+            self.cursor_pixels = null;
+        }
         if (self.cursor_handle != 0) {
             var destroy = drm_mode_destroy_dumb{ .handle = self.cursor_handle };
             _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_DESTROY_DUMB, @intFromPtr(&destroy));
+            self.cursor_handle = 0;
+        }
+        if (self.fb_pixels) |fp| {
+            if (self.fb_size > 0) {
+                _ = linux.munmap(@ptrCast(fp), self.fb_size);
+            }
+            self.fb_pixels = null;
         }
         if (self.fb_handle != 0) {
             var destroy = drm_mode_destroy_dumb{ .handle = self.fb_handle };
             _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_DESTROY_DUMB, @intFromPtr(&destroy));
+            self.fb_handle = 0;
         }
         if (self.fd >= 0) {
             _ = linux.close(self.fd);
+            self.fd = -1;
         }
     }
 };

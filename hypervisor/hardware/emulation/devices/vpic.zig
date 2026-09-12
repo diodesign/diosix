@@ -48,6 +48,7 @@ pub const VirtualPlic = struct {
         // Source Priorities: 0x0000 .. 0x01FC (up to 128 IRQs)
         if (offset < (MAX_IRQS * BYTES_PER_WORD)) {
             const irq = offset / BYTES_PER_WORD;
+            if (irq == 0) return 0; // IRQ 0 priority is hardwired to 0 per RISC-V PLIC spec
             return self.priority[irq];
         }
 
@@ -110,13 +111,16 @@ pub const VirtualPlic = struct {
         // Source Priorities
         if (offset < (MAX_IRQS * BYTES_PER_WORD)) {
             const irq = offset / BYTES_PER_WORD;
+            if (irq == 0) return; // IRQ 0 priority is hardwired to 0 (read-only)
             self.priority[irq] = val;
         } else if (offset >= PLIC_ENABLE_BASE and offset < PLIC_ENABLE_BASE + (MAX_CONTEXTS * PLIC_ENABLE_CTX_STRIDE)) {
             const rel = offset - PLIC_ENABLE_BASE;
             const ctx = rel / PLIC_ENABLE_CTX_STRIDE;
             const word_idx = (rel % PLIC_ENABLE_CTX_STRIDE) / BYTES_PER_WORD;
             if (ctx < MAX_CONTEXTS and word_idx < (MAX_IRQS / BITS_PER_WORD)) {
-                self.enable[ctx][word_idx] = val;
+                // In context enable word 0, bit 0 is reserved/hardwired to 0 (no IRQ 0)
+                const effective_val = if (word_idx == 0) val & ~@as(u32, 1) else val;
+                self.enable[ctx][word_idx] = effective_val;
             }
         } else if (offset >= PLIC_CONTEXT_BASE and offset < PLIC_CONTEXT_BASE + (MAX_CONTEXTS * PLIC_CONTEXT_STRIDE)) {
             const rel = offset - PLIC_CONTEXT_BASE;
@@ -168,4 +172,12 @@ test "PLIC interrupt priority, enable, pending, claim and complete" {
     // 6. Complete IRQ 11
     plic.write(ctx0_claim_addr, 11);
     try testing.expectEqual(@as(u32, 0), plic.claimed_irq[0]);
+
+    // 7. Verify IRQ 0 priority is hardwired to 0 and writes are ignored
+    plic.write(0, 99);
+    try testing.expectEqual(@as(u32, 0), plic.read(0));
+
+    // 8. Verify context enable word 0 bit 0 (IRQ 0) is hardwired to 0
+    plic.write(ctx0_enable_addr, 0xFFFFFFFF);
+    try testing.expectEqual(@as(u32, 0xFFFFFFFE), plic.read(ctx0_enable_addr));
 }

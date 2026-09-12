@@ -137,6 +137,59 @@ pub const PHDR32 = struct {
     pub const ALIGN = 28;
 };
 
+pub const ELF32_SHDR_SIZE: usize = 40;
+pub const ELF64_SHDR_SIZE: usize = 64;
+pub const ELF32_SYM_SIZE: usize = 16;
+pub const ELF64_SYM_SIZE: usize = 24;
+
+// Offsets within 64-bit Section Header (SHDR64)
+pub const SHDR = struct {
+    pub const NAME = 0;
+    pub const TYPE = 4;
+    pub const FLAGS = 8;
+    pub const ADDR = 16;
+    pub const OFFSET = 24;
+    pub const SIZE = 32;
+    pub const LINK = 40;
+    pub const INFO = 44;
+    pub const ADDRALIGN = 48;
+    pub const ENTSIZE = 56;
+};
+
+// Offsets within 32-bit Section Header (SHDR32)
+pub const SHDR32 = struct {
+    pub const NAME = 0;
+    pub const TYPE = 4;
+    pub const FLAGS = 8;
+    pub const ADDR = 12;
+    pub const OFFSET = 16;
+    pub const SIZE = 20;
+    pub const LINK = 24;
+    pub const INFO = 28;
+    pub const ADDRALIGN = 32;
+    pub const ENTSIZE = 36;
+};
+
+// Offsets within 64-bit Symbol Table Entry (Elf64_Sym)
+pub const SYM = struct {
+    pub const NAME = 0;
+    pub const INFO = 4;
+    pub const OTHER = 5;
+    pub const SHNDX = 6;
+    pub const VALUE = 8;
+    pub const SIZE = 16;
+};
+
+// Offsets within 32-bit Symbol Table Entry (Elf32_Sym)
+pub const SYM32 = struct {
+    pub const NAME = 0;
+    pub const VALUE = 4;
+    pub const SIZE = 8;
+    pub const INFO = 12;
+    pub const OTHER = 13;
+    pub const SHNDX = 14;
+};
+
 test "ELF specification constants and header layout validation" {
     const testing = std.testing;
 

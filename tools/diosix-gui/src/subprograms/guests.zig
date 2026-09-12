@@ -18,9 +18,10 @@ pub const WIN_GUEST_LIST_ID: u32 = 300;
 pub const WIN_GUEST_ACTIONS_ID: u32 = 301;
 pub const WIN_GUEST_DETAILS_ID: u32 = 302;
 
-pub const ICON_GUEST_ROW1_ID: u32 = 3001;
-pub const ICON_GUEST_ROW2_ID: u32 = 3002;
-pub const ICON_GUEST_ROW3_ID: u32 = 3003;
+pub const BASE_GUEST_ROW_ID: u32 = 3000;
+pub const ICON_GUEST_ROW1_ID: u32 = BASE_GUEST_ROW_ID + 1;
+pub const ICON_GUEST_ROW2_ID: u32 = BASE_GUEST_ROW_ID + 2;
+pub const ICON_GUEST_ROW3_ID: u32 = BASE_GUEST_ROW_ID + 3;
 pub const ICON_GUEST_ACTION_LAUNCH_ID: u32 = 3101;
 pub const ICON_GUEST_ACTION_STOP_ID: u32 = 3102;
 pub const ICON_GUEST_ACTION_SSH_ID: u32 = 3103;
@@ -116,7 +117,7 @@ pub fn onGuestRowClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) 
     _ = win_ctx;
     global_guests_data.selected_guest = icon.id;
     var buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Selected Domain: '{s}' (Virtual IP: 10.0.3.{d}, Status: RUNNING)", .{ icon.getText(), icon.id - 3000 }) catch "";
+    const msg = std.fmt.bufPrint(&buf, "Selected Domain: '{s}' (Virtual IP: 10.0.3.{d}, Status: RUNNING)", .{ icon.getText(), icon.id - BASE_GUEST_ROW_ID }) catch "";
     global_guests_data.setDetail(msg);
     updateDetailView(gui_ctx);
 }

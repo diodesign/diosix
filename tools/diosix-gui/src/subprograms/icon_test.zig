@@ -27,6 +27,16 @@ pub const ICON_SLIDER_BLUR_ID: u32 = 2006;
 pub const ICON_SLIDER_VCPU_ID: u32 = 2004;
 pub const ICON_TICK_LOGGING_ID: u32 = 2005;
 
+// Read-only label IDs
+pub const ICON_RO_LABEL1_ID: u32 = 2090;
+pub const ICON_RO_LABEL2_ID: u32 = 2091;
+pub const ICON_RO_LABEL3_ID: u32 = 2092;
+pub const ICON_RO_LABEL4_ID: u32 = 2095;
+pub const ICON_RO_LABEL5_ID: u32 = 2093;
+pub const ICON_RO_LABEL6_ID: u32 = 2094;
+pub const ICON_RO_TOP_LABEL_ID: u32 = 2190;
+pub const ICON_RO_BOT_LABEL_ID: u32 = 2191;
+
 // Exclusive Group 1 - Top Backdrop Color (Radio)
 pub const ICON_TOP_LIGHT_BLUE_ID: u32 = 2101; // Default Light Blue
 pub const ICON_TOP_CYAN_ID: u32       = 2102; // Sky Cyan

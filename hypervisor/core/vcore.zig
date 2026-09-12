@@ -12,6 +12,7 @@ const pcore = @import("pcore.zig");
 const physmem = @import("physmem.zig");
 const native_emu = @import("emulation");
 const glue = @import("emulation.zig");
+const interface = @import("interface");
 
 pub const VirtualCoreID = usize;
 pub var time_offset: u64 = 0;
@@ -48,6 +49,7 @@ pub const LAPIC_REG_VERSION: usize = 0x30;
 pub const LAPIC_REG_SPURIOUS: usize = 0xf0;
 pub const LAPIC_VERSION_INTEGRATED: u32 = 0x00050014;
 pub const LAPIC_SPURIOUS_ALL_MASKED: u32 = 0x000000ff;
+pub const LAPIC_ID_SHIFT: u5 = 24;
 
 pub const EMULATOR_STACK_SIZE_BYTES: usize = 2 * 1024 * 1024; // 2MB stack
 pub const EMULATOR_STACK_PAGE_ORDER: usize = 9;
@@ -60,8 +62,8 @@ pub const PIT_DEFAULT_LATCH_100HZ: u64 = 11932;
 pub const PIT_TIMER_ACCESS_LSB_MSB: u8 = 3;
 pub const PIT_TIMER_MODE_SQUARE_WAVE: u8 = 3;
 
-pub const HEDELEG_GUEST_DELEGATE: usize = 0xb1fb;
-pub const HIDELEG_VS_INTERRUPTS: usize = 0x1666;
+pub const HEDELEG_GUEST_DELEGATE: usize = riscv.HEDELEG_DELEGATED;
+pub const HIDELEG_VS_INTERRUPTS: usize = riscv.HIDELEG_DELEGATED;
 
 fn init_ioapic_redtbl() [IOAPIC_NUM_REDIR_ENTRIES]u64 {
     var tbl: [IOAPIC_NUM_REDIR_ENTRIES]u64 = undefined;
@@ -231,7 +233,7 @@ pub const VirtualCore = struct {
                     .context = std.mem.zeroes(riscv.ThreadContext),
                     .machine = .{
                         .mepc = entry,
-                        .mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor), MPIE=1, MPV=1 (Virtualization), FS=Dirty
+                        .mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | riscv.MSTATUS.FS_DIRTY,
                         .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
                         .hgatp = if (parent.space.mode == .h_paging) (if (parent.space.paging) |*p| p.hgatp(parent.vmid) else 0) else 0,
                         .hedeleg = HEDELEG_GUEST_DELEGATE, // Delegate exceptions to guest: includes breakpoint (bit 3)
@@ -239,7 +241,7 @@ pub const VirtualCore = struct {
                         .hvip = 0,
                     },
                     .guest_state = .{
-                        .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.FS_SHIFT),
+                        .vsstatus = riscv.SSTATUS.SPIE | riscv.MSTATUS.FS_DIRTY,
                         .vsie = 0,
                         .vstvec = 0,
                         .vsscratch = 0,
@@ -248,7 +250,7 @@ pub const VirtualCore = struct {
                         .vstval = 0,
                         .vsatp = 0,
                         .vstimecmp = std.math.maxInt(u64),
-                        .vsenvcfg = (@as(usize, 1) << 63) | 240,
+                        .vsenvcfg = riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL,
                     },
                 },
             };
@@ -279,7 +281,7 @@ pub const VirtualCore = struct {
                     .context = std.mem.zeroes(riscv.ThreadContext),
                     .machine = .{
                         .mepc = @intFromPtr(&@import("emulation.zig").emulatedRunnerSMode),
-                        .mstatus = (1 << 11) | (1 << 7) | (3 << riscv.MSTATUS.FS_SHIFT), // MPP=1 (Supervisor Mode), MPIE=1 (enable S-mode interrupts after mret), MPV=0, FS=3
+                        .mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.FS_DIRTY,
                         .hstatus = 0,
                         .hgatp = 0,
                         .hedeleg = 0,
@@ -310,7 +312,7 @@ pub const VirtualCore = struct {
 
         if (parent.target_arch == .x86_64) {
             const init_latch: u64 = PIT_DEFAULT_LATCH_100HZ; // 100 Hz default (10ms period)
-            const period_clint: u64 = (init_latch * 10_000_000) / PIT_BASE_FREQUENCY_HZ;
+            const period_clint: u64 = (init_latch * interface.sbi.HOST_TIMER_FREQ_HZ) / PIT_BASE_FREQUENCY_HZ;
             parent.pit.channels[0] = .{
                 .latch = @intCast(init_latch),
                 .access = PIT_TIMER_ACCESS_LSB_MSB,
@@ -322,7 +324,7 @@ pub const VirtualCore = struct {
         }
 
         if (parent.target_arch == .x86_64) {
-            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[LAPIC_REG_ID .. LAPIC_REG_ID + @sizeOf(u32)], @as(u32, @intCast(id)) << 24, .little); // APIC ID
+            std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[LAPIC_REG_ID .. LAPIC_REG_ID + @sizeOf(u32)], @as(u32, @intCast(id)) << LAPIC_ID_SHIFT, .little); // APIC ID
             std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[LAPIC_REG_VERSION .. LAPIC_REG_VERSION + @sizeOf(u32)], LAPIC_VERSION_INTEGRATED, .little); // APIC Version
             std.mem.writeInt(u32, vcore.exec_path.emulated.lapic_mem[LAPIC_REG_SPURIOUS .. LAPIC_REG_SPURIOUS + @sizeOf(u32)], LAPIC_SPURIOUS_ALL_MASKED, .little); // Spurious Vector
         }
@@ -346,14 +348,14 @@ pub const VirtualCore = struct {
                 n.context[@intFromEnum(riscv.Register.a0)] = self.id;
                 n.context[@intFromEnum(riscv.Register.a1)] = dtb;
                 n.machine.mepc = entry;
-                n.machine.mstatus = (1 << 11) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.FS_SHIFT);
+                n.machine.mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | riscv.MSTATUS.FS_DIRTY;
                 n.machine.hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
                 n.machine.hgatp = if (self.guest.space.mode == .h_paging) (if (self.guest.space.paging) |*p| p.hgatp(self.guest.vmid) else 0) else 0;
                 n.machine.hedeleg = HEDELEG_GUEST_DELEGATE;
                 n.machine.hideleg = HIDELEG_VS_INTERRUPTS;
                 n.machine.hvip = 0;
                 n.guest_state = .{
-                    .vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.FS_SHIFT),
+                    .vsstatus = riscv.SSTATUS.SPIE | riscv.MSTATUS.FS_DIRTY,
                     .vsie = 0,
                     .vstvec = 0,
                     .vsscratch = 0,
@@ -361,8 +363,8 @@ pub const VirtualCore = struct {
                     .vscause = 0,
                     .vstval = 0,
                     .vsatp = 0,
-                    .vstimecmp = 0xffffffffffffffff,
-                    .vsenvcfg = (@as(usize, 1) << 63) | 240,
+                    .vstimecmp = std.math.maxInt(u64),
+                    .vsenvcfg = riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL,
                 };
             },
             .emulated => |*e| {
@@ -401,13 +403,8 @@ pub const VirtualCore = struct {
                 std.atomic.spinLoopHint();
             }
 
-            // Spin wait until the vcore is no longer in a blocked queue
-            while ((@as(*volatile ?usize, &self.blocked_on_cpu)).* != null) {
-                std.atomic.spinLoopHint();
-            }
-
             // Spin wait until the vcore is removed from any run_queue
-            while ((@as(*volatile bool, &self.is_queued)).*) {
+            while (@atomicLoad(bool, &self.is_queued, .acquire)) {
                 std.atomic.spinLoopHint();
             }
         }

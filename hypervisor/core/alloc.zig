@@ -205,6 +205,8 @@ pub const HeapAllocator = struct {
     }
 
     fn tryAllocateFromBlock(self: *HeapAllocator, prev: ?*HeapBlock, block: *HeapBlock, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
+        if (len > block.max_size) return null;
+
         // A block/chunk starts at its header address minus its padding.
         const chunk_start = @intFromPtr(block) - block.padding_size;
         const header_size = @sizeOf(HeapBlock);
@@ -217,8 +219,8 @@ pub const HeapAllocator = struct {
         const new_header_ptr = aligned_payload_ptr - header_size;
         const padding = new_header_ptr - chunk_start;
 
-        const rounded_up_payload_size = (len + heap_block_size_multiple - 1) & ~(heap_block_size_multiple - 1);
-        const required_size = padding + header_size + rounded_up_payload_size;
+        const rounded_up_payload_size = std.mem.alignForward(usize, len, heap_block_size_multiple);
+        const required_size = (std.math.add(usize, padding + header_size, rounded_up_payload_size)) catch return null;
 
         if (block.max_size < required_size) {
             return null; // block is too small

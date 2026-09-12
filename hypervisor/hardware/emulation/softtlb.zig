@@ -93,8 +93,8 @@ pub const SoftTlb = struct {
     }
 
     pub fn translateGpaToHpa(self: *SoftTlb, gpa: usize) ?usize {
-        if (gpa >= self.guest_gpa_base and gpa < self.guest_gpa_base + self.guest_ram_size) {
-            return self.guest_hpa_base + (gpa - self.guest_gpa_base);
+        if (gpa >= self.guest_gpa_base and (gpa - self.guest_gpa_base) < self.guest_ram_size) {
+            return self.guest_hpa_base +% (gpa - self.guest_gpa_base);
         }
         return null;
     }
@@ -117,7 +117,7 @@ pub const SoftTlb = struct {
         else
             vaddr;
 
-        if (gpa >= self.guest_gpa_base and gpa < self.guest_gpa_base + self.guest_ram_size) {
+        if (gpa >= self.guest_gpa_base and (gpa - self.guest_gpa_base) < self.guest_ram_size) {
             if (self.translateGpaToHpa(gpa)) |hpa| {
                 const page = vaddr >> 12;
                 const slot = page & TLB_MASK;
@@ -154,7 +154,7 @@ pub const SoftTlb = struct {
             const required_flag: u8 = if (is_exec) (1 << 3) else if (is_write) (1 << 2) else (1 << 1);
             if ((entry.flags & required_flag) != 0) {
                 const paddr = entry.host_paddr_page | (vaddr & 0xFFF);
-                if (paddr >= self.guest_hpa_base and paddr < self.guest_hpa_base + self.guest_ram_size) {
+                if (paddr >= self.guest_hpa_base and (paddr - self.guest_hpa_base) < self.guest_ram_size) {
                     return paddr;
                 }
             }
@@ -178,8 +178,8 @@ pub const SoftTlb = struct {
             const required_flag: u8 = if (is_exec) (1 << 3) else if (is_write) (1 << 2) else (1 << 1);
             if ((region.flags & required_flag) != 0) {
                 const offset = vaddr - region.vaddr_start;
-                const paddr = region.hpa_start + offset;
-                if (paddr >= self.guest_hpa_base and paddr < self.guest_hpa_base + self.guest_ram_size) {
+                const paddr = region.hpa_start +% offset;
+                if (paddr >= self.guest_hpa_base and (paddr - self.guest_hpa_base) < self.guest_ram_size) {
                     entry.* = .{
                         .guest_vaddr_page = page,
                         .host_paddr_page = paddr & ~@as(usize, 0xFFF),
@@ -207,9 +207,9 @@ pub const SoftTlb = struct {
         // 1. Bare mode (satp == 0) or M-mode
         const satp_mode = (self.satp >> 31) & 1;
         if (satp_mode == 0 or self.privilege_mode == 3) {
-            if (vaddr >= self.guest_gpa_base and vaddr < self.guest_gpa_base + self.guest_ram_size) {
+            if (vaddr >= self.guest_gpa_base and (vaddr - self.guest_gpa_base) < self.guest_ram_size) {
                 const vstart = @as(u32, @truncate(self.guest_gpa_base));
-                const vend = @as(u32, @truncate(self.guest_gpa_base + self.guest_ram_size));
+                const vend = vstart +% @as(u32, @truncate(self.guest_ram_size));
                 const vstart_sign_ext = @as(i64, @as(i32, @bitCast(vstart)));
                 return .{
                     .vaddr_start = vstart,
@@ -276,7 +276,7 @@ pub const SoftTlb = struct {
         const root_ppn = @as(usize, self.satp) & 0x003F_FFFF;
         const root_gpa = self.ppnToGpa(root_ppn);
         const vpn1 = (vaddr >> 22) & 0x3FF;
-        const pte1_gpa = root_gpa + (vpn1 * 4);
+        const pte1_gpa = root_gpa +% (vpn1 * 4);
         const pte1_hpa = self.translateGpaToHpa(pte1_gpa) orelse return null;
 
         const pte1_ptr = @as(*align(4) const u32, @ptrFromInt(pte1_hpa));
@@ -296,7 +296,7 @@ pub const SoftTlb = struct {
             const pte0_ppn = (@as(usize, pte1) & 0xFFFF_FC00) >> 10;
             const pte0_table_gpa = self.ppnToGpa(pte0_ppn);
             const vpn0 = (vaddr >> 12) & 0x3FF;
-            const pte0_gpa = pte0_table_gpa + (vpn0 * 4);
+            const pte0_gpa = pte0_table_gpa +% (vpn0 * 4);
             const pte0_hpa = self.translateGpaToHpa(pte0_gpa) orelse return null;
 
             const pte0_ptr = @as(*align(4) const u32, @ptrFromInt(pte0_hpa));
@@ -385,7 +385,7 @@ pub const SoftTlb = struct {
         if ((vaddr & 0xFFF) == 0xFFF) {
             const b0 = self.readU8(vaddr, bus);
             if (b0.trap) |cause| return .{ .trap = cause };
-            const b1 = self.readU8(vaddr + 1, bus);
+            const b1 = self.readU8(vaddr +% 1, bus);
             if (b1.trap) |cause| return .{ .trap = cause };
             return .{ .val = @as(u32, b0.val) | (@as(u32, b1.val) << 8) };
         }
@@ -401,7 +401,7 @@ pub const SoftTlb = struct {
             return .{ .val = @atomicLoad(u16, ptr, .acquire) };
         }
         const ptr_lo = @as(*align(1) const u8, @ptrFromInt(paddr));
-        const ptr_hi = @as(*align(1) const u8, @ptrFromInt(paddr + 1));
+        const ptr_hi = @as(*align(1) const u8, @ptrFromInt(paddr +% 1));
         const lo = @atomicLoad(u8, ptr_lo, .acquire);
         const hi = @atomicLoad(u8, ptr_hi, .acquire);
         return .{ .val = @as(u32, lo) | (@as(u32, hi) << 8) };
@@ -412,7 +412,7 @@ pub const SoftTlb = struct {
             const paddr1 = self.translateFast(vaddr, false, true) orelse (self.translateFull(vaddr, false, true, bus) orelse {
                 return .{ .trap = 12 };
             });
-            const paddr2 = self.translateFast(vaddr + 2, false, true) orelse (self.translateFull(vaddr + 2, false, true, bus) orelse {
+            const paddr2 = self.translateFast(vaddr +% 2, false, true) orelse (self.translateFull(vaddr +% 2, false, true, bus) orelse {
                 return .{ .trap = 12 };
             });
             const p32_1: u32 = @truncate(paddr1);
@@ -452,7 +452,7 @@ pub const SoftTlb = struct {
             var val: u32 = 0;
             var i: u32 = 0;
             while (i < 4) : (i += 1) {
-                const res = self.readU8(vaddr + i, bus);
+                const res = self.readU8(vaddr +% i, bus);
                 if (res.trap) |cause| return .{ .trap = cause };
                 val |= (@as(u32, res.val) << @as(u5, @truncate(i * 8)));
             }
@@ -472,7 +472,7 @@ pub const SoftTlb = struct {
         var val: u32 = 0;
         var i: usize = 0;
         while (i < 4) : (i += 1) {
-            const b = @atomicLoad(u8, @as(*align(1) const u8, @ptrFromInt(paddr + i)), .acquire);
+            const b = @atomicLoad(u8, @as(*align(1) const u8, @ptrFromInt(paddr +% i)), .acquire);
             val |= (@as(u32, b) << @as(u5, @truncate(i * 8)));
         }
         return .{ .val = val };
@@ -500,7 +500,7 @@ pub const SoftTlb = struct {
     pub fn writeU16(self: *SoftTlb, vaddr: u32, val: u16, bus: *bus_mod.Bus) ?u32 {
         if ((vaddr & 0xFFF) == 0xFFF) {
             if (self.writeU8(vaddr, @truncate(val), bus)) |trap| return trap;
-            if (self.writeU8(vaddr + 1, @truncate(val >> 8), bus)) |trap| return trap;
+            if (self.writeU8(vaddr +% 1, @truncate(val >> 8), bus)) |trap| return trap;
             return null;
         }
         const paddr = self.translateFast(vaddr, true, false) orelse (self.translateFull(vaddr, true, false, bus) orelse {
@@ -518,7 +518,7 @@ pub const SoftTlb = struct {
             return null;
         }
         const ptr_lo = @as(*align(1) u8, @ptrFromInt(paddr));
-        const ptr_hi = @as(*align(1) u8, @ptrFromInt(paddr + 1));
+        const ptr_hi = @as(*align(1) u8, @ptrFromInt(paddr +% 1));
         @atomicStore(u8, ptr_lo, @truncate(val), .release);
         @atomicStore(u8, ptr_hi, @truncate(val >> 8), .release);
         vcpu_mod.VCpu.invalidateReservations(paddr);
@@ -530,7 +530,7 @@ pub const SoftTlb = struct {
             var i: u32 = 0;
             while (i < 4) : (i += 1) {
                 const b: u8 = @truncate(val >> @as(u5, @truncate(i * 8)));
-                if (self.writeU8(vaddr + i, b, bus)) |trap| return trap;
+                if (self.writeU8(vaddr +% i, b, bus)) |trap| return trap;
             }
             return null;
         }
@@ -554,7 +554,7 @@ pub const SoftTlb = struct {
         }
         var i: usize = 0;
         while (i < 4) : (i += 1) {
-            @atomicStore(u8, @as(*align(1) u8, @ptrFromInt(paddr + i)), @truncate(val >> @as(u5, @truncate(i * 8))), .release);
+            @atomicStore(u8, @as(*align(1) u8, @ptrFromInt(paddr +% i)), @truncate(val >> @as(u5, @truncate(i * 8))), .release);
         }
         vcpu_mod.VCpu.invalidateReservations(paddr);
         return null;
@@ -650,3 +650,34 @@ pub const SoftTlb = struct {
         return .{ .success = true };
     }
 };
+
+test "SoftTlb boundary access at 0xFFFFFFFF does not panic from integer overflow" {
+    const testing = std.testing;
+
+    var uart = @import("devices/vuart.zig").VirtualUart{};
+    var timer = @import("devices/vtimer.zig").VirtualTimer{};
+    var pic = @import("devices/vpic.zig").VirtualPlic{};
+    var bus = bus_mod.Bus{
+        .uart = &uart,
+        .timer = &timer,
+        .pic = &pic,
+    };
+
+    var tlb = SoftTlb.init(0x80000000, 0x80000000, 0x10000000);
+
+    // 1. readU16 at 0xFFFFFFFF (unaligned across 32-bit boundary)
+    const r16 = tlb.readU16(0xFFFFFFFF, &bus);
+    try testing.expect(r16.trap != null); // Must cleanly trap instead of panicking
+
+    // 2. readU32 at 0xFFFFFFFD (spans 0xFFFFFFFD..0x00000000)
+    const r32 = tlb.readU32(0xFFFFFFFD, &bus);
+    try testing.expect(r32.trap != null);
+
+    // 3. writeU16 at 0xFFFFFFFF
+    const w16 = tlb.writeU16(0xFFFFFFFF, 0x1234, &bus);
+    try testing.expect(w16 != null);
+
+    // 4. writeU32 at 0xFFFFFFFE
+    const w32 = tlb.writeU32(0xFFFFFFFE, 0x12345678, &bus);
+    try testing.expect(w32 != null);
+}

@@ -107,16 +107,19 @@ pub fn handleMouseMove(sub: *SubProgram, gui_ctx: *anyopaque, px: i32, py: i32, 
     _ = left_down;
 }
 
+pub const EXIT_EXEC_FAILED: u8 = 127;
+
 fn runSubprocess(argv: [*:null]const ?[*:0]const u8) void {
     const pid_res = std.os.linux.fork();
     const pid_signed: isize = @bitCast(pid_res);
+    if (pid_signed < 0) return; // Fork failed
     if (pid_signed == 0) {
         const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
             "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
             null,
         };
         _ = std.os.linux.execve(argv[0].?, argv, envp);
-        std.os.linux.exit(127);
+        std.os.linux.exit(EXIT_EXEC_FAILED);
     }
 }
 

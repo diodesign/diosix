@@ -3,6 +3,8 @@
 // Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
+
 // define a linked list that can arbitrarily insert and remove nodes in O(1).
 // nodes can be added and removed in a FIFO or LIFO manner, too.
 // take care to allocate LinkedList and Node(s) on the heap
@@ -144,7 +146,6 @@ pub fn LinkedList(comptime T: type) type {
 }
 
 test "doubly linked list" {
-    const std = @import("std");
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -584,19 +585,22 @@ pub fn RedBlackTree(comptime T: type, comptime compareFn: fn (a: T, b: T) i8) ty
 }
 
 fn compareU32(a: u32, b: u32) i8 {
-    if (a < b) return -1;
-    if (a > b) return 1;
-    return 0;
+    return switch (std.math.order(a, b)) {
+        .lt => -1,
+        .eq => 0,
+        .gt => 1,
+    };
 }
 
 pub fn compareU64(a: u64, b: u64) i8 {
-    if (a < b) return -1;
-    if (a > b) return 1;
-    return 0;
+    return switch (std.math.order(a, b)) {
+        .lt => -1,
+        .eq => 0,
+        .gt => 1,
+    };
 }
 
 test "red-black tree basics" {
-    const std = @import("std");
     const testing = std.testing;
     const allocator = testing.allocator;
 

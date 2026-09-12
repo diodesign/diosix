@@ -29,13 +29,27 @@ pub const TAB_HEIGHT: u32 = 32;
 pub const Key = struct {
     pub const BACKSPACE: u16 = 14;
     pub const TAB: u16 = 15;
+    pub const U: u16 = 22;
     pub const ENTER: u16 = 28;
+    pub const LEFT_CTRL: u16 = 29;
+    pub const A: u16 = 30;
+    pub const LEFT_SHIFT: u16 = 42;
+    pub const Z: u16 = 44;
+    pub const X: u16 = 45;
+    pub const C: u16 = 46;
+    pub const V: u16 = 47;
+    pub const RIGHT_SHIFT: u16 = 54;
     pub const SPACE: u16 = 57;
+    pub const F6: u16 = 64;
+    pub const RIGHT_CTRL: u16 = 97;
     pub const UP: u16 = 103;
     pub const LEFT: u16 = 105;
     pub const RIGHT: u16 = 106;
     pub const DOWN: u16 = 108;
+    pub const DELETE: u16 = 111;
 };
+
+pub const CLIPBOARD_CAPACITY: usize = 256;
 
 pub const DiosixGui = struct {
     allocator: std.mem.Allocator,
@@ -49,6 +63,14 @@ pub const DiosixGui = struct {
 
     cursor: cursor_mod.Cursor,
     mouse_left_down: bool = false,
+
+    // Keyboard modifier states tracked from input events
+    ctrl_down: bool = false,
+    shift_down: bool = false,
+
+    // System clipboard for text copy / cut / paste (guaranteed null-terminated)
+    clipboard_buf: [CLIPBOARD_CAPACITY + 1]u8 = @splat(0),
+    clipboard_len: usize = 0,
 
     // Keyboard navigation focus
     focus_on_tab_bar: bool = false,
@@ -70,7 +92,8 @@ pub const DiosixGui = struct {
     blur_scratch: []u32,
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !DiosixGui {
-        const scratch_len = @as(usize, @intCast(width)) * @as(usize, @intCast(height + 64));
+        const total_h = std.math.add(usize, height, 64) catch return error.InvalidDimensions;
+        const scratch_len = std.math.mul(usize, width, total_h) catch return error.InvalidDimensions;
         const scratch_mem = try allocator.alloc(u32, scratch_len);
 
         var gui = DiosixGui{
@@ -154,7 +177,7 @@ pub const DiosixGui = struct {
         btn_specs.callback = sys_sub.onSpecsClicked;
         _ = try win_actions.addIcon(btn_specs);
 
-        _ = try win_actions.addIcon(Icon.createReadOnly(1199, 24, 168, 384, 24, "Host Platform Control:"));
+        _ = try win_actions.addIcon(Icon.createReadOnly(sys_sub.ICON_LABEL_PLATFORM_CTRL_ID, 24, 168, 384, 24, "Host Platform Control:"));
 
         var btn_reboot = Icon.createButton(sys_sub.ICON_BTN_REBOOT_ID, 24, 204, 384, 36, "Reboot Host Platform");
         btn_reboot.callback = sys_sub.onRebootClicked;
@@ -174,33 +197,33 @@ pub const DiosixGui = struct {
     fn buildIconTestWindows(self: *DiosixGui) !void {
         // Left Showcase Pane: Read-only, Read-write, Sliders, Tick box
         var win_ctrls = Window.init(self.allocator, icon_sub.WIN_CONTROLS_ID, 24, 54, 600, 536, "INTERACTIVE CONTROLS SHOWCASE");
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(2090, 24, 40, 552, 18, "1. Read-Only Telemetry Display:"));
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL1_ID, 24, 40, 552, 18, "1. Read-Only Telemetry Display:"));
         _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_TEXT_ID, 24, 60, 552, 24, "Live Core Telemetry: 0 ticks (OK)"));
 
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(2091, 24, 94, 552, 18, "2. Read-Write Editable Text Field:"));
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL2_ID, 24, 94, 552, 18, "2. Read-Write Editable Text Field:"));
         var rw_text = Icon.createReadWrite(icon_sub.ICON_RW_TEXT_ID, 24, 114, 552, 34, "Diosix RISC-V Hypervisor");
         rw_text.callback = icon_sub.onReadWriteTextChanged;
         _ = try win_ctrls.addIcon(rw_text);
 
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(2092, 24, 158, 552, 18, "3. Real-Time Window Transparency Slider:"));
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL3_ID, 24, 158, 552, 18, "3. Real-Time Window Transparency Slider:"));
         var sl_trans = Icon.createSlider(icon_sub.ICON_SLIDER_TRANSPARENCY_ID, 24, 178, 552, 46, 0, 90, 50, "%");
         sl_trans.setText("Window Transparency (Glass Opacity)");
         sl_trans.callback = icon_sub.onTransparencySliderChanged;
         _ = try win_ctrls.addIcon(sl_trans);
 
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(2095, 24, 234, 552, 18, "4. Backdrop Gaussian Blur Strength Slider:"));
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL4_ID, 24, 234, 552, 18, "4. Backdrop Gaussian Blur Strength Slider:"));
         var sl_blur = Icon.createSlider(icon_sub.ICON_SLIDER_BLUR_ID, 24, 254, 552, 46, 0, 100, 50, "%");
         sl_blur.setText("Backdrop Gaussian Blur (Frosted Glass)");
         sl_blur.callback = icon_sub.onBlurSliderChanged;
         _ = try win_ctrls.addIcon(sl_blur);
 
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(2093, 24, 310, 552, 18, "5. Scalar Slider (Interactive Drag & Keys):"));
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL5_ID, 24, 310, 552, 18, "5. Scalar Slider (Interactive Drag & Keys):"));
         var sl_vcpu = Icon.createSlider(icon_sub.ICON_SLIDER_VCPU_ID, 24, 330, 552, 46, 0, 100, 75, "%");
         sl_vcpu.setText("VCPU Quota Allocation");
         sl_vcpu.callback = icon_sub.onVcpuSliderChanged;
         _ = try win_ctrls.addIcon(sl_vcpu);
 
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(2094, 24, 386, 552, 18, "6. Independent Tick Box:"));
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL6_ID, 24, 386, 552, 18, "6. Independent Tick Box:"));
         var tick_log = Icon.createTickBox(icon_sub.ICON_TICK_LOGGING_ID, 24, 406, 552, 28, "Enable Verbose Real-Time Telemetry", true, null, .inclusive);
         tick_log.callback = icon_sub.onLoggingToggled;
         _ = try win_ctrls.addIcon(tick_log);
@@ -208,7 +231,7 @@ pub const DiosixGui = struct {
 
         // Right Groups Pane: Backdrop Color Selection
         var win_groups = Window.init(self.allocator, icon_sub.WIN_GROUPS_ID, 644, 54, 612, 536, "BACKDROP GRADIENT COLOR SELECTION");
-        _ = try win_groups.addIcon(Icon.createReadOnly(2190, 24, 44, 564, 20, "Top Backdrop Color (Graduated Shading Top):"));
+        _ = try win_groups.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_TOP_LABEL_ID, 24, 44, 564, 20, "Top Backdrop Color (Graduated Shading Top):"));
 
         var rad_top1 = Icon.createTickBox(icon_sub.ICON_TOP_LIGHT_BLUE_ID, 24, 74, 564, 28, "Light Blue (Default #4C8BE0)", true, 1, .exclusive);
         rad_top1.callback = icon_sub.onTopColorSelected;
@@ -226,7 +249,7 @@ pub const DiosixGui = struct {
         rad_top4.callback = icon_sub.onTopColorSelected;
         _ = try win_groups.addIcon(rad_top4);
 
-        _ = try win_groups.addIcon(Icon.createReadOnly(2191, 24, 230, 564, 20, "Bottom Backdrop Color (Graduated Shading Bottom):"));
+        _ = try win_groups.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_BOT_LABEL_ID, 24, 230, 564, 20, "Bottom Backdrop Color (Graduated Shading Bottom):"));
 
         var rad_bot1 = Icon.createTickBox(icon_sub.ICON_BOT_DARK_BLUE_ID, 24, 260, 564, 28, "Dark Blue (Default #0C1836)", true, 2, .exclusive);
         rad_bot1.callback = icon_sub.onBotColorSelected;
@@ -357,18 +380,30 @@ pub const DiosixGui = struct {
         const new_sub = &self.subprograms.items[idx];
         new_sub.on_activate_fn(new_sub, self);
 
-        // Select first active window in view
+        // Select first active window with interactive icons in view
         self.active_win_idx = null;
+        var first_interactive: ?usize = null;
+        var first_onscreen: ?usize = null;
+
         for (self.windows.items, 0..) |*win, w_idx| {
             if (win.is_onscreen) {
-                if (self.active_win_idx == null) {
-                    self.active_win_idx = w_idx;
-                    win.is_active = true;
-                } else {
-                    win.is_active = false;
+                if (first_onscreen == null) first_onscreen = w_idx;
+                if (first_interactive == null and win.hasInteractiveIcons()) {
+                    first_interactive = w_idx;
                 }
+                win.is_active = false;
             }
         }
+
+        const target_win_idx = first_interactive orelse first_onscreen;
+        if (target_win_idx) |t_idx| {
+            self.focusWindow(t_idx);
+            const win = &self.windows.items[t_idx];
+            if (win.focused_icon_idx == null) {
+                _ = win.focusFirstInteractiveIcon();
+            }
+        }
+        self.markFullDirty();
     }
 
     pub fn nextTab(self: *DiosixGui) void {
@@ -483,7 +518,52 @@ pub const DiosixGui = struct {
         }
     }
 
+    pub fn setClipboard(self: *DiosixGui, text: []const u8) void {
+        var safe_len = @min(text.len, CLIPBOARD_CAPACITY);
+        if (safe_len < text.len) {
+            // String was truncated. Ensure we do not truncate in the middle of a multi-byte UTF-8 sequence.
+            var i = safe_len;
+            while (i > 0 and (text[i - 1] & 0xC0) == 0x80) {
+                i -= 1;
+            }
+            if (i > 0 and text[i - 1] >= 0x80) {
+                const lead = text[i - 1];
+                const expected_len: usize = if ((lead & 0xE0) == 0xC0)
+                    2
+                else if ((lead & 0xF0) == 0xE0)
+                    3
+                else if ((lead & 0xF8) == 0xF0)
+                    4
+                else
+                    1;
+                if (safe_len - (i - 1) < expected_len) {
+                    safe_len = i - 1;
+                }
+            }
+        }
+        @memcpy(self.clipboard_buf[0..safe_len], text[0..safe_len]);
+        self.clipboard_buf[safe_len] = 0;
+        self.clipboard_len = safe_len;
+    }
+
+    pub fn getClipboard(self: *const DiosixGui) []const u8 {
+        const safe_len = @min(self.clipboard_len, CLIPBOARD_CAPACITY);
+        return self.clipboard_buf[0..safe_len];
+    }
+
     // --- Input Dispatch ---
+
+    pub fn handleMouseRelease(self: *DiosixGui) void {
+        self.mouse_left_down = false;
+        for (self.windows.items) |*win| {
+            if (win.is_onscreen) {
+                const changed = win.handleMouseRelease();
+                if (changed) {
+                    self.markDirty(win.getBox());
+                }
+            }
+        }
+    }
 
     pub fn handleMouseMove(self: *DiosixGui, px: i32, py: i32, left_down: bool) void {
         self.cursor.x = px;
@@ -551,105 +631,380 @@ pub const DiosixGui = struct {
         self.active_win_idx = target_idx;
     }
 
-    pub fn focusNextWindow(self: *DiosixGui) void {
+    // Focus next on-screen window pane that has interactive icons, preserving icon focus
+    pub fn focusNextPane(self: *DiosixGui) void {
         const total = self.windows.items.len;
         if (total == 0) return;
-        const start = if (self.active_win_idx) |cur| (cur + 1) % total else 0;
+        const cur_idx = self.active_win_idx orelse 0;
 
-        var i: usize = 0;
-        while (i < total) : (i += 1) {
-            const check = (start + i) % total;
-            if (self.windows.items[check].is_onscreen) {
+        var i: usize = 1;
+        while (i <= total) : (i += 1) {
+            const check = (cur_idx + i) % total;
+            const win = &self.windows.items[check];
+            if (win.is_onscreen and win.hasInteractiveIcons()) {
                 self.focusWindow(check);
+                if (win.focused_icon_idx == null) {
+                    _ = win.focusFirstInteractiveIcon();
+                }
+                self.markDirty(win.getBox());
                 return;
             }
         }
     }
 
-    pub fn handleKey(self: *DiosixGui, key_code: u16, key_char: ?u8, pressed: bool) void {
-        if (!pressed) return;
+    // Focus previous on-screen window pane that has interactive icons, preserving icon focus
+    pub fn focusPrevPane(self: *DiosixGui) void {
+        const total = self.windows.items.len;
+        if (total == 0) return;
+        const cur_idx = self.active_win_idx orelse 0;
 
-        // Number keys '1'..'5' quick switch subprograms
-        if (key_char) |c| {
-            if (c >= '1' and c <= '5') {
-                const sub_idx: usize = @intCast(c - '1');
-                if (sub_idx < self.subprograms.items.len) {
-                    self.activateSubProgram(sub_idx);
+        var i: usize = 1;
+        while (i <= total) : (i += 1) {
+            const check = (cur_idx + total * total - i) % total;
+            const win = &self.windows.items[check];
+            if (win.is_onscreen and win.hasInteractiveIcons()) {
+                self.focusWindow(check);
+                if (win.focused_icon_idx == null) {
+                    _ = win.focusLastInteractiveIcon();
+                }
+                self.markDirty(win.getBox());
+                return;
+            }
+        }
+    }
+
+    // Focus next pane and select its first interactive icon (used for Tab overflow)
+    pub fn focusNextPaneFirst(self: *DiosixGui) void {
+        const total = self.windows.items.len;
+        if (total == 0) return;
+        const cur_idx = self.active_win_idx orelse 0;
+
+        var i: usize = 1;
+        while (i <= total) : (i += 1) {
+            const check = (cur_idx + i) % total;
+            const win = &self.windows.items[check];
+            if (win.is_onscreen and win.hasInteractiveIcons()) {
+                self.focusWindow(check);
+                _ = win.focusFirstInteractiveIcon();
+                self.markDirty(win.getBox());
+                return;
+            }
+        }
+        if (self.getActiveWindow()) |cur_win| {
+            _ = cur_win.focusFirstInteractiveIcon();
+            self.markDirty(cur_win.getBox());
+        }
+    }
+
+    // Focus previous pane and select its last interactive icon (used for Shift-Tab underflow)
+    pub fn focusPrevPaneLast(self: *DiosixGui) void {
+        const total = self.windows.items.len;
+        if (total == 0) return;
+        const cur_idx = self.active_win_idx orelse 0;
+
+        var i: usize = 1;
+        while (i <= total) : (i += 1) {
+            const check = (cur_idx + total * total - i) % total;
+            const win = &self.windows.items[check];
+            if (win.is_onscreen and win.hasInteractiveIcons()) {
+                self.focusWindow(check);
+                _ = win.focusLastInteractiveIcon();
+                self.markDirty(win.getBox());
+                return;
+            }
+        }
+        if (self.getActiveWindow()) |cur_win| {
+            _ = cur_win.focusLastInteractiveIcon();
+            self.markDirty(cur_win.getBox());
+        }
+    }
+
+    pub fn focusNextWindow(self: *DiosixGui) void {
+        self.focusNextPane();
+    }
+
+    pub fn handleKey(self: *DiosixGui, key_code: u16, key_char: ?u8, pressed: bool) void {
+        self.handleKeyWithModifiers(key_code, key_char, pressed, self.ctrl_down, self.shift_down);
+    }
+
+    pub fn handleKeyWithModifiers(self: *DiosixGui, key_code: u16, key_char: ?u8, pressed: bool, ctrl: bool, shift: bool) void {
+        if (!pressed) {
+            if (key_code == Key.ENTER or key_code == Key.SPACE) {
+                if (self.getActiveWindow()) |win| {
+                    if (win.focused_icon_idx) |idx| {
+                        if (idx < win.icons.items.len) {
+                            const icon = &win.icons.items[idx];
+                            if (icon.is_active_press) {
+                                icon.is_active_press = false;
+                                self.markDirty(win.getBox());
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        const active_win = self.getActiveWindow();
+        const focused_icon: ?*Icon = if (active_win) |win|
+            if (win.focused_icon_idx) |idx|
+                if (idx < win.icons.items.len) &win.icons.items[idx] else null
+            else
+                null
+        else
+            null;
+        const is_in_text_field = if (focused_icon) |ic| (ic.icon_type == .read_write_text) else false;
+
+        // 1. Number keys '1'..'5' quick switch subprograms ONLY if not typing in a text field and Ctrl is not held
+        if (!is_in_text_field and !ctrl) {
+            if (key_char) |c| {
+                if (c >= '1' and c <= '5') {
+                    const sub_idx: usize = @intCast(c - '1');
+                    if (sub_idx < self.subprograms.items.len) {
+                        self.activateSubProgram(sub_idx);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 2. Direct Pane Navigation via F6 / Shift-F6
+        if (key_code == Key.F6) {
+            if (shift) {
+                self.focusPrevPane();
+            } else {
+                self.focusNextPane();
+            }
+            return;
+        }
+
+        // 3. Tab Navigation: moves focus to next/prev item; transitions across panes on boundary
+        // Ctrl-Tab switches directly between panes
+        if (key_code == Key.TAB) {
+            if (ctrl) {
+                if (shift) {
+                    self.focusPrevPane();
+                } else {
+                    self.focusNextPane();
+                }
+                return;
+            }
+            if (active_win) |win| {
+                if (shift) {
+                    if (!win.focusPrevIcon()) {
+                        self.focusPrevPaneLast();
+                    }
+                } else {
+                    if (!win.focusNextIcon()) {
+                        self.focusNextPaneFirst();
+                    }
+                }
+                self.markDirty(win.getBox());
+                return;
+            } else {
+                self.focusNextPaneFirst();
+                return;
+            }
+        }
+
+        // 4. Control Codes recognition (both keycode+ctrl and raw ASCII control bytes)
+        const is_ctrl_a = (ctrl and (key_code == Key.A or key_char == 'a' or key_char == 'A')) or (key_char != null and key_char.? == 1);
+        const is_ctrl_c = (ctrl and (key_code == Key.C or key_char == 'c' or key_char == 'C')) or (key_char != null and key_char.? == 3);
+        const is_ctrl_v = (ctrl and (key_code == Key.V or key_char == 'v' or key_char == 'V')) or (key_char != null and key_char.? == 22);
+        const is_ctrl_x = (ctrl and (key_code == Key.X or key_char == 'x' or key_char == 'X')) or (key_char != null and key_char.? == 24);
+        const is_ctrl_u = (ctrl and (key_code == Key.U or key_char == 'u' or key_char == 'U')) or (key_char != null and key_char.? == 21);
+
+        // 5. If focused on a read_write_text icon, handle text field actions
+        if (is_in_text_field) {
+            const icon = focused_icon.?;
+            const win = active_win.?;
+
+            if (is_ctrl_a) {
+                // Control-A: Select all
+                icon.selectAll();
+                self.markDirty(win.getBox());
+                return;
+            } else if (is_ctrl_c) {
+                // Control-C: Copy selected text
+                if (icon.hasSelection()) {
+                    self.setClipboard(icon.getSelectedText());
+                }
+                return;
+            } else if (is_ctrl_x) {
+                // Control-X: Cut selected text
+                if (icon.hasSelection()) {
+                    self.setClipboard(icon.getSelectedText());
+                    _ = icon.deleteSelection();
+                    if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
+                    self.markDirty(win.getBox());
+                }
+                return;
+            } else if (is_ctrl_v) {
+                // Control-V: Paste
+                const clip = self.getClipboard();
+                if (clip.len > 0) {
+                    _ = icon.deleteSelection();
+                    icon.insertString(clip);
+                    if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
+                    self.markDirty(win.getBox());
+                }
+                return;
+            } else if (is_ctrl_u) {
+                // Control-U: Clear the whole field
+                icon.clearField();
+                if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
+                self.markDirty(win.getBox());
+                return;
+            }
+
+            // If Ctrl is held but unhandled, do not type printable characters
+            if (ctrl) return;
+
+            // Arrow keys in writable text field
+            if (key_code == Key.LEFT) {
+                if (shift) {
+                    if (icon.selection_start == null) {
+                        icon.selection_start = icon.cursor_pos;
+                    }
+                    if (icon.cursor_pos > 0) {
+                        icon.cursor_pos -= 1;
+                    }
+                    icon.selection_end = icon.cursor_pos;
+                } else {
+                    if (icon.getSelectionBounds()) |b| {
+                        icon.cursor_pos = b.min;
+                        icon.clearSelection();
+                    } else if (icon.cursor_pos > 0) {
+                        icon.cursor_pos -= 1;
+                    }
+                }
+                self.markDirty(win.getBox());
+                return;
+            } else if (key_code == Key.RIGHT) {
+                if (shift) {
+                    if (icon.selection_start == null) {
+                        icon.selection_start = icon.cursor_pos;
+                    }
+                    if (icon.cursor_pos < icon.text_len) {
+                        icon.cursor_pos += 1;
+                    }
+                    icon.selection_end = icon.cursor_pos;
+                } else {
+                    if (icon.getSelectionBounds()) |b| {
+                        icon.cursor_pos = b.max;
+                        icon.clearSelection();
+                    } else if (icon.cursor_pos < icon.text_len) {
+                        icon.cursor_pos += 1;
+                    }
+                }
+                self.markDirty(win.getBox());
+                return;
+            } else if (key_code == Key.UP) {
+                // Up arrow moves to previous item
+                if (!win.focusPrevIcon()) {
+                    self.focusPrevPaneLast();
+                }
+                self.markDirty(win.getBox());
+                return;
+            } else if (key_code == Key.DOWN) {
+                // Down arrow moves to next item
+                if (!win.focusNextIcon()) {
+                    self.focusNextPaneFirst();
+                }
+                self.markDirty(win.getBox());
+                return;
+            }
+
+            // Backspace and Delete
+            if (key_code == Key.BACKSPACE) {
+                if (icon.hasSelection()) {
+                    _ = icon.deleteSelection();
+                } else {
+                    icon.deleteBackward();
+                }
+                if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
+                self.markDirty(win.getBox());
+                return;
+            } else if (key_code == Key.DELETE) {
+                if (icon.hasSelection()) {
+                    _ = icon.deleteSelection();
+                } else {
+                    icon.deleteForward();
+                }
+                if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
+                self.markDirty(win.getBox());
+                return;
+            }
+
+            // Regular character typing
+            if (key_char) |c| {
+                if (c >= 32 and c <= 126) {
+                    if (icon.hasSelection()) {
+                        _ = icon.deleteSelection();
+                    }
+                    icon.insertChar(c);
+                    if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
+                    self.markDirty(win.getBox());
                     return;
                 }
             }
         }
 
-        // Global Tab navigation
-        if (key_code == Key.TAB) {
-            self.focusNextWindow();
-            return;
-        }
-
-        // Left / Right arrow navigation
-        // If focused icon is a slider, adjust slider; otherwise switch tabs
-        if (self.getActiveWindow()) |win| {
-            if (win.focused_icon_idx) |f_idx| {
-                const icon = &win.icons.items[f_idx];
+        // 6. Non-text field handling (Sliders, Action Buttons, Checkboxes, Pane Navigation)
+        if (active_win) |win| {
+            if (focused_icon) |icon| {
                 if (icon.icon_type == .slider) {
                     if (key_code == Key.LEFT) {
                         icon.adjustSlider(-5);
-                        if (icon.callback) |cb| cb(self, win, icon);
+                        if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
                         self.markDirty(win.getBox());
                         return;
                     } else if (key_code == Key.RIGHT) {
                         icon.adjustSlider(5);
-                        if (icon.callback) |cb| cb(self, win, icon);
+                        if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
                         self.markDirty(win.getBox());
                         return;
-                    }
-                } else if (icon.icon_type == .read_write_text) {
-                    if (key_code == Key.BACKSPACE) {
-                        icon.deleteBackward();
-                        if (icon.callback) |cb| cb(self, win, icon);
+                    } else if (key_code == Key.UP) {
+                        win.focusPrevIconWrap();
                         self.markDirty(win.getBox());
                         return;
-                    } else if (key_char) |c| {
-                        icon.insertChar(c);
-                        if (icon.callback) |cb| cb(self, win, icon);
+                    } else if (key_code == Key.DOWN) {
+                        win.focusNextIconWrap();
                         self.markDirty(win.getBox());
                         return;
                     }
                 }
             }
 
-            // Up / Down arrow navigation between icons in the active window
+            // Up / Down arrow navigates vertically within the pane (wrapping around)
             if (key_code == Key.UP) {
-                win.focusPrevIcon();
+                win.focusPrevIconWrap();
                 self.markDirty(win.getBox());
                 return;
             } else if (key_code == Key.DOWN) {
-                win.focusNextIcon();
+                win.focusNextIconWrap();
                 self.markDirty(win.getBox());
                 return;
             }
 
-            // Enter or Space activates the focused icon
-            if (key_code == Key.ENTER or key_code == Key.SPACE) {
-                if (win.focused_icon_idx) |f_idx| {
-                    win.triggerIcon(self, &win.icons.items[f_idx]);
-                    self.markDirty(win.getBox());
-                }
+            // Left / Right arrow moves keyboard focus between panes
+            if (key_code == Key.RIGHT) {
+                self.focusNextPane();
+                return;
+            } else if (key_code == Key.LEFT) {
+                self.focusPrevPane();
                 return;
             }
-        }
 
-        // Direct character input into read-write fields if focused
-        if (key_char) |c| {
-            if (self.getActiveWindow()) |win| {
+            // Enter or Space activates the focused action button or toggles tickbox
+            if (key_code == Key.ENTER or key_code == Key.SPACE) {
                 if (win.focused_icon_idx) |f_idx| {
-                    const icon = &win.icons.items[f_idx];
-                    if (icon.icon_type == .read_write_text) {
-                        icon.insertChar(c);
-                        if (icon.callback) |cb| cb(self, win, icon);
+                    if (f_idx < win.icons.items.len) {
+                        win.triggerIcon(self, &win.icons.items[f_idx]);
                         self.markDirty(win.getBox());
                     }
                 }
+                return;
             }
         }
     }

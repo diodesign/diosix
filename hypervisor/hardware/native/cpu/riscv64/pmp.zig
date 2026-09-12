@@ -60,6 +60,7 @@ pub const PMPConfig = struct {
 
     pub fn addRegion(self: *PMPConfig, base: usize, size: usize, flags: u8) !void {
         if (self.regions.items.len >= MAX_REGIONS) return PMPError.TooManyRegions;
+        _ = std.math.add(usize, base, size) catch return PMPError.InvalidAlignment;
         try self.regions.append(self.allocator, .{ .base = base, .size = size, .flags = flags });
     }
 

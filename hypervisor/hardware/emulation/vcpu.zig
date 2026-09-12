@@ -384,7 +384,7 @@ pub const VCpu = extern struct {
         const is_interrupt = (cause & 0x80000000) != 0;
         const code = cause & 0x7fffffff;
         const delegate_to_s = if (self.privilege_mode < 3)
-            (if (is_interrupt) (self.mideleg & (@as(u32, 1) << @truncate(code))) != 0 else (self.medeleg & (@as(u32, 1) << @truncate(code))) != 0)
+            (if (code < 32) (if (is_interrupt) (self.mideleg & (@as(u32, 1) << @truncate(code))) != 0 else (self.medeleg & (@as(u32, 1) << @truncate(code))) != 0) else false)
         else
             false;
 
@@ -415,7 +415,7 @@ pub const VCpu = extern struct {
 
             const mode = self.stvec & 3;
             const base = self.stvec & ~@as(u32, 3);
-            self.pc = if (is_interrupt and mode == 1) base + 4 * code else base;
+            self.pc = if (is_interrupt and mode == 1) base +% (4 *% code) else base;
         } else {
             self.mepc = fault_pc;
             self.mcause = cause;
@@ -440,7 +440,7 @@ pub const VCpu = extern struct {
 
             const mode = self.mtvec & 3;
             const base = self.mtvec & ~@as(u32, 3);
-            self.pc = if (is_interrupt and mode == 1) base + 4 * code else base;
+            self.pc = if (is_interrupt and mode == 1) base +% (4 *% code) else base;
         }
     }
 };

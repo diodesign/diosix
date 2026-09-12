@@ -37,8 +37,10 @@ pub const Display = struct {
         const dri_paths = [_][]const u8{ "/dev/dri/card0", "/dev/dri/card1" };
         for (dri_paths) |card_path| {
             if (drm.DrmDevice.init(card_path)) |dev| {
-                const bb_mem = try allocator.alloc(u32, dev.width * dev.height);
-                const cb_mem = try allocator.alloc(u32, dev.width * dev.height);
+                const stride_pixels = dev.pitch / @sizeOf(u32);
+                const buffer_pixels = stride_pixels * dev.height;
+                const bb_mem = try allocator.alloc(u32, buffer_pixels);
+                const cb_mem = try allocator.alloc(u32, buffer_pixels);
                 return Display{
                     .width = dev.width,
                     .height = dev.height,
@@ -60,9 +62,9 @@ pub const Display = struct {
         const signed_fd: isize = @bitCast(fd_rc);
         if (signed_fd >= 0) {
             const fd: i32 = @intCast(signed_fd);
-            const w: u32 = 1280;
-            const h: u32 = 800;
-            const stride: usize = w * 4;
+            const w: u32 = drm.PREFERRED_WIDTH;
+            const h: u32 = drm.PREFERRED_HEIGHT;
+            const stride: usize = w * @sizeOf(u32);
             const map_size = stride * h;
 
             const map_res = linux.mmap(null, map_size, linux.PROT{ .READ = true, .WRITE = true }, linux.MAP{ .TYPE = .SHARED }, fd, 0);
@@ -93,7 +95,14 @@ pub const Display = struct {
         allocator.free(self.backbuffer_mem);
         allocator.free(self.clean_buffer_mem);
         if (self.drm_dev) |*d| d.deinit();
-        if (self.fb_fd >= 0) _ = linux.close(self.fb_fd);
+        if (self.fb_fd >= 0) {
+            const map_size = self.stride * self.height;
+            if (map_size > 0) {
+                _ = linux.munmap(@ptrCast(self.fb_ptr), map_size);
+            }
+            _ = linux.close(self.fb_fd);
+            self.fb_fd = -1;
+        }
     }
 
     pub fn screenSurface(self: *Display) fb.Surface {
@@ -108,15 +117,19 @@ pub const Display = struct {
         if (x0 >= x1 or y0 >= y1) return;
 
         const w: usize = @intCast(x1 - x0);
-        const stride_pixels = self.stride / 4;
+        const stride_pixels = self.stride / @sizeOf(u32);
         const ux0: usize = @intCast(x0);
 
         var y: usize = @intCast(y0);
         const end_y: usize = @intCast(y1);
+        const max_len = self.backbuffer_mem.len;
 
         while (y < end_y) : (y += 1) {
-            const row_offset = y * stride_pixels + ux0;
-            @memcpy(self.fb_ptr[row_offset .. row_offset + w], self.backbuffer_mem[row_offset .. row_offset + w]);
+            const row_start = std.math.mul(usize, y, stride_pixels) catch break;
+            const row_offset = std.math.add(usize, row_start, ux0) catch break;
+            const row_end = std.math.add(usize, row_offset, w) catch break;
+            if (row_end > max_len) break;
+            @memcpy(self.fb_ptr[row_offset..row_end], self.backbuffer_mem[row_offset..row_end]);
         }
 
         if (self.drm_dev) |*d| {
@@ -129,10 +142,17 @@ pub const Display = struct {
     }
 };
 
+pub const MS_PER_SEC: i64 = 1000;
+pub const NS_PER_MS: i64 = 1_000_000;
+pub const TARGET_FPS: i64 = 60;
+pub const FRAME_INTERVAL_MS: i64 = MS_PER_SEC / TARGET_FPS; // 16 ms (~60 FPS)
+pub const POLL_TIMEOUT_MS: i32 = @intCast(FRAME_INTERVAL_MS);
+pub const MAX_INPUT_DEVICES: usize = 8;
+
 fn getMilliTimestamp() i64 {
     var ts: linux.timespec = undefined;
     _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
-    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
+    return @as(i64, @intCast(ts.sec)) * MS_PER_SEC + @divTrunc(@as(i64, @intCast(ts.nsec)), NS_PER_MS);
 }
 
 pub const InputEvent = extern struct {
@@ -199,11 +219,17 @@ pub const KEY_N: u16 = 49;
 pub const KEY_M: u16 = 50;
 pub const KEY_DOT: u16 = 52;
 pub const KEY_SLASH: u16 = 53;
+pub const KEY_LEFTCTRL: u16 = 29;
+pub const KEY_LEFTSHIFT: u16 = 42;
+pub const KEY_RIGHTSHIFT: u16 = 54;
 pub const KEY_SPACE: u16 = 57;
+pub const KEY_F6: u16 = 64;
+pub const KEY_RIGHTCTRL: u16 = 97;
 pub const KEY_UP: u16 = 103;
 pub const KEY_LEFT: u16 = 105;
 pub const KEY_RIGHT: u16 = 106;
 pub const KEY_DOWN: u16 = 108;
+pub const KEY_DELETE: u16 = 111;
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -226,10 +252,10 @@ pub fn main() !void {
     defer gui.deinit();
 
     // 3. Open Evdev Input Devices
-    var input_fds: [8]i32 = undefined;
+    var input_fds: [MAX_INPUT_DEVICES]i32 = undefined;
     var input_count: usize = 0;
     var dev_idx: u8 = 0;
-    while (dev_idx < 8) : (dev_idx += 1) {
+    while (dev_idx < MAX_INPUT_DEVICES) : (dev_idx += 1) {
         var path_buf: [32]u8 = undefined;
         const p_slice = std.fmt.bufPrint(&path_buf, "/dev/input/event{d}", .{dev_idx}) catch continue;
         path_buf[p_slice.len] = 0;
@@ -253,10 +279,18 @@ pub fn main() !void {
     display.cursor_drawn = true;
     display.flushDamage(init_damage);
 
-    // 5. Main Multitasking and Event Loop
+    // 5. Main Multitasking and Event Loop with 60 FPS Frame Pacing
     var last_time: i64 = getMilliTimestamp();
+    var last_render_time: i64 = last_time;
 
     while (true) {
+        const cur_time = getMilliTimestamp();
+        const elapsed_since_render = cur_time - last_render_time;
+        const poll_timeout: i32 = if (elapsed_since_render >= FRAME_INTERVAL_MS)
+            0
+        else
+            @intCast(FRAME_INTERVAL_MS - elapsed_since_render);
+
         var pfds: [16]linux.pollfd = undefined;
         for (input_fds[0..input_count], 0..) |fd, i| {
             pfds[i] = linux.pollfd{
@@ -266,12 +300,12 @@ pub fn main() !void {
             };
         }
 
-        const poll_res = linux.poll(&pfds, input_count, 16); // 16ms timeout (~60 FPS)
+        const poll_res = linux.poll(&pfds, input_count, poll_timeout);
         const signed_poll: isize = @bitCast(poll_res);
 
-        const cur_time = getMilliTimestamp();
-        const dt_ms: u32 = @intCast(@max(1, cur_time - last_time));
-        last_time = cur_time;
+        const now = getMilliTimestamp();
+        const dt_ms: u32 = @intCast(@max(1, now - last_time));
+        last_time = now;
 
         // Preemptive Multitasking: Deliver CPU time to all sub-programs every frame
         gui.tick(dt_ms);
@@ -294,10 +328,16 @@ pub fn main() !void {
                                     if (code == BTN_LEFT or code == BTN_TOUCH) {
                                         if (pressed) {
                                             gui.handleMouseClick(gui.cursor.x, gui.cursor.y);
+                                        } else {
+                                            gui.handleMouseRelease();
                                         }
                                         gui.mouse_left_down = pressed;
+                                    } else if (code == KEY_LEFTCTRL or code == KEY_RIGHTCTRL) {
+                                        gui.ctrl_down = pressed;
+                                    } else if (code == KEY_LEFTSHIFT or code == KEY_RIGHTSHIFT) {
+                                        gui.shift_down = pressed;
                                     } else {
-                                        const key_char = mapEvdevToAscii(code, false);
+                                        const key_char = mapEvdevToAscii(code, gui.shift_down);
                                         gui.handleKey(code, key_char, pressed);
                                     }
                                 },
@@ -328,44 +368,94 @@ pub fn main() !void {
             }
         }
 
-        // Render updated frame with intelligent damage tracking
-        const damage = gui.renderDamaged(&display.clean_buffer);
-        const cursor_moved = (gui.cursor.x != display.prev_cursor_x or gui.cursor.y != display.prev_cursor_y);
-        const cursor_box = gui.cursor.getBox();
+        // Pace frame composition and scanout to the target framerate (~60 FPS)
+        if (now - last_render_time >= FRAME_INTERVAL_MS or signed_poll <= 0) {
+            last_render_time = now;
 
-        if (!damage.isEmpty() or cursor_moved or !display.cursor_drawn) {
-            var flush_box = fb.Box{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 };
+            // Render updated frame with intelligent damage tracking
+            const damage = gui.renderDamaged(&display.clean_buffer);
+            const cursor_moved = (gui.cursor.x != display.prev_cursor_x or gui.cursor.y != display.prev_cursor_y);
+            const cursor_box = gui.cursor.getBox();
 
-            // 1. If clean_buffer had damage, copy damaged rect to backbuffer
-            if (!damage.isEmpty()) {
-                display.backbuffer.copyBoxFrom(&display.clean_buffer, damage);
-                flush_box = flush_box.merge(damage);
+            if (!damage.isEmpty() or cursor_moved or !display.cursor_drawn) {
+                var flush_box = fb.Box{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 };
+
+                // 1. If clean_buffer had damage, copy damaged rect to backbuffer
+                if (!damage.isEmpty()) {
+                    display.backbuffer.copyBoxFrom(&display.clean_buffer, damage);
+                    flush_box = flush_box.merge(damage);
+                }
+
+                // 2. If cursor moved, restore old cursor area from clean_buffer into backbuffer
+                if (cursor_moved and display.cursor_drawn) {
+                    display.backbuffer.copyBoxFrom(&display.clean_buffer, display.prev_cursor_box);
+                    flush_box = flush_box.merge(display.prev_cursor_box);
+                }
+
+                // 3. Stamp cursor sprite onto backbuffer
+                gui.cursor.draw(&display.backbuffer);
+                flush_box = flush_box.merge(cursor_box);
+
+                display.prev_cursor_box = cursor_box;
+                display.prev_cursor_x = gui.cursor.x;
+                display.prev_cursor_y = gui.cursor.y;
+                display.cursor_drawn = true;
+
+                // 4. Flush only the damaged region to hardware scanout and DRM
+                display.flushDamage(flush_box);
             }
-
-            // 2. If cursor moved, restore old cursor area from clean_buffer into backbuffer
-            if (cursor_moved and display.cursor_drawn) {
-                display.backbuffer.copyBoxFrom(&display.clean_buffer, display.prev_cursor_box);
-                flush_box = flush_box.merge(display.prev_cursor_box);
-            }
-
-            // 3. Stamp cursor sprite onto backbuffer
-            gui.cursor.draw(&display.backbuffer);
-            flush_box = flush_box.merge(cursor_box);
-
-            display.prev_cursor_box = cursor_box;
-            display.prev_cursor_x = gui.cursor.x;
-            display.prev_cursor_y = gui.cursor.y;
-            display.cursor_drawn = true;
-
-            // 4. Flush only the damaged region to hardware scanout and DRM
-            display.flushDamage(flush_box);
         }
     }
 }
 
 // Convert evdev keycode to standard ASCII character
 fn mapEvdevToAscii(code: u16, shift: bool) ?u8 {
-    _ = shift;
+    if (shift) {
+        return switch (code) {
+            KEY_1 => '!',
+            KEY_2 => '@',
+            KEY_3 => '#',
+            KEY_4 => '$',
+            KEY_5 => '%',
+            KEY_6 => '^',
+            KEY_7 => '&',
+            KEY_8 => '*',
+            KEY_9 => '(',
+            KEY_0 => ')',
+            KEY_MINUS => '_',
+            KEY_EQUAL => '+',
+            KEY_A => 'A',
+            KEY_B => 'B',
+            KEY_C => 'C',
+            KEY_D => 'D',
+            KEY_E => 'E',
+            KEY_F => 'F',
+            KEY_G => 'G',
+            KEY_H => 'H',
+            KEY_I => 'I',
+            KEY_J => 'J',
+            KEY_K => 'K',
+            KEY_L => 'L',
+            KEY_M => 'M',
+            KEY_N => 'N',
+            KEY_O => 'O',
+            KEY_P => 'P',
+            KEY_Q => 'Q',
+            KEY_R => 'R',
+            KEY_S => 'S',
+            KEY_T => 'T',
+            KEY_U => 'U',
+            KEY_V => 'V',
+            KEY_W => 'W',
+            KEY_X => 'X',
+            KEY_Y => 'Y',
+            KEY_Z => 'Z',
+            KEY_SPACE => ' ',
+            KEY_DOT => '>',
+            KEY_SLASH => '?',
+            else => null,
+        };
+    }
     return switch (code) {
         KEY_1 => '1',
         KEY_2 => '2',
@@ -377,6 +467,8 @@ fn mapEvdevToAscii(code: u16, shift: bool) ?u8 {
         KEY_8 => '8',
         KEY_9 => '9',
         KEY_0 => '0',
+        KEY_MINUS => '-',
+        KEY_EQUAL => '=',
         KEY_A => 'a',
         KEY_B => 'b',
         KEY_C => 'c',
@@ -404,7 +496,6 @@ fn mapEvdevToAscii(code: u16, shift: bool) ?u8 {
         KEY_Y => 'y',
         KEY_Z => 'z',
         KEY_SPACE => ' ',
-        KEY_MINUS => '-',
         KEY_DOT => '.',
         KEY_SLASH => '/',
         else => null,
@@ -654,3 +745,326 @@ test "diosix-gui: intelligent damage tracking and idle frame skipping" {
     try testing.expect(win_damage.height() <= 536);
     try testing.expect(!gui.isDirty());
 }
+
+test "diosix-gui: icon text selection, select-all, and cut/copy/paste primitives" {
+    var ic = Icon.createReadWrite(101, 10, 10, 200, 30, "Hello World");
+    try testing.expectEqualStrings("Hello World", ic.getText());
+    try testing.expect(!ic.hasSelection());
+
+    // 1. Select all
+    ic.selectAll();
+    try testing.expect(ic.hasSelection());
+    try testing.expectEqualStrings("Hello World", ic.getSelectedText());
+
+    // 2. Delete selection
+    try testing.expect(ic.deleteSelection());
+    try testing.expectEqualStrings("", ic.getText());
+    try testing.expect(!ic.hasSelection());
+    try testing.expectEqual(@as(usize, 0), ic.cursor_pos);
+
+    // 3. Insert string
+    ic.insertString("Diosix Microkernel");
+    try testing.expectEqualStrings("Diosix Microkernel", ic.getText());
+
+    // 4. Partial selection: select "Microkernel"
+    ic.selection_start = 7;
+    ic.selection_end = 18;
+    try testing.expect(ic.hasSelection());
+    try testing.expectEqualStrings("Microkernel", ic.getSelectedText());
+
+    // 5. Delete selection
+    try testing.expect(ic.deleteSelection());
+    try testing.expectEqualStrings("Diosix ", ic.getText());
+    try testing.expectEqual(@as(usize, 7), ic.cursor_pos);
+
+    // 6. Clear field
+    ic.clearField();
+    try testing.expectEqualStrings("", ic.getText());
+    try testing.expectEqual(@as(usize, 0), ic.cursor_pos);
+}
+
+test "diosix-gui: keyboard handling with arrow keys, tab navigation, and control codes" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    // Switch to Subprogram 1 (Interactive controls showcase)
+    gui.activateSubProgram(1);
+
+    // Get active window (Controls pane)
+    const win = gui.getActiveWindow().?;
+
+    // Find the read-write text field icon
+    var rw_idx: ?usize = null;
+    for (win.icons.items, 0..) |*ic, i| {
+        if (ic.icon_type == .read_write_text) {
+            rw_idx = i;
+            break;
+        }
+    }
+    try testing.expect(rw_idx != null);
+    win.setFocusedIndex(rw_idx.?);
+
+    const rw_icon = &win.icons.items[rw_idx.?];
+    try testing.expect(rw_icon.is_focused);
+
+    // Reset initial text
+    rw_icon.setText("Diosix RISC-V");
+    try testing.expectEqualStrings("Diosix RISC-V", rw_icon.getText());
+    try testing.expectEqual(@as(usize, 13), rw_icon.cursor_pos);
+
+    // 1. Arrow Keys: Left moves cursor backward, Right moves cursor forward
+    gui.handleKey(gui_mod.Key.LEFT, null, true);
+    try testing.expectEqual(@as(usize, 12), rw_icon.cursor_pos);
+    gui.handleKey(gui_mod.Key.LEFT, null, true);
+    try testing.expectEqual(@as(usize, 11), rw_icon.cursor_pos);
+    gui.handleKey(gui_mod.Key.RIGHT, null, true);
+    try testing.expectEqual(@as(usize, 12), rw_icon.cursor_pos);
+
+    // 2. Control-A: Select all
+    gui.handleKeyWithModifiers(gui_mod.Key.A, 'a', true, true, false);
+    try testing.expect(rw_icon.hasSelection());
+    try testing.expectEqualStrings("Diosix RISC-V", rw_icon.getSelectedText());
+
+    // 3. Control-C: Copy selected text to clipboard
+    gui.handleKeyWithModifiers(gui_mod.Key.C, 'c', true, true, false);
+    try testing.expectEqualStrings("Diosix RISC-V", gui.getClipboard());
+
+    // 4. Control-X: Cut selected text to clipboard
+    gui.handleKeyWithModifiers(gui_mod.Key.X, 'x', true, true, false);
+    try testing.expectEqualStrings("", rw_icon.getText());
+    try testing.expectEqualStrings("Diosix RISC-V", gui.getClipboard());
+
+    // 5. Control-V: Paste from clipboard
+    gui.handleKeyWithModifiers(gui_mod.Key.V, 'v', true, true, false);
+    try testing.expectEqualStrings("Diosix RISC-V", rw_icon.getText());
+
+    // 6. Typing numbers in text field must NOT trigger subprogram tab switching!
+    gui.handleKey(0, '1', true);
+    gui.handleKey(0, '2', true);
+    try testing.expectEqualStrings("Diosix RISC-V12", rw_icon.getText());
+    try testing.expectEqual(@as(usize, 1), gui.active_sub_idx); // Still on tab 1!
+
+    // 7. Control-U: Clear the whole field
+    gui.handleKeyWithModifiers(gui_mod.Key.U, 'u', true, true, false);
+    try testing.expectEqualStrings("", rw_icon.getText());
+
+    // 8. Tab Navigation: moves focus to the next item (away from text field to slider)
+    gui.handleKey(gui_mod.Key.TAB, null, true);
+    try testing.expect(!rw_icon.is_focused);
+    try testing.expect(win.focused_icon_idx != rw_idx.?);
+
+    const next_icon = &win.icons.items[win.focused_icon_idx.?];
+    try testing.expectEqual(icon_mod.IconType.slider, next_icon.icon_type);
+
+    // 9. Slider arrow navigation: Left / Right adjusts slider
+    const initial_val = next_icon.slider_val;
+    gui.handleKey(gui_mod.Key.LEFT, null, true);
+    try testing.expectEqual(initial_val - 5, next_icon.slider_val);
+    gui.handleKey(gui_mod.Key.RIGHT, null, true);
+    try testing.expectEqual(initial_val, next_icon.slider_val);
+
+    // 10. Shift-Tab moves focus back to previous item (the text field)
+    gui.handleKeyWithModifiers(gui_mod.Key.TAB, null, true, false, true);
+    try testing.expect(rw_icon.is_focused);
+}
+
+test "diosix-gui: mouse click and select dragging in text field" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    gui.activateSubProgram(1);
+    const win = gui.getActiveWindow().?;
+
+    var rw_idx: ?usize = null;
+    for (win.icons.items, 0..) |*ic, i| {
+        if (ic.icon_type == .read_write_text) {
+            rw_idx = i;
+            break;
+        }
+    }
+    const icon = &win.icons.items[rw_idx.?];
+    icon.setText("Diosix Drag Test");
+
+    // Click at beginning of text field
+    const click_x = win.x + icon.rel_x + 10;
+    const click_y = win.y + icon.rel_y + 10;
+
+    _ = win.handleMouseClick(@ptrCast(&gui), click_x, click_y);
+    try testing.expect(icon.is_focused);
+    try testing.expect(icon.is_dragging_select);
+    try testing.expectEqual(@as(usize, 0), icon.selection_start.?);
+
+    // Drag mouse to the right across multiple characters
+    const drag_x = win.x + icon.rel_x + 80;
+    _ = win.handleMouseMove(@ptrCast(&gui), drag_x, click_y, true);
+    try testing.expect(icon.hasSelection());
+    try testing.expect(icon.selection_end.? > 0);
+
+    // Release mouse button
+    _ = win.handleMouseRelease();
+    try testing.expect(!icon.is_dragging_select);
+    try testing.expect(icon.hasSelection());
+
+    // Backspace on active mouse-drag selection deletes the selected text
+    gui.handleKey(gui_mod.Key.BACKSPACE, null, true);
+    try testing.expect(!icon.hasSelection());
+    try testing.expect(icon.getText().len < 16);
+}
+
+test "diosix-gui: keyboard navigation between panes via Tab, F6, and Left/Right arrows" {
+    const guests_sub = @import("subprograms/guests.zig");
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    // Activate Guests subprogram (tab index 2)
+    gui.activateSubProgram(2);
+
+    // Verify initial active window is Guest List (first interactive pane)
+    const win_list = gui.getActiveWindow().?;
+    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, win_list.id);
+    try testing.expect(win_list.focused_icon_idx != null);
+    try testing.expectEqual(guests_sub.ICON_GUEST_ROW1_ID, win_list.icons.items[win_list.focused_icon_idx.?].id);
+
+    // 1. Press Key.RIGHT on a button in the left pane to jump to the right pane (Domain Actions)
+    gui.handleKey(gui_mod.Key.RIGHT, null, true);
+    const win_actions = gui.getActiveWindow().?;
+    try testing.expectEqual(guests_sub.WIN_GUEST_ACTIONS_ID, win_actions.id);
+    try testing.expect(win_actions.focused_icon_idx != null);
+    try testing.expectEqual(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, win_actions.icons.items[win_actions.focused_icon_idx.?].id);
+
+    // 2. Press Key.LEFT on an action button in the right pane to jump back to the left pane
+    gui.handleKey(gui_mod.Key.LEFT, null, true);
+    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
+
+    // 3. Press Key.F6 to cycle directly between panes
+    gui.handleKey(gui_mod.Key.F6, null, true);
+    try testing.expectEqual(guests_sub.WIN_GUEST_ACTIONS_ID, gui.getActiveWindow().?.id);
+    gui.handleKey(gui_mod.Key.F6, null, true);
+    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
+
+    // 4. Tab through all 3 guest items in the inventory pane and overflow into Domain Actions pane
+    // Currently on item 0 (row 1).
+    gui.handleKey(gui_mod.Key.TAB, null, true); // to row 2
+    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
+    gui.handleKey(gui_mod.Key.TAB, null, true); // to row 3
+    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
+    // Tab again: reaches end of Guest List and transitions into Domain Actions pane!
+    gui.handleKey(gui_mod.Key.TAB, null, true);
+    try testing.expectEqual(guests_sub.WIN_GUEST_ACTIONS_ID, gui.getActiveWindow().?.id);
+    try testing.expectEqual(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, gui.getActiveWindow().?.icons.items[gui.getActiveWindow().?.focused_icon_idx.?].id);
+
+    // 5. Shift-Tab underflow from top of Domain Actions pane wraps back to bottom of Guest List pane
+    gui.handleKeyWithModifiers(gui_mod.Key.TAB, null, true, false, true);
+    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
+    try testing.expectEqual(guests_sub.ICON_GUEST_ROW3_ID, gui.getActiveWindow().?.icons.items[gui.getActiveWindow().?.focused_icon_idx.?].id);
+}
+
+test "diosix-gui: action button selection via Space and Enter with press and release feedback" {
+    const guests_sub = @import("subprograms/guests.zig");
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    gui.activateSubProgram(2);
+
+    // Jump to Domain Actions pane
+    gui.handleKey(gui_mod.Key.RIGHT, null, true);
+    const win = gui.getActiveWindow().?;
+    try testing.expectEqual(guests_sub.WIN_GUEST_ACTIONS_ID, win.id);
+
+    // Focused button is Launch Guest
+    const btn_launch = &win.icons.items[win.focused_icon_idx.?];
+    try testing.expectEqual(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, btn_launch.id);
+    try testing.expect(!btn_launch.is_active_press);
+
+    // 1. Press SPACE: button becomes active press and executes callback
+    gui.handleKey(gui_mod.Key.SPACE, ' ', true);
+    try testing.expect(btn_launch.is_active_press);
+
+    // Verify detail pane text updated by action callback
+    const detail_icon = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_DETAIL_TEXT_ID).?;
+    try testing.expectEqualStrings("Spawn Command: dsx run default --name guest-vm --ram 512M --vcpus 2", detail_icon.getText());
+
+    // 2. Release SPACE: button releases from active press
+    gui.handleKey(gui_mod.Key.SPACE, ' ', false);
+    try testing.expect(!btn_launch.is_active_press);
+
+    // 3. Move down to Terminate Domain button
+    gui.handleKey(gui_mod.Key.DOWN, null, true);
+    const btn_stop = &win.icons.items[win.focused_icon_idx.?];
+    try testing.expectEqual(guests_sub.ICON_GUEST_ACTION_STOP_ID, btn_stop.id);
+
+    // 4. Press ENTER: button becomes active press and executes terminate callback
+    gui.handleKey(gui_mod.Key.ENTER, '\n', true);
+    try testing.expect(btn_stop.is_active_press);
+    try testing.expectEqualStrings("Terminate Command: Sending hypercall stop request to target child domain.", detail_icon.getText());
+
+    // 5. Release ENTER: button releases
+    gui.handleKey(gui_mod.Key.ENTER, '\n', false);
+    try testing.expect(!btn_stop.is_active_press);
+}
+
+test "diosix-gui: clipboard overflow immunity with arbitrarily long strings and multi-byte UTF-8" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    // 1. Attempt to copy an oversized 1000-byte ASCII string into the 256-byte clipboard
+    var huge_buf: [1000]u8 = undefined;
+    @memset(&huge_buf, 'X');
+    gui.setClipboard(&huge_buf);
+
+    // Verify clipboard safely clamped to CLIPBOARD_CAPACITY (256 bytes)
+    const clip = gui.getClipboard();
+    try testing.expectEqual(@as(usize, gui_mod.CLIPBOARD_CAPACITY), clip.len);
+    try testing.expectEqual(@as(u8, 'X'), clip[0]);
+    try testing.expectEqual(@as(u8, 'X'), clip[255]);
+    // Guaranteed null terminator in buffer
+    try testing.expectEqual(@as(u8, 0), gui.clipboard_buf[256]);
+
+    // 2. Test multi-byte UTF-8 boundary truncation safety
+    // Create a 255-byte ASCII prefix, followed by a 3-byte UTF-8 sequence (e.g. '€' = 0xE2 0x82 0xAC)
+    var utf8_test_buf: [300]u8 = undefined;
+    @memset(utf8_test_buf[0..255], 'A');
+    utf8_test_buf[255] = 0xE2;
+    utf8_test_buf[256] = 0x82;
+    utf8_test_buf[257] = 0xAC;
+    @memset(utf8_test_buf[258..300], 'B');
+
+    // Passing this to setClipboard would truncate at index 256 right in the middle of '€' (after 0xE2).
+    // Our hardened setClipboard must detect this and truncate safely BEFORE the incomplete sequence!
+    gui.setClipboard(&utf8_test_buf);
+    const safe_clip = gui.getClipboard();
+    try testing.expectEqual(@as(usize, 255), safe_clip.len);
+    try testing.expectEqual(@as(u8, 0), gui.clipboard_buf[255]);
+
+    // 3. Test pasting oversized clipboard data into a text field
+    gui.activateSubProgram(1);
+    const win = gui.getActiveWindow().?;
+    var rw_icon: *icon_mod.Icon = undefined;
+    for (win.icons.items) |*ic| {
+        if (ic.icon_type == .read_write_text) {
+            rw_icon = ic;
+            break;
+        }
+    }
+
+    // Set clipboard to a 256-byte string
+    var clip_256: [256]u8 = undefined;
+    @memset(&clip_256, 'Z');
+    gui.setClipboard(&clip_256);
+
+    // Paste into text field with max_input_len = 64
+    rw_icon.clearField();
+    rw_icon.insertString(gui.getClipboard());
+
+    // Verify text field length is strictly clamped to max_input_len (64)
+    try testing.expectEqual(@as(usize, rw_icon.max_input_len), rw_icon.text_len);
+    try testing.expect(rw_icon.text_len < rw_icon.text_buf.len);
+    try testing.expectEqual(@as(u8, 0), rw_icon.text_buf[rw_icon.text_len]);
+}
+
+

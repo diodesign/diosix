@@ -53,16 +53,16 @@ const DefaultSizeCells: usize = 1;
 
 // advance to the NEXT u32 boundary (always moves forward by at least 1 byte)
 inline fn alignToNextU32(address: usize) usize {
-    return (address & ~@as(usize, 3)) + 4;
+    return (address & ~(@as(usize, @alignOf(u32) - 1))) + @sizeOf(u32);
 }
 
 // round UP to the nearest u32 boundary (no-op if already aligned)
 inline fn alignUpU32(address: usize) usize {
-    return (address + 3) & ~@as(usize, 3);
+    return std.mem.alignForward(usize, address, @alignOf(u32));
 }
 
 inline fn isAlignedU32(address: usize) bool {
-    return (address & 3) == 0;
+    return (address & (@alignOf(u32) - 1)) == 0;
 }
 
 // ---- big-endian read helper ----
@@ -83,15 +83,12 @@ inline fn readU32(src: [*]const u8, offset: usize) !u32 {
 
 // ---- big-endian byte-level helpers ----
 
-fn readBeU32(data: []const u8) u32 {
-    return @as(u32, data[0]) << 24 | @as(u32, data[1]) << 16 | @as(u32, data[2]) << 8 | @as(u32, data[3]);
+inline fn readBeU32(data: []const u8) u32 {
+    return std.mem.readInt(u32, data[0..@sizeOf(u32)], .big);
 }
 
-fn readBeU64(data: []const u8) u64 {
-    return @as(u64, data[0]) << 56 | @as(u64, data[1]) << 48 |
-        @as(u64, data[2]) << 40 | @as(u64, data[3]) << 32 |
-        @as(u64, data[4]) << 24 | @as(u64, data[5]) << 16 |
-        @as(u64, data[6]) << 8 | @as(u64, data[7]);
+inline fn readBeU64(data: []const u8) u64 {
+    return std.mem.readInt(u64, data[0..@sizeOf(u64)], .big);
 }
 
 fn countChar(s: []const u8, c: u8) usize {
@@ -179,7 +176,8 @@ const ByteWriter = struct {
     }
 
     fn alterU32(self: *ByteWriter, offset: usize, value: u32) !void {
-        if (offset + 4 > self.len) return DeviceTreeError.OutOfBoundsWrite;
+        const end = std.math.add(usize, offset, 4) catch return DeviceTreeError.OutOfBoundsWrite;
+        if (end > self.len) return DeviceTreeError.OutOfBoundsWrite;
         self.buffer[offset + 0] = @truncate(value >> 24);
         self.buffer[offset + 1] = @truncate(value >> 16);
         self.buffer[offset + 2] = @truncate(value >> 8);
@@ -762,7 +760,8 @@ pub const DeviceTree = struct {
         try bytes.addU32(0xffffffff); // size_dt_struct placeholder
 
         // memory reservation block (8-byte aligned)
-        while (!isAlignedU32(bytes.len) or (bytes.len & 7) != 0) {
+        const rsv_pad = std.mem.alignForward(usize, bytes.len, 8) - bytes.len;
+        for (0..rsv_pad) |_| {
             try bytes.addU8(0);
         }
         try bytes.alterU32(ref_off_memrsv, bytes.offset32());
@@ -919,6 +918,18 @@ pub const DeviceTree = struct {
 
 // ---- DeviceTreeBlob: raw DTB in memory ----
 
+pub const FDT_OFF_MAGIC: usize = 0 * @sizeOf(u32);
+pub const FDT_OFF_TOTALSIZE: usize = 1 * @sizeOf(u32);
+pub const FDT_OFF_OFF_DT_STRUCT: usize = 2 * @sizeOf(u32);
+pub const FDT_OFF_OFF_DT_STRINGS: usize = 3 * @sizeOf(u32);
+pub const FDT_OFF_OFF_MEM_RSVMAP: usize = 4 * @sizeOf(u32);
+pub const FDT_OFF_VERSION: usize = 5 * @sizeOf(u32);
+pub const FDT_OFF_LAST_COMP_VERSION: usize = 6 * @sizeOf(u32);
+pub const FDT_OFF_BOOT_CPUID_PHYS: usize = 7 * @sizeOf(u32);
+pub const FDT_OFF_SIZE_DT_STRINGS: usize = 8 * @sizeOf(u32);
+pub const FDT_OFF_SIZE_DT_STRUCT: usize = 9 * @sizeOf(u32);
+pub const FDT_HEADER_SIZE: usize = 10 * @sizeOf(u32);
+
 pub const DeviceTreeBlob = struct {
     magic: u32,
     totalsize: u32,
@@ -937,27 +948,34 @@ pub const DeviceTreeBlob = struct {
     pub fn compatibilityCheck(self: *const DeviceTreeBlob) !void {
         if (self.magic != DtbMagic) return DeviceTreeError.BadMagic;
         if (self.last_comp_version > LastSupportedVersion) return DeviceTreeError.UnsupportedVersion;
+        if (self.totalsize < FDT_HEADER_SIZE) return DeviceTreeError.ReachedUnexpectedEnd;
+        _ = std.math.add(u32, self.off_dt_struct, self.size_dt_struct) catch return DeviceTreeError.ReachedUnexpectedEnd;
+        _ = std.math.add(u32, self.off_dt_strings, self.size_dt_strings) catch return DeviceTreeError.ReachedUnexpectedEnd;
+        if (self.off_dt_struct + self.size_dt_struct > self.totalsize) return DeviceTreeError.ReachedUnexpectedEnd;
+        if (self.off_dt_strings + self.size_dt_strings > self.totalsize) return DeviceTreeError.ReachedUnexpectedEnd;
+        if (self.off_mem_rsvmap > self.totalsize) return DeviceTreeError.ReachedUnexpectedEnd;
     }
 
     // create a DeviceTreeBlob from a raw pointer to a device tree blob in memory.
     // takes a heap copy of the blob data.
     pub fn init(allocator: Allocator, blob: [*]u8) !*DeviceTreeBlob {
-        const blob_size = try readU32(blob, 1 * 4);
+        const blob_size = try readU32(blob, FDT_OFF_TOTALSIZE);
+        if (blob_size < FDT_HEADER_SIZE) return DeviceTreeError.ReachedUnexpectedEnd;
 
         const new_dtb = try allocator.create(DeviceTreeBlob);
         errdefer allocator.destroy(new_dtb);
 
         new_dtb.allocator = allocator;
-        new_dtb.magic = try readU32(blob, 0 * 4);
-        new_dtb.totalsize = try readU32(blob, 1 * 4);
-        new_dtb.off_dt_struct = try readU32(blob, 2 * 4);
-        new_dtb.off_dt_strings = try readU32(blob, 3 * 4);
-        new_dtb.off_mem_rsvmap = try readU32(blob, 4 * 4);
-        new_dtb.version = try readU32(blob, 5 * 4);
-        new_dtb.last_comp_version = try readU32(blob, 6 * 4);
-        new_dtb.boot_cpuid_phys = try readU32(blob, 7 * 4);
-        new_dtb.size_dt_strings = try readU32(blob, 8 * 4);
-        new_dtb.size_dt_struct = try readU32(blob, 9 * 4);
+        new_dtb.magic = try readU32(blob, FDT_OFF_MAGIC);
+        new_dtb.totalsize = try readU32(blob, FDT_OFF_TOTALSIZE);
+        new_dtb.off_dt_struct = try readU32(blob, FDT_OFF_OFF_DT_STRUCT);
+        new_dtb.off_dt_strings = try readU32(blob, FDT_OFF_OFF_DT_STRINGS);
+        new_dtb.off_mem_rsvmap = try readU32(blob, FDT_OFF_OFF_MEM_RSVMAP);
+        new_dtb.version = try readU32(blob, FDT_OFF_VERSION);
+        new_dtb.last_comp_version = try readU32(blob, FDT_OFF_LAST_COMP_VERSION);
+        new_dtb.boot_cpuid_phys = try readU32(blob, FDT_OFF_BOOT_CPUID_PHYS);
+        new_dtb.size_dt_strings = try readU32(blob, FDT_OFF_SIZE_DT_STRINGS);
+        new_dtb.size_dt_struct = try readU32(blob, FDT_OFF_SIZE_DT_STRUCT);
 
         try new_dtb.compatibilityCheck();
 
@@ -984,7 +1002,7 @@ pub const DeviceTreeBlob = struct {
 
         // parse reserved memory entries
         var mem_rsv_offset: usize = @intCast(self.off_mem_rsvmap);
-        while (mem_rsv_offset + 16 <= self.blob.len) {
+        while (mem_rsv_offset <= self.blob.len and (self.blob.len - mem_rsv_offset) >= 16) {
             const addr = readBeU64(self.blob[mem_rsv_offset .. mem_rsv_offset + 8]);
             const rsv_size = readBeU64(self.blob[mem_rsv_offset + 8 .. mem_rsv_offset + 16]);
             mem_rsv_offset += 16;
@@ -1000,7 +1018,8 @@ pub const DeviceTreeBlob = struct {
 
         while (true) {
             if (!isAlignedU32(offset)) return DeviceTreeError.BadAlignment;
-            if (offset + 4 > self.blob.len) return DeviceTreeError.ReachedUnexpectedEnd;
+            const end_tok = std.math.add(usize, offset, 4) catch return DeviceTreeError.ReachedUnexpectedEnd;
+            if (end_tok > self.blob.len) return DeviceTreeError.ReachedUnexpectedEnd;
 
             const token = readBeU32(self.blob[offset .. offset + 4]);
             offset = alignToNextU32(offset);
@@ -1026,7 +1045,8 @@ pub const DeviceTreeBlob = struct {
                     if (path_depth > 0) path_depth -= 1;
                 },
                 FdtProp => {
-                    if (offset + 8 > self.blob.len) return DeviceTreeError.ReachedUnexpectedEnd;
+                    const end_prop_hdr = std.math.add(usize, offset, 8) catch return DeviceTreeError.ReachedUnexpectedEnd;
+                    if (end_prop_hdr > self.blob.len) return DeviceTreeError.ReachedUnexpectedEnd;
                     const length = readBeU32(self.blob[offset .. offset + 4]);
                     offset = alignToNextU32(offset);
                     const string_offset = readBeU32(self.blob[offset .. offset + 4]);
@@ -1037,6 +1057,7 @@ pub const DeviceTreeBlob = struct {
                     const value = if (data_len == 0)
                         DeviceTreeProperty.empty
                     else blk: {
+                        _ = std.math.add(usize, offset, data_len) catch return DeviceTreeError.ReachedUnexpectedEnd;
                         if (offset + data_len > self.blob.len) return DeviceTreeError.ReachedUnexpectedEnd;
                         break :blk try DeviceTreeProperty.fromBytes(self.allocator, self.blob[offset .. offset + data_len]);
                     };
@@ -1052,9 +1073,12 @@ pub const DeviceTreeBlob = struct {
                     defer self.allocator.free(full_path);
 
                     // get property name from strings block
+                    _ = std.math.add(u32, self.off_dt_strings, string_offset) catch return DeviceTreeError.ReachedUnexpectedEnd;
                     const str_off: usize = @intCast(self.off_dt_strings + string_offset);
+                    if (str_off >= self.blob.len) return DeviceTreeError.ReachedUnexpectedEnd;
                     var name_end = str_off;
                     while (name_end < self.blob.len and self.blob[name_end] != 0) : (name_end += 1) {}
+                    if (name_end >= self.blob.len) return DeviceTreeError.ReachedUnexpectedEnd;
                     const prop_name = self.blob[str_off..name_end];
 
                     try dt.editProperty(full_path, prop_name, value);

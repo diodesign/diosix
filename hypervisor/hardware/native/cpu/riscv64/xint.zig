@@ -1275,13 +1275,7 @@ fn handle_interrupt(irq: IRQ, context: *riscv.ThreadContext) void {
             // clear VSEIP, and re-enable physical external interrupts.
             riscv.setTimer(riscv.readTime() + 5000);
 
-            const my_hart = riscv.getCPUContext().hardware_hart_id;
-            for (0..riscv.MAX_PHYS_CORES) |hw_hart| {
-                if (hw_hart == my_hart) continue;
-                if (riscv.CLINT.msip(hw_hart)) |ptr| {
-                    ptr.* = 1;
-                }
-            }
+            pcore.broadcastIpi();
 
             scheduler.schedule();
         },

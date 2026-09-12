@@ -63,6 +63,9 @@ pub const IsaExtension = struct {
 pub const MSTATUS = struct {
     pub const MPP_SHIFT = 11;
     pub const MPP_MASK = 0b11 << MPP_SHIFT;
+    pub const MPP_USER: usize = 0 << MPP_SHIFT;
+    pub const MPP_SUPERVISOR: usize = 1 << MPP_SHIFT;
+    pub const MPP_MACHINE: usize = 3 << MPP_SHIFT;
     pub const MIE = 1 << 3;
     pub const MPIE = 1 << 7;
     pub const SIE = 1 << 1;
@@ -72,9 +75,17 @@ pub const MSTATUS = struct {
     // Vector State (VS) and Floating-point State (FS) field definitions
     pub const VS_SHIFT = 9;
     pub const VS_MASK = 0b11 << VS_SHIFT;
+    pub const VS_DIRTY: usize = 0b11 << VS_SHIFT;
     pub const FS_SHIFT = 13;
     pub const FS_MASK = 0b11 << FS_SHIFT;
+    pub const FS_DIRTY: usize = 0b11 << FS_SHIFT;
 };
+
+// Trap Delegation Masks
+pub const HEDELEG_DELEGATED: usize = 0xb1fb;
+pub const HIDELEG_DELEGATED: usize = 0x1666;
+pub const MEDELEG_DELEGATED: usize = 0xb1fb;
+pub const MIDELEG_DELEGATED: usize = 0x0444;
 
 pub const SSTATUS = struct {
     pub const SPP_SHIFT = 8;

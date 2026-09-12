@@ -16,8 +16,9 @@ const physmem = @import("physmem.zig");
 const dsa = @import("dsa.zig");
 const vm_space = @import("vm.zig");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
-const debug = @import("debug.zig");
 const scheduler = @import("scheduler.zig");
+const pcore = @import("pcore.zig");
+const debug = @import("debug.zig");
 const interface = @import("interface");
 const sbi = interface.sbi;
 const emulation = @import("emulation");
@@ -107,6 +108,11 @@ pub const EventQueue = struct {
         self.count += 1;
     }
 
+    pub fn peek(self: *const EventQueue) ?sbi.Event {
+        if (self.count == 0) return null;
+        return self.events[self.tail];
+    }
+
     pub fn pop(self: *EventQueue) ?sbi.Event {
         if (self.count == 0) return null;
         const ev = self.events[self.tail];
@@ -143,6 +149,17 @@ pub const PacketQueue = struct {
         self.head = (self.head + 1) % MAX_NET_PACKETS;
         self.count += 1;
         return true;
+    }
+
+    pub fn peek(self: *const PacketQueue) ?*const Packet {
+        if (self.count == 0) return null;
+        return &self.packets[self.tail];
+    }
+
+    pub fn drop(self: *PacketQueue) void {
+        if (self.count == 0) return;
+        self.tail = (self.tail + 1) % MAX_NET_PACKETS;
+        self.count -= 1;
     }
 
     pub fn pop(self: *PacketQueue, out_buf: []u8) ?usize {
@@ -269,8 +286,9 @@ pub const Guest = struct {
             if (args.max_ram_pages > 0) {
                 self.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
                 self.quotas.used_ram_pages = @min(self.quotas.used_ram_pages, self.quotas.max_ram_pages);
-                if (self.space.range_size == 0 or self.space.range_size > self.quotas.max_ram_pages * physmem.PageSize) {
-                    self.space.range_size = self.quotas.max_ram_pages * physmem.PageSize;
+                const max_bytes = std.math.mul(usize, self.quotas.max_ram_pages, physmem.PageSize) catch std.math.maxInt(usize);
+                if (self.space.range_size == 0 or self.space.range_size > max_bytes) {
+                    self.space.range_size = max_bytes;
                 }
             }
             if (args.max_vcpus > 0) self.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
@@ -281,7 +299,7 @@ pub const Guest = struct {
                 if (args.max_ram_pages > 0) {
                     child.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
                     child.quotas.used_ram_pages = @min(child.quotas.used_ram_pages, child.quotas.max_ram_pages);
-                    child.space.range_size = child.quotas.max_ram_pages * physmem.PageSize;
+                    child.space.range_size = std.math.mul(usize, child.quotas.max_ram_pages, physmem.PageSize) catch std.math.maxInt(usize);
                 }
                 if (args.max_vcpus > 0) {
                     child.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
@@ -299,15 +317,15 @@ pub const Guest = struct {
 
     fn guestReadMemory(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
         const g: *Guest = @ptrCast(@alignCast(ctx));
-        const hpa = g.space.translateGPA(@truncate(gpa)) catch return false;
-        @memcpy(buf, @as([*]const u8, @ptrFromInt(hpa))[0..buf.len]);
+        const addr: usize = std.math.cast(usize, gpa) orelse return false;
+        g.space.copyFromGuest(buf, addr) catch return false;
         return true;
     }
 
     fn guestWriteMemory(ctx: *anyopaque, gpa: u64, buf: []const u8) bool {
         const g: *Guest = @ptrCast(@alignCast(ctx));
-        const hpa = g.space.translateGPA(@truncate(gpa)) catch return false;
-        @memcpy(@as([*]u8, @ptrFromInt(hpa))[0..buf.len], buf);
+        const addr: usize = std.math.cast(usize, gpa) orelse return false;
+        g.space.copyToGuest(addr, buf) catch return false;
         return true;
     }
 
@@ -401,17 +419,7 @@ pub const Guest = struct {
         self.space.deinit();
 
         // Send an IPI to other CPUs to force them to reschedule if needed
-        if (!builtin.is_test) {
-            const my_hart = riscv.getCPUContext().hardware_hart_id;
-            for (0..riscv.cpu_to_hart_map.len) |target_cpu| {
-                const hw_hart = riscv.cpu_to_hart_map[target_cpu];
-                if (hw_hart != my_hart) {
-                    if (riscv.CLINT.msip(hw_hart)) |ptr| {
-                        ptr.* = 1;
-                    }
-                }
-            }
-        }
+        pcore.broadcastIpi();
 
         // Unlink from parent's children list and free child handle if still attached
         if (self.parent) |p| {
@@ -473,10 +481,13 @@ pub const Guest = struct {
 
     pub fn checkQuota(self: *Guest, ram_pages: usize, vcpus: usize, depth: usize) bool {
         // Check local limits
-        if (self.quotas.used_ram_pages + ram_pages > self.quotas.max_ram_pages) return false;
-        if (self.quotas.used_vcpus + vcpus > self.quotas.max_vcpus) return false;
+        const new_ram = std.math.add(usize, self.quotas.used_ram_pages, ram_pages) catch return false;
+        if (new_ram > self.quotas.max_ram_pages) return false;
+        const new_vcpus = std.math.add(usize, self.quotas.used_vcpus, vcpus) catch return false;
+        if (new_vcpus > self.quotas.max_vcpus) return false;
         if (depth > self.quotas.max_child_depth) return false;
-        if (self.quotas.used_descendants + 1 > self.quotas.max_descendants) return false;
+        const new_desc = std.math.add(usize, self.quotas.used_descendants, 1) catch return false;
+        if (new_desc > self.quotas.max_descendants) return false;
 
         // Recursively check ancestors
         if (self.parent) |p| {
@@ -486,8 +497,8 @@ pub const Guest = struct {
     }
 
     pub fn consumeQuota(self: *Guest, ram_pages: usize, vcpus: usize) void {
-        self.quotas.used_ram_pages += ram_pages;
-        self.quotas.used_vcpus += vcpus;
+        self.quotas.used_ram_pages = std.math.add(usize, self.quotas.used_ram_pages, ram_pages) catch self.quotas.max_ram_pages;
+        self.quotas.used_vcpus = std.math.add(usize, self.quotas.used_vcpus, vcpus) catch self.quotas.max_vcpus;
         if (self.parent) |p| {
             p.consumeQuota(ram_pages, vcpus);
         }
@@ -575,6 +586,9 @@ pub const Guest = struct {
     }
 
     pub fn findVcore(self: *const Guest, vid: vcore.VirtualCoreID) ?*vcore.VirtualCore {
+        if (vid < max_vcores) {
+            if (self.vcore_lookup[vid]) |vc| return vc;
+        }
         var it = self.vcores.start;
         while (it) |node| {
             if (node.contents.id == vid) return node.contents;
@@ -595,7 +609,7 @@ pub const Guest = struct {
             defer guard.release();
             const state = guard.get();
             const next = state.guest_id_next;
-            state.guest_id_next = next + 1;
+            state.guest_id_next = std.math.add(usize, next, 1) catch std.math.maxInt(usize);
             break :blk next;
         };
 
@@ -746,7 +760,11 @@ pub const Guest = struct {
 
 // Global guest manager state to encapsulate VMIDs and guest ID counters.
 const GuestManagerState = struct {
-    vmid_bitmap: [VMID_BITMAP_WORDS]u64 = std.mem.zeroes([VMID_BITMAP_WORDS]u64),
+    vmid_bitmap: [VMID_BITMAP_WORDS]u64 = blk: {
+        var bm = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
+        bm[0] = 1; // VMID 0 is permanently reserved in RISC-V hgatp
+        break :blk bm;
+    },
     guest_id_next: usize = CID_SELF,
 };
 
@@ -757,17 +775,13 @@ fn allocVmid() !u16 {
     defer guard.release();
     const state = guard.get();
 
-    // Search for a free bit in the bitmap (skip bit 0 = VMID 0).
+    // Search for a free bit in the bitmap. VMID 0 is reserved (bit 0 of word 0 is permanently set).
     for (&state.vmid_bitmap, 0..) |*word, wi| {
-        if (word.* == ~@as(u64, 0)) continue; // All bits set, skip.
-        const free_bit = @ctz(~word.*);
+        if (word.* == std.math.maxInt(u64)) continue; // All 64 bits set, skip.
+        const free_bit: u6 = @intCast(@ctz(~word.*));
         const vmid: u16 = @intCast(wi * BITS_PER_WORD + free_bit);
-        if (vmid == 0) {
-            // VMID 0 is reserved; mark it used and continue searching.
-            word.* |= @as(u64, 1) << @intCast(free_bit);
-            continue;
-        }
-        word.* |= @as(u64, 1) << @intCast(free_bit);
+        if (vmid >= max_vmids) break;
+        word.* |= @as(u64, 1) << free_bit;
         return vmid;
     }
     // All VMIDs exhausted.
@@ -1112,4 +1126,8 @@ test "guest quota management and manifest attachments" {
     try child.setManifest(sample_manifest);
     try testing.expect(child.getManifest() != null);
     try testing.expectEqualStrings(sample_manifest, child.getManifest().?);
+
+    // Test checkQuota rejection on integer overflow
+    try testing.expect(!child.checkQuota(std.math.maxInt(usize), 1, 1));
+    try testing.expect(!child.checkQuota(1, std.math.maxInt(usize), 1));
 }

@@ -33,6 +33,14 @@ pub const MIP_STIP_BIT: u6 = 5;
 pub const DBCN_CHUNK_BUFFER_SIZE: usize = 256;
 pub const DBCN_MAX_WRITE_BYTES: usize = 4096;
 
+pub const DEFAULT_ROOT_RAM_BYTES: usize = 512 * 1024 * 1024;
+pub const DEFAULT_CHILD_RAM_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_FOREIGN_MAP_SIZE_BYTES: usize = 512 * 1024 * 1024;
+pub const MAX_MANIFEST_SIZE_BYTES: usize = 1024 * 1024; // Maximum 1MB manifest buffer
+pub const MAX_USER_CID_DISCRIMINATOR: usize = physmem.PageSize; // Below PageSize indicates CID argument, not pointer GPA
+pub const DEFAULT_VERSION_MAJOR: u16 = 26;
+pub const DEFAULT_VERSION_MINOR: u16 = 1;
+
 // SBI Error Codes.
 pub const SBI_SUCCESS = interface.SUCCESS;
 pub const SBI_ERR_FAILED = interface.ERR_FAILED;
@@ -106,24 +114,37 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
             // SBI v0.1: hart_mask is ALWAYS a virtual address pointing to the bit-vector, even on RV64
             const mask_ptr = context[@intFromEnum(arch.Register.a0)];
             var hart_mask: usize = 0;
-            if (vc.exec_path == .emulated) {
-                if (mask_ptr != 0) {
-                    if (vc.exec_path.emulated.engine) |eng| {
-                        const res = eng.tlb.readU32(@truncate(mask_ptr), eng.bus);
-                        hart_mask = res.val;
+            if (mask_ptr == 0) {
+                hart_mask = std.math.maxInt(usize); // NULL pointer means ALL harts in SBI v0.1
+            } else if (vc.exec_path == .emulated) {
+                if (vc.exec_path.emulated.engine) |eng| {
+                    const res = eng.tlb.readU32(@truncate(mask_ptr), eng.bus);
+                    hart_mask = res.val;
+                }
+            } else if (riscv.hasHExtension()) {
+                const pcpu = pcore.this();
+                pcpu.probing_active = true;
+                pcpu.probe_failed = false;
+                defer pcpu.probing_active = false;
+
+                // Safely read byte-by-byte with hlv_bu to handle arbitrary guest alignment without traps
+                var val: usize = 0;
+                for (0..@sizeOf(usize)) |i| {
+                    const b = riscv.hlv_bu(mask_ptr +% i);
+                    if (pcpu.probe_failed) {
+                        val = 0;
+                        break;
                     }
-                } else {
-                    hart_mask = std.math.maxInt(usize); // NULL pointer means ALL harts in SBI v0.1
+                    val |= @as(usize, b) << @intCast(i * 8);
                 }
+                hart_mask = val;
             } else {
-                if (mask_ptr != 0) {
-                    hart_mask = @as(usize, @bitCast(riscv.hlv_d(mask_ptr)));
-                } else {
-                    hart_mask = std.math.maxInt(usize);
-                }
+                // Native PMP mode: load safely through guest address space
+                hart_mask = vc.getGuest().space.readGuestStruct(usize, mask_ptr) catch 0;
             }
             const g = vc.getGuest();
-            for (0..guest.max_vcores) |vid| {
+            const mask_bits = @min(guest.max_vcores, @bitSizeOf(usize));
+            for (0..mask_bits) |vid| {
                 if ((hart_mask & (@as(usize, 1) << @intCast(vid))) != 0) {
                     if (g.vcore_lookup[vid]) |target_vc| {
                         if (target_vc.exec_path == .emulated) {
@@ -159,6 +180,7 @@ pub fn handle(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadCont
                     riscv.sfenceVma();
                 }
                 riscv.getCPUContext().gstage_dirty = false;
+                broadcastPhysicalIPI();
             }
             setResult(vc, context, SBI_SUCCESS, 0);
         },
@@ -251,7 +273,7 @@ fn handleIPI(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, hart_mask: u
         const base_val: usize = if (vc.exec_path == .emulated) (hart_mask_base & RV32_WORD_MASK) else hart_mask_base;
         for (0..@bitSizeOf(usize)) |bit_pos| {
             if ((mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
-                const hart_id = base_val + bit_pos;
+                const hart_id = std.math.add(usize, base_val, bit_pos) catch continue;
                 if (hart_id < guest.max_vcores) {
                     if (g.vcore_lookup[hart_id]) |target_vc| {
                         if (target_vc.exec_path == .emulated) {
@@ -380,7 +402,7 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             const base_val: usize = hart_mask_base & RV32_WORD_MASK;
             for (0..@bitSizeOf(usize)) |bit_pos| {
                 if ((mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
-                    const hart_id = base_val + bit_pos;
+                    const hart_id = std.math.add(usize, base_val, bit_pos) catch continue;
                     if (hart_id < guest.max_vcores) {
                         if (g.vcore_lookup[hart_id]) |target_vc| {
                             if (target_vc == vc) {
@@ -415,7 +437,7 @@ fn handleRFENCE(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
         } else {
             for (0..@bitSizeOf(usize)) |bit_pos| {
                 if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
-                    const hart_id = hart_mask_base + bit_pos;
+                    const hart_id = std.math.add(usize, hart_mask_base, bit_pos) catch continue;
                     if (hart_id < riscv.cpu_to_hart_map.len) {
                         if (riscv.CLINT.msip(riscv.cpu_to_hart_map[hart_id])) |ptr| {
                             ptr.* = 1;
@@ -480,9 +502,9 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.DIOSIX.GET_INFO => {
-            const target_cid = if (a0 < 4096) a0 else 1;
-            const info_gpa = if (a0 < 4096) a1 else a0;
-            const info_len = if (a0 < 4096) a2 else a1;
+            const target_cid = if (a0 < MAX_USER_CID_DISCRIMINATOR) a0 else 1;
+            const info_gpa = if (a0 < MAX_USER_CID_DISCRIMINATOR) a1 else a0;
+            const info_len = if (a0 < MAX_USER_CID_DISCRIMINATOR) a2 else a1;
 
             if (info_len != 0 and info_len < @sizeOf(interface.GuestInfo)) {
                 setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
@@ -505,121 +527,123 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             }
             const tg = target_guest.?;
 
-            if (g.space.translateGPA(info_gpa) catch null) |hpa| {
-                const info_ptr: *interface.GuestInfo = @ptrFromInt(hpa);
-                const effective_ram_pages: usize = blk: {
-                    if (tg.is_root) {
-                        break :blk if (tg.space.range_size > 0) tg.space.range_size / physmem.PageSize else (512 * 1024 * 1024 / physmem.PageSize);
+            const effective_ram_pages: usize = blk: {
+                if (tg.is_root) {
+                    break :blk if (tg.space.range_size > 0) tg.space.range_size / physmem.PageSize else (DEFAULT_ROOT_RAM_BYTES / physmem.PageSize);
+                } else {
+                    if (tg.space.range_size > 0) {
+                        break :blk tg.space.range_size / physmem.PageSize;
+                    } else if (tg.quotas.used_ram_pages > 0 and tg.quotas.used_ram_pages != std.math.maxInt(usize)) {
+                        break :blk tg.quotas.used_ram_pages;
+                    } else if (tg.quotas.max_ram_pages > 0 and tg.quotas.max_ram_pages != std.math.maxInt(usize)) {
+                        break :blk tg.quotas.max_ram_pages;
                     } else {
-                        if (tg.space.range_size > 0) {
-                            break :blk tg.space.range_size / physmem.PageSize;
-                        } else if (tg.quotas.used_ram_pages > 0 and tg.quotas.used_ram_pages != std.math.maxInt(usize)) {
-                            break :blk tg.quotas.used_ram_pages;
-                        } else if (tg.quotas.max_ram_pages > 0 and tg.quotas.max_ram_pages != std.math.maxInt(usize)) {
-                            break :blk tg.quotas.max_ram_pages;
-                        } else {
-                            break :blk (256 * 1024 * 1024 / physmem.PageSize);
-                        }
+                        break :blk (DEFAULT_CHILD_RAM_BYTES / physmem.PageSize);
                     }
-                };
+                }
+            };
 
-                info_ptr.* = .{
-                    .guest_id = if (tg == g) 1 else target_cid,
-                    .parent_id = if (tg == g) (if (g.parent != null) guest.CID_PARENT else 0) else 1,
-                    .is_trusted = if (tg.is_trusted) 1 else 0,
-                    .is_root = if (tg.is_root) 1 else 0,
-                    .target_arch = @intFromEnum(tg.target_arch),
-                    .assigned_cid = if (tg.is_root) 1 else @truncate(tg.local_cid),
-                    .vcpus = tg.vcores.count(),
-                    .self_ram_pages = effective_ram_pages,
-                    .used_vcpus = if (tg.quotas.used_vcpus > 0) tg.quotas.used_vcpus else tg.vcores.count(),
-                    .max_vcpus = if (tg.quotas.max_vcpus == std.math.maxInt(usize)) tg.vcores.count() else tg.quotas.max_vcpus,
-                    .used_ram_pages = if (tg.quotas.used_ram_pages > 0 and tg.quotas.used_ram_pages != std.math.maxInt(usize)) tg.quotas.used_ram_pages else effective_ram_pages,
-                    .max_ram_pages = if (tg.quotas.max_ram_pages == std.math.maxInt(usize)) effective_ram_pages else tg.quotas.max_ram_pages,
-                    .child_count = tg.children.count(),
-                };
+            const info = interface.GuestInfo{
+                .guest_id = if (tg == g) 1 else target_cid,
+                .parent_id = if (tg == g) (if (g.parent != null) guest.CID_PARENT else 0) else 1,
+                .is_trusted = if (tg.is_trusted) 1 else 0,
+                .is_root = if (tg.is_root) 1 else 0,
+                .target_arch = @intFromEnum(tg.target_arch),
+                .assigned_cid = if (tg.is_root) 1 else @truncate(tg.local_cid),
+                .vcpus = tg.vcores.count(),
+                .self_ram_pages = effective_ram_pages,
+                .used_vcpus = if (tg.quotas.used_vcpus > 0) tg.quotas.used_vcpus else tg.vcores.count(),
+                .max_vcpus = if (tg.quotas.max_vcpus == std.math.maxInt(usize)) tg.vcores.count() else tg.quotas.max_vcpus,
+                .used_ram_pages = if (tg.quotas.used_ram_pages > 0 and tg.quotas.used_ram_pages != std.math.maxInt(usize)) tg.quotas.used_ram_pages else effective_ram_pages,
+                .max_ram_pages = if (tg.quotas.max_ram_pages == std.math.maxInt(usize)) effective_ram_pages else tg.quotas.max_ram_pages,
+                .child_count = tg.children.count(),
+            };
 
-                setResult(vc, context, SBI_SUCCESS, 0);
-            } else {
+            g.space.writeGuestStruct(interface.GuestInfo, info_gpa, info) catch {
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
+                return;
+            };
+            setResult(vc, context, SBI_SUCCESS, 0);
         },
 
         interface.DIOSIX.RUN => {
-            if (g.space.translateGPA(a0) catch null) |args_hpa| {
-                const args: *const interface.RunArgs = @ptrFromInt(args_hpa);
-                // Look up child by CID (>= CID_FIRST_CHILD) or create a fresh child on the fly (child_id == 0)
-                const child_to_run: ?*guest.Guest = if (args.child_id >= guest.CID_FIRST_CHILD)
-                    g.getGuestByCid(args.child_id)
-                else if (args.child_id == 0)
-                    g.createChild((args.flags & interface.RunFlags.TRUSTED) != 0, .riscv64, 1) catch |err| blk: {
-                        debug.printf("SBI: createChild failed: {s}\n", .{@errorName(err)});
-                        break :blk null;
-                    }
-                else
-                    null;
+            const args = g.space.readGuestStruct(interface.RunArgs, a0) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
+            // Look up child by CID (>= CID_FIRST_CHILD) or create a fresh child on the fly (child_id == 0)
+            const child_to_run: ?*guest.Guest = if (args.child_id >= guest.CID_FIRST_CHILD)
+                g.getGuestByCid(args.child_id)
+            else if (args.child_id == 0)
+                g.createChild((args.flags & interface.RunFlags.TRUSTED) != 0, .riscv64, 1) catch |err| blk: {
+                    debug.printf("SBI: createChild failed: {s}\n", .{@errorName(err)});
+                    break :blk null;
+                }
+            else
+                null;
 
-                if (child_to_run) |child| {
-                    // Set trust level: default is untrusted unless RunFlags.TRUSTED is explicitly passed
-                    if ((args.flags & interface.RunFlags.TRUSTED) != 0) {
-                        if (!g.is_trusted) {
-                            debug.printf("SBI: RunFlags.TRUSTED denied: caller not trusted\n", .{});
-                            setResult(vc, context, SBI_ERR_DENIED, 0);
-                            return;
-                        }
-                        child.is_trusted = true;
-                        child.space.is_trusted = true;
-                    } else {
-                        child.dropTrust();
-                    }
-
-                    // 1. Stop all virtual cores of the child VM and wait for physical cores to relinquish them
-                    child.stop();
-
-                    // 2. Invalidate TLB and G-stage translation cache
-                    if (riscv.hasHExtension()) {
-                        riscv.hfenceGvma();
-                    } else {
-                        riscv.sfenceVma();
-                    }
-
-                    if (args.elf_size == 0) {
-                        setResult(vc, context, SBI_SUCCESS, child.local_cid);
+            if (child_to_run) |child| {
+                // Set trust level: default is untrusted unless RunFlags.TRUSTED is explicitly passed
+                if ((args.flags & interface.RunFlags.TRUSTED) != 0) {
+                    if (!g.is_trusted) {
+                        debug.printf("SBI: RunFlags.TRUSTED denied: caller not trusted\n", .{});
+                        setResult(vc, context, SBI_ERR_DENIED, 0);
                         return;
                     }
-
-                    if (g.space.translateGPA(args.elf_ptr) catch null) |elf_hpa| {
-                        const elf_data = @as([*]const u8, @ptrFromInt(elf_hpa))[0..args.elf_size];
-
-                        // 3. Detect and update target architecture if necessary
-                        if (loader.Loader.detectArch(elf_data) catch null) |detected_arch| {
-                            child.target_arch = detected_arch;
-                        }
-
-                        // 4. Load the ELF binary segments into child GPA space
-                        const entry_point = loader.Loader.load(child, elf_data) catch |err| {
-                            debug.printf("SBI: Run loader failed: {s}\n", .{@errorName(err)});
-                            setResult(vc, context, SBI_ERR_FAILED, 0);
-                            return;
-                        };
-
-                        // 5. Reset all child virtual cores (Hart 0 = .ready, Hart 1..N = .stopped)
-                        child.resetForRun(entry_point, args.dtb_ptr);
-
-                        // 6. Enqueue only the primary bootstrap core (Hart 0) into scheduler
-                        if (child.vcores.start) |vc_node| {
-                            scheduler.queue(vc_node.contents);
-                        }
-
-                        setResult(vc, context, SBI_SUCCESS, child.local_cid);
-                    } else {
-                        setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-                    }
+                    child.is_trusted = true;
+                    child.space.is_trusted = true;
                 } else {
-                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    child.dropTrust();
                 }
+
+                // 1. Stop all virtual cores of the child VM and wait for physical cores to relinquish them
+                child.stop();
+
+                // 2. Invalidate TLB and G-stage translation cache
+                if (riscv.hasHExtension()) {
+                    riscv.hfenceGvma();
+                } else {
+                    riscv.sfenceVma();
+                }
+
+                if (args.elf_size == 0) {
+                    setResult(vc, context, SBI_SUCCESS, child.local_cid);
+                    return;
+                }
+
+                if (args.elf_size > MAX_FOREIGN_MAP_SIZE_BYTES) {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                }
+                _ = std.math.add(usize, args.elf_ptr, args.elf_size) catch {
+                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                    return;
+                };
+
+                // 3. Detect and update target architecture if necessary
+                if (loader.Loader.detectArchFromGuest(&g.space, args.elf_ptr, args.elf_size) catch null) |detected_arch| {
+                    child.target_arch = detected_arch;
+                }
+
+                // 4. Load the ELF binary segments into child GPA space
+                const entry_point = loader.Loader.loadFromGuest(child, &g.space, args.elf_ptr, args.elf_size) catch |err| {
+                    debug.printf("SBI: Run loader failed: {s}\n", .{@errorName(err)});
+                    const err_code = if (err == loader.LoaderError.TranslationFailed) SBI_ERR_INVALID_ADDRESS else SBI_ERR_FAILED;
+                    setResult(vc, context, err_code, 0);
+                    return;
+                };
+
+                // 5. Reset all child virtual cores (Hart 0 = .ready, Hart 1..N = .stopped)
+                child.resetForRun(entry_point, args.dtb_ptr);
+
+                // 6. Enqueue only the primary bootstrap core (Hart 0) into scheduler
+                if (child.vcores.start) |vc_node| {
+                    scheduler.queue(vc_node.contents);
+                }
+
+                setResult(vc, context, SBI_SUCCESS, child.local_cid);
             } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
             }
         },
         interface.DIOSIX.POLL_EVENT => {
@@ -629,32 +653,30 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
                 return;
             }
-            if (g.events.pop()) |ev| {
-                if (g.space.translateGPA(event_gpa) catch null) |hpa| {
-                    const ev_ptr: *interface.Event = @ptrFromInt(hpa);
-                    ev_ptr.* = ev;
-                    setResult(vc, context, SBI_SUCCESS, 1);
-                } else {
+            if (g.events.peek()) |ev| {
+                g.space.writeGuestStruct(interface.Event, event_gpa, ev) catch {
                     setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-                }
+                    return;
+                };
+                _ = g.events.pop();
+                setResult(vc, context, SBI_SUCCESS, 1);
             } else {
                 setResult(vc, context, SBI_SUCCESS, 0);
             }
         },
         interface.DIOSIX.SET_QUOTA => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const qargs: *const interface.QuotaArgs = @ptrFromInt(hpa);
-                g.setQuota(qargs.*) catch |err| {
-                    switch (err) {
-                        error.AccessDenied => setResult(vc, context, SBI_ERR_DENIED, 0),
-                        error.InvalidParam => setResult(vc, context, SBI_ERR_INVALID_PARAM, 0),
-                    }
-                    return;
-                };
-                setResult(vc, context, SBI_SUCCESS, 0);
-            } else {
+            const qargs = g.space.readGuestStruct(interface.QuotaArgs, a0) catch {
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
+                return;
+            };
+            g.setQuota(qargs) catch |err| {
+                switch (err) {
+                    error.AccessDenied => setResult(vc, context, SBI_ERR_DENIED, 0),
+                    error.InvalidParam => setResult(vc, context, SBI_ERR_INVALID_PARAM, 0),
+                }
+                return;
+            };
+            setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.DIOSIX.GET_HV_INFO => {
             const buf_gpa = a0;
@@ -663,240 +685,303 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
                 setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
                 return;
             }
-            if (g.space.translateGPA(buf_gpa) catch null) |hpa| {
-                const info_ptr: *interface.HypervisorInfo = @ptrFromInt(hpa);
-                var info = interface.HypervisorInfo{};
+            var info = interface.HypervisorInfo{};
 
-                const v_str = std.mem.span(project_version);
-                if (std.mem.indexOfScalar(u8, v_str, '.')) |dot| {
-                    info.version_major = std.fmt.parseInt(u16, v_str[0..dot], 10) catch 26;
-                    info.version_minor = std.fmt.parseInt(u16, v_str[dot + 1 ..], 10) catch 1;
-                }
-
-                const rev_str = std.mem.span(git_revision);
-                const copy_len = @min(rev_str.len, 15);
-                @memcpy(info.build_commit[0..copy_len], rev_str[0..copy_len]);
-
-                info.features = interface.HypervisorFeature.DYNAREC | interface.HypervisorFeature.VIRTIO_VSOCK;
-
-                if (!builtin.is_test and riscv.hasHExtension()) {
-                    info.features |= interface.HypervisorFeature.HARDWARE_VIRT |
-                        interface.HypervisorFeature.STAGE2_PAGING;
-                }
-
-                info.host_physical_cores = riscv.getOnlineCpuCount();
-                info.host_timer_freq_hz = interface.HOST_TIMER_FREQ_HZ;
-                info.host_total_ram_kb = @intCast(physmem.getTotalRamBytes() / 1024);
-                info.host_free_ram_kb = @intCast(physmem.getFreeRamBytes() / 1024);
-
-                info_ptr.* = info;
-                setResult(vc, context, SBI_SUCCESS, 0);
-            } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+            const v_str = std.mem.span(project_version);
+            if (std.mem.indexOfScalar(u8, v_str, '.')) |dot| {
+                info.version_major = std.fmt.parseInt(u16, v_str[0..dot], 10) catch DEFAULT_VERSION_MAJOR;
+                info.version_minor = std.fmt.parseInt(u16, v_str[dot + 1 ..], 10) catch DEFAULT_VERSION_MINOR;
             }
+
+            const rev_str = std.mem.span(git_revision);
+            const copy_len = @min(rev_str.len, info.build_commit.len);
+            @memcpy(info.build_commit[0..copy_len], rev_str[0..copy_len]);
+
+            info.features = interface.HypervisorFeature.DYNAREC | interface.HypervisorFeature.VIRTIO_VSOCK;
+
+            if (!builtin.is_test and riscv.hasHExtension()) {
+                info.features |= interface.HypervisorFeature.HARDWARE_VIRT |
+                    interface.HypervisorFeature.STAGE2_PAGING;
+            }
+
+            info.host_physical_cores = riscv.getOnlineCpuCount();
+            info.host_timer_freq_hz = interface.HOST_TIMER_FREQ_HZ;
+            info.host_total_ram_kb = @intCast(physmem.getTotalRamBytes() / 1024);
+            info.host_free_ram_kb = @intCast(physmem.getFreeRamBytes() / 1024);
+
+            g.space.writeGuestStruct(interface.HypervisorInfo, buf_gpa, info) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
+            setResult(vc, context, SBI_SUCCESS, 0);
         },
         interface.DIOSIX.GET_MANIFEST => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const margs: *interface.ManifestArgs = @ptrFromInt(hpa);
-                const target_guest = g.getGuestByCid(margs.target_cid);
-                if (target_guest) |target| {
-                    if (target.manifest) |m_data| {
-                        const copy_len = @min(margs.max_len, m_data.len);
-                        if (copy_len > 0) {
-                            if (g.space.translateGPA(margs.data_ptr) catch null) |data_hpa| {
-                                const dst_slice: [*]u8 = @ptrFromInt(data_hpa);
-                                @memcpy(dst_slice[0..copy_len], m_data[0..copy_len]);
-                                margs.actual_len = m_data.len;
-                                setResult(vc, context, SBI_SUCCESS, copy_len);
-                            } else {
-                                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-                            }
-                        } else {
-                            margs.actual_len = m_data.len;
-                            setResult(vc, context, SBI_SUCCESS, 0);
-                        }
-                    } else {
-                        margs.actual_len = 0;
-                        setResult(vc, context, SBI_SUCCESS, 0);
-                    }
-                } else {
-                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                }
-            } else {
+            var margs = g.space.readGuestStruct(interface.ManifestArgs, a0) catch {
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
-        },
-        interface.DIOSIX.SET_MANIFEST => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const margs: *const interface.ManifestArgs = @ptrFromInt(hpa);
-                const target_guest = g.getGuestByCid(margs.target_cid);
-                if (target_guest) |target| {
-                    if (!g.is_trusted and !g.is_root and target.parent != g) {
-                        setResult(vc, context, SBI_ERR_DENIED, 0);
-                        return;
-                    }
-                    if (g.space.translateGPA(margs.data_ptr) catch null) |data_hpa| {
-                        const src_slice: [*]const u8 = @ptrFromInt(data_hpa);
-                        target.setManifest(src_slice[0..margs.max_len]) catch |err| {
-                            debug.printf("SBI: Set manifest failed: {s}\n", .{@errorName(err)});
-                            setResult(vc, context, SBI_ERR_FAILED, 0);
+                return;
+            };
+            const target_guest = g.getGuestByCid(margs.target_cid);
+            if (target_guest) |target| {
+                if (target.manifest) |m_data| {
+                    const copy_len = @min(margs.max_len, m_data.len);
+                    if (copy_len > 0) {
+                        _ = std.math.add(usize, margs.data_ptr, copy_len) catch {
+                            setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                            return;
+                        };
+                        g.space.copyToGuest(margs.data_ptr, m_data[0..copy_len]) catch {
+                            setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                            return;
+                        };
+                        margs.actual_len = m_data.len;
+                        g.space.writeGuestStruct(interface.ManifestArgs, a0, margs) catch {
+                            setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                            return;
+                        };
+                        setResult(vc, context, SBI_SUCCESS, copy_len);
+                    } else {
+                        margs.actual_len = m_data.len;
+                        g.space.writeGuestStruct(interface.ManifestArgs, a0, margs) catch {
+                            setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
                             return;
                         };
                         setResult(vc, context, SBI_SUCCESS, 0);
-                    } else {
+                    }
+                } else {
+                    margs.actual_len = 0;
+                    g.space.writeGuestStruct(interface.ManifestArgs, a0, margs) catch {
                         setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-                    }
-                } else {
-                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                }
-            } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
-        },
-        interface.DIOSIX.MAP_CHILD_MEM => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const margs: *const interface.MapChildMemArgs = @ptrFromInt(hpa);
-                const target_guest = g.getGuestByCid(margs.child_id);
-                if (target_guest) |child| {
-                    // Security Shield: Caller must be direct parent or ancestor of child
-                    if (child == g or (child.parent != g and !g.is_root)) {
-                        setResult(vc, context, SBI_ERR_DENIED, 0);
                         return;
-                    }
-                    if (margs.size == 0 or (margs.size % physmem.PageSize) != 0) {
-                        setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                        return;
-                    }
-                    // Limit foreign mapping size to 512MB per call for safety
-                    if (margs.size > 512 * 1024 * 1024) {
-                        setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                        return;
-                    }
-
-                    const parent_rwx = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
-                    var offset: usize = 0;
-                    while (offset < margs.size) : (offset += physmem.PageSize) {
-                        const cur_child_gpa = margs.child_gpa + offset;
-                        const cur_parent_gpa = margs.parent_gpa + offset;
-
-                        // Ensure child page exists (allocate on demand if needed)
-                        const child_hpa = child.space.translateGPA(cur_child_gpa) catch blk: {
-                            const new_page = physmem.allocPage() catch {
-                                setResult(vc, context, SBI_ERR_FAILED, 0);
-                                return;
-                            };
-                            @memset(@as([*]u8, @ptrFromInt(new_page))[0..physmem.PageSize], 0);
-                            const child_pte_flags = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
-                            child.space.map(cur_child_gpa, new_page, physmem.PageSize, child_pte_flags) catch {
-                                physmem.freePage(new_page);
-                                setResult(vc, context, SBI_ERR_FAILED, 0);
-                                return;
-                            };
-                            physmem.decrementPageRef(new_page);
-                            break :blk new_page;
-                        };
-
-                        // Map child_hpa into parent's Stage-2 page table
-                        g.space.map(cur_parent_gpa, child_hpa, physmem.PageSize, parent_rwx) catch {
-                            setResult(vc, context, SBI_ERR_FAILED, 0);
-                            return;
-                        };
-                    }
-
-                    riscv.hfenceGvma();
-                    setResult(vc, context, SBI_SUCCESS, margs.size);
-                } else {
-                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                }
-            } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
-        },
-        interface.DIOSIX.UNMAP_CHILD_MEM => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const uargs: *const interface.UnmapChildMemArgs = @ptrFromInt(hpa);
-                if (uargs.size == 0 or (uargs.size % physmem.PageSize) != 0) {
-                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                    return;
-                }
-                g.space.unmap(uargs.parent_gpa, uargs.size);
-                riscv.hfenceGvma();
-                setResult(vc, context, SBI_SUCCESS, 0);
-            } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
-        },
-        interface.DIOSIX.START => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const sargs: *const interface.StartArgs = @ptrFromInt(hpa);
-                const target_guest = g.getGuestByCid(sargs.child_id);
-                if (target_guest) |child| {
-                    if (!g.is_trusted and !g.is_root and child.parent != g) {
-                        setResult(vc, context, SBI_ERR_DENIED, 0);
-                        return;
-                    }
-                    child.resetForRun(sargs.entry_point, sargs.dtb_ptr);
-                    if (child.vcores.start) |vc_node| {
-                        scheduler.queue(vc_node.contents);
-                        broadcastPhysicalIPI();
-                    }
-                    setResult(vc, context, SBI_SUCCESS, child.local_cid);
-                } else {
-                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                }
-            } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
-        },
-        interface.DIOSIX.NET_SEND => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const pkt_len = @min(a1, guest.MAX_PACKET_LEN);
-                if (pkt_len == 0) {
-                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
-                    return;
-                }
-                const pkt_data = @as([*]const u8, @ptrFromInt(hpa))[0..pkt_len];
-                const dest_cid = a2;
-
-                if (dest_cid == 0) {
-                    // Broadcast packet: send to all peers
-                    var it = g.children.start;
-                    while (it) |node| {
-                        deliverPacket(node.contents, pkt_data);
-                        it = node.next;
-                    }
-                    if (g.parent) |p| {
-                        deliverPacket(p, pkt_data);
-                    }
-                } else if (dest_cid == guest.CID_PARENT or (dest_cid == 1 and !g.is_root)) {
-                    if (g.parent) |p| {
-                        deliverPacket(p, pkt_data);
-                    }
-                } else if (dest_cid >= guest.CID_FIRST_CHILD) {
-                    if (g.getGuestByCid(dest_cid)) |target| {
-                        deliverPacket(target, pkt_data);
-                    } else if (g.parent) |p| {
-                        if (p.getGuestByCid(dest_cid)) |target| {
-                            deliverPacket(target, pkt_data);
-                        }
-                    }
-                }
-                setResult(vc, context, SBI_SUCCESS, 0);
-            } else {
-                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
-            }
-        },
-        interface.DIOSIX.NET_RECV => {
-            if (g.space.translateGPA(a0) catch null) |hpa| {
-                const max_len = @min(a1, guest.MAX_PACKET_LEN);
-                const out_buf = @as([*]u8, @ptrFromInt(hpa))[0..max_len];
-                if (g.net_rx.pop(out_buf)) |copied| {
-                    setResult(vc, context, SBI_SUCCESS, copied);
-                } else {
+                    };
                     setResult(vc, context, SBI_SUCCESS, 0);
                 }
             } else {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+            }
+        },
+        interface.DIOSIX.SET_MANIFEST => {
+            const margs = g.space.readGuestStruct(interface.ManifestArgs, a0) catch {
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
+            const target_guest = g.getGuestByCid(margs.target_cid);
+            if (target_guest) |target| {
+                if (!g.is_trusted and !g.is_root and target.parent != g) {
+                    setResult(vc, context, SBI_ERR_DENIED, 0);
+                    return;
+                }
+                if (margs.max_len == 0 or margs.max_len > MAX_MANIFEST_SIZE_BYTES) {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                }
+                _ = std.math.add(usize, margs.data_ptr, margs.max_len) catch {
+                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                    return;
+                };
+                const buf = target.allocator.alloc(u8, margs.max_len) catch {
+                    setResult(vc, context, SBI_ERR_FAILED, 0);
+                    return;
+                };
+                errdefer target.allocator.free(buf);
+
+                g.space.copyFromGuest(buf, margs.data_ptr) catch {
+                    target.allocator.free(buf);
+                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                    return;
+                };
+
+                target.setManifest(buf) catch |err| {
+                    debug.printf("ERROR sbi SET_MANIFEST: setManifest failed: {s}\n", .{@errorName(err)});
+                    target.allocator.free(buf);
+                    setResult(vc, context, SBI_ERR_FAILED, 0);
+                    return;
+                };
+                setResult(vc, context, SBI_SUCCESS, 0);
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+            }
+        },
+        interface.DIOSIX.MAP_CHILD_MEM => {
+            const margs = g.space.readGuestStruct(interface.MapChildMemArgs, a0) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
+            const target_guest = g.getGuestByCid(margs.child_id);
+            if (target_guest) |child| {
+                // Security Shield: Caller must be direct parent or ancestor of child
+                if (child == g or (child.parent != g and !g.is_root)) {
+                    setResult(vc, context, SBI_ERR_DENIED, 0);
+                    return;
+                }
+                if (margs.size == 0 or (margs.size % physmem.PageSize) != 0) {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                }
+                if ((margs.child_gpa % physmem.PageSize) != 0 or (margs.parent_gpa % physmem.PageSize) != 0) {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                }
+                _ = std.math.add(usize, margs.child_gpa, margs.size) catch {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                };
+                _ = std.math.add(usize, margs.parent_gpa, margs.size) catch {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                };
+                // Limit foreign mapping size to MAX_FOREIGN_MAP_SIZE_BYTES per call for safety
+                if (margs.size > MAX_FOREIGN_MAP_SIZE_BYTES) {
+                    setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                    return;
+                }
+
+                const parent_rwx = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
+                var offset: usize = 0;
+                while (offset < margs.size) : (offset += physmem.PageSize) {
+                    const cur_child_gpa = margs.child_gpa + offset;
+                    const cur_parent_gpa = margs.parent_gpa + offset;
+
+                    // Ensure child page exists (allocate on demand if needed)
+                    const child_hpa = child.space.translateGPA(cur_child_gpa) catch blk: {
+                        const new_page = physmem.allocPage() catch {
+                            setResult(vc, context, SBI_ERR_FAILED, 0);
+                            return;
+                        };
+                        @memset(@as([*]u8, @ptrFromInt(new_page))[0..physmem.PageSize], 0);
+                        const child_pte_flags = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write | sv39x4.PTEFlags.execute | sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed | sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
+                        child.space.map(cur_child_gpa, new_page, physmem.PageSize, child_pte_flags) catch {
+                            physmem.freePage(new_page);
+                            setResult(vc, context, SBI_ERR_FAILED, 0);
+                            return;
+                        };
+                        physmem.decrementPageRef(new_page);
+                        break :blk new_page;
+                    };
+
+                    // Shielding: ensure child_hpa does not map hypervisor physical memory
+                    if (physmem.isHypervisorMemory(child_hpa, physmem.PageSize)) {
+                        setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                        return;
+                    }
+
+                    // Map child_hpa into parent's Stage-2 page table
+                    g.space.map(cur_parent_gpa, child_hpa, physmem.PageSize, parent_rwx) catch {
+                        setResult(vc, context, SBI_ERR_FAILED, 0);
+                        return;
+                    };
+                }
+
+                riscv.hfenceGvma();
+                setResult(vc, context, SBI_SUCCESS, margs.size);
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+            }
+        },
+        interface.DIOSIX.UNMAP_CHILD_MEM => {
+            const uargs = g.space.readGuestStruct(interface.UnmapChildMemArgs, a0) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
+            if (uargs.size == 0 or (uargs.size % physmem.PageSize) != 0) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+            if (uargs.size > MAX_FOREIGN_MAP_SIZE_BYTES) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+            if ((uargs.parent_gpa % physmem.PageSize) != 0) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+            _ = std.math.add(usize, uargs.parent_gpa, uargs.size) catch {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            };
+            g.space.unmap(uargs.parent_gpa, uargs.size);
+            riscv.hfenceGvma();
+            setResult(vc, context, SBI_SUCCESS, 0);
+        },
+        interface.DIOSIX.START => {
+            const sargs = g.space.readGuestStruct(interface.StartArgs, a0) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
+            if ((sargs.entry_point & 1) != 0 or (sargs.dtb_ptr & 3) != 0) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+            const target_guest = g.getGuestByCid(sargs.child_id);
+            if (target_guest) |child| {
+                if (!g.is_trusted and !g.is_root and child.parent != g) {
+                    setResult(vc, context, SBI_ERR_DENIED, 0);
+                    return;
+                }
+                child.resetForRun(sargs.entry_point, sargs.dtb_ptr);
+                if (child.vcores.start) |vc_node| {
+                    scheduler.queue(vc_node.contents);
+                    broadcastPhysicalIPI();
+                }
+                setResult(vc, context, SBI_SUCCESS, child.local_cid);
+            } else {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+            }
+        },
+        interface.DIOSIX.NET_SEND => {
+            if (a1 == 0 or a1 > guest.MAX_PACKET_LEN) {
+                setResult(vc, context, SBI_ERR_INVALID_PARAM, 0);
+                return;
+            }
+            const pkt_len = a1;
+            _ = std.math.add(usize, a0, pkt_len) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
+            var pkt_buf: [guest.MAX_PACKET_LEN]u8 = undefined;
+            g.space.copyFromGuest(pkt_buf[0..pkt_len], a0) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
+            const pkt_data = pkt_buf[0..pkt_len];
+            const dest_cid = a2;
+
+            if (dest_cid == 0) {
+                // Broadcast packet: send to all peers
+                var it = g.children.start;
+                while (it) |node| {
+                    deliverPacket(node.contents, pkt_data);
+                    it = node.next;
+                }
+                if (g.parent) |p| {
+                    deliverPacket(p, pkt_data);
+                }
+            } else if (dest_cid == guest.CID_PARENT or (dest_cid == 1 and !g.is_root)) {
+                if (g.parent) |p| {
+                    deliverPacket(p, pkt_data);
+                }
+            } else if (dest_cid >= guest.CID_FIRST_CHILD) {
+                if (g.getGuestByCid(dest_cid)) |target| {
+                    deliverPacket(target, pkt_data);
+                } else if (g.parent) |p| {
+                    if (p.getGuestByCid(dest_cid)) |target| {
+                        deliverPacket(target, pkt_data);
+                    }
+                }
+            }
+            setResult(vc, context, SBI_SUCCESS, 0);
+        },
+        interface.DIOSIX.NET_RECV => {
+            const max_len = @min(a1, guest.MAX_PACKET_LEN);
+            if (g.net_rx.peek()) |pkt| {
+                const copy_len = @min(max_len, @as(usize, pkt.len));
+                g.space.copyToGuest(a0, pkt.data[0..copy_len]) catch {
+                    setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                    return;
+                };
+                g.net_rx.drop();
+                setResult(vc, context, SBI_SUCCESS, copy_len);
+            } else {
+                setResult(vc, context, SBI_SUCCESS, 0);
             }
         },
         interface.DIOSIX.NET_POLL => {
@@ -915,6 +1000,11 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
             const target_hart = a0;
             const start_addr = a1;
             const opaque_param = a2;
+
+            if ((start_addr & 1) != 0) {
+                setResult(vc, context, interface.ERR_INVALID_ADDRESS, 0);
+                return;
+            }
 
             if (g.findVcore(target_hart)) |target_vc| {
                 if (target_vc.state != .stopped) {
@@ -958,15 +1048,15 @@ fn handleHSM(vc: *vcore.VirtualCore, sub_idx: usize, context: *riscv.ThreadConte
                     target_vc.getNativeContext()[@intFromEnum(arch.Register.a0)] = target_hart;
                     target_vc.getNativeContext()[@intFromEnum(arch.Register.a1)] = opaque_param;
                     target_vc.getNativeMachine().mepc = start_addr;
-                    target_vc.getNativeMachine().mstatus = (1 << riscv.MSTATUS.MPP_SHIFT) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | (3 << riscv.MSTATUS.FS_SHIFT);
+                    target_vc.getNativeMachine().mstatus = (1 << riscv.MSTATUS.MPP_SHIFT) | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | riscv.MSTATUS.FS_DIRTY;
                     target_vc.getNativeMachine().hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
-                    target_vc.getNativeMachine().hedeleg = 0xb1fb;
-                    target_vc.getNativeMachine().hideleg = 0x1666;
+                    target_vc.getNativeMachine().hedeleg = riscv.HEDELEG_DELEGATED;
+                    target_vc.getNativeMachine().hideleg = riscv.HIDELEG_DELEGATED;
                     target_vc.getNativeMachine().hvip = 0;
                     if (target_vc.guest.space.mode == .h_paging) {
                         target_vc.getNativeMachine().hgatp = if (target_vc.guest.space.paging) |*p| p.hgatp(target_vc.guest.vmid) else 0;
                     }
-                    target_vc.getNativeGuestState().vsstatus = riscv.SSTATUS.SPIE | (3 << riscv.MSTATUS.FS_SHIFT);
+                    target_vc.getNativeGuestState().vsstatus = riscv.SSTATUS.SPIE | riscv.MSTATUS.FS_DIRTY;
                     target_vc.getNativeGuestState().vsatp = 0;
                     target_vc.getNativeGuestState().vstimecmp = std.math.maxInt(u64);
                     target_vc.getNativeGuestState().vsenvcfg = riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL;
@@ -1042,49 +1132,54 @@ fn handleDebugConsole(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, fun
             // Cap bytes-per-call to prevent a guest from monopolizing the
             // hypervisor in this loop. The guest can make multiple calls.
             const num_bytes = if (a0 > DBCN_MAX_WRITE_BYTES) DBCN_MAX_WRITE_BYTES else a0;
-            const gpa: usize = (a1 & RV32_WORD_MASK) | ((@as(usize, @intCast(a2)) & RV32_WORD_MASK) << RV32_HIGH_SHIFT);
+            const gpa: usize = if (vc.exec_path == .emulated)
+                @as(usize, @truncate((a1 & RV32_WORD_MASK) | ((@as(u64, a2) & RV32_WORD_MASK) << RV32_HIGH_SHIFT)))
+            else
+                if (a2 != 0 and a2 != std.math.maxInt(usize))
+                    @as(usize, @truncate((a1 & RV32_WORD_MASK) | ((@as(u64, a2) & RV32_WORD_MASK) << RV32_HIGH_SHIFT)))
+                else
+                    a1;
+            _ = std.math.add(usize, gpa, num_bytes) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
 
             var written: usize = 0;
             var buf: [DBCN_CHUNK_BUFFER_SIZE]u8 = undefined;
-            var buf_idx: usize = 0;
 
             while (written < num_bytes) {
-                const target_addr = gpa + written;
-                var char: u8 = 0;
-                if (g.space.translateGPA(target_addr)) |hpa| {
-                    char = @as(*u8, @ptrFromInt(hpa)).*;
-                } else |_| {
+                const chunk = @min(num_bytes - written, buf.len);
+                g.space.copyFromGuest(buf[0..chunk], gpa + written) catch {
                     setResult(vc, context, SBI_ERR_INVALID_ADDRESS, written);
                     return;
-                }
-                buf[buf_idx] = char;
-                buf_idx += 1;
-                written += 1;
-
-                if (buf_idx == buf.len) {
-                    debug.write(buf[0..buf_idx]);
-                    buf_idx = 0;
-                }
-            }
-            if (buf_idx > 0) {
-                debug.write(buf[0..buf_idx]);
+                };
+                debug.write(buf[0..chunk]);
+                written += chunk;
             }
             setResult(vc, context, SBI_SUCCESS, written);
         },
         interface.DBCN.CONSOLE_READ => {
-            const num_bytes = a0;
-            const gpa: usize = (a1 & RV32_WORD_MASK) | ((@as(usize, @intCast(a2)) & RV32_WORD_MASK) << RV32_HIGH_SHIFT);
+            const num_bytes = @min(a0, DBCN_MAX_WRITE_BYTES);
+            const gpa: usize = if (vc.exec_path == .emulated)
+                @as(usize, @truncate((a1 & RV32_WORD_MASK) | ((@as(u64, a2) & RV32_WORD_MASK) << RV32_HIGH_SHIFT)))
+            else
+                if (a2 != 0 and a2 != std.math.maxInt(usize))
+                    @as(usize, @truncate((a1 & RV32_WORD_MASK) | ((@as(u64, a2) & RV32_WORD_MASK) << RV32_HIGH_SHIFT)))
+                else
+                    a1;
+            _ = std.math.add(usize, gpa, num_bytes) catch {
+                setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);
+                return;
+            };
             var read: usize = 0;
             while (read < num_bytes) : (read += 1) {
                 const c = debug.getchar();
                 if (c < 0) break;
-                const target_addr = gpa + read;
-                if (g.space.translateGPA(target_addr)) |hpa| {
-                    @as(*u8, @ptrFromInt(hpa)).* = @truncate(@as(u16, @bitCast(c)));
-                } else |_| {
+                const char_byte: [1]u8 = .{@truncate(@as(u16, @bitCast(c)))};
+                g.space.copyToGuest(gpa + read, &char_byte) catch {
                     setResult(vc, context, SBI_ERR_INVALID_ADDRESS, read);
                     return;
-                }
+                };
             }
             setResult(vc, context, SBI_SUCCESS, read);
         },
@@ -1130,13 +1225,7 @@ fn terminateOrRestart(g: *guest.Guest, exit_code: usize) void {
 /// running_on_cpu is null for blocked vcores, we can't target a specific
 /// physical core. Broadcasting ensures an idle core picks up the vcore.
 fn broadcastPhysicalIPI() void {
-    const my_hart = riscv.getCPUContext().hardware_hart_id;
-    for (riscv.cpu_to_hart_map) |hw_hart| {
-        if (hw_hart == my_hart) continue; // Don't IPI ourselves
-        if (riscv.CLINT.msip(hw_hart)) |ptr| {
-            ptr.* = 1;
-        }
-    }
+    pcore.broadcastIpi();
 }
 
 test "SBI Base extension dispatch" {

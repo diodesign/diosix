@@ -189,12 +189,20 @@ pub const VirtioVsock = struct {
             0x030 => self.queue_sel = val,
             0x038 => {
                 if (self.queue_sel < NUM_QUEUES) {
-                    self.queues[self.queue_sel].num = @truncate(@min(val, QUEUE_SIZE_MAX));
+                    const q_num = @min(val, QUEUE_SIZE_MAX);
+                    if (q_num > 0) {
+                        self.queues[self.queue_sel].num = @truncate(q_num);
+                    }
                 }
             },
             0x044 => {
                 if (self.queue_sel < NUM_QUEUES) {
-                    self.queues[self.queue_sel].ready = (val & 1) != 0;
+                    const req_ready = (val & 1) != 0;
+                    if (req_ready and self.queues[self.queue_sel].num == 0) {
+                        self.queues[self.queue_sel].ready = false;
+                    } else {
+                        self.queues[self.queue_sel].ready = req_ready;
+                    }
                 }
             },
             0x050 => {
@@ -255,20 +263,25 @@ pub const VirtioVsock = struct {
     pub fn processTx(self: *VirtioVsock) void {
         const mem = self.mem orelse return;
         var tx_q = &self.queues[1];
-        if (!tx_q.ready or tx_q.driver_gpa == 0 or tx_q.device_gpa == 0) return;
+        if (!tx_q.ready or tx_q.num == 0 or tx_q.driver_gpa == 0 or tx_q.device_gpa == 0) return;
 
         // Read available index from Avail Ring
         var avail_idx: u16 = 0;
-        if (!mem.read(tx_q.driver_gpa + 2, std.mem.asBytes(&avail_idx))) return;
+        if (!mem.read(tx_q.driver_gpa +% 2, std.mem.asBytes(&avail_idx))) return;
 
-        while (tx_q.last_avail_idx != avail_idx) {
+        var processed_count: u16 = 0;
+        while (tx_q.last_avail_idx != avail_idx and processed_count < tx_q.num) : (processed_count += 1) {
             const ring_slot = tx_q.last_avail_idx % tx_q.num;
             var desc_head_idx: u16 = 0;
-            if (!mem.read(tx_q.driver_gpa + 4 + (@as(u64, ring_slot) * 2), std.mem.asBytes(&desc_head_idx))) break;
+            const ring_entry_offset = 4 +% (@as(u64, ring_slot) *% 2);
+            if (!mem.read(tx_q.driver_gpa +% ring_entry_offset, std.mem.asBytes(&desc_head_idx))) break;
+
+            if (desc_head_idx >= tx_q.num) break;
 
             // Read descriptor
             var desc: VirtqDesc = undefined;
-            const desc_addr = tx_q.desc_gpa + (@as(u64, desc_head_idx) * @sizeOf(VirtqDesc));
+            const desc_offset = @as(u64, desc_head_idx) *% @sizeOf(VirtqDesc);
+            const desc_addr = tx_q.desc_gpa +% desc_offset;
             if (!mem.read(desc_addr, std.mem.asBytes(&desc))) break;
 
             if (desc.len >= @sizeOf(VirtioVsockHdr)) {
@@ -281,12 +294,13 @@ pub const VirtioVsock = struct {
                     if (payload_len > 0) {
                         if (desc.len > @sizeOf(VirtioVsockHdr)) {
                             const available_in_desc = @min(payload_len, desc.len - @sizeOf(VirtioVsockHdr));
-                            if (mem.read(desc.addr + @sizeOf(VirtioVsockHdr), payload_buf[0..available_in_desc])) {
+                            if (mem.read(desc.addr +% @sizeOf(VirtioVsockHdr), payload_buf[0..available_in_desc])) {
                                 payload_slice = payload_buf[0..available_in_desc];
                             }
-                        } else if ((desc.flags & VIRTQ_DESC_F_NEXT) != 0) {
+                        } else if ((desc.flags & VIRTQ_DESC_F_NEXT) != 0 and desc.next < tx_q.num) {
                             var next_desc: VirtqDesc = undefined;
-                            const next_desc_addr = tx_q.desc_gpa + (@as(u64, desc.next) * @sizeOf(VirtqDesc));
+                            const next_desc_offset = @as(u64, desc.next) *% @sizeOf(VirtqDesc);
+                            const next_desc_addr = tx_q.desc_gpa +% next_desc_offset;
                             if (mem.read(next_desc_addr, std.mem.asBytes(&next_desc))) {
                                 const copy_len = @min(payload_len, next_desc.len);
                                 if (mem.read(next_desc.addr, payload_buf[0..copy_len])) {
@@ -309,11 +323,12 @@ pub const VirtioVsock = struct {
                 .id = desc_head_idx,
                 .len = 0,
             };
-            const used_elem_addr = tx_q.device_gpa + 4 + (@as(u64, used_slot) * @sizeOf(VirtqUsedElem));
+            const used_elem_offset = 4 +% (@as(u64, used_slot) *% @sizeOf(VirtqUsedElem));
+            const used_elem_addr = tx_q.device_gpa +% used_elem_offset;
             _ = mem.write(used_elem_addr, std.mem.asBytes(&used_elem));
 
             tx_q.last_used_idx +%= 1;
-            _ = mem.write(tx_q.device_gpa + 2, std.mem.asBytes(&tx_q.last_used_idx));
+            _ = mem.write(tx_q.device_gpa +% 2, std.mem.asBytes(&tx_q.last_used_idx));
 
             tx_q.last_avail_idx +%= 1;
         }
@@ -325,19 +340,23 @@ pub const VirtioVsock = struct {
     pub fn deliverRxPacket(self: *VirtioVsock, hdr: *const VirtioVsockHdr, payload: []const u8) bool {
         const mem = self.mem orelse return false;
         var rx_q = &self.queues[0];
-        if (!rx_q.ready or rx_q.driver_gpa == 0 or rx_q.device_gpa == 0) return false;
+        if (!rx_q.ready or rx_q.num == 0 or rx_q.driver_gpa == 0 or rx_q.device_gpa == 0) return false;
 
         // Read available index
         var avail_idx: u16 = 0;
-        if (!mem.read(rx_q.driver_gpa + 2, std.mem.asBytes(&avail_idx))) return false;
+        if (!mem.read(rx_q.driver_gpa +% 2, std.mem.asBytes(&avail_idx))) return false;
         if (rx_q.last_avail_idx == avail_idx) return false; // No RX buffers available
 
         const ring_slot = rx_q.last_avail_idx % rx_q.num;
         var desc_head_idx: u16 = 0;
-        if (!mem.read(rx_q.driver_gpa + 4 + (@as(u64, ring_slot) * 2), std.mem.asBytes(&desc_head_idx))) return false;
+        const ring_entry_offset = 4 +% (@as(u64, ring_slot) *% 2);
+        if (!mem.read(rx_q.driver_gpa +% ring_entry_offset, std.mem.asBytes(&desc_head_idx))) return false;
+
+        if (desc_head_idx >= rx_q.num) return false;
 
         var desc: VirtqDesc = undefined;
-        const desc_addr = rx_q.desc_gpa + (@as(u64, desc_head_idx) * @sizeOf(VirtqDesc));
+        const desc_offset = @as(u64, desc_head_idx) *% @sizeOf(VirtqDesc);
+        const desc_addr = rx_q.desc_gpa +% desc_offset;
         if (!mem.read(desc_addr, std.mem.asBytes(&desc))) return false;
 
         if (desc.len < @sizeOf(VirtioVsockHdr)) return false;
@@ -348,13 +367,15 @@ pub const VirtioVsock = struct {
         var total_written: u32 = @sizeOf(VirtioVsockHdr);
 
         if (payload.len > 0) {
-            if (desc.len >= @sizeOf(VirtioVsockHdr) + payload.len) {
-                if (mem.write(desc.addr + @sizeOf(VirtioVsockHdr), payload)) {
+            const needed_len = std.math.add(usize, @sizeOf(VirtioVsockHdr), payload.len) catch std.math.maxInt(usize);
+            if (desc.len >= needed_len) {
+                if (mem.write(desc.addr +% @sizeOf(VirtioVsockHdr), payload)) {
                     total_written += @truncate(payload.len);
                 }
-            } else if ((desc.flags & VIRTQ_DESC_F_NEXT) != 0) {
+            } else if ((desc.flags & VIRTQ_DESC_F_NEXT) != 0 and desc.next < rx_q.num) {
                 var next_desc: VirtqDesc = undefined;
-                const next_desc_addr = rx_q.desc_gpa + (@as(u64, desc.next) * @sizeOf(VirtqDesc));
+                const next_desc_offset = @as(u64, desc.next) *% @sizeOf(VirtqDesc);
+                const next_desc_addr = rx_q.desc_gpa +% next_desc_offset;
                 if (mem.read(next_desc_addr, std.mem.asBytes(&next_desc))) {
                     const copy_len = @min(payload.len, next_desc.len);
                     if (mem.write(next_desc.addr, payload[0..copy_len])) {
@@ -370,11 +391,12 @@ pub const VirtioVsock = struct {
             .id = desc_head_idx,
             .len = total_written,
         };
-        const used_elem_addr = rx_q.device_gpa + 4 + (@as(u64, used_slot) * @sizeOf(VirtqUsedElem));
+        const used_elem_offset = 4 +% (@as(u64, used_slot) *% @sizeOf(VirtqUsedElem));
+        const used_elem_addr = rx_q.device_gpa +% used_elem_offset;
         _ = mem.write(used_elem_addr, std.mem.asBytes(&used_elem));
 
         rx_q.last_used_idx +%= 1;
-        _ = mem.write(rx_q.device_gpa + 2, std.mem.asBytes(&rx_q.last_used_idx));
+        _ = mem.write(rx_q.device_gpa +% 2, std.mem.asBytes(&rx_q.last_used_idx));
         rx_q.last_avail_idx +%= 1;
 
         // Raise interrupt
@@ -418,15 +440,17 @@ const MockRam = struct {
 
     pub fn read(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
         const self: *MockRam = @ptrCast(@alignCast(ctx));
-        if (gpa + buf.len > self.buffer.len) return false;
-        @memcpy(buf, self.buffer[@intCast(gpa)..@intCast(gpa + buf.len)]);
+        const end = std.math.add(u64, gpa, buf.len) catch return false;
+        if (end > self.buffer.len) return false;
+        @memcpy(buf, self.buffer[@intCast(gpa)..@intCast(end)]);
         return true;
     }
 
     pub fn write(ctx: *anyopaque, gpa: u64, buf: []const u8) bool {
         const self: *MockRam = @ptrCast(@alignCast(ctx));
-        if (gpa + buf.len > self.buffer.len) return false;
-        @memcpy(self.buffer[@intCast(gpa)..@intCast(gpa + buf.len)], buf);
+        const end = std.math.add(u64, gpa, buf.len) catch return false;
+        if (end > self.buffer.len) return false;
+        @memcpy(self.buffer[@intCast(gpa)..@intCast(end)], buf);
         return true;
     }
 };
@@ -514,4 +538,41 @@ test "VirtIO-vsock inter-VM packet routing between Root VM and Guest VM" {
 
     // Verify Guest VM received interrupt
     try testing.expect(guest_vsock.interrupt_status & 1 != 0);
+}
+
+test "VirtIO-vsock safety against malicious queue zero size and out-of-bounds descriptor heads" {
+    const testing = std.testing;
+
+    var ram = MockRam{};
+    const mem = MemoryAccessor{
+        .ctx = &ram,
+        .readFn = MockRam.read,
+        .writeFn = MockRam.write,
+    };
+    var vsock = VirtioVsock.init(3, mem);
+
+    // 1. Malicious guest attempts to configure queue size = 0
+    vsock.writeReg(0x030, 1); // Select TX queue
+    vsock.writeReg(0x038, 0); // Write QueueNum = 0
+    try testing.expect(vsock.queues[1].num > 0); // Must be rejected or preserved > 0
+
+    // 2. Queue notify on unconfigured queue must not divide by zero or panic
+    vsock.queues[1].num = 0; // Forced simulation of zero queue size
+    vsock.queues[1].ready = true;
+    vsock.processTx(); // Must safely return without dividing by zero
+
+    // 3. Out-of-bounds descriptor head index must not read outside descriptor table
+    vsock.queues[1].num = 16;
+    vsock.queues[1].driver_gpa = 0x2000;
+    vsock.queues[1].desc_gpa = 0x1000;
+    vsock.queues[1].device_gpa = 0x3000;
+    vsock.queues[1].last_avail_idx = 0;
+
+    const bad_avail_idx: u16 = 1;
+    _ = mem.write(0x2002, std.mem.asBytes(&bad_avail_idx));
+    const bad_desc_head: u16 = 999; // Out of bounds (> 16)
+    _ = mem.write(0x2004, std.mem.asBytes(&bad_desc_head));
+
+    vsock.processTx(); // Must safely break without out-of-bounds read
+    try testing.expectEqual(@as(u16, 0), vsock.queues[1].last_used_idx); // No descriptor processed
 }

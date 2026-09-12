@@ -127,12 +127,13 @@ pub const VirtioInput = struct {
             0x030 => self.queue_sel = val,
             0x038 => {
                 if (self.queue_sel < NUM_QUEUES) {
-                    self.queues[self.queue_sel].num = @truncate(@min(val, QUEUE_SIZE_MAX));
+                    const q_num = @min(val, QUEUE_SIZE_MAX);
+                    self.queues[self.queue_sel].num = @truncate(if (q_num > 0) q_num else 1);
                 }
             },
             0x044 => {
                 if (self.queue_sel < NUM_QUEUES) {
-                    self.queues[self.queue_sel].ready = (val & 1) != 0;
+                    self.queues[self.queue_sel].ready = (val & 1) != 0 and self.queues[self.queue_sel].num > 0;
                 }
             },
             0x064 => self.interrupt_status &= ~val,

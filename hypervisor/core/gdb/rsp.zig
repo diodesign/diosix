@@ -11,6 +11,7 @@ const debug = @import("../debug.zig");
 const glue = @import("../emulation.zig");
 const vcore = @import("../vcore.zig");
 const guest = @import("../guest.zig");
+const physmem = @import("../physmem.zig");
 const x86_64 = @import("../../hardware/emulation/arch/x86_64/mod.zig");
 
 pub const X86_64_TARGET_XML =
@@ -89,7 +90,8 @@ pub fn sendPacket(payload: []const u8) void {
 /// Send hex-encoded text string response inside an 'O' packet (for monitor commands)
 pub fn sendOutputPacket(text: []const u8) void {
     var hex_buf: [1024]u8 = undefined;
-    if (text.len * 2 + 1 > hex_buf.len) return;
+    const max_text_len = (hex_buf.len - 1) / 2;
+    if (text.len > max_text_len) return;
 
     hex_buf[0] = 'O';
     const hex_digits = "0123456789abcdef";
@@ -214,7 +216,7 @@ pub fn handlePacketPayload(payload: []const u8) void {
                 if (vc.exec_path == .emulated) {
                     if (vc.exec_path.emulated.vcpu) |vcpu| {
                         if (reg_num == 16) { // RIP / PC
-                            var bytes: [8]u8 = undefined;
+                            var bytes: [8]u8 = @splat(0);
                             var idx: usize = 0;
                             while (idx < 8 and idx * 2 + 1 < val_str.len) : (idx += 1) {
                                 if (parseHexByte(val_str[idx * 2 .. idx * 2 + 2])) |b| {
@@ -251,7 +253,15 @@ pub fn handlePacketPayload(payload: []const u8) void {
             var mem_buf: [256]u8 = undefined;
             const read_len = @min(len, mem_buf.len / 2);
             if (active_thread == 1) {
-                const host_ptr = @as([*]const u8, @ptrFromInt(addr));
+                const host_addr: usize = std.math.cast(usize, addr) orelse {
+                    sendPacket("E01");
+                    return;
+                };
+                if (!physmem.isRam(host_addr, read_len)) {
+                    sendPacket("E01");
+                    return;
+                }
+                const host_ptr = @as([*]const u8, @ptrFromInt(host_addr));
                 var hex_res: [512]u8 = undefined;
                 const hex_digits = "0123456789abcdef";
                 for (host_ptr[0..read_len], 0..) |b, idx| {
@@ -263,22 +273,20 @@ pub fn handlePacketPayload(payload: []const u8) void {
             }
 
             if (active_vc) |vc| {
-                if (vc.exec_path == .emulated) {
-                    const target_gpa = addr;
-                    if (target_gpa < vc.guest.space.range_size) {
-                        const host_ptr = @as([*]const u8, @ptrFromInt(vc.guest.space.base_hpa + target_gpa));
-                        @memcpy(mem_buf[0..read_len], host_ptr[0..read_len]);
-
-                        var hex_res: [512]u8 = undefined;
-                        const hex_digits = "0123456789abcdef";
-                        for (mem_buf[0..read_len], 0..) |b, idx| {
-                            hex_res[idx * 2] = hex_digits[(b >> 4) & 0xf];
-                            hex_res[idx * 2 + 1] = hex_digits[b & 0xf];
-                        }
-                        sendPacket(hex_res[0 .. read_len * 2]);
-                        return;
+                const target_gpa: usize = std.math.cast(usize, addr) orelse {
+                    sendPacket("E01");
+                    return;
+                };
+                if (vc.guest.space.copyFromGuest(mem_buf[0..read_len], target_gpa)) |_| {
+                    var hex_res: [512]u8 = undefined;
+                    const hex_digits = "0123456789abcdef";
+                    for (mem_buf[0..read_len], 0..) |b, idx| {
+                        hex_res[idx * 2] = hex_digits[(b >> 4) & 0xf];
+                        hex_res[idx * 2 + 1] = hex_digits[b & 0xf];
                     }
-                }
+                    sendPacket(hex_res[0 .. read_len * 2]);
+                    return;
+                } else |_| {}
             }
             sendPacket("E01");
         },
@@ -305,26 +313,58 @@ pub fn handlePacketPayload(payload: []const u8) void {
             };
 
             const hex_payload = payload[1 + colon_idx + 1 ..];
-            if (hex_payload.len < len * 2) {
+            if (len > hex_payload.len / 2) {
                 sendPacket("E01");
                 return;
             }
 
-            if (active_vc) |vc| {
-                if (vc.exec_path == .emulated) {
-                    const target_gpa = addr;
-                    if (target_gpa < vc.guest.space.range_size) {
-                        const host_ptr = @as([*]u8, @ptrFromInt(vc.guest.space.base_hpa + target_gpa));
-                        var idx: usize = 0;
-                        while (idx < len) : (idx += 1) {
-                            if (parseHexByte(hex_payload[idx * 2 .. idx * 2 + 2])) |b| {
-                                host_ptr[idx] = b;
-                            }
-                        }
-                        sendPacket("OK");
+            if (active_thread == 1) {
+                const host_addr: usize = std.math.cast(usize, addr) orelse {
+                    sendPacket("E01");
+                    return;
+                };
+                var write_buf: [256]u8 = undefined;
+                const write_len = @min(len, write_buf.len);
+                // Prevent GDB writes to hypervisor execution code/data structures
+                if (!physmem.isRam(host_addr, write_len) or physmem.isHypervisorMemory(host_addr, write_len)) {
+                    sendPacket("E01");
+                    return;
+                }
+                var idx: usize = 0;
+                while (idx < write_len) : (idx += 1) {
+                    if (parseHexByte(hex_payload[idx * 2 .. idx * 2 + 2])) |b| {
+                        write_buf[idx] = b;
+                    } else {
+                        sendPacket("E01");
                         return;
                     }
                 }
+                const host_ptr = @as([*]u8, @ptrFromInt(host_addr));
+                @memcpy(host_ptr[0..write_len], write_buf[0..write_len]);
+                sendPacket("OK");
+                return;
+            }
+
+            if (active_vc) |vc| {
+                const target_gpa: usize = std.math.cast(usize, addr) orelse {
+                    sendPacket("E01");
+                    return;
+                };
+                var write_buf: [256]u8 = undefined;
+                const write_len = @min(len, write_buf.len);
+                var idx: usize = 0;
+                while (idx < write_len) : (idx += 1) {
+                    if (parseHexByte(hex_payload[idx * 2 .. idx * 2 + 2])) |b| {
+                        write_buf[idx] = b;
+                    } else {
+                        sendPacket("E01");
+                        return;
+                    }
+                }
+                if (vc.guest.space.copyToGuest(target_gpa, write_buf[0..write_len])) |_| {
+                    sendPacket("OK");
+                    return;
+                } else |_| {}
             }
             sendPacket("E01");
         },
@@ -448,22 +488,17 @@ const SwBreakpoint = struct {
 var sw_breakpoints: [16]SwBreakpoint = undefined;
 
 fn readByte(vc: *vcore.VirtualCore, addr: u64) ?u8 {
-    const target_gpa = addr;
-    if (target_gpa < vc.guest.space.range_size) {
-        const host_ptr = @as([*]u8, @ptrFromInt(vc.guest.space.base_hpa + target_gpa));
-        return host_ptr[0];
-    }
-    return null;
+    const target_gpa: usize = std.math.cast(usize, addr) orelse return null;
+    var b: [1]u8 = undefined;
+    vc.guest.space.copyFromGuest(&b, target_gpa) catch return null;
+    return b[0];
 }
 
 fn writeByte(vc: *vcore.VirtualCore, addr: u64, val: u8) bool {
-    const target_gpa = addr;
-    if (target_gpa < vc.guest.space.range_size) {
-        const host_ptr = @as([*]u8, @ptrFromInt(vc.guest.space.base_hpa + target_gpa));
-        host_ptr[0] = val;
-        return true;
-    }
-    return false;
+    const target_gpa: usize = std.math.cast(usize, addr) orelse return false;
+    const b = [1]u8{val};
+    vc.guest.space.copyToGuest(target_gpa, &b) catch return false;
+    return true;
 }
 
 fn insertSwBreakpoint(addr: u64) bool {

@@ -28,6 +28,21 @@ pub extern fn hw_run_vcore(
     guest_state: *const riscv.GuestState,
 ) noreturn;
 
+// Send a physical IPI to all other online physical cores to wake them.
+pub fn broadcastIpi() void {
+    if (builtin.is_test) return;
+    const my_hart = this().hardware_hart_id;
+    for (0..riscv.cpu_to_hart_map.len) |idx| {
+        if (riscv.cpu_contexts[idx] == null) continue;
+        const hw_hart = riscv.cpu_to_hart_map[idx];
+        if (hw_hart != my_hart) {
+            if (riscv.CLINT.msip(hw_hart)) |ptr| {
+                ptr.* = 1;
+            }
+        }
+    }
+}
+
 // Perform a context switch to the given virtual core
 // This sets up the physical core to run the guest on the next exception return
 pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
@@ -37,7 +52,9 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
             return;
         }
     }
-    if (@intFromPtr(to_vcore) & 7 != 0) @import("debug.zig").printf("!!! contextSwitch given misaligned to_vcore 0x{x}\n", .{@intFromPtr(to_vcore)});
+    if ((@intFromPtr(to_vcore) & (@alignOf(vcore.VirtualCore) - 1)) != 0) {
+        @import("debug.zig").printf("!!! contextSwitch given misaligned to_vcore 0x{x}\n", .{@intFromPtr(to_vcore)});
+    }
     cpu.active_vcore = to_vcore;
     to_vcore.running_on_cpu = cpu.cpu_core_id;
     to_vcore.state = .running;
@@ -45,8 +62,8 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
 
     const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
     pmp.PMPConfig.clearAllPmp();
-    pmp.PMPConfig.writePmpAddr(0, ~@as(usize, 0));
-    pmp.PMPConfig.writePmpCfg(0, 0x1f); // NAPOT, RWX
+    pmp.PMPConfig.writePmpAddr(0, std.math.maxInt(usize));
+    pmp.PMPConfig.writePmpCfg(0, pmp.PMPAccess.napot | pmp.PMPAccess.rwx); // NAPOT, RWX
 
     switch (to_vcore.exec_path) {
         .native => {

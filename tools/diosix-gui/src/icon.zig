@@ -46,6 +46,9 @@ pub const Icon = struct {
     // For read_write_text
     cursor_pos: usize = 0,
     max_input_len: usize = 64,
+    selection_start: ?usize = null,
+    selection_end: ?usize = null,
+    is_dragging_select: bool = false,
 
     // For slider
     slider_min: i32 = 0,
@@ -120,8 +123,9 @@ pub const Icon = struct {
             .slider_max = max,
             .slider_val = initial,
         };
-        const s_len = @min(suffix.len, icon.slider_suffix.len);
+        const s_len = if (icon.slider_suffix.len > 1) @min(suffix.len, icon.slider_suffix.len - 1) else 0;
         @memcpy(icon.slider_suffix[0..s_len], suffix[0..s_len]);
+        icon.slider_suffix[s_len] = 0;
         icon.slider_suffix_len = s_len;
         return icon;
     }
@@ -166,10 +170,16 @@ pub const Icon = struct {
     }
 
     pub fn setText(self: *Icon, text: []const u8) void {
-        const copy_len = @min(text.len, self.text_buf.len);
+        const max_limit = if (self.icon_type == .read_write_text)
+            (if (self.text_buf.len > 1) @min(self.text_buf.len - 1, self.max_input_len) else 0)
+        else
+            (if (self.text_buf.len > 1) self.text_buf.len - 1 else 0);
+        const copy_len = @min(text.len, max_limit);
         @memcpy(self.text_buf[0..copy_len], text[0..copy_len]);
+        self.text_buf[copy_len] = 0;
         self.text_len = copy_len;
         self.cursor_pos = copy_len;
+        self.clearSelection();
     }
 
     pub fn getText(self: *const Icon) []const u8 {
@@ -184,11 +194,89 @@ pub const Icon = struct {
         self.setSliderValue(self.slider_val + delta * self.slider_step);
     }
 
-    // Handles character insertion for read-write text box
+    pub const SelectionBounds = struct {
+        min: usize,
+        max: usize,
+    };
+
+    pub fn hasSelection(self: *const Icon) bool {
+        if (self.selection_start) |s| {
+            if (self.selection_end) |e| {
+                return s != e;
+            }
+        }
+        return false;
+    }
+
+    pub fn getSelectionBounds(self: *const Icon) ?SelectionBounds {
+        if (self.selection_start) |s| {
+            if (self.selection_end) |e| {
+                if (s == e) return null;
+                return .{
+                    .min = @min(s, e),
+                    .max = @min(@max(s, e), self.text_len),
+                };
+            }
+        }
+        return null;
+    }
+
+    pub fn clearSelection(self: *Icon) void {
+        self.selection_start = null;
+        self.selection_end = null;
+        self.is_dragging_select = false;
+    }
+
+    pub fn selectAll(self: *Icon) void {
+        if (self.icon_type != .read_write_text) return;
+        self.selection_start = 0;
+        self.selection_end = self.text_len;
+        self.cursor_pos = self.text_len;
+    }
+
+    pub fn clearField(self: *Icon) void {
+        if (self.icon_type != .read_write_text) return;
+        self.text_len = 0;
+        self.cursor_pos = 0;
+        self.clearSelection();
+        if (self.text_buf.len > 0) self.text_buf[0] = 0;
+    }
+
+    pub fn getSelectedText(self: *const Icon) []const u8 {
+        if (self.getSelectionBounds()) |b| {
+            return self.text_buf[b.min..b.max];
+        }
+        return "";
+    }
+
+    pub fn deleteSelection(self: *Icon) bool {
+        if (self.icon_type != .read_write_text) return false;
+        const bounds = self.getSelectionBounds() orelse return false;
+        const min = bounds.min;
+        const max = bounds.max;
+        const count = max - min;
+        if (count == 0) return false;
+
+        var i = max;
+        while (i < self.text_len) : (i += 1) {
+            self.text_buf[i - count] = self.text_buf[i];
+        }
+        self.text_len -= count;
+        if (self.text_len < self.text_buf.len) {
+            self.text_buf[self.text_len] = 0;
+        }
+        self.cursor_pos = min;
+        self.clearSelection();
+        return true;
+    }
+
+    // Handles character insertion for read-write text box with strict bounds check and null termination
     pub fn insertChar(self: *Icon, c: u8) void {
         if (self.icon_type != .read_write_text) return;
-        if (self.text_len >= self.max_input_len or self.text_len >= self.text_buf.len) return;
+        if (self.text_len >= self.max_input_len or self.text_len + 1 >= self.text_buf.len) return;
         if (c < 32 or c > 126) return;
+
+        self.cursor_pos = @min(self.cursor_pos, self.text_len);
 
         // Shift right
         var i = self.text_len;
@@ -197,6 +285,7 @@ pub const Icon = struct {
         }
         self.text_buf[self.cursor_pos] = c;
         self.text_len += 1;
+        self.text_buf[self.text_len] = 0;
         self.cursor_pos += 1;
     }
 
@@ -205,12 +294,67 @@ pub const Icon = struct {
         if (self.icon_type != .read_write_text) return;
         if (self.cursor_pos == 0 or self.text_len == 0) return;
 
+        self.cursor_pos = @min(self.cursor_pos, self.text_len);
         var i = self.cursor_pos - 1;
         while (i + 1 < self.text_len) : (i += 1) {
             self.text_buf[i] = self.text_buf[i + 1];
         }
         self.text_len -= 1;
+        self.text_buf[self.text_len] = 0;
         self.cursor_pos -= 1;
+    }
+
+    // Handles delete key forward deletion
+    pub fn deleteForward(self: *Icon) void {
+        if (self.icon_type != .read_write_text) return;
+        if (self.cursor_pos >= self.text_len or self.text_len == 0) return;
+
+        var i = self.cursor_pos;
+        while (i + 1 < self.text_len) : (i += 1) {
+            self.text_buf[i] = self.text_buf[i + 1];
+        }
+        self.text_len -= 1;
+        self.text_buf[self.text_len] = 0;
+    }
+
+    // Inserts a string at current cursor position (replacing any active selection) without overflowing capacity
+    pub fn insertString(self: *Icon, str: []const u8) void {
+        if (self.icon_type != .read_write_text) return;
+        _ = self.deleteSelection();
+        for (str) |c| {
+            if (self.text_len >= self.max_input_len or self.text_len + 1 >= self.text_buf.len) break;
+            if (c >= 32 and c <= 126) {
+                self.insertChar(c);
+            }
+        }
+    }
+
+    // Calculate nearest character index from mouse X position
+    pub fn getCharIndexAtX(self: *const Icon, win_x: i32, px: i32) usize {
+        const text_start_x = win_x + self.rel_x + 8;
+        if (px <= text_start_x) return 0;
+
+        const rel_px = px - text_start_x;
+        const txt = self.getText();
+        var cur_x: i32 = 0;
+
+        for (txt, 0..) |c, i| {
+            const char_w: i32 = if (c >= 32 and c <= 126)
+                @intCast(font.GLYPHS[c - 32].advance)
+            else if (c == ' ')
+                6
+            else if (c == '\t')
+                24
+            else
+                8;
+
+            const mid_x = cur_x + @divTrunc(char_w, 2);
+            if (rel_px < mid_x) {
+                return i;
+            }
+            cur_x += char_w;
+        }
+        return self.text_len;
     }
 
     pub fn hitTest(self: *const Icon, win_x: i32, win_y: i32, px: i32, py: i32) bool {
@@ -251,11 +395,24 @@ pub const Icon = struct {
 
                 const text_y = sy + @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(font.GLYPH_HEIGHT)), 2);
                 const txt = self.getText();
+
+                // 1. Draw selection highlight box behind characters if selection active
+                if (self.getSelectionBounds()) |b| {
+                    const sel_start_x = sx + 8 + @as(i32, @intCast(font.measureString(txt[0..b.min])));
+                    const sel_w = font.measureString(txt[b.min..b.max]);
+                    if (sel_w > 0) {
+                        const sel_box = fb.Box.fromPosSize(sel_start_x, text_y, sel_w, font.GLYPH_HEIGHT);
+                        surface.drawRoundedTranslucentBox(sel_box, 2, fb.Color.ACCENT_CYAN, 140, null);
+                    }
+                }
+
+                // 2. Draw text with drop shadow
                 font.drawTextWithShadow(surface, txt, sx + 8, text_y, fg_color, fb.Color.BLACK);
 
-                // Draw blinking or static insertion cursor if focused
+                // 3. Draw blinking or static insertion cursor if focused
                 if (self.is_focused and is_win_active) {
-                    const before_cursor = txt[0..self.cursor_pos];
+                    const safe_cur = @min(self.cursor_pos, txt.len);
+                    const before_cursor = txt[0..safe_cur];
                     const cur_offset = font.measureString(before_cursor);
                     const cur_x = sx + 8 + @as(i32, @intCast(cur_offset));
                     const cur_box = fb.Box.fromPosSize(cur_x, text_y + 1, 2, font.GLYPH_HEIGHT);
