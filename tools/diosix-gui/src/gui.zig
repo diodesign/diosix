@@ -27,12 +27,14 @@ pub const TAB_WIDTH: u32 = 200;
 pub const TAB_HEIGHT: u32 = 32;
 
 pub const Key = struct {
+    pub const ESC: u16 = 1;
     pub const BACKSPACE: u16 = 14;
     pub const TAB: u16 = 15;
     pub const U: u16 = 22;
     pub const ENTER: u16 = 28;
     pub const LEFT_CTRL: u16 = 29;
     pub const A: u16 = 30;
+    pub const F: u16 = 33;
     pub const LEFT_SHIFT: u16 = 42;
     pub const Z: u16 = 44;
     pub const X: u16 = 45;
@@ -276,37 +278,97 @@ pub const DiosixGui = struct {
     }
 
     fn buildGuestsWindows(self: *DiosixGui) !void {
-        var win_list = Window.init(self.allocator, guests_sub.WIN_GUEST_LIST_ID, 24, 54, 780, 536, "GUEST DOMAIN INVENTORY");
-        var row1 = Icon.createButton(guests_sub.ICON_GUEST_ROW1_ID, 24, 54, 732, 38, "second-vm   [CID 2, 2 vCPUs, 256 MB RAM, IP: 10.0.3.2, Status: RUNNING]");
+        // Window 1: Guest Domain Inventory (300)
+        var win_list = Window.init(self.allocator, guests_sub.WIN_GUEST_LIST_ID, 24, 48, 450, 430, "GUEST DOMAIN INVENTORY");
+        var row1 = Icon.createButton(guests_sub.ICON_GUEST_ROW1_ID, 18, 44, 414, 40, "second-vm   [CID 2]  2 vCPU  256M   GPU   RUNNING");
         row1.callback = guests_sub.onGuestRowClicked;
         _ = try win_list.addIcon(row1);
 
-        var row2 = Icon.createButton(guests_sub.ICON_GUEST_ROW2_ID, 24, 104, 732, 38, "debian-vm   [CID 3, 2 vCPUs, 1024 MB RAM, Disk: debian.img, Status: STOPPED]");
+        var row2 = Icon.createButton(guests_sub.ICON_GUEST_ROW2_ID, 18, 92, 414, 40, "debian-vm   [CID 3]  2 vCPU 1024M   GPU   RUNNING");
         row2.callback = guests_sub.onGuestRowClicked;
         _ = try win_list.addIcon(row2);
 
-        var row3 = Icon.createButton(guests_sub.ICON_GUEST_ROW3_ID, 24, 154, 732, 38, "micro-guest [CID 4, 1 vCPU,  64 MB RAM, Payload: Minimal, Status: STOPPED]");
+        var row3 = Icon.createButton(guests_sub.ICON_GUEST_ROW3_ID, 18, 140, 414, 40, "micro-guest [CID 4]  1 vCPU   64M   TTY   RUNNING");
         row3.callback = guests_sub.onGuestRowClicked;
         _ = try win_list.addIcon(row3);
+
+        _ = try win_list.addIcon(Icon.createReadOnly(3005, 18, 192, 414, 20, "Active Domains: 3 | Protected RAM: 1344 MB"));
+        _ = try win_list.addIcon(Icon.createReadOnly(3006, 18, 218, 414, 20, "Hypervisor: Diosix Microkernel v0.2.0 (riscv64)"));
+        _ = try win_list.addIcon(Icon.createReadOnly(3007, 18, 244, 414, 20, "Isolation: Hardware-Enforced RISC-V PMP"));
+        _ = try win_list.addIcon(Icon.createReadOnly(3008, 18, 270, 414, 20, "Virtual Switch: Bridge br0 (10.0.3.0/24 Subnet)"));
+        _ = try win_list.addIcon(Icon.createReadOnly(3009, 18, 296, 414, 20, "Host I/O Virtualization: VirtIO-GPU, Blk, Net"));
+        _ = try win_list.addIcon(Icon.createReadOnly(3010, 18, 330, 414, 20, "Tip: Click row to select domain & view telemetry"));
         try self.windows.append(self.allocator, win_list);
 
-        var win_actions = Window.init(self.allocator, guests_sub.WIN_GUEST_ACTIONS_ID, 824, 54, 432, 536, "DOMAIN ACTIONS");
-        var btn_launch = Icon.createButton(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, 24, 54, 384, 36, "Start Selected Domain");
+        // Window 2: Domain Control Actions (301)
+        var win_actions = Window.init(self.allocator, guests_sub.WIN_GUEST_ACTIONS_ID, 490, 48, 310, 430, "DOMAIN CONTROL");
+        var btn_launch = Icon.createButton(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, 18, 44, 274, 38, "Start Selected Domain");
         btn_launch.callback = guests_sub.onLaunchGuestClicked;
         _ = try win_actions.addIcon(btn_launch);
 
-        var btn_stop = Icon.createButton(guests_sub.ICON_GUEST_ACTION_STOP_ID, 24, 106, 384, 36, "Terminate Selected Domain");
+        var btn_stop = Icon.createButton(guests_sub.ICON_GUEST_ACTION_STOP_ID, 18, 90, 274, 38, "Terminate Selected Domain");
         btn_stop.callback = guests_sub.onStopGuestClicked;
         _ = try win_actions.addIcon(btn_stop);
 
-        var btn_ssh = Icon.createButton(guests_sub.ICON_GUEST_ACTION_SSH_ID, 24, 158, 384, 36, "Open Virtual SSH Console");
+        var btn_pause = Icon.createButton(guests_sub.ICON_GUEST_ACTION_PAUSE_ID, 18, 136, 274, 38, "Pause / Resume vCPUs");
+        btn_pause.callback = guests_sub.onPauseGuestClicked;
+        _ = try win_actions.addIcon(btn_pause);
+
+        var btn_ssh = Icon.createButton(guests_sub.ICON_GUEST_ACTION_SSH_ID, 18, 182, 274, 38, "Open Virtual SSH Console");
         btn_ssh.callback = guests_sub.onSshGuestClicked;
         _ = try win_actions.addIcon(btn_ssh);
+
+        var btn_full = Icon.createButton(guests_sub.ICON_GUEST_ACTION_FULLSCREEN_ID, 18, 228, 274, 38, "Expand Fullscreen Display (F)");
+        btn_full.callback = guests_sub.onToggleFullscreenClicked;
+        _ = try win_actions.addIcon(btn_full);
+
+        _ = try win_actions.addIcon(Icon.createReadOnly(3106, 18, 276, 274, 20, "Console: /dev/ttyS0 @ 115200 baud"));
+        _ = try win_actions.addIcon(Icon.createReadOnly(3107, 18, 300, 274, 20, "Display: VirtIO-GPU 2D Scanout"));
+        _ = try win_actions.addIcon(Icon.createReadOnly(3108, 18, 324, 274, 20, "IPC Signal: dsx://vm/ctl"));
+        _ = try win_actions.addIcon(Icon.createReadOnly(3109, 18, 354, 274, 20, "Press 'F' or Enter on video for Fullscreen"));
         try self.windows.append(self.allocator, win_actions);
 
-        var win_details = Window.init(self.allocator, guests_sub.WIN_GUEST_DETAILS_ID, 24, 608, 1232, 172, "DOMAIN STATUS DETAILS");
-        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_DETAIL_TEXT_ID, 24, 54, 1184, 28, "Select a virtual machine from the inventory list above to perform domain operations."));
+        // Window 3: Live Virtual Machine Display (303)
+        var win_video = Window.init(self.allocator, guests_sub.WIN_GUEST_VIDEO_ID, 816, 48, 440, 430, "LIVE VIRTUAL MACHINE DISPLAY");
+        var vid_view = Icon.createVideoViewport(guests_sub.ICON_GUEST_VIDEO_VIEWPORT_ID, 12, 44, 416, 372, "second-vm", true);
+        vid_view.callback = guests_sub.onVideoViewportClicked;
+        _ = try win_video.addIcon(vid_view);
+        try self.windows.append(self.allocator, win_video);
+
+        // Window 4: Domain Telemetry & Resource Usage (302)
+        var win_details = Window.init(self.allocator, guests_sub.WIN_GUEST_DETAILS_ID, 24, 490, 1232, 290, "DOMAIN TELEMETRY & RESOURCE USAGE");
+        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_DETAIL_TEXT_ID, 20, 38, 1192, 22, "Selected Domain: 'second-vm' (Virtual IP: 10.0.3.2, Status: RUNNING)"));
+
+        // Left column: vCPU & RAM
+        const cpu_bar = Icon.createProgressBar(guests_sub.ICON_GUEST_METER_CPU_ID, 20, 66, 580, 28, "vCPU Utilization: 42% [2400 MHz | 12 MIPS]", 42, fb.Color.ACCENT_CYAN);
+        _ = try win_details.addIcon(cpu_bar);
+        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_TEXT_CPU_INFO_ID, 20, 96, 580, 20, "vCPUs: 2 | Sched: Preemptive 10ms | Cycles: 14820M | Ctx Sw: 1848/s"));
+
+        const ram_bar = Icon.createProgressBar(guests_sub.ICON_GUEST_METER_RAM_ID, 20, 120, 580, 28, "Guest RAM Committed: 141 MB / 256 MB (55%)", 55, fb.Color.ACCENT_GREEN);
+        _ = try win_details.addIcon(ram_bar);
+        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_TEXT_RAM_INFO_ID, 20, 150, 580, 20, "PMP Guard: Active (4 Regions) | Page Faults: 14/s | Memory Isolation: Enforced"));
+
+        // Right column: Virtual Disk & Virtual Network
+        const disk_bar = Icon.createProgressBar(guests_sub.ICON_GUEST_METER_DISK_ID, 628, 66, 580, 28, "Virtual Disk Usage: 184 MB / 512 MB (35%)", 35, fb.Color.ACCENT_GOLD);
+        _ = try win_details.addIcon(disk_bar);
+        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_TEXT_DISK_INFO_ID, 628, 96, 580, 20, "Disk I/O: 3.4 MB/s Read, 1.2 MB/s Write | IOPS: 480 | VirtIO-Blk"));
+
+        const net_bar = Icon.createProgressBar(guests_sub.ICON_GUEST_METER_NET_ID, 628, 120, 580, 28, "Virtual NIC Bandwidth: 24.0 Mbps / 100 Mbps (24%)", 24, fb.Color.ACCENT_BLUE);
+        _ = try win_details.addIcon(net_bar);
+        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_TEXT_NET_INFO_ID, 628, 150, 580, 20, "VirtIO-Net TAP: tap0 | MAC: 52:54:00:12:34:02 | Traffic: 1840 KB rx / 920 KB tx"));
+
+        _ = try win_details.addIcon(Icon.createReadOnly(3210, 20, 186, 1192, 20, "Hypervisor Hardware Enclave: RISC-V H-Extension (sstatus.SPV=1, vsstatus, hgatp, hstatus)"));
+        _ = try win_details.addIcon(Icon.createReadOnly(3211, 20, 210, 1192, 20, "Nested MMU Translation: Two-Stage Paging (VS-Stage Guest Virtual -> Guest Physical -> Host Physical)"));
+        _ = try win_details.addIcon(Icon.createReadOnly(3212, 20, 234, 1192, 20, "Virtual Interrupt Controller: In-Kernel IMSIC / APLIC Virtualization with Direct MSI Routing"));
         try self.windows.append(self.allocator, win_details);
+
+        // Window 5: Fullscreen Video Display Viewport (304)
+        var win_fs = Window.init(self.allocator, guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID, 24, 48, 1232, 732, "VIRTUAL MACHINE DISPLAY - FULLSCREEN (PRESS ESC OR CLICK TO RETURN)");
+        win_fs.setOnScreen(false);
+        var fs_view = Icon.createVideoViewport(guests_sub.ICON_GUEST_FULLSCREEN_VIEWPORT_ID, 12, 44, 1208, 674, "second-vm", true);
+        fs_view.callback = guests_sub.onExitFullscreenClicked;
+        _ = try win_fs.addIcon(fs_view);
+        try self.windows.append(self.allocator, win_fs);
     }
 
     fn buildStorageWindows(self: *DiosixGui) !void {
@@ -755,6 +817,14 @@ pub const DiosixGui = struct {
             null;
         const is_in_text_field = if (focused_icon) |ic| (ic.icon_type == .read_write_text) else false;
 
+        // Handle ESC key to exit fullscreen video mode
+        if (key_code == Key.ESC) {
+            if (guests_sub.isFullscreen()) {
+                guests_sub.exitFullscreen(self);
+                return;
+            }
+        }
+
         // 1. Number keys '1'..'5' quick switch subprograms ONLY if not typing in a text field and Ctrl is not held
         if (!is_in_text_field and !ctrl) {
             if (key_char) |c| {
@@ -764,6 +834,14 @@ pub const DiosixGui = struct {
                         self.activateSubProgram(sub_idx);
                         return;
                     }
+                }
+            }
+
+            // 'F' key toggles fullscreen video display in Guests subprogram
+            if (key_code == Key.F or key_char == 'f' or key_char == 'F') {
+                if (self.active_sub_idx == 2) {
+                    guests_sub.toggleFullscreen(self);
+                    return;
                 }
             }
         }

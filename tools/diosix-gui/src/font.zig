@@ -442,8 +442,11 @@ pub const GLYPH_BITMAPS = [_]u8{
     0x00, 0x00, 0x00,
 };
 
-// Render antialiased Questrial text
+// Render antialiased Questrial text with active clipping support
 pub fn drawText(surface: *fb.Surface, text: []const u8, x: i32, y: i32, color: u32) void {
+    if (surface.clip.isEmpty()) return;
+    if (y + @as(i32, @intCast(GLYPH_HEIGHT)) <= surface.clip.y0 or y >= surface.clip.y1) return;
+
     var cur_x = x;
     for (text) |c| {
         if (c >= 32 and c <= 126) {
@@ -451,12 +454,27 @@ pub fn drawText(surface: *fb.Surface, text: []const u8, x: i32, y: i32, color: u
             if (g.width > 0 and g.height > 0) {
                 const gx = cur_x + g.offset_x;
                 const gy = y + g.offset_y;
+
+                // Stop immediately once text reaches or exceeds the right clip edge
+                if (gx >= surface.clip.x1) break;
+
+                // Skip rasterization if glyph is entirely left of the clip region
+                const g_right = gx + @as(i32, @intCast(g.width));
+                if (g_right <= surface.clip.x0) {
+                    cur_x += g.advance;
+                    continue;
+                }
+
                 var row: usize = 0;
                 while (row < g.height) : (row += 1) {
                     const py = gy + @as(i32, @intCast(row));
+                    if (py < surface.clip.y0 or py >= surface.clip.y1) continue;
+
                     var col: usize = 0;
                     while (col < g.width) : (col += 1) {
                         const px = gx + @as(i32, @intCast(col));
+                        if (px < surface.clip.x0 or px >= surface.clip.x1) continue;
+
                         const alpha = GLYPH_BITMAPS[g.bitmap_offset + row * g.width + col];
                         if (alpha > 0) {
                             if (alpha == 255) {
@@ -471,8 +489,10 @@ pub fn drawText(surface: *fb.Surface, text: []const u8, x: i32, y: i32, color: u
             }
             cur_x += g.advance;
         } else if (c == ' ') {
+            if (cur_x >= surface.clip.x1) break;
             cur_x += 6;
         } else if (c == '\t') {
+            if (cur_x >= surface.clip.x1) break;
             cur_x += 24;
         }
     }

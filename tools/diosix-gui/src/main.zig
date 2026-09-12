@@ -176,6 +176,7 @@ pub const EVDEV_ABS_MAX: i64 = 32767;
 pub const BTN_LEFT: u16 = 0x110;
 pub const BTN_TOUCH: u16 = 0x14a;
 
+pub const KEY_ESC: u16 = 1;
 pub const KEY_1: u16 = 2;
 pub const KEY_2: u16 = 3;
 pub const KEY_3: u16 = 4;
@@ -1066,5 +1067,344 @@ test "diosix-gui: clipboard overflow immunity with arbitrarily long strings and 
     try testing.expect(rw_icon.text_len < rw_icon.text_buf.len);
     try testing.expectEqual(@as(u8, 0), rw_icon.text_buf[rw_icon.text_len]);
 }
+
+test "diosix-gui: guest VM domain viewer with live video viewport and resource usage telemetry" {
+    const guests_sub = @import("subprograms/guests.zig");
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    gui.activateSubProgram(2);
+
+    // 1. Initial State: second-vm selected (VirtIO-GPU active, video signal true)
+    const vid_icon = gui.findIcon(guests_sub.WIN_GUEST_VIDEO_ID, guests_sub.ICON_GUEST_VIDEO_VIEWPORT_ID).?;
+    try testing.expectEqualStrings("second-vm", vid_icon.getText());
+    try testing.expect(vid_icon.video_has_signal);
+
+    const cpu_meter = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_METER_CPU_ID).?;
+    try testing.expectEqual(@as(u32, 42), cpu_meter.progress_val);
+    try testing.expect(std.mem.indexOf(u8, cpu_meter.getText(), "42%") != null);
+
+    const ram_meter = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_METER_RAM_ID).?;
+    try testing.expectEqual(@as(u32, 55), ram_meter.progress_val);
+    try testing.expect(std.mem.indexOf(u8, ram_meter.getText(), "141 MB / 256 MB") != null);
+
+    const disk_meter = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_METER_DISK_ID).?;
+    try testing.expectEqual(@as(u32, 35), disk_meter.progress_val);
+    try testing.expect(std.mem.indexOf(u8, disk_meter.getText(), "184 MB / 512 MB") != null);
+
+    const disk_text = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_TEXT_DISK_INFO_ID).?;
+    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "3.4 MB/s Read, 1.2 MB/s Write") != null);
+    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "IOPS: 480") != null);
+
+    // 2. Select debian-vm (Row 2): high load domain with VirtIO-GPU
+    const row2 = gui.findIcon(guests_sub.WIN_GUEST_LIST_ID, guests_sub.ICON_GUEST_ROW2_ID).?;
+    guests_sub.onGuestRowClicked(&gui, undefined, row2);
+
+    try testing.expectEqualStrings("debian-vm", vid_icon.getText());
+    try testing.expect(vid_icon.video_has_signal);
+    try testing.expectEqual(@as(u32, 68), cpu_meter.progress_val);
+    try testing.expectEqual(@as(u32, 59), ram_meter.progress_val);
+    try testing.expectEqual(@as(u32, 37), disk_meter.progress_val);
+    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "12.8 MB/s Read, 4.5 MB/s Write") != null);
+    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "IOPS: 1240") != null);
+
+    // 3. Select micro-guest (Row 3): headless domain with no GPU output
+    const row3 = gui.findIcon(guests_sub.WIN_GUEST_LIST_ID, guests_sub.ICON_GUEST_ROW3_ID).?;
+    guests_sub.onGuestRowClicked(&gui, undefined, row3);
+
+    try testing.expectEqualStrings("micro-guest", vid_icon.getText());
+    try testing.expect(!vid_icon.video_has_signal); // Headless CRT diagnostic panel
+    try testing.expectEqual(@as(u32, 14), cpu_meter.progress_val);
+    try testing.expectEqual(@as(u32, 28), ram_meter.progress_val);
+    try testing.expectEqual(@as(u32, 28), disk_meter.progress_val);
+    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "0.2 MB/s Read, 0.1 MB/s Write") != null);
+
+    // 4. Terminate selected domain: verifies video signal and CPU telemetry drop
+    const btn_stop = gui.findIcon(guests_sub.WIN_GUEST_ACTIONS_ID, guests_sub.ICON_GUEST_ACTION_STOP_ID).?;
+    guests_sub.onStopGuestClicked(&gui, undefined, btn_stop);
+
+    try testing.expect(!vid_icon.video_has_signal);
+    try testing.expectEqual(@as(u32, 0), cpu_meter.progress_val);
+    try testing.expectEqual(@as(u32, 0), ram_meter.progress_val);
+    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "0.0 MB/s Read, 0.0 MB/s Write") != null);
+    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "IOPS: 0") != null);
+}
+
+test "diosix-gui: fullscreen video display toggle and ESC key handling" {
+    const guests_sub = @import("subprograms/guests.zig");
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    gui.activateSubProgram(2);
+
+    // 1. Initially fullscreen is inactive
+    try testing.expect(!guests_sub.isFullscreen());
+
+    var win_list_onscreen: bool = false;
+    var win_fs_onscreen: bool = false;
+    for (gui.windows.items) |win| {
+        if (win.id == guests_sub.WIN_GUEST_LIST_ID) win_list_onscreen = win.is_onscreen;
+        if (win.id == guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID) win_fs_onscreen = win.is_onscreen;
+    }
+    try testing.expect(win_list_onscreen);
+    try testing.expect(!win_fs_onscreen);
+
+    // 2. Press 'F' key to toggle fullscreen
+    gui.handleKey(gui_mod.Key.F, 'f', true);
+    try testing.expect(guests_sub.isFullscreen());
+
+    for (gui.windows.items) |win| {
+        if (win.id == guests_sub.WIN_GUEST_LIST_ID) win_list_onscreen = win.is_onscreen;
+        if (win.id == guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID) win_fs_onscreen = win.is_onscreen;
+    }
+    try testing.expect(!win_list_onscreen);
+    try testing.expect(win_fs_onscreen);
+
+    // Fullscreen viewport is populated
+    const fs_vid = gui.findIcon(guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID, guests_sub.ICON_GUEST_FULLSCREEN_VIEWPORT_ID).?;
+    try testing.expectEqualStrings("second-vm", fs_vid.getText());
+    try testing.expect(fs_vid.video_has_signal);
+
+    // 3. Press ESC key to exit fullscreen
+    gui.handleKey(gui_mod.Key.ESC, null, true);
+    try testing.expect(!guests_sub.isFullscreen());
+
+    for (gui.windows.items) |win| {
+        if (win.id == guests_sub.WIN_GUEST_LIST_ID) win_list_onscreen = win.is_onscreen;
+        if (win.id == guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID) win_fs_onscreen = win.is_onscreen;
+    }
+    try testing.expect(win_list_onscreen);
+    try testing.expect(!win_fs_onscreen);
+}
+
+fn writePpmFile(surface: *const fb.Surface, path_z: [*:0]const u8) !void {
+    const rc = linux.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    const signed_rc: isize = @bitCast(rc);
+    if (signed_rc < 0) return error.OpenFileFailed;
+    const fd: i32 = @intCast(signed_rc);
+    defer _ = linux.close(fd);
+
+    var hdr_buf: [32]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "P6\n{d} {d}\n255\n", .{ surface.width, surface.height }) catch return;
+    _ = linux.write(fd, hdr.ptr, hdr.len);
+
+    var rgb_row: [1280 * 3]u8 = undefined;
+    var y: u32 = 0;
+    while (y < surface.height) : (y += 1) {
+        var x: u32 = 0;
+        while (x < surface.width) : (x += 1) {
+            const px = surface.pixels[y * surface.stridePixels() + x];
+            rgb_row[x * 3 + 0] = @intCast((px >> 16) & 0xFF);
+            rgb_row[x * 3 + 1] = @intCast((px >> 8) & 0xFF);
+            rgb_row[x * 3 + 2] = @intCast(px & 0xFF);
+        }
+        _ = linux.write(fd, &rgb_row, surface.width * 3);
+    }
+}
+
+test "diosix-gui: render guest screenshots for visualization" {
+    const guests_sub = @import("subprograms/guests.zig");
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    const pixel_mem = try allocator.alloc(u32, 1280 * 800);
+    defer allocator.free(pixel_mem);
+    var surface = fb.Surface.init(pixel_mem.ptr, 1280, 800, 1280 * @sizeOf(u32));
+
+    // 1. Render Tab 2 (Guests) with second-vm (VirtIO-GPU)
+    gui.activateSubProgram(2);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_guests_overview.ppm");
+
+    // 2. Select micro-guest (headless domain)
+    const row3 = gui.findIcon(guests_sub.WIN_GUEST_LIST_ID, guests_sub.ICON_GUEST_ROW3_ID).?;
+    guests_sub.onGuestRowClicked(&gui, undefined, row3);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_guests_headless.ppm");
+
+    // 3. Switch back to second-vm and enter Fullscreen Video View
+    const row1 = gui.findIcon(guests_sub.WIN_GUEST_LIST_ID, guests_sub.ICON_GUEST_ROW1_ID).?;
+    guests_sub.onGuestRowClicked(&gui, undefined, row1);
+    guests_sub.enterFullscreen(&gui);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_guests_fullscreen.ppm");
+}
+
+test "diosix-gui: graphical clipping of icons to bounding box" {
+    const allocator = testing.allocator;
+    const s_w: u32 = 200;
+    const s_h: u32 = 100;
+    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
+    defer allocator.free(pixel_mem);
+    @memset(pixel_mem, 0);
+    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
+
+    // Create a read-only text icon at (20, 20) with width 50, height 24
+    // Give it a 500px wide string that would vastly exceed the 50px width without clipping
+    var label_icon = icon_mod.Icon.createReadOnly(
+        1001,
+        20,
+        20,
+        50,
+        24,
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+    );
+
+    label_icon.render(&surface, 0, 0, false);
+
+    // Verify that pixels inside [20..70, 20..44] contain rendered glyph pixels
+    var inside_non_zero: usize = 0;
+    var y: u32 = 20;
+    while (y < 44) : (y += 1) {
+        var x: u32 = 20;
+        while (x < 70) : (x += 1) {
+            if (pixel_mem[y * s_w + x] != 0) {
+                inside_non_zero += 1;
+            }
+        }
+    }
+    try testing.expect(inside_non_zero > 0);
+
+    // Verify that NO pixels outside the bounding box were modified
+    // 1. Right of bounding box (x >= 70): must be all zero!
+    y = 0;
+    while (y < s_h) : (y += 1) {
+        var x: u32 = 70;
+        while (x < s_w) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
+        }
+    }
+
+    // 2. Left of bounding box (x < 20): must be all zero!
+    y = 0;
+    while (y < s_h) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 20) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
+        }
+    }
+
+    // 3. Above bounding box (y < 20): must be all zero!
+    y = 0;
+    while (y < 20) : (y += 1) {
+        var x: u32 = 0;
+        while (x < s_w) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
+        }
+    }
+
+    // 4. Below bounding box (y >= 44): must be all zero!
+    y = 44;
+    while (y < s_h) : (y += 1) {
+        var x: u32 = 0;
+        while (x < s_w) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
+        }
+    }
+}
+
+test "diosix-gui: graphical clipping inside button and editable text field" {
+    const allocator = testing.allocator;
+    const s_w: u32 = 180;
+    const s_h: u32 = 80;
+    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
+    defer allocator.free(pixel_mem);
+
+    // 1. Test Button Clipping
+    @memset(pixel_mem, 0);
+    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
+
+    var btn = icon_mod.Icon.createButton(
+        2001,
+        10,
+        10,
+        60,
+        30,
+        "An Extremely Long Button Label That Exceeds Width",
+    );
+    btn.render(&surface, 0, 0, false);
+
+    // Pixels to the right of the button (x >= 70) must remain strictly 0
+    var y: u32 = 0;
+    while (y < s_h) : (y += 1) {
+        var x: u32 = 70;
+        while (x < s_w) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
+        }
+    }
+
+    // 2. Test Editable Text Field Clipping
+    @memset(pixel_mem, 0);
+    var field = icon_mod.Icon.createReadWrite(
+        2002,
+        10,
+        10,
+        60,
+        28,
+        "Default",
+    );
+    field.insertString("0123456789012345678901234567890123456789");
+    field.render(&surface, 0, 0, false);
+
+    // Pixels to the right of the field (x >= 70) must remain strictly 0
+    y = 0;
+    while (y < s_h) : (y += 1) {
+        var x: u32 = 70;
+        while (x < s_w) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
+        }
+    }
+}
+
+test "diosix-gui: Surface pushClip and popClip stack nesting" {
+    const allocator = testing.allocator;
+    const s_w: u32 = 100;
+    const s_h: u32 = 100;
+    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
+    defer allocator.free(pixel_mem);
+    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
+
+    // Default clip is full surface
+    try testing.expectEqual(@as(i32, 0), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 0), surface.clip.y0);
+    try testing.expectEqual(@as(i32, 100), surface.clip.x1);
+    try testing.expectEqual(@as(i32, 100), surface.clip.y1);
+
+    // Push clip (10, 10, 50, 50) -> x0=10, y0=10, x1=60, y1=60
+    const clip1 = surface.pushClip(fb.Box.fromPosSize(10, 10, 50, 50));
+    try testing.expectEqual(@as(i32, 10), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 10), surface.clip.y0);
+    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
+    try testing.expectEqual(@as(i32, 60), surface.clip.y1);
+
+    // Push intersecting clip (30, 30, 50, 50) -> x0=30, y0=30, x1=80, y1=80
+    // Intersection with (10, 10, 60, 60) is (30, 30, 60, 60)
+    const clip2 = surface.pushClip(fb.Box.fromPosSize(30, 30, 50, 50));
+    try testing.expectEqual(@as(i32, 30), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 30), surface.clip.y0);
+    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
+    try testing.expectEqual(@as(i32, 60), surface.clip.y1);
+
+    // Pop clip2
+    surface.popClip(clip2);
+    try testing.expectEqual(@as(i32, 10), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 10), surface.clip.y0);
+    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
+    try testing.expectEqual(@as(i32, 60), surface.clip.y1);
+
+    // Pop clip1
+    surface.popClip(clip1);
+    try testing.expectEqual(@as(i32, 0), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 0), surface.clip.y0);
+    try testing.expectEqual(@as(i32, 100), surface.clip.x1);
+    try testing.expectEqual(@as(i32, 100), surface.clip.y1);
+}
+
 
 

@@ -117,10 +117,15 @@ pub const Window = struct {
         return self.getBox().intersects(box);
     }
 
+    // Check if an icon is interactive (eligible for keyboard navigation and activation)
+    pub fn isIconInteractive(icon: *const Icon) bool {
+        return icon.icon_type != .read_only_text and icon.icon_type != .progress_bar and icon.icon_type != .video_viewport and icon.is_enabled;
+    }
+
     // Check if this window has any enabled interactive icons
     pub fn hasInteractiveIcons(self: *const Window) bool {
         for (self.icons.items) |*ic| {
-            if (ic.icon_type != .read_only_text and ic.is_enabled) return true;
+            if (isIconInteractive(ic)) return true;
         }
         return false;
     }
@@ -134,7 +139,7 @@ pub const Window = struct {
         var i = start;
         while (i < self.icons.items.len) : (i += 1) {
             const ic = &self.icons.items[i];
-            if (ic.icon_type != .read_only_text and ic.is_enabled) {
+            if (isIconInteractive(ic)) {
                 self.setFocusedIndex(i);
                 return true;
             }
@@ -153,7 +158,7 @@ pub const Window = struct {
         while (i > 0) : (i -= 1) {
             const check_idx = i - 1;
             const ic = &self.icons.items[check_idx];
-            if (ic.icon_type != .read_only_text and ic.is_enabled) {
+            if (isIconInteractive(ic)) {
                 self.setFocusedIndex(check_idx);
                 return true;
             }
@@ -164,7 +169,7 @@ pub const Window = struct {
     // Focus the first enabled interactive icon in this window
     pub fn focusFirstInteractiveIcon(self: *Window) bool {
         for (self.icons.items, 0..) |*ic, idx| {
-            if (ic.icon_type != .read_only_text and ic.is_enabled) {
+            if (isIconInteractive(ic)) {
                 self.setFocusedIndex(idx);
                 return true;
             }
@@ -178,7 +183,7 @@ pub const Window = struct {
         while (i > 0) : (i -= 1) {
             const idx = i - 1;
             const ic = &self.icons.items[idx];
-            if (ic.icon_type != .read_only_text and ic.is_enabled) {
+            if (isIconInteractive(ic)) {
                 self.setFocusedIndex(idx);
                 return true;
             }
@@ -245,6 +250,10 @@ pub const Window = struct {
             },
             .slider => {},
             .read_only_text => {},
+            .progress_bar => {},
+            .video_viewport => {
+                icon.is_active_press = true;
+            },
         }
 
         // Fire optional user callback
@@ -357,9 +366,13 @@ pub const Window = struct {
         const border_col = if (self.is_active) fb.Color.GLASS_BTN_BORDER else fb.Color.GLASS_BORDER;
         surface.drawRoundedTranslucentBox(box, CORNER_RADIUS, fb.Color.GLASS_BG, opacity_alpha, border_col);
 
-        // 2. Optional Title Banner
+        // 2. Optional Title Banner (clipped to window width)
         if (self.title) |t| {
+            const title_w: u32 = if (self.width > 36) self.width - 36 else 0;
+            const title_clip = surface.pushClip(fb.Box.fromPosSize(self.x + 18, self.y, title_w, 34));
             font.drawTextWithShadow(surface, t, self.x + 18, self.y + 12, fb.Color.ACCENT_GOLD, fb.Color.BLACK);
+            surface.popClip(title_clip);
+
             // Thin translucent divider line under title
             const div_box = fb.Box.fromPosSize(self.x + 16, self.y + 34, self.width - 32, 1);
             surface.fillBox(div_box, fb.Color.GLASS_DIVIDER);

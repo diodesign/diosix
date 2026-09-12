@@ -45,6 +45,7 @@ pub const Color = struct {
     pub const ACCENT_GREEN: u32    = 0x0028D060; // Success / privileged badge
     pub const ACCENT_AMBER: u32    = 0x00E0A020; // Warning / unprivileged badge
     pub const ACCENT_RED: u32      = 0x00E03838; // Power / alert
+    pub const ACCENT_BLUE: u32     = 0x003080E0; // Network / info accent
     pub const TEXT_MUTED: u32      = 0x008090A8; // Dimmed / secondary text
     pub const DESKTOP_BG: u32      = 0x004C8BE0; // Light blue base
 
@@ -272,6 +273,18 @@ pub const Surface = struct {
         self.clip = Box.fromPosSize(0, 0, self.width, self.height);
     }
 
+    // Pushes an inner clip box by intersecting it with the current clip, returning the previous clip for popClip
+    pub fn pushClip(self: *Surface, box: Box) Box {
+        const prev = self.clip;
+        self.clip = prev.intersect(box);
+        return prev;
+    }
+
+    // Restores a previous clip box returned by pushClip
+    pub fn popClip(self: *Surface, prev_clip: Box) void {
+        self.clip = prev_clip;
+    }
+
     pub fn setPixel(self: *Surface, x: i32, y: i32, color: u32) void {
         if (!self.clip.contains(x, y)) return;
         const row_start = @as(usize, @intCast(y)) * self.stridePixels();
@@ -323,7 +336,7 @@ pub const Surface = struct {
     const w = self.width;
     if (h == 0 or w == 0 or target.isEmpty()) return;
 
-    const clipped = target.intersect(Box.fromPosSize(0, 0, w, h));
+    const clipped = target.intersect(self.clip);
     if (clipped.isEmpty()) return;
 
     const top_r: i32 = @intCast((top_color >> 16) & 0xFF);
