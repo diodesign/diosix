@@ -8,6 +8,11 @@
 // SPDX-License-Identifier: MIT
 
 const config = @import("config");
+const builtin = @import("builtin");
+
+test {
+    _ = @import("rsp.zig");
+}
 
 pub const stub = if (config.enable_gdb)
     @import("rsp.zig")

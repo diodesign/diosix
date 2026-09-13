@@ -23,8 +23,13 @@ pub fn putchar(c: u8) void {
     if (base_address) |base| {
         const status_reg = @as(*volatile u8, @ptrFromInt(base + REG_LSR));
         const tx_reg = @as(*volatile u8, @ptrFromInt(base + REG_THR));
-        while (status_reg.* & LSR_THRE == 0) {}
-        tx_reg.* = c;
+        var timeout: usize = 1_000_000;
+        while (status_reg.* & LSR_THRE == 0 and timeout > 0) : (timeout -= 1) {
+            std.atomic.spinLoopHint();
+        }
+        if (timeout > 0) {
+            tx_reg.* = c;
+        }
     }
 }
 

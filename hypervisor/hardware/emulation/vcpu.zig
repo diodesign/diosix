@@ -176,33 +176,140 @@ pub const VCpu = extern struct {
     pub var max_guest_time: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
     pub var guest_insn_time: std.atomic.Value(u64) = std.atomic.Value(u64).init(10_000_000);
 
-    pub var global_reservation_addr: [4]std.atomic.Value(usize) = .{
-        std.atomic.Value(usize).init(0),
-        std.atomic.Value(usize).init(0),
-        std.atomic.Value(usize).init(0),
-        std.atomic.Value(usize).init(0),
+    pub const STATIC_RESERVATION_HARTS: usize = 32;
+
+    pub const DynamicReservationNode = struct {
+        hart_id: usize,
+        reservation_addr: std.atomic.Value(usize),
+        next: ?*DynamicReservationNode = null,
     };
 
+    pub const ReservationRow = struct {
+        static_addr: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+        dynamic_head: ?*DynamicReservationNode = null,
+    };
+
+    // Fixed-length two-column table managing LR/SC atomic reservations:
+    // Column 1: Static atomic reservations for harts 0..31
+    // Column 2: Linked-list buckets for dynamic harts (bucket = hart_id % 32)
+    pub var reservation_table: [STATIC_RESERVATION_HARTS]ReservationRow = blk: {
+        var arr: [STATIC_RESERVATION_HARTS]ReservationRow = undefined;
+        for (&arr) |*elem| {
+            elem.* = .{
+                .static_addr = std.atomic.Value(usize).init(0),
+                .dynamic_head = null,
+            };
+        }
+        break :blk arr;
+    };
+
+    var dynamic_pool: [128]DynamicReservationNode = undefined;
+    var dynamic_pool_count: usize = 0;
+    var res_lock = std.atomic.Value(bool).init(false);
+
+    fn getOrCreateDynamicNode(hart_id: usize) ?*DynamicReservationNode {
+        const bucket = hart_id % STATIC_RESERVATION_HARTS;
+        var curr = reservation_table[bucket].dynamic_head;
+        while (curr) |node| {
+            if (node.hart_id == hart_id) return node;
+            curr = node.next;
+        }
+
+        while (res_lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer res_lock.store(false, .release);
+
+        curr = reservation_table[bucket].dynamic_head;
+        while (curr) |node| {
+            if (node.hart_id == hart_id) return node;
+            curr = node.next;
+        }
+
+        if (dynamic_pool_count < dynamic_pool.len) {
+            const idx = dynamic_pool_count;
+            dynamic_pool_count += 1;
+            const node = &dynamic_pool[idx];
+            node.hart_id = hart_id;
+            node.reservation_addr = std.atomic.Value(usize).init(0);
+            node.next = reservation_table[bucket].dynamic_head;
+            reservation_table[bucket].dynamic_head = node;
+            return node;
+        }
+        return null;
+    }
+
     pub fn setReservation(hart_id: usize, paddr: usize) void {
-        if (hart_id < 4) {
-            global_reservation_addr[hart_id].store(paddr & ~@as(usize, 0x3F), .release);
+        const line = paddr & ~@as(usize, 0x3F);
+        if (hart_id < STATIC_RESERVATION_HARTS) {
+            reservation_table[hart_id].static_addr.store(line, .release);
+            return;
+        }
+        if (getOrCreateDynamicNode(hart_id)) |node| {
+            node.reservation_addr.store(line, .release);
         }
     }
 
     pub fn checkAndClearReservation(hart_id: usize, paddr: usize) bool {
-        if (hart_id >= 4) return false;
         const line = paddr & ~@as(usize, 0x3F);
-        const cur = global_reservation_addr[hart_id].swap(0, .acq_rel);
-        return (cur == line and line != 0);
+        if (hart_id < STATIC_RESERVATION_HARTS) {
+            const cur = reservation_table[hart_id].static_addr.swap(0, .acq_rel);
+            return (cur == line and line != 0);
+        }
+        const bucket = hart_id % STATIC_RESERVATION_HARTS;
+        var curr = reservation_table[bucket].dynamic_head;
+        while (curr) |node| {
+            if (node.hart_id == hart_id) {
+                const cur = node.reservation_addr.swap(0, .acq_rel);
+                return (cur == line and line != 0);
+            }
+            curr = node.next;
+        }
+        return false;
+    }
+
+    pub fn clearReservation(hart_id: usize) void {
+        if (hart_id < STATIC_RESERVATION_HARTS) {
+            reservation_table[hart_id].static_addr.store(0, .monotonic);
+            return;
+        }
+        const bucket = hart_id % STATIC_RESERVATION_HARTS;
+        var curr = reservation_table[bucket].dynamic_head;
+        while (curr) |node| {
+            if (node.hart_id == hart_id) {
+                node.reservation_addr.store(0, .monotonic);
+                return;
+            }
+            curr = node.next;
+        }
     }
 
     pub fn invalidateReservations(paddr: usize) void {
         const line = paddr & ~@as(usize, 0x3F);
-        for (0..4) |i| {
-            if (global_reservation_addr[i].load(.monotonic) == line) {
-                global_reservation_addr[i].store(0, .monotonic);
+        // Column 1: static reservations 0..31
+        for (0..STATIC_RESERVATION_HARTS) |i| {
+            if (reservation_table[i].static_addr.load(.monotonic) == line) {
+                reservation_table[i].static_addr.store(0, .monotonic);
             }
         }
+        // Column 2: dynamic linked-list buckets
+        for (0..STATIC_RESERVATION_HARTS) |b| {
+            var curr = reservation_table[b].dynamic_head;
+            while (curr) |node| {
+                if (node.reservation_addr.load(.monotonic) == line) {
+                    node.reservation_addr.store(0, .monotonic);
+                }
+                curr = node.next;
+            }
+        }
+    }
+
+    pub fn resetReservations() void {
+        for (0..STATIC_RESERVATION_HARTS) |i| {
+            reservation_table[i].static_addr.store(0, .monotonic);
+            reservation_table[i].dynamic_head = null;
+        }
+        dynamic_pool_count = 0;
     }
 
     pub fn setMipBit(self: *VCpu, bit: u5) void {
@@ -379,7 +486,7 @@ pub const VCpu = extern struct {
     }
 
     pub fn injectException(self: *VCpu, cause: u32, fault_pc: u32, stval: u32) void {
-        if (self.id < 4) global_reservation_addr[self.id].store(0, .monotonic);
+        clearReservation(self.id);
         self.load_res_addr = 0;
         const is_interrupt = (cause & 0x80000000) != 0;
         const code = cause & 0x7fffffff;
@@ -444,3 +551,48 @@ pub const VCpu = extern struct {
         }
     }
 };
+
+test "VCpu dynamic atomic reservations with two-column table and collision handling" {
+    const testing = std.testing;
+
+    VCpu.resetReservations();
+    defer VCpu.resetReservations();
+
+    const test_paddr: usize = 0x80201040;
+
+    // 1. Test static harts 0..31 (e.g. hart 7 and hart 31)
+    VCpu.setReservation(7, test_paddr);
+    try testing.expect(VCpu.checkAndClearReservation(7, test_paddr));
+    // Subsequent check fails because it was cleared
+    try testing.expect(!VCpu.checkAndClearReservation(7, test_paddr));
+
+    VCpu.setReservation(31, test_paddr);
+    try testing.expect(VCpu.checkAndClearReservation(31, test_paddr));
+
+    // 2. Test dynamic harts >= 32 (e.g. hart 38 and hart 70)
+    // Both 38 and 70 hash into bucket 6 (38 % 32 = 6, 70 % 32 = 6)
+    VCpu.setReservation(38, test_paddr);
+    VCpu.setReservation(70, test_paddr + 0x40);
+
+    try testing.expect(VCpu.checkAndClearReservation(38, test_paddr));
+    try testing.expect(VCpu.checkAndClearReservation(70, test_paddr + 0x40));
+    try testing.expect(!VCpu.checkAndClearReservation(38, test_paddr));
+    try testing.expect(!VCpu.checkAndClearReservation(70, test_paddr + 0x40));
+
+    // 3. Test cross-core invalidation across static and dynamic harts on the same cache line
+    VCpu.setReservation(5, test_paddr);
+    VCpu.setReservation(38, test_paddr);
+    VCpu.setReservation(70, test_paddr + 0x40); // different line
+
+    // Store invalidation on test_paddr clears hart 5 and hart 38, but preserves hart 70
+    VCpu.invalidateReservations(test_paddr + 0x10); // offset within same 64B cache line
+
+    try testing.expect(!VCpu.checkAndClearReservation(5, test_paddr));
+    try testing.expect(!VCpu.checkAndClearReservation(38, test_paddr));
+    try testing.expect(VCpu.checkAndClearReservation(70, test_paddr + 0x40));
+
+    // 4. Test clearReservation
+    VCpu.setReservation(50, test_paddr);
+    VCpu.clearReservation(50);
+    try testing.expect(!VCpu.checkAndClearReservation(50, test_paddr));
+}

@@ -9,7 +9,7 @@ pub const MAX_SERVICE_NAME_LEN: usize = 64;
 pub const MAX_ALIAS_LEN: usize = 64;
 pub const MAX_CHANNEL_LEN: usize = 32;
 pub const MAX_MODE_LEN: usize = 16;
-pub const MAX_MANIFEST_SIZE: usize = 64 * 1024; // 64 KiB
+pub const MAX_MANIFEST_SIZE: usize = 1024 * 1024; // 1 MiB
 
 pub const ServiceOffer = struct {
     service: []const u8,

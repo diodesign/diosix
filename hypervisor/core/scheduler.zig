@@ -75,7 +75,7 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     vc.last_queued_time = riscv.readTime();
 
     const pc = pcore.this();
-    const is_local = if (builtin.is_test) true else (vc.guest.is_root and vc.id == pc.cpu_core_id);
+    const is_local = if (builtin.is_test) true else (vc.guest.is_root and vc.id == pc.hardware_hart_id);
 
     vc.scheduler_node.contents = vc;
     if (is_local and pc.run_queue_count < MAX_LOCAL_VCORES) {
@@ -95,6 +95,19 @@ pub fn queue(vc: *vcore.VirtualCore) void {
 
 // Remove a virtual core from the run queue if present
 pub fn dequeue(vc: *vcore.VirtualCore) void {
+    const pc = pcore.this();
+    var it_local = pc.run_queue.start;
+    while (it_local) |node| {
+        const local_vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
+        if (local_vc == vc) {
+            pc.run_queue.remove(node);
+            if (pc.run_queue_count > 0) pc.run_queue_count -= 1;
+            @atomicStore(bool, &vc.is_queued, false, .release);
+            return;
+        }
+        it_local = node.next;
+    }
+
     const guard = global_scheduler.acquire();
     defer guard.release();
     const state = guard.get();
@@ -128,13 +141,13 @@ pub fn pickNext() ?*vcore.VirtualCore {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
         if (vc.state == .stopped) {
             pc.run_queue.remove(node);
-            pc.run_queue_count -= 1;
+            if (pc.run_queue_count > 0) pc.run_queue_count -= 1;
             @atomicStore(bool, &vc.is_queued, false, .release);
             it = next_it;
             continue;
         }
         if (vc.running_on_cpu == null and ((vc.requiredExtensions() & misa) == vc.requiredExtensions())) {
-            if (!builtin.is_test and vc.guest.is_root and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
+            if (!builtin.is_test and vc.guest.is_root and pcore.fromHartId(vc.id) != null and vc.id != pc.hardware_hart_id) {
                 it = next_it;
                 continue;
             }
@@ -161,7 +174,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
             continue;
         }
         if (vc.running_on_cpu == null and ((vc.requiredExtensions() & misa) == vc.requiredExtensions())) {
-            if (!builtin.is_test and vc.guest.is_root and vc.id < riscv.MAX_PHYS_CORES and vc.id != pc.cpu_core_id) {
+            if (!builtin.is_test and vc.guest.is_root and pcore.fromHartId(vc.id) != null and vc.id != pc.hardware_hart_id) {
                 g_it = next_git;
                 continue;
             }
@@ -187,7 +200,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     if (best_local_node) |node| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
         pc.run_queue.remove(node);
-        pc.run_queue_count -= 1;
+        if (pc.run_queue_count > 0) pc.run_queue_count -= 1;
         vc.running_on_cpu = pc.cpu_core_id;
         @atomicStore(bool, &vc.is_queued, false, .release);
         global_min_vruntime.store(vc.vruntime, .monotonic);
@@ -210,7 +223,8 @@ pub fn schedule() void {
         const was_wfi = @atomicLoad(bool, &vc.wfi_blocked, .acquire);
         vc.running_on_cpu = null;
         pc.active_vcore = null;
-        if (!was_wfi) {
+        if (!was_wfi and (vc.state == .ready or vc.state == .running)) {
+            vc.state = .ready;
             const now = if (builtin.is_test) 0 else riscv.readTime();
             const actual_time = if (now > vc.last_dispatched_time and vc.last_dispatched_time > 0)
                 now - vc.last_dispatched_time
@@ -245,14 +259,17 @@ pub fn yield(vc: *vcore.VirtualCore) void {
         if (active_vc == vc) {
             vc.running_on_cpu = null;
             pc.active_vcore = null;
-            const now = if (builtin.is_test) 0 else riscv.readTime();
-            const actual_time = if (now > vc.last_dispatched_time and vc.last_dispatched_time > 0)
-                now - vc.last_dispatched_time
-            else
-                MIN_RUNTIME_DELTA;
-            const delta: u64 = actual_time * NICE_0_WEIGHT / vc.weight;
-            vc.vruntime += delta;
-            queue(vc);
+            if (vc.state == .ready or vc.state == .running) {
+                vc.state = .ready;
+                const now = if (builtin.is_test) 0 else riscv.readTime();
+                const actual_time = if (now > vc.last_dispatched_time and vc.last_dispatched_time > 0)
+                    now - vc.last_dispatched_time
+                else
+                    MIN_RUNTIME_DELTA;
+                const delta: u64 = actual_time * NICE_0_WEIGHT / vc.weight;
+                vc.vruntime += delta;
+                queue(vc);
+            }
         }
     }
     if (pickNext()) |next_vc| {

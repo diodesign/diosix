@@ -15,6 +15,8 @@ case "$1" in
     if [ -n "$GUI_BIN" ] && [ -c /dev/dri/card0 -o -c /dev/fb0 ]; then
         echo "Starting Diosix GUI ($GUI_BIN)..."
         $GUI_BIN > /var/log/diosix-gui.log 2>&1 &
+    else
+        echo "Diosix GUI: Headless/non-framebuffer display mode (console login active)."
     fi
     ;;
   stop)

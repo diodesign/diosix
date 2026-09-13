@@ -480,12 +480,89 @@ pub fn handlePacketPayload(payload: []const u8) void {
     }
 }
 
-const SwBreakpoint = struct {
-    addr: u64,
-    orig_byte: u8,
-    active: bool,
+pub const STATIC_BREAKPOINTS: usize = 32;
+pub const DYNAMIC_HASH_BUCKETS: usize = 32;
+pub const MAX_DYNAMIC_BREAKPOINTS: usize = 1024;
+
+pub const SwBreakpoint = struct {
+    addr: u64 = 0,
+    orig_byte: u8 = 0,
+    active: bool = false,
+    next: ?*SwBreakpoint = null,
 };
-var sw_breakpoints: [16]SwBreakpoint = undefined;
+
+pub const BreakpointTable = struct {
+    // Column 1: Fast-path static array for first 32 breakpoints (wait-free, O(1), zero heap allocation)
+    static_slots: [STATIC_BREAKPOINTS]SwBreakpoint = @splat(.{}),
+    // Column 2: Dynamic hash buckets for overflow breakpoints (chained hash table keyed by (addr >> 2) % 32)
+    dynamic_buckets: [DYNAMIC_HASH_BUCKETS]?*SwBreakpoint = @splat(null),
+    dynamic_pool: [MAX_DYNAMIC_BREAKPOINTS]SwBreakpoint = @splat(.{}),
+    dynamic_count: usize = 0,
+
+    pub fn reset(self: *BreakpointTable) void {
+        for (&self.static_slots) |*bp| {
+            bp.* = .{};
+        }
+        self.dynamic_buckets = @splat(null);
+        self.dynamic_count = 0;
+    }
+
+    pub fn find(self: *BreakpointTable, addr: u64) ?*SwBreakpoint {
+        for (&self.static_slots) |*bp| {
+            if (bp.active and bp.addr == addr) return bp;
+        }
+        const bucket = @as(usize, @intCast((addr >> 2) % DYNAMIC_HASH_BUCKETS));
+        var curr = self.dynamic_buckets[bucket];
+        while (curr) |bp| {
+            if (bp.active and bp.addr == addr) return bp;
+            curr = bp.next;
+        }
+        return null;
+    }
+
+    pub fn allocate(self: *BreakpointTable, addr: u64, orig_byte: u8) ?*SwBreakpoint {
+        if (self.find(addr) != null) return null;
+
+        // Try static slot first (Column 1)
+        for (&self.static_slots) |*bp| {
+            if (!bp.active) {
+                bp.* = .{ .addr = addr, .orig_byte = orig_byte, .active = true, .next = null };
+                return bp;
+            }
+        }
+
+        // Try reusing inactive dynamic slot in matching bucket (Column 2)
+        const bucket = @as(usize, @intCast((addr >> 2) % DYNAMIC_HASH_BUCKETS));
+        var curr = self.dynamic_buckets[bucket];
+        while (curr) |bp| {
+            if (!bp.active) {
+                bp.addr = addr;
+                bp.orig_byte = orig_byte;
+                bp.active = true;
+                return bp;
+            }
+            curr = bp.next;
+        }
+
+        // Allocate from dynamic pool
+        if (self.dynamic_count < self.dynamic_pool.len) {
+            const bp = &self.dynamic_pool[self.dynamic_count];
+            self.dynamic_count += 1;
+            bp.* = .{
+                .addr = addr,
+                .orig_byte = orig_byte,
+                .active = true,
+                .next = self.dynamic_buckets[bucket],
+            };
+            self.dynamic_buckets[bucket] = bp;
+            return bp;
+        }
+
+        return null;
+    }
+};
+
+pub var sw_breakpoints: BreakpointTable = .{};
 
 fn readByte(vc: *vcore.VirtualCore, addr: u64) ?u8 {
     const target_gpa: usize = std.math.cast(usize, addr) orelse return null;
@@ -504,30 +581,22 @@ fn writeByte(vc: *vcore.VirtualCore, addr: u64, val: u8) bool {
 fn insertSwBreakpoint(addr: u64) bool {
     if (active_vc == null or active_vc.?.exec_path != .emulated) return false;
     const vc = active_vc.?;
+
+    if (sw_breakpoints.find(addr) != null) return true;
+
     const orig = readByte(vc, addr) orelse return false;
-
-    var slot: ?usize = null;
-    for (&sw_breakpoints, 0..) |*bp, i| {
-        if (bp.active and bp.addr == addr) return true;
-        if (!bp.active and slot == null) slot = i;
-    }
-    if (slot == null) return false;
-
     if (!writeByte(vc, addr, 0xCC)) return false;
 
-    sw_breakpoints[slot.?] = .{ .addr = addr, .orig_byte = orig, .active = true };
-    return true;
+    return sw_breakpoints.allocate(addr, orig) != null;
 }
 
 fn removeSwBreakpoint(addr: u64) bool {
     if (active_vc == null or active_vc.?.exec_path != .emulated) return false;
     const vc = active_vc.?;
-    for (&sw_breakpoints) |*bp| {
-        if (bp.active and bp.addr == addr) {
-            _ = writeByte(vc, addr, bp.orig_byte);
-            bp.active = false;
-            return true;
-        }
+    if (sw_breakpoints.find(addr)) |bp| {
+        _ = writeByte(vc, addr, bp.orig_byte);
+        bp.active = false;
+        return true;
     }
     return false;
 }
@@ -535,10 +604,20 @@ fn removeSwBreakpoint(addr: u64) bool {
 pub fn removeAllBreakpoints() void {
     if (active_vc == null or active_vc.?.exec_path != .emulated) return;
     const vc = active_vc.?;
-    for (&sw_breakpoints) |*bp| {
+    for (&sw_breakpoints.static_slots) |*bp| {
         if (bp.active) {
             _ = writeByte(vc, bp.addr, bp.orig_byte);
             bp.active = false;
+        }
+    }
+    for (sw_breakpoints.dynamic_buckets) |head| {
+        var curr = head;
+        while (curr) |bp| {
+            if (bp.active) {
+                _ = writeByte(vc, bp.addr, bp.orig_byte);
+                bp.active = false;
+            }
+            curr = bp.next;
         }
     }
 }
@@ -565,9 +644,7 @@ var checksum_hi: u8 = 0;
 pub fn init() void {
     pkt_state = .idle;
     payload_len = 0;
-    for (&sw_breakpoints) |*bp| {
-        bp.* = .{ .addr = 0, .orig_byte = 0, .active = false };
-    }
+    sw_breakpoints.reset();
 }
 
 pub fn handleSerialByte(ch: u8) void {
@@ -643,4 +720,66 @@ pub fn pollSerialInput() void {
 
 pub inline fn onException(context: anytype) void {
     _ = context;
+}
+
+test "GDB RSP BreakpointTable static and dynamic hash buckets" {
+    const testing = std.testing;
+
+    var table = BreakpointTable{};
+
+    // 1. Fill all 32 static slots
+    var i: u64 = 0;
+    while (i < 32) : (i += 1) {
+        const addr = 0x1000 + i * 4;
+        const bp = table.allocate(addr, @as(u8, @intCast(i & 0xFF)));
+        try testing.expect(bp != null);
+        try testing.expectEqual(addr, bp.?.addr);
+        try testing.expectEqual(@as(u8, @intCast(i & 0xFF)), bp.?.orig_byte);
+    }
+
+    // Verify all 32 are findable
+    i = 0;
+    while (i < 32) : (i += 1) {
+        const addr = 0x1000 + i * 4;
+        const bp = table.find(addr);
+        try testing.expect(bp != null);
+        try testing.expectEqual(addr, bp.?.addr);
+    }
+
+    // Duplicate allocation returns null
+    try testing.expect(table.allocate(0x1000, 0xAA) == null);
+
+    // 2. Allocate dynamic breakpoint (index 32+)
+    const dyn_addr1: u64 = 0x8000;
+    const dyn_bp1 = table.allocate(dyn_addr1, 0x11);
+    try testing.expect(dyn_bp1 != null);
+    try testing.expectEqual(dyn_addr1, dyn_bp1.?.addr);
+    try testing.expectEqual(@as(usize, 1), table.dynamic_count);
+
+    // 3. Hash collision in dynamic buckets:
+    // (0x8000 >> 2) % 32 == (0x8000 + 32 * 4 >> 2) % 32 == (0x8080 >> 2) % 32
+    const dyn_addr2: u64 = 0x8080;
+    const dyn_bp2 = table.allocate(dyn_addr2, 0x22);
+    try testing.expect(dyn_bp2 != null);
+    try testing.expectEqual(dyn_addr2, dyn_bp2.?.addr);
+    try testing.expectEqual(@as(usize, 2), table.dynamic_count);
+
+    // Both colliding addresses findable
+    try testing.expect(table.find(dyn_addr1) != null);
+    try testing.expect(table.find(dyn_addr2) != null);
+
+    // 4. Deactivate and slot reuse
+    dyn_bp1.?.active = false;
+    try testing.expect(table.find(dyn_addr1) == null);
+
+    // Reallocating dyn_addr1 reuses inactive slot without increasing pool count
+    const dyn_realloc = table.allocate(dyn_addr1, 0x33);
+    try testing.expect(dyn_realloc != null);
+    try testing.expectEqual(@as(usize, 2), table.dynamic_count);
+
+    // 5. Reset cleans everything
+    table.reset();
+    try testing.expectEqual(@as(usize, 0), table.dynamic_count);
+    try testing.expect(table.find(0x1000) == null);
+    try testing.expect(table.find(dyn_addr1) == null);
 }

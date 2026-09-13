@@ -29,6 +29,31 @@ pub const VIRTIO_MMIO_VERSION_2: u32 = 0x00000002; // Modern VirtIO
 pub const VIRTIO_MMIO_DEVICE_NONE: u32 = 0x00000000; // Empty slot
 pub const VIRTIO_MMIO_VENDOR_QEMU: u32 = 0x554d4551; // "QEMU"
 
+// Canonical VirtIO MMIO Register Offsets (VirtIO 1.1 Specification Section 4.2.2)
+pub const VIRTIO_MMIO_REG_MAGIC_VALUE: u32        = 0x000;
+pub const VIRTIO_MMIO_REG_VERSION: u32            = 0x004;
+pub const VIRTIO_MMIO_REG_DEVICE_ID: u32          = 0x008;
+pub const VIRTIO_MMIO_REG_VENDOR_ID: u32          = 0x00c;
+pub const VIRTIO_MMIO_REG_DEVICE_FEATURES: u32    = 0x010;
+pub const VIRTIO_MMIO_REG_DEVICE_FEATURES_SEL: u32= 0x014;
+pub const VIRTIO_MMIO_REG_DRIVER_FEATURES: u32    = 0x020;
+pub const VIRTIO_MMIO_REG_DRIVER_FEATURES_SEL: u32= 0x024;
+pub const VIRTIO_MMIO_REG_QUEUE_SEL: u32          = 0x030;
+pub const VIRTIO_MMIO_REG_QUEUE_NUM_MAX: u32      = 0x034;
+pub const VIRTIO_MMIO_REG_QUEUE_NUM: u32          = 0x038;
+pub const VIRTIO_MMIO_REG_QUEUE_READY: u32        = 0x044;
+pub const VIRTIO_MMIO_REG_QUEUE_NOTIFY: u32       = 0x050;
+pub const VIRTIO_MMIO_REG_INTERRUPT_STATUS: u32   = 0x060;
+pub const VIRTIO_MMIO_REG_INTERRUPT_ACK: u32      = 0x064;
+pub const VIRTIO_MMIO_REG_STATUS: u32             = 0x070;
+pub const VIRTIO_MMIO_REG_QUEUE_DESC_LOW: u32     = 0x080;
+pub const VIRTIO_MMIO_REG_QUEUE_DESC_HIGH: u32    = 0x084;
+pub const VIRTIO_MMIO_REG_QUEUE_DRIVER_LOW: u32   = 0x090;
+pub const VIRTIO_MMIO_REG_QUEUE_DRIVER_HIGH: u32  = 0x094;
+pub const VIRTIO_MMIO_REG_QUEUE_DEVICE_LOW: u32   = 0x0a0;
+pub const VIRTIO_MMIO_REG_QUEUE_DEVICE_HIGH: u32  = 0x0a4;
+pub const VIRTIO_MMIO_REG_CONFIG_BASE: u32        = 0x100;
+
 pub const Bus = struct {
     uart: *vuart_mod.VirtualUart,
     timer: *vtimer_mod.VirtualTimer,

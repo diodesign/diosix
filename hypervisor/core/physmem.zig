@@ -95,31 +95,45 @@ var phys_mem_state = PhysMemState{
 pub const TestState = struct {
     allocator: std.mem.Allocator,
     metadata: []PageDescriptor,
-    ram: []u8,
+    raw_ram: []u8,
 
     pub fn deinit(self: *TestState) void {
+        const lock_ms = phys_mem_state.lock.lock();
+        defer phys_mem_state.lock.unlock(lock_ms);
+
         self.allocator.free(self.metadata);
-        self.allocator.free(self.ram);
+        self.allocator.free(self.raw_ram);
         phys_mem_state.metadata = &.{};
+        phys_mem_state.ram_base = 0;
         phys_mem_state.ram_size = 0;
+        phys_mem_state.total_pages = 0;
+        phys_mem_state.free_pages = 0;
+        phys_mem_state.region_count = 0;
+        phys_mem_state.hv_region = .{ .base = 0, .size = 0 };
+        phys_mem_state.free_lists = init_free_lists;
     }
 };
 
 pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
     const metadata = try allocator.alloc(PageDescriptor, num_pages);
     @memset(std.mem.sliceAsBytes(metadata), 0);
-    const ram = try allocator.alloc(u8, num_pages * PageSize);
+    const align_pad = 16 * PageSize;
+    const raw_ram = try allocator.alloc(u8, num_pages * PageSize + align_pad);
+    const aligned_base = std.mem.alignForward(usize, @intFromPtr(raw_ram.ptr), align_pad);
 
     const lock_ms = phys_mem_state.lock.lock();
     defer phys_mem_state.lock.unlock(lock_ms);
 
     phys_mem_state.has_h_extension = true;
     phys_mem_state.free_lists = init_free_lists;
-    phys_mem_state.ram_base = @intFromPtr(ram.ptr);
+    phys_mem_state.ram_base = aligned_base;
     phys_mem_state.ram_size = num_pages * PageSize;
     phys_mem_state.total_pages = num_pages;
     phys_mem_state.free_pages = 0;
     phys_mem_state.metadata = metadata;
+    phys_mem_state.region_count = 1;
+    phys_mem_state.regions[0] = .{ .base = phys_mem_state.ram_base, .size = phys_mem_state.ram_size };
+    phys_mem_state.hv_region = .{ .base = 0, .size = 0 };
 
     var addr = phys_mem_state.ram_base;
     for (0..num_pages) |_| {
@@ -127,12 +141,10 @@ pub fn initForTest(allocator: std.mem.Allocator, num_pages: usize) !TestState {
         addr += PageSize;
     }
 
-    // Register this RAM region so isRam() works in tests
-    phys_mem_state.region_count = 1;
-    phys_mem_state.regions[0] = .{ .base = phys_mem_state.ram_base, .size = phys_mem_state.ram_size };
+    // Set mock hypervisor region for tests (disjoint from test RAM)
     phys_mem_state.hv_region = .{ .base = 0x80000000, .size = 0x200000 };
 
-    return TestState{ .allocator = allocator, .metadata = metadata, .ram = ram };
+    return TestState{ .allocator = allocator, .metadata = metadata, .raw_ram = raw_ram };
 }
 
 // Initialize physical memory management using the device tree

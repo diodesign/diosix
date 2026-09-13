@@ -6,6 +6,8 @@
 
 const std = @import("std");
 
+const bus = @import("bus.zig");
+
 pub const VIRTIO_ID_INPUT: u32 = 18;
 pub const VIRTIO_VENDOR_ID: u32 = 0x554d4551; // "QEMU" / Standard VirtIO
 pub const VIRTIO_MAGIC: u32 = 0x74726976; // "virt"
@@ -22,6 +24,14 @@ pub const VIRTIO_INPUT_CFG_ID_DEVIDS: u8 = 0x03;
 pub const VIRTIO_INPUT_CFG_PROP_BITS: u8 = 0x10;
 pub const VIRTIO_INPUT_CFG_EV_BITS: u8 = 0x11;
 pub const VIRTIO_INPUT_CFG_ABS_INFO: u8 = 0x12;
+
+// VirtIO-Input config register offsets within MMIO
+pub const REG_INPUT_CFG_SELECT: u32 = bus.VIRTIO_MMIO_REG_CONFIG_BASE;
+pub const REG_INPUT_CFG_SUBSEL: u32 = bus.VIRTIO_MMIO_REG_CONFIG_BASE + 1;
+pub const REG_INPUT_CFG_SIZE: u32 = bus.VIRTIO_MMIO_REG_CONFIG_BASE + 2;
+pub const REG_INPUT_CFG_DATA_START: u32 = bus.VIRTIO_MMIO_REG_CONFIG_BASE + 8;
+pub const REG_INPUT_CFG_DATA_SIZE: u32 = 128;
+pub const REG_INPUT_CFG_DATA_END: u32 = REG_INPUT_CFG_DATA_START + REG_INPUT_CFG_DATA_SIZE;
 
 // Standard Linux evdev Event Types
 pub const EV_SYN: u16 = 0x00;
@@ -52,7 +62,7 @@ pub const VirtQueue = struct {
     last_used_idx: u16 = 0,
 };
 
-pub const MAX_EVENTS_BUFFER: usize = 32;
+pub const MAX_EVENTS_BUFFER: usize = 128;
 
 pub const VirtioInput = struct {
     guest_cid: usize = 0,
@@ -61,7 +71,8 @@ pub const VirtioInput = struct {
     driver_features_sel: u32 = 0,
     driver_features: u64 = 0,
     queue_sel: u32 = 0,
-    interrupt_status: u32 = 0,
+    interrupt_status: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     cfg_select: u8 = VIRTIO_INPUT_CFG_UNSET,
     cfg_subsel: u8 = 0,
@@ -83,11 +94,11 @@ pub const VirtioInput = struct {
 
     pub fn readReg(self: *VirtioInput, offset: u32) u32 {
         return switch (offset) {
-            0x000 => VIRTIO_MAGIC,
-            0x004 => VIRTIO_VERSION,
-            0x008 => VIRTIO_ID_INPUT,
-            0x00c => VIRTIO_VENDOR_ID,
-            0x010 => blk: {
+            bus.VIRTIO_MMIO_REG_MAGIC_VALUE => VIRTIO_MAGIC,
+            bus.VIRTIO_MMIO_REG_VERSION => VIRTIO_VERSION,
+            bus.VIRTIO_MMIO_REG_DEVICE_ID => VIRTIO_ID_INPUT,
+            bus.VIRTIO_MMIO_REG_VENDOR_ID => VIRTIO_VENDOR_ID,
+            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES => blk: {
                 if (self.device_features_sel == 0) {
                     break :blk 0;
                 } else if (self.device_features_sel == 1) {
@@ -95,17 +106,17 @@ pub const VirtioInput = struct {
                 }
                 break :blk 0;
             },
-            0x034 => QUEUE_SIZE_MAX,
-            0x044 => if (self.queue_sel < NUM_QUEUES and self.queues[self.queue_sel].ready) 1 else 0,
-            0x060 => self.interrupt_status,
-            0x070 => self.status,
-            // Config space starts at 0x100
-            0x100 => self.cfg_select,
-            0x101 => self.cfg_subsel,
-            0x102 => @truncate(self.getConfigSize()),
+            bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX => if (self.queue_sel < NUM_QUEUES) QUEUE_SIZE_MAX else 0,
+            bus.VIRTIO_MMIO_REG_QUEUE_READY => if (self.queue_sel < NUM_QUEUES and self.queues[self.queue_sel].ready) 1 else 0,
+            bus.VIRTIO_MMIO_REG_INTERRUPT_STATUS => self.interrupt_status.load(.acquire),
+            bus.VIRTIO_MMIO_REG_STATUS => self.status,
+            // Config space
+            REG_INPUT_CFG_SELECT => self.cfg_select,
+            REG_INPUT_CFG_SUBSEL => self.cfg_subsel,
+            REG_INPUT_CFG_SIZE => @truncate(self.getConfigSize()),
             else => blk: {
-                if (offset >= 0x108 and offset < 0x188) {
-                    const byte_idx = offset - 0x108;
+                if (offset >= REG_INPUT_CFG_DATA_START and offset < REG_INPUT_CFG_DATA_END) {
+                    const byte_idx = offset - REG_INPUT_CFG_DATA_START;
                     break :blk self.readConfigData(byte_idx);
                 }
                 break :blk 0;
@@ -115,61 +126,79 @@ pub const VirtioInput = struct {
 
     pub fn writeReg(self: *VirtioInput, offset: u32, val: u32) void {
         switch (offset) {
-            0x014 => self.device_features_sel = val,
-            0x020 => {
+            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES_SEL => self.device_features_sel = val,
+            bus.VIRTIO_MMIO_REG_DRIVER_FEATURES => {
                 if (self.driver_features_sel == 0) {
                     self.driver_features = (self.driver_features & 0xFFFFFFFF00000000) | val;
                 } else {
                     self.driver_features = (self.driver_features & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
                 }
             },
-            0x024 => self.driver_features_sel = val,
-            0x030 => self.queue_sel = val,
-            0x038 => {
+            bus.VIRTIO_MMIO_REG_DRIVER_FEATURES_SEL => self.driver_features_sel = val,
+            bus.VIRTIO_MMIO_REG_QUEUE_SEL => self.queue_sel = val,
+            bus.VIRTIO_MMIO_REG_QUEUE_NUM => {
                 if (self.queue_sel < NUM_QUEUES) {
                     const q_num = @min(val, QUEUE_SIZE_MAX);
                     self.queues[self.queue_sel].num = @truncate(if (q_num > 0) q_num else 1);
                 }
             },
-            0x044 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_READY => {
                 if (self.queue_sel < NUM_QUEUES) {
                     self.queues[self.queue_sel].ready = (val & 1) != 0 and self.queues[self.queue_sel].num > 0;
                 }
             },
-            0x064 => self.interrupt_status &= ~val,
-            0x070 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_NOTIFY => {
+                const q_idx = val;
+                if (q_idx == 0) {
+                    while (self.lock.swap(true, .acquire)) {
+                        std.atomic.spinLoopHint();
+                    }
+                    const has_pending = self.event_count > 0;
+                    self.lock.store(false, .release);
+                    if (has_pending) {
+                        _ = self.interrupt_status.fetchOr(1, .release);
+                    }
+                }
+            },
+            bus.VIRTIO_MMIO_REG_INTERRUPT_ACK => _ = self.interrupt_status.fetchAnd(~val, .release),
+            bus.VIRTIO_MMIO_REG_STATUS => {
                 self.status = val;
                 if (val == 0) {
                     self.reset();
                 }
             },
-            0x080 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DESC_LOW => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].desc_gpa = (self.queues[self.queue_sel].desc_gpa & 0xFFFFFFFF00000000) | val;
             },
-            0x084 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DESC_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].desc_gpa = (self.queues[self.queue_sel].desc_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
             },
-            0x090 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DRIVER_LOW => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].driver_gpa = (self.queues[self.queue_sel].driver_gpa & 0xFFFFFFFF00000000) | val;
             },
-            0x094 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DRIVER_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].driver_gpa = (self.queues[self.queue_sel].driver_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
             },
-            0x0a0 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DEVICE_LOW => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].device_gpa = (self.queues[self.queue_sel].device_gpa & 0xFFFFFFFF00000000) | val;
             },
-            0x0a4 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DEVICE_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].device_gpa = (self.queues[self.queue_sel].device_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
             },
-            0x100 => self.cfg_select = @truncate(val),
-            0x101 => self.cfg_subsel = @truncate(val),
+            REG_INPUT_CFG_SELECT => self.cfg_select = @truncate(val),
+            REG_INPUT_CFG_SUBSEL => self.cfg_subsel = @truncate(val),
             else => {},
         }
     }
 
     pub fn reset(self: *VirtioInput) void {
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
         self.status = 0;
-        self.interrupt_status = 0;
+        self.interrupt_status.store(0, .release);
         self.event_head = 0;
         self.event_tail = 0;
         self.event_count = 0;
@@ -204,7 +233,16 @@ pub const VirtioInput = struct {
     }
 
     pub fn pushEvent(self: *VirtioInput, event_type: u16, code: u16, value: u32) bool {
-        if (self.event_count >= MAX_EVENTS_BUFFER) return false;
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
+        if (self.event_count >= MAX_EVENTS_BUFFER) {
+            // Drop oldest event on buffer overflow to keep input responsive
+            self.event_head = (self.event_head + 1) % MAX_EVENTS_BUFFER;
+            self.event_count -= 1;
+        }
         self.event_queue[self.event_tail] = .{
             .type = event_type,
             .code = code,
@@ -212,11 +250,16 @@ pub const VirtioInput = struct {
         };
         self.event_tail = (self.event_tail + 1) % MAX_EVENTS_BUFFER;
         self.event_count += 1;
-        self.interrupt_status |= 1;
+        _ = self.interrupt_status.fetchOr(1, .release);
         return true;
     }
 
     pub fn popEvent(self: *VirtioInput) ?VirtioInputEvent {
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
         if (self.event_count == 0) return null;
         const ev = self.event_queue[self.event_head];
         self.event_head = (self.event_head + 1) % MAX_EVENTS_BUFFER;
@@ -253,4 +296,29 @@ test "VirtIO Input register probe, config query, and event queueing" {
     const ev2 = input.popEvent().?;
     try testing.expectEqual(EV_SYN, ev2.type);
     try testing.expect(input.popEvent() == null);
+
+    // Test QueueNumMax behavior
+    input.writeReg(bus.VIRTIO_MMIO_REG_QUEUE_SEL, 0);
+    try testing.expectEqual(QUEUE_SIZE_MAX, input.readReg(bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX));
+    input.writeReg(bus.VIRTIO_MMIO_REG_QUEUE_SEL, 99); // Out-of-bounds queue
+    try testing.expectEqual(@as(u32, 0), input.readReg(bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX));
+
+    // Test Queue Notify doorbell with pending event
+    input.interrupt_status.store(0, .release);
+    try testing.expect(input.pushEvent(EV_KEY, 1, 1));
+    input.interrupt_status.store(0, .release); // Clear it to verify notify triggers it
+    input.writeReg(bus.VIRTIO_MMIO_REG_QUEUE_NOTIFY, 0);
+    try testing.expectEqual(@as(u32, 1), input.interrupt_status.load(.acquire) & 1);
+
+    // Test buffer overflow resilience: fill beyond MAX_EVENTS_BUFFER (128)
+    // Drain existing event
+    _ = input.popEvent();
+    var idx: u16 = 0;
+    while (idx < MAX_EVENTS_BUFFER + 5) : (idx += 1) {
+        try testing.expect(input.pushEvent(EV_KEY, idx, 1));
+    }
+    try testing.expectEqual(MAX_EVENTS_BUFFER, input.event_count);
+    // Oldest 5 events (0..4) should have been dropped; head should be 5
+    const head_ev = input.popEvent().?;
+    try testing.expectEqual(@as(u16, 5), head_ev.code);
 }

@@ -23,6 +23,10 @@ STAGING_DIR="$(dirname "$OUT_IMG")/storage-staging"
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/images" "$STAGING_DIR/manifests" "$STAGING_DIR/keys"
 chmod 700 "$STAGING_DIR/keys"
+if command -v dropbearkey >/dev/null 2>&1; then
+    dropbearkey -t ed25519 -f "$STAGING_DIR/keys/id_management" >/dev/null 2>&1 || true
+    chmod 600 "$STAGING_DIR/keys/id_management" 2>/dev/null || true
+fi
 
 # Copy kernel image to standard locations on the storage disk (strip if possible)
 if [ -f "$KERNEL_ELF" ]; then

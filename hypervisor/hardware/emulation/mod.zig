@@ -19,7 +19,22 @@ pub const VirtualUart = @import("devices/vuart.zig").VirtualUart;
 pub const VirtualTimer = @import("devices/vtimer.zig").VirtualTimer;
 pub const VirtualPlic = @import("devices/vpic.zig").VirtualPlic;
 pub const VirtioVsock = @import("devices/vsock.zig").VirtioVsock;
+pub const VirtioGpu = @import("devices/vgpu.zig").VirtioGpu;
+pub const VirtioInput = @import("devices/vinput.zig").VirtioInput;
 pub const VsockRouter = @import("devices/vsock.zig").VsockRouter;
 pub const global_vsock_router = &@import("devices/vsock.zig").global_vsock_router;
 pub const decoder_rv32 = @import("engine/decoders/rv32.zig");
 pub const emitter_rv64 = @import("engine/emitters/rv64.zig");
+
+test {
+    _ = @import("vcpu.zig");
+    _ = @import("softtlb.zig");
+    _ = @import("devices/bus.zig");
+    _ = @import("devices/vuart.zig");
+    _ = @import("devices/vtimer.zig");
+    _ = @import("devices/vpic.zig");
+    _ = @import("devices/vsock.zig");
+    _ = @import("devices/vgpu.zig");
+    _ = @import("devices/vinput.zig");
+}
+

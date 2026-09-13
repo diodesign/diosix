@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const bus = @import("bus.zig");
 
 pub const VIRTIO_ID_VSOCK: u32 = 19;
 pub const VIRTIO_VENDOR_ID: u32 = 0x554d4551; // "QEMU" / Standard VirtIO
@@ -78,35 +79,112 @@ pub const VirtQueue = struct {
     last_used_idx: u16 = 0,
 };
 
-pub const MAX_VSOCK_DEVICES: usize = 64;
+pub const TABLE_BUCKETS: usize = 32;
 
 pub const VsockRouter = struct {
-    devices: [MAX_VSOCK_DEVICES]?*VirtioVsock = @splat(null),
+    // Fast-path direct slots for standard system and early guest CIDs 0..31:
+    // (CID 0: Hypervisor/Loopback, CID 2: Host OS, CIDs 3..31: early guest VMs)
+    static_slots: [TABLE_BUCKETS]?*VirtioVsock = @splat(null),
+
+    // Dynamic hash table buckets for arbitrary 64-bit CIDs (bucket = cid % TABLE_BUCKETS)
+    dynamic_buckets: [TABLE_BUCKETS]?*VirtioVsock = @splat(null),
+    lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn unregisterLocked(self: *VsockRouter, cid: u64) void {
+        const bucket = @as(usize, @truncate(cid % TABLE_BUCKETS));
+        var curr = self.dynamic_buckets[bucket];
+        var prev: ?*VirtioVsock = null;
+
+        while (curr) |d| {
+            if (d.guest_cid == cid) {
+                if (prev) |p| {
+                    p.router_next = d.router_next;
+                } else {
+                    self.dynamic_buckets[bucket] = d.router_next;
+                }
+                d.router_next = null;
+                return;
+            }
+            prev = curr;
+            curr = d.router_next;
+        }
+    }
 
     pub fn register(self: *VsockRouter, dev: *VirtioVsock) void {
         const cid = dev.guest_cid;
-        if (cid < MAX_VSOCK_DEVICES) {
-            self.devices[cid] = dev;
+        if (cid < TABLE_BUCKETS) {
+            self.static_slots[@as(usize, @truncate(cid))] = dev;
+            return;
         }
+
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
+        // CIDs >= 32: Hash table bucket insertion
+        const bucket = @as(usize, @truncate(cid % TABLE_BUCKETS));
+        // Remove prior registration if present to prevent circular links
+        self.unregisterLocked(cid);
+
+        dev.router_next = self.dynamic_buckets[bucket];
+        self.dynamic_buckets[bucket] = dev;
     }
 
-    pub fn unregister(self: *VsockRouter, cid: usize) void {
-        if (cid < MAX_VSOCK_DEVICES) {
-            self.devices[cid] = null;
+    pub fn unregister(self: *VsockRouter, cid: u64) void {
+        if (cid < TABLE_BUCKETS) {
+            self.static_slots[@as(usize, @truncate(cid))] = null;
+            return;
         }
+
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
+        self.unregisterLocked(cid);
     }
 
-    pub fn getDevice(self: *VsockRouter, cid: usize) ?*VirtioVsock {
-        if (cid < MAX_VSOCK_DEVICES) {
-            return self.devices[cid];
+    pub fn getDevice(self: *VsockRouter, cid: u64) ?*VirtioVsock {
+        if (cid < TABLE_BUCKETS) {
+            return self.static_slots[@as(usize, @truncate(cid))];
+        }
+
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
+        // CIDs >= 32: Hash table lookup in dynamic buckets
+        const bucket = @as(usize, @truncate(cid % TABLE_BUCKETS));
+        var curr = self.dynamic_buckets[bucket];
+        while (curr) |d| {
+            if (d.guest_cid == cid) {
+                return d;
+            }
+            curr = d.router_next;
         }
         return null;
     }
 
     pub fn routePacket(self: *VsockRouter, src_dev: *VirtioVsock, hdr: *const VirtioVsockHdr, payload: []const u8) bool {
-        _ = src_dev;
-        const target = self.getDevice(@truncate(hdr.dst_cid)) orelse return false;
-        return target.deliverRxPacket(hdr, payload);
+        const target = self.getDevice(hdr.dst_cid) orelse return false;
+        // Security Shield: Prevent CID spoofing across virtual guests.
+        // Guarantee that the source CID delivered to the destination matches the authentic guest CID of the sender.
+        var authentic_hdr = hdr.*;
+        authentic_hdr.src_cid = src_dev.guest_cid;
+        authentic_hdr.len = @truncate(payload.len);
+        return target.deliverRxPacket(&authentic_hdr, payload);
+    }
+
+    pub fn reset(self: *VsockRouter) void {
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
+        self.static_slots = @splat(null);
+        self.dynamic_buckets = @splat(null);
     }
 };
 
@@ -137,6 +215,8 @@ pub const VirtioVsock = struct {
     queues: [NUM_QUEUES]VirtQueue = @splat(.{}),
     mem: ?MemoryAccessor = null,
     router: ?*VsockRouter = &global_vsock_router,
+    router_next: ?*VirtioVsock = null,
+    rx_lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(cid: u64, mem: ?MemoryAccessor) VirtioVsock {
         var dev = VirtioVsock{
@@ -151,11 +231,11 @@ pub const VirtioVsock = struct {
 
     pub fn readReg(self: *VirtioVsock, offset: u32) u32 {
         return switch (offset) {
-            0x000 => VIRTIO_MAGIC,
-            0x004 => VIRTIO_VERSION,
-            0x008 => VIRTIO_ID_VSOCK,
-            0x00c => VIRTIO_VENDOR_ID,
-            0x010 => blk: {
+            bus.VIRTIO_MMIO_REG_MAGIC_VALUE => VIRTIO_MAGIC,
+            bus.VIRTIO_MMIO_REG_VERSION => VIRTIO_VERSION,
+            bus.VIRTIO_MMIO_REG_DEVICE_ID => VIRTIO_ID_VSOCK,
+            bus.VIRTIO_MMIO_REG_VENDOR_ID => VIRTIO_VENDOR_ID,
+            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES => blk: {
                 if (self.device_features_sel == 0) {
                     // Feature bits 0..31
                     break :blk 0;
@@ -165,29 +245,29 @@ pub const VirtioVsock = struct {
                 }
                 break :blk 0;
             },
-            0x034 => QUEUE_SIZE_MAX,
-            0x044 => if (self.queue_sel < NUM_QUEUES) (if (self.queues[self.queue_sel].ready) 1 else 0) else 0,
-            0x060 => self.interrupt_status,
-            0x070 => self.status,
-            0x0fc, 0x100 => @truncate(self.guest_cid),
-            0x104 => @truncate(self.guest_cid >> 32),
+            bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX => if (self.queue_sel < NUM_QUEUES) QUEUE_SIZE_MAX else 0,
+            bus.VIRTIO_MMIO_REG_QUEUE_READY => if (self.queue_sel < NUM_QUEUES) (if (self.queues[self.queue_sel].ready) 1 else 0) else 0,
+            bus.VIRTIO_MMIO_REG_INTERRUPT_STATUS => @atomicLoad(u32, &self.interrupt_status, .seq_cst),
+            bus.VIRTIO_MMIO_REG_STATUS => self.status,
+            0x0fc, bus.VIRTIO_MMIO_REG_CONFIG_BASE => @truncate(self.guest_cid),
+            bus.VIRTIO_MMIO_REG_CONFIG_BASE + 4 => @truncate(self.guest_cid >> 32),
             else => 0,
         };
     }
 
     pub fn writeReg(self: *VirtioVsock, offset: u32, val: u32) void {
         switch (offset) {
-            0x014 => self.device_features_sel = val,
-            0x020 => {
+            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES_SEL => self.device_features_sel = val,
+            bus.VIRTIO_MMIO_REG_DRIVER_FEATURES => {
                 if (self.driver_features_sel == 0) {
                     self.driver_features = (self.driver_features & 0xFFFFFFFF00000000) | val;
                 } else if (self.driver_features_sel == 1) {
                     self.driver_features = (self.driver_features & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
                 }
             },
-            0x024 => self.driver_features_sel = val,
-            0x030 => self.queue_sel = val,
-            0x038 => {
+            bus.VIRTIO_MMIO_REG_DRIVER_FEATURES_SEL => self.driver_features_sel = val,
+            bus.VIRTIO_MMIO_REG_QUEUE_SEL => self.queue_sel = val,
+            bus.VIRTIO_MMIO_REG_QUEUE_NUM => {
                 if (self.queue_sel < NUM_QUEUES) {
                     const q_num = @min(val, QUEUE_SIZE_MAX);
                     if (q_num > 0) {
@@ -195,7 +275,7 @@ pub const VirtioVsock = struct {
                     }
                 }
             },
-            0x044 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_READY => {
                 if (self.queue_sel < NUM_QUEUES) {
                     const req_ready = (val & 1) != 0;
                     if (req_ready and self.queues[self.queue_sel].num == 0) {
@@ -205,53 +285,53 @@ pub const VirtioVsock = struct {
                     }
                 }
             },
-            0x050 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_NOTIFY => {
                 // Queue Notify doorbell from driver
                 const q_idx = val;
                 if (q_idx == 1) {
                     self.processTx();
                 }
             },
-            0x064 => {
+            bus.VIRTIO_MMIO_REG_INTERRUPT_ACK => {
                 // Interrupt ACK
-                self.interrupt_status &= ~val;
+                _ = @atomicRmw(u32, &self.interrupt_status, .And, ~val, .seq_cst);
             },
-            0x070 => {
+            bus.VIRTIO_MMIO_REG_STATUS => {
                 self.status = val;
                 if (val == 0) {
                     // Device Reset
                     for (&self.queues) |*q| {
                         q.* = .{};
                     }
-                    self.interrupt_status = 0;
+                    @atomicStore(u32, &self.interrupt_status, 0, .seq_cst);
                 }
             },
-            0x080 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DESC_LOW => {
                 if (self.queue_sel < NUM_QUEUES) {
                     self.queues[self.queue_sel].desc_gpa = (self.queues[self.queue_sel].desc_gpa & 0xFFFFFFFF00000000) | val;
                 }
             },
-            0x084 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DESC_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) {
                     self.queues[self.queue_sel].desc_gpa = (self.queues[self.queue_sel].desc_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
                 }
             },
-            0x090 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DRIVER_LOW => {
                 if (self.queue_sel < NUM_QUEUES) {
                     self.queues[self.queue_sel].driver_gpa = (self.queues[self.queue_sel].driver_gpa & 0xFFFFFFFF00000000) | val;
                 }
             },
-            0x094 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DRIVER_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) {
                     self.queues[self.queue_sel].driver_gpa = (self.queues[self.queue_sel].driver_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
                 }
             },
-            0x0a0 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DEVICE_LOW => {
                 if (self.queue_sel < NUM_QUEUES) {
                     self.queues[self.queue_sel].device_gpa = (self.queues[self.queue_sel].device_gpa & 0xFFFFFFFF00000000) | val;
                 }
             },
-            0x0a4 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DEVICE_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) {
                     self.queues[self.queue_sel].device_gpa = (self.queues[self.queue_sel].device_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
                 }
@@ -334,10 +414,15 @@ pub const VirtioVsock = struct {
         }
 
         // Set interrupt for used buffer notification
-        self.interrupt_status |= 1;
+        _ = @atomicRmw(u32, &self.interrupt_status, .Or, 1, .seq_cst);
     }
 
     pub fn deliverRxPacket(self: *VirtioVsock, hdr: *const VirtioVsockHdr, payload: []const u8) bool {
+        while (self.rx_lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.rx_lock.store(false, .release);
+
         const mem = self.mem orelse return false;
         var rx_q = &self.queues[0];
         if (!rx_q.ready or rx_q.num == 0 or rx_q.driver_gpa == 0 or rx_q.device_gpa == 0) return false;
@@ -360,30 +445,38 @@ pub const VirtioVsock = struct {
         if (!mem.read(desc_addr, std.mem.asBytes(&desc))) return false;
 
         if (desc.len < @sizeOf(VirtioVsockHdr)) return false;
+        // RX descriptors must be device-writable per VirtIO 1.1 spec Section 2.6.5
+        if ((desc.flags & VIRTQ_DESC_F_WRITE) == 0) return false;
 
-        // Write header to RX buffer
-        if (!mem.write(desc.addr, std.mem.asBytes(hdr))) return false;
-
-        var total_written: u32 = @sizeOf(VirtioVsockHdr);
+        var rx_hdr = hdr.*;
+        var payload_written: u32 = 0;
 
         if (payload.len > 0) {
             const needed_len = std.math.add(usize, @sizeOf(VirtioVsockHdr), payload.len) catch std.math.maxInt(usize);
             if (desc.len >= needed_len) {
                 if (mem.write(desc.addr +% @sizeOf(VirtioVsockHdr), payload)) {
-                    total_written += @truncate(payload.len);
+                    payload_written = @truncate(payload.len);
                 }
             } else if ((desc.flags & VIRTQ_DESC_F_NEXT) != 0 and desc.next < rx_q.num) {
                 var next_desc: VirtqDesc = undefined;
                 const next_desc_offset = @as(u64, desc.next) *% @sizeOf(VirtqDesc);
                 const next_desc_addr = rx_q.desc_gpa +% next_desc_offset;
                 if (mem.read(next_desc_addr, std.mem.asBytes(&next_desc))) {
-                    const copy_len = @min(payload.len, next_desc.len);
-                    if (mem.write(next_desc.addr, payload[0..copy_len])) {
-                        total_written += @truncate(copy_len);
+                    if ((next_desc.flags & VIRTQ_DESC_F_WRITE) != 0) {
+                        const copy_len = @min(payload.len, next_desc.len);
+                        if (mem.write(next_desc.addr, payload[0..copy_len])) {
+                            payload_written = @truncate(copy_len);
+                        }
                     }
                 }
             }
         }
+
+        // Deliver header with exact payload byte count written into guest buffers
+        rx_hdr.len = payload_written;
+        if (!mem.write(desc.addr, std.mem.asBytes(&rx_hdr))) return false;
+
+        const total_written: u32 = @sizeOf(VirtioVsockHdr) + payload_written;
 
         // Put into Used ring
         const used_slot = rx_q.last_used_idx % rx_q.num;
@@ -400,7 +493,7 @@ pub const VirtioVsock = struct {
         rx_q.last_avail_idx +%= 1;
 
         // Raise interrupt
-        self.interrupt_status |= 1;
+        _ = @atomicRmw(u32, &self.interrupt_status, .Or, 1, .seq_cst);
         return true;
     }
 };
@@ -576,3 +669,172 @@ test "VirtIO-vsock safety against malicious queue zero size and out-of-bounds de
     vsock.processTx(); // Must safely break without out-of-bounds read
     try testing.expectEqual(@as(u16, 0), vsock.queues[1].last_used_idx); // No descriptor processed
 }
+
+test "VirtIO-vsock router prevents CID spoofing" {
+    const testing = std.testing;
+
+    var ram_dest = MockRam{};
+    const mem_dest = MemoryAccessor{
+        .ctx = &ram_dest,
+        .readFn = MockRam.read,
+        .writeFn = MockRam.write,
+    };
+
+    var sender = VirtioVsock.init(2, null);
+    var receiver = VirtioVsock.init(3, mem_dest);
+
+    // Setup receiver's RX queue
+    receiver.queues[0].ready = true;
+    receiver.queues[0].num = 16;
+    receiver.queues[0].driver_gpa = 0x2000;
+    receiver.queues[0].desc_gpa = 0x1000;
+    receiver.queues[0].device_gpa = 0x3000;
+
+    const avail_idx: u16 = 1;
+    _ = mem_dest.write(0x2002, std.mem.asBytes(&avail_idx));
+    const desc_head: u16 = 0;
+    _ = mem_dest.write(0x2004, std.mem.asBytes(&desc_head));
+
+    const rx_desc = VirtqDesc{
+        .addr = 0x4000,
+        .len = 512,
+        .flags = VIRTQ_DESC_F_WRITE,
+        .next = 0,
+    };
+    _ = mem_dest.write(0x1000, std.mem.asBytes(&rx_desc));
+
+    // Attacker sends packet with spoofed src_cid = 999 (pretending to be root or another VM)
+    const spoofed_hdr = VirtioVsockHdr{
+        .src_cid = 999,
+        .dst_cid = 3,
+        .src_port = 1234,
+        .dst_port = 5678,
+        .len = 4,
+        .type = VIRTIO_VSOCK_TYPE_STREAM,
+        .op = VIRTIO_VSOCK_OP_RW,
+        .flags = 0,
+        .buf_alloc = 4096,
+        .fwd_cnt = 0,
+    };
+
+    var router = VsockRouter{};
+    router.register(&sender);
+    router.register(&receiver);
+
+    const delivered = router.routePacket(&sender, &spoofed_hdr, "TEST");
+    try testing.expect(delivered);
+
+    // Verify receiver received packet with authentic sender CID 2, not spoofed 999!
+    var received_hdr: VirtioVsockHdr = undefined;
+    _ = mem_dest.read(0x4000, std.mem.asBytes(&received_hdr));
+    try testing.expectEqual(@as(u64, 2), received_hdr.src_cid);
+
+    // Test rejection of non-writable RX descriptor
+    const ro_desc = VirtqDesc{
+        .addr = 0x4000,
+        .len = 512,
+        .flags = 0, // No VIRTQ_DESC_F_WRITE
+        .next = 0,
+    };
+    _ = mem_dest.write(0x1000, std.mem.asBytes(&ro_desc));
+    receiver.queues[0].last_avail_idx = 0; // Reset avail idx to process slot again
+    try testing.expect(!receiver.deliverRxPacket(&spoofed_hdr, "TEST"));
+
+    // Test rejection of out-of-bounds 64-bit CID without aliasing
+    var high_cid_hdr = spoofed_hdr;
+    high_cid_hdr.dst_cid = (@as(u64, 1) << 32) | 3;
+    try testing.expect(!router.routePacket(&sender, &high_cid_hdr, "TEST"));
+
+    // Test QueueNumMax invalid selector
+    sender.writeReg(bus.VIRTIO_MMIO_REG_QUEUE_SEL, 0);
+    try testing.expectEqual(QUEUE_SIZE_MAX, sender.readReg(bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX));
+    sender.writeReg(bus.VIRTIO_MMIO_REG_QUEUE_SEL, 5); // Non-existent queue
+    try testing.expectEqual(@as(u32, 0), sender.readReg(bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX));
+
+    // Test high CID (>= 64) registration and routing
+    var mock_ram_high = MockRam{};
+    const mem_high = mock_ram_high.accessor();
+    var dev_high = VirtioVsock.init(64, mem_high);
+    dev_high.queues[0].ready = true;
+    dev_high.queues[0].num = 16;
+    dev_high.queues[0].driver_gpa = 0x2000;
+    dev_high.queues[0].desc_gpa = 0x1000;
+    dev_high.queues[0].device_gpa = 0x3000;
+    _ = mem_high.write(0x2002, std.mem.asBytes(&avail_idx));
+    _ = mem_high.write(0x2004, std.mem.asBytes(&desc_head));
+    _ = mem_high.write(0x1000, std.mem.asBytes(&rx_desc));
+
+    router.register(&dev_high);
+    try testing.expectEqual(&dev_high, router.getDevice(64));
+
+    const high_dst_hdr = VirtioVsockHdr{
+        .src_cid = 2,
+        .dst_cid = 64,
+        .src_port = 100,
+        .dst_port = 200,
+        .len = 100, // Deliberately state 100 bytes
+        .type = VIRTIO_VSOCK_TYPE_STREAM,
+        .op = VIRTIO_VSOCK_OP_RW,
+        .flags = 0,
+        .buf_alloc = 4096,
+        .fwd_cnt = 0,
+    };
+    // Send 5 bytes payload: header delivered should accurately record len = 5, NOT 100!
+    const high_delivered = router.routePacket(&sender, &high_dst_hdr, "HELLO");
+    try testing.expect(high_delivered);
+    var delivered_hdr: VirtioVsockHdr = undefined;
+    _ = mem_high.read(0x4000, std.mem.asBytes(&delivered_hdr));
+    try testing.expectEqual(@as(u32, 5), delivered_hdr.len);
+    try testing.expectEqual(@as(u64, 2), delivered_hdr.src_cid);
+    try testing.expectEqual(@as(u64, 64), delivered_hdr.dst_cid);
+}
+
+test "VsockRouter dynamic hash table with arbitrary 64-bit CIDs and collision handling" {
+    const testing = std.testing;
+
+    var router = VsockRouter{};
+
+    // 1. Static slots (CIDs 0..31)
+    var dev2 = VirtioVsock{ .guest_cid = 2 };
+    var dev3 = VirtioVsock{ .guest_cid = 3 };
+    router.register(&dev2);
+    router.register(&dev3);
+
+    try testing.expectEqual(&dev2, router.getDevice(2));
+    try testing.expectEqual(&dev3, router.getDevice(3));
+    try testing.expect(router.getDevice(4) == null);
+
+    // 2. Dynamic high CIDs (CIDs >= 32)
+    var dev1000 = VirtioVsock{ .guest_cid = 1000 };
+    var dev_u32max = VirtioVsock{ .guest_cid = 4294967295 }; // 2^32 - 1
+    var dev_high64 = VirtioVsock{ .guest_cid = (@as(u64, 1) << 40) | 123 };
+    router.register(&dev1000);
+    router.register(&dev_u32max);
+    router.register(&dev_high64);
+
+    try testing.expectEqual(&dev1000, router.getDevice(1000));
+    try testing.expectEqual(&dev_u32max, router.getDevice(4294967295));
+    try testing.expectEqual(&dev_high64, router.getDevice((@as(u64, 1) << 40) | 123));
+
+    // 3. Collision handling in dynamic buckets: CIDs 38 and 70 both hash to bucket 38 % 32 = 6, 70 % 32 = 6
+    var dev38 = VirtioVsock{ .guest_cid = 38 };
+    var dev70 = VirtioVsock{ .guest_cid = 70 };
+    router.register(&dev38);
+    router.register(&dev70);
+
+    try testing.expectEqual(&dev38, router.getDevice(38));
+    try testing.expectEqual(&dev70, router.getDevice(70));
+
+    // 4. Safe null on arbitrary non-existent or massive CIDs without crash or index overflow
+    try testing.expect(router.getDevice(0xFFFF_FFFF_FFFF_FFFF) == null);
+    try testing.expect(router.getDevice(99999) == null);
+
+    // 5. Unregistration cleanly unlinks from dynamic bucket chain
+    router.unregister(38);
+    try testing.expect(router.getDevice(38) == null);
+    try testing.expectEqual(&dev70, router.getDevice(70));
+
+    router.unregister(70);
+    try testing.expect(router.getDevice(70) == null);
+}
+

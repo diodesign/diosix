@@ -87,7 +87,13 @@ pub const GuestSpace = struct {
     }
 
     // Map physical memory into guest address space
+    // Map physical memory into guest address space
     pub fn map(self: *GuestSpace, gpa: usize, hpa: usize, size: usize, flags: u64) !void {
+        if (size == 0) return;
+        const gpa_end = std.math.add(usize, gpa, size) catch return error.InvalidAddress;
+        _ = std.math.add(usize, hpa, size) catch return error.InvalidAddress;
+        if (self.mode == .h_paging and gpa_end > sv39x4.MAX_GPA) return error.InvalidAddress;
+
         if (self.mode == .h_paging) {
             if (self.paging) |*pt| {
                 // Map individual pages for paging (allows fragmentation/CoW)
@@ -110,6 +116,10 @@ pub const GuestSpace = struct {
 
     // Unmap physical memory from guest address space
     pub fn unmap(self: *GuestSpace, gpa: usize, size: usize) void {
+        if (size == 0) return;
+        const gpa_end = std.math.add(usize, gpa, size) catch return;
+        if (self.mode == .h_paging and gpa_end > sv39x4.MAX_GPA) return;
+
         if (self.mode == .h_paging) {
             if (self.paging) |*pt| {
                 var offset: usize = 0;
@@ -117,6 +127,14 @@ pub const GuestSpace = struct {
                     pt.unmapPage(gpa + offset);
                 }
             }
+        }
+    }
+
+    // Update guest range size and underlying page table limits
+    pub fn setRangeSize(self: *GuestSpace, new_size: usize) void {
+        self.range_size = new_size;
+        if (self.paging) |*pt| {
+            pt.root_range_size = new_size;
         }
     }
 
@@ -154,7 +172,7 @@ pub const GuestSpace = struct {
         if (self.mode == .h_paging) {
             const pt = self.paging orelse return error.TranslationFailed;
             // Check if it's within the optimized identity/offset range
-            if (pt.root_range_size > 0 and gpa >= pt.root_base_gpa and (gpa - pt.root_base_gpa) < pt.root_range_size) {
+            if (pt.root_base_hpa > 0 and pt.root_range_size > 0 and gpa >= pt.root_base_gpa and (gpa - pt.root_base_gpa) < pt.root_range_size) {
                 const off = gpa - pt.root_base_gpa;
                 return std.math.add(usize, pt.root_base_hpa, off) catch return error.TranslationFailed;
             }
@@ -166,7 +184,7 @@ pub const GuestSpace = struct {
             return std.math.add(usize, hpa, gpa % physmem.PageSize) catch return error.TranslationFailed;
         } else {
             // PMP mode: resolve the GPA through the optimized identity mapping.
-            if (self.range_size > 0 and gpa >= self.base_gpa and (gpa - self.base_gpa) < self.range_size) {
+            if (self.base_hpa > 0 and self.range_size > 0 and gpa >= self.base_gpa and (gpa - self.base_gpa) < self.range_size) {
                 const off = gpa - self.base_gpa;
                 return std.math.add(usize, self.base_hpa, off) catch return error.TranslationFailed;
             }
@@ -207,10 +225,23 @@ pub const GuestSpace = struct {
 
     // Safely copy data from guest physical memory space into host buffer.
     // Handles multi-page transfers and non-contiguous guest physical mappings.
+    // Pre-validates the entire GPA range to ensure transactional integrity against unmapped faults.
     pub fn copyFromGuest(self: *const GuestSpace, dst: []u8, src_gpa: usize) !void {
         if (dst.len == 0) return;
         _ = std.math.add(usize, src_gpa, dst.len) catch return error.TranslationFailed;
 
+        // Pass 1: Pre-validate all source pages to avoid partial reads on unmapped/denied faults
+        var check_off: usize = 0;
+        while (check_off < dst.len) {
+            const cur_gpa = src_gpa + check_off;
+            const cur_hpa = try self.translateGPA(cur_gpa);
+            const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
+            const chunk = @min(dst.len - check_off, page_rem);
+            if (physmem.isHypervisorMemory(cur_hpa, chunk)) return error.AccessDenied;
+            check_off += chunk;
+        }
+
+        // Pass 2: Transfer data page by page
         var transferred: usize = 0;
         while (transferred < dst.len) {
             const cur_gpa = src_gpa + transferred;
@@ -268,7 +299,7 @@ test "GuestSpace safe copy and struct transfer across page boundaries" {
     defer phys_test.deinit();
 
     const base_gpa: usize = 0x80000000;
-    const base_hpa = physmem.getRamBase() + 4 * physmem.PageSize;
+    const base_hpa = physmem.getRamBase() + 8 * physmem.PageSize;
     const size: usize = 2 * physmem.PageSize; // 2 pages = 8KB
 
     var space = try GuestSpace.init(testing.allocator, true, base_gpa, base_hpa, size);

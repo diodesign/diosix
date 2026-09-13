@@ -1,4 +1,4 @@
-// Cursor and Focus Marker Engine for Diosix GUI (Final Fantasy 7/8 Theme)
+// Cursor and Focus Marker Engine for Diosix GUI
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -15,7 +15,7 @@ const G = fb.Color.GLOVE_SHADING;
 const C = fb.Color.GLOVE_CUFF;
 const T = fb.Color.TRANSPARENT;
 
-// Iconic Final Fantasy pointing hand glove cursor (pointing horizontally right/up)
+// Pointing hand glove cursor (pointing horizontally right/up)
 pub const POINTER_PIXELS = [_]u32{
     K, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
     K, W, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
@@ -71,18 +71,17 @@ pub const Cursor = struct {
     }
 
     pub fn drawSprite(screen: *fb.Surface, x: i32, y: i32) void {
-        const x_start = @max(0, x);
-        const y_start = @max(0, y);
-        const x_end = @min(@as(i32, @intCast(screen.width)), x + @as(i32, @intCast(CURSOR_WIDTH)));
-        const y_end = @min(@as(i32, @intCast(screen.height)), y + @as(i32, @intCast(CURSOR_HEIGHT)));
-        if (x_start >= x_end or y_start >= y_end) return;
+        const sprite_box = fb.Box.fromPosSize(x, y, CURSOR_WIDTH, CURSOR_HEIGHT);
+        const clipped = sprite_box.intersect(screen.clip);
+        if (clipped.isEmpty()) return;
 
-        var py = y_start;
-        while (py < y_end) : (py += 1) {
+        const pixels_per_row = screen.stridePixels();
+        var py = clipped.y0;
+        while (py < clipped.y1) : (py += 1) {
             const src_row = @as(usize, @intCast(py - y)) * CURSOR_WIDTH;
-            const dst_row = @as(usize, @intCast(py)) * (screen.stride / @sizeOf(u32));
-            var px = x_start;
-            while (px < x_end) : (px += 1) {
+            const dst_row = @as(usize, @intCast(py)) * pixels_per_row;
+            var px = clipped.x0;
+            while (px < clipped.x1) : (px += 1) {
                 const src_idx = src_row + @as(usize, @intCast(px - x));
                 const col = POINTER_PIXELS[src_idx];
                 if (col != T) {
@@ -94,18 +93,17 @@ pub const Cursor = struct {
 
     // Draw keyboard focus hand pointing at (x, y)
     pub fn drawFocusHand(screen: *fb.Surface, x: i32, y: i32) void {
-        const x_start = @max(0, x);
-        const y_start = @max(0, y);
-        const x_end = @min(@as(i32, @intCast(screen.width)), x + @as(i32, @intCast(MARKER_WIDTH)));
-        const y_end = @min(@as(i32, @intCast(screen.height)), y + @as(i32, @intCast(MARKER_HEIGHT)));
-        if (x_start >= x_end or y_start >= y_end) return;
+        const sprite_box = fb.Box.fromPosSize(x, y, MARKER_WIDTH, MARKER_HEIGHT);
+        const clipped = sprite_box.intersect(screen.clip);
+        if (clipped.isEmpty()) return;
 
-        var py = y_start;
-        while (py < y_end) : (py += 1) {
+        const pixels_per_row = screen.stridePixels();
+        var py = clipped.y0;
+        while (py < clipped.y1) : (py += 1) {
             const src_row = @as(usize, @intCast(py - y)) * MARKER_WIDTH;
-            const dst_row = @as(usize, @intCast(py)) * (screen.stride / @sizeOf(u32));
-            var px = x_start;
-            while (px < x_end) : (px += 1) {
+            const dst_row = @as(usize, @intCast(py)) * pixels_per_row;
+            var px = clipped.x0;
+            while (px < clipped.x1) : (px += 1) {
                 const src_idx = src_row + @as(usize, @intCast(px - x));
                 const col = HAND_MARKER_PIXELS[src_idx];
                 if (col != T) {

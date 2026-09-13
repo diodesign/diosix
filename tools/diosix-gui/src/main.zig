@@ -86,6 +86,7 @@ pub const Display = struct {
                     .clean_buffer_mem = cb_mem,
                 };
             }
+            _ = linux.close(fd);
         }
 
         return error.NoDisplayDeviceFound;
@@ -122,7 +123,7 @@ pub const Display = struct {
 
         var y: usize = @intCast(y0);
         const end_y: usize = @intCast(y1);
-        const max_len = self.backbuffer_mem.len;
+        const max_len = @min(self.backbuffer_mem.len, (self.stride * self.height) / @sizeOf(u32));
 
         while (y < end_y) : (y += 1) {
             const row_start = std.math.mul(usize, y, stride_pixels) catch break;
@@ -147,7 +148,7 @@ pub const NS_PER_MS: i64 = 1_000_000;
 pub const TARGET_FPS: i64 = 60;
 pub const FRAME_INTERVAL_MS: i64 = MS_PER_SEC / TARGET_FPS; // 16 ms (~60 FPS)
 pub const POLL_TIMEOUT_MS: i32 = @intCast(FRAME_INTERVAL_MS);
-pub const MAX_INPUT_DEVICES: usize = 8;
+pub const MAX_INPUT_DEVICES: usize = 32;
 
 fn getMilliTimestamp() i64 {
     var ts: linux.timespec = undefined;
@@ -292,7 +293,7 @@ pub fn main() !void {
         else
             @intCast(FRAME_INTERVAL_MS - elapsed_since_render);
 
-        var pfds: [16]linux.pollfd = undefined;
+        var pfds: [MAX_INPUT_DEVICES]linux.pollfd = undefined;
         for (input_fds[0..input_count], 0..) |fd, i| {
             pfds[i] = linux.pollfd{
                 .fd = fd,

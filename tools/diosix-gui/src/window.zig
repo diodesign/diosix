@@ -1,4 +1,4 @@
-// Final Fantasy 7/8 Window Pane System for Diosix GUI
+// Diosix GUI Translucent Slate Glass Window System
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -30,12 +30,6 @@ pub const Window = struct {
 
     is_active: bool = false,
     z_order: u32 = 0,
-
-    // Custom gradient corner colors (defaults to FF7/8 classic gradient)
-    c_tl: u32 = fb.Color.FF_LIGHT_BLUE,
-    c_tr: u32 = fb.Color.FF_MID_BLUE,
-    c_bl: u32 = fb.Color.FF_DARK_BLUE,
-    c_br: u32 = fb.Color.FF_BLACK_CORNER,
 
     pub const CORNER_RADIUS: i32 = 10;
     pub const DEFAULT_OFFSCREEN_OFFSET: i32 = 2000;

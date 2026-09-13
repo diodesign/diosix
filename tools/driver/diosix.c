@@ -63,6 +63,12 @@
 #define IOCTL_UNMAP_CHILD_MEM  0x100F
 #define IOCTL_START            0x1010
 
+#define DIOSIX_CHILD_MEM_BASE     0x200000000UL
+#define DIOSIX_CHILD_MEM_MAX_SIZE (256UL * 1024 * 1024)
+#define DIOSIX_MAX_ELF_SIZE       (512UL * 1024 * 1024)
+#define DIOSIX_MAX_DTB_SIZE       (16UL * 1024 * 1024)
+#define DIOSIX_MAX_MANIFEST_SIZE  (1024UL * 1024)
+
 struct map_child_mem_args {
     unsigned long child_id;
     unsigned long child_gpa;
@@ -191,12 +197,12 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         struct guest_info *kinfo = kzalloc(sizeof(*kinfo), GFP_KERNEL);
         phys_addr_t pa;
         unsigned long target_cid = 1;
-        if (!kinfo)
-            return -ENOMEM;
-        if (copy_from_user(kinfo, (void __user *)arg, sizeof(*kinfo)) == 0) {
-            if (kinfo->guest_id > 0) {
-                target_cid = kinfo->guest_id;
-            }
+        if (copy_from_user(kinfo, (void __user *)arg, sizeof(*kinfo))) {
+            kfree(kinfo);
+            return -EFAULT;
+        }
+        if (kinfo->guest_id > 0) {
+            target_cid = kinfo->guest_id;
         }
         pa = virt_to_phys(kinfo);
         ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_GET_INFO, target_cid, (unsigned long)pa, sizeof(*kinfo), 0, 0, 0);
@@ -221,13 +227,25 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         bool elf_is_dma = false;
         struct run_args *sbi_args = kzalloc(sizeof(*sbi_args), GFP_KERNEL);
         phys_addr_t sbi_args_pa;
+        int ret_val = 0;
 
         if (!sbi_args)
             return -ENOMEM;
 
         if (copy_from_user(&kargs, (void __user *)arg, sizeof(kargs))) {
-            kfree(sbi_args);
-            return -EFAULT;
+            ret_val = -EFAULT;
+            goto out_free_sbi;
+        }
+
+        if (kargs.elf_size > DIOSIX_MAX_ELF_SIZE || kargs.dtb_size > DIOSIX_MAX_DTB_SIZE) {
+            ret_val = -EINVAL;
+            goto out_free_sbi;
+        }
+
+        if ((kargs.elf_size > 0 && !kargs.elf_ptr) ||
+            (kargs.dtb_size > 0 && !kargs.dtb_ptr)) {
+            ret_val = -EINVAL;
+            goto out_free_sbi;
         }
 
         if (kargs.elf_size > 0 && kargs.elf_ptr) {
@@ -245,38 +263,24 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                 }
             }
             if (!elf_kbuf) {
-                kfree(sbi_args);
-                return -ENOMEM;
+                ret_val = -ENOMEM;
+                goto out_free_sbi;
             }
             if (copy_from_user(elf_kbuf, (void __user *)kargs.elf_ptr, kargs.elf_size)) {
-                if (elf_is_dma) {
-                    dma_free_coherent(diosix_dev.this_device, kargs.elf_size, elf_kbuf, elf_dma_handle);
-                } else {
-                    free_pages_exact(elf_kbuf, kargs.elf_size);
-                }
-                kfree(sbi_args);
-                return -EFAULT;
+                ret_val = -EFAULT;
+                goto out_free_elf;
             }
         }
 
         if (kargs.dtb_size > 0 && kargs.dtb_ptr) {
             dtb_kbuf = alloc_pages_exact(kargs.dtb_size, GFP_KERNEL);
             if (!dtb_kbuf) {
-                if (elf_kbuf) {
-                    if (elf_is_dma) dma_free_coherent(diosix_dev.this_device, kargs.elf_size, elf_kbuf, elf_dma_handle);
-                    else free_pages_exact(elf_kbuf, kargs.elf_size);
-                }
-                kfree(sbi_args);
-                return -ENOMEM;
+                ret_val = -ENOMEM;
+                goto out_free_elf;
             }
             if (copy_from_user(dtb_kbuf, (void __user *)kargs.dtb_ptr, kargs.dtb_size)) {
-                if (elf_kbuf) {
-                    if (elf_is_dma) dma_free_coherent(diosix_dev.this_device, kargs.elf_size, elf_kbuf, elf_dma_handle);
-                    else free_pages_exact(elf_kbuf, kargs.elf_size);
-                }
-                free_pages_exact(dtb_kbuf, kargs.dtb_size);
-                kfree(sbi_args);
-                return -EFAULT;
+                ret_val = -EFAULT;
+                goto out_free_dtb;
             }
             dtb_pa = virt_to_phys(dtb_kbuf);
         }
@@ -292,21 +296,29 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
         ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_RUN, (unsigned long)sbi_args_pa, 0, 0, 0, 0, 0);
 
+        if (ret.error) {
+            ret_val = -EIO;
+            goto out_free_dtb;
+        }
+
+        kargs.child_id = ret.value;
+        if (copy_to_user((void __user *)arg, &kargs, sizeof(kargs))) {
+            ret_val = -EFAULT;
+            goto out_free_dtb;
+        }
+
+        ret_val = (int)ret.value;
+
+out_free_dtb:
+        if (dtb_kbuf) free_pages_exact(dtb_kbuf, kargs.dtb_size);
+out_free_elf:
         if (elf_kbuf) {
             if (elf_is_dma) dma_free_coherent(diosix_dev.this_device, kargs.elf_size, elf_kbuf, elf_dma_handle);
             else free_pages_exact(elf_kbuf, kargs.elf_size);
         }
-        if (dtb_kbuf) free_pages_exact(dtb_kbuf, kargs.dtb_size);
+out_free_sbi:
         kfree(sbi_args);
-
-        if (ret.error)
-            return -EIO;
-
-        kargs.child_id = ret.value;
-        if (copy_to_user((void __user *)arg, &kargs, sizeof(kargs)))
-            return -EFAULT;
-
-        return (int)ret.value;
+        return ret_val;
     }
 
 
@@ -342,21 +354,19 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         pa = virt_to_phys(kev);
 
         while (1) {
-            ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_POLL_EVENT, (unsigned long)pa, sizeof(*kev), 0, 0, 0, 0);
+            ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_POLL_EVENT, (unsigned long)pa, sizeof(*kev), wargs.target_cid, 0, 0, 0);
             if (ret.error) {
                 ret_val = -EIO;
                 break;
             }
             if (ret.value == 1) {
-                if (wargs.target_cid == 0 || wargs.target_cid == kev->cid) {
-                    memcpy(&wargs.event, kev, sizeof(*kev));
-                    if (copy_to_user((void __user *)arg, &wargs, sizeof(wargs))) {
-                        ret_val = -EFAULT;
-                        break;
-                    }
-                    ret_val = 0;
+                memcpy(&wargs.event, kev, sizeof(*kev));
+                if (copy_to_user((void __user *)arg, &wargs, sizeof(wargs))) {
+                    ret_val = -EFAULT;
                     break;
                 }
+                ret_val = 0;
+                break;
             } else {
                 if (wargs.flags & 1) {
                     ret_val = -EAGAIN;
@@ -430,7 +440,10 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
             return -EFAULT;
 
-        if (args.max_len > 64 * 1024)
+        if (args.max_len > DIOSIX_MAX_MANIFEST_SIZE)
+            return -EINVAL;
+
+        if (args.max_len > 0 && !args.data_ptr)
             return -EINVAL;
 
         sbi_margs = kzalloc(sizeof(*sbi_margs), GFP_KERNEL);
@@ -492,7 +505,10 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
             return -EFAULT;
 
-        if (args.max_len > 64 * 1024)
+        if (args.max_len > DIOSIX_MAX_MANIFEST_SIZE)
+            return -EINVAL;
+
+        if (args.max_len > 0 && !args.data_ptr)
             return -EINVAL;
 
         sbi_margs = kzalloc(sizeof(*sbi_margs), GFP_KERNEL);
@@ -541,7 +557,23 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             return -EFAULT;
 
         if (args.parent_gpa == 0)
-            args.parent_gpa = 0x200000000UL;
+            args.parent_gpa = DIOSIX_CHILD_MEM_BASE;
+
+        if (args.size == 0 || args.size > DIOSIX_CHILD_MEM_MAX_SIZE)
+            return -EINVAL;
+
+        if ((args.parent_gpa & (PAGE_SIZE - 1)) ||
+            (args.child_gpa & (PAGE_SIZE - 1)) ||
+            (args.size & (PAGE_SIZE - 1)))
+            return -EINVAL;
+
+        if (args.child_gpa + args.size < args.child_gpa)
+            return -EINVAL;
+
+        if (args.parent_gpa < DIOSIX_CHILD_MEM_BASE ||
+            args.parent_gpa + args.size < args.parent_gpa ||
+            args.parent_gpa + args.size > DIOSIX_CHILD_MEM_BASE + DIOSIX_CHILD_MEM_MAX_SIZE)
+            return -EINVAL;
 
         sbi_margs = kzalloc(sizeof(*sbi_margs), GFP_KERNEL);
         if (!sbi_margs)
@@ -573,7 +605,19 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             return -EFAULT;
 
         if (args.parent_gpa == 0)
-            args.parent_gpa = 0x200000000UL;
+            args.parent_gpa = DIOSIX_CHILD_MEM_BASE;
+
+        if (args.size == 0 || args.size > DIOSIX_CHILD_MEM_MAX_SIZE)
+            return -EINVAL;
+
+        if ((args.parent_gpa & (PAGE_SIZE - 1)) ||
+            (args.size & (PAGE_SIZE - 1)))
+            return -EINVAL;
+
+        if (args.parent_gpa < DIOSIX_CHILD_MEM_BASE ||
+            args.parent_gpa + args.size < args.parent_gpa ||
+            args.parent_gpa + args.size > DIOSIX_CHILD_MEM_BASE + DIOSIX_CHILD_MEM_MAX_SIZE)
+            return -EINVAL;
 
         sbi_uargs = kzalloc(sizeof(*sbi_uargs), GFP_KERNEL);
         if (!sbi_uargs)
@@ -624,14 +668,30 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 static int diosix_mmap(struct file *file, struct vm_area_struct *vma)
 {
-    unsigned long size = vma->vm_end - vma->vm_start;
+    unsigned long size;
     unsigned long pfn = vma->vm_pgoff;
+    unsigned long base_pfn = DIOSIX_CHILD_MEM_BASE >> PAGE_SHIFT;
+    unsigned long max_pfn = (DIOSIX_CHILD_MEM_BASE + DIOSIX_CHILD_MEM_MAX_SIZE) >> PAGE_SHIFT;
 
     if (!capable(CAP_SYS_ADMIN))
         return -EPERM;
 
+    if (vma->vm_end <= vma->vm_start)
+        return -EINVAL;
+
+    size = vma->vm_end - vma->vm_start;
+
+    if (size == 0 || size > DIOSIX_CHILD_MEM_MAX_SIZE)
+        return -EINVAL;
+
     if (pfn == 0)
-        pfn = 0x200000000UL >> PAGE_SHIFT;
+        pfn = base_pfn;
+
+    if (pfn < base_pfn || pfn >= max_pfn)
+        return -EINVAL;
+
+    if ((size >> PAGE_SHIFT) > (max_pfn - pfn))
+        return -EINVAL;
 
     vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
 
@@ -685,7 +745,7 @@ static netdev_tx_t diosix_net_xmit(struct sk_buff *skb, struct net_device *dev)
     phys_addr_t pa;
     void *kbuf;
 
-    if (skb->len > 1536) {
+    if (skb->len == 0 || skb->len > 1536) {
         dev_kfree_skb(skb);
         priv->stats.tx_dropped++;
         return NETDEV_TX_OK;
@@ -756,7 +816,12 @@ static int diosix_net_rx_worker(void *data)
         ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_NET_RECV, (unsigned long)rx_pa, 1536, 0, 0, 0, 0);
         if (ret.error == 0 && ret.value > 0) {
             unsigned long pkt_len = ret.value;
-            struct sk_buff *skb = netdev_alloc_skb(dev, pkt_len + 2);
+            struct sk_buff *skb;
+            if (pkt_len > 1536) {
+                idle_count = 0;
+                continue;
+            }
+            skb = netdev_alloc_skb(dev, pkt_len + 2);
             if (skb) {
                 skb_reserve(skb, 2);
                 memcpy(skb_put(skb, pkt_len), rx_buf, pkt_len);
@@ -815,7 +880,7 @@ static int init_diosix_net(void)
     dev->flags |= IFF_BROADCAST | IFF_MULTICAST;
 
     {
-        u8 mac_addr[ETH_ALEN] = { 0x02, 0x00, 0x00, 0x00, 0x00, (u8)(self_cid & 0xff) };
+        u8 mac_addr[ETH_ALEN] = { 0x02, 0x00, 0x00, 0x00, (u8)((self_cid >> 8) & 0xff), (u8)(self_cid & 0xff) };
         eth_hw_addr_set(dev, mac_addr);
     }
 

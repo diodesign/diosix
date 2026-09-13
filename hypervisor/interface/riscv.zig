@@ -42,7 +42,15 @@ pub const PrivilegeMode = enum(u2) {
     user = 0,
     supervisor = 1,
     machine = 3,
+
+    pub const PRIV_USER: u2 = 0;
+    pub const PRIV_SUPERVISOR: u2 = 1;
+    pub const PRIV_MACHINE: u2 = 3;
 };
+
+pub const PRIV_USER: u2 = PrivilegeMode.PRIV_USER;
+pub const PRIV_SUPERVISOR: u2 = PrivilegeMode.PRIV_SUPERVISOR;
+pub const PRIV_MACHINE: u2 = PrivilegeMode.PRIV_MACHINE;
 
 pub const IsaExtension = struct {
     pub const a: usize = 1 << 0;
@@ -69,8 +77,16 @@ pub const MSTATUS = struct {
     pub const MIE = 1 << 3;
     pub const MPIE = 1 << 7;
     pub const SIE = 1 << 1;
-    pub const TW = 1 << 21; // Timeout Wait: intercept WFI in S/VS mode
+    pub const MPRV = 1 << 17; // Modify PRiVilege: alters data memory access privilege
+    pub const SUM = 1 << 18;  // Permit Supervisor User Memory access
+    pub const MXR = 1 << 19;  // Make eXecutable Readable
+    pub const TVM = 1 << 20;  // Trap Virtual Memory: intercepts SATP access in S-mode
+    pub const TW = 1 << 21;   // Timeout Wait: intercept WFI in S/VS mode
+    pub const TSR = 1 << 22;  // Trap SRET: intercepts SRET in S-mode
     pub const MPV: u64 = 1 << 39;
+
+    // Mask of flags affecting virtual memory translation & access permissions
+    pub const TRANSLATION_AFFECTING_MASK: u32 = MPRV | SUM | MXR | MPP_MASK;
 
     // Vector State (VS) and Floating-point State (FS) field definitions
     pub const VS_SHIFT = 9;
@@ -236,6 +252,41 @@ pub fn toCause(val: usize) Cause {
 
 // Standard RISC-V CSR Numbers
 pub const CSR = struct {
+    // User / Supervisor / Machine standard CSRs
+    pub const CYCLE = 0xc00;
+    pub const TIME = 0xc01;
+    pub const INSTRET = 0xc02;
+    pub const CYCLEH = 0xc80;
+    pub const TIMEH = 0xc81;
+    pub const INSTRETH = 0xc82;
+
+    pub const SSTATUS = 0x100;
+    pub const SIE = 0x104;
+    pub const STVEC = 0x105;
+    pub const SCOUNTEREN = 0x106;
+    pub const SENVCFG = 0x10a;
+    pub const SSCRATCH = 0x140;
+    pub const SEPC = 0x141;
+    pub const SCAUSE = 0x142;
+    pub const STVAL = 0x143;
+    pub const SIP = 0x144;
+    pub const STIMECMP = 0x14d;
+    pub const SATP = 0x180;
+
+    pub const MSTATUS = 0x300;
+    pub const MISA = 0x301;
+    pub const MEDELEG = 0x302;
+    pub const MIDELEG = 0x303;
+    pub const MIE = 0x304;
+    pub const MTVEC = 0x305;
+    pub const MCOUNTEREN = 0x306;
+    pub const MENVCFG = 0x30a;
+    pub const MSCRATCH = 0x340;
+    pub const MEPC = 0x341;
+    pub const MCAUSE = 0x342;
+    pub const MTVAL = 0x343;
+    pub const MIP = 0x344;
+
     // Entropy Source (Zkr)
     pub const SEED = 0x015;
 
@@ -256,13 +307,10 @@ pub const CSR = struct {
     pub const VSIREGH = 0xeb4;
 
     // Execution Environment Config
-    pub const SENVCFG = 0x10a;
     pub const HENVCFG = 0x60a;
     pub const VSENVCFG = 0x20a;
 
     // Timer/Counter CSRs
-    pub const TIME = 0xc01;
-    pub const STIMECMP = 0x14d;
     pub const VSTIMECMP = 0x24d;
 };
 

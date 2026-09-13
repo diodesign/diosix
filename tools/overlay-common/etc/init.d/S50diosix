@@ -64,9 +64,9 @@ case "$1" in
 
         if [ -n "$WAN_IF" ]; then
             ip link set "$WAN_IF" up 2>/dev/null || ifconfig "$WAN_IF" up 2>/dev/null || true
-            # Try DHCP via udhcpc in non-blocking mode
+            # Try DHCP via udhcpc in non-blocking mode with fast timeout
             if [ -x /sbin/udhcpc ] || [ -x /usr/sbin/udhcpc ]; then
-                udhcpc -i "$WAN_IF" -b -q -p /var/run/udhcpc."$WAN_IF".pid 2>/dev/null || true
+                udhcpc -i "$WAN_IF" -t 2 -T 1 -b -q -p /var/run/udhcpc."$WAN_IF".pid >/dev/null 2>&1 || true
             fi
             # Set default static IP fallback for QEMU SLIRP user network (10.0.2.15/24 via 10.0.2.2)
             if ! ip -4 addr show dev "$WAN_IF" 2>/dev/null | grep -q "inet "; then
@@ -156,6 +156,7 @@ case "$1" in
             fi
         fi
     done
+    echo "Diosix guest services: OK"
     ;;
   stop)
     echo "Stopping Diosix guest services..."

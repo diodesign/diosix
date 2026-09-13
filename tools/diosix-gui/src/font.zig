@@ -8,6 +8,9 @@ const std = @import("std");
 const fb = @import("framebuffer.zig");
 
 pub const GLYPH_HEIGHT: u32 = 18;
+pub const SPACE_ADVANCE: u8 = 6;
+pub const TAB_ADVANCE: u8 = 24; // 4 space columns
+pub const FALLBACK_ADVANCE: u8 = 8;
 
 pub const Glyph = struct {
     advance: u8,
@@ -490,10 +493,10 @@ pub fn drawText(surface: *fb.Surface, text: []const u8, x: i32, y: i32, color: u
             cur_x += g.advance;
         } else if (c == ' ') {
             if (cur_x >= surface.clip.x1) break;
-            cur_x += 6;
+            cur_x += SPACE_ADVANCE;
         } else if (c == '\t') {
             if (cur_x >= surface.clip.x1) break;
-            cur_x += 24;
+            cur_x += TAB_ADVANCE;
         }
     }
 }
@@ -513,9 +516,9 @@ pub fn measureString(text: []const u8) u32 {
         if (c >= 32 and c <= 126) {
             cur_w += GLYPHS[c - 32].advance;
         } else if (c == ' ') {
-            cur_w += 6;
+            cur_w += SPACE_ADVANCE;
         } else if (c == '\t') {
-            cur_w += 24;
+            cur_w += TAB_ADVANCE;
         }
     }
     return cur_w;

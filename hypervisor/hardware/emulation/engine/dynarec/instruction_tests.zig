@@ -448,3 +448,113 @@ test "Dynamic Direct RAM Mapping Region Resolution" {
     try std.testing.expect(tlb.getDirectMappingRegion(0x0C000000) == null);
     try std.testing.expect(tlb.getDirectMappingRegion(0x00000000) == null);
 }
+
+test "Dynarec Privilege Checks and Architectural Exception Synchronization" {
+    const vcpu_mod = @import("../../vcpu.zig");
+    const softtlb_mod = @import("../../softtlb.zig");
+    const bus_mod = @import("../../devices/bus.zig");
+    const vuart_mod = @import("../../devices/vuart.zig");
+    const vtimer_mod = @import("../../devices/vtimer.zig");
+    const vpic_mod = @import("../../devices/vpic.zig");
+    const engine_mod = @import("engine.zig");
+    const riscv = @import("interface").riscv;
+
+    var vcpu: vcpu_mod.VCpu = undefined;
+    @memset(@as([*]u8, @ptrCast(&vcpu))[0..@sizeOf(vcpu_mod.VCpu)], 0);
+    var tlb: softtlb_mod.SoftTlb = undefined;
+    tlb.initOnPtr(0x80000000, 0x80000000, 16 * 1024 * 1024);
+
+    var uart = vuart_mod.VirtualUart{};
+    var timer = vtimer_mod.VirtualTimer{};
+    var pic = vpic_mod.VirtualPlic{};
+    var bus = bus_mod.Bus{
+        .uart = &uart,
+        .timer = &timer,
+        .pic = &pic,
+    };
+
+    var jit_buffer: [4096]u8 align(4096) = undefined;
+    var eng: engine_mod.Engine = undefined;
+    eng.initOnPtr(&jit_buffer, &vcpu, &tlb, &bus);
+
+    // 1. User mode write to supervisor CSR satp (0x180) -> Cause 2 (Illegal Instruction)
+    vcpu.privilege_mode = vcpu_mod.PRIV_USER;
+    vcpu.medeleg = 0xFFFF; // Delegate exceptions to S-mode
+    vcpu.stvec = 0x80000000;
+    const csrw_satp = decoder_rv32.decode(0x18051073); // csrrw x0, 0x180, x10
+    _ = eng.executeDecoded(csrw_satp, 0x18051073, 0x1000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0x1000), vcpu.sepc);
+
+    // 2. Write to read-only CSR cycle (0xC00) in M-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_MACHINE;
+    vcpu.mcause = 0;
+    const csrw_cycle = decoder_rv32.decode(0xC0051073); // csrrw x0, 0xC00, x10
+    _ = eng.executeDecoded(csrw_cycle, 0xC0051073, 0x2000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.mcause);
+    try std.testing.expectEqual(@as(u32, 0x2000), vcpu.mepc);
+
+    // 3. sret in U-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_USER;
+    vcpu.scause = 0;
+    const sret_insn = decoder_rv32.decode(0x10200073); // sret
+    _ = eng.executeDecoded(sret_insn, 0x10200073, 0x3000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0x3000), vcpu.sepc);
+
+    // 4. mret in S-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
+    vcpu.scause = 0;
+    const mret_insn = decoder_rv32.decode(0x30200073); // mret
+    _ = eng.executeDecoded(mret_insn, 0x30200073, 0x4000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0x4000), vcpu.sepc);
+
+    // 5. sfence.vma in U-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_USER;
+    vcpu.scause = 0;
+    const sfence_insn = decoder_rv32.decode(0x12000073); // sfence.vma
+    _ = eng.executeDecoded(sfence_insn, 0x12000073, 0x5000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0x5000), vcpu.sepc);
+
+    // 6. satp write with mstatus.TVM = 1 in S-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
+    vcpu.mstatus = riscv.MSTATUS.TVM;
+    vcpu.scause = 0;
+    _ = eng.executeDecoded(csrw_satp, 0x18051073, 0x6000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0x6000), vcpu.sepc);
+
+    // 7. sfence.vma with mstatus.TVM = 1 in S-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
+    vcpu.mstatus = riscv.MSTATUS.TVM;
+    vcpu.scause = 0;
+    _ = eng.executeDecoded(sfence_insn, 0x12000073, 0x7000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0x7000), vcpu.sepc);
+
+    // 8. wfi in U-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_USER;
+    vcpu.scause = 0;
+    const wfi_insn = decoder_rv32.decode(0x10500073); // wfi
+    _ = eng.executeDecoded(wfi_insn, 0x10500073, 0x8000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0x8000), vcpu.sepc);
+
+    // 9. wfi with mstatus.TW = 1 in S-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
+    vcpu.mstatus = riscv.MSTATUS.TW;
+    vcpu.scause = 0;
+    _ = eng.executeDecoded(wfi_insn, 0x10500073, 0x9000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0x9000), vcpu.sepc);
+
+    // 10. sret with mstatus.TSR = 1 in S-mode -> Cause 2
+    vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
+    vcpu.mstatus = riscv.MSTATUS.TSR;
+    vcpu.scause = 0;
+    _ = eng.executeDecoded(sret_insn, 0x10200073, 0xA000);
+    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0xA000), vcpu.sepc);
+}

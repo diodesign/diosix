@@ -81,8 +81,8 @@ fn detectSystemPrivileges() void {
 
     // Check /proc/cpuinfo to count vCPUs and RAM
     var vcpus: usize = 4;
-    var path_buf = "/proc/cpuinfo\x00".*;
-    const fd_res = std.os.linux.open(@ptrCast(&path_buf), .{ .ACCMODE = .RDONLY }, 0);
+    const path_z: [:0]const u8 = "/proc/cpuinfo";
+    const fd_res = std.os.linux.open(path_z.ptr, .{ .ACCMODE = .RDONLY }, 0);
     const signed_fd: isize = @bitCast(fd_res);
     if (signed_fd >= 0) {
         const fd: i32 = @intCast(signed_fd);

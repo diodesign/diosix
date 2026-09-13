@@ -59,7 +59,7 @@ mkdir -p "$(dirname "$OUT_FILE")"
 mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$( (find tools/overlay-common -type f -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/diosix-gui/src/*.zig tools/diosix-gui/src/subprograms/*.zig tools/driver/diosix.c tools/micro-guest/* 2>/dev/null) | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$( (find tools/overlay-common -type f ! -name 'micro-guest.elf' -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/diosix-gui/src/*.zig tools/diosix-gui/src/subprograms/*.zig tools/driver/diosix.c tools/micro-guest/* 2>/dev/null) | awk '{print $1}' | sort | sha256sum | cut -d' ' -f1)
 
 write_rootvm_s() {
     if [ -n "$ROOTVM_S_PATH" ]; then
@@ -127,7 +127,6 @@ if [ -f "tools/micro-guest/guest.s" ]; then
     fi
     if command -v "$CC_GUEST" >/dev/null 2>&1; then
         "$CC_GUEST" -nostdlib -static -Wl,-Ttext=0x80000000,-N,--build-id=none tools/micro-guest/guest.s -o "$DYNAMIC_OVERLAY/boot/micro-guest.elf" 2>/dev/null || true
-        cp -f "$DYNAMIC_OVERLAY/boot/micro-guest.elf" tools/overlay-common/boot/micro-guest.elf 2>/dev/null || true
         mkdir -p "$DYNAMIC_OVERLAY/var/lib/diosix/images"
         ln -sf /boot/micro-guest.elf "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest.elf" 2>/dev/null || true
         log_ok "Installed micro-guest payload in overlay (/boot/micro-guest.elf)."

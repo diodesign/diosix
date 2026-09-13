@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const bus = @import("bus.zig");
 
 pub const VIRTIO_ID_GPU: u32 = 16;
 pub const VIRTIO_VENDOR_ID: u32 = 0x554d4551; // "QEMU" / Standard VirtIO
@@ -52,7 +53,10 @@ pub const VIRTIO_GPU_RESP_ERR_INVALID_CONTEXT_ID: u32 = 0x1204;
 pub const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
 
 pub const MAX_SCANOUTS: usize = 16;
-pub const MAX_RESOURCES: usize = 64;
+pub const STATIC_RESOURCES: usize = 32;
+pub const DYNAMIC_HASH_BUCKETS: usize = 32;
+pub const MAX_SYSTEM_RESOURCES: usize = 4096;
+pub const MAX_RESOURCES: usize = MAX_SYSTEM_RESOURCES;
 
 pub const VirtioGpuCtrlHdr = extern struct {
     type: u32,
@@ -137,6 +141,7 @@ pub const VirtioGpuResource = struct {
     backing_gpa: u64 = 0,
     backing_len: usize = 0,
     is_active: bool = false,
+    next: ?*VirtioGpuResource = null,
 };
 
 pub const VirtqDesc = extern struct {
@@ -185,15 +190,81 @@ pub const VirtioGpu = struct {
     driver_features_sel: u32 = 0,
     driver_features: u64 = 0,
     queue_sel: u32 = 0,
-    interrupt_status: u32 = 0,
+    interrupt_status: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     queues: [NUM_QUEUES]VirtQueue = @splat(.{}),
-    resources: [MAX_RESOURCES]VirtioGpuResource = @splat(.{}),
+    // Column 1: Static fast-path resources 0..31 (wait-free, O(1), zero heap allocation)
+    static_resources: [STATIC_RESOURCES]VirtioGpuResource = @splat(.{}),
+    // Column 2: Dynamic hash buckets for resource IDs >= 32 (keyed by id % 32)
+    dynamic_buckets: [DYNAMIC_HASH_BUCKETS]?*VirtioGpuResource = @splat(null),
+    // Dynamic node pool for standalone execution (up to 128 dynamic resources = 160 total resources)
+    dynamic_pool: [128]VirtioGpuResource = @splat(.{}),
+    pool_count: usize = 0,
+    lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     display_width: u32 = 1280,
     display_height: u32 = 720,
     flushes_count: usize = 0,
     last_flushed_resource: u32 = 0,
+
+    pub fn getResource(self: *VirtioGpu, id: u32) ?*VirtioGpuResource {
+        if (id == 0 or id >= MAX_SYSTEM_RESOURCES) return null;
+        if (id < STATIC_RESOURCES) {
+            const res = &self.static_resources[id];
+            return if (res.is_active) res else null;
+        }
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
+        const bucket = id % DYNAMIC_HASH_BUCKETS;
+        var curr = self.dynamic_buckets[bucket];
+        while (curr) |res| {
+            if (res.id == id and res.is_active) return res;
+            curr = res.next;
+        }
+        return null;
+    }
+
+    pub fn allocateResource(self: *VirtioGpu, id: u32) ?*VirtioGpuResource {
+        if (id == 0 or id >= MAX_SYSTEM_RESOURCES) return null;
+        if (id < STATIC_RESOURCES) {
+            const res = &self.static_resources[id];
+            if (res.is_active) return null; // Duplicate
+            return res;
+        }
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
+        const bucket = id % DYNAMIC_HASH_BUCKETS;
+        var curr = self.dynamic_buckets[bucket];
+        while (curr) |res| {
+            if (res.id == id and res.is_active) return null; // Duplicate
+            curr = res.next;
+        }
+        // Check for an inactive slot in the bucket to reuse
+        curr = self.dynamic_buckets[bucket];
+        while (curr) |res| {
+            if (!res.is_active) {
+                res.id = id;
+                return res;
+            }
+            curr = res.next;
+        }
+        // Otherwise take a node from the embedded pool
+        if (self.pool_count < self.dynamic_pool.len) {
+            const res = &self.dynamic_pool[self.pool_count];
+            self.pool_count += 1;
+            res.id = id;
+            res.next = self.dynamic_buckets[bucket];
+            self.dynamic_buckets[bucket] = res;
+            return res;
+        }
+        return null;
+    }
 
     pub fn init(guest_cid: usize) VirtioGpu {
         return .{
@@ -203,11 +274,11 @@ pub const VirtioGpu = struct {
 
     pub fn readReg(self: *VirtioGpu, offset: u32) u32 {
         return switch (offset) {
-            0x000 => VIRTIO_MAGIC,
-            0x004 => VIRTIO_VERSION,
-            0x008 => VIRTIO_ID_GPU,
-            0x00c => VIRTIO_VENDOR_ID,
-            0x010 => blk: {
+            bus.VIRTIO_MMIO_REG_MAGIC_VALUE => VIRTIO_MAGIC,
+            bus.VIRTIO_MMIO_REG_VERSION => VIRTIO_VERSION,
+            bus.VIRTIO_MMIO_REG_DEVICE_ID => VIRTIO_ID_GPU,
+            bus.VIRTIO_MMIO_REG_VENDOR_ID => VIRTIO_VENDOR_ID,
+            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES => blk: {
                 if (self.device_features_sel == 0) {
                     break :blk 0;
                 } else if (self.device_features_sel == 1) {
@@ -215,66 +286,66 @@ pub const VirtioGpu = struct {
                 }
                 break :blk 0;
             },
-            0x034 => QUEUE_SIZE_MAX,
-            0x044 => if (self.queue_sel < NUM_QUEUES and self.queues[self.queue_sel].ready) 1 else 0,
-            0x060 => self.interrupt_status,
-            0x070 => self.status,
+            bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX => if (self.queue_sel < NUM_QUEUES) QUEUE_SIZE_MAX else 0,
+            bus.VIRTIO_MMIO_REG_QUEUE_READY => if (self.queue_sel < NUM_QUEUES and self.queues[self.queue_sel].ready) 1 else 0,
+            bus.VIRTIO_MMIO_REG_INTERRUPT_STATUS => self.interrupt_status.load(.acquire),
+            bus.VIRTIO_MMIO_REG_STATUS => self.status,
             else => 0,
         };
     }
 
     pub fn writeReg(self: *VirtioGpu, offset: u32, val: u32) void {
         switch (offset) {
-            0x014 => self.device_features_sel = val,
-            0x020 => {
+            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES_SEL => self.device_features_sel = val,
+            bus.VIRTIO_MMIO_REG_DRIVER_FEATURES => {
                 if (self.driver_features_sel == 0) {
                     self.driver_features = (self.driver_features & 0xFFFFFFFF00000000) | val;
                 } else {
                     self.driver_features = (self.driver_features & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
                 }
             },
-            0x024 => self.driver_features_sel = val,
-            0x030 => self.queue_sel = val,
-            0x038 => {
+            bus.VIRTIO_MMIO_REG_DRIVER_FEATURES_SEL => self.driver_features_sel = val,
+            bus.VIRTIO_MMIO_REG_QUEUE_SEL => self.queue_sel = val,
+            bus.VIRTIO_MMIO_REG_QUEUE_NUM => {
                 if (self.queue_sel < NUM_QUEUES) {
                     const q_num = @min(val, QUEUE_SIZE_MAX);
                     self.queues[self.queue_sel].num = @truncate(if (q_num > 0) q_num else 1);
                 }
             },
-            0x044 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_READY => {
                 if (self.queue_sel < NUM_QUEUES) {
                     self.queues[self.queue_sel].ready = (val & 1) != 0 and self.queues[self.queue_sel].num > 0;
                 }
             },
-            0x050 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_NOTIFY => {
                 const q_idx = val;
                 if (q_idx == 0) {
                     self.processControlQueue();
                 }
             },
-            0x064 => self.interrupt_status &= ~val,
-            0x070 => {
+            bus.VIRTIO_MMIO_REG_INTERRUPT_ACK => _ = self.interrupt_status.fetchAnd(~val, .acq_rel),
+            bus.VIRTIO_MMIO_REG_STATUS => {
                 self.status = val;
                 if (val == 0) {
                     self.reset();
                 }
             },
-            0x080 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DESC_LOW => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].desc_gpa = (self.queues[self.queue_sel].desc_gpa & 0xFFFFFFFF00000000) | val;
             },
-            0x084 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DESC_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].desc_gpa = (self.queues[self.queue_sel].desc_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
             },
-            0x090 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DRIVER_LOW => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].driver_gpa = (self.queues[self.queue_sel].driver_gpa & 0xFFFFFFFF00000000) | val;
             },
-            0x094 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DRIVER_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].driver_gpa = (self.queues[self.queue_sel].driver_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
             },
-            0x0a0 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DEVICE_LOW => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].device_gpa = (self.queues[self.queue_sel].device_gpa & 0xFFFFFFFF00000000) | val;
             },
-            0x0a4 => {
+            bus.VIRTIO_MMIO_REG_QUEUE_DEVICE_HIGH => {
                 if (self.queue_sel < NUM_QUEUES) self.queues[self.queue_sel].device_gpa = (self.queues[self.queue_sel].device_gpa & 0x00000000FFFFFFFF) | (@as(u64, val) << 32);
             },
             else => {},
@@ -282,18 +353,26 @@ pub const VirtioGpu = struct {
     }
 
     pub fn reset(self: *VirtioGpu) void {
+        while (self.lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.lock.store(false, .release);
+
         self.status = 0;
-        self.interrupt_status = 0;
+        self.interrupt_status.store(0, .release);
         for (&self.queues) |*q| {
             q.* = .{};
         }
-        for (&self.resources) |*r| {
+        for (&self.static_resources) |*r| {
             r.* = .{};
         }
+        self.dynamic_buckets = @splat(null);
+        self.dynamic_pool = @splat(.{});
+        self.pool_count = 0;
     }
 
     pub fn processControlQueue(self: *VirtioGpu) void {
-        self.interrupt_status |= 1;
+        _ = self.interrupt_status.fetchOr(1, .acq_rel);
     }
 
     pub fn handleGetDisplayInfo(self: *VirtioGpu, resp: *VirtioGpuRespDisplayInfo) void {
@@ -307,28 +386,57 @@ pub const VirtioGpu = struct {
     }
 
     pub fn handleResourceCreate2D(self: *VirtioGpu, req: *const VirtioGpuResourceCreate2D) u32 {
-        if (req.resource_id == 0 or req.resource_id >= MAX_RESOURCES) {
+        if (req.resource_id == 0 or req.resource_id >= MAX_SYSTEM_RESOURCES) {
             return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        }
+        if (self.getResource(req.resource_id) != null) {
+            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        }
+        switch (req.format) {
+            VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+            VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM,
+            VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM,
+            VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM,
+            VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM,
+            VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM,
+            => {},
+            else => return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
         }
         if (req.width == 0 or req.height == 0 or req.width > 4096 or req.height > 4096) {
             return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
         }
-        _ = std.math.mul(u32, req.width, req.height) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-        self.resources[req.resource_id] = .{
+        const pixels = std.math.mul(u32, req.width, req.height) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        _ = std.math.mul(u32, pixels, 4) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        const res = self.allocateResource(req.resource_id) orelse return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        res.* = .{
             .id = req.resource_id,
             .format = req.format,
             .width = req.width,
             .height = req.height,
             .is_active = true,
+            .next = res.next,
         };
         return VIRTIO_GPU_RESP_OK_NODATA;
     }
 
     pub fn handleResourceUnref(self: *VirtioGpu, req: *const VirtioGpuResourceUnref) u32 {
-        if (req.resource_id == 0 or req.resource_id >= MAX_RESOURCES or !self.resources[req.resource_id].is_active) {
-            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        if (req.resource_id >= STATIC_RESOURCES) {
+            while (self.lock.swap(true, .acquire)) {
+                std.atomic.spinLoopHint();
+            }
+            defer self.lock.store(false, .release);
+            const res = self.getResource(req.resource_id) orelse return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+            res.is_active = false;
+            res.scanout_id = null;
+            res.backing_gpa = 0;
+            res.backing_len = 0;
+            return VIRTIO_GPU_RESP_OK_NODATA;
         }
-        self.resources[req.resource_id] = .{};
+        const res = self.getResource(req.resource_id) orelse return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        res.is_active = false;
+        res.scanout_id = null;
+        res.backing_gpa = 0;
+        res.backing_len = 0;
         return VIRTIO_GPU_RESP_OK_NODATA;
     }
 
@@ -337,25 +445,19 @@ pub const VirtioGpu = struct {
             return VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID;
         }
         if (req.resource_id != 0) {
-            if (req.resource_id >= MAX_RESOURCES or !self.resources[req.resource_id].is_active) {
-                return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            }
-            const res = &self.resources[req.resource_id];
+            const res = self.getResource(req.resource_id) orelse return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
             const end_x = std.math.add(u32, req.r.x, req.r.width) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
             const end_y = std.math.add(u32, req.r.y, req.r.height) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
             if (end_x > res.width or end_y > res.height) {
                 return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
             }
-            self.resources[req.resource_id].scanout_id = req.scanout_id;
+            res.scanout_id = req.scanout_id;
         }
         return VIRTIO_GPU_RESP_OK_NODATA;
     }
 
     pub fn handleResourceFlush(self: *VirtioGpu, req: *const VirtioGpuResourceFlush) u32 {
-        if (req.resource_id == 0 or req.resource_id >= MAX_RESOURCES or !self.resources[req.resource_id].is_active) {
-            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        }
-        const res = &self.resources[req.resource_id];
+        const res = self.getResource(req.resource_id) orelse return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
         const end_x = std.math.add(u32, req.r.x, req.r.width) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
         const end_y = std.math.add(u32, req.r.y, req.r.height) catch return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
         if (end_x > res.width or end_y > res.height) {
@@ -392,7 +494,8 @@ test "VirtIO GPU register probe, display info, and 2D resource management" {
         .height = 720,
     };
     try testing.expectEqual(VIRTIO_GPU_RESP_OK_NODATA, gpu.handleResourceCreate2D(&create_req));
-    try testing.expect(gpu.resources[1].is_active);
+    try testing.expect(gpu.getResource(1) != null);
+    try testing.expect(gpu.getResource(1).?.is_active);
 
     const scanout_req = VirtioGpuSetScanout{
         .hdr = .{ .type = VIRTIO_GPU_CMD_SET_SCANOUT, .flags = 0, .fence_id = 0, .ctx_id = 0, .padding = 0 },
@@ -412,6 +515,40 @@ test "VirtIO GPU register probe, display info, and 2D resource management" {
     try testing.expectEqual(@as(usize, 1), gpu.flushes_count);
     try testing.expectEqual(@as(u32, 1), gpu.last_flushed_resource);
 
+    // Test dynamic resource allocation (>= 32) and bucket hash collision resolution (32 and 64 map to bucket 0)
+    var dyn_req_32 = create_req;
+    dyn_req_32.resource_id = 32;
+    try testing.expectEqual(VIRTIO_GPU_RESP_OK_NODATA, gpu.handleResourceCreate2D(&dyn_req_32));
+    try testing.expect(gpu.getResource(32) != null);
+
+    var dyn_req_64 = create_req;
+    dyn_req_64.resource_id = 64;
+    try testing.expectEqual(VIRTIO_GPU_RESP_OK_NODATA, gpu.handleResourceCreate2D(&dyn_req_64));
+    try testing.expect(gpu.getResource(64) != null);
+    try testing.expect(gpu.getResource(32) != null);
+
+    // Test flush of dynamic resource
+    var dyn_flush_64 = flush_req;
+    dyn_flush_64.resource_id = 64;
+    try testing.expectEqual(VIRTIO_GPU_RESP_OK_NODATA, gpu.handleResourceFlush(&dyn_flush_64));
+    try testing.expectEqual(@as(u32, 64), gpu.last_flushed_resource);
+
+    // Duplicate dynamic resource rejection
+    try testing.expectEqual(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, gpu.handleResourceCreate2D(&dyn_req_32));
+
+    // Dynamic unref and slot reuse
+    const unref_32 = VirtioGpuResourceUnref{
+        .hdr = .{ .type = VIRTIO_GPU_CMD_RESOURCE_UNREF, .flags = 0, .fence_id = 0, .ctx_id = 0, .padding = 0 },
+        .resource_id = 32,
+        .padding = 0,
+    };
+    try testing.expectEqual(VIRTIO_GPU_RESP_OK_NODATA, gpu.handleResourceUnref(&unref_32));
+    try testing.expect(gpu.getResource(32) == null);
+
+    // Re-create resource 32 (reuses inactive bucket node)
+    try testing.expectEqual(VIRTIO_GPU_RESP_OK_NODATA, gpu.handleResourceCreate2D(&dyn_req_32));
+    try testing.expect(gpu.getResource(32) != null);
+
     // Test zero queue size rejection
     gpu.writeReg(0x030, 0); // Queue 0
     gpu.writeReg(0x038, 0); // QueueNum = 0
@@ -425,4 +562,29 @@ test "VirtIO GPU register probe, display info, and 2D resource management" {
         .padding = 0,
     };
     try testing.expectEqual(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, gpu.handleResourceFlush(&bad_flush));
+
+    // Test duplicate resource creation rejection
+    try testing.expectEqual(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, gpu.handleResourceCreate2D(&create_req));
+
+    // Test invalid format rejection
+    var bad_fmt_req = create_req;
+    bad_fmt_req.resource_id = 2;
+    bad_fmt_req.format = 999;
+    try testing.expectEqual(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, gpu.handleResourceCreate2D(&bad_fmt_req));
+
+    // Test resource ID 0 and >= MAX_SYSTEM_RESOURCES rejection
+    var zero_res_req = create_req;
+    zero_res_req.resource_id = 0;
+    try testing.expectEqual(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, gpu.handleResourceCreate2D(&zero_res_req));
+
+    var oob_res_req = create_req;
+    oob_res_req.resource_id = MAX_SYSTEM_RESOURCES;
+    try testing.expectEqual(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, gpu.handleResourceCreate2D(&oob_res_req));
+
+    // Test QueueNumMax valid and out-of-bounds selector
+    gpu.writeReg(bus.VIRTIO_MMIO_REG_QUEUE_SEL, 0);
+    try testing.expectEqual(QUEUE_SIZE_MAX, gpu.readReg(bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX));
+    gpu.writeReg(bus.VIRTIO_MMIO_REG_QUEUE_SEL, 99);
+    try testing.expectEqual(@as(u32, 0), gpu.readReg(bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX));
 }
+

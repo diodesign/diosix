@@ -15,6 +15,7 @@ pub const LoaderError = error{
     SegmentOutOfBounds,
     SegmentTooLarge,
     TranslationFailed,
+    QuotaExceeded,
 };
 
 pub const Loader = struct {
@@ -190,9 +191,14 @@ pub const Loader = struct {
                     if (root_vm.space.translateGPA(page_gpa) catch null) |_| {
                         continue;
                     }
+                    if (!root_vm.checkRamQuota(1)) return LoaderError.QuotaExceeded;
                     const new_page_hpa = try physmem.allocPage();
                     @memset(@as([*]u8, @ptrFromInt(new_page_hpa))[0..physmem.PageSize], 0);
-                    try root_vm.space.map(page_gpa, new_page_hpa, physmem.PageSize, rwx_flags);
+                    root_vm.space.map(page_gpa, new_page_hpa, physmem.PageSize, rwx_flags) catch |err| {
+                        physmem.freePage(new_page_hpa);
+                        return err;
+                    };
+                    root_vm.consumeQuota(1, 0);
                     physmem.decrementPageRef(new_page_hpa);
                 }
 
@@ -227,21 +233,27 @@ pub const Loader = struct {
 
         // Look up early_top_pgt for non-x86_64 guests to configure the initial page tables.
         if (findSymbol(source, "early_top_pgt")) |pgt_vaddr| {
-            if (root_vm.target_arch != .x86_64) {
-                const pgt_offset = pgt_vaddr -% min_vaddr;
-                root_vm.early_pgt_gpa = root_vm.space.base_gpa + @as(usize, @intCast(pgt_offset));
+            if (root_vm.target_arch != .x86_64 and pgt_vaddr >= min_vaddr) {
+                if (std.math.cast(usize, pgt_vaddr - min_vaddr)) |pgt_offset| {
+                    if (std.math.add(usize, root_vm.space.base_gpa, pgt_offset)) |early_gpa| {
+                        root_vm.early_pgt_gpa = early_gpa;
+                    } else |_| {}
+                }
             }
         }
 
         if (root_vm.target_arch == .x86_64) {
-            return root_vm.space.base_gpa + @as(usize, @intCast(entry_point));
+            const ep = std.math.cast(usize, entry_point) orelse return LoaderError.InvalidElfHeader;
+            return std.math.add(usize, root_vm.space.base_gpa, ep) catch return LoaderError.InvalidElfHeader;
         }
 
-        const entry_offset = if (entry_point < min_vaddr)
-            entry_point -% min_paddr
-        else
-            entry_point -% min_vaddr;
-        return root_vm.space.base_gpa + @as(usize, @intCast(entry_offset));
+        const entry_offset = if (entry_point < min_vaddr) blk: {
+            if (entry_point < min_paddr) return LoaderError.InvalidElfHeader;
+            break :blk entry_point - min_paddr;
+        } else (entry_point - min_vaddr);
+
+        const ep_usize = std.math.cast(usize, entry_offset) orelse return LoaderError.InvalidElfHeader;
+        return std.math.add(usize, root_vm.space.base_gpa, ep_usize) catch return LoaderError.InvalidElfHeader;
     }
 
     /// Load an ELF binary directly from another guest's address space (`source_space`)
@@ -388,9 +400,14 @@ pub const Loader = struct {
                     if (child_vm.space.translateGPA(page_gpa) catch null) |_| {
                         continue;
                     }
+                    if (!child_vm.checkRamQuota(1)) return LoaderError.QuotaExceeded;
                     const new_page_hpa = try physmem.allocPage();
                     @memset(@as([*]u8, @ptrFromInt(new_page_hpa))[0..physmem.PageSize], 0);
-                    try child_vm.space.map(page_gpa, new_page_hpa, physmem.PageSize, rwx_flags);
+                    child_vm.space.map(page_gpa, new_page_hpa, physmem.PageSize, rwx_flags) catch |err| {
+                        physmem.freePage(new_page_hpa);
+                        return err;
+                    };
+                    child_vm.consumeQuota(1, 0);
                     physmem.decrementPageRef(new_page_hpa);
                 }
 
@@ -737,4 +754,50 @@ test "ELF loader and readers overflow safety" {
     defer g.deinit();
 
     try testing.expectError(LoaderError.InvalidProgramHeader, Loader.load(g, &bad_elf));
+}
+
+test "ELF loader RAM quota enforcement" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
+
+    const g = try guest.createGuest(allocator, false, false, null, 0x80000000, 0, 0x100000, .riscv64);
+    defer g.deinit();
+
+    // Set quota to 0 pages
+    g.quotas.used_ram_pages = 0;
+    g.quotas.max_ram_pages = 0;
+
+    var elf_buf: [256]u8 = std.mem.zeroes([256]u8);
+    @memcpy(elf_buf[0..4], elf_spec.MAGIC);
+    elf_buf[elf_spec.EI_CLASS] = elf_spec.CLASS_64;
+    elf_buf[elf_spec.EI_DATA] = elf_spec.DATA_LSB;
+    elf_buf[elf_spec.EI_VERSION] = 1;
+    std.mem.writeInt(u16, elf_buf[elf_spec.EHDR.TYPE..][0..2], elf_spec.TYPE_EXEC, .little);
+    std.mem.writeInt(u16, elf_buf[elf_spec.EHDR.MACHINE..][0..2], elf_spec.MACHINE_RISCV, .little);
+    std.mem.writeInt(u32, elf_buf[elf_spec.EHDR.VERSION..][0..4], 1, .little);
+    std.mem.writeInt(u64, elf_buf[elf_spec.EHDR.ENTRY..][0..8], 0x80000000, .little);
+    std.mem.writeInt(u64, elf_buf[elf_spec.EHDR.PHOFF..][0..8], 64, .little);
+    std.mem.writeInt(u16, elf_buf[elf_spec.EHDR.EHSIZE..][0..2], 64, .little);
+    std.mem.writeInt(u16, elf_buf[elf_spec.EHDR.PHENTSIZE..][0..2], 56, .little);
+    std.mem.writeInt(u16, elf_buf[elf_spec.EHDR.PHNUM..][0..2], 1, .little);
+
+    // Program header 0 at offset 64: PT_LOAD
+    const ph = elf_buf[64..120];
+    std.mem.writeInt(u32, ph[elf_spec.PHDR.TYPE..][0..4], elf_spec.PT_LOAD, .little);
+    std.mem.writeInt(u64, ph[elf_spec.PHDR.OFFSET..][0..8], 0, .little);
+    std.mem.writeInt(u64, ph[elf_spec.PHDR.VADDR..][0..8], 0x80000000, .little);
+    std.mem.writeInt(u64, ph[elf_spec.PHDR.PADDR..][0..8], 0x80000000, .little);
+    std.mem.writeInt(u64, ph[elf_spec.PHDR.FILESZ..][0..8], 64, .little);
+    std.mem.writeInt(u64, ph[elf_spec.PHDR.MEMSZ..][0..8], 4096, .little);
+
+    try testing.expectError(LoaderError.QuotaExceeded, Loader.load(g, &elf_buf));
+
+    // Increase quota to allow the 1 page
+    g.quotas.max_ram_pages = 1;
+    const entry = try Loader.load(g, &elf_buf);
+    try testing.expectEqual(@as(usize, 0x80000000), entry);
+    try testing.expectEqual(@as(usize, 1), g.quotas.used_ram_pages);
 }

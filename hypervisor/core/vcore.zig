@@ -116,31 +116,31 @@ pub const VirtualCore = struct {
     guest_id: usize,
     state: VirtualCoreState,
 
+    // Virtual CPU registers and state.
+    context: riscv.ThreadContext,
+
+    // Machine and Hypervisor specific architecture state.
+    machine: riscv.MachineState,
+
+    // VS-mode state (usually context switched).
+    guest_state: riscv.GuestState,
+
     // Polymorphic execution path parameters
     exec_path: union(VirtualCoreType) {
         native: struct {
-            // Virtual CPU registers and state.
-            context: riscv.ThreadContext,
-
-            // Machine and Hypervisor specific architecture state.
-            machine: riscv.MachineState,
-
-            // VS-mode state (usually context switched).
-            guest_state: riscv.GuestState,
-
             required_extensions: usize,
             siselect: usize,
         },
         emulated: struct {
             vcpu: ?*native_emu.VCpu = null,
             engine: ?*native_emu.Engine = null,
+            slot_idx: ?usize = null,
             target_arch: guest.TargetArch,
             entry: usize,
             dtb: usize,
-            context: riscv.ThreadContext,
-            machine: riscv.MachineState,
-            guest_state: riscv.GuestState,
             stack: []u8,
+            stack_phys: usize = 0,
+            tls_phys: usize = 0,
             emu_running: bool = false,
             tls_pointer: usize = 0,
 
@@ -197,12 +197,16 @@ pub const VirtualCore = struct {
     // Node for the physical core's blocked queue (WFI).
     blocked_node: dsa.LinkedList(*anyopaque).Node,
 
+    // Intrusive pointer for Guest's two-column dynamic hash lookup (for vcores with ID >= 32)
+    lookup_next: ?*VirtualCore = null,
+
     pub fn init(id: VirtualCoreID, parent: *guest.Guest, entry: usize, dtb: usize, priority: Priority) VirtualCore {
         var vcore = VirtualCore{
             .id = id,
             .guest = parent,
             .guest_id = parent.id,
             .state = .stopped,
+            .lookup_next = null,
             .timer_scheduled = false,
             .timer_target = 0,
             .virtual_time = 0,
@@ -222,40 +226,42 @@ pub const VirtualCore = struct {
             .last_dispatched_time = 0,
             .scheduler_node = undefined,
             .blocked_node = undefined,
+            .context = std.mem.zeroes(riscv.ThreadContext),
+            .machine = undefined,
+            .guest_state = undefined,
             .exec_path = undefined,
         };
 
         if (parent.target_arch == .riscv64) {
+            vcore.machine = .{
+                .mepc = entry,
+                .mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | riscv.MSTATUS.FS_DIRTY,
+                .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
+                .hgatp = if (parent.space.mode == .h_paging) (if (parent.space.paging) |*p| p.hgatp(parent.vmid) else 0) else 0,
+                .hedeleg = HEDELEG_GUEST_DELEGATE, // Delegate exceptions to guest: includes breakpoint (bit 3)
+                .hideleg = HIDELEG_VS_INTERRUPTS, // Delegate VS interrupts (VSSIP, VSTIP, VSEIP, SGEIP)
+                .hvip = 0,
+            };
+            vcore.guest_state = .{
+                .vsstatus = riscv.SSTATUS.SPIE | riscv.MSTATUS.FS_DIRTY,
+                .vsie = 0,
+                .vstvec = 0,
+                .vsscratch = 0,
+                .vsepc = 0,
+                .vscause = 0,
+                .vstval = 0,
+                .vsatp = 0,
+                .vstimecmp = std.math.maxInt(u64),
+                .vsenvcfg = riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL,
+            };
             vcore.exec_path = .{
                 .native = .{
                     .siselect = 0,
                     .required_extensions = riscv.IsaExtension.i,
-                    .context = std.mem.zeroes(riscv.ThreadContext),
-                    .machine = .{
-                        .mepc = entry,
-                        .mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | riscv.MSTATUS.FS_DIRTY,
-                        .hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP,
-                        .hgatp = if (parent.space.mode == .h_paging) (if (parent.space.paging) |*p| p.hgatp(parent.vmid) else 0) else 0,
-                        .hedeleg = HEDELEG_GUEST_DELEGATE, // Delegate exceptions to guest: includes breakpoint (bit 3)
-                        .hideleg = HIDELEG_VS_INTERRUPTS, // Delegate VS interrupts (VSSIP, VSTIP, VSEIP, SGEIP)
-                        .hvip = 0,
-                    },
-                    .guest_state = .{
-                        .vsstatus = riscv.SSTATUS.SPIE | riscv.MSTATUS.FS_DIRTY,
-                        .vsie = 0,
-                        .vstvec = 0,
-                        .vsscratch = 0,
-                        .vsepc = 0,
-                        .vscause = 0,
-                        .vstval = 0,
-                        .vsatp = 0,
-                        .vstimecmp = std.math.maxInt(u64),
-                        .vsenvcfg = riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL,
-                    },
                 },
             };
-            vcore.exec_path.native.context[@intFromEnum(riscv.Register.a0)] = id; // A0 = VCPU ID.
-            vcore.exec_path.native.context[@intFromEnum(riscv.Register.a1)] = dtb; // A1 = DTB address.
+            vcore.context[@intFromEnum(riscv.Register.a0)] = id; // A0 = VCPU ID.
+            vcore.context[@intFromEnum(riscv.Register.a1)] = dtb; // A1 = DTB address.
         } else {
             const stack_phys = physmem.allocPageSelection(EMULATOR_STACK_PAGE_ORDER) catch @panic("Failed to allocate S-mode stack for emulator");
             const stack = @as([*]align(16) u8, @ptrFromInt(stack_phys))[0..EMULATOR_STACK_SIZE_BYTES];
@@ -271,6 +277,27 @@ pub const VirtualCore = struct {
                 );
             }
 
+            vcore.machine = .{
+                .mepc = @intFromPtr(&@import("emulation.zig").emulatedRunnerSMode),
+                .mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.FS_DIRTY,
+                .hstatus = 0,
+                .hgatp = 0,
+                .hedeleg = 0,
+                .hideleg = 0,
+                .hvip = 0,
+            };
+            vcore.guest_state = .{
+                .vsstatus = 0,
+                .vsie = 0,
+                .vstvec = 0,
+                .vsscratch = 0,
+                .vsepc = 0,
+                .vscause = 0,
+                .vstval = 0,
+                .vsatp = 0,
+                .vstimecmp = std.math.maxInt(u64),
+                .vsenvcfg = 0,
+            };
             vcore.exec_path = .{
                 .emulated = .{
                     .vcpu = null,
@@ -278,36 +305,16 @@ pub const VirtualCore = struct {
                     .target_arch = parent.target_arch,
                     .entry = entry,
                     .dtb = dtb,
-                    .context = std.mem.zeroes(riscv.ThreadContext),
-                    .machine = .{
-                        .mepc = @intFromPtr(&@import("emulation.zig").emulatedRunnerSMode),
-                        .mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.FS_DIRTY,
-                        .hstatus = 0,
-                        .hgatp = 0,
-                        .hedeleg = 0,
-                        .hideleg = 0,
-                        .hvip = 0,
-                    },
-                    .guest_state = .{
-                        .vsstatus = 0,
-                        .vsie = 0,
-                        .vstvec = 0,
-                        .vsscratch = 0,
-                        .vsepc = 0,
-                        .vscause = 0,
-                        .vstval = 0,
-                        .vsatp = 0,
-                        .vstimecmp = std.math.maxInt(u64),
-                        .vsenvcfg = 0,
-                    },
                     .stack = stack,
+                    .stack_phys = stack_phys,
+                    .tls_phys = tls_phys,
                     .tls_pointer = tls_phys + EMULATOR_TLS_TP_OFFSET,
                 },
             };
-            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.sp)] = @intFromPtr(stack.ptr) + stack.len;
-            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.gp)] = hypervisor_gp;
-            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.tp)] = tls_phys + EMULATOR_TLS_TP_OFFSET;
-            vcore.exec_path.emulated.context[@intFromEnum(riscv.Register.a0)] = 0;
+            vcore.context[@intFromEnum(riscv.Register.sp)] = @intFromPtr(stack.ptr) + stack.len;
+            vcore.context[@intFromEnum(riscv.Register.gp)] = hypervisor_gp;
+            vcore.context[@intFromEnum(riscv.Register.tp)] = tls_phys + EMULATOR_TLS_TP_OFFSET;
+            vcore.context[@intFromEnum(riscv.Register.a0)] = 0;
         }
 
         if (parent.target_arch == .x86_64) {
@@ -342,44 +349,72 @@ pub const VirtualCore = struct {
         self.is_queued = false;
         self.running_on_cpu = null;
 
-        switch (self.exec_path) {
-            .native => |*n| {
-                n.context = std.mem.zeroes(riscv.ThreadContext);
-                n.context[@intFromEnum(riscv.Register.a0)] = self.id;
-                n.context[@intFromEnum(riscv.Register.a1)] = dtb;
-                n.machine.mepc = entry;
-                n.machine.mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | riscv.MSTATUS.FS_DIRTY;
-                n.machine.hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
-                n.machine.hgatp = if (self.guest.space.mode == .h_paging) (if (self.guest.space.paging) |*p| p.hgatp(self.guest.vmid) else 0) else 0;
-                n.machine.hedeleg = HEDELEG_GUEST_DELEGATE;
-                n.machine.hideleg = HIDELEG_VS_INTERRUPTS;
-                n.machine.hvip = 0;
-                n.guest_state = .{
-                    .vsstatus = riscv.SSTATUS.SPIE | riscv.MSTATUS.FS_DIRTY,
-                    .vsie = 0,
-                    .vstvec = 0,
-                    .vsscratch = 0,
-                    .vsepc = 0,
-                    .vscause = 0,
-                    .vstval = 0,
-                    .vsatp = 0,
-                    .vstimecmp = std.math.maxInt(u64),
-                    .vsenvcfg = riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL,
-                };
-            },
-            .emulated => |*e| {
-                e.entry = entry;
-                e.dtb = dtb;
-                if (e.engine) |eng| {
-                    eng.tlb.flush();
-                }
-                e.sub_vcores = std.mem.zeroes([max_sub_vcores]SubVcoreState);
-                e.sub_vcore_count = 1;
-                e.active_sub_vcore = 0;
-                e.last_run_sub_vcore = null;
-                e.preempt_pending = false;
-                e.hsm_started = false;
-            },
+        self.context = std.mem.zeroes(riscv.ThreadContext);
+        if (self.exec_path == .native) {
+            self.context[@intFromEnum(riscv.Register.a0)] = self.id;
+            self.context[@intFromEnum(riscv.Register.a1)] = dtb;
+            self.machine.mepc = entry;
+            self.machine.mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.MPV | riscv.MSTATUS.FS_DIRTY;
+            self.machine.hstatus = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
+            self.machine.hgatp = if (self.guest.space.mode == .h_paging) (if (self.guest.space.paging) |*p| p.hgatp(self.guest.vmid) else 0) else 0;
+            self.machine.hedeleg = HEDELEG_GUEST_DELEGATE;
+            self.machine.hideleg = HIDELEG_VS_INTERRUPTS;
+            self.machine.hvip = 0;
+            self.guest_state = .{
+                .vsstatus = riscv.SSTATUS.SPIE | riscv.MSTATUS.FS_DIRTY,
+                .vsie = 0,
+                .vstvec = 0,
+                .vsscratch = 0,
+                .vsepc = 0,
+                .vscause = 0,
+                .vstval = 0,
+                .vsatp = 0,
+                .vstimecmp = std.math.maxInt(u64),
+                .vsenvcfg = riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL,
+            };
+        } else {
+            const e = &self.exec_path.emulated;
+            e.entry = entry;
+            e.dtb = dtb;
+            if (e.engine) |eng| {
+                eng.tlb.flush();
+            }
+            e.sub_vcores = std.mem.zeroes([max_sub_vcores]SubVcoreState);
+            e.sub_vcore_count = 1;
+            e.active_sub_vcore = 0;
+            e.last_run_sub_vcore = null;
+            e.preempt_pending = false;
+            e.hsm_started = false;
+
+            self.machine.mepc = @intFromPtr(&@import("emulation.zig").emulatedRunnerSMode);
+            self.machine.mstatus = riscv.MSTATUS.MPP_SUPERVISOR | riscv.MSTATUS.MPIE | riscv.MSTATUS.FS_DIRTY;
+            self.machine.hstatus = 0;
+            self.machine.hgatp = 0;
+            self.machine.hedeleg = 0;
+            self.machine.hideleg = 0;
+            self.machine.hvip = 0;
+            self.guest_state = .{
+                .vsstatus = 0,
+                .vsie = 0,
+                .vstvec = 0,
+                .vsscratch = 0,
+                .vsepc = 0,
+                .vscause = 0,
+                .vstval = 0,
+                .vsatp = 0,
+                .vstimecmp = std.math.maxInt(u64),
+                .vsenvcfg = 0,
+            };
+            var hypervisor_gp: usize = 0;
+            if (comptime !@import("builtin").is_test) {
+                asm volatile ("mv %[g], gp"
+                    : [g] "=r" (hypervisor_gp),
+                );
+            }
+            self.context[@intFromEnum(riscv.Register.sp)] = @intFromPtr(e.stack.ptr) + e.stack.len;
+            self.context[@intFromEnum(riscv.Register.gp)] = hypervisor_gp;
+            self.context[@intFromEnum(riscv.Register.tp)] = e.tls_phys + EMULATOR_TLS_TP_OFFSET;
+            self.context[@intFromEnum(riscv.Register.a0)] = 0;
         }
     }
 
@@ -390,11 +425,7 @@ pub const VirtualCore = struct {
         if (!builtin.is_test) {
             // Spin wait until the home CPU removes it from the blocked_queue
             while ((@as(*volatile ?usize, &self.blocked_on_cpu)).*) |home_cpu| {
-                if (home_cpu < riscv.cpu_to_hart_map.len) {
-                    if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
-                        ptr.* = 1; // Send IPI to wake the home CPU
-                    }
-                }
+                pcore.sendIpiToCpu(home_cpu);
                 std.atomic.spinLoopHint();
             }
 
@@ -411,9 +442,18 @@ pub const VirtualCore = struct {
 
         switch (self.exec_path) {
             .emulated => |*e| {
+                glue.deinit(self);
                 e.vcpu = null;
                 e.engine = null;
-                self.guest.allocator.free(e.stack);
+                e.slot_idx = null;
+                if (e.stack_phys != 0) {
+                    physmem.freePage(e.stack_phys);
+                    e.stack_phys = 0;
+                }
+                if (e.tls_phys != 0) {
+                    physmem.freePage(e.tls_phys);
+                    e.tls_phys = 0;
+                }
             },
             else => {},
         }
@@ -424,35 +464,26 @@ pub const VirtualCore = struct {
     }
 
     pub fn requiredExtensions(self: *VirtualCore) usize {
-        return switch (self.exec_path) {
-            .native => |n| n.required_extensions,
-            .emulated => 0,
-        };
+        if (self.exec_path == .native) {
+            return self.exec_path.native.required_extensions;
+        }
+        return 0;
     }
 
     pub fn getNativeSiselect(self: *VirtualCore) *usize {
         return &self.exec_path.native.siselect;
     }
 
-    pub fn getNativeContext(self: *VirtualCore) *riscv.ThreadContext {
-        return switch (self.exec_path) {
-            .native => |*n| &n.context,
-            .emulated => |*e| &e.context,
-        };
+    pub inline fn getNativeContext(self: *VirtualCore) *riscv.ThreadContext {
+        return &self.context;
     }
 
-    pub fn getNativeMachine(self: *VirtualCore) *riscv.MachineState {
-        return switch (self.exec_path) {
-            .native => |*n| &n.machine,
-            .emulated => |*e| &e.machine,
-        };
+    pub inline fn getNativeMachine(self: *VirtualCore) *riscv.MachineState {
+        return &self.machine;
     }
 
-    pub fn getNativeGuestState(self: *VirtualCore) *riscv.GuestState {
-        return switch (self.exec_path) {
-            .native => |*n| &n.guest_state,
-            .emulated => |*e| &e.guest_state,
-        };
+    pub inline fn getNativeGuestState(self: *VirtualCore) *riscv.GuestState {
+        return &self.guest_state;
     }
 
     pub fn getGuest(self: *VirtualCore) *guest.Guest {
@@ -517,9 +548,9 @@ test "virtual core initialization" {
 
     try testing.expectEqual(id, vc.id);
     try testing.expectEqual(parent.id, vc.guest_id);
-    try testing.expectEqual(entry, vc.exec_path.native.machine.mepc);
-    try testing.expectEqual(dtb, vc.exec_path.native.context[@intFromEnum(riscv.Register.a1)]); // a1
-    try testing.expectEqual(id, vc.exec_path.native.context[@intFromEnum(riscv.Register.a0)]); // a0
+    try testing.expectEqual(entry, vc.machine.mepc);
+    try testing.expectEqual(dtb, vc.context[@intFromEnum(riscv.Register.a1)]); // a1
+    try testing.expectEqual(id, vc.context[@intFromEnum(riscv.Register.a0)]); // a0
     try testing.expectEqual(@as(u32, 1024), vc.weight);
     try testing.expectEqual(@as(u64, 0), vc.vruntime);
 }

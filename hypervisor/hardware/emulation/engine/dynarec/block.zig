@@ -38,12 +38,22 @@ pub const TranslationBlock = struct {
             const target_host_addr = @intFromPtr(target_tb.host_code.ptr);
             const rel_offset = @as(isize, @bitCast(target_host_addr)) - @as(isize, @bitCast(src_host_addr));
 
+            // AUIPC + JALR has +/-2GB reach: [-0x8000_0000, 0x7FFF_FFFF]
+            if (rel_offset < -0x8000_0000 or rel_offset > 0x7FFF_FFFF) return;
+
             const j_upper = @as(i20, @truncate((rel_offset + 0x800) >> 12));
             const j_lower = @as(i12, @bitCast(@as(u12, @truncate(@as(usize, @bitCast(rel_offset)) & 0xFFF))));
             const auipc_insn = rv64.auipc(5, j_upper);
             const jalr_insn = rv64.jalr(0, 5, j_lower);
-            std.mem.writeInt(u32, self.host_code[b.patch_offset..][0..4], auipc_insn, .little);
-            std.mem.writeInt(u32, self.host_code[b.patch_offset + 4 ..][0..4], jalr_insn, .little);
+
+            if ((src_host_addr & 7) == 0) {
+                const insns_64 = @as(u64, auipc_insn) | (@as(u64, jalr_insn) << 32);
+                const ptr_64: *align(8) u64 = @ptrCast(@alignCast(&self.host_code[b.patch_offset]));
+                @atomicStore(u64, ptr_64, insns_64, .release);
+            } else {
+                std.mem.writeInt(u32, self.host_code[b.patch_offset..][0..4], auipc_insn, .little);
+                std.mem.writeInt(u32, self.host_code[b.patch_offset + 4 ..][0..4], jalr_insn, .little);
+            }
             rv64.fenceI();
             if (branch_idx == 0) self.chained_block1 = target_tb else self.chained_block2 = target_tb;
         }

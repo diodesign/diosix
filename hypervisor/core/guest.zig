@@ -53,14 +53,20 @@ pub const CID_PARENT: usize = sbi.CID_PARENT;
 pub const CID_SELF: usize = sbi.CID_SELF;
 pub const CID_FIRST_CHILD: usize = sbi.CID_FIRST_CHILD;
 
-pub const max_child_handles: usize = 64;
+pub const STATIC_CHILD_HANDLES: usize = 32;
+pub const DYNAMIC_CHILD_BUCKETS: usize = 32;
+pub const MAX_CHILD_HANDLES: usize = 4096;
+pub const max_child_handles: usize = MAX_CHILD_HANDLES;
 pub const max_events: usize = 32;
 pub const max_ipc_messages: usize = 16;
 pub const max_ipc_msg_len: usize = 4096;
-pub const max_vcores: usize = 128;
+pub const max_vcores: usize = 4096;
+pub const STATIC_VCORES: usize = 32;
+pub const VCORE_HASH_BUCKETS: usize = 32;
 pub const max_vmids: u16 = 4096;
 
 pub const DEFAULT_ROOT_MAX_VCPUS: usize = 16;
+pub const MAX_MANIFEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const IOAPIC_PAGE_SIZE: usize = physmem.PageSize;
 pub const X86_EARLY_PGT_GPA_OFFSET: usize = 0x70000;
 
@@ -97,8 +103,11 @@ pub const EventQueue = struct {
     head: usize = 0,
     tail: usize = 0,
     count: usize = 0,
+    lock: atomic.SpinLock = atomic.SpinLock.init(),
 
     pub fn push(self: *EventQueue, ev: sbi.Event) void {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
         if (self.count >= max_events) {
             self.tail = (self.tail + 1) % max_events;
             self.count -= 1;
@@ -108,17 +117,80 @@ pub const EventQueue = struct {
         self.count += 1;
     }
 
-    pub fn peek(self: *const EventQueue) ?sbi.Event {
+    fn peekFilteredLocked(self: *const EventQueue, filter_cid: usize) ?sbi.Event {
         if (self.count == 0) return null;
-        return self.events[self.tail];
+        if (filter_cid == 0) return self.events[self.tail];
+        var i: usize = 0;
+        while (i < self.count) : (i += 1) {
+            const idx = (self.tail + i) % max_events;
+            if (self.events[idx].cid == filter_cid) {
+                return self.events[idx];
+            }
+        }
+        return null;
+    }
+
+    pub fn peek(self: *EventQueue) ?sbi.Event {
+        return self.peekFiltered(0);
+    }
+
+    pub fn peekFiltered(self: *EventQueue, filter_cid: usize) ?sbi.Event {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        return self.peekFilteredLocked(filter_cid);
+    }
+
+    fn popFilteredLocked(self: *EventQueue, filter_cid: usize) ?sbi.Event {
+        if (self.count == 0) return null;
+        if (filter_cid == 0) {
+            const ev = self.events[self.tail];
+            self.tail = (self.tail + 1) % max_events;
+            self.count -= 1;
+            return ev;
+        }
+        var i: usize = 0;
+        while (i < self.count) : (i += 1) {
+            const idx = (self.tail + i) % max_events;
+            if (self.events[idx].cid == filter_cid) {
+                const found = self.events[idx];
+                var j = i;
+                while (j + 1 < self.count) : (j += 1) {
+                    const cur_slot = (self.tail + j) % max_events;
+                    const next_slot = (self.tail + j + 1) % max_events;
+                    self.events[cur_slot] = self.events[next_slot];
+                }
+                self.head = (self.head + max_events - 1) % max_events;
+                self.count -= 1;
+                return found;
+            }
+        }
+        return null;
     }
 
     pub fn pop(self: *EventQueue) ?sbi.Event {
-        if (self.count == 0) return null;
-        const ev = self.events[self.tail];
-        self.tail = (self.tail + 1) % max_events;
-        self.count -= 1;
-        return ev;
+        return self.popFiltered(0);
+    }
+
+    pub fn popFiltered(self: *EventQueue, filter_cid: usize) ?sbi.Event {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        return self.popFilteredLocked(filter_cid);
+    }
+
+    pub fn popIfWritten(self: *EventQueue, filter_cid: usize, g: *Guest, event_gpa: usize) !bool {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+
+        const ev = self.peekFilteredLocked(filter_cid) orelse return false;
+        try g.space.writeGuestStruct(sbi.Event, event_gpa, ev);
+        _ = self.popFilteredLocked(filter_cid);
+        return true;
+    }
+
+    pub fn getCount(self: *EventQueue) usize {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        return self.count;
     }
 };
 
@@ -135,9 +207,12 @@ pub const PacketQueue = struct {
     head: usize = 0,
     tail: usize = 0,
     count: usize = 0,
+    lock: atomic.SpinLock = atomic.SpinLock.init(),
 
     pub fn push(self: *PacketQueue, data: []const u8) bool {
         if (data.len == 0 or data.len > MAX_PACKET_LEN) return false;
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
         if (self.count >= MAX_NET_PACKETS) {
             // Drop oldest packet on overflow
             self.tail = (self.tail + 1) % MAX_NET_PACKETS;
@@ -151,18 +226,24 @@ pub const PacketQueue = struct {
         return true;
     }
 
-    pub fn peek(self: *const PacketQueue) ?*const Packet {
+    pub fn peek(self: *PacketQueue) ?*const Packet {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
         if (self.count == 0) return null;
         return &self.packets[self.tail];
     }
 
     pub fn drop(self: *PacketQueue) void {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
         if (self.count == 0) return;
         self.tail = (self.tail + 1) % MAX_NET_PACKETS;
         self.count -= 1;
     }
 
     pub fn pop(self: *PacketQueue, out_buf: []u8) ?usize {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
         if (self.count == 0) return null;
         const pkt = &self.packets[self.tail];
         const copy_len = @min(out_buf.len, @as(usize, pkt.len));
@@ -170,6 +251,24 @@ pub const PacketQueue = struct {
         self.tail = (self.tail + 1) % MAX_NET_PACKETS;
         self.count -= 1;
         return copy_len;
+    }
+
+    pub fn popToGuest(self: *PacketQueue, space: *vm_space.GuestSpace, gpa: usize, max_len: usize) !usize {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        if (self.count == 0) return 0;
+        const pkt = &self.packets[self.tail];
+        const copy_len = @min(max_len, @as(usize, pkt.len));
+        try space.copyToGuest(gpa, pkt.data[0..copy_len]);
+        self.tail = (self.tail + 1) % MAX_NET_PACKETS;
+        self.count -= 1;
+        return copy_len;
+    }
+
+    pub fn getCount(self: *PacketQueue) usize {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        return self.count;
     }
 };
 
@@ -191,8 +290,15 @@ pub const Guest = struct {
     // Context ID assigned by parent (1 for Root VM)
     local_cid: usize = CID_SELF,
 
-    // Fast array mapping child CID (CID >= 2) to *Guest
-    child_handles: [max_child_handles]?*Guest = std.mem.zeroes([max_child_handles]?*Guest),
+    // Two-column child handle lookup table:
+    // Column 1: Static array for child handles 0..31 -> CIDs 2..33 (wait-free, O(1), zero allocation)
+    child_static_handles: [STATIC_CHILD_HANDLES]?*Guest = @splat(null),
+    // Column 2: Dynamic hash bucket chains for child handles >= 32 (keyed by handle_idx % 32, intrusive linking)
+    child_dynamic_buckets: [DYNAMIC_CHILD_BUCKETS]?*Guest = @splat(null),
+    // Intrusive pointer for dynamic child handle bucket chaining
+    child_handle_next: ?*Guest = null,
+    // Next candidate index for dynamic child CID allocation (32..4095)
+    next_dynamic_handle: usize = STATIC_CHILD_HANDLES,
 
     // Event queue for asynchronous child notifications
     events: EventQueue = .{},
@@ -215,9 +321,11 @@ pub const Guest = struct {
     // Early page table physical address (GPA) for x86_64 boot
     early_pgt_gpa: usize,
 
-    // Fast O(1) lookup from guest_hart_id to vcore.
-    // Lock-free because vcores are only added during init before booting.
-    vcore_lookup: [max_vcores]?*vcore.VirtualCore,
+    // Two-column virtual core lookup table:
+    // Column 1: Static array for guest hart IDs 0..31 (wait-free, O(1), zero allocation)
+    vcore_static: [STATIC_VCORES]?*vcore.VirtualCore = @splat(null),
+    // Column 2: Dynamic hash bucket chains for guest hart IDs >= 32 (keyed by vid % 32, intrusive linking)
+    vcore_dynamic_buckets: [VCORE_HASH_BUCKETS]?*vcore.VirtualCore = @splat(null),
 
     // PIT (Programmable Interval Timer) State
     pit: PitState,
@@ -227,21 +335,57 @@ pub const Guest = struct {
 
     // Attenuated guest VM manifest buffer
     manifest: ?[]u8 = null,
+    manifest_lock: atomic.SpinLock = atomic.SpinLock.init(),
+
+    // Lock protecting child tree hierarchy mutations (child_handles and children list)
+    tree_lock: atomic.SpinLock = atomic.SpinLock.init(),
 
     // VirtIO-vsock device for this guest
     vsock: vsock_mod.VirtioVsock = .{},
+
+    // Virtual devices for emulated guests
+    uart: emulation.VirtualUart = .{},
+    timer: emulation.VirtualTimer = .{},
+    pic: emulation.VirtualPlic = .{},
 
     // allocator for heap-allocated Guest structures
     allocator: std.mem.Allocator,
 
     pub fn setManifest(self: *Guest, data: []const u8) !void {
-        if (self.manifest) |m| {
-            self.allocator.free(m);
-            self.manifest = null;
+        if (data.len > MAX_MANIFEST_SIZE_BYTES) {
+            return error.ManifestTooLarge;
         }
-        const buf = try self.allocator.alloc(u8, data.len);
-        @memcpy(buf, data);
-        self.manifest = buf;
+        const new_buf = try self.allocator.alloc(u8, data.len);
+        @memcpy(new_buf, data);
+
+        const old_buf = blk: {
+            const s = self.manifest_lock.lock();
+            defer self.manifest_lock.unlock(s);
+            const old = self.manifest;
+            self.manifest = new_buf;
+            break :blk old;
+        };
+
+        if (old_buf) |m| {
+            self.allocator.free(m);
+        }
+    }
+
+    pub fn readManifest(self: *Guest, out_buf: []u8) ?usize {
+        const s = self.manifest_lock.lock();
+        defer self.manifest_lock.unlock(s);
+        if (self.manifest) |m| {
+            const copy_len = @min(out_buf.len, m.len);
+            @memcpy(out_buf[0..copy_len], m[0..copy_len]);
+            return m.len;
+        }
+        return null;
+    }
+
+    pub fn getManifestLength(self: *Guest) usize {
+        const s = self.manifest_lock.lock();
+        defer self.manifest_lock.unlock(s);
+        return if (self.manifest) |m| m.len else 0;
     }
 
     pub fn getManifest(self: *const Guest) ?[]const u8 {
@@ -249,20 +393,84 @@ pub const Guest = struct {
     }
 
     pub fn allocChildHandle(self: *Guest, child: *Guest) !usize {
-        for (&self.child_handles, 0..) |*slot, i| {
+        const s = self.tree_lock.lock();
+        defer self.tree_lock.unlock(s);
+
+        // Column 1: fast static array for handles 0..31 (CIDs 2..33)
+        for (&self.child_static_handles, 0..) |*slot, i| {
             if (slot.* == null) {
                 slot.* = child;
-                return i + CID_FIRST_CHILD;
+                child.child_handle_next = null;
+                const cid = i + CID_FIRST_CHILD;
+                child.local_cid = cid;
+                return cid;
             }
         }
+
+        // Column 2: dynamic chained hash table for handles 32..4095
+        const dynamic_count = MAX_CHILD_HANDLES - STATIC_CHILD_HANDLES;
+        var attempts: usize = 0;
+        while (attempts < dynamic_count) : (attempts += 1) {
+            const handle_idx = self.next_dynamic_handle;
+            self.next_dynamic_handle += 1;
+            if (self.next_dynamic_handle >= MAX_CHILD_HANDLES) {
+                self.next_dynamic_handle = STATIC_CHILD_HANDLES;
+            }
+
+            const cand_cid = handle_idx + CID_FIRST_CHILD;
+            const bucket = handle_idx % DYNAMIC_CHILD_BUCKETS;
+
+            // Check if cand_cid is already in use in this bucket
+            var in_use = false;
+            var curr = self.child_dynamic_buckets[bucket];
+            while (curr) |c| {
+                if (c.local_cid == cand_cid) {
+                    in_use = true;
+                    break;
+                }
+                curr = c.child_handle_next;
+            }
+
+            if (!in_use) {
+                child.child_handle_next = self.child_dynamic_buckets[bucket];
+                self.child_dynamic_buckets[bucket] = child;
+                child.local_cid = cand_cid;
+                return cand_cid;
+            }
+        }
+
         return error.QuotaExceeded;
     }
 
     pub fn freeChildHandle(self: *Guest, child: *Guest) void {
-        for (&self.child_handles) |*slot| {
-            if (slot.* == child) {
-                slot.* = null;
-                break;
+        const s = self.tree_lock.lock();
+        defer self.tree_lock.unlock(s);
+
+        const cid = child.local_cid;
+        if (cid >= CID_FIRST_CHILD) {
+            const handle_idx = cid - CID_FIRST_CHILD;
+            if (handle_idx < STATIC_CHILD_HANDLES) {
+                if (self.child_static_handles[handle_idx] == child) {
+                    self.child_static_handles[handle_idx] = null;
+                    return;
+                }
+            } else if (handle_idx < MAX_CHILD_HANDLES) {
+                const bucket = handle_idx % DYNAMIC_CHILD_BUCKETS;
+                var curr = self.child_dynamic_buckets[bucket];
+                var prev: ?*Guest = null;
+                while (curr) |c| {
+                    if (c == child) {
+                        if (prev) |p| {
+                            p.child_handle_next = c.child_handle_next;
+                        } else {
+                            self.child_dynamic_buckets[bucket] = c.child_handle_next;
+                        }
+                        c.child_handle_next = null;
+                        return;
+                    }
+                    prev = c;
+                    curr = c.child_handle_next;
+                }
             }
         }
     }
@@ -273,9 +481,21 @@ pub const Guest = struct {
         } else if (cid == CID_SELF) {
             return self;
         } else if (cid >= CID_FIRST_CHILD) {
-            const idx = cid - CID_FIRST_CHILD;
-            if (idx < max_child_handles) {
-                return self.child_handles[idx];
+            const s = self.tree_lock.lock();
+            defer self.tree_lock.unlock(s);
+
+            const handle_idx = cid - CID_FIRST_CHILD;
+            if (handle_idx < STATIC_CHILD_HANDLES) {
+                return self.child_static_handles[handle_idx];
+            } else if (handle_idx < MAX_CHILD_HANDLES) {
+                const bucket = handle_idx % DYNAMIC_CHILD_BUCKETS;
+                var curr = self.child_dynamic_buckets[bucket];
+                while (curr) |c| {
+                    if (c.local_cid == cid) {
+                        return c;
+                    }
+                    curr = c.child_handle_next;
+                }
             }
         }
         return null;
@@ -288,7 +508,7 @@ pub const Guest = struct {
                 self.quotas.used_ram_pages = @min(self.quotas.used_ram_pages, self.quotas.max_ram_pages);
                 const max_bytes = std.math.mul(usize, self.quotas.max_ram_pages, physmem.PageSize) catch std.math.maxInt(usize);
                 if (self.space.range_size == 0 or self.space.range_size > max_bytes) {
-                    self.space.range_size = max_bytes;
+                    self.space.setRangeSize(max_bytes);
                 }
             }
             if (args.max_vcpus > 0) self.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
@@ -299,7 +519,8 @@ pub const Guest = struct {
                 if (args.max_ram_pages > 0) {
                     child.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, args.max_ram_pages);
                     child.quotas.used_ram_pages = @min(child.quotas.used_ram_pages, child.quotas.max_ram_pages);
-                    child.space.range_size = std.math.mul(usize, child.quotas.max_ram_pages, physmem.PageSize) catch std.math.maxInt(usize);
+                    const new_range = std.math.mul(usize, child.quotas.max_ram_pages, physmem.PageSize) catch std.math.maxInt(usize);
+                    child.space.setRangeSize(new_range);
                 }
                 if (args.max_vcpus > 0) {
                     child.quotas.max_vcpus = @min(self.quotas.max_vcpus, args.max_vcpus);
@@ -329,6 +550,10 @@ pub const Guest = struct {
         return true;
     }
 
+    fn guestUartOutput(char: u8) void {
+        debug.putchar(char);
+    }
+
     pub fn init(allocator: std.mem.Allocator, id: GuestID, is_trusted: bool, is_root: bool, parent: ?*Guest, base_gpa: usize, base_hpa: usize, range_size: usize, target_arch: TargetArch) !*Guest {
         const self = try allocator.create(Guest);
         errdefer allocator.destroy(self);
@@ -350,16 +575,23 @@ pub const Guest = struct {
             .children = .{ .start = null, .end = null },
             .child_node = null,
             .local_cid = CID_SELF,
-            .child_handles = std.mem.zeroes([max_child_handles]?*Guest),
+            .child_static_handles = @splat(null),
+            .child_dynamic_buckets = @splat(null),
+            .child_handle_next = null,
+            .next_dynamic_handle = STATIC_CHILD_HANDLES,
             .exit_code = 0,
             .vcores = .{ .start = null, .end = null },
             .vmid = try allocVmid(),
-            .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
+            .vcore_static = @splat(null),
+            .vcore_dynamic_buckets = @splat(null),
             .space = try vm_space.GuestSpace.init(allocator, is_trusted, base_gpa, base_hpa, range_size),
 
             .early_pgt_gpa = if (target_arch == .x86_64) base_gpa + X86_EARLY_PGT_GPA_OFFSET else 0,
             .pit = .{},
             .ioapic_mem = std.mem.zeroes([IOAPIC_PAGE_SIZE]u8),
+            .uart = .{ .guest_id = id, .out_fn = guestUartOutput },
+            .timer = .{},
+            .pic = .{},
             .allocator = allocator,
         };
         self.children.init();
@@ -368,7 +600,11 @@ pub const Guest = struct {
         if (parent) |p| {
             const node = try allocator.create(dsa.LinkedList(*Guest).Node);
             node.* = .{ .next = null, .previous = null, .contents = self };
-            p.children.pushEnd(node);
+            {
+                const s = p.tree_lock.lock();
+                p.children.pushEnd(node);
+                p.tree_lock.unlock(s);
+            }
             self.child_node = node;
             self.local_cid = try p.allocChildHandle(self);
             self.quotas.current_depth = p.quotas.current_depth + 1;
@@ -405,7 +641,12 @@ pub const Guest = struct {
         self.exit_code = exit_code;
 
         // Recursive termination of all children (cascading)
-        while (self.children.popStart()) |node| {
+        while (blk: {
+            const s = self.tree_lock.lock();
+            const n = self.children.popStart();
+            self.tree_lock.unlock(s);
+            break :blk n;
+        }) |node| {
             const child = node.contents;
             child.child_node = null;
             child.terminateWithCode(exit_code);
@@ -430,7 +671,9 @@ pub const Guest = struct {
             });
             p.freeChildHandle(self);
             if (self.child_node) |node| {
+                const s = p.tree_lock.lock();
                 p.children.remove(node);
+                p.tree_lock.unlock(s);
                 p.allocator.destroy(node);
                 self.child_node = null;
             }
@@ -458,10 +701,19 @@ pub const Guest = struct {
         }
 
         vsock_mod.global_vsock_router.unregister(self.local_cid);
-        freeVmid(self.vmid);
-        if (self.manifest) |m| {
-            self.allocator.free(m);
+        if (self.vmid != 0) {
+            freeVmid(self.vmid);
+            self.vmid = 0;
+        }
+        const old_manifest = blk: {
+            const s = self.manifest_lock.lock();
+            defer self.manifest_lock.unlock(s);
+            const m = self.manifest;
             self.manifest = null;
+            break :blk m;
+        };
+        if (old_manifest) |m| {
+            self.allocator.free(m);
         }
     }
 
@@ -496,11 +748,36 @@ pub const Guest = struct {
         return true;
     }
 
+    pub fn checkRamQuota(self: *Guest, ram_pages: usize) bool {
+        const new_ram = std.math.add(usize, self.quotas.used_ram_pages, ram_pages) catch return false;
+        if (new_ram > self.quotas.max_ram_pages) return false;
+        if (self.parent) |p| {
+            return p.checkRamQuota(ram_pages);
+        }
+        return true;
+    }
+
     pub fn consumeQuota(self: *Guest, ram_pages: usize, vcpus: usize) void {
         self.quotas.used_ram_pages = std.math.add(usize, self.quotas.used_ram_pages, ram_pages) catch self.quotas.max_ram_pages;
         self.quotas.used_vcpus = std.math.add(usize, self.quotas.used_vcpus, vcpus) catch self.quotas.max_vcpus;
         if (self.parent) |p| {
             p.consumeQuota(ram_pages, vcpus);
+        }
+    }
+
+    pub fn releaseQuota(self: *Guest, ram_pages: usize, vcpus: usize) void {
+        if (self.quotas.used_ram_pages >= ram_pages) {
+            self.quotas.used_ram_pages -= ram_pages;
+        } else {
+            self.quotas.used_ram_pages = 0;
+        }
+        if (self.quotas.used_vcpus >= vcpus) {
+            self.quotas.used_vcpus -= vcpus;
+        } else {
+            self.quotas.used_vcpus = 0;
+        }
+        if (self.parent) |p| {
+            p.releaseQuota(ram_pages, vcpus);
         }
     }
 
@@ -515,6 +792,10 @@ pub const Guest = struct {
         }
         self.vcores.start = null;
         self.vcores.end = null;
+        self.vcore_static = @splat(null);
+        self.vcore_dynamic_buckets = @splat(null);
+        self.child_static_handles = @splat(null);
+        self.child_dynamic_buckets = @splat(null);
 
         self.space.deinit();
 
@@ -528,20 +809,31 @@ pub const Guest = struct {
         if (self.parent) |p| {
             p.freeChildHandle(self);
             if (self.child_node) |node| {
+                const s = p.tree_lock.lock();
                 p.children.remove(node);
+                p.tree_lock.unlock(s);
                 self.allocator.destroy(node);
                 self.child_node = null;
             }
         }
 
-        if (self.manifest) |m| {
-            self.allocator.free(m);
+        const old_manifest = blk: {
+            const s = self.manifest_lock.lock();
+            defer self.manifest_lock.unlock(s);
+            const m = self.manifest;
             self.manifest = null;
+            break :blk m;
+        };
+        if (old_manifest) |m| {
+            self.allocator.free(m);
         }
 
         vsock_mod.global_vsock_router.unregister(self.local_cid);
 
-        freeVmid(self.vmid);
+        if (self.vmid != 0) {
+            freeVmid(self.vmid);
+            self.vmid = 0;
+        }
         self.allocator.destroy(self);
     }
 
@@ -550,13 +842,15 @@ pub const Guest = struct {
     /// should not be auto-enrolled (e.g. stopped secondary harts, or testing).
     /// This dependency-injection pattern allows future support for multiple scheduler backends.
     pub fn addVcore(self: *Guest, vid: vcore.VirtualCoreID, entry: usize, dtb: usize, priority: vcore.Priority, sched_queue: ?*const fn (*vcore.VirtualCore) void) !*vcore.VirtualCore {
+        if (self.findVcore(vid) != null) return error.DuplicateVcore;
+
         const vc = try self.allocator.create(vcore.VirtualCore);
         errdefer self.allocator.destroy(vc);
 
         vc.* = vcore.VirtualCore.init(vid, self, entry, dtb, priority);
         vc.blocked_node.contents = @ptrCast(vc);
         if (vc.exec_path == .emulated) {
-            vc.exec_path.emulated.context[@intFromEnum(riscv.Register.a0)] = @intFromPtr(vc);
+            vc.context[@intFromEnum(riscv.Register.a0)] = @intFromPtr(vc);
         }
 
         const node = try self.allocator.create(dsa.LinkedList(*vcore.VirtualCore).Node);
@@ -570,11 +864,13 @@ pub const Guest = struct {
         self.vcores.pushEnd(node);
         self.quotas.used_vcpus = self.vcores.count();
 
-        // Register in the O(1) lookup table if the hart ID fits.
-        if (vid < max_vcores) {
-            self.vcore_lookup[vid] = vc;
+        // Register in the two-column lookup table
+        if (vid < STATIC_VCORES) {
+            self.vcore_static[vid] = vc;
         } else {
-            debug.printf("Warning: Guest {} created vcore with ID {} exceeding max_vcores ({})\n", .{ self.id, vid, max_vcores });
+            const bucket = vid % VCORE_HASH_BUCKETS;
+            vc.lookup_next = self.vcore_dynamic_buckets[bucket];
+            self.vcore_dynamic_buckets[bucket] = vc;
         }
 
         // Enroll the vcore in the scheduler if a queue function was provided.
@@ -586,8 +882,14 @@ pub const Guest = struct {
     }
 
     pub fn findVcore(self: *const Guest, vid: vcore.VirtualCoreID) ?*vcore.VirtualCore {
-        if (vid < max_vcores) {
-            if (self.vcore_lookup[vid]) |vc| return vc;
+        if (vid < STATIC_VCORES) {
+            return self.vcore_static[vid];
+        }
+        const bucket = vid % VCORE_HASH_BUCKETS;
+        var curr = self.vcore_dynamic_buckets[bucket];
+        while (curr) |c| {
+            if (c.id == vid) return c;
+            curr = c.lookup_next;
         }
         var it = self.vcores.start;
         while (it) |node| {
@@ -626,7 +928,8 @@ pub const Guest = struct {
             .x86_64 => 0,
             .aarch64 => 0x40000000,
         };
-        const child_space = vm_space.GuestSpace.init(self.allocator, is_trusted, child_base_gpa, 0, 0) catch |err| {
+        const child_range_size = std.math.mul(usize, self.quotas.max_ram_pages, physmem.PageSize) catch std.math.maxInt(usize);
+        const child_space = vm_space.GuestSpace.init(self.allocator, is_trusted, child_base_gpa, 0, child_range_size) catch |err| {
             debug.printf("createChild: GuestSpace.init failed: {s}, free RAM: {} KB\n", .{ @errorName(err), physmem.getFreeRamBytes() / 1024 });
             return err;
         };
@@ -657,18 +960,25 @@ pub const Guest = struct {
             .children = .{ .start = null, .end = null },
             .child_node = null,
             .local_cid = child_id,
-            .child_handles = std.mem.zeroes([max_child_handles]?*Guest),
+            .child_static_handles = @splat(null),
+            .child_dynamic_buckets = @splat(null),
+            .child_handle_next = null,
+            .next_dynamic_handle = STATIC_CHILD_HANDLES,
             .exit_code = 0,
             .vcores = .{ .start = null, .end = null },
             .vmid = allocVmid() catch |err| {
                 debug.printf("createChild: allocVmid failed: {s}\n", .{@errorName(err)});
                 return err;
             },
-            .vcore_lookup = std.mem.zeroes([max_vcores]?*vcore.VirtualCore),
+            .vcore_static = @splat(null),
+            .vcore_dynamic_buckets = @splat(null),
             .space = child_space,
             .early_pgt_gpa = if (target_arch == .x86_64) child_space.base_gpa + X86_EARLY_PGT_GPA_OFFSET else 0,
             .pit = .{},
             .ioapic_mem = std.mem.zeroes([IOAPIC_PAGE_SIZE]u8),
+            .uart = .{ .guest_id = child_id, .out_fn = guestUartOutput },
+            .timer = .{},
+            .pic = .{},
             .allocator = self.allocator,
         };
         child.children.init();
@@ -680,7 +990,11 @@ pub const Guest = struct {
             return err;
         };
         line_node.* = .{ .next = null, .previous = null, .contents = child };
-        self.children.pushEnd(line_node);
+        {
+            const s = self.tree_lock.lock();
+            self.children.pushEnd(line_node);
+            self.tree_lock.unlock(s);
+        }
         child.child_node = line_node;
         child.local_cid = try self.allocChildHandle(child);
         child.quotas.current_depth = self.quotas.current_depth + 1;
@@ -717,10 +1031,8 @@ pub const Guest = struct {
             if (!builtin.is_test) {
                 scheduler.dequeue(vc);
                 if (vc.running_on_cpu) |home_cpu| {
-                    if (home_cpu != my_cpu and home_cpu < riscv.cpu_to_hart_map.len) {
-                        if (riscv.CLINT.msip(riscv.cpu_to_hart_map[home_cpu])) |ptr| {
-                            ptr.* = 1;
-                        }
+                    if (home_cpu != my_cpu) {
+                        pcore.sendIpiToCpu(home_cpu);
                     }
                 }
             }
@@ -742,6 +1054,10 @@ pub const Guest = struct {
 
     // Reset all vcores for booting a new ELF entry point
     pub fn resetForRun(self: *Guest, entry: usize, dtb: usize) void {
+        self.state = .valid;
+        self.uart = .{ .guest_id = self.id, .out_fn = guestUartOutput };
+        self.timer.reset();
+        self.pic.reset();
         var is_primary = true;
         var it = self.vcores.start;
         while (it) |node| {
@@ -846,7 +1162,7 @@ test "guest createChild and vcore setup" {
     // Check that we have a vcore in the child
     try testing.expect(child.vcores.start != null);
     const child_vc = child.vcores.start.?.contents;
-    try testing.expectEqual(@as(usize, 0), child_vc.exec_path.native.context[10]); // a0 is 0
+    try testing.expectEqual(@as(usize, 0), child_vc.context[10]); // a0 is 0
 }
 
 test "guest creation and vcore management" {
@@ -880,7 +1196,7 @@ test "guest creation and vcore management" {
     const vc = try g1.addVcore(100, 0x1000, 0x2000, .high, null);
     try testing.expectEqual(@as(usize, 100), vc.id);
     try testing.expectEqual(g1.id, vc.guest_id);
-    try testing.expectEqual(@as(usize, 0x1000), vc.exec_path.native.machine.mepc);
+    try testing.expectEqual(@as(usize, 0x1000), vc.machine.mepc);
 
     // Check that it was added to the guest's vcore list
     try testing.expect(g1.vcores.start != null);
@@ -957,15 +1273,15 @@ test "guest stop and resetForRun on multicore" {
 
     // Bootstrap core (vc0) must be .ready, with updated PC and DTB
     try testing.expect(vc0.state == .ready);
-    try testing.expectEqual(new_entry, vc0.exec_path.native.machine.mepc);
-    try testing.expectEqual(@as(usize, 0), vc0.exec_path.native.context[@intFromEnum(riscv.Register.a0)]);
-    try testing.expectEqual(new_dtb, vc0.exec_path.native.context[@intFromEnum(riscv.Register.a1)]);
+    try testing.expectEqual(new_entry, vc0.machine.mepc);
+    try testing.expectEqual(@as(usize, 0), vc0.context[@intFromEnum(riscv.Register.a0)]);
+    try testing.expectEqual(new_dtb, vc0.context[@intFromEnum(riscv.Register.a1)]);
 
     // Secondary core (vc1) must be .stopped awaiting SBI HSM start
     try testing.expect(vc1.state == .stopped);
-    try testing.expectEqual(new_entry, vc1.exec_path.native.machine.mepc);
-    try testing.expectEqual(@as(usize, 1), vc1.exec_path.native.context[@intFromEnum(riscv.Register.a0)]);
-    try testing.expectEqual(new_dtb, vc1.exec_path.native.context[@intFromEnum(riscv.Register.a1)]);
+    try testing.expectEqual(new_entry, vc1.machine.mepc);
+    try testing.expectEqual(@as(usize, 1), vc1.context[@intFromEnum(riscv.Register.a0)]);
+    try testing.expectEqual(new_dtb, vc1.context[@intFromEnum(riscv.Register.a1)]);
 }
 
 test "child termination unlinking and quota reclamation" {
@@ -1130,4 +1446,284 @@ test "guest quota management and manifest attachments" {
     // Test checkQuota rejection on integer overflow
     try testing.expect(!child.checkQuota(std.math.maxInt(usize), 1, 1));
     try testing.expect(!child.checkQuota(1, std.math.maxInt(usize), 1));
+
+    // Test checkRamQuota, consumeQuota, and releaseQuota propagation
+    const parent_base_ram = parent.quotas.used_ram_pages;
+    try testing.expect(child.checkRamQuota(100));
+    try testing.expect(!child.checkRamQuota(600)); // exceeds child.quotas.max_ram_pages (512)
+    child.consumeQuota(100, 0);
+    try testing.expectEqual(@as(usize, 100), child.quotas.used_ram_pages);
+    try testing.expectEqual(parent_base_ram + 100, parent.quotas.used_ram_pages);
+    child.releaseQuota(50, 0);
+    try testing.expectEqual(@as(usize, 50), child.quotas.used_ram_pages);
+    try testing.expectEqual(parent_base_ram + 50, parent.quotas.used_ram_pages);
+    child.releaseQuota(50, 0);
+    try testing.expectEqual(@as(usize, 0), child.quotas.used_ram_pages);
+    try testing.expectEqual(parent_base_ram, parent.quotas.used_ram_pages);
 }
+
+test "VMID double free prevention on terminateWithCode followed by deinit" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
+
+    // Reset ID counter and VMID bitmap
+    {
+        const guard = guest_manager.acquire();
+        defer guard.release();
+        const state = guard.get();
+        state.guest_id_next = CID_SELF;
+        state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
+        state.vmid_bitmap[0] = 1; // VMID 0 reserved
+    }
+
+    const parent = try createGuest(allocator, true, true, null, 0, 0, 0, .riscv64);
+    defer parent.deinit();
+
+    const child1 = try parent.createChild(false, .riscv64, 0);
+    const vmid1 = child1.vmid;
+    try testing.expect(vmid1 != 0);
+
+    // Terminate child1: frees VMID and zeroes child1.vmid
+    child1.terminateWithCode(0);
+    try testing.expectEqual(@as(u16, 0), child1.vmid);
+
+    // Allocate another child VM: it reclaims the freed VMID
+    const child2 = try parent.createChild(false, .riscv64, 0);
+    defer child2.deinit();
+    try testing.expectEqual(vmid1, child2.vmid);
+
+    // Call deinit on child1: must NOT free child2's active VMID!
+    child1.deinit();
+
+    // child2's VMID must still be marked active in the bitmap
+    {
+        const guard = guest_manager.acquire();
+        defer guard.release();
+        const state = guard.get();
+        const wi = child2.vmid / BITS_PER_WORD;
+        const bit: u6 = @intCast(child2.vmid % BITS_PER_WORD);
+        try testing.expect((state.vmid_bitmap[wi] & (@as(u64, 1) << bit)) != 0);
+    }
+}
+
+test "EventQueue filtered polling by CID and manifest size enforcement" {
+    const testing = std.testing;
+
+    var q = EventQueue{};
+
+    // Push events with distinct CIDs
+    q.push(.{ .cid = 10, .event_type = 1, .exit_code = 0 });
+    q.push(.{ .cid = 20, .event_type = 2, .exit_code = 1 });
+    q.push(.{ .cid = 30, .event_type = 3, .exit_code = 2 });
+
+    try testing.expectEqual(@as(usize, 3), q.count);
+
+    // Filtered peek for CID 20
+    const peek20 = q.peekFiltered(20);
+    try testing.expect(peek20 != null);
+    try testing.expectEqual(@as(usize, 20), peek20.?.cid);
+    try testing.expectEqual(@as(usize, 3), q.count); // Count unchanged
+
+    // Filtered peek for non-existent CID
+    try testing.expect(q.peekFiltered(99) == null);
+
+    // Pop filtered: extract CID 20 from middle
+    const pop20 = q.popFiltered(20);
+    try testing.expect(pop20 != null);
+    try testing.expectEqual(@as(usize, 20), pop20.?.cid);
+    try testing.expectEqual(@as(usize, 2), q.count);
+
+    // Remaining queue in FIFO order: CID 10, then CID 30
+    const pop10 = q.popFiltered(0); // Pop any
+    try testing.expect(pop10 != null);
+    try testing.expectEqual(@as(usize, 10), pop10.?.cid);
+
+    const pop30 = q.popFiltered(0);
+    try testing.expect(pop30 != null);
+    try testing.expectEqual(@as(usize, 30), pop30.?.cid);
+
+    try testing.expect(q.popFiltered(0) == null);
+    try testing.expectEqual(@as(usize, 0), q.count);
+}
+
+test "Two-column virtual core lookup table (static and dynamic buckets)" {
+    const testing = std.testing;
+
+    var g: Guest = undefined;
+    g.vcore_static = @splat(null);
+    g.vcore_dynamic_buckets = @splat(null);
+    g.vcores.init();
+
+    // Create dummy vcores across static (0..31) and dynamic (>=32) ranges
+    var vc0: vcore.VirtualCore = undefined;
+    vc0.id = 0;
+    vc0.lookup_next = null;
+    g.vcore_static[0] = &vc0;
+
+    var vc15: vcore.VirtualCore = undefined;
+    vc15.id = 15;
+    vc15.lookup_next = null;
+    g.vcore_static[15] = &vc15;
+
+    var vc31: vcore.VirtualCore = undefined;
+    vc31.id = 31;
+    vc31.lookup_next = null;
+    g.vcore_static[31] = &vc31;
+
+    // Dynamic vcores >= 32
+    var vc32: vcore.VirtualCore = undefined;
+    vc32.id = 32;
+    vc32.lookup_next = null;
+    const b32 = 32 % VCORE_HASH_BUCKETS;
+    vc32.lookup_next = g.vcore_dynamic_buckets[b32];
+    g.vcore_dynamic_buckets[b32] = &vc32;
+
+    var vc64: vcore.VirtualCore = undefined; // Collides in bucket 0 with 32
+    vc64.id = 64;
+    vc64.lookup_next = null;
+    const b64 = 64 % VCORE_HASH_BUCKETS;
+    vc64.lookup_next = g.vcore_dynamic_buckets[b64];
+    g.vcore_dynamic_buckets[b64] = &vc64;
+
+    var vc1024: vcore.VirtualCore = undefined;
+    vc1024.id = 1024;
+    vc1024.lookup_next = null;
+    const b1024 = 1024 % VCORE_HASH_BUCKETS;
+    vc1024.lookup_next = g.vcore_dynamic_buckets[b1024];
+    g.vcore_dynamic_buckets[b1024] = &vc1024;
+
+    // Verify static lookups
+    try testing.expectEqual(&vc0, g.findVcore(0));
+    try testing.expectEqual(&vc15, g.findVcore(15));
+    try testing.expectEqual(&vc31, g.findVcore(31));
+
+    // Verify dynamic lookups (including colliding bucket chain 64 -> 32)
+    try testing.expectEqual(&vc32, g.findVcore(32));
+    try testing.expectEqual(&vc64, g.findVcore(64));
+    try testing.expectEqual(&vc1024, g.findVcore(1024));
+
+    // Verify non-existent returns null
+    try testing.expect(g.findVcore(1) == null);
+    try testing.expect(g.findVcore(33) == null);
+    try testing.expect(g.findVcore(9999) == null);
+}
+
+test "addVcore duplicate prevention across static and dynamic columns" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
+
+    const hpa = try physmem.allocPage();
+    const g = try createGuest(allocator, true, true, null, 0x80000000, hpa, 0x1000, .riscv64);
+    defer g.deinit();
+
+    // 1. Static vcore (ID 0)
+    _ = try g.addVcore(0, 0, 0, .normal, null);
+    try testing.expect(g.findVcore(0) != null);
+    // Duplicate static vcore must fail
+    try testing.expectError(error.DuplicateVcore, g.addVcore(0, 0, 0, .normal, null));
+
+    // 2. Dynamic vcore (ID 42)
+    _ = try g.addVcore(42, 0, 0, .normal, null);
+    try testing.expect(g.findVcore(42) != null);
+    // Duplicate dynamic vcore must fail
+    try testing.expectError(error.DuplicateVcore, g.addVcore(42, 0, 0, .normal, null));
+
+    // Non-existent
+    try testing.expect(g.findVcore(1) == null);
+    try testing.expect(g.findVcore(43) == null);
+}
+
+test "Two-column child handle lookup table (static array and dynamic chained buckets)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
+
+    const hpa = try physmem.allocPage();
+    const parent = try createGuest(allocator, true, true, null, 0x80000000, hpa, 0x1000, .riscv64);
+    defer parent.deinit();
+
+    const NUM_CHILDREN = 80; // Surpasses legacy 64 child limit
+    var dummy_children: [NUM_CHILDREN]Guest = undefined;
+    var allocated_cids: [NUM_CHILDREN]usize = undefined;
+
+    // Allocate 80 child handles on parent
+    for (0..NUM_CHILDREN) |i| {
+        dummy_children[i] = undefined;
+        dummy_children[i].local_cid = 0;
+        dummy_children[i].child_handle_next = null;
+
+        const cid = try parent.allocChildHandle(&dummy_children[i]);
+        allocated_cids[i] = cid;
+
+        // Static handles: first 32 handles (0..31) -> CIDs 2..33
+        if (i < STATIC_CHILD_HANDLES) {
+            try testing.expectEqual(i + CID_FIRST_CHILD, cid);
+            try testing.expectEqual(&dummy_children[i], parent.child_static_handles[i]);
+        } else {
+            // Dynamic handles: 32..79 -> CIDs >= 34
+            try testing.expect(cid >= STATIC_CHILD_HANDLES + CID_FIRST_CHILD);
+        }
+    }
+
+    // Verify all 80 children can be looked up via getGuestByCid
+    for (0..NUM_CHILDREN) |i| {
+        const found = parent.getGuestByCid(allocated_cids[i]);
+        try testing.expect(found != null);
+        try testing.expectEqual(&dummy_children[i], found.?);
+    }
+
+    // Verify CID_PARENT and CID_SELF
+    try testing.expectEqual(parent, parent.getGuestByCid(CID_SELF));
+    try testing.expect(parent.getGuestByCid(CID_PARENT) == null); // Root VM has no parent
+
+    // Verify non-existent CID
+    try testing.expect(parent.getGuestByCid(9999) == null);
+
+    // Free a static handle (e.g. index 5 -> CID 7)
+    parent.freeChildHandle(&dummy_children[5]);
+    try testing.expect(parent.getGuestByCid(allocated_cids[5]) == null);
+    // Other static handles still exist
+    try testing.expectEqual(&dummy_children[4], parent.getGuestByCid(allocated_cids[4]));
+    try testing.expectEqual(&dummy_children[6], parent.getGuestByCid(allocated_cids[6]));
+
+    // Free a dynamic handle (e.g. index 45)
+    parent.freeChildHandle(&dummy_children[45]);
+    try testing.expect(parent.getGuestByCid(allocated_cids[45]) == null);
+    // Other dynamic handles still exist
+    try testing.expectEqual(&dummy_children[44], parent.getGuestByCid(allocated_cids[44]));
+    try testing.expectEqual(&dummy_children[46], parent.getGuestByCid(allocated_cids[46]));
+
+    // Re-allocating should fill the freed static slot first
+    var new_child_static: Guest = undefined;
+    new_child_static.local_cid = 0;
+    new_child_static.child_handle_next = null;
+    const reused_cid = try parent.allocChildHandle(&new_child_static);
+    try testing.expectEqual(allocated_cids[5], reused_cid);
+    try testing.expectEqual(&new_child_static, parent.getGuestByCid(reused_cid));
+
+    // Re-allocating dynamic handle allocates at cursor
+    var new_child_dynamic: Guest = undefined;
+    new_child_dynamic.local_cid = 0;
+    new_child_dynamic.child_handle_next = null;
+    const new_dyn_cid = try parent.allocChildHandle(&new_child_dynamic);
+    try testing.expect(new_dyn_cid >= STATIC_CHILD_HANDLES + CID_FIRST_CHILD);
+    try testing.expectEqual(&new_child_dynamic, parent.getGuestByCid(new_dyn_cid));
+
+    // When cursor wraps around or points to freed slot 45, it reuses the hole
+    parent.next_dynamic_handle = 45;
+    var reused_child: Guest = undefined;
+    reused_child.local_cid = 0;
+    reused_child.child_handle_next = null;
+    const hole_cid = try parent.allocChildHandle(&reused_child);
+    try testing.expectEqual(allocated_cids[45], hole_cid);
+    try testing.expectEqual(&reused_child, parent.getGuestByCid(hole_cid));
+}
+

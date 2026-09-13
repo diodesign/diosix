@@ -15,6 +15,7 @@ const block_mod = @import("block.zig");
 const vcpu_mod = @import("../../vcpu.zig");
 const softtlb_mod = @import("../../softtlb.zig");
 const bus_mod = @import("../../devices/bus.zig");
+const riscv = @import("interface").riscv;
 
 fn printUart(msg: []const u8) void {
     if (comptime builtin.target.cpu.arch.isRISCV()) {
@@ -1307,6 +1308,20 @@ pub const Engine = struct {
         }
     }
 
+    const CounterCsrMapping = struct { host_csr: u32, is_high: bool };
+
+    inline fn mapPerformanceCounterCsr(csr: u12) ?CounterCsrMapping {
+        return switch (csr) {
+            riscv.CSR.CYCLE => .{ .host_csr = riscv.CSR.CYCLE, .is_high = false },
+            riscv.CSR.TIME => .{ .host_csr = riscv.CSR.TIME, .is_high = false },
+            riscv.CSR.INSTRET => .{ .host_csr = riscv.CSR.INSTRET, .is_high = false },
+            riscv.CSR.CYCLEH => .{ .host_csr = riscv.CSR.CYCLE, .is_high = true },
+            riscv.CSR.TIMEH => .{ .host_csr = riscv.CSR.TIME, .is_high = true },
+            riscv.CSR.INSTRETH => .{ .host_csr = riscv.CSR.INSTRET, .is_high = true },
+            else => null,
+        };
+    }
+
     inline fn emitBranch(tb: *block_mod.TranslationBlock, host_offset: *usize, current_pc: u32, offset: i32, decoded_len: u32, rs1: u5, rs2: u5, comptime branch_fn: fn (u5, u5, i13) u32) struct { exit1: block_mod.ExitBranch, exit2: block_mod.ExitBranch } {
         const target = current_pc +% @as(u32, @bitCast(offset));
         const fallthrough = current_pc + decoded_len;
@@ -1384,7 +1399,7 @@ pub const Engine = struct {
 
             const fetch_res = self.tlb.fetchU32(current_pc, self.bus);
             if (fetch_res.trap) |cause| {
-                self.vcpu.injectException(cause, current_pc, current_pc);
+                self.trap(cause, current_pc, current_pc);
                 return error.GuestFetchFault;
             }
 
@@ -1684,56 +1699,52 @@ pub const Engine = struct {
                 },
 
                 .csrrs => |d| {
-                    if (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02) { // rdtime / rdcycle / rdinstret
-                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
-                    } else if (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82) { // rdtimeh / rdcycleh / rdinstreth
-                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
+                    if (mapPerformanceCounterCsr(d.csr)) |c| {
+                        emitCsrRead(tb, &host_offset, d.rd, c.host_csr, c.is_high);
                     } else {
                         break;
                     }
                 },
                 .csrrw => |d| {
-                    if (d.rs1 == 0 and (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02)) {
-                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
-                    } else if (d.rs1 == 0 and (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82)) {
-                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
+                    if (d.rs1 == 0) {
+                        if (mapPerformanceCounterCsr(d.csr)) |c| {
+                            emitCsrRead(tb, &host_offset, d.rd, c.host_csr, c.is_high);
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
                 },
                 .csrrc => |d| {
-                    if (d.rs1 == 0 and (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02)) {
-                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
-                    } else if (d.rs1 == 0 and (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82)) {
-                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
+                    if (d.rs1 == 0) {
+                        if (mapPerformanceCounterCsr(d.csr)) |c| {
+                            emitCsrRead(tb, &host_offset, d.rd, c.host_csr, c.is_high);
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
                 },
                 .csrrsi => |d| {
-                    if (d.uimm == 0 and (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02)) {
-                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
-                    } else if (d.uimm == 0 and (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82)) {
-                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
+                    if (d.uimm == 0) {
+                        if (mapPerformanceCounterCsr(d.csr)) |c| {
+                            emitCsrRead(tb, &host_offset, d.rd, c.host_csr, c.is_high);
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
                 },
                 .csrrci => |d| {
-                    if (d.uimm == 0 and (d.csr == 0xC01 or d.csr == 0xC00 or d.csr == 0xC02)) {
-                        const host_csr: u32 = if (d.csr == 0xC00) 0xC00 else if (d.csr == 0xC02) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, false);
-                    } else if (d.uimm == 0 and (d.csr == 0xC81 or d.csr == 0xC80 or d.csr == 0xC82)) {
-                        const host_csr: u32 = if (d.csr == 0xC80) 0xC00 else if (d.csr == 0xC82) 0xC02 else 0xC01;
-                        emitCsrRead(tb, &host_offset, d.rd, host_csr, true);
+                    if (d.uimm == 0) {
+                        if (mapPerformanceCounterCsr(d.csr)) |c| {
+                            emitCsrRead(tb, &host_offset, d.rd, c.host_csr, c.is_high);
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -1916,12 +1927,43 @@ pub const Engine = struct {
         const pc_before = self.vcpu.pc;
         const fetch_res = self.tlb.fetchU32(pc_before, self.bus);
         if (fetch_res.trap) |cause| {
-            self.vcpu.injectException(cause, pc_before, pc_before);
+            self.trap(cause, pc_before, pc_before);
             return true;
         }
 
         const decoded = decoder_rv32.decode(fetch_res.val);
         return self.executeDecoded(decoded, fetch_res.val, pc_before);
+    }
+
+    fn checkCsrAccess(priv: u8, csr: u12, will_write: bool) bool {
+        const min_priv: u8 = @truncate((csr >> 8) & 3);
+        if (priv < min_priv) return false;
+        const is_ro = ((csr >> 10) & 3) == 3;
+        if (will_write and is_ro) return false;
+        return true;
+    }
+
+    inline fn isCsrAccessPermitted(self: *Engine, csr: u12, will_write: bool) bool {
+        if (!checkCsrAccess(self.vcpu.privilege_mode, csr, will_write)) return false;
+        // RISC-V Privileged Spec: S-mode access to SATP raises illegal instruction when mstatus.TVM = 1
+        if (csr == riscv.CSR.SATP and self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and (self.vcpu.mstatus & riscv.MSTATUS.TVM) != 0) {
+            return false;
+        }
+        return true;
+    }
+
+    inline fn handleCsrPostWrite(self: *Engine, csr: u12) void {
+        if (csr == riscv.CSR.SATP) {
+            self.tlb.satp = self.vcpu.satp;
+            self.tlb.flush();
+        } else if (csr == riscv.CSR.SSTATUS or csr == riscv.CSR.MSTATUS) {
+            if (((self.tlb.mstatus ^ self.vcpu.mstatus) & riscv.MSTATUS.TRANSLATION_AFFECTING_MASK) != 0) {
+                self.tlb.mstatus = self.vcpu.mstatus;
+                self.tlb.flush();
+            } else {
+                self.tlb.mstatus = self.vcpu.mstatus;
+            }
+        }
     }
 
     pub fn executeDecoded(self: *Engine, decoded: anytype, raw_insn: u32, pc_before: u32) bool {
@@ -2138,7 +2180,7 @@ pub const Engine = struct {
             .flw => |d| {
                 const fs_enabled = ((self.vcpu.mstatus >> 13) & 3) != 0;
                 if (!fs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
                 const vaddr = @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) +% @as(u32, @bitCast(d.offset));
@@ -2153,7 +2195,7 @@ pub const Engine = struct {
             .fld => |d| {
                 const fs_enabled = ((self.vcpu.mstatus >> 13) & 3) != 0;
                 if (!fs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
                 const vaddr = @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) +% @as(u32, @bitCast(d.offset));
@@ -2162,9 +2204,9 @@ pub const Engine = struct {
                     self.trap(cause, pc_before, vaddr);
                     return true;
                 }
-                const res_hi = self.tlb.readU32(vaddr + 4, self.bus);
+                const res_hi = self.tlb.readU32(vaddr +% 4, self.bus);
                 if (res_hi.trap) |cause| {
-                    self.trap(cause, pc_before, vaddr + 4);
+                    self.trap(cause, pc_before, vaddr +% 4);
                     return true;
                 }
                 self.vcpu.fpregs[d.rd] = @as(u64, res_lo.val) | (@as(u64, res_hi.val) << 32);
@@ -2173,7 +2215,7 @@ pub const Engine = struct {
             .fsw => |d| {
                 const fs_enabled = ((self.vcpu.mstatus >> 13) & 3) != 0;
                 if (!fs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
                 const vaddr = @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) +% @as(u32, @bitCast(d.offset));
@@ -2188,7 +2230,7 @@ pub const Engine = struct {
             .fsd => |d| {
                 const fs_enabled = ((self.vcpu.mstatus >> 13) & 3) != 0;
                 if (!fs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
                 const vaddr = @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) +% @as(u32, @bitCast(d.offset));
@@ -2199,9 +2241,9 @@ pub const Engine = struct {
                     self.trap(cause, pc_before, vaddr);
                     return true;
                 }
-                const trap_hi = self.tlb.writeU32(vaddr + 4, val_hi, self.bus);
+                const trap_hi = self.tlb.writeU32(vaddr +% 4, val_hi, self.bus);
                 if (trap_hi) |cause| {
-                    self.trap(cause, pc_before, vaddr + 4);
+                    self.trap(cause, pc_before, vaddr +% 4);
                     return true;
                 }
                 self.vcpu.mstatus |= (3 << 13);
@@ -2209,7 +2251,7 @@ pub const Engine = struct {
             .fp_op => {
                 const fs_enabled = ((self.vcpu.mstatus >> 13) & 3) != 0;
                 if (!fs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
             },
@@ -2274,116 +2316,78 @@ pub const Engine = struct {
 
             // ---- CSR Instructions ----
             .csrrw => |d| {
+                if (!self.isCsrAccessPermitted(d.csr, true)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
                 const old = self.vcpu.readCsr(d.csr);
                 self.vcpu.writeCsr(d.csr, @truncate(self.vcpu.getGpr(d.rs1)));
                 if (d.rd != 0) self.vcpu.setGpr(d.rd, old);
-                if (d.csr == 0x180) {
-                    self.tlb.satp = self.vcpu.satp;
-                    self.tlb.flush();
-                } else if (d.csr == 0x100 or d.csr == 0x300) {
-                    const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
-                    if (((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
-                        self.tlb.mstatus = self.vcpu.mstatus;
-                        self.tlb.flush();
-                    } else {
-                        self.tlb.mstatus = self.vcpu.mstatus;
-                    }
-                }
+                self.handleCsrPostWrite(d.csr);
             },
             .csrrs => |d| {
+                const will_write = (d.rs1 != 0);
+                if (!self.isCsrAccessPermitted(d.csr, will_write)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
                 const old = self.vcpu.readCsr(d.csr);
-                if (d.rs1 != 0) {
+                if (will_write) {
                     const new_val = old | @as(u32, @truncate(self.vcpu.getGpr(d.rs1)));
                     self.vcpu.writeCsr(d.csr, new_val);
-                    if (d.csr == 0x180) {
-                        self.tlb.satp = self.vcpu.satp;
-                        self.tlb.flush();
-                    } else if (d.csr == 0x100 or d.csr == 0x300) {
-                        const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
-                        if (((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
-                            self.tlb.mstatus = self.vcpu.mstatus;
-                            self.tlb.flush();
-                        } else {
-                            self.tlb.mstatus = self.vcpu.mstatus;
-                        }
-                    }
+                    self.handleCsrPostWrite(d.csr);
                 }
                 if (d.rd != 0) self.vcpu.setGpr(d.rd, old);
             },
             .csrrc => |d| {
+                const will_write = (d.rs1 != 0);
+                if (!self.isCsrAccessPermitted(d.csr, will_write)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
                 const old = self.vcpu.readCsr(d.csr);
-                if (d.rs1 != 0) {
+                if (will_write) {
                     const new_val = old & ~@as(u32, @truncate(self.vcpu.getGpr(d.rs1)));
                     self.vcpu.writeCsr(d.csr, new_val);
-                    if (d.csr == 0x180) {
-                        self.tlb.satp = self.vcpu.satp;
-                        self.tlb.flush();
-                    } else if (d.csr == 0x100 or d.csr == 0x300) {
-                        const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
-                        if (((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
-                            self.tlb.mstatus = self.vcpu.mstatus;
-                            self.tlb.flush();
-                        } else {
-                            self.tlb.mstatus = self.vcpu.mstatus;
-                        }
-                    }
+                    self.handleCsrPostWrite(d.csr);
                 }
                 if (d.rd != 0) self.vcpu.setGpr(d.rd, old);
             },
             .csrrwi => |d| {
+                if (!self.isCsrAccessPermitted(d.csr, true)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
                 const old = self.vcpu.readCsr(d.csr);
                 self.vcpu.writeCsr(d.csr, d.uimm);
                 if (d.rd != 0) self.vcpu.setGpr(d.rd, old);
-                if (d.csr == 0x180) {
-                    self.tlb.satp = self.vcpu.satp;
-                    self.tlb.flush();
-                } else if (d.csr == 0x100 or d.csr == 0x300) {
-                    const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
-                    if (((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
-                        self.tlb.mstatus = self.vcpu.mstatus;
-                        self.tlb.flush();
-                    } else {
-                        self.tlb.mstatus = self.vcpu.mstatus;
-                    }
-                }
+                self.handleCsrPostWrite(d.csr);
             },
             .csrrsi => |d| {
+                const will_write = (d.uimm != 0);
+                if (!self.isCsrAccessPermitted(d.csr, will_write)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
                 const old = self.vcpu.readCsr(d.csr);
-                if (d.uimm != 0) {
+                if (will_write) {
                     const new_val = old | d.uimm;
                     self.vcpu.writeCsr(d.csr, new_val);
-                    if (d.csr == 0x180) {
-                        self.tlb.satp = self.vcpu.satp;
-                        self.tlb.flush();
-                    } else if (d.csr == 0x100 or d.csr == 0x300) {
-                        const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
-                        if (((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
-                            self.tlb.mstatus = self.vcpu.mstatus;
-                            self.tlb.flush();
-                        } else {
-                            self.tlb.mstatus = self.vcpu.mstatus;
-                        }
-                    }
+                    self.handleCsrPostWrite(d.csr);
                 }
                 if (d.rd != 0) self.vcpu.setGpr(d.rd, old);
             },
             .csrrci => |d| {
+                const will_write = (d.uimm != 0);
+                if (!self.isCsrAccessPermitted(d.csr, will_write)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
                 const old = self.vcpu.readCsr(d.csr);
-                if (d.uimm != 0) {
+                if (will_write) {
                     const new_val = old & ~@as(u32, d.uimm);
                     self.vcpu.writeCsr(d.csr, new_val);
-                    if (d.csr == 0x180) {
-                        self.tlb.satp = self.vcpu.satp;
-                        self.tlb.flush();
-                    } else if (d.csr == 0x100 or d.csr == 0x300) {
-                        const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
-                        if (((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
-                            self.tlb.mstatus = self.vcpu.mstatus;
-                            self.tlb.flush();
-                        } else {
-                            self.tlb.mstatus = self.vcpu.mstatus;
-                        }
-                    }
+                    self.handleCsrPostWrite(d.csr);
                 }
                 if (d.rd != 0) self.vcpu.setGpr(d.rd, old);
             },
@@ -2392,7 +2396,7 @@ pub const Engine = struct {
             .vsetvli => |d| {
                 const vs_enabled = ((self.vcpu.mstatus >> 9) & 3) != 0;
                 if (!vs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
                 const req = if (d.rs1 != 0) @as(u32, @truncate(self.vcpu.getGpr(d.rs1))) else 32;
@@ -2404,16 +2408,16 @@ pub const Engine = struct {
             .vload => |d| {
                 const vs_enabled = ((self.vcpu.mstatus >> 9) & 3) != 0;
                 if (!vs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
                 const base_vaddr = @as(u32, @truncate(self.vcpu.getGpr(d.rs1)));
-                const count = if (self.vcpu.vl == 0) 32 else self.vcpu.vl;
+                const count = @min(if (self.vcpu.vl == 0) 32 else self.vcpu.vl, 32);
                 var i: u32 = 0;
                 while (i < count) : (i += 1) {
-                    const res = self.tlb.readU8(base_vaddr + i, self.bus);
+                    const res = self.tlb.readU8(base_vaddr +% i, self.bus);
                     if (res.trap) |cause| {
-                        self.vcpu.injectException(cause, pc_before, base_vaddr + i);
+                        self.trap(cause, pc_before, base_vaddr +% i);
                         return true;
                     }
                     self.vcpu.vregs[d.vd][i] = @truncate(res.val);
@@ -2424,17 +2428,17 @@ pub const Engine = struct {
             .vstore => |d| {
                 const vs_enabled = ((self.vcpu.mstatus >> 9) & 3) != 0;
                 if (!vs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
                 const base_vaddr = @as(u32, @truncate(self.vcpu.getGpr(d.rs1)));
-                const count = if (self.vcpu.vl == 0) 32 else self.vcpu.vl;
+                const count = @min(if (self.vcpu.vl == 0) 32 else self.vcpu.vl, 32);
                 var i: u32 = 0;
                 while (i < count) : (i += 1) {
                     const byte = self.vcpu.vregs[d.vs3][i];
-                    const trap_res = self.tlb.writeU8(base_vaddr + i, byte, self.bus);
+                    const trap_res = self.tlb.writeU8(base_vaddr +% i, byte, self.bus);
                     if (trap_res) |cause| {
-                        self.trap(cause, pc_before, base_vaddr + i);
+                        self.trap(cause, pc_before, base_vaddr +% i);
                         return true;
                     }
                 }
@@ -2444,7 +2448,7 @@ pub const Engine = struct {
             .vector_op => |d| {
                 const vs_enabled = ((self.vcpu.mstatus >> 9) & 3) != 0;
                 if (!vs_enabled) {
-                    self.vcpu.injectException(2, pc_before, 0);
+                    self.trap(2, pc_before, 0);
                     return true;
                 }
                 @memcpy(self.vcpu.vregs[d.rd][0..], self.vcpu.vregs[d.rs1][0..]);
@@ -2576,16 +2580,20 @@ pub const Engine = struct {
 
             // ---- Traps & Returns ----
             .sret => {
-                const spp = (self.vcpu.mstatus >> 8) & 1;
+                if (self.vcpu.privilege_mode < vcpu_mod.PRIV_SUPERVISOR or (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and (self.vcpu.mstatus & riscv.MSTATUS.TSR) != 0)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
+                const spp = (self.vcpu.mstatus >> riscv.SSTATUS.SPP_SHIFT) & 1;
                 const spie = (self.vcpu.mstatus >> 5) & 1;
                 var mstatus = self.vcpu.mstatus;
                 mstatus = (mstatus & ~@as(u32, 0x02)) | (spie << 1);
                 mstatus |= (1 << 5);
-                mstatus &= ~@as(u32, 1 << 8);
+                mstatus &= ~@as(u32, 1 << riscv.SSTATUS.SPP_SHIFT);
                 self.vcpu.mstatus = mstatus;
 
                 const new_priv: u2 = @truncate(spp);
-                const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
+                const mask: u32 = riscv.MSTATUS.TRANSLATION_AFFECTING_MASK;
                 if (self.vcpu.privilege_mode != new_priv or self.tlb.satp != self.vcpu.satp or ((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
                     self.tlb.privilege_mode = new_priv;
                     self.tlb.satp = self.vcpu.satp;
@@ -2603,16 +2611,20 @@ pub const Engine = struct {
                 return true;
             },
             .mret => {
-                const mpp = (self.vcpu.mstatus >> 11) & 3;
+                if (self.vcpu.privilege_mode < vcpu_mod.PRIV_MACHINE) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
+                const mpp = (self.vcpu.mstatus >> riscv.MSTATUS.MPP_SHIFT) & 3;
                 const mpie = (self.vcpu.mstatus >> 7) & 1;
                 var mstatus = self.vcpu.mstatus;
                 mstatus = (mstatus & ~@as(u32, 0x08)) | (mpie << 3);
                 mstatus |= (1 << 7);
-                mstatus &= ~@as(u32, 3 << 11);
+                mstatus &= ~@as(u32, riscv.MSTATUS.MPP_MASK);
                 self.vcpu.mstatus = mstatus;
 
                 const new_priv: u2 = @truncate(mpp);
-                const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
+                const mask: u32 = riscv.MSTATUS.TRANSLATION_AFFECTING_MASK;
                 if (self.vcpu.privilege_mode != new_priv or self.tlb.satp != self.vcpu.satp or ((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
                     self.tlb.privilege_mode = new_priv;
                     self.tlb.satp = self.vcpu.satp;
@@ -2630,8 +2642,8 @@ pub const Engine = struct {
             .ecall => {
                 const pc_trap = pc_before;
                 const cause: u32 = switch (self.vcpu.privilege_mode) {
-                    0 => 8, // User ecall
-                    1 => 9, // Supervisor ecall
+                    vcpu_mod.PRIV_USER => 8, // User ecall
+                    vcpu_mod.PRIV_SUPERVISOR => 9, // Supervisor ecall
                     else => 11, // Machine ecall
                 };
                 self.trap(cause, pc_trap, 0);
@@ -2643,10 +2655,18 @@ pub const Engine = struct {
                 return true;
             },
             .wfi => {
+                if (self.vcpu.privilege_mode == vcpu_mod.PRIV_USER or (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and (self.vcpu.mstatus & riscv.MSTATUS.TW) != 0)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
                 self.vcpu.pc = next_pc;
                 return false;
             },
             .sfence_vma => {
+                if (self.vcpu.privilege_mode == vcpu_mod.PRIV_USER or (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and (self.vcpu.mstatus & riscv.MSTATUS.TVM) != 0)) {
+                    self.trap(2, pc_before, 0);
+                    return true;
+                }
                 if (comptime builtin.target.cpu.arch.isRISCV()) {
                     asm volatile ("sfence.vma");
                 }
@@ -2721,7 +2741,7 @@ pub const Engine = struct {
             if (self.vcpu.checkAndClearCacheFlush()) {
                 self.cache.flush();
             }
-            const mask: u32 = (1 << 18) | (1 << 19) | (1 << 17) | (3 << 11);
+            const mask: u32 = riscv.MSTATUS.TRANSLATION_AFFECTING_MASK;
             if (self.tlb.satp != self.vcpu.satp or self.tlb.privilege_mode != self.vcpu.privilege_mode or ((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0) {
                 self.tlb.satp = self.vcpu.satp;
                 self.tlb.privilege_mode = self.vcpu.privilege_mode;
@@ -2736,24 +2756,24 @@ pub const Engine = struct {
             self.last_pc = pc_before;
 
             // Check if supervisor interrupts can be delivered (only when stvec is set and an interrupt is pending)
-            const sie = (self.vcpu.mstatus >> 1) & 1;
-            if (self.vcpu.stvec != 0 and (self.vcpu.privilege_mode == 0 or (self.vcpu.privilege_mode == 1 and sie != 0))) {
+            const sie = (self.vcpu.mstatus & riscv.MSTATUS.SIE) != 0;
+            if (self.vcpu.stvec != 0 and (self.vcpu.privilege_mode == vcpu_mod.PRIV_USER or (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and sie))) {
                 const cur_mip = self.vcpu.getMip();
                 const pending = (cur_mip & self.vcpu.sie & self.vcpu.mideleg);
                 if (pending != 0) {
                     if ((pending & (1 << 1)) != 0) {
                         self.vcpu.clearMipBit(1);
-                        self.vcpu.injectException(0x80000001, pc_before, 0);
+                        self.trap(0x80000001, pc_before, 0);
                         continue;
                     } else if ((pending & (1 << 5)) != 0) {
                         self.vcpu.clearMipBit(5);
                         self.last_timer_inject_count = self.total_insn_count;
                         self.last_irq_pc = pc_before;
-                        self.vcpu.injectException(0x80000005, pc_before, 0);
+                        self.trap(0x80000005, pc_before, 0);
                         continue;
                     } else if ((pending & (1 << 9)) != 0) {
                         self.vcpu.clearMipBit(9);
-                        self.vcpu.injectException(0x80000009, pc_before, 0);
+                        self.trap(0x80000009, pc_before, 0);
                         continue;
                     }
                 }
@@ -2814,8 +2834,7 @@ pub const Engine = struct {
                     self.vcpu.pc = pc_before + decoded.len;
                     return ExitReason.ecall;
                 } else {
-                    self.vcpu.injectException(8, pc_before, 0);
-                    self.tlb.privilege_mode = self.vcpu.privilege_mode;
+                    self.trap(8, pc_before, 0);
                     continue;
                 }
             }

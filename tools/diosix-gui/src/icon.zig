@@ -666,12 +666,12 @@ pub const Icon = struct {
 
                 if (self.video_has_signal) {
                     // Guest desktop twilight background
-                    surface.drawGraduatedBackgroundInBox(screen_box, 0x001B3058, 0x000A1428);
+                    surface.drawGraduatedBackgroundInBox(screen_box, fb.Color.VIEWPORT_DESKTOP_TOP, fb.Color.VIEWPORT_DESKTOP_BOT);
 
                     // Guest OS top system bar
                     const bar_h: u32 = 18;
                     const bar_box = fb.Box.fromPosSize(screen_x, screen_y, screen_w, bar_h);
-                    surface.fillBox(bar_box, 0x00101C30);
+                    surface.fillBox(bar_box, fb.Color.VIEWPORT_BAR);
                     if (screen_w >= 600) {
                         font.drawText(surface, "Diosix Guest OS", screen_x + 8, screen_y + 2, fb.Color.WHITE);
                         font.drawText(surface, "riscv64 | IP: 10.0.3.2 | GPU: VirtIO-GPU", screen_x + @divTrunc(@as(i32, @intCast(screen_w)), 2) - 110, screen_y + 2, fb.Color.TEXT_MUTED);
@@ -689,11 +689,11 @@ pub const Icon = struct {
                         const term_w = if (screen_w > 48) screen_w - 48 else screen_w;
                         const term_h = if (screen_h > 68) screen_h - 68 else screen_h;
                         const term_box = fb.Box.fromPosSize(term_x, term_y, term_w, term_h);
-                        surface.drawRoundedTranslucentBox(term_box, 4, 0x000B0F16, 240, 0x00334866);
+                        surface.drawRoundedTranslucentBox(term_box, 4, fb.Color.VIEWPORT_TERM_BG, 240, fb.Color.VIEWPORT_TERM_BORDER);
 
                         // Terminal title bar
                         const ttitle_box = fb.Box.fromPosSize(term_x, term_y, term_w, 20);
-                        surface.drawRoundedTranslucentBox(ttitle_box, 4, 0x00182436, 255, null);
+                        surface.drawRoundedTranslucentBox(ttitle_box, 4, fb.Color.VIEWPORT_TERM_HDR, 255, null);
                         // Window control buttons
                         surface.fillBox(fb.Box.fromPosSize(term_x + 8, term_y + 6, 8, 8), fb.Color.ACCENT_RED);
                         surface.fillBox(fb.Box.fromPosSize(term_x + 20, term_y + 6, 8, 8), fb.Color.ACCENT_AMBER);
@@ -706,9 +706,9 @@ pub const Icon = struct {
                         // Terminal output lines
                         const l1_y = term_y + 26;
                         if (term_w >= 500) {
-                            font.drawText(surface, "Linux 7.0.10-diosix (riscv64) #1 SMP PREEMPT_DYNAMIC", term_x + 10, l1_y, 0x00A0B8D0);
+                            font.drawText(surface, "Linux 7.0.10-diosix (riscv64) #1 SMP PREEMPT_DYNAMIC", term_x + 10, l1_y, fb.Color.VIEWPORT_TEXT_DIM);
                         } else {
-                            font.drawText(surface, "Linux 7.0.10-diosix (riscv64)", term_x + 10, l1_y, 0x00A0B8D0);
+                            font.drawText(surface, "Linux 7.0.10-diosix (riscv64)", term_x + 10, l1_y, fb.Color.VIEWPORT_TEXT_DIM);
                         }
                         if (term_h > 50) {
                             font.drawText(surface, "root@guest:~# dsx ps", term_x + 10, l1_y + 16, fb.Color.ACCENT_GREEN);
@@ -729,7 +729,7 @@ pub const Icon = struct {
                     // Lower desktop taskbar
                     const bbar_y = screen_y + @as(i32, @intCast(screen_h)) - 18;
                     const bbar_box = fb.Box.fromPosSize(screen_x, bbar_y, screen_w, 18);
-                    surface.fillBox(bbar_box, 0x000E1624);
+                    surface.fillBox(bbar_box, fb.Color.VIEWPORT_BOTTOM_BAR);
                     if (screen_w >= 600) {
                         font.drawText(surface, "Format: X8R8G8B8 | DRM: /dev/dri/card0 | Scanout 0 (60.0 FPS)", screen_x + 8, bbar_y + 2, fb.Color.TEXT_MUTED);
                     } else {
@@ -737,12 +737,12 @@ pub const Icon = struct {
                     }
                 } else {
                     // Headless Domain Display: Dark phosphor CRT with retro diagnostic screen
-                    surface.fillBox(screen_box, 0x00080C14);
+                    surface.fillBox(screen_box, fb.Color.VIEWPORT_HEADLESS_BG);
 
                     // Scanlines
                     var gy: i32 = screen_y + 4;
                     while (gy < screen_y + @as(i32, @intCast(screen_h))) : (gy += 8) {
-                        surface.fillBox(fb.Box.fromPosSize(screen_x, gy, screen_w, 1), 0x000E1420);
+                        surface.fillBox(fb.Box.fromPosSize(screen_x, gy, screen_w, 1), fb.Color.VIEWPORT_GRID_LINE);
                     }
 
                     // Centered diagnostic warning box
@@ -751,7 +751,7 @@ pub const Icon = struct {
                     const warn_x = screen_x + 20;
                     const warn_y = screen_y + 20;
                     const warn_box = fb.Box.fromPosSize(warn_x, warn_y, warn_w, warn_h);
-                    surface.drawRoundedTranslucentBox(warn_box, 4, 0x000F1522, 240, fb.Color.ACCENT_AMBER);
+                    surface.drawRoundedTranslucentBox(warn_box, 4, fb.Color.INPUT_BG, 240, fb.Color.ACCENT_AMBER);
 
                     if (warn_w >= 500) {
                         font.drawTextWithShadow(surface, "[ HEADLESS DOMAIN - NO VIDEO OUTPUT DEVICE ]", warn_x + 20, warn_y + 16, fb.Color.ACCENT_AMBER, fb.Color.BLACK);

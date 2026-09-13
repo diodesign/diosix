@@ -13,7 +13,10 @@ pub const SV39x4Error = error{
     InvalidAlignment,
     MappingOverlap,
     WalkFailed,
+    InvalidAddress,
 };
+
+pub const MAX_GPA: usize = 1 << 41; // 2TB SV39x4 Stage-2 GPA limit
 
 pub const PTEFlags = struct {
     pub const valid: u64 = 1 << 0;
@@ -107,6 +110,7 @@ pub const PageTable = struct {
 
     // Map a single 4KB page
     pub fn mapPage(self: *PageTable, gpa: usize, hpa: usize, flags: u64, is_trusted: bool) !void {
+        if (gpa >= MAX_GPA) return SV39x4Error.InvalidAddress;
         if (gpa % physmem.PageSize != 0 or hpa % physmem.PageSize != 0) return SV39x4Error.InvalidAlignment;
 
         // Security Shields:
@@ -155,6 +159,7 @@ pub const PageTable = struct {
 
     // Unmap a single 4KB page and decrement its refcount
     pub fn unmapPage(self: *PageTable, gpa: usize) void {
+        if (gpa >= MAX_GPA) return;
         if (self.walk(gpa, false)) |pte_ptr| {
             const pte = pte_ptr.*;
             if (pte & PTEFlags.valid != 0) {
@@ -170,7 +175,7 @@ pub const PageTable = struct {
     // Walk the page table to find the entry for the given GPA.
     // If 'create' is true, intermediate tables are allocated as needed.
     pub fn walk(self: *const PageTable, gpa: usize, create: bool) !*PTE {
-        if (self.root_phys == 0) return error.WalkFailed;
+        if (self.root_phys == 0 or gpa >= MAX_GPA) return error.WalkFailed;
         var ptes_phys = self.root_phys;
         var level: u8 = 2;
 

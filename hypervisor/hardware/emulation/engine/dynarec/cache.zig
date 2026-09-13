@@ -113,6 +113,9 @@ pub const Cache = struct {
                 break;
             }
             slot = (slot + 1) & (HASH_SIZE - 1);
+        } else {
+            // Replace the last probed slot so recently executed blocks are indexed
+            self.hash_table[(hash(tb.guest_pc) + 7) & (HASH_SIZE - 1)] = tb;
         }
 
         rv64.fenceI();

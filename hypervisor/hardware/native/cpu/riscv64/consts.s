@@ -5,10 +5,9 @@
 
 .equ PAGE_SIZE, (4096)
 
-# maximum number of physical cores supported
-# keep this in sync with MAX_PHYS_CORES in hypervisor/hardware/native/cpu/riscv64/mod.zig
-# we'll do this automatically when we later increase this core count
-.equ MAX_PHYS_CORES, 16
+# maximum number of physical cores with static bootstrap memory slabs
+# keep this in sync with STATIC_PHYS_CORES in hypervisor/hardware/native/cpu/riscv64/mod.zig
+.equ MAX_PHYS_CORES, 32
 
 # during exceptions and interrupts (xint), reserve space for 32 CPU registers, eight-bytes wide each
 .equ  XINT_REGISTER_FRAME_SIZE,   (32 * 8)

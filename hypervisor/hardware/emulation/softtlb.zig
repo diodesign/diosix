@@ -93,7 +93,7 @@ pub const SoftTlb = struct {
     }
 
     pub fn translateGpaToHpa(self: *SoftTlb, gpa: usize) ?usize {
-        if (gpa >= self.guest_gpa_base and (gpa - self.guest_gpa_base) < self.guest_ram_size) {
+        if (self.guest_hpa_base > 0 and gpa >= self.guest_gpa_base and (gpa - self.guest_gpa_base) < self.guest_ram_size) {
             return self.guest_hpa_base +% (gpa - self.guest_gpa_base);
         }
         return null;
@@ -117,7 +117,7 @@ pub const SoftTlb = struct {
         else
             vaddr;
 
-        if (gpa >= self.guest_gpa_base and (gpa - self.guest_gpa_base) < self.guest_ram_size) {
+        if (self.guest_hpa_base > 0 and gpa >= self.guest_gpa_base and (gpa - self.guest_gpa_base) < self.guest_ram_size) {
             if (self.translateGpaToHpa(gpa)) |hpa| {
                 const page = vaddr >> 12;
                 const slot = page & TLB_MASK;
@@ -154,7 +154,7 @@ pub const SoftTlb = struct {
             const required_flag: u8 = if (is_exec) (1 << 3) else if (is_write) (1 << 2) else (1 << 1);
             if ((entry.flags & required_flag) != 0) {
                 const paddr = entry.host_paddr_page | (vaddr & 0xFFF);
-                if (paddr >= self.guest_hpa_base and (paddr - self.guest_hpa_base) < self.guest_ram_size) {
+                if (self.guest_hpa_base > 0 and paddr >= self.guest_hpa_base and (paddr - self.guest_hpa_base) < self.guest_ram_size) {
                     return paddr;
                 }
             }
@@ -179,7 +179,7 @@ pub const SoftTlb = struct {
             if ((region.flags & required_flag) != 0) {
                 const offset = vaddr - region.vaddr_start;
                 const paddr = region.hpa_start +% offset;
-                if (paddr >= self.guest_hpa_base and (paddr - self.guest_hpa_base) < self.guest_ram_size) {
+                if (self.guest_hpa_base > 0 and paddr >= self.guest_hpa_base and (paddr - self.guest_hpa_base) < self.guest_ram_size) {
                     entry.* = .{
                         .guest_vaddr_page = page,
                         .host_paddr_page = paddr & ~@as(usize, 0xFFF),
@@ -207,7 +207,7 @@ pub const SoftTlb = struct {
         // 1. Bare mode (satp == 0) or M-mode
         const satp_mode = (self.satp >> 31) & 1;
         if (satp_mode == 0 or self.privilege_mode == 3) {
-            if (vaddr >= self.guest_gpa_base and (vaddr - self.guest_gpa_base) < self.guest_ram_size) {
+            if (self.guest_hpa_base > 0 and vaddr >= self.guest_gpa_base and (vaddr - self.guest_gpa_base) < self.guest_ram_size) {
                 const vstart = @as(u32, @truncate(self.guest_gpa_base));
                 const vend = vstart +% @as(u32, @truncate(self.guest_ram_size));
                 const vstart_sign_ext = @as(i64, @as(i32, @bitCast(vstart)));
@@ -282,7 +282,7 @@ pub const SoftTlb = struct {
         const pte1_ptr = @as(*align(4) const u32, @ptrFromInt(pte1_hpa));
         const pte1 = @atomicLoad(u32, pte1_ptr, .acquire);
 
-        if ((pte1 & 1) == 0) {
+        if ((pte1 & 1) == 0 or ((pte1 & 2) == 0 and (pte1 & 4) != 0)) {
             self.last_null_vaddr = vaddr;
             self.last_null_pte1 = pte1;
             return null;
@@ -302,7 +302,7 @@ pub const SoftTlb = struct {
             const pte0_ptr = @as(*align(4) const u32, @ptrFromInt(pte0_hpa));
             const pte0 = @atomicLoad(u32, pte0_ptr, .acquire);
 
-            if ((pte0 & 1) == 0) {
+            if ((pte0 & 1) == 0 or ((pte0 & 2) == 0 and (pte0 & 4) != 0) or (pte0 & 0xE) == 0) {
                 self.last_null_vaddr = vaddr;
                 self.last_null_pte1 = pte1;
                 self.last_null_pte0 = pte0;
@@ -314,6 +314,12 @@ pub const SoftTlb = struct {
             pte_flags = @truncate(pte0 & 0x1F); // V, R, W, X, U
         } else {
             // 4MB Superpage (PPN1 is bits 31..20, shifted to address bits 31..22)
+            // Misaligned superpage check: in Sv32, PPN[0] (bits 19..10) must be 0 for superpages.
+            if ((pte1 & 0x000F_FC00) != 0) {
+                self.last_null_vaddr = vaddr;
+                self.last_null_pte1 = pte1;
+                return null;
+            }
             const ppn1_raw = @as(usize, @as(u32, @truncate((@as(usize, pte1) >> 20) << 22)));
             const ppn1 = if (ppn1_raw >= self.guest_gpa_base) ppn1_raw else (self.guest_gpa_base | ppn1_raw);
             final_gpa = ppn1 | (vaddr & 0x003F_FFFF);
@@ -680,4 +686,42 @@ test "SoftTlb boundary access at 0xFFFFFFFF does not panic from integer overflow
     // 4. writeU32 at 0xFFFFFFFE
     const w32 = tlb.writeU32(0xFFFFFFFE, 0x12345678, &bus);
     try testing.expect(w32 != null);
+}
+
+test "SoftTlb Sv32 validation rejects illegal W=1 R=0 and misaligned superpages" {
+    const testing = std.testing;
+
+    var uart = @import("devices/vuart.zig").VirtualUart{};
+    var timer = @import("devices/vtimer.zig").VirtualTimer{};
+    var pic = @import("devices/vpic.zig").VirtualPlic{};
+    var bus = bus_mod.Bus{
+        .uart = &uart,
+        .timer = &timer,
+        .pic = &pic,
+    };
+
+    // Allocate a buffer to simulate guest RAM
+    var mock_ram: [8192]u8 align(4096) = std.mem.zeroes([8192]u8);
+    const ram_addr = @intFromPtr(&mock_ram);
+
+    // Root page table at mock_ram[0..4096]
+    var tlb = SoftTlb.init(0x80000000, ram_addr, 8192);
+    // Enable Sv32 paging: satp mode = 1, PPN = 0x80000 (corresponds to GPA 0x80000000 -> ram_addr)
+    tlb.satp = (1 << 31) | 0x80000;
+    tlb.privilege_mode = 1; // S-mode
+
+    const root_pt = @as([*]u32, @ptrCast(@alignCast(&mock_ram[0])));
+
+    // Case 1: Leaf PTE with R=0, W=1 (reserved illegal encoding, V=1, W=1, R=0 -> 0x5)
+    root_pt[0] = 0x20000000 | 0x05; // PPN + W + V (R=0)
+    try testing.expect(tlb.translateFull(0x00000000, true, false, &bus) == null);
+
+    // Case 2: 4MB Superpage with misaligned PPN[0] != 0 (e.g. bits 19..10 set)
+    // Leaf superpage: R=1, W=1, V=1 -> 0x7, with PPN[0] = 0x400
+    root_pt[1] = 0x20000000 | 0x00000400 | 0x07;
+    try testing.expect(tlb.translateFull(0x00400000, false, false, &bus) == null);
+
+    // Case 3: Valid 4MB Superpage with PPN[0] == 0 (must succeed)
+    root_pt[2] = 0x20000000 | 0x07; // PPN[0] = 0, R=1, W=1, V=1
+    try testing.expect(tlb.translateFull(0x00800000, false, false, &bus) != null);
 }

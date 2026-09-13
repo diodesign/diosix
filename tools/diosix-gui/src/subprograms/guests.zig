@@ -102,10 +102,24 @@ pub const GuestEntry = struct {
     pub fn getIp(self: *const GuestEntry) []const u8 {
         return self.ip[0..self.ip_len];
     }
+
+    pub fn setName(self: *GuestEntry, new_name: []const u8) void {
+        const copy_len = @min(new_name.len, self.name.len);
+        @memcpy(self.name[0..copy_len], new_name[0..copy_len]);
+        self.name_len = copy_len;
+    }
+
+    pub fn setIp(self: *GuestEntry, new_ip: []const u8) void {
+        const copy_len = @min(new_ip.len, self.ip.len);
+        @memcpy(self.ip[0..copy_len], new_ip[0..copy_len]);
+        self.ip_len = copy_len;
+    }
 };
 
+pub const MAX_GUESTS_CATALOG: usize = 3;
+
 pub const GuestsData = struct {
-    guests: [3]GuestEntry = undefined,
+    guests: [MAX_GUESTS_CATALOG]GuestEntry = undefined,
     selected_idx: usize = 0,
     selected_guest: u32 = ICON_GUEST_ROW1_ID,
     detail_msg: [160]u8 = @splat(0),
@@ -173,10 +187,8 @@ pub fn init(sub: *SubProgram, gui_ctx: *anyopaque) void {
         .net_rx_kb = 1840,
         .net_tx_kb = 920,
     };
-    @memcpy(g1.name[0..9], "second-vm");
-    g1.name_len = 9;
-    @memcpy(g1.ip[0..8], "10.0.3.2");
-    g1.ip_len = 8;
+    g1.setName("second-vm");
+    g1.setIp("10.0.3.2");
     global_guests_data.guests[0] = g1;
 
     // Guest 2: debian-vm (Active with VirtIO-GPU video output, higher disk load)
@@ -203,10 +215,8 @@ pub fn init(sub: *SubProgram, gui_ctx: *anyopaque) void {
         .net_rx_kb = 6420,
         .net_tx_kb = 3180,
     };
-    @memcpy(g2.name[0..9], "debian-vm");
-    g2.name_len = 9;
-    @memcpy(g2.ip[0..8], "10.0.3.3");
-    g2.ip_len = 8;
+    g2.setName("debian-vm");
+    g2.setIp("10.0.3.3");
     global_guests_data.guests[1] = g2;
 
     // Guest 3: micro-guest (Headless domain with serial UART & SSH console)
@@ -233,10 +243,8 @@ pub fn init(sub: *SubProgram, gui_ctx: *anyopaque) void {
         .net_rx_kb = 340,
         .net_tx_kb = 180,
     };
-    @memcpy(g3.name[0..11], "micro-guest");
-    g3.name_len = 11;
-    @memcpy(g3.ip[0..8], "10.0.3.4");
-    g3.ip_len = 8;
+    g3.setName("micro-guest");
+    g3.setIp("10.0.3.4");
     global_guests_data.guests[2] = g3;
 
     global_guests_data.selected_idx = 0;

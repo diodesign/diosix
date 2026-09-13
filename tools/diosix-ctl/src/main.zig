@@ -14,10 +14,10 @@ pub const CID_FIRST_CHILD: usize = api.CID_FIRST_CHILD;
 
 pub const MAX_POSITIONAL_ARGS: usize = 8;
 pub const MAX_IPC_BUF_LEN: usize = 4096;
-pub const MAX_PATH_LEN: usize = 256;
+pub const MAX_PATH_LEN: usize = 4096;
 pub const MAX_ELF_FILE_SIZE: usize = 256 * 1024 * 1024;
 pub const MAX_DTB_FILE_SIZE: usize = 2 * 1024 * 1024;
-pub const MAX_MANIFEST_SIZE: usize = 64 * 1024;
+pub const MAX_MANIFEST_SIZE: usize = 1024 * 1024;
 
 pub const PAGE_SIZE_KB: usize = 4;
 pub const KB_PER_MB: usize = 1024;

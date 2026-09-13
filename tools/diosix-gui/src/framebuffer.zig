@@ -64,6 +64,18 @@ pub const Color = struct {
     pub const TAB_INACTIVE_BG: u32     = 0x00101824; // Inactive tab pill fill
     pub const TAB_INACTIVE_BORDER: u32 = 0x0024344A; // Inactive tab pill border
     pub const GRADIENT_BOT_DEFAULT: u32= 0x000C1836; // Default backdrop bottom color
+
+    // Virtual Machine Display Viewport Preview Palette
+    pub const VIEWPORT_DESKTOP_TOP: u32 = 0x001B3058; // VM desktop background top
+    pub const VIEWPORT_DESKTOP_BOT: u32 = 0x000A1428; // VM desktop background bottom
+    pub const VIEWPORT_BAR: u32         = 0x00101C30; // VM top title / status bar
+    pub const VIEWPORT_BOTTOM_BAR: u32  = 0x000E1624; // VM bottom dock / bar
+    pub const VIEWPORT_TERM_BG: u32     = 0x000B0F16; // VM terminal window fill
+    pub const VIEWPORT_TERM_BORDER: u32 = 0x00334866; // VM terminal window border
+    pub const VIEWPORT_TERM_HDR: u32    = 0x00182436; // VM terminal header bar
+    pub const VIEWPORT_TEXT_DIM: u32    = 0x00A0B8D0; // VM terminal muted text
+    pub const VIEWPORT_HEADLESS_BG: u32 = 0x00080C14; // VM headless terminal background
+    pub const VIEWPORT_GRID_LINE: u32   = 0x000E1420; // VM headless scanline grid
 };
 
 pub const Box = struct {
@@ -153,6 +165,21 @@ pub fn blendPixel(bg: u32, fg: u32, alpha: u8) u32 {
 }
 
 pub const CLOUD_MAP: []const u8 = @embedFile("cloud_map.bin");
+pub const CLOUD_MAP_DIMENSION: usize = 256;
+pub const CLOUD_MAP_MASK: usize = CLOUD_MAP_DIMENSION - 1;
+pub const CLOUD_BASE_OPACITY: u32 = 90; // Subtle static cloud coverage (~35%)
+pub const CLOUD_ANIMATED_OPACITY: u32 = 110; // Subtle animated cloud coverage (~43%)
+
+// Blend dual cloud noise samples over base RGB colors with fixed-point arithmetic
+pub inline fn blendCloudPixel(r_base: u32, g_base: u32, b_base: u32, c1: u32, c2: u32, max_opacity: u32) u32 {
+    const cd = (c1 * 3 + c2 * 2) / 5;
+    const cloud_alpha = (cd * max_opacity) >> 8;
+    const inv_alpha = 255 - cloud_alpha;
+    const r = (r_base * inv_alpha + 255 * cloud_alpha) >> 8;
+    const g = (g_base * inv_alpha + 255 * cloud_alpha) >> 8;
+    const b = (b_base * inv_alpha + 255 * cloud_alpha) >> 8;
+    return (r << 16) | (g << 8) | b;
+}
 
 // Evaluates the deterministic background pixel at (x, y) on the screen.
 // Linear vertical gradient with subtle static white cloud texture (deterministic Perlin map).
@@ -175,23 +202,15 @@ pub fn getBackdropPixel(x: i32, y: i32, width: u32, height: u32, top_color: u32,
 
     const ucy = @as(usize, @intCast(cy));
     const ucx = @as(usize, @intCast(cx));
-    const map_y1 = (ucy & 0xFF) * 256;
-    const map_y2 = ((ucy * 2) & 0xFF) * 256;
-    const map_x1 = ucx & 0xFF;
-    const map_x2 = (ucx * 2) & 0xFF;
+    const map_y1 = (ucy & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+    const map_y2 = ((ucy * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+    const map_x1 = ucx & CLOUD_MAP_MASK;
+    const map_x2 = (ucx * 2) & CLOUD_MAP_MASK;
 
     const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
     const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
 
-    const cd = (c1 * 3 + c2 * 2) / 5;
-    const cloud_alpha = (cd * 90) >> 8;
-    const inv_alpha = 255 - cloud_alpha;
-
-    const r = (r_base * inv_alpha + 255 * cloud_alpha) >> 8;
-    const g = (g_base * inv_alpha + 255 * cloud_alpha) >> 8;
-    const b = (b_base * inv_alpha + 255 * cloud_alpha) >> 8;
-
-    return (r << 16) | (g << 8) | b;
+    return blendCloudPixel(r_base, g_base, b_base, c1, c2, CLOUD_BASE_OPACITY);
 }
 
 pub const MAX_BLUR_RADIUS: u32 = 16;
@@ -350,10 +369,10 @@ pub const Surface = struct {
     const pixels_per_row = self.stridePixels();
     const den_y = @as(i32, @intCast(if (h > 1) h - 1 else 1));
 
-    const x0 = @as(usize, @intCast(clipped.x0));
-    const x1 = @as(usize, @intCast(clipped.x1));
-    const y0 = @as(usize, @intCast(clipped.y0));
-    const y1 = @as(usize, @intCast(clipped.y1));
+    const x0 = @as(usize, @intCast(@max(0, clipped.x0)));
+    const x1 = @as(usize, @intCast(@max(0, clipped.x1)));
+    const y0 = @as(usize, @intCast(@max(0, clipped.y0)));
+    const y1 = @as(usize, @intCast(@max(0, clipped.y1)));
 
     var y: usize = y0;
     while (y < y1) : (y += 1) {
@@ -362,27 +381,19 @@ pub const Surface = struct {
         const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * vy, den_y), 0, 255));
         const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * vy, den_y), 0, 255));
 
-        const map_y1 = (y & 0xFF) * 256;
-        const map_y2 = ((y * 2) & 0xFF) * 256;
+        const map_y1 = (y & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+        const map_y2 = ((y * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
 
         const row_offset = y * pixels_per_row;
         var x: usize = x0;
         while (x < x1) : (x += 1) {
-            const map_x1 = x & 0xFF;
-            const map_x2 = (x * 2) & 0xFF;
+            const map_x1 = x & CLOUD_MAP_MASK;
+            const map_x2 = (x * 2) & CLOUD_MAP_MASK;
 
             const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
             const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
 
-            const cd = (c1 * 3 + c2 * 2) / 5;
-            const cloud_alpha = (cd * 90) >> 8;
-            const inv_alpha = 255 - cloud_alpha;
-
-            const r = (r_base * inv_alpha + 255 * cloud_alpha) >> 8;
-            const g = (g_base * inv_alpha + 255 * cloud_alpha) >> 8;
-            const b = (b_base * inv_alpha + 255 * cloud_alpha) >> 8;
-
-            self.pixels[row_offset + x] = (r << 16) | (g << 8) | b;
+            self.pixels[row_offset + x] = blendCloudPixel(r_base, g_base, b_base, c1, c2, CLOUD_BASE_OPACITY);
         }
     }
 }
@@ -464,8 +475,8 @@ pub fn drawBlurredBackdropInBox(
         const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * cy, den_y), 0, 255));
         const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * cy, den_y), 0, 255));
         const ucy = @as(usize, @intCast(cy));
-        const map_y1 = (ucy & 0xFF) * 256;
-        const map_y2 = ((ucy * 2) & 0xFF) * 256;
+        const map_y1 = (ucy & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+        const map_y2 = ((ucy * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
 
         // Pre-sample source backdrop row for x in [x0 - r_blur, x1 + r_blur)
         var si: usize = 0;
@@ -476,21 +487,13 @@ pub fn drawBlurredBackdropInBox(
             si += 1;
         }) {
             const ucx = @as(usize, @intCast(std.math.clamp(sx_iter, 0, max_w)));
-            const map_x1 = ucx & 0xFF;
-            const map_x2 = (ucx * 2) & 0xFF;
+            const map_x1 = ucx & CLOUD_MAP_MASK;
+            const map_x2 = (ucx * 2) & CLOUD_MAP_MASK;
 
             const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
             const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
 
-            const cd = (c1 * 3 + c2 * 2) / 5;
-            const cloud_alpha = (cd * 90) >> 8;
-            const inv_alpha = 255 - cloud_alpha;
-
-            const r = (r_base * inv_alpha + 255 * cloud_alpha) >> 8;
-            const g = (g_base * inv_alpha + 255 * cloud_alpha) >> 8;
-            const b = (b_base * inv_alpha + 255 * cloud_alpha) >> 8;
-
-            src_row_buf[si] = (r << 16) | (g << 8) | b;
+            src_row_buf[si] = blendCloudPixel(r_base, g_base, b_base, c1, c2, CLOUD_BASE_OPACITY);
         }
 
         // Convolve horizontally
@@ -669,40 +672,42 @@ pub fn drawGraduatedBackground(self: *Surface, top_color: u32, bot_color: u32) v
         const pixels_per_row = self.stridePixels();
         const h = self.height;
         const w = self.width;
+        if (h == 0 or w == 0) return;
+
+        const top_r: i32 = @intCast((Color.SKY_BASE_TOP >> 16) & 0xFF);
+        const top_g: i32 = @intCast((Color.SKY_BASE_TOP >> 8) & 0xFF);
+        const top_b: i32 = @intCast(Color.SKY_BASE_TOP & 0xFF);
+
+        const bot_r: i32 = @intCast((Color.SKY_BASE_BOT >> 16) & 0xFF);
+        const bot_g: i32 = @intCast((Color.SKY_BASE_BOT >> 8) & 0xFF);
+        const bot_b: i32 = @intCast(Color.SKY_BASE_BOT & 0xFF);
+
+        const den_h = @as(i32, @intCast(if (h > 1) h - 1 else 1));
+        const map_dim_i32 = @as(i32, @intCast(CLOUD_MAP_DIMENSION));
 
         var y: u32 = 0;
         while (y < h) : (y += 1) {
             const y_int: i32 = @intCast(y);
             // Linear vertical sky gradient from SKY_BASE_TOP to SKY_BASE_BOT
-            const sky_r: u32 = @intCast(76 + @divTrunc((130 - 76) * y_int, @as(i32, @intCast(h))));
-            const sky_g: u32 = @intCast(139 + @divTrunc((190 - 139) * y_int, @as(i32, @intCast(h))));
-            const sky_b: u32 = @intCast(224 + @divTrunc((245 - 224) * y_int, @as(i32, @intCast(h))));
+            const sky_r: u32 = @intCast(std.math.clamp(top_r + @divTrunc((bot_r - top_r) * y_int, den_h), 0, 255));
+            const sky_g: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * y_int, den_h), 0, 255));
+            const sky_b: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * y_int, den_h), 0, 255));
 
             const row_offset = @as(usize, @intCast(y)) * pixels_per_row;
 
-            const map_y1 = @as(usize, @intCast(@mod(y_int + drift1_y, 256))) * 256;
-            const map_y2 = @as(usize, @intCast(@mod(y_int * 2 + drift2_y, 256))) * 256;
+            const map_y1 = @as(usize, @intCast(@mod(y_int + drift1_y, map_dim_i32))) * CLOUD_MAP_DIMENSION;
+            const map_y2 = @as(usize, @intCast(@mod(y_int * 2 + drift2_y, map_dim_i32))) * CLOUD_MAP_DIMENSION;
 
             var x: u32 = 0;
             while (x < w) : (x += 1) {
                 const x_int: i32 = @intCast(x);
-                const map_x1 = @as(usize, @intCast(@mod(x_int + drift1_x, 256)));
-                const map_x2 = @as(usize, @intCast(@mod(x_int * 2 + drift2_x, 256)));
+                const map_x1 = @as(usize, @intCast(@mod(x_int + drift1_x, map_dim_i32)));
+                const map_x2 = @as(usize, @intCast(@mod(x_int * 2 + drift2_x, map_dim_i32)));
 
                 const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
                 const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
 
-                // Blend dual drifting cloud layers
-                const cd = (c1 * 3 + c2 * 2) / 5;
-                // Subtle white clouds (coverage ~43% max)
-                const alpha = (cd * 110) >> 8;
-                const inv_alpha = 255 - alpha;
-
-                const r = (sky_r * inv_alpha + 255 * alpha) >> 8;
-                const g = (sky_g * inv_alpha + 255 * alpha) >> 8;
-                const b = (sky_b * inv_alpha + 255 * alpha) >> 8;
-
-                self.pixels[row_offset + x] = (r << 16) | (g << 8) | b;
+                self.pixels[row_offset + x] = blendCloudPixel(sky_r, sky_g, sky_b, c1, c2, CLOUD_ANIMATED_OPACITY);
             }
         }
     }

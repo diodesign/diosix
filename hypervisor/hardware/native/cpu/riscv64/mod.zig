@@ -68,23 +68,25 @@ pub const SiFiveTest = struct {
 
 const is_test = builtin.is_test;
 
-pub const MAX_PHYS_CORES = 16;
+pub const STATIC_PHYS_CORES: usize = 32;
+pub const MAX_PHYS_CORES: usize = STATIC_PHYS_CORES;
 pub const CPU_SLAB_SHIFT = 22;
 pub const CPU_SLAB_SIZE = 1 << CPU_SLAB_SHIFT;
 
 // Timer configuration constants
 pub const TIMER_INFINITY: u64 = 0xffffffffffffffff;
 pub const TIMESLICE_TICKS: u64 = 100_000; // 10ms at standard 10MHz RISC-V clock
+pub const EXT_IRQ_POLL_TICKS: u64 = 1_000; // 100us at standard 10MHz RISC-V clock
 pub const WATCHDOG_TICKS: u64 = 100_000_000; // 10s at standard 10MHz RISC-V clock
-fn init_cpu_to_hart_map() [MAX_PHYS_CORES]usize {
-    var map: [MAX_PHYS_CORES]usize = undefined;
-    for (0..MAX_PHYS_CORES) |i| {
+fn init_cpu_to_hart_map() [STATIC_PHYS_CORES]usize {
+    var map: [STATIC_PHYS_CORES]usize = undefined;
+    for (0..STATIC_PHYS_CORES) |i| {
         map[i] = i;
     }
     return map;
 }
-pub var cpu_to_hart_map: [MAX_PHYS_CORES]usize = init_cpu_to_hart_map();
-pub var cpu_contexts = std.mem.zeroes([MAX_PHYS_CORES]?*CpuContext);
+pub var cpu_to_hart_map: [STATIC_PHYS_CORES]usize = init_cpu_to_hart_map();
+pub var cpu_contexts = std.mem.zeroes([STATIC_PHYS_CORES]?*CpuContext);
 
 // Mock CSR state for tests.
 var mock_csrs = if (is_test) std.StaticStringMap(usize).initComptime(.{
@@ -817,31 +819,24 @@ pub inline fn readTime() u64 {
 
 extern const __hypervisor_end: u8;
 
+pub inline fn setTp(val: usize) void {
+    if (is_test) return;
+    asm volatile (
+        \\mv tp, %[val]
+        :
+        : [val] "r" (val),
+    );
+}
+
 pub fn isHostTp(tp_val: usize) bool {
     if (is_test) return false;
-    if (tp_val % 16 != 0) return false;
-
-    const hv_end = @intFromPtr(&__hypervisor_end);
-    const max_cores = MAX_PHYS_CORES;
-    const cpu_slab_shift = CPU_SLAB_SHIFT; // 4MB per CPU slab
-    const slab_span = std.math.shl(usize, max_cores, cpu_slab_shift) catch return false;
-    const max_slab_end = std.math.add(usize, hv_end, slab_span) catch return false;
-
-    if (tp_val < hv_end or tp_val >= max_slab_end) return false;
-
-    const ctx = @as(*CpuContext, @ptrFromInt(tp_val));
-    const core_id = ctx.cpu_core_id;
-    if (core_id >= cpu_contexts.len) return false;
-    return cpu_contexts[core_id] == ctx;
+    return @import("../../../../core/pcore.zig").isHostTp(tp_val);
 }
 
 pub fn getOnlineCpuCount() u32 {
     if (is_test) return 1;
-    var count: u32 = 0;
-    for (cpu_contexts) |ctx| {
-        if (ctx != null) count += 1;
-    }
-    return if (count > 0) count else 1;
+    const count = @import("../../../../core/pcore.zig").countOnline();
+    return if (count > 0) @as(u32, @intCast(count)) else 1;
 }
 
 pub const TpGuard = struct {

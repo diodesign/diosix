@@ -50,7 +50,13 @@ pub var system_ctx_locked = atomic.LockPayload(?*SystemContext).init(
 // This is the core initialization logic for the boot CPU.
 // It is separated from main() to allow for easier testing.
 pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
-    var guest_hart_ids = std.mem.zeroes([riscv.MAX_PHYS_CORES]usize);
+    var guest_hart_ids = blk: {
+        var ids: [pcore.TABLE_ROWS]usize = undefined;
+        for (0..pcore.TABLE_ROWS) |i| {
+            ids[i] = i;
+        }
+        break :blk ids;
+    };
     debug.printf("\n{s}\n", .{banner});
     debug.printf("Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})\n\n", .{ project_version, git_branch, git_revision, build_date, build_user, build_hostname, zig_version, cpu_arch });
 
@@ -143,7 +149,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
     const rootvm_elf = @as([*]const u8, @ptrFromInt(rootvm_elf_base))[0..rootvm_elf_size];
     const guest_arch = try loader.Loader.detectArch(rootvm_elf);
-    const root_vm_gpa_base: usize = if (guest_arch == .x86_64) 0 else rootvm_hpa_base;
+    const root_vm_gpa_base: usize = if (guest_arch == .x86_64) 0 else if (rootvm_hpa_base >= sv39x4.MAX_GPA) 0x80000000 else rootvm_hpa_base;
     debug.printf("Detected guest VM target architecture: {s}\n", .{@tagName(guest_arch)});
     const root_vm = try guest.createGuest(cpu_allocator, true, true, null, root_vm_gpa_base, rootvm_hpa_base, rootvm_ram_size, guest_arch);
     ctx.root_vm = root_vm;
