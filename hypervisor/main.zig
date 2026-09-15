@@ -101,6 +101,7 @@ pub export fn main(hartid_boot_arg: usize, fdt_paddr: usize) void {
 
     switch (cpu_core_id) {
         BootCpuID => {
+            pcore.host_stopping.store(false, .release);
             boot.bootCpuInit(allocator, global_dtb) catch |err| {
                 debug.printf("Boot CPU core {} failed to initialize, reason: {s}\n", .{ cpu_core_id, @errorName(err) });
                 return;
@@ -128,6 +129,17 @@ pub export fn main(hartid_boot_arg: usize, fdt_paddr: usize) void {
 
     debug.printf("Physical CPU ID {} (hardware hart ID {}) ready for work\n", .{ cpu_core_id, hw_hartid });
     while (true) {
+        if (pcore.host_stopping.load(.acquire)) {
+            if (riscv.CLINT.msip(pcore.this().hardware_hart_id)) |ptr| {
+                ptr.* = 0;
+            }
+            riscv.writeMie(0);
+            @atomicStore(bool, &pcore.this().is_parked, true, .release);
+            while (true) {
+                riscv.pause();
+            }
+        }
+
         if (pcore.this().active_vcore == null) {
             scheduler.schedule();
         }

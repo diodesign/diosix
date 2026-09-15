@@ -49,6 +49,9 @@ pub var next_cpu_id: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
 // Flag indicating global dynamic heap allocator is available for cores >= 32
 pub var dynamic_heap_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+// Flag indicating the host machine is stopping (reboot or shutdown in progress)
+pub var host_stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 // Global allocator used to allocate DynamicCoreNodes for cores >= 32
 pub var global_allocator: ?std.mem.Allocator = null;
 
@@ -76,6 +79,7 @@ pub fn registerStaticCore(id: usize, hart_id: usize, ctx: *riscv.CpuContext) voi
     if (id >= TABLE_ROWS) return;
     ctx.cpu_core_id = id;
     ctx.hardware_hart_id = hart_id;
+    ctx.is_parked = false;
     core_table[id].static_ptr = ctx;
     if (id < riscv.cpu_to_hart_map.len) {
         riscv.cpu_to_hart_map[id] = hart_id;
@@ -111,6 +115,7 @@ pub fn registerDynamicCore(id: usize, hart_id: usize) !*riscv.CpuContext {
     node.context.hardware_hart_id = hart_id;
     node.context.last_timer_val = riscv.TIMER_INFINITY;
     node.context.in_m_mode = true;
+    node.context.is_parked = false;
     node.context.blocked_lock = atomic.SpinLock.init();
     node.context.allocator.init(@intFromPtr(heap_mem.ptr), heap_mem.len) catch |err| {
         return err;
@@ -286,6 +291,59 @@ pub fn broadcastIpi() void {
     }
 }
 
+// Signal all other online physical cores to park in M-mode and spin-wait until they are parked.
+pub fn parkOtherCores() void {
+    host_stopping.store(true, .release);
+    broadcastIpi();
+
+    if (countOnline() <= 1) return;
+
+    const my_ctx = this();
+    const max_spins: usize = if (builtin.is_test) 1_000 else 100_000_000;
+    var spins: usize = 0;
+    while (spins < max_spins) : (spins += 1) {
+        var all_parked = true;
+
+        // Check Column 1 static cores
+        for (0..TABLE_ROWS) |i| {
+            if (core_table[i].static_ptr) |ctx| {
+                if (ctx != my_ctx) {
+                    if (!@atomicLoad(bool, &ctx.is_parked, .acquire)) {
+                        all_parked = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (all_parked) {
+            // Check Column 2 dynamic cores
+            const flags = table_lock.lock();
+            for (0..TABLE_ROWS) |bucket| {
+                var current = core_table[bucket].dynamic_head;
+                while (current) |node| {
+                    if (&node.context != my_ctx) {
+                        if (!@atomicLoad(bool, &node.context.is_parked, .acquire)) {
+                            all_parked = false;
+                            break;
+                        }
+                    }
+                    current = node.next;
+                }
+                if (!all_parked) break;
+            }
+            table_lock.unlock(flags);
+        }
+
+        if (all_parked) return;
+
+        if (spins % 10_000 == 0) {
+            broadcastIpi();
+        }
+        riscv.pause();
+    }
+}
+
 // Perform a context switch to the given virtual core
 // This sets up the physical core to run the guest on the next exception return
 pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
@@ -342,6 +400,7 @@ pub fn resetForTest() void {
     core_table = initCoreTable();
     next_cpu_id.store(0, .seq_cst);
     dynamic_heap_ready.store(false, .seq_cst);
+    host_stopping.store(false, .seq_cst);
     global_allocator = null;
 }
 
@@ -548,5 +607,27 @@ test "physical CPU: duplicate registration prevention in Column 2" {
     // Unique ID and hart should succeed
     const dyn2 = try registerDynamicCore(51, 501);
     try std.testing.expectEqual(@as(usize, 51), dyn2.cpu_core_id);
+}
+
+test "physical CPU: parkOtherCores signals host_stopping and waits for secondary cores" {
+    resetForTest();
+    defer resetForTest();
+
+    try std.testing.expect(!host_stopping.load(.acquire));
+
+    // Register static core 0 (current core) and core 1 (secondary core)
+    @memset(@as([*]u8, @ptrCast(&static_contexts[1]))[0..@sizeOf(riscv.CpuContext)], 0);
+    registerStaticCore(0, 0, riscv.getCPUContext());
+    registerStaticCore(1, 10, &static_contexts[1]);
+
+    // Initially secondary core is not parked
+    try std.testing.expect(!static_contexts[1].is_parked);
+
+    // Simulate secondary core receiving IPI and parking in M-mode
+    static_contexts[1].is_parked = true;
+
+    // parkOtherCores should set host_stopping and complete cleanly
+    parkOtherCores();
+    try std.testing.expect(host_stopping.load(.acquire));
 }
 

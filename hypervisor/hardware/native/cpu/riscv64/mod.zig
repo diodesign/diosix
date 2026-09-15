@@ -189,6 +189,7 @@ pub fn initMockHardware() void {
     test_cpu_ctx.trap_loop_count = 0;
     test_cpu_ctx.run_queue_count = 0;
     test_cpu_ctx.run_queue.init();
+    test_cpu_ctx.is_parked = false;
 
     test_mstatus = 0;
     test_mcause = 0;
@@ -253,6 +254,9 @@ pub const CpuContext = struct {
     // Cleared after hfence.gvma. Prevents unnecessary TLB flushes
     // on ecall/timer returns that don't change page tables.
     gstage_dirty: bool,
+
+    // True when this physical core has been parked in M-mode during host reset/shutdown.
+    is_parked: bool = false,
 };
 
 // Machine and Hypervisor specific architecture state
@@ -1092,6 +1096,8 @@ pub inline fn writeHstateen0(val: usize) void {
 // Reboot the host machine.
 pub fn reboot() void {
     if (builtin.is_test) return;
+    const pcore = @import("../../../../core/pcore.zig");
+    pcore.parkOtherCores();
     const drivers = @import("../../../../core/drivers.zig");
     if (drivers.reset) |drv| {
         drv.reset();
@@ -1105,6 +1111,8 @@ pub fn reboot() void {
 // Shutdown the host machine.
 pub fn shutdown() void {
     if (builtin.is_test) return;
+    const pcore = @import("../../../../core/pcore.zig");
+    pcore.parkOtherCores();
     const drivers = @import("../../../../core/drivers.zig");
     if (drivers.reset) |drv| {
         drv.shutdown();

@@ -214,6 +214,18 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
     const pcpu = pcore.this();
     pcpu.in_m_mode = true; // Trap entry is always in M-mode
+
+    if (pcore.host_stopping.load(.acquire)) {
+        if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
+            ptr.* = 0;
+        }
+        riscv.writeMie(0);
+        @atomicStore(bool, &pcpu.is_parked, true, .release);
+        while (true) {
+            riscv.pause();
+        }
+    }
+
     const irq = dispatch(context);
 
     // If we're coming from a guest or emulator, save its context
@@ -306,6 +318,17 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     // If there is no active vcore to run, enter a low-power scheduling loop in machine mode
     // until a virtual core becomes ready (e.g. via timer or hardware interrupt).
     while (pcpu.active_vcore == null) {
+        if (pcore.host_stopping.load(.acquire)) {
+            if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
+                ptr.* = 0;
+            }
+            riscv.writeMie(0);
+            @atomicStore(bool, &pcpu.is_parked, true, .release);
+            while (true) {
+                riscv.pause();
+            }
+        }
+
         const now_time = riscv.readTime();
         const timeslice_limit = now_time +% riscv.TIMESLICE_TICKS;
         const b_prev = pcpu.blocked_lock.lock();
