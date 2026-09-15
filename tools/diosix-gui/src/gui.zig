@@ -44,10 +44,14 @@ pub const Key = struct {
     pub const SPACE: u16 = 57;
     pub const F6: u16 = 64;
     pub const RIGHT_CTRL: u16 = 97;
+    pub const HOME: u16 = 102;
     pub const UP: u16 = 103;
+    pub const PAGE_UP: u16 = 104;
     pub const LEFT: u16 = 105;
     pub const RIGHT: u16 = 106;
+    pub const END: u16 = 107;
     pub const DOWN: u16 = 108;
+    pub const PAGE_DOWN: u16 = 109;
     pub const DELETE: u16 = 111;
 };
 
@@ -229,6 +233,30 @@ pub const DiosixGui = struct {
         var tick_log = Icon.createTickBox(icon_sub.ICON_TICK_LOGGING_ID, 24, 406, 552, 28, "Enable Verbose Real-Time Telemetry", true, null, .inclusive);
         tick_log.callback = icon_sub.onLoggingToggled;
         _ = try win_ctrls.addIcon(tick_log);
+
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL7_ID, 24, 446, 552, 18, "7. Hypervisor Workload Progress:"));
+        const prog_bench = Icon.createProgressBar(icon_sub.ICON_PROGRESS_TEST_ID, 24, 466, 552, 28, "Hypervisor Workload Stress: 65%", 65, fb.Color.ACCENT_CYAN);
+        _ = try win_ctrls.addIcon(prog_bench);
+
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL8_ID, 24, 508, 552, 18, "8. Extended Action Controls:"));
+        var btn_reset = Icon.createButton(icon_sub.ICON_BTN_RESET_DEFAULTS_ID, 24, 532, 260, 32, "Reset All Controls");
+        btn_reset.callback = icon_sub.onResetDefaults;
+        _ = try win_ctrls.addIcon(btn_reset);
+
+        var btn_bench = Icon.createButton(icon_sub.ICON_BTN_RUN_BENCHMARK_ID, 300, 532, 276, 32, "Run Performance Stress Test");
+        btn_bench.callback = icon_sub.onRunBenchmark;
+        _ = try win_ctrls.addIcon(btn_bench);
+
+        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL9_ID, 24, 580, 552, 18, "9. Extended Scheduler Configuration:"));
+        var sl_timeslice = Icon.createSlider(icon_sub.ICON_SLIDER_TIMESLICE_ID, 24, 600, 552, 46, 1, 50, 10, "ms");
+        sl_timeslice.setText("Scheduler Timeslice Quantum");
+        sl_timeslice.callback = icon_sub.onTimesliceSliderChanged;
+        _ = try win_ctrls.addIcon(sl_timeslice);
+
+        var btn_export = Icon.createButton(icon_sub.ICON_BTN_EXPORT_LOGS_ID, 24, 660, 552, 32, "Export Diagnostic Metrics to Serial");
+        btn_export.callback = icon_sub.onExportLogs;
+        _ = try win_ctrls.addIcon(btn_export);
+
         try self.windows.append(self.allocator, win_ctrls);
 
         // Right Groups Pane: Backdrop Color Selection
@@ -664,6 +692,24 @@ pub const DiosixGui = struct {
         }
     }
 
+    pub fn handleMouseScroll(self: *DiosixGui, px: i32, py: i32, delta: i32) void {
+        var i = self.windows.items.len;
+        while (i > 0) : (i -= 1) {
+            const win = &self.windows.items[i - 1];
+            if (win.is_onscreen and win.contains(px, py)) {
+                if (win.handleScroll(delta * 30)) {
+                    self.markDirty(win.getBox());
+                }
+                return;
+            }
+        }
+        if (self.getActiveWindow()) |win| {
+            if (win.handleScroll(delta * 30)) {
+                self.markDirty(win.getBox());
+            }
+        }
+    }
+
     fn handleTabBarClick(self: *DiosixGui, px: i32, py: i32) void {
         _ = py;
         if (px >= TAB_START_X) {
@@ -885,6 +931,37 @@ pub const DiosixGui = struct {
             }
         }
 
+        // Page Up / Page Down / Ctrl-Home / Ctrl-End scroll the active window pane
+        if (key_code == Key.PAGE_UP) {
+            if (active_win) |win| {
+                if (win.scrollBy(-win.getViewportHeight())) {
+                    self.markDirty(win.getBox());
+                }
+                return;
+            }
+        } else if (key_code == Key.PAGE_DOWN) {
+            if (active_win) |win| {
+                if (win.scrollBy(win.getViewportHeight())) {
+                    self.markDirty(win.getBox());
+                }
+                return;
+            }
+        } else if (ctrl and key_code == Key.HOME) {
+            if (active_win) |win| {
+                if (win.scrollTo(0)) {
+                    self.markDirty(win.getBox());
+                }
+                return;
+            }
+        } else if (ctrl and key_code == Key.END) {
+            if (active_win) |win| {
+                if (win.scrollTo(win.getMaxScroll())) {
+                    self.markDirty(win.getBox());
+                }
+                return;
+            }
+        }
+
         // 4. Control Codes recognition (both keycode+ctrl and raw ASCII control bytes)
         const is_ctrl_a = (ctrl and (key_code == Key.A or key_char == 'a' or key_char == 'A')) or (key_char != null and key_char.? == 1);
         const is_ctrl_c = (ctrl and (key_code == Key.C or key_char == 'c' or key_char == 'C')) or (key_char != null and key_char.? == 3);
@@ -977,6 +1054,32 @@ pub const DiosixGui = struct {
                 }
                 self.markDirty(win.getBox());
                 return;
+            } else if (key_code == Key.HOME) {
+                if (shift) {
+                    if (icon.selection_start == null) {
+                        icon.selection_start = icon.cursor_pos;
+                    }
+                    icon.cursor_pos = 0;
+                    icon.selection_end = 0;
+                } else {
+                    icon.cursor_pos = 0;
+                    icon.clearSelection();
+                }
+                self.markDirty(win.getBox());
+                return;
+            } else if (key_code == Key.END) {
+                if (shift) {
+                    if (icon.selection_start == null) {
+                        icon.selection_start = icon.cursor_pos;
+                    }
+                    icon.cursor_pos = icon.text_len;
+                    icon.selection_end = icon.text_len;
+                } else {
+                    icon.cursor_pos = icon.text_len;
+                    icon.clearSelection();
+                }
+                self.markDirty(win.getBox());
+                return;
             } else if (key_code == Key.UP) {
                 // Up arrow moves to previous item
                 if (!win.focusPrevIcon()) {
@@ -1062,6 +1165,19 @@ pub const DiosixGui = struct {
             } else if (key_code == Key.DOWN) {
                 win.focusNextIconWrap();
                 self.markDirty(win.getBox());
+                return;
+            }
+
+            // Home / End scroll to top / bottom of scrollable pane
+            if (key_code == Key.HOME) {
+                if (win.scrollTo(0)) {
+                    self.markDirty(win.getBox());
+                }
+                return;
+            } else if (key_code == Key.END) {
+                if (win.scrollTo(win.getMaxScroll())) {
+                    self.markDirty(win.getBox());
+                }
                 return;
             }
 

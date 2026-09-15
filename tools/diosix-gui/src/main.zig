@@ -174,6 +174,7 @@ pub const EV_ABS: u16 = 0x03;
 
 pub const REL_X: u16 = 0x00;
 pub const REL_Y: u16 = 0x01;
+pub const REL_WHEEL: u16 = 0x08;
 pub const ABS_X: u16 = 0x00;
 pub const ABS_Y: u16 = 0x01;
 pub const EVDEV_ABS_MAX: i64 = 32767;
@@ -456,13 +457,19 @@ pub fn main() !void {
                                     }
                                 },
                                 EV_REL => {
-                                    var nx = gui.cursor.x;
-                                    var ny = gui.cursor.y;
-                                    if (ev.code == REL_X) nx += ev.value;
-                                    if (ev.code == REL_Y) ny += ev.value;
-                                    nx = std.math.clamp(nx, 0, @as(i32, @intCast(display.width - 1)));
-                                    ny = std.math.clamp(ny, 0, @as(i32, @intCast(display.height - 1)));
-                                    gui.handleMouseMove(nx, ny, gui.mouse_left_down);
+                                    if (ev.code == REL_WHEEL) {
+                                        // Standard vertical mouse wheel: positive value is wheel up (scroll content down -> delta < 0),
+                                        // negative value is wheel down (scroll content up -> delta > 0)
+                                        gui.handleMouseScroll(gui.cursor.x, gui.cursor.y, -ev.value);
+                                    } else {
+                                        var nx = gui.cursor.x;
+                                        var ny = gui.cursor.y;
+                                        if (ev.code == REL_X) nx += ev.value;
+                                        if (ev.code == REL_Y) ny += ev.value;
+                                        nx = std.math.clamp(nx, 0, @as(i32, @intCast(display.width - 1)));
+                                        ny = std.math.clamp(ny, 0, @as(i32, @intCast(display.height - 1)));
+                                        gui.handleMouseMove(nx, ny, gui.mouse_left_down);
+                                    }
                                 },
                                 EV_ABS => {
                                     // Handle tablet absolute coordinates
@@ -1591,6 +1598,226 @@ test "diosix-gui: Surface pushClip and popClip stack nesting" {
     try testing.expectEqual(@as(i32, 100), surface.clip.x1);
     try testing.expectEqual(@as(i32, 100), surface.clip.y1);
 }
+
+test "diosix-gui: scrollable pane scrolling, bounds, and scrollToKeepIconVisible" {
+    const allocator = testing.allocator;
+    var win = Window.init(allocator, 999, 100, 100, 400, 300, "SCROLL TEST");
+    defer win.deinit();
+    win.setOnScreen(true);
+
+    _ = try win.addIcon(Icon.createReadOnly(1, 20, 50, 360, 30, "Item 1"));
+    _ = try win.addIcon(Icon.createReadOnly(2, 20, 150, 360, 30, "Item 2"));
+    _ = try win.addIcon(Icon.createReadOnly(3, 20, 250, 360, 30, "Item 3"));
+    _ = try win.addIcon(Icon.createReadOnly(4, 20, 350, 360, 30, "Item 4"));
+    _ = try win.addIcon(Icon.createReadOnly(5, 20, 450, 360, 30, "Item 5"));
+
+    // Content height is 450 + 30 + 10 = 490.
+    // Window height is 300. Max scroll is 490 - 300 = 190.
+    try testing.expect(win.isScrollable());
+    try testing.expectEqual(@as(i32, 190), win.getMaxScroll());
+
+    // Scroll by delta
+    _ = win.scrollBy(50);
+    try testing.expectEqual(@as(i32, 50), win.scroll_y);
+
+    // Scroll past max clamps to max
+    _ = win.scrollBy(500);
+    try testing.expectEqual(@as(i32, 190), win.scroll_y);
+
+    // Scroll negative clamps to 0
+    _ = win.scrollBy(-500);
+    try testing.expectEqual(@as(i32, 0), win.scroll_y);
+
+    // Auto-scroll to keep icon visible
+    // Icon 4 (index 4) is at rel_y=450..480, completely out of view when scroll_y=0
+    _ = win.scrollToKeepIconVisible(4);
+    try testing.expect(win.scroll_y > 0);
+    const c_top = win.getHeaderHeight();
+    const vh = win.getViewportHeight();
+    const icon_rel_y: i32 = 450;
+    try testing.expect(icon_rel_y >= win.scroll_y + c_top);
+    try testing.expect(icon_rel_y + 30 <= win.scroll_y + c_top + vh);
+}
+
+test "diosix-gui: scrollbar proximity detection, auto-hiding fade, and drag interaction" {
+    const allocator = testing.allocator;
+    var win = Window.init(allocator, 998, 100, 100, 400, 300, "PROXIMITY TEST");
+    defer win.deinit();
+    win.setOnScreen(true);
+
+    _ = try win.addIcon(Icon.createReadOnly(1, 20, 50, 360, 30, "Item 1"));
+    _ = try win.addIcon(Icon.createReadOnly(2, 20, 450, 360, 30, "Item 2"));
+
+    const track = win.getScrollbarTrackBox();
+    try testing.expect(track.x1 > track.x0);
+    try testing.expect(track.y1 > track.y0);
+
+    // 1. Mouse far away (> 60px) -> scrollbar alpha is 0
+    _ = win.handleMouseMove(undefined, 0, 0, false);
+    try testing.expectEqual(@as(u8, 0), win.scrollbar_alpha);
+
+    // 2. Mouse within proximity range (~25px from track) -> scrollbar alpha > 0 and < 240
+    const near_x = track.x0 - 25;
+    const near_y = track.y0 + 20;
+    _ = win.handleMouseMove(undefined, near_x, near_y, false);
+    try testing.expect(win.scrollbar_alpha > 0);
+    try testing.expect(win.scrollbar_alpha < 240);
+
+    // 3. Mouse directly over scrollbar track (<= 8px) -> scrollbar alpha is 240
+    _ = win.handleMouseMove(undefined, track.x0, track.y0 + 20, false);
+    try testing.expectEqual(@as(u8, 240), win.scrollbar_alpha);
+
+    // 4. Mouse click on thumb starts drag -> scrollbar alpha becomes 255 (active drag glow)
+    const thumb = win.getScrollbarThumbBox();
+    _ = win.handleMouseClick(undefined, thumb.x0 + 1, thumb.y0 + 2);
+    try testing.expect(win.is_dragging_scrollbar);
+    try testing.expectEqual(@as(u8, 255), win.scrollbar_alpha);
+
+    // 5. Drag mouse down -> scroll_y increases
+    const initial_scroll = win.scroll_y;
+    _ = win.handleMouseMove(undefined, thumb.x0 + 1, thumb.y0 + 40, true);
+    try testing.expect(win.scroll_y > initial_scroll);
+
+    // 6. Release mouse -> drag ends
+    _ = win.handleMouseRelease();
+    try testing.expect(!win.is_dragging_scrollbar);
+}
+
+test "diosix-gui: strict viewport clipping prevents content from overdrawing title bar and borders" {
+    const allocator = testing.allocator;
+    const s_w: u32 = 400;
+    const s_h: u32 = 400;
+    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
+    defer allocator.free(pixel_mem);
+    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
+    @memset(surface.pixels[0..s_w * s_h], fb.Color.BLACK);
+
+    // Create window at (50, 50), size 300x300, with title
+    var win = Window.init(allocator, 997, 50, 50, 300, 300, "CLIP STRICT TEST");
+    defer win.deinit();
+    win.setOnScreen(true);
+
+    // Header is y = 50..86. Content top is 86.
+    // Add an icon with high contrast color at rel_y = 40 (inside viewport initially)
+    const btn = Icon.createButton(1, 20, 40, 200, 30, "CLIPPED TEST BUTTON");
+    _ = try win.addIcon(btn);
+    // Add another icon at rel_y = 500 to make window scrollable
+    _ = try win.addIcon(Icon.createReadOnly(2, 20, 500, 200, 30, "TALL CONTENT"));
+
+    // Scroll by 60px so that the button's rendered y would be:
+    // win.y - scroll_y + rel_y = 50 - 60 + 40 = 30.
+    // Button area would be y = 30..60, which overlaps the window title bar area (y = 50..86) if unclipped!
+    _ = win.scrollTo(60);
+
+    // Render the window
+    win.render(&surface, 255);
+
+    // Viewport clip ensures everything above c_top (86) was clipped.
+    // Surface clip must be restored to full surface:
+    try testing.expectEqual(@as(i32, 0), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 400), surface.clip.x1);
+}
+
+test "diosix-gui: mouse wheel and PageUp/PageDown/Home/End keyboard navigation" {
+    const icon_sub = @import("subprograms/icon_test.zig");
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    // Activate Controls & Icons subprogram (tab 1)
+    gui.activateSubProgram(1);
+
+    var win_ctrls_opt: ?*Window = null;
+    for (gui.windows.items) |*w| {
+        if (w.id == icon_sub.WIN_CONTROLS_ID) {
+            win_ctrls_opt = w;
+            break;
+        }
+    }
+    const win_ctrls = win_ctrls_opt orelse return error.WindowNotFound;
+    try testing.expect(win_ctrls.is_onscreen);
+    try testing.expect(win_ctrls.isScrollable());
+
+    const max_s = win_ctrls.getMaxScroll();
+    try testing.expect(max_s > 0);
+
+    // 1. Mouse wheel down (delta = 1) -> scrolls down by 30px
+    gui.handleMouseScroll(win_ctrls.x + 50, win_ctrls.y + 50, 1);
+    try testing.expectEqual(@as(i32, 30), win_ctrls.scroll_y);
+
+    // 2. Mouse wheel up (delta = -1) -> scrolls back up
+    gui.handleMouseScroll(win_ctrls.x + 50, win_ctrls.y + 50, -1);
+    try testing.expectEqual(@as(i32, 0), win_ctrls.scroll_y);
+
+    // 3. Page Down key -> scrolls down by viewport height
+    gui.handleKey(gui_mod.Key.PAGE_DOWN, null, true);
+    try testing.expect(win_ctrls.scroll_y > 0);
+
+    // 4. Ctrl-Home scrolls to 0 even when focused inside text field
+    gui.handleKeyWithModifiers(gui_mod.Key.HOME, null, true, true, false);
+    try testing.expectEqual(@as(i32, 0), win_ctrls.scroll_y);
+
+    // 5. Ctrl-End scrolls to maximum scroll
+    gui.handleKeyWithModifiers(gui_mod.Key.END, null, true, true, false);
+    try testing.expectEqual(max_s, win_ctrls.scroll_y);
+
+    // 6. When focused on a non-text icon (e.g. slider at index 4), plain Home and End scroll pane
+    win_ctrls.setFocusedIndex(4);
+    gui.handleKey(gui_mod.Key.HOME, null, true);
+    try testing.expectEqual(@as(i32, 0), win_ctrls.scroll_y);
+
+    gui.handleKey(gui_mod.Key.END, null, true);
+    try testing.expectEqual(max_s, win_ctrls.scroll_y);
+
+    // 7. Page Up key scrolls back up
+    gui.handleKey(gui_mod.Key.PAGE_UP, null, true);
+    try testing.expect(win_ctrls.scroll_y < max_s);
+}
+
+test "diosix-gui: render scrollable pane screenshots for visual verification" {
+    const icon_sub = @import("subprograms/icon_test.zig");
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    const pixel_mem = try allocator.alloc(u32, 1280 * 800);
+    defer allocator.free(pixel_mem);
+    var surface = fb.Surface.init(pixel_mem.ptr, 1280, 800, 1280 * @sizeOf(u32));
+
+    gui.activateSubProgram(1);
+
+    var win_ctrls_opt: ?*Window = null;
+    for (gui.windows.items) |*w| {
+        if (w.id == icon_sub.WIN_CONTROLS_ID) {
+            win_ctrls_opt = w;
+            break;
+        }
+    }
+    const win = win_ctrls_opt.?;
+
+    // 1. Mouse far away: scrollbar is hidden
+    gui.handleMouseMove(1000, 700, false);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_scroll_away.ppm");
+
+    // 2. Mouse near scrollbar: scrollbar fades in
+    const track = win.getScrollbarTrackBox();
+    gui.handleMouseMove(track.x0 - 15, track.y0 + 50, false);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_scroll_near.ppm");
+
+    // 3. Mouse drags scrollbar thumb down: pane scrolled, thumb active cyan glow
+    _ = win.scrollTo(120);
+    win.scrollbar_alpha = 255;
+    win.is_dragging_scrollbar = true;
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_scroll_drag.ppm");
+}
+
+
 
 
 

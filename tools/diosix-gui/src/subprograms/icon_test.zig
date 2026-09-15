@@ -34,6 +34,14 @@ pub const ICON_RO_LABEL3_ID: u32 = 2092;
 pub const ICON_RO_LABEL4_ID: u32 = 2095;
 pub const ICON_RO_LABEL5_ID: u32 = 2093;
 pub const ICON_RO_LABEL6_ID: u32 = 2094;
+pub const ICON_RO_LABEL7_ID: u32 = 2096;
+pub const ICON_PROGRESS_TEST_ID: u32 = 2007;
+pub const ICON_RO_LABEL8_ID: u32 = 2097;
+pub const ICON_BTN_RESET_DEFAULTS_ID: u32 = 2008;
+pub const ICON_BTN_RUN_BENCHMARK_ID: u32 = 2009;
+pub const ICON_RO_LABEL9_ID: u32 = 2098;
+pub const ICON_SLIDER_TIMESLICE_ID: u32 = 2010;
+pub const ICON_BTN_EXPORT_LOGS_ID: u32 = 2011;
 pub const ICON_RO_TOP_LABEL_ID: u32 = 2190;
 pub const ICON_RO_BOT_LABEL_ID: u32 = 2191;
 
@@ -237,9 +245,52 @@ pub fn onReadWriteTextChanged(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *I
     updateInspector(gui_ctx);
 }
 
+pub fn onResetDefaults(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+    _ = win_ctx;
+    _ = icon;
+    const gui: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+    gui.setWindowTransparency(50);
+    gui.setBlurStrength(50);
+    if (gui.findIcon(WIN_CONTROLS_ID, ICON_SLIDER_TRANSPARENCY_ID)) |sl| sl.setSliderValue(50);
+    if (gui.findIcon(WIN_CONTROLS_ID, ICON_SLIDER_BLUR_ID)) |sl| sl.setSliderValue(50);
+    if (gui.findIcon(WIN_CONTROLS_ID, ICON_SLIDER_VCPU_ID)) |sl| sl.setSliderValue(75);
+    if (gui.findIcon(WIN_CONTROLS_ID, ICON_SLIDER_TIMESLICE_ID)) |sl| sl.setSliderValue(10);
+    if (gui.findIcon(WIN_CONTROLS_ID, ICON_PROGRESS_TEST_ID)) |p| p.setProgress(65);
+    global_test_data.setLog("[ACTION] Reset all controls and sliders to default configurations.");
+    updateInspector(gui_ctx);
+}
+
+pub fn onRunBenchmark(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+    _ = win_ctx;
+    _ = icon;
+    const gui: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+    if (gui.findIcon(WIN_CONTROLS_ID, ICON_PROGRESS_TEST_ID)) |p| {
+        const next_val = if (p.progress_val + 15 > 100) 20 else p.progress_val + 15;
+        p.setProgress(next_val);
+    }
+    global_test_data.setLog("[BENCHMARK] Executed hypervisor stress workload pass.");
+    updateInspector(gui_ctx);
+}
+
+pub fn onTimesliceSliderChanged(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+    _ = win_ctx;
+    var buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "[SCHEDULER] Timeslice quantum set to {d}ms", .{icon.slider_val}) catch "";
+    global_test_data.setLog(msg);
+    updateInspector(gui_ctx);
+}
+
+pub fn onExportLogs(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+    _ = win_ctx;
+    _ = icon;
+    global_test_data.setLog("[EXPORT] Telemetry and trace records exported to serial console.");
+    updateInspector(gui_ctx);
+}
+
 fn updateInspector(gui_ctx: *anyopaque) void {
     const gui: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
     if (gui.findIcon(WIN_INSPECTOR_ID, ICON_INSPECTOR_TEXT_ID)) |ic| {
         ic.setText(global_test_data.inspector_log[0..global_test_data.inspector_len]);
     }
 }
+
