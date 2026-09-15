@@ -121,6 +121,11 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/power.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/audio.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/intro.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/noise.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/banner_font.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/banner_font.bin"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/banner_glow.bin"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/cloud_map.bin"));
     run_buildroot.addFileInput(b.path("tools/driver/diosix.c"));
     run_buildroot.stdio = .inherit;
 
@@ -324,7 +329,7 @@ pub fn build(b: *std.Build) !void {
     }
     if (qemu_gl_opt) {
         try qemu_gui_args.append(b.allocator, "-display");
-        try qemu_gui_args.append(b.allocator, "gtk,gl=on");
+        try qemu_gui_args.append(b.allocator, "gtk,gl=on,zoom-to-fit=off");
         try qemu_gui_args.append(b.allocator, "-device");
         try qemu_gui_args.append(b.allocator, "virtio-gpu-gl-pci,xres=1280,yres=800");
     } else {

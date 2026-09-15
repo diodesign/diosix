@@ -5,6 +5,7 @@ zig-out/
 # binaries and build outputs
 *.elf
 *.bin
+!tools/diosix-gui/src/*.bin
 *.iso
 *.img
 *.tmp*

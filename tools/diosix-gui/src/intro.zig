@@ -11,6 +11,7 @@ const std = @import("std");
 const linux = std.os.linux;
 const fb = @import("framebuffer.zig");
 const font = @import("font.zig");
+const banner_font = @import("banner_font.zig");
 const cursor_mod = @import("cursor.zig");
 const gui_mod = @import("gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
@@ -290,20 +291,22 @@ fn drawHorizonBeam(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
 
     if (beam_intensity <= 0.01) return;
 
-    const max_alpha: f32 = 150.0 * beam_intensity;
-    const beam_half_h: i32 = 32;
+    // Subtle, translucent atmospheric horizon glow matching the character aura
+    const max_alpha: f32 = 60.0 * beam_intensity;
+    const beam_half_h: i32 = 28;
     const y0 = @max(0, center_y - beam_half_h);
     const y1 = @min(@as(i32, @intCast(h)), center_y + beam_half_h);
 
     var y = y0;
     while (y < y1) : (y += 1) {
         const dy: f32 = @floatFromInt(@abs(y - center_y));
-        const falloff = std.math.clamp(1.0 - (dy / @as(f32, @floatFromInt(beam_half_h))), 0.0, 1.0);
+        const norm_y = dy / @as(f32, @floatFromInt(beam_half_h));
+        const falloff = std.math.clamp(1.0 - norm_y, 0.0, 1.0);
         const alpha: u8 = @intFromFloat(max_alpha * falloff * falloff);
         if (alpha == 0) continue;
 
-        // Beam color: warm white core fading into radiant cyan
-        const beam_color = if (dy < 6.0) @as(u32, 0x00F8FCFF) else @as(u32, 0x004CD8F8);
+        // Soft celestial ice-white core smoothly transitioning into misty starlight cyan
+        const beam_color = interpolateColor(0x00F0F8FF, 0x0050B8E8, norm_y);
 
         var x: i32 = 0;
         const w_i: i32 = @intCast(w);
@@ -325,26 +328,22 @@ fn drawBrandingAnimation(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
     if (t < 500 or t >= 4200) return;
 
     const letters = "diosix";
-    const scale: u32 = 3;
     const spacing: i32 = 68; // Wide letter spacing
-    const brand_total_width: i32 = spacing * 5 + 32;
+    const brand_total_width: i32 = spacing * 5 + 25;
     const start_x: i32 = @as(i32, @intCast(w / 2)) - @divTrunc(brand_total_width, 2);
-    const center_y: i32 = @as(i32, @intCast(h / 2)) - 32;
+    const center_y: i32 = @as(i32, @intCast(h / 2)) - 26;
 
-    // Peak 1 radiant soft white corona pulse (around 1700ms - 3000ms)
-    var corona_pulse: f32 = 0.0;
+    // Peak 1 character glow pulse: starts when all 6 letters are shown (1700ms),
+    // reaches maximum radiance at the apex of the chime (2100ms),
+    // and gently fades back to crisp letters before fade-out (3000ms).
+    var char_glow_pulse: f32 = 0.0;
     if (t >= 1700 and t <= 3000) {
         if (t <= 2100) {
-            corona_pulse = @as(f32, @floatFromInt(t - 1700)) / 400.0;
+            char_glow_pulse = @as(f32, @floatFromInt(t - 1700)) / 400.0;
         } else {
-            corona_pulse = 1.0 - (@as(f32, @floatFromInt(t - 2100)) / 900.0);
+            char_glow_pulse = 1.0 - (@as(f32, @floatFromInt(t - 2100)) / 900.0);
         }
-        corona_pulse = easeInOut(corona_pulse);
-    }
-
-    // Draw soft white aura behind typography
-    if (corona_pulse > 0.02) {
-        drawCoronaAura(surface, start_x + @divTrunc(brand_total_width, 2), center_y + 24, corona_pulse);
+        char_glow_pulse = easeInOut(char_glow_pulse);
     }
 
     // Render individual letters:
@@ -380,110 +379,17 @@ fn drawBrandingAnimation(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
         const lx = start_x + @as(i32, @intCast(idx)) * spacing;
         const ly = center_y;
 
-        drawScaledGlyph(surface, char, lx, ly, scale, fb.Color.WHITE, letter_alpha);
-    }
-}
-
-// Draws radiant smooth soft white Gaussian aura behind typography at Peak 1
-fn drawCoronaAura(surface: *fb.Surface, cx: i32, cy: i32, intensity: f32) void {
-    const rx: i32 = 240;
-    const ry: i32 = 70;
-    const max_a = @as(f32, 95.0 * intensity);
-    const rx_f: f32 = @floatFromInt(rx);
-    const ry_f: f32 = @floatFromInt(ry);
-
-    var y = cy - ry;
-    while (y <= cy + ry) : (y += 1) {
-        if (y < 0 or y >= @as(i32, @intCast(surface.height))) continue;
-        const dy: f32 = @floatFromInt(y - cy);
-        const ny = dy / ry_f;
-
-        var x = cx - rx;
-        while (x <= cx + rx) : (x += 1) {
-            if (x < 0 or x >= @as(i32, @intCast(surface.width))) continue;
-            const dx: f32 = @floatFromInt(x - cx);
-            const nx = dx / rx_f;
-
-            const d_sq = nx * nx + ny * ny;
-            if (d_sq >= 1.0) continue;
-
-            const falloff = (1.0 - d_sq) * (1.0 - d_sq);
-            const alpha: u8 = @intFromFloat(max_a * falloff);
-            if (alpha > 0) {
-                // Soft white inner core blending to ethereal moonlight white / light ice cyan glow
-                const aura_color: u32 = if (falloff > 0.40) 0x00FFFFFF else 0x00E2F0F8;
-                const bg = surface.getPixel(x, y);
-                surface.setPixel(x, y, fb.blendPixel(bg, aura_color, alpha));
+        // 1. Radiant translucent aura emanating softly around the character outlines
+        // Soft ethereal moonlight white (0x00EAF4FF) creates a delicate atmospheric haze
+        if (char_glow_pulse > 0.01) {
+            const glow_a: u8 = @intFromFloat(@as(f32, @floatFromInt(letter_alpha)) * char_glow_pulse * 0.40);
+            if (glow_a > 0) {
+                banner_font.drawBannerGlyphGlow(surface, char, lx, ly, 0x00EAF4FF, glow_a);
             }
         }
-    }
-}
 
-// Draws scaled glyph from Questrial font table with subtle soft edge glow
-fn drawScaledGlyph(surface: *fb.Surface, char: u8, x: i32, y: i32, scale: u32, color: u32, alpha: u8) void {
-    if (char < 32 or char > 126) return;
-    const g = font.GLYPHS[char - 32];
-    if (g.width == 0 or g.height == 0) return;
-
-    const s: i32 = @intCast(scale);
-    const gx = x + @as(i32, g.offset_x) * s;
-    const gy = y + @as(i32, g.offset_y) * s;
-
-    // First pass: subtle glowing shadow / aura (+1, +1)
-    if (scale >= 2) {
-        var row: usize = 0;
-        while (row < g.height) : (row += 1) {
-            var col: usize = 0;
-            while (col < g.width) : (col += 1) {
-                const raw_a = font.GLYPH_BITMAPS[g.bitmap_offset + row * g.width + col];
-                if (raw_a < 120) continue;
-
-                const glow_a: u8 = @intCast((@as(u32, raw_a) * @as(u32, alpha) / 4) >> 8);
-                if (glow_a == 0) continue;
-
-                var dy: i32 = 0;
-                while (dy < s) : (dy += 1) {
-                    const py = gy + @as(i32, @intCast(row)) * s + dy + 1;
-                    if (py < 0 or py >= @as(i32, @intCast(surface.height))) continue;
-                    var dx: i32 = 0;
-                    while (dx < s) : (dx += 1) {
-                        const px = gx + @as(i32, @intCast(col)) * s + dx + 1;
-                        if (px < 0 or px >= @as(i32, @intCast(surface.width))) continue;
-                        const bg = surface.getPixel(px, py);
-                        surface.setPixel(px, py, fb.blendPixel(bg, 0x00206088, glow_a));
-                    }
-                }
-            }
-        }
-    }
-
-    // Main pass
-    var row: usize = 0;
-    while (row < g.height) : (row += 1) {
-        var col: usize = 0;
-        while (col < g.width) : (col += 1) {
-            const raw_a = font.GLYPH_BITMAPS[g.bitmap_offset + row * g.width + col];
-            if (raw_a == 0) continue;
-
-            const effective_a: u8 = @intCast((@as(u32, raw_a) * @as(u32, alpha)) >> 8);
-            if (effective_a == 0) continue;
-
-            // Fill scale x scale pixel block
-            var dy: i32 = 0;
-            while (dy < s) : (dy += 1) {
-                const py = gy + @as(i32, @intCast(row)) * s + dy;
-                if (py < 0 or py >= @as(i32, @intCast(surface.height))) continue;
-
-                var dx: i32 = 0;
-                while (dx < s) : (dx += 1) {
-                    const px = gx + @as(i32, @intCast(col)) * s + dx;
-                    if (px < 0 or px >= @as(i32, @intCast(surface.width))) continue;
-
-                    const bg = surface.getPixel(px, py);
-                    surface.setPixel(px, py, fb.blendPixel(bg, color, effective_a));
-                }
-            }
-        }
+        // 2. Crisp native 52px antialiased Questrial glyph
+        banner_font.drawBannerGlyph(surface, char, lx, ly, fb.Color.WHITE, letter_alpha);
     }
 }
 

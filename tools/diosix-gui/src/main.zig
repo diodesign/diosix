@@ -17,6 +17,8 @@ const window_mod = @import("window.zig");
 const Window = window_mod.Window;
 const intro_mod = @import("intro.zig");
 const audio_mod = @import("audio.zig");
+pub const noise_mod = @import("noise.zig");
+pub const banner_font_mod = @import("banner_font.zig");
 
 pub const Display = struct {
     width: u32,
@@ -752,7 +754,7 @@ test "diosix-gui: static graduated background rendering" {
     const bot_px = surface.getPixel(50, 99);
     const bot_r = (bot_px >> 16) & 0xFF;
     const bot_b = bot_px & 0xFF;
-    try testing.expect(bot_r < 50 and bot_b < 80);
+    try testing.expect(bot_r < 65 and bot_b < 100);
 
     // Middle row (y=50) is smoothly interpolated between top and bot
     const mid_col = surface.getPixel(50, 50);

@@ -164,6 +164,7 @@ pub fn blendPixel(bg: u32, fg: u32, alpha: u8) u32 {
     return (r << 16) | (g << 8) | b;
 }
 
+pub const noise = @import("noise.zig");
 pub const CLOUD_MAP: []const u8 = @embedFile("cloud_map.bin");
 pub const CLOUD_MAP_DIMENSION: usize = 256;
 pub const CLOUD_MAP_MASK: usize = CLOUD_MAP_DIMENSION - 1;
@@ -869,5 +870,27 @@ test "framebuffer: deterministic backdrop blur between full box and sub-box" {
             try testing.expectEqual(mem1[idx], mem2[idx]);
         }
     }
+}
+
+test "framebuffer: cloud map tessellation and periodic continuity" {
+    try std.testing.expectEqual(@as(usize, 65536), CLOUD_MAP.len);
+    // Verify seamless wrap at boundaries
+    var max_seam_x: u32 = 0;
+    var max_seam_y: u32 = 0;
+    for (0..256) |y| {
+        const left = @as(i32, CLOUD_MAP[y * 256 + 0]);
+        const right = @as(i32, CLOUD_MAP[y * 256 + 255]);
+        const d: u32 = @intCast(@abs(left - right));
+        if (d > max_seam_x) max_seam_x = d;
+    }
+    for (0..256) |x| {
+        const top = @as(i32, CLOUD_MAP[0 * 256 + x]);
+        const bot = @as(i32, CLOUD_MAP[255 * 256 + x]);
+        const d: u32 = @intCast(@abs(top - bot));
+        if (d > max_seam_y) max_seam_y = d;
+    }
+    // Discontinuity across periodic edge must be continuous 1-pixel derivative (<= 20), not jump of 136
+    try std.testing.expect(max_seam_x <= 20);
+    try std.testing.expect(max_seam_y <= 20);
 }
 
