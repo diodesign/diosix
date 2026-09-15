@@ -11,12 +11,11 @@ pub const CURSOR_HEIGHT: u32 = 18;
 
 const K = fb.Color.BLACK;
 const W = fb.Color.WHITE;
-const G = fb.Color.GLOVE_SHADING;
-const C = fb.Color.GLOVE_CUFF;
 const T = fb.Color.TRANSPARENT;
 
-// Pointing hand glove cursor (pointing horizontally right/up)
+// Clean all-white mouse pointer arrow with solid black contrast outline
 pub const POINTER_PIXELS = [_]u32{
+    K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
     K, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
     K, W, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
     K, W, W, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
@@ -26,34 +25,33 @@ pub const POINTER_PIXELS = [_]u32{
     K, W, W, W, W, W, W, K, T, T, T, T, T, T, T, T, T, T,
     K, W, W, W, W, W, W, W, K, T, T, T, T, T, T, T, T, T,
     K, W, W, W, W, W, W, W, W, K, T, T, T, T, T, T, T, T,
-    K, W, W, W, W, W, W, W, W, W, K, T, T, T, T, T, T, T,
-    K, W, W, W, W, W, K, K, K, K, K, K, T, T, T, T, T, T,
-    K, W, W, G, W, W, K, T, T, T, T, T, T, T, T, T, T, T,
-    K, W, G, K, W, W, G, K, T, T, T, T, T, T, T, T, T, T,
-    K, G, K, T, K, W, W, G, K, T, T, T, T, T, T, T, T, T,
-    K, K, T, T, K, W, W, G, K, T, T, T, T, T, T, T, T, T,
-    T, T, T, T, T, K, C, C, K, T, T, T, T, T, T, T, T, T,
-    T, T, T, T, T, K, C, C, K, T, T, T, T, T, T, T, T, T,
-    T, T, T, T, T, T, K, K, T, T, T, T, T, T, T, T, T, T,
+    K, W, W, W, W, W, K, K, K, K, K, T, T, T, T, T, T, T,
+    K, W, W, K, W, W, K, T, T, T, T, T, T, T, T, T, T, T,
+    K, W, K, T, K, W, W, K, T, T, T, T, T, T, T, T, T, T,
+    K, K, T, T, T, K, W, W, K, T, T, T, T, T, T, T, T, T,
+    K, T, T, T, T, K, W, W, K, T, T, T, T, T, T, T, T, T,
+    T, T, T, T, T, T, K, W, W, K, T, T, T, T, T, T, T, T,
+    T, T, T, T, T, T, K, W, W, K, T, T, T, T, T, T, T, T,
+    T, T, T, T, T, T, T, K, K, T, T, T, T, T, T, T, T, T,
 };
 
-// Keyboard navigation pointing hand marker (points right at active menu row)
-pub const MARKER_WIDTH: u32 = 16;
+// Keyboard navigation pointing marker (clean all-white arrow pointing right at active icon)
+pub const MARKER_WIDTH: u32 = 12;
 pub const MARKER_HEIGHT: u32 = 12;
 
 pub const HAND_MARKER_PIXELS = [_]u32{
-    T, T, T, T, T, T, T, T, T, K, K, T, T, T, T, T,
-    T, T, T, T, T, T, T, K, K, W, W, K, T, T, T, T,
-    K, K, K, K, K, K, K, W, W, W, W, W, K, T, T, T,
-    K, C, C, W, W, W, W, W, W, W, W, W, W, K, T, T,
-    K, C, C, W, W, W, W, W, W, W, W, W, W, W, K, T,
-    K, C, C, W, W, W, W, W, W, W, W, W, W, W, W, K,
-    K, C, C, W, W, W, W, W, W, W, W, W, W, W, K, T,
-    K, C, C, W, W, W, W, W, W, W, W, W, W, K, T, T,
-    K, K, K, K, K, K, K, W, W, W, W, W, K, T, T, T,
-    T, T, T, T, T, T, T, K, K, W, W, K, T, T, T, T,
-    T, T, T, T, T, T, T, T, T, K, K, T, T, T, T, T,
-    T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
+    T, T, T, T, T, K, K, T, T, T, T, T,
+    T, T, T, K, K, W, W, K, T, T, T, T,
+    K, K, K, W, W, W, W, W, K, T, T, T,
+    K, W, W, W, W, W, W, W, W, K, T, T,
+    K, W, W, W, W, W, W, W, W, W, K, T,
+    K, W, W, W, W, W, W, W, W, W, W, K,
+    K, W, W, W, W, W, W, W, W, W, K, T,
+    K, W, W, W, W, W, W, W, W, K, T, T,
+    K, K, K, W, W, W, W, W, K, T, T, T,
+    T, T, T, K, K, W, W, K, T, T, T, T,
+    T, T, T, T, T, K, K, T, T, T, T, T,
+    T, T, T, T, T, T, T, T, T, T, T, T,
 };
 
 pub const Cursor = struct {
@@ -113,3 +111,43 @@ pub const Cursor = struct {
         }
     }
 };
+
+test "cursor: verify pointer sprite dimensions and pure white interior" {
+    try std.testing.expectEqual(@as(usize, CURSOR_WIDTH * CURSOR_HEIGHT), POINTER_PIXELS.len);
+    try std.testing.expectEqual(K, POINTER_PIXELS[0]); // Hotspot at (0,0) is black point
+
+    var white_count: usize = 0;
+    var black_count: usize = 0;
+    for (POINTER_PIXELS) |p| {
+        if (p == W) {
+            white_count += 1;
+        } else if (p == K) {
+            black_count += 1;
+        } else {
+            try std.testing.expectEqual(T, p); // Every other pixel must be transparent
+        }
+    }
+
+    try std.testing.expect(white_count > 0);
+    try std.testing.expect(black_count > 0);
+}
+
+test "cursor: verify hand marker sprite dimensions and pure white interior" {
+    try std.testing.expectEqual(@as(usize, MARKER_WIDTH * MARKER_HEIGHT), HAND_MARKER_PIXELS.len);
+    try std.testing.expectEqual(K, HAND_MARKER_PIXELS[5 * MARKER_WIDTH + (MARKER_WIDTH - 1)]); // Rightmost tip at row 5 is black point
+
+    var white_count: usize = 0;
+    var black_count: usize = 0;
+    for (HAND_MARKER_PIXELS) |p| {
+        if (p == W) {
+            white_count += 1;
+        } else if (p == K) {
+            black_count += 1;
+        } else {
+            try std.testing.expectEqual(T, p); // Every other pixel must be transparent (no dark cuff)
+        }
+    }
+
+    try std.testing.expect(white_count > 0);
+    try std.testing.expect(black_count > 0);
+}

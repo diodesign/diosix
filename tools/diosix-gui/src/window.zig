@@ -373,6 +373,8 @@ pub const Window = struct {
         }
 
         // 3. Render all icons inside window (icons do not overlap)
+        const prev_win_clip = surface.pushClip(box);
+        defer surface.popClip(prev_win_clip);
         for (self.icons.items) |*icon| {
             icon.render(surface, self.x, self.y, self.is_active);
         }

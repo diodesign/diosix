@@ -429,7 +429,8 @@ pub const Icon = struct {
         // If this icon is focused and window is active, render keyboard focus hand marker
         // (drawn before establishing icon content clipping so the hand can point in the outer margin)
         if (self.is_focused and is_win_active) {
-            cursor_mod.Cursor.drawFocusHand(surface, sx - 20, sy + @divTrunc(@as(i32, @intCast(self.height)) - 12, 2));
+            const marker_x = @max(win_x + 4, sx - @as(i32, @intCast(cursor_mod.MARKER_WIDTH)) - 2);
+            cursor_mod.Cursor.drawFocusHand(surface, marker_x, sy + @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(cursor_mod.MARKER_HEIGHT)), 2));
         }
 
         // Establish icon bounding box clipping
