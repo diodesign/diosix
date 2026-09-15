@@ -509,6 +509,66 @@ pub fn drawTextWithShadow(surface: *fb.Surface, text: []const u8, x: i32, y: i32
     drawText(surface, text, x, y, fg_color);
 }
 
+// Render antialiased Questrial text modulated by master alpha (0 - 255)
+pub fn drawTextWithAlpha(surface: *fb.Surface, text: []const u8, x: i32, y: i32, color: u32, master_alpha: u8) void {
+    if (master_alpha == 0 or surface.clip.isEmpty()) return;
+    if (y + @as(i32, @intCast(GLYPH_HEIGHT)) <= surface.clip.y0 or y >= surface.clip.y1) return;
+
+    var cur_x = x;
+    for (text) |c| {
+        if (c >= 32 and c <= 126) {
+            const g = GLYPHS[c - 32];
+            if (g.width > 0 and g.height > 0) {
+                const gx = cur_x + g.offset_x;
+                const gy = y + g.offset_y;
+
+                if (gx >= surface.clip.x1) break;
+
+                const g_right = gx + @as(i32, @intCast(g.width));
+                if (g_right <= surface.clip.x0) {
+                    cur_x += g.advance;
+                    continue;
+                }
+
+                var row: usize = 0;
+                while (row < g.height) : (row += 1) {
+                    const py = gy + @as(i32, @intCast(row));
+                    if (py < surface.clip.y0 or py >= surface.clip.y1) continue;
+
+                    var col: usize = 0;
+                    while (col < g.width) : (col += 1) {
+                        const px = gx + @as(i32, @intCast(col));
+                        if (px < surface.clip.x0 or px >= surface.clip.x1) continue;
+
+                        const raw_a = GLYPH_BITMAPS[g.bitmap_offset + row * g.width + col];
+                        if (raw_a > 0) {
+                            const eff_a: u8 = @intCast((@as(u32, raw_a) * @as(u32, master_alpha)) >> 8);
+                            if (eff_a > 0) {
+                                const bg = surface.getPixel(px, py);
+                                surface.setPixel(px, py, fb.blendPixel(bg, color, eff_a));
+                            }
+                        }
+                    }
+                }
+            }
+            cur_x += g.advance;
+        } else if (c == ' ') {
+            if (cur_x >= surface.clip.x1) break;
+            cur_x += SPACE_ADVANCE;
+        } else if (c == '\t') {
+            if (cur_x >= surface.clip.x1) break;
+            cur_x += TAB_ADVANCE;
+        }
+    }
+}
+
+// Draw antialiased Questrial text with 1px drop shadow modulated by master alpha
+pub fn drawTextWithShadowAlpha(surface: *fb.Surface, text: []const u8, x: i32, y: i32, fg_color: u32, shadow_color: u32, master_alpha: u8) void {
+    if (master_alpha == 0) return;
+    drawTextWithAlpha(surface, text, x + 1, y + 1, shadow_color, master_alpha);
+    drawTextWithAlpha(surface, text, x, y, fg_color, master_alpha);
+}
+
 // Measure exact rendered pixel width of string
 pub fn measureString(text: []const u8) u32 {
     var cur_w: u32 = 0;

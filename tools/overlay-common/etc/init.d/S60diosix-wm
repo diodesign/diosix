@@ -12,7 +12,13 @@ case "$1" in
         GUI_BIN="/usr/bin/diosix-wm"
     fi
 
+    if pidof diosix-gui >/dev/null 2>&1 || pidof diosix-wm >/dev/null 2>&1; then
+        echo "Diosix GUI is already running."
+        exit 0
+    fi
+
     if [ -n "$GUI_BIN" ] && [ -c /dev/dri/card0 -o -c /dev/fb0 ]; then
+        [ -x /usr/sbin/diosix-alsa-init ] && /usr/sbin/diosix-alsa-init
         echo "Starting Diosix GUI ($GUI_BIN)..."
         $GUI_BIN > /var/log/diosix-gui.log 2>&1 &
     else

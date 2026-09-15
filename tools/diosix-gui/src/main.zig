@@ -15,6 +15,8 @@ const icon_mod = @import("icon.zig");
 const Icon = icon_mod.Icon;
 const window_mod = @import("window.zig");
 const Window = window_mod.Window;
+const intro_mod = @import("intro.zig");
+const audio_mod = @import("audio.zig");
 
 pub const Display = struct {
     width: u32,
@@ -236,6 +238,41 @@ pub const KEY_DELETE: u16 = 111;
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
+    // Singleton lock: prevent concurrent GUI processes from conflicting on display
+    const pid_file_path = "/tmp/.diosix-gui.pid";
+    const open_res = linux.open(pid_file_path, .{ .ACCMODE = .RDONLY }, 0);
+    if (@as(isize, @bitCast(open_res)) >= 0) {
+        const pfd: i32 = @intCast(open_res);
+        var pbuf: [32]u8 = undefined;
+        const read_res = linux.read(pfd, &pbuf, pbuf.len);
+        _ = linux.close(pfd);
+        const signed_read: isize = @bitCast(read_res);
+        if (signed_read > 0) {
+            const n: usize = @intCast(signed_read);
+            const pid_str = std.mem.trim(u8, pbuf[0..n], " \r\n\t");
+            if (std.fmt.parseInt(i32, pid_str, 10)) |other_pid| {
+                const kill_res = linux.kill(other_pid, @enumFromInt(0));
+                const signed_kill: isize = @bitCast(kill_res);
+                if (signed_kill == 0) {
+                    std.debug.print("diosix-gui: Instance already running (PID {d}). Exiting.\n", .{other_pid});
+                    return;
+                }
+            } else |_| {}
+        }
+    }
+
+    const creat_res = linux.open(pid_file_path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    if (@as(isize, @bitCast(creat_res)) >= 0) {
+        const cfd: i32 = @intCast(creat_res);
+        const my_pid = linux.getpid();
+        var pbuf: [32]u8 = undefined;
+        const s = std.fmt.bufPrint(&pbuf, "{d}\n", .{my_pid}) catch "";
+        if (s.len > 0) {
+            _ = linux.write(cfd, s.ptr, s.len);
+        }
+        _ = linux.close(cfd);
+    }
+
     var stdout_buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&stdout_buf, "Starting Diosix Monolithic GUI (diosix-gui)...\n", .{}) catch return;
     _ = linux.write(1, msg.ptr, msg.len);
@@ -270,7 +307,80 @@ pub fn main() !void {
         }
     }
 
-    // 4. Initial Render Frame (Full Screen Composited)
+    // 4. Graphical Intro Animation and Audio Chime (Plays once per boot)
+    var audio_player = audio_mod.AudioPlayer{};
+    defer audio_player.stop();
+
+    if (intro_mod.shouldPlayIntro()) {
+        std.debug.print("Playing Diosix graphical intro chime...\n", .{});
+        audio_player.start();
+
+        var intro_state = intro_mod.IntroState.init(getMilliTimestamp());
+        var intro_last_time: i64 = intro_state.start_time_ms;
+
+        while (intro_state.is_active) {
+            const now = getMilliTimestamp();
+            const dt: u32 = @intCast(@max(1, now - intro_last_time));
+            intro_last_time = now;
+
+            // Check if user pressed key or mouse to skip intro
+            var pfds: [MAX_INPUT_DEVICES]linux.pollfd = undefined;
+            for (input_fds[0..input_count], 0..) |fd, i| {
+                pfds[i] = linux.pollfd{
+                    .fd = fd,
+                    .events = linux.POLL.IN,
+                    .revents = 0,
+                };
+            }
+            const poll_res = linux.poll(&pfds, input_count, 0);
+            const signed_poll: isize = @bitCast(poll_res);
+            if (signed_poll > 0) {
+                var i: usize = 0;
+                var skip_requested = false;
+                while (i < input_count) : (i += 1) {
+                    if ((pfds[i].revents & linux.POLL.IN) != 0) {
+                        var ev_buf: [32]InputEvent = undefined;
+                        const rd = linux.read(pfds[i].fd, @ptrCast(&ev_buf), @sizeOf(@TypeOf(ev_buf)));
+                        const signed_rd: isize = @bitCast(rd);
+                        if (signed_rd > 0) {
+                            const count = @as(usize, @intCast(signed_rd)) / @sizeOf(InputEvent);
+                            for (ev_buf[0..count]) |ev| {
+                                // Only explicit Escape (code 1) or Space (code 57) keypress skips the intro
+                                if (ev.type == EV_KEY and ev.value == 1 and (ev.code == 1 or ev.code == 57)) {
+                                    skip_requested = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (skip_requested) break;
+                }
+                if (skip_requested) {
+                    audio_player.stop();
+                    intro_state.skip();
+                    break;
+                }
+            }
+
+            intro_state.tick(dt, now, display.width, display.height);
+            intro_state.render(&display.backbuffer, &gui);
+            display.flushDamage(fb.Box.fromPosSize(0, 0, display.width, display.height));
+
+            // Pace intro frame rate (~60 FPS)
+            const frame_end = getMilliTimestamp();
+            const frame_dur = frame_end - now;
+            if (frame_dur < FRAME_INTERVAL_MS) {
+                var sleep_ts = linux.timespec{
+                    .sec = 0,
+                    .nsec = @intCast((FRAME_INTERVAL_MS - frame_dur) * 1_000_000),
+                };
+                _ = linux.nanosleep(&sleep_ts, null);
+            }
+        }
+        std.debug.print("Intro sequence completed (elapsed {d}ms). Handing over to live desktop.\n", .{intro_state.elapsed_ms});
+    }
+
+    // 5. Initial Render Frame (Full Screen Composited)
     gui.markFullDirty();
     const init_damage = gui.renderDamaged(&display.clean_buffer);
     display.backbuffer.copyBoxFrom(&display.clean_buffer, init_damage);
@@ -1235,6 +1345,79 @@ test "diosix-gui: render guest screenshots for visualization" {
     gui.markFullDirty();
     _ = gui.renderDamaged(&surface);
     try writePpmFile(&surface, "/tmp/diosix_guests_fullscreen.ppm");
+}
+
+test "diosix-gui: render intro animation frames for the two warm moments" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    const pixel_mem = try allocator.alloc(u32, 1280 * 800);
+    defer allocator.free(pixel_mem);
+    var surface = fb.Surface.init(pixel_mem.ptr, 1280, 800, 1280 * @sizeOf(u32));
+
+    var intro = intro_mod.IntroState.init(0);
+
+    // Capture key animation moments for verification:
+    // Spell-out left to right:
+    intro.elapsed_ms = 700; // 'd'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step1_d.ppm");
+
+    intro.elapsed_ms = 900; // 'di'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step2_di.ppm");
+
+    intro.elapsed_ms = 1100; // 'dio'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step3_dio.ppm");
+
+    intro.elapsed_ms = 1300; // 'dios'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step4_dios.ppm");
+
+    intro.elapsed_ms = 1500; // 'diosi'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step5_diosi.ppm");
+
+    intro.elapsed_ms = 1700; // 'diosix'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step6_diosix.ppm");
+
+    // Moment 1 peak with soft white corona:
+    intro.elapsed_ms = 2100; // 'diosix' + soft white corona
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_moment1.ppm");
+
+    // Fade-out left to right:
+    intro.elapsed_ms = 3200; // ' iosix'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step7_iosix.ppm");
+
+    intro.elapsed_ms = 3400; // '  osix'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step8_osix.ppm");
+
+    intro.elapsed_ms = 3600; // '   six'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step9_six.ppm");
+
+    intro.elapsed_ms = 3800; // '    ix'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step10_ix.ppm");
+
+    intro.elapsed_ms = 4000; // '     x'
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_step11_x.ppm");
+
+    // Moment 2 GUI Bloom & Settled:
+    intro.elapsed_ms = 6000;
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_moment2.ppm");
+
+    intro.elapsed_ms = 8000;
+    intro.render(&surface, &gui);
+    try writePpmFile(&surface, "/tmp/diosix_intro_settled.ppm");
 }
 
 test "diosix-gui: graphical clipping of icons to bounding box" {

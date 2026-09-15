@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# S45alsa-init: Unmute ALSA audio devices and maximize playback volume on boot
+#
+
+case "$1" in
+  start)
+    if [ -x /usr/sbin/diosix-alsa-init ]; then
+        /usr/sbin/diosix-alsa-init
+    fi
+    ;;
+  stop)
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
+
+exit 0

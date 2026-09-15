@@ -34,6 +34,8 @@ pub fn build(b: *std.Build) !void {
     const smp_cores = b.option(u32, "smp", "Number of SMP CPU cores for emulator") orelse 4;
     const mem_size = b.option([]const u8, "mem", "Memory size for emulator (e.g. 2G)") orelse "2G";
     const qemu_gl_opt = b.option(bool, "gl", "Enable OpenGL virgl acceleration for QEMU GUI (virtio-gpu-gl-pci)") orelse true;
+    const qemu_audio_opt = b.option([]const u8, "qemu-audio", "Audio backend for QEMU: auto, pipewire, pa, alsa, none") orelse "auto";
+    const qemu_extra_opt = b.option([]const u8, "qemu-extra", "Extra arguments to pass to QEMU");
 
     // Generate config.s dynamically
     const config_s_content = try std.fmt.allocPrint(b.allocator,
@@ -117,6 +119,8 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/guests.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/storage.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/power.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/audio.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/intro.zig"));
     run_buildroot.addFileInput(b.path("tools/driver/diosix.c"));
     run_buildroot.stdio = .inherit;
 
@@ -331,6 +335,40 @@ pub fn build(b: *std.Build) !void {
     try qemu_gui_args.append(b.allocator, "virtio-keyboard-pci");
     try qemu_gui_args.append(b.allocator, "-device");
     try qemu_gui_args.append(b.allocator, "virtio-tablet-pci");
+    var audio_backend: []const u8 = "pa";
+    if (std.mem.eql(u8, qemu_audio_opt, "auto")) {
+        var has_pipewire = false;
+        if (b.graph.environ_map.get("XDG_RUNTIME_DIR")) |xdg| {
+            const pw_path = std.fmt.allocPrint(b.allocator, "{s}/pipewire-0", .{xdg}) catch null;
+            if (pw_path) |p| {
+                defer b.allocator.free(p);
+                if (std.Io.Dir.cwd().access(b.graph.io, p, .{})) |_| {
+                    has_pipewire = true;
+                } else |_| {}
+            }
+        }
+        if (has_pipewire) {
+            audio_backend = "pipewire";
+        }
+    } else {
+        audio_backend = qemu_audio_opt;
+    }
+    std.debug.print("DEBUG_AUDIO: backend={s}\n", .{audio_backend});
+
+    if (!std.mem.eql(u8, audio_backend, "none")) {
+        try qemu_gui_args.append(b.allocator, "-audiodev");
+        try qemu_gui_args.append(b.allocator, try std.fmt.allocPrint(b.allocator, "{s},id=audio0", .{audio_backend}));
+        try qemu_gui_args.append(b.allocator, "-device");
+        try qemu_gui_args.append(b.allocator, "intel-hda");
+        try qemu_gui_args.append(b.allocator, "-device");
+        try qemu_gui_args.append(b.allocator, "hda-duplex,audiodev=audio0");
+    }
+    if (qemu_extra_opt) |extra| {
+        var it = std.mem.tokenizeScalar(u8, extra, ' ');
+        while (it.next()) |tok| {
+            try qemu_gui_args.append(b.allocator, tok);
+        }
+    }
     try qemu_gui_args.append(b.allocator, "-bios");
     try qemu_gui_args.append(b.allocator, "none");
     try qemu_gui_args.append(b.allocator, "-kernel");

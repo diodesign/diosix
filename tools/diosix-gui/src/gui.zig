@@ -1151,23 +1151,27 @@ pub const DiosixGui = struct {
         self.cursor.draw(surface);
     }
 
-    fn renderTabBar(self: *DiosixGui, surface: *fb.Surface) void {
-        const bar_box = fb.Box.fromPosSize(0, 0, self.width, TAB_BAR_HEIGHT);
+    pub fn renderTabBar(self: *DiosixGui, surface: *fb.Surface) void {
+        self.renderTabBarAtY(surface, 0);
+    }
+
+    pub fn renderTabBarAtY(self: *DiosixGui, surface: *fb.Surface, y_offset: i32) void {
+        const bar_box = fb.Box.fromPosSize(0, y_offset, self.width, TAB_BAR_HEIGHT);
 
         // Translucent top header bar (85% opaque neutral dark glass)
         surface.drawRoundedTranslucentBox(bar_box, 0, fb.Color.GLASS_BG, 220, null);
 
         // Header bottom divider line
-        const div_box = fb.Box.fromPosSize(0, @as(i32, @intCast(TAB_BAR_HEIGHT - 1)), self.width, 1);
+        const div_box = fb.Box.fromPosSize(0, y_offset + @as(i32, @intCast(TAB_BAR_HEIGHT - 1)), self.width, 1);
         surface.fillBox(div_box, fb.Color.TAB_DIVIDER);
 
         // Title Branding: Questrial Regular with Accent Gold
-        font.drawTextWithShadow(surface, "DIOSIX SYSTEM MENU", 18, 12, fb.Color.ACCENT_GOLD, fb.Color.BLACK);
+        font.drawTextWithShadow(surface, "DIOSIX SYSTEM MENU", 18, y_offset + 12, fb.Color.ACCENT_GOLD, fb.Color.BLACK);
 
         // Render Tabs
         for (self.subprograms.items, 0..) |*sub, idx| {
             const tx = TAB_START_X + @as(i32, @intCast(idx)) * TAB_STRIDE;
-            const ty: i32 = 5;
+            const ty: i32 = y_offset + 5;
             const t_box = fb.Box.fromPosSize(tx, ty, TAB_WIDTH, TAB_HEIGHT);
 
             const title_w = font.measureString(sub.tab_title);
@@ -1182,6 +1186,60 @@ pub const DiosixGui = struct {
                 // Inactive tab: subtle translucent dark pill
                 surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_INACTIVE_BG, 180, fb.Color.TAB_INACTIVE_BORDER);
                 font.drawTextWithShadow(surface, sub.tab_title, text_x, ty + 7, fb.Color.TEXT_MUTED, fb.Color.BLACK);
+            }
+        }
+    }
+
+    pub fn renderTabBarWithAlpha(self: *DiosixGui, surface: *fb.Surface, alpha_factor: f32) void {
+        const af = std.math.clamp(alpha_factor, 0.0, 1.0);
+        if (af <= 0.005) return;
+
+        const bar_box = fb.Box.fromPosSize(0, 0, self.width, TAB_BAR_HEIGHT);
+        const glass_alpha: u8 = @intFromFloat(220.0 * af);
+
+        // Translucent top header bar
+        surface.drawRoundedTranslucentBox(bar_box, 0, fb.Color.GLASS_BG, glass_alpha, null);
+
+        // Header bottom divider line
+        const div_box = fb.Box.fromPosSize(0, @as(i32, @intCast(TAB_BAR_HEIGHT - 1)), self.width, 1);
+        const div_col = fb.blendPixel(surface.getPixel(0, @as(i32, @intCast(TAB_BAR_HEIGHT - 1))), fb.Color.TAB_DIVIDER, @intFromFloat(255.0 * af));
+        surface.fillBox(div_box, div_col);
+
+        // Title Branding: Questrial Regular with Accent Gold
+        const title_alpha: u8 = @intFromFloat(255.0 * af);
+        font.drawTextWithShadowAlpha(surface, "DIOSIX SYSTEM MENU", 18, 12, fb.Color.ACCENT_GOLD, fb.Color.BLACK, title_alpha);
+
+        // Render Tabs
+        for (self.subprograms.items, 0..) |*sub, idx| {
+            const tx = TAB_START_X + @as(i32, @intCast(idx)) * TAB_STRIDE;
+            const ty: i32 = 5;
+            const t_box = fb.Box.fromPosSize(tx, ty, TAB_WIDTH, TAB_HEIGHT);
+
+            const title_w = font.measureString(sub.tab_title);
+            const text_x = if (TAB_WIDTH > title_w) tx + @as(i32, @intCast((TAB_WIDTH - title_w) / 2)) else tx + 4;
+
+            const is_active = (idx == self.active_sub_idx);
+            if (is_active) {
+                const tab_a: u8 = @intFromFloat(230.0 * af);
+                surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_ACTIVE_BG, tab_a, fb.Color.GLASS_BTN_BORDER);
+                font.drawTextWithShadowAlpha(surface, sub.tab_title, text_x, ty + 7, fb.Color.WHITE, fb.Color.BLACK, title_alpha);
+            } else {
+                const tab_a: u8 = @intFromFloat(180.0 * af);
+                surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_INACTIVE_BG, tab_a, fb.Color.TAB_INACTIVE_BORDER);
+                font.drawTextWithShadowAlpha(surface, sub.tab_title, text_x, ty + 7, fb.Color.TEXT_MUTED, fb.Color.BLACK, title_alpha);
+            }
+        }
+    }
+
+    pub fn drawWindowsWithAlpha(self: *DiosixGui, surface: *fb.Surface, alpha_factor: f32) void {
+        const base_win_alpha = self.getWindowOpacityAlpha();
+        const win_alpha: u8 = @intFromFloat(@as(f32, @floatFromInt(base_win_alpha)) * std.math.clamp(alpha_factor, 0.0, 1.0));
+        const blur_radius = self.getBlurRadius();
+        for (self.windows.items) |*win| {
+            if (win.is_onscreen) {
+                const win_box = win.getBox();
+                surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
+                win.render(surface, win_alpha);
             }
         }
     }

@@ -59,7 +59,7 @@ mkdir -p "$(dirname "$OUT_FILE")"
 mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$( (find tools/overlay-common -type f ! -name 'micro-guest.elf' -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/diosix-gui/src/*.zig tools/diosix-gui/src/subprograms/*.zig tools/driver/diosix.c tools/micro-guest/* 2>/dev/null) | awk '{print $1}' | sort | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$( (find tools/overlay-common -type f ! -name 'micro-guest.elf' -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/diosix-gui/src/*.zig tools/diosix-gui/src/subprograms/*.zig tools/driver/diosix.c tools/alsa-init/* tools/micro-guest/* 2>/dev/null) | awk '{print $1}' | sort | sha256sum | cut -d' ' -f1)
 
 write_rootvm_s() {
     if [ -n "$ROOTVM_S_PATH" ]; then
@@ -115,6 +115,14 @@ if [ -d "tools/diosix-gui" ]; then
     else
         log_err "Failed to cross-compile diosix-gui for ${ZIG_TARGET}."
         exit 1
+    fi
+fi
+
+if [ -f "tools/alsa-init/diosix-alsa-init.c" ]; then
+    log_info "Compiling diosix-alsa-init for ${BOLD}${ZIG_TARGET}${RESET}..."
+    if zig cc -target "$ZIG_TARGET" -Os -s tools/alsa-init/diosix-alsa-init.c -o "$DYNAMIC_OVERLAY/usr/sbin/diosix-alsa-init" 2>/dev/null; then
+        chmod +x "$DYNAMIC_OVERLAY/usr/sbin/diosix-alsa-init"
+        log_ok "Installed diosix-alsa-init in overlay (/usr/sbin/diosix-alsa-init)."
     fi
 fi
 
