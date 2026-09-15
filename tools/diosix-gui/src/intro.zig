@@ -167,10 +167,10 @@ pub const IntroState = struct {
         // -------------------------------------------------------------
         // 1. Background Composition: Transition between Midnight & Sky
         // -------------------------------------------------------------
-        // Horizon rise occurs smoothly from 4000ms to 5400ms (Moment 2 onset)
+        // Horizon rise occurs smoothly from 3800ms to 5400ms (Moment 2 onset)
         var day_factor: f32 = 0.0;
-        if (t > 4000) {
-            const rise_t = @as(f32, @floatFromInt(t - 4000)) / 1400.0;
+        if (t > 3800) {
+            const rise_t = @as(f32, @floatFromInt(t - 3800)) / 1600.0;
             day_factor = easeInOut(rise_t);
         }
 
@@ -323,9 +323,9 @@ fn drawHorizonBeam(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
     }
 }
 
-// Draws the brand typography ('diosix') centered with left-to-right spell out and fade out
+// Draws the brand typography ('diosix') centered with left-to-right spell out and graceful wave fade out
 fn drawBrandingAnimation(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
-    if (t < 500 or t >= 4200) return;
+    if (t < 500 or t >= 4250) return;
 
     const letters = "diosix";
     const spacing: i32 = 68; // Wide letter spacing
@@ -347,20 +347,20 @@ fn drawBrandingAnimation(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
     }
 
     // Render individual letters:
-    // Spells out left-to-right:
+    // Spells out left-to-right to the first chime swell:
     //   d -> di -> dio -> dios -> diosi -> diosix
-    // Then at 3000ms fades out left-to-right:
-    //   iosix -> osix -> six -> ix -> x -> (empty)
+    // Stays solid and crisp through the chime decay, then fades out in a tight,
+    // graceful harmonic wave with smooth easeInOut curves dissolving into the emerging daylight sky:
     const in_step: u32 = 200;
     const in_fade: u32 = 200;
-    const out_step: u32 = 200;
-    const out_fade: u32 = 200;
+    const out_step: u32 = 35;
+    const out_fade: u32 = 600;
 
     for (letters, 0..) |char, idx| {
         const u_idx: u32 = @intCast(idx);
         const in_start: u32 = 500 + u_idx * in_step;
         const in_end: u32 = in_start + in_fade;
-        const out_start: u32 = 3000 + u_idx * out_step;
+        const out_start: u32 = 3450 + u_idx * out_step;
         const out_end: u32 = out_start + out_fade;
 
         if (t < in_start or t >= out_end) continue;
@@ -371,7 +371,8 @@ fn drawBrandingAnimation(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
             letter_alpha = @intFromFloat(frac * 255.0);
         } else if (t >= out_start) {
             const frac = @as(f32, @floatFromInt(out_end - t)) / @as(f32, @floatFromInt(out_fade));
-            letter_alpha = @intFromFloat(std.math.clamp(frac, 0.0, 1.0) * 255.0);
+            const eased = easeInOut(frac);
+            letter_alpha = @intFromFloat(eased * 255.0);
         }
 
         if (letter_alpha == 0) continue;
