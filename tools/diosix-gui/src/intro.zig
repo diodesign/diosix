@@ -248,6 +248,11 @@ pub const IntroState = struct {
         if (t >= 5400) {
             drawGuiBloom(surface, gui, t, w, h);
         }
+
+        // Render live mouse cursor when in mouse mode
+        if (gui.input_mode == .mouse and gui.cursor.visible) {
+            gui.cursor.draw(surface);
+        }
     }
 };
 
@@ -438,27 +443,9 @@ fn drawGuiBloom(surface: *fb.Surface, gui: *DiosixGui, t: u32, w: u32, h: u32) v
     // easeInOut strictly clamps progress so ease remains 1.0 permanently after 6800ms
     const bloom_progress = @as(f32, @floatFromInt(t - 5400)) / 1400.0;
     const ease = easeInOut(bloom_progress);
-
-    // 1. Render Tab Bar (smoothly fades into view from 5400ms to 6000ms, morphing from docked brand)
-    const tab_alpha_prog = @as(f32, @floatFromInt(t - 5400)) / 600.0;
-    const tab_alpha = easeInOut(tab_alpha_prog);
-    gui.renderTabBarWithAlpha(surface, tab_alpha);
-
-    // 2. Render Windows unfolding from center with translucent glass (5400ms to 6800ms)
+    // 1. Render Windows unfolding from center with translucent glass (5400ms to 6800ms)
     if (ease > 0.01) {
         gui.drawWindowsWithAlpha(surface, ease);
-    }
-
-    // 3. Render Cursor gliding into position (starting from 5800ms to 6800ms)
-    if (t >= 5800) {
-        const c_prog = @as(f32, @floatFromInt(t - 5800)) / 1000.0;
-        const c_ease = easeInOut(c_prog);
-        // Glides from offscreen right (x=950, y=550) to default cursor position (x=450, y=260)
-        const cur_cx = @as(i32, @intFromFloat(950.0 + (450.0 - 950.0) * c_ease));
-        const cur_cy = @as(i32, @intFromFloat(550.0 + (260.0 - 550.0) * c_ease));
-        gui.cursor.x = cur_cx;
-        gui.cursor.y = cur_cy;
-        gui.cursor.draw(surface);
     }
 }
 

@@ -583,3 +583,92 @@ pub fn measureString(text: []const u8) u32 {
     }
     return cur_w;
 }
+
+// Measure exact rendered pixel width of string scaled by scale_num / scale_den
+pub fn measureStringScaled(text: []const u8, scale_num: u32, scale_den: u32) u32 {
+    if (scale_den == 0) return 0;
+    const base_w = measureString(text);
+    return @intCast(@divTrunc(@as(u64, base_w) * scale_num + (scale_den - 1), scale_den));
+}
+
+// Render antialiased Questrial text scaled by arbitrary scale_num / scale_den ratio
+pub fn drawTextScaled(surface: *fb.Surface, text: []const u8, x: i32, y: i32, color: u32, scale_num: u32, scale_den: u32) void {
+    if (surface.clip.isEmpty()) return;
+    if (scale_num == 0 or scale_den == 0) return;
+    if (scale_num == scale_den) {
+        drawText(surface, text, x, y, color);
+        return;
+    }
+
+    const scaled_h = @divTrunc(GLYPH_HEIGHT * scale_num, scale_den);
+    if (y + @as(i32, @intCast(scaled_h)) <= surface.clip.y0 or y >= surface.clip.y1) return;
+
+    var cur_x = x;
+    for (text) |c| {
+        if (c >= 32 and c <= 126) {
+            const g = GLYPHS[c - 32];
+            const scaled_advance = @divTrunc(@as(i32, @intCast(g.advance)) * @as(i32, @intCast(scale_num)), @as(i32, @intCast(scale_den)));
+            if (g.width > 0 and g.height > 0) {
+                const scaled_off_x = @divTrunc(@as(i32, @intCast(g.offset_x)) * @as(i32, @intCast(scale_num)), @as(i32, @intCast(scale_den)));
+                const scaled_off_y = @divTrunc(@as(i32, @intCast(g.offset_y)) * @as(i32, @intCast(scale_num)), @as(i32, @intCast(scale_den)));
+                const scaled_gw = @divTrunc(@as(u32, @intCast(g.width)) * scale_num + (scale_den - 1), scale_den);
+                const scaled_gh = @divTrunc(@as(u32, @intCast(g.height)) * scale_num + (scale_den - 1), scale_den);
+
+                const gx = cur_x + scaled_off_x;
+                const gy = y + scaled_off_y;
+
+                if (gx >= surface.clip.x1) break;
+
+                const g_right = gx + @as(i32, @intCast(scaled_gw));
+                if (g_right <= surface.clip.x0) {
+                    cur_x += scaled_advance;
+                    continue;
+                }
+
+                var row: usize = 0;
+                while (row < scaled_gh) : (row += 1) {
+                    const py = gy + @as(i32, @intCast(row));
+                    if (py < surface.clip.y0 or py >= surface.clip.y1) continue;
+
+                    const src_row = @divTrunc(row * scale_den, scale_num);
+                    if (src_row >= g.height) continue;
+
+                    var col: usize = 0;
+                    while (col < scaled_gw) : (col += 1) {
+                        const px = gx + @as(i32, @intCast(col));
+                        if (px < surface.clip.x0 or px >= surface.clip.x1) continue;
+
+                        const src_col = @divTrunc(col * scale_den, scale_num);
+                        if (src_col >= g.width) continue;
+
+                        const alpha = GLYPH_BITMAPS[g.bitmap_offset + src_row * g.width + src_col];
+                        if (alpha > 0) {
+                            if (alpha == 255) {
+                                surface.setPixel(px, py, color);
+                            } else {
+                                const bg = surface.getPixel(px, py);
+                                surface.setPixel(px, py, fb.blendPixel(bg, color, alpha));
+                            }
+                        }
+                    }
+                }
+            }
+            cur_x += scaled_advance;
+        } else if (c == ' ') {
+            if (cur_x >= surface.clip.x1) break;
+            const scaled_space = @divTrunc(@as(i32, @intCast(SPACE_ADVANCE)) * @as(i32, @intCast(scale_num)), @as(i32, @intCast(scale_den)));
+            cur_x += scaled_space;
+        } else if (c == '\t') {
+            if (cur_x >= surface.clip.x1) break;
+            const scaled_tab = @divTrunc(@as(i32, @intCast(TAB_ADVANCE)) * @as(i32, @intCast(scale_num)), @as(i32, @intCast(scale_den)));
+            cur_x += scaled_tab;
+        }
+    }
+}
+
+// Draw antialiased scaled Questrial text with 1px drop shadow
+pub fn drawTextScaledWithShadow(surface: *fb.Surface, text: []const u8, x: i32, y: i32, fg_color: u32, shadow_color: u32, scale_num: u32, scale_den: u32) void {
+    drawTextScaled(surface, text, x + 1, y + 1, shadow_color, scale_num, scale_den);
+    drawTextScaled(surface, text, x, y, fg_color, scale_num, scale_den);
+}
+

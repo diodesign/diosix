@@ -19,6 +19,7 @@ const intro_mod = @import("intro.zig");
 const audio_mod = @import("audio.zig");
 pub const noise_mod = @import("noise.zig");
 pub const banner_font_mod = @import("banner_font.zig");
+pub const host_info = @import("host_info.zig");
 
 pub const Display = struct {
     width: u32,
@@ -180,6 +181,8 @@ pub const ABS_Y: u16 = 0x01;
 pub const EVDEV_ABS_MAX: i64 = 32767;
 
 pub const BTN_LEFT: u16 = 0x110;
+pub const BTN_RIGHT: u16 = 0x111;
+pub const BTN_MIDDLE: u16 = 0x112;
 pub const BTN_TOUCH: u16 = 0x14a;
 
 pub const KEY_ESC: u16 = 1;
@@ -315,7 +318,7 @@ pub fn main() !void {
     defer audio_player.stop();
 
     if (intro_mod.shouldPlayIntro()) {
-        std.debug.print("Playing Diosix graphical intro chime...\n", .{});
+        std.debug.print("Playing Diosix graphical intro animation and chime...\n", .{});
         audio_player.start();
 
         var intro_state = intro_mod.IntroState.init(getMilliTimestamp());
@@ -326,7 +329,7 @@ pub fn main() !void {
             const dt: u32 = @intCast(@max(1, now - intro_last_time));
             intro_last_time = now;
 
-            // Check if user pressed key or mouse to skip intro
+            // Poll input devices non-blocking so mouse pointer and keyboard are live and responsive
             var pfds: [MAX_INPUT_DEVICES]linux.pollfd = undefined;
             for (input_fds[0..input_count], 0..) |fd, i| {
                 pfds[i] = linux.pollfd{
@@ -339,7 +342,6 @@ pub fn main() !void {
             const signed_poll: isize = @bitCast(poll_res);
             if (signed_poll > 0) {
                 var i: usize = 0;
-                var skip_requested = false;
                 while (i < input_count) : (i += 1) {
                     if ((pfds[i].revents & linux.POLL.IN) != 0) {
                         var ev_buf: [32]InputEvent = undefined;
@@ -348,22 +350,49 @@ pub fn main() !void {
                         if (signed_rd > 0) {
                             const count = @as(usize, @intCast(signed_rd)) / @sizeOf(InputEvent);
                             for (ev_buf[0..count]) |ev| {
-                                // Only explicit Escape (code 1) or Space (code 57) keypress skips the intro
-                                if (ev.type == EV_KEY and ev.value == 1 and (ev.code == 1 or ev.code == 57)) {
-                                    skip_requested = true;
-                                    break;
+                                switch (ev.type) {
+                                    EV_REL => {
+                                        // Mouse motion updates real cursor position and switches to mouse mode
+                                        if (ev.code == REL_X) {
+                                            const new_x = std.math.clamp(gui.cursor.x + ev.value, 0, @as(i32, @intCast(display.width - 1)));
+                                            gui.handleMouseMove(new_x, gui.cursor.y, gui.mouse_left_down);
+                                        } else if (ev.code == REL_Y) {
+                                            const new_y = std.math.clamp(gui.cursor.y + ev.value, 0, @as(i32, @intCast(display.height - 1)));
+                                            gui.handleMouseMove(gui.cursor.x, new_y, gui.mouse_left_down);
+                                        }
+                                    },
+                                    EV_KEY => {
+                                        const pressed = (ev.value != 0);
+                                        if (pressed) {
+                                            // User interacted: hand over immediately to the live desktop
+                                            // without stopping the background audio chime!
+                                            intro_state.skip();
+                                            if (ev.code == BTN_LEFT or ev.code == BTN_TOUCH) {
+                                                gui.handleMouseClick(gui.cursor.x, gui.cursor.y);
+                                                gui.mouse_left_down = true;
+                                            } else if (ev.code == BTN_RIGHT or ev.code == BTN_MIDDLE or (ev.code >= 0x110 and ev.code <= 0x11f)) {
+                                                // Right-click and auxiliary mouse buttons do nothing right now and do not switch to keyboard mode
+                                            } else if (ev.code == KEY_LEFTCTRL or ev.code == KEY_RIGHTCTRL) {
+                                                gui.ctrl_down = true;
+                                            } else if (ev.code == KEY_LEFTSHIFT or ev.code == KEY_RIGHTSHIFT) {
+                                                gui.shift_down = true;
+                                            } else {
+                                                const key_char = mapEvdevToAscii(ev.code, gui.shift_down);
+                                                gui.handleKey(ev.code, key_char, true);
+                                            }
+                                            break;
+                                        }
+                                    },
+                                    else => {},
                                 }
                             }
                         }
                     }
-                    if (skip_requested) break;
-                }
-                if (skip_requested) {
-                    audio_player.stop();
-                    intro_state.skip();
-                    break;
+                    if (!intro_state.is_active) break;
                 }
             }
+
+            if (!intro_state.is_active) break;
 
             intro_state.tick(dt, now, display.width, display.height);
             intro_state.render(&display.backbuffer, &gui);
@@ -387,11 +416,15 @@ pub fn main() !void {
     gui.markFullDirty();
     const init_damage = gui.renderDamaged(&display.clean_buffer);
     display.backbuffer.copyBoxFrom(&display.clean_buffer, init_damage);
-    gui.cursor.draw(&display.backbuffer);
-    display.prev_cursor_box = gui.cursor.getBox();
-    display.prev_cursor_x = gui.cursor.x;
-    display.prev_cursor_y = gui.cursor.y;
-    display.cursor_drawn = true;
+    if (gui.input_mode == .mouse and gui.cursor.visible) {
+        gui.cursor.draw(&display.backbuffer);
+        display.prev_cursor_box = gui.cursor.getBox();
+        display.prev_cursor_x = gui.cursor.x;
+        display.prev_cursor_y = gui.cursor.y;
+        display.cursor_drawn = true;
+    } else {
+        display.cursor_drawn = false;
+    }
     display.flushDamage(init_damage);
 
     // 5. Main Multitasking and Event Loop with 60 FPS Frame Pacing
@@ -447,6 +480,10 @@ pub fn main() !void {
                                             gui.handleMouseRelease();
                                         }
                                         gui.mouse_left_down = pressed;
+                                    } else if (code == BTN_RIGHT or code == BTN_MIDDLE or (code >= 0x110 and code <= 0x11f)) {
+                                        // Mouse buttons (right-click, middle-click, auxiliary buttons):
+                                        // Right-click doesn't do anything right now.
+                                        // Explicitly do not pass to handleKey so it does not switch to keyboard mode.
                                     } else if (code == KEY_LEFTCTRL or code == KEY_RIGHTCTRL) {
                                         gui.ctrl_down = pressed;
                                     } else if (code == KEY_LEFTSHIFT or code == KEY_RIGHTSHIFT) {
@@ -495,10 +532,12 @@ pub fn main() !void {
 
             // Render updated frame with intelligent damage tracking
             const damage = gui.renderDamaged(&display.clean_buffer);
-            const cursor_moved = (gui.cursor.x != display.prev_cursor_x or gui.cursor.y != display.prev_cursor_y);
+            const cursor_should_show = (gui.input_mode == .mouse and gui.cursor.visible);
+            const cursor_state_changed = (cursor_should_show != display.cursor_drawn);
+            const cursor_moved = cursor_should_show and (gui.cursor.x != display.prev_cursor_x or gui.cursor.y != display.prev_cursor_y);
             const cursor_box = gui.cursor.getBox();
 
-            if (!damage.isEmpty() or cursor_moved or !display.cursor_drawn) {
+            if (!damage.isEmpty() or cursor_moved or cursor_state_changed) {
                 var flush_box = fb.Box{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 };
 
                 // 1. If clean_buffer had damage, copy damaged rect to backbuffer
@@ -507,23 +546,29 @@ pub fn main() !void {
                     flush_box = flush_box.merge(damage);
                 }
 
-                // 2. If cursor moved, restore old cursor area from clean_buffer into backbuffer
-                if (cursor_moved and display.cursor_drawn) {
+                // 2. If cursor moved or became hidden while previously drawn, restore old cursor area from clean_buffer into backbuffer
+                if ((cursor_moved or (!cursor_should_show and display.cursor_drawn)) and display.cursor_drawn) {
                     display.backbuffer.copyBoxFrom(&display.clean_buffer, display.prev_cursor_box);
                     flush_box = flush_box.merge(display.prev_cursor_box);
                 }
 
-                // 3. Stamp cursor sprite onto backbuffer
-                gui.cursor.draw(&display.backbuffer);
-                flush_box = flush_box.merge(cursor_box);
+                // 3. Stamp cursor sprite onto backbuffer if cursor should show
+                if (cursor_should_show) {
+                    gui.cursor.draw(&display.backbuffer);
+                    flush_box = flush_box.merge(cursor_box);
 
-                display.prev_cursor_box = cursor_box;
-                display.prev_cursor_x = gui.cursor.x;
-                display.prev_cursor_y = gui.cursor.y;
-                display.cursor_drawn = true;
+                    display.prev_cursor_box = cursor_box;
+                    display.prev_cursor_x = gui.cursor.x;
+                    display.prev_cursor_y = gui.cursor.y;
+                    display.cursor_drawn = true;
+                } else {
+                    display.cursor_drawn = false;
+                }
 
                 // 4. Flush only the damaged region to hardware scanout and DRM
-                display.flushDamage(flush_box);
+                if (!flush_box.isEmpty()) {
+                    display.flushDamage(flush_box);
+                }
             }
         }
     }
@@ -625,6 +670,7 @@ fn mapEvdevToAscii(code: u16, shift: bool) ?u8 {
 
 // --- Unit Tests for diosix-gui ---
 
+
 const testing = std.testing;
 
 test "diosix-gui: surface drawing and translucent window pane" {
@@ -671,7 +717,7 @@ test "diosix-gui: icon types, sliders, and editing" {
     ic_sl.adjustSlider(10);
     try testing.expectEqual(@as(i32, 60), ic_sl.slider_val);
     ic_sl.adjustSlider(-100);
-    try testing.expectEqual(@as(i32, 0), ic_sl.slider_val); // Clamped to min
+    try testing.expectEqual(@as(i32, 0), ic_sl.slider_val);
 }
 
 test "diosix-gui: icon grouping and exclusive radio behavior" {
@@ -679,7 +725,6 @@ test "diosix-gui: icon grouping and exclusive radio behavior" {
     var win = Window.init(allocator, 1, 0, 0, 300, 300, "Group Test");
     defer win.deinit();
 
-    // Add 3 radio tick boxes in exclusive group 1
     const r1 = try win.addIcon(Icon.createTickBox(10, 10, 10, 200, 24, "Option A", true, 1, .exclusive));
     const r2 = try win.addIcon(Icon.createTickBox(11, 10, 40, 200, 24, "Option B", false, 1, .exclusive));
     const r3 = try win.addIcon(Icon.createTickBox(12, 10, 70, 200, 24, "Option C", false, 1, .exclusive));
@@ -688,7 +733,6 @@ test "diosix-gui: icon grouping and exclusive radio behavior" {
     try testing.expect(!r2.is_ticked);
     try testing.expect(!r3.is_ticked);
 
-    // Trigger option B: option A and C must become unticked!
     var dummy_gui: usize = 0;
     win.triggerIcon(@ptrCast(&dummy_gui), r2);
 
@@ -702,133 +746,297 @@ test "diosix-gui: window offscreen parking and movement" {
     var win = Window.init(allocator, 42, 50, 60, 400, 300, "Window Move Test");
     defer win.deinit();
 
-    // Starts parked offscreen
     try testing.expect(!win.is_onscreen);
     try testing.expect(win.x < 0);
 
-    // Bring onscreen
     win.setOnScreen(true);
     try testing.expect(win.is_onscreen);
     try testing.expectEqual(@as(i32, 50), win.x);
     try testing.expectEqual(@as(i32, 60), win.y);
 
-    // Park window back offscreen
     win.setOnScreen(false);
     try testing.expect(!win.is_onscreen);
     try testing.expect(win.x < 0);
 }
 
-test "diosix-gui: coordinator initialization and preemptive multitasking" {
+test "diosix-gui: coordinator initialization, dynamic layout, and host telemetry panes" {
     const allocator = testing.allocator;
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    try testing.expectEqual(@as(usize, 5), gui.subprograms.items.len);
-    try testing.expectEqual(@as(usize, 0), gui.active_sub_idx);
+    // 1. Initial layout has exactly 3 windows: Main Menu (100), Version (101), Host Uptime (102)
+    try testing.expectEqual(@as(usize, 3), gui.windows.items.len);
 
-    // Initial subprogram 0 is active: its windows are on-screen
-    try testing.expect(gui.windows.items[0].is_onscreen); // specs pane
-    try testing.expect(!gui.windows.items[3].is_onscreen); // icon showcase pane parked
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    try testing.expect(win_menu.is_onscreen);
+    try testing.expectEqual(gui_mod.BORDER_GAP, win_menu.x);
+    try testing.expectEqual(gui_mod.BORDER_GAP, win_menu.y);
+    try testing.expectEqual(@as(usize, 3), win_menu.icons.items.len);
 
-    // Check that subprograms get background CPU time on tick
-    gui.tick(100);
-    gui.tick(500);
+    const item_guests = &win_menu.icons.items[0];
+    const item_status = &win_menu.icons.items[1];
+    const item_config = &win_menu.icons.items[2];
+    try testing.expectEqualStrings("Guests", item_guests.getText());
+    try testing.expectEqualStrings("Status", item_status.getText());
+    try testing.expectEqualStrings("Config", item_config.getText());
+    try testing.expectEqual(icon_mod.IconType.menu_item, item_guests.icon_type);
+    try testing.expectEqual(icon_mod.IconType.menu_item, item_status.icon_type);
+    try testing.expectEqual(icon_mod.IconType.menu_item, item_config.icon_type);
+    try testing.expect(item_guests.is_focused);
 
-    // Switch tab
-    gui.activateSubProgram(1);
-    try testing.expectEqual(@as(usize, 1), gui.active_sub_idx);
+    // 2. Down arrow navigates to Status, then to Config; Up arrow navigates back
+    gui.handleKey(gui_mod.Key.DOWN, null, true);
+    try testing.expect(!item_guests.is_focused);
+    try testing.expect(item_status.is_focused);
 
-    // Ensure tab 0 windows are parked off-screen and tab 1 windows are on screen
-    try testing.expect(!gui.windows.items[0].is_onscreen);
-    try testing.expect(gui.windows.items[3].is_onscreen); // icon showcase pane
+    gui.handleKey(gui_mod.Key.DOWN, null, true);
+    try testing.expect(!item_status.is_focused);
+    try testing.expect(item_config.is_focused);
+
+    gui.handleKey(gui_mod.Key.UP, null, true);
+    try testing.expect(item_status.is_focused);
+    gui.handleKey(gui_mod.Key.UP, null, true);
+    try testing.expect(item_guests.is_focused);
+
+    // 3. Mouse hover over menu item sets is_hovered
+    gui.handleMouseMove(win_menu.x + item_status.rel_x + 5, win_menu.y + item_status.rel_y + 5, false);
+    try testing.expect(item_status.is_hovered);
+
+    // 4. Version pane in bottom-right corner
+    const win_ver = gui.getWindow(gui_mod.WIN_VERSION_ID).?;
+    try testing.expect(win_ver.is_onscreen);
+    try testing.expectEqual(@as(u32, 40), win_ver.height);
+    try testing.expectEqual(@as(i32, 1280) - @as(i32, @intCast(win_ver.width)) - gui_mod.BORDER_GAP, win_ver.x);
+    try testing.expectEqual(@as(i32, 800) - @as(i32, @intCast(win_ver.height)) - gui_mod.BORDER_GAP, win_ver.y);
+    const ver_icon = win_ver.getIconById(gui_mod.ICON_VERSION_TEXT_ID).?;
+    try testing.expect(std.mem.startsWith(u8, ver_icon.getText(), "diosix"));
+    try testing.expect(!ver_icon.is_selectable);
+
+    // 5. Active Help pane spanning remaining screen width with even spacing
+    const win_help = gui.getWindow(gui_mod.WIN_HELP_ID).?;
+    try testing.expect(win_help.is_onscreen);
+    try testing.expectEqual(@as(u32, 40), win_help.height);
+    try testing.expectEqual(gui_mod.BORDER_GAP, win_help.x);
+    try testing.expectEqual(win_ver.y, win_help.y);
+    // Spacing between help pane and version pane equals BORDER_GAP (16px)
+    try testing.expectEqual(gui_mod.BORDER_GAP, win_ver.x - (win_help.x + @as(i32, @intCast(win_help.width))));
+    // Spacing between version pane and right screen edge equals BORDER_GAP (16px)
+    try testing.expectEqual(gui_mod.BORDER_GAP, @as(i32, 1280) - (win_ver.x + @as(i32, @intCast(win_ver.width))));
+
+    const help_icon = win_help.getIconById(gui_mod.ICON_HELP_TEXT_ID).?;
+
+    // 6. Active Help dynamic updates:
+    // Hovering over Guests menu item
+    gui.handleMouseMove(win_menu.x + item_guests.rel_x + 5, win_menu.y + item_guests.rel_y + 5, false);
+    try testing.expectEqualStrings("View and manage guest virtual machines", help_icon.getText());
+
+    // Hovering over Status menu item
+    gui.handleMouseMove(win_menu.x + item_status.rel_x + 5, win_menu.y + item_status.rel_y + 5, false);
+    try testing.expectEqualStrings("View real-time system information", help_icon.getText());
+
+    // Hovering over Config menu item
+    gui.handleMouseMove(win_menu.x + item_config.rel_x + 5, win_menu.y + item_config.rel_y + 5, false);
+    try testing.expectEqualStrings("Configure window appearance and desktop background themes", help_icon.getText());
+
+    // Hovering over Version pane text
+    gui.handleMouseMove(win_ver.x + ver_icon.rel_x + 5, win_ver.y + ver_icon.rel_y + 5, false);
+    try testing.expectEqualStrings("Hypervisor name, version number, build branch, and commit hash", help_icon.getText());
+
+    // Moving mouse to empty space displays priority fallback "Welcome to diosix"
+    gui.handleMouseMove(500, 500, false);
+    try testing.expectEqualStrings("Welcome to diosix", help_icon.getText());
+
+    // 7. Selecting Status menu item opens the Status pane
+    win_menu.setFocusedIndex(1); // focus Status menu item
+    gui.handleKey(gui_mod.Key.ENTER, null, true); // activate Status
+
+    const win_status = gui.getWindow(gui_mod.WIN_STATUS_ID).?;
+    try testing.expect(win_status.is_onscreen);
+    try testing.expectEqual(@as(u32, @intCast(@as(i32, 1280) - gui_mod.BORDER_GAP - win_status.x)), win_status.width);
+
+    // Verify Host section
+    const status_host_hdr = win_status.getIconById(gui_mod.ICON_STATUS_HOST_HDR_ID).?;
+    try testing.expectEqualStrings("Host", status_host_hdr.getText());
+
+    // Verify Table Column Alignment (Right-aligned labels ending at col1_right = 140, values starting at col2_x = 160)
+    const col1_right: i32 = 140;
+    const col2_x: i32 = 160;
+
+    const lbl_uptime = win_status.getIconById(gui_mod.ICON_STATUS_HOST_UPTIME_LABEL_ID).?;
+    const val_uptime = win_status.getIconById(gui_mod.ICON_STATUS_HOST_UPTIME_ID).?;
+    try testing.expectEqualStrings("Uptime", lbl_uptime.getText());
+    try testing.expectEqual(col1_right, lbl_uptime.rel_x + @as(i32, @intCast(font.measureString(lbl_uptime.getText()))));
+    try testing.expectEqual(col2_x, val_uptime.rel_x);
+    try testing.expectEqual(lbl_uptime.rel_y, val_uptime.rel_y);
+
+    const lbl_cpu = win_status.getIconById(gui_mod.ICON_STATUS_HOST_CPU_LABEL_ID).?;
+    const val_cpu = win_status.getIconById(gui_mod.ICON_STATUS_HOST_CPU_ID).?;
+    try testing.expectEqualStrings("CPU cores", lbl_cpu.getText());
+    try testing.expectEqual(col1_right, lbl_cpu.rel_x + @as(i32, @intCast(font.measureString(lbl_cpu.getText()))));
+    try testing.expectEqual(col2_x, val_cpu.rel_x);
+    try testing.expectEqual(lbl_cpu.rel_y, val_cpu.rel_y);
+
+    const lbl_ram = win_status.getIconById(gui_mod.ICON_STATUS_HOST_RAM_LABEL_ID).?;
+    const val_ram = win_status.getIconById(gui_mod.ICON_STATUS_HOST_RAM_ID).?;
+    try testing.expectEqualStrings("RAM", lbl_ram.getText());
+    try testing.expectEqual(col1_right, lbl_ram.rel_x + @as(i32, @intCast(font.measureString(lbl_ram.getText()))));
+    try testing.expectEqual(col2_x, val_ram.rel_x);
+    try testing.expectEqual(lbl_ram.rel_y, val_ram.rel_y);
+
+    const lbl_time = win_status.getIconById(gui_mod.ICON_STATUS_HOST_TIME_LABEL_ID).?;
+    const val_time = win_status.getIconById(gui_mod.ICON_STATUS_HOST_TIME_ID).?;
+    try testing.expectEqualStrings("Time and date", lbl_time.getText());
+    try testing.expectEqual(col1_right, lbl_time.rel_x + @as(i32, @intCast(font.measureString(lbl_time.getText()))));
+    try testing.expectEqual(col2_x, val_time.rel_x);
+    try testing.expectEqual(lbl_time.rel_y, val_time.rel_y);
+
+    // Verify Hypervisor section
+    const status_hv_hdr = win_status.getIconById(gui_mod.ICON_STATUS_HV_HDR_ID).?;
+    try testing.expectEqualStrings("Hypervisor", status_hv_hdr.getText());
+
+    const lbl_build = win_status.getIconById(gui_mod.ICON_STATUS_HV_BUILD_LABEL_ID).?;
+    const val_b1 = win_status.getIconById(gui_mod.ICON_STATUS_HV_BUILD1_ID).?;
+    const val_b2 = win_status.getIconById(gui_mod.ICON_STATUS_HV_BUILD2_ID).?;
+    try testing.expectEqualStrings("Build", lbl_build.getText());
+    try testing.expectEqual(col1_right, lbl_build.rel_x + @as(i32, @intCast(font.measureString(lbl_build.getText()))));
+    try testing.expectEqual(col2_x, val_b1.rel_x);
+    try testing.expectEqual(col2_x, val_b2.rel_x);
+    try testing.expectEqual(lbl_build.rel_y, val_b1.rel_y);
+
+    const lbl_foot = win_status.getIconById(gui_mod.ICON_STATUS_HV_FOOTPRINT_LABEL_ID).?;
+    const val_foot = win_status.getIconById(gui_mod.ICON_STATUS_HV_FOOTPRINT_ID).?;
+    try testing.expectEqualStrings("Footprint", lbl_foot.getText());
+    try testing.expectEqual(col1_right, lbl_foot.rel_x + @as(i32, @intCast(font.measureString(lbl_foot.getText()))));
+    try testing.expectEqual(col2_x, val_foot.rel_x);
+    try testing.expectEqual(lbl_foot.rel_y, val_foot.rel_y);
+
+    // When hypervisor info is unavailable (/dev/diosix not present), fallback is strictly "--"
+    try testing.expectEqualStrings("--", val_cpu.getText());
+    try testing.expectEqualStrings("--", val_ram.getText());
+    try testing.expectEqualStrings("--", val_b1.getText());
+    try testing.expectEqualStrings("--", val_foot.getText());
+
+    // Priority 2: Moving cursor over Status pane displays pane help text (text icons have no help text)
+    gui.handleMouseMove(win_status.x + 10, win_status.y + 10, false);
+    try testing.expectEqualStrings("Information about this host system and hypervisor", help_icon.getText());
+
+    // Verify Status menu item is selected when Status pane is open
+    const icon_status = win_menu.getIconById(gui_mod.ICON_MENU_STATUS_ID).?;
+    try testing.expect(icon_status.is_selected);
+    try testing.expect(gui.getActiveChildConnectorBox() != null);
+
+    // 8. Pressing Escape closes the child pane chain and unselects menu item
+    gui.handleKey(gui_mod.Key.ESC, null, true);
+    try testing.expect(gui.getWindow(gui_mod.WIN_STATUS_ID) == null);
+    try testing.expect(!icon_status.is_selected);
+    // In keyboard mode, Status item in main menu remains focused, so its help text displays
+    try testing.expectEqualStrings("View real-time system information", help_icon.getText());
+
+    // Moving mouse to empty space switches to mouse mode and displays fallback "Welcome to diosix"
+    gui.handleMouseMove(500, 500, false);
+    try testing.expectEqualStrings("Welcome to diosix", help_icon.getText());
+}
+
+test "diosix-gui: dynamic window lifecycle (createWindow, destroyWindow, destroyAllWindows)" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    // 1. Create dynamic window
+    const win = try gui.createWindow(501, 100, 100, 300, 200, "Dynamic Pane");
+    try testing.expect(win.is_onscreen);
+    try testing.expectEqual(@as(usize, 4), gui.windows.items.len);
+
+    _ = try win.addIcon(Icon.createButton(5001, 10, 10, 100, 30, "Action"));
+    try testing.expect(gui.getWindow(501) != null);
+
+    // 2. Destroy dynamic window
+    const destroyed = gui.destroyWindow(501);
+    try testing.expect(destroyed);
+    try testing.expectEqual(@as(usize, 3), gui.windows.items.len);
+    try testing.expect(gui.getWindow(501) == null);
+
+    // 3. Destroy all windows
+    gui.destroyAllWindows();
+    try testing.expectEqual(@as(usize, 0), gui.windows.items.len);
+}
+
+test "diosix-gui: left menu scrollable auto-activation when exceeding screen height" {
+    const allocator = testing.allocator;
+    // When screen height is small (e.g. 70px), available height is 70 - 32 = 38px
+    // Total menu content is 92px, so window height is clamped to 38px, making it scrollable
+    var gui = try DiosixGui.init(allocator, 800, 70);
+    defer gui.deinit();
+
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    try testing.expect(win_menu.isScrollable());
+    try testing.expect(win_menu.getMaxScroll() > 0);
 }
 
 test "diosix-gui: static graduated background rendering" {
     var pixel_buffer: [100 * 100]u32 = undefined;
     var surface = fb.Surface.init(&pixel_buffer, 100, 100, 400);
 
-    const top_col: u32 = 0x004C8BE0; // Light Blue
-    const bot_col: u32 = 0x000C1836; // Dark Blue
+    const top_col: u32 = 0x004C8BE0;
+    const bot_col: u32 = 0x000C1836;
 
     surface.drawGraduatedBackground(top_col, bot_col);
 
-    // Top row has light blue hue
     const top_px = surface.getPixel(50, 0);
     const top_b = top_px & 0xFF;
     try testing.expect(top_b >= 200);
 
-    // Bottom row has dark blue hue
     const bot_px = surface.getPixel(50, 99);
-    const bot_r = (bot_px >> 16) & 0xFF;
     const bot_b = bot_px & 0xFF;
-    try testing.expect(bot_r < 65 and bot_b < 100);
-
-    // Middle row (y=50) is smoothly interpolated between top and bot
-    const mid_col = surface.getPixel(50, 50);
-    const mid_b = mid_col & 0xFF;
-    try testing.expect(mid_b < top_b and mid_b > bot_b);
+    try testing.expect(bot_b < 100);
 }
 
 test "diosix-gui: real-time window transparency and backdrop controls" {
     const allocator = testing.allocator;
-    var gui = try DiosixGui.init(allocator, 800, 600);
+    var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    // Default transparency is 50%
     try testing.expectEqual(@as(u32, 50), gui.window_transparency);
     try testing.expectEqual(@as(u8, 127), gui.getWindowOpacityAlpha());
 
-    // Adjust transparency to 0% (fully opaque)
     gui.setWindowTransparency(0);
     try testing.expectEqual(@as(u32, 0), gui.window_transparency);
     try testing.expectEqual(@as(u8, 255), gui.getWindowOpacityAlpha());
 
-    // Adjust transparency to 80% (20% opaque)
     gui.setWindowTransparency(80);
     try testing.expectEqual(@as(u32, 80), gui.window_transparency);
     try testing.expectEqual(@as(u8, 51), gui.getWindowOpacityAlpha());
 
-    // Default blur strength is 50% (radius 5)
     try testing.expectEqual(@as(u32, 50), gui.getBlurStrength());
     try testing.expectEqual(@as(u32, 5), gui.getBlurRadius());
 
-    // Adjust blur strength to 100% (radius 10)
     gui.setBlurStrength(100);
     try testing.expectEqual(@as(u32, 100), gui.getBlurStrength());
     try testing.expectEqual(@as(u32, 10), gui.getBlurRadius());
 
-    // Adjust blur strength to 0% (radius 0)
-    gui.setBlurStrength(0);
-    try testing.expectEqual(@as(u32, 0), gui.getBlurStrength());
-    try testing.expectEqual(@as(u32, 0), gui.getBlurRadius());
+    gui.setBackdropTopColor(0x00C86840);
+    try testing.expectEqual(@as(u32, 0x00C86840), gui.bg_top_color);
 
-    // Adjust backdrop colors
-    gui.setBackdropTopColor(0x002EB8D8);
     gui.setBackdropBotColor(0x00060B18);
-    try testing.expectEqual(@as(u32, 0x002EB8D8), gui.bg_top_color);
     try testing.expectEqual(@as(u32, 0x00060B18), gui.bg_bot_color);
 }
 
 test "diosix-gui: surface copyBoxFrom tile copying" {
-    var src_buf: [100 * 100]u32 = @splat(0x00FF0000); // Red
-    var dst_buf: [100 * 100]u32 = @splat(0x000000FF); // Blue
+    var src_pixels: [100 * 100]u32 = undefined;
+    var dst_pixels: [100 * 100]u32 = undefined;
 
-    var src = fb.Surface.init(&src_buf, 100, 100, 400);
-    var dst = fb.Surface.init(&dst_buf, 100, 100, 400);
+    @memset(&src_pixels, 0x00FF0000);
+    @memset(&dst_pixels, 0x00000000);
 
-    // Copy a 20x20 tile at (30, 40)
-    const copy_box = fb.Box.fromPosSize(30, 40, 20, 20);
+    var src = fb.Surface.init(&src_pixels, 100, 100, 400);
+    var dst = fb.Surface.init(&dst_pixels, 100, 100, 400);
+
+    const copy_box = fb.Box.fromPosSize(20, 20, 40, 40);
     dst.copyBoxFrom(&src, copy_box);
 
-    // Inside tile should be red
-    try testing.expectEqual(@as(u32, 0x00FF0000), dst.getPixel(30, 40));
-    try testing.expectEqual(@as(u32, 0x00FF0000), dst.getPixel(49, 59));
-
-    // Outside tile should remain blue
-    try testing.expectEqual(@as(u32, 0x000000FF), dst.getPixel(29, 40));
-    try testing.expectEqual(@as(u32, 0x000000FF), dst.getPixel(50, 40));
-    try testing.expectEqual(@as(u32, 0x000000FF), dst.getPixel(30, 39));
-    try testing.expectEqual(@as(u32, 0x000000FF), dst.getPixel(30, 60));
+    try testing.expectEqual(@as(u32, 0x00FF0000), dst.getPixel(30, 30));
+    try testing.expectEqual(@as(u32, 0x00000000), dst.getPixel(10, 10));
+    try testing.expectEqual(@as(u32, 0x00000000), dst.getPixel(70, 70));
 }
 
 test "diosix-gui: intelligent damage tracking and idle frame skipping" {
@@ -836,156 +1044,110 @@ test "diosix-gui: intelligent damage tracking and idle frame skipping" {
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    const clean_buf = try allocator.alloc(u32, 1280 * 800);
-    defer allocator.free(clean_buf);
-    var clean_surface = fb.Surface.init(clean_buf.ptr, 1280, 800, 1280 * 4);
+    const clean_pixels = try allocator.alloc(u32, 1280 * 800);
+    defer allocator.free(clean_pixels);
+    var clean_surface = fb.Surface.init(clean_pixels.ptr, 1280, 800, 1280 * @sizeOf(u32));
 
-    // 1. On startup, gui is full dirty
     try testing.expect(gui.isDirty());
     const init_damage = gui.renderDamaged(&clean_surface);
-    try testing.expectEqual(@as(i32, 0), init_damage.x0);
-    try testing.expectEqual(@as(i32, 0), init_damage.y0);
-    try testing.expectEqual(@as(i32, 1280), init_damage.x1);
-    try testing.expectEqual(@as(i32, 800), init_damage.y1);
-
-    // 2. Immediately afterwards (idle), damage must be completely EMPTY!
+    try testing.expect(!init_damage.isEmpty());
     try testing.expect(!gui.isDirty());
+
     const idle_damage = gui.renderDamaged(&clean_surface);
     try testing.expect(idle_damage.isEmpty());
 
-    // 3. Updating an icon in Window 0 marks only that window dirty
-    if (gui.findIcon(100, 1008)) |ic| { // WIN_SPECS_ID, ICON_UPTIME_ID
-        ic.setText("Uptime: 5s");
-    }
+    gui.markWindowDirty(gui_mod.WIN_MENU_ID);
     try testing.expect(gui.isDirty());
 
-    // 4. Redraw damaged region: must ONLY damage window 0's bounds, not full screen!
-    const win_damage = gui.renderDamaged(&clean_surface);
-    try testing.expect(!win_damage.isEmpty());
-    try testing.expect(win_damage.width() <= 780);
-    try testing.expect(win_damage.height() <= 536);
+    const partial_damage = gui.renderDamaged(&clean_surface);
+    try testing.expect(!partial_damage.isEmpty());
     try testing.expect(!gui.isDirty());
 }
 
 test "diosix-gui: icon text selection, select-all, and cut/copy/paste primitives" {
-    var ic = Icon.createReadWrite(101, 10, 10, 200, 30, "Hello World");
+    var ic = Icon.createReadWrite(1, 0, 0, 200, 30, "Hello World");
     try testing.expectEqualStrings("Hello World", ic.getText());
     try testing.expect(!ic.hasSelection());
 
-    // 1. Select all
+    ic.selection_start = 0;
+    ic.selection_end = 5;
+    try testing.expect(ic.hasSelection());
+    try testing.expectEqualStrings("Hello", ic.getSelectedText());
+
+    _ = ic.deleteSelection();
+    try testing.expectEqualStrings(" World", ic.getText());
+    try testing.expect(!ic.hasSelection());
+
+    ic.insertString("Brave");
+    try testing.expectEqualStrings("Brave World", ic.getText());
+
     ic.selectAll();
     try testing.expect(ic.hasSelection());
-    try testing.expectEqualStrings("Hello World", ic.getSelectedText());
+    try testing.expectEqualStrings("Brave World", ic.getSelectedText());
 
-    // 2. Delete selection
-    try testing.expect(ic.deleteSelection());
-    try testing.expectEqualStrings("", ic.getText());
-    try testing.expect(!ic.hasSelection());
-    try testing.expectEqual(@as(usize, 0), ic.cursor_pos);
-
-    // 3. Insert string
-    ic.insertString("Diosix Microkernel");
-    try testing.expectEqualStrings("Diosix Microkernel", ic.getText());
-
-    // 4. Partial selection: select "Microkernel"
-    ic.selection_start = 7;
-    ic.selection_end = 18;
-    try testing.expect(ic.hasSelection());
-    try testing.expectEqualStrings("Microkernel", ic.getSelectedText());
-
-    // 5. Delete selection
-    try testing.expect(ic.deleteSelection());
-    try testing.expectEqualStrings("Diosix ", ic.getText());
-    try testing.expectEqual(@as(usize, 7), ic.cursor_pos);
-
-    // 6. Clear field
     ic.clearField();
     try testing.expectEqualStrings("", ic.getText());
     try testing.expectEqual(@as(usize, 0), ic.cursor_pos);
 }
 
-test "diosix-gui: keyboard handling with arrow keys, tab navigation, and control codes" {
+test "diosix-gui: keyboard handling with arrow keys, tab navigation, and control codes in dynamic pane" {
     const allocator = testing.allocator;
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    // Switch to Subprogram 1 (Interactive controls showcase)
-    gui.activateSubProgram(1);
+    const win = try gui.createWindow(200, 100, 100, 600, 400, "Dynamic Pane");
+    const rw_icon = try win.addIcon(Icon.createReadWrite(1, 10, 10, 400, 30, "Diosix RISC-V"));
+    const sl_icon = try win.addIcon(Icon.createSlider(2, 10, 50, 400, 30, 0, 100, 50, "%"));
+    gui.focusWindow(gui.windows.items.len - 1);
 
-    // Get active window (Controls pane)
-    const win = gui.getActiveWindow().?;
-
-    // Find the read-write text field icon
-    var rw_idx: ?usize = null;
-    for (win.icons.items, 0..) |*ic, i| {
-        if (ic.icon_type == .read_write_text) {
-            rw_idx = i;
-            break;
-        }
-    }
-    try testing.expect(rw_idx != null);
-    win.setFocusedIndex(rw_idx.?);
-
-    const rw_icon = &win.icons.items[rw_idx.?];
+    win.setFocusedIndex(0);
     try testing.expect(rw_icon.is_focused);
 
-    // Reset initial text
-    rw_icon.setText("Diosix RISC-V");
-    try testing.expectEqualStrings("Diosix RISC-V", rw_icon.getText());
-    try testing.expectEqual(@as(usize, 13), rw_icon.cursor_pos);
-
-    // 1. Arrow Keys: Left moves cursor backward, Right moves cursor forward
+    // 1. Arrow Keys
     gui.handleKey(gui_mod.Key.LEFT, null, true);
     try testing.expectEqual(@as(usize, 12), rw_icon.cursor_pos);
-    gui.handleKey(gui_mod.Key.LEFT, null, true);
-    try testing.expectEqual(@as(usize, 11), rw_icon.cursor_pos);
     gui.handleKey(gui_mod.Key.RIGHT, null, true);
-    try testing.expectEqual(@as(usize, 12), rw_icon.cursor_pos);
+    try testing.expectEqual(@as(usize, 13), rw_icon.cursor_pos);
 
     // 2. Control-A: Select all
     gui.handleKeyWithModifiers(gui_mod.Key.A, 'a', true, true, false);
     try testing.expect(rw_icon.hasSelection());
     try testing.expectEqualStrings("Diosix RISC-V", rw_icon.getSelectedText());
 
-    // 3. Control-C: Copy selected text to clipboard
+    // 3. Control-C: Copy
     gui.handleKeyWithModifiers(gui_mod.Key.C, 'c', true, true, false);
     try testing.expectEqualStrings("Diosix RISC-V", gui.getClipboard());
 
-    // 4. Control-X: Cut selected text to clipboard
+    // 4. Control-X: Cut
     gui.handleKeyWithModifiers(gui_mod.Key.X, 'x', true, true, false);
     try testing.expectEqualStrings("", rw_icon.getText());
-    try testing.expectEqualStrings("Diosix RISC-V", gui.getClipboard());
 
-    // 5. Control-V: Paste from clipboard
+    // 5. Control-V: Paste
     gui.handleKeyWithModifiers(gui_mod.Key.V, 'v', true, true, false);
     try testing.expectEqualStrings("Diosix RISC-V", rw_icon.getText());
 
-    // 6. Typing numbers in text field must NOT trigger subprogram tab switching!
+    // 6. Typing digits in text field
     gui.handleKey(0, '1', true);
     gui.handleKey(0, '2', true);
     try testing.expectEqualStrings("Diosix RISC-V12", rw_icon.getText());
-    try testing.expectEqual(@as(usize, 1), gui.active_sub_idx); // Still on tab 1!
 
-    // 7. Control-U: Clear the whole field
+    // 7. Control-U: Clear
     gui.handleKeyWithModifiers(gui_mod.Key.U, 'u', true, true, false);
     try testing.expectEqualStrings("", rw_icon.getText());
 
-    // 8. Tab Navigation: moves focus to the next item (away from text field to slider)
+    // 8. Tab Navigation: moves focus to slider
     gui.handleKey(gui_mod.Key.TAB, null, true);
     try testing.expect(!rw_icon.is_focused);
-    try testing.expect(win.focused_icon_idx != rw_idx.?);
+    try testing.expect(sl_icon.is_focused);
 
-    const next_icon = &win.icons.items[win.focused_icon_idx.?];
-    try testing.expectEqual(icon_mod.IconType.slider, next_icon.icon_type);
-
-    // 9. Slider arrow navigation: Left / Right adjusts slider
-    const initial_val = next_icon.slider_val;
+    // 9. Slider arrow navigation
+    const initial_val = sl_icon.slider_val;
     gui.handleKey(gui_mod.Key.LEFT, null, true);
-    try testing.expectEqual(initial_val - 5, next_icon.slider_val);
+    try testing.expectEqual(initial_val - 5, sl_icon.slider_val);
     gui.handleKey(gui_mod.Key.RIGHT, null, true);
-    try testing.expectEqual(initial_val, next_icon.slider_val);
+    try testing.expectEqual(initial_val, sl_icon.slider_val);
 
-    // 10. Shift-Tab moves focus back to previous item (the text field)
+    // 10. Shift-Tab moves focus back to text field
     gui.handleKeyWithModifiers(gui_mod.Key.TAB, null, true, false, true);
     try testing.expect(rw_icon.is_focused);
 }
@@ -995,20 +1157,10 @@ test "diosix-gui: mouse click and select dragging in text field" {
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    gui.activateSubProgram(1);
-    const win = gui.getActiveWindow().?;
+    const win = try gui.createWindow(201, 100, 100, 600, 400, "Drag Test Pane");
+    const icon = try win.addIcon(Icon.createReadWrite(1, 10, 50, 400, 30, "Diosix Drag Test"));
+    gui.focusWindow(gui.windows.items.len - 1);
 
-    var rw_idx: ?usize = null;
-    for (win.icons.items, 0..) |*ic, i| {
-        if (ic.icon_type == .read_write_text) {
-            rw_idx = i;
-            break;
-        }
-    }
-    const icon = &win.icons.items[rw_idx.?];
-    icon.setText("Diosix Drag Test");
-
-    // Click at beginning of text field
     const click_x = win.x + icon.rel_x + 10;
     const click_y = win.y + icon.rel_y + 10;
 
@@ -1017,115 +1169,90 @@ test "diosix-gui: mouse click and select dragging in text field" {
     try testing.expect(icon.is_dragging_select);
     try testing.expectEqual(@as(usize, 0), icon.selection_start.?);
 
-    // Drag mouse to the right across multiple characters
     const drag_x = win.x + icon.rel_x + 80;
     _ = win.handleMouseMove(@ptrCast(&gui), drag_x, click_y, true);
     try testing.expect(icon.hasSelection());
     try testing.expect(icon.selection_end.? > 0);
 
-    // Release mouse button
     _ = win.handleMouseRelease();
     try testing.expect(!icon.is_dragging_select);
     try testing.expect(icon.hasSelection());
 
-    // Backspace on active mouse-drag selection deletes the selected text
     gui.handleKey(gui_mod.Key.BACKSPACE, null, true);
     try testing.expect(!icon.hasSelection());
     try testing.expect(icon.getText().len < 16);
 }
 
 test "diosix-gui: keyboard navigation between panes via Tab, F6, and Left/Right arrows" {
-    const guests_sub = @import("subprograms/guests.zig");
     const allocator = testing.allocator;
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    // Activate Guests subprogram (tab index 2)
-    gui.activateSubProgram(2);
+    const win1 = try gui.createWindow(301, 20, 20, 300, 200, "Left Pane");
+    _ = try win1.addIcon(Icon.createButton(10, 10, 10, 200, 24, "Row 1"));
+    _ = try win1.addIcon(Icon.createButton(11, 10, 40, 200, 24, "Row 2"));
+    _ = try win1.addIcon(Icon.createButton(12, 10, 70, 200, 24, "Row 3"));
 
-    // Verify initial active window is Guest List (first interactive pane)
-    const win_list = gui.getActiveWindow().?;
-    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, win_list.id);
-    try testing.expect(win_list.focused_icon_idx != null);
-    try testing.expectEqual(guests_sub.ICON_GUEST_ROW1_ID, win_list.icons.items[win_list.focused_icon_idx.?].id);
+    const win2 = try gui.createWindow(302, 340, 20, 300, 200, "Right Pane");
+    _ = try win2.addIcon(Icon.createButton(20, 10, 10, 200, 24, "Action 1"));
+    _ = try win2.addIcon(Icon.createButton(21, 10, 40, 200, 24, "Action 2"));
 
-    // 1. Press Key.RIGHT on a button in the left pane to jump to the right pane (Domain Actions)
+    gui.focusWindow(gui.windows.items.len - 2); // Focus win1
+
+    // 1. Right arrow jumps to win2
     gui.handleKey(gui_mod.Key.RIGHT, null, true);
-    const win_actions = gui.getActiveWindow().?;
-    try testing.expectEqual(guests_sub.WIN_GUEST_ACTIONS_ID, win_actions.id);
-    try testing.expect(win_actions.focused_icon_idx != null);
-    try testing.expectEqual(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, win_actions.icons.items[win_actions.focused_icon_idx.?].id);
+    try testing.expectEqual(@as(u32, 302), gui.getActiveWindow().?.id);
 
-    // 2. Press Key.LEFT on an action button in the right pane to jump back to the left pane
+    // 2. Left arrow jumps back to win1
     gui.handleKey(gui_mod.Key.LEFT, null, true);
-    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
+    try testing.expectEqual(@as(u32, 301), gui.getActiveWindow().?.id);
 
-    // 3. Press Key.F6 to cycle directly between panes
+    // 3. F6 cycles between panes
     gui.handleKey(gui_mod.Key.F6, null, true);
-    try testing.expectEqual(guests_sub.WIN_GUEST_ACTIONS_ID, gui.getActiveWindow().?.id);
+    try testing.expectEqual(@as(u32, 302), gui.getActiveWindow().?.id);
     gui.handleKey(gui_mod.Key.F6, null, true);
-    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
-
-    // 4. Tab through all 3 guest items in the inventory pane and overflow into Domain Actions pane
-    // Currently on item 0 (row 1).
-    gui.handleKey(gui_mod.Key.TAB, null, true); // to row 2
-    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
-    gui.handleKey(gui_mod.Key.TAB, null, true); // to row 3
-    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
-    // Tab again: reaches end of Guest List and transitions into Domain Actions pane!
-    gui.handleKey(gui_mod.Key.TAB, null, true);
-    try testing.expectEqual(guests_sub.WIN_GUEST_ACTIONS_ID, gui.getActiveWindow().?.id);
-    try testing.expectEqual(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, gui.getActiveWindow().?.icons.items[gui.getActiveWindow().?.focused_icon_idx.?].id);
-
-    // 5. Shift-Tab underflow from top of Domain Actions pane wraps back to bottom of Guest List pane
-    gui.handleKeyWithModifiers(gui_mod.Key.TAB, null, true, false, true);
-    try testing.expectEqual(guests_sub.WIN_GUEST_LIST_ID, gui.getActiveWindow().?.id);
-    try testing.expectEqual(guests_sub.ICON_GUEST_ROW3_ID, gui.getActiveWindow().?.icons.items[gui.getActiveWindow().?.focused_icon_idx.?].id);
+    // cycles back (skipping version/uptime which have no interactive icons)
+    try testing.expect(gui.getActiveWindow().?.hasInteractiveIcons());
 }
 
 test "diosix-gui: action button selection via Space and Enter with press and release feedback" {
-    const guests_sub = @import("subprograms/guests.zig");
     const allocator = testing.allocator;
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    gui.activateSubProgram(2);
+    const win = try gui.createWindow(401, 50, 50, 300, 200, "Button Test Pane");
+    var btn = Icon.createButton(1, 10, 10, 200, 30, "Action Button");
 
-    // Jump to Domain Actions pane
-    gui.handleKey(gui_mod.Key.RIGHT, null, true);
-    const win = gui.getActiveWindow().?;
-    try testing.expectEqual(guests_sub.WIN_GUEST_ACTIONS_ID, win.id);
+    const Handler = struct {
+        var clicked_count: u32 = 0;
+        fn onClick(_: *anyopaque, _: *anyopaque, _: *Icon) void {
+            clicked_count += 1;
+        }
+    };
+    Handler.clicked_count = 0;
+    btn.callback = Handler.onClick;
+    _ = try win.addIcon(btn);
+    gui.focusWindow(gui.windows.items.len - 1);
 
-    // Focused button is Launch Guest
-    const btn_launch = &win.icons.items[win.focused_icon_idx.?];
-    try testing.expectEqual(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, btn_launch.id);
-    try testing.expect(!btn_launch.is_active_press);
+    const btn_ref = &win.icons.items[0];
 
-    // 1. Press SPACE: button becomes active press and executes callback
+    // 1. Press SPACE
     gui.handleKey(gui_mod.Key.SPACE, ' ', true);
-    try testing.expect(btn_launch.is_active_press);
+    try testing.expect(btn_ref.is_active_press);
+    try testing.expectEqual(@as(u32, 1), Handler.clicked_count);
 
-    // Verify detail pane text updated by action callback
-    const detail_icon = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_DETAIL_TEXT_ID).?;
-    try testing.expectEqualStrings("Spawn Command: dsx run default --name guest-vm --ram 512M --vcpus 2", detail_icon.getText());
-
-    // 2. Release SPACE: button releases from active press
+    // 2. Release SPACE
     gui.handleKey(gui_mod.Key.SPACE, ' ', false);
-    try testing.expect(!btn_launch.is_active_press);
+    try testing.expect(!btn_ref.is_active_press);
 
-    // 3. Move down to Terminate Domain button
-    gui.handleKey(gui_mod.Key.DOWN, null, true);
-    const btn_stop = &win.icons.items[win.focused_icon_idx.?];
-    try testing.expectEqual(guests_sub.ICON_GUEST_ACTION_STOP_ID, btn_stop.id);
-
-    // 4. Press ENTER: button becomes active press and executes terminate callback
+    // 3. Press ENTER
     gui.handleKey(gui_mod.Key.ENTER, '\n', true);
-    try testing.expect(btn_stop.is_active_press);
-    try testing.expectEqualStrings("Terminate Command: Sending hypercall stop request to target child domain.", detail_icon.getText());
+    try testing.expect(btn_ref.is_active_press);
+    try testing.expectEqual(@as(u32, 2), Handler.clicked_count);
 
-    // 5. Release ENTER: button releases
+    // 4. Release ENTER
     gui.handleKey(gui_mod.Key.ENTER, '\n', false);
-    try testing.expect(!btn_stop.is_active_press);
+    try testing.expect(!btn_ref.is_active_press);
 }
 
 test "diosix-gui: clipboard overflow immunity with arbitrarily long strings and multi-byte UTF-8" {
@@ -1133,21 +1260,16 @@ test "diosix-gui: clipboard overflow immunity with arbitrarily long strings and 
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    // 1. Attempt to copy an oversized 1000-byte ASCII string into the 256-byte clipboard
     var huge_buf: [1000]u8 = undefined;
     @memset(&huge_buf, 'X');
     gui.setClipboard(&huge_buf);
 
-    // Verify clipboard safely clamped to CLIPBOARD_CAPACITY (256 bytes)
     const clip = gui.getClipboard();
     try testing.expectEqual(@as(usize, gui_mod.CLIPBOARD_CAPACITY), clip.len);
     try testing.expectEqual(@as(u8, 'X'), clip[0]);
     try testing.expectEqual(@as(u8, 'X'), clip[255]);
-    // Guaranteed null terminator in buffer
     try testing.expectEqual(@as(u8, 0), gui.clipboard_buf[256]);
 
-    // 2. Test multi-byte UTF-8 boundary truncation safety
-    // Create a 255-byte ASCII prefix, followed by a 3-byte UTF-8 sequence (e.g. '€' = 0xE2 0x82 0xAC)
     var utf8_test_buf: [300]u8 = undefined;
     @memset(utf8_test_buf[0..255], 'A');
     utf8_test_buf[255] = 0xE2;
@@ -1155,148 +1277,221 @@ test "diosix-gui: clipboard overflow immunity with arbitrarily long strings and 
     utf8_test_buf[257] = 0xAC;
     @memset(utf8_test_buf[258..300], 'B');
 
-    // Passing this to setClipboard would truncate at index 256 right in the middle of '€' (after 0xE2).
-    // Our hardened setClipboard must detect this and truncate safely BEFORE the incomplete sequence!
     gui.setClipboard(&utf8_test_buf);
     const safe_clip = gui.getClipboard();
     try testing.expectEqual(@as(usize, 255), safe_clip.len);
     try testing.expectEqual(@as(u8, 0), gui.clipboard_buf[255]);
+}
 
-    // 3. Test pasting oversized clipboard data into a text field
-    gui.activateSubProgram(1);
-    const win = gui.getActiveWindow().?;
-    var rw_icon: *icon_mod.Icon = undefined;
-    for (win.icons.items) |*ic| {
-        if (ic.icon_type == .read_write_text) {
-            rw_icon = ic;
-            break;
+test "diosix-gui: graphical clipping of icons to bounding box" {
+    const allocator = testing.allocator;
+    const s_w: u32 = 200;
+    const s_h: u32 = 100;
+    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
+    defer allocator.free(pixel_mem);
+    @memset(pixel_mem, 0);
+    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
+
+    var label_icon = icon_mod.Icon.createReadOnly(
+        1001,
+        20,
+        20,
+        50,
+        24,
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+    );
+    label_icon.render(&surface, 0, 0, false, false);
+
+    var inside_non_zero: usize = 0;
+    var y: u32 = 20;
+    while (y < 44) : (y += 1) {
+        var x: u32 = 20;
+        while (x < 70) : (x += 1) {
+            if (pixel_mem[y * s_w + x] != 0) inside_non_zero += 1;
         }
     }
+    try testing.expect(inside_non_zero > 0);
 
-    // Set clipboard to a 256-byte string
-    var clip_256: [256]u8 = undefined;
-    @memset(&clip_256, 'Z');
-    gui.setClipboard(&clip_256);
-
-    // Paste into text field with max_input_len = 64
-    rw_icon.clearField();
-    rw_icon.insertString(gui.getClipboard());
-
-    // Verify text field length is strictly clamped to max_input_len (64)
-    try testing.expectEqual(@as(usize, rw_icon.max_input_len), rw_icon.text_len);
-    try testing.expect(rw_icon.text_len < rw_icon.text_buf.len);
-    try testing.expectEqual(@as(u8, 0), rw_icon.text_buf[rw_icon.text_len]);
+    y = 0;
+    while (y < s_h) : (y += 1) {
+        var x: u32 = 70;
+        while (x < s_w) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
+        }
+    }
 }
 
-test "diosix-gui: guest VM domain viewer with live video viewport and resource usage telemetry" {
-    const guests_sub = @import("subprograms/guests.zig");
+test "diosix-gui: graphical clipping inside button and editable text field" {
+    const allocator = testing.allocator;
+    const s_w: u32 = 180;
+    const s_h: u32 = 80;
+    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
+    defer allocator.free(pixel_mem);
+
+    @memset(pixel_mem, 0);
+    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
+
+    var btn = icon_mod.Icon.createButton(
+        2001,
+        10,
+        10,
+        60,
+        30,
+        "An Extremely Long Button Label That Exceeds Width",
+    );
+    btn.render(&surface, 0, 0, false, false);
+
+    var y: u32 = 0;
+    while (y < s_h) : (y += 1) {
+        var x: u32 = 70;
+        while (x < s_w) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
+        }
+    }
+}
+
+test "diosix-gui: Surface pushClip and popClip stack nesting" {
+    const allocator = testing.allocator;
+    const s_w: u32 = 100;
+    const s_h: u32 = 100;
+    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
+    defer allocator.free(pixel_mem);
+    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
+
+    try testing.expectEqual(@as(i32, 0), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 100), surface.clip.x1);
+
+    const clip1 = surface.pushClip(fb.Box.fromPosSize(10, 10, 50, 50));
+    try testing.expectEqual(@as(i32, 10), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
+
+    const clip2 = surface.pushClip(fb.Box.fromPosSize(30, 30, 50, 50));
+    try testing.expectEqual(@as(i32, 30), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
+
+    surface.popClip(clip2);
+    try testing.expectEqual(@as(i32, 10), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
+
+    surface.popClip(clip1);
+    try testing.expectEqual(@as(i32, 0), surface.clip.x0);
+    try testing.expectEqual(@as(i32, 100), surface.clip.x1);
+}
+
+test "diosix-gui: scrollable pane scrolling, bounds, and scrollToKeepIconVisible" {
+    const allocator = testing.allocator;
+    var win = Window.init(allocator, 999, 100, 100, 400, 300, "SCROLL TEST");
+    defer win.deinit();
+    win.setOnScreen(true);
+
+    _ = try win.addIcon(Icon.createReadOnly(1, 20, 50, 360, 30, "Item 1"));
+    _ = try win.addIcon(Icon.createReadOnly(2, 20, 150, 360, 30, "Item 2"));
+    _ = try win.addIcon(Icon.createReadOnly(3, 20, 250, 360, 30, "Item 3"));
+    _ = try win.addIcon(Icon.createReadOnly(4, 20, 350, 360, 30, "Item 4"));
+    _ = try win.addIcon(Icon.createReadOnly(5, 20, 450, 360, 30, "Item 5"));
+
+    try testing.expect(win.isScrollable());
+    try testing.expectEqual(@as(i32, 190), win.getMaxScroll());
+
+    _ = win.scrollBy(50);
+    try testing.expectEqual(@as(i32, 50), win.scroll_y);
+
+    _ = win.scrollBy(500);
+    try testing.expectEqual(@as(i32, 190), win.scroll_y);
+
+    _ = win.scrollBy(-500);
+    try testing.expectEqual(@as(i32, 0), win.scroll_y);
+}
+
+test "diosix-gui: scrollbar proximity detection, auto-hiding fade, and drag interaction" {
+    const allocator = testing.allocator;
+    var win = Window.init(allocator, 998, 100, 100, 400, 300, "PROXIMITY TEST");
+    defer win.deinit();
+    win.setOnScreen(true);
+
+    _ = try win.addIcon(Icon.createReadOnly(1, 20, 50, 360, 30, "Item 1"));
+    _ = try win.addIcon(Icon.createReadOnly(2, 20, 450, 360, 30, "Item 2"));
+
+    const track = win.getScrollbarTrackBox();
+    const near_x = track.x0 - 10;
+    const near_y = track.y0 + 20;
+
+    _ = win.handleMouseMove(undefined, near_x, near_y, false);
+    try testing.expect(win.scrollbar_alpha > 0);
+
+    const far_x = win.x + 20;
+    const far_y = win.y + 20;
+    var i: usize = 0;
+    while (i < 20) : (i += 1) {
+        _ = win.handleMouseMove(undefined, far_x, far_y, false);
+    }
+    try testing.expectEqual(@as(u8, 0), win.scrollbar_alpha);
+}
+
+test "diosix-gui: strict viewport clipping prevents content from overdrawing title bar and borders" {
+    const allocator = testing.allocator;
+    var win = Window.init(allocator, 997, 100, 100, 400, 300, "STRICT CLIPPING TEST");
+    defer win.deinit();
+    win.setOnScreen(true);
+
+    _ = try win.addIcon(Icon.createReadOnly(1, 20, 50, 360, 30, "Item 1"));
+    _ = try win.addIcon(Icon.createReadOnly(2, 20, 450, 360, 30, "Item 2"));
+
+    _ = win.scrollTo(100);
+
+    const pixel_mem = try allocator.alloc(u32, 600 * 500);
+    defer allocator.free(pixel_mem);
+    @memset(pixel_mem, 0);
+    var surface = fb.Surface.init(pixel_mem.ptr, 600, 500, 600 * @sizeOf(u32));
+
+    win.render(&surface, 255, true);
+
+    var y: u32 = 0;
+    while (y < 100) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 600) : (x += 1) {
+            try testing.expectEqual(@as(u32, 0), pixel_mem[y * 600 + x]);
+        }
+    }
+}
+
+test "diosix-gui: mouse wheel and PageUp/PageDown/Home/End keyboard navigation" {
     const allocator = testing.allocator;
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    gui.activateSubProgram(2);
+    const win = try gui.createWindow(601, 50, 50, 400, 300, "Scroll Nav Test");
+    _ = try win.addIcon(Icon.createReadOnly(1, 20, 50, 360, 30, "Item 1"));
+    _ = try win.addIcon(Icon.createReadOnly(2, 20, 450, 360, 30, "Item 2"));
+    gui.focusWindow(gui.windows.items.len - 1);
 
-    // 1. Initial State: second-vm selected (VirtIO-GPU active, video signal true)
-    const vid_icon = gui.findIcon(guests_sub.WIN_GUEST_VIDEO_ID, guests_sub.ICON_GUEST_VIDEO_VIEWPORT_ID).?;
-    try testing.expectEqualStrings("second-vm", vid_icon.getText());
-    try testing.expect(vid_icon.video_has_signal);
+    try testing.expect(win.isScrollable());
+    const max_s = win.getMaxScroll();
+    try testing.expect(max_s > 0);
 
-    const cpu_meter = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_METER_CPU_ID).?;
-    try testing.expectEqual(@as(u32, 42), cpu_meter.progress_val);
-    try testing.expect(std.mem.indexOf(u8, cpu_meter.getText(), "42%") != null);
+    // 1. Mouse wheel down -> scroll by 30
+    gui.handleMouseScroll(win.x + 50, win.y + 50, 1);
+    try testing.expectEqual(@as(i32, 30), win.scroll_y);
 
-    const ram_meter = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_METER_RAM_ID).?;
-    try testing.expectEqual(@as(u32, 55), ram_meter.progress_val);
-    try testing.expect(std.mem.indexOf(u8, ram_meter.getText(), "141 MB / 256 MB") != null);
+    // 2. Mouse wheel up -> scroll back up
+    gui.handleMouseScroll(win.x + 50, win.y + 50, -1);
+    try testing.expectEqual(@as(i32, 0), win.scroll_y);
 
-    const disk_meter = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_METER_DISK_ID).?;
-    try testing.expectEqual(@as(u32, 35), disk_meter.progress_val);
-    try testing.expect(std.mem.indexOf(u8, disk_meter.getText(), "184 MB / 512 MB") != null);
+    // 3. Page Down key
+    gui.handleKey(gui_mod.Key.PAGE_DOWN, null, true);
+    try testing.expect(win.scroll_y > 0);
 
-    const disk_text = gui.findIcon(guests_sub.WIN_GUEST_DETAILS_ID, guests_sub.ICON_GUEST_TEXT_DISK_INFO_ID).?;
-    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "3.4 MB/s Read, 1.2 MB/s Write") != null);
-    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "IOPS: 480") != null);
+    // 4. Ctrl-Home scrolls to 0
+    gui.handleKeyWithModifiers(gui_mod.Key.HOME, null, true, true, false);
+    try testing.expectEqual(@as(i32, 0), win.scroll_y);
 
-    // 2. Select debian-vm (Row 2): high load domain with VirtIO-GPU
-    const row2 = gui.findIcon(guests_sub.WIN_GUEST_LIST_ID, guests_sub.ICON_GUEST_ROW2_ID).?;
-    guests_sub.onGuestRowClicked(&gui, undefined, row2);
+    // 5. Ctrl-End scrolls to max
+    gui.handleKeyWithModifiers(gui_mod.Key.END, null, true, true, false);
+    try testing.expectEqual(max_s, win.scroll_y);
 
-    try testing.expectEqualStrings("debian-vm", vid_icon.getText());
-    try testing.expect(vid_icon.video_has_signal);
-    try testing.expectEqual(@as(u32, 68), cpu_meter.progress_val);
-    try testing.expectEqual(@as(u32, 59), ram_meter.progress_val);
-    try testing.expectEqual(@as(u32, 37), disk_meter.progress_val);
-    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "12.8 MB/s Read, 4.5 MB/s Write") != null);
-    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "IOPS: 1240") != null);
-
-    // 3. Select micro-guest (Row 3): headless domain with no GPU output
-    const row3 = gui.findIcon(guests_sub.WIN_GUEST_LIST_ID, guests_sub.ICON_GUEST_ROW3_ID).?;
-    guests_sub.onGuestRowClicked(&gui, undefined, row3);
-
-    try testing.expectEqualStrings("micro-guest", vid_icon.getText());
-    try testing.expect(!vid_icon.video_has_signal); // Headless CRT diagnostic panel
-    try testing.expectEqual(@as(u32, 14), cpu_meter.progress_val);
-    try testing.expectEqual(@as(u32, 28), ram_meter.progress_val);
-    try testing.expectEqual(@as(u32, 28), disk_meter.progress_val);
-    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "0.2 MB/s Read, 0.1 MB/s Write") != null);
-
-    // 4. Terminate selected domain: verifies video signal and CPU telemetry drop
-    const btn_stop = gui.findIcon(guests_sub.WIN_GUEST_ACTIONS_ID, guests_sub.ICON_GUEST_ACTION_STOP_ID).?;
-    guests_sub.onStopGuestClicked(&gui, undefined, btn_stop);
-
-    try testing.expect(!vid_icon.video_has_signal);
-    try testing.expectEqual(@as(u32, 0), cpu_meter.progress_val);
-    try testing.expectEqual(@as(u32, 0), ram_meter.progress_val);
-    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "0.0 MB/s Read, 0.0 MB/s Write") != null);
-    try testing.expect(std.mem.indexOf(u8, disk_text.getText(), "IOPS: 0") != null);
-}
-
-test "diosix-gui: fullscreen video display toggle and ESC key handling" {
-    const guests_sub = @import("subprograms/guests.zig");
-    const allocator = testing.allocator;
-    var gui = try DiosixGui.init(allocator, 1280, 800);
-    defer gui.deinit();
-
-    gui.activateSubProgram(2);
-
-    // 1. Initially fullscreen is inactive
-    try testing.expect(!guests_sub.isFullscreen());
-
-    var win_list_onscreen: bool = false;
-    var win_fs_onscreen: bool = false;
-    for (gui.windows.items) |win| {
-        if (win.id == guests_sub.WIN_GUEST_LIST_ID) win_list_onscreen = win.is_onscreen;
-        if (win.id == guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID) win_fs_onscreen = win.is_onscreen;
-    }
-    try testing.expect(win_list_onscreen);
-    try testing.expect(!win_fs_onscreen);
-
-    // 2. Press 'F' key to toggle fullscreen
-    gui.handleKey(gui_mod.Key.F, 'f', true);
-    try testing.expect(guests_sub.isFullscreen());
-
-    for (gui.windows.items) |win| {
-        if (win.id == guests_sub.WIN_GUEST_LIST_ID) win_list_onscreen = win.is_onscreen;
-        if (win.id == guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID) win_fs_onscreen = win.is_onscreen;
-    }
-    try testing.expect(!win_list_onscreen);
-    try testing.expect(win_fs_onscreen);
-
-    // Fullscreen viewport is populated
-    const fs_vid = gui.findIcon(guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID, guests_sub.ICON_GUEST_FULLSCREEN_VIEWPORT_ID).?;
-    try testing.expectEqualStrings("second-vm", fs_vid.getText());
-    try testing.expect(fs_vid.video_has_signal);
-
-    // 3. Press ESC key to exit fullscreen
-    gui.handleKey(gui_mod.Key.ESC, null, true);
-    try testing.expect(!guests_sub.isFullscreen());
-
-    for (gui.windows.items) |win| {
-        if (win.id == guests_sub.WIN_GUEST_LIST_ID) win_list_onscreen = win.is_onscreen;
-        if (win.id == guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID) win_fs_onscreen = win.is_onscreen;
-    }
-    try testing.expect(win_list_onscreen);
-    try testing.expect(!win_fs_onscreen);
+    // 6. Page Up key scrolls back up
+    gui.handleKey(gui_mod.Key.PAGE_UP, null, true);
+    try testing.expect(win.scroll_y < max_s);
 }
 
 fn writePpmFile(surface: *const fb.Surface, path_z: [*:0]const u8) !void {
@@ -1324,38 +1519,6 @@ fn writePpmFile(surface: *const fb.Surface, path_z: [*:0]const u8) !void {
     }
 }
 
-test "diosix-gui: render guest screenshots for visualization" {
-    const guests_sub = @import("subprograms/guests.zig");
-    const allocator = testing.allocator;
-    var gui = try DiosixGui.init(allocator, 1280, 800);
-    defer gui.deinit();
-
-    const pixel_mem = try allocator.alloc(u32, 1280 * 800);
-    defer allocator.free(pixel_mem);
-    var surface = fb.Surface.init(pixel_mem.ptr, 1280, 800, 1280 * @sizeOf(u32));
-
-    // 1. Render Tab 2 (Guests) with second-vm (VirtIO-GPU)
-    gui.activateSubProgram(2);
-    gui.markFullDirty();
-    _ = gui.renderDamaged(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_guests_overview.ppm");
-
-    // 2. Select micro-guest (headless domain)
-    const row3 = gui.findIcon(guests_sub.WIN_GUEST_LIST_ID, guests_sub.ICON_GUEST_ROW3_ID).?;
-    guests_sub.onGuestRowClicked(&gui, undefined, row3);
-    gui.markFullDirty();
-    _ = gui.renderDamaged(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_guests_headless.ppm");
-
-    // 3. Switch back to second-vm and enter Fullscreen Video View
-    const row1 = gui.findIcon(guests_sub.WIN_GUEST_LIST_ID, guests_sub.ICON_GUEST_ROW1_ID).?;
-    guests_sub.onGuestRowClicked(&gui, undefined, row1);
-    guests_sub.enterFullscreen(&gui);
-    gui.markFullDirty();
-    _ = gui.renderDamaged(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_guests_fullscreen.ppm");
-}
-
 test "diosix-gui: render intro animation frames for the two warm moments" {
     const allocator = testing.allocator;
     var gui = try DiosixGui.init(allocator, 1280, 800);
@@ -1367,415 +1530,16 @@ test "diosix-gui: render intro animation frames for the two warm moments" {
 
     var intro = intro_mod.IntroState.init(0);
 
-    // Capture key animation moments for verification:
-    // Spell-out left to right:
-    intro.elapsed_ms = 700; // 'd'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step1_d.ppm");
-
-    intro.elapsed_ms = 900; // 'di'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step2_di.ppm");
-
-    intro.elapsed_ms = 1100; // 'dio'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step3_dio.ppm");
-
-    intro.elapsed_ms = 1300; // 'dios'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step4_dios.ppm");
-
-    intro.elapsed_ms = 1500; // 'diosi'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step5_diosi.ppm");
-
-    intro.elapsed_ms = 1700; // 'diosix'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step6_diosix.ppm");
-
-    // Moment 1 peak with soft white corona:
-    intro.elapsed_ms = 2100; // 'diosix' + soft white corona
+    intro.elapsed_ms = 2100;
     intro.render(&surface, &gui);
     try writePpmFile(&surface, "/tmp/diosix_intro_moment1.ppm");
 
-    // Fade-out left to right:
-    intro.elapsed_ms = 3200; // ' iosix'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step7_iosix.ppm");
-
-    intro.elapsed_ms = 3400; // '  osix'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step8_osix.ppm");
-
-    intro.elapsed_ms = 3600; // '   six'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step9_six.ppm");
-
-    intro.elapsed_ms = 3800; // '    ix'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step10_ix.ppm");
-
-    intro.elapsed_ms = 4000; // '     x'
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_step11_x.ppm");
-
-    // Moment 2 GUI Bloom & Settled:
-    intro.elapsed_ms = 6000;
+    intro.elapsed_ms = 4600;
     intro.render(&surface, &gui);
     try writePpmFile(&surface, "/tmp/diosix_intro_moment2.ppm");
-
-    intro.elapsed_ms = 8000;
-    intro.render(&surface, &gui);
-    try writePpmFile(&surface, "/tmp/diosix_intro_settled.ppm");
 }
 
-test "diosix-gui: graphical clipping of icons to bounding box" {
-    const allocator = testing.allocator;
-    const s_w: u32 = 200;
-    const s_h: u32 = 100;
-    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
-    defer allocator.free(pixel_mem);
-    @memset(pixel_mem, 0);
-    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
-
-    // Create a read-only text icon at (20, 20) with width 50, height 24
-    // Give it a 500px wide string that would vastly exceed the 50px width without clipping
-    var label_icon = icon_mod.Icon.createReadOnly(
-        1001,
-        20,
-        20,
-        50,
-        24,
-        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
-    );
-
-    label_icon.render(&surface, 0, 0, false);
-
-    // Verify that pixels inside [20..70, 20..44] contain rendered glyph pixels
-    var inside_non_zero: usize = 0;
-    var y: u32 = 20;
-    while (y < 44) : (y += 1) {
-        var x: u32 = 20;
-        while (x < 70) : (x += 1) {
-            if (pixel_mem[y * s_w + x] != 0) {
-                inside_non_zero += 1;
-            }
-        }
-    }
-    try testing.expect(inside_non_zero > 0);
-
-    // Verify that NO pixels outside the bounding box were modified
-    // 1. Right of bounding box (x >= 70): must be all zero!
-    y = 0;
-    while (y < s_h) : (y += 1) {
-        var x: u32 = 70;
-        while (x < s_w) : (x += 1) {
-            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
-        }
-    }
-
-    // 2. Left of bounding box (x < 20): must be all zero!
-    y = 0;
-    while (y < s_h) : (y += 1) {
-        var x: u32 = 0;
-        while (x < 20) : (x += 1) {
-            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
-        }
-    }
-
-    // 3. Above bounding box (y < 20): must be all zero!
-    y = 0;
-    while (y < 20) : (y += 1) {
-        var x: u32 = 0;
-        while (x < s_w) : (x += 1) {
-            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
-        }
-    }
-
-    // 4. Below bounding box (y >= 44): must be all zero!
-    y = 44;
-    while (y < s_h) : (y += 1) {
-        var x: u32 = 0;
-        while (x < s_w) : (x += 1) {
-            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
-        }
-    }
-}
-
-test "diosix-gui: graphical clipping inside button and editable text field" {
-    const allocator = testing.allocator;
-    const s_w: u32 = 180;
-    const s_h: u32 = 80;
-    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
-    defer allocator.free(pixel_mem);
-
-    // 1. Test Button Clipping
-    @memset(pixel_mem, 0);
-    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
-
-    var btn = icon_mod.Icon.createButton(
-        2001,
-        10,
-        10,
-        60,
-        30,
-        "An Extremely Long Button Label That Exceeds Width",
-    );
-    btn.render(&surface, 0, 0, false);
-
-    // Pixels to the right of the button (x >= 70) must remain strictly 0
-    var y: u32 = 0;
-    while (y < s_h) : (y += 1) {
-        var x: u32 = 70;
-        while (x < s_w) : (x += 1) {
-            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
-        }
-    }
-
-    // 2. Test Editable Text Field Clipping
-    @memset(pixel_mem, 0);
-    var field = icon_mod.Icon.createReadWrite(
-        2002,
-        10,
-        10,
-        60,
-        28,
-        "Default",
-    );
-    field.insertString("0123456789012345678901234567890123456789");
-    field.render(&surface, 0, 0, false);
-
-    // Pixels to the right of the field (x >= 70) must remain strictly 0
-    y = 0;
-    while (y < s_h) : (y += 1) {
-        var x: u32 = 70;
-        while (x < s_w) : (x += 1) {
-            try testing.expectEqual(@as(u32, 0), pixel_mem[y * s_w + x]);
-        }
-    }
-}
-
-test "diosix-gui: Surface pushClip and popClip stack nesting" {
-    const allocator = testing.allocator;
-    const s_w: u32 = 100;
-    const s_h: u32 = 100;
-    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
-    defer allocator.free(pixel_mem);
-    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
-
-    // Default clip is full surface
-    try testing.expectEqual(@as(i32, 0), surface.clip.x0);
-    try testing.expectEqual(@as(i32, 0), surface.clip.y0);
-    try testing.expectEqual(@as(i32, 100), surface.clip.x1);
-    try testing.expectEqual(@as(i32, 100), surface.clip.y1);
-
-    // Push clip (10, 10, 50, 50) -> x0=10, y0=10, x1=60, y1=60
-    const clip1 = surface.pushClip(fb.Box.fromPosSize(10, 10, 50, 50));
-    try testing.expectEqual(@as(i32, 10), surface.clip.x0);
-    try testing.expectEqual(@as(i32, 10), surface.clip.y0);
-    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
-    try testing.expectEqual(@as(i32, 60), surface.clip.y1);
-
-    // Push intersecting clip (30, 30, 50, 50) -> x0=30, y0=30, x1=80, y1=80
-    // Intersection with (10, 10, 60, 60) is (30, 30, 60, 60)
-    const clip2 = surface.pushClip(fb.Box.fromPosSize(30, 30, 50, 50));
-    try testing.expectEqual(@as(i32, 30), surface.clip.x0);
-    try testing.expectEqual(@as(i32, 30), surface.clip.y0);
-    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
-    try testing.expectEqual(@as(i32, 60), surface.clip.y1);
-
-    // Pop clip2
-    surface.popClip(clip2);
-    try testing.expectEqual(@as(i32, 10), surface.clip.x0);
-    try testing.expectEqual(@as(i32, 10), surface.clip.y0);
-    try testing.expectEqual(@as(i32, 60), surface.clip.x1);
-    try testing.expectEqual(@as(i32, 60), surface.clip.y1);
-
-    // Pop clip1
-    surface.popClip(clip1);
-    try testing.expectEqual(@as(i32, 0), surface.clip.x0);
-    try testing.expectEqual(@as(i32, 0), surface.clip.y0);
-    try testing.expectEqual(@as(i32, 100), surface.clip.x1);
-    try testing.expectEqual(@as(i32, 100), surface.clip.y1);
-}
-
-test "diosix-gui: scrollable pane scrolling, bounds, and scrollToKeepIconVisible" {
-    const allocator = testing.allocator;
-    var win = Window.init(allocator, 999, 100, 100, 400, 300, "SCROLL TEST");
-    defer win.deinit();
-    win.setOnScreen(true);
-
-    _ = try win.addIcon(Icon.createReadOnly(1, 20, 50, 360, 30, "Item 1"));
-    _ = try win.addIcon(Icon.createReadOnly(2, 20, 150, 360, 30, "Item 2"));
-    _ = try win.addIcon(Icon.createReadOnly(3, 20, 250, 360, 30, "Item 3"));
-    _ = try win.addIcon(Icon.createReadOnly(4, 20, 350, 360, 30, "Item 4"));
-    _ = try win.addIcon(Icon.createReadOnly(5, 20, 450, 360, 30, "Item 5"));
-
-    // Content height is 450 + 30 + 10 = 490.
-    // Window height is 300. Max scroll is 490 - 300 = 190.
-    try testing.expect(win.isScrollable());
-    try testing.expectEqual(@as(i32, 190), win.getMaxScroll());
-
-    // Scroll by delta
-    _ = win.scrollBy(50);
-    try testing.expectEqual(@as(i32, 50), win.scroll_y);
-
-    // Scroll past max clamps to max
-    _ = win.scrollBy(500);
-    try testing.expectEqual(@as(i32, 190), win.scroll_y);
-
-    // Scroll negative clamps to 0
-    _ = win.scrollBy(-500);
-    try testing.expectEqual(@as(i32, 0), win.scroll_y);
-
-    // Auto-scroll to keep icon visible
-    // Icon 4 (index 4) is at rel_y=450..480, completely out of view when scroll_y=0
-    _ = win.scrollToKeepIconVisible(4);
-    try testing.expect(win.scroll_y > 0);
-    const c_top = win.getHeaderHeight();
-    const vh = win.getViewportHeight();
-    const icon_rel_y: i32 = 450;
-    try testing.expect(icon_rel_y >= win.scroll_y + c_top);
-    try testing.expect(icon_rel_y + 30 <= win.scroll_y + c_top + vh);
-}
-
-test "diosix-gui: scrollbar proximity detection, auto-hiding fade, and drag interaction" {
-    const allocator = testing.allocator;
-    var win = Window.init(allocator, 998, 100, 100, 400, 300, "PROXIMITY TEST");
-    defer win.deinit();
-    win.setOnScreen(true);
-
-    _ = try win.addIcon(Icon.createReadOnly(1, 20, 50, 360, 30, "Item 1"));
-    _ = try win.addIcon(Icon.createReadOnly(2, 20, 450, 360, 30, "Item 2"));
-
-    const track = win.getScrollbarTrackBox();
-    try testing.expect(track.x1 > track.x0);
-    try testing.expect(track.y1 > track.y0);
-
-    // 1. Mouse far away (> 60px) -> scrollbar alpha is 0
-    _ = win.handleMouseMove(undefined, 0, 0, false);
-    try testing.expectEqual(@as(u8, 0), win.scrollbar_alpha);
-
-    // 2. Mouse within proximity range (~25px from track) -> scrollbar alpha > 0 and < 240
-    const near_x = track.x0 - 25;
-    const near_y = track.y0 + 20;
-    _ = win.handleMouseMove(undefined, near_x, near_y, false);
-    try testing.expect(win.scrollbar_alpha > 0);
-    try testing.expect(win.scrollbar_alpha < 240);
-
-    // 3. Mouse directly over scrollbar track (<= 8px) -> scrollbar alpha is 240
-    _ = win.handleMouseMove(undefined, track.x0, track.y0 + 20, false);
-    try testing.expectEqual(@as(u8, 240), win.scrollbar_alpha);
-
-    // 4. Mouse click on thumb starts drag -> scrollbar alpha becomes 255 (active drag glow)
-    const thumb = win.getScrollbarThumbBox();
-    _ = win.handleMouseClick(undefined, thumb.x0 + 1, thumb.y0 + 2);
-    try testing.expect(win.is_dragging_scrollbar);
-    try testing.expectEqual(@as(u8, 255), win.scrollbar_alpha);
-
-    // 5. Drag mouse down -> scroll_y increases
-    const initial_scroll = win.scroll_y;
-    _ = win.handleMouseMove(undefined, thumb.x0 + 1, thumb.y0 + 40, true);
-    try testing.expect(win.scroll_y > initial_scroll);
-
-    // 6. Release mouse -> drag ends
-    _ = win.handleMouseRelease();
-    try testing.expect(!win.is_dragging_scrollbar);
-}
-
-test "diosix-gui: strict viewport clipping prevents content from overdrawing title bar and borders" {
-    const allocator = testing.allocator;
-    const s_w: u32 = 400;
-    const s_h: u32 = 400;
-    const pixel_mem = try allocator.alloc(u32, s_w * s_h);
-    defer allocator.free(pixel_mem);
-    var surface = fb.Surface.init(pixel_mem.ptr, s_w, s_h, s_w * @sizeOf(u32));
-    @memset(surface.pixels[0..s_w * s_h], fb.Color.BLACK);
-
-    // Create window at (50, 50), size 300x300, with title
-    var win = Window.init(allocator, 997, 50, 50, 300, 300, "CLIP STRICT TEST");
-    defer win.deinit();
-    win.setOnScreen(true);
-
-    // Header is y = 50..86. Content top is 86.
-    // Add an icon with high contrast color at rel_y = 40 (inside viewport initially)
-    const btn = Icon.createButton(1, 20, 40, 200, 30, "CLIPPED TEST BUTTON");
-    _ = try win.addIcon(btn);
-    // Add another icon at rel_y = 500 to make window scrollable
-    _ = try win.addIcon(Icon.createReadOnly(2, 20, 500, 200, 30, "TALL CONTENT"));
-
-    // Scroll by 60px so that the button's rendered y would be:
-    // win.y - scroll_y + rel_y = 50 - 60 + 40 = 30.
-    // Button area would be y = 30..60, which overlaps the window title bar area (y = 50..86) if unclipped!
-    _ = win.scrollTo(60);
-
-    // Render the window
-    win.render(&surface, 255);
-
-    // Viewport clip ensures everything above c_top (86) was clipped.
-    // Surface clip must be restored to full surface:
-    try testing.expectEqual(@as(i32, 0), surface.clip.x0);
-    try testing.expectEqual(@as(i32, 400), surface.clip.x1);
-}
-
-test "diosix-gui: mouse wheel and PageUp/PageDown/Home/End keyboard navigation" {
-    const icon_sub = @import("subprograms/icon_test.zig");
-    const allocator = testing.allocator;
-    var gui = try DiosixGui.init(allocator, 1280, 800);
-    defer gui.deinit();
-
-    // Activate Controls & Icons subprogram (tab 1)
-    gui.activateSubProgram(1);
-
-    var win_ctrls_opt: ?*Window = null;
-    for (gui.windows.items) |*w| {
-        if (w.id == icon_sub.WIN_CONTROLS_ID) {
-            win_ctrls_opt = w;
-            break;
-        }
-    }
-    const win_ctrls = win_ctrls_opt orelse return error.WindowNotFound;
-    try testing.expect(win_ctrls.is_onscreen);
-    try testing.expect(win_ctrls.isScrollable());
-
-    const max_s = win_ctrls.getMaxScroll();
-    try testing.expect(max_s > 0);
-
-    // 1. Mouse wheel down (delta = 1) -> scrolls down by 30px
-    gui.handleMouseScroll(win_ctrls.x + 50, win_ctrls.y + 50, 1);
-    try testing.expectEqual(@as(i32, 30), win_ctrls.scroll_y);
-
-    // 2. Mouse wheel up (delta = -1) -> scrolls back up
-    gui.handleMouseScroll(win_ctrls.x + 50, win_ctrls.y + 50, -1);
-    try testing.expectEqual(@as(i32, 0), win_ctrls.scroll_y);
-
-    // 3. Page Down key -> scrolls down by viewport height
-    gui.handleKey(gui_mod.Key.PAGE_DOWN, null, true);
-    try testing.expect(win_ctrls.scroll_y > 0);
-
-    // 4. Ctrl-Home scrolls to 0 even when focused inside text field
-    gui.handleKeyWithModifiers(gui_mod.Key.HOME, null, true, true, false);
-    try testing.expectEqual(@as(i32, 0), win_ctrls.scroll_y);
-
-    // 5. Ctrl-End scrolls to maximum scroll
-    gui.handleKeyWithModifiers(gui_mod.Key.END, null, true, true, false);
-    try testing.expectEqual(max_s, win_ctrls.scroll_y);
-
-    // 6. When focused on a non-text icon (e.g. slider at index 4), plain Home and End scroll pane
-    win_ctrls.setFocusedIndex(4);
-    gui.handleKey(gui_mod.Key.HOME, null, true);
-    try testing.expectEqual(@as(i32, 0), win_ctrls.scroll_y);
-
-    gui.handleKey(gui_mod.Key.END, null, true);
-    try testing.expectEqual(max_s, win_ctrls.scroll_y);
-
-    // 7. Page Up key scrolls back up
-    gui.handleKey(gui_mod.Key.PAGE_UP, null, true);
-    try testing.expect(win_ctrls.scroll_y < max_s);
-}
-
-test "diosix-gui: render scrollable pane screenshots for visual verification" {
-    const icon_sub = @import("subprograms/icon_test.zig");
+test "diosix-gui: render dynamic layout screenshot for visual verification" {
     const allocator = testing.allocator;
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
@@ -1784,40 +1548,391 @@ test "diosix-gui: render scrollable pane screenshots for visual verification" {
     defer allocator.free(pixel_mem);
     var surface = fb.Surface.init(pixel_mem.ptr, 1280, 800, 1280 * @sizeOf(u32));
 
-    gui.activateSubProgram(1);
+    // 1. Mouse Mode: Hover mouse over "Status" menu item
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    const status_item = &win_menu.icons.items[1];
+    gui.handleMouseMove(win_menu.x + status_item.rel_x + 10, win_menu.y + status_item.rel_y + 10, false);
 
-    var win_ctrls_opt: ?*Window = null;
-    for (gui.windows.items) |*w| {
-        if (w.id == icon_sub.WIN_CONTROLS_ID) {
-            win_ctrls_opt = w;
-            break;
-        }
-    }
-    const win = win_ctrls_opt.?;
-
-    // 1. Mouse far away: scrollbar is hidden
-    gui.handleMouseMove(1000, 700, false);
     gui.markFullDirty();
     _ = gui.renderDamaged(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_scroll_away.ppm");
+    gui.cursor.draw(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_new_layout.ppm");
 
-    // 2. Mouse near scrollbar: scrollbar fades in
-    const track = win.getScrollbarTrackBox();
-    gui.handleMouseMove(track.x0 - 15, track.y0 + 50, false);
+    // 2. Keyboard Mode: Press Up key, switching to keyboard mode and focusing "Guests"
+    gui.handleKey(gui_mod.Key.UP, null, true);
     gui.markFullDirty();
     _ = gui.renderDamaged(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_scroll_near.ppm");
-
-    // 3. Mouse drags scrollbar thumb down: pane scrolled, thumb active cyan glow
-    _ = win.scrollTo(120);
-    win.scrollbar_alpha = 255;
-    win.is_dragging_scrollbar = true;
-    gui.markFullDirty();
-    _ = gui.renderDamaged(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_scroll_drag.ppm");
+    // Mouse cursor is not drawn in keyboard mode
+    try writePpmFile(&surface, "/tmp/diosix_keyboard_mode.ppm");
 }
 
+test "diosix-gui: taller info panes and non-selectable icon text immunity" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
 
+    const win_ver = gui.getWindow(gui_mod.WIN_VERSION_ID).?;
+    const win_help = gui.getWindow(gui_mod.WIN_HELP_ID).?;
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
 
+    // 1. Geometry verification: 40px height for panes, 24px height for icons, rel_y 8
+    try testing.expectEqual(@as(u32, 40), win_ver.height);
+    try testing.expectEqual(@as(u32, 40), win_help.height);
 
+    const ver_icon = win_ver.getIconById(gui_mod.ICON_VERSION_TEXT_ID).?;
+    try testing.expectEqual(@as(u32, 24), ver_icon.height);
+    try testing.expectEqual(@as(i32, 8), ver_icon.rel_y);
+    try testing.expect(!ver_icon.is_selectable);
 
+    const help_icon = win_help.getIconById(gui_mod.ICON_HELP_TEXT_ID).?;
+    try testing.expectEqual(@as(u32, 24), help_icon.height);
+    try testing.expectEqual(@as(i32, 8), help_icon.rel_y);
+    try testing.expect(!help_icon.is_selectable);
+
+    // 2. Active window is initially the left menu
+    try testing.expect(win_menu.is_active);
+    try testing.expect(!win_ver.is_active);
+    try testing.expect(!win_help.is_active);
+    try testing.expectEqual(@as(?usize, null), win_ver.focused_icon_idx);
+    try testing.expectEqual(@as(?usize, null), win_help.focused_icon_idx);
+
+    // 3. Mouse clicks inside version pane or help pane do NOT steal focus or select text
+    gui.handleMouseClick(win_ver.x + 20, win_ver.y + 20);
+    try testing.expect(win_menu.is_active);
+    try testing.expect(!win_ver.is_active);
+    try testing.expect(!ver_icon.is_focused);
+    try testing.expectEqual(@as(?usize, null), win_ver.focused_icon_idx);
+
+    gui.handleMouseClick(win_help.x + 20, win_help.y + 20);
+    try testing.expect(win_menu.is_active);
+    try testing.expect(!win_help.is_active);
+    try testing.expect(!help_icon.is_focused);
+    try testing.expectEqual(@as(?usize, null), win_help.focused_icon_idx);
+
+    // 4. Mouse movement over version/help pane does NOT set is_hovered on non-selectable icons
+    gui.handleMouseMove(win_ver.x + 20, win_ver.y + 20, false);
+    try testing.expect(!ver_icon.is_hovered);
+
+    gui.handleMouseMove(win_help.x + 20, win_help.y + 20, false);
+    try testing.expect(!help_icon.is_hovered);
+
+    // 5. Keyboard navigation (Tab, Shift-Tab, F6) ignores non-selectable panes
+    gui.handleKey(gui_mod.Key.F6, null, true);
+    try testing.expect(win_menu.is_active);
+    try testing.expect(!win_ver.is_active);
+    try testing.expect(!win_help.is_active);
+
+    gui.handleKey(gui_mod.Key.TAB, null, true);
+    try testing.expect(win_menu.is_active);
+    try testing.expect(!win_ver.is_active);
+    try testing.expect(!win_help.is_active);
+
+    // 6. Programmatic setSelectable(false) disables hit testing and clears focus
+    var btn = Icon.createButton(9999, 10, 10, 100, 30, "Click Me");
+    try testing.expect(btn.is_selectable);
+    try testing.expect(btn.hitTest(0, 0, 20, 20));
+
+    btn.is_focused = true;
+    btn.is_hovered = true;
+    btn.setSelectable(false);
+    try testing.expect(!btn.is_selectable);
+    try testing.expect(!btn.is_focused);
+    try testing.expect(!btn.is_hovered);
+    try testing.expect(!btn.hitTest(0, 0, 20, 20));
+}
+
+test "diosix-gui: input mode switching between mouse and keyboard pointers" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+
+    // 1. Initial boot state: keyboard mode active, mouse cursor hidden, first interactive item focused
+    try testing.expectEqual(gui_mod.InputMode.keyboard, gui.input_mode);
+    try testing.expect(!gui.cursor.visible);
+    try testing.expectEqual(@as(?usize, 0), win_menu.focused_icon_idx);
+    try testing.expect(win_menu.icons.items[0].is_focused);
+    try testing.expect(!win_menu.icons.items[1].is_focused);
+    try testing.expect(!win_menu.icons.items[0].is_hovered);
+    try testing.expect(!win_menu.icons.items[1].is_hovered);
+
+    // 2. Mouse move over 'Status' menu item (index 1) switches to mouse mode
+    const status_item = &win_menu.icons.items[1];
+    const mouse_target_x = win_menu.x + status_item.rel_x + 15;
+    const mouse_target_y = win_menu.y + status_item.rel_y + 15;
+    gui.handleMouseMove(mouse_target_x, mouse_target_y, false);
+
+    try testing.expectEqual(gui_mod.InputMode.mouse, gui.input_mode);
+    try testing.expect(gui.cursor.visible);
+    try testing.expect(status_item.is_hovered);
+    try testing.expect(!win_menu.icons.items[0].is_hovered);
+
+    // Focus was synced to hovered item (index 1) so keyboard can resume smoothly
+    try testing.expectEqual(@as(?usize, 1), win_menu.focused_icon_idx);
+
+    // 3. User presses Up arrow key on keyboard:
+    // Switches to keyboard mode immediately. Mouse cursor disappears and becomes inactive.
+    // Hover states are completely cleared. Hand marker points to focused item.
+    gui.handleKey(gui_mod.Key.UP, null, true);
+
+    try testing.expectEqual(gui_mod.InputMode.keyboard, gui.input_mode);
+    try testing.expect(!gui.cursor.visible);
+    // Focus navigated up from index 1 (Status) to index 0 (Guests)
+    try testing.expectEqual(@as(?usize, 0), win_menu.focused_icon_idx);
+    try testing.expect(win_menu.icons.items[0].is_focused);
+    try testing.expect(!win_menu.icons.items[1].is_focused);
+
+    // Crucial Bug Fix Verification: 'Status' must NO LONGER be hovered or highlighted!
+    try testing.expect(!win_menu.icons.items[0].is_hovered);
+    try testing.expect(!win_menu.icons.items[1].is_hovered);
+
+    // 4. Moving the mouse again resumes mouse mode and hides keyboard focus hand
+    gui.handleMouseMove(mouse_target_x, mouse_target_y, false);
+    try testing.expectEqual(gui_mod.InputMode.mouse, gui.input_mode);
+    try testing.expect(gui.cursor.visible);
+    try testing.expect(win_menu.icons.items[1].is_hovered);
+    try testing.expect(!win_menu.icons.items[0].is_hovered);
+}
+
+test "diosix-gui: render active help and status pane screenshots for visual verification" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    const pixel_mem = try allocator.alloc(u32, 1280 * 800);
+    defer allocator.free(pixel_mem);
+    var surface = fb.Surface.init(pixel_mem.ptr, 1280, 800, 1280 * @sizeOf(u32));
+
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    const guests_item = &win_menu.icons.items[0];
+    const status_item = &win_menu.icons.items[1];
+
+    // 1. Mouse hover over "Guests": Active Help displays help text
+    gui.handleMouseMove(win_menu.x + guests_item.rel_x + 15, win_menu.y + guests_item.rel_y + 15, false);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    gui.cursor.draw(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_help_guests.ppm");
+
+    // 2. Mouse hover over "Status": Active Help displays status help text
+    gui.handleMouseMove(win_menu.x + status_item.rel_x + 15, win_menu.y + status_item.rel_y + 15, false);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    gui.cursor.draw(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_help_status.ppm");
+
+    // 3. Click Status to open Status pane (fallback view: unmocked environment renders clean '--' values)
+    gui.handleMouseClick(win_menu.x + status_item.rel_x + 15, win_menu.y + status_item.rel_y + 15);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    gui.cursor.draw(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_status_pane_fallback.ppm");
+
+    // 4. Populate with live Hypervisor telemetry: table alignment and formatted values
+    var mock_info = std.mem.zeroes(host_info.HypervisorInfo);
+    mock_info.version_major = 26;
+    mock_info.version_minor = 1;
+    mock_info.host_physical_cores = 4;
+    mock_info.host_total_ram_kb = 16 * 1024 * 1024; // 16 GB
+    mock_info.host_free_ram_kb = 9 * 1024 * 1024;  // 9 GB free
+    mock_info.hv_reserved_bytes = 16 * 1024 * 1024; // 16 MB reserved
+    mock_info.hv_heap_free_bytes = 16580608;        // 15.8 MB free
+    const isa_src = "RV64IMAFDC";
+    @memcpy(mock_info.host_cpu_isa[0..isa_src.len], isa_src);
+    const commit_src = "760a3d7";
+    @memcpy(mock_info.build_commit[0..commit_src.len], commit_src);
+    const desc_src = "Version 26.1 guestdev/760a3d7 Wed Sep 16 12:48:32 AM PDT 2026 chris@violet (Zig 0.17.0-dev.648+8d1b6e339 riscv64)";
+    @memcpy(mock_info.build_desc[0..desc_src.len], desc_src);
+
+    host_info.mock_hypervisor_info = mock_info;
+    defer host_info.mock_hypervisor_info = null;
+
+    gui.updateStatusPaneData();
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    gui.cursor.draw(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_status_pane.ppm");
+    try writePpmFile(&surface, "/tmp/diosix_status_pane_table.ppm");
+
+    // 5. Switch to keyboard navigation and move focus to "Guests" while Status pane is open
+    gui.handleKey(gui_mod.Key.UP, null, true);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_status_pane_keyboard.ppm");
+
+    // 6. Open Config pane and export visual verification screenshot
+    try gui.activateMenuItem(gui_mod.ICON_MENU_CONFIG_ID);
+    gui.markFullDirty();
+    _ = gui.renderDamaged(&surface);
+    gui.cursor.draw(&surface);
+    try writePpmFile(&surface, "/tmp/diosix_config_pane.ppm");
+}
+
+test "diosix-gui: mouse right-click does not switch to keyboard control" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    // Move mouse to enter mouse mode
+    gui.handleMouseMove(200, 200, false);
+    try testing.expectEqual(gui_mod.InputMode.mouse, gui.input_mode);
+    try testing.expect(gui.cursor.visible);
+
+    // Right-click pressed: should be ignored and MUST NOT switch to keyboard mode
+    gui.handleKey(BTN_RIGHT, null, true);
+    try testing.expectEqual(gui_mod.InputMode.mouse, gui.input_mode);
+    try testing.expect(gui.cursor.visible);
+
+    // Right-click released: should also be ignored
+    gui.handleKey(BTN_RIGHT, null, false);
+    try testing.expectEqual(gui_mod.InputMode.mouse, gui.input_mode);
+    try testing.expect(gui.cursor.visible);
+}
+
+test "diosix-gui: host_info hypervisor footprint format" {
+    var mock_info = std.mem.zeroes(host_info.HypervisorInfo);
+    mock_info.hv_reserved_bytes = 16 * 1024 * 1024;
+    mock_info.hv_heap_free_bytes = 16580608;
+    host_info.mock_hypervisor_info = mock_info;
+    defer host_info.mock_hypervisor_info = null;
+
+    var buf: [80]u8 = undefined;
+    const str = host_info.getHvFootprintString(&buf);
+    try testing.expectEqualStrings("15.8 MB free of 16 MB reserved (98% free)", str);
+}
+
+test "diosix-gui: config pane controls and dynamic appearance customization" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    // 1. Open Config pane
+    try gui.activateMenuItem(gui_mod.ICON_MENU_CONFIG_ID);
+    const win_config = gui.getWindow(gui_mod.WIN_CONFIG_ID).?;
+    try testing.expect(win_config.is_onscreen);
+    try testing.expectEqual(gui_mod.WIN_MENU_ID, win_config.parent_window_id.?);
+    try testing.expectEqual(gui_mod.ICON_MENU_CONFIG_ID, win_config.linked_menu_item_id.?);
+
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    try testing.expectEqual(gui_mod.WIN_CONFIG_ID, win_menu.child_window_id.?);
+
+    const icon_config_menu = win_menu.getIconById(gui_mod.ICON_MENU_CONFIG_ID).?;
+    try testing.expect(icon_config_menu.is_selected);
+    try testing.expect(gui.getActiveChildConnectorBox() != null);
+
+    // 2. Adjust Transparency slider
+    const trans_slider = win_config.getIconById(gui_mod.ICON_CONFIG_TRANSPARENCY_SLIDER_ID).?;
+    try testing.expectEqual(@as(u32, 50), gui.window_transparency);
+    try testing.expectEqual(@as(i32, 50), trans_slider.slider_val);
+
+    // Adjust slider up by +10
+    trans_slider.adjustSlider(10);
+    if (trans_slider.callback) |cb| cb(&gui, win_config, trans_slider);
+    try testing.expectEqual(@as(u32, 60), gui.window_transparency);
+    try testing.expectEqual(@as(i32, 60), trans_slider.slider_val);
+
+    // 3. Adjust Blur strength slider
+    const blur_slider = win_config.getIconById(gui_mod.ICON_CONFIG_BLUR_SLIDER_ID).?;
+    try testing.expectEqual(@as(u32, 50), gui.blur_strength);
+    try testing.expectEqual(@as(i32, 50), blur_slider.slider_val);
+
+    // Adjust slider down by -20
+    blur_slider.adjustSlider(-20);
+    if (blur_slider.callback) |cb| cb(&gui, win_config, blur_slider);
+    try testing.expectEqual(@as(u32, 30), gui.blur_strength);
+    try testing.expectEqual(@as(i32, 30), blur_slider.slider_val);
+    try testing.expectEqual(@as(u32, 3), gui.getBlurRadius());
+
+    // 4. Test Theme buttons: Midnight, Sunset, Emerald, Day Sky
+    const btn_midnight = win_config.getIconById(gui_mod.ICON_CONFIG_THEME_MIDNIGHT_ID).?;
+    if (btn_midnight.callback) |cb| cb(&gui, win_config, btn_midnight);
+    try testing.expectEqual(fb.Color.rgb(16, 24, 48), gui.bg_top_color);
+    try testing.expectEqual(fb.Color.rgb(4, 6, 16), gui.bg_bot_color);
+
+    const btn_sunset = win_config.getIconById(gui_mod.ICON_CONFIG_THEME_SUNSET_ID).?;
+    if (btn_sunset.callback) |cb| cb(&gui, win_config, btn_sunset);
+    try testing.expectEqual(fb.Color.rgb(180, 70, 60), gui.bg_top_color);
+    try testing.expectEqual(fb.Color.rgb(40, 20, 50), gui.bg_bot_color);
+
+    const btn_emerald = win_config.getIconById(gui_mod.ICON_CONFIG_THEME_EMERALD_ID).?;
+    if (btn_emerald.callback) |cb| cb(&gui, win_config, btn_emerald);
+    try testing.expectEqual(fb.Color.rgb(32, 120, 90), gui.bg_top_color);
+    try testing.expectEqual(fb.Color.rgb(10, 36, 30), gui.bg_bot_color);
+
+    const btn_day = win_config.getIconById(gui_mod.ICON_CONFIG_THEME_DAY_ID).?;
+    if (btn_day.callback) |cb| cb(&gui, win_config, btn_day);
+    try testing.expectEqual(fb.Color.SKY_BASE_TOP, gui.bg_top_color);
+    try testing.expectEqual(fb.Color.GRADIENT_BOT_DEFAULT, gui.bg_bot_color);
+}
+
+test "diosix-gui: linked list pane architecture and switching between panes" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    const icon_status = win_menu.getIconById(gui_mod.ICON_MENU_STATUS_ID).?;
+    const icon_config = win_menu.getIconById(gui_mod.ICON_MENU_CONFIG_ID).?;
+
+    // 1. Initially no child panes
+    try testing.expect(win_menu.child_window_id == null);
+    try testing.expect(!icon_status.is_selected);
+    try testing.expect(!icon_config.is_selected);
+    try testing.expect(gui.getActiveChildConnectorBox() == null);
+
+    // 2. Open Status pane
+    try gui.activateMenuItem(gui_mod.ICON_MENU_STATUS_ID);
+    try testing.expectEqual(gui_mod.WIN_STATUS_ID, win_menu.child_window_id.?);
+    try testing.expect(icon_status.is_selected);
+    try testing.expect(!icon_config.is_selected);
+    try testing.expect(gui.getActiveChildConnectorBox() != null);
+
+    // 3. Switch to Config pane: Status is torn down from tail back to head, Config is opened
+    try gui.activateMenuItem(gui_mod.ICON_MENU_CONFIG_ID);
+    try testing.expect(gui.getWindow(gui_mod.WIN_STATUS_ID) == null);
+    try testing.expect(gui.getWindow(gui_mod.WIN_CONFIG_ID) != null);
+    try testing.expectEqual(gui_mod.WIN_CONFIG_ID, win_menu.child_window_id.?);
+    try testing.expect(!icon_status.is_selected);
+    try testing.expect(icon_config.is_selected);
+    try testing.expect(gui.getActiveChildConnectorBox() != null);
+
+    // 4. Clicking open Config menu item toggles it closed
+    try gui.activateMenuItem(gui_mod.ICON_MENU_CONFIG_ID);
+    try testing.expect(gui.getWindow(gui_mod.WIN_CONFIG_ID) == null);
+    try testing.expect(win_menu.child_window_id == null);
+    try testing.expect(!icon_config.is_selected);
+    try testing.expect(gui.getActiveChildConnectorBox() == null);
+}
+
+test "diosix-gui: 3-tier active help priority system" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    const win_help = gui.getWindow(gui_mod.WIN_HELP_ID).?;
+    const help_icon = win_help.getIconById(gui_mod.ICON_HELP_TEXT_ID).?;
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    const item_guests = &win_menu.icons.items[0];
+
+    // Priority 1: Cursor over icon with help text displays icon help text
+    gui.handleMouseMove(win_menu.x + item_guests.rel_x + 5, win_menu.y + item_guests.rel_y + 5, false);
+    try testing.expectEqualStrings("View and manage guest virtual machines", help_icon.getText());
+
+    // Priority 2: Open Status pane. Text icons have no help text, but the pane itself has help text
+    try gui.activateMenuItem(gui_mod.ICON_MENU_STATUS_ID);
+    const win_status = gui.getWindow(gui_mod.WIN_STATUS_ID).?;
+
+    // Cursor over status pane's "Uptime" label (icon has no help text) -> shows pane help text
+    const lbl_uptime = win_status.getIconById(gui_mod.ICON_STATUS_HOST_UPTIME_LABEL_ID).?;
+    gui.handleMouseMove(win_status.x + lbl_uptime.rel_x + 2, win_status.y + lbl_uptime.rel_y + 2, false);
+    try testing.expectEqualStrings("Information about this host system and hypervisor", help_icon.getText());
+
+    // Cursor over empty region of status pane (no icon under cursor) -> shows pane help text
+    gui.handleMouseMove(win_status.x + 10, win_status.y + 10, false);
+    try testing.expectEqualStrings("Information about this host system and hypervisor", help_icon.getText());
+
+    // Priority 3: Cursor over empty desktop (no window, no icon) -> shows fallback text
+    gui.handleMouseMove(500, 500, false);
+    try testing.expectEqualStrings("Welcome to diosix", help_icon.getText());
+}

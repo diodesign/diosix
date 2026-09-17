@@ -113,12 +113,7 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/window.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/drm.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/gui.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprogram.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/system_info.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/icon_test.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/guests.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/storage.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/subprograms/power.zig"));
+    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/host_info.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/audio.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/intro.zig"));
     run_buildroot.addFileInput(b.path("tools/diosix-gui/src/noise.zig"));

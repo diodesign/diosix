@@ -456,6 +456,10 @@ pub fn getHvRegion() Region {
     return phys_mem_state.hv_region;
 }
 
+pub fn getHypervisorRegion() Region {
+    return phys_mem_state.hv_region;
+}
+
 pub fn isHypervisorMemory(base: usize, size: usize) bool {
     if (size == 0) return false;
     const end = std.math.add(usize, base, size) catch std.math.maxInt(usize);

@@ -38,6 +38,22 @@ pub const Window = struct {
     scrollbar_drag_start_scroll_y: i32 = 0,
     scrollbar_alpha: u8 = 0,
 
+    // Linked list pane hierarchy: parent -> child -> sub-child
+    parent_window_id: ?u32 = null,
+    child_window_id: ?u32 = null,
+    linked_menu_item_id: ?u32 = null,
+
+    // Contextual help text for this pane (Priority 2 help text)
+    help_text: ?[]const u8 = null,
+
+    pub fn setHelpText(self: *Window, text: ?[]const u8) void {
+        self.help_text = text;
+    }
+
+    pub fn getHelpText(self: *const Window) ?[]const u8 {
+        return self.help_text;
+    }
+
     pub const CORNER_RADIUS: i32 = 10;
     pub const DEFAULT_OFFSCREEN_OFFSET: i32 = 2000;
     pub const SCROLLBAR_WIDTH: u32 = 6;
@@ -82,7 +98,7 @@ pub const Window = struct {
         try self.icons.append(self.allocator, icon);
         const idx = self.icons.items.len - 1;
         // Default first interactive icon as focused
-        if (self.focused_icon_idx == null and icon.icon_type != .read_only_text and icon.is_enabled) {
+        if (self.focused_icon_idx == null and isIconInteractive(&self.icons.items[idx])) {
             self.focused_icon_idx = idx;
             self.icons.items[idx].is_focused = true;
         }
@@ -124,7 +140,7 @@ pub const Window = struct {
     // --- Scrollable Viewport & Geometry ---
 
     pub fn getHeaderHeight(self: *const Window) i32 {
-        return if (self.title != null) 36 else 10;
+        return if (self.title != null) 36 else 6;
     }
 
     pub fn getContentTop(self: *const Window) i32 {
@@ -132,7 +148,8 @@ pub const Window = struct {
     }
 
     pub fn getContentBottom(self: *const Window) i32 {
-        return self.y + @as(i32, @intCast(self.height)) - 10;
+        const bot_pad: i32 = if (self.title != null) 10 else 6;
+        return self.y + @as(i32, @intCast(self.height)) - bot_pad;
     }
 
     pub fn getViewportHeight(self: *const Window) i32 {
@@ -146,7 +163,8 @@ pub const Window = struct {
             const bottom = icon.rel_y + @as(i32, @intCast(icon.height));
             if (bottom > max_bottom) max_bottom = bottom;
         }
-        const span = max_bottom + 10;
+        const pad: i32 = if (self.title != null) 10 else 6;
+        const span = max_bottom + pad;
         return @max(@as(i32, @intCast(self.height)), span);
     }
 
@@ -234,7 +252,7 @@ pub const Window = struct {
 
     // Check if an icon is interactive (eligible for keyboard navigation and activation)
     pub fn isIconInteractive(icon: *const Icon) bool {
-        return icon.icon_type != .read_only_text and icon.icon_type != .progress_bar and icon.icon_type != .video_viewport and icon.is_enabled;
+        return icon.is_selectable and icon.icon_type != .read_only_text and icon.icon_type != .progress_bar and icon.icon_type != .video_viewport and icon.is_enabled;
     }
 
     // Check if this window has any enabled interactive icons
@@ -332,10 +350,23 @@ pub const Window = struct {
         self.focused_icon_idx = new_idx;
         if (new_idx) |idx| {
             if (idx < self.icons.items.len) {
-                self.icons.items[idx].is_focused = true;
-                _ = self.scrollToKeepIconVisible(idx);
+                if (self.icons.items[idx].is_selectable) {
+                    self.icons.items[idx].is_focused = true;
+                    _ = self.scrollToKeepIconVisible(idx);
+                } else {
+                    self.focused_icon_idx = null;
+                }
             }
         }
+    }
+
+    pub fn getFocusedIcon(self: *Window) ?*Icon {
+        if (self.focused_icon_idx) |idx| {
+            if (idx < self.icons.items.len) {
+                return &self.icons.items[idx];
+            }
+        }
+        return null;
     }
 
     // Trigger icon click with grouping exclusivity handling
@@ -368,6 +399,9 @@ pub const Window = struct {
             .read_only_text => {},
             .progress_bar => {},
             .video_viewport => {
+                icon.is_active_press = true;
+            },
+            .menu_item => {
                 icon.is_active_press = true;
             },
         }
@@ -420,7 +454,7 @@ pub const Window = struct {
                 const icon_bot = icon_sy + @as(i32, @intCast(icon.height));
                 if (icon_bot <= c_top or icon_sy >= c_bot) continue;
 
-                if (icon.hitTest(self.x, win_content_y, px, py)) {
+                if (icon.is_selectable and icon.hitTest(self.x, win_content_y, px, py)) {
                     self.setFocusedIndex(idx);
 
                     // Handle slider specific direct position setting
@@ -521,14 +555,27 @@ pub const Window = struct {
         const in_content_viewport = (py >= c_top and py < c_bot);
         const win_content_y = self.y - self.scroll_y;
 
-        for (self.icons.items) |*icon| {
+        for (self.icons.items, 0..) |*icon, idx| {
             const icon_sy = win_content_y + icon.rel_y;
             const icon_bot = icon_sy + @as(i32, @intCast(icon.height));
             const in_view = !(icon_bot <= c_top or icon_sy >= c_bot);
             const hit = in_content_viewport and in_view and icon.hitTest(self.x, win_content_y, px, py);
 
+            if (!icon.is_selectable) {
+                if (icon.is_hovered) {
+                    icon.is_hovered = false;
+                    changed = true;
+                }
+                continue;
+            }
+
             if (icon.is_hovered != hit) {
                 icon.is_hovered = hit;
+                changed = true;
+            }
+
+            if (hit and icon.icon_type == .menu_item and (self.focused_icon_idx == null or self.focused_icon_idx.? != idx)) {
+                self.setFocusedIndex(idx);
                 changed = true;
             }
 
@@ -583,15 +630,33 @@ pub const Window = struct {
         return changed;
     }
 
+    // Find an icon at the given absolute screen coordinates (px, py)
+    pub fn findIconAt(self: *Window, px: i32, py: i32) ?*Icon {
+        if (!self.is_onscreen) return null;
+        const box = self.getBox();
+        if (!box.contains(px, py)) return null;
+
+        const c_top = self.getContentTop();
+        const c_bot = self.getContentBottom();
+        if (py < c_top or py >= c_bot) return null;
+
+        const win_content_y = self.y - self.scroll_y;
+        for (self.icons.items) |*icon| {
+            if (icon.containsPoint(self.x, win_content_y, px, py)) {
+                return icon;
+            }
+        }
+        return null;
+    }
+
     // Render this window and all its contained icons
-    pub fn render(self: *Window, surface: *fb.Surface, opacity_alpha: u8) void {
+    pub fn render(self: *Window, surface: *fb.Surface, opacity_alpha: u8, is_keyboard_active: bool) void {
         if (!self.is_onscreen) return;
 
         const box = self.getBox();
 
-        // 1. Draw neutral glass pane with dynamic opacity and subtly rounded corners
-        const border_col = if (self.is_active) fb.Color.GLASS_BTN_BORDER else fb.Color.GLASS_BORDER;
-        surface.drawRoundedTranslucentBox(box, CORNER_RADIUS, fb.Color.GLASS_BG, opacity_alpha, border_col);
+        // 1. Draw neutral glass pane with dynamic opacity and subtly rounded corners (no outline border)
+        surface.drawRoundedTranslucentBox(box, CORNER_RADIUS, fb.Color.GLASS_BG, opacity_alpha, null);
 
         // 2. Optional Title Banner (clipped to window width)
         if (self.title) |t| {
@@ -627,7 +692,7 @@ pub const Window = struct {
                 // Quick culling of icons completely outside the viewport
                 if (icon_bot <= c_top or icon_sy >= c_bot) continue;
 
-                icon.render(surface, self.x, win_content_y, self.is_active);
+                icon.render(surface, self.x, win_content_y, self.is_active, is_keyboard_active);
             }
         }
 

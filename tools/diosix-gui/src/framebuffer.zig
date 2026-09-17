@@ -350,6 +350,28 @@ pub const Surface = struct {
         self.fillBox(.{ .x0 = target.x1 - t, .y0 = target.y0 + t, .x1 = target.x1, .y1 = target.y1 - t }, color);
     }
 
+    pub fn drawFilledCircle(self: *Surface, cx: i32, cy: i32, radius: i32, color: u32) void {
+        if (radius <= 0) {
+            self.setPixel(cx, cy, color);
+            return;
+        }
+        var dy = -radius;
+        while (dy <= radius) : (dy += 1) {
+            var dx = -radius;
+            while (dx <= radius) : (dx += 1) {
+                if (dx * dx + dy * dy <= radius * radius) {
+                    self.setPixel(cx + dx, cy + dy, color);
+                }
+            }
+        }
+    }
+
+    pub fn drawHorizontalLine(self: *Surface, x0: i32, x1: i32, y: i32, color: u32) void {
+        const left = @min(x0, x1);
+        const right = @max(x0, x1);
+        self.fillBox(Box{ .x0 = left, .y0 = y, .x1 = right + 1, .y1 = y + 1 }, color);
+    }
+
     // Static graduated background constrained to target box
     pub fn drawGraduatedBackgroundInBox(self: *Surface, target: Box, top_color: u32, bot_color: u32) void {
     const h = self.height;

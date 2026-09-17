@@ -103,6 +103,10 @@ struct hypervisor_info {
     uint32_t host_timer_freq_hz;
     uint64_t host_total_ram_kb;
     uint64_t host_free_ram_kb;
+    uint64_t hv_reserved_bytes;
+    uint64_t hv_heap_free_bytes;
+    char     host_cpu_isa[32];
+    char     build_desc[192];
 };
 
 

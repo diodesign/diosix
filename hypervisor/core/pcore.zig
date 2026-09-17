@@ -233,6 +233,27 @@ pub fn countOnline() usize {
     return count;
 }
 
+// Return the total free bytes in the hypervisor heap across all active physical CPU cores
+pub fn getTotalFreeHeapBytes() usize {
+    var total: usize = 0;
+    for (0..TABLE_ROWS) |i| {
+        if (core_table[i].static_ptr) |ctx| {
+            total += ctx.allocator.free_size;
+        }
+    }
+    const flags = table_lock.lock();
+    defer table_lock.unlock(flags);
+
+    for (0..TABLE_ROWS) |i| {
+        var current = core_table[i].dynamic_head;
+        while (current) |node| {
+            total += node.context.allocator.free_size;
+            current = node.next;
+        }
+    }
+    return total;
+}
+
 pub extern fn hw_run_vcore(
     context: *riscv.ThreadContext,
     machine: *const riscv.MachineState,

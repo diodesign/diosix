@@ -1,4 +1,4 @@
-// Monolithic Final Fantasy 7/8 Themed GUI Coordinator for Diosix
+// Monolithic Final Fantasy 7/8 Themed Dynamic GUI Coordinator for Diosix
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -11,20 +11,50 @@ const icon_mod = @import("icon.zig");
 const Icon = icon_mod.Icon;
 const window_mod = @import("window.zig");
 const Window = window_mod.Window;
-const sub_mod = @import("subprogram.zig");
-const SubProgram = sub_mod.SubProgram;
+const host_info = @import("host_info.zig");
 
-const sys_sub = @import("subprograms/system_info.zig");
-const icon_sub = @import("subprograms/icon_test.zig");
-const guests_sub = @import("subprograms/guests.zig");
-const storage_sub = @import("subprograms/storage.zig");
-const power_sub = @import("subprograms/power.zig");
+pub const TAB_BAR_HEIGHT: u32 = 0;
+pub const BORDER_GAP: i32 = 16;
 
-pub const TAB_BAR_HEIGHT: u32 = 42;
-pub const TAB_START_X: i32 = 230;
-pub const TAB_STRIDE: i32 = 204;
-pub const TAB_WIDTH: u32 = 200;
-pub const TAB_HEIGHT: u32 = 32;
+// Standard Window & Icon IDs
+pub const WIN_MENU_ID: u32 = 100;
+pub const WIN_VERSION_ID: u32 = 101;
+pub const WIN_HELP_ID: u32 = 103;
+pub const WIN_STATUS_ID: u32 = 104;
+pub const WIN_CONFIG_ID: u32 = 105;
+
+pub const ICON_MENU_GUESTS_ID: u32 = 1001;
+pub const ICON_MENU_STATUS_ID: u32 = 1002;
+pub const ICON_MENU_CONFIG_ID: u32 = 1003;
+pub const ICON_VERSION_TEXT_ID: u32 = 1011;
+pub const ICON_HELP_TEXT_ID: u32 = 1031;
+
+pub const ICON_STATUS_HOST_HDR_ID: u32 = 1040;
+pub const ICON_STATUS_HOST_UPTIME_LABEL_ID: u32 = 1041;
+pub const ICON_STATUS_HOST_UPTIME_ID: u32 = 1042;
+pub const ICON_STATUS_HOST_CPU_LABEL_ID: u32 = 1043;
+pub const ICON_STATUS_HOST_CPU_ID: u32 = 1044;
+pub const ICON_STATUS_HOST_RAM_LABEL_ID: u32 = 1045;
+pub const ICON_STATUS_HOST_RAM_ID: u32 = 1046;
+pub const ICON_STATUS_HOST_TIME_LABEL_ID: u32 = 1047;
+pub const ICON_STATUS_HOST_TIME_ID: u32 = 1048;
+pub const ICON_STATUS_HV_HDR_ID: u32 = 1049;
+pub const ICON_STATUS_HV_BUILD_LABEL_ID: u32 = 1050;
+pub const ICON_STATUS_HV_BUILD1_ID: u32 = 1051;
+pub const ICON_STATUS_HV_BUILD2_ID: u32 = 1052;
+pub const ICON_STATUS_HV_FOOTPRINT_LABEL_ID: u32 = 1053;
+pub const ICON_STATUS_HV_FOOTPRINT_ID: u32 = 1054;
+
+pub const ICON_CONFIG_HDR_ID: u32 = 1060;
+pub const ICON_CONFIG_TRANSPARENCY_LBL_ID: u32 = 1061;
+pub const ICON_CONFIG_TRANSPARENCY_SLIDER_ID: u32 = 1062;
+pub const ICON_CONFIG_BLUR_LBL_ID: u32 = 1063;
+pub const ICON_CONFIG_BLUR_SLIDER_ID: u32 = 1064;
+pub const ICON_CONFIG_THEME_LBL_ID: u32 = 1065;
+pub const ICON_CONFIG_THEME_DAY_ID: u32 = 1066;
+pub const ICON_CONFIG_THEME_MIDNIGHT_ID: u32 = 1067;
+pub const ICON_CONFIG_THEME_SUNSET_ID: u32 = 1068;
+pub const ICON_CONFIG_THEME_EMERALD_ID: u32 = 1069;
 
 pub const Key = struct {
     pub const ESC: u16 = 1;
@@ -57,15 +87,21 @@ pub const Key = struct {
 
 pub const CLIPBOARD_CAPACITY: usize = 256;
 
+pub const InputMode = enum {
+    mouse,
+    keyboard,
+};
+
 pub const DiosixGui = struct {
     allocator: std.mem.Allocator,
     width: u32,
     height: u32,
 
     windows: std.ArrayList(Window),
-    subprograms: std.ArrayList(SubProgram),
-    active_sub_idx: usize = 0,
     active_win_idx: ?usize = null,
+
+    // Dynamic input mode: mouse pointer vs keyboard pointer
+    input_mode: InputMode = .keyboard,
 
     cursor: cursor_mod.Cursor,
     mouse_left_down: bool = false,
@@ -77,9 +113,6 @@ pub const DiosixGui = struct {
     // System clipboard for text copy / cut / paste (guaranteed null-terminated)
     clipboard_buf: [CLIPBOARD_CAPACITY + 1]u8 = @splat(0),
     clipboard_len: usize = 0,
-
-    // Keyboard navigation focus
-    focus_on_tab_bar: bool = false,
 
     // Real-time window transparency percentage (0 = fully opaque, 100 = invisible; default 50%)
     window_transparency: u32 = 50,
@@ -97,6 +130,10 @@ pub const DiosixGui = struct {
     // Scratch buffer for deterministic separable Gaussian blur passes
     blur_scratch: []u32,
 
+    // Live host telemetry tracking
+    uptime_accum_ms: u32 = 0,
+    last_uptime_sec: u64 = 0,
+
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !DiosixGui {
         const total_h = std.math.add(usize, height, 64) catch return error.InvalidDimensions;
         const scratch_len = std.math.mul(usize, width, total_h) catch return error.InvalidDimensions;
@@ -107,36 +144,27 @@ pub const DiosixGui = struct {
             .width = width,
             .height = height,
             .windows = .empty,
-            .subprograms = .empty,
-            .active_sub_idx = 0,
             .cursor = cursor_mod.Cursor{
                 .x = @as(i32, @intCast(width / 2)),
                 .y = @as(i32, @intCast(height / 2)),
+                .visible = false,
             },
             .blur_scratch = scratch_mem,
         };
 
-        // 1. Register all monolithic sub-programs
-        try gui.subprograms.append(allocator, sys_sub.createSubProgram(allocator));
-        try gui.subprograms.append(allocator, icon_sub.createSubProgram(allocator));
-        try gui.subprograms.append(allocator, guests_sub.createSubProgram(allocator));
-        try gui.subprograms.append(allocator, storage_sub.createSubProgram(allocator));
-        try gui.subprograms.append(allocator, power_sub.createSubProgram(allocator));
+        // 1. Build left menu
+        try gui.buildMainMenu();
 
-        // 2. Build and populate all fixed-size window panes on startup
-        try gui.buildSystemInfoWindows();
-        try gui.buildIconTestWindows();
-        try gui.buildGuestsWindows();
-        try gui.buildStorageWindows();
-        try gui.buildPowerWindows();
+        // 2. Build bottom panes (Active Help pane on left, Version pane on right)
+        try gui.buildBottomPanes();
 
-        // 3. Initialize all sub-programs
-        for (gui.subprograms.items) |*sub| {
-            sub.init_fn(sub, &gui);
+        // Focus main menu
+        if (gui.windows.items.len > 0) {
+            gui.focusWindow(0);
         }
 
-        // 4. Activate initial sub-program (System Info)
-        gui.activateSubProgram(0);
+        // Initialize active help
+        gui.updateActiveHelp();
 
         // Initial state is full-screen damage
         gui.markFullDirty();
@@ -149,369 +177,672 @@ pub const DiosixGui = struct {
             win.deinit();
         }
         self.windows.deinit(self.allocator);
-
-        for (self.subprograms.items) |*sub| {
-            sub.deinit();
-        }
-        self.subprograms.deinit(self.allocator);
-
         self.allocator.free(self.blur_scratch);
     }
 
-    // --- Window Builders ---
+    // --- Dynamic Window Lifecycle Management ---
 
-    fn buildSystemInfoWindows(self: *DiosixGui) !void {
-        // Left Specs Window Pane
-        var win_specs = Window.init(self.allocator, sys_sub.WIN_SPECS_ID, 24, 54, 780, 536, "SYSTEM SPECIFICATIONS & HYPERVISOR");
-        _ = try win_specs.addIcon(Icon.createReadOnly(sys_sub.ICON_BADGE_ID, 24, 46, 732, 28, "[ PRIVILEGED DOMAIN 0 (ROOT VM) - FULL HYPERVISOR AUTHORITY ]"));
-        _ = try win_specs.addIcon(Icon.createReadOnly(sys_sub.ICON_CID_ID, 24, 88, 732, 24, "Assigned Context ID : CID 1 (Platform Domain 0)"));
-        _ = try win_specs.addIcon(Icon.createReadOnly(sys_sub.ICON_ARCH_ID, 24, 122, 732, 24, "Architecture        : RISC-V 64-bit (rv64gc / sv39x4 virt)"));
-        _ = try win_specs.addIcon(Icon.createReadOnly(sys_sub.ICON_VCPUS_ID, 24, 156, 732, 24, "Online Virtual CPUs : 4 Cores (Hart 0 - 3 online)"));
-        _ = try win_specs.addIcon(Icon.createReadOnly(sys_sub.ICON_RAM_ID, 24, 190, 732, 24, "Physical Memory     : 2048 MB Total / 128 MB Hypervisor Reserve"));
-        _ = try win_specs.addIcon(Icon.createReadOnly(sys_sub.ICON_HV_ID, 24, 224, 732, 24, "Hypervisor Core     : Diosix Microkernel v0.2.0 (Type-1 Bare-Metal)"));
-        _ = try win_specs.addIcon(Icon.createReadOnly(sys_sub.ICON_NET_ID, 24, 258, 732, 24, "Virtual Network     : diosix0 (10.0.3.1/24, Virtual Switch Active)"));
-        _ = try win_specs.addIcon(Icon.createReadOnly(sys_sub.ICON_UPTIME_ID, 24, 292, 732, 24, "System Uptime       : Initializing telemetry..."));
-        try self.windows.append(self.allocator, win_specs);
+    // Dynamically create a new window pane
+    pub fn createWindow(self: *DiosixGui, id: u32, x: i32, y: i32, width: u32, height: u32, title: ?[]const u8) !*Window {
+        _ = self.destroyWindow(id);
 
-        // Right Actions Window Pane
-        var win_actions = Window.init(self.allocator, sys_sub.WIN_ACTIONS_ID, 824, 54, 432, 536, "OPERATIONS");
-        var btn_refresh = Icon.createButton(sys_sub.ICON_BTN_REFRESH_ID, 24, 54, 384, 36, "Refresh System Status");
-        btn_refresh.callback = sys_sub.onRefreshClicked;
-        _ = try win_actions.addIcon(btn_refresh);
-
-        var btn_specs = Icon.createButton(sys_sub.ICON_BTN_SPECS_ID, 24, 106, 384, 36, "Hardware Capabilities");
-        btn_specs.callback = sys_sub.onSpecsClicked;
-        _ = try win_actions.addIcon(btn_specs);
-
-        _ = try win_actions.addIcon(Icon.createReadOnly(sys_sub.ICON_LABEL_PLATFORM_CTRL_ID, 24, 168, 384, 24, "Host Platform Control:"));
-
-        var btn_reboot = Icon.createButton(sys_sub.ICON_BTN_REBOOT_ID, 24, 204, 384, 36, "Reboot Host Platform");
-        btn_reboot.callback = sys_sub.onRebootClicked;
-        _ = try win_actions.addIcon(btn_reboot);
-
-        var btn_poweroff = Icon.createButton(sys_sub.ICON_BTN_POWEROFF_ID, 24, 256, 384, 36, "Power Off Host Platform");
-        btn_poweroff.callback = sys_sub.onPowerOffClicked;
-        _ = try win_actions.addIcon(btn_poweroff);
-        try self.windows.append(self.allocator, win_actions);
-
-        // Bottom Log Window Pane
-        var win_log = Window.init(self.allocator, sys_sub.WIN_LOG_ID, 24, 608, 1232, 172, "DIOSIX SYSTEM LOG & STATUS");
-        _ = try win_log.addIcon(Icon.createReadOnly(sys_sub.ICON_LOG_TEXT_ID, 24, 54, 1184, 28, "Privileged Domain 0: Full host hypervisor authority active across /dev/diosix."));
-        try self.windows.append(self.allocator, win_log);
+        var win = Window.init(self.allocator, id, x, y, width, height, title);
+        win.setOnScreen(true);
+        try self.windows.append(self.allocator, win);
+        const idx = self.windows.items.len - 1;
+        self.markDirty(self.windows.items[idx].getBox());
+        return &self.windows.items[idx];
     }
 
-    fn buildIconTestWindows(self: *DiosixGui) !void {
-        // Left Showcase Pane: Read-only, Read-write, Sliders, Tick box
-        var win_ctrls = Window.init(self.allocator, icon_sub.WIN_CONTROLS_ID, 24, 54, 600, 536, "INTERACTIVE CONTROLS SHOWCASE");
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL1_ID, 24, 40, 552, 18, "1. Read-Only Telemetry Display:"));
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_TEXT_ID, 24, 60, 552, 24, "Live Core Telemetry: 0 ticks (OK)"));
-
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL2_ID, 24, 94, 552, 18, "2. Read-Write Editable Text Field:"));
-        var rw_text = Icon.createReadWrite(icon_sub.ICON_RW_TEXT_ID, 24, 114, 552, 34, "Diosix RISC-V Hypervisor");
-        rw_text.callback = icon_sub.onReadWriteTextChanged;
-        _ = try win_ctrls.addIcon(rw_text);
-
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL3_ID, 24, 158, 552, 18, "3. Real-Time Window Transparency Slider:"));
-        var sl_trans = Icon.createSlider(icon_sub.ICON_SLIDER_TRANSPARENCY_ID, 24, 178, 552, 46, 0, 90, 50, "%");
-        sl_trans.setText("Window Transparency (Glass Opacity)");
-        sl_trans.callback = icon_sub.onTransparencySliderChanged;
-        _ = try win_ctrls.addIcon(sl_trans);
-
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL4_ID, 24, 234, 552, 18, "4. Backdrop Gaussian Blur Strength Slider:"));
-        var sl_blur = Icon.createSlider(icon_sub.ICON_SLIDER_BLUR_ID, 24, 254, 552, 46, 0, 100, 50, "%");
-        sl_blur.setText("Backdrop Gaussian Blur (Frosted Glass)");
-        sl_blur.callback = icon_sub.onBlurSliderChanged;
-        _ = try win_ctrls.addIcon(sl_blur);
-
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL5_ID, 24, 310, 552, 18, "5. Scalar Slider (Interactive Drag & Keys):"));
-        var sl_vcpu = Icon.createSlider(icon_sub.ICON_SLIDER_VCPU_ID, 24, 330, 552, 46, 0, 100, 75, "%");
-        sl_vcpu.setText("VCPU Quota Allocation");
-        sl_vcpu.callback = icon_sub.onVcpuSliderChanged;
-        _ = try win_ctrls.addIcon(sl_vcpu);
-
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL6_ID, 24, 386, 552, 18, "6. Independent Tick Box:"));
-        var tick_log = Icon.createTickBox(icon_sub.ICON_TICK_LOGGING_ID, 24, 406, 552, 28, "Enable Verbose Real-Time Telemetry", true, null, .inclusive);
-        tick_log.callback = icon_sub.onLoggingToggled;
-        _ = try win_ctrls.addIcon(tick_log);
-
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL7_ID, 24, 446, 552, 18, "7. Hypervisor Workload Progress:"));
-        const prog_bench = Icon.createProgressBar(icon_sub.ICON_PROGRESS_TEST_ID, 24, 466, 552, 28, "Hypervisor Workload Stress: 65%", 65, fb.Color.ACCENT_CYAN);
-        _ = try win_ctrls.addIcon(prog_bench);
-
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL8_ID, 24, 508, 552, 18, "8. Extended Action Controls:"));
-        var btn_reset = Icon.createButton(icon_sub.ICON_BTN_RESET_DEFAULTS_ID, 24, 532, 260, 32, "Reset All Controls");
-        btn_reset.callback = icon_sub.onResetDefaults;
-        _ = try win_ctrls.addIcon(btn_reset);
-
-        var btn_bench = Icon.createButton(icon_sub.ICON_BTN_RUN_BENCHMARK_ID, 300, 532, 276, 32, "Run Performance Stress Test");
-        btn_bench.callback = icon_sub.onRunBenchmark;
-        _ = try win_ctrls.addIcon(btn_bench);
-
-        _ = try win_ctrls.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_LABEL9_ID, 24, 580, 552, 18, "9. Extended Scheduler Configuration:"));
-        var sl_timeslice = Icon.createSlider(icon_sub.ICON_SLIDER_TIMESLICE_ID, 24, 600, 552, 46, 1, 50, 10, "ms");
-        sl_timeslice.setText("Scheduler Timeslice Quantum");
-        sl_timeslice.callback = icon_sub.onTimesliceSliderChanged;
-        _ = try win_ctrls.addIcon(sl_timeslice);
-
-        var btn_export = Icon.createButton(icon_sub.ICON_BTN_EXPORT_LOGS_ID, 24, 660, 552, 32, "Export Diagnostic Metrics to Serial");
-        btn_export.callback = icon_sub.onExportLogs;
-        _ = try win_ctrls.addIcon(btn_export);
-
-        try self.windows.append(self.allocator, win_ctrls);
-
-        // Right Groups Pane: Backdrop Color Selection
-        var win_groups = Window.init(self.allocator, icon_sub.WIN_GROUPS_ID, 644, 54, 612, 536, "BACKDROP GRADIENT COLOR SELECTION");
-        _ = try win_groups.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_TOP_LABEL_ID, 24, 44, 564, 20, "Top Backdrop Color (Graduated Shading Top):"));
-
-        var rad_top1 = Icon.createTickBox(icon_sub.ICON_TOP_LIGHT_BLUE_ID, 24, 74, 564, 28, "Light Blue (Default #4C8BE0)", true, 1, .exclusive);
-        rad_top1.callback = icon_sub.onTopColorSelected;
-        _ = try win_groups.addIcon(rad_top1);
-
-        var rad_top2 = Icon.createTickBox(icon_sub.ICON_TOP_CYAN_ID, 24, 110, 564, 28, "Sky Cyan (#2EB8D8)", false, 1, .exclusive);
-        rad_top2.callback = icon_sub.onTopColorSelected;
-        _ = try win_groups.addIcon(rad_top2);
-
-        var rad_top3 = Icon.createTickBox(icon_sub.ICON_TOP_AMBER_ID, 24, 146, 564, 28, "Sunset Amber (#C86840)", false, 1, .exclusive);
-        rad_top3.callback = icon_sub.onTopColorSelected;
-        _ = try win_groups.addIcon(rad_top3);
-
-        var rad_top4 = Icon.createTickBox(icon_sub.ICON_TOP_SLATE_ID, 24, 182, 564, 28, "Slate Frost (#607890)", false, 1, .exclusive);
-        rad_top4.callback = icon_sub.onTopColorSelected;
-        _ = try win_groups.addIcon(rad_top4);
-
-        _ = try win_groups.addIcon(Icon.createReadOnly(icon_sub.ICON_RO_BOT_LABEL_ID, 24, 230, 564, 20, "Bottom Backdrop Color (Graduated Shading Bottom):"));
-
-        var rad_bot1 = Icon.createTickBox(icon_sub.ICON_BOT_DARK_BLUE_ID, 24, 260, 564, 28, "Dark Blue (Default #0C1836)", true, 2, .exclusive);
-        rad_bot1.callback = icon_sub.onBotColorSelected;
-        _ = try win_groups.addIcon(rad_bot1);
-
-        var rad_bot2 = Icon.createTickBox(icon_sub.ICON_BOT_NAVY_ID, 24, 296, 564, 28, "Midnight Navy (#060B18)", false, 2, .exclusive);
-        rad_bot2.callback = icon_sub.onBotColorSelected;
-        _ = try win_groups.addIcon(rad_bot2);
-
-        var rad_bot3 = Icon.createTickBox(icon_sub.ICON_BOT_INDIGO_ID, 24, 332, 564, 28, "Deep Indigo (#180828)", false, 2, .exclusive);
-        rad_bot3.callback = icon_sub.onBotColorSelected;
-        _ = try win_groups.addIcon(rad_bot3);
-
-        var rad_bot4 = Icon.createTickBox(icon_sub.ICON_BOT_PITCH_ID, 24, 368, 564, 28, "Pitch Black (#000206)", false, 2, .exclusive);
-        rad_bot4.callback = icon_sub.onBotColorSelected;
-        _ = try win_groups.addIcon(rad_bot4);
-
-        try self.windows.append(self.allocator, win_groups);
-
-        // Bottom Inspector Pane
-        var win_insp = Window.init(self.allocator, icon_sub.WIN_INSPECTOR_ID, 24, 608, 1232, 172, "LIVE CALLBACK INSPECTOR");
-        _ = try win_insp.addIcon(Icon.createReadOnly(icon_sub.ICON_INSPECTOR_TEXT_ID, 24, 54, 1184, 28, "Interactive Showcase: Drag the transparency slider or select backdrop colors to test callbacks."));
-        try self.windows.append(self.allocator, win_insp);
-    }
-
-    fn buildGuestsWindows(self: *DiosixGui) !void {
-        // Window 1: Guest Domain Inventory (300)
-        var win_list = Window.init(self.allocator, guests_sub.WIN_GUEST_LIST_ID, 24, 48, 450, 430, "GUEST DOMAIN INVENTORY");
-        var row1 = Icon.createButton(guests_sub.ICON_GUEST_ROW1_ID, 18, 44, 414, 40, "second-vm   [CID 2]  2 vCPU  256M   GPU   RUNNING");
-        row1.callback = guests_sub.onGuestRowClicked;
-        _ = try win_list.addIcon(row1);
-
-        var row2 = Icon.createButton(guests_sub.ICON_GUEST_ROW2_ID, 18, 92, 414, 40, "debian-vm   [CID 3]  2 vCPU 1024M   GPU   RUNNING");
-        row2.callback = guests_sub.onGuestRowClicked;
-        _ = try win_list.addIcon(row2);
-
-        var row3 = Icon.createButton(guests_sub.ICON_GUEST_ROW3_ID, 18, 140, 414, 40, "micro-guest [CID 4]  1 vCPU   64M   TTY   RUNNING");
-        row3.callback = guests_sub.onGuestRowClicked;
-        _ = try win_list.addIcon(row3);
-
-        _ = try win_list.addIcon(Icon.createReadOnly(3005, 18, 192, 414, 20, "Active Domains: 3 | Protected RAM: 1344 MB"));
-        _ = try win_list.addIcon(Icon.createReadOnly(3006, 18, 218, 414, 20, "Hypervisor: Diosix Microkernel v0.2.0 (riscv64)"));
-        _ = try win_list.addIcon(Icon.createReadOnly(3007, 18, 244, 414, 20, "Isolation: Hardware-Enforced RISC-V PMP"));
-        _ = try win_list.addIcon(Icon.createReadOnly(3008, 18, 270, 414, 20, "Virtual Switch: Bridge br0 (10.0.3.0/24 Subnet)"));
-        _ = try win_list.addIcon(Icon.createReadOnly(3009, 18, 296, 414, 20, "Host I/O Virtualization: VirtIO-GPU, Blk, Net"));
-        _ = try win_list.addIcon(Icon.createReadOnly(3010, 18, 330, 414, 20, "Tip: Click row to select domain & view telemetry"));
-        try self.windows.append(self.allocator, win_list);
-
-        // Window 2: Domain Control Actions (301)
-        var win_actions = Window.init(self.allocator, guests_sub.WIN_GUEST_ACTIONS_ID, 490, 48, 310, 430, "DOMAIN CONTROL");
-        var btn_launch = Icon.createButton(guests_sub.ICON_GUEST_ACTION_LAUNCH_ID, 18, 44, 274, 38, "Start Selected Domain");
-        btn_launch.callback = guests_sub.onLaunchGuestClicked;
-        _ = try win_actions.addIcon(btn_launch);
-
-        var btn_stop = Icon.createButton(guests_sub.ICON_GUEST_ACTION_STOP_ID, 18, 90, 274, 38, "Terminate Selected Domain");
-        btn_stop.callback = guests_sub.onStopGuestClicked;
-        _ = try win_actions.addIcon(btn_stop);
-
-        var btn_pause = Icon.createButton(guests_sub.ICON_GUEST_ACTION_PAUSE_ID, 18, 136, 274, 38, "Pause / Resume vCPUs");
-        btn_pause.callback = guests_sub.onPauseGuestClicked;
-        _ = try win_actions.addIcon(btn_pause);
-
-        var btn_ssh = Icon.createButton(guests_sub.ICON_GUEST_ACTION_SSH_ID, 18, 182, 274, 38, "Open Virtual SSH Console");
-        btn_ssh.callback = guests_sub.onSshGuestClicked;
-        _ = try win_actions.addIcon(btn_ssh);
-
-        var btn_full = Icon.createButton(guests_sub.ICON_GUEST_ACTION_FULLSCREEN_ID, 18, 228, 274, 38, "Expand Fullscreen Display (F)");
-        btn_full.callback = guests_sub.onToggleFullscreenClicked;
-        _ = try win_actions.addIcon(btn_full);
-
-        _ = try win_actions.addIcon(Icon.createReadOnly(3106, 18, 276, 274, 20, "Console: /dev/ttyS0 @ 115200 baud"));
-        _ = try win_actions.addIcon(Icon.createReadOnly(3107, 18, 300, 274, 20, "Display: VirtIO-GPU 2D Scanout"));
-        _ = try win_actions.addIcon(Icon.createReadOnly(3108, 18, 324, 274, 20, "IPC Signal: dsx://vm/ctl"));
-        _ = try win_actions.addIcon(Icon.createReadOnly(3109, 18, 354, 274, 20, "Press 'F' or Enter on video for Fullscreen"));
-        try self.windows.append(self.allocator, win_actions);
-
-        // Window 3: Live Virtual Machine Display (303)
-        var win_video = Window.init(self.allocator, guests_sub.WIN_GUEST_VIDEO_ID, 816, 48, 440, 430, "LIVE VIRTUAL MACHINE DISPLAY");
-        var vid_view = Icon.createVideoViewport(guests_sub.ICON_GUEST_VIDEO_VIEWPORT_ID, 12, 44, 416, 372, "second-vm", true);
-        vid_view.callback = guests_sub.onVideoViewportClicked;
-        _ = try win_video.addIcon(vid_view);
-        try self.windows.append(self.allocator, win_video);
-
-        // Window 4: Domain Telemetry & Resource Usage (302)
-        var win_details = Window.init(self.allocator, guests_sub.WIN_GUEST_DETAILS_ID, 24, 490, 1232, 290, "DOMAIN TELEMETRY & RESOURCE USAGE");
-        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_DETAIL_TEXT_ID, 20, 38, 1192, 22, "Selected Domain: 'second-vm' (Virtual IP: 10.0.3.2, Status: RUNNING)"));
-
-        // Left column: vCPU & RAM
-        const cpu_bar = Icon.createProgressBar(guests_sub.ICON_GUEST_METER_CPU_ID, 20, 66, 580, 28, "vCPU Utilization: 42% [2400 MHz | 12 MIPS]", 42, fb.Color.ACCENT_CYAN);
-        _ = try win_details.addIcon(cpu_bar);
-        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_TEXT_CPU_INFO_ID, 20, 96, 580, 20, "vCPUs: 2 | Sched: Preemptive 10ms | Cycles: 14820M | Ctx Sw: 1848/s"));
-
-        const ram_bar = Icon.createProgressBar(guests_sub.ICON_GUEST_METER_RAM_ID, 20, 120, 580, 28, "Guest RAM Committed: 141 MB / 256 MB (55%)", 55, fb.Color.ACCENT_GREEN);
-        _ = try win_details.addIcon(ram_bar);
-        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_TEXT_RAM_INFO_ID, 20, 150, 580, 20, "PMP Guard: Active (4 Regions) | Page Faults: 14/s | Memory Isolation: Enforced"));
-
-        // Right column: Virtual Disk & Virtual Network
-        const disk_bar = Icon.createProgressBar(guests_sub.ICON_GUEST_METER_DISK_ID, 628, 66, 580, 28, "Virtual Disk Usage: 184 MB / 512 MB (35%)", 35, fb.Color.ACCENT_GOLD);
-        _ = try win_details.addIcon(disk_bar);
-        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_TEXT_DISK_INFO_ID, 628, 96, 580, 20, "Disk I/O: 3.4 MB/s Read, 1.2 MB/s Write | IOPS: 480 | VirtIO-Blk"));
-
-        const net_bar = Icon.createProgressBar(guests_sub.ICON_GUEST_METER_NET_ID, 628, 120, 580, 28, "Virtual NIC Bandwidth: 24.0 Mbps / 100 Mbps (24%)", 24, fb.Color.ACCENT_BLUE);
-        _ = try win_details.addIcon(net_bar);
-        _ = try win_details.addIcon(Icon.createReadOnly(guests_sub.ICON_GUEST_TEXT_NET_INFO_ID, 628, 150, 580, 20, "VirtIO-Net TAP: tap0 | MAC: 52:54:00:12:34:02 | Traffic: 1840 KB rx / 920 KB tx"));
-
-        _ = try win_details.addIcon(Icon.createReadOnly(3210, 20, 186, 1192, 20, "Hypervisor Hardware Enclave: RISC-V H-Extension (sstatus.SPV=1, vsstatus, hgatp, hstatus)"));
-        _ = try win_details.addIcon(Icon.createReadOnly(3211, 20, 210, 1192, 20, "Nested MMU Translation: Two-Stage Paging (VS-Stage Guest Virtual -> Guest Physical -> Host Physical)"));
-        _ = try win_details.addIcon(Icon.createReadOnly(3212, 20, 234, 1192, 20, "Virtual Interrupt Controller: In-Kernel IMSIC / APLIC Virtualization with Direct MSI Routing"));
-        try self.windows.append(self.allocator, win_details);
-
-        // Window 5: Fullscreen Video Display Viewport (304)
-        var win_fs = Window.init(self.allocator, guests_sub.WIN_GUEST_FULLSCREEN_VIDEO_ID, 24, 48, 1232, 732, "VIRTUAL MACHINE DISPLAY - FULLSCREEN (PRESS ESC OR CLICK TO RETURN)");
-        win_fs.setOnScreen(false);
-        var fs_view = Icon.createVideoViewport(guests_sub.ICON_GUEST_FULLSCREEN_VIEWPORT_ID, 12, 44, 1208, 674, "second-vm", true);
-        fs_view.callback = guests_sub.onExitFullscreenClicked;
-        _ = try win_fs.addIcon(fs_view);
-        try self.windows.append(self.allocator, win_fs);
-    }
-
-    fn buildStorageWindows(self: *DiosixGui) !void {
-        var win_list = Window.init(self.allocator, storage_sub.WIN_STORAGE_LIST_ID, 24, 54, 780, 536, "VIRTUAL DISK DATASTORE");
-        var d1 = Icon.createButton(storage_sub.ICON_DISK_ITEM1_ID, 24, 54, 732, 38, "debian.img       [Size: 4096 MB, Type: ext4, Attached: debian-vm]");
-        d1.callback = storage_sub.onDiskItemClicked;
-        _ = try win_list.addIcon(d1);
-
-        var d2 = Icon.createButton(storage_sub.ICON_DISK_ITEM2_ID, 24, 104, 732, 38, "second-vm.img    [Size: 512 MB,  Type: ext4, Attached: second-vm]");
-        d2.callback = storage_sub.onDiskItemClicked;
-        _ = try win_list.addIcon(d2);
-
-        var d3 = Icon.createButton(storage_sub.ICON_DISK_ITEM3_ID, 24, 154, 732, 38, "scratch-data.img [Size: 1024 MB, Type: ext4, Unattached]");
-        d3.callback = storage_sub.onDiskItemClicked;
-        _ = try win_list.addIcon(d3);
-        try self.windows.append(self.allocator, win_list);
-
-        var win_actions = Window.init(self.allocator, storage_sub.WIN_STORAGE_ACTIONS_ID, 824, 54, 432, 536, "STORAGE OPERATIONS");
-        var btn_c = Icon.createButton(storage_sub.ICON_DISK_CREATE_ID, 24, 54, 384, 36, "Create Virtual Disk");
-        btn_c.callback = storage_sub.onCreateDiskClicked;
-        _ = try win_actions.addIcon(btn_c);
-
-        var btn_r = Icon.createButton(storage_sub.ICON_DISK_RESIZE_ID, 24, 106, 384, 36, "Resize Virtual Disk");
-        btn_r.callback = storage_sub.onResizeDiskClicked;
-        _ = try win_actions.addIcon(btn_r);
-
-        var btn_d = Icon.createButton(storage_sub.ICON_DISK_DELETE_ID, 24, 158, 384, 36, "Delete Virtual Disk");
-        btn_d.callback = storage_sub.onDeleteDiskClicked;
-        _ = try win_actions.addIcon(btn_d);
-        try self.windows.append(self.allocator, win_actions);
-
-        var win_details = Window.init(self.allocator, storage_sub.WIN_STORAGE_DETAILS_ID, 24, 608, 1232, 172, "DATASTORE STATUS");
-        _ = try win_details.addIcon(Icon.createReadOnly(storage_sub.ICON_STORAGE_DETAIL_ID, 24, 54, 1184, 28, "Datastore mounted at /var/lib/diosix/disks. Select an image for disk geometry and usage."));
-        try self.windows.append(self.allocator, win_details);
-    }
-
-    fn buildPowerWindows(self: *DiosixGui) !void {
-        var win_menu = Window.init(self.allocator, power_sub.WIN_POWER_MENU_ID, 24, 54, 600, 536, "PLATFORM POWER MANAGEMENT");
-        var btn_reb = Icon.createButton(power_sub.ICON_PWR_REBOOT_ID, 24, 54, 552, 42, "[ Reboot Host Hardware Platform ]");
-        btn_reb.callback = power_sub.onPowerReboot;
-        _ = try win_menu.addIcon(btn_reb);
-
-        var btn_shut = Icon.createButton(power_sub.ICON_PWR_SHUTDOWN_ID, 24, 116, 552, 42, "[ Power Off Host Hardware Platform ]");
-        btn_shut.callback = power_sub.onPowerShutdown;
-        _ = try win_menu.addIcon(btn_shut);
-
-        var btn_susp = Icon.createButton(power_sub.ICON_PWR_SUSPEND_ID, 24, 178, 552, 42, "[ Low-Power ACPI / PSCI Standby ]");
-        btn_susp.callback = power_sub.onPowerSuspend;
-        _ = try win_menu.addIcon(btn_susp);
-        try self.windows.append(self.allocator, win_menu);
-
-        var win_status = Window.init(self.allocator, power_sub.WIN_POWER_STATUS_ID, 644, 54, 612, 536, "POWER SECURITY POLICY");
-        _ = try win_status.addIcon(Icon.createReadOnly(power_sub.ICON_PWR_STATUS_TEXT_ID, 24, 54, 564, 48, "Platform control commands require Root VM Domain 0 privileges."));
-        try self.windows.append(self.allocator, win_status);
-    }
-
-    // --- Sub-Program Tab Switching & Preemptive Multitasking ---
-
-    pub fn activateSubProgram(self: *DiosixGui, idx: usize) void {
-        if (idx >= self.subprograms.items.len) return;
-
-        self.markFullDirty();
-
-        // Deactivate previous subprogram
-        if (self.active_sub_idx < self.subprograms.items.len) {
-            const old = &self.subprograms.items[self.active_sub_idx];
-            old.on_deactivate_fn(old, self);
-        }
-
-        self.active_sub_idx = idx;
-        const new_sub = &self.subprograms.items[idx];
-        new_sub.on_activate_fn(new_sub, self);
-
-        // Select first active window with interactive icons in view
-        self.active_win_idx = null;
-        var first_interactive: ?usize = null;
-        var first_onscreen: ?usize = null;
-
-        for (self.windows.items, 0..) |*win, w_idx| {
-            if (win.is_onscreen) {
-                if (first_onscreen == null) first_onscreen = w_idx;
-                if (first_interactive == null and win.hasInteractiveIcons()) {
-                    first_interactive = w_idx;
+    // Dynamically destroy a window pane by ID
+    pub fn destroyWindow(self: *DiosixGui, id: u32) bool {
+        for (self.windows.items, 0..) |*win, idx| {
+            if (win.id == id) {
+                if (win.linked_menu_item_id) |mid| {
+                    self.setMenuItemSelected(mid, false);
                 }
-                win.is_active = false;
+                if (win.parent_window_id) |pid| {
+                    if (self.getWindow(pid)) |pwin| {
+                        if (pwin.child_window_id == id) {
+                            pwin.child_window_id = null;
+                        }
+                    }
+                }
+                self.markConnectorDirty();
+                if (win.is_onscreen) {
+                    self.markDirty(win.getBox());
+                }
+                win.deinit();
+                _ = self.windows.orderedRemove(idx);
+                if (self.active_win_idx) |act_idx| {
+                    if (act_idx == idx) {
+                        self.active_win_idx = null;
+                        if (self.windows.items.len > 0) {
+                            self.focusWindow(@min(idx, self.windows.items.len - 1));
+                        }
+                    } else if (act_idx > idx) {
+                        self.active_win_idx = act_idx - 1;
+                    }
+                }
+                return true;
             }
         }
+        return false;
+    }
 
-        const target_win_idx = first_interactive orelse first_onscreen;
-        if (target_win_idx) |t_idx| {
-            self.focusWindow(t_idx);
-            const win = &self.windows.items[t_idx];
-            if (win.focused_icon_idx == null) {
-                _ = win.focusFirstInteractiveIcon();
+    pub fn destroyAllWindows(self: *DiosixGui) void {
+        for (self.windows.items) |*win| {
+            if (win.linked_menu_item_id) |mid| {
+                self.setMenuItemSelected(mid, false);
             }
+            win.deinit();
         }
+        self.windows.clearRetainingCapacity();
+        self.active_win_idx = null;
         self.markFullDirty();
     }
 
-    pub fn nextTab(self: *DiosixGui) void {
-        const next_idx = (self.active_sub_idx + 1) % self.subprograms.items.len;
-        self.activateSubProgram(next_idx);
+    pub fn getWindow(self: *DiosixGui, id: u32) ?*Window {
+        for (self.windows.items) |*win| {
+            if (win.id == id) return win;
+        }
+        return null;
     }
 
-    pub fn prevTab(self: *DiosixGui) void {
-        const prev_idx = (self.active_sub_idx + self.subprograms.items.len - 1) % self.subprograms.items.len;
-        self.activateSubProgram(prev_idx);
+    // --- Dynamic Layout Builders ---
+
+    // Menu item activation callback
+    fn onMenuItemActivated(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        self.activateMenuItem(icon.id) catch {};
     }
 
-    // Preemptive Multitasking Loop: called every frame
-    // Preemptively runs tick on ALL subprograms giving each CPU time regardless of view!
+    // Dynamically sized menu on left-hand side with border gap
+    pub fn buildMainMenu(self: *DiosixGui) !void {
+        const menu_items = [_][]const u8{ "Guests", "Status", "Config" };
+        const menu_ids = [_]u32{ ICON_MENU_GUESTS_ID, ICON_MENU_STATUS_ID, ICON_MENU_CONFIG_ID };
+        const menu_helps = [_][]const u8{
+            "View and manage guest virtual machines",
+            "View real-time system information",
+            "Configure window appearance and desktop background themes",
+        };
+
+        // 1. Determine dynamic width based on longest item scaled 1.2x (6:5)
+        var max_w: u32 = 0;
+        for (menu_items) |item_str| {
+            const w = font.measureStringScaled(item_str, 6, 5);
+            if (w > max_w) max_w = w;
+        }
+
+        const hand_marker_space: i32 = 28; // space on left for keyboard pointer hand marker
+        const right_pad: u32 = 24;
+        const item_w = max_w + 8;
+        const menu_w = @as(u32, @intCast(hand_marker_space)) + item_w + right_pad;
+
+        // 2. Determine dynamic height based on vertical layout
+        const item_h: u32 = 28;
+        const item_spacing: u32 = 8;
+        const top_pad: i32 = 14;
+        const bot_pad: i32 = 14;
+        const total_content_h: u32 = @intCast(top_pad + bot_pad + @as(i32, @intCast(menu_items.len * item_h + (menu_items.len - 1) * item_spacing)));
+
+        const max_avail_h = if (self.height > @as(u32, @intCast(BORDER_GAP * 2)))
+            self.height - @as(u32, @intCast(BORDER_GAP * 2))
+        else
+            self.height;
+
+        // If content exceeds screen height, clamp window height so it turns scrollable
+        const win_h = @min(total_content_h, max_avail_h);
+
+        const win = try self.createWindow(WIN_MENU_ID, BORDER_GAP, BORDER_GAP, menu_w, win_h, null);
+        win.setHelpText("Main menu");
+
+        var cur_y: i32 = top_pad;
+        for (menu_items, 0..) |item_str, idx| {
+            var icon = Icon.createMenuItem(menu_ids[idx], hand_marker_space, cur_y, item_w, item_h, item_str);
+            icon.setHelpText(menu_helps[idx]);
+            icon.callback = onMenuItemActivated;
+            if (idx == 0) icon.is_focused = true;
+            _ = try win.addIcon(icon);
+            cur_y += @as(i32, @intCast(item_h + item_spacing));
+        }
+        win.focused_icon_idx = 0;
+    }
+
+    // Build bottom panes: Active Help pane on bottom-left, Version pane on bottom-right
+    pub fn buildBottomPanes(self: *DiosixGui) !void {
+        var ver_buf: [64]u8 = undefined;
+        const ver_str = host_info.getVersionString(&ver_buf);
+        const ver_text_w = font.measureString(ver_str);
+
+        // Version Pane sizing (bottom-right)
+        const ver_h: u32 = 40;
+        const ver_pad_h: u32 = 14;
+        const ver_w = ver_text_w + ver_pad_h * 2;
+        const ver_x = @as(i32, @intCast(self.width)) - @as(i32, @intCast(ver_w)) - BORDER_GAP;
+        const ver_y = @as(i32, @intCast(self.height)) - @as(i32, @intCast(ver_h)) - BORDER_GAP;
+
+        const win_ver = try self.createWindow(WIN_VERSION_ID, ver_x, ver_y, ver_w, ver_h, null);
+        win_ver.setHelpText("Hypervisor build information");
+        var ver_icon = Icon.createReadOnly(ICON_VERSION_TEXT_ID, @intCast(ver_pad_h), 8, ver_text_w + 4, 24, ver_str);
+        ver_icon.setHelpText("Hypervisor name, version number, build branch, and commit hash");
+        _ = try win_ver.addIcon(ver_icon);
+
+        // Active Help Pane: same vertical position (ver_y), same height (ver_h = 40),
+        // width fills remaining length of screen with even spacing (BORDER_GAP = 16)
+        // between left screen edge, active help pane, version pane, and right screen edge.
+        const help_x: i32 = BORDER_GAP;
+        const help_y: i32 = ver_y;
+        const help_h: u32 = ver_h;
+        const available_w = @as(i32, @intCast(ver_x)) - help_x - BORDER_GAP;
+        const help_w: u32 = if (available_w > 0) @intCast(available_w) else 0;
+
+        const win_help = try self.createWindow(WIN_HELP_ID, help_x, help_y, help_w, help_h, null);
+        const help_pad_h: u32 = 14;
+        const help_text_w: u32 = if (help_w > help_pad_h * 2) help_w - help_pad_h * 2 else 0;
+        var help_icon = Icon.createReadOnly(ICON_HELP_TEXT_ID, @intCast(help_pad_h), 8, help_text_w, 24, FALLBACK_HELP_TEXT);
+        help_icon.setCustomColor(fb.Color.WHITE);
+        _ = try win_help.addIcon(help_icon);
+    }
+
+    pub const FALLBACK_HELP_TEXT = "Welcome to diosix";
+
+    // Search top-to-bottom among onscreen windows for an icon containing (px, py)
+    pub fn findIconAt(self: *DiosixGui, px: i32, py: i32) ?*Icon {
+        var i = self.windows.items.len;
+        while (i > 0) : (i -= 1) {
+            const win = &self.windows.items[i - 1];
+            if (!win.is_onscreen) continue;
+            if (win.id == WIN_HELP_ID) continue;
+            if (win.findIconAt(px, py)) |icon| {
+                return icon;
+            }
+        }
+        return null;
+    }
+
+    // Search top-to-bottom among onscreen windows for a window containing (px, py)
+    pub fn findWindowAt(self: *DiosixGui, px: i32, py: i32) ?*Window {
+        var i = self.windows.items.len;
+        while (i > 0) : (i -= 1) {
+            const win = &self.windows.items[i - 1];
+            if (!win.is_onscreen) continue;
+            if (win.id == WIN_HELP_ID) continue;
+            if (win.contains(px, py)) {
+                return win;
+            }
+        }
+        return null;
+    }
+
+    // Update active contextual help text based on Priority 1 (Icon), Priority 2 (Pane), Priority 3 (Fallback)
+    pub fn updateActiveHelp(self: *DiosixGui) void {
+        var help_str: ?[]const u8 = null;
+
+        switch (self.input_mode) {
+            .mouse => {
+                // Priority 1: Icon under mouse cursor with help text
+                if (self.findIconAt(self.cursor.x, self.cursor.y)) |icon| {
+                    if (icon.getHelpText()) |ht| {
+                        if (ht.len > 0) help_str = ht;
+                    }
+                }
+                // Priority 2: Pane under mouse cursor with help text
+                if (help_str == null) {
+                    if (self.findWindowAt(self.cursor.x, self.cursor.y)) |win| {
+                        if (win.getHelpText()) |ht| {
+                            if (ht.len > 0) help_str = ht;
+                        }
+                    }
+                }
+            },
+            .keyboard => {
+                const act_win = self.getActiveWindow();
+                if (act_win) |win| {
+                    // Priority 1: Focused icon with help text
+                    if (win.getFocusedIcon()) |icon| {
+                        if (icon.getHelpText()) |ht| {
+                            if (ht.len > 0) help_str = ht;
+                        }
+                    }
+                    // Priority 2: Active pane with help text
+                    if (help_str == null) {
+                        if (win.getHelpText()) |ht| {
+                            if (ht.len > 0) help_str = ht;
+                        }
+                    }
+                }
+            },
+        }
+
+        // Priority 3: Fallback text ("Welcome to diosix")
+        const final_text = help_str orelse FALLBACK_HELP_TEXT;
+
+        if (self.findIcon(WIN_HELP_ID, ICON_HELP_TEXT_ID)) |help_icon| {
+            const current_text = help_icon.getText();
+            if (!std.mem.eql(u8, current_text, final_text)) {
+                help_icon.setText(final_text);
+                self.markWindowDirty(WIN_HELP_ID);
+            }
+        }
+    }
+
+    // Build the Status pane displaying Host and Hypervisor telemetry in table format
+    pub fn buildStatusPane(self: *DiosixGui) !void {
+        const menu_win = self.getWindow(WIN_MENU_ID);
+        const status_x: i32 = if (menu_win) |mw| mw.x + @as(i32, @intCast(mw.width)) + BORDER_GAP else 172;
+        const status_y: i32 = BORDER_GAP;
+        const max_w = @as(i32, @intCast(self.width)) - BORDER_GAP - status_x;
+        const status_w: u32 = if (max_w > 0) @intCast(max_w) else 780;
+        const status_h: u32 = 224;
+
+        const win = try self.createWindow(WIN_STATUS_ID, status_x, status_y, status_w, status_h, null);
+        win.setHelpText("Information about this host system and hypervisor");
+        win.parent_window_id = WIN_MENU_ID;
+        win.linked_menu_item_id = ICON_MENU_STATUS_ID;
+        if (menu_win) |mw| {
+            mw.child_window_id = WIN_STATUS_ID;
+        }
+        self.setMenuItemSelected(ICON_MENU_STATUS_ID, true);
+        self.markConnectorDirty();
+
+        const pad_x: i32 = 20;
+        const col1_right: i32 = 140;
+        const col2_x: i32 = 160;
+        const col2_w: u32 = status_w - @as(u32, @intCast(col2_x)) - 20;
+        const line_h: u32 = 20;
+        const label_color: u32 = 0x00A0B4C8; // Clean table label styling
+
+        // --- Host Heading ---
+        var host_hdr = Icon.createReadOnly(ICON_STATUS_HOST_HDR_ID, pad_x, 14, 200, line_h, "Host");
+        host_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
+        _ = try win.addIcon(host_hdr);
+
+        // Row 1: Uptime
+        const lbl_uptime_str = "Uptime";
+        const lbl_uptime_w = font.measureString(lbl_uptime_str);
+        var lbl_uptime = Icon.createReadOnly(ICON_STATUS_HOST_UPTIME_LABEL_ID, col1_right - @as(i32, @intCast(lbl_uptime_w)), 34, lbl_uptime_w, line_h, lbl_uptime_str);
+        lbl_uptime.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_uptime);
+
+        var uptime_buf: [64]u8 = undefined;
+        const uptime_str = host_info.formatUptime(&uptime_buf);
+        const icon_uptime = Icon.createReadOnly(ICON_STATUS_HOST_UPTIME_ID, col2_x, 34, col2_w, line_h, uptime_str);
+        _ = try win.addIcon(icon_uptime);
+
+        // Row 2: CPU Cores
+        const lbl_cpu_str = "CPU cores";
+        const lbl_cpu_w = font.measureString(lbl_cpu_str);
+        var lbl_cpu = Icon.createReadOnly(ICON_STATUS_HOST_CPU_LABEL_ID, col1_right - @as(i32, @intCast(lbl_cpu_w)), 54, lbl_cpu_w, line_h, lbl_cpu_str);
+        lbl_cpu.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_cpu);
+
+        var cpu_buf: [64]u8 = undefined;
+        const cpu_str = host_info.getHostCpuString(&cpu_buf);
+        const icon_cpu = Icon.createReadOnly(ICON_STATUS_HOST_CPU_ID, col2_x, 54, col2_w, line_h, cpu_str);
+        _ = try win.addIcon(icon_cpu);
+
+        // Row 3: RAM
+        const lbl_ram_str = "RAM";
+        const lbl_ram_w = font.measureString(lbl_ram_str);
+        var lbl_ram = Icon.createReadOnly(ICON_STATUS_HOST_RAM_LABEL_ID, col1_right - @as(i32, @intCast(lbl_ram_w)), 74, lbl_ram_w, line_h, lbl_ram_str);
+        lbl_ram.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_ram);
+
+        var ram_buf: [80]u8 = undefined;
+        const ram_str = host_info.getHostRamString(&ram_buf);
+        const icon_ram = Icon.createReadOnly(ICON_STATUS_HOST_RAM_ID, col2_x, 74, col2_w, line_h, ram_str);
+        _ = try win.addIcon(icon_ram);
+
+        // Row 4: Time and Date
+        const lbl_time_str = "Time and date";
+        const lbl_time_w = font.measureString(lbl_time_str);
+        var lbl_time = Icon.createReadOnly(ICON_STATUS_HOST_TIME_LABEL_ID, col1_right - @as(i32, @intCast(lbl_time_w)), 94, lbl_time_w, line_h, lbl_time_str);
+        lbl_time.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_time);
+
+        var dt_buf: [80]u8 = undefined;
+        const dt_str = host_info.getHostDateTimeString(&dt_buf);
+        const icon_time = Icon.createReadOnly(ICON_STATUS_HOST_TIME_ID, col2_x, 94, col2_w, line_h, dt_str);
+        _ = try win.addIcon(icon_time);
+
+        // --- Hypervisor Heading ---
+        var hv_hdr = Icon.createReadOnly(ICON_STATUS_HV_HDR_ID, pad_x, 120, 200, line_h, "Hypervisor");
+        hv_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
+        _ = try win.addIcon(hv_hdr);
+
+        // Row 5: Hypervisor Build
+        const lbl_build_str = "Build";
+        const lbl_build_w = font.measureString(lbl_build_str);
+        var lbl_build = Icon.createReadOnly(ICON_STATUS_HV_BUILD_LABEL_ID, col1_right - @as(i32, @intCast(lbl_build_w)), 140, lbl_build_w, line_h, lbl_build_str);
+        lbl_build.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_build);
+
+        var b1_buf: [160]u8 = undefined;
+        var b2_buf: [160]u8 = undefined;
+        const split = host_info.getHvBuildSplit(&b1_buf, &b2_buf);
+
+        const icon_b1 = Icon.createReadOnly(ICON_STATUS_HV_BUILD1_ID, col2_x, 140, col2_w, line_h, split.line1);
+        _ = try win.addIcon(icon_b1);
+
+        const icon_b2 = Icon.createReadOnly(ICON_STATUS_HV_BUILD2_ID, col2_x, 158, col2_w, line_h, split.line2);
+        _ = try win.addIcon(icon_b2);
+
+        // Row 6: Hypervisor Footprint
+        const lbl_foot_str = "Footprint";
+        const lbl_foot_w = font.measureString(lbl_foot_str);
+        var lbl_foot = Icon.createReadOnly(ICON_STATUS_HV_FOOTPRINT_LABEL_ID, col1_right - @as(i32, @intCast(lbl_foot_w)), 180, lbl_foot_w, line_h, lbl_foot_str);
+        lbl_foot.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_foot);
+
+        var foot_buf: [80]u8 = undefined;
+        const foot_str = host_info.getHvFootprintString(&foot_buf);
+        const icon_foot = Icon.createReadOnly(ICON_STATUS_HV_FOOTPRINT_ID, col2_x, 180, col2_w, line_h, foot_str);
+        _ = try win.addIcon(icon_foot);
+    }
+
+    // Config Pane slider / button callbacks
+    fn onTransparencySliderChanged(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        self.setWindowTransparency(@intCast(icon.slider_val));
+    }
+
+    fn onBlurSliderChanged(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        self.setBlurStrength(@intCast(icon.slider_val));
+    }
+
+    fn onThemeButtonClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        switch (icon.id) {
+            ICON_CONFIG_THEME_DAY_ID => {
+                self.setBackdropTopColor(fb.Color.SKY_BASE_TOP);
+                self.setBackdropBotColor(fb.Color.GRADIENT_BOT_DEFAULT);
+            },
+            ICON_CONFIG_THEME_MIDNIGHT_ID => {
+                self.setBackdropTopColor(fb.Color.rgb(16, 24, 48));
+                self.setBackdropBotColor(fb.Color.rgb(4, 6, 16));
+            },
+            ICON_CONFIG_THEME_SUNSET_ID => {
+                self.setBackdropTopColor(fb.Color.rgb(180, 70, 60));
+                self.setBackdropBotColor(fb.Color.rgb(40, 20, 50));
+            },
+            ICON_CONFIG_THEME_EMERALD_ID => {
+                self.setBackdropTopColor(fb.Color.rgb(32, 120, 90));
+                self.setBackdropBotColor(fb.Color.rgb(10, 36, 30));
+            },
+            else => {},
+        }
+    }
+
+    // Build the Config pane allowing user configuration of transparency, blur, and theme colors
+    pub fn buildConfigPane(self: *DiosixGui) !void {
+        const menu_win = self.getWindow(WIN_MENU_ID);
+        const config_x: i32 = if (menu_win) |mw| mw.x + @as(i32, @intCast(mw.width)) + BORDER_GAP else 172;
+        const config_y: i32 = BORDER_GAP;
+        const max_w = @as(i32, @intCast(self.width)) - BORDER_GAP - config_x;
+        const config_w: u32 = if (max_w > 0) @intCast(max_w) else 780;
+        const config_h: u32 = 224;
+
+        const win = try self.createWindow(WIN_CONFIG_ID, config_x, config_y, config_w, config_h, null);
+        win.setHelpText("System configuration and appearance settings");
+        win.parent_window_id = WIN_MENU_ID;
+        win.linked_menu_item_id = ICON_MENU_CONFIG_ID;
+        if (menu_win) |mw| {
+            mw.child_window_id = WIN_CONFIG_ID;
+        }
+        self.setMenuItemSelected(ICON_MENU_CONFIG_ID, true);
+        self.markConnectorDirty();
+
+        const pad_x: i32 = 20;
+        const col1_right: i32 = 140;
+        const col2_x: i32 = 160;
+        const line_h: u32 = 20;
+        const label_color: u32 = 0x00A0B4C8;
+
+        // Heading: Appearance
+        var app_hdr = Icon.createReadOnly(ICON_CONFIG_HDR_ID, pad_x, 14, 200, line_h, "Appearance");
+        app_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
+        _ = try win.addIcon(app_hdr);
+
+        // Row 1: Transparency Slider
+        const lbl_trans_str = "Transparency";
+        const lbl_trans_w = font.measureString(lbl_trans_str);
+        var lbl_trans = Icon.createReadOnly(ICON_CONFIG_TRANSPARENCY_LBL_ID, col1_right - @as(i32, @intCast(lbl_trans_w)), 38, lbl_trans_w, line_h, lbl_trans_str);
+        lbl_trans.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_trans);
+
+        var slider_trans = Icon.createSlider(
+            ICON_CONFIG_TRANSPARENCY_SLIDER_ID,
+            col2_x,
+            34,
+            240,
+            28,
+            0,
+            90,
+            @intCast(self.window_transparency),
+            "%",
+        );
+        slider_trans.setHelpText("Adjust window pane background transparency (0% opaque to 90% transparent)");
+        slider_trans.callback = onTransparencySliderChanged;
+        _ = try win.addIcon(slider_trans);
+
+        // Row 2: Blur Strength Slider
+        const lbl_blur_str = "Glass blur";
+        const lbl_blur_w = font.measureString(lbl_blur_str);
+        var lbl_blur = Icon.createReadOnly(ICON_CONFIG_BLUR_LBL_ID, col1_right - @as(i32, @intCast(lbl_blur_w)), 78, lbl_blur_w, line_h, lbl_blur_str);
+        lbl_blur.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_blur);
+
+        var slider_blur = Icon.createSlider(
+            ICON_CONFIG_BLUR_SLIDER_ID,
+            col2_x,
+            74,
+            240,
+            28,
+            0,
+            100,
+            @intCast(self.blur_strength),
+            "%",
+        );
+        slider_blur.setHelpText("Adjust Gaussian glass blur radius on background under window panes");
+        slider_blur.callback = onBlurSliderChanged;
+        _ = try win.addIcon(slider_blur);
+
+        // Heading: Desktop Theme
+        var theme_hdr = Icon.createReadOnly(ICON_CONFIG_THEME_LBL_ID, pad_x, 120, 200, line_h, "Color Themes");
+        theme_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
+        _ = try win.addIcon(theme_hdr);
+
+        // Row 3: Theme Buttons
+        const btn_w: u32 = 110;
+        const btn_h: u32 = 28;
+        const btn_spacing: i32 = 16;
+        var btn_x: i32 = col2_x;
+
+        var btn_day = Icon.createButton(ICON_CONFIG_THEME_DAY_ID, btn_x, 142, btn_w, btn_h, "Day Sky");
+        btn_day.setHelpText("Classic light blue daytime sky gradient");
+        btn_day.callback = onThemeButtonClicked;
+        _ = try win.addIcon(btn_day);
+        btn_x += @as(i32, @intCast(btn_w)) + btn_spacing;
+
+        var btn_mid = Icon.createButton(ICON_CONFIG_THEME_MIDNIGHT_ID, btn_x, 142, btn_w, btn_h, "Midnight");
+        btn_mid.setHelpText("Deep dark navy night sky gradient");
+        btn_mid.callback = onThemeButtonClicked;
+        _ = try win.addIcon(btn_mid);
+        btn_x += @as(i32, @intCast(btn_w)) + btn_spacing;
+
+        var btn_sun = Icon.createButton(ICON_CONFIG_THEME_SUNSET_ID, btn_x, 142, btn_w, btn_h, "Sunset");
+        btn_sun.setHelpText("Warm crimson dusk sunset gradient");
+        btn_sun.callback = onThemeButtonClicked;
+        _ = try win.addIcon(btn_sun);
+        btn_x += @as(i32, @intCast(btn_w)) + btn_spacing;
+
+        var btn_emr = Icon.createButton(ICON_CONFIG_THEME_EMERALD_ID, btn_x, 142, btn_w, btn_h, "Emerald");
+        btn_emr.setHelpText("Forest aurora green gradient");
+        btn_emr.callback = onThemeButtonClicked;
+        _ = try win.addIcon(btn_emr);
+    }
+
+    // Activate a menu item: closes any previous child pane and opens the selected one
+    pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
+        const head = self.getWindow(WIN_MENU_ID) orelse return;
+        const curr_child_id = head.child_window_id;
+
+        if (curr_child_id) |cid| {
+            if (self.getWindow(cid)) |cwin| {
+                if (cwin.linked_menu_item_id == menu_item_id) {
+                    // Clicking the already-open menu item toggles it closed
+                    self.teardownChildPanes();
+                    self.updateActiveHelp();
+                    return;
+                }
+            }
+            // Different menu item was clicked: teardown previous pane chain from tail to head
+            self.teardownChildPanes();
+        }
+
+        // Open the pane for the selected menu item
+        switch (menu_item_id) {
+            ICON_MENU_STATUS_ID => {
+                try self.buildStatusPane();
+            },
+            ICON_MENU_CONFIG_ID => {
+                try self.buildConfigPane();
+            },
+            ICON_MENU_GUESTS_ID => {},
+            else => {},
+        }
+
+        self.updateActiveHelp();
+    }
+
+    // Teardown linked list of child panes starting from the tail back to head
+    pub fn teardownChildPanes(self: *DiosixGui) void {
+        const head = self.getWindow(WIN_MENU_ID) orelse return;
+        const first_child_id = head.child_window_id orelse return;
+
+        // Find the tail of the chain
+        var curr_id: u32 = first_child_id;
+        while (true) {
+            if (self.getWindow(curr_id)) |w| {
+                if (w.child_window_id) |cid| {
+                    curr_id = cid;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Teardown from tail back to first child
+        while (true) {
+            const curr_win = self.getWindow(curr_id) orelse break;
+            const parent_id = curr_win.parent_window_id;
+
+            // If this child pane was linked to a menu item, unselect that menu item
+            if (curr_win.linked_menu_item_id) |m_id| {
+                self.setMenuItemSelected(m_id, false);
+            }
+
+            // Mark connector dirty before destroying window
+            self.markConnectorDirty();
+
+            // Destroy window
+            _ = self.destroyWindow(curr_id);
+
+            if (parent_id) |pid| {
+                if (self.getWindow(pid)) |pwin| {
+                    pwin.child_window_id = null;
+                }
+                if (pid == WIN_MENU_ID) {
+                    break;
+                }
+                curr_id = pid;
+            } else {
+                break;
+            }
+        }
+
+        head.child_window_id = null;
+        self.markConnectorDirty();
+        self.updateActiveHelp();
+    }
+
+    // Toggle Status pane open or closed
+    pub fn toggleStatusPane(self: *DiosixGui) !void {
+        try self.activateMenuItem(ICON_MENU_STATUS_ID);
+    }
+
+    // Toggle Config pane open or closed
+    pub fn toggleConfigPane(self: *DiosixGui) !void {
+        try self.activateMenuItem(ICON_MENU_CONFIG_ID);
+    }
+
+    // Refresh live telemetry inside Status pane
+    pub fn updateStatusPaneData(self: *DiosixGui) void {
+        const secs = host_info.getHostUptimeSeconds();
+        self.last_uptime_sec = secs orelse 0;
+
+        var uptime_buf: [64]u8 = undefined;
+        const uptime_str = host_info.formatUptime(&uptime_buf);
+        if (self.findIcon(WIN_STATUS_ID, ICON_STATUS_HOST_UPTIME_ID)) |icon| {
+            icon.setText(uptime_str);
+        }
+
+        var cpu_buf: [64]u8 = undefined;
+        const cpu_str = host_info.getHostCpuString(&cpu_buf);
+        if (self.findIcon(WIN_STATUS_ID, ICON_STATUS_HOST_CPU_ID)) |icon| {
+            icon.setText(cpu_str);
+        }
+
+        var ram_buf: [80]u8 = undefined;
+        const ram_str = host_info.getHostRamString(&ram_buf);
+        if (self.findIcon(WIN_STATUS_ID, ICON_STATUS_HOST_RAM_ID)) |icon| {
+            icon.setText(ram_str);
+        }
+
+        var dt_buf: [80]u8 = undefined;
+        const dt_str = host_info.getHostDateTimeString(&dt_buf);
+        if (self.findIcon(WIN_STATUS_ID, ICON_STATUS_HOST_TIME_ID)) |icon| {
+            icon.setText(dt_str);
+        }
+
+        var b1_buf: [160]u8 = undefined;
+        var b2_buf: [160]u8 = undefined;
+        const split = host_info.getHvBuildSplit(&b1_buf, &b2_buf);
+        if (self.findIcon(WIN_STATUS_ID, ICON_STATUS_HV_BUILD1_ID)) |icon| {
+            icon.setText(split.line1);
+        }
+        if (self.findIcon(WIN_STATUS_ID, ICON_STATUS_HV_BUILD2_ID)) |icon| {
+            icon.setText(split.line2);
+        }
+
+        var foot_buf: [80]u8 = undefined;
+        const foot_str = host_info.getHvFootprintString(&foot_buf);
+        if (self.findIcon(WIN_STATUS_ID, ICON_STATUS_HV_FOOTPRINT_ID)) |icon| {
+            icon.setText(foot_str);
+        }
+
+        self.markWindowDirty(WIN_STATUS_ID);
+    }
+
+    // Called every frame with delta time in milliseconds
     pub fn tick(self: *DiosixGui, dt_ms: u32) void {
-        for (self.subprograms.items, 0..) |*sub, idx| {
-            const is_active = (idx == self.active_sub_idx);
-            sub.tick_fn(sub, self, dt_ms, is_active);
+        self.uptime_accum_ms += dt_ms;
+        if (self.uptime_accum_ms >= 1000) {
+            self.uptime_accum_ms = 0;
+            for (self.windows.items) |*win| {
+                if (win.id == WIN_STATUS_ID and win.is_onscreen) {
+                    self.updateStatusPaneData();
+                    break;
+                }
+            }
         }
     }
 
@@ -547,10 +878,107 @@ pub const DiosixGui = struct {
                 win.setOnScreen(on);
                 if (was_on != on) {
                     self.markDirty(fb.Box.fromPosSize(win.onscreen_x, win.onscreen_y, win.width, win.height));
+                    if (win.linked_menu_item_id) |m_id| {
+                        self.setMenuItemSelected(m_id, on);
+                        self.markConnectorDirty();
+                    } else if (win_id == WIN_STATUS_ID) {
+                        self.setStatusMenuSelected(on);
+                        self.markConnectorDirty();
+                    }
                 }
                 break;
             }
         }
+    }
+
+    // Update selected state of a menu item in Main Menu
+    pub fn setMenuItemSelected(self: *DiosixGui, menu_item_id: u32, selected: bool) void {
+        if (self.getWindow(WIN_MENU_ID)) |mw| {
+            if (mw.getIconById(menu_item_id)) |icon| {
+                if (icon.is_selected != selected) {
+                    icon.setSelected(selected);
+                    self.markDirty(mw.getBox());
+                }
+            }
+        }
+    }
+
+    // Update selected state of Status item in Main Menu
+    pub fn setStatusMenuSelected(self: *DiosixGui, selected: bool) void {
+        self.setMenuItemSelected(ICON_MENU_STATUS_ID, selected);
+    }
+
+    // Returns the bounding box of the visual bridge connecting Main Menu and its active child pane
+    pub fn getActiveChildConnectorBox(self: *DiosixGui) ?fb.Box {
+        const mw = self.getWindow(WIN_MENU_ID) orelse return null;
+        const first_child_id = mw.child_window_id orelse return null;
+        const child = self.getWindow(first_child_id) orelse return null;
+        if (!child.is_onscreen) return null;
+
+        const linked_menu_id = child.linked_menu_item_id orelse return null;
+        const icon = mw.getIconById(linked_menu_id) orelse return null;
+
+        const x_start = mw.x + @as(i32, @intCast(mw.width));
+        const x_end = child.x;
+        const cy = mw.y + icon.rel_y + @as(i32, @intCast(icon.height / 2));
+
+        const pad: i32 = 5; // cover radius 3 + 1px drop-shadow + 1px boundary margin
+        return fb.Box{
+            .x0 = x_start - pad,
+            .y0 = cy - pad,
+            .x1 = x_end + pad + 1,
+            .y1 = cy + pad + 2,
+        };
+    }
+
+    pub fn getMenuStatusConnectorBox(self: *DiosixGui) ?fb.Box {
+        return self.getActiveChildConnectorBox();
+    }
+
+    // Mark the connector region dirty for redrawing or erasing
+    pub fn markConnectorDirty(self: *DiosixGui) void {
+        if (self.getActiveChildConnectorBox()) |box| {
+            self.markDirty(box);
+        }
+    }
+
+    // Render elegant connecting link between Main Menu item and the active child pane
+    pub fn drawActiveChildConnector(self: *DiosixGui, surface: *fb.Surface) void {
+        const mw = self.getWindow(WIN_MENU_ID) orelse return;
+        const first_child_id = mw.child_window_id orelse return;
+        const child = self.getWindow(first_child_id) orelse return;
+        if (!child.is_onscreen) return;
+
+        const linked_menu_id = child.linked_menu_item_id orelse return;
+        const icon = mw.getIconById(linked_menu_id) orelse return;
+
+        const x_start = mw.x + @as(i32, @intCast(mw.width));
+        const x_end = child.x;
+        const cy = mw.y + icon.rel_y + @as(i32, @intCast(icon.height / 2));
+
+        if (x_end <= x_start) return;
+
+        const shadow_color = fb.Color.rgb(10, 16, 26);
+
+        // 1. Subtle drop-shadow offset at (0, 1) for contrast against clouds
+        surface.drawHorizontalLine(x_start, x_end, cy + 1, shadow_color);
+        surface.drawFilledCircle(x_start, cy + 1, 3, shadow_color);
+        surface.drawFilledCircle(x_end, cy + 1, 3, shadow_color);
+
+        // 2. Connecting line between the panes (ACCENT_CYAN)
+        surface.drawHorizontalLine(x_start, x_end, cy, fb.Color.ACCENT_CYAN);
+
+        // 3. Small filled circular nodes at each end of the line (radius 3)
+        surface.drawFilledCircle(x_start, cy, 3, fb.Color.ACCENT_CYAN);
+        surface.drawFilledCircle(x_end, cy, 3, fb.Color.ACCENT_CYAN);
+
+        // 4. Subtle luminous white core pip (1px center dot)
+        surface.setPixel(x_start, cy, fb.Color.WHITE);
+        surface.setPixel(x_end, cy, fb.Color.WHITE);
+    }
+
+    pub fn drawMenuStatusConnector(self: *DiosixGui, surface: *fb.Surface) void {
+        self.drawActiveChildConnector(surface);
     }
 
     pub fn findIcon(self: *DiosixGui, win_id: u32, icon_id: u32) ?*Icon {
@@ -611,7 +1039,6 @@ pub const DiosixGui = struct {
     pub fn setClipboard(self: *DiosixGui, text: []const u8) void {
         var safe_len = @min(text.len, CLIPBOARD_CAPACITY);
         if (safe_len < text.len) {
-            // String was truncated. Ensure we do not truncate in the middle of a multi-byte UTF-8 sequence.
             var i = safe_len;
             while (i > 0 and (text[i - 1] & 0xC0) == 0x80) {
                 i -= 1;
@@ -641,7 +1068,31 @@ pub const DiosixGui = struct {
         return self.clipboard_buf[0..safe_len];
     }
 
-    // --- Input Dispatch ---
+    // --- Input Dispatch & Mode Management ---
+
+    pub fn setInputMode(self: *DiosixGui, mode: InputMode) void {
+        if (self.input_mode != mode) {
+            self.input_mode = mode;
+            if (mode == .keyboard) {
+                self.cursor.visible = false;
+                self.clearMouseHover();
+            } else {
+                self.cursor.visible = true;
+            }
+            self.markFullDirty();
+        }
+    }
+
+    pub fn clearMouseHover(self: *DiosixGui) void {
+        for (self.windows.items) |*win| {
+            for (win.icons.items) |*icon| {
+                if (icon.is_hovered) {
+                    icon.is_hovered = false;
+                    self.markDirty(win.getBox());
+                }
+            }
+        }
+    }
 
     pub fn handleMouseRelease(self: *DiosixGui) void {
         self.mouse_left_down = false;
@@ -656,11 +1107,11 @@ pub const DiosixGui = struct {
     }
 
     pub fn handleMouseMove(self: *DiosixGui, px: i32, py: i32, left_down: bool) void {
+        self.setInputMode(.mouse);
         self.cursor.x = px;
         self.cursor.y = py;
         self.mouse_left_down = left_down;
 
-        // Route mouse move to on-screen windows
         for (self.windows.items) |*win| {
             if (win.is_onscreen) {
                 const changed = win.handleMouseMove(self, px, py, left_down);
@@ -669,30 +1120,29 @@ pub const DiosixGui = struct {
                 }
             }
         }
+
+        self.updateActiveHelp();
     }
 
     pub fn handleMouseClick(self: *DiosixGui, px: i32, py: i32) void {
-        // 1. Check if click is on top tab bar
-        if (py < @as(i32, @intCast(TAB_BAR_HEIGHT))) {
-            self.handleTabBarClick(px, py);
-            return;
-        }
-
-        // 2. Check if click is on an on-screen window
+        self.setInputMode(.mouse);
         var i = self.windows.items.len;
         while (i > 0) : (i -= 1) {
             const win = &self.windows.items[i - 1];
             if (win.is_onscreen and win.contains(px, py)) {
-                // Focus this window
-                self.focusWindow(i - 1);
+                if (win.hasInteractiveIcons() or win.isScrollable()) {
+                    self.focusWindow(i - 1);
+                }
                 _ = win.handleMouseClick(self, px, py);
                 self.markDirty(win.getBox());
                 break;
             }
         }
+        self.updateActiveHelp();
     }
 
     pub fn handleMouseScroll(self: *DiosixGui, px: i32, py: i32, delta: i32) void {
+        self.setInputMode(.mouse);
         var i = self.windows.items.len;
         while (i > 0) : (i -= 1) {
             const win = &self.windows.items[i - 1];
@@ -706,18 +1156,6 @@ pub const DiosixGui = struct {
         if (self.getActiveWindow()) |win| {
             if (win.handleScroll(delta * 30)) {
                 self.markDirty(win.getBox());
-            }
-        }
-    }
-
-    fn handleTabBarClick(self: *DiosixGui, px: i32, py: i32) void {
-        _ = py;
-        if (px >= TAB_START_X) {
-            const rel_x = px - TAB_START_X;
-            const clicked_tab = @divTrunc(rel_x, TAB_STRIDE);
-            const in_tab_x = @mod(rel_x, TAB_STRIDE);
-            if (clicked_tab >= 0 and clicked_tab < self.subprograms.items.len and in_tab_x < @as(i32, @intCast(TAB_WIDTH))) {
-                self.activateSubProgram(@intCast(clicked_tab));
             }
         }
     }
@@ -739,7 +1177,6 @@ pub const DiosixGui = struct {
         self.active_win_idx = target_idx;
     }
 
-    // Focus next on-screen window pane that has interactive icons, preserving icon focus
     pub fn focusNextPane(self: *DiosixGui) void {
         const total = self.windows.items.len;
         if (total == 0) return;
@@ -760,7 +1197,6 @@ pub const DiosixGui = struct {
         }
     }
 
-    // Focus previous on-screen window pane that has interactive icons, preserving icon focus
     pub fn focusPrevPane(self: *DiosixGui) void {
         const total = self.windows.items.len;
         if (total == 0) return;
@@ -781,7 +1217,6 @@ pub const DiosixGui = struct {
         }
     }
 
-    // Focus next pane and select its first interactive icon (used for Tab overflow)
     pub fn focusNextPaneFirst(self: *DiosixGui) void {
         const total = self.windows.items.len;
         if (total == 0) return;
@@ -804,7 +1239,6 @@ pub const DiosixGui = struct {
         }
     }
 
-    // Focus previous pane and select its last interactive icon (used for Shift-Tab underflow)
     pub fn focusPrevPaneLast(self: *DiosixGui) void {
         const total = self.windows.items.len;
         if (total == 0) return;
@@ -853,7 +1287,33 @@ pub const DiosixGui = struct {
             return;
         }
 
+        // Ignore mouse button codes (0x110..0x11f) so mouse clicks never trigger keyboard mode
+        if (key_code >= 0x110 and key_code <= 0x11f) return;
+
+        self.setInputMode(.keyboard);
+        defer self.updateActiveHelp();
+
+        // Escape closes any open child pane chain
+        if (key_code == Key.ESC) {
+            const head = self.getWindow(WIN_MENU_ID);
+            if (head != null and head.?.child_window_id != null) {
+                self.teardownChildPanes();
+                return;
+            }
+            for (self.windows.items) |*win| {
+                if (win.id == WIN_STATUS_ID and win.is_onscreen) {
+                    self.setWindowOnScreen(WIN_STATUS_ID, false);
+                    return;
+                }
+            }
+        }
+
         const active_win = self.getActiveWindow();
+        if (active_win) |win| {
+            if (win.focused_icon_idx == null) {
+                _ = win.focusFirstInteractiveIcon();
+            }
+        }
         const focused_icon: ?*Icon = if (active_win) |win|
             if (win.focused_icon_idx) |idx|
                 if (idx < win.icons.items.len) &win.icons.items[idx] else null
@@ -863,36 +1323,7 @@ pub const DiosixGui = struct {
             null;
         const is_in_text_field = if (focused_icon) |ic| (ic.icon_type == .read_write_text) else false;
 
-        // Handle ESC key to exit fullscreen video mode
-        if (key_code == Key.ESC) {
-            if (guests_sub.isFullscreen()) {
-                guests_sub.exitFullscreen(self);
-                return;
-            }
-        }
-
-        // 1. Number keys '1'..'5' quick switch subprograms ONLY if not typing in a text field and Ctrl is not held
-        if (!is_in_text_field and !ctrl) {
-            if (key_char) |c| {
-                if (c >= '1' and c <= '5') {
-                    const sub_idx: usize = @intCast(c - '1');
-                    if (sub_idx < self.subprograms.items.len) {
-                        self.activateSubProgram(sub_idx);
-                        return;
-                    }
-                }
-            }
-
-            // 'F' key toggles fullscreen video display in Guests subprogram
-            if (key_code == Key.F or key_char == 'f' or key_char == 'F') {
-                if (self.active_sub_idx == 2) {
-                    guests_sub.toggleFullscreen(self);
-                    return;
-                }
-            }
-        }
-
-        // 2. Direct Pane Navigation via F6 / Shift-F6
+        // 1. Direct Pane Navigation via F6 / Shift-F6
         if (key_code == Key.F6) {
             if (shift) {
                 self.focusPrevPane();
@@ -902,7 +1333,7 @@ pub const DiosixGui = struct {
             return;
         }
 
-        // 3. Tab Navigation: moves focus to next/prev item; transitions across panes on boundary
+        // 2. Tab Navigation: moves focus to next/prev item; transitions across panes on boundary
         // Ctrl-Tab switches directly between panes
         if (key_code == Key.TAB) {
             if (ctrl) {
@@ -962,31 +1393,28 @@ pub const DiosixGui = struct {
             }
         }
 
-        // 4. Control Codes recognition (both keycode+ctrl and raw ASCII control bytes)
-        const is_ctrl_a = (ctrl and (key_code == Key.A or key_char == 'a' or key_char == 'A')) or (key_char != null and key_char.? == 1);
-        const is_ctrl_c = (ctrl and (key_code == Key.C or key_char == 'c' or key_char == 'C')) or (key_char != null and key_char.? == 3);
-        const is_ctrl_v = (ctrl and (key_code == Key.V or key_char == 'v' or key_char == 'V')) or (key_char != null and key_char.? == 22);
-        const is_ctrl_x = (ctrl and (key_code == Key.X or key_char == 'x' or key_char == 'X')) or (key_char != null and key_char.? == 24);
-        const is_ctrl_u = (ctrl and (key_code == Key.U or key_char == 'u' or key_char == 'U')) or (key_char != null and key_char.? == 21);
+        // 3. Control Codes recognition (both keycode+ctrl and raw ASCII control bytes)
+        const is_ctrl_a = (ctrl and (key_code == Key.A or (key_char != null and (key_char.? == 'a' or key_char.? == 'A')))) or (key_char != null and key_char.? == 1);
+        const is_ctrl_c = (ctrl and (key_code == Key.C or (key_char != null and (key_char.? == 'c' or key_char.? == 'C')))) or (key_char != null and key_char.? == 3);
+        const is_ctrl_v = (ctrl and (key_code == Key.V or (key_char != null and (key_char.? == 'v' or key_char.? == 'V')))) or (key_char != null and key_char.? == 22);
+        const is_ctrl_x = (ctrl and (key_code == Key.X or (key_char != null and (key_char.? == 'x' or key_char.? == 'X')))) or (key_char != null and key_char.? == 24);
+        const is_ctrl_u = (ctrl and (key_code == Key.U or (key_char != null and (key_char.? == 'u' or key_char.? == 'U')))) or (key_char != null and key_char.? == 21);
 
-        // 5. If focused on a read_write_text icon, handle text field actions
+        // 4. If focused on a read_write_text icon, handle text field actions
         if (is_in_text_field) {
             const icon = focused_icon.?;
             const win = active_win.?;
 
             if (is_ctrl_a) {
-                // Control-A: Select all
                 icon.selectAll();
                 self.markDirty(win.getBox());
                 return;
             } else if (is_ctrl_c) {
-                // Control-C: Copy selected text
                 if (icon.hasSelection()) {
                     self.setClipboard(icon.getSelectedText());
                 }
                 return;
             } else if (is_ctrl_x) {
-                // Control-X: Cut selected text
                 if (icon.hasSelection()) {
                     self.setClipboard(icon.getSelectedText());
                     _ = icon.deleteSelection();
@@ -995,7 +1423,6 @@ pub const DiosixGui = struct {
                 }
                 return;
             } else if (is_ctrl_v) {
-                // Control-V: Paste
                 const clip = self.getClipboard();
                 if (clip.len > 0) {
                     _ = icon.deleteSelection();
@@ -1005,17 +1432,14 @@ pub const DiosixGui = struct {
                 }
                 return;
             } else if (is_ctrl_u) {
-                // Control-U: Clear the whole field
                 icon.clearField();
                 if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
                 self.markDirty(win.getBox());
                 return;
             }
 
-            // If Ctrl is held but unhandled, do not type printable characters
             if (ctrl) return;
 
-            // Arrow keys in writable text field
             if (key_code == Key.LEFT) {
                 if (shift) {
                     if (icon.selection_start == null) {
@@ -1080,24 +1504,7 @@ pub const DiosixGui = struct {
                 }
                 self.markDirty(win.getBox());
                 return;
-            } else if (key_code == Key.UP) {
-                // Up arrow moves to previous item
-                if (!win.focusPrevIcon()) {
-                    self.focusPrevPaneLast();
-                }
-                self.markDirty(win.getBox());
-                return;
-            } else if (key_code == Key.DOWN) {
-                // Down arrow moves to next item
-                if (!win.focusNextIcon()) {
-                    self.focusNextPaneFirst();
-                }
-                self.markDirty(win.getBox());
-                return;
-            }
-
-            // Backspace and Delete
-            if (key_code == Key.BACKSPACE) {
+            } else if (key_code == Key.BACKSPACE) {
                 if (icon.hasSelection()) {
                     _ = icon.deleteSelection();
                 } else {
@@ -1115,14 +1522,9 @@ pub const DiosixGui = struct {
                 if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
                 self.markDirty(win.getBox());
                 return;
-            }
-
-            // Regular character typing
-            if (key_char) |c| {
+            } else if (key_char) |c| {
                 if (c >= 32 and c <= 126) {
-                    if (icon.hasSelection()) {
-                        _ = icon.deleteSelection();
-                    }
+                    _ = icon.deleteSelection();
                     icon.insertChar(c);
                     if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
                     self.markDirty(win.getBox());
@@ -1131,7 +1533,7 @@ pub const DiosixGui = struct {
             }
         }
 
-        // 6. Non-text field handling (Sliders, Action Buttons, Checkboxes, Pane Navigation)
+        // 5. Non-text field handling (Menu Items, Sliders, Action Buttons, Checkboxes, Pane Navigation)
         if (active_win) |win| {
             if (focused_icon) |icon| {
                 if (icon.icon_type == .slider) {
@@ -1190,7 +1592,7 @@ pub const DiosixGui = struct {
                 return;
             }
 
-            // Enter or Space activates the focused action button or toggles tickbox
+            // Enter or Space activates the focused action button or toggles tickbox or triggers menu item
             if (key_code == Key.ENTER or key_code == Key.SPACE) {
                 if (win.focused_icon_idx) |f_idx| {
                     if (f_idx < win.icons.items.len) {
@@ -1224,37 +1626,39 @@ pub const DiosixGui = struct {
         if (damage.isEmpty()) return fb.Box{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 };
 
         const win_alpha = self.getWindowOpacityAlpha();
-        const tab_bar_box = fb.Box.fromPosSize(0, 0, self.width, TAB_BAR_HEIGHT);
         const blur_radius = self.getBlurRadius();
 
         const is_full_screen = (damage.x0 == 0 and damage.y0 == 0 and
             damage.x1 == @as(i32, @intCast(self.width)) and
             damage.y1 == @as(i32, @intCast(self.height)));
 
+        const is_keyboard_active = (self.input_mode == .keyboard);
+
         if (is_full_screen) {
             clean_surface.drawGraduatedBackground(self.bg_top_color, self.bg_bot_color);
-            self.renderTabBar(clean_surface);
             for (self.windows.items) |*win| {
                 if (win.is_onscreen) {
                     const win_box = win.getBox();
                     clean_surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
-                    win.render(clean_surface, win_alpha);
+                    win.render(clean_surface, win_alpha, is_keyboard_active);
                 }
             }
         } else {
-            // 1. Redraw tab bar if it intersects damage
-            if (damage.intersects(tab_bar_box)) {
-                clean_surface.drawGraduatedBackgroundInBox(tab_bar_box, self.bg_top_color, self.bg_bot_color);
-                self.renderTabBar(clean_surface);
-            }
-
-            // 2. Redraw any on-screen window intersecting damage
+            clean_surface.drawGraduatedBackgroundInBox(damage, self.bg_top_color, self.bg_bot_color);
+            // Redraw any on-screen window intersecting damage
             for (self.windows.items) |*win| {
                 if (win.is_onscreen and win.intersectsBox(damage)) {
                     const win_box = win.getBox();
                     clean_surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
-                    win.render(clean_surface, win_alpha);
+                    win.render(clean_surface, win_alpha, is_keyboard_active);
                 }
+            }
+        }
+
+        // Draw visual bridge connecting Menu pane and active child pane if onscreen
+        if (self.getActiveChildConnectorBox()) |cbox| {
+            if (is_full_screen or damage.intersects(cbox)) {
+                self.drawActiveChildConnector(clean_surface);
             }
         }
 
@@ -1264,86 +1668,8 @@ pub const DiosixGui = struct {
     pub fn render(self: *DiosixGui, surface: *fb.Surface) void {
         self.markFullDirty();
         _ = self.renderDamaged(surface);
-        self.cursor.draw(surface);
-    }
-
-    pub fn renderTabBar(self: *DiosixGui, surface: *fb.Surface) void {
-        self.renderTabBarAtY(surface, 0);
-    }
-
-    pub fn renderTabBarAtY(self: *DiosixGui, surface: *fb.Surface, y_offset: i32) void {
-        const bar_box = fb.Box.fromPosSize(0, y_offset, self.width, TAB_BAR_HEIGHT);
-
-        // Translucent top header bar (85% opaque neutral dark glass)
-        surface.drawRoundedTranslucentBox(bar_box, 0, fb.Color.GLASS_BG, 220, null);
-
-        // Header bottom divider line
-        const div_box = fb.Box.fromPosSize(0, y_offset + @as(i32, @intCast(TAB_BAR_HEIGHT - 1)), self.width, 1);
-        surface.fillBox(div_box, fb.Color.TAB_DIVIDER);
-
-        // Title Branding: Questrial Regular with Accent Gold
-        font.drawTextWithShadow(surface, "DIOSIX SYSTEM MENU", 18, y_offset + 12, fb.Color.ACCENT_GOLD, fb.Color.BLACK);
-
-        // Render Tabs
-        for (self.subprograms.items, 0..) |*sub, idx| {
-            const tx = TAB_START_X + @as(i32, @intCast(idx)) * TAB_STRIDE;
-            const ty: i32 = y_offset + 5;
-            const t_box = fb.Box.fromPosSize(tx, ty, TAB_WIDTH, TAB_HEIGHT);
-
-            const title_w = font.measureString(sub.tab_title);
-            const text_x = if (TAB_WIDTH > title_w) tx + @as(i32, @intCast((TAB_WIDTH - title_w) / 2)) else tx + 4;
-
-            const is_active = (idx == self.active_sub_idx);
-            if (is_active) {
-                // Active tab: Translucent rounded glass pill with bright frosted border
-                surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_ACTIVE_BG, 230, fb.Color.GLASS_BTN_BORDER);
-                font.drawTextWithShadow(surface, sub.tab_title, text_x, ty + 7, fb.Color.WHITE, fb.Color.BLACK);
-            } else {
-                // Inactive tab: subtle translucent dark pill
-                surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_INACTIVE_BG, 180, fb.Color.TAB_INACTIVE_BORDER);
-                font.drawTextWithShadow(surface, sub.tab_title, text_x, ty + 7, fb.Color.TEXT_MUTED, fb.Color.BLACK);
-            }
-        }
-    }
-
-    pub fn renderTabBarWithAlpha(self: *DiosixGui, surface: *fb.Surface, alpha_factor: f32) void {
-        const af = std.math.clamp(alpha_factor, 0.0, 1.0);
-        if (af <= 0.005) return;
-
-        const bar_box = fb.Box.fromPosSize(0, 0, self.width, TAB_BAR_HEIGHT);
-        const glass_alpha: u8 = @intFromFloat(220.0 * af);
-
-        // Translucent top header bar
-        surface.drawRoundedTranslucentBox(bar_box, 0, fb.Color.GLASS_BG, glass_alpha, null);
-
-        // Header bottom divider line
-        const div_box = fb.Box.fromPosSize(0, @as(i32, @intCast(TAB_BAR_HEIGHT - 1)), self.width, 1);
-        const div_col = fb.blendPixel(surface.getPixel(0, @as(i32, @intCast(TAB_BAR_HEIGHT - 1))), fb.Color.TAB_DIVIDER, @intFromFloat(255.0 * af));
-        surface.fillBox(div_box, div_col);
-
-        // Title Branding: Questrial Regular with Accent Gold
-        const title_alpha: u8 = @intFromFloat(255.0 * af);
-        font.drawTextWithShadowAlpha(surface, "DIOSIX SYSTEM MENU", 18, 12, fb.Color.ACCENT_GOLD, fb.Color.BLACK, title_alpha);
-
-        // Render Tabs
-        for (self.subprograms.items, 0..) |*sub, idx| {
-            const tx = TAB_START_X + @as(i32, @intCast(idx)) * TAB_STRIDE;
-            const ty: i32 = 5;
-            const t_box = fb.Box.fromPosSize(tx, ty, TAB_WIDTH, TAB_HEIGHT);
-
-            const title_w = font.measureString(sub.tab_title);
-            const text_x = if (TAB_WIDTH > title_w) tx + @as(i32, @intCast((TAB_WIDTH - title_w) / 2)) else tx + 4;
-
-            const is_active = (idx == self.active_sub_idx);
-            if (is_active) {
-                const tab_a: u8 = @intFromFloat(230.0 * af);
-                surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_ACTIVE_BG, tab_a, fb.Color.GLASS_BTN_BORDER);
-                font.drawTextWithShadowAlpha(surface, sub.tab_title, text_x, ty + 7, fb.Color.WHITE, fb.Color.BLACK, title_alpha);
-            } else {
-                const tab_a: u8 = @intFromFloat(180.0 * af);
-                surface.drawRoundedTranslucentBox(t_box, 6, fb.Color.TAB_INACTIVE_BG, tab_a, fb.Color.TAB_INACTIVE_BORDER);
-                font.drawTextWithShadowAlpha(surface, sub.tab_title, text_x, ty + 7, fb.Color.TEXT_MUTED, fb.Color.BLACK, title_alpha);
-            }
+        if (self.input_mode == .mouse and self.cursor.visible) {
+            self.cursor.draw(surface);
         }
     }
 
@@ -1351,12 +1677,14 @@ pub const DiosixGui = struct {
         const base_win_alpha = self.getWindowOpacityAlpha();
         const win_alpha: u8 = @intFromFloat(@as(f32, @floatFromInt(base_win_alpha)) * std.math.clamp(alpha_factor, 0.0, 1.0));
         const blur_radius = self.getBlurRadius();
+        const is_keyboard_active = (self.input_mode == .keyboard);
         for (self.windows.items) |*win| {
             if (win.is_onscreen) {
                 const win_box = win.getBox();
                 surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
-                win.render(surface, win_alpha);
+                win.render(surface, win_alpha, is_keyboard_active);
             }
         }
+        self.drawActiveChildConnector(surface);
     }
 };

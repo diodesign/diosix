@@ -24,6 +24,7 @@ pub const IconType = enum {
     button,
     progress_bar,
     video_viewport,
+    menu_item,
 };
 
 pub const GroupMode = enum {
@@ -42,8 +43,14 @@ pub const Icon = struct {
     height: u32,
 
     // Text label or content buffer
-    text_buf: [128]u8 = @splat(0),
+    text_buf: [256]u8 = @splat(0),
     text_len: usize = 0,
+
+    // Optional custom text color
+    custom_color: ?u32 = null,
+
+    // Optional contextual help text displayed in Active Help Pane
+    help_text: ?[]const u8 = null,
 
     // For read_write_text
     cursor_pos: usize = 0,
@@ -85,7 +92,39 @@ pub const Icon = struct {
     is_focused: bool = false,
     is_hovered: bool = false,
     is_enabled: bool = true,
+    is_selectable: bool = true,
+    is_selected: bool = false,
     is_active_press: bool = false,
+
+    pub fn setSelected(self: *Icon, selected: bool) void {
+        self.is_selected = selected;
+    }
+
+    pub fn setHelpText(self: *Icon, text: ?[]const u8) void {
+        self.help_text = text;
+    }
+
+    pub fn getHelpText(self: *const Icon) ?[]const u8 {
+        return self.help_text;
+    }
+
+    pub fn setCustomColor(self: *Icon, color: ?u32) void {
+        self.custom_color = color;
+    }
+
+    pub fn containsPoint(self: *const Icon, win_x: i32, win_y: i32, px: i32, py: i32) bool {
+        if (!self.is_enabled) return false;
+        const box = fb.Box.fromPosSize(win_x + self.rel_x, win_y + self.rel_y, self.width, self.height);
+        return box.contains(px, py);
+    }
+
+    pub fn setSelectable(self: *Icon, selectable: bool) void {
+        self.is_selectable = selectable;
+        if (!selectable) {
+            self.is_focused = false;
+            self.is_hovered = false;
+        }
+    }
 
     pub fn createReadOnly(id: u32, rel_x: i32, rel_y: i32, width: u32, height: u32, text: []const u8) Icon {
         var icon = Icon{
@@ -95,6 +134,7 @@ pub const Icon = struct {
             .rel_y = rel_y,
             .width = width,
             .height = height,
+            .is_selectable = false,
         };
         icon.setText(text);
         return icon;
@@ -211,6 +251,19 @@ pub const Icon = struct {
             .video_has_signal = has_signal,
         };
         icon.setText(vm_name);
+        return icon;
+    }
+
+    pub fn createMenuItem(id: u32, rel_x: i32, rel_y: i32, width: u32, height: u32, label: []const u8) Icon {
+        var icon = Icon{
+            .id = id,
+            .icon_type = .menu_item,
+            .rel_x = rel_x,
+            .rel_y = rel_y,
+            .width = width,
+            .height = height,
+        };
+        icon.setText(label);
         return icon;
     }
 
@@ -415,20 +468,21 @@ pub const Icon = struct {
     }
 
     pub fn hitTest(self: *const Icon, win_x: i32, win_y: i32, px: i32, py: i32) bool {
-        if (!self.is_enabled) return false;
+        if (!self.is_enabled or !self.is_selectable) return false;
         const box = fb.Box.fromPosSize(win_x + self.rel_x, win_y + self.rel_y, self.width, self.height);
         return box.contains(px, py);
     }
 
     // Render this icon onto the framebuffer surface with strict bounding box clipping
-    pub fn render(self: *Icon, surface: *fb.Surface, win_x: i32, win_y: i32, is_win_active: bool) void {
+    pub fn render(self: *Icon, surface: *fb.Surface, win_x: i32, win_y: i32, is_win_active: bool, is_keyboard_active: bool) void {
         const sx = win_x + self.rel_x;
         const sy = win_y + self.rel_y;
         const box = fb.Box.fromPosSize(sx, sy, self.width, self.height);
 
-        // If this icon is focused and window is active, render keyboard focus hand marker
+        // If this icon is focused, window is active, and keyboard navigation is active:
+        // render keyboard focus hand marker
         // (drawn before establishing icon content clipping so the hand can point in the outer margin)
-        if (self.is_focused and is_win_active) {
+        if (self.is_selectable and self.is_focused and is_win_active and is_keyboard_active) {
             const marker_x = @max(win_x + 4, sx - @as(i32, @intCast(cursor_mod.MARKER_WIDTH)) - 2);
             cursor_mod.Cursor.drawFocusHand(surface, marker_x, sy + @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(cursor_mod.MARKER_HEIGHT)), 2));
         }
@@ -440,10 +494,14 @@ pub const Icon = struct {
         // If icon bounding box is completely clipped out by parent, return early
         if (surface.clip.isEmpty()) return;
 
+        const is_focused_active = (self.is_selectable and self.is_focused and is_win_active and is_keyboard_active);
+        const is_highlighted = if (is_keyboard_active) is_focused_active else (self.is_selectable and self.is_hovered);
         const fg_color: u32 = if (!self.is_enabled)
             fb.Color.TEXT_MUTED
-        else if (self.is_focused and is_win_active)
+        else if (is_highlighted)
             fb.Color.ACCENT_CYAN
+        else if (self.custom_color) |c|
+            c
         else
             fb.Color.WHITE;
 
@@ -564,14 +622,19 @@ pub const Icon = struct {
 
             .button => {
                 // Sleek pushable button
+                const is_btn_highlight = if (is_keyboard_active)
+                    (self.is_focused and is_win_active)
+                else
+                    self.is_hovered;
+
                 const btn_bg: u32 = if (self.is_active_press)
                     fb.Color.BTN_PRESS_BG
-                else if (self.is_hovered or (self.is_focused and is_win_active))
+                else if (is_btn_highlight)
                     fb.Color.BTN_HOVER_BG
                 else
                     fb.Color.BTN_NORMAL_BG;
 
-                const border_col: u32 = if (self.is_focused and is_win_active) fb.Color.ACCENT_CYAN else fb.Color.GLASS_BTN_BORDER;
+                const border_col: u32 = if (is_btn_highlight) fb.Color.ACCENT_CYAN else fb.Color.GLASS_BTN_BORDER;
                 surface.drawRoundedTranslucentBox(box, 6, btn_bg, 220, border_col);
 
                 const txt = self.getText();
@@ -768,6 +831,24 @@ pub const Icon = struct {
                         font.drawText(surface, "Use 'Open Virtual SSH' to interact.", warn_x + 14, warn_y + 110, fb.Color.ACCENT_CYAN);
                     }
                 }
+            },
+
+            .menu_item => {
+                const is_active_highlight = if (is_keyboard_active)
+                    (self.is_focused and is_win_active)
+                else
+                    self.is_hovered;
+
+                const item_color: u32 = if (!self.is_enabled)
+                    fb.Color.TEXT_MUTED
+                else if (is_active_highlight or self.is_selected)
+                    fb.Color.ACCENT_CYAN
+                else
+                    fb.Color.WHITE;
+
+                // Render menu item label at normal font size with color highlight (no resizing)
+                const text_y = sy + @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(font.GLYPH_HEIGHT)), 2);
+                font.drawTextWithShadow(surface, self.getText(), sx, text_y, item_color, fb.Color.BLACK);
             },
         }
     }

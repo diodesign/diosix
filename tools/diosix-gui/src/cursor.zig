@@ -58,12 +58,14 @@ pub const Cursor = struct {
     x: i32 = 640,
     y: i32 = 400,
     drawn: bool = false,
+    visible: bool = true,
 
     pub fn getBox(self: *const Cursor) fb.Box {
         return fb.Box.fromPosSize(self.x, self.y, CURSOR_WIDTH, CURSOR_HEIGHT);
     }
 
     pub fn draw(self: *Cursor, screen: *fb.Surface) void {
+        if (!self.visible) return;
         drawSprite(screen, self.x, self.y);
         self.drawn = true;
     }

@@ -23,7 +23,13 @@ const vcpu_mod = em_mod.vcpu;
 const builtin = @import("builtin");
 
 extern const project_version: [*:0]const u8;
+extern const git_branch: [*:0]const u8;
 extern const git_revision: [*:0]const u8;
+extern const build_date: [*:0]const u8;
+extern const build_user: [*:0]const u8;
+extern const build_hostname: [*:0]const u8;
+extern const zig_version: [*:0]const u8;
+extern const cpu_arch: [*:0]const u8;
 
 pub const RV32_WORD_MASK: u64 = 0xFFFF_FFFF;
 pub const RV32_HIGH_SHIFT: u6 = 32;
@@ -697,6 +703,46 @@ fn handleDiosix(vc: *vcore.VirtualCore, context: *riscv.ThreadContext, function:
             info.host_timer_freq_hz = interface.HOST_TIMER_FREQ_HZ;
             info.host_total_ram_kb = @intCast(physmem.getTotalRamBytes() / 1024);
             info.host_free_ram_kb = @intCast(physmem.getFreeRamBytes() / 1024);
+            info.hv_reserved_bytes = @intCast(physmem.getHypervisorRegion().size);
+            info.hv_heap_free_bytes = @intCast(pcore.getTotalFreeHeapBytes());
+
+            const b_str = std.fmt.bufPrint(&info.build_desc, "Version {s} {s}/{s} {s} {s}@{s} (Zig {s} {s})", .{
+                project_version,
+                git_branch,
+                git_revision,
+                build_date,
+                build_user,
+                build_hostname,
+                zig_version,
+                cpu_arch,
+            }) catch "";
+            _ = b_str;
+
+            // Detect host CPU ISA
+            const misa = riscv.readMisa();
+            var isa_buf: [32]u8 = undefined;
+            var isa_len: usize = 0;
+            const is_64 = (misa & (@as(usize, 2) << 62)) != 0 or builtin.target.cpu.arch == .riscv64;
+            const base_str = if (is_64) "RV64" else "RV32";
+            @memcpy(isa_buf[0..base_str.len], base_str);
+            isa_len += base_str.len;
+
+            const canonical_exts = "IMAFDCSUH";
+            for (canonical_exts) |ch| {
+                const bit = @as(usize, 1) << @intCast(ch - 'A');
+                if ((misa & bit) != 0) {
+                    if (isa_len < isa_buf.len) {
+                        isa_buf[isa_len] = ch;
+                        isa_len += 1;
+                    }
+                }
+            }
+            if (isa_len == base_str.len) {
+                const fallback = if (is_64) "RV64GC" else "RV32IMAFDC";
+                @memcpy(info.host_cpu_isa[0..fallback.len], fallback);
+            } else {
+                @memcpy(info.host_cpu_isa[0..isa_len], isa_buf[0..isa_len]);
+            }
 
             g.space.writeGuestStruct(interface.HypervisorInfo, buf_gpa, info) catch {
                 setResult(vc, context, SBI_ERR_INVALID_ADDRESS, 0);

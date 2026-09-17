@@ -606,12 +606,16 @@ fn cmdHostInfo(client: *api.DiosixClient) !void {
         return;
     };
 
-    var buf: [512]u8 = undefined;
+    var buf: [1024]u8 = undefined;
     const commit_str = std.mem.sliceTo(&info.build_commit, 0);
+    const isa_str = std.mem.sliceTo(&info.host_cpu_isa, 0);
+    const build_str = std.mem.sliceTo(&info.build_desc, 0);
     const out = std.fmt.bufPrint(&buf,
         \\Diosix version  : {d}.{d} (Commit {s})
+        \\Hypervisor build: {s}
+        \\Footprint       : {d} KB reserved, {d} KB free
         \\ABI version     : {d}.{d}.{d}
-        \\Host cores      : {d} physical hart(s)
+        \\Host cores      : {d} physical hart(s) {s}
         \\Host RAM        : {d} MB total / {d} MB free
         \\Timer frequency : {d} Hz
         \\Capabilities    :
@@ -624,10 +628,14 @@ fn cmdHostInfo(client: *api.DiosixClient) !void {
         info.version_major,
         info.version_minor,
         if (commit_str.len > 0) commit_str else "release",
+        if (build_str.len > 0) build_str else "n/a",
+        info.hv_reserved_bytes / 1024,
+        info.hv_heap_free_bytes / 1024,
         info.abi_version_major,
         info.abi_version_minor,
         info.abi_version_patch,
         info.host_physical_cores,
+        if (isa_str.len > 0) isa_str else "",
         info.host_total_ram_kb / KB_PER_MB,
         info.host_free_ram_kb / KB_PER_MB,
         info.host_timer_freq_hz,

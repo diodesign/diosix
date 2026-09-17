@@ -113,6 +113,10 @@ pub const HypervisorInfo = extern struct {
     host_timer_freq_hz: u32 = HOST_TIMER_FREQ_HZ,
     host_total_ram_kb: u64 = 0,
     host_free_ram_kb: u64 = 0,
+    hv_reserved_bytes: u64 = 0,
+    hv_heap_free_bytes: u64 = 0,
+    host_cpu_isa: [32]u8 = std.mem.zeroes([32]u8),
+    build_desc: [192]u8 = std.mem.zeroes([192]u8),
 };
 
 pub const GuestInfo = extern struct {
