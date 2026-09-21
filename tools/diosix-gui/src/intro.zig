@@ -25,26 +25,26 @@ pub const TOTAL_INTRO_DURATION_MS: u32 = 10_000; // 10 seconds
 // Creates the sentinel file on first check so it plays once per boot.
 pub fn shouldPlayIntro() bool {
     // 1. Check primary sentinel (/run)
-    const rc_run = linux.open(SENTINEL_PRIMARY, .{ .ACCMODE = .RDONLY }, 0);
+    const rc_run = linux.open(SENTINEL_PRIMARY, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
     if (@as(isize, @bitCast(rc_run)) >= 0) {
         _ = linux.close(@intCast(rc_run));
         return false;
     }
 
-    // 2. Check fallback sentinel (/tmp)
-    const rc_tmp = linux.open(SENTINEL_FALLBACK, .{ .ACCMODE = .RDONLY }, 0);
+    // 2. Check fallback sentinel (/tmp) with NOFOLLOW
+    const rc_tmp = linux.open(SENTINEL_FALLBACK, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
     if (@as(isize, @bitCast(rc_tmp)) >= 0) {
         _ = linux.close(@intCast(rc_tmp));
         return false;
     }
 
-    // 3. Mark as played for this boot (create both if possible)
-    const creat_run = linux.open(SENTINEL_PRIMARY, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    // 3. Mark as played for this boot (create with NOFOLLOW and restricted 0600 mode)
+    const creat_run = linux.open(SENTINEL_PRIMARY, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true }, 0o600);
     if (@as(isize, @bitCast(creat_run)) >= 0) {
         _ = linux.close(@intCast(creat_run));
     }
 
-    const creat_tmp = linux.open(SENTINEL_FALLBACK, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    const creat_tmp = linux.open(SENTINEL_FALLBACK, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true }, 0o600);
     if (@as(isize, @bitCast(creat_tmp)) >= 0) {
         _ = linux.close(@intCast(creat_tmp));
     }
@@ -249,8 +249,8 @@ pub const IntroState = struct {
             drawGuiBloom(surface, gui, t, w, h);
         }
 
-        // Render live mouse cursor when in mouse mode
-        if (gui.input_mode == .mouse and gui.cursor.visible) {
+        // Render live mouse cursor when visible
+        if (gui.cursor.visible) {
             gui.cursor.draw(surface);
         }
     }

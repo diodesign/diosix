@@ -27,6 +27,7 @@ pub const Window = struct {
     allocator: std.mem.Allocator,
     icons: std.ArrayList(Icon) = .empty,
     focused_icon_idx: ?usize = null,
+    active_drag_icon_idx: ?usize = null,
 
     is_active: bool = false,
     z_order: u32 = 0,
@@ -96,13 +97,7 @@ pub const Window = struct {
 
     pub fn addIcon(self: *Window, icon: Icon) !*Icon {
         try self.icons.append(self.allocator, icon);
-        const idx = self.icons.items.len - 1;
-        // Default first interactive icon as focused
-        if (self.focused_icon_idx == null and isIconInteractive(&self.icons.items[idx])) {
-            self.focused_icon_idx = idx;
-            self.icons.items[idx].is_focused = true;
-        }
-        return &self.icons.items[idx];
+        return &self.icons.items[self.icons.items.len - 1];
     }
 
     pub fn getIconById(self: *Window, id: u32) ?*Icon {
@@ -135,6 +130,14 @@ pub const Window = struct {
     pub fn intersectsBox(self: *const Window, box: fb.Box) bool {
         if (!self.is_onscreen) return false;
         return self.getBox().intersects(box);
+    }
+
+    // Check if this window has any enabled interactive icons
+    pub fn hasInteractiveIcons(self: *const Window) bool {
+        for (self.icons.items) |*ic| {
+            if (ic.is_selectable and ic.is_enabled) return true;
+        }
+        return false;
     }
 
     // --- Scrollable Viewport & Geometry ---
@@ -250,94 +253,6 @@ pub const Window = struct {
         return self.scrollBy(delta);
     }
 
-    // Check if an icon is interactive (eligible for keyboard navigation and activation)
-    pub fn isIconInteractive(icon: *const Icon) bool {
-        return icon.is_selectable and icon.icon_type != .read_only_text and icon.icon_type != .progress_bar and icon.icon_type != .video_viewport and icon.is_enabled;
-    }
-
-    // Check if this window has any enabled interactive icons
-    pub fn hasInteractiveIcons(self: *const Window) bool {
-        for (self.icons.items) |*ic| {
-            if (isIconInteractive(ic)) return true;
-        }
-        return false;
-    }
-
-    // Move keyboard focus to next interactive icon in this window.
-    // Returns true if advanced to an icon within this window, or false if the end was reached.
-    pub fn focusNextIcon(self: *Window) bool {
-        if (self.icons.items.len == 0) return false;
-        const start = if (self.focused_icon_idx) |idx| idx + 1 else 0;
-
-        var i = start;
-        while (i < self.icons.items.len) : (i += 1) {
-            const ic = &self.icons.items[i];
-            if (isIconInteractive(ic)) {
-                self.setFocusedIndex(i);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Move keyboard focus to previous interactive icon in this window.
-    // Returns true if moved backward within this window, or false if the beginning was reached.
-    pub fn focusPrevIcon(self: *Window) bool {
-        if (self.icons.items.len == 0) return false;
-        const cur = self.focused_icon_idx orelse return self.focusLastInteractiveIcon();
-        if (cur == 0) return false;
-
-        var i: usize = cur;
-        while (i > 0) : (i -= 1) {
-            const check_idx = i - 1;
-            const ic = &self.icons.items[check_idx];
-            if (isIconInteractive(ic)) {
-                self.setFocusedIndex(check_idx);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Focus the first enabled interactive icon in this window
-    pub fn focusFirstInteractiveIcon(self: *Window) bool {
-        for (self.icons.items, 0..) |*ic, idx| {
-            if (isIconInteractive(ic)) {
-                self.setFocusedIndex(idx);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Focus the last enabled interactive icon in this window
-    pub fn focusLastInteractiveIcon(self: *Window) bool {
-        var i = self.icons.items.len;
-        while (i > 0) : (i -= 1) {
-            const idx = i - 1;
-            const ic = &self.icons.items[idx];
-            if (isIconInteractive(ic)) {
-                self.setFocusedIndex(idx);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Move keyboard focus to next interactive icon, wrapping to start if reaching the end
-    pub fn focusNextIconWrap(self: *Window) void {
-        if (!self.focusNextIcon()) {
-            _ = self.focusFirstInteractiveIcon();
-        }
-    }
-
-    // Move keyboard focus to previous interactive icon, wrapping to end if reaching the start
-    pub fn focusPrevIconWrap(self: *Window) void {
-        if (!self.focusPrevIcon()) {
-            _ = self.focusLastInteractiveIcon();
-        }
-    }
-
     pub fn setFocusedIndex(self: *Window, new_idx: ?usize) void {
         if (self.focused_icon_idx) |old_idx| {
             if (old_idx < self.icons.items.len) {
@@ -449,7 +364,10 @@ pub const Window = struct {
         const c_bot = self.getContentBottom();
         if (py >= c_top and py < c_bot) {
             const win_content_y = self.y - self.scroll_y;
-            for (self.icons.items, 0..) |*icon, idx| {
+            var i = self.icons.items.len;
+            while (i > 0) : (i -= 1) {
+                const idx = i - 1;
+                const icon = &self.icons.items[idx];
                 const icon_sy = win_content_y + icon.rel_y;
                 const icon_bot = icon_sy + @as(i32, @intCast(icon.height));
                 if (icon_bot <= c_top or icon_sy >= c_bot) continue;
@@ -457,8 +375,21 @@ pub const Window = struct {
                 if (icon.is_selectable and icon.hitTest(self.x, win_content_y, px, py)) {
                     self.setFocusedIndex(idx);
 
-                    // Handle slider specific direct position setting
+                    // Reset active press and dragging on all other icons in this window
+                    for (self.icons.items, 0..) |*other, other_idx| {
+                        if (other_idx != idx) {
+                            other.is_active_press = false;
+                            other.is_hovered = false;
+                            other.is_dragging_slider = false;
+                            other.is_dragging_select = false;
+                        }
+                    }
+                    icon.is_hovered = true;
+
+                    // Handle slider specific direct position setting and drag capture
                     if (icon.icon_type == .slider) {
+                        self.active_drag_icon_idx = idx;
+                        icon.is_dragging_slider = true;
                         const sx = self.x + icon.rel_x;
                         const track_w = if (icon.width > 16) icon.width - 16 else 1;
                         const click_offset = std.math.clamp(px - sx - 8, 0, @as(i32, @intCast(track_w)));
@@ -467,6 +398,7 @@ pub const Window = struct {
                         icon.setSliderValue(new_val);
                         if (icon.callback) |cb| cb(gui_ctx, @ptrCast(self), icon);
                     } else if (icon.icon_type == .read_write_text) {
+                        self.active_drag_icon_idx = idx;
                         const char_idx = icon.getCharIndexAtX(self.x, px);
                         icon.cursor_pos = char_idx;
                         icon.selection_start = char_idx;
@@ -474,13 +406,34 @@ pub const Window = struct {
                         icon.is_dragging_select = true;
                         if (icon.callback) |cb| cb(gui_ctx, @ptrCast(self), icon);
                     } else {
+                        self.active_drag_icon_idx = null;
                         self.triggerIcon(gui_ctx, icon);
                     }
                     return true;
                 }
             }
         }
+
+        // Click landed on window background: clear active press and drag states
+        for (self.icons.items) |*icon| {
+            icon.is_active_press = false;
+            icon.is_dragging_slider = false;
+            icon.is_dragging_select = false;
+        }
+        self.active_drag_icon_idx = null;
         return true; // Clicked on window background
+    }
+
+    // Reset hover on all icons in this window
+    pub fn clearHover(self: *Window) bool {
+        var changed = false;
+        for (self.icons.items) |*icon| {
+            if (icon.is_hovered) {
+                icon.is_hovered = false;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     // Handle mouse motion for hover highlights, slider drags, text drag-selection, and scrollbar
@@ -490,30 +443,22 @@ pub const Window = struct {
 
         var changed = false;
 
-        // 1. Scrollbar drag tracking
-        if (self.is_dragging_scrollbar) {
-            if (left_down) {
-                const track = self.getScrollbarTrackBox();
-                const thumb = self.getScrollbarThumbBox();
-                const track_h = track.y1 - track.y0;
-                const thumb_h = thumb.y1 - thumb.y0;
-                const travel = track_h - thumb_h;
-                const max_s = self.getMaxScroll();
-                if (travel > 0 and max_s > 0) {
-                    const dy = py - self.scrollbar_drag_start_y;
-                    const d_scroll = @divTrunc(dy * max_s, travel);
-                    const target_scroll = self.scrollbar_drag_start_scroll_y + d_scroll;
-                    if (self.scrollTo(target_scroll)) {
-                        changed = true;
-                    }
-                }
-                if (self.scrollbar_alpha != 255) {
-                    self.scrollbar_alpha = 255;
+        // 1. Scrollbar drag handling
+        if (self.is_dragging_scrollbar and left_down) {
+            const dy = py - self.scrollbar_drag_start_y;
+            const track = self.getScrollbarTrackBox();
+            const track_h = track.y1 - track.y0;
+            const thumb = self.getScrollbarThumbBox();
+            const thumb_h = thumb.y1 - thumb.y0;
+            const scrollable_range = track_h - thumb_h;
+            if (scrollable_range > 0) {
+                const total_scroll_range = self.getContentHeight() - self.getViewportHeight();
+                const delta_scroll = @divTrunc(dy * @as(i32, @intCast(total_scroll_range)), @as(i32, @intCast(scrollable_range)));
+                const new_scroll = std.math.clamp(self.scrollbar_drag_start_scroll_y + delta_scroll, 0, @as(i32, @intCast(total_scroll_range)));
+                if (new_scroll != self.scroll_y) {
+                    self.scroll_y = new_scroll;
                     changed = true;
                 }
-            } else {
-                self.is_dragging_scrollbar = false;
-                changed = true;
             }
         }
 
@@ -549,18 +494,65 @@ pub const Window = struct {
             }
         }
 
-        // 3. Icons hover and drag handling
+        // 3. Active icon drag (exclusive dragging for the selected slider or text field)
+        if (self.active_drag_icon_idx) |drag_idx| {
+            if (left_down and drag_idx < self.icons.items.len) {
+                const active_icon = &self.icons.items[drag_idx];
+                if (active_icon.icon_type == .slider) {
+                    const sx = self.x + active_icon.rel_x;
+                    const track_w = if (active_icon.width > 16) active_icon.width - 16 else 1;
+                    const click_offset = std.math.clamp(px - sx - 8, 0, @as(i32, @intCast(track_w)));
+                    const span = if (active_icon.slider_max > active_icon.slider_min) active_icon.slider_max - active_icon.slider_min else 1;
+                    const new_val = active_icon.slider_min + @divTrunc(click_offset * span, @as(i32, @intCast(track_w)));
+                    if (active_icon.slider_val != new_val) {
+                        active_icon.setSliderValue(new_val);
+                        if (active_icon.callback) |cb| cb(gui_ctx, @ptrCast(self), active_icon);
+                        changed = true;
+                    }
+                } else if (active_icon.icon_type == .read_write_text) {
+                    active_icon.is_dragging_select = true;
+                    const new_idx = active_icon.getCharIndexAtX(self.x, px);
+                    if (active_icon.selection_end != new_idx or active_icon.cursor_pos != new_idx) {
+                        active_icon.selection_end = new_idx;
+                        active_icon.cursor_pos = new_idx;
+                        changed = true;
+                    }
+                }
+            } else {
+                if (drag_idx < self.icons.items.len) {
+                    self.icons.items[drag_idx].is_dragging_slider = false;
+                    self.icons.items[drag_idx].is_dragging_select = false;
+                }
+                self.active_drag_icon_idx = null;
+                changed = true;
+            }
+        }
+
+        // 4. Icons hover handling: identify at most the ONE topmost icon under pointer
         const c_top = self.getContentTop();
         const c_bot = self.getContentBottom();
         const in_content_viewport = (py >= c_top and py < c_bot);
         const win_content_y = self.y - self.scroll_y;
+        const is_dragging_any = (self.is_dragging_scrollbar or self.active_drag_icon_idx != null);
+
+        var top_hit_idx: ?usize = null;
+        if (!is_dragging_any and in_content_viewport and self.contains(px, py)) {
+            var i = self.icons.items.len;
+            while (i > 0) : (i -= 1) {
+                const idx = i - 1;
+                const icon = &self.icons.items[idx];
+                if (!icon.is_selectable) continue;
+                const icon_sy = win_content_y + icon.rel_y;
+                const icon_bot = icon_sy + @as(i32, @intCast(icon.height));
+                if (icon_bot <= c_top or icon_sy >= c_bot) continue;
+                if (icon.hitTest(self.x, win_content_y, px, py)) {
+                    top_hit_idx = idx;
+                    break; // Identify strictly the one topmost icon under pointer
+                }
+            }
+        }
 
         for (self.icons.items, 0..) |*icon, idx| {
-            const icon_sy = win_content_y + icon.rel_y;
-            const icon_bot = icon_sy + @as(i32, @intCast(icon.height));
-            const in_view = !(icon_bot <= c_top or icon_sy >= c_bot);
-            const hit = in_content_viewport and in_view and icon.hitTest(self.x, win_content_y, px, py);
-
             if (!icon.is_selectable) {
                 if (icon.is_hovered) {
                     icon.is_hovered = false;
@@ -569,43 +561,19 @@ pub const Window = struct {
                 continue;
             }
 
-            if (icon.is_hovered != hit) {
-                icon.is_hovered = hit;
+            const new_hover = if (is_dragging_any)
+                (self.active_drag_icon_idx != null and self.active_drag_icon_idx.? == idx)
+            else
+                (top_hit_idx != null and top_hit_idx.? == idx);
+
+            if (icon.is_hovered != new_hover) {
+                icon.is_hovered = new_hover;
                 changed = true;
             }
 
-            if (hit and icon.icon_type == .menu_item and (self.focused_icon_idx == null or self.focused_icon_idx.? != idx)) {
+            if (new_hover and !is_dragging_any and icon.icon_type == .menu_item and (self.focused_icon_idx == null or self.focused_icon_idx.? != idx)) {
                 self.setFocusedIndex(idx);
                 changed = true;
-            }
-
-            // Slider drag support
-            if (left_down and icon.icon_type == .slider and (hit or icon.is_focused)) {
-                const sx = self.x + icon.rel_x;
-                const track_w = if (icon.width > 16) icon.width - 16 else 1;
-                const click_offset = std.math.clamp(px - sx - 8, 0, @as(i32, @intCast(track_w)));
-                const span = if (icon.slider_max > icon.slider_min) icon.slider_max - icon.slider_min else 1;
-                const new_val = icon.slider_min + @divTrunc(click_offset * span, @as(i32, @intCast(track_w)));
-                if (icon.slider_val != new_val) {
-                    icon.setSliderValue(new_val);
-                    if (icon.callback) |cb| cb(gui_ctx, @ptrCast(self), icon);
-                    changed = true;
-                }
-            }
-
-            // Read-write text select-drag support
-            if (icon.icon_type == .read_write_text) {
-                if (left_down and (icon.is_dragging_select or (hit and icon.is_focused))) {
-                    icon.is_dragging_select = true;
-                    const new_idx = icon.getCharIndexAtX(self.x, px);
-                    if (icon.selection_end != new_idx or icon.cursor_pos != new_idx) {
-                        icon.selection_end = new_idx;
-                        icon.cursor_pos = new_idx;
-                        changed = true;
-                    }
-                } else if (!left_down) {
-                    icon.is_dragging_select = false;
-                }
             }
         }
         return changed;
@@ -618,6 +586,14 @@ pub const Window = struct {
             self.is_dragging_scrollbar = false;
             changed = true;
         }
+        if (self.active_drag_icon_idx) |drag_idx| {
+            if (drag_idx < self.icons.items.len) {
+                self.icons.items[drag_idx].is_dragging_slider = false;
+                self.icons.items[drag_idx].is_dragging_select = false;
+            }
+            self.active_drag_icon_idx = null;
+            changed = true;
+        }
         for (self.icons.items) |*icon| {
             if (icon.is_active_press) {
                 icon.is_active_press = false;
@@ -625,6 +601,9 @@ pub const Window = struct {
             }
             if (icon.is_dragging_select) {
                 icon.is_dragging_select = false;
+            }
+            if (icon.is_dragging_slider) {
+                icon.is_dragging_slider = false;
             }
         }
         return changed;
@@ -650,7 +629,7 @@ pub const Window = struct {
     }
 
     // Render this window and all its contained icons
-    pub fn render(self: *Window, surface: *fb.Surface, opacity_alpha: u8, is_keyboard_active: bool) void {
+    pub fn render(self: *Window, surface: *fb.Surface, opacity_alpha: u8) void {
         if (!self.is_onscreen) return;
 
         const box = self.getBox();
@@ -692,7 +671,7 @@ pub const Window = struct {
                 // Quick culling of icons completely outside the viewport
                 if (icon_bot <= c_top or icon_sy >= c_bot) continue;
 
-                icon.render(surface, self.x, win_content_y, self.is_active, is_keyboard_active);
+                icon.render(surface, self.x, win_content_y, self.is_active);
             }
         }
 

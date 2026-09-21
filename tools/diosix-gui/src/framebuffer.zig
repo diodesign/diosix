@@ -182,9 +182,9 @@ pub inline fn blendCloudPixel(r_base: u32, g_base: u32, b_base: u32, c1: u32, c2
     return (r << 16) | (g << 8) | b;
 }
 
-// Evaluates the deterministic background pixel at (x, y) on the screen.
+// Evaluates the deterministic background pixel at (x, y) on the screen with horizontal/vertical drift.
 // Linear vertical gradient with subtle static white cloud texture (deterministic Perlin map).
-pub fn getBackdropPixel(x: i32, y: i32, width: u32, height: u32, top_color: u32, bot_color: u32) u32 {
+pub fn getBackdropPixelDrift(x: i32, y: i32, width: u32, height: u32, top_color: u32, bot_color: u32, drift_x: i32, drift_y: i32) u32 {
     const cx = std.math.clamp(x, 0, @as(i32, @intCast(if (width > 0) width - 1 else 0)));
     const cy = std.math.clamp(y, 0, @as(i32, @intCast(if (height > 0) height - 1 else 0)));
 
@@ -201,8 +201,8 @@ pub fn getBackdropPixel(x: i32, y: i32, width: u32, height: u32, top_color: u32,
     const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * cy, den_y), 0, 255));
     const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * cy, den_y), 0, 255));
 
-    const ucy = @as(usize, @intCast(cy));
-    const ucx = @as(usize, @intCast(cx));
+    const ucy = @as(usize, @intCast(@mod(@as(i64, cy) + @as(i64, drift_y), 256)));
+    const ucx = @as(usize, @intCast(@mod(@as(i64, cx) + @as(i64, drift_x), 256)));
     const map_y1 = (ucy & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
     const map_y2 = ((ucy * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
     const map_x1 = ucx & CLOUD_MAP_MASK;
@@ -212,6 +212,10 @@ pub fn getBackdropPixel(x: i32, y: i32, width: u32, height: u32, top_color: u32,
     const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
 
     return blendCloudPixel(r_base, g_base, b_base, c1, c2, CLOUD_BASE_OPACITY);
+}
+
+pub fn getBackdropPixel(x: i32, y: i32, width: u32, height: u32, top_color: u32, bot_color: u32) u32 {
+    return getBackdropPixelDrift(x, y, width, height, top_color, bot_color, 0, 0);
 }
 
 pub const MAX_BLUR_RADIUS: u32 = 16;
@@ -372,255 +376,212 @@ pub const Surface = struct {
         self.fillBox(Box{ .x0 = left, .y0 = y, .x1 = right + 1, .y1 = y + 1 }, color);
     }
 
+    // Graduated background constrained to target box with horizontal/vertical drift
+    pub fn drawGraduatedBackgroundInBoxDrift(self: *Surface, target: Box, top_color: u32, bot_color: u32, drift_x: i32, drift_y: i32) void {
+        const h = self.height;
+        const w = self.width;
+        if (h == 0 or w == 0 or target.isEmpty()) return;
+
+        const clipped = target.intersect(self.clip);
+        if (clipped.isEmpty()) return;
+
+        const top_r: i32 = @intCast((top_color >> 16) & 0xFF);
+        const top_g: i32 = @intCast((top_color >> 8) & 0xFF);
+        const top_b: i32 = @intCast(top_color & 0xFF);
+
+        const bot_r: i32 = @intCast((bot_color >> 16) & 0xFF);
+        const bot_g: i32 = @intCast((bot_color >> 8) & 0xFF);
+        const bot_b: i32 = @intCast(bot_color & 0xFF);
+
+        const pixels_per_row = self.stridePixels();
+        const den_y = @as(i32, @intCast(if (h > 1) h - 1 else 1));
+
+        const x0 = @as(usize, @intCast(@max(0, clipped.x0)));
+        const x1 = @as(usize, @intCast(@max(0, clipped.x1)));
+        const y0 = @as(usize, @intCast(@max(0, clipped.y0)));
+        const y1 = @as(usize, @intCast(@max(0, clipped.y1)));
+
+        var y: usize = y0;
+        while (y < y1) : (y += 1) {
+            const vy: i32 = @intCast(y);
+            const r_base: u32 = @intCast(std.math.clamp(top_r + @divTrunc((bot_r - top_r) * vy, den_y), 0, 255));
+            const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * vy, den_y), 0, 255));
+            const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * vy, den_y), 0, 255));
+
+            const vy_drift = @as(usize, @intCast(@mod(@as(i64, vy) + @as(i64, drift_y), 256)));
+            const map_y1 = (vy_drift & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+            const map_y2 = ((vy_drift * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+
+            const row_offset = y * pixels_per_row;
+            var x: usize = x0;
+            while (x < x1) : (x += 1) {
+                const vx_drift = @as(usize, @intCast(@mod(@as(i64, @intCast(x)) + @as(i64, drift_x), 256)));
+                const map_x1 = vx_drift & CLOUD_MAP_MASK;
+                const map_x2 = (vx_drift * 2) & CLOUD_MAP_MASK;
+
+                const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
+                const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
+
+                self.pixels[row_offset + x] = blendCloudPixel(r_base, g_base, b_base, c1, c2, CLOUD_BASE_OPACITY);
+            }
+        }
+    }
+
     // Static graduated background constrained to target box
     pub fn drawGraduatedBackgroundInBox(self: *Surface, target: Box, top_color: u32, bot_color: u32) void {
-    const h = self.height;
-    const w = self.width;
-    if (h == 0 or w == 0 or target.isEmpty()) return;
-
-    const clipped = target.intersect(self.clip);
-    if (clipped.isEmpty()) return;
-
-    const top_r: i32 = @intCast((top_color >> 16) & 0xFF);
-    const top_g: i32 = @intCast((top_color >> 8) & 0xFF);
-    const top_b: i32 = @intCast(top_color & 0xFF);
-
-    const bot_r: i32 = @intCast((bot_color >> 16) & 0xFF);
-    const bot_g: i32 = @intCast((bot_color >> 8) & 0xFF);
-    const bot_b: i32 = @intCast(bot_color & 0xFF);
-
-    const pixels_per_row = self.stridePixels();
-    const den_y = @as(i32, @intCast(if (h > 1) h - 1 else 1));
-
-    const x0 = @as(usize, @intCast(@max(0, clipped.x0)));
-    const x1 = @as(usize, @intCast(@max(0, clipped.x1)));
-    const y0 = @as(usize, @intCast(@max(0, clipped.y0)));
-    const y1 = @as(usize, @intCast(@max(0, clipped.y1)));
-
-    var y: usize = y0;
-    while (y < y1) : (y += 1) {
-        const vy: i32 = @intCast(y);
-        const r_base: u32 = @intCast(std.math.clamp(top_r + @divTrunc((bot_r - top_r) * vy, den_y), 0, 255));
-        const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * vy, den_y), 0, 255));
-        const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * vy, den_y), 0, 255));
-
-        const map_y1 = (y & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-        const map_y2 = ((y * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-
-        const row_offset = y * pixels_per_row;
-        var x: usize = x0;
-        while (x < x1) : (x += 1) {
-            const map_x1 = x & CLOUD_MAP_MASK;
-            const map_x2 = (x * 2) & CLOUD_MAP_MASK;
-
-            const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
-            const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
-
-            self.pixels[row_offset + x] = blendCloudPixel(r_base, g_base, b_base, c1, c2, CLOUD_BASE_OPACITY);
-        }
-    }
-}
-
-// Deterministic 2-pass separable Gaussian blur applied to the backdrop in target box.
-// window_box (optional) supplies the outer window geometry for corner_radius checking,
-// ensuring that damaged sub-regions inside a window retain identical corner behavior.
-pub fn drawBlurredBackdropInBox(
-    self: *Surface,
-    target: Box,
-    window_box: ?Box,
-    top_color: u32,
-    bot_color: u32,
-    radius: u32,
-    corner_radius: u32,
-    scratch: []u32,
-) void {
-    const h = self.height;
-    const w = self.width;
-    if (h == 0 or w == 0 or target.isEmpty()) return;
-
-    const screen_box = Box.fromPosSize(0, 0, w, h);
-    const clipped = target.intersect(screen_box);
-    if (clipped.isEmpty()) return;
-
-    if (radius == 0) {
-        self.drawGraduatedBackgroundInBox(clipped, top_color, bot_color);
-        return;
+        self.drawGraduatedBackgroundInBoxDrift(target, top_color, bot_color, 0, 0);
     }
 
-    const r_blur = std.math.clamp(radius, 1, 16);
-    var kernel: [33]u32 = undefined;
-    computeGaussianKernel(r_blur, kernel[0 .. r_blur * 2 + 1]);
-    const kernel_len = r_blur * 2 + 1;
+    // Deterministic 2-pass separable Gaussian blur applied to the backdrop in target box with drift.
+    // window_box (optional) supplies the outer window geometry for corner_radius checking,
+    // ensuring that damaged sub-regions inside a window retain identical corner behavior.
+    pub fn drawBlurredBackdropInBoxDrift(
+        self: *Surface,
+        target: Box,
+        window_box: ?Box,
+        top_color: u32,
+        bot_color: u32,
+        radius: u32,
+        corner_radius: u32,
+        scratch: []u32,
+        drift_x: i32,
+        drift_y: i32,
+    ) void {
+        const h = self.height;
+        const w = self.width;
+        if (h == 0 or w == 0 or target.isEmpty()) return;
 
-    const x0 = clipped.x0;
-    const x1 = clipped.x1;
-    const y0 = clipped.y0;
-    const y1 = clipped.y1;
-    const width_int: usize = @intCast(x1 - x0);
+        const screen_box = Box.fromPosSize(0, 0, w, h);
+        const clipped = target.intersect(screen_box);
+        if (clipped.isEmpty()) return;
 
-    const r_int: i32 = @intCast(r_blur);
-    const y_start = y0 - r_int;
-    const y_end = y1 + r_int;
-    const num_scratch_rows: usize = @intCast(y_end - y_start);
-
-    if (scratch.len < width_int * num_scratch_rows) {
-        // Scratch buffer insufficient, fallback to unblurred
-        self.drawGraduatedBackgroundInBox(clipped, top_color, bot_color);
-        return;
-    }
-
-    // Pass 1: Horizontal 1D Gaussian convolution across [y_start, y_end)
-    const top_r: i32 = @intCast((top_color >> 16) & 0xFF);
-    const top_g: i32 = @intCast((top_color >> 8) & 0xFF);
-    const top_b: i32 = @intCast(top_color & 0xFF);
-
-    const bot_r: i32 = @intCast((bot_color >> 16) & 0xFF);
-    const bot_g: i32 = @intCast((bot_color >> 8) & 0xFF);
-    const bot_b: i32 = @intCast(bot_color & 0xFF);
-
-    const den_y = @as(i32, @intCast(if (h > 1) h - 1 else 1));
-    const max_w: i32 = @intCast(if (w > 0) w - 1 else 0);
-
-    var y_iter = y_start;
-    var src_row_buf: [2048]u32 = undefined;
-    const src_row_len = width_int + @as(usize, @intCast(r_blur * 2));
-    if (src_row_len > src_row_buf.len) {
-        self.drawGraduatedBackgroundInBox(clipped, top_color, bot_color);
-        return;
-    }
-
-    while (y_iter < y_end) : (y_iter += 1) {
-        const cy = std.math.clamp(y_iter, 0, @as(i32, @intCast(h - 1)));
-        const scratch_row_idx = @as(usize, @intCast(y_iter - y_start)) * width_int;
-
-        // Precompute row-invariant gradient base and Y map offsets once per row
-        const r_base: u32 = @intCast(std.math.clamp(top_r + @divTrunc((bot_r - top_r) * cy, den_y), 0, 255));
-        const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * cy, den_y), 0, 255));
-        const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * cy, den_y), 0, 255));
-        const ucy = @as(usize, @intCast(cy));
-        const map_y1 = (ucy & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-        const map_y2 = ((ucy * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-
-        // Pre-sample source backdrop row for x in [x0 - r_blur, x1 + r_blur)
-        var si: usize = 0;
-        var sx_iter = x0 - r_int;
-        const sx_end = x1 + r_int;
-        while (sx_iter < sx_end and si < src_row_len and si < src_row_buf.len) : ({
-            sx_iter += 1;
-            si += 1;
-        }) {
-            const ucx = @as(usize, @intCast(std.math.clamp(sx_iter, 0, max_w)));
-            const map_x1 = ucx & CLOUD_MAP_MASK;
-            const map_x2 = (ucx * 2) & CLOUD_MAP_MASK;
-
-            const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
-            const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
-
-            src_row_buf[si] = blendCloudPixel(r_base, g_base, b_base, c1, c2, CLOUD_BASE_OPACITY);
+        if (radius == 0) {
+            self.drawGraduatedBackgroundInBoxDrift(clipped, top_color, bot_color, drift_x, drift_y);
+            return;
         }
 
-        // Convolve horizontally
-        var x_rel: usize = 0;
-        while (x_rel < width_int) : (x_rel += 1) {
-            var sum_r: u32 = 0;
-            var sum_g: u32 = 0;
-            var sum_b: u32 = 0;
+        const r_blur = std.math.clamp(radius, 1, 16);
+        var kernel: [33]u32 = undefined;
+        computeGaussianKernel(r_blur, kernel[0 .. r_blur * 2 + 1]);
+        const kernel_len = r_blur * 2 + 1;
 
-            var k_idx: usize = 0;
-            while (k_idx < kernel_len) : (k_idx += 1) {
-                const p = src_row_buf[x_rel + k_idx];
-                const weight = kernel[k_idx];
-                sum_r += ((p >> 16) & 0xFF) * weight;
-                sum_g += ((p >> 8) & 0xFF) * weight;
-                sum_b += (p & 0xFF) * weight;
+        const x0 = clipped.x0;
+        const x1 = clipped.x1;
+        const y0 = clipped.y0;
+        const y1 = clipped.y1;
+        const width_int: usize = @intCast(x1 - x0);
+
+        const r_int: i32 = @intCast(r_blur);
+        const y_start = y0 - r_int;
+        const y_end = y1 + r_int;
+        const num_scratch_rows: usize = @intCast(y_end - y_start);
+
+        if (scratch.len < width_int * num_scratch_rows) {
+            // Scratch buffer insufficient, fallback to unblurred
+            self.drawGraduatedBackgroundInBoxDrift(clipped, top_color, bot_color, drift_x, drift_y);
+            return;
+        }
+
+        // Pass 1: Horizontal 1D Gaussian convolution across [y_start, y_end)
+        const top_r: i32 = @intCast((top_color >> 16) & 0xFF);
+        const top_g: i32 = @intCast((top_color >> 8) & 0xFF);
+        const top_b: i32 = @intCast(top_color & 0xFF);
+
+        const bot_r: i32 = @intCast((bot_color >> 16) & 0xFF);
+        const bot_g: i32 = @intCast((bot_color >> 8) & 0xFF);
+        const bot_b: i32 = @intCast(bot_color & 0xFF);
+
+        const den_y = @as(i32, @intCast(if (h > 1) h - 1 else 1));
+        const max_w: i32 = @intCast(if (w > 0) w - 1 else 0);
+
+        var y_iter = y_start;
+        var src_row_buf: [4096]u32 = undefined;
+        const src_row_len = width_int + @as(usize, @intCast(r_blur * 2));
+        if (src_row_len > src_row_buf.len) {
+            self.drawGraduatedBackgroundInBoxDrift(clipped, top_color, bot_color, drift_x, drift_y);
+            return;
+        }
+
+        while (y_iter < y_end) : (y_iter += 1) {
+            const cy = std.math.clamp(y_iter, 0, @as(i32, @intCast(h - 1)));
+            const scratch_row_idx = @as(usize, @intCast(y_iter - y_start)) * width_int;
+
+            // Precompute row-invariant gradient base and Y map offsets once per row
+            const r_base: u32 = @intCast(std.math.clamp(top_r + @divTrunc((bot_r - top_r) * cy, den_y), 0, 255));
+            const g_base: u32 = @intCast(std.math.clamp(top_g + @divTrunc((bot_g - top_g) * cy, den_y), 0, 255));
+            const b_base: u32 = @intCast(std.math.clamp(top_b + @divTrunc((bot_b - top_b) * cy, den_y), 0, 255));
+            const ucy = @as(usize, @intCast(@mod(@as(i64, cy) + @as(i64, drift_y), 256)));
+            const map_y1 = (ucy & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+            const map_y2 = ((ucy * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+
+            // Pre-sample source backdrop row for x in [x0 - r_blur, x1 + r_blur)
+            var si: usize = 0;
+            var sx_iter = x0 - r_int;
+            const sx_end = x1 + r_int;
+            while (sx_iter < sx_end and si < src_row_len and si < src_row_buf.len) : ({
+                sx_iter += 1;
+                si += 1;
+            }) {
+                const cx_clamped = std.math.clamp(sx_iter, 0, max_w);
+                const ucx = @as(usize, @intCast(@mod(@as(i64, cx_clamped) + @as(i64, drift_x), 256)));
+                const map_x1 = ucx & CLOUD_MAP_MASK;
+                const map_x2 = (ucx * 2) & CLOUD_MAP_MASK;
+
+                const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
+                const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
+
+                src_row_buf[si] = blendCloudPixel(r_base, g_base, b_base, c1, c2, CLOUD_BASE_OPACITY);
             }
 
-            const hr = (sum_r >> 16);
-            const hg = (sum_g >> 16);
-            const hb = (sum_b >> 16);
-            scratch[scratch_row_idx + x_rel] = (hr << 16) | (hg << 8) | hb;
-        }
-    }
-
-    // Pass 2: Vertical 1D Gaussian convolution into self.pixels
-    // Respects corner_radius geometry so outside the rounded corner stays unblurred backdrop.
-    const win_geom = window_box orelse target;
-    const cr: i32 = @intCast(corner_radius);
-    const cr_sq = cr * cr;
-    const pixels_per_row = self.stridePixels();
-
-    var y: i32 = y0;
-    while (y < y1) : (y += 1) {
-        const uy: usize = @intCast(y);
-        const dst_row_offset = uy * pixels_per_row;
-        const is_top_corner = (cr > 0 and y < win_geom.y0 + cr);
-        const is_bot_corner = (cr > 0 and y >= win_geom.y1 - cr);
-        const is_corner_row = is_top_corner or is_bot_corner;
-        const y_rel: usize = @intCast(y - y_start);
-        const base_sample_y_rel: usize = @intCast(@as(i32, @intCast(y_rel)) - r_int);
-
-        if (!is_corner_row) {
-            // Fast path: Row has no rounded corners, convolve all pixels directly
-            var x: i32 = x0;
+            // Convolve horizontally
             var x_rel: usize = 0;
-            while (x < x1) : ({
-                x += 1;
-                x_rel += 1;
-            }) {
-                const dst_idx = dst_row_offset + @as(usize, @intCast(x));
+            while (x_rel < width_int) : (x_rel += 1) {
                 var sum_r: u32 = 0;
                 var sum_g: u32 = 0;
                 var sum_b: u32 = 0;
 
-                var scratch_ptr = base_sample_y_rel * width_int + x_rel;
                 var k_idx: usize = 0;
                 while (k_idx < kernel_len) : (k_idx += 1) {
-                    const hp = scratch[scratch_ptr];
-                    scratch_ptr += width_int;
+                    const p = src_row_buf[x_rel + k_idx];
                     const weight = kernel[k_idx];
-                    sum_r += ((hp >> 16) & 0xFF) * weight;
-                    sum_g += ((hp >> 8) & 0xFF) * weight;
-                    sum_b += (hp & 0xFF) * weight;
+                    sum_r += ((p >> 16) & 0xFF) * weight;
+                    sum_g += ((p >> 8) & 0xFF) * weight;
+                    sum_b += (p & 0xFF) * weight;
                 }
 
-                const vr = (sum_r >> 16);
-                const vg = (sum_g >> 16);
-                const vb = (sum_b >> 16);
-                self.pixels[dst_idx] = (vr << 16) | (vg << 8) | vb;
+                const hr = (sum_r >> 16);
+                const hg = (sum_g >> 16);
+                const hb = (sum_b >> 16);
+                scratch[scratch_row_idx + x_rel] = (hr << 16) | (hg << 8) | hb;
             }
-        } else {
-            // Corner row: test rounded corner curvature
-            var x: i32 = x0;
-            var x_rel: usize = 0;
-            while (x < x1) : ({
-                x += 1;
-                x_rel += 1;
-            }) {
-                var inside_corner = true;
-                if (is_top_corner) {
-                    const dy = (win_geom.y0 + cr) - y;
-                    if (x < win_geom.x0 + cr) {
-                        const dx = (win_geom.x0 + cr) - x;
-                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
-                    } else if (x >= win_geom.x1 - cr) {
-                        const dx = x - (win_geom.x1 - cr - 1);
-                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
-                    }
-                } else {
-                    const dy = y - (win_geom.y1 - cr - 1);
-                    if (x < win_geom.x0 + cr) {
-                        const dx = (win_geom.x0 + cr) - x;
-                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
-                    } else if (x >= win_geom.x1 - cr) {
-                        const dx = x - (win_geom.x1 - cr - 1);
-                        if (dx * dx + dy * dy > cr_sq) inside_corner = false;
-                    }
-                }
+        }
 
-                const dst_idx = dst_row_offset + @as(usize, @intCast(x));
-                if (!inside_corner) {
-                    self.pixels[dst_idx] = getBackdropPixel(x, y, w, h, top_color, bot_color);
-                } else {
+        // Pass 2: Vertical 1D Gaussian convolution into self.pixels
+        // Respects corner_radius geometry so outside the rounded corner stays unblurred backdrop.
+        const win_geom = window_box orelse target;
+        const cr: i32 = @intCast(corner_radius);
+        const cr_sq = cr * cr;
+        const pixels_per_row = self.stridePixels();
+
+        var y: i32 = y0;
+        while (y < y1) : (y += 1) {
+            const uy: usize = @intCast(y);
+            const dst_row_offset = uy * pixels_per_row;
+            const is_top_corner = (cr > 0 and y < win_geom.y0 + cr);
+            const is_bot_corner = (cr > 0 and y >= win_geom.y1 - cr);
+            const is_corner_row = is_top_corner or is_bot_corner;
+            const y_rel: usize = @intCast(y - y_start);
+            const base_sample_y_rel: usize = @intCast(@as(i32, @intCast(y_rel)) - r_int);
+
+            if (!is_corner_row) {
+                // Fast path: Row has no rounded corners, convolve all pixels directly
+                var x: i32 = x0;
+                var x_rel: usize = 0;
+                while (x < x1) : ({
+                    x += 1;
+                    x_rel += 1;
+                }) {
+                    const dst_idx = dst_row_offset + @as(usize, @intCast(x));
                     var sum_r: u32 = 0;
                     var sum_g: u32 = 0;
                     var sum_b: u32 = 0;
@@ -641,15 +602,86 @@ pub fn drawBlurredBackdropInBox(
                     const vb = (sum_b >> 16);
                     self.pixels[dst_idx] = (vr << 16) | (vg << 8) | vb;
                 }
+            } else {
+                // Corner row: test rounded corner curvature
+                var x: i32 = x0;
+                var x_rel: usize = 0;
+                while (x < x1) : ({
+                    x += 1;
+                    x_rel += 1;
+                }) {
+                    var inside_corner = true;
+                    if (is_top_corner) {
+                        const dy = (win_geom.y0 + cr) - y;
+                        if (x < win_geom.x0 + cr) {
+                            const dx = (win_geom.x0 + cr) - x;
+                            if (dx * dx + dy * dy > cr_sq) inside_corner = false;
+                        } else if (x >= win_geom.x1 - cr) {
+                            const dx = x - (win_geom.x1 - cr - 1);
+                            if (dx * dx + dy * dy > cr_sq) inside_corner = false;
+                        }
+                    } else {
+                        const dy = y - (win_geom.y1 - cr - 1);
+                        if (x < win_geom.x0 + cr) {
+                            const dx = (win_geom.x0 + cr) - x;
+                            if (dx * dx + dy * dy > cr_sq) inside_corner = false;
+                        } else if (x >= win_geom.x1 - cr) {
+                            const dx = x - (win_geom.x1 - cr - 1);
+                            if (dx * dx + dy * dy > cr_sq) inside_corner = false;
+                        }
+                    }
+
+                    const dst_idx = dst_row_offset + @as(usize, @intCast(x));
+                    if (!inside_corner) {
+                        self.pixels[dst_idx] = getBackdropPixelDrift(x, y, w, h, top_color, bot_color, drift_x, drift_y);
+                    } else {
+                        var sum_r: u32 = 0;
+                        var sum_g: u32 = 0;
+                        var sum_b: u32 = 0;
+
+                        var scratch_ptr = base_sample_y_rel * width_int + x_rel;
+                        var k_idx: usize = 0;
+                        while (k_idx < kernel_len) : (k_idx += 1) {
+                            const hp = scratch[scratch_ptr];
+                            scratch_ptr += width_int;
+                            const weight = kernel[k_idx];
+                            sum_r += ((hp >> 16) & 0xFF) * weight;
+                            sum_g += ((hp >> 8) & 0xFF) * weight;
+                            sum_b += (hp & 0xFF) * weight;
+                        }
+
+                        const vr = (sum_r >> 16);
+                        const vg = (sum_g >> 16);
+                        const vb = (sum_b >> 16);
+                        self.pixels[dst_idx] = (vr << 16) | (vg << 8) | vb;
+                    }
+                }
             }
         }
     }
-}
 
-// Static graduated background from top_color down to bot_color
-pub fn drawGraduatedBackground(self: *Surface, top_color: u32, bot_color: u32) void {
-    self.drawGraduatedBackgroundInBox(Box.fromPosSize(0, 0, self.width, self.height), top_color, bot_color);
-}
+    pub fn drawBlurredBackdropInBox(
+        self: *Surface,
+        target: Box,
+        window_box: ?Box,
+        top_color: u32,
+        bot_color: u32,
+        radius: u32,
+        corner_radius: u32,
+        scratch: []u32,
+    ) void {
+        self.drawBlurredBackdropInBoxDrift(target, window_box, top_color, bot_color, radius, corner_radius, scratch, 0, 0);
+    }
+
+    // Graduated background with horizontal/vertical drift
+    pub fn drawGraduatedBackgroundDrift(self: *Surface, top_color: u32, bot_color: u32, drift_x: i32, drift_y: i32) void {
+        self.drawGraduatedBackgroundInBoxDrift(Box.fromPosSize(0, 0, self.width, self.height), top_color, bot_color, drift_x, drift_y);
+    }
+
+    // Static graduated background from top_color down to bot_color
+    pub fn drawGraduatedBackground(self: *Surface, top_color: u32, bot_color: u32) void {
+        self.drawGraduatedBackgroundDrift(top_color, bot_color, 0, 0);
+    }
 
     // Copy rectangular region from src surface to this surface
     pub fn copyBoxFrom(self: *Surface, src: *const Surface, box: Box) void {

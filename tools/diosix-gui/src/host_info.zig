@@ -34,6 +34,16 @@ pub const HypervisorInfo = extern struct {
 // Optional mock for testing environment where /dev/diosix is unavailable
 pub var mock_hypervisor_info: ?HypervisorInfo = null;
 
+// Check if running as privileged root console on Root VM (/dev/diosix accessible with CAP_SYS_ADMIN)
+pub fn isRootConsole() bool {
+    if (mock_hypervisor_info != null) return true;
+    const fd_rc = linux.open("/dev/diosix", .{ .ACCMODE = .RDWR }, 0);
+    const signed_fd: isize = @bitCast(fd_rc);
+    if (signed_fd < 0) return false;
+    _ = linux.close(@intCast(signed_fd));
+    return true;
+}
+
 // Query the live hypervisor over /dev/diosix
 pub fn getHypervisorInfo() ?HypervisorInfo {
     if (mock_hypervisor_info) |mock| return mock;

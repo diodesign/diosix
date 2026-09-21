@@ -174,14 +174,10 @@ pub const DrmDevice = struct {
     fb_handle: u32,
     fb_size: u64,
     fb_pixels: ?[*]u32 = null,
-    cursor_handle: u32 = 0,
-    cursor_size: u64 = 0,
-    cursor_pixels: ?[*]u32 = null,
     width: u32,
     height: u32,
     pitch: u32,
     screen_surface: fb.Surface,
-    has_hw_cursor: bool = false,
 
     pub fn init(card_path: []const u8) !DrmDevice {
         var z_path: [64]u8 = undefined;
@@ -191,7 +187,10 @@ pub const DrmDevice = struct {
 
         const open_rc = linux.open(@ptrCast(&z_path), .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
         const signed_fd: isize = @bitCast(open_rc);
-        if (signed_fd < 0) return error.DeviceOpenFailed;
+        if (signed_fd < 0) {
+            if (signed_fd == -@as(isize, @intFromEnum(linux.E.ACCES))) return error.AccessDenied;
+            return error.DeviceOpenFailed;
+        }
         const fd: i32 = @intCast(signed_fd);
         errdefer _ = linux.close(fd);
 
@@ -319,7 +318,7 @@ pub const DrmDevice = struct {
         ioctl_rc = linux.ioctl(fd, DRM_IOCTL_MODE_SETCRTC, @intFromPtr(&set_crtc));
         if (@as(isize, @bitCast(ioctl_rc)) < 0) return error.SetCrtcFailed;
 
-        var dev = DrmDevice{
+        const dev = DrmDevice{
             .fd = fd,
             .crtc_id = crtc_id,
             .conn_id = conn_id,
@@ -333,92 +332,7 @@ pub const DrmDevice = struct {
             .screen_surface = fb.Surface.init(fb_pixels, w, h, pitch),
         };
 
-        // 7. Setup Hardware Cursor Plane (64x64 ARGB8888)
-        var cur_dumb = drm_mode_create_dumb{
-            .width = HW_CURSOR_WIDTH,
-            .height = HW_CURSOR_HEIGHT,
-            .bpp = DEFAULT_BPP,
-        };
-        const cur_create_rc = linux.ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, @intFromPtr(&cur_dumb));
-        if (@as(isize, @bitCast(cur_create_rc)) == 0) {
-            var cur_map = drm_mode_map_dumb{ .handle = cur_dumb.handle };
-            const cur_map_rc = linux.ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, @intFromPtr(&cur_map));
-            if (@as(isize, @bitCast(cur_map_rc)) == 0) {
-                const cur_mmap_res = linux.mmap(
-                    null,
-                    cur_dumb.size,
-                    linux.PROT{ .READ = true, .WRITE = true },
-                    linux.MAP{ .TYPE = .SHARED },
-                    fd,
-                    @as(i64, @bitCast(cur_map.offset)),
-                );
-                const signed_cur_mmap: isize = @bitCast(cur_mmap_res);
-                if (signed_cur_mmap >= 0) {
-                    dev.cursor_handle = cur_dumb.handle;
-                    dev.cursor_size = cur_dumb.size;
-                    const cur_pixels: [*]u32 = @ptrFromInt(cur_mmap_res);
-                    dev.cursor_pixels = cur_pixels;
-                    @memset(cur_pixels[0 .. HW_CURSOR_WIDTH * HW_CURSOR_HEIGHT], fb.Color.TRANSPARENT);
-
-                    var cur_cmd = drm_mode_cursor{
-                        .flags = DRM_MODE_CURSOR_BO,
-                        .crtc_id = crtc_id,
-                        .width = HW_CURSOR_WIDTH,
-                        .height = HW_CURSOR_HEIGHT,
-                        .handle = cur_dumb.handle,
-                    };
-                    const set_bo_rc = linux.ioctl(fd, DRM_IOCTL_MODE_CURSOR, @intFromPtr(&cur_cmd));
-                    if (@as(isize, @bitCast(set_bo_rc)) == 0) {
-                        dev.has_hw_cursor = true;
-                    }
-                }
-            }
-        }
-
         return dev;
-    }
-
-    pub fn setHardwareCursorSprite(
-        self: *DrmDevice,
-        sprite_pixels: []const u32,
-        sprite_w: u32,
-        sprite_h: u32,
-    ) void {
-        if (!self.has_hw_cursor or self.cursor_handle == 0) return;
-        const ptr = self.cursor_pixels orelse return;
-        @memset(ptr[0 .. HW_CURSOR_WIDTH * HW_CURSOR_HEIGHT], fb.Color.TRANSPARENT);
-
-        const copy_w = @min(HW_CURSOR_WIDTH, sprite_w);
-        const copy_h = @min(HW_CURSOR_HEIGHT, sprite_h);
-        var y: usize = 0;
-        while (y < copy_h) : (y += 1) {
-            var x: usize = 0;
-            while (x < copy_w) : (x += 1) {
-                ptr[y * HW_CURSOR_WIDTH + x] = sprite_pixels[y * sprite_w + x];
-            }
-        }
-
-        // Re-issue CURSOR_BO to upload cursor image
-        var cur_cmd = drm_mode_cursor{
-            .flags = DRM_MODE_CURSOR_BO,
-            .crtc_id = self.crtc_id,
-            .width = HW_CURSOR_WIDTH,
-            .height = HW_CURSOR_HEIGHT,
-            .handle = self.cursor_handle,
-        };
-        _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_CURSOR, @intFromPtr(&cur_cmd));
-    }
-
-    // Move hardware cursor: 0 CPU overhead, composites on host GPU
-    pub fn moveCursor(self: *DrmDevice, x: i32, y: i32) void {
-        if (!self.has_hw_cursor) return;
-        var cur_cmd = drm_mode_cursor{
-            .flags = DRM_MODE_CURSOR_MOVE,
-            .crtc_id = self.crtc_id,
-            .x = x,
-            .y = y,
-        };
-        _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_CURSOR, @intFromPtr(&cur_cmd));
     }
 
     // Immediately flush dirty rect to VirtIO-GPU without 50ms deferred IO delay
@@ -444,17 +358,6 @@ pub const DrmDevice = struct {
     }
 
     pub fn deinit(self: *DrmDevice) void {
-        if (self.cursor_pixels) |cp| {
-            if (self.cursor_size > 0) {
-                _ = linux.munmap(@ptrCast(cp), self.cursor_size);
-            }
-            self.cursor_pixels = null;
-        }
-        if (self.cursor_handle != 0) {
-            var destroy = drm_mode_destroy_dumb{ .handle = self.cursor_handle };
-            _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_DESTROY_DUMB, @intFromPtr(&destroy));
-            self.cursor_handle = 0;
-        }
         if (self.fb_pixels) |fp| {
             if (self.fb_size > 0) {
                 _ = linux.munmap(@ptrCast(fp), self.fb_size);

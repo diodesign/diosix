@@ -6,7 +6,6 @@
 const std = @import("std");
 const fb = @import("framebuffer.zig");
 const font = @import("font.zig");
-const cursor_mod = @import("cursor.zig");
 
 // Forward declaration of GUI coordinator and Window
 pub const DiosixGui = struct {
@@ -34,6 +33,47 @@ pub const GroupMode = enum {
 
 pub const IconCallback = *const fn (gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void;
 
+// Antialiased Back Arrow Bitmap (14x10) - elegant back-pointing arrow
+pub const BACK_ARROW_WIDTH: u32 = 14;
+pub const BACK_ARROW_HEIGHT: u32 = 10;
+pub const BACK_ARROW_BITMAP = [BACK_ARROW_WIDTH * BACK_ARROW_HEIGHT]u8{
+      0,   0,   0,  41, 183, 253, 244,  66,   0,   0,   0,   0,   0,   0,
+      0,   0,  52, 198, 254, 252, 167,  21,   0,   0,   0,   0,   0,   0,
+      1,  67, 210, 255, 248, 150,  21,   0,   0,   0,   0,   0,   0,   0,
+     86, 222, 255, 245, 170, 101,  91,  91,  91,  91,  91,  91,  91,  69,
+    237, 255, 255, 253, 253, 253, 253, 253, 253, 253, 253, 253, 253, 237,
+    237, 255, 255, 253, 253, 253, 253, 253, 253, 253, 253, 253, 253, 237,
+     86, 222, 255, 245, 170, 101,  91,  91,  91,  91,  91,  91,  91,  69,
+      1,  67, 210, 255, 248, 150,  21,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,  52, 198, 254, 252, 167,  21,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,  41, 183, 253, 244,  66,   0,   0,   0,   0,   0,   0,
+};
+
+pub fn drawBackArrow(surface: *fb.Surface, x: i32, y: i32, color: u32) void {
+    var r: usize = 0;
+    while (r < BACK_ARROW_HEIGHT) : (r += 1) {
+        const py = y + @as(i32, @intCast(r));
+        var c: usize = 0;
+        while (c < BACK_ARROW_WIDTH) : (c += 1) {
+            const px = x + @as(i32, @intCast(c));
+            const alpha = BACK_ARROW_BITMAP[r * BACK_ARROW_WIDTH + c];
+            if (alpha > 0) {
+                if (alpha == 255) {
+                    surface.setPixel(px, py, color);
+                } else {
+                    const bg = surface.getPixel(px, py);
+                    surface.setPixel(px, py, fb.blendPixel(bg, color, alpha));
+                }
+            }
+        }
+    }
+}
+
+pub fn drawBackArrowWithShadow(surface: *fb.Surface, x: i32, y: i32, fg_color: u32, shadow_color: u32) void {
+    drawBackArrow(surface, x + 1, y + 1, shadow_color);
+    drawBackArrow(surface, x, y, fg_color);
+}
+
 pub const Icon = struct {
     id: u32,
     icon_type: IconType,
@@ -51,6 +91,9 @@ pub const Icon = struct {
 
     // Optional contextual help text displayed in Active Help Pane
     help_text: ?[]const u8 = null,
+
+    // Special menu item with back arrow
+    has_back_arrow: bool = false,
 
     // For read_write_text
     cursor_pos: usize = 0,
@@ -95,6 +138,7 @@ pub const Icon = struct {
     is_selectable: bool = true,
     is_selected: bool = false,
     is_active_press: bool = false,
+    is_dragging_slider: bool = false,
 
     pub fn setSelected(self: *Icon, selected: bool) void {
         self.is_selected = selected;
@@ -262,6 +306,20 @@ pub const Icon = struct {
             .rel_y = rel_y,
             .width = width,
             .height = height,
+        };
+        icon.setText(label);
+        return icon;
+    }
+
+    pub fn createBackMenuItem(id: u32, rel_x: i32, rel_y: i32, width: u32, height: u32, label: []const u8) Icon {
+        var icon = Icon{
+            .id = id,
+            .icon_type = .menu_item,
+            .rel_x = rel_x,
+            .rel_y = rel_y,
+            .width = width,
+            .height = height,
+            .has_back_arrow = true,
         };
         icon.setText(label);
         return icon;
@@ -474,18 +532,10 @@ pub const Icon = struct {
     }
 
     // Render this icon onto the framebuffer surface with strict bounding box clipping
-    pub fn render(self: *Icon, surface: *fb.Surface, win_x: i32, win_y: i32, is_win_active: bool, is_keyboard_active: bool) void {
+    pub fn render(self: *Icon, surface: *fb.Surface, win_x: i32, win_y: i32, is_win_active: bool) void {
         const sx = win_x + self.rel_x;
         const sy = win_y + self.rel_y;
         const box = fb.Box.fromPosSize(sx, sy, self.width, self.height);
-
-        // If this icon is focused, window is active, and keyboard navigation is active:
-        // render keyboard focus hand marker
-        // (drawn before establishing icon content clipping so the hand can point in the outer margin)
-        if (self.is_selectable and self.is_focused and is_win_active and is_keyboard_active) {
-            const marker_x = @max(win_x + 4, sx - @as(i32, @intCast(cursor_mod.MARKER_WIDTH)) - 2);
-            cursor_mod.Cursor.drawFocusHand(surface, marker_x, sy + @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(cursor_mod.MARKER_HEIGHT)), 2));
-        }
 
         // Establish icon bounding box clipping
         const prev_icon_clip = surface.pushClip(box);
@@ -494,8 +544,7 @@ pub const Icon = struct {
         // If icon bounding box is completely clipped out by parent, return early
         if (surface.clip.isEmpty()) return;
 
-        const is_focused_active = (self.is_selectable and self.is_focused and is_win_active and is_keyboard_active);
-        const is_highlighted = if (is_keyboard_active) is_focused_active else (self.is_selectable and self.is_hovered);
+        const is_highlighted = (self.is_selectable and self.is_hovered);
         const fg_color: u32 = if (!self.is_enabled)
             fb.Color.TEXT_MUTED
         else if (is_highlighted)
@@ -577,7 +626,7 @@ pub const Icon = struct {
                 font.drawTextWithShadow(surface, val_str, val_x, text_y, fb.Color.ACCENT_GOLD, fb.Color.BLACK);
 
                 // 2. Slider Track Groove
-                const track_y = sy + 24;
+                const track_y = sy + 16;
                 const track_h: u32 = 6;
                 const track_box = fb.Box.fromPosSize(sx, track_y, self.width, track_h);
                 surface.drawRoundedTranslucentBox(track_box, 3, fb.Color.TRACK_BG, 240, fb.Color.GLASS_BORDER);
@@ -622,10 +671,7 @@ pub const Icon = struct {
 
             .button => {
                 // Sleek pushable button
-                const is_btn_highlight = if (is_keyboard_active)
-                    (self.is_focused and is_win_active)
-                else
-                    self.is_hovered;
+                const is_btn_highlight = self.is_hovered;
 
                 const btn_bg: u32 = if (self.is_active_press)
                     fb.Color.BTN_PRESS_BG
@@ -834,10 +880,7 @@ pub const Icon = struct {
             },
 
             .menu_item => {
-                const is_active_highlight = if (is_keyboard_active)
-                    (self.is_focused and is_win_active)
-                else
-                    self.is_hovered;
+                const is_active_highlight = self.is_hovered;
 
                 const item_color: u32 = if (!self.is_enabled)
                     fb.Color.TEXT_MUTED
@@ -848,7 +891,25 @@ pub const Icon = struct {
 
                 // Render menu item label at normal font size with color highlight (no resizing)
                 const text_y = sy + @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(font.GLYPH_HEIGHT)), 2);
-                font.drawTextWithShadow(surface, self.getText(), sx, text_y, item_color, fb.Color.BLACK);
+
+                if (self.has_back_arrow) {
+                    // Draw elegant back arrow aligned with uppercase text baseline
+                    const arrow_y = text_y + 4;
+                    drawBackArrowWithShadow(surface, sx, arrow_y, item_color, fb.Color.BLACK);
+
+                    const raw_text = self.getText();
+                    const display_text = if (std.mem.startsWith(u8, raw_text, "< "))
+                        raw_text[2..]
+                    else if (std.mem.startsWith(u8, raw_text, "<"))
+                        raw_text[1..]
+                    else
+                        raw_text;
+
+                    const label_x = sx + @as(i32, @intCast(BACK_ARROW_WIDTH + 8));
+                    font.drawTextWithShadow(surface, display_text, label_x, text_y, item_color, fb.Color.BLACK);
+                } else {
+                    font.drawTextWithShadow(surface, self.getText(), sx, text_y, item_color, fb.Color.BLACK);
+                }
             },
         }
     }

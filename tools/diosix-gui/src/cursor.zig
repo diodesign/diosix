@@ -35,25 +35,6 @@ pub const POINTER_PIXELS = [_]u32{
     T, T, T, T, T, T, T, K, K, T, T, T, T, T, T, T, T, T,
 };
 
-// Keyboard navigation pointing marker (clean all-white arrow pointing right at active icon)
-pub const MARKER_WIDTH: u32 = 12;
-pub const MARKER_HEIGHT: u32 = 12;
-
-pub const HAND_MARKER_PIXELS = [_]u32{
-    T, T, T, T, T, K, K, T, T, T, T, T,
-    T, T, T, K, K, W, W, K, T, T, T, T,
-    K, K, K, W, W, W, W, W, K, T, T, T,
-    K, W, W, W, W, W, W, W, W, K, T, T,
-    K, W, W, W, W, W, W, W, W, W, K, T,
-    K, W, W, W, W, W, W, W, W, W, W, K,
-    K, W, W, W, W, W, W, W, W, W, K, T,
-    K, W, W, W, W, W, W, W, W, K, T, T,
-    K, K, K, W, W, W, W, W, K, T, T, T,
-    T, T, T, K, K, W, W, K, T, T, T, T,
-    T, T, T, T, T, K, K, T, T, T, T, T,
-    T, T, T, T, T, T, T, T, T, T, T, T,
-};
-
 pub const Cursor = struct {
     x: i32 = 640,
     y: i32 = 400,
@@ -90,28 +71,6 @@ pub const Cursor = struct {
             }
         }
     }
-
-    // Draw keyboard focus hand pointing at (x, y)
-    pub fn drawFocusHand(screen: *fb.Surface, x: i32, y: i32) void {
-        const sprite_box = fb.Box.fromPosSize(x, y, MARKER_WIDTH, MARKER_HEIGHT);
-        const clipped = sprite_box.intersect(screen.clip);
-        if (clipped.isEmpty()) return;
-
-        const pixels_per_row = screen.stridePixels();
-        var py = clipped.y0;
-        while (py < clipped.y1) : (py += 1) {
-            const src_row = @as(usize, @intCast(py - y)) * MARKER_WIDTH;
-            const dst_row = @as(usize, @intCast(py)) * pixels_per_row;
-            var px = clipped.x0;
-            while (px < clipped.x1) : (px += 1) {
-                const src_idx = src_row + @as(usize, @intCast(px - x));
-                const col = HAND_MARKER_PIXELS[src_idx];
-                if (col != T) {
-                    screen.pixels[dst_row + @as(usize, @intCast(px))] = col;
-                }
-            }
-        }
-    }
 };
 
 test "cursor: verify pointer sprite dimensions and pure white interior" {
@@ -127,26 +86,6 @@ test "cursor: verify pointer sprite dimensions and pure white interior" {
             black_count += 1;
         } else {
             try std.testing.expectEqual(T, p); // Every other pixel must be transparent
-        }
-    }
-
-    try std.testing.expect(white_count > 0);
-    try std.testing.expect(black_count > 0);
-}
-
-test "cursor: verify hand marker sprite dimensions and pure white interior" {
-    try std.testing.expectEqual(@as(usize, MARKER_WIDTH * MARKER_HEIGHT), HAND_MARKER_PIXELS.len);
-    try std.testing.expectEqual(K, HAND_MARKER_PIXELS[5 * MARKER_WIDTH + (MARKER_WIDTH - 1)]); // Rightmost tip at row 5 is black point
-
-    var white_count: usize = 0;
-    var black_count: usize = 0;
-    for (HAND_MARKER_PIXELS) |p| {
-        if (p == W) {
-            white_count += 1;
-        } else if (p == K) {
-            black_count += 1;
-        } else {
-            try std.testing.expectEqual(T, p); // Every other pixel must be transparent (no dark cuff)
         }
     }
 

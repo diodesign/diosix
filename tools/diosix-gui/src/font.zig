@@ -468,23 +468,28 @@ pub fn drawText(surface: *fb.Surface, text: []const u8, x: i32, y: i32, color: u
                     continue;
                 }
 
+                const pixels_per_row = surface.stridePixels();
                 var row: usize = 0;
                 while (row < g.height) : (row += 1) {
                     const py = gy + @as(i32, @intCast(row));
                     if (py < surface.clip.y0 or py >= surface.clip.y1) continue;
+
+                    const row_offset = @as(usize, @intCast(py)) * pixels_per_row;
+                    const bitmap_row_start = g.bitmap_offset + row * g.width;
 
                     var col: usize = 0;
                     while (col < g.width) : (col += 1) {
                         const px = gx + @as(i32, @intCast(col));
                         if (px < surface.clip.x0 or px >= surface.clip.x1) continue;
 
-                        const alpha = GLYPH_BITMAPS[g.bitmap_offset + row * g.width + col];
+                        const alpha = GLYPH_BITMAPS[bitmap_row_start + col];
                         if (alpha > 0) {
+                            const dst_idx = row_offset + @as(usize, @intCast(px));
                             if (alpha == 255) {
-                                surface.setPixel(px, py, color);
+                                surface.pixels[dst_idx] = color;
                             } else {
-                                const bg = surface.getPixel(px, py);
-                                surface.setPixel(px, py, fb.blendPixel(bg, color, alpha));
+                                const bg = surface.pixels[dst_idx];
+                                surface.pixels[dst_idx] = fb.blendPixel(bg, color, alpha);
                             }
                         }
                     }
@@ -530,22 +535,27 @@ pub fn drawTextWithAlpha(surface: *fb.Surface, text: []const u8, x: i32, y: i32,
                     continue;
                 }
 
+                const pixels_per_row = surface.stridePixels();
                 var row: usize = 0;
                 while (row < g.height) : (row += 1) {
                     const py = gy + @as(i32, @intCast(row));
                     if (py < surface.clip.y0 or py >= surface.clip.y1) continue;
+
+                    const row_offset = @as(usize, @intCast(py)) * pixels_per_row;
+                    const bitmap_row_start = g.bitmap_offset + row * g.width;
 
                     var col: usize = 0;
                     while (col < g.width) : (col += 1) {
                         const px = gx + @as(i32, @intCast(col));
                         if (px < surface.clip.x0 or px >= surface.clip.x1) continue;
 
-                        const raw_a = GLYPH_BITMAPS[g.bitmap_offset + row * g.width + col];
+                        const raw_a = GLYPH_BITMAPS[bitmap_row_start + col];
                         if (raw_a > 0) {
                             const eff_a: u8 = @intCast((@as(u32, raw_a) * @as(u32, master_alpha)) >> 8);
                             if (eff_a > 0) {
-                                const bg = surface.getPixel(px, py);
-                                surface.setPixel(px, py, fb.blendPixel(bg, color, eff_a));
+                                const dst_idx = row_offset + @as(usize, @intCast(px));
+                                const bg = surface.pixels[dst_idx];
+                                surface.pixels[dst_idx] = fb.blendPixel(bg, color, eff_a);
                             }
                         }
                     }
@@ -625,6 +635,7 @@ pub fn drawTextScaled(surface: *fb.Surface, text: []const u8, x: i32, y: i32, co
                     continue;
                 }
 
+                const pixels_per_row = surface.stridePixels();
                 var row: usize = 0;
                 while (row < scaled_gh) : (row += 1) {
                     const py = gy + @as(i32, @intCast(row));
@@ -632,6 +643,9 @@ pub fn drawTextScaled(surface: *fb.Surface, text: []const u8, x: i32, y: i32, co
 
                     const src_row = @divTrunc(row * scale_den, scale_num);
                     if (src_row >= g.height) continue;
+
+                    const row_offset = @as(usize, @intCast(py)) * pixels_per_row;
+                    const bitmap_row_start = g.bitmap_offset + src_row * g.width;
 
                     var col: usize = 0;
                     while (col < scaled_gw) : (col += 1) {
@@ -641,13 +655,14 @@ pub fn drawTextScaled(surface: *fb.Surface, text: []const u8, x: i32, y: i32, co
                         const src_col = @divTrunc(col * scale_den, scale_num);
                         if (src_col >= g.width) continue;
 
-                        const alpha = GLYPH_BITMAPS[g.bitmap_offset + src_row * g.width + src_col];
+                        const alpha = GLYPH_BITMAPS[bitmap_row_start + src_col];
                         if (alpha > 0) {
+                            const dst_idx = row_offset + @as(usize, @intCast(px));
                             if (alpha == 255) {
-                                surface.setPixel(px, py, color);
+                                surface.pixels[dst_idx] = color;
                             } else {
-                                const bg = surface.getPixel(px, py);
-                                surface.setPixel(px, py, fb.blendPixel(bg, color, alpha));
+                                const bg = surface.pixels[dst_idx];
+                                surface.pixels[dst_idx] = fb.blendPixel(bg, color, alpha);
                             }
                         }
                     }

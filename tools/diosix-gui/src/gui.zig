@@ -12,6 +12,7 @@ const Icon = icon_mod.Icon;
 const window_mod = @import("window.zig");
 const Window = window_mod.Window;
 const host_info = @import("host_info.zig");
+const linux = std.os.linux;
 
 pub const TAB_BAR_HEIGHT: u32 = 0;
 pub const BORDER_GAP: i32 = 16;
@@ -19,6 +20,7 @@ pub const BORDER_GAP: i32 = 16;
 // Standard Window & Icon IDs
 pub const WIN_MENU_ID: u32 = 100;
 pub const WIN_VERSION_ID: u32 = 101;
+pub const WIN_BACK_ID: u32 = 102;
 pub const WIN_HELP_ID: u32 = 103;
 pub const WIN_STATUS_ID: u32 = 104;
 pub const WIN_CONFIG_ID: u32 = 105;
@@ -27,7 +29,40 @@ pub const ICON_MENU_GUESTS_ID: u32 = 1001;
 pub const ICON_MENU_STATUS_ID: u32 = 1002;
 pub const ICON_MENU_CONFIG_ID: u32 = 1003;
 pub const ICON_VERSION_TEXT_ID: u32 = 1011;
+pub const ICON_BACK_BTN_ID: u32 = 1021;
 pub const ICON_HELP_TEXT_ID: u32 = 1031;
+
+pub const MENU_ITEM_HEIGHT: u32 = 28;
+pub const MENU_ITEM_SPACING: u32 = 8;
+pub const MENU_PAD_X: i32 = 16;
+pub const MENU_TOP_PAD: i32 = 14;
+pub const MENU_BOT_PAD: i32 = 14;
+pub const MENU_FULL_H: u32 = 128;
+pub const MENU_CONTRACTED_H: u32 = 56;
+pub const BACK_PANE_H: u32 = 56;
+pub const BACK_PANE_GAP: i32 = 12;
+pub const BACK_PANE_Y: i32 = BORDER_GAP + @as(i32, @intCast(MENU_CONTRACTED_H)) + BACK_PANE_GAP;
+
+pub const NavAnimState = enum {
+    idle,
+    opening,
+    closing,
+};
+
+pub const DriftDirection = enum(u2) {
+    left = 0,
+    right = 1,
+    up = 2,
+    down = 3,
+};
+
+pub const DRIFT_INTERVAL_MS: u32 = 60; // Shift background texture by 1 pixel every 60ms (~16.6 px/sec)
+
+pub fn easeOutCubic(t: f32) f32 {
+    const clamped = std.math.clamp(t, 0.0, 1.0);
+    const inv = 1.0 - clamped;
+    return 1.0 - inv * inv * inv;
+}
 
 pub const ICON_STATUS_HOST_HDR_ID: u32 = 1040;
 pub const ICON_STATUS_HOST_UPTIME_LABEL_ID: u32 = 1041;
@@ -55,41 +90,29 @@ pub const ICON_CONFIG_THEME_DAY_ID: u32 = 1066;
 pub const ICON_CONFIG_THEME_MIDNIGHT_ID: u32 = 1067;
 pub const ICON_CONFIG_THEME_SUNSET_ID: u32 = 1068;
 pub const ICON_CONFIG_THEME_EMERALD_ID: u32 = 1069;
+pub const ICON_CONFIG_ADMIN_LBL_ID: u32 = 1070;
+pub const ICON_CONFIG_ADMIN_BTN_ID: u32 = 1071;
+pub const ICON_CONFIG_SPEED_LBL_ID: u32 = 1072;
+pub const ICON_CONFIG_SPEED_SLIDER_ID: u32 = 1073;
 
-pub const Key = struct {
-    pub const ESC: u16 = 1;
-    pub const BACKSPACE: u16 = 14;
-    pub const TAB: u16 = 15;
-    pub const U: u16 = 22;
-    pub const ENTER: u16 = 28;
-    pub const LEFT_CTRL: u16 = 29;
-    pub const A: u16 = 30;
-    pub const F: u16 = 33;
-    pub const LEFT_SHIFT: u16 = 42;
-    pub const Z: u16 = 44;
-    pub const X: u16 = 45;
-    pub const C: u16 = 46;
-    pub const V: u16 = 47;
-    pub const RIGHT_SHIFT: u16 = 54;
-    pub const SPACE: u16 = 57;
-    pub const F6: u16 = 64;
-    pub const RIGHT_CTRL: u16 = 97;
-    pub const HOME: u16 = 102;
-    pub const UP: u16 = 103;
-    pub const PAGE_UP: u16 = 104;
-    pub const LEFT: u16 = 105;
-    pub const RIGHT: u16 = 106;
-    pub const END: u16 = 107;
-    pub const DOWN: u16 = 108;
-    pub const PAGE_DOWN: u16 = 109;
-    pub const DELETE: u16 = 111;
+// Touch PIN Keypad Authentication Modal IDs
+pub const WIN_PIN_MODAL_ID: u32 = 110;
+pub const ICON_PIN_TITLE_ID: u32 = 1101;
+pub const ICON_PIN_DISPLAY_ID: u32 = 1102;
+pub const ICON_PIN_STATUS_ID: u32 = 1103;
+pub const ICON_PIN_KEY_BASE_ID: u32 = 1110; // 1110..1119 for digits 0..9
+pub const ICON_PIN_CLEAR_ID: u32 = 1120;
+pub const ICON_PIN_SUBMIT_ID: u32 = 1121;
+pub const ICON_PIN_CANCEL_ID: u32 = 1122;
+
+pub const PrivilegeMode = enum {
+    root_console,
+    guest_diagnostic,
 };
 
-pub const CLIPBOARD_CAPACITY: usize = 256;
-
-pub const InputMode = enum {
-    mouse,
-    keyboard,
+pub const AuthState = enum {
+    locked,
+    unlocked,
 };
 
 pub const DiosixGui = struct {
@@ -100,29 +123,32 @@ pub const DiosixGui = struct {
     windows: std.ArrayList(Window),
     active_win_idx: ?usize = null,
 
-    // Dynamic input mode: mouse pointer vs keyboard pointer
-    input_mode: InputMode = .keyboard,
-
     cursor: cursor_mod.Cursor,
     mouse_left_down: bool = false,
 
-    // Keyboard modifier states tracked from input events
-    ctrl_down: bool = false,
-    shift_down: bool = false,
-
-    // System clipboard for text copy / cut / paste (guaranteed null-terminated)
-    clipboard_buf: [CLIPBOARD_CAPACITY + 1]u8 = @splat(0),
-    clipboard_len: usize = 0,
-
-    // Real-time window transparency percentage (0 = fully opaque, 100 = invisible; default 50%)
-    window_transparency: u32 = 50,
+    // Real-time window transparency percentage (0 = fully opaque, 100 = invisible; default 30%)
+    window_transparency: u32 = 30,
 
     // Real-time backdrop Gaussian blur strength (0 = no blur, 100 = max blur; default 50%)
     blur_strength: u32 = 50,
 
-    // Static graduated background colors (default light blue top, dark blue bottom)
+    // Graduated background colors (default light blue top, dark blue bottom)
     bg_top_color: u32 = fb.Color.SKY_BASE_TOP,
     bg_bot_color: u32 = fb.Color.GRADIENT_BOT_DEFAULT,
+
+    // Gradual background texture drift state (random direction decided at runtime)
+    drift_dir: DriftDirection = .right,
+    drift_x: i32 = 0,
+    drift_y: i32 = 0,
+    drift_accum_ms: u32 = 0,
+    // Background animation speed (0 = 0 movement/static, 100 = full/original speed; default 50%)
+    bg_animation_speed: u32 = 50,
+
+    // Privilege separation & Touch PIN Authentication state
+    privilege_mode: PrivilegeMode = .root_console,
+    auth_state: AuthState = .locked,
+    pin_buf: [16]u8 = @splat(0),
+    pin_len: usize = 0,
 
     // Damage tracking: dirty bounding box needing redraw
     dirty_box: fb.Box = fb.Box{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 },
@@ -134,10 +160,31 @@ pub const DiosixGui = struct {
     uptime_accum_ms: u32 = 0,
     last_uptime_sec: u64 = 0,
 
+    // Navigation roll-up/roll-down and pane sliding animation state
+    nav_anim_state: NavAnimState = .idle,
+    nav_anim_progress: f32 = 0.0,
+    nav_anim_duration_ms: f32 = 200.0,
+    active_menu_id: ?u32 = null,
+
+    // Active mouse drag capture window ID (e.g. while dragging a slider)
+    active_drag_win_id: ?u32 = null,
+
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !DiosixGui {
         const total_h = std.math.add(usize, height, 64) catch return error.InvalidDimensions;
         const scratch_len = std.math.mul(usize, width, total_h) catch return error.InvalidDimensions;
         const scratch_mem = try allocator.alloc(u32, scratch_len);
+
+        // Decide background drift direction randomly at runtime: left, right, up, or down
+        var ts: linux.timespec = undefined;
+        const clk_rc = linux.clock_gettime(linux.CLOCK.REALTIME, &ts);
+        const seed: u64 = if (@as(isize, @bitCast(clk_rc)) == 0)
+            (@as(u64, @bitCast(ts.sec)) *% 31) ^ (@as(u64, @bitCast(ts.nsec)) << 16)
+        else
+            0x12345678_9ABCDEF0;
+
+        var prng = std.Random.DefaultPrng.init(seed);
+        const dir_num = prng.random().uintLessThan(u32, 4);
+        const chosen_dir: DriftDirection = @enumFromInt(dir_num);
 
         var gui = DiosixGui{
             .allocator = allocator,
@@ -149,7 +196,10 @@ pub const DiosixGui = struct {
                 .y = @as(i32, @intCast(height / 2)),
                 .visible = false,
             },
+            .window_transparency = 30,
             .blur_scratch = scratch_mem,
+            .drift_dir = chosen_dir,
+            .bg_animation_speed = 50,
         };
 
         // 1. Build left menu
@@ -208,12 +258,14 @@ pub const DiosixGui = struct {
                         }
                     }
                 }
-                self.markConnectorDirty();
                 if (win.is_onscreen) {
                     self.markDirty(win.getBox());
                 }
                 win.deinit();
                 _ = self.windows.orderedRemove(idx);
+                if (self.active_drag_win_id == id) {
+                    self.active_drag_win_id = null;
+                }
                 if (self.active_win_idx) |act_idx| {
                     if (act_idx == idx) {
                         self.active_win_idx = null;
@@ -239,6 +291,7 @@ pub const DiosixGui = struct {
         }
         self.windows.clearRetainingCapacity();
         self.active_win_idx = null;
+        self.active_drag_win_id = null;
         self.markFullDirty();
     }
 
@@ -251,6 +304,14 @@ pub const DiosixGui = struct {
 
     // --- Dynamic Layout Builders ---
 
+    // Back button activation callback
+    fn onBackButtonClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        _ = icon;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        self.navigateBack() catch {};
+    }
+
     // Menu item activation callback
     fn onMenuItemActivated(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
         _ = win_ctx;
@@ -261,6 +322,38 @@ pub const DiosixGui = struct {
     // Dynamically sized menu on left-hand side with border gap
     pub fn buildMainMenu(self: *DiosixGui) !void {
         const menu_items = [_][]const u8{ "Guests", "Status", "Config" };
+        var max_w: u32 = 0;
+        for (menu_items) |item_str| {
+            const w = font.measureStringScaled(item_str, 6, 5);
+            if (w > max_w) max_w = w;
+        }
+
+        const item_w = max_w + 16;
+        const menu_w = @as(u32, @intCast(MENU_PAD_X * 2)) + item_w;
+        const max_avail_h = if (self.height > @as(u32, @intCast(BORDER_GAP * 2)))
+            self.height - @as(u32, @intCast(BORDER_GAP * 2))
+        else
+            self.height;
+        const win_h = @min(MENU_FULL_H, max_avail_h);
+
+        const win = try self.createWindow(WIN_MENU_ID, BORDER_GAP, BORDER_GAP, menu_w, win_h, null);
+        win.setHelpText("Main menu");
+
+        try self.repopulateMainMenu();
+    }
+
+    // Repopulate Main Menu with all items (Guests, Status, Config) and restore full height
+    pub fn repopulateMainMenu(self: *DiosixGui) !void {
+        const win = self.getWindow(WIN_MENU_ID) orelse return;
+        win.icons.clearRetainingCapacity();
+        const max_avail_h = if (self.height > @as(u32, @intCast(BORDER_GAP * 2)))
+            self.height - @as(u32, @intCast(BORDER_GAP * 2))
+        else
+            self.height;
+        win.height = @min(MENU_FULL_H, max_avail_h);
+        win.setHelpText("Main menu");
+
+        const menu_items = [_][]const u8{ "Guests", "Status", "Config" };
         const menu_ids = [_]u32{ ICON_MENU_GUESTS_ID, ICON_MENU_STATUS_ID, ICON_MENU_CONFIG_ID };
         const menu_helps = [_][]const u8{
             "View and manage guest virtual machines",
@@ -268,52 +361,81 @@ pub const DiosixGui = struct {
             "Configure window appearance and desktop background themes",
         };
 
-        // 1. Determine dynamic width based on longest item scaled 1.2x (6:5)
         var max_w: u32 = 0;
         for (menu_items) |item_str| {
             const w = font.measureStringScaled(item_str, 6, 5);
             if (w > max_w) max_w = w;
         }
-
-        const hand_marker_space: i32 = 28; // space on left for keyboard pointer hand marker
-        const right_pad: u32 = 24;
-        const item_w = max_w + 8;
-        const menu_w = @as(u32, @intCast(hand_marker_space)) + item_w + right_pad;
-
-        // 2. Determine dynamic height based on vertical layout
-        const item_h: u32 = 28;
-        const item_spacing: u32 = 8;
-        const top_pad: i32 = 14;
-        const bot_pad: i32 = 14;
-        const total_content_h: u32 = @intCast(top_pad + bot_pad + @as(i32, @intCast(menu_items.len * item_h + (menu_items.len - 1) * item_spacing)));
-
-        const max_avail_h = if (self.height > @as(u32, @intCast(BORDER_GAP * 2)))
-            self.height - @as(u32, @intCast(BORDER_GAP * 2))
+        const item_w = if (win.width > @as(u32, @intCast(MENU_PAD_X * 2)))
+            win.width - @as(u32, @intCast(MENU_PAD_X * 2))
         else
-            self.height;
+            max_w + 16;
 
-        // If content exceeds screen height, clamp window height so it turns scrollable
-        const win_h = @min(total_content_h, max_avail_h);
-
-        const win = try self.createWindow(WIN_MENU_ID, BORDER_GAP, BORDER_GAP, menu_w, win_h, null);
-        win.setHelpText("Main menu");
-
-        var cur_y: i32 = top_pad;
+        var cur_y: i32 = MENU_TOP_PAD;
         for (menu_items, 0..) |item_str, idx| {
-            var icon = Icon.createMenuItem(menu_ids[idx], hand_marker_space, cur_y, item_w, item_h, item_str);
+            var icon = Icon.createMenuItem(menu_ids[idx], MENU_PAD_X, cur_y, item_w, MENU_ITEM_HEIGHT, item_str);
             icon.setHelpText(menu_helps[idx]);
             icon.callback = onMenuItemActivated;
-            if (idx == 0) icon.is_focused = true;
             _ = try win.addIcon(icon);
-            cur_y += @as(i32, @intCast(item_h + item_spacing));
+            cur_y += @as(i32, @intCast(MENU_ITEM_HEIGHT + MENU_ITEM_SPACING));
         }
-        win.focused_icon_idx = 0;
+    }
+
+    // Contract Main Menu to show just the selected item
+    pub fn contractMainMenu(self: *DiosixGui, selected_menu_id: u32) !void {
+        const win = self.getWindow(WIN_MENU_ID) orelse return;
+        win.icons.clearRetainingCapacity();
+
+        const name: []const u8 = switch (selected_menu_id) {
+            ICON_MENU_GUESTS_ID => "Guests",
+            ICON_MENU_STATUS_ID => "Status",
+            ICON_MENU_CONFIG_ID => "Config",
+            else => "Menu",
+        };
+        const help: []const u8 = switch (selected_menu_id) {
+            ICON_MENU_GUESTS_ID => "View and manage guest virtual machines",
+            ICON_MENU_STATUS_ID => "View real-time system information",
+            ICON_MENU_CONFIG_ID => "Configure window appearance and desktop background themes",
+            else => "Selected menu item",
+        };
+
+        const item_w = if (win.width > @as(u32, @intCast(MENU_PAD_X * 2)))
+            win.width - @as(u32, @intCast(MENU_PAD_X * 2))
+        else
+            80;
+        var icon = Icon.createMenuItem(selected_menu_id, MENU_PAD_X, MENU_TOP_PAD, item_w, MENU_ITEM_HEIGHT, name);
+        icon.setHelpText(help);
+        icon.callback = onMenuItemActivated;
+        icon.setSelected(true);
+        _ = try win.addIcon(icon);
+        win.setHelpText(help);
+    }
+
+    // Build the separate Back menu pane positioned under the contracted menu pane
+    pub fn buildBackPane(self: *DiosixGui) !void {
+        if (self.getWindow(WIN_BACK_ID) != null) return;
+        const menu_win = self.getWindow(WIN_MENU_ID);
+        const menu_w = if (menu_win) |mw| mw.width else 112;
+        const back_w: u32 = menu_w;
+        const back_h: u32 = BACK_PANE_H;
+
+        const win = try self.createWindow(WIN_BACK_ID, BORDER_GAP, BACK_PANE_Y, back_w, back_h, null);
+        win.setHelpText("Return to the main menu");
+        win.parent_window_id = WIN_MENU_ID;
+
+        const item_w: u32 = if (back_w > @as(u32, @intCast(MENU_PAD_X * 2))) back_w - @as(u32, @intCast(MENU_PAD_X * 2)) else 80;
+        var back_item = Icon.createBackMenuItem(ICON_BACK_BTN_ID, MENU_PAD_X, MENU_TOP_PAD, item_w, MENU_ITEM_HEIGHT, "Back");
+        back_item.setHelpText("Return to the main menu");
+        back_item.callback = onBackButtonClicked;
+        _ = try win.addIcon(back_item);
     }
 
     // Build bottom panes: Active Help pane on bottom-left, Version pane on bottom-right
     pub fn buildBottomPanes(self: *DiosixGui) !void {
         var ver_buf: [64]u8 = undefined;
-        const ver_str = host_info.getVersionString(&ver_buf);
+        const ver_base = host_info.getVersionString(&ver_buf);
+        var badge_buf: [128]u8 = undefined;
+        const ver_str = std.fmt.bufPrint(&badge_buf, "{s} {s}", .{ ver_base, self.getSecurityBadge() }) catch ver_base;
         const ver_text_w = font.measureString(ver_str);
 
         // Version Pane sizing (bottom-right)
@@ -324,9 +446,9 @@ pub const DiosixGui = struct {
         const ver_y = @as(i32, @intCast(self.height)) - @as(i32, @intCast(ver_h)) - BORDER_GAP;
 
         const win_ver = try self.createWindow(WIN_VERSION_ID, ver_x, ver_y, ver_w, ver_h, null);
-        win_ver.setHelpText("Hypervisor build information");
+        win_ver.setHelpText("Hypervisor build information and security console privilege state");
         var ver_icon = Icon.createReadOnly(ICON_VERSION_TEXT_ID, @intCast(ver_pad_h), 8, ver_text_w + 4, 24, ver_str);
-        ver_icon.setHelpText("Hypervisor name, version number, build branch, and commit hash");
+        ver_icon.setHelpText("Hypervisor name, version number, build branch, commit hash, and security lock mode");
         _ = try win_ver.addIcon(ver_icon);
 
         // Active Help Pane: same vertical position (ver_y), same height (ver_h = 40),
@@ -380,40 +502,33 @@ pub const DiosixGui = struct {
     pub fn updateActiveHelp(self: *DiosixGui) void {
         var help_str: ?[]const u8 = null;
 
-        switch (self.input_mode) {
-            .mouse => {
-                // Priority 1: Icon under mouse cursor with help text
-                if (self.findIconAt(self.cursor.x, self.cursor.y)) |icon| {
-                    if (icon.getHelpText()) |ht| {
-                        if (ht.len > 0) help_str = ht;
-                    }
-                }
-                // Priority 2: Pane under mouse cursor with help text
-                if (help_str == null) {
-                    if (self.findWindowAt(self.cursor.x, self.cursor.y)) |win| {
-                        if (win.getHelpText()) |ht| {
+        // Priority 1: Actively dragged icon help text, or icon under mouse cursor with help text
+        if (self.active_drag_win_id) |d_wid| {
+            if (self.getWindow(d_wid)) |dwin| {
+                if (dwin.active_drag_icon_idx) |d_idx| {
+                    if (d_idx < dwin.icons.items.len) {
+                        if (dwin.icons.items[d_idx].getHelpText()) |ht| {
                             if (ht.len > 0) help_str = ht;
                         }
                     }
                 }
-            },
-            .keyboard => {
-                const act_win = self.getActiveWindow();
-                if (act_win) |win| {
-                    // Priority 1: Focused icon with help text
-                    if (win.getFocusedIcon()) |icon| {
-                        if (icon.getHelpText()) |ht| {
-                            if (ht.len > 0) help_str = ht;
-                        }
-                    }
-                    // Priority 2: Active pane with help text
-                    if (help_str == null) {
-                        if (win.getHelpText()) |ht| {
-                            if (ht.len > 0) help_str = ht;
-                        }
-                    }
+            }
+        }
+
+        if (help_str == null) {
+            if (self.findIconAt(self.cursor.x, self.cursor.y)) |icon| {
+                if (icon.getHelpText()) |ht| {
+                    if (ht.len > 0) help_str = ht;
                 }
-            },
+            }
+        }
+        // Priority 2: Pane under mouse cursor with help text
+        if (help_str == null) {
+            if (self.findWindowAt(self.cursor.x, self.cursor.y)) |win| {
+                if (win.getHelpText()) |ht| {
+                    if (ht.len > 0) help_str = ht;
+                }
+            }
         }
 
         // Priority 3: Fallback text ("Welcome to diosix")
@@ -445,7 +560,6 @@ pub const DiosixGui = struct {
             mw.child_window_id = WIN_STATUS_ID;
         }
         self.setMenuItemSelected(ICON_MENU_STATUS_ID, true);
-        self.markConnectorDirty();
 
         const pad_x: i32 = 20;
         const col1_right: i32 = 140;
@@ -555,6 +669,12 @@ pub const DiosixGui = struct {
         self.setBlurStrength(@intCast(icon.slider_val));
     }
 
+    fn onBgSpeedSliderChanged(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        self.setBgAnimationSpeed(@intCast(icon.slider_val));
+    }
+
     fn onThemeButtonClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
         _ = win_ctx;
         const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
@@ -579,6 +699,287 @@ pub const DiosixGui = struct {
         }
     }
 
+    fn onConfigAdminClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        _ = icon;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        if (self.auth_state == .locked) {
+            self.openPinModal() catch {};
+        } else {
+            self.lockConsole();
+        }
+    }
+
+    fn onPinKeyClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        if (icon.id >= ICON_PIN_KEY_BASE_ID and icon.id <= ICON_PIN_KEY_BASE_ID + 9) {
+            const digit: u8 = @intCast('0' + (icon.id - ICON_PIN_KEY_BASE_ID));
+            self.handlePinDigit(digit);
+        }
+    }
+
+    fn onPinClearClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        _ = icon;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        self.handlePinClear();
+    }
+
+    fn onPinCancelClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        _ = icon;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        self.closePinModal();
+    }
+
+    fn onPinSubmitClicked(gui_ctx: *anyopaque, win_ctx: *anyopaque, icon: *Icon) void {
+        _ = win_ctx;
+        _ = icon;
+        const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+        self.handlePinSubmit();
+    }
+
+    pub const DEFAULT_PIN = "1234";
+
+    pub fn lockConsole(self: *DiosixGui) void {
+        self.auth_state = .locked;
+        @memset(&self.pin_buf, 0);
+        self.pin_len = 0;
+        self.updateSecurityBadgeText();
+        self.updateConfigAdminButtonText();
+        self.markFullDirty();
+    }
+
+    pub fn openPinModal(self: *DiosixGui) !void {
+        if (self.getWindow(WIN_PIN_MODAL_ID) != null) return;
+
+        @memset(&self.pin_buf, 0);
+        self.pin_len = 0;
+
+        const modal_w: u32 = 320;
+        const modal_h: u32 = 390;
+        const mx: i32 = @divTrunc(@as(i32, @intCast(self.width)) - @as(i32, @intCast(modal_w)), 2);
+        const my: i32 = @divTrunc(@as(i32, @intCast(self.height)) - @as(i32, @intCast(modal_h)), 2);
+
+        const win = try self.createWindow(WIN_PIN_MODAL_ID, mx, my, modal_w, modal_h, "ADMINISTRATIVE UNLOCK");
+        win.setHelpText("Enter administrative PIN to unlock full console access");
+
+        // Subtitle / Prompt
+        const prompt_str = "Enter Root Console PIN:";
+        var prompt_icon = Icon.createReadOnly(ICON_PIN_TITLE_ID, 20, 40, modal_w - 40, 20, prompt_str);
+        prompt_icon.setCustomColor(fb.Color.ACCENT_CYAN);
+        _ = try win.addIcon(prompt_icon);
+
+        // Masked PIN display box
+        var pin_display = Icon.createReadOnly(ICON_PIN_DISPLAY_ID, 20, 64, modal_w - 40, 28, "_ _ _ _");
+        pin_display.setCustomColor(fb.Color.WHITE);
+        _ = try win.addIcon(pin_display);
+
+        // Touch Keypad: 3 columns x 4 rows
+        const key_w: u32 = 70;
+        const key_h: u32 = 36;
+        const col_gap: i32 = 15;
+        const row_gap: i32 = 10;
+        const start_x: i32 = 40;
+        const start_y: i32 = 100;
+
+        // Digits 1..9
+        const digits = [_]u8{ '1', '2', '3', '4', '5', '6', '7', '8', '9' };
+        for (digits, 0..) |d, i| {
+            const row: i32 = @intCast(i / 3);
+            const col: i32 = @intCast(i % 3);
+            const kx = start_x + col * @as(i32, @intCast(key_w + col_gap));
+            const ky = start_y + row * @as(i32, @intCast(key_h + row_gap));
+            const d_str = [_]u8{d};
+            const kid = ICON_PIN_KEY_BASE_ID + @as(u32, d - '0');
+            var k_btn = Icon.createButton(kid, kx, ky, key_w, key_h, &d_str);
+            k_btn.callback = onPinKeyClicked;
+            _ = try win.addIcon(k_btn);
+        }
+
+        // Row 3: Clear, 0, Enter
+        const row3_y = start_y + 3 * @as(i32, @intCast(key_h + row_gap));
+        const kclear_x = start_x;
+        var kclear_btn = Icon.createButton(ICON_PIN_CLEAR_ID, kclear_x, row3_y, key_w, key_h, "Clear");
+        kclear_btn.callback = onPinClearClicked;
+        _ = try win.addIcon(kclear_btn);
+
+        const k0_x = start_x + 1 * @as(i32, @intCast(key_w + col_gap));
+        var k0_btn = Icon.createButton(ICON_PIN_KEY_BASE_ID, k0_x, row3_y, key_w, key_h, "0");
+        k0_btn.callback = onPinKeyClicked;
+        _ = try win.addIcon(k0_btn);
+
+        const kenter_x = start_x + 2 * @as(i32, @intCast(key_w + col_gap));
+        var kenter_btn = Icon.createButton(ICON_PIN_SUBMIT_ID, kenter_x, row3_y, key_w, key_h, "Enter");
+        kenter_btn.callback = onPinSubmitClicked;
+        _ = try win.addIcon(kenter_btn);
+
+        // Row 4: Cancel button spans full keypad width
+        const row4_y = start_y + 4 * @as(i32, @intCast(key_h + row_gap));
+        const total_pad_w = 3 * key_w + 2 * @as(u32, @intCast(col_gap));
+        var btn_cancel = Icon.createButton(ICON_PIN_CANCEL_ID, start_x, row4_y, total_pad_w, key_h, "Cancel");
+        btn_cancel.setHelpText("Cancel authentication and dismiss modal");
+        btn_cancel.callback = onPinCancelClicked;
+        _ = try win.addIcon(btn_cancel);
+
+        // Status text / validation feedback at bottom
+        const status_icon = Icon.createReadOnly(ICON_PIN_STATUS_ID, 20, row4_y + @as(i32, @intCast(key_h)) + 8, modal_w - 40, 20, "");
+        _ = try win.addIcon(status_icon);
+
+        self.focusWindowById(WIN_PIN_MODAL_ID);
+        self.markDirty(win.getBox());
+    }
+
+    pub fn closePinModal(self: *DiosixGui) void {
+        @memset(&self.pin_buf, 0);
+        self.pin_len = 0;
+        _ = self.destroyWindow(WIN_PIN_MODAL_ID);
+        self.markFullDirty();
+    }
+
+    pub fn handlePinDigit(self: *DiosixGui, digit: u8) void {
+        if (self.pin_len < 8) {
+            self.pin_buf[self.pin_len] = digit;
+            self.pin_len += 1;
+            self.updatePinDisplay();
+        }
+    }
+
+    pub fn handlePinClear(self: *DiosixGui) void {
+        @memset(&self.pin_buf, 0);
+        self.pin_len = 0;
+        self.updatePinDisplay();
+        if (self.findIcon(WIN_PIN_MODAL_ID, ICON_PIN_STATUS_ID)) |st| {
+            st.setText("");
+        }
+    }
+
+    pub fn handlePinSubmit(self: *DiosixGui) void {
+        const entered = self.pin_buf[0..self.pin_len];
+        const is_correct = std.mem.eql(u8, entered, DEFAULT_PIN);
+
+        // Security Hygiene: Zero PIN memory immediately after verification
+        @memset(&self.pin_buf, 0);
+        self.pin_len = 0;
+
+        if (is_correct) {
+            self.auth_state = .unlocked;
+            _ = self.destroyWindow(WIN_PIN_MODAL_ID);
+            self.updateSecurityBadgeText();
+            self.updateConfigAdminButtonText();
+            self.markFullDirty();
+        } else {
+            self.updatePinDisplay();
+            if (self.findIcon(WIN_PIN_MODAL_ID, ICON_PIN_STATUS_ID)) |st| {
+                st.setText("Invalid PIN. Try again.");
+                st.setCustomColor(fb.Color.rgb(240, 70, 70));
+            }
+            if (self.getWindow(WIN_PIN_MODAL_ID)) |win| {
+                self.markDirty(win.getBox());
+            }
+        }
+    }
+
+    pub fn updatePinDisplay(self: *DiosixGui) void {
+        if (self.findIcon(WIN_PIN_MODAL_ID, ICON_PIN_DISPLAY_ID)) |disp| {
+            if (self.pin_len == 0) {
+                disp.setText("_ _ _ _");
+            } else {
+                var buf: [32]u8 = undefined;
+                var b_idx: usize = 0;
+                var i: usize = 0;
+                while (i < self.pin_len and b_idx + 2 < buf.len) : (i += 1) {
+                    if (b_idx > 0) {
+                        buf[b_idx] = ' ';
+                        b_idx += 1;
+                    }
+                    buf[b_idx] = '*';
+                    b_idx += 1;
+                }
+                disp.setText(buf[0..b_idx]);
+            }
+            if (self.getWindow(WIN_PIN_MODAL_ID)) |win| {
+                self.markDirty(win.getBox());
+            }
+        }
+    }
+
+    pub fn updateSecurityBadgeText(self: *DiosixGui) void {
+        if (self.findIcon(WIN_VERSION_ID, ICON_VERSION_TEXT_ID)) |vicon| {
+            var ver_buf: [64]u8 = undefined;
+            const ver_base = host_info.getVersionString(&ver_buf);
+            var badge_buf: [128]u8 = undefined;
+            const full_badge = std.fmt.bufPrint(&badge_buf, "{s} {s}", .{ ver_base, self.getSecurityBadge() }) catch ver_base;
+            vicon.setText(full_badge);
+
+            const ver_text_w = font.measureString(full_badge);
+            const ver_pad_h: u32 = 14;
+            const new_ver_w = ver_text_w + ver_pad_h * 2;
+            const new_ver_x = @as(i32, @intCast(self.width)) - @as(i32, @intCast(new_ver_w)) - BORDER_GAP;
+
+            if (self.getWindow(WIN_VERSION_ID)) |win| {
+                self.markDirty(win.getBox());
+                win.x = new_ver_x;
+                win.width = new_ver_w;
+                vicon.width = ver_text_w + 4;
+                self.markDirty(win.getBox());
+            }
+
+            if (self.getWindow(WIN_HELP_ID)) |hwin| {
+                const help_x: i32 = BORDER_GAP;
+                const avail_w = @as(i32, @intCast(new_ver_x)) - help_x - BORDER_GAP;
+                if (avail_w > 0) {
+                    self.markDirty(hwin.getBox());
+                    hwin.width = @intCast(avail_w);
+                    if (self.findIcon(WIN_HELP_ID, ICON_HELP_TEXT_ID)) |hicon| {
+                        hicon.width = if (hwin.width > ver_pad_h * 2) hwin.width - ver_pad_h * 2 else 0;
+                    }
+                    self.markDirty(hwin.getBox());
+                }
+            }
+        }
+    }
+
+    pub fn updateConfigAdminButtonText(self: *DiosixGui) void {
+        if (self.findIcon(WIN_CONFIG_ID, ICON_CONFIG_ADMIN_BTN_ID)) |abtn| {
+            if (self.auth_state == .unlocked) {
+                abtn.setText("Lock Console");
+                abtn.setHelpText("Lock the administrative console and revoke elevated session");
+            } else {
+                abtn.setText("Admin Unlock");
+                abtn.setHelpText("Enter PIN to unlock privileged root hypervisor management");
+            }
+            if (self.getWindow(WIN_CONFIG_ID)) |win| {
+                self.markDirty(win.getBox());
+            }
+        }
+    }
+
+    pub fn isConsoleUnlocked(self: *const DiosixGui) bool {
+        if (self.privilege_mode == .guest_diagnostic) return false;
+        return self.auth_state == .unlocked;
+    }
+
+    pub fn getSecurityBadge(self: *const DiosixGui) []const u8 {
+        return switch (self.privilege_mode) {
+            .root_console => switch (self.auth_state) {
+                .locked => "[Root: Locked]",
+                .unlocked => "[Root: Unlocked]",
+            },
+            .guest_diagnostic => "[Guest: Diagnostic]",
+        };
+    }
+
+    pub fn focusWindowById(self: *DiosixGui, win_id: u32) void {
+        for (self.windows.items, 0..) |*win, idx| {
+            if (win.id == win_id) {
+                self.focusWindow(idx);
+                break;
+            }
+        }
+    }
+
     // Build the Config pane allowing user configuration of transparency, blur, and theme colors
     pub fn buildConfigPane(self: *DiosixGui) !void {
         const menu_win = self.getWindow(WIN_MENU_ID);
@@ -586,7 +987,7 @@ pub const DiosixGui = struct {
         const config_y: i32 = BORDER_GAP;
         const max_w = @as(i32, @intCast(self.width)) - BORDER_GAP - config_x;
         const config_w: u32 = if (max_w > 0) @intCast(max_w) else 780;
-        const config_h: u32 = 224;
+        const config_h: u32 = 264;
 
         const win = try self.createWindow(WIN_CONFIG_ID, config_x, config_y, config_w, config_h, null);
         win.setHelpText("System configuration and appearance settings");
@@ -596,7 +997,6 @@ pub const DiosixGui = struct {
             mw.child_window_id = WIN_CONFIG_ID;
         }
         self.setMenuItemSelected(ICON_MENU_CONFIG_ID, true);
-        self.markConnectorDirty();
 
         const pad_x: i32 = 20;
         const col1_right: i32 = 140;
@@ -653,60 +1053,103 @@ pub const DiosixGui = struct {
         slider_blur.callback = onBlurSliderChanged;
         _ = try win.addIcon(slider_blur);
 
+        // Row 3: Background Animation Speed Slider
+        const lbl_speed_str = "Anim speed";
+        const lbl_speed_w = font.measureString(lbl_speed_str);
+        var lbl_speed = Icon.createReadOnly(ICON_CONFIG_SPEED_LBL_ID, col1_right - @as(i32, @intCast(lbl_speed_w)), 118, lbl_speed_w, line_h, lbl_speed_str);
+        lbl_speed.setCustomColor(label_color);
+        _ = try win.addIcon(lbl_speed);
+
+        var slider_speed = Icon.createSlider(
+            ICON_CONFIG_SPEED_SLIDER_ID,
+            col2_x,
+            114,
+            240,
+            28,
+            0,
+            100,
+            @intCast(self.bg_animation_speed),
+            "%",
+        );
+        slider_speed.setHelpText("Adjust background drift animation speed (0% static to 100% full speed)");
+        slider_speed.callback = onBgSpeedSliderChanged;
+        _ = try win.addIcon(slider_speed);
+
         // Heading: Desktop Theme
-        var theme_hdr = Icon.createReadOnly(ICON_CONFIG_THEME_LBL_ID, pad_x, 120, 200, line_h, "Color Themes");
+        var theme_hdr = Icon.createReadOnly(ICON_CONFIG_THEME_LBL_ID, pad_x, 156, 200, line_h, "Color Themes");
         theme_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
         _ = try win.addIcon(theme_hdr);
 
-        // Row 3: Theme Buttons
+        // Row 4: Theme Buttons
         const btn_w: u32 = 110;
         const btn_h: u32 = 28;
         const btn_spacing: i32 = 16;
         var btn_x: i32 = col2_x;
 
-        var btn_day = Icon.createButton(ICON_CONFIG_THEME_DAY_ID, btn_x, 142, btn_w, btn_h, "Day Sky");
+        var btn_day = Icon.createButton(ICON_CONFIG_THEME_DAY_ID, btn_x, 178, btn_w, btn_h, "Day Sky");
         btn_day.setHelpText("Classic light blue daytime sky gradient");
         btn_day.callback = onThemeButtonClicked;
         _ = try win.addIcon(btn_day);
         btn_x += @as(i32, @intCast(btn_w)) + btn_spacing;
 
-        var btn_mid = Icon.createButton(ICON_CONFIG_THEME_MIDNIGHT_ID, btn_x, 142, btn_w, btn_h, "Midnight");
+        var btn_mid = Icon.createButton(ICON_CONFIG_THEME_MIDNIGHT_ID, btn_x, 178, btn_w, btn_h, "Midnight");
         btn_mid.setHelpText("Deep dark navy night sky gradient");
         btn_mid.callback = onThemeButtonClicked;
         _ = try win.addIcon(btn_mid);
         btn_x += @as(i32, @intCast(btn_w)) + btn_spacing;
 
-        var btn_sun = Icon.createButton(ICON_CONFIG_THEME_SUNSET_ID, btn_x, 142, btn_w, btn_h, "Sunset");
+        var btn_sun = Icon.createButton(ICON_CONFIG_THEME_SUNSET_ID, btn_x, 178, btn_w, btn_h, "Sunset");
         btn_sun.setHelpText("Warm crimson dusk sunset gradient");
         btn_sun.callback = onThemeButtonClicked;
         _ = try win.addIcon(btn_sun);
         btn_x += @as(i32, @intCast(btn_w)) + btn_spacing;
 
-        var btn_emr = Icon.createButton(ICON_CONFIG_THEME_EMERALD_ID, btn_x, 142, btn_w, btn_h, "Emerald");
+        var btn_emr = Icon.createButton(ICON_CONFIG_THEME_EMERALD_ID, btn_x, 178, btn_w, btn_h, "Emerald");
         btn_emr.setHelpText("Forest aurora green gradient");
         btn_emr.callback = onThemeButtonClicked;
         _ = try win.addIcon(btn_emr);
+
+        // Row 5: Console Security
+        const sec_lbl_str = "Console access";
+        const sec_lbl_w = font.measureString(sec_lbl_str);
+        var sec_lbl = Icon.createReadOnly(ICON_CONFIG_ADMIN_LBL_ID, col1_right - @as(i32, @intCast(sec_lbl_w)), 222, sec_lbl_w, line_h, sec_lbl_str);
+        sec_lbl.setCustomColor(label_color);
+        _ = try win.addIcon(sec_lbl);
+
+        const admin_btn_label = if (self.auth_state == .unlocked) "Lock Console" else "Admin Unlock";
+        var btn_admin = Icon.createButton(ICON_CONFIG_ADMIN_BTN_ID, col2_x, 218, 140, 28, admin_btn_label);
+        btn_admin.setHelpText(if (self.auth_state == .unlocked) "Lock administrative console and revoke elevated session" else "Enter PIN to unlock privileged root hypervisor management");
+        btn_admin.callback = onConfigAdminClicked;
+        _ = try win.addIcon(btn_admin);
     }
 
-    // Activate a menu item: closes any previous child pane and opens the selected one
-    pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
-        const head = self.getWindow(WIN_MENU_ID) orelse return;
-        const curr_child_id = head.child_window_id;
+    pub fn getChildTargetX(self: *DiosixGui) i32 {
+        const menu_win = self.getWindow(WIN_MENU_ID);
+        return if (menu_win) |mw| mw.x + @as(i32, @intCast(mw.width)) + BORDER_GAP else 144;
+    }
 
-        if (curr_child_id) |cid| {
-            if (self.getWindow(cid)) |cwin| {
-                if (cwin.linked_menu_item_id == menu_item_id) {
-                    // Clicking the already-open menu item toggles it closed
-                    self.teardownChildPanes();
-                    self.updateActiveHelp();
-                    return;
-                }
-            }
-            // Different menu item was clicked: teardown previous pane chain from tail to head
+    pub fn getChildWindowId(self: *DiosixGui) ?u32 {
+        const menu_win = self.getWindow(WIN_MENU_ID) orelse return null;
+        return menu_win.child_window_id;
+    }
+
+    // Activate a menu item: rolls up the menu to show just the selected item,
+    // slides in its child collection of panes, and slides in the Back button pane.
+    pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
+        _ = self.getWindow(WIN_MENU_ID) orelse return;
+
+        // If clicking the already selected menu item: toggle it back
+        if (self.active_menu_id == menu_item_id and self.nav_anim_state != .closing) {
+            try self.navigateBack();
+            return;
+        }
+
+        // If another item was open: teardown previous child panes immediately
+        if (self.active_menu_id != null) {
             self.teardownChildPanes();
         }
 
-        // Open the pane for the selected menu item
+        // 1. Build the child pane for the selected menu item
         switch (menu_item_id) {
             ICON_MENU_STATUS_ID => {
                 try self.buildStatusPane();
@@ -714,64 +1157,152 @@ pub const DiosixGui = struct {
             ICON_MENU_CONFIG_ID => {
                 try self.buildConfigPane();
             },
-            ICON_MENU_GUESTS_ID => {},
+            ICON_MENU_GUESTS_ID => {
+                if (self.auth_state == .locked) {
+                    try self.openPinModal();
+                    return;
+                }
+            },
             else => {},
         }
+
+        // 2. Build the separate Back button pane under the contracted menu pane
+        try self.buildBackPane();
+
+        // 3. Contract Main Menu to show just the selected item
+        try self.contractMainMenu(menu_item_id);
+        self.active_menu_id = menu_item_id;
+
+        // 4. Start opening animation: menu rolls up from full to contracted,
+        // while child pane slides in from right and back pane slides in from left
+        self.nav_anim_state = .opening;
+        self.nav_anim_progress = 0.0;
+        self.applyNavAnimation();
 
         self.updateActiveHelp();
     }
 
-    // Teardown linked list of child panes starting from the tail back to head
+    // Restore the Main Menu pane: Back pane and child panes slide back,
+    // and the Main Menu grows down and repopulates with all items.
+    pub fn navigateBack(self: *DiosixGui) !void {
+        if (self.nav_anim_state == .closing) return;
+        if (self.active_menu_id == null and self.nav_anim_state == .idle) return;
+
+        // Immediately repopulate full menu items in WIN_MENU_ID so that
+        // as the menu pane grows down, items are progressively revealed
+        try self.repopulateMainMenu();
+
+        self.nav_anim_state = .closing;
+        self.nav_anim_progress = 1.0;
+        self.applyNavAnimation();
+
+        self.updateActiveHelp();
+    }
+
+    // Finalize closing transition once animation progress reaches 0.0
+    pub fn finishClosing(self: *DiosixGui) void {
+        const head = self.getWindow(WIN_MENU_ID);
+        if (head) |h| {
+            if (h.child_window_id) |cid| {
+                if (self.getWindow(cid)) |cwin| {
+                    self.markDirty(cwin.getBox());
+                }
+                _ = self.destroyWindow(cid);
+                h.child_window_id = null;
+            }
+            h.height = MENU_FULL_H;
+        }
+
+        if (self.getWindow(WIN_BACK_ID)) |wb| {
+            self.markDirty(wb.getBox());
+            _ = self.destroyWindow(WIN_BACK_ID);
+        }
+
+        self.repopulateMainMenu() catch {};
+        self.active_menu_id = null;
+        self.nav_anim_state = .idle;
+        self.nav_anim_progress = 0.0;
+        self.updateActiveHelp();
+        self.markFullDirty();
+    }
+
+    // Immediately complete any in-flight navigation animation
+    pub fn completeNavAnimation(self: *DiosixGui) void {
+        if (self.nav_anim_state == .idle) return;
+        if (self.nav_anim_state == .opening) {
+            self.nav_anim_progress = 1.0;
+            self.applyNavAnimation();
+            self.nav_anim_state = .idle;
+        } else if (self.nav_anim_state == .closing) {
+            self.nav_anim_progress = 0.0;
+            self.applyNavAnimation();
+            self.finishClosing();
+        }
+        self.updateActiveHelp();
+    }
+
+    // Apply interpolated positions and sizes for current animation progress
+    pub fn applyNavAnimation(self: *DiosixGui) void {
+        const factor = easeOutCubic(self.nav_anim_progress);
+
+        // 1. Menu pane height: rolls up (opening) or grows down (closing)
+        if (self.getWindow(WIN_MENU_ID)) |win_menu| {
+            const old_box = win_menu.getBox();
+            const target_h: u32 = @intFromFloat(@as(f32, @floatFromInt(MENU_FULL_H)) - @as(f32, @floatFromInt(MENU_FULL_H - MENU_CONTRACTED_H)) * factor);
+            win_menu.height = target_h;
+            const new_box = win_menu.getBox();
+            self.markDirty(old_box.merge(new_box));
+        }
+
+        // 2. Back pane: slides in under menu pane from left (-132 -> 16)
+        if (self.getWindow(WIN_BACK_ID)) |win_back| {
+            const old_box = win_back.getBox();
+            const offscreen_x: i32 = -@as(i32, @intCast(win_back.width)) - 20;
+            const onscreen_x: i32 = BORDER_GAP;
+            const cur_x: i32 = @intFromFloat(@as(f32, @floatFromInt(offscreen_x)) + @as(f32, @floatFromInt(onscreen_x - offscreen_x)) * factor);
+            win_back.x = cur_x;
+            win_back.onscreen_x = cur_x;
+            const new_box = win_back.getBox();
+            self.markDirty(old_box.merge(new_box));
+        }
+
+        // 3. Child pane: slides in from right (target_x + 80 -> target_x)
+        if (self.getChildWindowId()) |cid| {
+            if (self.getWindow(cid)) |cwin| {
+                const old_box = cwin.getBox();
+                const target_x = self.getChildTargetX();
+                const offset: f32 = 80.0 * (1.0 - factor);
+                const cur_x: i32 = @intFromFloat(@as(f32, @floatFromInt(target_x)) + offset);
+                cwin.x = cur_x;
+                cwin.onscreen_x = cur_x;
+                const new_box = cwin.getBox();
+                self.markDirty(old_box.merge(new_box));
+            }
+        }
+    }
+
+    // Teardown child panes and Back pane, restoring full Main Menu
     pub fn teardownChildPanes(self: *DiosixGui) void {
         const head = self.getWindow(WIN_MENU_ID) orelse return;
-        const first_child_id = head.child_window_id orelse return;
-
-        // Find the tail of the chain
-        var curr_id: u32 = first_child_id;
-        while (true) {
-            if (self.getWindow(curr_id)) |w| {
-                if (w.child_window_id) |cid| {
-                    curr_id = cid;
-                } else {
-                    break;
-                }
-            } else {
-                break;
+        if (head.child_window_id) |cid| {
+            if (self.getWindow(cid)) |cwin| {
+                self.markDirty(cwin.getBox());
             }
+            _ = self.destroyWindow(cid);
+            head.child_window_id = null;
         }
 
-        // Teardown from tail back to first child
-        while (true) {
-            const curr_win = self.getWindow(curr_id) orelse break;
-            const parent_id = curr_win.parent_window_id;
-
-            // If this child pane was linked to a menu item, unselect that menu item
-            if (curr_win.linked_menu_item_id) |m_id| {
-                self.setMenuItemSelected(m_id, false);
-            }
-
-            // Mark connector dirty before destroying window
-            self.markConnectorDirty();
-
-            // Destroy window
-            _ = self.destroyWindow(curr_id);
-
-            if (parent_id) |pid| {
-                if (self.getWindow(pid)) |pwin| {
-                    pwin.child_window_id = null;
-                }
-                if (pid == WIN_MENU_ID) {
-                    break;
-                }
-                curr_id = pid;
-            } else {
-                break;
-            }
+        if (self.getWindow(WIN_BACK_ID)) |wb| {
+            self.markDirty(wb.getBox());
+            _ = self.destroyWindow(WIN_BACK_ID);
         }
 
-        head.child_window_id = null;
-        self.markConnectorDirty();
+        self.repopulateMainMenu() catch {};
+        self.active_menu_id = null;
+        self.nav_anim_state = .idle;
+        self.nav_anim_progress = 0.0;
         self.updateActiveHelp();
+        self.markFullDirty();
     }
 
     // Toggle Status pane open or closed
@@ -832,8 +1363,36 @@ pub const DiosixGui = struct {
         self.markWindowDirty(WIN_STATUS_ID);
     }
 
+    pub fn hasActiveAnimation(self: *const DiosixGui) bool {
+        return self.nav_anim_state != .idle;
+    }
+
     // Called every frame with delta time in milliseconds
     pub fn tick(self: *DiosixGui, dt_ms: u32) void {
+        // Animate menu roll-up / grow-down and pane sliding
+        if (self.nav_anim_state != .idle) {
+            const step = @as(f32, @floatFromInt(dt_ms)) / self.nav_anim_duration_ms;
+            if (self.nav_anim_state == .opening) {
+                self.nav_anim_progress += step;
+                if (self.nav_anim_progress >= 1.0) {
+                    self.nav_anim_progress = 1.0;
+                    self.applyNavAnimation();
+                    self.nav_anim_state = .idle;
+                } else {
+                    self.applyNavAnimation();
+                }
+            } else if (self.nav_anim_state == .closing) {
+                self.nav_anim_progress -= step;
+                if (self.nav_anim_progress <= 0.0) {
+                    self.nav_anim_progress = 0.0;
+                    self.applyNavAnimation();
+                    self.finishClosing();
+                } else {
+                    self.applyNavAnimation();
+                }
+            }
+        }
+
         self.uptime_accum_ms += dt_ms;
         if (self.uptime_accum_ms >= 1000) {
             self.uptime_accum_ms = 0;
@@ -844,6 +1403,43 @@ pub const DiosixGui = struct {
                 }
             }
         }
+
+        // Gradual background texture drift
+        if (self.bg_animation_speed > 0) {
+            self.drift_accum_ms += dt_ms * self.bg_animation_speed;
+            const threshold = DRIFT_INTERVAL_MS * 100;
+            if (self.drift_accum_ms >= threshold) {
+                const steps: i32 = @intCast(self.drift_accum_ms / threshold);
+                self.drift_accum_ms %= threshold;
+                switch (self.drift_dir) {
+                    .left => self.drift_x -%= steps,
+                    .right => self.drift_x +%= steps,
+                    .up => self.drift_y -%= steps,
+                    .down => self.drift_y +%= steps,
+                }
+                self.markFullDirty();
+            }
+        }
+    }
+
+    pub fn setBgAnimationSpeed(self: *DiosixGui, speed: u32) void {
+        const clamped = std.math.clamp(speed, 0, 100);
+        if (clamped == 0) {
+            self.drift_accum_ms = 0;
+        }
+        self.bg_animation_speed = clamped;
+    }
+
+    pub fn getBgAnimationSpeed(self: *const DiosixGui) u32 {
+        return self.bg_animation_speed;
+    }
+
+    pub fn setDriftDirection(self: *DiosixGui, dir: DriftDirection) void {
+        self.drift_dir = dir;
+    }
+
+    pub fn getDriftDirection(self: *const DiosixGui) DriftDirection {
+        return self.drift_dir;
     }
 
     // --- Damage Tracking ---
@@ -880,10 +1476,8 @@ pub const DiosixGui = struct {
                     self.markDirty(fb.Box.fromPosSize(win.onscreen_x, win.onscreen_y, win.width, win.height));
                     if (win.linked_menu_item_id) |m_id| {
                         self.setMenuItemSelected(m_id, on);
-                        self.markConnectorDirty();
                     } else if (win_id == WIN_STATUS_ID) {
                         self.setStatusMenuSelected(on);
-                        self.markConnectorDirty();
                     }
                 }
                 break;
@@ -906,79 +1500,6 @@ pub const DiosixGui = struct {
     // Update selected state of Status item in Main Menu
     pub fn setStatusMenuSelected(self: *DiosixGui, selected: bool) void {
         self.setMenuItemSelected(ICON_MENU_STATUS_ID, selected);
-    }
-
-    // Returns the bounding box of the visual bridge connecting Main Menu and its active child pane
-    pub fn getActiveChildConnectorBox(self: *DiosixGui) ?fb.Box {
-        const mw = self.getWindow(WIN_MENU_ID) orelse return null;
-        const first_child_id = mw.child_window_id orelse return null;
-        const child = self.getWindow(first_child_id) orelse return null;
-        if (!child.is_onscreen) return null;
-
-        const linked_menu_id = child.linked_menu_item_id orelse return null;
-        const icon = mw.getIconById(linked_menu_id) orelse return null;
-
-        const x_start = mw.x + @as(i32, @intCast(mw.width));
-        const x_end = child.x;
-        const cy = mw.y + icon.rel_y + @as(i32, @intCast(icon.height / 2));
-
-        const pad: i32 = 5; // cover radius 3 + 1px drop-shadow + 1px boundary margin
-        return fb.Box{
-            .x0 = x_start - pad,
-            .y0 = cy - pad,
-            .x1 = x_end + pad + 1,
-            .y1 = cy + pad + 2,
-        };
-    }
-
-    pub fn getMenuStatusConnectorBox(self: *DiosixGui) ?fb.Box {
-        return self.getActiveChildConnectorBox();
-    }
-
-    // Mark the connector region dirty for redrawing or erasing
-    pub fn markConnectorDirty(self: *DiosixGui) void {
-        if (self.getActiveChildConnectorBox()) |box| {
-            self.markDirty(box);
-        }
-    }
-
-    // Render elegant connecting link between Main Menu item and the active child pane
-    pub fn drawActiveChildConnector(self: *DiosixGui, surface: *fb.Surface) void {
-        const mw = self.getWindow(WIN_MENU_ID) orelse return;
-        const first_child_id = mw.child_window_id orelse return;
-        const child = self.getWindow(first_child_id) orelse return;
-        if (!child.is_onscreen) return;
-
-        const linked_menu_id = child.linked_menu_item_id orelse return;
-        const icon = mw.getIconById(linked_menu_id) orelse return;
-
-        const x_start = mw.x + @as(i32, @intCast(mw.width));
-        const x_end = child.x;
-        const cy = mw.y + icon.rel_y + @as(i32, @intCast(icon.height / 2));
-
-        if (x_end <= x_start) return;
-
-        const shadow_color = fb.Color.rgb(10, 16, 26);
-
-        // 1. Subtle drop-shadow offset at (0, 1) for contrast against clouds
-        surface.drawHorizontalLine(x_start, x_end, cy + 1, shadow_color);
-        surface.drawFilledCircle(x_start, cy + 1, 3, shadow_color);
-        surface.drawFilledCircle(x_end, cy + 1, 3, shadow_color);
-
-        // 2. Connecting line between the panes (ACCENT_CYAN)
-        surface.drawHorizontalLine(x_start, x_end, cy, fb.Color.ACCENT_CYAN);
-
-        // 3. Small filled circular nodes at each end of the line (radius 3)
-        surface.drawFilledCircle(x_start, cy, 3, fb.Color.ACCENT_CYAN);
-        surface.drawFilledCircle(x_end, cy, 3, fb.Color.ACCENT_CYAN);
-
-        // 4. Subtle luminous white core pip (1px center dot)
-        surface.setPixel(x_start, cy, fb.Color.WHITE);
-        surface.setPixel(x_end, cy, fb.Color.WHITE);
-    }
-
-    pub fn drawMenuStatusConnector(self: *DiosixGui, surface: *fb.Surface) void {
-        self.drawActiveChildConnector(surface);
     }
 
     pub fn findIcon(self: *DiosixGui, win_id: u32, icon_id: u32) ?*Icon {
@@ -1036,52 +1557,7 @@ pub const DiosixGui = struct {
         }
     }
 
-    pub fn setClipboard(self: *DiosixGui, text: []const u8) void {
-        var safe_len = @min(text.len, CLIPBOARD_CAPACITY);
-        if (safe_len < text.len) {
-            var i = safe_len;
-            while (i > 0 and (text[i - 1] & 0xC0) == 0x80) {
-                i -= 1;
-            }
-            if (i > 0 and text[i - 1] >= 0x80) {
-                const lead = text[i - 1];
-                const expected_len: usize = if ((lead & 0xE0) == 0xC0)
-                    2
-                else if ((lead & 0xF0) == 0xE0)
-                    3
-                else if ((lead & 0xF8) == 0xF0)
-                    4
-                else
-                    1;
-                if (safe_len - (i - 1) < expected_len) {
-                    safe_len = i - 1;
-                }
-            }
-        }
-        @memcpy(self.clipboard_buf[0..safe_len], text[0..safe_len]);
-        self.clipboard_buf[safe_len] = 0;
-        self.clipboard_len = safe_len;
-    }
-
-    pub fn getClipboard(self: *const DiosixGui) []const u8 {
-        const safe_len = @min(self.clipboard_len, CLIPBOARD_CAPACITY);
-        return self.clipboard_buf[0..safe_len];
-    }
-
-    // --- Input Dispatch & Mode Management ---
-
-    pub fn setInputMode(self: *DiosixGui, mode: InputMode) void {
-        if (self.input_mode != mode) {
-            self.input_mode = mode;
-            if (mode == .keyboard) {
-                self.cursor.visible = false;
-                self.clearMouseHover();
-            } else {
-                self.cursor.visible = true;
-            }
-            self.markFullDirty();
-        }
-    }
+    // --- Input Dispatch & Mouse Management ---
 
     pub fn clearMouseHover(self: *DiosixGui) void {
         for (self.windows.items) |*win| {
@@ -1096,6 +1572,7 @@ pub const DiosixGui = struct {
 
     pub fn handleMouseRelease(self: *DiosixGui) void {
         self.mouse_left_down = false;
+        self.active_drag_win_id = null;
         for (self.windows.items) |*win| {
             if (win.is_onscreen) {
                 const changed = win.handleMouseRelease();
@@ -1107,16 +1584,51 @@ pub const DiosixGui = struct {
     }
 
     pub fn handleMouseMove(self: *DiosixGui, px: i32, py: i32, left_down: bool) void {
-        self.setInputMode(.mouse);
+        self.cursor.visible = true;
         self.cursor.x = px;
         self.cursor.y = py;
         self.mouse_left_down = left_down;
 
-        for (self.windows.items) |*win| {
-            if (win.is_onscreen) {
-                const changed = win.handleMouseMove(self, px, py, left_down);
-                if (changed) {
-                    self.markDirty(win.getBox());
+        if (!left_down) {
+            self.active_drag_win_id = null;
+        }
+
+        if (self.active_drag_win_id) |drag_win_id| {
+            for (self.windows.items) |*win| {
+                if (!win.is_onscreen) continue;
+                if (win.id == drag_win_id) {
+                    if (win.handleMouseMove(self, px, py, left_down)) {
+                        self.markDirty(win.getBox());
+                    }
+                } else {
+                    if (win.clearHover()) {
+                        self.markDirty(win.getBox());
+                    }
+                }
+            }
+        } else {
+            // Find strictly the ONE topmost window containing (px, py)
+            var top_win_idx: ?usize = null;
+            var i = self.windows.items.len;
+            while (i > 0) : (i -= 1) {
+                const win_idx = i - 1;
+                const win = &self.windows.items[win_idx];
+                if (win.is_onscreen and win.contains(px, py)) {
+                    top_win_idx = win_idx;
+                    break;
+                }
+            }
+
+            for (self.windows.items, 0..) |*win, idx| {
+                if (!win.is_onscreen) continue;
+                if (top_win_idx != null and top_win_idx.? == idx) {
+                    if (win.handleMouseMove(self, px, py, left_down)) {
+                        self.markDirty(win.getBox());
+                    }
+                } else {
+                    if (win.clearHover()) {
+                        self.markDirty(win.getBox());
+                    }
                 }
             }
         }
@@ -1125,24 +1637,60 @@ pub const DiosixGui = struct {
     }
 
     pub fn handleMouseClick(self: *DiosixGui, px: i32, py: i32) void {
-        self.setInputMode(.mouse);
+        self.cursor.visible = true;
+        self.cursor.x = px;
+        self.cursor.y = py;
+        var hit_any_win = false;
         var i = self.windows.items.len;
         while (i > 0) : (i -= 1) {
-            const win = &self.windows.items[i - 1];
+            const win_idx = i - 1;
+            const win = &self.windows.items[win_idx];
             if (win.is_onscreen and win.contains(px, py)) {
+                hit_any_win = true;
                 if (win.hasInteractiveIcons() or win.isScrollable()) {
-                    self.focusWindow(i - 1);
+                    self.focusWindow(win_idx);
                 }
                 _ = win.handleMouseClick(self, px, py);
+                if (win.active_drag_icon_idx != null or win.is_dragging_scrollbar) {
+                    self.active_drag_win_id = win.id;
+                } else {
+                    self.active_drag_win_id = null;
+                }
                 self.markDirty(win.getBox());
+
+                // Reset active press and dragging on all other windows
+                for (self.windows.items, 0..) |*other, other_idx| {
+                    if (other_idx != win_idx) {
+                        if (other.handleMouseRelease()) {
+                            self.markDirty(other.getBox());
+                        }
+                        if (other.clearHover()) {
+                            self.markDirty(other.getBox());
+                        }
+                    }
+                }
                 break;
+            }
+        }
+
+        if (!hit_any_win) {
+            self.active_drag_win_id = null;
+            for (self.windows.items) |*win| {
+                if (win.handleMouseRelease()) {
+                    self.markDirty(win.getBox());
+                }
+                if (win.clearHover()) {
+                    self.markDirty(win.getBox());
+                }
             }
         }
         self.updateActiveHelp();
     }
 
     pub fn handleMouseScroll(self: *DiosixGui, px: i32, py: i32, delta: i32) void {
-        self.setInputMode(.mouse);
+        self.cursor.visible = true;
+        self.cursor.x = px;
+        self.cursor.y = py;
         var i = self.windows.items.len;
         while (i > 0) : (i -= 1) {
             const win = &self.windows.items[i - 1];
@@ -1177,434 +1725,6 @@ pub const DiosixGui = struct {
         self.active_win_idx = target_idx;
     }
 
-    pub fn focusNextPane(self: *DiosixGui) void {
-        const total = self.windows.items.len;
-        if (total == 0) return;
-        const cur_idx = self.active_win_idx orelse 0;
-
-        var i: usize = 1;
-        while (i <= total) : (i += 1) {
-            const check = (cur_idx + i) % total;
-            const win = &self.windows.items[check];
-            if (win.is_onscreen and win.hasInteractiveIcons()) {
-                self.focusWindow(check);
-                if (win.focused_icon_idx == null) {
-                    _ = win.focusFirstInteractiveIcon();
-                }
-                self.markDirty(win.getBox());
-                return;
-            }
-        }
-    }
-
-    pub fn focusPrevPane(self: *DiosixGui) void {
-        const total = self.windows.items.len;
-        if (total == 0) return;
-        const cur_idx = self.active_win_idx orelse 0;
-
-        var i: usize = 1;
-        while (i <= total) : (i += 1) {
-            const check = (cur_idx + total * total - i) % total;
-            const win = &self.windows.items[check];
-            if (win.is_onscreen and win.hasInteractiveIcons()) {
-                self.focusWindow(check);
-                if (win.focused_icon_idx == null) {
-                    _ = win.focusLastInteractiveIcon();
-                }
-                self.markDirty(win.getBox());
-                return;
-            }
-        }
-    }
-
-    pub fn focusNextPaneFirst(self: *DiosixGui) void {
-        const total = self.windows.items.len;
-        if (total == 0) return;
-        const cur_idx = self.active_win_idx orelse 0;
-
-        var i: usize = 1;
-        while (i <= total) : (i += 1) {
-            const check = (cur_idx + i) % total;
-            const win = &self.windows.items[check];
-            if (win.is_onscreen and win.hasInteractiveIcons()) {
-                self.focusWindow(check);
-                _ = win.focusFirstInteractiveIcon();
-                self.markDirty(win.getBox());
-                return;
-            }
-        }
-        if (self.getActiveWindow()) |cur_win| {
-            _ = cur_win.focusFirstInteractiveIcon();
-            self.markDirty(cur_win.getBox());
-        }
-    }
-
-    pub fn focusPrevPaneLast(self: *DiosixGui) void {
-        const total = self.windows.items.len;
-        if (total == 0) return;
-        const cur_idx = self.active_win_idx orelse 0;
-
-        var i: usize = 1;
-        while (i <= total) : (i += 1) {
-            const check = (cur_idx + total * total - i) % total;
-            const win = &self.windows.items[check];
-            if (win.is_onscreen and win.hasInteractiveIcons()) {
-                self.focusWindow(check);
-                _ = win.focusLastInteractiveIcon();
-                self.markDirty(win.getBox());
-                return;
-            }
-        }
-        if (self.getActiveWindow()) |cur_win| {
-            _ = cur_win.focusLastInteractiveIcon();
-            self.markDirty(cur_win.getBox());
-        }
-    }
-
-    pub fn focusNextWindow(self: *DiosixGui) void {
-        self.focusNextPane();
-    }
-
-    pub fn handleKey(self: *DiosixGui, key_code: u16, key_char: ?u8, pressed: bool) void {
-        self.handleKeyWithModifiers(key_code, key_char, pressed, self.ctrl_down, self.shift_down);
-    }
-
-    pub fn handleKeyWithModifiers(self: *DiosixGui, key_code: u16, key_char: ?u8, pressed: bool, ctrl: bool, shift: bool) void {
-        if (!pressed) {
-            if (key_code == Key.ENTER or key_code == Key.SPACE) {
-                if (self.getActiveWindow()) |win| {
-                    if (win.focused_icon_idx) |idx| {
-                        if (idx < win.icons.items.len) {
-                            const icon = &win.icons.items[idx];
-                            if (icon.is_active_press) {
-                                icon.is_active_press = false;
-                                self.markDirty(win.getBox());
-                            }
-                        }
-                    }
-                }
-            }
-            return;
-        }
-
-        // Ignore mouse button codes (0x110..0x11f) so mouse clicks never trigger keyboard mode
-        if (key_code >= 0x110 and key_code <= 0x11f) return;
-
-        self.setInputMode(.keyboard);
-        defer self.updateActiveHelp();
-
-        // Escape closes any open child pane chain
-        if (key_code == Key.ESC) {
-            const head = self.getWindow(WIN_MENU_ID);
-            if (head != null and head.?.child_window_id != null) {
-                self.teardownChildPanes();
-                return;
-            }
-            for (self.windows.items) |*win| {
-                if (win.id == WIN_STATUS_ID and win.is_onscreen) {
-                    self.setWindowOnScreen(WIN_STATUS_ID, false);
-                    return;
-                }
-            }
-        }
-
-        const active_win = self.getActiveWindow();
-        if (active_win) |win| {
-            if (win.focused_icon_idx == null) {
-                _ = win.focusFirstInteractiveIcon();
-            }
-        }
-        const focused_icon: ?*Icon = if (active_win) |win|
-            if (win.focused_icon_idx) |idx|
-                if (idx < win.icons.items.len) &win.icons.items[idx] else null
-            else
-                null
-        else
-            null;
-        const is_in_text_field = if (focused_icon) |ic| (ic.icon_type == .read_write_text) else false;
-
-        // 1. Direct Pane Navigation via F6 / Shift-F6
-        if (key_code == Key.F6) {
-            if (shift) {
-                self.focusPrevPane();
-            } else {
-                self.focusNextPane();
-            }
-            return;
-        }
-
-        // 2. Tab Navigation: moves focus to next/prev item; transitions across panes on boundary
-        // Ctrl-Tab switches directly between panes
-        if (key_code == Key.TAB) {
-            if (ctrl) {
-                if (shift) {
-                    self.focusPrevPane();
-                } else {
-                    self.focusNextPane();
-                }
-                return;
-            }
-            if (active_win) |win| {
-                if (shift) {
-                    if (!win.focusPrevIcon()) {
-                        self.focusPrevPaneLast();
-                    }
-                } else {
-                    if (!win.focusNextIcon()) {
-                        self.focusNextPaneFirst();
-                    }
-                }
-                self.markDirty(win.getBox());
-                return;
-            } else {
-                self.focusNextPaneFirst();
-                return;
-            }
-        }
-
-        // Page Up / Page Down / Ctrl-Home / Ctrl-End scroll the active window pane
-        if (key_code == Key.PAGE_UP) {
-            if (active_win) |win| {
-                if (win.scrollBy(-win.getViewportHeight())) {
-                    self.markDirty(win.getBox());
-                }
-                return;
-            }
-        } else if (key_code == Key.PAGE_DOWN) {
-            if (active_win) |win| {
-                if (win.scrollBy(win.getViewportHeight())) {
-                    self.markDirty(win.getBox());
-                }
-                return;
-            }
-        } else if (ctrl and key_code == Key.HOME) {
-            if (active_win) |win| {
-                if (win.scrollTo(0)) {
-                    self.markDirty(win.getBox());
-                }
-                return;
-            }
-        } else if (ctrl and key_code == Key.END) {
-            if (active_win) |win| {
-                if (win.scrollTo(win.getMaxScroll())) {
-                    self.markDirty(win.getBox());
-                }
-                return;
-            }
-        }
-
-        // 3. Control Codes recognition (both keycode+ctrl and raw ASCII control bytes)
-        const is_ctrl_a = (ctrl and (key_code == Key.A or (key_char != null and (key_char.? == 'a' or key_char.? == 'A')))) or (key_char != null and key_char.? == 1);
-        const is_ctrl_c = (ctrl and (key_code == Key.C or (key_char != null and (key_char.? == 'c' or key_char.? == 'C')))) or (key_char != null and key_char.? == 3);
-        const is_ctrl_v = (ctrl and (key_code == Key.V or (key_char != null and (key_char.? == 'v' or key_char.? == 'V')))) or (key_char != null and key_char.? == 22);
-        const is_ctrl_x = (ctrl and (key_code == Key.X or (key_char != null and (key_char.? == 'x' or key_char.? == 'X')))) or (key_char != null and key_char.? == 24);
-        const is_ctrl_u = (ctrl and (key_code == Key.U or (key_char != null and (key_char.? == 'u' or key_char.? == 'U')))) or (key_char != null and key_char.? == 21);
-
-        // 4. If focused on a read_write_text icon, handle text field actions
-        if (is_in_text_field) {
-            const icon = focused_icon.?;
-            const win = active_win.?;
-
-            if (is_ctrl_a) {
-                icon.selectAll();
-                self.markDirty(win.getBox());
-                return;
-            } else if (is_ctrl_c) {
-                if (icon.hasSelection()) {
-                    self.setClipboard(icon.getSelectedText());
-                }
-                return;
-            } else if (is_ctrl_x) {
-                if (icon.hasSelection()) {
-                    self.setClipboard(icon.getSelectedText());
-                    _ = icon.deleteSelection();
-                    if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
-                    self.markDirty(win.getBox());
-                }
-                return;
-            } else if (is_ctrl_v) {
-                const clip = self.getClipboard();
-                if (clip.len > 0) {
-                    _ = icon.deleteSelection();
-                    icon.insertString(clip);
-                    if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
-                    self.markDirty(win.getBox());
-                }
-                return;
-            } else if (is_ctrl_u) {
-                icon.clearField();
-                if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
-                self.markDirty(win.getBox());
-                return;
-            }
-
-            if (ctrl) return;
-
-            if (key_code == Key.LEFT) {
-                if (shift) {
-                    if (icon.selection_start == null) {
-                        icon.selection_start = icon.cursor_pos;
-                    }
-                    if (icon.cursor_pos > 0) {
-                        icon.cursor_pos -= 1;
-                    }
-                    icon.selection_end = icon.cursor_pos;
-                } else {
-                    if (icon.getSelectionBounds()) |b| {
-                        icon.cursor_pos = b.min;
-                        icon.clearSelection();
-                    } else if (icon.cursor_pos > 0) {
-                        icon.cursor_pos -= 1;
-                    }
-                }
-                self.markDirty(win.getBox());
-                return;
-            } else if (key_code == Key.RIGHT) {
-                if (shift) {
-                    if (icon.selection_start == null) {
-                        icon.selection_start = icon.cursor_pos;
-                    }
-                    if (icon.cursor_pos < icon.text_len) {
-                        icon.cursor_pos += 1;
-                    }
-                    icon.selection_end = icon.cursor_pos;
-                } else {
-                    if (icon.getSelectionBounds()) |b| {
-                        icon.cursor_pos = b.max;
-                        icon.clearSelection();
-                    } else if (icon.cursor_pos < icon.text_len) {
-                        icon.cursor_pos += 1;
-                    }
-                }
-                self.markDirty(win.getBox());
-                return;
-            } else if (key_code == Key.HOME) {
-                if (shift) {
-                    if (icon.selection_start == null) {
-                        icon.selection_start = icon.cursor_pos;
-                    }
-                    icon.cursor_pos = 0;
-                    icon.selection_end = 0;
-                } else {
-                    icon.cursor_pos = 0;
-                    icon.clearSelection();
-                }
-                self.markDirty(win.getBox());
-                return;
-            } else if (key_code == Key.END) {
-                if (shift) {
-                    if (icon.selection_start == null) {
-                        icon.selection_start = icon.cursor_pos;
-                    }
-                    icon.cursor_pos = icon.text_len;
-                    icon.selection_end = icon.text_len;
-                } else {
-                    icon.cursor_pos = icon.text_len;
-                    icon.clearSelection();
-                }
-                self.markDirty(win.getBox());
-                return;
-            } else if (key_code == Key.BACKSPACE) {
-                if (icon.hasSelection()) {
-                    _ = icon.deleteSelection();
-                } else {
-                    icon.deleteBackward();
-                }
-                if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
-                self.markDirty(win.getBox());
-                return;
-            } else if (key_code == Key.DELETE) {
-                if (icon.hasSelection()) {
-                    _ = icon.deleteSelection();
-                } else {
-                    icon.deleteForward();
-                }
-                if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
-                self.markDirty(win.getBox());
-                return;
-            } else if (key_char) |c| {
-                if (c >= 32 and c <= 126) {
-                    _ = icon.deleteSelection();
-                    icon.insertChar(c);
-                    if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
-                    self.markDirty(win.getBox());
-                    return;
-                }
-            }
-        }
-
-        // 5. Non-text field handling (Menu Items, Sliders, Action Buttons, Checkboxes, Pane Navigation)
-        if (active_win) |win| {
-            if (focused_icon) |icon| {
-                if (icon.icon_type == .slider) {
-                    if (key_code == Key.LEFT) {
-                        icon.adjustSlider(-5);
-                        if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
-                        self.markDirty(win.getBox());
-                        return;
-                    } else if (key_code == Key.RIGHT) {
-                        icon.adjustSlider(5);
-                        if (icon.callback) |cb| cb(self, @ptrCast(win), icon);
-                        self.markDirty(win.getBox());
-                        return;
-                    } else if (key_code == Key.UP) {
-                        win.focusPrevIconWrap();
-                        self.markDirty(win.getBox());
-                        return;
-                    } else if (key_code == Key.DOWN) {
-                        win.focusNextIconWrap();
-                        self.markDirty(win.getBox());
-                        return;
-                    }
-                }
-            }
-
-            // Up / Down arrow navigates vertically within the pane (wrapping around)
-            if (key_code == Key.UP) {
-                win.focusPrevIconWrap();
-                self.markDirty(win.getBox());
-                return;
-            } else if (key_code == Key.DOWN) {
-                win.focusNextIconWrap();
-                self.markDirty(win.getBox());
-                return;
-            }
-
-            // Home / End scroll to top / bottom of scrollable pane
-            if (key_code == Key.HOME) {
-                if (win.scrollTo(0)) {
-                    self.markDirty(win.getBox());
-                }
-                return;
-            } else if (key_code == Key.END) {
-                if (win.scrollTo(win.getMaxScroll())) {
-                    self.markDirty(win.getBox());
-                }
-                return;
-            }
-
-            // Left / Right arrow moves keyboard focus between panes
-            if (key_code == Key.RIGHT) {
-                self.focusNextPane();
-                return;
-            } else if (key_code == Key.LEFT) {
-                self.focusPrevPane();
-                return;
-            }
-
-            // Enter or Space activates the focused action button or toggles tickbox or triggers menu item
-            if (key_code == Key.ENTER or key_code == Key.SPACE) {
-                if (win.focused_icon_idx) |f_idx| {
-                    if (f_idx < win.icons.items.len) {
-                        win.triggerIcon(self, &win.icons.items[f_idx]);
-                        self.markDirty(win.getBox());
-                    }
-                }
-                return;
-            }
-        }
-    }
-
     pub fn getActiveWindow(self: *DiosixGui) ?*Window {
         if (self.active_win_idx) |idx| {
             if (idx < self.windows.items.len) return &self.windows.items[idx];
@@ -1632,33 +1752,24 @@ pub const DiosixGui = struct {
             damage.x1 == @as(i32, @intCast(self.width)) and
             damage.y1 == @as(i32, @intCast(self.height)));
 
-        const is_keyboard_active = (self.input_mode == .keyboard);
-
         if (is_full_screen) {
-            clean_surface.drawGraduatedBackground(self.bg_top_color, self.bg_bot_color);
+            clean_surface.drawGraduatedBackgroundDrift(self.bg_top_color, self.bg_bot_color, self.drift_x, self.drift_y);
             for (self.windows.items) |*win| {
                 if (win.is_onscreen) {
                     const win_box = win.getBox();
-                    clean_surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
-                    win.render(clean_surface, win_alpha, is_keyboard_active);
+                    clean_surface.drawBlurredBackdropInBoxDrift(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch, self.drift_x, self.drift_y);
+                    win.render(clean_surface, win_alpha);
                 }
             }
         } else {
-            clean_surface.drawGraduatedBackgroundInBox(damage, self.bg_top_color, self.bg_bot_color);
+            clean_surface.drawGraduatedBackgroundInBoxDrift(damage, self.bg_top_color, self.bg_bot_color, self.drift_x, self.drift_y);
             // Redraw any on-screen window intersecting damage
             for (self.windows.items) |*win| {
                 if (win.is_onscreen and win.intersectsBox(damage)) {
                     const win_box = win.getBox();
-                    clean_surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
-                    win.render(clean_surface, win_alpha, is_keyboard_active);
+                    clean_surface.drawBlurredBackdropInBoxDrift(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch, self.drift_x, self.drift_y);
+                    win.render(clean_surface, win_alpha);
                 }
-            }
-        }
-
-        // Draw visual bridge connecting Menu pane and active child pane if onscreen
-        if (self.getActiveChildConnectorBox()) |cbox| {
-            if (is_full_screen or damage.intersects(cbox)) {
-                self.drawActiveChildConnector(clean_surface);
             }
         }
 
@@ -1668,7 +1779,7 @@ pub const DiosixGui = struct {
     pub fn render(self: *DiosixGui, surface: *fb.Surface) void {
         self.markFullDirty();
         _ = self.renderDamaged(surface);
-        if (self.input_mode == .mouse and self.cursor.visible) {
+        if (self.cursor.visible) {
             self.cursor.draw(surface);
         }
     }
@@ -1677,14 +1788,12 @@ pub const DiosixGui = struct {
         const base_win_alpha = self.getWindowOpacityAlpha();
         const win_alpha: u8 = @intFromFloat(@as(f32, @floatFromInt(base_win_alpha)) * std.math.clamp(alpha_factor, 0.0, 1.0));
         const blur_radius = self.getBlurRadius();
-        const is_keyboard_active = (self.input_mode == .keyboard);
         for (self.windows.items) |*win| {
             if (win.is_onscreen) {
                 const win_box = win.getBox();
-                surface.drawBlurredBackdropInBox(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch);
-                win.render(surface, win_alpha, is_keyboard_active);
+                surface.drawBlurredBackdropInBoxDrift(win_box, win_box, self.bg_top_color, self.bg_bot_color, blur_radius, Window.CORNER_RADIUS, self.blur_scratch, self.drift_x, self.drift_y);
+                win.render(surface, win_alpha);
             }
         }
-        self.drawActiveChildConnector(surface);
     }
 };
