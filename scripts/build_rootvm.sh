@@ -75,7 +75,7 @@ fi
 
 # Build it
 echo "Building Root VM (this may take a while)..."
-eval make -C "$BUILDROOT_DIR" -j"$(nproc)" $WGET_EXTRA_ARGS
+eval make -C "$BUILDROOT_DIR" -j"${DIOSIX_BUILD_JOBS:-$(nproc)}" $WGET_EXTRA_ARGS
 
 # Ensure the output directory exists
 mkdir -p "$(dirname "$OUT_FILE")"
