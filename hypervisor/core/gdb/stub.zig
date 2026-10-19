@@ -1,14 +1,13 @@
-// Comptime wrapper for embedded GDB RSP stub
+// Comptime wrapper for embedded GDB RSP stub.
 //
 // In ReleaseSafe builds (or when enable_gdb is false), the GDB stub evaluates
-// to zero-byte inline no-op functions, completely eliminating all packet parsing,
-// string constants, and serial hooks from production binaries.
+// to zero-byte inline no-op functions, completely eliminating all packet
+// parsing, string constants, and serial hooks from production binaries.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const config = @import("config");
-const builtin = @import("builtin");
 
 test {
     _ = @import("rsp.zig");

@@ -1,0 +1,432 @@
+// Diosix Hypervisor Guest Management CLI — VM Lifecycle & Resource Quotas.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+
+const std = @import("std");
+const api = @import("api.zig");
+const common = @import("common.zig");
+const vm_info = @import("vm/info.zig");
+const vm_run = @import("vm/run.zig");
+const vm_install = @import("vm/install.zig");
+
+pub const formatGuestDetail = vm_info.formatGuestDetail;
+pub const formatSelfInfo = vm_info.formatSelfInfo;
+pub const cmdInfo = vm_info.cmdInfo;
+pub const cmdRun = vm_run.cmdRun;
+pub const cmdInstallGuest = vm_install.cmdInstallGuest;
+pub const cmdRestart = vm_install.cmdRestart;
+
+const CID_PARENT = common.CID_PARENT;
+const CID_SELF = common.CID_SELF;
+const CID_FIRST_CHILD = common.CID_FIRST_CHILD;
+const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
+const PAGE_SIZE_KB = common.PAGE_SIZE_KB;
+const KB_PER_MB = common.KB_PER_MB;
+
+const printStr = common.printStr;
+const parseCid = common.parseCid;
+const printApiError = common.printApiError;
+const copyStr = common.copyStr;
+const parseMemorySizeMb = common.parseMemorySizeMb;
+const readBinaryFile = common.readBinaryFile;
+const unmapBinaryFile = common.unmapBinaryFile;
+const matchTarget = common.matchTarget;
+const removeGuestFromRegistry = common.removeGuestFromRegistry;
+const printGuestLine = common.printGuestLine;
+
+const QuotaOption = enum {
+    @"--ram",
+    @"--vcpus",
+    @"--depth",
+    @"--descendants",
+};
+
+const TargetAlias = enum {
+    self,
+    root,
+    parent,
+    @"0",
+};
+
+pub fn cmdQuota(
+    client: *api.DiosixClient,
+    target_cid: usize,
+    argv: []const [*:0]const u8,
+) !void {
+    var ram_pages: usize = 0;
+    var vcpus: usize = 0;
+    var depth: usize = 0;
+    var descendants: usize = 0;
+    var has_update = false;
+
+    if (target_cid == CID_PARENT) {
+        printStr("Error: Cannot query or set quotas on parent VM (CID 0).\n");
+        return;
+    }
+
+    var i: usize = 2;
+    while (i < argv.len) : (i += 1) {
+        const flag = std.mem.span(argv[i]);
+        if (i == 2 and !std.mem.startsWith(u8, flag, "-")) {
+            continue;
+        }
+        if (std.meta.stringToEnum(QuotaOption, flag)) |opt| {
+            switch (opt) {
+                .@"--ram" => {
+                    if (i + 1 >= argv.len) {
+                        printStr(
+                            "Error: Option '--ram' requires a value in MB.\n",
+                        );
+                        return;
+                    }
+                    i += 1;
+                    const mb = std.fmt.parseInt(
+                        usize,
+                        std.mem.span(argv[i]),
+                        10,
+                    ) catch {
+                        printStr("Error: Invalid numeric value for '--ram'.\n");
+                        return;
+                    };
+                    ram_pages = (mb * KB_PER_MB) / PAGE_SIZE_KB;
+                    has_update = true;
+                },
+                .@"--vcpus" => {
+                    if (i + 1 >= argv.len) {
+                        printStr("Error: Option '--vcpus' requires a value.\n");
+                        return;
+                    }
+                    i += 1;
+                    vcpus = std.fmt.parseInt(
+                        usize,
+                        std.mem.span(argv[i]),
+                        10,
+                    ) catch {
+                        printStr(
+                            "Error: Invalid numeric value for '--vcpus'.\n",
+                        );
+                        return;
+                    };
+                    has_update = true;
+                },
+                .@"--depth" => {
+                    if (i + 1 >= argv.len) {
+                        printStr("Error: Option '--depth' requires a value.\n");
+                        return;
+                    }
+                    i += 1;
+                    depth = std.fmt.parseInt(
+                        usize,
+                        std.mem.span(argv[i]),
+                        10,
+                    ) catch {
+                        printStr(
+                            "Error: Invalid numeric value for '--depth'.\n",
+                        );
+                        return;
+                    };
+                    has_update = true;
+                },
+                .@"--descendants" => {
+                    if (i + 1 >= argv.len) {
+                        printStr(
+                            "Error: Option '--descendants' requires a value.\n",
+                        );
+                        return;
+                    }
+                    i += 1;
+                    descendants = std.fmt.parseInt(
+                        usize,
+                        std.mem.span(argv[i]),
+                        10,
+                    ) catch {
+                        printStr(
+                            "Error: Invalid numeric value for " ++
+                                "'--descendants'.\n",
+                        );
+                        return;
+                    };
+                    has_update = true;
+                },
+            }
+        } else if (std.mem.startsWith(u8, flag, "-")) {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(
+                &err_buf,
+                "Error: Unknown option '{s}'. Available: --ram, --vcpus, " ++
+                    "--depth, --descendants.\n",
+                .{flag},
+            ) catch "Error: Unknown option.\n";
+            printStr(err_msg);
+            return;
+        }
+    }
+
+    if (!has_update) {
+        if (client.getInfo(target_cid)) |info| {
+            var buf: [512]u8 = undefined;
+            const used_ram_mb =
+                (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
+            const max_ram_mb = if (info.max_ram_pages == std.math.maxInt(usize))
+                0
+            else
+                (info.max_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
+            const self_ram_mb =
+                (info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
+            const self_vcpus = if (info.vcpus > 0) info.vcpus else 4;
+            const child_vcpus = if (info.used_vcpus >= self_vcpus)
+                info.used_vcpus - self_vcpus
+            else
+                0;
+            const child_ram_mb = if (used_ram_mb >= self_ram_mb)
+                used_ram_mb - self_ram_mb
+            else
+                0;
+
+            const has_caps =
+                max_ram_mb > 0 and info.max_vcpus < std.math.maxInt(usize);
+            const cap_fmt =
+                "Resource Quotas (CID {d}):\n" ++
+                "  Virtual CPUs : {d} used / {d} max " ++
+                "({d} self, {d} allocated to children)\n" ++
+                "  RAM Capacity : {d} MB used / {d} MB max " ++
+                "({d} MB self, {d} MB allocated to children)\n" ++
+                "  Child VMs    : {d} active\n";
+            const uncap_fmt =
+                "Resource Quotas (CID {d}):\n" ++
+                "  Virtual CPUs : {d} used " ++
+                "({d} self, {d} allocated to children)\n" ++
+                "  RAM Capacity : {d} MB used " ++
+                "({d} MB self, {d} MB allocated to children)\n" ++
+                "  Child VMs    : {d} active\n";
+            const msg = if (has_caps)
+                std.fmt.bufPrint(&buf, cap_fmt, .{
+                    target_cid,
+                    info.used_vcpus,
+                    info.max_vcpus,
+                    self_vcpus,
+                    child_vcpus,
+                    used_ram_mb,
+                    max_ram_mb,
+                    self_ram_mb,
+                    child_ram_mb,
+                    info.child_count,
+                }) catch return
+            else
+                std.fmt.bufPrint(&buf, uncap_fmt, .{
+                    target_cid,
+                    info.used_vcpus,
+                    self_vcpus,
+                    child_vcpus,
+                    used_ram_mb,
+                    self_ram_mb,
+                    child_ram_mb,
+                    info.child_count,
+                }) catch return;
+
+            printStr(msg);
+            return;
+        } else |err| {
+            printApiError("Query quotas", err);
+            return;
+        }
+    }
+
+    client.setQuota(
+        target_cid,
+        ram_pages,
+        vcpus,
+        depth,
+        descendants,
+    ) catch |err| {
+        printApiError("Set quota", err);
+        return;
+    };
+    printStr("Quotas updated successfully.\n");
+}
+
+pub fn cmdDropTrust(client: *api.DiosixClient) !void {
+    printStr("Dropping hardware trust...\n");
+    client.dropTrust() catch |err| {
+        printApiError("Drop trust", err);
+        return;
+    };
+    printStr("Hardware trust successfully relinquished.\n");
+}
+
+pub fn cmdList(client: *api.DiosixClient) !void {
+    const info_res = client.getInfo(1) catch null;
+    const is_root = if (info_res) |info| info.is_root != 0 else true;
+    const is_trusted = if (info_res) |info| info.is_trusted != 0 else true;
+    const default_self_vcpus: usize = if (is_root) 4 else 1;
+    const self_vcpus = if (info_res) |info|
+        (if (info.vcpus > 0) info.vcpus else default_self_vcpus)
+    else
+        4;
+    const default_ram: usize = 256;
+    const ram_mb = if (info_res) |info|
+        (if (info.self_ram_pages > 0)
+            ((info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB)
+        else
+            default_ram)
+    else
+        default_ram;
+    const child_count = if (info_res) |info| info.child_count else 0;
+
+    printStr(
+        "CID   Name             vCPUs   RAM       Status    Trust       " ++
+            "IP / Endpoint\n",
+    );
+
+    var self_ram_buf: [32]u8 = undefined;
+    const self_ram_str = std.fmt.bufPrint(
+        &self_ram_buf,
+        "{d} MB",
+        .{if (ram_mb > 0) ram_mb else default_ram},
+    ) catch "256 MB";
+    const self_name = if (is_root) "root (self)" else "self";
+    printGuestLine(
+        1,
+        self_name,
+        self_vcpus,
+        self_ram_str,
+        "running",
+        if (is_trusted) "trusted" else "untrusted",
+        "local",
+    );
+
+    var guest_count: usize = 0;
+    if (readBinaryFile(
+        "/var/run/diosix/guests.toml",
+        MAX_MANIFEST_SIZE,
+    )) |content| {
+        defer unmapBinaryFile(content);
+        var iter = common.GuestRegistryIter.init(content);
+        while (iter.next()) |entry| {
+            const c_mb = parseMemorySizeMb(entry.ram);
+            var child_ram_buf: [32]u8 = undefined;
+            const child_ram_str = std.fmt.bufPrint(
+                &child_ram_buf,
+                "{d} MB",
+                .{c_mb},
+            ) catch entry.ram;
+            printGuestLine(
+                entry.cid,
+                entry.name,
+                entry.vcpus,
+                child_ram_str,
+                entry.status,
+                entry.trust,
+                entry.ip,
+            );
+            guest_count += 1;
+        }
+    } else |_| {}
+
+    if (guest_count == 0 and child_count == 0) {
+        printStr("\nNo child VMs running.\n");
+    }
+}
+
+pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
+    const exe_name = common.getExeName();
+    if (args.len == 0) {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "Usage: {s} stop <name|cid|self>\n",
+            .{exe_name},
+        ) catch return false;
+        printStr(msg);
+        return false;
+    }
+    const target_str = std.mem.span(args[0]);
+    if (std.meta.stringToEnum(TargetAlias, target_str)) |alias| {
+        switch (alias) {
+            .parent, .@"0" => {
+                printStr("Error: Cannot stop parent VM (CID 0).\n");
+                return false;
+            },
+            .self => {
+                if (client.getInfo(1)) |info| {
+                    if (info.is_root != 0) {
+                        var buf: [160]u8 = undefined;
+                        const msg = std.fmt.bufPrint(
+                            &buf,
+                            "Root VM cannot be stopped directly. Use " ++
+                                "'{s} host poweroff' or '{s} host reboot'.\n",
+                            .{ exe_name, exe_name },
+                        ) catch return false;
+                        printStr(msg);
+                        return false;
+                    }
+                } else |_| {}
+                client.terminate(CID_SELF, 0) catch |err| {
+                    printApiError("Stop self", err);
+                    return false;
+                };
+                printStr("VM self-terminated.\n");
+                return true;
+            },
+            .root => {},
+        }
+    }
+
+    var target_cid = parseCid(target_str) catch 0;
+    var target_name: []const u8 = target_str;
+    var name_storage: [64]u8 = undefined;
+
+    if (readBinaryFile(
+        "/var/run/diosix/guests.toml",
+        MAX_MANIFEST_SIZE,
+    )) |content| {
+        defer unmapBinaryFile(content);
+        var iter = common.GuestRegistryIter.init(content);
+        while (iter.next()) |entry| {
+            if (matchTarget(target_str, target_cid, entry.cid, entry.name)) {
+                target_cid = entry.cid;
+                target_name = copyStr(&name_storage, entry.name);
+                break;
+            }
+        }
+    } else |_| {}
+
+    if (target_cid < CID_FIRST_CHILD) {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "Error: Unknown or invalid child VM '{s}'. " ++
+                "Use '{s} list' to inspect active VMs.\n",
+            .{ target_str, exe_name },
+        ) catch return false;
+        printStr(msg);
+        return false;
+    }
+
+    client.terminate(target_cid, 0) catch |err| {
+        printApiError("Stop VM", err);
+        return false;
+    };
+    removeGuestFromRegistry(target_cid);
+
+    var msg_buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrint(
+        &msg_buf,
+        "✓ Child VM '{s}' (CID {d}) terminated.\n",
+        .{ target_name, target_cid },
+    ) catch return true;
+    printStr(msg);
+    return true;
+}
+
+test "vm: QuotaOption enum parses expected CLI flags" {
+    std.testing.refAllDecls(@This());
+    _ = vm_info;
+    _ = vm_run;
+    _ = vm_install;
+    try std.testing.expectEqual(
+        QuotaOption.@"--ram",
+        std.meta.stringToEnum(QuotaOption, "--ram").?,
+    );
+}

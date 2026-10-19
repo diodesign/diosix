@@ -1,0 +1,356 @@
+// Guest instruction and CSR trap-and-emulate routines for RISC-V.
+//
+// Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+
+const std = @import("std");
+const debug = @import("../../../../../core/debug.zig");
+const riscv = @import("../mod.zig");
+const pcore = @import("../../../../../core/pcore.zig");
+const vcore = @import("../../../../../core/vcore.zig");
+const scheduler = @import("../../../../../core/scheduler.zig");
+
+/// Outcome of attempting to emulate a trapped instruction from a guest.
+pub const EmulationOutcome = enum {
+    /// Instruction is not an emulated CSR/system instruction; reflect to guest.
+    not_handled,
+    /// Instruction was emulated and `mepc` advanced; resume guest execution.
+    handled,
+};
+
+/// Safely fetch an instruction from guest memory, accounting for potential
+/// 2-byte parcel alignment if the guest PC is not 4-byte aligned.
+pub fn fetchGuestInstruction(pc: usize) usize {
+    const pcpu = pcore.this();
+    pcpu.probing_active = true;
+    pcpu.probe_failed = false;
+    defer pcpu.probing_active = false;
+
+    var instr: usize = 0;
+
+    if ((pc & 0x2) != 0) {
+        // Misaligned PC: fetch as 16-bit parcels to avoid alignment faults.
+        const lower = riscv.hlv_hu(pc);
+        if (pcpu.probe_failed) return 0;
+        instr = lower;
+
+        // Check if it is a 32-bit instruction (lowest 2 bits are 0b11).
+        if ((lower & 0b11) == 0b11) {
+            const upper = riscv.hlv_hu(pc + 2);
+            if (pcpu.probe_failed) return 0;
+            instr |= (@as(usize, upper) << 16);
+        }
+    } else {
+        // Aligned PC: safe to fetch 32-bit word directly.
+        instr = riscv.hlv_wu(pc);
+        if (pcpu.probe_failed) return 0;
+    }
+
+    return instr;
+}
+
+fn isSiselectCsr(csr: usize) bool {
+    return switch (csr) {
+        riscv.CSR.VSISELECT_LEGACY,
+        riscv.CSR.SISELECT,
+        riscv.CSR.VSISELECT,
+        riscv.CSR.SISELECTH,
+        riscv.CSR.VSISELECTH,
+        => true,
+        else => false,
+    };
+}
+
+fn isEnvcfgCsr(csr: usize) bool {
+    return csr == riscv.CSR.SENVCFG or csr == riscv.CSR.VSENVCFG;
+}
+
+pub fn isEmulatedCsr(csr: usize) bool {
+    return switch (csr) {
+        riscv.CSR.SEED,
+        riscv.CSR.SIREG_LEGACY,
+        riscv.CSR.VSISELECT_LEGACY,
+        riscv.CSR.VSIREG_LEGACY,
+        riscv.CSR.SISELECT,
+        riscv.CSR.SIREG,
+        riscv.CSR.VSISELECT,
+        riscv.CSR.VSIREG,
+        riscv.CSR.SISELECTH,
+        riscv.CSR.SIREGH,
+        riscv.CSR.VSISELECTH,
+        riscv.CSR.VSIREGH,
+        riscv.CSR.SENVCFG,
+        riscv.CSR.VSENVCFG,
+        riscv.CSR.STIMECMP,
+        => true,
+        else => false,
+    };
+}
+
+fn readEmulatedCsr(vc: *vcore.VirtualCore, csr: usize) usize {
+    if (csr == riscv.CSR.SEED) {
+        // RISC-V Entropy Source Extension (Zkr): return ES16 status
+        // (0x80000000) combined with 16 bits of hardware timer entropy.
+        const time_now = riscv.readTime();
+        const entropy = (time_now ^ (time_now >> 16)) & 0xffff;
+        const old_val = 0x80000000 | entropy;
+        debug.printf(
+            "Zkr seed read: time=0x{x} entropy=0x{x} old_val=0x{x}\n",
+            .{ time_now, entropy, old_val },
+        );
+        return old_val;
+    }
+    if (isSiselectCsr(csr)) return vc.getNativeSiselect().*;
+    if (isEnvcfgCsr(csr)) return vc.getNativeGuestState().vsenvcfg;
+    if (csr == riscv.CSR.STIMECMP) return vc.getNativeGuestState().vstimecmp;
+    return 0;
+}
+
+fn writeEmulatedCsr(vc: *vcore.VirtualCore, csr: usize, new_val: usize) void {
+    if (isSiselectCsr(csr)) {
+        vc.getNativeSiselect().* = new_val;
+    } else if (isEnvcfgCsr(csr)) {
+        vc.getNativeGuestState().vsenvcfg = new_val;
+    } else if (csr == riscv.CSR.STIMECMP) {
+        vc.getNativeGuestState().vstimecmp = new_val;
+        vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
+    }
+}
+
+/// Emulate a trapped CSR read/modify/write instruction.
+pub fn emulateCsrAccess(
+    vc: *vcore.VirtualCore,
+    instr: usize,
+    context: *riscv.ThreadContext,
+) void {
+    const csr = (instr >> 20) & riscv.Instr.CSR_MASK;
+    const rd = (instr >> 7) & riscv.Instr.RD_MASK;
+    const rs1 = (instr >> 15) & riscv.Instr.RS1_MASK;
+    const funct3 = (instr >> 12) & riscv.Instr.FUNCT3_MASK;
+
+    const old_val = readEmulatedCsr(vc, csr);
+    const operand: usize = switch (funct3) {
+        riscv.Instr.FUNCT3_CSRRW,
+        riscv.Instr.FUNCT3_CSRRS,
+        riscv.Instr.FUNCT3_CSRRC,
+        => if (rs1 == 0) 0 else context[rs1],
+        else => rs1,
+    };
+
+    switch (funct3) {
+        riscv.Instr.FUNCT3_CSRRW, riscv.Instr.FUNCT3_CSRRWI => {
+            writeEmulatedCsr(vc, csr, operand);
+        },
+        riscv.Instr.FUNCT3_CSRRS, riscv.Instr.FUNCT3_CSRRSI => {
+            if (rs1 != 0) writeEmulatedCsr(vc, csr, old_val | operand);
+        },
+        riscv.Instr.FUNCT3_CSRRC, riscv.Instr.FUNCT3_CSRRCI => {
+            if (rs1 != 0) writeEmulatedCsr(vc, csr, old_val & ~operand);
+        },
+        else => {},
+    }
+
+    if (rd != 0) {
+        context[rd] = old_val;
+        vc.getNativeContext()[rd] = old_val;
+    }
+
+    vc.getNativeMachine().mepc += 4;
+    riscv.writeMepc(vc.getNativeMachine().mepc);
+    pcore.this().trap_loop_count = 0;
+
+    if (csr == riscv.CSR.STIMECMP) {
+        const vstc = vc.getNativeGuestState().vstimecmp;
+        if (riscv.riscv_supports_sstc) {
+            riscv.writeVstimecmp(vstc);
+            const hvip = riscv.readHvip() & ~@as(usize, riscv.HVIP.VSTIP);
+            riscv.writeHvip(hvip);
+        }
+        if (vstc != 0 and vstc != riscv.TIMER_INFINITY) {
+            riscv.setTimer(vstc);
+        }
+    }
+}
+
+fn emulateWfi(vc: *vcore.VirtualCore) void {
+    const pcpu = pcore.this();
+    pcpu.trap_loop_count = 0;
+    vc.getNativeMachine().mepc += 4;
+
+    // If a physical PLIC interrupt is pending on this hart, inject VSEIP.
+    const mip_val = riscv.readMip();
+    const ext_pending = (mip_val & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0;
+    if (ext_pending) {
+        vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
+        const mask = ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
+        riscv.writeMie(riscv.MIE.ALL_PHYSICAL & mask);
+    } else {
+        vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSEIP);
+        riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
+    }
+
+    // Do not block if virtual or physical interrupts are already pending.
+    const gs = vc.getNativeGuestState();
+    const timer_expired = (gs.vstimecmp != 0 and
+        gs.vstimecmp != riscv.TIMER_INFINITY and
+        riscv.readTime() >= gs.vstimecmp);
+    const virt_mask =
+        riscv.HVIP.VSSIP | riscv.HVIP.VSTIP | riscv.HVIP.VSEIP;
+    const has_ipi = @atomicLoad(bool, &vc.pending_ipi, .acquire);
+    const ipi_bit: usize = if (has_ipi) riscv.HVIP.VSSIP else 0;
+    const pending_virt =
+        (((vc.getNativeMachine().hvip | ipi_bit) & virt_mask) != 0) or
+        ext_pending;
+
+    if (pending_virt or timer_expired) {
+        if (timer_expired and !riscv.riscv_supports_sstc) {
+            vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
+        }
+        if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
+            vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
+        }
+        if (riscv.hasHExtension()) {
+            riscv.writeHvip(vc.getNativeMachine().hvip);
+        }
+        riscv.writeMepc(vc.getNativeMachine().mepc);
+        return;
+    }
+
+    // Block this vCore on the current physical CPU's blocked queue.
+    const b_wfi_prev = pcpu.blocked_lock.lock();
+    vc.blocked_node.contents = vc;
+    pcpu.blocked_queue.pushStart(&vc.blocked_node);
+    vc.blocked_on_cpu = pcpu.cpu_core_id;
+    @atomicStore(bool, &vc.wfi_blocked, true, .release);
+    pcpu.blocked_lock.unlock(b_wfi_prev);
+    scheduler.schedule();
+}
+
+/// Attempt to emulate a trapped guest instruction.
+pub fn emulateInstruction(
+    vc: *vcore.VirtualCore,
+    instr: usize,
+    context: *riscv.ThreadContext,
+) EmulationOutcome {
+    const opcode = instr & riscv.Instr.OPCODE_MASK;
+    const csr = (instr >> 20) & riscv.Instr.CSR_MASK;
+
+    if (opcode == riscv.Instr.OPCODE_SYSTEM and isEmulatedCsr(csr)) {
+        emulateCsrAccess(vc, instr, context);
+        return .handled;
+    }
+
+    // Emulate rdtime / csrr rd, time.
+    const rdtime_inst: u32 = (riscv.CSR.TIME << 20) |
+        (riscv.Instr.FUNCT3_CSRRS << 12) |
+        riscv.Instr.OPCODE_SYSTEM;
+    const rdtime_mask: u32 = ~@as(u32, riscv.Instr.RD_MASK << 7);
+
+    if ((instr & rdtime_mask) == rdtime_inst) {
+        const time_now = @as(usize, riscv.readTime());
+        const rd = (instr >> 7) & riscv.Instr.RD_MASK;
+        if (rd != 0) {
+            context[rd] = time_now;
+            vc.getNativeContext()[rd] = time_now;
+        }
+        vc.getNativeMachine().mepc += 4;
+        pcore.this().trap_loop_count = 0;
+        return .handled;
+    }
+
+    // Emulate FENCE.I as a no-op since I-cache coherency is maintained.
+    if (instr == riscv.Instr.FENCE_I) {
+        vc.getNativeMachine().mepc += 4;
+        pcore.this().trap_loop_count = 0;
+        return .handled;
+    }
+
+    // Emulate WFI (Wait For Interrupt).
+    if (instr == riscv.Instr.WFI) {
+        emulateWfi(vc);
+        return .handled;
+    }
+
+    // Emulate Zawrs: WRS.NTO (0x00d00073), WRS.STO (0x01d00073), pause hint.
+    if (instr == 0x00d00073 or instr == 0x01d00073 or instr == 0x0100000f) {
+        vc.getNativeMachine().mepc += 4;
+        riscv.writeMepc(vc.getNativeMachine().mepc);
+        pcore.this().trap_loop_count = 0;
+        return .handled;
+    }
+
+    // Emulate FENCE encodings that trap from VS-mode.
+    const funct3 = (instr >> 12) & riscv.Instr.FUNCT3_MASK;
+    if (opcode == riscv.Instr.OPCODE_MISC_MEM and
+        funct3 == riscv.Instr.FUNCT3_FENCE)
+    {
+        vc.getNativeMachine().mepc += 4;
+        riscv.writeMepc(vc.getNativeMachine().mepc);
+        pcore.this().trap_loop_count = 0;
+        return .handled;
+    }
+
+    // Emulate read-only M-mode CSR reads (mhartid, mvendorid, marchid,
+    // mimpid, misa) trapped from S-mode/VS-mode.
+    if (opcode == riscv.Instr.OPCODE_SYSTEM and funct3 >= 1 and funct3 <= 3) {
+        const val: usize = switch (csr) {
+            0xf14 => vc.id, // mhartid
+            0xf11, 0xf12, 0xf13, 0x301 => 0,
+            else => return .not_handled,
+        };
+        const rd = (instr >> 7) & riscv.Instr.RD_MASK;
+        if (rd != 0) {
+            context[rd] = val;
+            vc.getNativeContext()[rd] = val;
+        }
+        vc.getNativeMachine().mepc += 4;
+        pcore.this().trap_loop_count = 0;
+        return .handled;
+    }
+
+    return .not_handled;
+}
+
+test "csr_emu: isEmulatedCsr and emulateInstruction" {
+    try std.testing.expect(isEmulatedCsr(riscv.CSR.SEED));
+    try std.testing.expect(isEmulatedCsr(riscv.CSR.SISELECT));
+    try std.testing.expect(isEmulatedCsr(riscv.CSR.VSISELECT));
+    try std.testing.expect(isEmulatedCsr(riscv.CSR.SENVCFG));
+    try std.testing.expect(isEmulatedCsr(riscv.CSR.VSENVCFG));
+    try std.testing.expect(isEmulatedCsr(riscv.CSR.STIMECMP));
+    try std.testing.expect(!isEmulatedCsr(0x300)); // mstatus
+
+    riscv.initMockHardware();
+    const physmem = @import("../../../../../core/physmem.zig");
+    var phys_test = try physmem.initForTest(std.testing.allocator, 2048);
+    defer phys_test.deinit();
+    const guest_mod = @import("../../../../../core/guest.zig");
+    const g = try guest_mod.createGuest(
+        std.testing.allocator,
+        false,
+        false,
+        null,
+        0,
+        0,
+        0,
+        .riscv64,
+    );
+    defer g.deinit();
+    var vc = vcore.VirtualCore.init(0, g, 0x80000000, 0x80001000, .normal);
+    var ctx = std.mem.zeroes(riscv.ThreadContext);
+    ctx[11] = 0x70; // a1 = 0x70
+
+    // CSRRW a0 (x10), vsiselect (0x250), a1 (x11)
+    const csrrw_vsiselect: usize = (riscv.CSR.VSISELECT << 20) |
+        (11 << 15) |
+        (riscv.Instr.FUNCT3_CSRRW << 12) |
+        (10 << 7) |
+        riscv.Instr.OPCODE_SYSTEM;
+    const outcome = emulateInstruction(&vc, csrrw_vsiselect, &ctx);
+    try std.testing.expectEqual(EmulationOutcome.handled, outcome);
+    try std.testing.expectEqual(@as(usize, 0x70), vc.getNativeSiselect().*);
+    try std.testing.expectEqual(
+        @as(usize, 0x80000004),
+        vc.getNativeMachine().mepc,
+    );
+}

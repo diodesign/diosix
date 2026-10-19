@@ -1,4 +1,4 @@
-// Cursor and Focus Marker Engine for Diosix GUI
+// Cursor and Focus Marker Engine for Diosix GUI.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -13,7 +13,7 @@ const K = fb.Color.BLACK;
 const W = fb.Color.WHITE;
 const T = fb.Color.TRANSPARENT;
 
-// Clean all-white mouse pointer arrow with solid black contrast outline
+// Clean all-white mouse pointer arrow with solid black contrast outline.
 pub const POINTER_PIXELS = [_]u32{
     K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
     K, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
@@ -52,8 +52,10 @@ pub const Cursor = struct {
     }
 
     pub fn drawSprite(screen: *fb.Surface, x: i32, y: i32) void {
-        const sprite_box = fb.Box.fromPosSize(x, y, CURSOR_WIDTH, CURSOR_HEIGHT);
-        const clipped = sprite_box.intersect(screen.clip);
+        const sprite_box =
+            fb.Box.fromPosSize(x, y, CURSOR_WIDTH, CURSOR_HEIGHT);
+        const bounds = fb.Box.fromPosSize(0, 0, screen.width, screen.height);
+        const clipped = sprite_box.intersect(screen.clip).intersect(bounds);
         if (clipped.isEmpty()) return;
 
         const pixels_per_row = screen.stridePixels();
@@ -74,8 +76,12 @@ pub const Cursor = struct {
 };
 
 test "cursor: verify pointer sprite dimensions and pure white interior" {
-    try std.testing.expectEqual(@as(usize, CURSOR_WIDTH * CURSOR_HEIGHT), POINTER_PIXELS.len);
-    try std.testing.expectEqual(K, POINTER_PIXELS[0]); // Hotspot at (0,0) is black point
+    try std.testing.expectEqual(
+        @as(usize, CURSOR_WIDTH * CURSOR_HEIGHT),
+        POINTER_PIXELS.len,
+    );
+    // Hotspot at (0,0) is black point.
+    try std.testing.expectEqual(K, POINTER_PIXELS[0]);
 
     var white_count: usize = 0;
     var black_count: usize = 0;
@@ -85,7 +91,8 @@ test "cursor: verify pointer sprite dimensions and pure white interior" {
         } else if (p == K) {
             black_count += 1;
         } else {
-            try std.testing.expectEqual(T, p); // Every other pixel must be transparent
+            // Every other pixel must be transparent.
+            try std.testing.expectEqual(T, p);
         }
     }
 

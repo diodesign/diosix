@@ -24,35 +24,144 @@ pub const MMIO_TEST_RTC_BASE: u32 = 0x00100000;
 pub const MMIO_RTC_BASE: u32 = 0x00101000;
 pub const MMIO_TEST_RTC_END: u32 = 0x00102000;
 
-pub const VIRTIO_MMIO_MAGIC: u32 = 0x74726976; // "virt" in little-endian
-pub const VIRTIO_MMIO_VERSION_2: u32 = 0x00000002; // Modern VirtIO
-pub const VIRTIO_MMIO_DEVICE_NONE: u32 = 0x00000000; // Empty slot
-pub const VIRTIO_MMIO_VENDOR_QEMU: u32 = 0x554d4551; // "QEMU"
+pub const VIRTIO_MMIO_MAGIC: u32 = 0x74726976; // "virt" in little-endian.
+pub const VIRTIO_MMIO_VERSION_2: u32 = 0x00000002; // Modern VirtIO.
+pub const VIRTIO_MMIO_DEVICE_NONE: u32 = 0x00000000; // Empty slot.
+pub const VIRTIO_MMIO_VENDOR_QEMU: u32 = 0x554d4551; // "QEMU".
 
-// Canonical VirtIO MMIO Register Offsets (VirtIO 1.1 Specification Section 4.2.2)
-pub const VIRTIO_MMIO_REG_MAGIC_VALUE: u32        = 0x000;
-pub const VIRTIO_MMIO_REG_VERSION: u32            = 0x004;
-pub const VIRTIO_MMIO_REG_DEVICE_ID: u32          = 0x008;
-pub const VIRTIO_MMIO_REG_VENDOR_ID: u32          = 0x00c;
-pub const VIRTIO_MMIO_REG_DEVICE_FEATURES: u32    = 0x010;
-pub const VIRTIO_MMIO_REG_DEVICE_FEATURES_SEL: u32= 0x014;
-pub const VIRTIO_MMIO_REG_DRIVER_FEATURES: u32    = 0x020;
-pub const VIRTIO_MMIO_REG_DRIVER_FEATURES_SEL: u32= 0x024;
-pub const VIRTIO_MMIO_REG_QUEUE_SEL: u32          = 0x030;
-pub const VIRTIO_MMIO_REG_QUEUE_NUM_MAX: u32      = 0x034;
-pub const VIRTIO_MMIO_REG_QUEUE_NUM: u32          = 0x038;
-pub const VIRTIO_MMIO_REG_QUEUE_READY: u32        = 0x044;
-pub const VIRTIO_MMIO_REG_QUEUE_NOTIFY: u32       = 0x050;
-pub const VIRTIO_MMIO_REG_INTERRUPT_STATUS: u32   = 0x060;
-pub const VIRTIO_MMIO_REG_INTERRUPT_ACK: u32      = 0x064;
-pub const VIRTIO_MMIO_REG_STATUS: u32             = 0x070;
-pub const VIRTIO_MMIO_REG_QUEUE_DESC_LOW: u32     = 0x080;
-pub const VIRTIO_MMIO_REG_QUEUE_DESC_HIGH: u32    = 0x084;
-pub const VIRTIO_MMIO_REG_QUEUE_DRIVER_LOW: u32   = 0x090;
-pub const VIRTIO_MMIO_REG_QUEUE_DRIVER_HIGH: u32  = 0x094;
-pub const VIRTIO_MMIO_REG_QUEUE_DEVICE_LOW: u32   = 0x0a0;
-pub const VIRTIO_MMIO_REG_QUEUE_DEVICE_HIGH: u32  = 0x0a4;
-pub const VIRTIO_MMIO_REG_CONFIG_BASE: u32        = 0x100;
+// Canonical VirtIO MMIO Register Offsets (VirtIO 1.1 Spec Section 4.2.2).
+pub const VIRTIO_MMIO_REG_MAGIC_VALUE: u32 = 0x000;
+pub const VIRTIO_MMIO_REG_VERSION: u32 = 0x004;
+pub const VIRTIO_MMIO_REG_DEVICE_ID: u32 = 0x008;
+pub const VIRTIO_MMIO_REG_VENDOR_ID: u32 = 0x00c;
+pub const VIRTIO_MMIO_REG_DEVICE_FEATURES: u32 = 0x010;
+pub const VIRTIO_MMIO_REG_DEVICE_FEATURES_SEL: u32 = 0x014;
+pub const VIRTIO_MMIO_REG_DRIVER_FEATURES: u32 = 0x020;
+pub const VIRTIO_MMIO_REG_DRIVER_FEATURES_SEL: u32 = 0x024;
+pub const VIRTIO_MMIO_REG_QUEUE_SEL: u32 = 0x030;
+pub const VIRTIO_MMIO_REG_QUEUE_NUM_MAX: u32 = 0x034;
+pub const VIRTIO_MMIO_REG_QUEUE_NUM: u32 = 0x038;
+pub const VIRTIO_MMIO_REG_QUEUE_READY: u32 = 0x044;
+pub const VIRTIO_MMIO_REG_QUEUE_NOTIFY: u32 = 0x050;
+pub const VIRTIO_MMIO_REG_INTERRUPT_STATUS: u32 = 0x060;
+pub const VIRTIO_MMIO_REG_INTERRUPT_ACK: u32 = 0x064;
+pub const VIRTIO_MMIO_REG_STATUS: u32 = 0x070;
+pub const VIRTIO_MMIO_REG_QUEUE_DESC_LOW: u32 = 0x080;
+pub const VIRTIO_MMIO_REG_QUEUE_DESC_HIGH: u32 = 0x084;
+pub const VIRTIO_MMIO_REG_QUEUE_DRIVER_LOW: u32 = 0x090;
+pub const VIRTIO_MMIO_REG_QUEUE_DRIVER_HIGH: u32 = 0x094;
+pub const VIRTIO_MMIO_REG_QUEUE_DEVICE_LOW: u32 = 0x0a0;
+pub const VIRTIO_MMIO_REG_QUEUE_DEVICE_HIGH: u32 = 0x0a4;
+pub const VIRTIO_MMIO_REG_CONFIG_BASE: u32 = 0x100;
+
+// Shared VirtIO Descriptor & Split-Virtqueue Definitions (VirtIO 1.1 Sec 2.6).
+pub const VIRTQ_DESC_F_NEXT: u16 = 1;
+pub const VIRTQ_DESC_F_WRITE: u16 = 2;
+
+pub const VirtqDesc = extern struct {
+    addr: u64,
+    len: u32,
+    flags: u16,
+    next: u16,
+};
+
+pub const VirtqUsedElem = extern struct {
+    id: u32,
+    len: u32,
+};
+
+pub fn VirtQueueConfig(comptime default_num: u16) type {
+    return struct {
+        num: u16 = default_num,
+        ready: bool = false,
+        desc_gpa: u64 = 0,
+        driver_gpa: u64 = 0,
+        device_gpa: u64 = 0,
+        last_avail_idx: u16 = 0,
+        last_used_idx: u16 = 0,
+    };
+}
+
+/// Shared handler for standard VirtIO MMIO feature and split-virtqueue
+/// configuration registers. Returns true if the register offset was handled.
+pub fn writeVirtioQueueAndFeatureReg(
+    dev: anytype,
+    comptime num_queues: usize,
+    comptime queue_size_max: u16,
+    offset: u32,
+    val: u32,
+) bool {
+    switch (offset) {
+        VIRTIO_MMIO_REG_DEVICE_FEATURES_SEL => dev.device_features_sel = val,
+        VIRTIO_MMIO_REG_DRIVER_FEATURES => {
+            if (dev.driver_features_sel == 0) {
+                dev.driver_features =
+                    (dev.driver_features & 0xffffffff00000000) | val;
+            } else if (dev.driver_features_sel == 1) {
+                dev.driver_features =
+                    (dev.driver_features & 0x00000000ffffffff) |
+                    (@as(u64, val) << 32);
+            }
+        },
+        VIRTIO_MMIO_REG_DRIVER_FEATURES_SEL => dev.driver_features_sel = val,
+        VIRTIO_MMIO_REG_QUEUE_SEL => dev.queue_sel = val,
+        VIRTIO_MMIO_REG_QUEUE_NUM => {
+            if (dev.queue_sel < num_queues) {
+                const q_num = @min(val, queue_size_max);
+                if (q_num > 0) {
+                    dev.queues[dev.queue_sel].num = @truncate(q_num);
+                }
+            }
+        },
+        VIRTIO_MMIO_REG_QUEUE_READY => {
+            if (dev.queue_sel < num_queues) {
+                const q = &dev.queues[dev.queue_sel];
+                q.ready = (val & 1) != 0 and q.num > 0;
+            }
+        },
+        VIRTIO_MMIO_REG_QUEUE_DESC_LOW => {
+            if (dev.queue_sel < num_queues) {
+                const q = &dev.queues[dev.queue_sel];
+                q.desc_gpa = (q.desc_gpa & 0xffffffff00000000) | val;
+            }
+        },
+        VIRTIO_MMIO_REG_QUEUE_DESC_HIGH => {
+            if (dev.queue_sel < num_queues) {
+                const q = &dev.queues[dev.queue_sel];
+                q.desc_gpa = (q.desc_gpa & 0x00000000ffffffff) |
+                    (@as(u64, val) << 32);
+            }
+        },
+        VIRTIO_MMIO_REG_QUEUE_DRIVER_LOW => {
+            if (dev.queue_sel < num_queues) {
+                const q = &dev.queues[dev.queue_sel];
+                q.driver_gpa = (q.driver_gpa & 0xffffffff00000000) | val;
+            }
+        },
+        VIRTIO_MMIO_REG_QUEUE_DRIVER_HIGH => {
+            if (dev.queue_sel < num_queues) {
+                const q = &dev.queues[dev.queue_sel];
+                q.driver_gpa = (q.driver_gpa & 0x00000000ffffffff) |
+                    (@as(u64, val) << 32);
+            }
+        },
+        VIRTIO_MMIO_REG_QUEUE_DEVICE_LOW => {
+            if (dev.queue_sel < num_queues) {
+                const q = &dev.queues[dev.queue_sel];
+                q.device_gpa = (q.device_gpa & 0xffffffff00000000) | val;
+            }
+        },
+        VIRTIO_MMIO_REG_QUEUE_DEVICE_HIGH => {
+            if (dev.queue_sel < num_queues) {
+                const q = &dev.queues[dev.queue_sel];
+                q.device_gpa = (q.device_gpa & 0x00000000ffffffff) |
+                    (@as(u64, val) << 32);
+            }
+        },
+        else => return false,
+    }
+    return true;
+}
 
 pub const Bus = struct {
     uart: *vuart_mod.VirtualUart,
@@ -63,11 +172,25 @@ pub const Bus = struct {
     input: ?*vinput_mod.VirtioInput = null,
 
     pub fn isMmioAddr(addr: u32) bool {
-        if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) return true; // 16550 UART
-        if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) return true; // VirtIO MMIO slots 0..7
-        if (addr >= MMIO_CLINT_BASE and addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE) return true; // CLINT Timer
-        if (addr >= MMIO_PLIC_BASE and addr < MMIO_PLIC_END) return true; // PLIC
-        if (addr >= MMIO_TEST_RTC_BASE and addr < MMIO_TEST_RTC_END) return true; // Test & Goldfish RTC
+        if (addr >= MMIO_UART_BASE and
+            addr < MMIO_UART_BASE + MMIO_UART_SIZE)
+        {
+            return true; // 16550 UART.
+        }
+        if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) {
+            return true; // VirtIO MMIO slots 0..7.
+        }
+        if (addr >= MMIO_CLINT_BASE and
+            addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE)
+        {
+            return true; // CLINT Timer.
+        }
+        if (addr >= MMIO_PLIC_BASE and addr < MMIO_PLIC_END) {
+            return true; // PLIC.
+        }
+        if (addr >= MMIO_TEST_RTC_BASE and addr < MMIO_TEST_RTC_END) {
+            return true; // Test & Goldfish RTC.
+        }
         return false;
     }
 
@@ -78,23 +201,19 @@ pub const Bus = struct {
 
     pub fn read(self: *Bus, addr: u32, size: u8) u32 {
         _ = size;
-        if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) {
+        if (addr >= MMIO_UART_BASE and
+            addr < MMIO_UART_BASE + MMIO_UART_SIZE)
+        {
             return self.uart.read(@truncate(addr - MMIO_UART_BASE));
         } else if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) {
             const slot_idx = (addr - MMIO_VIRTIO_BASE) / 0x1000;
-            const reg_offset = (addr - MMIO_VIRTIO_BASE) & 0xFFF;
+            const reg_offset = (addr - MMIO_VIRTIO_BASE) & 0xfff;
             if (slot_idx == 0) {
-                if (self.vsock) |v| {
-                    return v.readReg(reg_offset);
-                }
+                if (self.vsock) |v| return v.readReg(reg_offset);
             } else if (slot_idx == 1) {
-                if (self.gpu) |g| {
-                    return g.readReg(reg_offset);
-                }
+                if (self.gpu) |g| return g.readReg(reg_offset);
             } else if (slot_idx == 2) {
-                if (self.input) |i| {
-                    return i.readReg(reg_offset);
-                }
+                if (self.input) |i| return i.readReg(reg_offset);
             }
             return switch (reg_offset) {
                 0x000 => VIRTIO_MMIO_MAGIC,
@@ -103,13 +222,15 @@ pub const Bus = struct {
                 0x00c => VIRTIO_MMIO_VENDOR_QEMU,
                 else => 0,
             };
-        } else if (addr >= MMIO_CLINT_BASE and addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE) {
+        } else if (addr >= MMIO_CLINT_BASE and
+            addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE)
+        {
             return self.timer.read(@truncate(addr - MMIO_CLINT_BASE));
         } else if (addr >= MMIO_PLIC_BASE and addr < MMIO_PLIC_END) {
             return self.pic.read(@truncate(addr - MMIO_PLIC_BASE));
         } else if (addr >= MMIO_RTC_BASE and addr < MMIO_TEST_RTC_END) {
-            // Goldfish RTC: offset 0x00 = TIME_LOW, offset 0x04 = TIME_HIGH (nanoseconds since epoch)
-            const reg_offset = addr & 0xFFF;
+            // Goldfish RTC: 0x00 = TIME_LOW, 0x04 = TIME_HIGH (ns).
+            const reg_offset = addr & 0xfff;
             const time_ns: u64 = vcpu_mod.readHostTime() *% 100;
             if (reg_offset == 0x00) return @truncate(time_ns);
             if (reg_offset == 0x04) return @truncate(time_ns >> 32);
@@ -120,11 +241,13 @@ pub const Bus = struct {
 
     pub fn write(self: *Bus, addr: u32, val: u32, size: u8) void {
         _ = size;
-        if (addr >= MMIO_UART_BASE and addr < MMIO_UART_BASE + MMIO_UART_SIZE) {
+        if (addr >= MMIO_UART_BASE and
+            addr < MMIO_UART_BASE + MMIO_UART_SIZE)
+        {
             self.uart.write(@truncate(addr - MMIO_UART_BASE), @truncate(val));
         } else if (addr >= MMIO_VIRTIO_BASE and addr < MMIO_VIRTIO_END) {
             const slot_idx = (addr - MMIO_VIRTIO_BASE) / 0x1000;
-            const reg_offset = (addr - MMIO_VIRTIO_BASE) & 0xFFF;
+            const reg_offset = (addr - MMIO_VIRTIO_BASE) & 0xfff;
             if (slot_idx == 0) {
                 if (self.vsock) |v| {
                     v.writeReg(reg_offset, val);
@@ -141,12 +264,14 @@ pub const Bus = struct {
                     return;
                 }
             }
-        } else if (addr >= MMIO_CLINT_BASE and addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE) {
+        } else if (addr >= MMIO_CLINT_BASE and
+            addr < MMIO_CLINT_BASE + MMIO_CLINT_SIZE)
+        {
             self.timer.write(@truncate(addr - MMIO_CLINT_BASE), val);
         } else if (addr >= MMIO_PLIC_BASE and addr < MMIO_PLIC_END) {
             self.pic.write(@truncate(addr - MMIO_PLIC_BASE), val);
         } else if (addr >= MMIO_TEST_RTC_BASE and addr < MMIO_TEST_RTC_END) {
-            // Test & Goldfish RTC writes
+            // Test & Goldfish RTC writes are no-ops.
         }
     }
 };
@@ -154,15 +279,14 @@ pub const Bus = struct {
 test "MMIO Bus address classification and VirtIO transport probe" {
     const testing = std.testing;
 
-    // Test MMIO range classification
-    try testing.expect(Bus.isMmioAddr(0x10000000)); // UART
-    try testing.expect(Bus.isMmioAddr(0x10001000)); // VirtIO slot 0 (vsock)
-    try testing.expect(Bus.isMmioAddr(0x10002000)); // VirtIO slot 1 (gpu)
-    try testing.expect(Bus.isMmioAddr(0x10003000)); // VirtIO slot 2 (input)
-    try testing.expect(Bus.isMmioAddr(0x02000000)); // CLINT
-    try testing.expect(Bus.isMmioAddr(0x0c000000)); // PLIC
-    try testing.expect(Bus.isMmioAddr(0x00101000)); // RTC
-    try testing.expect(!Bus.isMmioAddr(0x80000000)); // DRAM is not MMIO
+    try testing.expect(Bus.isMmioAddr(0x10000000)); // UART.
+    try testing.expect(Bus.isMmioAddr(0x10001000)); // VirtIO slot 0 (vsock).
+    try testing.expect(Bus.isMmioAddr(0x10002000)); // VirtIO slot 1 (gpu).
+    try testing.expect(Bus.isMmioAddr(0x10003000)); // VirtIO slot 2 (input).
+    try testing.expect(Bus.isMmioAddr(0x02000000)); // CLINT.
+    try testing.expect(Bus.isMmioAddr(0x0c000000)); // PLIC.
+    try testing.expect(Bus.isMmioAddr(0x00101000)); // RTC.
+    try testing.expect(!Bus.isMmioAddr(0x80000000)); // DRAM is not MMIO.
 
     var uart = vuart_mod.VirtualUart{};
     var timer = vtimer_mod.VirtualTimer{};
@@ -178,10 +302,20 @@ test "MMIO Bus address classification and VirtIO transport probe" {
         .input = &input,
     };
 
-    // Test VirtIO probe headers on Slot 1 (GPU) and Slot 2 (Input)
-    try testing.expectEqual(VIRTIO_MMIO_MAGIC, bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x000, 4));
-    try testing.expectEqual(VIRTIO_MMIO_VERSION_2, bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x004, 4));
-    try testing.expectEqual(vgpu_mod.VIRTIO_ID_GPU, bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x008, 4));
-
-    try testing.expectEqual(vinput_mod.VIRTIO_ID_INPUT, bus.read(MMIO_VIRTIO_BASE + 0x2000 + 0x008, 4));
+    try testing.expectEqual(
+        VIRTIO_MMIO_MAGIC,
+        bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x000, 4),
+    );
+    try testing.expectEqual(
+        VIRTIO_MMIO_VERSION_2,
+        bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x004, 4),
+    );
+    try testing.expectEqual(
+        vgpu_mod.VIRTIO_ID_GPU,
+        bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x008, 4),
+    );
+    try testing.expectEqual(
+        vinput_mod.VIRTIO_ID_INPUT,
+        bus.read(MMIO_VIRTIO_BASE + 0x2000 + 0x008, 4),
+    );
 }

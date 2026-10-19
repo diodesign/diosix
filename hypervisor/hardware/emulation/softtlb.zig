@@ -4,12 +4,51 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const riscv = @import("interface").riscv;
 const bus_mod = @import("devices/bus.zig");
-const vcpu_mod = @import("vcpu.zig");
+const ops = @import("softtlb/ops.zig");
+
+pub const PAGE_SHIFT = 12;
+pub const PAGE_SIZE: u32 = 1 << PAGE_SHIFT;
+pub const PAGE_OFFSET_MASK: u32 = PAGE_SIZE - 1; // 0xfff
+pub const INVALID_VADDR_PAGE: u32 = 0xffff_ffff;
+
+pub const SV32_VPN1_SHIFT = 22;
+pub const SV32_VPN_MASK: u32 = 0x3ff;
+pub const SV32_PPN_SHIFT = 10;
+pub const SV32_PTE_PPN_MASK: usize = 0xffff_fc00;
+pub const SV32_PTE_PPN0_MASK: u32 = 0x000f_fc00;
+pub const SV32_SUPERPAGE_SIZE: u32 = 1 << SV32_VPN1_SHIFT; // 4 MiB
+pub const SV32_SUPERPAGE_MASK: u32 = SV32_SUPERPAGE_SIZE - 1; // 0x003f_ffff
+pub const SV32_SATP_MODE_SHIFT = 31;
+pub const SV32_SATP_PPN_MASK: usize = 0x003f_ffff;
+
+pub const PTE = struct {
+    pub const V = 1 << 0;
+    pub const R = 1 << 1;
+    pub const W = 1 << 2;
+    pub const X = 1 << 3;
+    pub const U = 1 << 4;
+    pub const RWX = R | W | X;
+    pub const VRWX = V | R | W | X;
+    pub const FLAGS_MASK: u32 = 0x1f;
+
+    /// Return true if a raw PTE has the Valid bit set and does not use the
+    /// reserved R=0, W=1 encoding.
+    pub inline fn isValid(pte: u32) bool {
+        return (pte & V) != 0 and !((pte & R) == 0 and (pte & W) != 0);
+    }
+
+    /// Return true if a valid PTE points to the next page-table level.
+    pub inline fn isPointer(pte: u32) bool {
+        return (pte & RWX) == 0;
+    }
+};
 
 pub const SoftTlbEntry = struct {
-    guest_vaddr_page: u32 = 0xFFFF_FFFF,
-    flags: u8 = 0, // [0]: Valid, [1]: Read, [2]: Write, [3]: Execute, [4]: User
+    guest_vaddr_page: u32 = INVALID_VADDR_PAGE,
+    /// [0]: Valid, [1]: Read, [2]: Write, [3]: Execute, [4]: User.
+    flags: u8 = 0,
     _pad: u8 = 0,
     epoch: u16 = 0,
     host_paddr_page: usize = 0,
@@ -17,7 +56,8 @@ pub const SoftTlbEntry = struct {
 
 pub const AccessResult = struct {
     val: u32 = 0,
-    trap: ?u32 = null, // Exception cause if fault occurs (e.g. 1=Instruction access fault, 12=Instruction page fault, 13=Load page fault, 15=Store page fault)
+    /// RISC-V exception cause (`riscv.Cause`) if a fault occurs.
+    trap: ?u32 = null,
 };
 
 pub const TLB_ENTRIES: usize = 4096;
@@ -34,11 +74,12 @@ pub const ContiguousRegion = struct {
 
 pub const SoftTlb = struct {
     entries: [TLB_ENTRIES]SoftTlbEntry = undefined,
-    contiguous_regions: [MAX_CONTIGUOUS_REGIONS]ContiguousRegion = std.mem.zeroes([MAX_CONTIGUOUS_REGIONS]ContiguousRegion),
+    contiguous_regions: [MAX_CONTIGUOUS_REGIONS]ContiguousRegion =
+        std.mem.zeroes([MAX_CONTIGUOUS_REGIONS]ContiguousRegion),
     epoch: u16 = 1,
     satp: u32 = 0,
     mstatus: u32 = 0,
-    privilege_mode: u8 = 1, // Default Supervisor mode
+    privilege_mode: u8 = riscv.PRIV_SUPERVISOR,
     guest_gpa_base: usize = 0x80000000,
     guest_hpa_base: usize = 0xe0000000,
     guest_ram_size: usize = 0x20000000,
@@ -50,6 +91,10 @@ pub const SoftTlb = struct {
     last_trampoline_pgd_write_vaddr: u32 = 0,
     last_trampoline_pgd_write_val: u32 = 0,
 
+    pub const AmoOp = ops.AmoOp;
+    pub const LrResult = ops.LrResult;
+    pub const ScResult = ops.ScResult;
+
     pub fn init(gpa_base: usize, hpa_base: usize, ram_size: usize) SoftTlb {
         var tlb = SoftTlb{
             .guest_gpa_base = gpa_base,
@@ -60,56 +105,53 @@ pub const SoftTlb = struct {
         return tlb;
     }
 
-    pub fn initOnPtr(self: *SoftTlb, gpa_base: usize, hpa_base: usize, ram_size: usize) void {
+    pub fn initOnPtr(self: *SoftTlb, gpa: usize, hpa: usize, sz: usize) void {
         for (self.entries[0..]) |*entry| {
-            entry.guest_vaddr_page = 0xFFFF_FFFF;
-            entry.flags = 0;
-            entry.epoch = 0;
-            entry.host_paddr_page = 0;
+            entry.* = .{};
         }
         @memset(std.mem.sliceAsBytes(self.contiguous_regions[0..]), 0);
         self.epoch = 1;
         self.satp = 0;
-        self.privilege_mode = 1;
-        self.guest_gpa_base = gpa_base;
-        self.guest_hpa_base = hpa_base;
-        self.guest_ram_size = ram_size;
+        self.privilege_mode = riscv.PRIV_SUPERVISOR;
+        self.guest_gpa_base = gpa;
+        self.guest_hpa_base = hpa;
+        self.guest_ram_size = sz;
     }
 
     pub fn flush(self: *SoftTlb) void {
         self.epoch +%= 1;
         for (self.entries[0..]) |*entry| {
-            entry.guest_vaddr_page = 0xFFFF_FFFF;
+            entry.guest_vaddr_page = INVALID_VADDR_PAGE;
             entry.flags = 0;
         }
-        for (self.contiguous_regions[0..]) |*r| {
-            r.valid = false;
-        }
+        for (self.contiguous_regions[0..]) |*r| r.valid = false;
     }
 
     pub fn ppnToGpa(self: *SoftTlb, ppn: usize) usize {
         _ = self;
-        return ppn << 12;
+        return ppn << PAGE_SHIFT;
     }
 
     pub fn translateGpaToHpa(self: *SoftTlb, gpa: usize) ?usize {
-        if (self.guest_hpa_base > 0 and gpa >= self.guest_gpa_base and (gpa - self.guest_gpa_base) < self.guest_ram_size) {
+        if (self.guest_hpa_base > 0 and gpa >= self.guest_gpa_base and
+            (gpa - self.guest_gpa_base) < self.guest_ram_size)
+        {
             return self.guest_hpa_base +% (gpa - self.guest_gpa_base);
         }
         return null;
     }
 
     pub fn fallbackIdentity(self: *SoftTlb, vaddr: u32) ?usize {
-        if (vaddr < 0x1000) return null; // NULL pointer dereference must trap
+        if (vaddr < PAGE_SIZE) return null; // NULL pointer dereference traps.
         if ((vaddr >= 0x10000000 and vaddr < 0x10009000) or
             (vaddr >= 0x02000000 and vaddr < 0x02010000) or
             (vaddr >= 0x0c000000 and vaddr < 0x10000000))
         {
-            return vaddr; // MMIO physical address directly
+            return vaddr; // MMIO physical address directly.
         }
 
-        const gpa: usize = if (vaddr >= 0xC000_0000)
-            self.guest_gpa_base +% (vaddr -% 0xC000_0000)
+        const gpa: usize = if (vaddr >= 0xc000_0000)
+            self.guest_gpa_base +% (vaddr -% 0xc000_0000)
         else if (vaddr >= 0x4000_0000 and vaddr < self.guest_gpa_base)
             self.guest_gpa_base +% (vaddr -% 0x4000_0000)
         else if (vaddr < self.guest_gpa_base)
@@ -117,14 +159,15 @@ pub const SoftTlb = struct {
         else
             vaddr;
 
-        if (self.guest_hpa_base > 0 and gpa >= self.guest_gpa_base and (gpa - self.guest_gpa_base) < self.guest_ram_size) {
+        if (self.guest_hpa_base > 0 and gpa >= self.guest_gpa_base and
+            (gpa - self.guest_gpa_base) < self.guest_ram_size)
+        {
             if (self.translateGpaToHpa(gpa)) |hpa| {
-                const page = vaddr >> 12;
-                const slot = page & TLB_MASK;
-                self.entries[slot] = .{
+                const page = vaddr >> PAGE_SHIFT;
+                self.entries[page & TLB_MASK] = .{
                     .guest_vaddr_page = page,
-                    .host_paddr_page = hpa & ~@as(usize, 0xFFF),
-                    .flags = 1 | (1 << 1) | (1 << 2) | (1 << 3),
+                    .host_paddr_page = hpa & ~@as(usize, PAGE_OFFSET_MASK),
+                    .flags = PTE.VRWX,
                     .epoch = self.epoch,
                 };
                 return hpa;
@@ -133,64 +176,75 @@ pub const SoftTlb = struct {
         return null;
     }
 
-    /// Fast-path address translation using direct-mapped cache and dynamic contiguous regions
-    pub fn translateFast(self: *SoftTlb, vaddr: u32, is_write: bool, is_exec: bool) ?usize {
-        const page = vaddr >> 12;
-        const slot = page & TLB_MASK;
-        const entry = &self.entries[slot];
-
-        if (entry.epoch == self.epoch and (entry.flags & 1) != 0 and entry.guest_vaddr_page == page) {
-            const is_user_page = (entry.flags & (1 << 4)) != 0;
-            if (self.privilege_mode == 0) {
-                if (!is_user_page) return null; // User mode cannot access supervisor pages
-            } else if (self.privilege_mode == 1) {
-                if (is_user_page) {
-                    if (is_exec) return null; // Supervisor mode cannot execute user pages
-                    const sum_allowed = (self.mstatus & (1 << 18)) != 0;
-                    if (!sum_allowed) return null; // Supervisor mode cannot access user pages unless SUM bit is set
-                }
+    fn checkPrivilegeFlags(
+        self: *const SoftTlb,
+        flags: u8,
+        is_write: bool,
+        is_exec: bool,
+    ) bool {
+        const is_user_page = (flags & PTE.U) != 0;
+        if (self.privilege_mode == riscv.PRIV_USER) {
+            if (!is_user_page) return false;
+        } else if (self.privilege_mode == riscv.PRIV_SUPERVISOR and
+            is_user_page)
+        {
+            if (is_exec or (self.mstatus & riscv.MSTATUS.SUM) == 0) {
+                return false;
             }
+        }
+        const req_flag: u8 =
+            if (is_exec) PTE.X else if (is_write) PTE.W else PTE.R;
+        return (flags & req_flag) != 0;
+    }
 
-            const required_flag: u8 = if (is_exec) (1 << 3) else if (is_write) (1 << 2) else (1 << 1);
-            if ((entry.flags & required_flag) != 0) {
-                const paddr = entry.host_paddr_page | (vaddr & 0xFFF);
-                if (self.guest_hpa_base > 0 and paddr >= self.guest_hpa_base and (paddr - self.guest_hpa_base) < self.guest_ram_size) {
-                    return paddr;
-                }
+    /// Fast-path address translation using direct-mapped cache and contiguous
+    /// superpage regions.
+    pub fn translateFast(
+        self: *SoftTlb,
+        vaddr: u32,
+        is_write: bool,
+        is_exec: bool,
+    ) ?usize {
+        const page = vaddr >> PAGE_SHIFT;
+        const entry = &self.entries[page & TLB_MASK];
+
+        if (entry.epoch == self.epoch and (entry.flags & PTE.V) != 0 and
+            entry.guest_vaddr_page == page)
+        {
+            if (!self.checkPrivilegeFlags(entry.flags, is_write, is_exec)) {
+                return null;
+            }
+            const paddr = entry.host_paddr_page | (vaddr & PAGE_OFFSET_MASK);
+            if (self.guest_hpa_base > 0 and paddr >= self.guest_hpa_base and
+                (paddr - self.guest_hpa_base) < self.guest_ram_size)
+            {
+                return paddr;
             }
         }
 
-        // Fast-path: Check dynamically verified contiguous regions (e.g. 4MB superpages)
-        const reg_slot = (vaddr >> 22) & (MAX_CONTIGUOUS_REGIONS - 1);
+        // Check dynamically verified contiguous regions (e.g. 4MB superpages).
+        const reg_slot =
+            (vaddr >> SV32_VPN1_SHIFT) & (MAX_CONTIGUOUS_REGIONS - 1);
         const region = &self.contiguous_regions[reg_slot];
-        if (region.valid and vaddr >= region.vaddr_start and vaddr < region.vaddr_end) {
-            const is_user_page = (region.flags & (1 << 4)) != 0;
-            if (self.privilege_mode == 0) {
-                if (!is_user_page) return null;
-            } else if (self.privilege_mode == 1) {
-                if (is_user_page) {
-                    if (is_exec) return null;
-                    const sum_allowed = (self.mstatus & (1 << 18)) != 0;
-                    if (!sum_allowed) return null;
-                }
+        if (region.valid and vaddr >= region.vaddr_start and
+            vaddr < region.vaddr_end)
+        {
+            if (!self.checkPrivilegeFlags(region.flags, is_write, is_exec)) {
+                return null;
             }
-
-            const required_flag: u8 = if (is_exec) (1 << 3) else if (is_write) (1 << 2) else (1 << 1);
-            if ((region.flags & required_flag) != 0) {
-                const offset = vaddr - region.vaddr_start;
-                const paddr = region.hpa_start +% offset;
-                if (self.guest_hpa_base > 0 and paddr >= self.guest_hpa_base and (paddr - self.guest_hpa_base) < self.guest_ram_size) {
-                    entry.* = .{
-                        .guest_vaddr_page = page,
-                        .host_paddr_page = paddr & ~@as(usize, 0xFFF),
-                        .flags = region.flags,
-                        .epoch = self.epoch,
-                    };
-                    return paddr;
-                }
+            const paddr = region.hpa_start +% (vaddr - region.vaddr_start);
+            if (self.guest_hpa_base > 0 and paddr >= self.guest_hpa_base and
+                (paddr - self.guest_hpa_base) < self.guest_ram_size)
+            {
+                entry.* = .{
+                    .guest_vaddr_page = page,
+                    .host_paddr_page = paddr & ~@as(usize, PAGE_OFFSET_MASK),
+                    .flags = region.flags,
+                    .epoch = self.epoch,
+                };
+                return paddr;
             }
         }
-
         return null;
     }
 
@@ -201,70 +255,83 @@ pub const SoftTlb = struct {
         delta: i64,
     };
 
-    /// Query the dynamic direct-mapped host physical region for a virtual address.
-    /// Returns the region metadata if the address falls within a verified linear contiguous RAM region.
-    pub fn getDirectMappingRegion(self: *SoftTlb, vaddr: u32) ?DirectMappingRegion {
-        // 1. Bare mode (satp == 0) or M-mode
-        const satp_mode = (self.satp >> 31) & 1;
-        if (satp_mode == 0 or self.privilege_mode == 3) {
-            if (self.guest_hpa_base > 0 and vaddr >= self.guest_gpa_base and (vaddr - self.guest_gpa_base) < self.guest_ram_size) {
+    /// Query the dynamic direct-mapped host physical region for a virtual
+    /// address.
+    pub fn getDirectMappingRegion(
+        self: *SoftTlb,
+        vaddr: u32,
+    ) ?DirectMappingRegion {
+        const satp_mode = (self.satp >> SV32_SATP_MODE_SHIFT) & 1;
+        if (satp_mode == 0 or self.privilege_mode == riscv.PRIV_MACHINE) {
+            if (self.guest_hpa_base > 0 and vaddr >= self.guest_gpa_base and
+                (vaddr - self.guest_gpa_base) < self.guest_ram_size)
+            {
                 const vstart = @as(u32, @truncate(self.guest_gpa_base));
                 const vend = vstart +% @as(u32, @truncate(self.guest_ram_size));
-                const vstart_sign_ext = @as(i64, @as(i32, @bitCast(vstart)));
+                const vstart_sext = @as(i64, @as(i32, @bitCast(vstart)));
                 return .{
                     .vaddr_start = vstart,
                     .vaddr_end = vend,
                     .hpa_start = self.guest_hpa_base,
-                    .delta = @as(i64, @intCast(self.guest_hpa_base)) - vstart_sign_ext,
+                    .delta = @as(i64, @intCast(self.guest_hpa_base)) -
+                        vstart_sext,
                 };
             }
             return null;
         }
 
-        // 2. Sv32 mode: Check verified contiguous regions
-        const reg_slot = (vaddr >> 22) & (MAX_CONTIGUOUS_REGIONS - 1);
+        const reg_slot =
+            (vaddr >> SV32_VPN1_SHIFT) & (MAX_CONTIGUOUS_REGIONS - 1);
         const region = &self.contiguous_regions[reg_slot];
-        if (region.valid and vaddr >= region.vaddr_start and vaddr < region.vaddr_end) {
-            const vstart_sign_ext = @as(i64, @as(i32, @bitCast(region.vaddr_start)));
+        if (region.valid and vaddr >= region.vaddr_start and
+            vaddr < region.vaddr_end)
+        {
+            const vstart_sext =
+                @as(i64, @as(i32, @bitCast(region.vaddr_start)));
             return .{
                 .vaddr_start = region.vaddr_start,
                 .vaddr_end = region.vaddr_end,
                 .hpa_start = region.hpa_start,
-                .delta = @as(i64, @intCast(region.hpa_start)) - vstart_sign_ext,
+                .delta = @as(i64, @intCast(region.hpa_start)) - vstart_sext,
             };
         }
-
         return null;
     }
 
-    /// Query the dynamic direct-mapped host physical delta for a virtual address.
-    /// Returns delta if the address falls within a verified linear contiguous RAM region.
+    /// Query the dynamic direct-mapped host physical delta for a virtual
+    /// address.
     pub fn getDirectMappingDelta(self: *SoftTlb, vaddr: u32) ?i64 {
-        if (self.getDirectMappingRegion(vaddr)) |r| {
-            return r.delta;
-        }
+        if (self.getDirectMappingRegion(vaddr)) |r| return r.delta;
         return null;
     }
 
-    /// Translate virtual address to host physical address via direct mapping or Sv32 page table walk
-    pub fn translateFull(self: *SoftTlb, vaddr: u32, is_write: bool, is_exec: bool, bus: *bus_mod.Bus) ?usize {
+    /// Translate virtual address to host physical address via direct mapping
+    /// or Sv32 page table walk.
+    pub fn translateFull(
+        self: *SoftTlb,
+        vaddr: u32,
+        is_write: bool,
+        is_exec: bool,
+        bus: *bus_mod.Bus,
+    ) ?usize {
         _ = bus;
-        if (self.translateFast(vaddr, is_write, is_exec)) |cached| return cached;
+        if (self.translateFast(vaddr, is_write, is_exec)) |cached| {
+            return cached;
+        }
 
-        // Bare mode (satp bit 31 == 0) or M-mode
-        const satp_mode = (self.satp >> 31) & 1;
-        if (satp_mode == 0 or self.privilege_mode == 3) {
-            const hpa = self.translateGpaToHpa(vaddr) orelse (self.fallbackIdentity(vaddr) orelse return null);
+        const satp_mode = (self.satp >> SV32_SATP_MODE_SHIFT) & 1;
+        if (satp_mode == 0 or self.privilege_mode == riscv.PRIV_MACHINE) {
+            const hpa = self.translateGpaToHpa(vaddr) orelse
+                (self.fallbackIdentity(vaddr) orelse return null);
 
             if (!bus_mod.Bus.isMmioAddr(@truncate(hpa))) {
-                const page = vaddr >> 12;
-                const slot = page & TLB_MASK;
-                var flags: u8 = 1 | (1 << 1) | (1 << 2) | (1 << 3); // Valid, R, W, X
-                if (self.privilege_mode == 0) flags |= (1 << 4);
+                const page = vaddr >> PAGE_SHIFT;
+                var flags: u8 = PTE.VRWX;
+                if (self.privilege_mode == riscv.PRIV_USER) flags |= PTE.U;
 
-                self.entries[slot] = .{
+                self.entries[page & TLB_MASK] = .{
                     .guest_vaddr_page = page,
-                    .host_paddr_page = hpa & ~@as(usize, 0xFFF),
+                    .host_paddr_page = hpa & ~@as(usize, PAGE_OFFSET_MASK),
                     .flags = flags,
                     .epoch = self.epoch,
                 };
@@ -272,64 +339,69 @@ pub const SoftTlb = struct {
             return hpa;
         }
 
-        // Sv32 Page Table Walk
-        const root_ppn = @as(usize, self.satp) & 0x003F_FFFF;
+        // Sv32 Page Table Walk.
+        const root_ppn = @as(usize, self.satp) & SV32_SATP_PPN_MASK;
         const root_gpa = self.ppnToGpa(root_ppn);
-        const vpn1 = (vaddr >> 22) & 0x3FF;
-        const pte1_gpa = root_gpa +% (vpn1 * 4);
+        const vpn1 = (vaddr >> SV32_VPN1_SHIFT) & SV32_VPN_MASK;
+        const pte1_gpa = root_gpa +% (vpn1 * @sizeOf(u32));
         const pte1_hpa = self.translateGpaToHpa(pte1_gpa) orelse return null;
 
         const pte1_ptr = @as(*align(4) const u32, @ptrFromInt(pte1_hpa));
         const pte1 = @atomicLoad(u32, pte1_ptr, .acquire);
 
-        if ((pte1 & 1) == 0 or ((pte1 & 2) == 0 and (pte1 & 4) != 0)) {
+        if (!PTE.isValid(pte1)) {
             self.last_null_vaddr = vaddr;
             self.last_null_pte1 = pte1;
             return null;
         }
 
         var final_gpa: usize = 0;
-        var pte_flags: u8 = 1;
+        var pte_flags: u8 = PTE.V;
 
-        if ((pte1 & 0xE) == 0) {
-            // Pointer to level 0 page table
-            const pte0_ppn = (@as(usize, pte1) & 0xFFFF_FC00) >> 10;
+        if (PTE.isPointer(pte1)) {
+            const pte0_ppn =
+                (@as(usize, pte1) & SV32_PTE_PPN_MASK) >> SV32_PPN_SHIFT;
             const pte0_table_gpa = self.ppnToGpa(pte0_ppn);
-            const vpn0 = (vaddr >> 12) & 0x3FF;
-            const pte0_gpa = pte0_table_gpa +% (vpn0 * 4);
-            const pte0_hpa = self.translateGpaToHpa(pte0_gpa) orelse return null;
+            const vpn0 = (vaddr >> PAGE_SHIFT) & SV32_VPN_MASK;
+            const pte0_gpa = pte0_table_gpa +% (vpn0 * @sizeOf(u32));
+            const pte0_hpa =
+                self.translateGpaToHpa(pte0_gpa) orelse return null;
 
             const pte0_ptr = @as(*align(4) const u32, @ptrFromInt(pte0_hpa));
             const pte0 = @atomicLoad(u32, pte0_ptr, .acquire);
 
-            if ((pte0 & 1) == 0 or ((pte0 & 2) == 0 and (pte0 & 4) != 0) or (pte0 & 0xE) == 0) {
+            if (!PTE.isValid(pte0) or PTE.isPointer(pte0)) {
                 self.last_null_vaddr = vaddr;
                 self.last_null_pte1 = pte1;
                 self.last_null_pte0 = pte0;
                 return null;
             }
 
-            const page_ppn = (@as(usize, pte0) & 0xFFFF_FC00) >> 10;
-            final_gpa = self.ppnToGpa(page_ppn) | (vaddr & 0xFFF);
-            pte_flags = @truncate(pte0 & 0x1F); // V, R, W, X, U
+            const page_ppn =
+                (@as(usize, pte0) & SV32_PTE_PPN_MASK) >> SV32_PPN_SHIFT;
+            final_gpa = self.ppnToGpa(page_ppn) | (vaddr & PAGE_OFFSET_MASK);
+            pte_flags = @truncate(pte0 & PTE.FLAGS_MASK);
         } else {
-            // 4MB Superpage (PPN1 is bits 31..20, shifted to address bits 31..22)
-            // Misaligned superpage check: in Sv32, PPN[0] (bits 19..10) must be 0 for superpages.
-            if ((pte1 & 0x000F_FC00) != 0) {
+            // 4MB Superpage: PPN[0] (bits 19..10) must be 0 in Sv32.
+            if ((pte1 & SV32_PTE_PPN0_MASK) != 0) {
                 self.last_null_vaddr = vaddr;
                 self.last_null_pte1 = pte1;
                 return null;
             }
-            const ppn1_raw = @as(usize, @as(u32, @truncate((@as(usize, pte1) >> 20) << 22)));
-            const ppn1 = if (ppn1_raw >= self.guest_gpa_base) ppn1_raw else (self.guest_gpa_base | ppn1_raw);
-            final_gpa = ppn1 | (vaddr & 0x003F_FFFF);
-            pte_flags = @truncate(pte1 & 0x1F);
+            const ppn1_shifted = (@as(usize, pte1) >> 20) << SV32_VPN1_SHIFT;
+            const ppn1_raw = @as(usize, @as(u32, @truncate(ppn1_shifted)));
+            const ppn1 = if (ppn1_raw >= self.guest_gpa_base)
+                ppn1_raw
+            else
+                (self.guest_gpa_base | ppn1_raw);
+            final_gpa = ppn1 | (vaddr & SV32_SUPERPAGE_MASK);
+            pte_flags = @truncate(pte1 & PTE.FLAGS_MASK);
 
-            // Dynamically register this verified contiguous 4MB mapping
-            const vstart = vaddr & ~@as(u32, 0x003F_FFFF);
-            const vend = vstart +% 0x0040_0000;
+            const vstart = vaddr & ~SV32_SUPERPAGE_MASK;
+            const vend = vstart +% SV32_SUPERPAGE_SIZE;
             if (self.translateGpaToHpa(ppn1)) |hstart| {
-                const reg_slot = (vstart >> 22) & (MAX_CONTIGUOUS_REGIONS - 1);
+                const reg_slot =
+                    (vstart >> SV32_VPN1_SHIFT) & (MAX_CONTIGUOUS_REGIONS - 1);
                 self.contiguous_regions[reg_slot] = .{
                     .vaddr_start = vstart,
                     .vaddr_end = vend,
@@ -340,34 +412,26 @@ pub const SoftTlb = struct {
             }
         }
 
-        const final_hpa = self.translateGpaToHpa(final_gpa) orelse (if (bus_mod.Bus.isMmioAddr(@truncate(final_gpa))) final_gpa else return null);
+        const final_hpa = self.translateGpaToHpa(final_gpa) orelse
+            (if (bus_mod.Bus.isMmioAddr(@truncate(final_gpa)))
+                final_gpa
+            else
+                return null);
 
-        // Check RISC-V privilege rules for Sv32
-        const is_user_page = (pte_flags & (1 << 4)) != 0;
-        if (self.privilege_mode == 0 and !is_user_page) {
-            // User mode cannot access kernel pages
-            return null;
-        }
-        if (self.privilege_mode == 1 and is_user_page) {
-            if (is_exec) return null; // Supervisor mode cannot execute code from User pages
-            const sum_allowed = (self.mstatus & (1 << 18)) != 0;
-            if (!sum_allowed) return null; // Supervisor mode cannot read/write User pages unless SUM bit is set
-        }
-
-        const required_flag: u8 = if (is_exec) (1 << 3) else if (is_write) (1 << 2) else (1 << 1);
-        if ((pte_flags & required_flag) == 0) {
+        const req_flag: u8 =
+            if (is_exec) PTE.X else if (is_write) PTE.W else PTE.R;
+        if (!self.checkPrivilegeFlags(pte_flags, is_write, is_exec)) {
             self.last_null_vaddr = vaddr;
             self.last_null_pte_flags = pte_flags;
-            self.last_null_req_flag = required_flag;
+            self.last_null_req_flag = req_flag;
             return null;
         }
 
         if (!bus_mod.Bus.isMmioAddr(@truncate(final_hpa))) {
-            const page = vaddr >> 12;
-            const slot = page & TLB_MASK;
-            self.entries[slot] = .{
+            const page = vaddr >> PAGE_SHIFT;
+            self.entries[page & TLB_MASK] = .{
                 .guest_vaddr_page = page,
-                .host_paddr_page = final_hpa & ~@as(usize, 0xFFF),
+                .host_paddr_page = final_hpa & ~@as(usize, PAGE_OFFSET_MASK),
                 .flags = pte_flags,
                 .epoch = self.epoch,
             };
@@ -375,353 +439,51 @@ pub const SoftTlb = struct {
         return final_hpa;
     }
 
-    pub fn readU8(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
-        const paddr = self.translateFast(vaddr, false, false) orelse (self.translateFull(vaddr, false, false, bus) orelse {
-            return .{ .trap = 13 }; // Load page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            return .{ .val = @truncate(bus.read(p32, 1)) };
-        }
-        const ptr = @as(*align(1) const u8, @ptrFromInt(paddr));
-        return .{ .val = @atomicLoad(u8, ptr, .acquire) };
-    }
-
-    pub fn readU16(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
-        if ((vaddr & 0xFFF) == 0xFFF) {
-            const b0 = self.readU8(vaddr, bus);
-            if (b0.trap) |cause| return .{ .trap = cause };
-            const b1 = self.readU8(vaddr +% 1, bus);
-            if (b1.trap) |cause| return .{ .trap = cause };
-            return .{ .val = @as(u32, b0.val) | (@as(u32, b1.val) << 8) };
-        }
-        const paddr = self.translateFast(vaddr, false, false) orelse (self.translateFull(vaddr, false, false, bus) orelse {
-            return .{ .trap = 13 }; // Load page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            return .{ .val = @truncate(bus.read(p32, 2)) };
-        }
-        if ((paddr & 1) == 0) {
-            const ptr = @as(*align(2) const u16, @ptrFromInt(paddr));
-            return .{ .val = @atomicLoad(u16, ptr, .acquire) };
-        }
-        const ptr_lo = @as(*align(1) const u8, @ptrFromInt(paddr));
-        const ptr_hi = @as(*align(1) const u8, @ptrFromInt(paddr +% 1));
-        const lo = @atomicLoad(u8, ptr_lo, .acquire);
-        const hi = @atomicLoad(u8, ptr_hi, .acquire);
-        return .{ .val = @as(u32, lo) | (@as(u32, hi) << 8) };
-    }
-
-    pub fn fetchU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
-        if ((vaddr & 0xFFF) > 0xFFC) {
-            const paddr1 = self.translateFast(vaddr, false, true) orelse (self.translateFull(vaddr, false, true, bus) orelse {
-                return .{ .trap = 12 };
-            });
-            const paddr2 = self.translateFast(vaddr +% 2, false, true) orelse (self.translateFull(vaddr +% 2, false, true, bus) orelse {
-                return .{ .trap = 12 };
-            });
-            const p32_1: u32 = @truncate(paddr1);
-            const p32_2: u32 = @truncate(paddr2);
-            var val: u32 = 0;
-            if (bus.isMmio(p32_1)) {
-                val |= @as(u32, @truncate(bus.read(p32_1, 2)));
-            } else {
-                const ptr1 = @as(*align(1) const volatile u16, @ptrFromInt(paddr1));
-                val |= @as(u32, ptr1.*);
-            }
-            if (bus.isMmio(p32_2)) {
-                val |= (@as(u32, @truncate(bus.read(p32_2, 2))) << 16);
-            } else {
-                const ptr2 = @as(*align(1) const volatile u16, @ptrFromInt(paddr2));
-                val |= (@as(u32, ptr2.*) << 16);
-            }
-            return .{ .val = val };
-        }
-        const paddr = self.translateFast(vaddr, false, true) orelse (self.translateFull(vaddr, false, true, bus) orelse {
-            return .{ .trap = 12 }; // Instruction page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            return .{ .val = bus.read(p32, 4) };
-        }
-        if ((paddr & 3) == 0) {
-            const ptr = @as(*align(4) const u32, @ptrFromInt(paddr));
-            return .{ .val = @atomicLoad(u32, ptr, .acquire) };
-        }
-        const ptr = @as(*align(1) const volatile u32, @ptrFromInt(paddr));
-        return .{ .val = ptr.* };
-    }
-
-    pub fn readU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
-        if ((vaddr & 0xFFF) > 0xFFC) {
-            var val: u32 = 0;
-            var i: u32 = 0;
-            while (i < 4) : (i += 1) {
-                const res = self.readU8(vaddr +% i, bus);
-                if (res.trap) |cause| return .{ .trap = cause };
-                val |= (@as(u32, res.val) << @as(u5, @truncate(i * 8)));
-            }
-            return .{ .val = val };
-        }
-        const paddr = self.translateFast(vaddr, false, false) orelse (self.translateFull(vaddr, false, false, bus) orelse {
-            return .{ .trap = 13 }; // Load page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            return .{ .val = bus.read(p32, 4) };
-        }
-        if ((paddr & 3) == 0) {
-            const ptr = @as(*align(4) const u32, @ptrFromInt(paddr));
-            return .{ .val = @atomicLoad(u32, ptr, .acquire) };
-        }
-        var val: u32 = 0;
-        var i: usize = 0;
-        while (i < 4) : (i += 1) {
-            const b = @atomicLoad(u8, @as(*align(1) const u8, @ptrFromInt(paddr +% i)), .acquire);
-            val |= (@as(u32, b) << @as(u5, @truncate(i * 8)));
-        }
-        return .{ .val = val };
-    }
-
-    pub fn writeU8(self: *SoftTlb, vaddr: u32, val: u8, bus: *bus_mod.Bus) ?u32 {
-        const paddr = self.translateFast(vaddr, true, false) orelse (self.translateFull(vaddr, true, false, bus) orelse {
-            return 15; // Store page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            bus.write(p32, val, 1);
-            return null;
-        }
-        if (paddr >= 0xE1D1_F000 and paddr < 0xE1D2_0000) {
-            self.last_trampoline_pgd_write_vaddr = vaddr;
-            self.last_trampoline_pgd_write_val = @as(u32, val);
-        }
-        const ptr = @as(*align(1) u8, @ptrFromInt(paddr));
-        @atomicStore(u8, ptr, val, .release);
-        vcpu_mod.VCpu.invalidateReservations(paddr);
-        return null;
-    }
-
-    pub fn writeU16(self: *SoftTlb, vaddr: u32, val: u16, bus: *bus_mod.Bus) ?u32 {
-        if ((vaddr & 0xFFF) == 0xFFF) {
-            if (self.writeU8(vaddr, @truncate(val), bus)) |trap| return trap;
-            if (self.writeU8(vaddr +% 1, @truncate(val >> 8), bus)) |trap| return trap;
-            return null;
-        }
-        const paddr = self.translateFast(vaddr, true, false) orelse (self.translateFull(vaddr, true, false, bus) orelse {
-            return 15; // Store page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            bus.write(p32, val, 2);
-            return null;
-        }
-        if ((paddr & 1) == 0) {
-            const ptr = @as(*align(2) u16, @ptrFromInt(paddr));
-            @atomicStore(u16, ptr, val, .release);
-            vcpu_mod.VCpu.invalidateReservations(paddr);
-            return null;
-        }
-        const ptr_lo = @as(*align(1) u8, @ptrFromInt(paddr));
-        const ptr_hi = @as(*align(1) u8, @ptrFromInt(paddr +% 1));
-        @atomicStore(u8, ptr_lo, @truncate(val), .release);
-        @atomicStore(u8, ptr_hi, @truncate(val >> 8), .release);
-        vcpu_mod.VCpu.invalidateReservations(paddr);
-        return null;
-    }
-
-    pub fn writeU32(self: *SoftTlb, vaddr: u32, val: u32, bus: *bus_mod.Bus) ?u32 {
-        if ((vaddr & 0xFFF) > 0xFFC) {
-            var i: u32 = 0;
-            while (i < 4) : (i += 1) {
-                const b: u8 = @truncate(val >> @as(u5, @truncate(i * 8)));
-                if (self.writeU8(vaddr +% i, b, bus)) |trap| return trap;
-            }
-            return null;
-        }
-        const paddr = self.translateFast(vaddr, true, false) orelse (self.translateFull(vaddr, true, false, bus) orelse {
-            return 15; // Store page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            bus.write(p32, val, 4);
-            return null;
-        }
-        if (paddr >= 0xE1D1_F000 and paddr < 0xE1D2_0000) {
-            self.last_trampoline_pgd_write_vaddr = vaddr;
-            self.last_trampoline_pgd_write_val = val;
-        }
-        if ((paddr & 3) == 0) {
-            const ptr = @as(*align(4) u32, @ptrFromInt(paddr));
-            @atomicStore(u32, ptr, val, .release);
-            vcpu_mod.VCpu.invalidateReservations(paddr);
-            return null;
-        }
-        var i: usize = 0;
-        while (i < 4) : (i += 1) {
-            @atomicStore(u8, @as(*align(1) u8, @ptrFromInt(paddr +% i)), @truncate(val >> @as(u5, @truncate(i * 8))), .release);
-        }
-        vcpu_mod.VCpu.invalidateReservations(paddr);
-        return null;
-    }
-
-    pub const AmoOp = enum {
-        swap,
-        add,
-        xor,
-        and_op,
-        or_op,
-        min,
-        max,
-        minu,
-        maxu,
-    };
-
-    pub fn amoU32(self: *SoftTlb, vaddr: u32, val: u32, op: AmoOp, bus: *bus_mod.Bus) AccessResult {
-        if ((vaddr & 3) != 0) {
-            return .{ .trap = 6 }; // Store/AMO address misaligned
-        }
-        const paddr = self.translateFast(vaddr, true, false) orelse (self.translateFull(vaddr, true, false, bus) orelse {
-            return .{ .trap = 15 }; // Store/AMO page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            const old = @as(u32, @truncate(bus.read(p32, 4)));
-            const new_val: u32 = switch (op) {
-                .swap => val,
-                .add => old +% val,
-                .xor => old ^ val,
-                .and_op => old & val,
-                .or_op => old | val,
-                .min => @as(u32, @bitCast(@min(@as(i32, @bitCast(old)), @as(i32, @bitCast(val))))),
-                .max => @as(u32, @bitCast(@max(@as(i32, @bitCast(old)), @as(i32, @bitCast(val))))),
-                .minu => @min(old, val),
-                .maxu => @max(old, val),
-            };
-            bus.write(p32, new_val, 4);
-            return .{ .val = old };
-        }
-        const ptr = @as(*align(4) u32, @ptrFromInt(paddr));
-        const old_val: u32 = switch (op) {
-            .swap => @atomicRmw(u32, ptr, .Xchg, val, .seq_cst),
-            .add => @atomicRmw(u32, ptr, .Add, val, .seq_cst),
-            .xor => @atomicRmw(u32, ptr, .Xor, val, .seq_cst),
-            .and_op => @atomicRmw(u32, ptr, .And, val, .seq_cst),
-            .or_op => @atomicRmw(u32, ptr, .Or, val, .seq_cst),
-            .min => @as(u32, @bitCast(@atomicRmw(i32, @as(*align(4) i32, @ptrCast(ptr)), .Min, @as(i32, @bitCast(val)), .seq_cst))),
-            .max => @as(u32, @bitCast(@atomicRmw(i32, @as(*align(4) i32, @ptrCast(ptr)), .Max, @as(i32, @bitCast(val)), .seq_cst))),
-            .minu => @atomicRmw(u32, ptr, .Min, val, .seq_cst),
-            .maxu => @atomicRmw(u32, ptr, .Max, val, .seq_cst),
-        };
-        vcpu_mod.VCpu.invalidateReservations(paddr);
-        return .{ .val = old_val };
-    }
-
-    pub fn lrU32(self: *SoftTlb, vaddr: u32, hart_id: usize, bus: *bus_mod.Bus) struct { trap: ?u32 = null, val: u32 = 0, paddr: usize = 0 } {
-        if ((vaddr & 3) != 0) {
-            return .{ .trap = 4 }; // Load address misaligned
-        }
-        const paddr = self.translateFast(vaddr, false, false) orelse (self.translateFull(vaddr, false, false, bus) orelse {
-            return .{ .trap = 13 }; // Load page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            return .{ .val = bus.read(p32, 4), .paddr = paddr };
-        }
-        vcpu_mod.VCpu.setReservation(hart_id, paddr);
-        const ptr = @as(*align(4) const u32, @ptrFromInt(paddr));
-        const val = @atomicLoad(u32, ptr, .seq_cst);
-        return .{ .val = val, .paddr = paddr };
-    }
-
-    pub fn scU32(self: *SoftTlb, vaddr: u32, val: u32, hart_id: usize, bus: *bus_mod.Bus) struct { trap: ?u32 = null, success: bool = false } {
-        if ((vaddr & 3) != 0) {
-            return .{ .trap = 6 }; // Store/AMO address misaligned
-        }
-        const paddr = self.translateFast(vaddr, true, false) orelse (self.translateFull(vaddr, true, false, bus) orelse {
-            return .{ .trap = 15 }; // Store page fault
-        });
-        const p32: u32 = @truncate(paddr);
-        if (bus.isMmio(p32)) {
-            bus.write(p32, val, 4);
-            return .{ .success = true };
-        }
-        if (!vcpu_mod.VCpu.checkAndClearReservation(hart_id, paddr)) {
-            return .{ .success = false };
-        }
-        const ptr = @as(*align(4) u32, @ptrFromInt(paddr));
-        @atomicStore(u32, ptr, val, .seq_cst);
-        vcpu_mod.VCpu.invalidateReservations(paddr);
-        return .{ .success = true };
-    }
+    pub const readU8 = ops.readU8;
+    pub const readU16 = ops.readU16;
+    pub const fetchU32 = ops.fetchU32;
+    pub const readU32 = ops.readU32;
+    pub const writeU8 = ops.writeU8;
+    pub const writeU16 = ops.writeU16;
+    pub const writeU32 = ops.writeU32;
+    pub const amoU32 = ops.amoU32;
+    pub const lrU32 = ops.lrU32;
+    pub const scU32 = ops.scU32;
 };
 
-test "SoftTlb boundary access at 0xFFFFFFFF does not panic from integer overflow" {
+test "SoftTlb Sv32 validation rejects illegal PTEs and misaligned superpages" {
     const testing = std.testing;
+    _ = ops;
 
     var uart = @import("devices/vuart.zig").VirtualUart{};
     var timer = @import("devices/vtimer.zig").VirtualTimer{};
     var pic = @import("devices/vpic.zig").VirtualPlic{};
-    var bus = bus_mod.Bus{
-        .uart = &uart,
-        .timer = &timer,
-        .pic = &pic,
-    };
+    var bus = bus_mod.Bus{ .uart = &uart, .timer = &timer, .pic = &pic };
 
-    var tlb = SoftTlb.init(0x80000000, 0x80000000, 0x10000000);
-
-    // 1. readU16 at 0xFFFFFFFF (unaligned across 32-bit boundary)
-    const r16 = tlb.readU16(0xFFFFFFFF, &bus);
-    try testing.expect(r16.trap != null); // Must cleanly trap instead of panicking
-
-    // 2. readU32 at 0xFFFFFFFD (spans 0xFFFFFFFD..0x00000000)
-    const r32 = tlb.readU32(0xFFFFFFFD, &bus);
-    try testing.expect(r32.trap != null);
-
-    // 3. writeU16 at 0xFFFFFFFF
-    const w16 = tlb.writeU16(0xFFFFFFFF, 0x1234, &bus);
-    try testing.expect(w16 != null);
-
-    // 4. writeU32 at 0xFFFFFFFE
-    const w32 = tlb.writeU32(0xFFFFFFFE, 0x12345678, &bus);
-    try testing.expect(w32 != null);
-}
-
-test "SoftTlb Sv32 validation rejects illegal W=1 R=0 and misaligned superpages" {
-    const testing = std.testing;
-
-    var uart = @import("devices/vuart.zig").VirtualUart{};
-    var timer = @import("devices/vtimer.zig").VirtualTimer{};
-    var pic = @import("devices/vpic.zig").VirtualPlic{};
-    var bus = bus_mod.Bus{
-        .uart = &uart,
-        .timer = &timer,
-        .pic = &pic,
-    };
-
-    // Allocate a buffer to simulate guest RAM
     var mock_ram: [8192]u8 align(4096) = std.mem.zeroes([8192]u8);
     const ram_addr = @intFromPtr(&mock_ram);
 
-    // Root page table at mock_ram[0..4096]
     var tlb = SoftTlb.init(0x80000000, ram_addr, 8192);
-    // Enable Sv32 paging: satp mode = 1, PPN = 0x80000 (corresponds to GPA 0x80000000 -> ram_addr)
-    tlb.satp = (1 << 31) | 0x80000;
-    tlb.privilege_mode = 1; // S-mode
+    tlb.satp = (1 << SV32_SATP_MODE_SHIFT) | 0x80000;
+    tlb.privilege_mode = riscv.PRIV_SUPERVISOR;
 
     const root_pt = @as([*]u32, @ptrCast(@alignCast(&mock_ram[0])));
 
-    // Case 1: Leaf PTE with R=0, W=1 (reserved illegal encoding, V=1, W=1, R=0 -> 0x5)
-    root_pt[0] = 0x20000000 | 0x05; // PPN + W + V (R=0)
-    try testing.expect(tlb.translateFull(0x00000000, true, false, &bus) == null);
+    // 1. Leaf PTE with R=0, W=1 (illegal reserved encoding).
+    root_pt[0] = 0x20000000 | PTE.V | PTE.W;
+    try testing.expect(
+        tlb.translateFull(0x00000000, true, false, &bus) == null,
+    );
 
-    // Case 2: 4MB Superpage with misaligned PPN[0] != 0 (e.g. bits 19..10 set)
-    // Leaf superpage: R=1, W=1, V=1 -> 0x7, with PPN[0] = 0x400
-    root_pt[1] = 0x20000000 | 0x00000400 | 0x07;
-    try testing.expect(tlb.translateFull(0x00400000, false, false, &bus) == null);
+    // 2. 4MB Superpage with misaligned PPN[0] != 0 (bits 19..10 set).
+    root_pt[1] = 0x20000000 | 0x00000400 | PTE.V | PTE.R | PTE.W;
+    try testing.expect(
+        tlb.translateFull(0x00400000, false, false, &bus) == null,
+    );
 
-    // Case 3: Valid 4MB Superpage with PPN[0] == 0 (must succeed)
-    root_pt[2] = 0x20000000 | 0x07; // PPN[0] = 0, R=1, W=1, V=1
-    try testing.expect(tlb.translateFull(0x00800000, false, false, &bus) != null);
+    // 3. Valid 4MB Superpage with PPN[0] == 0 (must succeed).
+    root_pt[2] = 0x20000000 | PTE.V | PTE.R | PTE.W;
+    try testing.expect(
+        tlb.translateFull(0x00800000, false, false, &bus) != null,
+    );
 }

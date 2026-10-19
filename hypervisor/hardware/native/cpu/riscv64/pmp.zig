@@ -1,5 +1,5 @@
-// RISC-V Physical Memory Protection (PMP) management
-// Used as a fallback for guest isolation when H-extension is missing.
+// RISC-V Physical Memory Protection (PMP) management.
+// Used as a fallback for guest isolation when the H-extension is missing.
 //
 // PMP uses Top-of-Range (TOR) mode which requires two entries per region:
 // entry N = base address, entry N+1 = top address with TOR config.
@@ -11,8 +11,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const physmem = @import("../../../../core/physmem.zig");
-const debug = @import("../../../../core/debug.zig");
+const riscv = @import("mod.zig");
 
 const is_test = builtin.is_test;
 
@@ -39,7 +38,7 @@ pub const Region = struct {
     flags: u8,
 };
 
-// Maximum number of PMP regions we support (7 TOR regions = 14 entries + 2 deny-all).
+// Maximum number of PMP regions we support (7 TOR regions = 14 entries).
 pub const MAX_REGIONS: usize = 7;
 pub const NUM_PMP_ENTRIES: usize = 16;
 
@@ -58,39 +57,48 @@ pub const PMPConfig = struct {
         self.regions.deinit(self.allocator);
     }
 
-    pub fn addRegion(self: *PMPConfig, base: usize, size: usize, flags: u8) !void {
-        if (self.regions.items.len >= MAX_REGIONS) return PMPError.TooManyRegions;
-        _ = std.math.add(usize, base, size) catch return PMPError.InvalidAlignment;
-        try self.regions.append(self.allocator, .{ .base = base, .size = size, .flags = flags });
+    pub fn addRegion(
+        self: *PMPConfig,
+        base: usize,
+        size: usize,
+        flags: u8,
+    ) !void {
+        if (self.regions.items.len >= MAX_REGIONS) {
+            return PMPError.TooManyRegions;
+        }
+        _ = std.math.add(usize, base, size) catch {
+            return PMPError.InvalidAlignment;
+        };
+        try self.regions.append(self.allocator, .{
+            .base = base,
+            .size = size,
+            .flags = flags,
+        });
     }
 
     /// Apply this PMP configuration to the current physical core.
     /// Called during context switch to a guest vcore.
     ///
-    /// Strategy:
-    /// First, deny all access by default (entry 0: NAPOT covering all memory, no permissions).
-    /// Then, for each guest region, program a TOR pair (base + top) with RWX permissions.
-    ///
-    /// TOR mode: pmpaddrN = base >> 2, pmpaddrN+1 = (base + size) >> 2, pmpcfgN+1 = TOR | perms.
+    /// TOR mode: pmpaddrN = base >> 2, pmpaddrN+1 = (base + size) >> 2,
+    /// pmpcfgN+1 = TOR | perms.
     pub fn apply(self: *PMPConfig) void {
         if (is_test) return;
 
-        // First clear all PMP entries to deny-all state.
         clearAllPmp();
 
-        // Program each region.
         var entry: usize = 0;
         for (self.regions.items) |reg| {
             if (reg.base == 0 and reg.size == ~@as(usize, 0)) {
                 if (entry >= NUM_PMP_ENTRIES) break;
-                writePmpAddr(entry, ~@as(usize, 0)); // Entire 64-bit space
-                writePmpCfg(entry, PMPAccess.napot | (reg.flags & PMPAccess.rwx_mask)); // NAPOT + RWX bits
+                writePmpAddr(entry, ~@as(usize, 0));
+                const cfg = PMPAccess.napot | (reg.flags & PMPAccess.rwx_mask);
+                writePmpCfg(entry, cfg);
                 entry += 1;
             } else {
-                if (entry + 2 > NUM_PMP_ENTRIES) break; // Hardware limit.
+                if (entry + 2 > NUM_PMP_ENTRIES) break;
                 const base_shifted = reg.base >> 2;
                 const top_shifted = (reg.base + reg.size) >> 2;
-                const cfg: u8 = PMPAccess.tor | (reg.flags & PMPAccess.rwx_mask); // TOR + RWX bits
+                const cfg = PMPAccess.tor | (reg.flags & PMPAccess.rwx_mask);
 
                 writePmpAddr(entry, base_shifted);
                 writePmpAddr(entry + 1, top_shifted);
@@ -100,16 +108,15 @@ pub const PMPConfig = struct {
             }
         }
 
-        // Final entry: deny-all for everything else.
-        // Set the last used entry+1 to NAPOT covering all remaining space with no perms.
+        // Final entry: deny-all for everything else (NAPOT, no permissions).
         if (entry < NUM_PMP_ENTRIES) {
-            writePmpAddr(entry, ~@as(usize, 0)); // All ones = entire address space (NAPOT)
-            writePmpCfg(entry, PMPAccess.napot); // NAPOT mode (bits 4:3 = 11), no R/W/X
+            writePmpAddr(entry, ~@as(usize, 0));
+            writePmpCfg(entry, PMPAccess.napot);
         }
     }
 
     pub fn clearAllPmp() void {
-        if (comptime @import("builtin").is_test) return;
+        if (comptime is_test) return;
         asm volatile ("csrw pmpcfg0, zero");
         asm volatile ("csrw pmpcfg2, zero");
         asm volatile ("csrw pmpaddr0, zero");
@@ -132,7 +139,7 @@ pub const PMPConfig = struct {
 
     /// Write a value to pmpaddr[index]. Only entries 0-15 are supported.
     pub fn writePmpAddr(index: usize, value: usize) void {
-        if (comptime @import("builtin").is_test) return;
+        if (comptime is_test) return;
         switch (index) {
             0 => asm volatile ("csrw pmpaddr0, %[val]"
                 :
@@ -203,15 +210,15 @@ pub const PMPConfig = struct {
     }
 
     /// Write configuration for a single PMP entry.
-    /// PMP configs are packed 4-per-register in pmpcfg0 (entries 0-7) and pmpcfg2 (entries 8-15).
+    /// PMP configs are packed 8-per-register in pmpcfg0 (0-7) and
+    /// pmpcfg2 (8-15).
     pub fn writePmpCfg(index: usize, cfg: u8) void {
-        if (comptime @import("builtin").is_test) return;
-        if (index >= 16) return;
+        if (comptime is_test) return;
+        if (index >= NUM_PMP_ENTRIES) return;
 
-        // Determine which pmpcfg register and which byte within it.
-        const reg_index = index / 8; // 0 → pmpcfg0, 1 → pmpcfg2
+        const reg_index = index / 8;
         const byte_pos: u6 = @intCast((index % 8) * 8);
-        const mask = ~(@as(usize, 0xFF) << byte_pos);
+        const mask = ~(@as(usize, 0xff) << byte_pos);
         const value = @as(usize, cfg) << byte_pos;
 
         if (reg_index == 0) {
@@ -237,47 +244,55 @@ pub const PMPConfig = struct {
 };
 
 extern const __hypervisor_start: u8;
-extern const __bss_start: u8;
+extern const __data_start: u8;
 extern const __hypervisor_end: u8;
 
-pub fn applyEmulatorPmp(cpu_core_id: usize, base_hpa: usize, range_size: usize) void {
+const CPU_STACK_SIZE: usize = 512 * 1024;
+
+pub fn applyEmulatorPmp(
+    cpu_core_id: usize,
+    base_hpa: usize,
+    range_size: usize,
+) void {
     if (is_test) return;
 
     PMPConfig.clearAllPmp();
 
     const hv_start = @intFromPtr(&__hypervisor_start);
-    const bss_start = @intFromPtr(&__bss_start);
+    const data_start = @intFromPtr(&__data_start);
     const hv_end = @intFromPtr(&__hypervisor_end);
+    const rx_cfg = PMPAccess.tor | PMPAccess.read | PMPAccess.execute;
+    const rw_cfg = PMPAccess.tor | PMPAccess.read | PMPAccess.write;
 
-    // Entry 0 and 1: Hypervisor text + rodata (RX)
+    // Entry 0 and 1: Hypervisor text + rodata (RX).
     PMPConfig.writePmpAddr(0, hv_start >> 2);
-    PMPConfig.writePmpAddr(1, bss_start >> 2);
-    PMPConfig.writePmpCfg(1, PMPAccess.tor | PMPAccess.read | PMPAccess.execute);
+    PMPConfig.writePmpAddr(1, data_start >> 2);
+    PMPConfig.writePmpCfg(1, rx_cfg);
 
-    // Entry 2 and 3: Hypervisor data + bss (RW)
-    PMPConfig.writePmpAddr(2, bss_start >> 2);
+    // Entry 2 and 3: Hypervisor data + bss + embedded rootvm (RW).
+    PMPConfig.writePmpAddr(2, data_start >> 2);
     PMPConfig.writePmpAddr(3, hv_end >> 2);
-    PMPConfig.writePmpCfg(3, PMPAccess.tor | PMPAccess.read | PMPAccess.write);
+    PMPConfig.writePmpCfg(3, rw_cfg);
 
-    // Entry 4 and 5: Current CPU core slab (RW)
-    // This MUST match CPU_SLAB_SHIFT in consts.s
-    const CPU_SLAB_SHIFT = 22;
-    const CPU_SLAB_SIZE = 1 << CPU_SLAB_SHIFT;
-    const slab_base = hv_end + (cpu_core_id << CPU_SLAB_SHIFT);
+    // Entry 4 and 5: Current CPU core slab (RW).
+    const slab_base = if (cpu_core_id < riscv.STATIC_PHYS_CORES)
+        hv_end + (cpu_core_id << riscv.CPU_SLAB_SHIFT)
+    else
+        @intFromPtr(riscv.getCPUContext()) - CPU_STACK_SIZE;
     PMPConfig.writePmpAddr(4, slab_base >> 2);
-    PMPConfig.writePmpAddr(5, (slab_base + CPU_SLAB_SIZE) >> 2);
-    PMPConfig.writePmpCfg(5, PMPAccess.tor | PMPAccess.read | PMPAccess.write);
+    PMPConfig.writePmpAddr(5, (slab_base + riscv.CPU_SLAB_SIZE) >> 2);
+    PMPConfig.writePmpCfg(5, rw_cfg);
 
-    // Entry 6 and 7: Guest RAM (RW)
+    // Entry 6 and 7: Guest RAM (RW).
     if (range_size > 0) {
         PMPConfig.writePmpAddr(6, base_hpa >> 2);
         PMPConfig.writePmpAddr(7, (base_hpa + range_size) >> 2);
-        PMPConfig.writePmpCfg(7, PMPAccess.tor | PMPAccess.read | PMPAccess.write);
+        PMPConfig.writePmpCfg(7, rw_cfg);
     }
 
-    // Entry 8: Deny-all for the rest of the address space (NAPOT mode, no perms)
+    // Entry 8: Deny-all for the rest of the address space (NAPOT, no perms).
     PMPConfig.writePmpAddr(8, ~@as(usize, 0));
-    PMPConfig.writePmpCfg(8, 0x18); // NAPOT mode (bits 4:3 = 11), no R/W/X
+    PMPConfig.writePmpCfg(8, PMPAccess.napot);
 }
 
 test "PMP configuration regions and capacity limits" {
@@ -288,19 +303,24 @@ test "PMP configuration regions and capacity limits" {
 
     try testing.expectEqual(@as(usize, 0), config.regions.items.len);
 
-    // Add regions up to MAX_REGIONS (7)
     var i: usize = 0;
     while (i < MAX_REGIONS) : (i += 1) {
-        try config.addRegion(0x80000000 + (i * 0x100000), 0x100000, PMPAccess.rwx);
+        try config.addRegion(
+            0x80000000 + (i * 0x100000),
+            0x100000,
+            PMPAccess.rwx,
+        );
     }
 
     try testing.expectEqual(MAX_REGIONS, config.regions.items.len);
 
-    // Attempting to add an 8th region must fail with TooManyRegions
-    try testing.expectError(error.TooManyRegions, config.addRegion(0x90000000, 0x100000, PMPAccess.rwx));
+    try testing.expectError(
+        error.TooManyRegions,
+        config.addRegion(0x90000000, 0x100000, PMPAccess.rwx),
+    );
 
-    // Verify first region attributes
-    try testing.expectEqual(@as(usize, 0x80000000), config.regions.items[0].base);
-    try testing.expectEqual(@as(usize, 0x100000), config.regions.items[0].size);
-    try testing.expectEqual(PMPAccess.rwx, config.regions.items[0].flags);
+    const reg0 = config.regions.items[0];
+    try testing.expectEqual(@as(usize, 0x80000000), reg0.base);
+    try testing.expectEqual(@as(usize, 0x100000), reg0.size);
+    try testing.expectEqual(PMPAccess.rwx, reg0.flags);
 }

@@ -1,0 +1,20 @@
+# Diosix Bare-Metal Host Installer Configuration (/etc/diosix/install.toml)
+#
+# Defines the default bare-metal installation layout used by `dsx host install`
+# when `--config` is not explicitly provided on the command line. Any setting
+# in this file can be overridden by CLI flags (`--mode`, `--disk`, `--hostname`,
+# `--stewards`, `--standby-root`, `--dry-run`).
+#
+# Permissions: 0644 (root:root)
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+[install]
+mode = "basic"
+target_disk = "/dev/vdb"
+hostname = "diosix-host"
+seat_profile = "desktop-kbd"
+boot_part_mb = 512
+state_part_mb = 4096
+enable_stewards = true
+standby_root_vm = true

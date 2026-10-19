@@ -1,4 +1,4 @@
-// Debug output for the hypervisor
+// Debug output for the hypervisor.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -7,14 +7,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Writer = std.Io.Writer;
 const atomic = @import("atomic.zig");
-const pcore = @import("pcore.zig");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const drivers = @import("drivers.zig");
 
-// Circular queue size for console text streams
+// Circular queue size for console text streams.
 const queue_size = 4096;
 
-// Generic circular queue (allocation-free & interrupt-safe)
+// Generic circular queue (allocation-free & interrupt-safe).
 pub fn GenericQueue(comptime T: type, comptime size: usize) type {
     return struct {
         buf: [size]T = undefined,
@@ -23,14 +22,14 @@ pub fn GenericQueue(comptime T: type, comptime size: usize) type {
 
         pub fn push(self: *@This(), val: T) bool {
             const next = (self.tail + 1) % size;
-            if (next == self.head) return false; // Full
+            if (next == self.head) return false; // Full.
             self.buf[self.tail] = val;
             self.tail = next;
             return true;
         }
 
         pub fn pop(self: *@This()) ?T {
-            if (self.head == self.tail) return null; // Empty
+            if (self.head == self.tail) return null; // Empty.
             const val = self.buf[self.head];
             self.head = (self.head + 1) % size;
             return val;
@@ -43,33 +42,34 @@ pub fn GenericQueue(comptime T: type, comptime size: usize) type {
 }
 
 const ConsoleState = struct {
-    // Single shared output queue for hypervisor console output
+    // Single shared output queue for hypervisor console output.
     output_queue: GenericQueue(u8, queue_size) = .{},
 
-    // Shared input queue for console keyboard input
+    // Shared input queue for console keyboard input.
     stdin_queue: GenericQueue(u8, 256) = .{},
 };
 
-// Global thread-safe debug console state
-var global_console_state = atomic.LockPayload(ConsoleState).init("Debug console state", .{});
+// Global thread-safe debug console state.
+var global_console_state =
+    atomic.LockPayload(ConsoleState).init("Debug console state", .{});
 
-// Reentrant lock tracking for active owner (eliminates fixed CPU arrays & aliasing bugs)
+// Reentrant lock tracking for active owner.
 var console_lock_owner: usize = 0;
 var console_lock_recursion: usize = 0;
 var console_lock_saved_mstatus: usize = 0;
 
-// Top-level crash bypass flag to guarantee panic messages get printed immediately
+// Top-level crash bypass flag so panic messages print immediately.
 pub var panic_mode: bool = false;
 
 pub const UART = struct {
-    // 16550 UART Register Offsets
-    pub const RBR = 0; // Receiver Buffer Register (read)
-    pub const THR = 0; // Transmitter Holding Register (write)
-    pub const LSR = 5; // Line Status Register
+    // 16550 UART Register Offsets.
+    pub const RBR = 0; // Receiver Buffer Register (read).
+    pub const THR = 0; // Transmitter Holding Register (write).
+    pub const LSR = 5; // Line Status Register.
 
-    // LSR Bitmasks
-    pub const LSR_DR = 0x01; // Data Ready
-    pub const LSR_THRE = 0x20; // Transmitter Holding Register Empty
+    // LSR Bitmasks.
+    pub const LSR_DR = 0x01; // Data Ready.
+    pub const LSR_THRE = 0x20; // Transmitter Holding Register Empty.
 };
 
 pub fn hw_putchar(c: u8) void {
@@ -100,7 +100,7 @@ pub fn hw_getchar() i16 {
 
 fn acquireConsole() *ConsoleState {
     const hart_id = riscv.readMhartid();
-    const self_id = hart_id + 1; // 1-indexed so 0 represents unowned
+    const self_id = hart_id + 1; // 1-indexed so 0 represents unowned.
 
     if (@atomicLoad(usize, &console_lock_owner, .seq_cst) == self_id) {
         console_lock_recursion += 1;
@@ -127,16 +127,16 @@ fn releaseConsole() void {
     }
 }
 
-// Drains characters from output queue to the physical console
+// Drains characters from output queue to the physical console.
 fn drainQueuesInternal(state: *ConsoleState) void {
     while (state.output_queue.pop()) |c| {
         hw_putchar(c);
     }
 }
 
-// Releases our spinlocks immediately when a crash is caught, enabling diagnostic prints.
+// Releases our spinlocks immediately when a crash is caught.
 pub fn releaseLocksForCrash() void {
-    panic_mode = true;
+    @atomicStore(bool, &panic_mode, true, .release);
     console_lock_recursion = 0;
     @atomicStore(usize, &console_lock_owner, 0, .release);
     global_console_state.lock.spinlock.lock_value.store(0, .release);
@@ -152,50 +152,48 @@ var basic_writer = Writer{
     .buffer = &.{},
 };
 
-fn basicDrain(_: *Writer, data: []const []const u8, splat: usize) Writer.Error!usize {
+fn emitSlices(
+    state: ?*ConsoleState,
+    data: []const []const u8,
+    splat: usize,
+) usize {
     var total: usize = 0;
-
-    if (panic_mode) {
-        for (data) |buf| {
-            for (buf) |c| hw_putchar(c);
-            total += buf.len;
-        }
-        if (data.len > 0 and splat > 0) {
-            const last = data[data.len - 1];
-            var i: usize = 0;
-            while (i < splat - 1) : (i += 1) {
-                for (last) |c| hw_putchar(c);
-                total += last.len;
-            }
-        }
-        return total;
-    }
-
-    const state = acquireConsole();
-    defer releaseConsole();
-
     for (data) |buf| {
         for (buf) |c| {
-            _ = state.output_queue.push(c);
+            if (state) |s| _ = s.output_queue.push(c) else hw_putchar(c);
         }
         total += buf.len;
     }
     if (data.len > 0 and splat > 0) {
         const last = data[data.len - 1];
-        var i: usize = 0;
-        while (i < splat - 1) : (i += 1) {
+        for (0..splat - 1) |_| {
             for (last) |c| {
-                _ = state.output_queue.push(c);
+                if (state) |s| _ = s.output_queue.push(c) else hw_putchar(c);
             }
             total += last.len;
         }
     }
+    return total;
+}
+
+fn basicDrain(
+    _: *Writer,
+    data: []const []const u8,
+    splat: usize,
+) Writer.Error!usize {
+    if (@atomicLoad(bool, &panic_mode, .acquire)) {
+        return emitSlices(null, data, splat);
+    }
+
+    const state = acquireConsole();
+    defer releaseConsole();
+    const total = emitSlices(state, data, splat);
     drainQueuesInternal(state);
     return total;
 }
 
 pub fn printf(comptime format: []const u8, args: anytype) void {
-    if (panic_mode) {
+    if (@atomicLoad(bool, &panic_mode, .acquire)) {
         basic_writer.print(format, args) catch {};
         return;
     }
@@ -205,7 +203,7 @@ pub fn printf(comptime format: []const u8, args: anytype) void {
 }
 
 pub fn putchar(c: u8) void {
-    if (panic_mode) {
+    if (@atomicLoad(bool, &panic_mode, .acquire)) {
         hw_putchar(c);
         return;
     }
@@ -216,7 +214,7 @@ pub fn putchar(c: u8) void {
 }
 
 pub fn write(s: []const u8) void {
-    if (panic_mode) {
+    if (@atomicLoad(bool, &panic_mode, .acquire)) {
         for (s) |c| hw_putchar(c);
         return;
     }
@@ -229,7 +227,7 @@ pub fn write(s: []const u8) void {
 }
 
 pub fn getchar() i16 {
-    if (panic_mode) {
+    if (@atomicLoad(bool, &panic_mode, .acquire)) {
         return hw_getchar();
     }
     const state = acquireConsole();
@@ -242,16 +240,23 @@ pub fn getchar() i16 {
     return hw_getchar();
 }
 
-// ----------------------- unit tests ---------------------
-
-test "debug console circular queue" {
+test "debug console circular queue push, pop, capacity, and wrap-around" {
     const testing = std.testing;
-    var q = GenericQueue(u8, 16){};
+    var q = GenericQueue(u8, 4){};
     try testing.expect(q.isEmpty());
     try testing.expect(q.pop() == null);
 
+    // Queue of size 4 holds 3 elements before full (head == next tail).
     try testing.expect(q.push('A'));
-    try testing.expect(!q.isEmpty());
-    try testing.expect(q.pop() == 'A');
+    try testing.expect(q.push('B'));
+    try testing.expect(q.push('C'));
+    try testing.expect(!q.push('D'));
+
+    try testing.expectEqual(@as(?u8, 'A'), q.pop());
+    try testing.expect(q.push('D')); // Wrap-around slot.
+
+    try testing.expectEqual(@as(?u8, 'B'), q.pop());
+    try testing.expectEqual(@as(?u8, 'C'), q.pop());
+    try testing.expectEqual(@as(?u8, 'D'), q.pop());
     try testing.expect(q.isEmpty());
 }

@@ -1,4 +1,4 @@
-// Dynamic Hardware Probing and Discovery Layer
+// Dynamic Hardware Probing and Discovery Layer.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -17,11 +17,11 @@ pub const HostHardware = struct {
     plic_base: ?usize,
 };
 
-pub const DEFAULT_RAM_BASE: u64 = 0x80000000;
-pub const DEFAULT_RAM_SIZE: u64 = 512 * 1024 * 1024;
-pub const DEFAULT_UART_BASE: usize = 0x10000000;
-pub const DEFAULT_CLINT_BASE: usize = 0x02000000;
-pub const DEFAULT_PLIC_BASE: usize = 0x0c000000;
+pub const DEFAULT_RAM_BASE: u64 = fdt.DEFAULT_RAM_BASE;
+pub const DEFAULT_RAM_SIZE: u64 = fdt.DEFAULT_RAM_SIZE;
+pub const DEFAULT_UART_BASE: usize = fdt.DEFAULT_UART_BASE;
+pub const DEFAULT_CLINT_BASE: usize = fdt.DEFAULT_CLINT_BASE;
+pub const DEFAULT_PLIC_BASE: usize = fdt.DEFAULT_PLIC_BASE;
 
 pub const DEFAULT_HOST_HARDWARE = HostHardware{
     .ram_base = DEFAULT_RAM_BASE,
@@ -52,4 +52,13 @@ pub fn probe(fdt_paddr: usize) HostHardware {
         .clint_base = info.clint_base,
         .plic_base = info.plic_base,
     };
+}
+
+test "discovery probe fallback on null FDT address" {
+    const hw = probe(0);
+    try std.testing.expectEqual(DEFAULT_RAM_BASE, hw.ram_base);
+    try std.testing.expectEqual(DEFAULT_RAM_SIZE, hw.ram_size);
+    try std.testing.expectEqual(@as(?usize, DEFAULT_UART_BASE), hw.uart_base);
+    try std.testing.expectEqual(@as(?usize, DEFAULT_CLINT_BASE), hw.clint_base);
+    try std.testing.expectEqual(@as(?usize, DEFAULT_PLIC_BASE), hw.plic_base);
 }

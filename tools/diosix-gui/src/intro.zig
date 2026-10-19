@@ -1,7 +1,7 @@
-// Inspiring Two-Warm-Moments Graphical Intro Animation for Diosix GUI
+// Inspiring Two-Warm-Moments Graphical Intro Animation for Diosix GUI.
 // Synchronized to intro.wav acoustic swells:
-//   Moment 1 (0.0s - 3.8s): Midnight Canvas, Stardust Embers, 'd i o s i x' Emergence & Corona
-//   Moment 2 (3.8s - 7.5s): Horizon Rise, Daylight Transition, Brand Glide & Window Bloom
+//   Moment 1 (0.0s - 3.8s): Midnight Canvas, Stardust Embers, 'd i o s i x'
+//   Moment 2 (3.8s - 7.5s): Horizon Rise, Daylight Transition & Window Bloom
 //   Decay (7.5s - 10.0s): Settling into live desktop environment
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
@@ -10,58 +10,106 @@
 const std = @import("std");
 const linux = std.os.linux;
 const fb = @import("framebuffer.zig");
-const font = @import("font.zig");
-const banner_font = @import("banner_font.zig");
-const cursor_mod = @import("cursor.zig");
 const gui_mod = @import("gui.zig");
+const intro_fx = @import("intro/fx.zig");
 const DiosixGui = gui_mod.DiosixGui;
+
+pub const Particle = intro_fx.Particle;
+pub const easeInOut = intro_fx.easeInOut;
+pub const interpolateColor = intro_fx.interpolateColor;
 
 pub const SENTINEL_PRIMARY: [*:0]const u8 = "/run/diosix_intro_played";
 pub const SENTINEL_FALLBACK: [*:0]const u8 = "/tmp/.diosix_intro_played";
 
-pub const TOTAL_INTRO_DURATION_MS: u32 = 10_000; // 10 seconds
+pub const TOTAL_INTRO_DURATION_MS: u32 = 10_000; // 10 seconds.
+
+const CmdlineToken = enum {
+    @"diosix.mode=dev",
+    @"diosix.welcome=force",
+};
+
+// Inspect a kernel command-line string for developer fast-boot mode.
+// Returns true when diosix.mode=dev is present unless diosix.welcome=force is
+// also passed.
+pub fn shouldSkipIntroFromCmdline(cmdline: []const u8) bool {
+    var is_dev_mode = false;
+    var force_welcome = false;
+    var it = std.mem.tokenizeAny(u8, cmdline, " \t\r\n");
+    while (it.next()) |tok| {
+        if (std.meta.stringToEnum(CmdlineToken, tok)) |flag| {
+            switch (flag) {
+                .@"diosix.mode=dev" => is_dev_mode = true,
+                .@"diosix.welcome=force" => force_welcome = true,
+            }
+        }
+    }
+    return is_dev_mode and !force_welcome;
+}
+
+// Check /proc/cmdline to see if this boot session is a developer fast-boot.
+pub fn isDevFastBoot() bool {
+    var buf: [1024]u8 = undefined;
+    const fd_rc = linux.open("/proc/cmdline", .{ .ACCMODE = .RDONLY }, 0);
+    const signed_fd: isize = @bitCast(fd_rc);
+    if (signed_fd < 0) return false;
+    const fd: i32 = @intCast(signed_fd);
+    defer _ = linux.close(fd);
+
+    const read_rc = linux.read(fd, &buf, buf.len);
+    const signed_read: isize = @bitCast(read_rc);
+    if (signed_read <= 0) return false;
+    return shouldSkipIntroFromCmdline(buf[0..@intCast(signed_read)]);
+}
 
 // Returns true if intro has not been played during this boot session.
 // Creates the sentinel file on first check so it plays once per boot.
+// Automatically skips the intro in developer fast-boot mode (diosix.mode=dev).
 pub fn shouldPlayIntro() bool {
-    // 1. Check primary sentinel (/run)
-    const rc_run = linux.open(SENTINEL_PRIMARY, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
+    if (!@import("builtin").is_test and isDevFastBoot()) {
+        return false;
+    }
+
+    // 1. Check primary sentinel (/run).
+    const rc_run = linux.open(
+        SENTINEL_PRIMARY,
+        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true },
+        0,
+    );
     if (@as(isize, @bitCast(rc_run)) >= 0) {
         _ = linux.close(@intCast(rc_run));
         return false;
     }
 
-    // 2. Check fallback sentinel (/tmp) with NOFOLLOW
-    const rc_tmp = linux.open(SENTINEL_FALLBACK, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
+    // 2. Check fallback sentinel (/tmp) with NOFOLLOW.
+    const rc_tmp = linux.open(
+        SENTINEL_FALLBACK,
+        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true },
+        0,
+    );
     if (@as(isize, @bitCast(rc_tmp)) >= 0) {
         _ = linux.close(@intCast(rc_tmp));
         return false;
     }
 
-    // 3. Mark as played for this boot (create with NOFOLLOW and restricted 0600 mode)
-    const creat_run = linux.open(SENTINEL_PRIMARY, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true }, 0o600);
+    // 3. Mark as played for this boot (NOFOLLOW and restricted 0600 mode).
+    const create_flags = linux.O{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .TRUNC = true,
+        .NOFOLLOW = true,
+    };
+    const creat_run = linux.open(SENTINEL_PRIMARY, create_flags, 0o600);
     if (@as(isize, @bitCast(creat_run)) >= 0) {
         _ = linux.close(@intCast(creat_run));
     }
 
-    const creat_tmp = linux.open(SENTINEL_FALLBACK, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true }, 0o600);
+    const creat_tmp = linux.open(SENTINEL_FALLBACK, create_flags, 0o600);
     if (@as(isize, @bitCast(creat_tmp)) >= 0) {
         _ = linux.close(@intCast(creat_tmp));
     }
 
     return true;
 }
-
-pub const Particle = struct {
-    x: f32,
-    y: f32,
-    vx: f32,
-    vy: f32,
-    size: u8,
-    color: u32,
-    twinkle_phase: f32,
-    twinkle_speed: f32,
-};
 
 pub const IntroState = struct {
     is_active: bool = false,
@@ -82,25 +130,25 @@ pub const IntroState = struct {
     }
 
     pub fn seedParticles(self: *IntroState, width: u32, height: u32) void {
-        var prng = std.Random.DefaultPrng.init(0x193E36CC);
+        var prng = std.Random.DefaultPrng.init(0x193e36cc);
         const rand = prng.random();
 
         const w_f: f32 = @floatFromInt(width);
         const h_f: f32 = @floatFromInt(height);
 
         const particle_palette = [_]u32{
-            0x00F8FCFF, // Starlight pure white
-            0x0078E0F8, // Ethereal mako cyan
-            0x00D0F0FF, // Starlight ice blue
-            0x00EDF6FC, // Soft pearl white
-            0x0040C0E0, // Radiant crystal cyan
+            0x00f8fcff, // Starlight pure white.
+            0x0078e0f8, // Ethereal mako cyan.
+            0x00d0f0ff, // Starlight ice blue.
+            0x00edf6fc, // Soft pearl white.
+            0x0040c0e0, // Radiant crystal cyan.
         };
 
         for (&self.particles, 0..) |*p, i| {
             p.x = rand.float(f32) * w_f;
             p.y = rand.float(f32) * h_f;
-            p.vx = (rand.float(f32) - 0.5) * 12.0; // Subtle horizontal drift
-            p.vy = -(15.0 + rand.float(f32) * 35.0); // Gentle upward float
+            p.vx = (rand.float(f32) - 0.5) * 12.0; // Subtle horizontal drift.
+            p.vy = -(15.0 + rand.float(f32) * 35.0); // Gentle upward float.
             p.size = @intCast(1 + (i % 3));
             p.color = particle_palette[i % particle_palette.len];
             p.twinkle_phase = rand.float(f32) * 6.28;
@@ -114,7 +162,13 @@ pub const IntroState = struct {
         self.is_active = false;
     }
 
-    pub fn tick(self: *IntroState, dt_ms: u32, now_ms: i64, width: u32, height: u32) void {
+    pub fn tick(
+        self: *IntroState,
+        dt_ms: u32,
+        now_ms: i64,
+        width: u32,
+        height: u32,
+    ) void {
         if (!self.is_active) return;
         if (!self.initialized_particles) {
             self.seedParticles(width, height);
@@ -131,7 +185,7 @@ pub const IntroState = struct {
             self.elapsed_ms = @intCast(elapsed);
         }
 
-        // Update particle positions
+        // Update particle positions.
         const dt_sec = @as(f32, @floatFromInt(dt_ms)) / 1000.0;
         const w_f: f32 = @floatFromInt(width);
         const h_f: f32 = @floatFromInt(height);
@@ -151,23 +205,23 @@ pub const IntroState = struct {
     }
 
     // Renders the choreographed intro animation frame onto surface.
-    // gui is passed so GUI windows, tabs, and backdrop can bloom during Moment 2.
-    pub fn render(self: *IntroState, surface: *fb.Surface, gui: *DiosixGui) void {
+    pub fn render(
+        self: *IntroState,
+        surface: *fb.Surface,
+        gui: *DiosixGui,
+    ) void {
         const t = self.elapsed_ms;
         const w = surface.width;
         const h = surface.height;
         if (w == 0 or h == 0) return;
 
-        // Color themes
+        // Color themes.
         const NIGHT_TOP: u32 = 0x00040812;
-        const NIGHT_BOT: u32 = 0x000A162C;
+        const NIGHT_BOT: u32 = 0x000a162c;
         const DAY_TOP: u32 = fb.Color.SKY_BASE_TOP;
         const DAY_BOT: u32 = fb.Color.GRADIENT_BOT_DEFAULT;
 
-        // -------------------------------------------------------------
-        // 1. Background Composition: Transition between Midnight & Sky
-        // -------------------------------------------------------------
-        // Horizon rise occurs smoothly from 3800ms to 5400ms (Moment 2 onset)
+        // 1. Background Composition: Transition between Midnight & Sky.
         var day_factor: f32 = 0.0;
         if (t > 3800) {
             const rise_t = @as(f32, @floatFromInt(t - 3800)) / 1600.0;
@@ -175,7 +229,6 @@ pub const IntroState = struct {
         }
 
         if (day_factor <= 0.001) {
-            // Pure smooth velvet midnight starry background (no cloud tile artifacts)
             const den_y = @as(f32, @floatFromInt(if (h > 1) h - 1 else 1));
             var y: u32 = 0;
             while (y < h) : (y += 1) {
@@ -185,277 +238,119 @@ pub const IntroState = struct {
                 @memset(surface.pixels[row_off .. row_off + w], row_col);
             }
         } else if (day_factor >= 0.999) {
-            // Full daylight sky background with Perlin clouds
-            surface.drawGraduatedBackgroundInBox(fb.Box.fromPosSize(0, 0, w, h), DAY_TOP, DAY_BOT);
+            surface.drawGraduatedBackgroundInBox(
+                fb.Box.fromPosSize(0, 0, w, h),
+                DAY_TOP,
+                DAY_BOT,
+            );
         } else {
-            // Cross-fade gradient
             const cur_top = interpolateColor(NIGHT_TOP, DAY_TOP, day_factor);
             const cur_bot = interpolateColor(NIGHT_BOT, DAY_BOT, day_factor);
-            surface.drawGraduatedBackgroundInBox(fb.Box.fromPosSize(0, 0, w, h), cur_top, cur_bot);
+            surface.drawGraduatedBackgroundInBox(
+                fb.Box.fromPosSize(0, 0, w, h),
+                cur_top,
+                cur_bot,
+            );
         }
 
-        // -------------------------------------------------------------
-        // 2. Horizontal Horizon Light Beam (Moment 1: 500ms - 3800ms)
-        // -------------------------------------------------------------
+        // 2. Horizontal Horizon Light Beam (Moment 1: 400ms - 3800ms).
         if (t >= 400 and t <= 3800) {
-            drawHorizonBeam(surface, t, w, h);
+            intro_fx.drawHorizonBeam(surface, t, w, h);
         }
 
-        // -------------------------------------------------------------
-        // 3. Stardust / Crystalline Embers
-        // -------------------------------------------------------------
-        // Particles sparkle brightly during Moment 1, gently dissolving as daylight settles
+        // 3. Stardust / Crystalline Embers.
         var particle_alpha: u8 = 255;
         if (t > 6000) {
             const fade = @as(f32, @floatFromInt(t - 6000)) / 2500.0;
-            particle_alpha = @intCast(255 - @as(u32, @intFromFloat(std.math.clamp(fade, 0.0, 1.0) * 255.0)));
+            const sub_a: u32 =
+                @intFromFloat(std.math.clamp(fade, 0.0, 1.0) * 255.0);
+            particle_alpha = @intCast(255 - sub_a);
         }
 
         if (particle_alpha > 0) {
+            const w_i: i32 = @intCast(w);
+            const h_i: i32 = @intCast(h);
             for (self.particles) |p| {
                 const px: i32 = @intFromFloat(p.x);
                 const py: i32 = @intFromFloat(p.y);
-                if (px < 0 or py < 0 or px >= @as(i32, @intCast(w)) or py >= @as(i32, @intCast(h))) continue;
+                if (px < 0 or py < 0 or px >= w_i or py >= h_i) continue;
 
-                // Twinkle modulation
                 const sin_val = std.math.sin(p.twinkle_phase);
-                const twinkle = (sin_val + 1.0) * 0.5; // 0.0 to 1.0
-                const cur_a: u8 = @intCast((@as(u32, particle_alpha) * @as(u32, @intFromFloat(100.0 + twinkle * 155.0))) >> 8);
+                const twinkle = (sin_val + 1.0) * 0.5;
+                const mod_a: u32 = @intFromFloat(100.0 + twinkle * 155.0);
+                const cur_a: u8 =
+                    @intCast((@as(u32, particle_alpha) * mod_a) >> 8);
 
                 const bg = surface.getPixel(px, py);
                 surface.setPixel(px, py, fb.blendPixel(bg, p.color, cur_a));
 
-                if (p.size >= 2 and px + 1 < @as(i32, @intCast(w)) and py + 1 < @as(i32, @intCast(h))) {
+                if (p.size >= 2 and px + 1 < w_i and py + 1 < h_i) {
                     const soft_a: u8 = cur_a / 2;
-                    surface.setPixel(px + 1, py, fb.blendPixel(surface.getPixel(px + 1, py), p.color, soft_a));
-                    surface.setPixel(px, py + 1, fb.blendPixel(surface.getPixel(px, py + 1), p.color, soft_a));
+                    const bg_x = surface.getPixel(px + 1, py);
+                    surface.setPixel(
+                        px + 1,
+                        py,
+                        fb.blendPixel(bg_x, p.color, soft_a),
+                    );
+                    const bg_y = surface.getPixel(px, py + 1);
+                    surface.setPixel(
+                        px,
+                        py + 1,
+                        fb.blendPixel(bg_y, p.color, soft_a),
+                    );
                 }
             }
         }
 
-        // -------------------------------------------------------------
-        // 4. Moment 1 & Moment 2 Glide ('d i o s i x')
-        // -------------------------------------------------------------
-        // Letters fade in sequentially, pulse at 2.0s (Peak 1),
-        // and glide to the top-left menu bar during Moment 2 (4000ms - 5400ms).
-        drawBrandingAnimation(surface, t, w, h);
+        // 4. Moment 1 & Moment 2 Glide ('d i o s i x').
+        intro_fx.drawBrandingAnimation(surface, t, w, h);
 
-        // -------------------------------------------------------------
-        // 5. Moment 2: GUI Windows, Tab Bar & Desktop Bloom (5400ms - 10000ms)
-        // -------------------------------------------------------------
-        // Only blooms AFTER the brand has arrived at the top-left menu bar!
-        // Stays permanently rock-solid and stable after blooming (no unwinding).
+        // 5. Moment 2: GUI Windows, Tab Bar & Desktop Bloom (5400ms - 10000ms).
         if (t >= 5400) {
-            drawGuiBloom(surface, gui, t, w, h);
+            const bloom_progress = @as(f32, @floatFromInt(t - 5400)) / 1400.0;
+            const ease = easeInOut(bloom_progress);
+            if (ease > 0.01) {
+                gui.drawWindowsWithAlpha(surface, ease);
+            }
         }
 
-        // Render live mouse cursor when visible
+        // Render live mouse cursor when visible.
         if (gui.cursor.visible) {
             gui.cursor.draw(surface);
         }
     }
 };
 
-// Standard smoothstep (clamped before polynomial to guarantee monotonic stability and prevent unwinding)
-pub fn easeInOut(val: f32) f32 {
-    const t = std.math.clamp(val, 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
-
-// Interpolates smoothly between two 24-bit RGB colors
-pub fn interpolateColor(c1: u32, c2: u32, factor: f32) u32 {
-    const f = std.math.clamp(factor, 0.0, 1.0);
-    const r1: f32 = @floatFromInt((c1 >> 16) & 0xFF);
-    const g1: f32 = @floatFromInt((c1 >> 8) & 0xFF);
-    const b1: f32 = @floatFromInt(c1 & 0xFF);
-
-    const r2: f32 = @floatFromInt((c2 >> 16) & 0xFF);
-    const g2: f32 = @floatFromInt((c2 >> 8) & 0xFF);
-    const b2: f32 = @floatFromInt(c2 & 0xFF);
-
-    const r = @as(u32, @intFromFloat(r1 + (r2 - r1) * f));
-    const g = @as(u32, @intFromFloat(g1 + (g2 - g1) * f));
-    const b = @as(u32, @intFromFloat(b1 + (b2 - b1) * f));
-
-    return (r << 16) | (g << 8) | b;
-}
-
-// Draws the luminous horizontal horizon light beam across the screen
-fn drawHorizonBeam(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
-    const center_y: i32 = @intCast(h / 2);
-
-    // Intensity profile: rises 500ms -> 2000ms (Peak 1), relaxes 2000ms -> 3500ms
-    var beam_intensity: f32 = 0.0;
-    if (t < 2000) {
-        const prog = @as(f32, @floatFromInt(t - 400)) / 1600.0;
-        beam_intensity = std.math.clamp(prog * prog, 0.0, 1.0);
-    } else {
-        const prog = @as(f32, @floatFromInt(3800 - t)) / 1800.0;
-        beam_intensity = std.math.clamp(prog, 0.0, 1.0);
-    }
-
-    if (beam_intensity <= 0.01) return;
-
-    // Subtle, translucent atmospheric horizon glow matching the character aura
-    const max_alpha: f32 = 60.0 * beam_intensity;
-    const beam_half_h: i32 = 28;
-    const y0 = @max(0, center_y - beam_half_h);
-    const y1 = @min(@as(i32, @intCast(h)), center_y + beam_half_h);
-
-    var y = y0;
-    while (y < y1) : (y += 1) {
-        const dy: f32 = @floatFromInt(@abs(y - center_y));
-        const norm_y = dy / @as(f32, @floatFromInt(beam_half_h));
-        const falloff = std.math.clamp(1.0 - norm_y, 0.0, 1.0);
-        const alpha: u8 = @intFromFloat(max_alpha * falloff * falloff);
-        if (alpha == 0) continue;
-
-        // Soft celestial ice-white core smoothly transitioning into misty starlight cyan
-        const beam_color = interpolateColor(0x00F0F8FF, 0x0050B8E8, norm_y);
-
-        var x: i32 = 0;
-        const w_i: i32 = @intCast(w);
-        const center_x: f32 = @as(f32, @floatFromInt(w)) * 0.5;
-        while (x < w_i) : (x += 1) {
-            const dx_norm = @abs(@as(f32, @floatFromInt(x)) - center_x) / center_x;
-            const x_falloff = std.math.clamp(1.0 - dx_norm * dx_norm, 0.0, 1.0);
-            const cur_a: u8 = @intFromFloat(@as(f32, @floatFromInt(alpha)) * x_falloff);
-            if (cur_a > 0) {
-                const bg = surface.getPixel(x, y);
-                surface.setPixel(x, y, fb.blendPixel(bg, beam_color, cur_a));
-            }
-        }
-    }
-}
-
-// Draws the brand typography ('diosix') centered with left-to-right spell out and graceful wave fade out
-fn drawBrandingAnimation(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
-    if (t < 500 or t >= 4250) return;
-
-    const letters = "diosix";
-    const spacing: i32 = 68; // Wide letter spacing
-    const brand_total_width: i32 = spacing * 5 + 25;
-    const start_x: i32 = @as(i32, @intCast(w / 2)) - @divTrunc(brand_total_width, 2);
-    const center_y: i32 = @as(i32, @intCast(h / 2)) - 26;
-
-    // Peak 1 character glow pulse: starts when all 6 letters are shown (1700ms),
-    // reaches maximum radiance at the apex of the chime (2100ms),
-    // and gently fades back to crisp letters before fade-out (3000ms).
-    var char_glow_pulse: f32 = 0.0;
-    if (t >= 1700 and t <= 3000) {
-        if (t <= 2100) {
-            char_glow_pulse = @as(f32, @floatFromInt(t - 1700)) / 400.0;
-        } else {
-            char_glow_pulse = 1.0 - (@as(f32, @floatFromInt(t - 2100)) / 900.0);
-        }
-        char_glow_pulse = easeInOut(char_glow_pulse);
-    }
-
-    // Render individual letters:
-    // Spells out left-to-right to the first chime swell:
-    //   d -> di -> dio -> dios -> diosi -> diosix
-    // Stays solid and crisp through the chime decay, then fades out in a tight,
-    // graceful harmonic wave with smooth easeInOut curves dissolving into the emerging daylight sky:
-    const in_step: u32 = 200;
-    const in_fade: u32 = 200;
-    const out_step: u32 = 35;
-    const out_fade: u32 = 600;
-
-    for (letters, 0..) |char, idx| {
-        const u_idx: u32 = @intCast(idx);
-        const in_start: u32 = 500 + u_idx * in_step;
-        const in_end: u32 = in_start + in_fade;
-        const out_start: u32 = 3450 + u_idx * out_step;
-        const out_end: u32 = out_start + out_fade;
-
-        if (t < in_start or t >= out_end) continue;
-
-        var letter_alpha: u8 = 255;
-        if (t < in_end) {
-            const frac = @as(f32, @floatFromInt(t - in_start)) / @as(f32, @floatFromInt(in_fade));
-            letter_alpha = @intFromFloat(frac * 255.0);
-        } else if (t >= out_start) {
-            const frac = @as(f32, @floatFromInt(out_end - t)) / @as(f32, @floatFromInt(out_fade));
-            const eased = easeInOut(frac);
-            letter_alpha = @intFromFloat(eased * 255.0);
-        }
-
-        if (letter_alpha == 0) continue;
-
-        const lx = start_x + @as(i32, @intCast(idx)) * spacing;
-        const ly = center_y;
-
-        // 1. Radiant translucent aura emanating softly around the character outlines
-        // Soft ethereal moonlight white (0x00EAF4FF) creates a delicate atmospheric haze
-        if (char_glow_pulse > 0.01) {
-            const glow_a: u8 = @intFromFloat(@as(f32, @floatFromInt(letter_alpha)) * char_glow_pulse * 0.40);
-            if (glow_a > 0) {
-                banner_font.drawBannerGlyphGlow(surface, char, lx, ly, 0x00EAF4FF, glow_a);
-            }
-        }
-
-        // 2. Crisp native 52px antialiased Questrial glyph
-        banner_font.drawBannerGlyph(surface, char, lx, ly, fb.Color.WHITE, letter_alpha);
-    }
-}
-
-// Text rendering with variable alpha
-fn drawTextWithAlpha(surface: *fb.Surface, text: []const u8, x: i32, y: i32, color: u32, alpha: u8) void {
-    var cur_x = x;
-    for (text) |c| {
-        if (c >= 32 and c <= 126) {
-            const g = font.GLYPHS[c - 32];
-            if (g.width > 0 and g.height > 0) {
-                const gx = cur_x + g.offset_x;
-                const gy = y + g.offset_y;
-
-                var row: usize = 0;
-                while (row < g.height) : (row += 1) {
-                    const py = gy + @as(i32, @intCast(row));
-                    if (py < 0 or py >= @as(i32, @intCast(surface.height))) continue;
-
-                    var col: usize = 0;
-                    while (col < g.width) : (col += 1) {
-                        const px = gx + @as(i32, @intCast(col));
-                        if (px < 0 or px >= @as(i32, @intCast(surface.width))) continue;
-
-                        const raw_a = font.GLYPH_BITMAPS[g.bitmap_offset + row * g.width + col];
-                        const eff_a: u8 = @intCast((@as(u32, raw_a) * @as(u32, alpha)) >> 8);
-                        if (eff_a > 0) {
-                            const bg = surface.getPixel(px, py);
-                            surface.setPixel(px, py, fb.blendPixel(bg, color, eff_a));
-                        }
-                    }
-                }
-            }
-            cur_x += g.advance;
-        } else if (c == ' ') {
-            cur_x += font.SPACE_ADVANCE;
-        }
-    }
-}
-
-// Moment 2: Desktop window unfurl and bloom (5400ms - 10000ms)
-fn drawGuiBloom(surface: *fb.Surface, gui: *DiosixGui, t: u32, w: u32, h: u32) void {
-    _ = w;
-    _ = h;
-    // Animation progress: 5400ms -> 6800ms (1400ms duration)
-    // easeInOut strictly clamps progress so ease remains 1.0 permanently after 6800ms
-    const bloom_progress = @as(f32, @floatFromInt(t - 5400)) / 1400.0;
-    const ease = easeInOut(bloom_progress);
-    // 1. Render Windows unfolding from center with translucent glass (5400ms to 6800ms)
-    if (ease > 0.01) {
-        gui.drawWindowsWithAlpha(surface, ease);
-    }
-}
-
 test "intro: sentinel file checking" {
-    // Verify sentinel checking works
     const is_first = shouldPlayIntro();
-    // Second check within the same session must return false
     const is_second = shouldPlayIntro();
     try std.testing.expect(is_first or !is_first);
     try std.testing.expectEqual(false, is_second);
+}
+
+test "intro: dev fast-boot cmdline detection" {
+    try std.testing.expectEqual(
+        true,
+        shouldSkipIntroFromCmdline(
+            "console=hvc0 earlycon=sbi diosix.mode=dev\n",
+        ),
+    );
+    try std.testing.expectEqual(
+        false,
+        shouldSkipIntroFromCmdline(
+            "console=hvc0 earlycon=sbi diosix.mode=dev diosix.welcome=force\n",
+        ),
+    );
+    try std.testing.expectEqual(
+        false,
+        shouldSkipIntroFromCmdline(
+            "console=hvc0 earlycon=sbi diosix.mode=live\n",
+        ),
+    );
+    try std.testing.expectEqual(
+        false,
+        shouldSkipIntroFromCmdline("console=hvc0 earlycon=sbi\n"),
+    );
 }
 
 test "intro: state timeline and particles" {
@@ -467,25 +362,21 @@ test "intro: state timeline and particles" {
     try std.testing.expectEqual(@as(u32, 1500), intro.elapsed_ms);
     try std.testing.expect(intro.is_active);
 
-    // Skip functionality
     intro.skip();
     try std.testing.expectEqual(false, intro.is_active);
     try std.testing.expectEqual(TOTAL_INTRO_DURATION_MS, intro.elapsed_ms);
 }
 
 test "intro: easeInOut stability and unwinding immunity" {
-    // Monotonic boundary checks
     try std.testing.expectEqual(@as(f32, 0.0), easeInOut(0.0));
     try std.testing.expectEqual(@as(f32, 0.5), easeInOut(0.5));
     try std.testing.expectEqual(@as(f32, 1.0), easeInOut(1.0));
 
-    // Values > 1.0 MUST stay locked at 1.0 and NEVER invert or unwind
     try std.testing.expectEqual(@as(f32, 1.0), easeInOut(1.2));
     try std.testing.expectEqual(@as(f32, 1.0), easeInOut(1.5));
     try std.testing.expectEqual(@as(f32, 1.0), easeInOut(2.0));
     try std.testing.expectEqual(@as(f32, 1.0), easeInOut(10.0));
 
-    // Negative values MUST stay locked at 0.0
     try std.testing.expectEqual(@as(f32, 0.0), easeInOut(-0.5));
     try std.testing.expectEqual(@as(f32, 0.0), easeInOut(-5.0));
 }
@@ -503,33 +394,25 @@ test "intro: full timeline rendering and stability across 10s" {
 
     var intro = IntroState.init(0);
 
-    // Test sequence across all phases:
-    // 1. Initial stardust (200ms)
     intro.elapsed_ms = 200;
     intro.render(&surface, &gui);
 
-    // 2. Moment 1 peak (2000ms)
     intro.elapsed_ms = 2000;
     intro.render(&surface, &gui);
 
-    // 3. Acoustic lull (3800ms)
     intro.elapsed_ms = 3800;
     intro.render(&surface, &gui);
 
-    // 4. Moment 2 glide (4800ms)
     intro.elapsed_ms = 4800;
     intro.render(&surface, &gui);
 
-    // 5. GUI bloom midpoint (6100ms)
     intro.elapsed_ms = 6100;
     intro.render(&surface, &gui);
 
-    // 6. GUI bloom completion (6800ms)
     intro.elapsed_ms = 6800;
     intro.render(&surface, &gui);
     const center_pixel_6800 = surface.getPixel(400, 300);
 
-    // 7. Settled state (8000ms and 10000ms) - MUST NOT UNWIND OR BLANK OUT
     intro.elapsed_ms = 8000;
     intro.render(&surface, &gui);
     const center_pixel_8000 = surface.getPixel(400, 300);
@@ -538,7 +421,6 @@ test "intro: full timeline rendering and stability across 10s" {
     intro.render(&surface, &gui);
     const center_pixel_10000 = surface.getPixel(400, 300);
 
-    // Pixels at center must remain non-zero and stable (GUI is active and visible)
     try std.testing.expect(center_pixel_6800 != 0);
     try std.testing.expect(center_pixel_8000 != 0);
     try std.testing.expect(center_pixel_10000 != 0);

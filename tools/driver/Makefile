@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: MIT
-obj-m := diosix.o
+obj-m := diosix_drv.o
+diosix_drv-objs := diosix.o governance.o net.o
 
 ccflags-y += -I$(src)
 
 all:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
+

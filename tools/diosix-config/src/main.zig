@@ -1,3 +1,8 @@
+// Diosix Configuration Manager Application Entry Point.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+
 const std = @import("std");
 const ui = @import("ui.zig");
 
@@ -7,14 +12,19 @@ pub const ConfigApp = struct {
     current_tab: ui.Tab = .dashboard,
     vms: std.ArrayList(ui.VmCard),
 
-    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !ConfigApp {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        width: u32,
+        height: u32,
+    ) !ConfigApp {
         var app = ConfigApp{
             .allocator = allocator,
             .canvas = try ui.Canvas.init(allocator, width, height),
             .vms = std.ArrayList(ui.VmCard).empty,
         };
+        errdefer app.deinit();
 
-        // Populate sample VM state
+        // Populate sample VM state.
         try app.vms.append(allocator, .{
             .name = "root (self)",
             .cid = 1,
@@ -55,31 +65,51 @@ pub const ConfigApp = struct {
         const w = self.canvas.width;
         const h = self.canvas.height;
 
-        // 1. Clear background
-        self.canvas.fillRect(.{ .x = 0, .y = 0, .w = w, .h = h }, ui.Color.BG);
+        // 1. Clear background.
+        self.canvas.fillRect(
+            .{ .x = 0, .y = 0, .w = w, .h = h },
+            ui.Color.BG,
+        );
 
-        // 2. Left Sidebar (Navigation)
+        // 2. Left sidebar (navigation).
         const sidebar_w: u32 = 180;
-        self.canvas.fillRect(.{ .x = 0, .y = 0, .w = sidebar_w, .h = h }, ui.Color.SIDEBAR_BG);
-        self.canvas.fillRect(.{ .x = @as(i32, @intCast(sidebar_w - 1)), .y = 0, .w = 1, .h = h }, ui.Color.CARD_BORDER);
+        self.canvas.fillRect(
+            .{ .x = 0, .y = 0, .w = sidebar_w, .h = h },
+            ui.Color.SIDEBAR_BG,
+        );
+        self.canvas.fillRect(
+            .{ .x = @as(i32, @intCast(sidebar_w - 1)), .y = 0, .w = 1, .h = h },
+            ui.Color.CARD_BORDER,
+        );
 
-        // Sidebar Navigation Items
+        // Sidebar navigation items.
         var tab_y: i32 = 20;
         const tab_height: u32 = 36;
         var tab_idx: usize = 0;
         while (tab_idx < 4) : (tab_idx += 1) {
-            const is_active = (tab_idx == @intFromEnum(self.current_tab));
+            const is_active = (tab_idx == @backingInt(self.current_tab));
             if (is_active) {
-                self.canvas.fillRect(.{ .x = 10, .y = tab_y, .w = sidebar_w - 20, .h = tab_height }, ui.Color.CARD_BG);
-                self.canvas.fillRect(.{ .x = 10, .y = tab_y, .w = 4, .h = tab_height }, ui.Color.ACCENT_GREEN);
+                self.canvas.fillRect(
+                    .{
+                        .x = 10,
+                        .y = tab_y,
+                        .w = sidebar_w - 20,
+                        .h = tab_height,
+                    },
+                    ui.Color.CARD_BG,
+                );
+                self.canvas.fillRect(
+                    .{ .x = 10, .y = tab_y, .w = 4, .h = tab_height },
+                    ui.Color.ACCENT_GREEN,
+                );
             }
             tab_y += @as(i32, @intCast(tab_height + 8));
         }
 
-        // 3. Main Content Area: VM Cards List
+        // 3. Main content area: VM cards list.
         const content_x: i32 = @as(i32, @intCast(sidebar_w)) + 20;
         var card_y: i32 = 20;
-        const card_w: u32 = w - sidebar_w - 40;
+        const card_w: u32 = w -| (sidebar_w + 40);
         const card_h: u32 = 50;
 
         for (self.vms.items) |*vm| {
@@ -95,18 +125,23 @@ pub const ConfigApp = struct {
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var app = try ConfigApp.init(allocator, 800, 500);
     defer app.deinit();
 
     app.render();
 
-    var stdout_buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&stdout_buf, "Diosix Configuration Manager (diosix-config) rendered {d}x{d} surface.\n", .{ app.canvas.width, app.canvas.height }) catch return;
-    _ = std.posix.write(std.posix.STDOUT_FILENO, msg) catch {};
+    const msg = try std.fmt.allocPrint(
+        allocator,
+        "Diosix Configuration Manager (diosix-config) rendered {d}x{d} " ++
+            "surface.\n",
+        .{ app.canvas.width, app.canvas.height },
+    );
+    defer allocator.free(msg);
+    _ = std.os.linux.write(std.os.linux.STDOUT_FILENO, msg.ptr, msg.len);
 }
 
 test "diosix-config: canvas rendering and vm card layout" {
@@ -120,7 +155,12 @@ test "diosix-config: canvas rendering and vm card layout" {
     try testing.expectEqual(@as(u32, 400), app.canvas.height);
     try testing.expectEqual(@as(usize, 3), app.vms.items.len);
 
-    // Verify sidebar background is painted
+    // Verify sidebar background is painted.
     const sidebar_pixel = app.canvas.pixels[50 * 640 + 50];
     try testing.expect(sidebar_pixel != ui.Color.BG);
+}
+
+test {
+    _ = ui;
+    std.testing.refAllDecls(@This());
 }

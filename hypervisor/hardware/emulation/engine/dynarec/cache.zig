@@ -1,4 +1,4 @@
-// Executable Host JIT Code Buffer Allocator & Block Cache Index
+// Executable Host JIT Code Buffer Allocator & Block Cache Index.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -12,7 +12,7 @@ const builtin = @import("builtin");
 
 pub const MAX_BLOCKS: usize = 16384;
 pub const HASH_SIZE: usize = 32768;
-pub const JIT_CACHE_SIZE: usize = 8 * 1024 * 1024; // 8MB JIT code buffer pool
+pub const JIT_CACHE_SIZE: usize = 8 * 1024 * 1024; // 8MB JIT code buffer pool.
 
 pub fn getExitAddr() usize {
     if (comptime builtin.target.cpu.arch.isRISCV()) {
@@ -30,7 +30,8 @@ pub const Cache = struct {
     code_offset: usize = 0,
     blocks: [MAX_BLOCKS]TranslationBlock = undefined,
     block_count: usize = 0,
-    hash_table: [HASH_SIZE]?*TranslationBlock = std.mem.zeroes([HASH_SIZE]?*TranslationBlock),
+    hash_table: [HASH_SIZE]?*TranslationBlock =
+        std.mem.zeroes([HASH_SIZE]?*TranslationBlock),
     layout_epoch: u32 = 1,
 
     pub fn initOnPtr(self: *Cache, buffer: []u8) void {
@@ -56,7 +57,8 @@ pub const Cache = struct {
     }
 
     fn hash(guest_pc: u32) usize {
-        return (guest_pc ^ (guest_pc >> 12) ^ (guest_pc >> 2)) & (HASH_SIZE - 1);
+        return (guest_pc ^ (guest_pc >> 12) ^ (guest_pc >> 2)) &
+            (HASH_SIZE - 1);
     }
 
     pub fn lookup(self: *Cache, guest_pc: u32, satp: u32) ?*TranslationBlock {
@@ -64,7 +66,12 @@ pub const Cache = struct {
         var tries: usize = 0;
         while (tries < 8) : (tries += 1) {
             if (self.hash_table[slot]) |tb| {
-                if (tb.layout_epoch == self.layout_epoch and tb.guest_pc == guest_pc and (tb.is_global or tb.satp == satp)) return tb;
+                if (tb.layout_epoch == self.layout_epoch and
+                    tb.guest_pc == guest_pc and
+                    (tb.is_global or tb.satp == satp))
+                {
+                    return tb;
+                }
                 slot = (slot + 1) & (HASH_SIZE - 1);
             } else {
                 return null;
@@ -73,10 +80,18 @@ pub const Cache = struct {
         return null;
     }
 
-    pub fn allocateBlock(self: *Cache, guest_pc: u32, satp: u32, is_global: bool, max_host_len: usize) !*TranslationBlock {
+    pub fn allocateBlock(
+        self: *Cache,
+        guest_pc: u32,
+        satp: u32,
+        is_global: bool,
+        max_host_len: usize,
+    ) !*TranslationBlock {
         if (self.block_count >= MAX_BLOCKS) return error.CacheFull;
         const aligned_offset = (self.code_offset + 7) & ~@as(usize, 7);
-        if (aligned_offset + max_host_len > self.code_buffer.len) return error.CodeBufferFull;
+        if (aligned_offset + max_host_len > self.code_buffer.len) {
+            return error.CodeBufferFull;
+        }
 
         const tb = &self.blocks[self.block_count];
         self.block_count += 1;
@@ -86,7 +101,8 @@ pub const Cache = struct {
             .satp = satp,
             .is_global = is_global,
             .guest_size = 0,
-            .host_code = self.code_buffer[aligned_offset .. aligned_offset + max_host_len],
+            .host_code = self.code_buffer[aligned_offset .. aligned_offset +
+                max_host_len],
             .host_len = 0,
             .layout_epoch = self.layout_epoch,
             .is_fast_path = false,
@@ -95,7 +111,11 @@ pub const Cache = struct {
         return tb;
     }
 
-    pub fn commitBlock(self: *Cache, tb: *TranslationBlock, code_bytes: usize) void {
+    pub fn commitBlock(
+        self: *Cache,
+        tb: *TranslationBlock,
+        code_bytes: usize,
+    ) void {
         const aligned = (code_bytes + 7) & ~@as(usize, 7);
         tb.host_code = tb.host_code[0..aligned];
         self.code_offset += aligned;
@@ -104,7 +124,9 @@ pub const Cache = struct {
         var tries: usize = 0;
         while (tries < 8) : (tries += 1) {
             if (self.hash_table[slot]) |existing| {
-                if (existing.guest_pc == tb.guest_pc and (existing.is_global or existing.satp == tb.satp)) {
+                if (existing.guest_pc == tb.guest_pc and
+                    (existing.is_global or existing.satp == tb.satp))
+                {
                     self.hash_table[slot] = tb;
                     break;
                 }
@@ -114,7 +136,8 @@ pub const Cache = struct {
             }
             slot = (slot + 1) & (HASH_SIZE - 1);
         } else {
-            // Replace the last probed slot so recently executed blocks are indexed
+            // Replace the last probed slot so recently executed blocks are
+            // indexed.
             self.hash_table[(hash(tb.guest_pc) + 7) & (HASH_SIZE - 1)] = tb;
         }
 
@@ -128,7 +151,8 @@ pub const Cache = struct {
     }
 
     pub fn chainBlock(self: *Cache, new_tb: *TranslationBlock) void {
-        // Forward chaining: patch outgoing forward branches to already compiled targets
+        // Forward chaining: patch outgoing forward branches to already
+        // compiled targets.
         if (new_tb.exit_branch1) |b1| {
             if (b1.target_guest_pc > new_tb.guest_pc) {
                 if (self.lookup(b1.target_guest_pc, new_tb.satp)) |target| {
@@ -144,19 +168,52 @@ pub const Cache = struct {
             }
         }
 
-        // Backward chaining: check if any existing blocks can now jump forward to new_tb
+        // Backward chaining: check if any existing blocks can now jump
+        // forward to new_tb.
         for (self.blocks[0..self.block_count]) |*tb| {
             if (tb == new_tb) continue;
             if (tb.exit_branch1) |b1| {
-                if (b1.target_guest_pc == new_tb.guest_pc and new_tb.guest_pc > tb.guest_pc and (new_tb.is_global or tb.satp == new_tb.satp)) {
+                if (b1.target_guest_pc == new_tb.guest_pc and
+                    new_tb.guest_pc > tb.guest_pc and
+                    (new_tb.is_global or tb.satp == new_tb.satp))
+                {
                     tb.patchBranch(0, new_tb);
                 }
             }
             if (tb.exit_branch2) |b2| {
-                if (b2.target_guest_pc == new_tb.guest_pc and new_tb.guest_pc > tb.guest_pc and (new_tb.is_global or tb.satp == new_tb.satp)) {
+                if (b2.target_guest_pc == new_tb.guest_pc and
+                    new_tb.guest_pc > tb.guest_pc and
+                    (new_tb.is_global or tb.satp == new_tb.satp))
+                {
                     tb.patchBranch(1, new_tb);
                 }
             }
         }
     }
 };
+
+test "Cache allocate, commit, lookup, and flush" {
+    const cache = try std.testing.allocator.create(Cache);
+    defer std.testing.allocator.destroy(cache);
+
+    var buf: [256]u8 align(8) = @splat(0);
+    cache.initOnPtr(&buf);
+
+    const tb = try cache.allocateBlock(0x8000_0000, 0x8008_0001, false, 32);
+    cache.commitBlock(tb, 16);
+
+    try std.testing.expectEqual(
+        @as(?*TranslationBlock, tb),
+        cache.lookup(0x8000_0000, 0x8008_0001),
+    );
+    try std.testing.expectEqual(
+        @as(?*TranslationBlock, null),
+        cache.lookup(0x8000_0000, 0x8009_0001),
+    );
+
+    cache.flush();
+    try std.testing.expectEqual(
+        @as(?*TranslationBlock, null),
+        cache.lookup(0x8000_0000, 0x8008_0001),
+    );
+}

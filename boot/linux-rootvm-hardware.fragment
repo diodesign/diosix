@@ -62,10 +62,21 @@ CONFIG_USB=y
 CONFIG_USB_XHCI_HCD=y
 CONFIG_USB_EHCI_HCD=y
 CONFIG_USB_STORAGE=y
-# CONFIG_USB_HID is not set
-# CONFIG_INPUT is not set
-# CONFIG_HID is not set
+CONFIG_USB_HID=y
+CONFIG_HID=y
+CONFIG_HIDRAW=y
+CONFIG_HID_GENERIC=y
 # CONFIG_THERMAL is not set
+
+# Input & Seat Devices (evdev, VirtIO tablet/keyboard/mouse, Touchscreen & uinput)
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_INPUT_MOUSE=y
+CONFIG_INPUT_TOUCHSCREEN=y
+CONFIG_INPUT_UINPUT=y
+CONFIG_HID_MULTITOUCH=y
+CONFIG_VIRTIO_INPUT=y
 
 # Networking & Packet Routing
 CONFIG_NET=y
@@ -114,10 +125,11 @@ CONFIG_SND_HDA_GENERIC=y
 CONFIG_SND_HDA_CODEC_REALTEK=y
 CONFIG_SND_VIRTIO=y
 
-# Graphics, Framebuffers & Displays (VirtIO-GPU & Framebuffer support)
+# Graphics, Framebuffers & Displays (VirtIO-GPU, SimpleDRM & Framebuffer support)
 CONFIG_DRM=y
 CONFIG_DRM_KMS_HELPER=y
 CONFIG_DRM_VIRTIO_GPU=y
+CONFIG_DRM_SIMPLEDRM=y
 CONFIG_DRM_FBDEV_EMULATION=y
 CONFIG_FB=y
 CONFIG_FB_DEFERRED_IO=y
@@ -125,10 +137,9 @@ CONFIG_FRAMEBUFFER_CONSOLE=y
 # CONFIG_VGA_CONSOLE is not set
 # CONFIG_LOGO is not set
 
-# Mice, Touchscreens & Joysticks (Disabled)
+# Legacy Mice & Joysticks (Disabled)
 # CONFIG_INPUT_MOUSEDEV is not set
 # CONFIG_INPUT_JOYSTICK is not set
-# CONFIG_INPUT_TOUCHSCREEN is not set
 
 # Media, Webcams & Capture (Disabled)
 # CONFIG_MEDIA_SUPPORT is not set
@@ -148,4 +159,10 @@ CONFIG_VSOCKETS=y
 CONFIG_VIRTIO_VSOCKETS=y
 CONFIG_VIRTIO_VSOCKETS_COMMON=y
 CONFIG_VIRTIO_MMIO=y
+
+# Hardware Security & Cryptographic Modules (TPM 2.0)
+CONFIG_TCG_TPM=y
+CONFIG_TCG_TIS_CORE=y
+CONFIG_TCG_TIS=y
+
 

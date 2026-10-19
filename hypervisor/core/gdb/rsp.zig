@@ -1,4 +1,4 @@
-// Embedded Multi-Target GDB Remote Serial Protocol (RSP) Debugging Engine
+// Embedded Multi-Target GDB Remote Serial Protocol (RSP) debugging engine.
 //
 // Provides interactive, multi-context debugging across the hypervisor core,
 // native RISC-V guests, and emulated non-native guests (x86_64, AArch64, RV32).
@@ -8,110 +8,89 @@
 
 const std = @import("std");
 const debug = @import("../debug.zig");
-const glue = @import("../emulation.zig");
 const vcore = @import("../vcore.zig");
-const guest = @import("../guest.zig");
 const physmem = @import("../physmem.zig");
-const x86_64 = @import("../../hardware/emulation/arch/x86_64/mod.zig");
+const bp_mod = @import("breakpoints.zig");
 
-pub const X86_64_TARGET_XML =
-    \\<?xml version="1.0"?>
-    \\<!DOCTYPE target SYSTEM "gdb-target.dtd">
-    \\<target version="1.0">
-    \\  <architecture>i386:x86-64</architecture>
-    \\  <feature name="org.gnu.gdb.i386.64bit">
-    \\    <reg name="rax" bitsize="64" type="int64"/>
-    \\    <reg name="rbx" bitsize="64" type="int64"/>
-    \\    <reg name="rcx" bitsize="64" type="int64"/>
-    \\    <reg name="rdx" bitsize="64" type="int64"/>
-    \\    <reg name="rsi" bitsize="64" type="int64"/>
-    \\    <reg name="rdi" bitsize="64" type="int64"/>
-    \\    <reg name="rbp" bitsize="64" type="data_ptr"/>
-    \\    <reg name="rsp" bitsize="64" type="data_ptr"/>
-    \\    <reg name="r8"  bitsize="64" type="int64"/>
-    \\    <reg name="r9"  bitsize="64" type="int64"/>
-    \\    <reg name="r10" bitsize="64" type="int64"/>
-    \\    <reg name="r11" bitsize="64" type="int64"/>
-    \\    <reg name="r12" bitsize="64" type="int64"/>
-    \\    <reg name="r13" bitsize="64" type="int64"/>
-    \\    <reg name="r14" bitsize="64" type="int64"/>
-    \\    <reg name="r15" bitsize="64" type="int64"/>
-    \\    <reg name="rip" bitsize="64" type="code_ptr"/>
-    \\    <reg name="eflags" bitsize="32" type="int32"/>
-    \\    <reg name="cs" bitsize="32" type="int32"/>
-    \\    <reg name="ss" bitsize="32" type="int32"/>
-    \\    <reg name="ds" bitsize="32" type="int32"/>
-    \\    <reg name="es" bitsize="32" type="int32"/>
-    \\    <reg name="fs" bitsize="32" type="int32"/>
-    \\    <reg name="gs" bitsize="32" type="int32"/>
-    \\  </feature>
-    \\</target>
-;
+pub const X86_64_TARGET_XML = bp_mod.X86_64_TARGET_XML;
+pub const STATIC_BREAKPOINTS = bp_mod.STATIC_BREAKPOINTS;
+pub const DYNAMIC_HASH_BUCKETS = bp_mod.DYNAMIC_HASH_BUCKETS;
+pub const MAX_DYNAMIC_BREAKPOINTS = bp_mod.MAX_DYNAMIC_BREAKPOINTS;
+pub const SwBreakpoint = bp_mod.SwBreakpoint;
+pub const BreakpointTable = bp_mod.BreakpointTable;
+pub const sw_breakpoints = &bp_mod.sw_breakpoints;
 
-const riscv = @import("../../hardware/native/cpu/riscv64/mod.zig");
+const HEX_DIGITS = "0123456789abcdef";
 
 pub var active_thread: usize = 1;
 pub var active_vc: ?*vcore.VirtualCore = null;
 pub var gdb_connected: bool = false;
 
-/// Low-level UART byte output helper for GDB RSP transport
 fn writeSerialByte(ch: u8) void {
     debug.hw_putchar(ch);
 }
 
-/// Low-level UART byte input helper for GDB RSP transport
 pub fn readSerialByte() i16 {
     return debug.hw_getchar();
 }
 
-/// Compute modulo 256 sum of payload slice
+/// Compute modulo 256 sum of payload slice.
 pub fn calcChecksum(payload: []const u8) u8 {
     var sum: u8 = 0;
-    for (payload) |b| {
-        sum = sum +% b;
-    }
+    for (payload) |b| sum = sum +% b;
     return sum;
 }
 
-/// Send formatted GDB RSP packet: $[payload]#[checksum_hex_2bytes]
+/// Encode raw bytes into lowercase hexadecimal characters in `dst`.
+pub fn encodeHexBytes(src: []const u8, dst: []u8) usize {
+    for (src, 0..) |b, idx| {
+        dst[idx * 2] = HEX_DIGITS[(b >> 4) & 0xf];
+        dst[idx * 2 + 1] = HEX_DIGITS[b & 0xf];
+    }
+    return src.len * 2;
+}
+
+/// Decode `dst.len` bytes from `hex_payload` (2 hex chars per byte).
+fn decodeHexBytes(hex_payload: []const u8, dst: []u8) bool {
+    if (hex_payload.len < dst.len * 2) return false;
+    for (dst, 0..) |*out, idx| {
+        out.* = parseHexByte(hex_payload[idx * 2 .. idx * 2 + 2]) orelse
+            return false;
+    }
+    return true;
+}
+
+/// Send formatted GDB RSP packet: `$[payload]#[checksum_hex_2bytes]`.
 pub fn sendPacket(payload: []const u8) void {
     writeSerialByte('$');
-    for (payload) |ch| {
-        writeSerialByte(ch);
-    }
+    for (payload) |ch| writeSerialByte(ch);
     writeSerialByte('#');
 
     const sum = calcChecksum(payload);
-    const hex_chars = "0123456789abcdef";
-    writeSerialByte(hex_chars[(sum >> 4) & 0xf]);
-    writeSerialByte(hex_chars[sum & 0xf]);
+    writeSerialByte(HEX_DIGITS[(sum >> 4) & 0xf]);
+    writeSerialByte(HEX_DIGITS[sum & 0xf]);
 }
 
-/// Send hex-encoded text string response inside an 'O' packet (for monitor commands)
+/// Send hex-encoded text string response inside an 'O' packet.
 pub fn sendOutputPacket(text: []const u8) void {
     var hex_buf: [1024]u8 = undefined;
     const max_text_len = (hex_buf.len - 1) / 2;
     if (text.len > max_text_len) return;
 
     hex_buf[0] = 'O';
-    const hex_digits = "0123456789abcdef";
-    for (text, 0..) |b, idx| {
-        hex_buf[1 + idx * 2] = hex_digits[(b >> 4) & 0xf];
-        hex_buf[1 + idx * 2 + 1] = hex_digits[b & 0xf];
-    }
-    sendPacket(hex_buf[0 .. 1 + text.len * 2]);
+    const hex_len = encodeHexBytes(text, hex_buf[1..]);
+    sendPacket(hex_buf[0 .. 1 + hex_len]);
 }
 
-/// Convert integer to little-endian hex string
 fn encodeHexLE(comptime T: type, val: T, buf: []u8) usize {
     const size = @sizeOf(T);
-    const hex_digits = "0123456789abcdef";
     var offset: usize = 0;
     var i: usize = 0;
     while (i < size) : (i += 1) {
-        const byte = @as(u8, @truncate(val >> @as(std.math.Log2Int(T), @intCast(i * 8))));
-        buf[offset] = hex_digits[(byte >> 4) & 0xf];
-        buf[offset + 1] = hex_digits[byte & 0xf];
+        const shift: std.math.Log2Int(T) = @intCast(i * 8);
+        const byte: u8 = @truncate(val >> shift);
+        buf[offset] = HEX_DIGITS[(byte >> 4) & 0xf];
+        buf[offset + 1] = HEX_DIGITS[byte & 0xf];
         offset += 2;
     }
     return offset;
@@ -119,12 +98,15 @@ fn encodeHexLE(comptime T: type, val: T, buf: []u8) usize {
 
 pub fn parseHexAddr(slice: []const u8) ?u64 {
     var end: usize = 0;
-    while (end < slice.len and slice[end] != ',' and slice[end] != ':') : (end += 1) {}
+    while (end < slice.len and
+        slice[end] != ',' and
+        slice[end] != ':') : (end += 1)
+    {}
     if (end == 0) return null;
     return std.fmt.parseInt(u64, slice[0..end], 16) catch null;
 }
 
-/// Parse 2 hex characters into a u8 byte
+/// Parse 2 hex characters into a `u8` byte.
 pub fn parseHexByte(slice: []const u8) ?u8 {
     if (slice.len < 2) return null;
     const hi = std.fmt.charToDigit(slice[0], 16) catch return null;
@@ -132,59 +114,193 @@ pub fn parseHexByte(slice: []const u8) ?u8 {
     return @as(u8, @intCast((hi << 4) | lo));
 }
 
-/// Read registers for emulated guest into GDB hex payload
 pub fn readX86_64Registers(uc: ?*anyopaque, buf: []u8) usize {
     _ = uc;
     var offset: usize = 0;
     var i: usize = 0;
-    while (i < 17) : (i += 1) {
-        offset += encodeHexLE(u64, 0, buf[offset..]);
-    }
-    while (i < 24) : (i += 1) {
-        offset += encodeHexLE(u32, 0, buf[offset..]);
-    }
+    while (i < 17) : (i += 1) offset += encodeHexLE(u64, 0, buf[offset..]);
+    while (i < 24) : (i += 1) offset += encodeHexLE(u32, 0, buf[offset..]);
     return offset;
 }
 
-/// Handle custom monitor (`qRcmd`) commands
 fn handleMonitorCommand(cmd: []const u8) void {
     if (std.mem.startsWith(u8, cmd, "targets")) {
-        sendOutputPacket("Active Targets:\n  Thread 1: Hypervisor Core (RV64)\n  Thread 3: Emulated Guest (Native Dynarec)\n");
+        sendOutputPacket(
+            "Active Targets:\n" ++
+                "  Thread 1: Hypervisor Core (RV64)\n" ++
+                "  Thread 3: Emulated Guest (Native Dynarec)\n",
+        );
     } else if (std.mem.startsWith(u8, cmd, "zero_page")) {
         if (active_vc) |vc| {
-            if (vc.exec_path.emulated.vcpu) |vcpu| {
-                _ = vcpu;
+            if (vc.exec_path.emulated.vcpu != null) {
                 sendOutputPacket("Native Dynarec VCpu active\n");
             }
         }
     } else {
-        sendOutputPacket("Unknown monitor command. Available: targets, zero_page\n");
+        sendOutputPacket(
+            "Unknown monitor command. Available: targets, zero_page\n",
+        );
     }
 }
 
-/// Read RV64 register file for Hypervisor M-mode core (Thread 1)
 pub fn readRV64Registers(buf: []u8) usize {
     var offset: usize = 0;
     var i: usize = 0;
-    while (i < 32) : (i += 1) {
-        offset += encodeHexLE(u64, 0, buf[offset..]);
-    }
-    // PC
+    while (i < 32) : (i += 1) offset += encodeHexLE(u64, 0, buf[offset..]);
     offset += encodeHexLE(u64, 0x80000000, buf[offset..]);
     return offset;
 }
 
-/// Dispatch incoming RSP packet payload
+fn parseAddrAndLen(slice: []const u8) ?struct { addr: u64, len: usize } {
+    const comma_idx = std.mem.indexOfScalar(u8, slice, ',') orelse return null;
+    const addr = std.fmt.parseInt(u64, slice[0..comma_idx], 16) catch
+        return null;
+    const len = std.fmt.parseInt(usize, slice[comma_idx + 1 ..], 16) catch
+        return null;
+    return .{ .addr = addr, .len = len };
+}
+
+fn handleMemoryRead(payload: []const u8) void {
+    const parsed = parseAddrAndLen(payload[1..]) orelse {
+        sendPacket("E01");
+        return;
+    };
+    var mem_buf: [256]u8 = undefined;
+    var hex_res: [512]u8 = undefined;
+    const read_len = @min(parsed.len, mem_buf.len / 2);
+
+    if (active_thread == 1) {
+        const host_addr = std.math.cast(usize, parsed.addr) orelse {
+            sendPacket("E01");
+            return;
+        };
+        if (!physmem.isRam(host_addr, read_len)) {
+            sendPacket("E01");
+            return;
+        }
+        const host_ptr = @as([*]const u8, @ptrFromInt(host_addr));
+        const hex_len = encodeHexBytes(host_ptr[0..read_len], &hex_res);
+        sendPacket(hex_res[0..hex_len]);
+        return;
+    }
+
+    if (active_vc) |vc| {
+        const gpa = std.math.cast(usize, parsed.addr) orelse {
+            sendPacket("E01");
+            return;
+        };
+        const dst = mem_buf[0..read_len];
+        if (vc.guest.space.copyFromGuest(dst, gpa)) |_| {
+            const hex_len = encodeHexBytes(dst, &hex_res);
+            sendPacket(hex_res[0..hex_len]);
+            return;
+        } else |_| {}
+    }
+    sendPacket("E01");
+}
+
+fn handleMemoryWrite(payload: []const u8) void {
+    const colon_idx = std.mem.indexOfScalar(u8, payload[1..], ':') orelse {
+        sendPacket("E01");
+        return;
+    };
+    const parsed = parseAddrAndLen(payload[1 .. 1 + colon_idx]) orelse {
+        sendPacket("E01");
+        return;
+    };
+    const hex_payload = payload[1 + colon_idx + 1 ..];
+    if (parsed.len > hex_payload.len / 2) {
+        sendPacket("E01");
+        return;
+    }
+
+    var write_buf: [256]u8 = undefined;
+    const write_len = @min(parsed.len, write_buf.len);
+    if (!decodeHexBytes(hex_payload, write_buf[0..write_len])) {
+        sendPacket("E01");
+        return;
+    }
+
+    if (active_thread == 1) {
+        const host_addr = std.math.cast(usize, parsed.addr) orelse {
+            sendPacket("E01");
+            return;
+        };
+        if (!physmem.isRam(host_addr, write_len) or
+            physmem.isHypervisorMemory(host_addr, write_len))
+        {
+            sendPacket("E01");
+            return;
+        }
+        const host_ptr = @as([*]u8, @ptrFromInt(host_addr));
+        @memcpy(host_ptr[0..write_len], write_buf[0..write_len]);
+        sendPacket("OK");
+        return;
+    }
+
+    if (active_vc) |vc| {
+        const gpa = std.math.cast(usize, parsed.addr) orelse {
+            sendPacket("E01");
+            return;
+        };
+        const src = write_buf[0..write_len];
+        if (vc.guest.space.copyToGuest(gpa, src)) |_| {
+            sendPacket("OK");
+            return;
+        } else |_| {}
+    }
+    sendPacket("E01");
+}
+
+fn handleQuery(payload: []const u8) void {
+    if (std.mem.startsWith(u8, payload, "qSupported")) {
+        sendPacket("PacketSize=1000;qXfer:features:read+");
+    } else if (std.mem.startsWith(u8, payload, "qXfer:")) {
+        if (std.mem.startsWith(u8, payload, "qXfer:features:read:target.xml")) {
+            var reply_buf: [2048]u8 = undefined;
+            reply_buf[0] = 'l';
+            @memcpy(
+                reply_buf[1 .. 1 + X86_64_TARGET_XML.len],
+                X86_64_TARGET_XML,
+            );
+            sendPacket(reply_buf[0 .. 1 + X86_64_TARGET_XML.len]);
+        } else {
+            sendPacket("");
+        }
+    } else if (std.mem.startsWith(u8, payload, "qfThreadInfo")) {
+        sendPacket("m1,3");
+    } else if (std.mem.startsWith(u8, payload, "qsThreadInfo")) {
+        sendPacket("l");
+    } else if (std.mem.startsWith(u8, payload, "qAttached")) {
+        sendPacket("1");
+    } else if (std.mem.startsWith(u8, payload, "qOffsets")) {
+        sendPacket("Text=0;Data=0;Bss=0");
+    } else if (std.mem.startsWith(u8, payload, "qC")) {
+        sendPacket("QC1");
+    } else if (std.mem.startsWith(u8, payload, "qRcmd,")) {
+        const hex_in = payload[6..];
+        var cmd_buf: [256]u8 = undefined;
+        var cmd_len: usize = 0;
+        var idx: usize = 0;
+        while (idx + 1 < hex_in.len and cmd_len < cmd_buf.len) : (idx += 2) {
+            if (parseHexByte(hex_in[idx .. idx + 2])) |b| {
+                cmd_buf[cmd_len] = b;
+                cmd_len += 1;
+            }
+        }
+        handleMonitorCommand(cmd_buf[0..cmd_len]);
+    } else {
+        sendPacket("");
+    }
+}
+
+/// Dispatch incoming RSP packet payload.
 pub fn handlePacketPayload(payload: []const u8) void {
     if (payload.len == 0) return;
 
     switch (payload[0]) {
-        '?' => {
-            // Halting status query -> reply SIGTRAP stop packet
-            sendPacket("S05");
-        },
+        '?' => sendPacket("S05"),
         'g' => {
-            // Read register file
             var reg_buf: [512]u8 = undefined;
             if (active_thread == 1) {
                 const len = readRV64Registers(&reg_buf);
@@ -201,7 +317,6 @@ pub fn handlePacketPayload(payload: []const u8) void {
             sendPacket("E01");
         },
         'P' => {
-            // Write single register: P reg_num=val_hex
             const eq_idx = std.mem.indexOfScalar(u8, payload[1..], '=') orelse {
                 sendPacket("E01");
                 return;
@@ -213,247 +328,47 @@ pub fn handlePacketPayload(payload: []const u8) void {
                 return;
             };
             if (active_vc) |vc| {
-                if (vc.exec_path == .emulated) {
+                if (vc.exec_path == .emulated and reg_num == 16) {
                     if (vc.exec_path.emulated.vcpu) |vcpu| {
-                        if (reg_num == 16) { // RIP / PC
-                            var bytes: [8]u8 = @splat(0);
-                            var idx: usize = 0;
-                            while (idx < 8 and idx * 2 + 1 < val_str.len) : (idx += 1) {
-                                if (parseHexByte(val_str[idx * 2 .. idx * 2 + 2])) |b| {
-                                    bytes[idx] = b;
-                                }
-                            }
-                            const new_rip = std.mem.readInt(u64, &bytes, .little);
-                            vcpu.pc = @truncate(new_rip);
-                            sendPacket("OK");
-                            return;
-                        }
+                        var bytes: [8]u8 = @splat(0);
+                        _ = decodeHexBytes(
+                            val_str,
+                            bytes[0..@min(8, val_str.len / 2)],
+                        );
+                        vcpu.pc = @truncate(
+                            std.mem.readInt(u64, &bytes, .little),
+                        );
                     }
                 }
             }
             sendPacket("OK");
         },
-        'm' => {
-            // Read memory: m addr,length
-            const comma_idx = std.mem.indexOfScalar(u8, payload[1..], ',') orelse {
-                sendPacket("E01");
-                return;
-            };
-            const addr_str = payload[1 .. 1 + comma_idx];
-            const len_str = payload[1 + comma_idx + 1 ..];
-            const addr = std.fmt.parseInt(u64, addr_str, 16) catch {
-                sendPacket("E01");
-                return;
-            };
-            const len = std.fmt.parseInt(usize, len_str, 16) catch {
-                sendPacket("E01");
-                return;
-            };
-
-            var mem_buf: [256]u8 = undefined;
-            const read_len = @min(len, mem_buf.len / 2);
-            if (active_thread == 1) {
-                const host_addr: usize = std.math.cast(usize, addr) orelse {
-                    sendPacket("E01");
-                    return;
-                };
-                if (!physmem.isRam(host_addr, read_len)) {
-                    sendPacket("E01");
-                    return;
-                }
-                const host_ptr = @as([*]const u8, @ptrFromInt(host_addr));
-                var hex_res: [512]u8 = undefined;
-                const hex_digits = "0123456789abcdef";
-                for (host_ptr[0..read_len], 0..) |b, idx| {
-                    hex_res[idx * 2] = hex_digits[(b >> 4) & 0xf];
-                    hex_res[idx * 2 + 1] = hex_digits[b & 0xf];
-                }
-                sendPacket(hex_res[0 .. read_len * 2]);
-                return;
-            }
-
-            if (active_vc) |vc| {
-                const target_gpa: usize = std.math.cast(usize, addr) orelse {
-                    sendPacket("E01");
-                    return;
-                };
-                if (vc.guest.space.copyFromGuest(mem_buf[0..read_len], target_gpa)) |_| {
-                    var hex_res: [512]u8 = undefined;
-                    const hex_digits = "0123456789abcdef";
-                    for (mem_buf[0..read_len], 0..) |b, idx| {
-                        hex_res[idx * 2] = hex_digits[(b >> 4) & 0xf];
-                        hex_res[idx * 2 + 1] = hex_digits[b & 0xf];
-                    }
-                    sendPacket(hex_res[0 .. read_len * 2]);
-                    return;
-                } else |_| {}
-            }
-            sendPacket("E01");
-        },
-        'M' => {
-            // Write memory: M addr,length:hex_bytes
-            const colon_idx = std.mem.indexOfScalar(u8, payload[1..], ':') orelse {
-                sendPacket("E01");
-                return;
-            };
-            const header = payload[1 .. 1 + colon_idx];
-            const comma_idx = std.mem.indexOfScalar(u8, header, ',') orelse {
-                sendPacket("E01");
-                return;
-            };
-            const addr_str = header[0..comma_idx];
-            const len_str = header[comma_idx + 1 ..];
-            const addr = std.fmt.parseInt(u64, addr_str, 16) catch {
-                sendPacket("E01");
-                return;
-            };
-            const len = std.fmt.parseInt(usize, len_str, 16) catch {
-                sendPacket("E01");
-                return;
-            };
-
-            const hex_payload = payload[1 + colon_idx + 1 ..];
-            if (len > hex_payload.len / 2) {
-                sendPacket("E01");
-                return;
-            }
-
-            if (active_thread == 1) {
-                const host_addr: usize = std.math.cast(usize, addr) orelse {
-                    sendPacket("E01");
-                    return;
-                };
-                var write_buf: [256]u8 = undefined;
-                const write_len = @min(len, write_buf.len);
-                // Prevent GDB writes to hypervisor execution code/data structures
-                if (!physmem.isRam(host_addr, write_len) or physmem.isHypervisorMemory(host_addr, write_len)) {
-                    sendPacket("E01");
-                    return;
-                }
-                var idx: usize = 0;
-                while (idx < write_len) : (idx += 1) {
-                    if (parseHexByte(hex_payload[idx * 2 .. idx * 2 + 2])) |b| {
-                        write_buf[idx] = b;
-                    } else {
-                        sendPacket("E01");
-                        return;
-                    }
-                }
-                const host_ptr = @as([*]u8, @ptrFromInt(host_addr));
-                @memcpy(host_ptr[0..write_len], write_buf[0..write_len]);
-                sendPacket("OK");
-                return;
-            }
-
-            if (active_vc) |vc| {
-                const target_gpa: usize = std.math.cast(usize, addr) orelse {
-                    sendPacket("E01");
-                    return;
-                };
-                var write_buf: [256]u8 = undefined;
-                const write_len = @min(len, write_buf.len);
-                var idx: usize = 0;
-                while (idx < write_len) : (idx += 1) {
-                    if (parseHexByte(hex_payload[idx * 2 .. idx * 2 + 2])) |b| {
-                        write_buf[idx] = b;
-                    } else {
-                        sendPacket("E01");
-                        return;
-                    }
-                }
-                if (vc.guest.space.copyToGuest(target_gpa, write_buf[0..write_len])) |_| {
-                    sendPacket("OK");
-                    return;
-                } else |_| {}
-            }
-            sendPacket("E01");
-        },
-        'q' => {
-            if (std.mem.startsWith(u8, payload, "qSupported")) {
-                sendPacket("PacketSize=1000;qXfer:features:read+");
-            } else if (std.mem.startsWith(u8, payload, "qXfer:")) {
-                if (std.mem.startsWith(u8, payload, "qXfer:features:read:target.xml")) {
-                    var reply_buf: [2048]u8 = undefined;
-                    reply_buf[0] = 'l';
-                    @memcpy(reply_buf[1 .. 1 + X86_64_TARGET_XML.len], X86_64_TARGET_XML);
-                    sendPacket(reply_buf[0 .. 1 + X86_64_TARGET_XML.len]);
-                } else {
-                    sendPacket("");
-                }
-            } else if (std.mem.startsWith(u8, payload, "qfThreadInfo")) {
-                sendPacket("m1,3");
-            } else if (std.mem.startsWith(u8, payload, "qsThreadInfo")) {
-                sendPacket("l");
-            } else if (std.mem.startsWith(u8, payload, "qAttached")) {
-                sendPacket("1");
-            } else if (std.mem.startsWith(u8, payload, "qOffsets")) {
-                sendPacket("Text=0;Data=0;Bss=0");
-            } else if (std.mem.startsWith(u8, payload, "qC")) {
-                sendPacket("QC1");
-            } else if (std.mem.startsWith(u8, payload, "qRcmd,")) {
-                // Decode monitor command
-                const hex_payload = payload[6..];
-                var cmd_buf: [256]u8 = undefined;
-                var cmd_len: usize = 0;
-                var idx: usize = 0;
-                while (idx + 1 < hex_payload.len and cmd_len < cmd_buf.len) : (idx += 2) {
-                    if (parseHexByte(hex_payload[idx .. idx + 2])) |b| {
-                        cmd_buf[cmd_len] = b;
-                        cmd_len += 1;
-                    }
-                }
-                handleMonitorCommand(cmd_buf[0..cmd_len]);
-            } else {
-                sendPacket(""); // Unsupported query
-            }
-        },
-        'v' => {
-            sendPacket("");
-        },
+        'm' => handleMemoryRead(payload),
+        'M' => handleMemoryWrite(payload),
+        'q' => handleQuery(payload),
+        'v' => sendPacket(""),
         'D' => {
             removeAllBreakpoints();
             gdb_connected = false;
             sendPacket("OK");
         },
         'H' => {
-            // Hg / Hc thread selection (e.g. Hg1 or Hg3)
             if (payload.len >= 3 and (payload[1] == 'g' or payload[1] == 'c')) {
-                const tid_str = payload[2..];
-                if (std.fmt.parseInt(usize, tid_str, 10)) |tid| {
+                if (std.fmt.parseInt(usize, payload[2..], 10)) |tid| {
                     active_thread = tid;
                 } else |_| {}
             }
             sendPacket("OK");
         },
-        'c' => {
-            // Continue execution: Do NOT send "OK". GDB waits for stop reply notification (T05/S05).
-            gdb_connected = true;
-        },
-        'Z' => {
-            // Insert breakpoint Z0,addr,kind
+        'c' => gdb_connected = true,
+        'Z', 'z' => {
             if (payload.len > 3 and payload[1] == '0' and payload[2] == ',') {
                 if (parseHexAddr(payload[3..])) |addr| {
-                    if (insertSwBreakpoint(addr)) {
-                        sendPacket("OK");
-                    } else {
-                        sendPacket("E01");
-                    }
-                } else {
-                    sendPacket("E01");
-                }
-            } else {
-                sendPacket("");
-            }
-        },
-        'z' => {
-            // Remove breakpoint z0,addr,kind
-            if (payload.len > 3 and payload[1] == '0' and payload[2] == ',') {
-                if (parseHexAddr(payload[3..])) |addr| {
-                    if (removeSwBreakpoint(addr)) {
-                        sendPacket("OK");
-                    } else {
-                        sendPacket("E01");
-                    }
+                    const ok = if (payload[0] == 'Z')
+                        bp_mod.insertSwBreakpoint(active_vc, addr)
+                    else
+                        bp_mod.removeSwBreakpoint(active_vc, addr);
+                    sendPacket(if (ok) "OK" else "E01");
                 } else {
                     sendPacket("E01");
                 }
@@ -462,170 +377,28 @@ pub fn handlePacketPayload(payload: []const u8) void {
             }
         },
         's' => {
-            // Single step 1 instruction
             if (active_vc) |vc| {
-                if (vc.exec_path == .emulated) {
-                    if (vc.exec_path.emulated.vcpu != null) {
-                        if (vc.exec_path.emulated.engine) |engine| {
-                            _ = engine.step();
-                        }
-                    }
+                if (vc.exec_path == .emulated and
+                    vc.exec_path.emulated.vcpu != null)
+                {
+                    if (vc.exec_path.emulated.engine) |eng| _ = eng.step();
                 }
             }
             sendPacket("S05");
         },
-        else => {
-            sendPacket("");
-        },
+        else => sendPacket(""),
     }
-}
-
-pub const STATIC_BREAKPOINTS: usize = 32;
-pub const DYNAMIC_HASH_BUCKETS: usize = 32;
-pub const MAX_DYNAMIC_BREAKPOINTS: usize = 1024;
-
-pub const SwBreakpoint = struct {
-    addr: u64 = 0,
-    orig_byte: u8 = 0,
-    active: bool = false,
-    next: ?*SwBreakpoint = null,
-};
-
-pub const BreakpointTable = struct {
-    // Column 1: Fast-path static array for first 32 breakpoints (wait-free, O(1), zero heap allocation)
-    static_slots: [STATIC_BREAKPOINTS]SwBreakpoint = @splat(.{}),
-    // Column 2: Dynamic hash buckets for overflow breakpoints (chained hash table keyed by (addr >> 2) % 32)
-    dynamic_buckets: [DYNAMIC_HASH_BUCKETS]?*SwBreakpoint = @splat(null),
-    dynamic_pool: [MAX_DYNAMIC_BREAKPOINTS]SwBreakpoint = @splat(.{}),
-    dynamic_count: usize = 0,
-
-    pub fn reset(self: *BreakpointTable) void {
-        for (&self.static_slots) |*bp| {
-            bp.* = .{};
-        }
-        self.dynamic_buckets = @splat(null);
-        self.dynamic_count = 0;
-    }
-
-    pub fn find(self: *BreakpointTable, addr: u64) ?*SwBreakpoint {
-        for (&self.static_slots) |*bp| {
-            if (bp.active and bp.addr == addr) return bp;
-        }
-        const bucket = @as(usize, @intCast((addr >> 2) % DYNAMIC_HASH_BUCKETS));
-        var curr = self.dynamic_buckets[bucket];
-        while (curr) |bp| {
-            if (bp.active and bp.addr == addr) return bp;
-            curr = bp.next;
-        }
-        return null;
-    }
-
-    pub fn allocate(self: *BreakpointTable, addr: u64, orig_byte: u8) ?*SwBreakpoint {
-        if (self.find(addr) != null) return null;
-
-        // Try static slot first (Column 1)
-        for (&self.static_slots) |*bp| {
-            if (!bp.active) {
-                bp.* = .{ .addr = addr, .orig_byte = orig_byte, .active = true, .next = null };
-                return bp;
-            }
-        }
-
-        // Try reusing inactive dynamic slot in matching bucket (Column 2)
-        const bucket = @as(usize, @intCast((addr >> 2) % DYNAMIC_HASH_BUCKETS));
-        var curr = self.dynamic_buckets[bucket];
-        while (curr) |bp| {
-            if (!bp.active) {
-                bp.addr = addr;
-                bp.orig_byte = orig_byte;
-                bp.active = true;
-                return bp;
-            }
-            curr = bp.next;
-        }
-
-        // Allocate from dynamic pool
-        if (self.dynamic_count < self.dynamic_pool.len) {
-            const bp = &self.dynamic_pool[self.dynamic_count];
-            self.dynamic_count += 1;
-            bp.* = .{
-                .addr = addr,
-                .orig_byte = orig_byte,
-                .active = true,
-                .next = self.dynamic_buckets[bucket],
-            };
-            self.dynamic_buckets[bucket] = bp;
-            return bp;
-        }
-
-        return null;
-    }
-};
-
-pub var sw_breakpoints: BreakpointTable = .{};
-
-fn readByte(vc: *vcore.VirtualCore, addr: u64) ?u8 {
-    const target_gpa: usize = std.math.cast(usize, addr) orelse return null;
-    var b: [1]u8 = undefined;
-    vc.guest.space.copyFromGuest(&b, target_gpa) catch return null;
-    return b[0];
-}
-
-fn writeByte(vc: *vcore.VirtualCore, addr: u64, val: u8) bool {
-    const target_gpa: usize = std.math.cast(usize, addr) orelse return false;
-    const b = [1]u8{val};
-    vc.guest.space.copyToGuest(target_gpa, &b) catch return false;
-    return true;
-}
-
-fn insertSwBreakpoint(addr: u64) bool {
-    if (active_vc == null or active_vc.?.exec_path != .emulated) return false;
-    const vc = active_vc.?;
-
-    if (sw_breakpoints.find(addr) != null) return true;
-
-    const orig = readByte(vc, addr) orelse return false;
-    if (!writeByte(vc, addr, 0xCC)) return false;
-
-    return sw_breakpoints.allocate(addr, orig) != null;
-}
-
-fn removeSwBreakpoint(addr: u64) bool {
-    if (active_vc == null or active_vc.?.exec_path != .emulated) return false;
-    const vc = active_vc.?;
-    if (sw_breakpoints.find(addr)) |bp| {
-        _ = writeByte(vc, addr, bp.orig_byte);
-        bp.active = false;
-        return true;
-    }
-    return false;
 }
 
 pub fn removeAllBreakpoints() void {
-    if (active_vc == null or active_vc.?.exec_path != .emulated) return;
-    const vc = active_vc.?;
-    for (&sw_breakpoints.static_slots) |*bp| {
-        if (bp.active) {
-            _ = writeByte(vc, bp.addr, bp.orig_byte);
-            bp.active = false;
-        }
-    }
-    for (sw_breakpoints.dynamic_buckets) |head| {
-        var curr = head;
-        while (curr) |bp| {
-            if (bp.active) {
-                _ = writeByte(vc, bp.addr, bp.orig_byte);
-                bp.active = false;
-            }
-            curr = bp.next;
-        }
-    }
+    bp_mod.removeAllBreakpoints(active_vc);
 }
 
 pub fn notifyTrap(sig: u8) void {
     if (!gdb_connected) return;
     var buf: [32]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "T{x:0>2}thread:3;", .{sig}) catch "T05thread:3;";
+    const msg = std.fmt.bufPrint(&buf, "T{x:0>2}thread:3;", .{sig}) catch
+        "T05thread:3;";
     sendPacket(msg);
 }
 
@@ -635,7 +408,6 @@ pub const PacketState = enum {
     reading_checksum_hi,
     reading_checksum_lo,
 };
-
 var pkt_state: PacketState = .idle;
 var payload_buf: [2048]u8 = undefined;
 var payload_len: usize = 0;
@@ -644,7 +416,7 @@ var checksum_hi: u8 = 0;
 pub fn init() void {
     pkt_state = .idle;
     payload_len = 0;
-    sw_breakpoints.reset();
+    bp_mod.sw_breakpoints.reset();
 }
 
 pub fn handleSerialByte(ch: u8) void {
@@ -653,16 +425,13 @@ pub fn handleSerialByte(ch: u8) void {
         @atomicStore(bool, &vc.wfi_blocked, false, .release);
     }
 
-    // Check for raw 0x03 (Control-C) interrupt byte
     if (ch == 0x03) {
         if (active_vc) |vc| {
             if (vc.exec_path == .emulated) {
-                if (vc.exec_path.emulated.vcpu) |vcpu| {
-                    vcpu.running = false;
-                }
+                if (vc.exec_path.emulated.vcpu) |vcpu| vcpu.running = false;
             }
         }
-        sendPacket("S02"); // SIGINT
+        sendPacket("S02");
         pkt_state = .idle;
         return;
     }
@@ -689,18 +458,15 @@ pub fn handleSerialByte(ch: u8) void {
             pkt_state = .reading_checksum_lo;
         },
         .reading_checksum_lo => {
-            const checksum_lo = ch;
-            const expected_hi = checksum_hi;
+            const sum_chars = [2]u8{ checksum_hi, ch };
             pkt_state = .idle;
 
-            const hex_hi = std.fmt.charToDigit(expected_hi, 16) catch 0;
-            const hex_lo = std.fmt.charToDigit(checksum_lo, 16) catch 0;
-            const received_sum = @as(u8, @intCast((hex_hi << 4) | hex_lo));
-
+            const received_sum = parseHexByte(&sum_chars) orelse {
+                writeSerialByte('-');
+                return;
+            };
             const payload_slice = payload_buf[0..payload_len];
-            const calculated_sum = calcChecksum(payload_slice);
-
-            if (received_sum == calculated_sum) {
+            if (received_sum == calcChecksum(payload_slice)) {
                 writeSerialByte('+');
                 handlePacketPayload(payload_slice);
             } else {
@@ -722,64 +488,6 @@ pub inline fn onException(context: anytype) void {
     _ = context;
 }
 
-test "GDB RSP BreakpointTable static and dynamic hash buckets" {
-    const testing = std.testing;
-
-    var table = BreakpointTable{};
-
-    // 1. Fill all 32 static slots
-    var i: u64 = 0;
-    while (i < 32) : (i += 1) {
-        const addr = 0x1000 + i * 4;
-        const bp = table.allocate(addr, @as(u8, @intCast(i & 0xFF)));
-        try testing.expect(bp != null);
-        try testing.expectEqual(addr, bp.?.addr);
-        try testing.expectEqual(@as(u8, @intCast(i & 0xFF)), bp.?.orig_byte);
-    }
-
-    // Verify all 32 are findable
-    i = 0;
-    while (i < 32) : (i += 1) {
-        const addr = 0x1000 + i * 4;
-        const bp = table.find(addr);
-        try testing.expect(bp != null);
-        try testing.expectEqual(addr, bp.?.addr);
-    }
-
-    // Duplicate allocation returns null
-    try testing.expect(table.allocate(0x1000, 0xAA) == null);
-
-    // 2. Allocate dynamic breakpoint (index 32+)
-    const dyn_addr1: u64 = 0x8000;
-    const dyn_bp1 = table.allocate(dyn_addr1, 0x11);
-    try testing.expect(dyn_bp1 != null);
-    try testing.expectEqual(dyn_addr1, dyn_bp1.?.addr);
-    try testing.expectEqual(@as(usize, 1), table.dynamic_count);
-
-    // 3. Hash collision in dynamic buckets:
-    // (0x8000 >> 2) % 32 == (0x8000 + 32 * 4 >> 2) % 32 == (0x8080 >> 2) % 32
-    const dyn_addr2: u64 = 0x8080;
-    const dyn_bp2 = table.allocate(dyn_addr2, 0x22);
-    try testing.expect(dyn_bp2 != null);
-    try testing.expectEqual(dyn_addr2, dyn_bp2.?.addr);
-    try testing.expectEqual(@as(usize, 2), table.dynamic_count);
-
-    // Both colliding addresses findable
-    try testing.expect(table.find(dyn_addr1) != null);
-    try testing.expect(table.find(dyn_addr2) != null);
-
-    // 4. Deactivate and slot reuse
-    dyn_bp1.?.active = false;
-    try testing.expect(table.find(dyn_addr1) == null);
-
-    // Reallocating dyn_addr1 reuses inactive slot without increasing pool count
-    const dyn_realloc = table.allocate(dyn_addr1, 0x33);
-    try testing.expect(dyn_realloc != null);
-    try testing.expectEqual(@as(usize, 2), table.dynamic_count);
-
-    // 5. Reset cleans everything
-    table.reset();
-    try testing.expectEqual(@as(usize, 0), table.dynamic_count);
-    try testing.expect(table.find(0x1000) == null);
-    try testing.expect(table.find(dyn_addr1) == null);
+test {
+    _ = bp_mod;
 }

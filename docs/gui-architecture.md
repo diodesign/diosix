@@ -1,69 +1,108 @@
-# Diosix GUI & System Configuration Architecture
+# Diosix GUI and system configuration architecture
 
-## 1. Overview & Security Model
+## 1. Overview and security model
 
-Diosix isolates the **Presentation Layer** (`sys.gui`) from the **Host Administration Layer** (`sys.config`):
+Diosix isolates the **presentation layer** (`sys.gui`) from the **host
+administration layer** (`sys.config`) while providing a zero-dependency
+Direct Rendering Manager / Kernel Mode Setting (DRM/KMS) desktop environment
+(`diosix-gui`):
 
 ```text
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   PHYSICAL HARDWARE                                    │
-│       Physical Display (DRM / KMS)                  Physical Keyboard & Mouse (evdev)  │
-└───────────────────────────────┬─────────────────────────────────┬──────────────────────┘
-                                │                                 │
-┌───────────────────────────────▼─────────────────────────────────▼──────────────────────┐
-│                    GUI DOMAIN (`sys.gui` / CID 2 — Hardware Trust)                     │
-│                                                                                        │
-│  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                     Homegrown Window Manager / Compositor (diosix-wm)            │  │
-│  │                                                                                  │  │
-│  │  • Drives DRM/KMS scanout buffer & captures evdev/libinput seat input            │  │
-│  │  • Fullscreen Desktop Shell: Top status bar, workspace manager, window frames    │  │
-│  │  • Tamper-Proof Trusted Window Borders: Color-coded by source Domain / CID       │  │
-│  │  • Wayland Server: Exposes wl_compositor, xdg_shell, wl_shm, wl_seat             │  │
-│  └───────────────────▲──────────────────────────────▲───────────────────────────▲───┘  │
-│                      │                              │                           │      │
-└──────────────────────┼──────────────────────────────┼───────────────────────────┼──────┘
-                       │ (Wayland over VSOCK / IP)    │                           │
-    ┌──────────────────┴───────────────┐ ┌────────────┴──────────────┐ ┌──────────┴───────────────┐
-    │  CONFIG DOMAIN (`sys.config`)    │ │  APP DOMAIN (`user.web`)  │ │ WORK DOMAIN (`user.work`) │
-    │                                  │ │                           │ │                           │
-    │  • Native GUI Config App         │ │  • Web Browser (Firefox)  │ │ • Terminal & Text Editor  │
-    │  • Talks to Root VM / Hypervisor │ │  • Wayland Client         │ │ • Wayland Client          │
-    │  • Manages VMs, Disks, Manifests │ │  • Untrusted sandbox      │ │ • Sandboxed environment   │
-    └──────────────────────────────────┘ └───────────────────────────┘ └───────────────────────────┘
++----------------------------------------------------------------------------+
+|                             PHYSICAL HARDWARE                              |
+|     Physical Display (DRM / KMS)            Keyboard, Mouse & Touch (evdev)|
++---------------------------------+---------------------------+--------------+
+                                  |                           |
++---------------------------------v---------------------------v--------------+
+|               GUI DOMAIN (`sys.gui` / CID 2 - Hardware Trust)              |
+|                                                                            |
+|  +----------------------------------------------------------------------+  |
+|  |            Monolithic Desktop Compositor (diosix-gui / diosix-wm)    |  |
+|  |                                                                      |  |
+|  |  * Drives DRM/KMS scanout buffer & captures evdev/touch seat input   |  |
+|  |  * Optical glass panes, dynamic sky backdrop, and Wimp window frames |  |
+|  |  * Dockable on-screen virtual keyboard (OSK) & 5-step Guided Tour    |  |
+|  |  * Headless semantic JSON control plane (/run/diosix/gui_state.json) |  |
+|  +------------------^----------------------------^--------------------^-+  |
++---------------------|----------------------------|--------------------|----+
+                      | (Wayland / VSOCK / IPC)    |                    |
+   +------------------+-------------+ +------------+----------+ +-------+----+
+   | CONFIG DOMAIN (`sys.config`)   | | APP DOMAIN (`user`)   | | VAULT VM   |
+   | * Native GUI Config App        | | * Wayland/RFB Client  | | * Isolated |
+   | * Manages VMs, Disks, Charters | | * Untrusted sandbox   | | * No WAN   |
+   +--------------------------------+ +-----------------------+ +------------+
 ```
 
-### Key Security Properties
-1. **Decoupled Privileges**: `sys.gui` owns display hardware and mouse/keyboard inputs, but has **zero administrative power** to control other VMs or modify storage.
-2. **Untrusted Presentation**: `sys.config` runs the native GUI configuration tool (`diosix-config`) but has **no direct access to display or input hardware**. It renders as a standard client window to `sys.gui`.
-3. **Visual Provenance (Trusted Window Frames)**: `diosix-wm` draws tamper-proof window frames with color-coded security badges:
-   - 🟢 **Green Border**: `[sys.config]` (Trusted Admin Domain)
-   - 🔵 **Blue Border**: `[user.work]` (Work Domain)
-   - 🔴 **Red Border**: `[user.web]` (Untrusted Sandboxed Domain)
-   - 🟣 **Purple Border**: `[sys.net]` (System Domain Service)
+### Key security properties
+
+1. **Decoupled privileges**: `sys.gui` owns display hardware and pointer,
+   keyboard, and touchscreen inputs, while delegating VM lifecycle and
+   storage management to the hypervisor control plane.
+2. **Untrusted presentation**: `sys.config` runs the native GUI configuration
+   tool (`diosix-config`) without direct access to display or input hardware.
+3. **Visual provenance (trusted window frames)**: `diosix-gui` renders
+   tamper-proof window frames with domain-specific accents:
+   - **Green border**: `[sys.config]` (trusted admin domain)
+   - **Blue border**: `[user.work]` (work domain)
+   - **Red border**: `[user.web]` (untrusted sandboxed domain)
+   - **Purple border**: `[sys.net]` (system domain service)
 
 ---
 
-## 2. Window Manager Component (`diosix-wm`)
+## 2. Monolithic desktop compositor (`diosix-gui`)
 
-Located in [`tools/diosix-wm/`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-wm):
-- **[`src/framebuffer.zig`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-wm/src/framebuffer.zig)**: Software double-buffered scanout rasterizer for `/dev/fb0` and DRM dumb buffers.
-- **[`src/decorator.zig`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-wm/src/decorator.zig)**: Enforces domain trust borders, titlebars, window controls, and client area clipping.
-- **[`src/seat.zig`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-wm/src/seat.zig)**: Mouse cursor sprite rendering, titlebar dragging, hit-testing, and focus management.
-- **[`src/panel.zig`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-wm/src/panel.zig)**: Top desktop panel displaying active domain focus badge and system status.
-- **[`src/wayland.zig`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-wm/src/wayland.zig)**: Lightweight Wayland server handling client surface commitments over AF_UNIX / VSOCK.
+Located in [`tools/diosix-gui/src/`](../tools/diosix-gui/src):
+
+*   **[`framebuffer.zig`](../tools/diosix-gui/src/framebuffer.zig),
+    [`glass.zig`](../tools/diosix-gui/src/glass.zig), and
+    [`backdrop.zig`](../tools/diosix-gui/src/backdrop.zig)**: Double-buffered
+    32-bit XRGB8888 software rasterizer, optical superellipse glass pane shader,
+    and procedural terrain/cloud sky backdrop renderer.
+*   **[`window.zig`](../tools/diosix-gui/src/window.zig) and
+    [`window/input.zig`](../tools/diosix-gui/src/window/input.zig)**: Window
+    chrome, titlebar hit-testing, scrollbars, and mouse/keyboard dispatch.
+*   **[`icon.zig`](../tools/diosix-gui/src/icon.zig),
+    [`icon/render.zig`](../tools/diosix-gui/src/icon/render.zig), and
+    [`icon/viewport.zig`](../tools/diosix-gui/src/icon/viewport.zig)**: Widget
+    primitives (buttons, badges, sliders, progress bars, RFB/Wayland client
+    viewports, and vector action glyphs).
+*   **[`panes.zig`](../tools/diosix-gui/src/panes.zig),
+    [`panes/vm.zig`](../tools/diosix-gui/src/panes/vm.zig),
+    [`panes/catalog.zig`](../tools/diosix-gui/src/panes/catalog.zig), and
+    [`panes/modal.zig`](../tools/diosix-gui/src/panes/modal.zig)**: Layout
+    builders for the VM Fleet Overview, slide-out VM Action Drawer, Software
+    and Hardware panes, Power modal, Welcome modal, 5-step Guided Tour, and
+    dockable On-Screen Keyboard (OSK).
+*   **[`gui.zig`](../tools/diosix-gui/src/gui.zig),
+    [`gui/input.zig`](../tools/diosix-gui/src/gui/input.zig),
+    [`gui/nav.zig`](../tools/diosix-gui/src/gui/nav.zig), and
+    [`gui/render.zig`](../tools/diosix-gui/src/gui/render.zig)**: Core
+    compositor state machine, dirty-rectangle damage tracking, keyboard focus
+    navigation, and semantic JSON state serialization.
+*   **[`osk.zig`](../tools/diosix-gui/src/osk.zig) and
+    [`welcome.zig`](../tools/diosix-gui/src/welcome.zig)**: Hardware seat
+    profiles (`touch-tablet`, `desktop-kbd`, `headless-serial`), virtual
+    keyboard state machine, and Guided Tour state.
+*   **[`drm.zig`](../tools/diosix-gui/src/drm.zig),
+    [`display.zig`](../tools/diosix-gui/src/display.zig), and
+    [`main.zig`](../tools/diosix-gui/src/main.zig)**: Linux DRM/KMS dumb-buffer
+    and `/dev/fb0` display backends, `evdev` input polling, and event loop.
 
 ---
 
-## 3. Configuration GUI Component (`diosix-config`)
+## 3. Configuration GUI component (`diosix-config`)
 
-Located in [`tools/diosix-config/`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-config):
-- **[`src/ui.zig`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-config/src/ui.zig)**: Widget library providing VM cards, navigation sidebars, memory/vCPU sliders, and action buttons.
-- **[`src/main.zig`](file:///home/chris/Documents/src/diosix-hq/diosix/tools/diosix-config/src/main.zig)**: Application lifecycle, tab controller (Dashboard, Virtual Machines, Storage Disks, Network Matrix), and hypervisor API bridge.
+Located in [`tools/diosix-config/src/`](../tools/diosix-config/src):
+
+*   **[`ui.zig`](../tools/diosix-config/src/ui.zig)**: Widget library providing
+    VM cards, navigation sidebars, memory/vCPU sliders, and action buttons.
+*   **[`main.zig`](../tools/diosix-config/src/main.zig)**: Application
+    lifecycle, tab controller (Dashboard, Virtual Machines, Storage Disks,
+    Network Matrix), and hypervisor API bridge.
 
 ---
 
-## 4. System Manifest Specification (`system.toml`)
+## 4. System manifest specification (`system.toml`)
 
 ```toml
 [system]
@@ -104,9 +143,9 @@ routes = [
 
 ---
 
-## 5. Detailed Desktop Implementation Plan
+## 5. Detailed desktop implementation plan
 
-For the detailed roadmap, window manager primitive specifications, RISC
-OS-inspired Wimp event contracts, iconbar design, and rendering optimizations,
-see [Desktop Implementation Plan](desktop-implementation-plan.md).
-
+For the historical design roadmap, window manager primitive specifications,
+RISC OS-inspired Wimp event contracts, iconbar design, and rendering
+optimizations, see
+[Desktop implementation plan](desktop-implementation-plan.md).

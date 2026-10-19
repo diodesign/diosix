@@ -16,6 +16,12 @@ BUILD_USER=$(whoami 2>/dev/null || echo "unknown")
 BUILD_HOSTNAME=$(hostname 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date 2>/dev/null || echo "unknown")
 
+# Load M-mode hypervisor build-time configuration defaults if present
+if [ -f "boot/hypervisor.conf" ]; then
+    # shellcheck source=/dev/null
+    source "boot/hypervisor.conf"
+fi
+
 # Add optional QEMU CPU override from host environment
 # Parse command line arguments for --debug
 BUILD_ARGS=()
@@ -27,7 +33,7 @@ for arg in "$@"; do
     fi
 done
 
-# Forward to zig build with metadata options
+# Forward to zig build with metadata and hypervisor.conf options
 exec zig build \
   -Dgit_branch="$GIT_BRANCH" \
   -Dgit_revision="$GIT_REVISION" \
@@ -35,5 +41,9 @@ exec zig build \
   -Dbuild_user="$BUILD_USER" \
   -Dbuild_hostname="$BUILD_HOSTNAME" \
   -Dbuild_date="$BUILD_DATE" \
+  -Droot-ram-min-mb="${ROOT_RAM_MIN_MB:-128}" \
+  -Droot-ram-max-mb="${ROOT_RAM_MAX_MB:-256}" \
+  -Droot-ram-divisor="${ROOT_RAM_HOST_DIVISOR:-8}" \
+  -Droot-vcpus-max="${ROOT_VCPUS_MAX:-4}" \
   "${EXTRA_ARGS[@]}" \
   "${BUILD_ARGS[@]}"

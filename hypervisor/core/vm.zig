@@ -1,4 +1,4 @@
-// Unified guest memory space management (GuestSpace)
+// Unified guest memory space management (GuestSpace).
 //
 // Manages memory address translation (Stage-2 Sv39x4 hardware paging or
 // physical memory protection PMP fallback). Overall VM lifecycle,
@@ -26,46 +26,87 @@ pub const GuestSpace = struct {
     is_ram_allocated: bool,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, is_trusted: bool, base_gpa: usize, base_hpa: usize, range_size: usize) !GuestSpace {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        is_trusted: bool,
+        base_gpa: usize,
+        base_hpa: usize,
+        range_size: usize,
+    ) !GuestSpace {
         if (riscv.hasHExtension()) {
-            return GuestSpace{
-                .mode = .h_paging,
-                .paging = try sv39x4.PageTable.init(base_gpa, base_hpa, range_size),
-                .pmp_config = null,
-                .is_trusted = is_trusted,
-                .base_gpa = base_gpa,
-                .base_hpa = base_hpa,
-                .range_size = range_size,
-                .is_ram_allocated = false,
-                .allocator = allocator,
-            };
-        } else {
-            var pmp_config = try pmp.PMPConfig.init(allocator);
-
-            // 1. Deny access to the hypervisor's private DRAM region [ram_base, base_hpa)
-            const ram_base = physmem.getRamBase();
-            const hv_size = base_hpa - ram_base;
-            if (hv_size > 0) {
-                try pmp_config.addRegion(ram_base, hv_size, pmp.PMPAccess.none);
-            }
-
-            // 2. Allow access to the entire 64-bit physical address space for everything else.
-            // Under PMP check ordering, the hypervisor range denial is matched first,
-            // so this securely enables direct guest S-mode/U-mode access to RAM and all MMIO peripherals.
-            try pmp_config.addRegion(0, ALL_PHYSICAL_MEMORY, pmp.PMPAccess.rwx);
-
-            return GuestSpace{
-                .mode = .pmp_fallback,
-                .paging = null,
-                .pmp_config = pmp_config,
-                .is_trusted = is_trusted,
-                .base_gpa = base_gpa,
-                .base_hpa = base_hpa,
-                .range_size = range_size,
-                .is_ram_allocated = false,
-                .allocator = allocator,
-            };
+            return initPaging(
+                allocator,
+                is_trusted,
+                base_gpa,
+                base_hpa,
+                range_size,
+            );
         }
+        return initPmpFallback(
+            allocator,
+            is_trusted,
+            base_gpa,
+            base_hpa,
+            range_size,
+        );
+    }
+
+    pub fn initPaging(
+        allocator: std.mem.Allocator,
+        is_trusted: bool,
+        base_gpa: usize,
+        base_hpa: usize,
+        range_size: usize,
+    ) !GuestSpace {
+        return GuestSpace{
+            .mode = .h_paging,
+            .paging = try sv39x4.PageTable.init(
+                base_gpa,
+                base_hpa,
+                range_size,
+            ),
+            .pmp_config = null,
+            .is_trusted = is_trusted,
+            .base_gpa = base_gpa,
+            .base_hpa = base_hpa,
+            .range_size = range_size,
+            .is_ram_allocated = false,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn initPmpFallback(
+        allocator: std.mem.Allocator,
+        is_trusted: bool,
+        base_gpa: usize,
+        base_hpa: usize,
+        range_size: usize,
+    ) !GuestSpace {
+        var pmp_config = try pmp.PMPConfig.init(allocator);
+        errdefer pmp_config.deinit();
+
+        // 1. Deny access to the hypervisor's private DRAM region.
+        const hv = physmem.getHvRegion();
+        if (hv.size > 0) {
+            try pmp_config.addRegion(hv.base, hv.size, pmp.PMPAccess.none);
+        }
+
+        // 2. Allow access to the rest of the 64-bit physical address space.
+        // Under PMP check ordering, the hypervisor range denial is matched
+        // first, enabling guest S-mode/U-mode access to RAM and MMIO.
+        try pmp_config.addRegion(0, ALL_PHYSICAL_MEMORY, pmp.PMPAccess.rwx);
+
+        return GuestSpace{
+            .mode = .pmp_fallback,
+            .paging = null,
+            .pmp_config = pmp_config,
+            .is_trusted = is_trusted,
+            .base_gpa = base_gpa,
+            .base_hpa = base_hpa,
+            .range_size = range_size,
+            .is_ram_allocated = false,
+            .allocator = allocator,
+        };
     }
 
     pub fn deinit(self: *GuestSpace) void {
@@ -86,35 +127,48 @@ pub const GuestSpace = struct {
         }
     }
 
-    // Map physical memory into guest address space
-    // Map physical memory into guest address space
-    pub fn map(self: *GuestSpace, gpa: usize, hpa: usize, size: usize, flags: u64) !void {
+    /// Maps physical memory into the guest address space.
+    pub fn map(
+        self: *GuestSpace,
+        gpa: usize,
+        hpa: usize,
+        size: usize,
+        flags: u64,
+    ) !void {
         if (size == 0) return;
-        const gpa_end = std.math.add(usize, gpa, size) catch return error.InvalidAddress;
+        const gpa_end = std.math.add(usize, gpa, size) catch
+            return error.InvalidAddress;
         _ = std.math.add(usize, hpa, size) catch return error.InvalidAddress;
-        if (self.mode == .h_paging and gpa_end > sv39x4.MAX_GPA) return error.InvalidAddress;
+        if (self.mode == .h_paging and gpa_end > sv39x4.MAX_GPA) {
+            return error.InvalidAddress;
+        }
 
         if (self.mode == .h_paging) {
             if (self.paging) |*pt| {
-                // Map individual pages for paging (allows fragmentation/CoW)
                 var offset: usize = 0;
                 while (offset < size) : (offset += physmem.PageSize) {
-                    try pt.mapPage(gpa + offset, hpa + offset, flags, self.is_trusted);
+                    try pt.mapPage(
+                        gpa + offset,
+                        hpa + offset,
+                        flags,
+                        self.is_trusted,
+                    );
                 }
             } else {
                 return error.NotSupported;
             }
         } else {
-            // Map as one contiguous block for PMP.
-            // If this region falls completely within our pre-allocated guest RAM region,
-            // we do not need to create a redundant PMP entry for it, preventing TooManyRegions hardware limits.
-            if (hpa >= self.base_hpa and (hpa - self.base_hpa) + size <= self.range_size) {
-                return; // Already covered by main RAM container
+            // If this region falls within our pre-allocated guest RAM region,
+            // no additional PMP entry is needed.
+            if (hpa >= self.base_hpa and
+                (hpa - self.base_hpa) + size <= self.range_size)
+            {
+                return;
             }
         }
     }
 
-    // Unmap physical memory from guest address space
+    /// Unmaps physical memory from the guest address space.
     pub fn unmap(self: *GuestSpace, gpa: usize, size: usize) void {
         if (size == 0) return;
         const gpa_end = std.math.add(usize, gpa, size) catch return;
@@ -130,7 +184,7 @@ pub const GuestSpace = struct {
         }
     }
 
-    // Update guest range size and underlying page table limits
+    /// Updates the guest range size and underlying page table limits.
     pub fn setRangeSize(self: *GuestSpace, new_size: usize) void {
         self.range_size = new_size;
         if (self.paging) |*pt| {
@@ -138,8 +192,13 @@ pub const GuestSpace = struct {
         }
     }
 
-    // Handle a guest physical page fault (dynamic paging, MMIO, or error)
-    pub fn handleFault(self: *GuestSpace, vc: *anyopaque, gpa: usize, cause: usize) !void {
+    /// Handles a guest physical page fault (dynamic paging, MMIO, or error).
+    pub fn handleFault(
+        self: *GuestSpace,
+        vc: *anyopaque,
+        gpa: usize,
+        cause: usize,
+    ) !void {
         _ = vc;
         _ = cause;
         if (self.mode == .h_paging) {
@@ -149,12 +208,11 @@ pub const GuestSpace = struct {
                 return error.NotSupported;
             }
         } else {
-            // PMP mode doesn't support CoW/Demand Paging yet
             return error.NotSupported;
         }
     }
 
-    // Load hgatp for paging or set PMP regs for fallback
+    /// Loads `hgatp` for Stage-2 paging or applies PMP registers for fallback.
     pub fn apply(self: *GuestSpace, vmid: u16) void {
         if (self.mode == .h_paging) {
             const new_hgatp = if (self.paging) |*pt| pt.hgatp(vmid) else 0;
@@ -167,129 +225,188 @@ pub const GuestSpace = struct {
         }
     }
 
-    // Translate a Guest Physical Address to a Host Physical Address
+    /// Translates a Guest Physical Address (GPA) to a Host Physical Address.
     pub fn translateGPA(self: *const GuestSpace, gpa: usize) !usize {
         if (self.mode == .h_paging) {
             const pt = self.paging orelse return error.TranslationFailed;
-            // Check if it's within the optimized identity/offset range
-            if (pt.root_base_hpa > 0 and pt.root_range_size > 0 and gpa >= pt.root_base_gpa and (gpa - pt.root_base_gpa) < pt.root_range_size) {
+            if (pt.root_base_hpa > 0 and
+                pt.root_range_size > 0 and
+                gpa >= pt.root_base_gpa and
+                (gpa - pt.root_base_gpa) < pt.root_range_size)
+            {
                 const off = gpa - pt.root_base_gpa;
-                return std.math.add(usize, pt.root_base_hpa, off) catch return error.TranslationFailed;
+                return std.math.add(usize, pt.root_base_hpa, off) catch
+                    return error.TranslationFailed;
             }
-            // Otherwise, perform a page table walk
-            const pte_ptr = pt.walk(gpa, false) catch return error.TranslationFailed;
-            if (pte_ptr.* & sv39x4.PTEFlags.valid == 0) return error.TranslationFailed;
+            const pte_ptr = pt.walk(gpa, false) catch
+                return error.TranslationFailed;
+            if (pte_ptr.* & sv39x4.PTEFlags.valid == 0) {
+                return error.TranslationFailed;
+            }
             const hpa = sv39x4.pteToHpa(pte_ptr.*);
             if (hpa == 0) return error.TranslationFailed;
-            return std.math.add(usize, hpa, gpa % physmem.PageSize) catch return error.TranslationFailed;
+            return std.math.add(usize, hpa, gpa % physmem.PageSize) catch
+                return error.TranslationFailed;
         } else {
-            // PMP mode: resolve the GPA through the optimized identity mapping.
-            if (self.base_hpa > 0 and self.range_size > 0 and gpa >= self.base_gpa and (gpa - self.base_gpa) < self.range_size) {
+            if (self.base_hpa > 0 and
+                self.range_size > 0 and
+                gpa >= self.base_gpa and
+                (gpa - self.base_gpa) < self.range_size)
+            {
                 const off = gpa - self.base_gpa;
-                return std.math.add(usize, self.base_hpa, off) catch return error.TranslationFailed;
+                return std.math.add(usize, self.base_hpa, off) catch
+                    return error.TranslationFailed;
             }
             return error.TranslationFailed;
         }
     }
 
-    // Safely copy data from host buffer to guest physical memory space.
-    // Handles multi-page transfers and non-contiguous guest physical mappings.
-    // Pre-validates the entire GPA range to ensure atomicity against unmapped faults.
-    pub fn copyToGuest(self: *const GuestSpace, dst_gpa: usize, src: []const u8) !void {
+    /// Safely copies data from a host buffer to guest physical memory space.
+    /// Pre-validates the entire GPA range to avoid partial writes.
+    pub fn copyToGuest(
+        self: *const GuestSpace,
+        dst_gpa: usize,
+        src: []const u8,
+    ) !void {
         if (src.len == 0) return;
-        _ = std.math.add(usize, dst_gpa, src.len) catch return error.TranslationFailed;
+        _ = std.math.add(usize, dst_gpa, src.len) catch
+            return error.TranslationFailed;
 
-        // Pass 1: Pre-validate all target pages to avoid partial writes on unmapped faults
+        // Pass 1: Pre-validate all target pages.
         var check_off: usize = 0;
         while (check_off < src.len) {
             const cur_gpa = dst_gpa + check_off;
             const cur_hpa = try self.translateGPA(cur_gpa);
             const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
             const chunk = @min(src.len - check_off, page_rem);
-            if (physmem.isHypervisorMemory(cur_hpa, chunk)) return error.AccessDenied;
+            if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+                return error.AccessDenied;
+            }
             check_off += chunk;
         }
 
-        // Pass 2: Transfer data page by page
+        // Pass 2: Transfer data page by page.
         var transferred: usize = 0;
         while (transferred < src.len) {
             const cur_gpa = dst_gpa + transferred;
             const cur_hpa = try self.translateGPA(cur_gpa);
             const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
             const chunk = @min(src.len - transferred, page_rem);
-            if (physmem.isHypervisorMemory(cur_hpa, chunk)) return error.AccessDenied;
-            @memcpy(@as([*]u8, @ptrFromInt(cur_hpa))[0..chunk], src[transferred .. transferred + chunk]);
+            if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+                return error.AccessDenied;
+            }
+            @memcpy(
+                @as([*]u8, @ptrFromInt(cur_hpa))[0..chunk],
+                src[transferred .. transferred + chunk],
+            );
             transferred += chunk;
         }
     }
 
-    // Safely copy data from guest physical memory space into host buffer.
-    // Handles multi-page transfers and non-contiguous guest physical mappings.
-    // Pre-validates the entire GPA range to ensure transactional integrity against unmapped faults.
-    pub fn copyFromGuest(self: *const GuestSpace, dst: []u8, src_gpa: usize) !void {
+    /// Safely copies data from guest physical memory space into a host buffer.
+    /// Pre-validates the entire GPA range to avoid partial reads.
+    pub fn copyFromGuest(
+        self: *const GuestSpace,
+        dst: []u8,
+        src_gpa: usize,
+    ) !void {
         if (dst.len == 0) return;
-        _ = std.math.add(usize, src_gpa, dst.len) catch return error.TranslationFailed;
+        _ = std.math.add(usize, src_gpa, dst.len) catch
+            return error.TranslationFailed;
 
-        // Pass 1: Pre-validate all source pages to avoid partial reads on unmapped/denied faults
+        // Pass 1: Pre-validate all source pages.
         var check_off: usize = 0;
         while (check_off < dst.len) {
             const cur_gpa = src_gpa + check_off;
             const cur_hpa = try self.translateGPA(cur_gpa);
             const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
             const chunk = @min(dst.len - check_off, page_rem);
-            if (physmem.isHypervisorMemory(cur_hpa, chunk)) return error.AccessDenied;
+            if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+                return error.AccessDenied;
+            }
             check_off += chunk;
         }
 
-        // Pass 2: Transfer data page by page
+        // Pass 2: Transfer data page by page.
         var transferred: usize = 0;
         while (transferred < dst.len) {
             const cur_gpa = src_gpa + transferred;
             const cur_hpa = try self.translateGPA(cur_gpa);
             const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
             const chunk = @min(dst.len - transferred, page_rem);
-            if (physmem.isHypervisorMemory(cur_hpa, chunk)) return error.AccessDenied;
-            @memcpy(dst[transferred .. transferred + chunk], @as([*]const u8, @ptrFromInt(cur_hpa))[0..chunk]);
+            if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+                return error.AccessDenied;
+            }
+            @memcpy(
+                dst[transferred .. transferred + chunk],
+                @as([*]const u8, @ptrFromInt(cur_hpa))[0..chunk],
+            );
             transferred += chunk;
         }
     }
 
-    // Read a typed struct from guest physical address space, safely handling page boundaries.
-    pub fn readGuestStruct(self: *const GuestSpace, comptime T: type, gpa: usize) !T {
+    /// Reads a typed struct from guest physical address space.
+    pub fn readGuestStruct(
+        self: *const GuestSpace,
+        comptime T: type,
+        gpa: usize,
+    ) !T {
         var val: T = undefined;
         try self.copyFromGuest(std.mem.asBytes(&val), gpa);
         return val;
     }
 
-    // Write a typed struct to guest physical address space, safely handling page boundaries.
-    pub fn writeGuestStruct(self: *const GuestSpace, comptime T: type, gpa: usize, val: T) !void {
+    /// Writes a typed struct to guest physical address space.
+    pub fn writeGuestStruct(
+        self: *const GuestSpace,
+        comptime T: type,
+        gpa: usize,
+        val: T,
+    ) !void {
         try self.copyToGuest(gpa, std.mem.asBytes(&val));
     }
 };
 
-test "GuestSpace GPA to HPA translation and bounds checking" {
+test "GuestSpace GPA to HPA translation and PMP fallback shielding" {
     const testing = std.testing;
 
     var phys_test = try physmem.initForTest(testing.allocator, 128);
     defer phys_test.deinit();
 
-    // Initialize a mock GuestSpace with 1MB DRAM at GPA 0x80000000 -> HPA 0x80200000
     const base_gpa: usize = 0x80000000;
     const base_hpa: usize = 0x80200000;
-    const size: usize = 1024 * 1024; // 1MB
+    const size: usize = 1024 * 1024;
 
-    var space = try GuestSpace.init(testing.allocator, true, base_gpa, base_hpa, size);
+    var space = try GuestSpace.init(
+        testing.allocator,
+        true,
+        base_gpa,
+        base_hpa,
+        size,
+    );
     defer space.deinit();
 
-    // 1. Valid GPA in range
     const hpa = try space.translateGPA(0x80001000);
     try testing.expectEqual(@as(usize, 0x80201000), hpa);
+    try testing.expectError(
+        error.TranslationFailed,
+        space.translateGPA(0x7fffffff),
+    );
+    try testing.expectError(
+        error.TranslationFailed,
+        space.translateGPA(base_gpa + size),
+    );
 
-    // 2. GPA out of bounds (below base) -> TranslationFailed
-    try testing.expectError(error.TranslationFailed, space.translateGPA(0x7FFFFFFF));
-
-    // 3. GPA out of bounds (above limit) -> TranslationFailed
-    try testing.expectError(error.TranslationFailed, space.translateGPA(base_gpa + size));
+    // Verify PMP fallback initialization does not underflow when base_hpa == 0.
+    var pmp_space = try GuestSpace.initPmpFallback(
+        testing.allocator,
+        false,
+        base_gpa,
+        0,
+        size,
+    );
+    defer pmp_space.deinit();
+    try testing.expectEqual(.pmp_fallback, pmp_space.mode);
 }
 
 test "GuestSpace safe copy and struct transfer across page boundaries" {
@@ -300,9 +417,15 @@ test "GuestSpace safe copy and struct transfer across page boundaries" {
 
     const base_gpa: usize = 0x80000000;
     const base_hpa = physmem.getRamBase() + 8 * physmem.PageSize;
-    const size: usize = 2 * physmem.PageSize; // 2 pages = 8KB
+    const size: usize = 2 * physmem.PageSize;
 
-    var space = try GuestSpace.init(testing.allocator, true, base_gpa, base_hpa, size);
+    var space = try GuestSpace.init(
+        testing.allocator,
+        true,
+        base_gpa,
+        base_hpa,
+        size,
+    );
     defer space.deinit();
 
     const TestStruct = extern struct {
@@ -311,13 +434,11 @@ test "GuestSpace safe copy and struct transfer across page boundaries" {
         c: u32,
     };
 
-    // Position struct so it straddles the 4KB page boundary:
-    // Offset 4096 - 8 starts 8 bytes before end of page 0, continues into page 1
     const straddle_gpa = base_gpa + physmem.PageSize - 8;
     const original = TestStruct{
         .a = 0x1122334455667788,
         .b = 0x8877665544332211,
-        .c = 0xDEADBEEF,
+        .c = 0xdeadbeef,
     };
 
     try space.writeGuestStruct(TestStruct, straddle_gpa, original);
@@ -326,21 +447,39 @@ test "GuestSpace safe copy and struct transfer across page boundaries" {
     try testing.expectEqual(original.b, read_back.b);
     try testing.expectEqual(original.c, read_back.c);
 
-    // Write struct extending past end of available space -> TranslationFailed
     const out_of_bounds_gpa = base_gpa + size - 4;
-    try testing.expectError(error.TranslationFailed, space.writeGuestStruct(TestStruct, out_of_bounds_gpa, original));
+    try testing.expectError(
+        error.TranslationFailed,
+        space.writeGuestStruct(TestStruct, out_of_bounds_gpa, original),
+    );
+    try testing.expectError(
+        error.TranslationFailed,
+        space.writeGuestStruct(
+            TestStruct,
+            std.math.maxInt(usize) - 4,
+            original,
+        ),
+    );
 
-    // Integer overflow in GPA address calculation -> TranslationFailed
-    try testing.expectError(error.TranslationFailed, space.writeGuestStruct(TestStruct, std.math.maxInt(usize) - 4, original));
-
-    // Shielding: guest space pointing to hypervisor memory cannot be read or written
     const hv_hpa = physmem.getHvRegion().base;
     if (hv_hpa > 0) {
-        var poisoned_space = try GuestSpace.init(testing.allocator, false, 0x1000, hv_hpa, physmem.PageSize);
+        var poisoned_space = try GuestSpace.init(
+            testing.allocator,
+            false,
+            0x1000,
+            hv_hpa,
+            physmem.PageSize,
+        );
         defer poisoned_space.deinit();
 
-        var dummy_buf: [16]u8 = @splat(0xAA);
-        try testing.expectError(error.AccessDenied, poisoned_space.copyToGuest(0x1000, &dummy_buf));
-        try testing.expectError(error.AccessDenied, poisoned_space.copyFromGuest(&dummy_buf, 0x1000));
+        var dummy_buf: [16]u8 = @splat(0xaa);
+        try testing.expectError(
+            error.AccessDenied,
+            poisoned_space.copyToGuest(0x1000, &dummy_buf),
+        );
+        try testing.expectError(
+            error.AccessDenied,
+            poisoned_space.copyFromGuest(&dummy_buf, 0x1000),
+        );
     }
 }

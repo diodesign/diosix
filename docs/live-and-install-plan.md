@@ -8,7 +8,7 @@ The design adheres strictly to the **Diosix Security Model**: maintaining a mini
 
 ## 1. Architectural principles
 
-Diosix manages Virtual Machines (VMs) hierarchically. The progenitor guest is the **Root VM** (Domain 0), which supervises direct descendant child VMs. The hypervisor core acts as an execution scheduler, memory isolation barrier (via G-stage extended page tables or Physical Memory Protection (PMP)), and Layer-2 virtual Ethernet frame router.
+Diosix manages Virtual Machines (VMs) hierarchically. The progenitor guest is the **Root VM** (trusted host supervisor), which supervises direct descendant child VMs. The hypervisor core acts as an execution scheduler, memory isolation barrier (via G-stage extended page tables or Physical Memory Protection (PMP)), and Layer-2 virtual Ethernet frame router.
 
 ```mermaid
 flowchart TD
@@ -23,7 +23,7 @@ flowchart TD
     end
 
     subgraph "Guest VM Lineage Tree"
-        ROOT["Root VM (CID 1, Privileged Domain 0)<br/>CLI Management (dsx) • Storage Orchestration"]
+        ROOT["Root VM (CID 1, Trusted Host Supervisor)<br/>CLI Management (dsx) • Storage Orchestration"]
         NETVM["Net/Firewall VM (Phase 4 Dedicated Domain)<br/>Hardware Passthrough NIC • NAT / Firewall / DHCP"]
         CHILD1["User VM: Workstation (CID 3, Untrusted)<br/>Debian / Alpine Linux (10.0.3.3)"]
         CHILD2["User VM: Sandboxed App (CID 4, Untrusted)<br/>Isolated Micro-appliance (10.0.3.4)"]
@@ -170,7 +170,7 @@ All downloaded guest images are verified against embedded root-of-trust signatur
 For maximum security hardening, Phase 5 transitions from Root VM NAT routing to dedicated, hardware-isolated network domains:
 
 1. **PCIe / MMIO Passthrough**: The hypervisor assigns physical Ethernet/Wi-Fi controllers directly to a dedicated `sys-net` VM via stage-2 MMIO mapping hypercalls (`MAP_CHILD_MEM`).
-2. **Untrusted Root VM**: The Root VM drops its own hardware trust privilege (`DROP_TRUST`) once the initial domains are spawned, leaving Domain 0 as a pure control-plane coordinator.
+2. **Untrusted Root VM**: The Root VM drops its own hardware trust privilege (`DROP_TRUST`) once the initial domains are spawned, leaving the Root VM as a pure control-plane coordinator.
 3. **Firewall Domain (`sys-firewall`)**: Interposes between `sys-net` and user workstations, enforcing packet filtering rules in an isolated S-mode virtual machine.
 
 ---

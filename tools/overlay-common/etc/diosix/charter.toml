@@ -1,0 +1,35 @@
+# Diosix Workload-Agnostic Constitutional Charter
+#
+# Sealed in the M-mode hypervisor via `dsx charter deploy` (DIOSIX.SEAL_CHARTER).
+# Once sealed, any Steward termination, quota reduction, or Charter amendment
+# requires M-of-N Steward quorum ratification.
+
+[charter]
+id = "autonomous-mesh-01"
+version = 1
+quorum_required = 2
+quorum_total = 3
+standby_replicas = 1
+principal_pubkey = ""
+
+[invariants]
+min_stewards = 3
+max_simultaneous_unit_termination_pct = 33
+require_quorum_for_volume_deletion = true
+volume_deletion_timelock_sec = 86400
+
+[invariants.isolation."unit-alpha"]
+confidential_memory = true
+allow_wan_egress = false
+forbid_volume_export = true
+
+[[units]]
+id = "unit-alpha"
+artifact = "micro-guest.elf"
+min_instances = 1
+target_instances = 2
+max_instances = 4
+vcpus = 1
+ram = "64MiB"
+affinity = "anti-colocate-steward"
+health_probe = "vsock-heartbeat"

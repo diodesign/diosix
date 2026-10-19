@@ -1,18 +1,26 @@
-// Fractal Brownian Motion (fBm) Periodic Noise Engine for Diosix GUI
-// Generates seamless, tiling 2D cloud textures using pure integer fixed-point arithmetic.
+// Fractal Brownian Motion (fBm) Periodic Noise Engine for Diosix GUI.
+// Generates seamless, tiling 2D cloud textures using integer fixed-point math.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
 
-// 8 standard 2D unit/diagonal gradients scaled to ~128 (7-bit fixed point)
-// Axis vectors: 128. Diagonal vectors: 90 (90 * sqrt(2) ~= 127.3)
+pub const MAX_NOISE_DIM: usize = 256;
+
+// 8 standard 2D unit/diagonal gradients scaled to ~128 (7-bit fixed point).
+// Axis vectors: 128. Diagonal vectors: 90 (90 * sqrt(2) ~= 127.3).
 const GRAD_X = [8]i32{ 128, -128, 0, 0, 90, -90, 90, -90 };
 const GRAD_Y = [8]i32{ 0, 0, 128, -128, 90, 90, -90, -90 };
 
-// Deterministic integer hash to pick gradient index in [0..7] with periodic boundary
-pub inline fn getGradientIndex(x: usize, y: usize, freq: usize, seed: u32) usize {
+// Deterministic integer hash to pick gradient index in [0..7] with wrap.
+pub inline fn getGradientIndex(
+    x: usize,
+    y: usize,
+    freq: usize,
+    seed: u32,
+) usize {
+    if (freq == 0) return 0;
     const wx: u32 = @intCast(x % freq);
     const wy: u32 = @intCast(y % freq);
     var h: u32 = wx *% 374761393 +% wy *% 668265263 +% seed;
@@ -21,15 +29,15 @@ pub inline fn getGradientIndex(x: usize, y: usize, freq: usize, seed: u32) usize
     return @intCast(h & 7);
 }
 
-// Fixed-point smoothstep polynomial: s(t) = t^2 * (3 - 2t)
-// t is in [0..256] (8.8 fixed point), returns [0..256]
+// Fixed-point smoothstep polynomial: s(t) = t^2 * (3 - 2t).
+// t is in [0..256] (8.8 fixed point), returns [0..256].
 pub inline fn smoothstep8(t: i32) i32 {
     const clamped = std.math.clamp(t, 0, 256);
     return (clamped * clamped * (768 - 2 * clamped)) >> 16;
 }
 
-// Evaluates a single octave of 2D periodic gradient noise at integer pixel (x, y)
-// within texture dimension dim, using fixed-point integer arithmetic.
+// Evaluates a single octave of 2D periodic gradient noise at integer pixel
+// (x, y) within texture dimension dim, using fixed-point integer arithmetic.
 pub fn evaluatePeriodicGradientNoise(
     x: usize,
     y: usize,
@@ -37,6 +45,7 @@ pub fn evaluatePeriodicGradientNoise(
     freq: usize,
     seed: u32,
 ) i32 {
+    if (dim == 0 or freq == 0) return 0;
     const step_fp: usize = (freq * 65536) / dim;
 
     const x_fp = x * step_fp;
@@ -47,13 +56,13 @@ pub fn evaluatePeriodicGradientNoise(
     const y0 = (y_fp >> 16) % freq;
     const y1 = (y0 + 1) % freq;
 
-    const fx: i32 = @intCast((x_fp >> 8) & 0xFF);
-    const fy: i32 = @intCast((y_fp >> 8) & 0xFF);
+    const fx: i32 = @intCast((x_fp >> 8) & 0xff);
+    const fy: i32 = @intCast((y_fp >> 8) & 0xff);
 
     const sx = smoothstep8(fx);
     const sy = smoothstep8(fy);
 
-    // Distance vectors from cell corners in [-128..127]
+    // Distance vectors from cell corners in [-128..127].
     const dx0 = fx >> 1;
     const dx1 = (fx - 256) >> 1;
     const dy0 = fy >> 1;
@@ -75,7 +84,7 @@ pub fn evaluatePeriodicGradientNoise(
 }
 
 // Generates a seamless, tiling 2D cloud texture buffer of size dim x dim
-// using standard Fractal Brownian Motion (fBm) with periodic boundary conditions.
+// using standard Fractal Brownian Motion (fBm) with periodic boundary wrap.
 pub fn generatePeriodicFbm(
     out: []u8,
     dim: usize,
@@ -83,9 +92,11 @@ pub fn generatePeriodicFbm(
     base_freq: usize,
     seed: u32,
 ) void {
+    if (dim == 0 or base_freq == 0) return;
+    std.debug.assert(dim <= MAX_NOISE_DIM);
     std.debug.assert(out.len >= dim * dim);
 
-    var accum_buf: [256 * 256]i32 = undefined;
+    var accum_buf: [MAX_NOISE_DIM * MAX_NOISE_DIM]i32 = undefined;
     const accum = accum_buf[0 .. dim * dim];
     @memset(accum, 0);
 
@@ -100,7 +111,13 @@ pub fn generatePeriodicFbm(
             const row_off = y * dim;
             var x: usize = 0;
             while (x < dim) : (x += 1) {
-                const val = evaluatePeriodicGradientNoise(x, y, dim, freq, oct_seed);
+                const val = evaluatePeriodicGradientNoise(
+                    x,
+                    y,
+                    dim,
+                    freq,
+                    oct_seed,
+                );
                 accum[row_off + x] += val * amp;
             }
         }
@@ -108,7 +125,7 @@ pub fn generatePeriodicFbm(
         freq *= 2;
     }
 
-    // Find min and max for normalization
+    // Find min and max for normalization.
     var min_v: i32 = accum[0];
     var max_v: i32 = accum[0];
     for (accum) |v| {
@@ -134,15 +151,24 @@ test "noise: smoothstep boundary conditions" {
 test "noise: gradient periodic wrapping" {
     const freq: usize = 4;
     const seed: u32 = 42;
-    try std.testing.expectEqual(getGradientIndex(0, 0, freq, seed), getGradientIndex(freq, 0, freq, seed));
-    try std.testing.expectEqual(getGradientIndex(1, 2, freq, seed), getGradientIndex(1 + freq, 2, freq, seed));
-    try std.testing.expectEqual(getGradientIndex(3, 3, freq, seed), getGradientIndex(3, 3 + freq, freq, seed));
+    try std.testing.expectEqual(
+        getGradientIndex(0, 0, freq, seed),
+        getGradientIndex(freq, 0, freq, seed),
+    );
+    try std.testing.expectEqual(
+        getGradientIndex(1, 2, freq, seed),
+        getGradientIndex(1 + freq, 2, freq, seed),
+    );
+    try std.testing.expectEqual(
+        getGradientIndex(3, 3, freq, seed),
+        getGradientIndex(3, 3 + freq, freq, seed),
+    );
 }
 
 test "noise: fBm seamless tessellation and zero boundary seam jumps" {
     const dim = 256;
     var tex: [dim * dim]u8 = undefined;
-    generatePeriodicFbm(&tex, dim, 5, 3, 0x193E36CC);
+    generatePeriodicFbm(&tex, dim, 5, 3, 0x193e36cc);
 
     var max_jump_x: u32 = 0;
     var y: usize = 0;
@@ -162,7 +188,6 @@ test "noise: fBm seamless tessellation and zero boundary seam jumps" {
         if (jump > max_jump_y) max_jump_y = jump;
     }
 
-    std.debug.print("\n=== Seam Check: max_jump_x = {d}, max_jump_y = {d} ===\n", .{ max_jump_x, max_jump_y });
     try std.testing.expect(max_jump_x <= 20);
     try std.testing.expect(max_jump_y <= 20);
 }

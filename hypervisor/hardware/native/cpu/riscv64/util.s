@@ -143,7 +143,7 @@ hw_run_vcore_no_h:
 # return pointer to this CPU core's private variables
 # <= a0 = pointer to CPU core private variables
 hw_private_variables:
-  # The physical CPU context is held in tp (thread pointer) for both M-mode and S-mode
+  # The physical CPU context is held in tp (thread pointer) in M-mode/S-mode.
   mv a0, tp
   ret
 
@@ -266,7 +266,7 @@ hw_dynarec_run_block:
   ld x2, 16(s11)
   ld x3, 24(s11)
   ld x4, 32(s11)
-  # x5 (t0) holds target block entry address - guest t0 is loaded at block entry from 40(s11)
+  # x5 (t0) holds target block entry address; guest t0 is loaded at block entry.
   ld x6, 48(s11)
   ld x7, 56(s11)
   ld x8, 64(s11)

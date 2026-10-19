@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# BuildRoot integration script for Diosix
+# Buildroot integration script for Diosix.
 #
-# Usage: build_rootvm.sh <path_to_config> <path_to_output_binary> <path_to_buildroot_dir> [guest_arch] [rootvm_s_path]
+# Usage: build_rootvm.sh <config> <out_bin> <buildroot_dir> [arch] [rootvm_s]
 #
 # Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
@@ -16,7 +16,7 @@ ROOTVM_S_PATH="$5"
 BUILDROOT_URL="https://gitlab.com/buildroot.org/buildroot.git"
 BUILDROOT_BRANCH="2026.02.x"
 
-# Terminal Formatting
+# Terminal Formatting.
 BOLD="\033[1m"
 DIM="\033[2m"
 GREEN="\033[32m"
@@ -51,7 +51,7 @@ log_err() {
 }
 
 if [ -z "$CONFIG_FILE" ] || [ -z "$OUT_FILE" ] || [ -z "$BUILDROOT_DIR" ]; then
-    echo "Usage: $0 <config_file> <out_file> <buildroot_dir> [guest_arch] [rootvm_s_path]"
+    echo "Usage: $0 <config_file> <out_file> <buildroot_dir> [arch] [rootvm_s]"
     exit 1
 fi
 
@@ -59,7 +59,16 @@ mkdir -p "$(dirname "$OUT_FILE")"
 mkdir -p "$(dirname "$BUILDROOT_DIR")"
 
 HASH_FILE="${OUT_FILE}.sha256"
-CURRENT_HASH=$( (find tools/overlay-common -type f ! -name 'micro-guest.elf' -exec sha256sum {} + 2>/dev/null; sha256sum "$CONFIG_FILE" "$0" $(dirname "$CONFIG_FILE")/*.fragment tools/diosix-ctl/src/*.zig tools/diosix-gui/src/*.zig tools/driver/diosix.c tools/alsa-init/* tools/micro-guest/* 2>/dev/null) | awk '{print $1}' | sort | sha256sum | cut -d' ' -f1)
+CURRENT_HASH=$(
+    (
+        find tools/overlay-common -type f ! -name 'micro-guest.elf' \
+            -exec sha256sum {} + 2>/dev/null
+        sha256sum "$CONFIG_FILE" "$0" "$(dirname "$CONFIG_FILE")"/*.fragment \
+            tools/diosix-ctl/src/*.zig tools/guest-shim/src/*.zig \
+            tools/guest-shim/linker.ld tools/diosix-gui/src/*.zig \
+            tools/driver/* tools/alsa-init/* tools/micro-guest/* 2>/dev/null
+    ) | awk '{print $1}' | sort | sha256sum | cut -d' ' -f1
+)
 
 write_rootvm_s() {
     if [ -n "$ROOTVM_S_PATH" ]; then
@@ -79,12 +88,13 @@ EOF
     fi
 }
 
-# 1. Cache Check
+# 1. Cache Check.
 if [ -f "$OUT_FILE" ] && [ -f "$HASH_FILE" ]; then
     RECORDED_HASH=$(cat "$HASH_FILE")
     if [ "$CURRENT_HASH" = "$RECORDED_HASH" ]; then
         SIZE=$(du -h "$OUT_FILE" | cut -f1)
-        log_ok "Root VM binary is up-to-date (${BOLD}${GUEST_ARCH}${RESET} | ${SIZE} | Hash: ${CURRENT_HASH:0:12}...). Rebuild skipped."
+        H_SHORT="${CURRENT_HASH:0:12}"
+        log_ok "Root VM up-to-date (${BOLD}${GUEST_ARCH}${RESET} | ${SIZE} | ${H_SHORT}...). Skipped."
         write_rootvm_s
         exit 0
     fi
@@ -96,60 +106,115 @@ log_info "Config profile      : $(basename "$CONFIG_FILE")"
 log_info "Parallel jobs       : $(nproc) host CPU cores"
 log_info "Destination ELF     : $OUT_FILE"
 
-# 2. Build Guest Management Utilities
+# 2. Build Guest Management Utilities.
 log_step "[1/5] Cross-compiling guest management tools (diosix-ctl / dsx)..."
 DYNAMIC_OVERLAY="$(realpath "$BUILDROOT_DIR")/overlay-dynamic"
 mkdir -p "$DYNAMIC_OVERLAY/usr/sbin" "$DYNAMIC_OVERLAY/usr/bin"
 
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
-zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall --dep interface -Mroot=tools/diosix-ctl/src/main.zig -Minterface=hypervisor/interface/lib.zig --name diosix-ctl -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
+zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall \
+    --dep interface -Mroot=tools/diosix-ctl/src/main.zig \
+    -Minterface=hypervisor/interface/lib.zig \
+    --name diosix-ctl \
+    -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
 log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
 
+if [ -d "tools/guest-shim" ]; then
+    log_info "Compiling freestanding S-mode guest bootloader shim..."
+    SHIM_DIR="$DYNAMIC_OVERLAY/usr/share/diosix/shim"
+    SHIM_ELF="guest-shim-riscv64.elf"
+    mkdir -p "$SHIM_DIR" "$DYNAMIC_OVERLAY/var/lib/diosix/images" \
+        "$DYNAMIC_OVERLAY/boot"
+    if zig build-exe -target riscv64-freestanding-none -O ReleaseSmall \
+        -mcmodel=medium --script tools/guest-shim/linker.ld \
+        tools/guest-shim/src/main.zig --name "$SHIM_ELF" \
+        -femit-bin="${SHIM_DIR}/${SHIM_ELF}" >/dev/null 2>&1; then
+        ln -sf "/usr/share/diosix/shim/${SHIM_ELF}" \
+            "$DYNAMIC_OVERLAY/var/lib/diosix/images/guest-shim.elf"
+        ln -sf "/usr/share/diosix/shim/${SHIM_ELF}" \
+            "$DYNAMIC_OVERLAY/boot/guest-shim.elf"
+        log_ok "Installed ${SHIM_ELF} in overlay (/usr/share/diosix/shim/)."
+    else
+        log_warn "Failed to cross-compile ${SHIM_ELF}."
+    fi
+fi
+
 if [ -d "tools/diosix-gui" ]; then
     log_info "Compiling diosix-gui for ${BOLD}${ZIG_TARGET}${RESET}..."
-    if zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall tools/diosix-gui/src/main.zig --name diosix-gui -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-gui"; then
+    if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast \
+        --dep interface -Mroot=tools/diosix-gui/src/main.zig \
+        -Minterface=hypervisor/interface/lib.zig \
+        --name diosix-gui \
+        -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-gui"; then
         ln -sf diosix-gui "$DYNAMIC_OVERLAY/usr/bin/diosix-wm"
-        log_ok "Installed diosix-gui and 'diosix-wm' symlink in overlay (/usr/bin/diosix-gui)."
+        log_ok "Installed diosix-gui and 'diosix-wm' symlink in overlay."
     else
         log_err "Failed to cross-compile diosix-gui for ${ZIG_TARGET}."
         exit 1
     fi
 fi
 
-if [ -f "tools/alsa-init/diosix-alsa-init.c" ]; then
+if [ -f "tools/alsa-init/main.c" ]; then
     log_info "Compiling diosix-alsa-init for ${BOLD}${ZIG_TARGET}${RESET}..."
-    if zig cc -target "$ZIG_TARGET" -Os -s tools/alsa-init/diosix-alsa-init.c -o "$DYNAMIC_OVERLAY/usr/sbin/diosix-alsa-init" 2>/dev/null; then
-        chmod +x "$DYNAMIC_OVERLAY/usr/sbin/diosix-alsa-init"
-        log_ok "Installed diosix-alsa-init in overlay (/usr/sbin/diosix-alsa-init)."
+    ALSA_BIN="$DYNAMIC_OVERLAY/usr/sbin/diosix-alsa-init"
+    if zig cc -target "$ZIG_TARGET" -Os -s \
+        tools/alsa-init/main.c -o "$ALSA_BIN" 2>/dev/null; then
+        chmod +x "$ALSA_BIN"
+        log_ok "Installed diosix-alsa-init in overlay (/usr/sbin/)."
     fi
 fi
 
-# Compile and install lightweight guest payload for nested virtualization or testing.
+# Compile and install lightweight guest payload for nested testing.
 if [ -f "tools/micro-guest/guest.s" ]; then
-    mkdir -p "$DYNAMIC_OVERLAY/boot" tools/overlay-common/boot
+    mkdir -p "$DYNAMIC_OVERLAY/boot" "$DYNAMIC_OVERLAY/var/lib/diosix/images"
     CC_GUEST="riscv64-linux-gnu-gcc"
-    if [ -x "$BUILDROOT_DIR/output/host/bin/riscv64-buildroot-linux-gnu-gcc" ]; then
-        CC_GUEST="$BUILDROOT_DIR/output/host/bin/riscv64-buildroot-linux-gnu-gcc"
+    BR_GCC="$BUILDROOT_DIR/output/host/bin/riscv64-buildroot-linux-gnu-gcc"
+    if [ -x "$BR_GCC" ]; then
+        CC_GUEST="$BR_GCC"
     fi
+    MICRO_ELF="$DYNAMIC_OVERLAY/boot/micro-guest.elf"
+    MICRO_ISO="$DYNAMIC_OVERLAY/boot/micro-guest.iso"
+    LD_FLAGS="-Wl,-Ttext=0x80000000,-N,--build-id=none"
     if command -v "$CC_GUEST" >/dev/null 2>&1; then
-        "$CC_GUEST" -nostdlib -static -Wl,-Ttext=0x80000000,-N,--build-id=none tools/micro-guest/guest.s -o "$DYNAMIC_OVERLAY/boot/micro-guest.elf" 2>/dev/null || true
-        mkdir -p "$DYNAMIC_OVERLAY/var/lib/diosix/images"
-        ln -sf /boot/micro-guest.elf "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest.elf" 2>/dev/null || true
-        log_ok "Installed micro-guest payload in overlay (/boot/micro-guest.elf)."
+        "$CC_GUEST" -nostdlib -static "$LD_FLAGS" \
+            tools/micro-guest/guest.s -o "$MICRO_ELF" 2>/dev/null || true
+    else
+        zig cc -target riscv64-freestanding-none -nostdlib "$LD_FLAGS" \
+            tools/micro-guest/guest.s -o "$MICRO_ELF" 2>/dev/null || true
+    fi
+    if [ -f "$MICRO_ELF" ]; then
+        ln -sf /boot/micro-guest.elf \
+            "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest.elf" \
+            2>/dev/null || true
+        if [ -f "scripts/build_micro_iso.py" ]; then
+            python3 scripts/build_micro_iso.py "$MICRO_ELF" \
+                "$MICRO_ISO" 2>/dev/null || true
+            ln -sf /boot/micro-guest.iso \
+                "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest.iso" \
+                2>/dev/null || true
+        fi
+        log_ok "Installed micro-guest ELF and ISO payloads in overlay."
     fi
 fi
 
-# Clean any lingering private keys from previous target builds
+# Clean lingering private keys from previous target builds and set permissions.
 if [ -d "$BUILDROOT_DIR/output/target/etc/diosix/keys" ]; then
     rm -f "$BUILDROOT_DIR"/output/target/etc/diosix/keys/id_*
 fi
+chmod 0755 tools/overlay-common/etc/diosix 2>/dev/null || true
+chmod 0644 tools/overlay-common/etc/diosix/*.toml \
+    tools/overlay-common/etc/diosix/*.md 2>/dev/null || true
+chmod 0755 tools/overlay-common/etc/init.d/S* 2>/dev/null || true
+if [ -d "tools/overlay-common/etc/diosix/keys" ]; then
+    chmod 0700 tools/overlay-common/etc/diosix/keys 2>/dev/null || true
+fi
 
-# 3. BuildRoot Workspace Setup
+# 3. Buildroot Workspace Setup.
 log_step "[2/5] Preparing Buildroot workspace..."
 if [ ! -d "$BUILDROOT_DIR/.git" ]; then
-    log_info "Cloning BuildRoot (${BUILDROOT_BRANCH}) into ${BUILDROOT_DIR}..."
+    log_info "Cloning Buildroot (${BUILDROOT_BRANCH}) into ${BUILDROOT_DIR}..."
     TEMP_CLONE=$(mktemp -d -p "$(dirname "$BUILDROOT_DIR")")
     git clone --depth 1 -b "$BUILDROOT_BRANCH" "$BUILDROOT_URL" "$TEMP_CLONE"
     mv "$BUILDROOT_DIR/dl" "$TEMP_CLONE/dl" 2>/dev/null || true
@@ -160,7 +225,7 @@ else
     log_ok "Buildroot workspace found."
 fi
 
-# 4. Configure BuildRoot
+# 4. Configure Buildroot.
 log_step "[3/5] Applying Buildroot and Linux kernel defconfig..."
 ABS_CONFIG=$(realpath "$CONFIG_FILE")
 
@@ -174,7 +239,8 @@ STATIC_OVERLAY=$(realpath tools/overlay-common)
 SHARED_DL_DIR="$(realpath "$(dirname "$BUILDROOT_DIR")")/dl"
 mkdir -p "$SHARED_DL_DIR"
 echo "BR2_DL_DIR=\"$SHARED_DL_DIR\"" >> "$BUILDROOT_DIR/.config"
-echo "BR2_ROOTFS_OVERLAY=\"$STATIC_OVERLAY $DYNAMIC_OVERLAY\"" >> "$BUILDROOT_DIR/.config"
+echo "BR2_ROOTFS_OVERLAY=\"$STATIC_OVERLAY $DYNAMIC_OVERLAY\"" \
+    >> "$BUILDROOT_DIR/.config"
 
 GETTY_PORT="hvc0"
 if [ "$GUEST_ARCH" = "aarch64" ]; then
@@ -188,17 +254,20 @@ echo "BR2_JLEVEL=0" >> "$BUILDROOT_DIR/.config"
 make -C "$BUILDROOT_DIR" olddefconfig >/dev/null
 
 if [ -f "$BUILDROOT_DIR/.config.old" ]; then
-    OLD_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config.old" | cut -d'"' -f2 || true)
-    NEW_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' "$BUILDROOT_DIR/.config" | cut -d'"' -f2 || true)
+    OLD_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' \
+        "$BUILDROOT_DIR/.config.old" | cut -d'"' -f2 || true)
+    NEW_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' \
+        "$BUILDROOT_DIR/.config" | cut -d'"' -f2 || true)
     if [ "$OLD_KV" != "$NEW_KV" ] && [ -n "$OLD_KV" ]; then
-        log_info "Linux kernel version changed ($OLD_KV -> $NEW_KV). Cleaning old build artifacts..."
-        make -C "$BUILDROOT_DIR" linux-dirclean linux-headers-dirclean >/dev/null 2>&1 || true
+        log_info "Linux kernel version changed ($OLD_KV -> $NEW_KV). Cleaning..."
+        make -C "$BUILDROOT_DIR" \
+            linux-dirclean linux-headers-dirclean >/dev/null 2>&1 || true
     fi
     rm -f "$BUILDROOT_DIR/.config.old"
 fi
-log_ok "Configured guest environment (login getty: ${GETTY_PORT}, concurrency: $(nproc))."
+log_ok "Configured guest environment (getty: ${GETTY_PORT}, jobs: $(nproc))."
 
-# 5. Fetch and patch Kernel
+# 5. Fetch and patch Kernel.
 log_step "[4/5] Preparing Linux kernel with /dev/diosix character driver..."
 WGET_EXTRA_ARGS=""
 if wget --version 2>&1 | head -1 | grep -q "Wget2"; then
@@ -206,15 +275,24 @@ if wget --version 2>&1 | head -1 | grep -q "Wget2"; then
 fi
 
 if ! ls -d "$BUILDROOT_DIR"/output/build/linux-[0-9]* >/dev/null 2>&1; then
-    eval make -C "$BUILDROOT_DIR" -j"$(nproc)" linux-patch $WGET_EXTRA_ARGS >/dev/null 2>&1 || true
+    eval make -C "$BUILDROOT_DIR" -j"$(nproc)" \
+        linux-patch $WGET_EXTRA_ARGS >/dev/null 2>&1 || true
 fi
 
 INJECTED=0
 for linux_dir in "$BUILDROOT_DIR"/output/build/linux-*; do
     if [ -d "$linux_dir/drivers/char" ]; then
-        cp tools/driver/diosix.c "$linux_dir/drivers/char/diosix.c"
-        if ! grep -q "diosix.o" "$linux_dir/drivers/char/Makefile"; then
-            echo "obj-y += diosix.o" >> "$linux_dir/drivers/char/Makefile"
+        mkdir -p "$linux_dir/drivers/char/diosix"
+        rm -f "$linux_dir/drivers/char/diosix.c" \
+            "$linux_dir/drivers/char/diosix.o"
+        sed -i '/obj-y += diosix\.o/d' "$linux_dir/drivers/char/Makefile"
+        cp tools/driver/diosix.h tools/driver/diosix.c \
+            tools/driver/governance.c tools/driver/net.c \
+            "$linux_dir/drivers/char/diosix/"
+        printf 'obj-y += diosix.o governance.o net.o\n' \
+            > "$linux_dir/drivers/char/diosix/Makefile"
+        if ! grep -q "diosix/" "$linux_dir/drivers/char/Makefile"; then
+            echo "obj-y += diosix/" >> "$linux_dir/drivers/char/Makefile"
         fi
         INJECTED=1
         log_ok "Installed /dev/diosix driver in $(basename "$linux_dir")."
@@ -225,34 +303,28 @@ if [ "$INJECTED" -eq 0 ]; then
     log_info "Kernel tree will be patched during package build."
 fi
 
-# 6. Build Root VM with Real-Time Progress Monitor
-log_step "[5/5] Compiling Linux kernel and Root VM packages (using $(nproc) parallel jobs)..."
+# 6. Build Root VM with Real-Time Progress Monitor.
+log_step "[5/5] Compiling Linux kernel and Root VM packages ($(nproc) jobs)..."
 
 START_TIME=$(date +%s)
 
-TOTAL_PACKAGES=$(make -s -C "$BUILDROOT_DIR" show-targets 2>/dev/null | tr '\n' ' ' | awk '{print NF}')
+TOTAL_PACKAGES=$(make -s -C "$BUILDROOT_DIR" show-targets 2>/dev/null | \
+    tr '\n' ' ' | awk '{print NF}')
 if [ -z "$TOTAL_PACKAGES" ] || [ "$TOTAL_PACKAGES" -lt 1 ] 2>/dev/null; then
     TOTAL_PACKAGES=44
 fi
 
 BUILD_LOG="$BUILDROOT_DIR/output/build/build-time.log"
 
-# Background animated heartbeat monitor
-MONITOR_FIFO=$(mktemp -u)
-mkfifo "$MONITOR_FIFO" 2>/dev/null || true
-
 cleanup_monitor() {
-    if [ -n "$MONITOR_PID" ] && kill -0 "$MONITOR_PID" 2>/dev/null; then
-        kill "$MONITOR_PID" 2>/dev/null || true
-        wait "$MONITOR_PID" 2>/dev/null || true
-    fi
     printf "\r\033[K"
-    rm -f "$MONITOR_FIFO" 2>/dev/null || true
 }
 trap cleanup_monitor EXIT INT TERM
 
-# Run make in background capturing output
-eval make -C "$BUILDROOT_DIR" -j"$(nproc)" $WGET_EXTRA_ARGS > "$BUILDROOT_DIR/output/build/make_exec.log" 2>&1 &
+# Run make in background capturing output.
+MAKE_LOG="$BUILDROOT_DIR/output/build/make_exec.log"
+eval make -C "$BUILDROOT_DIR" -j"$(nproc)" \
+    $WGET_EXTRA_ARGS > "$MAKE_LOG" 2>&1 &
 MAKE_PID=$!
 
 SPIN_CHARS=("⣾" "⣽" "⣻" "⢿" "⡿" "⣟" "⣯" "⣷")
@@ -271,26 +343,30 @@ while kill -0 "$MAKE_PID" 2>/dev/null; do
     DONE_COUNT=0
     CUR_PKG="toolchain"
     if [ -f "$BUILD_LOG" ]; then
-        DONE_COUNT=$(grep -E ':end  :install-target' "$BUILD_LOG" 2>/dev/null | wc -l | tr -dc '0-9' || echo "0")
+        DONE_COUNT=$(grep -E ':end  :install-target' "$BUILD_LOG" 2>/dev/null \
+            | wc -l | tr -dc '0-9' || echo "0")
         [ -z "$DONE_COUNT" ] && DONE_COUNT=0
         LATEST_LINE=$(tail -n 1 "$BUILD_LOG" 2>/dev/null || true)
         if [ -n "$LATEST_LINE" ]; then
-            CUR_PKG=$(echo "$LATEST_LINE" | awk -F':' '{print $NF}' | tr -d ' ' || echo "compiling")
+            CUR_PKG=$(echo "$LATEST_LINE" | awk -F':' '{print $NF}' \
+                | tr -d ' ' || echo "compiling")
         fi
     fi
 
-    # Adjust TOTAL_PACKAGES dynamically if needed
+    # Adjust TOTAL_PACKAGES dynamically if needed.
     if [ "$DONE_COUNT" -gt "$TOTAL_PACKAGES" ]; then
         TOTAL_PACKAGES=$DONE_COUNT
     fi
 
-    # Print milestone line if a new package finished
+    # Print milestone line if a new package finished.
     if [ "$DONE_COUNT" -gt "$LAST_DONE_COUNT" ]; then
-        LAST_PKG=$(tail -n 2 "$BUILD_LOG" 2>/dev/null | grep ':end  :' | tail -n 1 | awk -F':' '{print $NF}' | tr -d ' ' || true)
+        LAST_PKG=$(tail -n 2 "$BUILD_LOG" 2>/dev/null | grep ':end  :' \
+            | tail -n 1 | awk -F':' '{print $NF}' | tr -d ' ' || true)
         if [ -n "$LAST_PKG" ] && [ "$LAST_PKG" != "$LAST_REPORTED_PKG" ]; then
             PCT=$(( (DONE_COUNT * 100) / TOTAL_PACKAGES ))
             [ "$PCT" -gt 99 ] && PCT=99
-            printf "\r\033[K    [%2d/%d] [%2d%%] ${GREEN}✓${RESET} %s\n" "$DONE_COUNT" "$TOTAL_PACKAGES" "$PCT" "$LAST_PKG"
+            printf "\r\033[K    [%2d/%d] [%2d%%] ${GREEN}✓${RESET} %s\n" \
+                "$DONE_COUNT" "$TOTAL_PACKAGES" "$PCT" "$LAST_PKG"
             LAST_REPORTED_PKG="$LAST_PKG"
         fi
         LAST_DONE_COUNT="$DONE_COUNT"
@@ -307,21 +383,23 @@ while kill -0 "$MAKE_PID" 2>/dev/null; do
 
     EXTRA=""
     if [[ "$CUR_PKG" =~ linux ]]; then
-        OBJ_COUNT=$(find "$BUILDROOT_DIR/output/build/linux-7.0.10" -name "*.o" 2>/dev/null | wc -l | tr -dc '0-9' || echo "0")
+        OBJ_COUNT=$(find "$BUILDROOT_DIR"/output/build/linux-* \
+            -name "*.o" 2>/dev/null | wc -l | tr -dc '0-9' || echo "0")
         [ -z "$OBJ_COUNT" ] && OBJ_COUNT=0
         if [ -n "$OBJ_COUNT" ] && [ "$OBJ_COUNT" -gt 0 ] 2>/dev/null; then
             EXTRA=" ($OBJ_COUNT kernel objects)"
         fi
     fi
 
-    printf "\r    ${CYAN}%s${RESET} [Elapsed: ${BOLD}%s${RESET}] [%2d/%d packages | %2d%%] Building ${BOLD}%s${RESET}%s\033[K" \
-        "$SPIN_CHAR" "$TIME_STR" "$DONE_COUNT" "$TOTAL_PACKAGES" "$PCT" "$CUR_PKG" "$EXTRA"
+    FMT="\r    ${CYAN}%s${RESET} [Elapsed: ${BOLD}%s${RESET}] "
+    FMT="${FMT}[%2d/%d packages | %2d%%] Building ${BOLD}%s${RESET}%s\033[K"
+    printf "$FMT" "$SPIN_CHAR" "$TIME_STR" \
+        "$DONE_COUNT" "$TOTAL_PACKAGES" "$PCT" "$CUR_PKG" "$EXTRA"
 
     sleep 0.25
 done
 
-
-# Wait for make to get exit code
+# Wait for make to get exit code.
 set +e
 wait "$MAKE_PID"
 MAKE_EXIT_CODE=$?
@@ -330,17 +408,17 @@ set -e
 printf "\r\033[K"
 
 if [ "$MAKE_EXIT_CODE" -ne 0 ]; then
-    echo -e "\n${BOLD}\033[31mError:${RESET} BuildRoot compilation failed with exit code $MAKE_EXIT_CODE!"
+    echo -e "\n${BOLD}\033[31mError:${RESET} Buildroot failed ($MAKE_EXIT_CODE)!"
     echo -e "Last 25 log lines:"
-    tail -n 25 "$BUILDROOT_DIR/output/build/make_exec.log" 2>/dev/null || true
+    tail -n 25 "$MAKE_LOG" 2>/dev/null || true
     exit "$MAKE_EXIT_CODE"
 fi
 
-# Ensure the output directory exists and copy the final image
+# Ensure the output directory exists and copy the final image.
 mkdir -p "$(dirname "$OUT_FILE")"
 IMAGE_PATH="$BUILDROOT_DIR/output/images/vmlinux"
 if [ ! -f "$IMAGE_PATH" ]; then
-    echo -e "\n${BOLD}\033[31mError:${RESET} BuildRoot completed but expected kernel image '$IMAGE_PATH' was not found!"
+    echo -e "\n${BOLD}\033[31mError:${RESET} Missing image '$IMAGE_PATH'!"
     exit 1
 fi
 
@@ -356,4 +434,3 @@ echo -e "\n${BOLD}${GREEN}✓ Root VM build complete!${RESET} (${BOLD}${SIZE}${R
 log_info "Kernel image : ${BOLD}$OUT_FILE${RESET}"
 log_info "Hash check   : ${CURRENT_HASH:0:16}..."
 log_info "Descriptor   : $ROOTVM_S_PATH\n"
-

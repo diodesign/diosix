@@ -18,8 +18,10 @@ pub const LCR_DLAB: u8 = 0x80;
 pub const LCR_8N1: u8 = 0x03;
 pub const IIR_NO_INT: u8 = 0x01;
 pub const IIR_FIFO_ENABLED_16550A: u8 = 0xc1;
-pub const LSR_THRE_TEMT: u8 = 0x60; // Transmit holding and shift register empty
-pub const MSR_CARRIER_DSR_CTS: u8 = 0xb0; // Carrier detect, Data set ready, Clear to send
+/// Transmit holding and shift register empty.
+pub const LSR_THRE_TEMT: u8 = 0x60;
+/// Carrier detect, Data set ready, Clear to send.
+pub const MSR_CARRIER_DSR_CTS: u8 = 0xb0;
 
 pub const VirtualUart = struct {
     ier: u8 = 0,
@@ -54,8 +56,8 @@ pub const VirtualUart = struct {
             UART_REG_IIR_FCR => self.fcr = val,
             UART_REG_LCR => self.lcr = val,
             UART_REG_MCR => self.mcr = val,
-            UART_REG_LSR => {}, // LSR is read-only
-            UART_REG_MSR => {}, // MSR is read-only
+            UART_REG_LSR => {}, // LSR is read-only.
+            UART_REG_MSR => {}, // MSR is read-only.
             UART_REG_SCR => self.scr = val,
             else => {},
         }
@@ -63,8 +65,14 @@ pub const VirtualUart = struct {
 
     pub fn read(self: *VirtualUart, offset: u8) u8 {
         return switch (offset) {
-            UART_REG_RBR_THR_DLL => if ((self.lcr & LCR_DLAB) != 0) self.dll else 0,
-            UART_REG_IER_DLM => if ((self.lcr & LCR_DLAB) != 0) self.dlm else self.ier,
+            UART_REG_RBR_THR_DLL => if ((self.lcr & LCR_DLAB) != 0)
+                self.dll
+            else
+                0,
+            UART_REG_IER_DLM => if ((self.lcr & LCR_DLAB) != 0)
+                self.dlm
+            else
+                self.ier,
             UART_REG_IIR_FCR => IIR_FIFO_ENABLED_16550A,
             UART_REG_LCR => self.lcr,
             UART_REG_MCR => self.mcr,
@@ -89,32 +97,38 @@ test "16550 UART read write and DLAB latching" {
         .out_fn = TestHelper.out,
     };
 
-    // Test default status values
+    // Test default status values.
     try testing.expectEqual(LSR_THRE_TEMT, uart.read(UART_REG_LSR));
     try testing.expectEqual(MSR_CARRIER_DSR_CTS, uart.read(UART_REG_MSR));
-    try testing.expectEqual(IIR_FIFO_ENABLED_16550A, uart.read(UART_REG_IIR_FCR));
+    try testing.expectEqual(
+        IIR_FIFO_ENABLED_16550A,
+        uart.read(UART_REG_IIR_FCR),
+    );
     try testing.expectEqual(LCR_8N1, uart.read(UART_REG_LCR));
 
-    // Test normal IER write/read when DLAB is 0
+    // Test normal IER write/read when DLAB is 0.
     uart.write(UART_REG_IER_DLM, 0x05);
     try testing.expectEqual(@as(u8, 0x05), uart.read(UART_REG_IER_DLM));
 
-    // Test Scratch register
-    uart.write(UART_REG_SCR, 0xA5);
-    try testing.expectEqual(@as(u8, 0xA5), uart.read(UART_REG_SCR));
+    // Test Scratch register.
+    uart.write(UART_REG_SCR, 0xa5);
+    try testing.expectEqual(@as(u8, 0xa5), uart.read(UART_REG_SCR));
 
-    // Enable DLAB (bit 7 in LCR)
+    // Enable DLAB (bit 7 in LCR).
     uart.write(UART_REG_LCR, LCR_8N1 | LCR_DLAB);
-    try testing.expectEqual(@as(u8, LCR_8N1 | LCR_DLAB), uart.read(UART_REG_LCR));
+    try testing.expectEqual(
+        @as(u8, LCR_8N1 | LCR_DLAB),
+        uart.read(UART_REG_LCR),
+    );
 
-    // Write DLL & DLM divisor latches
+    // Write DLL & DLM divisor latches.
     uart.write(UART_REG_RBR_THR_DLL, 0x12);
     uart.write(UART_REG_IER_DLM, 0x34);
     try testing.expectEqual(@as(u8, 0x12), uart.read(UART_REG_RBR_THR_DLL));
     try testing.expectEqual(@as(u8, 0x34), uart.read(UART_REG_IER_DLM));
 
-    // Disable DLAB
+    // Disable DLAB.
     uart.write(UART_REG_LCR, LCR_8N1);
-    try testing.expectEqual(@as(u8, 0x05), uart.read(UART_REG_IER_DLM)); // Original IER restored
-    try testing.expectEqual(@as(u8, 0x00), uart.read(UART_REG_RBR_THR_DLL)); // RBR empty
+    try testing.expectEqual(@as(u8, 0x05), uart.read(UART_REG_IER_DLM));
+    try testing.expectEqual(@as(u8, 0x00), uart.read(UART_REG_RBR_THR_DLL));
 }

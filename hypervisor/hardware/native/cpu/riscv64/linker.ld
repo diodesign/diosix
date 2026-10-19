@@ -1,8 +1,7 @@
-/* ELF layout of the hypervisor for Qemu-compatible targets
+/* ELF layout of the hypervisor for QEMU-compatible targets.
  *
  * Copyright (c) 2024, 2026 Chris Williams <chrisw@diosix.org>
  * SPDX-License-Identifier: MIT
- *
  */
 
 OUTPUT_ARCH(riscv)
@@ -10,7 +9,7 @@ ENTRY(_start)
 
 SECTIONS
 {
-  /* execution starts at 0x80000000, DRAM base, so place our entry point here */
+  /* Execution starts at 0x80000000 (DRAM base); place entry point here. */
   . = 0x80000000;
   __hypervisor_start = .;
 
@@ -27,13 +26,14 @@ SECTIONS
     *(.eh_frame)
   }
 
-
+  /* Start of writable data section (used by PMP RW region boundary). */
+  __data_start = ALIGN(0x8);
   .data : ALIGN(0x8)
   {
     *(.data*)
   }
 
-  /* this needs to be zeroed */
+  /* Zeroed during early boot by CPU 0 in entry.s. */
   __bss_start = ALIGN(0x8);
   .bss : ALIGN(0x8)
   {
@@ -42,18 +42,17 @@ SECTIONS
   }
   __bss_end = ALIGN(0x8);
 
-  /* Move .note.gnu.build-id to the end */
+  /* Place .note.gnu.build-id after BSS. */
   .note.gnu.build-id : { *(.note.gnu.build-id) }
 
-  /* required for spike. writes and reads to these 64-bit addresses
-     are trapped by the simulator and treated specially by spike.
-     on non-spike targets, it's a NOP */
+  /* Required for Spike simulator: writes and reads to these 64-bit addresses
+     are trapped and treated specially by Spike. On non-Spike targets, NOP. */
   . = ALIGN(0x8);
   tohost = .;
   . += 8;
   fromhost = .;
 
-  /* embedded Root VM image */
+  /* Embedded Root VM image. */
   .rootvm : ALIGN(0x1000)
   {
     __rootvm_start = .;
@@ -61,9 +60,9 @@ SECTIONS
     __rootvm_end = .;
   }
 
-  /* set aligned end to the hypervisor, round up to nearest page boundary */
+  /* Aligned end of the hypervisor footprint, rounded up to page boundary. */
   __hypervisor_end = ALIGN(0x1000);
 
-  /* keep other GNU stuff out of the way */
+  /* Discard unneeded GNU property notes. */
   /DISCARD/ : { *(.note.gnu.property) }
 }

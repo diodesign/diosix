@@ -17,8 +17,8 @@ pub const CLINT_MTIME_HIGH: u32 = 0xbffc;
 
 pub const BYTES_PER_MTIMECMP: u32 = 8;
 pub const HIGH_WORD_SHIFT: u6 = 32;
-pub const LOW_WORD_MASK: u64 = 0x00000000FFFFFFFF;
-pub const HIGH_WORD_MASK: u64 = 0xFFFFFFFF00000000;
+pub const LOW_WORD_MASK: u64 = 0x00000000ffffffff;
+pub const HIGH_WORD_MASK: u64 = 0xffffffff00000000;
 
 pub const HartTimerNode = struct {
     hart: usize,
@@ -28,12 +28,16 @@ pub const HartTimerNode = struct {
 
 pub const VirtualTimer = struct {
     mtime: u64 = 0,
-    // Column 1: Static fast-path for harts 0..31 (wait-free, O(1), zero allocation)
+    /// Column 1: Static fast-path for harts 0..31 (wait-free, O(1)).
     static_mtimecmp: [STATIC_HARTS]u64 = @splat(~@as(u64, 0)),
-    // Column 2: Dynamic hash buckets for harts >= 32 (keyed by hart % 32)
+    /// Column 2: Dynamic hash buckets for harts >= 32 (keyed by hart % 32).
     dynamic_buckets: [DYNAMIC_HASH_BUCKETS]?*HartTimerNode = @splat(null),
-    // Dynamic node pool for standalone execution and up to 128 dynamic harts (160 total harts)
-    dynamic_pool: [128]HartTimerNode = @splat(.{ .hart = 0, .mtimecmp = ~@as(u64, 0), .next = null }),
+    /// Dynamic node pool for standalone execution (up to 128 dynamic harts).
+    dynamic_pool: [128]HartTimerNode = @splat(.{
+        .hart = 0,
+        .mtimecmp = ~@as(u64, 0),
+        .next = null,
+    }),
     pool_count: usize = 0,
     lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -87,7 +91,6 @@ pub const VirtualTimer = struct {
             }
             curr = node.next;
         }
-        // Allocate node from embedded pool
         if (self.pool_count < self.dynamic_pool.len) {
             const node = &self.dynamic_pool[self.pool_count];
             self.pool_count += 1;
@@ -107,14 +110,15 @@ pub const VirtualTimer = struct {
             const hart = (offset - CLINT_MTIMECMP_BASE) / BYTES_PER_MTIMECMP;
             const is_high = (offset & @sizeOf(u32)) != 0;
             const cmp = self.getMtimecmp(hart);
-            if (is_high) {
-                return @truncate(cmp >> HIGH_WORD_SHIFT);
-            } else {
-                return @truncate(cmp);
-            }
+            return if (is_high)
+                @truncate(cmp >> HIGH_WORD_SHIFT)
+            else
+                @truncate(cmp);
         }
         if (offset == CLINT_MTIME_LOW) return @truncate(time);
-        if (offset == CLINT_MTIME_HIGH) return @truncate(time >> HIGH_WORD_SHIFT);
+        if (offset == CLINT_MTIME_HIGH) {
+            return @truncate(time >> HIGH_WORD_SHIFT);
+        }
         return 0;
     }
 
@@ -161,7 +165,11 @@ pub const VirtualTimer = struct {
         self.mtime = 0;
         self.static_mtimecmp = @splat(~@as(u64, 0));
         self.dynamic_buckets = @splat(null);
-        self.dynamic_pool = @splat(.{ .hart = 0, .mtimecmp = ~@as(u64, 0), .next = null });
+        self.dynamic_pool = @splat(.{
+            .hart = 0,
+            .mtimecmp = ~@as(u64, 0),
+            .next = null,
+        });
         self.pool_count = 0;
     }
 };
@@ -171,25 +179,31 @@ test "CLINT virtual timer mtimecmp read write and earliest deadline" {
 
     var timer = VirtualTimer{};
 
-    // Initial state: all deadlines are max u64
+    // Initial state: all deadlines are max u64.
     try testing.expectEqual(~@as(u64, 0), timer.getEarliestDeadline());
 
-    // Write Hart 0 mtimecmp low word (offset 0x4000) and high word (offset 0x4004)
+    // Write Hart 0 mtimecmp low word (0x4000) and high word (0x4004).
     timer.write(CLINT_MTIMECMP_BASE, 0x12345678);
-    timer.write(CLINT_MTIMECMP_BASE + 4, 0x0000ABCD);
+    timer.write(CLINT_MTIMECMP_BASE + 4, 0x0000abcd);
 
-    try testing.expectEqual(@as(u32, 0x12345678), timer.read(CLINT_MTIMECMP_BASE));
-    try testing.expectEqual(@as(u32, 0x0000ABCD), timer.read(CLINT_MTIMECMP_BASE + 4));
-    try testing.expectEqual(@as(u64, 0x0000ABCD12345678), timer.getMtimecmp(0));
+    try testing.expectEqual(
+        @as(u32, 0x12345678),
+        timer.read(CLINT_MTIMECMP_BASE),
+    );
+    try testing.expectEqual(
+        @as(u32, 0x0000abcd),
+        timer.read(CLINT_MTIMECMP_BASE + 4),
+    );
+    try testing.expectEqual(@as(u64, 0x0000abcd12345678), timer.getMtimecmp(0));
 
-    // Write Hart 1 mtimecmp (offset 0x4008, 0x400C)
+    // Write Hart 1 mtimecmp (offset 0x4008, 0x400C).
     timer.write(CLINT_MTIMECMP_BASE + 8, 0x00000100);
     timer.write(CLINT_MTIMECMP_BASE + 12, 0x00000000);
 
-    // Earliest deadline should now be Hart 1 (0x100 < 0x0000ABCD12345678)
+    // Earliest deadline should now be Hart 1 (0x100 < 0x0000ABCD12345678).
     try testing.expectEqual(@as(u64, 0x100), timer.getEarliestDeadline());
 
-    // Test Hart 15 (high static hart ID)
+    // Test Hart 15 (high static hart ID).
     const hart15_base = CLINT_MTIMECMP_BASE + 15 * BYTES_PER_MTIMECMP;
     timer.write(hart15_base, 0x00000050);
     timer.write(hart15_base + 4, 0x00000000);
@@ -198,7 +212,7 @@ test "CLINT virtual timer mtimecmp read write and earliest deadline" {
     try testing.expectEqual(@as(u64, 0x50), timer.getMtimecmp(15));
     try testing.expectEqual(@as(u64, 0x50), timer.getEarliestDeadline());
 
-    // Test Dynamic Hart 32 (Column 2 hash bucket)
+    // Test Dynamic Hart 32 (Column 2 hash bucket).
     const hart32_base = CLINT_MTIMECMP_BASE + 32 * BYTES_PER_MTIMECMP;
     timer.write(hart32_base, 0x00000030);
     timer.write(hart32_base + 4, 0x00000000);
@@ -207,18 +221,19 @@ test "CLINT virtual timer mtimecmp read write and earliest deadline" {
     try testing.expectEqual(@as(u64, 0x30), timer.getMtimecmp(32));
     try testing.expectEqual(@as(u64, 0x30), timer.getEarliestDeadline());
 
-    // Test Dynamic Hart 64 (Collides with 32 in bucket 0)
+    // Test Dynamic Hart 64 (Collides with 32 in bucket 0).
     const hart64_base = CLINT_MTIMECMP_BASE + 64 * BYTES_PER_MTIMECMP;
     timer.write(hart64_base, 0x00000010);
     timer.write(hart64_base + 4, 0x00000000);
     try testing.expectEqual(@as(u32, 0x00000010), timer.read(hart64_base));
     try testing.expectEqual(@as(u64, 0x10), timer.getMtimecmp(64));
-    // Now earliest deadline should be Hart 64
     try testing.expectEqual(@as(u64, 0x10), timer.getEarliestDeadline());
 
-    // Test rejection of unaligned register access
+    // Test rejection of unaligned register access.
     try testing.expectEqual(@as(u32, 0), timer.read(CLINT_MTIMECMP_BASE + 1));
     timer.write(CLINT_MTIMECMP_BASE + 1, 0x99999999);
-    try testing.expectEqual(@as(u32, 0x12345678), timer.read(CLINT_MTIMECMP_BASE)); // Clobber prevented
+    try testing.expectEqual(
+        @as(u32, 0x12345678),
+        timer.read(CLINT_MTIMECMP_BASE),
+    );
 }
-

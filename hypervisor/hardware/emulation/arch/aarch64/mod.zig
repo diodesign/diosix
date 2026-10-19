@@ -8,7 +8,6 @@
 const std = @import("std");
 const emulation_native = @import("emulation");
 const VCpu = emulation_native.VCpu;
-const vcore = @import("../../../../core/vcore.zig");
 
 pub const ExceptionAction = enum {
     emulated,
@@ -17,9 +16,14 @@ pub const ExceptionAction = enum {
     wfi,
 };
 
-pub fn initRegisters(vcpu: *VCpu, entry: usize, dtb: usize, vcore_id: usize) void {
+pub fn initRegisters(
+    vcpu: *VCpu,
+    entry: usize,
+    dtb: usize,
+    vcore_id: usize,
+) void {
     vcpu.pc = @truncate(entry);
-    vcpu.setReg(0, @truncate(dtb));
+    vcpu.setReg(1, @truncate(dtb));
     _ = vcore_id;
 }
 
@@ -29,4 +33,18 @@ pub fn readPC(vcpu: *const VCpu) u32 {
 
 pub fn writePC(vcpu: *VCpu, pc: u32) void {
     vcpu.pc = pc;
+}
+
+test "aarch64 arch register initialization and PC accessors" {
+    const testing = std.testing;
+    testing.refAllDecls(@This());
+
+    var cpu = VCpu{};
+    initRegisters(&cpu, 0x40080000, 0x44000000, 0);
+    try testing.expectEqual(@as(u32, 0x40080000), readPC(&cpu));
+    const x1_val: u32 = @truncate(cpu.getReg(1));
+    try testing.expectEqual(@as(u32, 0x44000000), x1_val);
+
+    writePC(&cpu, 0x40080100);
+    try testing.expectEqual(@as(u32, 0x40080100), readPC(&cpu));
 }

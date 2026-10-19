@@ -1,4 +1,4 @@
-// Simple, robust linked list scheduler of virtual CPU cores
+// Linked-list virtual CPU core scheduler with CFS-style vruntime ordering.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -10,23 +10,25 @@ const dsa = @import("dsa.zig");
 const pcore = @import("pcore.zig");
 const vcore = @import("vcore.zig");
 const guest = @import("guest.zig");
-const alloc = @import("alloc.zig");
-const debug = @import("debug.zig");
 const atomic = @import("atomic.zig");
 const physmem = @import("physmem.zig");
 
-// Global scheduler state using a simple intrusive doubly-linked list
+// Global scheduler state using an intrusive doubly-linked list.
 const SchedulerState = struct {
     run_queue: dsa.LinkedList(*vcore.VirtualCore),
 };
 
-var global_scheduler = atomic.LockPayload(SchedulerState).init("Global scheduler state", .{
-    .run_queue = undefined,
-});
+var global_scheduler = atomic.LockPayload(SchedulerState).init(
+    "Global scheduler state",
+    .{ .run_queue = undefined },
+);
 
 var global_min_vruntime = std.atomic.Value(u64).init(0);
 
 const MAX_LOCAL_VCORES = 8;
+
+pub const NICE_0_WEIGHT: u64 = vcore.WEIGHT_NORMAL;
+pub const MIN_RUNTIME_DELTA: u64 = 1;
 
 pub fn init() void {
     const guard = global_scheduler.acquire();
@@ -34,7 +36,7 @@ pub fn init() void {
     guard.get().run_queue.init();
 }
 
-// initialize the per-CPU scheduler state
+// Initialize the per-CPU scheduler state.
 pub fn initCpu() void {
     const pc = pcore.this();
     pc.run_queue.init();
@@ -50,22 +52,21 @@ pub fn initCpu() void {
 }
 
 // Add a virtual core to a run queue (local preferred, global for overflow).
-// Only vcores in 'ready' state may be queued.
+// Only vcores in 'ready' or 'running' state may be queued.
 pub fn queue(vc: *vcore.VirtualCore) void {
     if (@atomicLoad(bool, &vc.wfi_blocked, .acquire)) return;
-    // Only schedulable states may be queued.
     if (vc.state != .ready and vc.state != .running) return;
 
-    // Do NOT queue if actively running on a physical CPU
+    // Do not queue if actively running on a physical CPU.
     if (vc.running_on_cpu != null) return;
 
-    // Atomically claim queuing rights. If already queued, do not insert again.
+    // Atomically claim queuing rights; if already queued, do not insert again.
     if (@atomicRmw(bool, &vc.is_queued, .Xchg, true, .acq_rel)) return;
 
     vc.state = .ready;
 
-    // Ensure the vcore's vruntime isn't too far behind to prevent it
-    // from hogging the CPU if it's been sleeping for a long time.
+    // Floor vruntime to global_min_vruntime so waking vcores do not starve
+    // peers after a long sleep.
     const min_vr = global_min_vruntime.load(.monotonic);
     if (vc.vruntime < min_vr) {
         vc.vruntime = min_vr;
@@ -75,30 +76,35 @@ pub fn queue(vc: *vcore.VirtualCore) void {
     vc.last_queued_time = riscv.readTime();
 
     const pc = pcore.this();
-    const is_local = if (builtin.is_test) true else (vc.guest.is_root and vc.id == pc.hardware_hart_id);
+    const is_local = if (builtin.is_test)
+        true
+    else
+        (vc.guest.is_root and vc.id == pc.hardware_hart_id);
 
     vc.scheduler_node.contents = vc;
     if (is_local and pc.run_queue_count < MAX_LOCAL_VCORES) {
-        const node_ptr: *dsa.LinkedList(*anyopaque).Node = @ptrCast(&vc.scheduler_node);
+        const node_ptr: *dsa.LinkedList(*anyopaque).Node =
+            @ptrCast(&vc.scheduler_node);
         pc.run_queue.pushEnd(node_ptr);
         pc.run_queue_count += 1;
     } else {
-        // Offload to lock-protected global queue for cross-CPU work or overflow
+        // Offload to lock-protected global queue for cross-CPU work/overflow.
         const guard = global_scheduler.acquire();
         guard.get().run_queue.pushEnd(&vc.scheduler_node);
         guard.release();
 
-        // Wake up other physical CPUs so a core can pick up the work
+        // Wake up other physical CPUs so an idle core can pick up the work.
         pcore.broadcastIpi();
     }
 }
 
-// Remove a virtual core from the run queue if present
+// Remove a virtual core from the run queue if present.
 pub fn dequeue(vc: *vcore.VirtualCore) void {
     const pc = pcore.this();
     var it_local = pc.run_queue.start;
     while (it_local) |node| {
-        const local_vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
+        const local_vc: *vcore.VirtualCore =
+            @ptrCast(@alignCast(node.contents));
         if (local_vc == vc) {
             pc.run_queue.remove(node);
             if (pc.run_queue_count > 0) pc.run_queue_count -= 1;
@@ -122,7 +128,25 @@ pub fn dequeue(vc: *vcore.VirtualCore) void {
     }
 }
 
-// Pick the next virtual core to run, pulling from global if local is empty
+fn canRunOnCpu(
+    vc: *const vcore.VirtualCore,
+    pc: *const riscv.CpuContext,
+    misa: usize,
+) bool {
+    if (vc.running_on_cpu != null) return false;
+    const req = vc.requiredExtensions();
+    if ((req & misa) != req) return false;
+    if (!builtin.is_test and
+        vc.guest.is_root and
+        pcore.fromHartId(vc.id) != null and
+        vc.id != pc.hardware_hart_id)
+    {
+        return false;
+    }
+    return true;
+}
+
+// Pick the next virtual core to run, pulling from global if local is empty.
 pub fn pickNext() ?*vcore.VirtualCore {
     const pc = pcore.this();
     const misa = riscv.readMisa();
@@ -131,7 +155,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     defer guard.release();
     const state = guard.get();
 
-    // Find best candidate in local run queue (lowest vruntime)
+    // Find best candidate in local run queue (lowest vruntime).
     var best_local_node: ?*dsa.LinkedList(*anyopaque).Node = null;
     var best_local_vr: u64 = std.math.maxInt(u64);
 
@@ -146,20 +170,14 @@ pub fn pickNext() ?*vcore.VirtualCore {
             it = next_it;
             continue;
         }
-        if (vc.running_on_cpu == null and ((vc.requiredExtensions() & misa) == vc.requiredExtensions())) {
-            if (!builtin.is_test and vc.guest.is_root and pcore.fromHartId(vc.id) != null and vc.id != pc.hardware_hart_id) {
-                it = next_it;
-                continue;
-            }
-            if (vc.vruntime < best_local_vr) {
-                best_local_vr = vc.vruntime;
-                best_local_node = node;
-            }
+        if (canRunOnCpu(vc, pc, misa) and vc.vruntime < best_local_vr) {
+            best_local_vr = vc.vruntime;
+            best_local_node = node;
         }
         it = next_it;
     }
 
-    // Find best candidate in global run queue (lowest vruntime)
+    // Find best candidate in global run queue (lowest vruntime).
     var best_global_node: ?*dsa.LinkedList(*vcore.VirtualCore).Node = null;
     var best_global_vr: u64 = std.math.maxInt(u64);
 
@@ -173,21 +191,17 @@ pub fn pickNext() ?*vcore.VirtualCore {
             g_it = next_git;
             continue;
         }
-        if (vc.running_on_cpu == null and ((vc.requiredExtensions() & misa) == vc.requiredExtensions())) {
-            if (!builtin.is_test and vc.guest.is_root and pcore.fromHartId(vc.id) != null and vc.id != pc.hardware_hart_id) {
-                g_it = next_git;
-                continue;
-            }
-            if (vc.vruntime < best_global_vr) {
-                best_global_vr = vc.vruntime;
-                best_global_node = node;
-            }
+        if (canRunOnCpu(vc, pc, misa) and vc.vruntime < best_global_vr) {
+            best_global_vr = vc.vruntime;
+            best_global_node = node;
         }
         g_it = next_git;
     }
 
-    // Pick lowest vruntime across queues (prefer global when vruntime <= local)
-    if (best_global_node != null and (best_local_node == null or best_global_vr <= best_local_vr)) {
+    // Pick lowest vruntime across queues (prefer global on tie).
+    if (best_global_node != null and
+        (best_local_node == null or best_global_vr <= best_local_vr))
+    {
         const node = best_global_node.?;
         const vc = node.contents;
         state.run_queue.remove(node);
@@ -210,30 +224,33 @@ pub fn pickNext() ?*vcore.VirtualCore {
     return null;
 }
 
-pub const NICE_0_WEIGHT: u64 = vcore.WEIGHT_NORMAL;
-pub const MIN_RUNTIME_DELTA: u64 = 1;
+fn accountAndRequeue(vc: *vcore.VirtualCore) void {
+    if (vc.state != .ready and vc.state != .running) return;
+    vc.state = .ready;
+    const now = if (builtin.is_test) 0 else riscv.readTime();
+    const actual_time = if (now > vc.last_dispatched_time and
+        vc.last_dispatched_time > 0)
+        now - vc.last_dispatched_time
+    else
+        MIN_RUNTIME_DELTA;
+    const weight: u64 = if (vc.weight > 0) vc.weight else NICE_0_WEIGHT;
+    const delta: u64 = (actual_time *| NICE_0_WEIGHT) / weight;
+    vc.vruntime +|= delta;
+    queue(vc);
+}
 
-// Called when a physical core is ready for more work
+// Called when a physical core is ready for more work.
 pub fn schedule() void {
     const pc = pcore.this();
 
-    // If there's an active vcore, update its runtime before putting it back
+    // If there is an active vcore, update its runtime before re-queuing.
     if (pc.active_vcore) |ptr| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(ptr));
         const was_wfi = @atomicLoad(bool, &vc.wfi_blocked, .acquire);
         vc.running_on_cpu = null;
         pc.active_vcore = null;
-        if (!was_wfi and (vc.state == .ready or vc.state == .running)) {
-            vc.state = .ready;
-            const now = if (builtin.is_test) 0 else riscv.readTime();
-            const actual_time = if (now > vc.last_dispatched_time and vc.last_dispatched_time > 0)
-                now - vc.last_dispatched_time
-            else
-                MIN_RUNTIME_DELTA;
-            const weight = if (vc.weight > 0) vc.weight else NICE_0_WEIGHT;
-            const delta: u64 = actual_time * NICE_0_WEIGHT / weight;
-            vc.vruntime += delta;
-            queue(vc);
+        if (!was_wfi) {
+            accountAndRequeue(vc);
         }
     }
 
@@ -244,14 +261,13 @@ pub fn schedule() void {
             @import("emulation.zig").emulatedRunnerSMode(next_vc);
         }
     } else {
-        // Nothing to run.
         if (pc.cpu_core_id == 0 and pc.trap_count < 1) {
             pc.trap_count += 1;
         }
     }
 }
 
-// Relinquish the CPU to the scheduler
+// Relinquish the CPU to the scheduler.
 pub fn yield(vc: *vcore.VirtualCore) void {
     const pc = pcore.this();
     if (pc.active_vcore) |ptr| {
@@ -259,17 +275,7 @@ pub fn yield(vc: *vcore.VirtualCore) void {
         if (active_vc == vc) {
             vc.running_on_cpu = null;
             pc.active_vcore = null;
-            if (vc.state == .ready or vc.state == .running) {
-                vc.state = .ready;
-                const now = if (builtin.is_test) 0 else riscv.readTime();
-                const actual_time = if (now > vc.last_dispatched_time and vc.last_dispatched_time > 0)
-                    now - vc.last_dispatched_time
-                else
-                    MIN_RUNTIME_DELTA;
-                const delta: u64 = actual_time * NICE_0_WEIGHT / vc.weight;
-                vc.vruntime += delta;
-                queue(vc);
-            }
+            accountAndRequeue(vc);
         }
     }
     if (pickNext()) |next_vc| {
@@ -280,7 +286,6 @@ pub fn yield(vc: *vcore.VirtualCore) void {
 test "scheduler basic queuing and picking" {
     const testing = std.testing;
 
-    // Reset global scheduler state
     riscv.initMockHardware();
     {
         const guard = global_scheduler.acquire();
@@ -293,10 +298,27 @@ test "scheduler basic queuing and picking" {
     var phys_test = try physmem.initForTest(testing.allocator, 128);
     defer phys_test.deinit();
 
-    const testing_allocator = testing.allocator;
-    const g1 = try guest.createGuest(testing_allocator, false, false, null, 0, 0, 0, .riscv64);
+    const g1 = try guest.createGuest(
+        testing.allocator,
+        false,
+        false,
+        null,
+        0,
+        0,
+        0,
+        .riscv64,
+    );
     defer g1.deinit();
-    const g2 = try guest.createGuest(testing_allocator, false, false, null, 0, 0, 0, .riscv64);
+    const g2 = try guest.createGuest(
+        testing.allocator,
+        false,
+        false,
+        null,
+        0,
+        0,
+        0,
+        .riscv64,
+    );
     defer g2.deinit();
     var vc1 = vcore.VirtualCore.init(1, g1, 0, 0, .normal);
     var vc2 = vcore.VirtualCore.init(2, g2, 0, 0, .normal);
@@ -310,10 +332,10 @@ test "scheduler basic queuing and picking" {
     queue(&vc2);
 
     const next1 = pickNext() orelse return error.TestFailed;
-    try testing.expect(next1.id == 1 or next1.id == 2);
+    try testing.expectEqual(@as(usize, 2), next1.id);
 
     const next2 = pickNext() orelse return error.TestFailed;
-    try testing.expect(next2.id == 1 or next2.id == 2);
+    try testing.expectEqual(@as(usize, 1), next2.id);
 
     try testing.expect(pickNext() == null);
 }

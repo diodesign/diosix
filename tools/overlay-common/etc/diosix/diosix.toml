@@ -1,0 +1,54 @@
+# Diosix System & CLI Runtime Configuration (/etc/diosix/diosix.toml)
+#
+# Centralizes user- and maintainer-tunable defaults for the `dsx` (`diosix-ctl`)
+# management tool, default child VM sizing, repository paths, and the
+# interactive guided tour.
+#
+# Permissions: 0644 (root:root)
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+[vm_defaults]
+default_vcpus = 1
+default_ram = "256 MB"
+default_disk_mb = 1024
+install_default_disk_mb = 4096
+default_arch = "riscv64"
+subnet_prefix = "10.0.3."
+
+[paths]
+images_dir = "/var/lib/diosix/images"
+iso_dir = "/var/lib/diosix/iso"
+disks_dir = "/var/lib/diosix/disks"
+snapshots_dir = "/var/lib/diosix/snapshots"
+keys_dir = "/var/lib/diosix/keys"
+system_manifest = "/etc/diosix/system.toml"
+catalog_config = "/etc/diosix/catalog.toml"
+charter_config = "/etc/diosix/charter.toml"
+constitution_doc = "/etc/diosix/constitution.md"
+install_config = "/etc/diosix/install.toml"
+
+[[tour]]
+title = "Step 1/5: Root VM & Hardware Trust"
+summary = "Root VM (CID 1) manages drivers, storage, and child VMs via SBI."
+cli_hint = "dsx host info && dsx info"
+
+[[tour]]
+title = "Step 2/5: Virtual Machine Fleet & Isolation"
+summary = "Child VMs run in Stage-2 memory partitions with isolated networks."
+cli_hint = "dsx image catalog && dsx image list"
+
+[[tour]]
+title = "Step 3/5: Passkey & Zero-Password Security"
+summary = "Password login is disabled; operators use FIDO2, TPM2, QR, or UART."
+cli_hint = "dsx auth status && dsx auth list"
+
+[[tour]]
+title = "Step 4/5: Autonomic Steward Collective"
+summary = "Steward VMs enforce the sealed M-mode Charter via M-of-N quorums."
+cli_hint = "dsx charter status && dsx charter audit"
+
+[[tour]]
+title = "Step 5/5: Bare-Metal Host Installation"
+summary = "Install the Diosix boot image and state volume onto NVMe or VirtIO."
+cli_hint = "dsx host install --mode basic --dry-run"
