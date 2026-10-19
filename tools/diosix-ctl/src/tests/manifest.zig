@@ -305,4 +305,5 @@ test "manifest: ManifestLexer terminates on unexpected special characters" {
     var sys = try parseSystemManifest(allocator, noisy_toml);
     defer sys.deinit();
     try testing.expect(sys.domains.contains("user"));
+    testing.refAllDecls(@This());
 }

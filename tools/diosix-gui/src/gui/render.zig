@@ -323,3 +323,7 @@ pub fn setBackdropBotColor(self: *DiosixGui, col: u32) void {
         self.markFullDirty();
     }
 }
+
+test {
+    std.testing.refAllDecls(@This());
+}

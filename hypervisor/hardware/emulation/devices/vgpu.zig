@@ -8,6 +8,7 @@
 const std = @import("std");
 const bus = @import("bus.zig");
 pub const proto = @import("vgpu/protocol.zig");
+pub const commands = @import("vgpu/commands.zig");
 
 pub const VIRTIO_ID_GPU = proto.VIRTIO_ID_GPU;
 pub const VIRTIO_VENDOR_ID = proto.VIRTIO_VENDOR_ID;
@@ -15,6 +16,11 @@ pub const VIRTIO_MAGIC = proto.VIRTIO_MAGIC;
 pub const VIRTIO_VERSION = proto.VIRTIO_VERSION;
 pub const QUEUE_SIZE_MAX = proto.QUEUE_SIZE_MAX;
 pub const NUM_QUEUES = proto.NUM_QUEUES;
+
+pub const DEFAULT_DISPLAY_WIDTH = proto.DEFAULT_DISPLAY_WIDTH;
+pub const DEFAULT_DISPLAY_HEIGHT = proto.DEFAULT_DISPLAY_HEIGHT;
+pub const MAX_RESOURCE_DIMENSION = proto.MAX_RESOURCE_DIMENSION;
+pub const BYTES_PER_PIXEL_RGBA = proto.BYTES_PER_PIXEL_RGBA;
 
 pub const MAX_SCANOUTS = proto.MAX_SCANOUTS;
 pub const STATIC_RESOURCES = proto.STATIC_RESOURCES;
@@ -60,12 +66,15 @@ pub const VirtioGpu = struct {
     pool_count: usize = 0,
     lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
-    display_width: u32 = 1280,
-    display_height: u32 = 720,
+    display_width: u32 = DEFAULT_DISPLAY_WIDTH,
+    display_height: u32 = DEFAULT_DISPLAY_HEIGHT,
     flushes_count: usize = 0,
     last_flushed_resource: u32 = 0,
 
-    fn getDynamicResourceLocked(self: *VirtioGpu, id: u32) ?*VirtioGpuResource {
+    pub fn getDynamicResourceLocked(
+        self: *VirtioGpu,
+        id: u32,
+    ) ?*VirtioGpuResource {
         const bucket = id % DYNAMIC_HASH_BUCKETS;
         var curr = self.dynamic_buckets[bucket];
         while (curr) |res| {
@@ -128,29 +137,15 @@ pub const VirtioGpu = struct {
     }
 
     pub fn readReg(self: *VirtioGpu, offset: u32) u32 {
-        const q_valid = self.queue_sel < NUM_QUEUES;
-        const feat_v1: u32 = if (self.device_features_sel == 1) 1 else 0;
-        return switch (offset) {
-            bus.VIRTIO_MMIO_REG_MAGIC_VALUE => VIRTIO_MAGIC,
-            bus.VIRTIO_MMIO_REG_VERSION => VIRTIO_VERSION,
-            bus.VIRTIO_MMIO_REG_DEVICE_ID => VIRTIO_ID_GPU,
-            bus.VIRTIO_MMIO_REG_VENDOR_ID => VIRTIO_VENDOR_ID,
-            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES => feat_v1,
-            bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX => if (q_valid)
-                QUEUE_SIZE_MAX
-            else
-                0,
-            bus.VIRTIO_MMIO_REG_QUEUE_READY => if (q_valid and
-                self.queues[self.queue_sel].ready)
-                1
-            else
-                0,
-            bus.VIRTIO_MMIO_REG_INTERRUPT_STATUS => self.interrupt_status.load(
-                .acquire,
-            ),
-            bus.VIRTIO_MMIO_REG_STATUS => self.status,
-            else => 0,
-        };
+        const irq = self.interrupt_status.load(.acquire);
+        return bus.readVirtioCommon(
+            self,
+            VIRTIO_ID_GPU,
+            NUM_QUEUES,
+            QUEUE_SIZE_MAX,
+            irq,
+            offset,
+        ) orelse 0;
     }
 
     pub fn writeReg(self: *VirtioGpu, offset: u32, val: u32) void {
@@ -196,134 +191,18 @@ pub const VirtioGpu = struct {
         _ = self.interrupt_status.fetchOr(1, .acq_rel);
     }
 
-    pub fn handleGetDisplayInfo(
-        self: *VirtioGpu,
-        resp: *VirtioGpuRespDisplayInfo,
-    ) void {
-        @memset(std.mem.asBytes(resp), 0);
-        resp.hdr.type = proto.VIRTIO_GPU_RESP_OK_DISPLAY_INFO;
-        resp.pmodes[0].enabled = 1;
-        resp.pmodes[0].r.x = 0;
-        resp.pmodes[0].r.y = 0;
-        resp.pmodes[0].r.width = self.display_width;
-        resp.pmodes[0].r.height = self.display_height;
-    }
-
-    pub fn handleResourceCreate2D(
-        self: *VirtioGpu,
-        req: *const VirtioGpuResourceCreate2D,
-    ) u32 {
-        if (req.resource_id == 0 or req.resource_id >= MAX_SYSTEM_RESOURCES) {
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        }
-        if (self.getResource(req.resource_id) != null) {
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        }
-        switch (req.format) {
-            proto.VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
-            proto.VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM,
-            proto.VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM,
-            proto.VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM,
-            proto.VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM,
-            proto.VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM,
-            => {},
-            else => return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
-        }
-        if (req.width == 0 or req.height == 0 or
-            req.width > 4096 or req.height > 4096)
-        {
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-        }
-        const pixels = std.math.mul(u32, req.width, req.height) catch
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-        _ = std.math.mul(u32, pixels, 4) catch
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-        const res = self.allocateResource(req.resource_id) orelse
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        res.* = .{
-            .id = req.resource_id,
-            .format = req.format,
-            .width = req.width,
-            .height = req.height,
-            .is_active = true,
-            .next = res.next,
-        };
-        return proto.VIRTIO_GPU_RESP_OK_NODATA;
-    }
-
-    pub fn handleResourceUnref(
-        self: *VirtioGpu,
-        req: *const VirtioGpuResourceUnref,
-    ) u32 {
-        if (req.resource_id == 0 or req.resource_id >= MAX_SYSTEM_RESOURCES) {
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        }
-        if (req.resource_id >= STATIC_RESOURCES) {
-            while (self.lock.swap(true, .acquire)) {
-                std.atomic.spinLoopHint();
-            }
-            defer self.lock.store(false, .release);
-            const res = self.getDynamicResourceLocked(req.resource_id) orelse
-                return proto.VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            res.is_active = false;
-            res.scanout_id = null;
-            res.backing_gpa = 0;
-            res.backing_len = 0;
-            return proto.VIRTIO_GPU_RESP_OK_NODATA;
-        }
-        const res = self.getResource(req.resource_id) orelse
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        res.is_active = false;
-        res.scanout_id = null;
-        res.backing_gpa = 0;
-        res.backing_len = 0;
-        return proto.VIRTIO_GPU_RESP_OK_NODATA;
-    }
-
-    pub fn handleSetScanout(
-        self: *VirtioGpu,
-        req: *const VirtioGpuSetScanout,
-    ) u32 {
-        if (req.scanout_id >= MAX_SCANOUTS) {
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID;
-        }
-        if (req.resource_id != 0) {
-            const res = self.getResource(req.resource_id) orelse
-                return proto.VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-            const end_x = std.math.add(u32, req.r.x, req.r.width) catch
-                return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-            const end_y = std.math.add(u32, req.r.y, req.r.height) catch
-                return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-            if (end_x > res.width or end_y > res.height) {
-                return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-            }
-            res.scanout_id = req.scanout_id;
-        }
-        return proto.VIRTIO_GPU_RESP_OK_NODATA;
-    }
-
-    pub fn handleResourceFlush(
-        self: *VirtioGpu,
-        req: *const VirtioGpuResourceFlush,
-    ) u32 {
-        const res = self.getResource(req.resource_id) orelse
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        const end_x = std.math.add(u32, req.r.x, req.r.width) catch
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-        const end_y = std.math.add(u32, req.r.y, req.r.height) catch
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-        if (end_x > res.width or end_y > res.height) {
-            return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
-        }
-        self.flushes_count += 1;
-        self.last_flushed_resource = req.resource_id;
-        return proto.VIRTIO_GPU_RESP_OK_NODATA;
-    }
+    pub const handleGetDisplayInfo = commands.handleGetDisplayInfo;
+    pub const handleResourceCreate2D = commands.handleResourceCreate2D;
+    pub const handleResourceUnref = commands.handleResourceUnref;
+    pub const handleSetScanout = commands.handleSetScanout;
+    pub const handleResourceFlush = commands.handleResourceFlush;
 };
 
 test "VirtIO GPU register probe, display info, and 2D resource management" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
     _ = proto;
+    _ = commands;
 
     var gpu = VirtioGpu.init(2);
 
@@ -339,8 +218,14 @@ test "VirtIO GPU register probe, display info, and 2D resource management" {
         disp_resp.hdr.type,
     );
     try testing.expectEqual(@as(u32, 1), disp_resp.pmodes[0].enabled);
-    try testing.expectEqual(@as(u32, 1280), disp_resp.pmodes[0].r.width);
-    try testing.expectEqual(@as(u32, 720), disp_resp.pmodes[0].r.height);
+    try testing.expectEqual(
+        DEFAULT_DISPLAY_WIDTH,
+        disp_resp.pmodes[0].r.width,
+    );
+    try testing.expectEqual(
+        DEFAULT_DISPLAY_HEIGHT,
+        disp_resp.pmodes[0].r.height,
+    );
 
     const zero_hdr = VirtioGpuCtrlHdr{
         .type = proto.VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
@@ -353,8 +238,8 @@ test "VirtIO GPU register probe, display info, and 2D resource management" {
         .hdr = zero_hdr,
         .resource_id = 1,
         .format = proto.VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
-        .width = 1280,
-        .height = 720,
+        .width = DEFAULT_DISPLAY_WIDTH,
+        .height = DEFAULT_DISPLAY_HEIGHT,
     };
     try testing.expectEqual(
         proto.VIRTIO_GPU_RESP_OK_NODATA,
@@ -363,8 +248,12 @@ test "VirtIO GPU register probe, display info, and 2D resource management" {
     try testing.expect(gpu.getResource(1) != null);
     try testing.expect(gpu.getResource(1).?.is_active);
 
-    const full_rect =
-        VirtioGpuRect{ .x = 0, .y = 0, .width = 1280, .height = 720 };
+    const full_rect = VirtioGpuRect{
+        .x = 0,
+        .y = 0,
+        .width = DEFAULT_DISPLAY_WIDTH,
+        .height = DEFAULT_DISPLAY_HEIGHT,
+    };
     const scanout_req = VirtioGpuSetScanout{
         .hdr = zero_hdr,
         .r = full_rect,
@@ -448,7 +337,12 @@ test "VirtIO GPU register probe, display info, and 2D resource management" {
     // Test out-of-bounds flush rectangle rejection.
     const bad_flush = VirtioGpuResourceFlush{
         .hdr = zero_hdr,
-        .r = .{ .x = 1000, .y = 500, .width = 1280, .height = 720 },
+        .r = .{
+            .x = 1000,
+            .y = 500,
+            .width = DEFAULT_DISPLAY_WIDTH,
+            .height = DEFAULT_DISPLAY_HEIGHT,
+        },
         .resource_id = 1,
         .padding = 0,
     };

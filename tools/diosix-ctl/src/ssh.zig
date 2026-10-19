@@ -13,21 +13,23 @@ const ssh_sync = @import("ssh/sync.zig");
 pub const copyFileOverSsh = ssh_sync.copyFileOverSsh;
 pub const ensureGuestDefaultImage = ssh_sync.ensureGuestDefaultImage;
 
+var private_key_buf: [common.MAX_PATH_LEN]u8 = undefined;
+
 pub fn findPrivateKey() ?[]const u8 {
-    const paths = [_][*:0]const u8{
-        "/var/lib/diosix/keys/id_management",
-        "/etc/diosix/keys/id_management",
-        "/etc/diosix/keys/id_dropbear",
-        "/etc/diosix/keys/id_ed25519",
-        "/root/.ssh/id_dropbear",
-        "/root/.ssh/id_ed25519",
-        "/etc/diosix/id_ed25519",
-    };
-    for (paths) |p| {
-        if (common.fileExistsPath(p)) {
-            return std.mem.span(p);
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    if (std.fmt.bufPrint(
+        &private_key_buf,
+        "{s}/id_management",
+        .{sys_cfg.keysDir()},
+    )) |cfg_key| {
+        var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+        if (common.toPathZ(cfg_key, &z_buf)) |kz| {
+            if (common.fileExistsPath(kz.ptr)) return cfg_key;
         }
-    }
+    } else |_| {}
+
+    const fallback: [:0]const u8 = "/etc/diosix/keys/id_management";
+    if (common.fileExistsPath(fallback.ptr)) return fallback;
     return null;
 }
 
@@ -212,8 +214,8 @@ pub fn execSsh(
         break :blk cmd_buf[0..cs.len :0];
     } else null;
 
-    const is_local = std.mem.eql(u8, ip_addr, "127.0.0.1") or
-        std.mem.eql(u8, ip_addr, "localhost");
+    const LoopbackHost = enum { @"127.0.0.1", localhost };
+    const is_local = std.meta.stringToEnum(LoopbackHost, ip_addr) != null;
     if (!is_local) {
         var attempts: usize = 0;
         var printed_waiting = false;
@@ -271,6 +273,7 @@ fn joinArgs(slice: []const [*:0]const u8, buf: []u8) []const u8 {
 
 pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
+    const sys_cfg = common.loadRuntimeSystemConfig();
     _ = client;
     if (args.len == 0) {
         var buf: [256]u8 = undefined;
@@ -357,8 +360,8 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     var ip_storage: [64]u8 = undefined;
     var name_storage: [64]u8 = undefined;
 
-    const is_self = std.mem.eql(u8, target_str, "root") or
-        std.mem.eql(u8, target_str, "self") or
+    const SelfAlias = enum { root, self };
+    const is_self = std.meta.stringToEnum(SelfAlias, target_str) != null or
         resolved_cid == 1;
     if (is_self) {
         resolved_cid = 1;
@@ -367,7 +370,7 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     }
 
     if (common.readBinaryFile(
-        "/var/run/diosix/guests.toml",
+        common.GUEST_REGISTRY_PATH,
         common.MAX_MANIFEST_SIZE,
     )) |content| {
         defer common.unmapBinaryFile(content);
@@ -384,7 +387,7 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
     if (resolved_ip.len == 0) {
         if (common.readBinaryFile(
-            "/etc/diosix/system.toml",
+            sys_cfg.systemManifestPath(),
             common.MAX_MANIFEST_SIZE,
         )) |content| {
             defer common.unmapBinaryFile(content);
@@ -408,8 +411,8 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         if (resolved_cid >= common.CID_FIRST_CHILD) {
             resolved_ip = std.fmt.bufPrint(
                 &ip_storage,
-                "10.0.3.{d}",
-                .{resolved_cid},
+                "{s}{d}",
+                .{ sys_cfg.subnetPrefix(), resolved_cid },
             ) catch "10.0.3.2";
         } else if (is_self) {
             resolved_ip = "127.0.0.1";

@@ -61,7 +61,9 @@ pub const Window = struct {
     pub const DEFAULT_OFFSCREEN_OFFSET: i32 = 2000;
     pub const SCROLLBAR_WIDTH: u32 = 6;
     pub const SCROLLBAR_MARGIN_RIGHT: i32 = 8;
-    pub const SCROLLBAR_PROXIMITY_PX: i32 = 60;
+    pub const SCROLLBAR_PROXIMITY_PX: i32 = 16;
+    pub const SCROLLBAR_PROXIMITY_DIST_SQ: i64 =
+        @as(i64, SCROLLBAR_PROXIMITY_PX) * @as(i64, SCROLLBAR_PROXIMITY_PX);
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -425,3 +427,8 @@ pub const Window = struct {
         }
     }
 };
+
+test {
+    _ = window_input;
+    std.testing.refAllDecls(@This());
+}

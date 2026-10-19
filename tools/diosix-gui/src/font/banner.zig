@@ -10,6 +10,9 @@ const fb = @import("../framebuffer.zig");
 const font = @import("../font.zig");
 
 pub const BANNER_GLYPH_HEIGHT: u32 = 52;
+pub const SPACE_ADVANCE: u32 = 24;
+pub const TAB_SPACES: u32 = 4;
+pub const TAB_ADVANCE: u32 = SPACE_ADVANCE * TAB_SPACES;
 pub const BANNER_BITMAPS: []const u8 = @embedFile("banner_font.bin");
 
 fn g(
@@ -173,8 +176,10 @@ pub fn drawBannerGlyph(
     color: u32,
     alpha: u8,
 ) void {
-    if (alpha == 0 or char < 32 or char > 126) return;
-    const glyph = BANNER_GLYPHS[char - 32];
+    if (alpha == 0 or
+        char < font.ASCII_PRINTABLE_MIN or
+        char > font.ASCII_PRINTABLE_MAX) return;
+    const glyph = BANNER_GLYPHS[char - font.ASCII_PRINTABLE_MIN];
     const gx = x + @as(i32, glyph.offset_x);
     const gy = y + @as(i32, glyph.offset_y);
     blendAlphaBitmap(
@@ -317,8 +322,10 @@ pub fn drawBannerGlyphGlow(
     color: u32,
     alpha: u8,
 ) void {
-    if (alpha == 0 or char < 32 or char > 126) return;
-    const glyph = BANNER_GLOW_GLYPHS[char - 32];
+    if (alpha == 0 or
+        char < font.ASCII_PRINTABLE_MIN or
+        char > font.ASCII_PRINTABLE_MAX) return;
+    const glyph = BANNER_GLOW_GLYPHS[char - font.ASCII_PRINTABLE_MIN];
     const gx = x + @as(i32, glyph.offset_x);
     const gy = y + @as(i32, glyph.offset_y);
     blendAlphaBitmap(
@@ -335,11 +342,12 @@ pub fn drawBannerGlyphGlow(
 }
 
 test "banner_font: verify ascii glyph array and bitmap mapping" {
+    std.testing.refAllDecls(@This());
     try std.testing.expectEqual(@as(usize, 95), BANNER_GLYPHS.len);
     try std.testing.expect(BANNER_BITMAPS.len > 80_000);
     // Verify "diosix" letters.
     for ("diosix") |c| {
-        const glyph = BANNER_GLYPHS[c - 32];
+        const glyph = BANNER_GLYPHS[c - font.ASCII_PRINTABLE_MIN];
         try std.testing.expect(glyph.width > 0);
         try std.testing.expect(glyph.height > 0);
         const end = glyph.bitmap_offset +
@@ -353,7 +361,7 @@ test "banner_font: verify glow ascii glyph array and bitmap mapping" {
     try std.testing.expect(BANNER_GLOW_BITMAPS.len > 200_000);
     // Verify "diosix" letters in glow table.
     for ("diosix") |c| {
-        const glyph = BANNER_GLOW_GLYPHS[c - 32];
+        const glyph = BANNER_GLOW_GLYPHS[c - font.ASCII_PRINTABLE_MIN];
         try std.testing.expect(glyph.width > 0);
         try std.testing.expect(glyph.height > 0);
         const end = glyph.bitmap_offset +

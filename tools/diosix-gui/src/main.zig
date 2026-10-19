@@ -188,24 +188,25 @@ pub fn main() !void {
 
     // Singleton lock: kernel-enforced flock preventing concurrent instances.
     var lock_fd: i32 = -1;
+    const run_dir_path = "/run/diosix";
     const run_lock_path = "/run/diosix/diosix-gui.lock";
-    const tmp_lock_path = "/tmp/.diosix-gui.lock";
     const lock_flags = linux.O{
         .ACCMODE = .RDWR,
         .CREAT = true,
         .NOFOLLOW = true,
     };
 
-    var lock_rc = linux.open(run_lock_path, lock_flags, 0o600);
-    var signed_lock: isize = @bitCast(lock_rc);
-    if (signed_lock < 0) {
-        lock_rc = linux.open(tmp_lock_path, lock_flags, 0o600);
-        signed_lock = @bitCast(lock_rc);
-    }
+    const RUN_DIR_MODE: usize = 0o755;
+    const PRIVATE_FILE_MODE: usize = 0o600;
+    const LOCK_EX: i32 = 2;
+    const LOCK_NB: i32 = 4;
+    const LOCK_EX_NB: i32 = LOCK_EX | LOCK_NB;
+    _ = linux.mkdir(run_dir_path, RUN_DIR_MODE);
+    const lock_rc = linux.open(run_lock_path, lock_flags, PRIVATE_FILE_MODE);
+    const signed_lock: isize = @bitCast(lock_rc);
     if (signed_lock >= 0) {
         lock_fd = @intCast(signed_lock);
-        // Apply exclusive non-blocking lock (LOCK_EX | LOCK_NB = 2 | 4).
-        const flock_rc = linux.flock(lock_fd, 2 | 4);
+        const flock_rc = linux.flock(lock_fd, LOCK_EX_NB);
         const signed_flock: isize = @bitCast(flock_rc);
         if (signed_flock != 0) {
             std.debug.print(
@@ -476,5 +477,6 @@ pub fn main() !void {
 }
 
 test {
+    std.testing.refAllDecls(@This());
     _ = @import("tests.zig");
 }

@@ -25,6 +25,8 @@ pub const FDT_OFF_BOOT_CPUID_PHYS: usize = 7 * @sizeOf(u32);
 pub const FDT_OFF_SIZE_DT_STRINGS: usize = 8 * @sizeOf(u32);
 pub const FDT_OFF_SIZE_DT_STRUCT: usize = 9 * @sizeOf(u32);
 pub const FDT_HEADER_SIZE: usize = 10 * @sizeOf(u32);
+pub const FDT_OFFSET_PLACEHOLDER: u32 = 0xffff_ffff;
+pub const INIT_STRING_REFS_CAPACITY: usize = 256;
 
 pub const max_path_depth = 32;
 
@@ -36,20 +38,20 @@ pub fn serializeToBlob(self: *const DeviceTree) ![]u8 {
 
     try bytes.addU32(prop.DtbMagic);
     const ref_total_size = bytes.len;
-    try bytes.addU32(0xffffffff);
+    try bytes.addU32(FDT_OFFSET_PLACEHOLDER);
     const ref_off_struct = bytes.len;
-    try bytes.addU32(0xffffffff);
+    try bytes.addU32(FDT_OFFSET_PLACEHOLDER);
     const ref_off_strings = bytes.len;
-    try bytes.addU32(0xffffffff);
+    try bytes.addU32(FDT_OFFSET_PLACEHOLDER);
     const ref_off_memrsv = bytes.len;
-    try bytes.addU32(0xffffffff);
+    try bytes.addU32(FDT_OFFSET_PLACEHOLDER);
     try bytes.addU32(prop.DtbVersion);
     try bytes.addU32(prop.LastSupportedVersion);
     try bytes.addU32(self.boot_cpu_id);
     const ref_size_strings = bytes.len;
-    try bytes.addU32(0xffffffff);
+    try bytes.addU32(FDT_OFFSET_PLACEHOLDER);
     const ref_size_struct = bytes.len;
-    try bytes.addU32(0xffffffff);
+    try bytes.addU32(FDT_OFFSET_PLACEHOLDER);
 
     const rsv_pad = std.mem.alignForward(usize, bytes.len, 8) - bytes.len;
     for (0..rsv_pad) |_| try bytes.addU8(0);
@@ -70,7 +72,10 @@ pub fn serializeToBlob(self: *const DeviceTree) ![]u8 {
     var prev_count: usize = 0;
 
     const PropRef = struct { offset: usize, name: []const u8 };
-    var prop_refs = try self.allocator.alloc(PropRef, 256);
+    var prop_refs = try self.allocator.alloc(
+        PropRef,
+        INIT_STRING_REFS_CAPACITY,
+    );
     defer self.allocator.free(prop_refs);
     var prop_ref_count: usize = 0;
 
@@ -119,8 +124,8 @@ pub fn serializeToBlob(self: *const DeviceTree) ![]u8 {
             try bytes.addU32(@intCast(p.value.size()));
 
             if (prop_ref_count >= prop_refs.len) {
-                const new_buf =
-                    try self.allocator.alloc(PropRef, prop_refs.len * 2);
+                const new_cap = try std.math.mul(usize, prop_refs.len, 2);
+                const new_buf = try self.allocator.alloc(PropRef, new_cap);
                 @memcpy(
                     new_buf[0..prop_ref_count],
                     prop_refs[0..prop_ref_count],
@@ -133,7 +138,7 @@ pub fn serializeToBlob(self: *const DeviceTree) ![]u8 {
                 .name = p.name,
             };
             prop_ref_count += 1;
-            try bytes.addU32(0xffffffff);
+            try bytes.addU32(FDT_OFFSET_PLACEHOLDER);
 
             if (p.value.data) |d| {
                 try bytes.addBytes(d);
@@ -155,7 +160,10 @@ pub fn serializeToBlob(self: *const DeviceTree) ![]u8 {
     try bytes.alterU32(ref_off_strings, dtstrings_start);
 
     const StringOff = struct { name: []const u8, offset: u32 };
-    var unique_strings = try self.allocator.alloc(StringOff, 256);
+    var unique_strings = try self.allocator.alloc(
+        StringOff,
+        INIT_STRING_REFS_CAPACITY,
+    );
     defer self.allocator.free(unique_strings);
     var unique_count: usize = 0;
 
@@ -175,10 +183,8 @@ pub fn serializeToBlob(self: *const DeviceTree) ![]u8 {
             const off = bytes.offset32() - dtstrings_start;
             try bytes.alterU32(p_ref.offset, off);
             if (unique_count >= unique_strings.len) {
-                const new_buf = try self.allocator.alloc(
-                    StringOff,
-                    unique_strings.len * 2,
-                );
+                const new_cap = try std.math.mul(usize, unique_strings.len, 2);
+                const new_buf = try self.allocator.alloc(StringOff, new_cap);
                 @memcpy(
                     new_buf[0..unique_count],
                     unique_strings[0..unique_count],
@@ -212,7 +218,7 @@ pub const DeviceTreeBlob = struct {
     size_dt_strings: u32,
     size_dt_struct: u32,
 
-    blob: []u8, // owned copy.
+    blob: []u8, // Owned copy.
     allocator: Allocator,
 
     pub fn compatibilityCheck(self: *const DeviceTreeBlob) !void {
@@ -429,6 +435,7 @@ pub const DeviceTreeBlob = struct {
 };
 
 test "round-trip: build tree, serialize to blob, parse back, and reserved mem" {
+    std.testing.refAllDecls(@This());
     const allocator = std.testing.allocator;
     const tree = try DeviceTree.init(allocator);
     defer tree.deinit();

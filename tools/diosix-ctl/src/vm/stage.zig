@@ -19,6 +19,8 @@ const parseMemorySizeMb = common.parseMemorySizeMb;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
 
+pub const FALLBACK_GUEST_ISO_PATH = "/var/lib/diosix/iso/micro-guest.iso";
+
 const ImageAlias = enum {
     @"guest-shim",
     @"guest-shim.elf",
@@ -31,22 +33,28 @@ pub fn resolveElfImage(
     elf_path: []const u8,
     resolved_buf: *[MAX_PATH_LEN]u8,
 ) ?[]u8 {
+    const sys_cfg = common.loadRuntimeSystemConfig();
     if (std.meta.stringToEnum(ImageAlias, elf_path)) |alias| {
+        const default_paths = [_][]const u8{
+            loader.DEFAULT_GUEST_IMAGE_PATH,
+            loader.FALLBACK_GUEST_IMAGE_PATH,
+        };
         switch (alias) {
             .@"guest-shim", .@"guest-shim.elf", .@"diosix-guest-shim.elf" => {
-                for (loader.GUEST_SHIM_CANDIDATES) |cand| {
-                    if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
-                        return data;
-                    } else |_| {}
-                }
-                for (loader.DEFAULT_GUEST_CANDIDATES) |cand| {
+                if (readBinaryFile(
+                    loader.GUEST_SHIM_PATH,
+                    MAX_ELF_FILE_SIZE,
+                )) |data| {
+                    return data;
+                } else |_| {}
+                for (default_paths) |cand| {
                     if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
                         return data;
                     } else |_| {}
                 }
             },
             .default, .@"default.elf" => {
-                for (loader.DEFAULT_GUEST_CANDIDATES) |cand| {
+                for (default_paths) |cand| {
                     if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
                         return data;
                     } else |_| {}
@@ -59,10 +67,16 @@ pub fn resolveElfImage(
         return data;
     } else |_| {}
 
+    var img_prefix_buf: [MAX_PATH_LEN]u8 = undefined;
+    const img_prefix = std.fmt.bufPrint(
+        &img_prefix_buf,
+        "{s}/",
+        .{sys_cfg.imagesDir()},
+    ) catch "/var/lib/diosix/images/";
+
     const search_prefixes = [_][]const u8{
-        "/var/lib/diosix/images/",
+        img_prefix,
         "/usr/share/diosix/shim/",
-        "/boot/",
     };
     for (search_prefixes) |prefix| {
         if (prefix.len + elf_path.len < resolved_buf.len) {
@@ -91,6 +105,8 @@ pub fn resolveElfImage(
     return null;
 }
 
+pub const stageGuestConfig = stageChildVmManifest;
+
 pub fn stageChildVmManifest(
     allocator: std.mem.Allocator,
     client: *api.DiosixClient,
@@ -99,11 +115,18 @@ pub fn stageChildVmManifest(
     domain_name: ?[]const u8,
     manifest_path: ?[]const u8,
 ) void {
+    const sys_cfg = common.loadRuntimeSystemConfig();
     var pubkey_line: []const u8 = "";
     var pk_mapped: ?[]u8 = null;
     defer if (pk_mapped) |m| unmapBinaryFile(m);
+    var cfg_pk_buf: [MAX_PATH_LEN]u8 = undefined;
+    const cfg_pk = std.fmt.bufPrint(
+        &cfg_pk_buf,
+        "{s}/id_management.pub",
+        .{sys_cfg.keysDir()},
+    ) catch "/var/lib/diosix/keys/id_management.pub";
     const pubkey_candidates = [_][]const u8{
-        "/var/lib/diosix/keys/id_management.pub",
+        cfg_pk,
         "/etc/diosix/keys/id_management.pub",
     };
     for (pubkey_candidates) |cand| {
@@ -118,21 +141,21 @@ pub fn stageChildVmManifest(
         } else |_| {}
     }
 
-    var staged_buf: [4096]u8 = undefined;
-    var staged_len: usize = 0;
+    var staged = std.ArrayList(u8).empty;
+    defer staged.deinit(allocator);
     if (pubkey_line.len > 0) {
-        if (std.fmt.bufPrint(
-            staged_buf[0..],
+        if (allocator.print(
             "# diosix-authorized-key: {s}\n",
             .{pubkey_line},
         )) |hdr| {
-            staged_len += hdr.len;
+            defer allocator.free(hdr);
+            staged.appendSlice(allocator, hdr) catch {};
         } else |_| {}
     }
 
     var wrote_domain_manifest = false;
     if (domain_name) |dname| {
-        const m_file = manifest_path orelse "/etc/diosix/system.toml";
+        const m_file = manifest_path orelse sys_cfg.systemManifestPath();
         if (readBinaryFile(m_file, MAX_MANIFEST_SIZE)) |m_content| {
             defer unmapBinaryFile(m_content);
             if (manifest.parseSystemManifest(allocator, m_content)) |sys_m_v| {
@@ -153,15 +176,9 @@ pub fn stageChildVmManifest(
                         &child_m,
                     )) |child_toml| {
                         defer allocator.free(child_toml);
-                        if (staged_len + child_toml.len <= staged_buf.len) {
-                            @memcpy(
-                                staged_buf[staged_len .. staged_len +
-                                    child_toml.len],
-                                child_toml,
-                            );
-                            staged_len += child_toml.len;
+                        if (staged.appendSlice(allocator, child_toml)) |_| {
                             wrote_domain_manifest = true;
-                        }
+                        } else |_| {}
                     } else |_| {}
                 } else |_| {}
             } else |_| {}
@@ -169,17 +186,17 @@ pub fn stageChildVmManifest(
     }
 
     if (!wrote_domain_manifest) {
-        if (std.fmt.bufPrint(
-            staged_buf[staged_len..],
+        if (allocator.print(
             "[vm]\nname = \"{s}\"\ncid = {d}\nparent_cid = 0\n",
             .{ vm_name, child_cid },
         )) |fallback_m| {
-            staged_len += fallback_m.len;
+            defer allocator.free(fallback_m);
+            staged.appendSlice(allocator, fallback_m) catch {};
         } else |_| {}
     }
 
-    if (staged_len > 0) {
-        _ = client.setManifest(child_cid, staged_buf[0..staged_len]) catch {};
+    if (staged.items.len > 0) {
+        _ = client.setManifest(child_cid, staged.items) catch {};
     }
 }
 
@@ -188,6 +205,8 @@ pub fn resolveRunDisk(
     vm_name: []const u8,
     final_disk_buf: *[MAX_PATH_LEN]u8,
 ) []const u8 {
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const disks_dir = sys_cfg.disksDir();
     const d = disk_str orelse return "";
     if (std.mem.startsWith(u8, d, "/")) return d;
     if (d.len > 0 and std.ascii.isDigit(d[0])) {
@@ -197,8 +216,8 @@ pub fn resolveRunDisk(
         }
         return std.fmt.bufPrint(
             final_disk_buf,
-            "/var/lib/diosix/disks/{s}.img",
-            .{vm_name},
+            "{s}/{s}.img",
+            .{ disks_dir, vm_name },
         ) catch "/var/lib/diosix/disks/disk.img";
     }
     const disk_base = if (std.mem.endsWith(u8, d, ".img") or
@@ -209,8 +228,8 @@ pub fn resolveRunDisk(
     var test_buf: [MAX_PATH_LEN]u8 = undefined;
     const test_path = std.fmt.bufPrint(
         &test_buf,
-        "/var/lib/diosix/disks/{s}.img",
-        .{disk_base},
+        "{s}/{s}.img",
+        .{ disks_dir, disk_base },
     ) catch "/var/lib/diosix/disks/disk.img";
     var z_buf: [MAX_PATH_LEN]u8 = undefined;
     if (common.toPathZ(test_path, &z_buf)) |z_test| {
@@ -219,7 +238,11 @@ pub fn resolveRunDisk(
                 test_path;
         }
     }
-    return storage.provisionVirtualDisk(disk_base, 1024, final_disk_buf) orelse
+    return storage.provisionVirtualDisk(
+        disk_base,
+        sys_cfg.default_disk_mb,
+        final_disk_buf,
+    ) orelse
         std.fmt.bufPrint(final_disk_buf, "{s}", .{test_path}) catch test_path;
 }
 

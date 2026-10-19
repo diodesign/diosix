@@ -421,4 +421,5 @@ test "diosix-gui: render modular slate overview and drawer screenshots" {
     _ = gui.renderDamaged(&surface);
     gui.cursor.draw(&surface);
     try writePpmFile(&surface, "/tmp/diosix_config_pane.ppm");
+    testing.refAllDecls(@This());
 }

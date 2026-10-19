@@ -226,6 +226,7 @@ pub fn panic(
 }
 
 test {
+    std.testing.refAllDecls(@This());
     _ = @import("interface");
     _ = @import("emulation");
     _ = @import("core/alloc.zig");
@@ -236,6 +237,8 @@ test {
     _ = @import("core/loader.zig");
     _ = @import("core/vm.zig");
     _ = @import("core/sbi.zig");
+    _ = @import("core/emulation.zig");
+    _ = @import("core/gdb/mod.zig");
     _ = @import("core/gdb/rsp.zig");
     _ = debug;
     _ = boot;

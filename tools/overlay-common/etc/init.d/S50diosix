@@ -20,12 +20,9 @@ case "$1" in
     # Identify VM Context ID (CID).
     SELF_CID=1
     DSX_BIN=""
-    for bin_path in /usr/sbin/dsx /sbin/dsx /usr/bin/dsx /bin/dsx; do
-        if [ -x "$bin_path" ]; then
-            DSX_BIN="$bin_path"
-            break
-        fi
-    done
+    if [ -x /usr/bin/dsx ]; then
+        DSX_BIN="/usr/bin/dsx"
+    fi
     if [ -n "$DSX_BIN" ]; then
         CID_VAL=$("$DSX_BIN" info 2>/dev/null | \
             grep -i "^Assigned CID" | awk '{print $NF}')
@@ -76,7 +73,8 @@ case "$1" in
                     -p "/var/run/udhcpc.${WAN_IF}.pid" >/dev/null 2>&1 || true
             fi
             # Set static IP fallback for QEMU user network (10.0.2.15/24).
-            if ! ip -4 addr show dev "$WAN_IF" 2>/dev/null | grep -q "inet "; then
+            if ! ip -4 addr show dev "$WAN_IF" 2>/dev/null | \
+               grep -q "inet "; then
                 ip addr add 10.0.2.15/24 dev "$WAN_IF" 2>/dev/null || \
                     ifconfig "$WAN_IF" 10.0.2.15 \
                         netmask 255.255.255.0 up 2>/dev/null || true
@@ -136,41 +134,49 @@ case "$1" in
         # Configure DNS fallback.
         if [ ! -s /etc/resolv.conf ] || \
            grep -q "127.0.0.1" /etc/resolv.conf 2>/dev/null; then
-            printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 10.0.3.1\n" \
-                > /etc/resolv.conf
+            {
+                echo "nameserver 1.1.1.1"
+                echo "nameserver 8.8.8.8"
+                echo "nameserver 10.0.3.1"
+            } > /etc/resolv.conf
         fi
     fi
 
     # Automount host storage disk at /var/lib/diosix.
-    mkdir -p /var/lib/diosix /boot /etc/diosix
+    mkdir -p /var/lib/diosix /etc/diosix
     for dev in /dev/vda2 /dev/vda1 /dev/vda /dev/sda2 /dev/sda1 /dev/sda \
         /dev/nvme0n1p2 /dev/nvme0n1p1 /dev/nvme0n1 \
         /dev/mmcblk0p2 /dev/mmcblk0p1 /dev/mmcblk0; do
         if [ -b "$dev" ]; then
             if mount -o rw "$dev" /var/lib/diosix 2>/dev/null || \
                mount "$dev" /var/lib/diosix 2>/dev/null; then
-                echo "Mounted persistent storage volume $dev on /var/lib/diosix."
+                echo "Mounted persistent storage $dev on /var/lib/diosix."
                 SYS_TOML="/var/lib/diosix/manifests/system.toml"
                 if [ -f "$SYS_TOML" ] && [ ! -f /etc/diosix/system.toml ]; then
-                    ln -sf "$SYS_TOML" /etc/diosix/system.toml 2>/dev/null || true
-                fi
-                GUEST_ELF="/var/lib/diosix/images/linux-guest.elf"
-                VMLINUX_ELF="/var/lib/diosix/images/vmlinux.elf"
-                if [ -f "$GUEST_ELF" ]; then
-                    ln -sf "$GUEST_ELF" /boot/vmlinux.elf 2>/dev/null || true
-                    ln -sf "$GUEST_ELF" /boot/default.elf 2>/dev/null || true
-                    ln -sf "$GUEST_ELF" \
-                        /var/lib/diosix/images/default.elf 2>/dev/null || true
-                elif [ -f "$VMLINUX_ELF" ]; then
-                    ln -sf "$VMLINUX_ELF" /boot/vmlinux.elf 2>/dev/null || true
-                    ln -sf "$VMLINUX_ELF" /boot/default.elf 2>/dev/null || true
-                    ln -sf "$VMLINUX_ELF" \
-                        /var/lib/diosix/images/default.elf 2>/dev/null || true
+                    ln -sf "$SYS_TOML" /etc/diosix/system.toml \
+                        2>/dev/null || true
                 fi
                 break
             fi
         fi
     done
+
+    mkdir -p /var/lib/diosix/images /var/lib/diosix/iso
+    if [ -f /usr/share/diosix/images/micro-guest.elf ] && \
+       [ ! -e /var/lib/diosix/images/micro-guest.elf ]; then
+        ln -sf /usr/share/diosix/images/micro-guest.elf \
+            /var/lib/diosix/images/micro-guest.elf 2>/dev/null || true
+    fi
+    if [ -f /usr/share/diosix/images/micro-guest.iso ] && \
+       [ ! -e /var/lib/diosix/iso/micro-guest.iso ]; then
+        ln -sf /usr/share/diosix/images/micro-guest.iso \
+            /var/lib/diosix/iso/micro-guest.iso 2>/dev/null || true
+    fi
+    GUEST_ELF="/var/lib/diosix/images/linux-guest.elf"
+    if [ -f "$GUEST_ELF" ]; then
+        ln -sf "$GUEST_ELF" \
+            /var/lib/diosix/images/default.elf 2>/dev/null || true
+    fi
 
     # Configure Zero-Password Passkey & Parent-to-Child Management Keys.
     KEY_DIR="/var/lib/diosix/keys"
@@ -185,17 +191,18 @@ case "$1" in
         chmod 600 "$MGT_KEY" 2>/dev/null || true
     fi
     if [ -f "$MGT_KEY" ]; then
-        if [ ! -s "${MGT_KEY}.pub" ] && command -v dropbearkey >/dev/null 2>&1; then
+        if [ ! -s "${MGT_KEY}.pub" ] && \
+           command -v dropbearkey >/dev/null 2>&1; then
             dropbearkey -y -f "$MGT_KEY" 2>/dev/null | \
                 grep "^ssh-" > "${MGT_KEY}.pub" || true
             chmod 644 "${MGT_KEY}.pub" 2>/dev/null || true
         fi
-        ln -sf "$MGT_KEY" /etc/diosix/keys/id_dropbear 2>/dev/null || true
         ln -sf "$MGT_KEY" /etc/diosix/keys/id_management 2>/dev/null || true
         if [ -s "${MGT_KEY}.pub" ]; then
             ln -sf "${MGT_KEY}.pub" \
                 /etc/diosix/keys/id_management.pub 2>/dev/null || true
-            cat "${MGT_KEY}.pub" >> /root/.ssh/authorized_keys 2>/dev/null || true
+            cat "${MGT_KEY}.pub" >> /root/.ssh/authorized_keys \
+                2>/dev/null || true
         fi
     fi
 

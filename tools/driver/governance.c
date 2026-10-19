@@ -303,14 +303,15 @@ static long handle_start_guest(unsigned long arg)
     if (ret.error)
         return -EIO;
 
-    return (int)ret.value;
+    return ret.value;
 }
 
 static long handle_charter(unsigned int cmd, unsigned long arg)
 {
     struct charter_args *kargs;
     phys_addr_t kargs_pa;
-    unsigned long seal_flag = (cmd == IOCTL_SEAL_CHARTER) ? 1UL : 0UL;
+    unsigned long seal_flag = (cmd == IOCTL_SEAL_CHARTER) ?
+        DIOSIX_CHARTER_OP_SEAL : DIOSIX_CHARTER_OP_QUERY;
     struct sbiret ret;
 
     if (cmd == IOCTL_SEAL_CHARTER && !capable(CAP_SYS_ADMIN))
@@ -351,7 +352,7 @@ static long handle_charter(unsigned int cmd, unsigned long arg)
     }
 
     kfree(kargs);
-    return (int)ret.value;
+    return ret.value;
 }
 
 long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
@@ -393,7 +394,7 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
         );
         if (ret.error)
             return -EPERM;
-        return (int)ret.value;
+        return ret.value;
 
     case IOCTL_RESET_STEWARD:
         if (!capable(CAP_SYS_ADMIN))
@@ -410,7 +411,7 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
         );
         if (ret.error)
             return -EPERM;
-        return (int)ret.value;
+        return ret.value;
 
     case IOCTL_REQUEST_ROOT_FAILOVER:
         if (!capable(CAP_SYS_ADMIN))
@@ -427,7 +428,7 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
         );
         if (ret.error)
             return -EPERM;
-        return (int)ret.value;
+        return ret.value;
 
     default:
         return -ENOTTY;

@@ -10,5 +10,8 @@ pub const sbi = @import("sbi.zig");
 pub const elf = @import("elf.zig");
 
 test {
+    _ = riscv;
+    _ = sbi;
+    _ = elf;
     std.testing.refAllDecls(@This());
 }

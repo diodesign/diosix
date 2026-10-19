@@ -301,10 +301,12 @@ fn appendOptField(
     val: []const u8,
 ) !void {
     if (val.len == 0) return;
-    var buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(&buf, "{s} = \"{s}\"\n", .{ key, val });
+    const line = try allocator.print("{s} = \"{s}\"\n", .{ key, val });
+    defer allocator.free(line);
     try out.appendSlice(allocator, line);
 }
+
+pub const serializeCapabilitiesToml = serializeChildManifest;
 
 /// Serializes a child manifest into a standard TOML string.
 pub fn serializeChildManifest(
@@ -314,13 +316,12 @@ pub fn serializeChildManifest(
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
 
-    var buf: [256]u8 = undefined;
-    const header = try std.fmt.bufPrint(
-        &buf,
+    const header = try allocator.print(
         "# Diosix attenuated guest VM manifest (generated)\n[vm]\n" ++
             "name = \"{s}\"\ncid = {d}\nparent_cid = {d}\nvcpus = {d}\n",
         .{ child.name, child.cid, child.parent_cid, child.vcpus },
     );
+    defer allocator.free(header);
     try out.appendSlice(allocator, header);
 
     try appendOptField(allocator, &out, "ram", child.ram);
@@ -336,8 +337,7 @@ pub fn serializeChildManifest(
             var line_buf = std.ArrayList(u8).empty;
             defer line_buf.deinit(allocator);
 
-            const prefix = try std.fmt.allocPrint(
-                allocator,
+            const prefix = try allocator.print(
                 "\"{s}\" = {{ as = \"{s}\"",
                 .{ req.service, req.as_alias },
             );
@@ -345,8 +345,7 @@ pub fn serializeChildManifest(
             try line_buf.appendSlice(allocator, prefix);
 
             if (req.target_cid > 0) {
-                const cid_part = try std.fmt.allocPrint(
-                    allocator,
+                const cid_part = try allocator.print(
                     ", target_cid = {d}",
                     .{req.target_cid},
                 );
@@ -354,16 +353,14 @@ pub fn serializeChildManifest(
                 try line_buf.appendSlice(allocator, cid_part);
             }
             if (req.target_domain.len > 0) {
-                const dom_part = try std.fmt.allocPrint(
-                    allocator,
+                const dom_part = try allocator.print(
                     ", target_domain = \"{s}\"",
                     .{req.target_domain},
                 );
                 defer allocator.free(dom_part);
                 try line_buf.appendSlice(allocator, dom_part);
             }
-            const suffix = try std.fmt.allocPrint(
-                allocator,
+            const suffix = try allocator.print(
                 ", channel = \"{s}\", mode = \"{s}\" }}\n",
                 .{ req.channel, req.mode },
             );
@@ -378,8 +375,7 @@ pub fn serializeChildManifest(
     if (child.provided.items.len > 0) {
         try out.appendSlice(allocator, "[services.provide]\n");
         for (child.provided.items) |prov| {
-            const prov_line = try std.fmt.allocPrint(
-                allocator,
+            const prov_line = try allocator.print(
                 "\"{s}\" = {{ channel = \"{s}\", type = \"{s}\" }}\n",
                 .{ prov.service, prov.channel, prov.type_name },
             );
@@ -434,4 +430,11 @@ pub fn resolveService(
         }
     }
     return null;
+}
+
+test "manifest/policy: matchPattern and child manifest roundtrip" {
+    std.testing.refAllDecls(@This());
+    try std.testing.expect(matchPattern("*", "anything"));
+    try std.testing.expect(matchPattern("net.*", "net.http"));
+    try std.testing.expect(!matchPattern("net.*", "gui.wayland"));
 }

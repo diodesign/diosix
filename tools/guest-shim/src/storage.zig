@@ -14,34 +14,54 @@ const BootLoaderError = boot_loader.BootLoaderError;
 pub const SECTOR_SIZE: usize = 512;
 pub const ISO_SECTOR_SIZE: usize = 2048;
 
-// MBR constants.
+// MBR constants and partition entry field offsets.
 pub const MBR_PARTITION_TABLE_OFFSET: usize = 446;
 pub const MBR_PARTITION_ENTRY_SIZE: usize = 16;
 pub const MBR_MAX_PARTITIONS: usize = 4;
 pub const MBR_SIGNATURE_OFFSET: usize = 510;
 pub const MBR_SIGNATURE: u16 = 0xaa55;
+pub const MBR_BOOTABLE_FLAG: u8 = 0x80;
+pub const MBR_ENTRY_OS_TYPE_OFFSET: usize = 4;
+pub const MBR_ENTRY_FIRST_LBA_OFFSET: usize = 8;
+pub const MBR_ENTRY_SECTORS_OFFSET: usize = 12;
 pub const MBR_TYPE_EMPTY: u8 = 0x00;
 pub const MBR_TYPE_FAT32_LBA: u8 = 0x0c;
 pub const MBR_TYPE_EFI_SYSTEM: u8 = 0xef;
 pub const MBR_TYPE_GPT_PROTECTIVE: u8 = 0xee;
 
-// GPT constants.
+// GPT constants and header/entry field offsets.
 pub const GPT_HEADER_LBA: usize = 1;
 pub const GPT_HEADER_OFFSET: usize = GPT_HEADER_LBA * SECTOR_SIZE;
 pub const GPT_HEADER_MIN_SIZE: usize = 92;
 pub const GPT_SIGNATURE = "EFI PART";
+pub const GPT_PART_ENTRY_LBA_OFFSET: usize = 72;
+pub const GPT_NUM_PART_ENTRIES_OFFSET: usize = 80;
+pub const GPT_SIZE_OF_PART_ENTRY_OFFSET: usize = 84;
 pub const GPT_MIN_ENTRY_SIZE: u32 = 128;
 pub const GPT_MAX_PARTITIONS: usize = 16;
+pub const GPT_ENTRY_GUID_LEN: usize = 16;
+pub const GPT_ENTRY_UNIQUE_GUID_OFFSET: usize = 16;
+pub const GPT_ENTRY_FIRST_LBA_OFFSET: usize = 32;
+pub const GPT_ENTRY_LAST_LBA_OFFSET: usize = 40;
+pub const GPT_ENTRY_ATTRS_OFFSET: usize = 48;
 
-// ISO9660 / El Torito constants.
+// ISO9660 / El Torito constants and directory record offsets.
 pub const ISO_PVD_SECTOR: usize = 16;
+pub const ISO_MAX_VD_SCAN_SECTORS: usize = 16;
 pub const ISO_PVD_OFFSET: usize = ISO_PVD_SECTOR * ISO_SECTOR_SIZE;
 pub const ISO_STD_ID = "CD001";
 pub const ISO_VD_TYPE_BOOT: u8 = 0;
 pub const ISO_VD_TYPE_PRIMARY: u8 = 1;
 pub const ISO_VD_TYPE_TERMINATOR: u8 = 255;
 pub const ISO_ROOT_DIR_RECORD_OFFSET: usize = 156;
+pub const ISO_DIR_RECORD_MIN_LEN: usize = 34;
+pub const ISO_DIR_EXTENT_LBA_OFFSET: usize = 2;
+pub const ISO_DIR_DATA_LEN_OFFSET: usize = 10;
+pub const ISO_DIR_FLAGS_OFFSET: usize = 25;
+pub const ISO_DIR_NAME_LEN_OFFSET: usize = 32;
+pub const ISO_DIR_NAME_OFFSET: usize = 33;
 pub const ISO_DIR_FLAG_DIRECTORY: u8 = 0x02;
+pub const ISO_MAX_PATH_DEPTH: usize = 8;
 pub const EL_TORITO_BOOT_CATALOG_OFFSET: usize = 0x47;
 pub const EL_TORITO_VALIDATION_HEADER_ID: u8 = 0x01;
 pub const EL_TORITO_BOOTABLE_INDICATOR: u8 = 0x88;
@@ -92,10 +112,23 @@ pub const IsoFileExtent = struct {
     data_length: u32,
 };
 
+inline fn readU16Le(buf: []const u8, off: usize) u16 {
+    return std.mem.readInt(u16, buf[off..][0..2], .little);
+}
+
+inline fn readU32Le(buf: []const u8, off: usize) u32 {
+    return std.mem.readInt(u32, buf[off..][0..4], .little);
+}
+
+inline fn readU64Le(buf: []const u8, off: usize) u64 {
+    return std.mem.readInt(u64, buf[off..][0..8], .little);
+}
+
 pub fn detectStorageFormat(disk_data: []const u8) StorageFormat {
     if (disk_data.len >= ISO_PVD_OFFSET + 7) {
         const vd_type = disk_data[ISO_PVD_OFFSET];
-        const std_id = disk_data[ISO_PVD_OFFSET + 1 .. ISO_PVD_OFFSET + 6];
+        const std_id =
+            disk_data[ISO_PVD_OFFSET + 1 ..][0..ISO_STD_ID.len];
         const is_iso_vd =
             (vd_type == ISO_VD_TYPE_PRIMARY or vd_type == ISO_VD_TYPE_BOOT);
         if (is_iso_vd and std.mem.eql(u8, std_id, ISO_STD_ID)) {
@@ -104,39 +137,28 @@ pub fn detectStorageFormat(disk_data: []const u8) StorageFormat {
     }
 
     if (disk_data.len >= GPT_HEADER_OFFSET + GPT_HEADER_MIN_SIZE) {
-        const sig = disk_data[GPT_HEADER_OFFSET .. GPT_HEADER_OFFSET + 8];
+        const sig = disk_data[GPT_HEADER_OFFSET..][0..GPT_SIGNATURE.len];
         if (std.mem.eql(u8, sig, GPT_SIGNATURE)) {
             return .gpt;
         }
     }
 
     if (disk_data.len >= EXT4_MAGIC_OFFSET + 2) {
-        const ext_magic = std.mem.readInt(
-            u16,
-            disk_data[EXT4_MAGIC_OFFSET .. EXT4_MAGIC_OFFSET + 2][0..2],
-            .little,
-        );
-        if (ext_magic == EXT4_SUPER_MAGIC) return .ext4;
+        if (readU16Le(disk_data, EXT4_MAGIC_OFFSET) == EXT4_SUPER_MAGIC) {
+            return .ext4;
+        }
     }
 
     if (disk_data.len >= UFS2_MAGIC_OFFSET + 4) {
-        const ufs_magic = std.mem.readInt(
-            u32,
-            disk_data[UFS2_MAGIC_OFFSET .. UFS2_MAGIC_OFFSET + 4][0..4],
-            .little,
-        );
-        if (ufs_magic == UFS2_MAGIC) return .ufs2;
+        if (readU32Le(disk_data, UFS2_MAGIC_OFFSET) == UFS2_MAGIC) {
+            return .ufs2;
+        }
     }
 
     if (disk_data.len >= SECTOR_SIZE) {
-        const sig = std.mem.readInt(
-            u16,
-            disk_data[MBR_SIGNATURE_OFFSET .. MBR_SIGNATURE_OFFSET + 2][0..2],
-            .little,
-        );
-        if (sig == MBR_SIGNATURE) {
+        if (readU16Le(disk_data, MBR_SIGNATURE_OFFSET) == MBR_SIGNATURE) {
             const fs_off = FAT32_BS_FILSYSTYPE_OFFSET;
-            const fs_tag = disk_data[fs_off .. fs_off + 8];
+            const fs_tag = disk_data[fs_off..][0..FAT32_FILSYSTYPE.len];
             if (std.mem.eql(u8, fs_tag, FAT32_FILSYSTYPE)) {
                 return .fat32;
             }
@@ -153,12 +175,9 @@ pub fn parseMbrPartitions(
     out_partitions: []MbrPartition,
 ) BootLoaderError!usize {
     if (disk_data.len < SECTOR_SIZE) return error.BufferTooSmall;
-    const sig = std.mem.readInt(
-        u16,
-        disk_data[MBR_SIGNATURE_OFFSET .. MBR_SIGNATURE_OFFSET + 2][0..2],
-        .little,
-    );
-    if (sig != MBR_SIGNATURE) return error.InvalidMbrSignature;
+    if (readU16Le(disk_data, MBR_SIGNATURE_OFFSET) != MBR_SIGNATURE) {
+        return error.InvalidMbrSignature;
+    }
 
     var count: usize = 0;
     var idx: usize = 0;
@@ -167,21 +186,14 @@ pub fn parseMbrPartitions(
     {
         const off = MBR_PARTITION_TABLE_OFFSET + idx * MBR_PARTITION_ENTRY_SIZE;
         const boot_ind = disk_data[off];
-        const os_type = disk_data[off + 4];
-        const first_lba = std.mem.readInt(
-            u32,
-            disk_data[off + 8 .. off + 12][0..4],
-            .little,
-        );
-        const sectors = std.mem.readInt(
-            u32,
-            disk_data[off + 12 .. off + 16][0..4],
-            .little,
-        );
+        const os_type = disk_data[off + MBR_ENTRY_OS_TYPE_OFFSET];
+        const first_lba =
+            readU32Le(disk_data, off + MBR_ENTRY_FIRST_LBA_OFFSET);
+        const sectors = readU32Le(disk_data, off + MBR_ENTRY_SECTORS_OFFSET);
 
         if (os_type == MBR_TYPE_EMPTY or sectors == 0) continue;
         out_partitions[count] = .{
-            .bootable = (boot_ind == 0x80),
+            .bootable = (boot_ind == MBR_BOOTABLE_FLAG),
             .os_type = os_type,
             .first_lba = first_lba,
             .sector_count = sectors,
@@ -200,13 +212,13 @@ pub fn parseGptPartitions(
         return error.BufferTooSmall;
     }
     const hdr = disk_data[GPT_HEADER_OFFSET..];
-    if (!std.mem.eql(u8, hdr[0..8], GPT_SIGNATURE)) {
+    if (!std.mem.eql(u8, hdr[0..GPT_SIGNATURE.len], GPT_SIGNATURE)) {
         return error.InvalidGptHeader;
     }
 
-    const part_entry_lba = std.mem.readInt(u64, hdr[72..80][0..8], .little);
-    const num_entries = std.mem.readInt(u32, hdr[80..84][0..4], .little);
-    const entry_size = std.mem.readInt(u32, hdr[84..88][0..4], .little);
+    const part_entry_lba = readU64Le(hdr, GPT_PART_ENTRY_LBA_OFFSET);
+    const num_entries = readU32Le(hdr, GPT_NUM_PART_ENTRIES_OFFSET);
+    const entry_size = readU32Le(hdr, GPT_SIZE_OF_PART_ENTRY_OFFSET);
 
     if (entry_size < GPT_MIN_ENTRY_SIZE or (entry_size % 8) != 0) {
         return error.InvalidGptHeader;
@@ -240,7 +252,7 @@ pub fn parseGptPartitions(
 
         const entry = disk_data[entry_off..entry_end];
         var is_empty = true;
-        for (entry[0..16]) |b| {
+        for (entry[0..GPT_ENTRY_GUID_LEN]) |b| {
             if (b != 0) {
                 is_empty = false;
                 break;
@@ -248,9 +260,9 @@ pub fn parseGptPartitions(
         }
         if (is_empty) continue;
 
-        const first_lba = std.mem.readInt(u64, entry[32..40][0..8], .little);
-        const last_lba = std.mem.readInt(u64, entry[40..48][0..8], .little);
-        const attrs = std.mem.readInt(u64, entry[48..56][0..8], .little);
+        const first_lba = readU64Le(entry, GPT_ENTRY_FIRST_LBA_OFFSET);
+        const last_lba = readU64Le(entry, GPT_ENTRY_LAST_LBA_OFFSET);
+        const attrs = readU64Le(entry, GPT_ENTRY_ATTRS_OFFSET);
         if (first_lba == 0 or last_lba < first_lba) continue;
 
         var p: GptPartition = .{
@@ -260,8 +272,11 @@ pub fn parseGptPartitions(
             .last_lba = last_lba,
             .attributes = attrs,
         };
-        @memcpy(&p.type_guid, entry[0..16]);
-        @memcpy(&p.unique_guid, entry[16..32]);
+        @memcpy(&p.type_guid, entry[0..GPT_ENTRY_GUID_LEN]);
+        @memcpy(
+            &p.unique_guid,
+            entry[GPT_ENTRY_UNIQUE_GUID_OFFSET..][0..GPT_ENTRY_GUID_LEN],
+        );
         out_partitions[count] = p;
         count += 1;
     }
@@ -283,31 +298,27 @@ pub fn parseIso9660Volume(iso_data: []const u8) BootLoaderError!IsoVolumeInfo {
     };
 
     var sector: usize = ISO_PVD_SECTOR;
-    while (sector < ISO_PVD_SECTOR + 16) : (sector += 1) {
+    while (sector < ISO_PVD_SECTOR + ISO_MAX_VD_SCAN_SECTORS) : (sector += 1) {
         const off = sector * ISO_SECTOR_SIZE;
         if (off + ISO_SECTOR_SIZE > iso_data.len) break;
         const vd = iso_data[off .. off + ISO_SECTOR_SIZE];
         const vd_type = vd[0];
-        if (!std.mem.eql(u8, vd[1..6], ISO_STD_ID)) {
+        if (!std.mem.eql(u8, vd[1..][0..ISO_STD_ID.len], ISO_STD_ID)) {
             if (sector == ISO_PVD_SECTOR) return error.InvalidIsoVolume;
             break;
         }
 
         if (vd_type == ISO_VD_TYPE_PRIMARY) {
             const rec_off = ISO_ROOT_DIR_RECORD_OFFSET;
-            const root_rec = vd[rec_off .. rec_off + 34];
+            const root_rec = vd[rec_off .. rec_off + ISO_DIR_RECORD_MIN_LEN];
             info.root_extent_lba =
-                std.mem.readInt(u32, root_rec[2..6][0..4], .little);
+                readU32Le(root_rec, ISO_DIR_EXTENT_LBA_OFFSET);
             info.root_data_length =
-                std.mem.readInt(u32, root_rec[10..14][0..4], .little);
+                readU32Le(root_rec, ISO_DIR_DATA_LEN_OFFSET);
             found_pvd = true;
         } else if (vd_type == ISO_VD_TYPE_BOOT) {
-            const cat_off = EL_TORITO_BOOT_CATALOG_OFFSET;
-            info.boot_catalog_lba = std.mem.readInt(
-                u32,
-                vd[cat_off .. cat_off + 4][0..4],
-                .little,
-            );
+            info.boot_catalog_lba =
+                readU32Le(vd, EL_TORITO_BOOT_CATALOG_OFFSET);
         } else if (vd_type == ISO_VD_TYPE_TERMINATOR) {
             break;
         }
@@ -358,16 +369,18 @@ fn findIso9660EntryInDir(
             pos = next_sector;
             continue;
         }
-        if (rec_len < 34 or rec_len > end_off - pos) break;
+        if (rec_len < ISO_DIR_RECORD_MIN_LEN or rec_len > end_off - pos) break;
 
         const rec = iso_data[pos .. pos + rec_len];
-        const extent_lba = std.mem.readInt(u32, rec[2..6][0..4], .little);
-        const data_len = std.mem.readInt(u32, rec[10..14][0..4], .little);
-        const flags = rec[25];
-        const name_len = rec[32];
+        const extent_lba = readU32Le(rec, ISO_DIR_EXTENT_LBA_OFFSET);
+        const data_len = readU32Le(rec, ISO_DIR_DATA_LEN_OFFSET);
+        const flags = rec[ISO_DIR_FLAGS_OFFSET];
+        const name_len = rec[ISO_DIR_NAME_LEN_OFFSET];
 
-        if (33 + @as(usize, name_len) <= rec_len and name_len > 0) {
-            const ident = rec[33 .. 33 + name_len];
+        if (ISO_DIR_NAME_OFFSET + @as(usize, name_len) <= rec_len and
+            name_len > 0)
+        {
+            const ident = rec[ISO_DIR_NAME_OFFSET..][0..name_len];
             // Skip '.' (0x00) and '..' (0x01) directory entries.
             if (!(name_len == 1 and (ident[0] == 0 or ident[0] == 1))) {
                 const is_dir = (flags & ISO_DIR_FLAG_DIRECTORY) != 0;
@@ -415,7 +428,7 @@ pub fn findIso9660Path(
     var rem = trimmed;
     var depth: usize = 0;
 
-    while (depth < 8) : (depth += 1) {
+    while (depth < ISO_MAX_PATH_DEPTH) : (depth += 1) {
         if (std.mem.indexOfScalar(u8, rem, '/')) |slash| {
             const comp = rem[0..slash];
             rem = rem[slash + 1 ..];
@@ -444,4 +457,8 @@ pub fn findIso9660Path(
     }
 
     return error.FileNotFound;
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

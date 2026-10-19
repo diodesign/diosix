@@ -191,17 +191,18 @@ pub const SYM32 = struct {
 };
 
 comptime {
-    std.debug.assert(EHDR.SHSTRNDX + 2 == ELF64_EHDR_SIZE);
-    std.debug.assert(EHDR32.SHSTRNDX + 2 == ELF32_EHDR_SIZE);
-    std.debug.assert(PHDR.ALIGN + 8 == ELF64_PHDR_SIZE);
-    std.debug.assert(PHDR32.ALIGN + 4 == ELF32_PHDR_SIZE);
-    std.debug.assert(SHDR.ENTSIZE + 8 == ELF64_SHDR_SIZE);
-    std.debug.assert(SHDR32.ENTSIZE + 4 == ELF32_SHDR_SIZE);
-    std.debug.assert(SYM.SIZE + 8 == ELF64_SYM_SIZE);
-    std.debug.assert(SYM32.SHNDX + 2 == ELF32_SYM_SIZE);
+    std.debug.assert(EHDR.SHSTRNDX + @sizeOf(u16) == ELF64_EHDR_SIZE);
+    std.debug.assert(EHDR32.SHSTRNDX + @sizeOf(u16) == ELF32_EHDR_SIZE);
+    std.debug.assert(PHDR.ALIGN + @sizeOf(u64) == ELF64_PHDR_SIZE);
+    std.debug.assert(PHDR32.ALIGN + @sizeOf(u32) == ELF32_PHDR_SIZE);
+    std.debug.assert(SHDR.ENTSIZE + @sizeOf(u64) == ELF64_SHDR_SIZE);
+    std.debug.assert(SHDR32.ENTSIZE + @sizeOf(u32) == ELF32_SHDR_SIZE);
+    std.debug.assert(SYM.SIZE + @sizeOf(u64) == ELF64_SYM_SIZE);
+    std.debug.assert(SYM32.SHNDX + @sizeOf(u16) == ELF32_SYM_SIZE);
 }
 
 test "ELF specification constants and header layout validation" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
     try testing.expectEqualStrings("\x7fELF", MAGIC);

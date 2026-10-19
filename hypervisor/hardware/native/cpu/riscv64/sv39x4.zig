@@ -42,6 +42,7 @@ pub const PTEFlags = struct {
 pub const PTE = u64;
 
 pub const PTE_PPN_SHIFT: u6 = 10;
+pub const PTE_FLAGS_MASK: u64 = (1 << PTE_PPN_SHIFT) - 1;
 pub const PAGE_SHIFT: u6 = 12;
 
 pub const VPN0_SHIFT: u6 = 12;
@@ -50,6 +51,10 @@ pub const VPN2_SHIFT: u6 = 30;
 
 pub const VPN_MASK: usize = 0x1ff;
 pub const ROOT_VPN_MASK: usize = 0x7ff;
+
+pub const HGATP_MODE_SV39X4: u64 = 8;
+pub const HGATP_MODE_SHIFT: u6 = 60;
+pub const HGATP_VMID_SHIFT: u6 = 44;
 
 pub inline fn pteToHpa(pte: PTE) usize {
     return (pte >> PTE_PPN_SHIFT) << PAGE_SHIFT;
@@ -236,12 +241,13 @@ pub const PageTable = struct {
 
     /// Entry point for direct PageTable fault resolution.
     pub fn resolveFault(self: *PageTable, gpa: usize, is_trusted: bool) !void {
+        const gpa_page = std.mem.alignBackward(usize, gpa, physmem.PageSize);
+
         // Identity-map standard MMIO/peripheral regions (below RAM or PCIe).
         if (gpa < physmem.getRamBase() or
             physmem.isMmio(gpa, physmem.PageSize))
         {
             if (!is_trusted) return error.AccessDenied;
-            const gpa_page = gpa & ~(physmem.PageSize - 1);
             try self.mapPage(
                 gpa_page,
                 gpa_page,
@@ -255,7 +261,6 @@ pub const PageTable = struct {
         if (self.root_base_hpa > 0 and is_trusted and
             physmem.isRam(gpa, physmem.PageSize))
         {
-            const gpa_page = gpa & ~(physmem.PageSize - 1);
             if (!physmem.isHypervisorMemory(gpa_page, physmem.PageSize)) {
                 try self.mapPage(
                     gpa_page,
@@ -284,8 +289,11 @@ pub const PageTable = struct {
             const offset = gpa - self.root_base_gpa;
             const hpa = std.math.add(usize, self.root_base_hpa, offset) catch
                 return error.UnhandledFault;
-            const gpa_page = gpa & ~(physmem.PageSize - 1);
-            const hpa_page = hpa & ~(physmem.PageSize - 1);
+            const hpa_page = std.mem.alignBackward(
+                usize,
+                hpa,
+                physmem.PageSize,
+            );
             if (physmem.isHypervisorMemory(hpa_page, physmem.PageSize)) {
                 return error.AccessDenied;
             }
@@ -302,7 +310,6 @@ pub const PageTable = struct {
         if (gpa >= self.root_base_gpa and
             (gpa - self.root_base_gpa) < dram_limit)
         {
-            const gpa_page = gpa & ~(physmem.PageSize - 1);
             const new_hpa = try physmem.allocPage();
             errdefer physmem.freePage(new_hpa);
             @memset(
@@ -323,13 +330,15 @@ pub const PageTable = struct {
     }
 
     pub fn hgatp(self: PageTable, vmid: u16) u64 {
-        const mode_sv39x4: u64 = 8;
         const vmid_u64: u64 = vmid;
-        return (mode_sv39x4 << 60) | (vmid_u64 << 44) | (self.root_phys >> 12);
+        return (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT) |
+            (vmid_u64 << HGATP_VMID_SHIFT) |
+            (self.root_phys >> PAGE_SHIFT);
     }
 };
 
 test "stage-2 paging and shielding" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     const allocator = testing.allocator;
 

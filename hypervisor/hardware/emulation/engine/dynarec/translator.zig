@@ -7,111 +7,35 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const riscv = @import("interface").riscv;
+const vcpu_mod = @import("../../vcpu.zig");
 const decoder_rv32 = @import("../decoders/rv32.zig");
 const rv64 = @import("../emitters/rv64.zig");
-const cache_mod = @import("cache.zig");
 const block_mod = @import("block.zig");
 const emit_alu = @import("emit/alu.zig");
 const emit_mem = @import("emit/mem.zig");
 
 const TranslationBlock = block_mod.TranslationBlock;
+const T0 = block_mod.HOST_REG_T0;
+const S11 = block_mod.HOST_REG_S11;
+const OFF_T0 = block_mod.VCPU_OFF_T0;
+const OFF_S11 = block_mod.VCPU_OFF_S11;
+const Op = emit_mem.MemOp;
+const AmoFunct5 = rv64.AmoFunct5;
+
+pub const emitLoad = emit_mem.emitLoad;
+pub const emitStore = emit_mem.emitStore;
+pub const emitAmo = emit_mem.emitAmo;
+
+pub const MAX_BLOCK_INSNS: usize = 32;
+pub const HOST_BYTES_PER_GUEST_INSN: usize = 200;
+pub const HOST_EPILOGUE_PAD_BYTES: usize = 512;
+pub const HOST_LOOP_GUARD_BYTES: usize = 256;
+pub const U_IMM_MASK: u32 = 0xfffff;
+pub const U_IMM_SHIFT: u5 = 12;
 
 inline fn emit(tb: *TranslationBlock, off: *usize, insn: u32) void {
     rv64.emit(tb.host_code, off, insn);
-}
-
-fn emitLoad(
-    eng: anytype,
-    tb: *TranslationBlock,
-    off: *usize,
-    pc: u32,
-    op: u3,
-    rd: u5,
-    rs1: u5,
-    offset: i32,
-) void {
-    const imm = @as(i12, @truncate(offset));
-    const tlb_addr = @intFromPtr(&eng.tlb.entries[0]);
-    if (eng.tlb.getDirectMappingRegion(pc)) |region| {
-        tb.is_fast_path = true;
-        if (rs1 == 2 or rs1 == 8) {
-            emit_mem.emitFastLoad(tb, off, op, rd, rs1, imm, region.delta);
-        } else {
-            emit_mem.emitFastLoadWithFallback(
-                tlb_addr,
-                tb,
-                off,
-                pc,
-                op,
-                rd,
-                rs1,
-                imm,
-                region.vaddr_start,
-                region.vaddr_end,
-                region.hpa_start,
-            );
-        }
-    } else {
-        emit_mem.emitSoftTlbLoad(tlb_addr, tb, off, pc, op, rd, rs1, imm);
-    }
-}
-
-fn emitStore(
-    eng: anytype,
-    tb: *TranslationBlock,
-    off: *usize,
-    pc: u32,
-    op: u3,
-    rs1: u5,
-    rs2: u5,
-    offset: i32,
-) void {
-    const imm = @as(i12, @truncate(offset));
-    const tlb_addr = @intFromPtr(&eng.tlb.entries[0]);
-    if (eng.tlb.getDirectMappingRegion(pc)) |region| {
-        tb.is_fast_path = true;
-        if (rs1 == 2 or rs1 == 8) {
-            emit_mem.emitFastStore(tb, off, op, rs1, rs2, imm, region.delta);
-        } else {
-            emit_mem.emitFastStoreWithFallback(
-                tlb_addr,
-                tb,
-                off,
-                pc,
-                op,
-                rs1,
-                rs2,
-                imm,
-                region.vaddr_start,
-                region.vaddr_end,
-                region.hpa_start,
-            );
-        }
-    } else {
-        emit_mem.emitSoftTlbStore(tlb_addr, tb, off, pc, op, rs1, rs2, imm);
-    }
-}
-
-fn emitAmo(
-    tlb_addr: usize,
-    tb: *TranslationBlock,
-    off: *usize,
-    pc: u32,
-    funct5: u5,
-    d: decoder_rv32.AmoType,
-) void {
-    emit_mem.emitSoftTlbAtomic(
-        tlb_addr,
-        tb,
-        off,
-        pc,
-        funct5,
-        d.aq,
-        d.rl,
-        d.rd,
-        d.rs1,
-        d.rs2,
-    );
 }
 
 /// Compile guest basic block starting at `start_pc` directly into RV64 machine
@@ -124,9 +48,9 @@ pub fn translateBlock(
         return existing;
     }
 
-    const max_insns: usize = 32;
-    const max_host_bytes: usize = max_insns * 200 + 512;
-    const is_global = (self.vcpu.privilege_mode != 0) or
+    const max_host_bytes: usize =
+        MAX_BLOCK_INSNS * HOST_BYTES_PER_GUEST_INSN + HOST_EPILOGUE_PAD_BYTES;
+    const is_global = (self.vcpu.privilege_mode != riscv.PRIV_USER) or
         (self.tlb.getDirectMappingRegion(start_pc) != null);
     const tb = try self.cache.allocateBlock(
         start_pc,
@@ -147,16 +71,19 @@ pub fn translateBlock(
     const shiftI = emit_alu.emitShiftI;
     const bitI = emit_alu.emitBitwiseI;
 
-    // Restore guest t0 from 40(s11) at block start.
-    emit(tb, off, rv64.ld(5, 27, 40));
+    // Restore guest t0 from VCPU_OFF_T0(s11) at block start.
+    emit(tb, off, rv64.ld(T0, S11, OFF_T0));
 
-    while ((pc - start_pc) < (max_insns * 4)) {
-        if (host_offset + 256 >= tb.host_code.len) break;
+    while ((pc - start_pc) < (MAX_BLOCK_INSNS * 4)) {
+        if (host_offset + HOST_LOOP_GUARD_BYTES >= tb.host_code.len) break;
 
         const fetch_res = self.tlb.fetchU32(pc, self.bus);
-        if (fetch_res.trap) |cause| {
-            self.trap(cause, pc, pc);
-            return error.GuestFetchFault;
+        if (fetch_res.trap != null) {
+            if (pc == start_pc) {
+                self.cache.cancelBlock();
+                return error.GuestFetchFault;
+            }
+            break;
         }
 
         const decoded = decoder_rv32.decode(fetch_res.val);
@@ -195,7 +122,7 @@ pub fn translateBlock(
                 var fused = false;
                 if (d.rd != 0 and
                     (d.shamt == 1 or d.shamt == 2 or d.shamt == 3) and
-                    (next_pc - start_pc) < (max_insns * 4))
+                    (next_pc - start_pc) < (MAX_BLOCK_INSNS * 4))
                 {
                     const nf = self.tlb.fetchU32(next_pc, self.bus);
                     if (nf.trap == null) {
@@ -247,7 +174,7 @@ pub fn translateBlock(
                 if (d.rd != 0) {
                     const next_pc = pc + decoded.len;
                     var fused = false;
-                    if ((next_pc - start_pc) < (max_insns * 4)) {
+                    if ((next_pc - start_pc) < (MAX_BLOCK_INSNS * 4)) {
                         const nf = self.tlb.fetchU32(next_pc, self.bus);
                         if (nf.trap == null) {
                             const nd = decoder_rv32.decode(nf.val);
@@ -256,7 +183,7 @@ pub fn translateBlock(
                                 nd.insn.addi.rs1 == d.rd)
                             {
                                 const hi = (@as(u32, @bitCast(d.imm)) &
-                                    0xfffff) << 12;
+                                    U_IMM_MASK) << U_IMM_SHIFT;
                                 const lo = @as(
                                     u32,
                                     @bitCast(@as(i32, nd.insn.addi.imm)),
@@ -268,11 +195,11 @@ pub fn translateBlock(
                         }
                     }
                     if (!fused) {
-                        if (d.rd == 27) {
-                            emit(tb, off, rv64.sd(27, 5, 40));
-                            emit(tb, off, rv64.lui(5, @truncate(d.imm)));
-                            emit(tb, off, rv64.sd(27, 5, 216));
-                            emit(tb, off, rv64.ld(5, 27, 40));
+                        if (d.rd == S11) {
+                            emit(tb, off, rv64.sd(S11, T0, OFF_T0));
+                            emit(tb, off, rv64.lui(T0, @truncate(d.imm)));
+                            emit(tb, off, rv64.sd(S11, T0, OFF_S11));
+                            emit(tb, off, rv64.ld(T0, S11, OFF_T0));
                         } else {
                             emit(tb, off, rv64.lui(d.rd, @truncate(d.imm)));
                         }
@@ -280,58 +207,85 @@ pub fn translateBlock(
                 }
             },
             .auipc => |d| {
-                const val = pc +% ((@as(u32, @bitCast(d.imm)) & 0xfffff) << 12);
+                const val = pc +% ((@as(u32, @bitCast(d.imm)) &
+                    U_IMM_MASK) << U_IMM_SHIFT);
                 emit_alu.emitLoadImm32(tb, off, d.rd, val);
             },
 
-            .lw => |d| emitLoad(self, tb, off, pc, 2, d.rd, d.rs1, d.offset),
-            .lh => |d| emitLoad(self, tb, off, pc, 1, d.rd, d.rs1, d.offset),
-            .lb => |d| emitLoad(self, tb, off, pc, 0, d.rd, d.rs1, d.offset),
-            .lhu => |d| emitLoad(self, tb, off, pc, 5, d.rd, d.rs1, d.offset),
-            .lbu => |d| emitLoad(self, tb, off, pc, 4, d.rd, d.rs1, d.offset),
+            .lw => |d| {
+                emitLoad(self, tb, off, pc, Op.LW, d.rd, d.rs1, d.offset);
+            },
+            .lh => |d| {
+                emitLoad(self, tb, off, pc, Op.LH, d.rd, d.rs1, d.offset);
+            },
+            .lb => |d| {
+                emitLoad(self, tb, off, pc, Op.LB, d.rd, d.rs1, d.offset);
+            },
+            .lhu => |d| {
+                emitLoad(self, tb, off, pc, Op.LHU, d.rd, d.rs1, d.offset);
+            },
+            .lbu => |d| {
+                emitLoad(self, tb, off, pc, Op.LBU, d.rd, d.rs1, d.offset);
+            },
             .flw => |d| {
-                if (((self.vcpu.mstatus >> 13) & 3) == 0) break;
-                self.vcpu.mstatus |= (3 << 13);
-                emitLoad(self, tb, off, pc, 6, d.rd, d.rs1, d.offset);
+                if ((self.vcpu.mstatus & vcpu_mod.MSTATUS_FS_MASK_U32) == 0) {
+                    break;
+                }
+                self.vcpu.mstatus |= vcpu_mod.MSTATUS_FS_DIRTY_U32;
+                emitLoad(self, tb, off, pc, Op.FLW, d.rd, d.rs1, d.offset);
             },
             .fld => |d| {
-                if (((self.vcpu.mstatus >> 13) & 3) == 0) break;
-                self.vcpu.mstatus |= (3 << 13);
-                emitLoad(self, tb, off, pc, 7, d.rd, d.rs1, d.offset);
+                if ((self.vcpu.mstatus & vcpu_mod.MSTATUS_FS_MASK_U32) == 0) {
+                    break;
+                }
+                self.vcpu.mstatus |= vcpu_mod.MSTATUS_FS_DIRTY_U32;
+                emitLoad(self, tb, off, pc, Op.FLD, d.rd, d.rs1, d.offset);
             },
 
-            .sw => |d| emitStore(self, tb, off, pc, 2, d.rs1, d.rs2, d.offset),
-            .sh => |d| emitStore(self, tb, off, pc, 1, d.rs1, d.rs2, d.offset),
-            .sb => |d| emitStore(self, tb, off, pc, 0, d.rs1, d.rs2, d.offset),
+            .sw => |d| {
+                emitStore(self, tb, off, pc, Op.SW, d.rs1, d.rs2, d.offset);
+            },
+            .sh => |d| {
+                emitStore(self, tb, off, pc, Op.SH, d.rs1, d.rs2, d.offset);
+            },
+            .sb => |d| {
+                emitStore(self, tb, off, pc, Op.SB, d.rs1, d.rs2, d.offset);
+            },
             .fsw => |d| {
-                if (((self.vcpu.mstatus >> 13) & 3) == 0) break;
-                self.vcpu.mstatus |= (3 << 13);
-                emitStore(self, tb, off, pc, 6, d.rs1, d.rs2, d.offset);
+                if ((self.vcpu.mstatus & vcpu_mod.MSTATUS_FS_MASK_U32) == 0) {
+                    break;
+                }
+                self.vcpu.mstatus |= vcpu_mod.MSTATUS_FS_DIRTY_U32;
+                emitStore(self, tb, off, pc, Op.FSW, d.rs1, d.rs2, d.offset);
             },
             .fsd => |d| {
-                if (((self.vcpu.mstatus >> 13) & 3) == 0) break;
-                self.vcpu.mstatus |= (3 << 13);
-                emitStore(self, tb, off, pc, 7, d.rs1, d.rs2, d.offset);
+                if ((self.vcpu.mstatus & vcpu_mod.MSTATUS_FS_MASK_U32) == 0) {
+                    break;
+                }
+                self.vcpu.mstatus |= vcpu_mod.MSTATUS_FS_DIRTY_U32;
+                emitStore(self, tb, off, pc, Op.FSD, d.rs1, d.rs2, d.offset);
             },
 
             .fp_op => |d| {
-                if (((self.vcpu.mstatus >> 13) & 3) == 0) break;
-                self.vcpu.mstatus |= (3 << 13);
+                if ((self.vcpu.mstatus & vcpu_mod.MSTATUS_FS_MASK_U32) == 0) {
+                    break;
+                }
+                self.vcpu.mstatus |= vcpu_mod.MSTATUS_FS_DIRTY_U32;
                 emit(tb, off, d.raw);
             },
 
             .lr_w, .sc_w => break,
-            .amoswap_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x01, d),
-            .amoadd_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x00, d),
-            .amoxor_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x04, d),
-            .amoand_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x0c, d),
-            .amoor_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x08, d),
-            .amomin_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x10, d),
-            .amomax_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x14, d),
-            .amominu_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x18, d),
-            .amomaxu_w => |d| emitAmo(tlb_addr, tb, off, pc, 0x1c, d),
+            .amoswap_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.SWAP, d),
+            .amoadd_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.ADD, d),
+            .amoxor_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.XOR, d),
+            .amoand_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.AND, d),
+            .amoor_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.OR, d),
+            .amomin_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.MIN, d),
+            .amomax_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.MAX, d),
+            .amominu_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.MINU, d),
+            .amomaxu_w => |d| emitAmo(tlb_addr, tb, off, pc, AmoFunct5.MAXU, d),
 
-            .fence => emit(tb, off, 0x0ff0000f),
+            .fence => emit(tb, off, rv64.FENCE_IORW),
             .fence_i, .pause, .sfence_vma => break,
 
             .csrrs => |d| {
@@ -339,32 +293,16 @@ pub fn translateBlock(
                     emit_alu.emitCsrRead(tb, off, d.rd, c.host_csr, c.is_high);
                 } else break;
             },
-            .csrrw, .csrrc => |d| {
-                if (d.rs1 == 0) {
-                    if (emit_alu.mapPerformanceCounterCsr(d.csr)) |c| {
-                        emit_alu.emitCsrRead(
-                            tb,
-                            off,
-                            d.rd,
-                            c.host_csr,
-                            c.is_high,
-                        );
-                    } else break;
+            .csrrw, .csrrc => |d| if (d.rs1 == 0) {
+                if (emit_alu.mapPerformanceCounterCsr(d.csr)) |c| {
+                    emit_alu.emitCsrRead(tb, off, d.rd, c.host_csr, c.is_high);
                 } else break;
-            },
-            .csrrsi, .csrrci => |d| {
-                if (d.uimm == 0) {
-                    if (emit_alu.mapPerformanceCounterCsr(d.csr)) |c| {
-                        emit_alu.emitCsrRead(
-                            tb,
-                            off,
-                            d.rd,
-                            c.host_csr,
-                            c.is_high,
-                        );
-                    } else break;
+            } else break,
+            .csrrsi, .csrrci => |d| if (d.uimm == 0) {
+                if (emit_alu.mapPerformanceCounterCsr(d.csr)) |c| {
+                    emit_alu.emitCsrRead(tb, off, d.rd, c.host_csr, c.is_high);
                 } else break;
-            },
+            } else break,
 
             .jal => |d| {
                 const target = pc +% @as(u32, @bitCast(d.offset));
@@ -449,15 +387,18 @@ pub fn translateBlock(
     return tb;
 }
 
-test "emitLoad dispatches SoftTLB load when no direct mapping region" {
-    const vcpu_mod = @import("../../vcpu.zig");
+test "emitLoad SoftTLB dispatch and cross-page fetch fault termination" {
     const softtlb_mod = @import("../../softtlb.zig");
     const bus_mod = @import("../../devices/bus.zig");
     const engine_mod = @import("engine.zig");
 
-    var vcpu = vcpu_mod.VCpu{ .id = 0, .pc = 0x8000_0000 };
+    var guest_ram: [4096]u8 align(4096) = std.mem.zeroes([4096]u8);
+    // Write `addi a0, a0, 1` (0x00150513) at last word of mapped page.
+    std.mem.writeInt(u32, guest_ram[0xffc..0x1000], 0x0015_0513, .little);
+
+    var vcpu = vcpu_mod.VCpu{ .id = 0, .pc = 0x8000_0ffc };
     var tlb: softtlb_mod.SoftTlb = undefined;
-    tlb.initOnPtr(0x8000_0000, 0x8000_0000, 4096);
+    tlb.initOnPtr(0x8000_0000, @intFromPtr(&guest_ram), 4096);
     var bus = bus_mod.Bus{
         .uart = undefined,
         .timer = undefined,
@@ -465,11 +406,17 @@ test "emitLoad dispatches SoftTLB load when no direct mapping region" {
     };
     const eng = try std.testing.allocator.create(engine_mod.Engine);
     defer std.testing.allocator.destroy(eng);
-    var raw_pool: [1024]u8 align(4096) = undefined;
+    var raw_pool: [32768]u8 align(4096) = undefined;
     eng.initOnPtr(&raw_pool, &vcpu, &tlb, &bus);
+
+    const tb_boundary = try eng.translateBlock(0x8000_0ffc);
+    try std.testing.expectEqual(@as(u32, 4), tb_boundary.guest_size);
+    try std.testing.expectEqual(@as(u32, 0), vcpu.scause);
+    try std.testing.expectEqual(@as(u32, 0), vcpu.mcause);
 
     const tb = try eng.cache.allocateBlock(0x1000_0000, 0, false, 512);
     var off: usize = 0;
-    emitLoad(eng, tb, &off, 0x1000_0000, 2, 10, 11, 0);
+    emitLoad(eng, tb, &off, 0x1000_0000, Op.LW, 10, 11, 0);
     try std.testing.expect(off > 0);
+    std.testing.refAllDecls(@This());
 }

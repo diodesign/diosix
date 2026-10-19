@@ -8,6 +8,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const common = @import("common.zig");
 
 pub const SHA256_HEX_LEN: usize = 64;
 pub const MAX_URL_LEN: usize = 1024;
@@ -135,20 +136,8 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
     },
 };
 
-fn trimAscii(s: []const u8) []const u8 {
-    return std.mem.trim(u8, s, " \t\r\n");
-}
-
-fn stripQuotes(s: []const u8) []const u8 {
-    const t = trimAscii(s);
-    if (t.len >= 2 and
-        ((t[0] == '"' and t[t.len - 1] == '"') or
-            (t[0] == '\'' and t[t.len - 1] == '\'')))
-    {
-        return t[1 .. t.len - 1];
-    }
-    return t;
-}
+const trimAscii = common.trimAscii;
+const stripQuotes = common.unquoteToml;
 
 /// Parses `/etc/diosix/catalog.toml` into `out_entries`.
 pub fn parseCatalogToml(
@@ -296,36 +285,37 @@ pub fn inferImageMetadata(
     const is_iso = std.mem.endsWith(u8, filename, ".iso") or is_iso_dir;
     const fmt: []const u8 = if (is_iso) "iso9660" else "elf";
 
-    if (std.mem.startsWith(u8, filename, "steward")) {
-        return .{ .tier = "steward", .os_family = "diosix", .format = fmt };
-    }
-    if (std.mem.indexOf(u8, filename, "shim") != null) {
-        return .{ .tier = "shim", .os_family = "diosix", .format = fmt };
+    const ImageMetadataEntry = struct {
+        id: []const u8,
+        tier: []const u8,
+        os_family: []const u8,
+    };
+    const table = [_]ImageMetadataEntry{
+        .{ .id = "steward", .tier = "steward", .os_family = "diosix" },
+        .{ .id = "shim", .tier = "shim", .os_family = "diosix" },
+        .{ .id = "freebsd", .tier = "leaf", .os_family = "freebsd" },
+        .{ .id = "FreeBSD", .tier = "leaf", .os_family = "freebsd" },
+        .{ .id = "openbsd", .tier = "leaf", .os_family = "openbsd" },
+        .{ .id = "install7", .tier = "leaf", .os_family = "openbsd" },
+        .{ .id = "netbsd", .tier = "leaf", .os_family = "netbsd" },
+        .{ .id = "NetBSD", .tier = "leaf", .os_family = "netbsd" },
+        .{ .id = "debian", .tier = "leaf", .os_family = "linux" },
+        .{ .id = "alpine", .tier = "leaf", .os_family = "linux" },
+        .{ .id = "linux", .tier = "leaf", .os_family = "linux" },
+        .{ .id = "vmlinux", .tier = "leaf", .os_family = "linux" },
+        .{ .id = "micro-guest", .tier = "leaf", .os_family = "diosix" },
+    };
+    for (table) |item| {
+        if (std.mem.indexOf(u8, filename, item.id) != null) {
+            return .{
+                .tier = item.tier,
+                .os_family = item.os_family,
+                .format = fmt,
+            };
+        }
     }
 
-    var os_family: []const u8 = if (is_iso) "generic" else "linux";
-    if (std.mem.indexOf(u8, filename, "freebsd") != null or
-        std.mem.indexOf(u8, filename, "FreeBSD") != null)
-    {
-        os_family = "freebsd";
-    } else if (std.mem.indexOf(u8, filename, "openbsd") != null or
-        std.mem.indexOf(u8, filename, "install7") != null)
-    {
-        os_family = "openbsd";
-    } else if (std.mem.indexOf(u8, filename, "netbsd") != null or
-        std.mem.indexOf(u8, filename, "NetBSD") != null)
-    {
-        os_family = "netbsd";
-    } else if (std.mem.indexOf(u8, filename, "debian") != null or
-        std.mem.indexOf(u8, filename, "alpine") != null or
-        std.mem.indexOf(u8, filename, "linux") != null or
-        std.mem.indexOf(u8, filename, "vmlinux") != null)
-    {
-        os_family = "linux";
-    } else if (std.mem.indexOf(u8, filename, "micro-guest") != null) {
-        os_family = "diosix";
-    }
-
+    const os_family: []const u8 = if (is_iso) "generic" else "linux";
     return .{ .tier = "leaf", .os_family = os_family, .format = fmt };
 }
 
@@ -383,20 +373,13 @@ pub fn hasPinnedSha256(entry: CatalogEntry) bool {
     return false;
 }
 
-/// Computes the lowercase 64-character SHA-256 hex digest of `data`.
-pub fn computeSha256Hex(
-    data: []const u8,
-    out_hex: *[SHA256_HEX_LEN]u8,
-) []const u8 {
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(data, &digest, .{});
-    const hex_chars = "0123456789abcdef";
-    for (digest, 0..) |b, i| {
-        out_hex[i * 2] = hex_chars[b >> 4];
-        out_hex[i * 2 + 1] = hex_chars[b & 0x0f];
-    }
-    return out_hex[0..SHA256_HEX_LEN];
-}
+const format = @import("catalog/format.zig");
+
+pub const computeSha256Hex = format.computeSha256Hex;
+pub const formatCatalogTableFromSlice = format.formatCatalogTableFromSlice;
+pub const formatCatalogTable = format.formatCatalogTable;
+pub const formatCatalogJsonFromSlice = format.formatCatalogJsonFromSlice;
+pub const formatCatalogJson = format.formatCatalogJson;
 
 /// Verifies `data` against an expected 64-character hexadecimal SHA-256 digest.
 pub fn verifySha256Hex(data: []const u8, expected_hex: []const u8) bool {
@@ -417,84 +400,11 @@ pub fn extractSafeFilename(url_or_path: []const u8) ?[]const u8 {
     return base;
 }
 
-/// Formats `entries` as a human-readable table following the Diosix
-/// sentence-case style guide.
-pub fn formatCatalogTableFromSlice(
-    buf: []u8,
-    entries: []const CatalogEntry,
-) []const u8 {
-    var pos: usize = 0;
-    const header =
-        "Catalog ID         Tier      OS family  Format   " ++
-        "Default spec        Description\n" ++
-        "---------------------------------------------------" ++
-        "-----------------------------------------------------------\n";
-    if (header.len > buf.len) return "";
-    @memcpy(buf[0..header.len], header);
-    pos += header.len;
-
-    for (entries) |e| {
-        var spec_buf: [32]u8 = undefined;
-        const spec = std.fmt.bufPrint(&spec_buf, "{d}c/{d}M/{d}G", .{
-            e.default_vcpus,
-            e.default_ram_mb,
-            e.default_disk_mb / 1024,
-        }) catch "1c/512M/1G";
-
-        const line = std.fmt.bufPrint(
-            buf[pos..],
-            "{s:<18} {s:<9} {s:<10} {s:<8} {s:<19} {s}\n",
-            .{ e.id, e.tier, e.os_family, e.format, spec, e.title },
-        ) catch break;
-        pos += line.len;
-    }
-    return buf[0..pos];
-}
-
-/// Formats the official Guest OS & Steward catalog as a human-readable table.
-pub fn formatCatalogTable(buf: []u8) []const u8 {
-    return formatCatalogTableFromSlice(buf, &OFFICIAL_CATALOG);
-}
-
-/// Formats `entries` as deterministic JSON for Operator Agents.
-pub fn formatCatalogJsonFromSlice(
-    buf: []u8,
-    entries: []const CatalogEntry,
-) []const u8 {
-    var pos: usize = 0;
-    const prefix = "{\"catalog\":[";
-    if (prefix.len > buf.len) return "";
-    @memcpy(buf[0..prefix.len], prefix);
-    pos += prefix.len;
-    for (entries, 0..) |e, idx| {
-        const sep: []const u8 = if (idx > 0) "," else "";
-        const item_fmt =
-            "{s}{{\"id\":\"{s}\",\"alias\":\"{s}\",\"tier\":\"{s}\"," ++
-            "\"os_family\":\"{s}\",\"format\":\"{s}\",\"arch\":\"{s}\"," ++
-            "\"vcpus\":{d},\"ram_mb\":{d},\"disk_mb\":{d}," ++
-            "\"filename\":\"{s}\",\"url\":\"{s}\",\"sha256\":\"{s}\"}}";
-        const item = std.fmt.bufPrint(buf[pos..], item_fmt, .{
-            sep,              e.id,              e.alias,    e.tier,
-            e.os_family,      e.format,          e.arch,     e.default_vcpus,
-            e.default_ram_mb, e.default_disk_mb, e.filename, e.url,
-            e.sha256,
-        }) catch break;
-        pos += item.len;
-    }
-    const suffix = "]}\n";
-    if (pos + suffix.len <= buf.len) {
-        @memcpy(buf[pos .. pos + suffix.len], suffix);
-        pos += suffix.len;
-    }
-    return buf[0..pos];
-}
-
-/// Formats the official Guest OS & Steward catalog as deterministic JSON.
-pub fn formatCatalogJson(buf: []u8) []const u8 {
-    return formatCatalogJsonFromSlice(buf, &OFFICIAL_CATALOG);
-}
-
-test {
+test "catalog: findEntry and filename/URL validation" {
     std.testing.refAllDecls(@This());
+    _ = format;
     _ = @import("tests/catalog.zig");
+    try std.testing.expect(findEntry("steward") != null);
+    try std.testing.expect(isValidImageName("debian-12.iso"));
+    try std.testing.expect(!isValidImageName("../bad.iso"));
 }

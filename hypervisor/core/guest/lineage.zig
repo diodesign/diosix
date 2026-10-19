@@ -275,128 +275,14 @@ pub fn terminateWithCode(self: *guest_mod.Guest, exit_code: usize) void {
     self.unregisterResources();
 }
 
-/// Non-destructively reset a Steward VM back to its golden boot entry point
-/// without terminating or disturbing any of its child Leaf VMs.
-pub fn resetSteward(self: *guest_mod.Guest, override_entry: usize) void {
-    self.stop();
-    self.steward_reset_count += 1;
-    self.events = .{};
-    self.whisper_rx = .{};
-    const entry = if (override_entry != 0)
-        override_entry
-    else
-        self.initial_entry_point;
-    self.resetForRun(entry, self.initial_dtb_ptr);
-}
-
-/// Locate a healthy warm Standby Root VM among this Root VM's direct children.
-pub fn findStandbyRoot(self: *guest_mod.Guest) ?*guest_mod.Guest {
-    const s = self.tree_lock.lock();
-    defer self.tree_lock.unlock(s);
-    var it = self.children.start;
-    while (it) |node| {
-        const child = node.contents;
-        if (child.is_standby_root and child.state == .valid) {
-            return child;
-        }
-        it = node.next;
-    }
-    return null;
-}
-
-/// Promote a designated Standby Root VM (`standby`) to replace `old_root` as
-/// the active Root VM (`CID 1`, `is_root = true`, `is_trusted = true`) and
-/// non-destructively re-parent all surviving Steward and Leaf subtrees.
-pub fn promoteStandbyRoot(
-    old_root: *guest_mod.Guest,
-    standby: *guest_mod.Guest,
-) !void {
-    if (!old_root.is_root or
-        !standby.is_standby_root or
-        standby.parent != old_root)
-    {
-        return error.InvalidParam;
-    }
-
-    old_root.freeChildHandle(standby);
-    if (standby.child_node) |stby_node| {
-        const s = old_root.tree_lock.lock();
-        old_root.children.remove(stby_node);
-        old_root.tree_lock.unlock(s);
-        old_root.allocator.destroy(stby_node);
-        standby.child_node = null;
-    }
-
-    standby.parent = null;
-    standby.is_root = true;
-    standby.is_standby_root = false;
-    standby.is_trusted = true;
-    standby.space.is_trusted = true;
-    standby.local_cid = sbi.CID_SELF;
-    standby.quotas.current_depth = 0;
-    standby.quotas.max_ram_pages = old_root.quotas.max_ram_pages;
-    standby.quotas.max_vcpus = old_root.quotas.max_vcpus;
-    standby.quotas.max_child_depth = old_root.quotas.max_child_depth;
-    standby.quotas.max_descendants = old_root.quotas.max_descendants;
-
-    while (blk: {
-        const s = old_root.tree_lock.lock();
-        const n = old_root.children.popStart();
-        old_root.tree_lock.unlock(s);
-        break :blk n;
-    }) |node| {
-        const child = node.contents;
-        const prev_cid = child.local_cid;
-        old_root.freeChildHandle(child);
-
-        child.parent = standby;
-        node.next = null;
-        node.previous = null;
-        const assigned_static = blk: {
-            const s = standby.tree_lock.lock();
-            defer standby.tree_lock.unlock(s);
-            standby.children.pushEnd(node);
-            if (prev_cid >= sbi.CID_FIRST_CHILD and
-                (prev_cid - sbi.CID_FIRST_CHILD) < STATIC_CHILD_HANDLES and
-                standby.child_static_handles[
-                    prev_cid - sbi.CID_FIRST_CHILD
-                ] == null)
-            {
-                standby.child_static_handles[
-                    prev_cid - sbi.CID_FIRST_CHILD
-                ] = child;
-                child.child_handle_next = null;
-                child.local_cid = prev_cid;
-                break :blk true;
-            }
-            break :blk false;
-        };
-        if (!assigned_static) {
-            _ = standby.allocChildHandle(child) catch {};
-        }
-
-        standby.quotas.used_descendants = std.math.add(
-            usize,
-            standby.quotas.used_descendants,
-            1 + child.quotas.used_descendants,
-        ) catch standby.quotas.max_descendants;
-        standby.quotas.used_vcpus = std.math.add(
-            usize,
-            standby.quotas.used_vcpus,
-            child.quotas.used_vcpus,
-        ) catch standby.quotas.max_vcpus;
-        standby.quotas.used_ram_pages = std.math.add(
-            usize,
-            standby.quotas.used_ram_pages,
-            child.quotas.used_ram_pages,
-        ) catch standby.quotas.max_ram_pages;
-    }
-
-    old_root.dropTrust();
-    old_root.is_root = false;
-}
+pub const failover_mod = @import("failover.zig");
+pub const resetSteward = failover_mod.resetSteward;
+pub const findStandbyRoot = failover_mod.findStandbyRoot;
+pub const promoteStandbyRoot = failover_mod.promoteStandbyRoot;
 
 test "Two-column virtual core and child handle lookup tables" {
+    _ = failover_mod;
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     const allocator = testing.allocator;
 

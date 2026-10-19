@@ -31,6 +31,7 @@ const ICON_DRAWER_SPEC2_ID = gui_mod.ICON_DRAWER_SPEC2_ID;
 const ICON_DRAWER_SPEC3_ID = gui_mod.ICON_DRAWER_SPEC3_ID;
 const ICON_DRAWER_NOTICE1_ID = gui_mod.ICON_DRAWER_NOTICE1_ID;
 const ICON_DRAWER_NOTICE2_ID = gui_mod.ICON_DRAWER_NOTICE2_ID;
+const ICON_DRAWER_OPS_HDR_ID = gui_mod.ICON_DRAWER_OPS_HDR_ID;
 const ICON_DRAWER_BTN_START_ID = gui_mod.ICON_DRAWER_BTN_START_ID;
 const ICON_DRAWER_BTN_STOP_ID = gui_mod.ICON_DRAWER_BTN_STOP_ID;
 const ICON_DRAWER_BTN_PAUSE_ID = gui_mod.ICON_DRAWER_BTN_PAUSE_ID;
@@ -373,7 +374,9 @@ pub fn buildVmActionDrawer(
     cur_y += 26;
 
     const op_lbl = "Available operations";
-    try addDrawerReadOnly(win, 1259, cur_y, col_w, 18, op_lbl, fb.Color.WHITE);
+    const ops_id = ICON_DRAWER_OPS_HDR_ID;
+    const white = fb.Color.WHITE;
+    try addDrawerReadOnly(win, ops_id, cur_y, col_w, 18, op_lbl, white);
     cur_y += 24;
 
     if (is_root) {
@@ -474,4 +477,8 @@ pub fn buildVmActionDrawer(
         };
         try addDrawerButtonList(win, pad_x, cur_y, col_w, &run_btns);
     }
+}
+
+test {
+    @import("std").testing.refAllDecls(@This());
 }

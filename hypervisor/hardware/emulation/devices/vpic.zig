@@ -22,6 +22,7 @@ pub const PLIC_ENABLE_BASE: u32 = 0x2000;
 pub const PLIC_ENABLE_CTX_STRIDE: u32 = 0x80;
 pub const PLIC_CONTEXT_BASE: u32 = 0x200000;
 pub const PLIC_CONTEXT_STRIDE: u32 = 0x1000;
+pub const PLIC_CONTEXT_OFFSET_MASK: u32 = PLIC_CONTEXT_STRIDE - 1;
 
 pub const PLIC_REG_THRESHOLD: u32 = 0;
 pub const PLIC_REG_CLAIM_COMPLETE: u32 = 4;
@@ -145,14 +146,14 @@ pub const VirtualPlic = struct {
     pub fn read(self: *VirtualPlic, offset: u32) u32 {
         if ((offset % BYTES_PER_WORD) != 0) return 0;
 
-        // Source Priorities: 0x0000 .. 0x01FC (up to 128 IRQs).
+        // Source Priorities: 0x0000 .. 0x01fc (up to 128 IRQs).
         if (offset < (MAX_IRQS * BYTES_PER_WORD)) {
             const irq = offset / BYTES_PER_WORD;
             if (irq == 0) return 0; // IRQ 0 priority is hardwired to 0.
             return self.priority[irq];
         }
 
-        // Pending Bits: 0x1000 .. 0x100C (4 words = 128 IRQs).
+        // Pending Bits: 0x1000 .. 0x100c (4 words = 128 IRQs).
         const pending_end =
             PLIC_PENDING_BASE + (PENDING_WORDS * BYTES_PER_WORD);
         if (offset >= PLIC_PENDING_BASE and offset < pending_end) {
@@ -177,7 +178,7 @@ pub const VirtualPlic = struct {
         if (offset >= PLIC_CONTEXT_BASE) {
             const rel = offset - PLIC_CONTEXT_BASE;
             const ctx = rel / PLIC_CONTEXT_STRIDE;
-            const reg = rel & 0xfff;
+            const reg = rel & PLIC_CONTEXT_OFFSET_MASK;
             if (self.getContext(ctx, false)) |c| {
                 if (reg == PLIC_REG_THRESHOLD) {
                     return c.threshold;
@@ -240,7 +241,7 @@ pub const VirtualPlic = struct {
         } else if (offset >= PLIC_CONTEXT_BASE) {
             const rel = offset - PLIC_CONTEXT_BASE;
             const ctx = rel / PLIC_CONTEXT_STRIDE;
-            const reg = rel & 0xfff;
+            const reg = rel & PLIC_CONTEXT_OFFSET_MASK;
             if (self.getContext(ctx, true)) |c| {
                 if (reg == PLIC_REG_THRESHOLD) {
                     c.threshold = val;
@@ -375,4 +376,5 @@ test "PLIC interrupt priority, enable, pending, claim and complete" {
 
     plic.write(ctx64_claim_addr, 10);
     try testing.expectEqual(@as(u32, 0), plic.getClaimedIrq(64));
+    testing.refAllDecls(@This());
 }

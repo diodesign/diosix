@@ -19,23 +19,24 @@ pub const BYTES_PER_MTIMECMP: u32 = 8;
 pub const HIGH_WORD_SHIFT: u6 = 32;
 pub const LOW_WORD_MASK: u64 = 0x00000000ffffffff;
 pub const HIGH_WORD_MASK: u64 = 0xffffffff00000000;
+pub const TIMER_INFINITY: u64 = std.math.maxInt(u64);
 
 pub const HartTimerNode = struct {
     hart: usize,
-    mtimecmp: u64 = ~@as(u64, 0),
+    mtimecmp: u64 = TIMER_INFINITY,
     next: ?*HartTimerNode = null,
 };
 
 pub const VirtualTimer = struct {
     mtime: u64 = 0,
     /// Column 1: Static fast-path for harts 0..31 (wait-free, O(1)).
-    static_mtimecmp: [STATIC_HARTS]u64 = @splat(~@as(u64, 0)),
+    static_mtimecmp: [STATIC_HARTS]u64 = @splat(TIMER_INFINITY),
     /// Column 2: Dynamic hash buckets for harts >= 32 (keyed by hart % 32).
     dynamic_buckets: [DYNAMIC_HASH_BUCKETS]?*HartTimerNode = @splat(null),
     /// Dynamic node pool for standalone execution (up to 128 dynamic harts).
     dynamic_pool: [128]HartTimerNode = @splat(.{
         .hart = 0,
-        .mtimecmp = ~@as(u64, 0),
+        .mtimecmp = TIMER_INFINITY,
         .next = null,
     }),
     pool_count: usize = 0,
@@ -56,7 +57,7 @@ pub const VirtualTimer = struct {
             if (node.hart == hart) return node.mtimecmp;
             curr = node.next;
         }
-        return ~@as(u64, 0);
+        return TIMER_INFINITY;
     }
 
     pub fn getMtimecmpConst(self: *const VirtualTimer, hart: usize) u64 {
@@ -69,7 +70,7 @@ pub const VirtualTimer = struct {
             if (node.hart == hart) return node.mtimecmp;
             curr = node.next;
         }
-        return ~@as(u64, 0);
+        return TIMER_INFINITY;
     }
 
     pub fn setMtimecmp(self: *VirtualTimer, hart: usize, val: u64) void {
@@ -137,7 +138,7 @@ pub const VirtualTimer = struct {
     }
 
     pub fn getEarliestDeadline(self: *VirtualTimer) u64 {
-        var min: u64 = ~@as(u64, 0);
+        var min: u64 = TIMER_INFINITY;
         for (self.static_mtimecmp) |deadline| {
             if (deadline < min) min = deadline;
         }
@@ -163,11 +164,11 @@ pub const VirtualTimer = struct {
         defer self.lock.store(false, .release);
 
         self.mtime = 0;
-        self.static_mtimecmp = @splat(~@as(u64, 0));
+        self.static_mtimecmp = @splat(TIMER_INFINITY);
         self.dynamic_buckets = @splat(null);
         self.dynamic_pool = @splat(.{
             .hart = 0,
-            .mtimecmp = ~@as(u64, 0),
+            .mtimecmp = TIMER_INFINITY,
             .next = null,
         });
         self.pool_count = 0;
@@ -180,7 +181,7 @@ test "CLINT virtual timer mtimecmp read write and earliest deadline" {
     var timer = VirtualTimer{};
 
     // Initial state: all deadlines are max u64.
-    try testing.expectEqual(~@as(u64, 0), timer.getEarliestDeadline());
+    try testing.expectEqual(TIMER_INFINITY, timer.getEarliestDeadline());
 
     // Write Hart 0 mtimecmp low word (0x4000) and high word (0x4004).
     timer.write(CLINT_MTIMECMP_BASE, 0x12345678);
@@ -196,11 +197,11 @@ test "CLINT virtual timer mtimecmp read write and earliest deadline" {
     );
     try testing.expectEqual(@as(u64, 0x0000abcd12345678), timer.getMtimecmp(0));
 
-    // Write Hart 1 mtimecmp (offset 0x4008, 0x400C).
+    // Write Hart 1 mtimecmp (offset 0x4008, 0x400c).
     timer.write(CLINT_MTIMECMP_BASE + 8, 0x00000100);
     timer.write(CLINT_MTIMECMP_BASE + 12, 0x00000000);
 
-    // Earliest deadline should now be Hart 1 (0x100 < 0x0000ABCD12345678).
+    // Earliest deadline should now be Hart 1 (0x100 < 0x0000abcd12345678).
     try testing.expectEqual(@as(u64, 0x100), timer.getEarliestDeadline());
 
     // Test Hart 15 (high static hart ID).
@@ -236,4 +237,5 @@ test "CLINT virtual timer mtimecmp read write and earliest deadline" {
         @as(u32, 0x12345678),
         timer.read(CLINT_MTIMECMP_BASE),
     );
+    testing.refAllDecls(@This());
 }

@@ -474,4 +474,5 @@ test "diosix-gui: dockable OSK, Welcome modal, Guided Tour, and semantic JSON" {
     try testing.expect(gui.getWindow(gui_mod.WIN_TOUR_ID) == null);
     try testing.expect(try gui.triggerSemanticAction("osk.hide"));
     try testing.expect(gui.getWindow(gui_mod.WIN_OSK_ID) == null);
+    testing.refAllDecls(@This());
 }

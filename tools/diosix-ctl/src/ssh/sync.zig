@@ -96,10 +96,7 @@ pub fn ensureGuestDefaultImage(
 ) void {
     const candidate_sources = [_][]const u8{
         "/var/lib/diosix/images/linux-guest.elf",
-        "/boot/vmlinux.elf",
-        "/boot/linux-guest.elf",
         "/var/lib/diosix/images/default.elf",
-        "/boot/default.elf",
     };
     var found_src: ?[]const u8 = null;
     var found_fd: i32 = -1;
@@ -140,8 +137,6 @@ pub fn ensureGuestDefaultImage(
     const dest_str = common.toPathZ(dest_slice, &dest_z_buf) orelse return;
 
     const check_cmd: [:0]const u8 =
-        "test -s /boot/default.elf || test -s /boot/vmlinux.elf || " ++
-        "test -s /boot/linux-guest.elf || " ++
         "test -s /var/lib/diosix/images/default.elf || " ++
         "test -s /var/lib/diosix/images/linux-guest.elf";
     if (ssh.runSshCommand(key_str, dest_str, check_cmd, true) == 0) return;

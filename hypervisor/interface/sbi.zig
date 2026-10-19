@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-pub const SPEC_VERSION: usize = 0x02000000; // v2.0.
+pub const SPEC_VERSION: usize = 0x02000000; // Specification v2.0.
 
 pub const IMPL_ID: usize = 5; // Diosix official implementation ID.
 pub const IMPL_VERSION: usize = 1;
@@ -117,7 +117,7 @@ pub const HypervisorInfo = extern struct {
     version_minor: u16 = DEFAULT_VERSION_MINOR,
     version_patch: u16 = DEFAULT_VERSION_PATCH,
     _reserved1: u32 = 0,
-    build_commit: [BUILD_COMMIT_LEN]u8 = std.mem.zeroes([BUILD_COMMIT_LEN]u8),
+    build_commit: [BUILD_COMMIT_LEN]u8 = @splat(0),
 
     features: u64 = 0,
     host_physical_cores: u32 = 0,
@@ -126,8 +126,8 @@ pub const HypervisorInfo = extern struct {
     host_free_ram_kb: u64 = 0,
     hv_reserved_bytes: u64 = 0,
     hv_heap_free_bytes: u64 = 0,
-    host_cpu_isa: [HOST_CPU_ISA_LEN]u8 = std.mem.zeroes([HOST_CPU_ISA_LEN]u8),
-    build_desc: [BUILD_DESC_LEN]u8 = std.mem.zeroes([BUILD_DESC_LEN]u8),
+    host_cpu_isa: [HOST_CPU_ISA_LEN]u8 = @splat(0),
+    build_desc: [BUILD_DESC_LEN]u8 = @splat(0),
 };
 
 pub const GuestInfo = extern struct {
@@ -170,7 +170,7 @@ pub const RunFlags = struct {
 pub const CHARTER_HASH_LEN: usize = 32;
 
 pub const CharterArgs = extern struct {
-    charter_hash: [CHARTER_HASH_LEN]u8 = std.mem.zeroes([CHARTER_HASH_LEN]u8),
+    charter_hash: [CHARTER_HASH_LEN]u8 = @splat(0),
     quorum_required: u16 = 2,
     quorum_total: u16 = 3,
     standby_replicas: u16 = 1,
@@ -195,6 +195,8 @@ pub const TerminateArgs = extern struct {
     target_id: u64,
     exit_code: u64,
 };
+
+pub const WAIT_EVENT_FLAG_NOHANG: u64 = 1 << 0;
 
 pub const WaitEventArgs = extern struct {
     target_cid: u64,
@@ -288,6 +290,7 @@ comptime {
 }
 
 test "SBI interface structures and extension IDs" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
     // Verify cross-ABI struct sizes.

@@ -487,4 +487,5 @@ test "diosix-gui: input scaling and evdev absinfo calibration" {
     };
     try testing.expectEqual(@as(i32, 0), zero_span.scaleX(50, 1920));
     try testing.expectEqual(@as(i32, 0), zero_span.scaleY(50, 1080));
+    testing.refAllDecls(@This());
 }

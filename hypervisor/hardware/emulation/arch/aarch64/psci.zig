@@ -7,6 +7,7 @@ const std = @import("std");
 const vcore = @import("../../../../core/vcore.zig");
 
 pub const PSCI_SUCCESS: i32 = 0;
+pub const PSCI_VERSION: u32 = 0x8400_0000;
 
 pub fn handlePSCI(
     vc: *vcore.VirtualCore,
@@ -30,6 +31,6 @@ test "PSCI handler returns success" {
     testing.refAllDecls(@This());
 
     var vc: vcore.VirtualCore = undefined;
-    const res = handlePSCI(&vc, 0, 0x84000000, 0, 0, 0);
+    const res = handlePSCI(&vc, 0, PSCI_VERSION, 0, 0, 0);
     try testing.expectEqual(PSCI_SUCCESS, res);
 }

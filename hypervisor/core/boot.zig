@@ -55,17 +55,22 @@ pub const ROOT_VM_VCPU_COUNT: usize = MAX_ROOT_VM_VCPU_COUNT;
 pub const RV32_DTB_GPA_OFFSET: usize = 0x04000000;
 pub const GUEST_DTB_TAIL_RESERVE_BYTES: usize = 1024 * 1024;
 pub const MAX_HOST_BOOTARGS_LEN: usize = 512;
+pub const MAX_DT_DISCOVERY_DEPTH: usize = 10;
 
 /// Computes Root VM RAM allocation from total host physical RAM.
 pub fn computeRootVmRamBytes(total_host_ram_bytes: usize) usize {
     if (total_host_ram_bytes == 0) return MIN_ROOT_VM_RAM_SIZE_BYTES;
     const align_2mb: usize = 2 * 1024 * 1024;
     if (total_host_ram_bytes < MIN_HOST_RAM_SIZE_BYTES) {
-        const half = (total_host_ram_bytes / 2) & ~(align_2mb - 1);
+        const half =
+            std.mem.alignBackward(usize, total_host_ram_bytes / 2, align_2mb);
         return @max(align_2mb, half);
     }
-    const scaled =
-        (total_host_ram_bytes / ROOT_RAM_HOST_DIVISOR) & ~(align_2mb - 1);
+    const scaled = std.mem.alignBackward(
+        usize,
+        total_host_ram_bytes / ROOT_RAM_HOST_DIVISOR,
+        align_2mb,
+    );
     return std.math.clamp(
         scaled,
         MIN_ROOT_VM_RAM_SIZE_BYTES,
@@ -91,8 +96,8 @@ pub fn sanitizeBootargs(buf: []u8, raw: []const u8) []const u8 {
     var prev_space: bool = false;
     for (trimmed) |ch| {
         if (out_len >= buf.len) break;
-        const is_ctrl = (ch < 0x20 or ch >= 0x7f);
-        const norm: u8 = if (is_ctrl or ch == ' ') ' ' else ch;
+        const norm: u8 =
+            if (!std.ascii.isControl(ch) and ch != ' ') ch else ' ';
         if (norm == ' ') {
             if (prev_space) continue;
             prev_space = true;
@@ -117,7 +122,7 @@ pub var system_ctx_locked = atomic.LockPayload(?*SystemContext).init(
 );
 
 fn discoverHostPeripherals(device_tree: *const dt.DeviceTree) !void {
-    var dt_it = device_tree.iter("/", 10);
+    var dt_it = device_tree.iter("/", MAX_DT_DISCOVERY_DEPTH);
     while (dt_it.next()) |path| {
         const compat_prop = device_tree.getProperty(path, "compatible") catch
             continue;
@@ -153,9 +158,7 @@ fn discoverHostPeripherals(device_tree: *const dt.DeviceTree) !void {
 pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
     var guest_hart_ids = blk: {
         var ids: [pcore.TABLE_ROWS]usize = undefined;
-        for (0..pcore.TABLE_ROWS) |i| {
-            ids[i] = i;
-        }
+        for (0..pcore.TABLE_ROWS) |i| ids[i] = i;
         break :blk ids;
     };
     const ver_str = std.mem.trim(u8, std.mem.span(project_version), " \t\r\n");
@@ -329,18 +332,11 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         root_vm_gpa_base + rootvm_ram_size - GUEST_DTB_TAIL_RESERVE_BYTES;
     const guest_dtb_hpa = try root_vm.space.translateGPA(guest_dtb_gpa);
 
-    const rwx_flags = sv39x4.PTEFlags.read |
-        sv39x4.PTEFlags.write |
-        sv39x4.PTEFlags.execute |
-        sv39x4.PTEFlags.valid |
-        sv39x4.PTEFlags.accessed |
-        sv39x4.PTEFlags.dirty |
-        sv39x4.PTEFlags.user;
     try root_vm.space.map(
         guest_dtb_gpa,
         guest_dtb_hpa,
         guest_dtb_slice.len,
-        rwx_flags,
+        sv39x4.PTEFlags.leaf_rwx_user,
     );
     try root_vm.space.copyToGuest(guest_dtb_gpa, guest_dtb_slice);
 
@@ -376,13 +372,19 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
 // Mock Root VM symbols for tests.
 const test_rootvm_data = if (builtin.is_test) blk: {
-    var data: [64]u8 = std.mem.zeroes([64]u8);
+    var data: [elf_spec.ELF64_EHDR_SIZE]u8 = @splat(0);
     @memcpy(
-        data[elf_spec.EHDR.IDENT .. elf_spec.EHDR.IDENT + 4],
+        data[elf_spec.EHDR.IDENT .. elf_spec.EHDR.IDENT + elf_spec.MAGIC.len],
         elf_spec.MAGIC,
     );
-    data[4] = elf_spec.CLASS_64;
-    data[5] = elf_spec.DATA_LSB;
+    data[elf_spec.EI_CLASS] = elf_spec.CLASS_64;
+    data[elf_spec.EI_DATA] = elf_spec.DATA_LSB;
+    std.mem.writeInt(
+        u16,
+        data[elf_spec.EHDR.TYPE..][0..2],
+        elf_spec.TYPE_EXEC,
+        .little,
+    );
     std.mem.writeInt(
         u16,
         data[elf_spec.EHDR.MACHINE..][0..2],
@@ -392,11 +394,11 @@ const test_rootvm_data = if (builtin.is_test) blk: {
     std.mem.writeInt(
         u64,
         data[elf_spec.EHDR.ENTRY..][0..8],
-        0x80000000,
+        DEFAULT_GUEST_GPA_BASE,
         .little,
     );
-    data[elf_spec.EHDR.PHOFF] = 64;
-    data[elf_spec.EHDR.PHENTSIZE] = 56;
+    data[elf_spec.EHDR.PHOFF] = elf_spec.ELF64_EHDR_SIZE;
+    data[elf_spec.EHDR.PHENTSIZE] = elf_spec.ELF64_PHDR_SIZE;
     data[elf_spec.EHDR.PHNUM] = 0;
     break :blk data;
 } else {};
@@ -404,6 +406,7 @@ pub var test_rootvm_start: usize = 0;
 pub var test_rootvm_end: usize = 0;
 
 test "boot CPU initialization, bootargs forwarding, and resource scaling" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     const allocator = testing.allocator;
 

@@ -7,19 +7,22 @@ const std = @import("std");
 const riscv = @import("interface").riscv;
 const bus_mod = @import("devices/bus.zig");
 const ops = @import("softtlb/ops.zig");
+const walk = @import("softtlb/walk.zig");
 
 pub const PAGE_SHIFT = 12;
 pub const PAGE_SIZE: u32 = 1 << PAGE_SHIFT;
-pub const PAGE_OFFSET_MASK: u32 = PAGE_SIZE - 1; // 0xfff
+pub const PAGE_OFFSET_MASK: u32 = PAGE_SIZE - 1; // 0xfff.
 pub const INVALID_VADDR_PAGE: u32 = 0xffff_ffff;
+pub const INVALID_TAG: u32 = INVALID_VADDR_PAGE;
 
 pub const SV32_VPN1_SHIFT = 22;
 pub const SV32_VPN_MASK: u32 = 0x3ff;
 pub const SV32_PPN_SHIFT = 10;
+pub const SV32_PPN1_PTE_SHIFT = 20;
 pub const SV32_PTE_PPN_MASK: usize = 0xffff_fc00;
 pub const SV32_PTE_PPN0_MASK: u32 = 0x000f_fc00;
-pub const SV32_SUPERPAGE_SIZE: u32 = 1 << SV32_VPN1_SHIFT; // 4 MiB
-pub const SV32_SUPERPAGE_MASK: u32 = SV32_SUPERPAGE_SIZE - 1; // 0x003f_ffff
+pub const SV32_SUPERPAGE_SIZE: u32 = 1 << SV32_VPN1_SHIFT; // 4 MiB.
+pub const SV32_SUPERPAGE_MASK: u32 = SV32_SUPERPAGE_SIZE - 1; // 0x003f_ffff.
 pub const SV32_SATP_MODE_SHIFT = 31;
 pub const SV32_SATP_PPN_MASK: usize = 0x003f_ffff;
 
@@ -95,6 +98,13 @@ pub const SoftTlb = struct {
     pub const LrResult = ops.LrResult;
     pub const ScResult = ops.ScResult;
 
+    pub const DirectMappingRegion = struct {
+        vaddr_start: u32,
+        vaddr_end: u32,
+        hpa_start: usize,
+        delta: i64,
+    };
+
     pub fn init(gpa_base: usize, hpa_base: usize, ram_size: usize) SoftTlb {
         var tlb = SoftTlb{
             .guest_gpa_base = gpa_base,
@@ -127,6 +137,29 @@ pub const SoftTlb = struct {
         for (self.contiguous_regions[0..]) |*r| r.valid = false;
     }
 
+    /// Synchronize SoftTLB address-space, privilege, and mstatus state with
+    /// the virtual CPU, flushing cached translations when translation-affecting
+    /// state changes.
+    pub fn syncCpuState(
+        self: *SoftTlb,
+        satp: u32,
+        priv: u8,
+        mstatus: u32,
+    ) void {
+        const mask: u32 = riscv.MSTATUS.TRANSLATION_AFFECTING_MASK;
+        if (self.satp != satp or
+            self.privilege_mode != priv or
+            ((self.mstatus ^ mstatus) & mask) != 0)
+        {
+            self.satp = satp;
+            self.privilege_mode = priv;
+            self.mstatus = mstatus;
+            self.flush();
+        } else {
+            self.mstatus = mstatus;
+        }
+    }
+
     pub fn ppnToGpa(self: *SoftTlb, ppn: usize) usize {
         _ = self;
         return ppn << PAGE_SHIFT;
@@ -141,42 +174,7 @@ pub const SoftTlb = struct {
         return null;
     }
 
-    pub fn fallbackIdentity(self: *SoftTlb, vaddr: u32) ?usize {
-        if (vaddr < PAGE_SIZE) return null; // NULL pointer dereference traps.
-        if ((vaddr >= 0x10000000 and vaddr < 0x10009000) or
-            (vaddr >= 0x02000000 and vaddr < 0x02010000) or
-            (vaddr >= 0x0c000000 and vaddr < 0x10000000))
-        {
-            return vaddr; // MMIO physical address directly.
-        }
-
-        const gpa: usize = if (vaddr >= 0xc000_0000)
-            self.guest_gpa_base +% (vaddr -% 0xc000_0000)
-        else if (vaddr >= 0x4000_0000 and vaddr < self.guest_gpa_base)
-            self.guest_gpa_base +% (vaddr -% 0x4000_0000)
-        else if (vaddr < self.guest_gpa_base)
-            self.guest_gpa_base +% vaddr
-        else
-            vaddr;
-
-        if (self.guest_hpa_base > 0 and gpa >= self.guest_gpa_base and
-            (gpa - self.guest_gpa_base) < self.guest_ram_size)
-        {
-            if (self.translateGpaToHpa(gpa)) |hpa| {
-                const page = vaddr >> PAGE_SHIFT;
-                self.entries[page & TLB_MASK] = .{
-                    .guest_vaddr_page = page,
-                    .host_paddr_page = hpa & ~@as(usize, PAGE_OFFSET_MASK),
-                    .flags = PTE.VRWX,
-                    .epoch = self.epoch,
-                };
-                return hpa;
-            }
-        }
-        return null;
-    }
-
-    fn checkPrivilegeFlags(
+    pub fn checkPrivilegeFlags(
         self: *const SoftTlb,
         flags: u8,
         is_write: bool,
@@ -248,195 +246,15 @@ pub const SoftTlb = struct {
         return null;
     }
 
-    pub const DirectMappingRegion = struct {
-        vaddr_start: u32,
-        vaddr_end: u32,
-        hpa_start: usize,
-        delta: i64,
-    };
-
-    /// Query the dynamic direct-mapped host physical region for a virtual
-    /// address.
-    pub fn getDirectMappingRegion(
-        self: *SoftTlb,
-        vaddr: u32,
-    ) ?DirectMappingRegion {
-        const satp_mode = (self.satp >> SV32_SATP_MODE_SHIFT) & 1;
-        if (satp_mode == 0 or self.privilege_mode == riscv.PRIV_MACHINE) {
-            if (self.guest_hpa_base > 0 and vaddr >= self.guest_gpa_base and
-                (vaddr - self.guest_gpa_base) < self.guest_ram_size)
-            {
-                const vstart = @as(u32, @truncate(self.guest_gpa_base));
-                const vend = vstart +% @as(u32, @truncate(self.guest_ram_size));
-                const vstart_sext = @as(i64, @as(i32, @bitCast(vstart)));
-                return .{
-                    .vaddr_start = vstart,
-                    .vaddr_end = vend,
-                    .hpa_start = self.guest_hpa_base,
-                    .delta = @as(i64, @intCast(self.guest_hpa_base)) -
-                        vstart_sext,
-                };
-            }
-            return null;
-        }
-
-        const reg_slot =
-            (vaddr >> SV32_VPN1_SHIFT) & (MAX_CONTIGUOUS_REGIONS - 1);
-        const region = &self.contiguous_regions[reg_slot];
-        if (region.valid and vaddr >= region.vaddr_start and
-            vaddr < region.vaddr_end)
-        {
-            const vstart_sext =
-                @as(i64, @as(i32, @bitCast(region.vaddr_start)));
-            return .{
-                .vaddr_start = region.vaddr_start,
-                .vaddr_end = region.vaddr_end,
-                .hpa_start = region.hpa_start,
-                .delta = @as(i64, @intCast(region.hpa_start)) - vstart_sext,
-            };
-        }
-        return null;
-    }
+    pub const fallbackIdentity = walk.fallbackIdentity;
+    pub const getDirectMappingRegion = walk.getDirectMappingRegion;
+    pub const translateFull = walk.translateFull;
 
     /// Query the dynamic direct-mapped host physical delta for a virtual
     /// address.
     pub fn getDirectMappingDelta(self: *SoftTlb, vaddr: u32) ?i64 {
         if (self.getDirectMappingRegion(vaddr)) |r| return r.delta;
         return null;
-    }
-
-    /// Translate virtual address to host physical address via direct mapping
-    /// or Sv32 page table walk.
-    pub fn translateFull(
-        self: *SoftTlb,
-        vaddr: u32,
-        is_write: bool,
-        is_exec: bool,
-        bus: *bus_mod.Bus,
-    ) ?usize {
-        _ = bus;
-        if (self.translateFast(vaddr, is_write, is_exec)) |cached| {
-            return cached;
-        }
-
-        const satp_mode = (self.satp >> SV32_SATP_MODE_SHIFT) & 1;
-        if (satp_mode == 0 or self.privilege_mode == riscv.PRIV_MACHINE) {
-            const hpa = self.translateGpaToHpa(vaddr) orelse
-                (self.fallbackIdentity(vaddr) orelse return null);
-
-            if (!bus_mod.Bus.isMmioAddr(@truncate(hpa))) {
-                const page = vaddr >> PAGE_SHIFT;
-                var flags: u8 = PTE.VRWX;
-                if (self.privilege_mode == riscv.PRIV_USER) flags |= PTE.U;
-
-                self.entries[page & TLB_MASK] = .{
-                    .guest_vaddr_page = page,
-                    .host_paddr_page = hpa & ~@as(usize, PAGE_OFFSET_MASK),
-                    .flags = flags,
-                    .epoch = self.epoch,
-                };
-            }
-            return hpa;
-        }
-
-        // Sv32 Page Table Walk.
-        const root_ppn = @as(usize, self.satp) & SV32_SATP_PPN_MASK;
-        const root_gpa = self.ppnToGpa(root_ppn);
-        const vpn1 = (vaddr >> SV32_VPN1_SHIFT) & SV32_VPN_MASK;
-        const pte1_gpa = root_gpa +% (vpn1 * @sizeOf(u32));
-        const pte1_hpa = self.translateGpaToHpa(pte1_gpa) orelse return null;
-
-        const pte1_ptr = @as(*align(4) const u32, @ptrFromInt(pte1_hpa));
-        const pte1 = @atomicLoad(u32, pte1_ptr, .acquire);
-
-        if (!PTE.isValid(pte1)) {
-            self.last_null_vaddr = vaddr;
-            self.last_null_pte1 = pte1;
-            return null;
-        }
-
-        var final_gpa: usize = 0;
-        var pte_flags: u8 = PTE.V;
-
-        if (PTE.isPointer(pte1)) {
-            const pte0_ppn =
-                (@as(usize, pte1) & SV32_PTE_PPN_MASK) >> SV32_PPN_SHIFT;
-            const pte0_table_gpa = self.ppnToGpa(pte0_ppn);
-            const vpn0 = (vaddr >> PAGE_SHIFT) & SV32_VPN_MASK;
-            const pte0_gpa = pte0_table_gpa +% (vpn0 * @sizeOf(u32));
-            const pte0_hpa =
-                self.translateGpaToHpa(pte0_gpa) orelse return null;
-
-            const pte0_ptr = @as(*align(4) const u32, @ptrFromInt(pte0_hpa));
-            const pte0 = @atomicLoad(u32, pte0_ptr, .acquire);
-
-            if (!PTE.isValid(pte0) or PTE.isPointer(pte0)) {
-                self.last_null_vaddr = vaddr;
-                self.last_null_pte1 = pte1;
-                self.last_null_pte0 = pte0;
-                return null;
-            }
-
-            const page_ppn =
-                (@as(usize, pte0) & SV32_PTE_PPN_MASK) >> SV32_PPN_SHIFT;
-            final_gpa = self.ppnToGpa(page_ppn) | (vaddr & PAGE_OFFSET_MASK);
-            pte_flags = @truncate(pte0 & PTE.FLAGS_MASK);
-        } else {
-            // 4MB Superpage: PPN[0] (bits 19..10) must be 0 in Sv32.
-            if ((pte1 & SV32_PTE_PPN0_MASK) != 0) {
-                self.last_null_vaddr = vaddr;
-                self.last_null_pte1 = pte1;
-                return null;
-            }
-            const ppn1_shifted = (@as(usize, pte1) >> 20) << SV32_VPN1_SHIFT;
-            const ppn1_raw = @as(usize, @as(u32, @truncate(ppn1_shifted)));
-            const ppn1 = if (ppn1_raw >= self.guest_gpa_base)
-                ppn1_raw
-            else
-                (self.guest_gpa_base | ppn1_raw);
-            final_gpa = ppn1 | (vaddr & SV32_SUPERPAGE_MASK);
-            pte_flags = @truncate(pte1 & PTE.FLAGS_MASK);
-
-            const vstart = vaddr & ~SV32_SUPERPAGE_MASK;
-            const vend = vstart +% SV32_SUPERPAGE_SIZE;
-            if (self.translateGpaToHpa(ppn1)) |hstart| {
-                const reg_slot =
-                    (vstart >> SV32_VPN1_SHIFT) & (MAX_CONTIGUOUS_REGIONS - 1);
-                self.contiguous_regions[reg_slot] = .{
-                    .vaddr_start = vstart,
-                    .vaddr_end = vend,
-                    .hpa_start = hstart,
-                    .flags = pte_flags,
-                    .valid = true,
-                };
-            }
-        }
-
-        const final_hpa = self.translateGpaToHpa(final_gpa) orelse
-            (if (bus_mod.Bus.isMmioAddr(@truncate(final_gpa)))
-                final_gpa
-            else
-                return null);
-
-        const req_flag: u8 =
-            if (is_exec) PTE.X else if (is_write) PTE.W else PTE.R;
-        if (!self.checkPrivilegeFlags(pte_flags, is_write, is_exec)) {
-            self.last_null_vaddr = vaddr;
-            self.last_null_pte_flags = pte_flags;
-            self.last_null_req_flag = req_flag;
-            return null;
-        }
-
-        if (!bus_mod.Bus.isMmioAddr(@truncate(final_hpa))) {
-            const page = vaddr >> PAGE_SHIFT;
-            self.entries[page & TLB_MASK] = .{
-                .guest_vaddr_page = page,
-                .host_paddr_page = final_hpa & ~@as(usize, PAGE_OFFSET_MASK),
-                .flags = pte_flags,
-                .epoch = self.epoch,
-            };
-        }
-        return final_hpa;
     }
 
     pub const readU8 = ops.readU8;
@@ -453,7 +271,9 @@ pub const SoftTlb = struct {
 
 test "SoftTlb Sv32 validation rejects illegal PTEs and misaligned superpages" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
     _ = ops;
+    _ = walk;
 
     var uart = @import("devices/vuart.zig").VirtualUart{};
     var timer = @import("devices/vtimer.zig").VirtualTimer{};

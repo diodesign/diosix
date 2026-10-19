@@ -169,12 +169,8 @@ pub fn parsePasskeyLine(raw_line: []const u8) ?PasskeyEntry {
     // Compute short 16-char SHA-256 fingerprint of the wire blob.
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(wire_blob, &digest, .{});
-    const hex_chars = "0123456789abcdef";
     var fp_hex: [16]u8 = undefined;
-    for (digest[0..8], 0..) |b, i| {
-        fp_hex[i * 2] = hex_chars[b >> 4];
-        fp_hex[i * 2 + 1] = hex_chars[b & 0x0f];
-    }
+    _ = bytesToHex(digest[0..8], &fp_hex);
 
     return PasskeyEntry{
         .kind = kind,
@@ -204,15 +200,7 @@ pub fn parseAuthorizedPasskeys(
 }
 
 /// Encodes a byte slice as lowercase hexadecimal.
-pub fn bytesToHex(bytes: []const u8, out_hex: []u8) []const u8 {
-    const hex_chars = "0123456789abcdef";
-    const n = @min(bytes.len, out_hex.len / 2);
-    for (bytes[0..n], 0..) |b, i| {
-        out_hex[i * 2] = hex_chars[b >> 4];
-        out_hex[i * 2 + 1] = hex_chars[b & 0x0f];
-    }
-    return out_hex[0 .. n * 2];
-}
+pub const bytesToHex = @import("common.zig").bytesToHex;
 
 /// Decodes a hexadecimal string into `out_bytes`.
 pub fn hexToBytes(hex: []const u8, out_bytes: []u8) ?[]const u8 {

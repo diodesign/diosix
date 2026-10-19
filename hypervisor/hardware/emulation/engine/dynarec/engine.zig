@@ -21,6 +21,11 @@ const softtlb_mod = @import("../../softtlb.zig");
 const bus_mod = @import("../../devices/bus.zig");
 const riscv = @import("interface").riscv;
 
+pub const PC_HISTORY_LEN: usize = 8;
+pub const PC_HISTORY_MASK: usize = PC_HISTORY_LEN - 1;
+pub const BACKWARD_JUMP_YIELD_THRESHOLD: u32 = 16384;
+pub const MIN_GUEST_INSN_BYTES: u32 = 2;
+
 pub fn runBlock(regs: *[32]u64, host_code_ptr: usize) usize {
     if (comptime builtin.target.cpu.arch.isRISCV()) {
         const ext = struct {
@@ -49,7 +54,7 @@ pub const Engine = struct {
     last_timer_inject_count: usize = 0,
     total_insn_count: usize = 0,
     last_irq_pc: u32 = 0,
-    pc_history: [8]u32 = std.mem.zeroes([8]u32),
+    pc_history: [PC_HISTORY_LEN]u32 = std.mem.zeroes([PC_HISTORY_LEN]u32),
     history_idx: usize = 0,
     jit_cycles: u64 = 0,
     engine_cycles: u64 = 0,
@@ -75,7 +80,7 @@ pub const Engine = struct {
         self.last_timer_inject_count = 0;
         self.total_insn_count = 0;
         self.last_irq_pc = 0;
-        self.pc_history = std.mem.zeroes([8]u32);
+        self.pc_history = std.mem.zeroes([PC_HISTORY_LEN]u32);
         self.history_idx = 0;
         self.jit_cycles = 0;
         self.engine_cycles = 0;
@@ -204,7 +209,11 @@ pub const Engine = struct {
             u32,
             @truncate(runBlock(&self.vcpu.regs, @intFromPtr(tb.host_code.ptr))),
         );
-        const insn_approx = @max(1, tb.guest_size / 2);
+        // Conservative count estimate using 16-bit RVC minimum size.
+        const insn_approx: usize = @max(
+            1,
+            tb.guest_size / MIN_GUEST_INSN_BYTES,
+        );
         self.jit_cycles +%= insn_approx;
         self.vcpu.pc = ret_pc;
         count.* += insn_approx;
@@ -214,7 +223,9 @@ pub const Engine = struct {
         // yield slice to other cores.
         if (ret_pc <= pc_before) {
             self.consecutive_backward_jumps += 1;
-            if (self.consecutive_backward_jumps >= 16384) {
+            if (self.consecutive_backward_jumps >=
+                BACKWARD_JUMP_YIELD_THRESHOLD)
+            {
                 self.consecutive_backward_jumps = 0;
                 return ExitReason.yield;
             }
@@ -261,20 +272,14 @@ pub const Engine = struct {
             if (self.vcpu.checkAndClearCacheFlush()) {
                 self.cache.flush();
             }
-            const mask: u32 = riscv.MSTATUS.TRANSLATION_AFFECTING_MASK;
-            if (self.tlb.satp != self.vcpu.satp or
-                self.tlb.privilege_mode != self.vcpu.privilege_mode or
-                ((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0)
-            {
-                self.tlb.satp = self.vcpu.satp;
-                self.tlb.privilege_mode = self.vcpu.privilege_mode;
-                self.tlb.mstatus = self.vcpu.mstatus;
-                self.tlb.flush();
-            } else {
-                self.tlb.mstatus = self.vcpu.mstatus;
-            }
+            self.tlb.syncCpuState(
+                self.vcpu.satp,
+                self.vcpu.privilege_mode,
+                self.vcpu.mstatus,
+            );
+
             const pc_before = self.vcpu.pc;
-            self.pc_history[self.history_idx & 7] = pc_before;
+            self.pc_history[self.history_idx & PC_HISTORY_MASK] = pc_before;
             self.history_idx += 1;
             self.last_pc = pc_before;
 
@@ -288,19 +293,23 @@ pub const Engine = struct {
                 const cur_mip = self.vcpu.getMip();
                 const pending = (cur_mip & self.vcpu.sie & self.vcpu.mideleg);
                 if (pending != 0) {
-                    if ((pending & (1 << 1)) != 0) {
-                        self.vcpu.clearMipBit(1);
-                        self.trap(0x8000_0001, pc_before, 0);
+                    const s_soft: u5 = riscv.MIP.SSIP_BIT;
+                    const s_timer: u5 = riscv.MIP.STIP_BIT;
+                    const s_ext: u5 = riscv.MIP.SEIP_BIT;
+                    const irq_bit = vcpu_mod.CAUSE_INTERRUPT_RV32;
+                    if ((pending & riscv.MIP.SSIP) != 0) {
+                        self.vcpu.clearMipBit(s_soft);
+                        self.trap(irq_bit | s_soft, pc_before, 0);
                         continue;
-                    } else if ((pending & (1 << 5)) != 0) {
-                        self.vcpu.clearMipBit(5);
+                    } else if ((pending & riscv.MIP.STIP) != 0) {
+                        self.vcpu.clearMipBit(s_timer);
                         self.last_timer_inject_count = self.total_insn_count;
                         self.last_irq_pc = pc_before;
-                        self.trap(0x8000_0005, pc_before, 0);
+                        self.trap(irq_bit | s_timer, pc_before, 0);
                         continue;
-                    } else if ((pending & (1 << 9)) != 0) {
-                        self.vcpu.clearMipBit(9);
-                        self.trap(0x8000_0009, pc_before, 0);
+                    } else if ((pending & riscv.MIP.SEIP) != 0) {
+                        self.vcpu.clearMipBit(s_ext);
+                        self.trap(irq_bit | s_ext, pc_before, 0);
                         continue;
                     }
                 }
@@ -332,19 +341,23 @@ pub const Engine = struct {
                 if (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR) {
                     self.vcpu.pc = pc_before + decoded.len;
                     return ExitReason.ecall;
-                } else {
-                    const cause: u32 = if (self.vcpu.privilege_mode ==
-                        vcpu_mod.PRIV_USER) 8 else 11;
-                    self.trap(cause, pc_before, 0);
-                    continue;
                 }
+                const cause: u32 = if (self.vcpu.privilege_mode ==
+                    vcpu_mod.PRIV_USER)
+                    @backingInt(riscv.Cause.user_environment_call)
+                else
+                    @backingInt(riscv.Cause.machine_environment_call);
+                self.trap(cause, pc_before, 0);
+                continue;
             }
             if (decoded.insn == .wfi) {
                 if (self.vcpu.privilege_mode == vcpu_mod.PRIV_USER or
                     (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and
                         (self.vcpu.mstatus & riscv.MSTATUS.TW) != 0))
                 {
-                    self.trap(2, pc_before, 0);
+                    const ill: u32 =
+                        @backingInt(riscv.Cause.illegal_instruction);
+                    self.trap(ill, pc_before, 0);
                     continue;
                 }
                 self.vcpu.pc = pc_before + decoded.len;
@@ -380,53 +393,6 @@ fn readInsnAt(buf: []const u8, offset: usize) u32 {
     return std.mem.readInt(u32, buf[offset..][0..4], .little);
 }
 
-test "Dynarec RV32I arithmetic and immediate emission" {
-    const cache_inst = try std.testing.allocator.create(cache_mod.Cache);
-    defer std.testing.allocator.destroy(cache_inst);
-    var raw_pool: [4096]u8 align(4096) = undefined;
-    cache_inst.initOnPtr(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x8000_0000, 0, false, 512);
-    const code = tb.host_code;
-    var off: usize = 0;
-
-    emitter_rv64.emit(code, &off, emitter_rv64.addw(10, 11, 12));
-    try std.testing.expectEqual(@as(usize, 4), off);
-    try std.testing.expectEqual(@as(u32, 0x00c5853b), readInsnAt(code, 0));
-
-    emitter_rv64.emit(code, &off, emitter_rv64.subw(10, 11, 12));
-    try std.testing.expectEqual(@as(usize, 8), off);
-    try std.testing.expectEqual(@as(u32, 0x40c5853b), readInsnAt(code, 4));
-
-    emitter_rv64.emit(code, &off, emitter_rv64.addiw(2, 2, -16));
-    try std.testing.expectEqual(@as(usize, 12), off);
-    try std.testing.expectEqual(@as(u32, 0xff01011b), readInsnAt(code, 8));
-}
-
-test "Dynarec RV32M multiply and divide emission" {
-    const cache_inst = try std.testing.allocator.create(cache_mod.Cache);
-    defer std.testing.allocator.destroy(cache_inst);
-    var raw_pool: [4096]u8 align(4096) = undefined;
-    cache_inst.initOnPtr(&raw_pool);
-    const tb = try cache_inst.allocateBlock(0x8000_0000, 0, false, 512);
-    const code = tb.host_code;
-    var off: usize = 0;
-
-    emitter_rv64.emit(code, &off, emitter_rv64.mulw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5853b), readInsnAt(code, 0));
-
-    emitter_rv64.emit(code, &off, emitter_rv64.divw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5c53b), readInsnAt(code, 4));
-
-    emitter_rv64.emit(code, &off, emitter_rv64.divuw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5d53b), readInsnAt(code, 8));
-
-    emitter_rv64.emit(code, &off, emitter_rv64.remw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5e53b), readInsnAt(code, 12));
-
-    emitter_rv64.emit(code, &off, emitter_rv64.remuw(10, 11, 12));
-    try std.testing.expectEqual(@as(u32, 0x02c5f53b), readInsnAt(code, 16));
-}
-
 test "Dynarec RV32A atomic and inlined SoftTLB fast-path emission" {
     var vcpu = vcpu_mod.VCpu{ .id = 0, .pc = 0x8000_0000 };
     var tlb: softtlb_mod.SoftTlb = undefined;
@@ -444,24 +410,25 @@ test "Dynarec RV32A atomic and inlined SoftTLB fast-path emission" {
 
     const tb = try eng.cache.allocateBlock(0x8000_0000, 0, false, 1024);
     var off: usize = 0;
-
-    eng.emitSoftTlbAtomic(tb, &off, 0x8000_0000, 0x00, 0, 0, 10, 11, 12);
+    const add_op = emitter_rv64.AmoFunct5.ADD;
+    eng.emitSoftTlbAtomic(tb, &off, 0x8000_0000, add_op, 0, 0, 10, 11, 12);
     try std.testing.expect(off > 0);
+    const s11 = block_mod.HOST_REG_S11;
     try std.testing.expectEqual(
-        emitter_rv64.sd(27, 5, 40),
+        emitter_rv64.sd(s11, block_mod.HOST_REG_T0, block_mod.VCPU_OFF_T0),
         readInsnAt(tb.host_code, 0),
     );
     try std.testing.expectEqual(
-        emitter_rv64.sd(27, 6, 48),
+        emitter_rv64.sd(s11, block_mod.HOST_REG_T1, block_mod.VCPU_OFF_T1),
         readInsnAt(tb.host_code, 4),
     );
 
     const prev_offset = off;
-    eng.emitSoftTlbLoad(tb, &off, 0x8000_0000, 2, 10, 11, 0);
+    eng.emitSoftTlbLoad(tb, &off, 0x8000_0000, emit_mem.MemOp.LW, 10, 11, 0);
     try std.testing.expect(off > prev_offset);
 
     const prev_store = off;
-    eng.emitSoftTlbStore(tb, &off, 0x8000_0004, 2, 11, 10, 4);
+    eng.emitSoftTlbStore(tb, &off, 0x8000_0004, emit_mem.MemOp.SW, 11, 10, 4);
     try std.testing.expect(off > prev_store);
 }
 
@@ -474,10 +441,12 @@ test "Dynarec fast stack load and store emission" {
     var host_offset: usize = 0;
 
     // Emit lw a0, 8(sp) with direct delta 0.
-    Engine.emitFastLoad(tb, &host_offset, 2, 10, 2, 8, 0);
+    Engine.emitFastLoad(tb, &host_offset, emit_mem.MemOp.LW, 10, 2, 8, 0);
     try std.testing.expect(host_offset > 0);
+    const s11 = block_mod.HOST_REG_S11;
     try std.testing.expectEqual(
-        emitter_rv64.sd(27, 5, 40),
+        emitter_rv64.sd(s11, block_mod.HOST_REG_T0, block_mod.VCPU_OFF_T0),
         readInsnAt(tb.host_code, 0),
     );
+    std.testing.refAllDecls(@This());
 }

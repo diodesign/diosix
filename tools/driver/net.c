@@ -61,7 +61,7 @@ static netdev_tx_t diosix_net_xmit(struct sk_buff *skb, struct net_device *dev)
 
     if (skb->len >= ETH_HLEN &&
         skb_copy_bits(skb, 0, dest_mac, ETH_ALEN) == 0) {
-        if (dest_mac[0] == 0x02 && dest_mac[1] == 0x00 &&
+        if (dest_mac[0] == DIOSIX_MAC_PREFIX_BYTE0 && dest_mac[1] == 0x00 &&
             dest_mac[2] == 0x00 && dest_mac[3] == 0x00) {
             dest_cid = ((unsigned long)dest_mac[4] << 8) |
                        (unsigned long)dest_mac[5];
@@ -147,9 +147,9 @@ static int diosix_net_rx_worker(void *data)
                 idle_count = 0;
                 continue;
             }
-            skb = netdev_alloc_skb(dev, pkt_len + 2);
+            skb = netdev_alloc_skb(dev, pkt_len + NET_IP_ALIGN);
             if (skb) {
-                skb_reserve(skb, 2);
+                skb_reserve(skb, NET_IP_ALIGN);
                 memcpy(skb_put(skb, pkt_len), rx_buf, pkt_len);
                 skb->protocol = eth_type_trans(skb, dev);
                 skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -182,7 +182,7 @@ int init_diosix_net(void)
     struct diosix_net_priv *priv;
     struct sbiret ret;
     struct guest_info *info;
-    unsigned long self_cid = 1;
+    unsigned long self_cid = DIOSIX_CID_SELF;
     phys_addr_t info_pa;
     u8 mac_addr[ETH_ALEN];
     int err;
@@ -193,7 +193,7 @@ int init_diosix_net(void)
         ret = sbi_ecall(
             EXT_DIOSIX,
             DIOSIX_FUNC_GET_INFO,
-            1,
+            DIOSIX_CID_SELF,
             (unsigned long)info_pa,
             sizeof(*info),
             0,
@@ -201,7 +201,8 @@ int init_diosix_net(void)
             0
         );
         if (ret.error == 0) {
-            self_cid = (info->assigned_cid > 0) ? info->assigned_cid : 1;
+            self_cid = (info->assigned_cid > 0) ?
+                info->assigned_cid : DIOSIX_CID_SELF;
         }
         kfree(info);
     }
@@ -214,7 +215,7 @@ int init_diosix_net(void)
     dev->netdev_ops = &diosix_netdev_ops;
     dev->flags |= IFF_BROADCAST | IFF_MULTICAST;
 
-    mac_addr[0] = 0x02;
+    mac_addr[0] = DIOSIX_MAC_PREFIX_BYTE0;
     mac_addr[1] = 0x00;
     mac_addr[2] = 0x00;
     mac_addr[3] = 0x00;

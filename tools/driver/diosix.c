@@ -38,7 +38,7 @@ static long handle_get_info(unsigned long arg)
 {
     struct guest_info *kinfo = kzalloc(sizeof(*kinfo), GFP_KERNEL);
     phys_addr_t pa;
-    unsigned long target_cid = 1;
+    unsigned long target_cid = DIOSIX_CID_SELF;
     struct sbiret ret;
 
     if (!kinfo)
@@ -85,7 +85,7 @@ static long handle_run_guest(unsigned long arg)
     struct run_args *sbi_args = kzalloc(sizeof(*sbi_args), GFP_KERNEL);
     phys_addr_t sbi_args_pa;
     struct sbiret ret;
-    int ret_val = 0;
+    long ret_val = 0;
 
     if (!sbi_args)
         return -ENOMEM;
@@ -108,7 +108,7 @@ static long handle_run_guest(unsigned long arg)
     }
 
     if (kargs.elf_size > 0 && kargs.elf_ptr) {
-        if (kargs.elf_size <= 2 * 1024 * 1024) {
+        if (kargs.elf_size <= DIOSIX_MAX_EXACT_ALLOC_SIZE) {
             elf_kbuf = alloc_pages_exact(kargs.elf_size, GFP_KERNEL);
             if (elf_kbuf) {
                 elf_pa = virt_to_phys(elf_kbuf);
@@ -158,9 +158,9 @@ static long handle_run_guest(unsigned long arg)
     }
 
     sbi_args->child_id = kargs.child_id;
-    sbi_args->elf_ptr = (unsigned long)elf_pa;
+    sbi_args->elf_ptr = (uint64_t)elf_pa;
     sbi_args->elf_size = kargs.elf_size;
-    sbi_args->dtb_ptr = (unsigned long)dtb_pa;
+    sbi_args->dtb_ptr = (uint64_t)dtb_pa;
     sbi_args->dtb_size = kargs.dtb_size;
     sbi_args->target_arch = kargs.target_arch;
     sbi_args->flags = kargs.flags;
@@ -188,7 +188,7 @@ static long handle_run_guest(unsigned long arg)
         goto out_free_dtb;
     }
 
-    ret_val = (int)ret.value;
+    ret_val = ret.value;
 
 out_free_dtb:
     if (dtb_kbuf)
@@ -217,7 +217,7 @@ static long handle_wait_event(unsigned long arg)
     struct diosix_event *kev = kzalloc(sizeof(*kev), GFP_KERNEL);
     phys_addr_t pa;
     struct sbiret ret;
-    int ret_val = 0;
+    long ret_val = 0;
 
     if (!kev)
         return -ENOMEM;
@@ -253,7 +253,7 @@ static long handle_wait_event(unsigned long arg)
             ret_val = 0;
             break;
         }
-        if (wargs.flags & 1) {
+        if (wargs.flags & DIOSIX_WAIT_FLAG_NONBLOCK) {
             ret_val = -EAGAIN;
             break;
         }
@@ -261,7 +261,7 @@ static long handle_wait_event(unsigned long arg)
             ret_val = -ERESTARTSYS;
             break;
         }
-        schedule_timeout_interruptible(msecs_to_jiffies(50));
+        schedule_timeout_interruptible(msecs_to_jiffies(DIOSIX_EVENT_POLL_MS));
     }
 
     kfree(kev);
@@ -444,7 +444,11 @@ static int __init diosix_init(void)
     dma_coerce_mask_and_coherent(diosix_dev.this_device, DMA_BIT_MASK(64));
     pr_info("diosix: /dev/diosix hypercall bridge registered\n");
 
-    init_diosix_net();
+    ret = init_diosix_net();
+    if (ret) {
+        misc_deregister(&diosix_dev);
+        return ret;
+    }
     return 0;
 }
 

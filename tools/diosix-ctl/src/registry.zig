@@ -8,6 +8,8 @@ const linux = std.os.linux;
 const common = @import("common.zig");
 const manifest = @import("manifest.zig");
 
+pub const GUEST_REGISTRY_PATH = "/var/run/diosix/guests.toml";
+
 pub const GuestRegistryKey = enum {
     cid,
     name,
@@ -100,7 +102,7 @@ pub fn matchTarget(
 
 pub fn findAttachedGuest(disk_path: []const u8, out_buf: []u8) []const u8 {
     const content = common.readBinaryFile(
-        "/var/run/diosix/guests.toml",
+        GUEST_REGISTRY_PATH,
         common.MAX_MANIFEST_SIZE,
     ) catch return "-";
     defer common.unmapBinaryFile(content);
@@ -139,7 +141,7 @@ const REGISTRY_ENTRY_FMT =
 
 pub fn removeGuestFromRegistry(target_cid: usize) void {
     const content = common.readBinaryFile(
-        "/var/run/diosix/guests.toml",
+        GUEST_REGISTRY_PATH,
         common.MAX_MANIFEST_SIZE,
     ) catch return;
     defer common.unmapBinaryFile(content);
@@ -171,7 +173,9 @@ pub fn removeGuestFromRegistry(target_cid: usize) void {
         }
     }
 
-    _ = common.writeFile("/var/run/diosix/guests.toml", out.items) catch {};
+    common.writeFile(GUEST_REGISTRY_PATH, out.items) catch |err| {
+        common.printApiError("Update guest registry", err);
+    };
 }
 
 pub fn saveGuestRegistry(
@@ -198,7 +202,11 @@ pub fn saveGuestRegistry(
         .CREAT = true,
         .APPEND = true,
     };
-    const fd_res = linux.open("/var/run/diosix/guests.toml", flags, 0o644);
+    const fd_res = linux.open(
+        GUEST_REGISTRY_PATH,
+        flags,
+        common.DEFAULT_FILE_MODE,
+    );
     const fd_signed: isize = @bitCast(fd_res);
     if (fd_signed >= 0) {
         const fd: i32 = @intCast(fd_signed);

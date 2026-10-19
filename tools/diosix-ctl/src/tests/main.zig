@@ -36,21 +36,47 @@ const formatVersionChannel = host.formatVersionChannel;
 const formatHostInfo = host.formatHostInfo;
 
 test {
-    testing.refAllDecls(@This());
-    testing.refAllDecls(api);
-    testing.refAllDecls(manifest);
-    testing.refAllDecls(catalog);
-    testing.refAllDecls(passkey);
-    testing.refAllDecls(installer);
-    testing.refAllDecls(charter);
-    testing.refAllDecls(sysconfig);
-    testing.refAllDecls(common);
-    testing.refAllDecls(loader);
-    testing.refAllDecls(ssh);
-    testing.refAllDecls(storage);
-    testing.refAllDecls(vm);
-    testing.refAllDecls(host);
-    testing.refAllDecls(governance);
+    inline for (.{
+        @This(),
+        api,
+        manifest,
+        catalog,
+        passkey,
+        installer,
+        charter,
+        sysconfig,
+        common,
+        loader,
+        ssh,
+        storage,
+        vm,
+        host,
+        governance,
+        @import("../auth.zig"),
+        @import("../auth/enroll.zig"),
+        @import("../catalog/format.zig"),
+        @import("../charter/cmd.zig"),
+        @import("../charter/status.zig"),
+        @import("../charter/whisper.zig"),
+        @import("../gui.zig"),
+        @import("../image.zig"),
+        @import("../image/import.zig"),
+        @import("../image/pull.zig"),
+        @import("../manifest/cmd.zig"),
+        @import("../manifest/lexer.zig"),
+        @import("../manifest/policy.zig"),
+        @import("../registry.zig"),
+        @import("../snapshot.zig"),
+        @import("../ssh/sync.zig"),
+        @import("../storage/disk.zig"),
+        @import("../sysconfig/tour.zig"),
+        @import("../vm/info.zig"),
+        @import("../vm/install.zig"),
+        @import("../vm/restart.zig"),
+        @import("../vm/run.zig"),
+        @import("../vm/stage.zig"),
+        @import("../whisper.zig"),
+    }) |mod| testing.refAllDecls(mod);
 }
 
 test "parseCid resolution" {
@@ -359,10 +385,23 @@ test "formatHostInfo text and JSON output with injection sanitization" {
     );
 }
 
-test "loader candidate lists and SHIM_HEADER_MAGIC are configured" {
-    try testing.expect(loader.GUEST_SHIM_CANDIDATES.len >= 3);
-    try testing.expect(loader.DEFAULT_GUEST_CANDIDATES.len >= 5);
-    try testing.expect(loader.FALLBACK_ISO_CANDIDATES.len >= 2);
+test "loader canonical paths and SHIM_HEADER_MAGIC are configured" {
+    try testing.expectEqualStrings(
+        "/usr/share/diosix/shim/guest-shim-riscv64.elf",
+        loader.GUEST_SHIM_PATH,
+    );
+    try testing.expectEqualStrings(
+        "/var/lib/diosix/images/default.elf",
+        loader.DEFAULT_GUEST_IMAGE_PATH,
+    );
+    try testing.expectEqualStrings(
+        "/var/lib/diosix/images/micro-guest.elf",
+        loader.FALLBACK_GUEST_IMAGE_PATH,
+    );
+    try testing.expectEqualStrings(
+        "/var/lib/diosix/iso/micro-guest.iso",
+        loader.FALLBACK_GUEST_ISO_PATH,
+    );
     try testing.expectEqual(
         @as(u64, 0x4d49_4853_5853_4f44),
         loader.SHIM_HEADER_MAGIC,
@@ -370,26 +409,18 @@ test "loader candidate lists and SHIM_HEADER_MAGIC are configured" {
 }
 
 test "parseProposalAction and shipped TOML configs parse cleanly" {
-    try testing.expectEqual(
-        charter.ProposalAction.amend_charter,
-        governance.parseProposalAction("amend-charter").?,
-    );
-    try testing.expectEqual(
-        charter.ProposalAction.terminate_steward,
-        governance.parseProposalAction("retire-steward").?,
-    );
-    try testing.expectEqual(
-        charter.ProposalAction.reset_steward,
-        governance.parseProposalAction("reset-steward").?,
-    );
-    try testing.expectEqual(
-        charter.ProposalAction.root_failover,
-        governance.parseProposalAction("promote-standby-root").?,
-    );
-    try testing.expectEqual(
-        charter.ProposalAction.terminate_units,
-        governance.parseProposalAction("terminate-vm").?,
-    );
+    for ([_]struct { []const u8, charter.ProposalAction }{
+        .{ "amend-charter", .amend_charter },
+        .{ "retire-steward", .terminate_steward },
+        .{ "reset-steward", .reset_steward },
+        .{ "promote-standby-root", .root_failover },
+        .{ "terminate-vm", .terminate_units },
+    }) |pair| {
+        try testing.expectEqual(
+            pair[1],
+            governance.parseProposalAction(pair[0]).?,
+        );
+    }
     try testing.expect(
         governance.parseProposalAction("unknown-action") == null,
     );
@@ -427,46 +458,23 @@ test "parseProposalAction and shipped TOML configs parse cleanly" {
 
 test "Command enum dispatches all CLI commands and aliases" {
     const Command = main.Command;
-    try testing.expectEqual(
-        Command.host,
-        std.meta.stringToEnum(Command, "host").?,
-    );
-    try testing.expectEqual(
-        Command.run,
-        std.meta.stringToEnum(Command, "run").?,
-    );
-    try testing.expectEqual(
-        Command.create,
-        std.meta.stringToEnum(Command, "create").?,
-    );
-    try testing.expectEqual(
-        Command.@"install-guest",
-        std.meta.stringToEnum(Command, "install-guest").?,
-    );
-    try testing.expectEqual(
-        Command.list,
-        std.meta.stringToEnum(Command, "list").?,
-    );
-    try testing.expectEqual(
-        Command.ps,
-        std.meta.stringToEnum(Command, "ps").?,
-    );
-    try testing.expectEqual(
-        Command.ssh,
-        std.meta.stringToEnum(Command, "ssh").?,
-    );
-    try testing.expectEqual(
-        Command.charter,
-        std.meta.stringToEnum(Command, "charter").?,
-    );
-    try testing.expectEqual(
-        Command.steward,
-        std.meta.stringToEnum(Command, "steward").?,
-    );
-    try testing.expectEqual(
-        Command.@"drop-trust",
-        std.meta.stringToEnum(Command, "drop-trust").?,
-    );
+    for ([_]struct { []const u8, Command }{
+        .{ "host", .host },
+        .{ "run", .run },
+        .{ "create", .create },
+        .{ "install-guest", .@"install-guest" },
+        .{ "list", .list },
+        .{ "ps", .ps },
+        .{ "ssh", .ssh },
+        .{ "charter", .charter },
+        .{ "steward", .steward },
+        .{ "drop-trust", .@"drop-trust" },
+    }) |pair| {
+        try testing.expectEqual(
+            pair[1],
+            std.meta.stringToEnum(Command, pair[0]).?,
+        );
+    }
     try testing.expect(
         std.meta.stringToEnum(Command, "nonexistent-cmd") == null,
     );

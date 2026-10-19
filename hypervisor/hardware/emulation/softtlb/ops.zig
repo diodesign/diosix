@@ -14,6 +14,10 @@ const AccessResult = softtlb_mod.AccessResult;
 const PAGE_SIZE = softtlb_mod.PAGE_SIZE;
 const PAGE_OFFSET_MASK = softtlb_mod.PAGE_OFFSET_MASK;
 
+pub const ALIGN16_MASK: usize = @alignOf(u16) - 1;
+pub const ALIGN32_MASK: usize = @alignOf(u32) - 1;
+pub const BITS_PER_BYTE: u5 = 8;
+
 const TRAP_LOAD_MISALIGNED: u32 = @backingInt(riscv.Cause.load_alignment);
 const TRAP_STORE_MISALIGNED: u32 = @backingInt(riscv.Cause.store_alignment);
 const TRAP_INST_PAGE_FAULT: u32 =
@@ -71,7 +75,9 @@ pub fn readU16(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
         if (b0.trap) |cause| return .{ .trap = cause };
         const b1 = readU8(self, vaddr +% 1, bus);
         if (b1.trap) |cause| return .{ .trap = cause };
-        return .{ .val = @as(u32, b0.val) | (@as(u32, b1.val) << 8) };
+        return .{
+            .val = @as(u32, b0.val) | (@as(u32, b1.val) << BITS_PER_BYTE),
+        };
     }
     const paddr = self.translateFast(vaddr, false, false) orelse
         (self.translateFull(vaddr, false, false, bus) orelse {
@@ -81,7 +87,7 @@ pub fn readU16(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
     if (bus.isMmio(p32)) {
         return .{ .val = @truncate(bus.read(p32, 2)) };
     }
-    if ((paddr & 1) == 0) {
+    if ((paddr & ALIGN16_MASK) == 0) {
         const ptr = @as(*align(2) const u16, @ptrFromInt(paddr));
         return .{ .val = @atomicLoad(u16, ptr, .acquire) };
     }
@@ -89,7 +95,7 @@ pub fn readU16(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
     const ptr_hi = @as(*align(1) const u8, @ptrFromInt(paddr +% 1));
     const lo = @atomicLoad(u8, ptr_lo, .acquire);
     const hi = @atomicLoad(u8, ptr_hi, .acquire);
-    return .{ .val = @as(u32, lo) | (@as(u32, hi) << 8) };
+    return .{ .val = @as(u32, lo) | (@as(u32, hi) << BITS_PER_BYTE) };
 }
 
 pub fn fetchU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
@@ -127,7 +133,7 @@ pub fn fetchU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
     if (bus.isMmio(p32)) {
         return .{ .val = bus.read(p32, 4) };
     }
-    if ((paddr & 3) == 0) {
+    if ((paddr & ALIGN32_MASK) == 0) {
         const ptr = @as(*align(4) const u32, @ptrFromInt(paddr));
         return .{ .val = @atomicLoad(u32, ptr, .acquire) };
     }
@@ -142,7 +148,8 @@ pub fn readU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
         while (i < 4) : (i += 1) {
             const res = readU8(self, vaddr +% i, bus);
             if (res.trap) |cause| return .{ .trap = cause };
-            val |= (@as(u32, res.val) << @as(u5, @truncate(i * 8)));
+            const shift: u5 = @truncate(i * BITS_PER_BYTE);
+            val |= (@as(u32, res.val) << shift);
         }
         return .{ .val = val };
     }
@@ -154,7 +161,7 @@ pub fn readU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
     if (bus.isMmio(p32)) {
         return .{ .val = bus.read(p32, 4) };
     }
-    if ((paddr & 3) == 0) {
+    if ((paddr & ALIGN32_MASK) == 0) {
         const ptr = @as(*align(4) const u32, @ptrFromInt(paddr));
         return .{ .val = @atomicLoad(u32, ptr, .acquire) };
     }
@@ -163,7 +170,8 @@ pub fn readU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
     while (i < 4) : (i += 1) {
         const byte_ptr = @as(*align(1) const u8, @ptrFromInt(paddr +% i));
         const b = @atomicLoad(u8, byte_ptr, .acquire);
-        val |= (@as(u32, b) << @as(u5, @truncate(i * 8)));
+        const shift: u5 = @truncate(i * BITS_PER_BYTE);
+        val |= (@as(u32, b) << shift);
     }
     return .{ .val = val };
 }
@@ -187,7 +195,12 @@ pub fn writeU8(self: *SoftTlb, vaddr: u32, val: u8, bus: *bus_mod.Bus) ?u32 {
 pub fn writeU16(self: *SoftTlb, vaddr: u32, val: u16, bus: *bus_mod.Bus) ?u32 {
     if (crossesPageBoundary(vaddr, @sizeOf(u16))) {
         if (writeU8(self, vaddr, @truncate(val), bus)) |trap| return trap;
-        if (writeU8(self, vaddr +% 1, @truncate(val >> 8), bus)) |trap| {
+        if (writeU8(
+            self,
+            vaddr +% 1,
+            @truncate(val >> BITS_PER_BYTE),
+            bus,
+        )) |trap| {
             return trap;
         }
         return null;
@@ -201,7 +214,7 @@ pub fn writeU16(self: *SoftTlb, vaddr: u32, val: u16, bus: *bus_mod.Bus) ?u32 {
         bus.write(p32, val, 2);
         return null;
     }
-    if ((paddr & 1) == 0) {
+    if ((paddr & ALIGN16_MASK) == 0) {
         const ptr = @as(*align(2) u16, @ptrFromInt(paddr));
         @atomicStore(u16, ptr, val, .release);
         vcpu_mod.VCpu.invalidateReservations(paddr);
@@ -210,7 +223,7 @@ pub fn writeU16(self: *SoftTlb, vaddr: u32, val: u16, bus: *bus_mod.Bus) ?u32 {
     const ptr_lo = @as(*align(1) u8, @ptrFromInt(paddr));
     const ptr_hi = @as(*align(1) u8, @ptrFromInt(paddr +% 1));
     @atomicStore(u8, ptr_lo, @truncate(val), .release);
-    @atomicStore(u8, ptr_hi, @truncate(val >> 8), .release);
+    @atomicStore(u8, ptr_hi, @truncate(val >> BITS_PER_BYTE), .release);
     vcpu_mod.VCpu.invalidateReservations(paddr);
     return null;
 }
@@ -219,7 +232,8 @@ pub fn writeU32(self: *SoftTlb, vaddr: u32, val: u32, bus: *bus_mod.Bus) ?u32 {
     if (crossesPageBoundary(vaddr, @sizeOf(u32))) {
         var i: u32 = 0;
         while (i < 4) : (i += 1) {
-            const b: u8 = @truncate(val >> @as(u5, @truncate(i * 8)));
+            const shift: u5 = @truncate(i * BITS_PER_BYTE);
+            const b: u8 = @truncate(val >> shift);
             if (writeU8(self, vaddr +% i, b, bus)) |trap| return trap;
         }
         return null;
@@ -233,7 +247,7 @@ pub fn writeU32(self: *SoftTlb, vaddr: u32, val: u32, bus: *bus_mod.Bus) ?u32 {
         bus.write(p32, val, 4);
         return null;
     }
-    if ((paddr & 3) == 0) {
+    if ((paddr & ALIGN32_MASK) == 0) {
         const ptr = @as(*align(4) u32, @ptrFromInt(paddr));
         @atomicStore(u32, ptr, val, .release);
         vcpu_mod.VCpu.invalidateReservations(paddr);
@@ -242,7 +256,7 @@ pub fn writeU32(self: *SoftTlb, vaddr: u32, val: u32, bus: *bus_mod.Bus) ?u32 {
     var i: usize = 0;
     while (i < 4) : (i += 1) {
         const byte_ptr = @as(*align(1) u8, @ptrFromInt(paddr +% i));
-        const shift: u5 = @truncate(i * 8);
+        const shift: u5 = @truncate(i * BITS_PER_BYTE);
         @atomicStore(u8, byte_ptr, @truncate(val >> shift), .release);
     }
     vcpu_mod.VCpu.invalidateReservations(paddr);
@@ -256,7 +270,7 @@ pub fn amoU32(
     op: AmoOp,
     bus: *bus_mod.Bus,
 ) AccessResult {
-    if ((vaddr & 3) != 0) {
+    if ((vaddr & ALIGN32_MASK) != 0) {
         return .{ .trap = TRAP_STORE_MISALIGNED };
     }
     const paddr = self.translateFast(vaddr, true, false) orelse
@@ -306,7 +320,7 @@ pub fn lrU32(
     hart_id: usize,
     bus: *bus_mod.Bus,
 ) LrResult {
-    if ((vaddr & 3) != 0) {
+    if ((vaddr & ALIGN32_MASK) != 0) {
         return .{ .trap = TRAP_LOAD_MISALIGNED };
     }
     const paddr = self.translateFast(vaddr, false, false) orelse
@@ -330,7 +344,7 @@ pub fn scU32(
     hart_id: usize,
     bus: *bus_mod.Bus,
 ) ScResult {
-    if ((vaddr & 3) != 0) {
+    if ((vaddr & ALIGN32_MASK) != 0) {
         return .{ .trap = TRAP_STORE_MISALIGNED };
     }
     const paddr = self.translateFast(vaddr, true, false) orelse
@@ -353,6 +367,7 @@ pub fn scU32(
 
 test "SoftTlb boundary access at 0xffffffff does not panic" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
 
     var uart = @import("../devices/vuart.zig").VirtualUart{};
     var timer = @import("../devices/vtimer.zig").VirtualTimer{};

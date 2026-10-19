@@ -13,6 +13,51 @@
 #include <sound/asound.h>
 
 #define MAX_ALSA_CHANNELS 128U
+#define MAX_OPEN_ATTEMPTS 30
+#define OPEN_RETRY_DELAY_US 100000U
+
+static int configure_elem(int fd, const struct snd_ctl_elem_id *id) {
+    struct snd_ctl_elem_info info;
+    memset(&info, 0, sizeof(info));
+    info.id = *id;
+    if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &info) < 0) {
+        return -1;
+    }
+
+    struct snd_ctl_elem_value val;
+    memset(&val, 0, sizeof(val));
+    val.id = *id;
+    if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_READ, &val) < 0) {
+        return -1;
+    }
+
+    unsigned int count =
+        info.count > MAX_ALSA_CHANNELS ? MAX_ALSA_CHANNELS : info.count;
+
+    // Unmute playback switches.
+    if (info.type == SNDRV_CTL_ELEM_TYPE_BOOLEAN &&
+        strstr((const char *)info.id.name, "Playback Switch")) {
+        for (unsigned int c = 0; c < count; c++) {
+            val.value.integer.value[c] = 1;
+        }
+        if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_WRITE, &val) < 0) {
+            return -1;
+        }
+    }
+
+    // Maximize playback volume controls.
+    if (info.type == SNDRV_CTL_ELEM_TYPE_INTEGER &&
+        strstr((const char *)info.id.name, "Playback Volume")) {
+        for (unsigned int c = 0; c < count; c++) {
+            val.value.integer.value[c] = info.value.integer.max;
+        }
+        if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_WRITE, &val) < 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
 
 int main(int argc, char **argv) {
     (void)argc;
@@ -20,10 +65,10 @@ int main(int argc, char **argv) {
 
     // Retry opening control device for up to 3 seconds as drivers initialize.
     int fd = -1;
-    for (int attempts = 0; attempts < 30; attempts++) {
+    for (int attempts = 0; attempts < MAX_OPEN_ATTEMPTS; attempts++) {
         fd = open("/dev/snd/controlC0", O_RDWR);
         if (fd >= 0) break;
-        usleep(100000); // 100ms.
+        usleep(OPEN_RETRY_DELAY_US);
     }
 
     if (fd < 0) {
@@ -54,44 +99,10 @@ int main(int argc, char **argv) {
     }
 
     for (unsigned int i = 0; i < list.used; i++) {
-        struct snd_ctl_elem_info info;
-        memset(&info, 0, sizeof(info));
-        info.id = pids[i];
-        if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &info) < 0) {
-            continue;
-        }
-
-        struct snd_ctl_elem_value val;
-        memset(&val, 0, sizeof(val));
-        val.id = pids[i];
-        if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_READ, &val) < 0) {
-            continue;
-        }
-
-        unsigned int count =
-            info.count > MAX_ALSA_CHANNELS ? MAX_ALSA_CHANNELS : info.count;
-
-        // Unmute playback switches.
-        if (info.type == SNDRV_CTL_ELEM_TYPE_BOOLEAN &&
-            strstr((const char *)info.id.name, "Playback Switch")) {
-            for (unsigned int c = 0; c < count; c++) {
-                val.value.integer.value[c] = 1;
-            }
-            ioctl(fd, SNDRV_CTL_IOCTL_ELEM_WRITE, &val);
-        }
-
-        // Maximize playback volume controls.
-        if (info.type == SNDRV_CTL_ELEM_TYPE_INTEGER &&
-            strstr((const char *)info.id.name, "Playback Volume")) {
-            for (unsigned int c = 0; c < count; c++) {
-                val.value.integer.value[c] = info.value.integer.max;
-            }
-            ioctl(fd, SNDRV_CTL_IOCTL_ELEM_WRITE, &val);
-        }
+        (void)configure_elem(fd, &pids[i]);
     }
 
     free(pids);
     close(fd);
     return 0;
 }
-

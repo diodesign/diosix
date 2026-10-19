@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const riscv = @import("interface").riscv;
 const reservation = @import("reservation.zig");
 
 pub inline fn readHostTime() u64 {
@@ -19,43 +20,59 @@ pub inline fn readHostTime() u64 {
 
 /// Privilege levels for virtual CPU.
 pub const PrivilegeMode = enum(u2) {
-    user = 0,
-    supervisor = 1,
-    machine = 3,
+    user = riscv.PRIV_USER,
+    supervisor = riscv.PRIV_SUPERVISOR,
+    machine = riscv.PRIV_MACHINE,
 };
 
-/// CSR Addresses for RISC-V 32-bit CPU.
-pub const CsrAddr = struct {
-    pub const mstatus: u12 = 0x300;
-    pub const misa: u12 = 0x301;
-    pub const medeleg: u12 = 0x302;
-    pub const mideleg: u12 = 0x303;
-    pub const mie: u12 = 0x304;
-    pub const mtvec: u12 = 0x305;
-    pub const mscratch: u12 = 0x340;
-    pub const mepc: u12 = 0x341;
-    pub const mcause: u12 = 0x342;
-    pub const mtval: u12 = 0x343;
-    pub const mip: u12 = 0x344;
-
-    pub const sstatus: u12 = 0x100;
-    pub const sie: u12 = 0x104;
-    pub const stvec: u12 = 0x105;
-    pub const sscratch: u12 = 0x140;
-    pub const sepc: u12 = 0x141;
-    pub const scause: u12 = 0x142;
-    pub const stval: u12 = 0x143;
-    pub const sip: u12 = 0x144;
-    pub const satp: u12 = 0x180;
-};
-
-pub const PRIV_USER: u2 = 0;
-pub const PRIV_SUPERVISOR: u2 = 1;
-pub const PRIV_MACHINE: u2 = 3;
+pub const PRIV_USER: u2 = riscv.PRIV_USER;
+pub const PRIV_SUPERVISOR: u2 = riscv.PRIV_SUPERVISOR;
+pub const PRIV_MACHINE: u2 = riscv.PRIV_MACHINE;
 
 /// Default RV32IMAFDC misa encoding.
-pub const DEFAULT_MISA_RV32: u32 = (1 << 30) | (1 << 8) | (1 << 12) |
-    (1 << 0) | (1 << 5) | (1 << 3) | (1 << 2);
+pub const DEFAULT_MISA_RV32: u32 =
+    riscv.IsaExtension.MXL_32 | @as(u32, @truncate(riscv.IsaExtension.gc));
+
+pub const MISA_FD_MASK: u32 = @truncate(
+    riscv.IsaExtension.f | riscv.IsaExtension.d,
+);
+pub const MSTATUS_VS_MASK_U32: u32 = @truncate(riscv.MSTATUS.VS_MASK);
+pub const MSTATUS_FS_MASK_U32: u32 = @truncate(riscv.MSTATUS.FS_MASK);
+pub const MSTATUS_FS_DIRTY_U32: u32 = @truncate(riscv.MSTATUS.FS_DIRTY);
+pub const MSTATUS_UBE_U32: u32 = 1 << 6;
+pub const MSTATUS_XS_MASK_U32: u32 = 0b11 << 15;
+pub const SSTATUS_WRITABLE_MASK: u32 = @as(
+    u32,
+    @truncate(
+        riscv.MSTATUS.SIE |
+            riscv.MSTATUS.SPIE |
+            riscv.MSTATUS.SPP |
+            riscv.MSTATUS.VS_MASK |
+            riscv.MSTATUS.FS_MASK |
+            riscv.MSTATUS.SUM |
+            riscv.MSTATUS.MXR,
+    ),
+) | MSTATUS_UBE_U32 | MSTATUS_XS_MASK_U32 | riscv.MSTATUS.SD_RV32;
+
+pub const CAUSE_INTERRUPT_RV32: u32 = 0x8000_0000;
+pub const CAUSE_CODE_MASK_RV32: u32 = 0x7fff_ffff;
+pub const FCSR_FFLAGS_MASK: u32 = 0x1f;
+pub const FCSR_FRM_SHIFT: u5 = 5;
+pub const FCSR_FRM_MASK: u32 = 0x7;
+pub const FCSR_FRM_FIELD_MASK: u32 = FCSR_FRM_MASK << FCSR_FRM_SHIFT;
+pub const FCSR_MASK: u32 = 0xff;
+pub const SIP_WRITABLE_MASK: u32 = @truncate(
+    riscv.MIP.SSIP | riscv.MIP.STIP | riscv.MIP.SEIP,
+);
+pub const MIP_STIP_U32: u32 = @truncate(riscv.MIP.STIP);
+pub const TVEC_MODE_MASK: u32 = 0x3;
+pub const TVEC_MODE_VECTORED: u32 = 1;
+pub const DELEGATE_ALL_MASK: u32 = 0xffff;
+pub const INITIAL_GUEST_INSN_TIME: u64 = 10_000_000;
+pub const TIMER_INFINITY: u64 = std.math.maxInt(u64);
+pub const LOW_WORD_MASK: u64 = 0x0000_0000_ffff_ffff;
+pub const HIGH_WORD_MASK: u64 = 0xffff_ffff_0000_0000;
+pub const HIGH_WORD_SHIFT: u6 = 32;
 
 /// Virtual CPU State.
 pub const VCpu = extern struct {
@@ -64,13 +81,13 @@ pub const VCpu = extern struct {
     /// Guest program counter -> offset 256..260.
     pc: u32 = 0,
     _pad0: u32 = 0,
-    id: usize = 0, // offset 264..272.
-    tlb_entries_ptr: usize = 0, // offset 272..280.
-    host_sp: usize = 0, // offset 280..288.
+    id: u64 = 0, // offset 264..272.
+    tlb_entries_ptr: u64 = 0, // offset 272..280.
+    host_sp: u64 = 0, // offset 280..288.
     scratch_t1: u64 = 0, // offset 288..296.
     scratch_t2: u64 = 0, // offset 296..304.
-    privilege_mode: u8 = 3,
-    priv_mode: u8 = 3,
+    privilege_mode: u8 = PRIV_MACHINE,
+    _pad1: u8 = 0,
     _pad2: u16 = 0,
     _pad4: u32 = 0,
     time: u64 = 0,
@@ -86,8 +103,8 @@ pub const VCpu = extern struct {
     // Machine-mode CSRs.
     mstatus: u32 = 0,
     misa: u32 = DEFAULT_MISA_RV32,
-    medeleg: u32 = 0xffff,
-    mideleg: u32 = 0xffff,
+    medeleg: u32 = DELEGATE_ALL_MASK,
+    mideleg: u32 = DELEGATE_ALL_MASK,
     mie: u32 = 0,
     mtvec: u32 = 0,
     mscratch: u32 = 0,
@@ -105,13 +122,13 @@ pub const VCpu = extern struct {
     satp: u32 = 0,
     sie: u32 = 0,
     _pad7: u32 = 0,
-    vstimecmp: u64 = 0xffffffffffffffff,
-    load_res_addr: usize = 0,
+    vstimecmp: u64 = TIMER_INFINITY,
+    load_res_addr: u64 = 0,
     load_res_val: u32 = 0,
     needs_tlb_flush_flag: bool = false,
     needs_cache_flush_flag: bool = false,
     _pad8: u16 = 0,
-    softtlb: extern struct { privilege_mode: u8 = 1 } = .{},
+    softtlb: extern struct { privilege_mode: u8 = PRIV_SUPERVISOR } = .{},
 
     pub const STATIC_RESERVATION_HARTS = reservation.STATIC_RESERVATION_HARTS;
     pub const DynamicReservationNode = reservation.DynamicReservationNode;
@@ -177,11 +194,13 @@ pub const VCpu = extern struct {
         std.debug.assert(@offsetOf(VCpu, "pc") == 256);
         std.debug.assert(@offsetOf(VCpu, "host_sp") == 280);
         std.debug.assert(@offsetOf(VCpu, "scratch_t1") == 288);
+        std.debug.assert(SSTATUS_WRITABLE_MASK == 0x800de762);
     }
 
     pub var time_offset = std.atomic.Value(u64).init(0);
     pub var max_guest_time = std.atomic.Value(u64).init(0);
-    pub var guest_insn_time = std.atomic.Value(u64).init(10_000_000);
+    pub var guest_insn_time =
+        std.atomic.Value(u64).init(INITIAL_GUEST_INSN_TIME);
 
     pub fn setMipBit(self: *VCpu, bit: u5) void {
         _ = @atomicRmw(u32, &self.mip, .Or, @as(u32, 1) << bit, .seq_cst);
@@ -194,8 +213,8 @@ pub const VCpu = extern struct {
     pub fn getMip(self: *const VCpu) u32 {
         var m = @atomicLoad(u32, &self.mip, .seq_cst);
         const now = readGuestTime();
-        if (self.vstimecmp != ~@as(u64, 0) and now >= self.vstimecmp) {
-            m |= (1 << 5); // STIP.
+        if (self.vstimecmp != TIMER_INFINITY and now >= self.vstimecmp) {
+            m |= MIP_STIP_U32;
         }
         return m;
     }
@@ -209,59 +228,68 @@ pub const VCpu = extern struct {
     fn computeEffectiveMip(self: *const VCpu) u32 {
         const now = readGuestTime();
         var m = @atomicLoad(u32, &self.mip, .seq_cst);
-        if (self.vstimecmp != ~@as(u64, 0) and now >= self.vstimecmp) {
-            m |= (1 << 5);
-        } else if (self.vstimecmp != ~@as(u64, 0)) {
-            m &= ~@as(u32, 1 << 5);
+        if (self.vstimecmp != TIMER_INFINITY and now >= self.vstimecmp) {
+            m |= MIP_STIP_U32;
+        } else if (self.vstimecmp != TIMER_INFINITY) {
+            m &= ~MIP_STIP_U32;
         }
         return m;
     }
 
+    fn maskFpIfDisabled(self: *const VCpu, val: u32) u32 {
+        return if ((self.misa & MISA_FD_MASK) == 0)
+            val & ~MSTATUS_FS_MASK_U32
+        else
+            val;
+    }
+
     pub fn readCsr(self: *VCpu, csr: u12) u32 {
         return switch (csr) {
-            CsrAddr.mstatus => blk: {
-                var m = self.mstatus;
-                if ((self.misa & ((1 << 5) | (1 << 3))) == 0) {
-                    m &= ~@as(u32, 3 << 13);
-                }
-                break :blk m;
-            },
-            CsrAddr.misa => self.misa,
-            CsrAddr.medeleg => self.medeleg,
-            CsrAddr.mideleg => self.mideleg,
-            CsrAddr.mie => self.mie,
-            CsrAddr.mtvec => self.mtvec,
-            CsrAddr.mscratch => self.mscratch,
-            CsrAddr.mepc => self.mepc,
-            CsrAddr.mcause => self.mcause,
-            CsrAddr.mtval => self.mtval,
-            CsrAddr.mip => self.computeEffectiveMip(),
+            riscv.CSR.MSTATUS => self.maskFpIfDisabled(self.mstatus),
+            riscv.CSR.MISA => self.misa,
+            riscv.CSR.MEDELEG => self.medeleg,
+            riscv.CSR.MIDELEG => self.mideleg,
+            riscv.CSR.MIE => self.mie,
+            riscv.CSR.MTVEC => self.mtvec,
+            riscv.CSR.MSCRATCH => self.mscratch,
+            riscv.CSR.MEPC => self.mepc,
+            riscv.CSR.MCAUSE => self.mcause,
+            riscv.CSR.MTVAL => self.mtval,
+            riscv.CSR.MIP => self.computeEffectiveMip(),
 
-            CsrAddr.sstatus => blk: {
-                var m = self.mstatus & 0x800de762;
-                if ((self.misa & ((1 << 5) | (1 << 3))) == 0) {
-                    m &= ~@as(u32, 3 << 13);
-                }
-                break :blk m;
-            },
-            CsrAddr.sie => self.mie & self.mideleg,
-            CsrAddr.stvec => self.stvec,
-            CsrAddr.sscratch => self.sscratch,
-            CsrAddr.sepc => self.sepc,
-            CsrAddr.scause => self.scause,
-            CsrAddr.stval => self.stval,
-            CsrAddr.sip => self.computeEffectiveMip() & self.mideleg,
-            CsrAddr.satp => self.satp,
+            riscv.CSR.SSTATUS => self.maskFpIfDisabled(
+                self.mstatus & SSTATUS_WRITABLE_MASK,
+            ),
+            riscv.CSR.SIE => self.mie & self.mideleg,
+            riscv.CSR.STVEC => self.stvec,
+            riscv.CSR.SSCRATCH => self.sscratch,
+            riscv.CSR.SEPC => self.sepc,
+            riscv.CSR.SCAUSE => self.scause,
+            riscv.CSR.STVAL => self.stval,
+            riscv.CSR.SIP => self.computeEffectiveMip() & self.mideleg,
+            riscv.CSR.SATP => self.satp,
 
-            0x001 => self.fcsr & 0x1f, // fflags.
-            0x002 => (self.fcsr >> 5) & 0x7, // frm.
-            0x003 => self.fcsr & 0xff, // fcsr.
+            riscv.CSR.FFLAGS => self.fcsr & FCSR_FFLAGS_MASK,
+            riscv.CSR.FRM => (self.fcsr >> FCSR_FRM_SHIFT) & FCSR_FRM_MASK,
+            riscv.CSR.FCSR => self.fcsr & FCSR_MASK,
 
-            0x14d => @truncate(self.vstimecmp),
-            0x15d => @truncate(self.vstimecmp >> 32),
+            riscv.CSR.STIMECMP => @truncate(self.vstimecmp),
+            riscv.CSR.STIMECMPH => @truncate(self.vstimecmp >> HIGH_WORD_SHIFT),
 
-            0xc00, 0xc01, 0xc02 => @truncate(readGuestTime()),
-            0xc80, 0xc81, 0xc82 => @truncate(readGuestTime() >> 32),
+            riscv.CSR.CYCLE,
+            riscv.CSR.TIME,
+            riscv.CSR.INSTRET,
+            => @truncate(readGuestTime()),
+            riscv.CSR.CYCLEH,
+            riscv.CSR.TIMEH,
+            riscv.CSR.INSTRETH,
+            => @truncate(readGuestTime() >> HIGH_WORD_SHIFT),
+
+            riscv.CSR.MVENDORID,
+            riscv.CSR.MARCHID,
+            riscv.CSR.MIMPID,
+            => 0,
+            riscv.CSR.MHARTID => @truncate(self.id),
 
             else => 0,
         };
@@ -269,61 +297,53 @@ pub const VCpu = extern struct {
 
     pub fn writeCsr(self: *VCpu, csr: u12, val: u32) void {
         switch (csr) {
-            0x001 => { // fflags.
-                self.fcsr = (self.fcsr & ~@as(u32, 0x1f)) | (val & 0x1f);
-                self.mstatus |= (3 << 13); // Mark FS dirty.
+            riscv.CSR.FFLAGS => {
+                self.fcsr = (self.fcsr & ~FCSR_FFLAGS_MASK) |
+                    (val & FCSR_FFLAGS_MASK);
+                self.mstatus |= MSTATUS_FS_DIRTY_U32;
             },
-            0x002 => { // frm.
-                self.fcsr =
-                    (self.fcsr & ~@as(u32, 0xe0)) | ((val & 0x7) << 5);
-                self.mstatus |= (3 << 13); // Mark FS dirty.
+            riscv.CSR.FRM => {
+                self.fcsr = (self.fcsr & ~FCSR_FRM_FIELD_MASK) |
+                    ((val & FCSR_FRM_MASK) << FCSR_FRM_SHIFT);
+                self.mstatus |= MSTATUS_FS_DIRTY_U32;
             },
-            0x003 => { // fcsr.
-                self.fcsr = val & 0xff;
-                self.mstatus |= (3 << 13); // Mark FS dirty.
+            riscv.CSR.FCSR => {
+                self.fcsr = val & FCSR_MASK;
+                self.mstatus |= MSTATUS_FS_DIRTY_U32;
             },
 
-            CsrAddr.mstatus => {
-                var v = val;
-                if ((self.misa & ((1 << 5) | (1 << 3))) == 0) {
-                    v &= ~@as(u32, 3 << 13);
-                }
-                self.mstatus = v;
-            },
-            CsrAddr.medeleg => self.medeleg = val,
-            CsrAddr.mideleg => {
+            riscv.CSR.MSTATUS => self.mstatus = self.maskFpIfDisabled(val),
+            riscv.CSR.MEDELEG => self.medeleg = val,
+            riscv.CSR.MIDELEG => {
                 self.mideleg = val;
                 self.sie = self.mie & val;
             },
-            CsrAddr.mie => {
+            riscv.CSR.MIE => {
                 self.mie = val;
                 self.sie = val & self.mideleg;
             },
-            CsrAddr.mtvec => self.mtvec = val,
-            CsrAddr.mscratch => self.mscratch = val,
-            CsrAddr.mepc => self.mepc = val,
-            CsrAddr.mcause => self.mcause = val,
-            CsrAddr.mtval => self.mtval = val,
-            CsrAddr.mip => @atomicStore(u32, &self.mip, val, .seq_cst),
+            riscv.CSR.MTVEC => self.mtvec = val,
+            riscv.CSR.MSCRATCH => self.mscratch = val,
+            riscv.CSR.MEPC => self.mepc = val,
+            riscv.CSR.MCAUSE => self.mcause = val,
+            riscv.CSR.MTVAL => self.mtval = val,
+            riscv.CSR.MIP => @atomicStore(u32, &self.mip, val, .seq_cst),
 
-            CsrAddr.sstatus => {
-                var mask: u32 = 0x800de762;
-                if ((self.misa & ((1 << 5) | (1 << 3))) == 0) {
-                    mask &= ~@as(u32, 3 << 13);
-                }
+            riscv.CSR.SSTATUS => {
+                const mask = self.maskFpIfDisabled(SSTATUS_WRITABLE_MASK);
                 self.mstatus = (self.mstatus & ~mask) | (val & mask);
             },
-            CsrAddr.sie => {
+            riscv.CSR.SIE => {
                 self.mie = (self.mie & ~self.mideleg) | (val & self.mideleg);
                 self.sie = self.mie & self.mideleg;
             },
-            CsrAddr.stvec => self.stvec = val,
-            CsrAddr.sscratch => self.sscratch = val,
-            CsrAddr.sepc => self.sepc = val,
-            CsrAddr.scause => self.scause = val,
-            CsrAddr.stval => self.stval = val,
-            CsrAddr.sip => {
-                const mask = self.mideleg & 0x222; // SSIP, STIP, SEIP.
+            riscv.CSR.STVEC => self.stvec = val,
+            riscv.CSR.SSCRATCH => self.sscratch = val,
+            riscv.CSR.SEPC => self.sepc = val,
+            riscv.CSR.SCAUSE => self.scause = val,
+            riscv.CSR.STVAL => self.stval = val,
+            riscv.CSR.SIP => {
+                const mask = self.mideleg & SIP_WRITABLE_MASK;
                 const prev = @atomicLoad(u32, &self.mip, .seq_cst);
                 @atomicStore(
                     u32,
@@ -332,15 +352,14 @@ pub const VCpu = extern struct {
                     .seq_cst,
                 );
             },
-            CsrAddr.satp => self.satp = val,
+            riscv.CSR.SATP => self.satp = val,
 
-            0x14d => {
-                self.vstimecmp =
-                    (self.vstimecmp & 0xffffffff00000000) | val;
+            riscv.CSR.STIMECMP => {
+                self.vstimecmp = (self.vstimecmp & HIGH_WORD_MASK) | val;
             },
-            0x15d => {
-                self.vstimecmp = (self.vstimecmp & 0x00000000ffffffff) |
-                    (@as(u64, val) << 32);
+            riscv.CSR.STIMECMPH => {
+                self.vstimecmp = (self.vstimecmp & LOW_WORD_MASK) |
+                    (@as(u64, val) << HIGH_WORD_SHIFT);
             },
 
             else => {},
@@ -353,17 +372,18 @@ pub const VCpu = extern struct {
         fault_pc: u32,
         stval: u32,
     ) void {
-        clearReservation(self.id);
+        clearReservation(@intCast(self.id));
         self.load_res_addr = 0;
-        const is_interrupt = (cause & 0x80000000) != 0;
-        const code = cause & 0x7fffffff;
-        const delegate_to_s = if (self.privilege_mode < 3 and code < 32) blk: {
-            const bit = @as(u32, 1) << @truncate(code);
-            break :blk if (is_interrupt)
-                (self.mideleg & bit) != 0
-            else
-                (self.medeleg & bit) != 0;
-        } else false;
+        const is_interrupt = (cause & CAUSE_INTERRUPT_RV32) != 0;
+        const code = cause & CAUSE_CODE_MASK_RV32;
+        const delegate_to_s =
+            if (self.privilege_mode < PRIV_MACHINE and code < 32) blk: {
+                const bit = @as(u32, 1) << @truncate(code);
+                break :blk if (is_interrupt)
+                    (self.mideleg & bit) != 0
+                else
+                    (self.medeleg & bit) != 0;
+            } else false;
 
         if (delegate_to_s) {
             self.sepc = fault_pc;
@@ -373,22 +393,23 @@ pub const VCpu = extern struct {
                 self.last_sepc_when_stvec_zero = fault_pc;
             }
 
-            const sie = (self.mstatus >> 1) & 1;
-            var mstatus = self.mstatus;
-            mstatus &= ~@as(u32, 1 << 8);
-            mstatus |= (@as(u32, self.privilege_mode & 1) << 8);
-            mstatus &= ~@as(u32, 1 << 5);
-            mstatus |= (sie << 5);
-            mstatus &= ~@as(u32, 1 << 1); // Disable interrupts in S-mode.
+            const sie_active =
+                (self.mstatus & @as(u32, @truncate(riscv.MSTATUS.SIE))) != 0;
+            const s_clear: u32 = @truncate(
+                riscv.MSTATUS.SPP | riscv.MSTATUS.SPIE | riscv.MSTATUS.SIE,
+            );
+            var mstatus = self.mstatus & ~s_clear;
+            mstatus |= (@as(u32, self.privilege_mode & 1) <<
+                riscv.SSTATUS.SPP_SHIFT);
+            if (sie_active) mstatus |= @truncate(riscv.MSTATUS.SPIE);
             self.mstatus = mstatus;
 
-            self.privilege_mode = 1; // Supervisor mode.
-            self.priv_mode = 1;
-            self.softtlb.privilege_mode = 1;
+            self.privilege_mode = PRIV_SUPERVISOR;
+            self.softtlb.privilege_mode = PRIV_SUPERVISOR;
 
-            const mode = self.stvec & 3;
-            const base = self.stvec & ~@as(u32, 3);
-            self.pc = if (is_interrupt and mode == 1)
+            const mode = self.stvec & TVEC_MODE_MASK;
+            const base = self.stvec & ~TVEC_MODE_MASK;
+            self.pc = if (is_interrupt and mode == TVEC_MODE_VECTORED)
                 base +% (4 *% code)
             else
                 base;
@@ -397,22 +418,23 @@ pub const VCpu = extern struct {
             self.mcause = cause;
             self.mtval = stval;
 
-            const mie = (self.mstatus >> 3) & 1;
-            var mstatus = self.mstatus;
-            mstatus &= ~@as(u32, 3 << 11);
-            mstatus |= (@as(u32, self.privilege_mode & 3) << 11);
-            mstatus &= ~@as(u32, 1 << 7);
-            mstatus |= (mie << 7);
-            mstatus &= ~@as(u32, 1 << 3); // Disable interrupts in M-mode.
+            const mie_active =
+                (self.mstatus & @as(u32, @truncate(riscv.MSTATUS.MIE))) != 0;
+            const m_clear: u32 = @truncate(
+                riscv.MSTATUS.MPP_MASK | riscv.MSTATUS.MPIE | riscv.MSTATUS.MIE,
+            );
+            var mstatus = self.mstatus & ~m_clear;
+            mstatus |= (@as(u32, self.privilege_mode & PRIV_MACHINE) <<
+                riscv.MSTATUS.MPP_SHIFT);
+            if (mie_active) mstatus |= @truncate(riscv.MSTATUS.MPIE);
             self.mstatus = mstatus;
 
-            self.privilege_mode = 3; // Machine mode.
-            self.priv_mode = 3;
-            self.softtlb.privilege_mode = 3;
+            self.privilege_mode = PRIV_MACHINE;
+            self.softtlb.privilege_mode = PRIV_MACHINE;
 
-            const mode = self.mtvec & 3;
-            const base = self.mtvec & ~@as(u32, 3);
-            self.pc = if (is_interrupt and mode == 1)
+            const mode = self.mtvec & TVEC_MODE_MASK;
+            const base = self.mtvec & ~TVEC_MODE_MASK;
+            self.pc = if (is_interrupt and mode == TVEC_MODE_VECTORED)
                 base +% (4 *% code)
             else
                 base;
@@ -422,6 +444,7 @@ pub const VCpu = extern struct {
 
 test "VCpu GPR sign-extension, CSR delegation, and exception injection" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
     _ = reservation;
 
     var cpu = VCpu{};
@@ -436,13 +459,13 @@ test "VCpu GPR sign-extension, CSR delegation, and exception injection" {
 
     // Delegated page fault from U-mode enters S-mode at stvec.
     cpu.privilege_mode = PRIV_USER;
-    cpu.priv_mode = PRIV_USER;
-    cpu.medeleg = 0xffff;
+    cpu.medeleg = DELEGATE_ALL_MASK;
     cpu.stvec = 0x80001000;
-    cpu.injectException(13, 0x10002000, 0xdeadbeef);
+    const load_pf = @backingInt(riscv.Cause.load_page_fault);
+    cpu.injectException(load_pf, 0x10002000, 0xdeadbeef);
     try testing.expectEqual(@as(u8, PRIV_SUPERVISOR), cpu.privilege_mode);
     try testing.expectEqual(@as(u32, 0x80001000), cpu.pc);
     try testing.expectEqual(@as(u32, 0x10002000), cpu.sepc);
-    try testing.expectEqual(@as(u32, 13), cpu.scause);
+    try testing.expectEqual(@as(u32, load_pf), cpu.scause);
     try testing.expectEqual(@as(u32, 0xdeadbeef), cpu.stval);
 }

@@ -1,32 +1,26 @@
-// Diosix hypervisor SBI extension (0x0A000005) handlers.
+// Diosix hypervisor SBI extension (0x0a000005) handlers.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const builtin = @import("builtin");
 const riscv = @import("../../hardware/native/cpu/riscv64/mod.zig");
 const sv39x4 = @import("../../hardware/native/cpu/riscv64/sv39x4.zig");
 const vcore = @import("../vcore.zig");
 const guest = @import("../guest.zig");
 const scheduler = @import("../scheduler.zig");
-const pcore = @import("../pcore.zig");
 const physmem = @import("../physmem.zig");
 const loader = @import("../loader.zig");
 const sbi_core = @import("../sbi.zig");
 const charter = @import("charter.zig");
 const ipc = @import("ipc.zig");
+const info = @import("info.zig");
 const interface = @import("interface").sbi;
 const arch = @import("interface").riscv;
 
-extern const project_version: [*:0]const u8;
-extern const git_branch: [*:0]const u8;
-extern const git_revision: [*:0]const u8;
-extern const build_date: [*:0]const u8;
-extern const build_user: [*:0]const u8;
-extern const build_hostname: [*:0]const u8;
-extern const zig_version: [*:0]const u8;
-extern const cpu_arch: [*:0]const u8;
+pub const handleGetInfo = info.handleGetInfo;
+pub const handleGetHvInfo = info.handleGetHvInfo;
+pub const formatIsaString = info.formatIsaString;
 
 const VCore = vcore.VirtualCore;
 const ThreadCtx = riscv.ThreadContext;
@@ -45,22 +39,23 @@ pub fn handleDiosix(
     a2: usize,
 ) void {
     const g = vc.getGuest();
+    const D = interface.DIOSIX;
     switch (function) {
-        interface.DIOSIX.TERMINATE => handleTerminate(vc, ctx, g, a0, a1),
-        interface.DIOSIX.YIELD => {
+        D.TERMINATE => handleTerminate(vc, ctx, g, a0, a1),
+        D.YIELD => {
             if (vc.exec_path == .native) {
                 vc.getNativeMachine().mepc +=
                     sbi_core.ECALL_INSTRUCTION_SIZE_BYTES;
             }
             scheduler.yield(vc);
         },
-        interface.DIOSIX.DROP_TRUST => {
+        D.DROP_TRUST => {
             g.dropTrust();
             reply(vc, ctx, sbi_core.SBI_SUCCESS, 0);
         },
-        interface.DIOSIX.GET_INFO => handleGetInfo(vc, ctx, g, a0, a1, a2),
-        interface.DIOSIX.RUN => handleRun(vc, ctx, g, a0),
-        interface.DIOSIX.POLL_EVENT => {
+        D.GET_INFO => handleGetInfo(vc, ctx, g, a0, a1, a2),
+        D.RUN => handleRun(vc, ctx, g, a0),
+        D.POLL_EVENT => {
             if (a1 < @sizeOf(interface.Event)) {
                 reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
                 return;
@@ -71,43 +66,29 @@ pub fn handleDiosix(
                 reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
             }
         },
-        interface.DIOSIX.SET_QUOTA => handleSetQuota(vc, ctx, g, a0),
-        interface.DIOSIX.GET_HV_INFO => handleGetHvInfo(vc, ctx, g, a0, a1),
-        interface.DIOSIX.GET_MANIFEST => ipc.handleGetManifest(vc, ctx, g, a0),
-        interface.DIOSIX.SET_MANIFEST => ipc.handleSetManifest(vc, ctx, g, a0),
-        interface.DIOSIX.MAP_CHILD_MEM => ipc.handleMapChildMem(vc, ctx, g, a0),
-        interface.DIOSIX.UNMAP_CHILD_MEM => {
-            ipc.handleUnmapChildMem(vc, ctx, g, a0);
-        },
-        interface.DIOSIX.START => handleStart(vc, ctx, g, a0),
-        interface.DIOSIX.NET_SEND => ipc.handleNetSend(vc, ctx, g, a0, a1, a2),
-        interface.DIOSIX.NET_RECV => {
-            const max_len = @min(a1, guest.MAX_PACKET_LEN);
+        D.SET_QUOTA => handleSetQuota(vc, ctx, g, a0),
+        D.GET_HV_INFO => handleGetHvInfo(vc, ctx, g, a0, a1),
+        D.GET_MANIFEST => ipc.handleGetManifest(vc, ctx, g, a0),
+        D.SET_MANIFEST => ipc.handleSetManifest(vc, ctx, g, a0),
+        D.MAP_CHILD_MEM => ipc.handleMapChildMem(vc, ctx, g, a0),
+        D.UNMAP_CHILD_MEM => ipc.handleUnmapChildMem(vc, ctx, g, a0),
+        D.START => handleStart(vc, ctx, g, a0),
+        D.NET_SEND => ipc.handleNetSend(vc, ctx, g, a0, a1, a2),
+        D.NET_RECV => {
+            const max_len: usize = @min(a1, guest.MAX_PACKET_LEN);
             if (g.net_rx.popToGuest(&g.space, a0, max_len)) |copy_len| {
                 reply(vc, ctx, sbi_core.SBI_SUCCESS, copy_len);
             } else |_| {
                 reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
             }
         },
-        interface.DIOSIX.NET_POLL => {
-            reply(vc, ctx, sbi_core.SBI_SUCCESS, g.net_rx.getCount());
-        },
-        interface.DIOSIX.SEAL_CHARTER => {
-            charter.handleSealCharter(vc, ctx, a0, a1);
-        },
-        interface.DIOSIX.RATIFY_CHARTER => {
-            charter.handleRatifyCharter(vc, ctx, a0);
-        },
-        interface.DIOSIX.WHISPER_SEND => {
-            charter.handleWhisperSend(vc, ctx, a0, a1, a2);
-        },
-        interface.DIOSIX.WHISPER_RECV => {
-            charter.handleWhisperRecv(vc, ctx, a0, a1);
-        },
-        interface.DIOSIX.RESET_STEWARD => {
-            charter.handleResetSteward(vc, ctx, a0, a1);
-        },
-        interface.DIOSIX.REQUEST_ROOT_FAILOVER => {
+        D.NET_POLL => reply(vc, ctx, sbi_core.SBI_SUCCESS, g.net_rx.getCount()),
+        D.SEAL_CHARTER => charter.handleSealCharter(vc, ctx, a0, a1),
+        D.RATIFY_CHARTER => charter.handleRatifyCharter(vc, ctx, a0),
+        D.WHISPER_SEND => charter.handleWhisperSend(vc, ctx, a0, a1, a2),
+        D.WHISPER_RECV => charter.handleWhisperRecv(vc, ctx, a0, a1),
+        D.RESET_STEWARD => charter.handleResetSteward(vc, ctx, a0, a1),
+        D.REQUEST_ROOT_FAILOVER => {
             charter.handleRequestRootFailover(vc, ctx, a0);
         },
         else => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),
@@ -146,85 +127,6 @@ fn handleTerminate(
     }
 }
 
-fn handleGetInfo(
-    vc: *VCore,
-    ctx: *ThreadCtx,
-    g: *Guest,
-    a0: usize,
-    a1: usize,
-    a2: usize,
-) void {
-    const is_cid = a0 < sbi_core.MAX_USER_CID_DISCRIMINATOR;
-    const target_cid = if (is_cid) a0 else 1;
-    const info_gpa = if (is_cid) a1 else a0;
-    const info_len = if (is_cid) a2 else a1;
-
-    if (info_len != 0 and info_len < @sizeOf(interface.GuestInfo)) {
-        reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
-        return;
-    }
-    if (target_cid == 0) {
-        reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
-        return;
-    }
-    const tg_opt = if (target_cid == 1) g else g.getGuestByCid(target_cid);
-    const tg = tg_opt orelse {
-        reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
-        return;
-    };
-
-    const max_u = std.math.maxInt(usize);
-    const eff_ram: usize = if (tg.space.range_size > 0)
-        tg.space.range_size / physmem.PageSize
-    else if (tg.is_root)
-        sbi_core.DEFAULT_ROOT_RAM_BYTES / physmem.PageSize
-    else if (tg.quotas.used_ram_pages > 0 and tg.quotas.used_ram_pages != max_u)
-        tg.quotas.used_ram_pages
-    else if (tg.quotas.max_ram_pages > 0 and tg.quotas.max_ram_pages != max_u)
-        tg.quotas.max_ram_pages
-    else
-        sbi_core.DEFAULT_CHILD_RAM_BYTES / physmem.PageSize;
-
-    const vcpus = tg.vcores.count();
-    const info = interface.GuestInfo{
-        .guest_id = if (tg == g) 1 else target_cid,
-        .parent_id = if (tg == g)
-            (if (g.parent != null) guest.CID_PARENT else 0)
-        else
-            1,
-        .is_trusted = if (tg.is_trusted) 1 else 0,
-        .is_root = if (tg.is_root) 1 else 0,
-        .target_arch = @backingInt(tg.target_arch),
-        .assigned_cid = if (tg.is_root) 1 else @truncate(tg.local_cid),
-        .vcpus = vcpus,
-        .self_ram_pages = eff_ram,
-        .used_vcpus = if (tg.quotas.used_vcpus > 0)
-            tg.quotas.used_vcpus
-        else
-            vcpus,
-        .max_vcpus = if (tg.quotas.max_vcpus == max_u)
-            vcpus
-        else
-            tg.quotas.max_vcpus,
-        .used_ram_pages = if (tg.quotas.used_ram_pages > 0 and
-            tg.quotas.used_ram_pages != max_u)
-            tg.quotas.used_ram_pages
-        else
-            eff_ram,
-        .max_ram_pages = if (tg.quotas.max_ram_pages == max_u)
-            eff_ram
-        else
-            tg.quotas.max_ram_pages,
-        .child_count = tg.children.count(),
-    };
-
-    g.space.writeGuestStruct(interface.GuestInfo, info_gpa, info) catch {
-        reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-        return;
-    };
-    reply(vc, ctx, sbi_core.SBI_SUCCESS, 0);
-}
-
 fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     const args = g.space.readGuestStruct(interface.RunArgs, a0) catch {
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
@@ -249,7 +151,14 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     }
 
     const detected_arch: ?guest.TargetArch = if (elf_sz > 0)
-        loader.Loader.detectArchFromGuest(&g.space, elf_ptr, elf_sz) catch null
+        loader.Loader.detectArchFromGuest(&g.space, elf_ptr, elf_sz) catch |e| {
+            const code = if (e == loader.LoaderError.TranslationFailed)
+                sbi_core.SBI_ERR_INVALID_ADDRESS
+            else
+                sbi_core.SBI_ERR_FAILED;
+            reply(vc, ctx, code, 0);
+            return;
+        }
     else
         null;
 
@@ -338,87 +247,6 @@ fn handleSetQuota(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     reply(vc, ctx, sbi_core.SBI_SUCCESS, 0);
 }
 
-fn handleGetHvInfo(
-    vc: *VCore,
-    ctx: *ThreadCtx,
-    g: *Guest,
-    buf_gpa: usize,
-    buf_len: usize,
-) void {
-    if (buf_len < @sizeOf(interface.HypervisorInfo)) {
-        reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
-        return;
-    }
-    var info = interface.HypervisorInfo{};
-
-    const ver_str = std.mem.trim(u8, std.mem.span(project_version), " \t\r\n");
-    const parsed_ver = sbi_core.parseVersionString(ver_str);
-    info.version_major = parsed_ver.major;
-    info.version_minor = parsed_ver.minor;
-    info.version_patch = parsed_ver.patch;
-
-    const rev_str = std.mem.trim(u8, std.mem.span(git_revision), " \t\r\n");
-    const copy_len = @min(rev_str.len, info.build_commit.len - 1);
-    @memcpy(info.build_commit[0..copy_len], rev_str[0..copy_len]);
-
-    const is_stable = (info.version_minor % 2) == 0;
-    const channel = if (is_stable) "stable" else "beta";
-    info.features = interface.HypervisorFeature.DYNAREC |
-        interface.HypervisorFeature.VIRTIO_VSOCK;
-    if (is_stable) info.features |= interface.HypervisorFeature.RELEASE_STABLE;
-    if (charter.isCharterSealed()) {
-        info.features |= interface.HypervisorFeature.CHARTER_SEALED;
-    }
-    if (!builtin.is_test and riscv.hasHExtension()) {
-        info.features |= interface.HypervisorFeature.HARDWARE_VIRT |
-            interface.HypervisorFeature.STAGE2_PAGING;
-    }
-
-    info.host_physical_cores = riscv.getOnlineCpuCount();
-    info.host_timer_freq_hz = interface.HOST_TIMER_FREQ_HZ;
-    info.host_total_ram_kb = @intCast(physmem.getTotalRamBytes() / 1024);
-    info.host_free_ram_kb = @intCast(physmem.getFreeRamBytes() / 1024);
-    info.hv_reserved_bytes = @intCast(physmem.getHvRegion().size);
-    info.hv_heap_free_bytes = @intCast(pcore.getTotalFreeHeapBytes());
-
-    _ = std.fmt.bufPrint(
-        info.build_desc[0 .. info.build_desc.len - 1],
-        "Version {s} ({s}) {s}/{s} {s} {s}@{s} (Zig {s} {s})",
-        .{
-            ver_str,    channel,        git_branch,  rev_str,  build_date,
-            build_user, build_hostname, zig_version, cpu_arch,
-        },
-    ) catch "";
-
-    const misa = riscv.readMisa();
-    var isa_buf: [interface.HOST_CPU_ISA_LEN - 1]u8 = undefined;
-    const is_64 = (misa & (@as(usize, 2) << 62)) != 0 or
-        builtin.target.cpu.arch == .riscv64;
-    const base_str = if (is_64) "RV64" else "RV32";
-    @memcpy(isa_buf[0..base_str.len], base_str);
-    var isa_len: usize = base_str.len;
-
-    for ("IMAFDCSUH") |ch| {
-        const bit = @as(usize, 1) << @intCast(ch - 'A');
-        if ((misa & bit) != 0 and isa_len < isa_buf.len) {
-            isa_buf[isa_len] = ch;
-            isa_len += 1;
-        }
-    }
-    if (isa_len == base_str.len) {
-        const fallback = if (is_64) "RV64GC" else "RV32IMAFDC";
-        @memcpy(info.host_cpu_isa[0..fallback.len], fallback);
-    } else {
-        @memcpy(info.host_cpu_isa[0..isa_len], isa_buf[0..isa_len]);
-    }
-
-    g.space.writeGuestStruct(interface.HypervisorInfo, buf_gpa, info) catch {
-        reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-        return;
-    };
-    reply(vc, ctx, sbi_core.SBI_SUCCESS, 0);
-}
-
 fn handleStart(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     const sargs = g.space.readGuestStruct(interface.StartArgs, a0) catch {
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
@@ -445,22 +273,15 @@ fn handleStart(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
 }
 
 test "SBI Diosix hypervisor extension get info and drop trust" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
-    var phys_test = try physmem.initForTest(testing.allocator, 128);
+    const alloc = testing.allocator;
+    var phys_test = try physmem.initForTest(alloc, 128);
     defer phys_test.deinit();
-    const g = try guest.createGuest(
-        testing.allocator,
-        true,
-        true,
-        null,
-        0,
-        0,
-        0,
-        .riscv64,
-    );
+    const g = try guest.createGuest(alloc, true, true, null, 0, 0, 0, .riscv64);
     defer g.deinit();
     var vc = vcore.VirtualCore.init(0, g, 0x80000000, 0, .normal);
-    var ctx: riscv.ThreadContext = std.mem.zeroes(riscv.ThreadContext);
+    var ctx: riscv.ThreadContext = @splat(0);
 
     try testing.expect(g.is_trusted);
     ctx[@backingInt(arch.Register.a7)] = interface.EXT.DIOSIX;
@@ -478,10 +299,8 @@ test "SBI Diosix hypervisor extension get info and drop trust" {
     try testing.expectEqual(inv_param, ctx[a0_idx]);
 
     const page_hpa = try physmem.allocPage();
-    const rwx = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write |
-        sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed |
-        sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
-    try g.space.map(0x80000000, page_hpa, physmem.PageSize, rwx);
+    const rw = sv39x4.PTEFlags.leaf_rw_user;
+    try g.space.map(0x80000000, page_hpa, physmem.PageSize, rw);
     physmem.decrementPageRef(page_hpa);
 
     ctx[a0_idx] = 0x80000000;

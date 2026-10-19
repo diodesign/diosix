@@ -8,7 +8,9 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const linux = std.os.linux;
 
+pub const DEFAULT_SYSCONFIG_PATH: [*:0]const u8 = "/etc/diosix/diosix.toml";
 pub const TOUR_STEP_COUNT: usize = 5;
 
 pub const TourStep = struct {
@@ -18,6 +20,23 @@ pub const TourStep = struct {
     summary_line2: []const u8,
     cli_hint: []const u8,
 };
+
+pub const CustomTourStep = struct {
+    title_buf: [96]u8 = @splat(0),
+    title_len: usize = 0,
+    summary1_buf: [128]u8 = @splat(0),
+    summary1_len: usize = 0,
+    summary2_buf: [128]u8 = @splat(0),
+    summary2_len: usize = 0,
+    hint_buf: [96]u8 = @splat(0),
+    hint_len: usize = 0,
+};
+
+fn setBuf(buf: []u8, len_out: *usize, src: []const u8) void {
+    const n = @min(src.len, buf.len);
+    @memcpy(buf[0..n], src[0..n]);
+    len_out.* = n;
+}
 
 pub const TOUR_STEPS = [TOUR_STEP_COUNT]TourStep{
     .{
@@ -72,8 +91,94 @@ pub const WelcomeState = struct {
     tour_visible: bool = false,
     current_step: usize = 0, // 0..4 index into TOUR_STEPS.
     install_requested: bool = false,
+    custom_steps: [TOUR_STEP_COUNT]CustomTourStep = @splat(.{}),
+    custom_step_count: usize = 0,
+    config_loaded: bool = false,
+
+    pub fn loadTourToml(self: *WelcomeState, content: []const u8) void {
+        var in_tour = false;
+        var count: usize = 0;
+        var active_idx: ?usize = null;
+
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        while (lines.next()) |raw_line| {
+            const trimmed = std.mem.trim(u8, raw_line, " \t\r");
+            if (trimmed.len == 0 or trimmed[0] == '#') continue;
+            if (trimmed[0] == '[') {
+                if (std.mem.eql(u8, trimmed, "[[tour]]")) {
+                    in_tour = true;
+                    if (count < TOUR_STEP_COUNT) {
+                        const def = TOUR_STEPS[count];
+                        var cs = &self.custom_steps[count];
+                        setBuf(&cs.title_buf, &cs.title_len, def.title);
+                        setBuf(
+                            &cs.summary1_buf,
+                            &cs.summary1_len,
+                            def.summary_line1,
+                        );
+                        setBuf(
+                            &cs.summary2_buf,
+                            &cs.summary2_len,
+                            def.summary_line2,
+                        );
+                        setBuf(&cs.hint_buf, &cs.hint_len, def.cli_hint);
+                        active_idx = count;
+                        count += 1;
+                    } else {
+                        active_idx = null;
+                    }
+                } else {
+                    in_tour = false;
+                    active_idx = null;
+                }
+                continue;
+            }
+            if (!in_tour) continue;
+            const idx = active_idx orelse continue;
+            const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
+            const key = std.mem.trim(u8, trimmed[0..eq], " \t");
+            const val = std.mem.trim(u8, trimmed[eq + 1 ..], " \t\"'");
+            if (val.len == 0) continue;
+
+            var cs = &self.custom_steps[idx];
+            if (std.mem.eql(u8, key, "title")) {
+                setBuf(&cs.title_buf, &cs.title_len, val);
+            } else if (std.mem.eql(u8, key, "summary")) {
+                setBuf(&cs.summary1_buf, &cs.summary1_len, val);
+            } else if (std.mem.eql(u8, key, "summary_line2")) {
+                setBuf(&cs.summary2_buf, &cs.summary2_len, val);
+            } else if (std.mem.eql(u8, key, "cli_hint")) {
+                setBuf(&cs.hint_buf, &cs.hint_len, val);
+            }
+        }
+        if (count > 0) {
+            self.custom_step_count = count;
+        }
+        self.config_loaded = true;
+    }
+
+    pub fn ensureConfigLoaded(self: *WelcomeState) void {
+        if (self.config_loaded) return;
+        self.config_loaded = true;
+        var buf: [4096]u8 = undefined;
+        const fd_rc = linux.open(
+            DEFAULT_SYSCONFIG_PATH,
+            .{ .ACCMODE = .RDONLY },
+            0,
+        );
+        const signed_fd: isize = @bitCast(fd_rc);
+        if (signed_fd < 0) return;
+        const fd: i32 = @intCast(signed_fd);
+        defer _ = linux.close(fd);
+        const rd_rc = linux.read(fd, &buf, buf.len);
+        const signed_rd: isize = @bitCast(rd_rc);
+        if (signed_rd > 0) {
+            self.loadTourToml(buf[0..@intCast(signed_rd)]);
+        }
+    }
 
     pub fn openWelcome(self: *WelcomeState) void {
+        self.ensureConfigLoaded();
         self.welcome_visible = true;
         self.tour_visible = false;
     }
@@ -83,13 +188,21 @@ pub const WelcomeState = struct {
     }
 
     pub fn startTour(self: *WelcomeState) void {
+        self.ensureConfigLoaded();
         self.welcome_visible = false;
         self.tour_visible = true;
         self.current_step = 0;
     }
 
+    pub fn stepCount(self: *const WelcomeState) usize {
+        return if (self.custom_step_count > 0)
+            self.custom_step_count
+        else
+            TOUR_STEP_COUNT;
+    }
+
     pub fn nextStep(self: *WelcomeState) void {
-        if (self.current_step + 1 < TOUR_STEP_COUNT) {
+        if (self.current_step + 1 < self.stepCount()) {
             self.current_step += 1;
         } else {
             self.tour_visible = false;
@@ -107,7 +220,19 @@ pub const WelcomeState = struct {
     }
 
     pub fn activeTourStep(self: *const WelcomeState) TourStep {
-        return TOUR_STEPS[@min(self.current_step, TOUR_STEP_COUNT - 1)];
+        if (self.custom_step_count > 0) {
+            const idx = @min(self.current_step, self.custom_step_count - 1);
+            const cs = &self.custom_steps[idx];
+            return .{
+                .step_num = @intCast(idx + 1),
+                .title = cs.title_buf[0..cs.title_len],
+                .summary_line1 = cs.summary1_buf[0..cs.summary1_len],
+                .summary_line2 = cs.summary2_buf[0..cs.summary2_len],
+                .cli_hint = cs.hint_buf[0..cs.hint_len],
+            };
+        }
+        const idx = @min(self.current_step, TOUR_STEP_COUNT - 1);
+        return TOUR_STEPS[idx];
     }
 };
 
@@ -116,8 +241,10 @@ pub fn formatTourStepCli(
     step_idx: usize,
     json_mode: bool,
 ) []const u8 {
-    const clamped = @min(step_idx, TOUR_STEP_COUNT - 1);
-    const s = TOUR_STEPS[clamped];
+    var ws = WelcomeState{};
+    ws.ensureConfigLoaded();
+    ws.current_step = step_idx;
+    const s = ws.activeTourStep();
     if (json_mode) {
         return std.fmt.bufPrint(
             buf,
@@ -125,7 +252,7 @@ pub fn formatTourStepCli(
                 "\"summary\":\"{s} {s}\",\"cli_hint\":\"{s}\"}}\n",
             .{
                 s.step_num,
-                TOUR_STEP_COUNT,
+                ws.stepCount(),
                 s.title,
                 s.summary_line1,
                 s.summary_line2,
@@ -153,6 +280,7 @@ pub fn formatTourStepCli(
 const testing = std.testing;
 
 test "WelcomeState transitions through all 5 guided tour steps and closes" {
+    testing.refAllDecls(@This());
     var ws = WelcomeState{};
     ws.openWelcome();
     try testing.expect(ws.welcome_visible);
@@ -176,6 +304,21 @@ test "WelcomeState transitions through all 5 guided tour steps and closes" {
     try testing.expect(ws.tour_visible);
     ws.nextStep(); // Finishes tour.
     try testing.expect(!ws.tour_visible);
+}
+
+test "WelcomeState loadTourToml parses [[tour]] blocks from diosix.toml" {
+    var ws = WelcomeState{};
+    ws.loadTourToml(
+        \\[[tour]]
+        \\title = "Custom Step 1"
+        \\summary = "Custom summary line"
+        \\cli_hint = "dsx host info"
+    );
+    try testing.expectEqual(@as(usize, 1), ws.stepCount());
+    const step = ws.activeTourStep();
+    try testing.expectEqualStrings("Custom Step 1", step.title);
+    try testing.expectEqualStrings("Custom summary line", step.summary_line1);
+    try testing.expectEqualStrings("dsx host info", step.cli_hint);
 }
 
 test "formatTourStepCli produces valid text and JSON" {

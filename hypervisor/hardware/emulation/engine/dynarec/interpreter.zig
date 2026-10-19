@@ -11,15 +11,23 @@ const builtin = @import("builtin");
 const decoder_rv32 = @import("../decoders/rv32.zig");
 const vcpu_mod = @import("../../vcpu.zig");
 const sys = @import("interpreter/sys.zig");
+const mem = @import("interpreter/mem.zig");
 const riscv = @import("interface").riscv;
 
 const u32Gpr = sys.u32Gpr;
 const i32Gpr = sys.i32Gpr;
 const execCsr = sys.execCsr;
-const execAmo = sys.execAmo;
+const execAmo = mem.execAmo;
 const execFpLoad = sys.execFpLoad;
 const execFpStore = sys.execFpStore;
 const execVecMem = sys.execVecMem;
+
+pub const SHIFT_MASK_32: u32 = 0x1f;
+pub const WORD_BITS: u6 = 32;
+pub const DIV_BY_ZERO_RESULT: u32 = 0xffff_ffff;
+pub const DIV_OVERFLOW_RESULT: u32 = 0x8000_0000;
+pub const UPPER20_MASK: u32 = 0xfffff;
+pub const PAGE_SHIFT: u5 = 12;
 
 inline fn csrR(
     self: anytype,
@@ -43,12 +51,11 @@ inline fn csrI(
 
 /// Single-step interpretation/dispatch step for guest virtual CPU.
 pub fn step(self: anytype) bool {
-    if (self.tlb.satp != self.vcpu.satp) {
-        self.tlb.satp = self.vcpu.satp;
-        self.tlb.flush();
-    }
-    self.tlb.privilege_mode = self.vcpu.privilege_mode;
-    self.tlb.mstatus = self.vcpu.mstatus;
+    self.tlb.syncCpuState(
+        self.vcpu.satp,
+        self.vcpu.privilege_mode,
+        self.vcpu.mstatus,
+    );
 
     const pc_before = self.vcpu.pc;
     const fetch_res = self.tlb.fetchU32(pc_before, self.bus);
@@ -78,7 +85,7 @@ pub fn executeDecoded(
             vcpu.setGpr(d.rd, u32Gpr(self, d.rs1) -% u32Gpr(self, d.rs2));
         },
         .sll => |d| {
-            const sh: u5 = @truncate(u32Gpr(self, d.rs2) & 0x1f);
+            const sh: u5 = @truncate(u32Gpr(self, d.rs2) & SHIFT_MASK_32);
             vcpu.setGpr(d.rd, u32Gpr(self, d.rs1) *% (@as(u32, 1) << sh));
         },
         .slt => |d| vcpu.setGpr(
@@ -93,11 +100,11 @@ pub fn executeDecoded(
             vcpu.setGpr(d.rd, u32Gpr(self, d.rs1) ^ u32Gpr(self, d.rs2));
         },
         .srl => |d| {
-            const sh: u5 = @truncate(u32Gpr(self, d.rs2) & 0x1f);
+            const sh: u5 = @truncate(u32Gpr(self, d.rs2) & SHIFT_MASK_32);
             vcpu.setGpr(d.rd, u32Gpr(self, d.rs1) >> sh);
         },
         .sra => |d| {
-            const sh: u5 = @truncate(u32Gpr(self, d.rs2) & 0x1f);
+            const sh: u5 = @truncate(u32Gpr(self, d.rs2) & SHIFT_MASK_32);
             vcpu.setGpr(d.rd, @as(u32, @bitCast(i32Gpr(self, d.rs1) >> sh)));
         },
         .or_ => |d| {
@@ -118,26 +125,26 @@ pub fn executeDecoded(
                 @bitCast(@as(i64, i32Gpr(self, d.rs1)) *%
                     @as(i64, i32Gpr(self, d.rs2))),
             );
-            vcpu.setGpr(d.rd, @as(u32, @truncate(p >> 32)));
+            vcpu.setGpr(d.rd, @as(u32, @truncate(p >> WORD_BITS)));
         },
         .mulhsu => |d| {
             const s1 = @as(i64, i32Gpr(self, d.rs1));
             const val2 = @as(i64, @bitCast(@as(u64, u32Gpr(self, d.rs2))));
             const p = @as(u64, @bitCast(s1 *% val2));
-            vcpu.setGpr(d.rd, @as(u32, @truncate(p >> 32)));
+            vcpu.setGpr(d.rd, @as(u32, @truncate(p >> WORD_BITS)));
         },
         .mulhu => |d| {
             const p = @as(u64, u32Gpr(self, d.rs1)) *%
                 @as(u64, u32Gpr(self, d.rs2));
-            vcpu.setGpr(d.rd, @as(u32, @truncate(p >> 32)));
+            vcpu.setGpr(d.rd, @as(u32, @truncate(p >> WORD_BITS)));
         },
         .div => |d| {
             const num = i32Gpr(self, d.rs1);
             const den = i32Gpr(self, d.rs2);
             if (den == 0) {
-                vcpu.setGpr(d.rd, 0xffff_ffff);
+                vcpu.setGpr(d.rd, DIV_BY_ZERO_RESULT);
             } else if (num == std.math.minInt(i32) and den == -1) {
-                vcpu.setGpr(d.rd, 0x8000_0000);
+                vcpu.setGpr(d.rd, DIV_OVERFLOW_RESULT);
             } else {
                 vcpu.setGpr(d.rd, @as(u32, @bitCast(@divTrunc(num, den))));
             }
@@ -145,7 +152,7 @@ pub fn executeDecoded(
         .divu => |d| {
             const num = u32Gpr(self, d.rs1);
             const den = u32Gpr(self, d.rs2);
-            vcpu.setGpr(d.rd, if (den == 0) 0xffff_ffff else num / den);
+            vcpu.setGpr(d.rd, if (den == 0) DIV_BY_ZERO_RESULT else num / den);
         },
         .rem => |d| {
             const num = i32Gpr(self, d.rs1);
@@ -198,102 +205,31 @@ pub fn executeDecoded(
             @as(u32, @bitCast(i32Gpr(self, d.rs1) >> d.shamt)),
         ),
 
-        .lui => |d| {
-            vcpu.setGpr(d.rd, (@as(u32, @bitCast(d.imm)) & 0xfffff) << 12);
-        },
+        .lui => |d| vcpu.setGpr(
+            d.rd,
+            (@as(u32, @bitCast(d.imm)) & UPPER20_MASK) << PAGE_SHIFT,
+        ),
         .auipc => |d| vcpu.setGpr(
             d.rd,
-            pc_before +% ((@as(u32, @bitCast(d.imm)) & 0xfffff) << 12),
+            pc_before +%
+                ((@as(u32, @bitCast(d.imm)) & UPPER20_MASK) << PAGE_SHIFT),
         ),
 
-        .lb => |d| {
-            const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
-            const res = self.tlb.readU8(vaddr, self.bus);
-            if (res.trap) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-            const sval = @as(i8, @bitCast(@as(u8, @truncate(res.val))));
-            vcpu.setGpr(d.rd, @as(u32, @bitCast(@as(i32, sval))));
-        },
-        .lbu => |d| {
-            const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
-            const res = self.tlb.readU8(vaddr, self.bus);
-            if (res.trap) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-            vcpu.setGpr(d.rd, res.val);
-        },
-        .lh => |d| {
-            const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
-            const res = self.tlb.readU16(vaddr, self.bus);
-            if (res.trap) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-            const sval = @as(i16, @bitCast(@as(u16, @truncate(res.val))));
-            vcpu.setGpr(d.rd, @as(u32, @bitCast(@as(i32, sval))));
-        },
-        .lhu => |d| {
-            const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
-            const res = self.tlb.readU16(vaddr, self.bus);
-            if (res.trap) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-            vcpu.setGpr(d.rd, res.val);
-        },
-        .lw => |d| {
-            const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
-            const res = self.tlb.readU32(vaddr, self.bus);
-            if (res.trap) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-            vcpu.setGpr(d.rd, res.val);
-        },
-
-        .sb => |d| {
-            const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
-            if (self.tlb.writeU8(
-                vaddr,
-                @truncate(u32Gpr(self, d.rs2)),
-                self.bus,
-            )) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-        },
-        .sh => |d| {
-            const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
-            if (self.tlb.writeU16(
-                vaddr,
-                @truncate(u32Gpr(self, d.rs2)),
-                self.bus,
-            )) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-        },
-        .sw => |d| {
-            const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
-            if (self.tlb.writeU32(
-                vaddr,
-                u32Gpr(self, d.rs2),
-                self.bus,
-            )) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-        },
+        .lb => |d| if (!mem.execLb(self, pc_before, d)) return true,
+        .lbu => |d| if (!mem.execLbu(self, pc_before, d)) return true,
+        .lh => |d| if (!mem.execLh(self, pc_before, d)) return true,
+        .lhu => |d| if (!mem.execLhu(self, pc_before, d)) return true,
+        .lw => |d| if (!mem.execLw(self, pc_before, d)) return true,
+        .sb => |d| if (!mem.execSb(self, pc_before, d)) return true,
+        .sh => |d| if (!mem.execSh(self, pc_before, d)) return true,
+        .sw => |d| if (!mem.execSw(self, pc_before, d)) return true,
 
         .flw => |d| if (!execFpLoad(self, pc_before, d, false)) return true,
         .fld => |d| if (!execFpLoad(self, pc_before, d, true)) return true,
         .fsw => |d| if (!execFpStore(self, pc_before, d, false)) return true,
         .fsd => |d| if (!execFpStore(self, pc_before, d, true)) return true,
-        .fp_op => if (((vcpu.mstatus >> 13) & 3) == 0) {
-            self.trap(2, pc_before, 0);
+        .fp_op => if ((vcpu.mstatus & vcpu_mod.MSTATUS_FS_MASK_U32) == 0) {
+            self.trap(sys.CAUSE_ILLEGAL_INSN, pc_before, 0);
             return true;
         },
 
@@ -350,12 +286,12 @@ pub fn executeDecoded(
         },
 
         .vsetvli => |d| {
-            if (((vcpu.mstatus >> 9) & 3) == 0) {
-                self.trap(2, pc_before, 0);
+            if ((vcpu.mstatus & vcpu_mod.MSTATUS_VS_MASK_U32) == 0) {
+                self.trap(sys.CAUSE_ILLEGAL_INSN, pc_before, 0);
                 return true;
             }
-            const req = if (d.rs1 != 0) u32Gpr(self, d.rs1) else 32;
-            vcpu.vl = @min(req, 32);
+            const req = if (d.rs1 != 0) u32Gpr(self, d.rs1) else sys.VREG_BYTES;
+            vcpu.vl = @min(req, sys.VREG_BYTES);
             if (d.rd != 0) vcpu.setGpr(d.rd, vcpu.vl);
             vcpu.pc = next_pc;
             return true;
@@ -369,35 +305,24 @@ pub fn executeDecoded(
             return true;
         },
         .vector_op => |d| {
-            if (((vcpu.mstatus >> 9) & 3) == 0) {
-                self.trap(2, pc_before, 0);
+            if ((vcpu.mstatus & vcpu_mod.MSTATUS_VS_MASK_U32) == 0) {
+                self.trap(sys.CAUSE_ILLEGAL_INSN, pc_before, 0);
                 return true;
             }
-            @memcpy(vcpu.vregs[d.rd][0..], vcpu.vregs[d.rs1][0..]);
+            if (d.rd != d.rs1) {
+                @memcpy(vcpu.vregs[d.rd][0..], vcpu.vregs[d.rs1][0..]);
+            }
             vcpu.pc = next_pc;
             return true;
         },
 
         .lr_w => |d| {
-            const vaddr = u32Gpr(self, d.rs1);
-            const res = self.tlb.lrU32(vaddr, vcpu.id, self.bus);
-            if (res.trap) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-            if (d.rd != 0) vcpu.setGpr(d.rd, res.val);
-            vcpu.pc = next_pc;
+            mem.execLrW(self, pc_before, next_pc, d);
+            return true;
         },
         .sc_w => |d| {
-            const vaddr = u32Gpr(self, d.rs1);
-            const val = u32Gpr(self, d.rs2);
-            const res = self.tlb.scU32(vaddr, val, vcpu.id, self.bus);
-            if (res.trap) |cause| {
-                self.trap(cause, pc_before, vaddr);
-                return true;
-            }
-            if (d.rd != 0) vcpu.setGpr(d.rd, if (res.success) 0 else 1);
-            vcpu.pc = next_pc;
+            mem.execScW(self, pc_before, next_pc, d);
+            return true;
         },
         .amoswap_w => |d| execAmo(self, pc_before, next_pc, d, .swap),
         .amoadd_w => |d| execAmo(self, pc_before, next_pc, d, .add),
@@ -419,15 +344,15 @@ pub fn executeDecoded(
         },
         .ecall => {
             const cause: u32 = switch (vcpu.privilege_mode) {
-                vcpu_mod.PRIV_USER => 8,
-                vcpu_mod.PRIV_SUPERVISOR => 9,
-                else => 11,
+                vcpu_mod.PRIV_USER => sys.CAUSE_USER_ECALL,
+                vcpu_mod.PRIV_SUPERVISOR => sys.CAUSE_SUPERVISOR_ECALL,
+                else => sys.CAUSE_MACHINE_ECALL,
             };
             self.trap(cause, pc_before, 0);
             return true;
         },
         .ebreak => {
-            self.trap(3, pc_before, 0);
+            self.trap(sys.CAUSE_BREAKPOINT, pc_before, 0);
             return true;
         },
         .wfi => {
@@ -435,7 +360,7 @@ pub fn executeDecoded(
                 (vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and
                     (vcpu.mstatus & riscv.MSTATUS.TW) != 0))
             {
-                self.trap(2, pc_before, 0);
+                self.trap(sys.CAUSE_ILLEGAL_INSN, pc_before, 0);
                 return true;
             }
             vcpu.pc = next_pc;
@@ -446,7 +371,7 @@ pub fn executeDecoded(
                 (vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and
                     (vcpu.mstatus & riscv.MSTATUS.TVM) != 0))
             {
-                self.trap(2, pc_before, 0);
+                self.trap(sys.CAUSE_ILLEGAL_INSN, pc_before, 0);
                 return true;
             }
             if (comptime builtin.target.cpu.arch.isRISCV()) {
@@ -478,11 +403,10 @@ pub fn executeDecoded(
             return true;
         },
         else => {
-            const cause: u32 = @backingInt(riscv.Cause.illegal_instruction);
             self.last_fault_pc = pc_before;
-            self.last_fault_cause = cause;
+            self.last_fault_cause = sys.CAUSE_ILLEGAL_INSN;
             self.last_fault_val = raw_insn;
-            self.trap(cause, pc_before, raw_insn);
+            self.trap(sys.CAUSE_ILLEGAL_INSN, pc_before, raw_insn);
             return true;
         },
     }
@@ -490,10 +414,41 @@ pub fn executeDecoded(
     return true;
 }
 
-test "interpreter u32Gpr and i32Gpr helpers" {
-    var vcpu = vcpu_mod.VCpu{ .id = 0, .pc = 0x8000_0000 };
+test "interpreter u32Gpr, i32Gpr, and self-referential vector_op" {
+    std.testing.refAllDecls(@This());
+    _ = mem;
+
+    var vcpu = vcpu_mod.VCpu{
+        .id = 0,
+        .pc = 0x8000_0000,
+        .mstatus = vcpu_mod.MSTATUS_VS_MASK_U32,
+    };
     vcpu.setGpr(10, 0xffff_fffe);
-    const dummy = .{ .vcpu = &vcpu };
-    try std.testing.expectEqual(@as(u32, 0xffff_fffe), u32Gpr(dummy, 10));
-    try std.testing.expectEqual(@as(i32, -2), i32Gpr(dummy, 10));
+    vcpu.vregs[5][0] = 0x42;
+
+    const softtlb_mod = @import("../../softtlb.zig");
+    const bus_mod = @import("../../devices/bus.zig");
+    const cache_mod = @import("cache.zig");
+    const MockEnv = struct {
+        vcpu: *vcpu_mod.VCpu,
+        tlb: *softtlb_mod.SoftTlb = undefined,
+        bus: *bus_mod.Bus = undefined,
+        cache: cache_mod.Cache = undefined,
+        last_fault_pc: u32 = 0,
+        last_fault_cause: u32 = 0,
+        last_fault_val: u32 = 0,
+        pub fn trap(_: *@This(), _: u32, _: u32, _: u32) void {}
+    };
+    var env = MockEnv{ .vcpu = &vcpu };
+
+    try std.testing.expectEqual(@as(u32, 0xffff_fffe), u32Gpr(&env, 10));
+    try std.testing.expectEqual(@as(i32, -2), i32Gpr(&env, 10));
+
+    // Verify vector_op with rd == rs1 does not panic on overlapping @memcpy.
+    const vec_dec = decoder_rv32.DecodedInsn{
+        .insn = .{ .vector_op = .{ .rd = 5, .rs1 = 5, .rs2 = 5 } },
+        .len = 4,
+    };
+    try std.testing.expect(executeDecoded(&env, vec_dec, 0, 0x8000_0000));
+    try std.testing.expectEqual(@as(u8, 0x42), vcpu.vregs[5][0]);
 }

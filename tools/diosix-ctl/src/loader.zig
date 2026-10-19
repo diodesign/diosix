@@ -8,29 +8,62 @@ const api = @import("api.zig");
 const catalog = @import("catalog.zig");
 const common = @import("common.zig");
 
-pub const GUEST_SHIM_CANDIDATES = [_][]const u8{
-    "/usr/share/diosix/shim/guest-shim-riscv64.elf",
-    "/var/lib/diosix/images/guest-shim.elf",
-    "/boot/guest-shim.elf",
-};
-
-pub const DEFAULT_GUEST_CANDIDATES = [_][]const u8{
-    "/var/lib/diosix/images/linux-guest.elf",
-    "/boot/vmlinux.elf",
-    "/boot/linux-guest.elf",
-    "/var/lib/diosix/images/default.elf",
-    "/boot/default.elf",
-    "/var/lib/diosix/images/micro-guest.elf",
-    "/boot/micro-guest.elf",
-};
-
-pub const FALLBACK_ISO_CANDIDATES = [_][]const u8{
-    "/var/lib/diosix/images/micro-guest.iso",
-    "/boot/micro-guest.iso",
-};
+pub const GUEST_SHIM_PATH = "/usr/share/diosix/shim/guest-shim-riscv64.elf";
+pub const DEFAULT_GUEST_IMAGE_PATH = "/var/lib/diosix/images/default.elf";
+pub const FALLBACK_GUEST_IMAGE_PATH = "/var/lib/diosix/images/micro-guest.elf";
+pub const FALLBACK_GUEST_ISO_PATH = "/var/lib/diosix/iso/micro-guest.iso";
 
 pub const SHIM_HEADER_OFFSET: usize = 0x0010_0000;
 pub const SHIM_HEADER_MAGIC: u64 = 0x4d49_4853_5853_4f44; // "DOSXSHIM".
+
+pub const FDT_MAGIC_BE: u32 = 0xd00dfeed;
+pub const FDT_OFF_DT_STRUCT: usize = 8;
+pub const FDT_OFF_DT_STRINGS: usize = 12;
+pub const FDT_MIN_HEADER_SIZE: usize = 32;
+pub const FDT_ALIGN: usize = 4;
+pub const FDT_PROP_HEADER_SIZE: usize = 8;
+pub const PAGE_ALIGN: usize = 0x1000;
+
+pub const MAX_FOREIGN_MAP_BYTES: usize = 256 * 1024 * 1024;
+pub const DEFAULT_PARENT_MAP_GPA: usize = 0x2_0000_0000;
+pub const MAP_CHILD_RW_FLAGS: usize = 3;
+
+pub const FdtToken = enum(u32) {
+    begin_node = 1,
+    end_node = 2,
+    prop = 3,
+    nop = 4,
+    end = 9,
+    _,
+};
+
+pub const ELF_MAGIC = "\x7fELF";
+pub const ELF_EI_CLASS_OFFSET: usize = 4;
+pub const ELFCLASS32: u8 = 1;
+pub const ELFCLASS64: u8 = 2;
+pub const PT_LOAD: u32 = 1;
+pub const ELF32_EHDR_SIZE: usize = 52;
+pub const ELF64_EHDR_SIZE: usize = 64;
+pub const ELF32_PHDR_SIZE: usize = 32;
+pub const ELF64_PHDR_SIZE: usize = 56;
+pub const MAX_ELF_PHDRS: u16 = 128;
+
+pub const ELF_E_ENTRY_OFFSET: usize = 24;
+pub const ELF32_E_PHOFF_OFFSET: usize = 28;
+pub const ELF32_E_PHENTSIZE_OFFSET: usize = 42;
+pub const ELF32_E_PHNUM_OFFSET: usize = 44;
+pub const ELF64_E_PHOFF_OFFSET: usize = 32;
+pub const ELF64_E_PHENTSIZE_OFFSET: usize = 54;
+pub const ELF64_E_PHNUM_OFFSET: usize = 56;
+
+pub const ELF32_P_OFFSET: usize = 4;
+pub const ELF32_P_VADDR: usize = 8;
+pub const ELF32_P_FILESZ: usize = 16;
+pub const ELF32_P_MEMSZ: usize = 20;
+pub const ELF64_P_OFFSET: usize = 8;
+pub const ELF64_P_VADDR: usize = 16;
+pub const ELF64_P_FILESZ: usize = 32;
+pub const ELF64_P_MEMSZ: usize = 40;
 
 const HOST_FDT_PREFIXES = [_][]const u8{
     "virtio_mmio@",  "pci@",  "pcie@",  "serial@",
@@ -38,47 +71,70 @@ const HOST_FDT_PREFIXES = [_][]const u8{
     "platform-bus@", "plic@", "clint@", "aliases",
 };
 
+fn readBeU32(buf: []const u8, off: usize) u32 {
+    return std.mem.readInt(u32, buf[off .. off + 4][0..4], .big);
+}
+
+fn readLeU16(buf: []const u8, off: usize) u16 {
+    return std.mem.readInt(u16, buf[off .. off + 2][0..2], .little);
+}
+
+fn readLeU32(buf: []const u8, off: usize) u32 {
+    return std.mem.readInt(u32, buf[off .. off + 4][0..4], .little);
+}
+
+fn readLeU64(buf: []const u8, off: usize) u64 {
+    return std.mem.readInt(u64, buf[off .. off + 8][0..8], .little);
+}
+
+fn writeBeU32(buf: []u8, off: usize, val: u32) void {
+    std.mem.writeInt(u32, buf[off .. off + 4][0..4], val, .big);
+}
+
+fn writeBeU64(buf: []u8, off: usize, val: u64) void {
+    std.mem.writeInt(u64, buf[off .. off + 8][0..8], val, .big);
+}
+
 fn nopFdtRange(dtb: []u8, start_off: usize, end_off: usize) void {
     const limit = @min(end_off, dtb.len);
     var cur = start_off;
-    while (cur + 4 <= limit) : (cur += 4) {
-        std.mem.writeInt(u32, dtb[cur .. cur + 4][0..4], 4, .big);
+    const nop_val = @backingInt(FdtToken.nop);
+    while (cur + FDT_ALIGN <= limit) : (cur += FDT_ALIGN) {
+        writeBeU32(dtb, cur, nop_val);
     }
 }
 
 fn scanNopSubtree(dtb: []const u8, start_off: usize) usize {
     var depth: usize = 1;
     var scan_off = start_off;
-    while (scan_off + 4 <= dtb.len and depth > 0) {
-        const sub_tag = std.mem.readInt(
-            u32,
-            dtb[scan_off .. scan_off + 4][0..4],
-            .big,
+    while (scan_off + FDT_ALIGN <= dtb.len and depth > 0) {
+        const sub_tag: FdtToken = @fromBackingInt(
+            @intCast(readBeU32(dtb, scan_off)),
         );
-        scan_off += 4;
+        scan_off += FDT_ALIGN;
         switch (sub_tag) {
-            1 => { // Nested FDT_BEGIN_NODE.
+            .begin_node => {
                 while (scan_off < dtb.len and
                     dtb[scan_off] != 0) : (scan_off += 1)
                 {}
-                scan_off = (scan_off + 4) & ~@as(usize, 3);
+                scan_off = std.mem.alignForward(usize, scan_off + 1, FDT_ALIGN);
                 depth += 1;
             },
-            2 => depth -= 1, // FDT_END_NODE.
-            3 => { // FDT_PROP.
-                if (scan_off + 8 > dtb.len) break;
-                const prop_len: usize = std.mem.readInt(
-                    u32,
-                    dtb[scan_off .. scan_off + 4][0..4],
-                    .big,
-                );
-                const step = std.math.add(usize, 8, prop_len) catch break;
+            .end_node => depth -= 1,
+            .prop => {
+                if (scan_off + FDT_PROP_HEADER_SIZE > dtb.len) break;
+                const prop_len: usize = readBeU32(dtb, scan_off);
+                const step = std.math.add(
+                    usize,
+                    FDT_PROP_HEADER_SIZE,
+                    prop_len,
+                ) catch break;
                 scan_off = std.math.add(usize, scan_off, step) catch break;
-                scan_off = (scan_off + 3) & ~@as(usize, 3);
+                scan_off = std.mem.alignForward(usize, scan_off, FDT_ALIGN);
             },
-            4 => {}, // FDT_NOP.
-            9 => break, // FDT_END.
-            else => break,
+            .nop => {},
+            .end => break,
+            _ => break,
         }
     }
     return @min(scan_off, dtb.len);
@@ -90,29 +146,27 @@ pub fn patchChildDtb(
     ram_bytes: u64,
     vcpus: usize,
 ) void {
-    if (dtb.len < 32) return;
-    if (dtb[0] != 0xd0 or dtb[1] != 0x0d or dtb[2] != 0xfe or dtb[3] != 0xed) {
-        return;
-    }
+    if (dtb.len < FDT_MIN_HEADER_SIZE) return;
+    if (readBeU32(dtb, 0) != FDT_MAGIC_BE) return;
 
-    const off_dt_struct = std.mem.readInt(u32, dtb[8..12][0..4], .big);
-    const off_dt_strings = std.mem.readInt(u32, dtb[12..16][0..4], .big);
+    const off_dt_struct = readBeU32(dtb, FDT_OFF_DT_STRUCT);
+    const off_dt_strings = readBeU32(dtb, FDT_OFF_DT_STRINGS);
     if (off_dt_struct >= dtb.len or off_dt_strings >= dtb.len) return;
 
     var offset: usize = off_dt_struct;
     var in_memory_node = false;
 
-    while (offset + 4 <= dtb.len) {
+    while (offset + FDT_ALIGN <= dtb.len) {
         const node_tag_offset = offset;
-        const tag = std.mem.readInt(u32, dtb[offset .. offset + 4][0..4], .big);
-        offset += 4;
+        const tag: FdtToken = @fromBackingInt(@intCast(readBeU32(dtb, offset)));
+        offset += FDT_ALIGN;
 
         switch (tag) {
-            1 => { // FDT_BEGIN_NODE.
+            .begin_node => {
                 const name_start = offset;
                 while (offset < dtb.len and dtb[offset] != 0) : (offset += 1) {}
                 const name = dtb[name_start..offset];
-                offset = (offset + 4) & ~@as(usize, 3);
+                offset = std.mem.alignForward(usize, offset + 1, FDT_ALIGN);
 
                 in_memory_node = std.mem.startsWith(u8, name, "memory@") or
                     std.mem.eql(u8, name, "memory");
@@ -139,20 +193,12 @@ pub fn patchChildDtb(
                     offset = nop_end;
                 }
             },
-            2 => in_memory_node = false, // FDT_END_NODE.
-            3 => { // FDT_PROP.
-                if (offset + 8 > dtb.len) break;
-                const prop_len: usize = std.mem.readInt(
-                    u32,
-                    dtb[offset .. offset + 4][0..4],
-                    .big,
-                );
-                const name_off: usize = std.mem.readInt(
-                    u32,
-                    dtb[offset + 4 .. offset + 8][0..4],
-                    .big,
-                );
-                offset += 8;
+            .end_node => in_memory_node = false,
+            .prop => {
+                if (offset + FDT_PROP_HEADER_SIZE > dtb.len) break;
+                const prop_len: usize = readBeU32(dtb, offset);
+                const name_off: usize = readBeU32(dtb, offset + 4);
+                offset += FDT_PROP_HEADER_SIZE;
 
                 const prop_end = std.math.add(usize, offset, prop_len) catch
                     break;
@@ -176,56 +222,47 @@ pub fn patchChildDtb(
                         switch (prop) {
                             .reg => if (in_memory_node) {
                                 if (prop_len >= 16) {
-                                    std.mem.writeInt(
-                                        u64,
-                                        dtb[offset .. offset + 8][0..8],
-                                        base_gpa,
-                                        .big,
-                                    );
-                                    std.mem.writeInt(
-                                        u64,
-                                        dtb[offset + 8 .. offset + 16][0..8],
-                                        ram_bytes,
-                                        .big,
-                                    );
+                                    writeBeU64(dtb, offset, base_gpa);
+                                    writeBeU64(dtb, offset + 8, ram_bytes);
                                 } else if (prop_len >= 8) {
-                                    std.mem.writeInt(
-                                        u32,
-                                        dtb[offset .. offset + 4][0..4],
+                                    writeBeU32(
+                                        dtb,
+                                        offset,
                                         @truncate(base_gpa),
-                                        .big,
                                     );
-                                    std.mem.writeInt(
-                                        u32,
-                                        dtb[offset + 4 .. offset + 8][0..4],
+                                    writeBeU32(
+                                        dtb,
+                                        offset + 4,
                                         @truncate(ram_bytes),
-                                        .big,
                                     );
                                 }
                             },
                             .@"stdout-path" => {
-                                const end_aligned =
-                                    (prop_end + 3) & ~@as(usize, 3);
+                                const end_aligned = std.mem.alignForward(
+                                    usize,
+                                    prop_end,
+                                    FDT_ALIGN,
+                                );
                                 nopFdtRange(dtb, node_tag_offset, end_aligned);
                             },
                         }
                     }
                 }
 
-                offset = (prop_end + 3) & ~@as(usize, 3);
+                offset = std.mem.alignForward(usize, prop_end, FDT_ALIGN);
             },
-            4 => {}, // FDT_NOP.
-            9 => break, // FDT_END.
-            else => break,
+            .nop => {},
+            .end => break,
+            _ => break,
         }
     }
 }
 
 fn readPhdrU64(elf: []const u8, class: u8, off32: usize, off64: usize) u64 {
-    return if (class == 1)
-        @as(u64, std.mem.readInt(u32, elf[off32 .. off32 + 4][0..4], .little))
+    return if (class == ELFCLASS32)
+        @as(u64, readLeU32(elf, off32))
     else
-        std.mem.readInt(u64, elf[off64 .. off64 + 8][0..8], .little);
+        readLeU64(elf, off64);
 }
 
 pub fn loadElfViaForeignMapping(
@@ -238,38 +275,37 @@ pub fn loadElfViaForeignMapping(
     ram_bytes: usize,
     vcpus: usize,
 ) !usize {
-    if (elf_data.len < 52) return error.InvalidElfHeader;
-    if (!std.mem.eql(u8, elf_data[0..4], "\x7fELF")) {
+    if (elf_data.len < ELF32_EHDR_SIZE) return error.InvalidElfHeader;
+    if (!std.mem.eql(u8, elf_data[0..4], ELF_MAGIC)) {
         return error.InvalidElfHeader;
     }
 
-    const class = elf_data[4];
+    const class = elf_data[ELF_EI_CLASS_OFFSET];
     var entry_point: u64 = 0;
     var ph_off: usize = 0;
     var ph_num: u16 = 0;
     var ph_size: usize = 0;
 
-    if (class == 1) { // 32-bit ELF.
-        entry_point = std.mem.readInt(u32, elf_data[24..28][0..4], .little);
-        ph_off = std.mem.readInt(u32, elf_data[28..32][0..4], .little);
-        ph_size = std.mem.readInt(u16, elf_data[42..44][0..2], .little);
-        ph_num = std.mem.readInt(u16, elf_data[44..46][0..2], .little);
-        if (ph_size < 32) return error.InvalidElfHeader;
-    } else if (class == 2) { // 64-bit ELF.
-        if (elf_data.len < 64) return error.InvalidElfHeader;
-        entry_point = std.mem.readInt(u64, elf_data[24..32][0..8], .little);
-        const raw_ph_off =
-            std.mem.readInt(u64, elf_data[32..40][0..8], .little);
+    if (class == ELFCLASS32) {
+        entry_point = readLeU32(elf_data, ELF_E_ENTRY_OFFSET);
+        ph_off = readLeU32(elf_data, ELF32_E_PHOFF_OFFSET);
+        ph_size = readLeU16(elf_data, ELF32_E_PHENTSIZE_OFFSET);
+        ph_num = readLeU16(elf_data, ELF32_E_PHNUM_OFFSET);
+        if (ph_size < ELF32_PHDR_SIZE) return error.InvalidElfHeader;
+    } else if (class == ELFCLASS64) {
+        if (elf_data.len < ELF64_EHDR_SIZE) return error.InvalidElfHeader;
+        entry_point = readLeU64(elf_data, ELF_E_ENTRY_OFFSET);
+        const raw_ph_off = readLeU64(elf_data, ELF64_E_PHOFF_OFFSET);
         ph_off = std.math.cast(usize, raw_ph_off) orelse
             return error.SegmentOutOfBounds;
-        ph_size = std.mem.readInt(u16, elf_data[54..56][0..2], .little);
-        ph_num = std.mem.readInt(u16, elf_data[56..58][0..2], .little);
-        if (ph_size < 56) return error.InvalidElfHeader;
+        ph_size = readLeU16(elf_data, ELF64_E_PHENTSIZE_OFFSET);
+        ph_num = readLeU16(elf_data, ELF64_E_PHNUM_OFFSET);
+        if (ph_size < ELF64_PHDR_SIZE) return error.InvalidElfHeader;
     } else {
         return error.InvalidElfHeader;
     }
 
-    if (ph_num == 0 or ph_num > 128) return error.InvalidElfHeader;
+    if (ph_num == 0 or ph_num > MAX_ELF_PHDRS) return error.InvalidElfHeader;
     const ph_table_bytes = std.math.mul(usize, ph_size, ph_num) catch
         return error.SegmentOutOfBounds;
     const ph_table_end = std.math.add(usize, ph_off, ph_table_bytes) catch
@@ -279,37 +315,38 @@ pub fn loadElfViaForeignMapping(
     var min_vaddr: u64 = std.math.maxInt(u64);
     var i: usize = 0;
     while (i < ph_num) : (i += 1) {
-        const off = ph_off + (i * ph_size);
-        const p_type =
-            std.mem.readInt(u32, elf_data[off .. off + 4][0..4], .little);
-        const p_vaddr = readPhdrU64(elf_data, class, off + 8, off + 16);
-        if (p_type == 1 and p_vaddr < min_vaddr) min_vaddr = p_vaddr;
+        const ph = elf_data[ph_off + (i * ph_size) ..];
+        const p_type = readLeU32(ph, 0);
+        const p_vaddr = readPhdrU64(ph, class, ELF32_P_VADDR, ELF64_P_VADDR);
+        if (p_type == PT_LOAD and p_vaddr < min_vaddr) min_vaddr = p_vaddr;
     }
     if (min_vaddr == std.math.maxInt(u64)) min_vaddr = 0;
     if (entry_point < min_vaddr) return error.InvalidElfHeader;
 
-    const map_size = @min(ram_bytes, 256 * 1024 * 1024);
-    const parent_gpa: usize = 0x2_0000_0000;
+    const map_size: usize = @min(ram_bytes, MAX_FOREIGN_MAP_BYTES);
+    const parent_gpa: usize = DEFAULT_PARENT_MAP_GPA;
     const child_ram = try client.mapChildMemory(
         child_cid,
         base_gpa,
         parent_gpa,
         map_size,
-        3,
+        MAP_CHILD_RW_FLAGS,
     );
     defer client.unmapChildMemory(child_ram, parent_gpa) catch {};
 
     i = 0;
     while (i < ph_num) : (i += 1) {
-        const off = ph_off + (i * ph_size);
-        const p_type =
-            std.mem.readInt(u32, elf_data[off .. off + 4][0..4], .little);
-        if (p_type != 1) continue; // Only PT_LOAD.
+        const ph = elf_data[ph_off + (i * ph_size) ..];
+        if (readLeU32(ph, 0) != PT_LOAD) continue;
 
-        const p_offset_u64 = readPhdrU64(elf_data, class, off + 4, off + 8);
-        const p_vaddr = readPhdrU64(elf_data, class, off + 8, off + 16);
-        const p_filesz_u64 = readPhdrU64(elf_data, class, off + 16, off + 32);
-        const p_memsz_u64 = readPhdrU64(elf_data, class, off + 20, off + 40);
+        const p_offset_u64 =
+            readPhdrU64(ph, class, ELF32_P_OFFSET, ELF64_P_OFFSET);
+        const p_vaddr =
+            readPhdrU64(ph, class, ELF32_P_VADDR, ELF64_P_VADDR);
+        const p_filesz_u64 =
+            readPhdrU64(ph, class, ELF32_P_FILESZ, ELF64_P_FILESZ);
+        const p_memsz_u64 =
+            readPhdrU64(ph, class, ELF32_P_MEMSZ, ELF64_P_MEMSZ);
 
         if (p_filesz_u64 > p_memsz_u64 or p_vaddr < min_vaddr) {
             return error.SegmentOutOfBounds;
@@ -370,7 +407,7 @@ pub fn loadElfViaForeignMapping(
     {
         const payload_offset = @max(
             @as(usize, 0x0040_0000),
-            (dtb_offset / 2) & ~@as(usize, 0xfff),
+            std.mem.alignBackward(usize, dtb_offset / 2, PAGE_ALIGN),
         );
         if (payload_offset >= dtb_offset) return error.SegmentOutOfBounds;
         const max_stage = dtb_offset - payload_offset;
@@ -390,8 +427,8 @@ pub fn loadElfViaForeignMapping(
     return entry_gpa;
 }
 
-/// Copies a pre-built guest ELF or ISO9660 image from `/boot` or
-/// `/var/lib/diosix/images` when offline catalog seeding is requested.
+/// Copies a pre-built guest ELF or ISO9660 image from `/var/lib/diosix`
+/// when offline catalog seeding is requested.
 pub fn seedOfflineCatalogFallback(
     entry: catalog.CatalogEntry,
     dest_path: []const u8,
@@ -399,9 +436,14 @@ pub fn seedOfflineCatalogFallback(
     const FormatType = enum { elf, iso9660 };
     const fmt = std.meta.stringToEnum(FormatType, entry.format) orelse
         return false;
+    const elf_paths = [_][]const u8{
+        DEFAULT_GUEST_IMAGE_PATH,
+        FALLBACK_GUEST_IMAGE_PATH,
+    };
+    const iso_paths = [_][]const u8{FALLBACK_GUEST_ISO_PATH};
     const candidates: []const []const u8 = switch (fmt) {
-        .elf => &DEFAULT_GUEST_CANDIDATES,
-        .iso9660 => &FALLBACK_ISO_CANDIDATES,
+        .elf => &elf_paths,
+        .iso9660 => &iso_paths,
     };
     for (candidates) |cand| {
         if (common.readBinaryFile(cand, common.MAX_ELF_FILE_SIZE)) |data| {
@@ -419,13 +461,15 @@ test "loader: patchChildDtb handles malformed FDT headers safely" {
     var bad_dtb: [64]u8 = @splat(0);
     patchChildDtb(&bad_dtb, 0x8000_0000, 0x1000_0000, 1);
 
-    bad_dtb[0] = 0xd0;
-    bad_dtb[1] = 0x0d;
-    bad_dtb[2] = 0xfe;
-    bad_dtb[3] = 0xed;
+    std.mem.writeInt(u32, bad_dtb[0..4], FDT_MAGIC_BE, .big);
     std.mem.writeInt(u32, bad_dtb[8..12], 32, .big);
     std.mem.writeInt(u32, bad_dtb[12..16], 48, .big);
-    std.mem.writeInt(u32, bad_dtb[32..36], 3, .big); // FDT_PROP.
+    std.mem.writeInt(
+        u32,
+        bad_dtb[32..36],
+        @backingInt(FdtToken.prop),
+        .big,
+    );
     std.mem.writeInt(u32, bad_dtb[36..40], 0xffff_ffff, .big); // prop_len.
     patchChildDtb(&bad_dtb, 0x8000_0000, 0x1000_0000, 1);
 }

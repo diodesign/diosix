@@ -3,6 +3,8 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
+
 pub const vcpu = @import("vcpu.zig");
 pub const VCpu = vcpu.VCpu;
 pub const PRIV_USER = vcpu.PRIV_USER;
@@ -11,7 +13,7 @@ pub const PRIV_MACHINE = vcpu.PRIV_MACHINE;
 
 pub const SoftTlb = @import("softtlb.zig").SoftTlb;
 pub const Engine = @import("engine/dynarec/engine.zig").Engine;
-pub const ExitReason = @import("engine/dynarec/engine.zig").ExitReason;
+pub const ExitReason = Engine.ExitReason;
 pub const Cache = @import("engine/dynarec/cache.zig").Cache;
 pub const TranslationBlock =
     @import("engine/dynarec/block.zig").TranslationBlock;
@@ -33,6 +35,7 @@ test {
     _ = @import("reservation.zig");
     _ = @import("softtlb.zig");
     _ = @import("softtlb/ops.zig");
+    _ = @import("softtlb/walk.zig");
     _ = @import("devices/bus.zig");
     _ = @import("devices/vuart.zig");
     _ = @import("devices/vtimer.zig");
@@ -41,9 +44,11 @@ test {
     _ = @import("devices/vsock/router.zig");
     _ = @import("devices/vgpu.zig");
     _ = @import("devices/vgpu/protocol.zig");
+    _ = @import("devices/vgpu/commands.zig");
     _ = @import("devices/vinput.zig");
     _ = @import("engine/decoders/aarch64.zig");
     _ = @import("engine/decoders/x86_64.zig");
+    _ = @import("engine/decoders/rv32/encoding.zig");
     _ = @import("engine/decoders/rv32c.zig");
     _ = @import("engine/decoders/rv32.zig");
     _ = @import("engine/emitters/rv64.zig");
@@ -51,12 +56,15 @@ test {
     _ = @import("engine/dynarec/block.zig");
     _ = @import("engine/dynarec/cache.zig");
     _ = @import("engine/dynarec/emit/alu.zig");
+    _ = @import("engine/dynarec/emit/branch.zig");
     _ = @import("engine/dynarec/emit/tlb.zig");
     _ = @import("engine/dynarec/emit/mem.zig");
     _ = @import("engine/dynarec/translator.zig");
     _ = @import("engine/dynarec/interpreter/sys.zig");
+    _ = @import("engine/dynarec/interpreter/mem.zig");
     _ = @import("engine/dynarec/interpreter.zig");
     _ = @import("engine/dynarec/engine.zig");
     _ = @import("engine/dynarec/tests/instruction.zig");
     _ = @import("engine/dynarec/tests/privilege.zig");
+    std.testing.refAllDecls(@This());
 }

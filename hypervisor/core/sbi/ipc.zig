@@ -29,6 +29,8 @@ pub fn handleGetManifest(
     };
     const max_len: usize = @intCast(margs.max_len);
     const data_ptr: usize = @intCast(margs.data_ptr);
+    const actual_len = target.getManifestLength();
+    const alloc_len: usize = @min(max_len, actual_len);
     if (max_len > 0 and data_ptr != 0) {
         _ = std.math.add(usize, data_ptr, max_len) catch {
             sbi_core.setResult(
@@ -39,15 +41,17 @@ pub fn handleGetManifest(
             );
             return;
         };
-        const kbuf = target.allocator.alloc(u8, max_len) catch {
+    }
+    if (alloc_len > 0 and data_ptr != 0) {
+        const kbuf = target.allocator.alloc(u8, alloc_len) catch {
             sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
             return;
         };
         defer target.allocator.free(kbuf);
 
         var copy_len: usize = 0;
-        if (target.readManifest(kbuf)) |actual_len| {
-            copy_len = @min(max_len, actual_len);
+        if (target.readManifest(kbuf)) |read_len| {
+            copy_len = @min(alloc_len, read_len);
             g.space.copyToGuest(data_ptr, kbuf[0..copy_len]) catch {
                 sbi_core.setResult(
                     vc,
@@ -57,7 +61,7 @@ pub fn handleGetManifest(
                 );
                 return;
             };
-            margs.actual_len = actual_len;
+            margs.actual_len = read_len;
         } else {
             margs.actual_len = 0;
         }
@@ -72,7 +76,7 @@ pub fn handleGetManifest(
         };
         sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, copy_len);
     } else {
-        margs.actual_len = target.getManifestLength();
+        margs.actual_len = actual_len;
         g.space.writeGuestStruct(interface.ManifestArgs, a0, margs) catch {
             sbi_core.setResult(
                 vc,
@@ -188,10 +192,8 @@ pub fn handleMapChildMem(
         return;
     }
 
-    const parent_rwx = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write |
-        sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed |
-        sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
-    const child_rwx = parent_rwx | sv39x4.PTEFlags.execute;
+    const parent_rwx = sv39x4.PTEFlags.leaf_rw_user;
+    const child_rwx = sv39x4.PTEFlags.leaf_rwx_user;
 
     var offset: usize = 0;
     while (offset < sz) : (offset += physmem.PageSize) {
@@ -316,7 +318,9 @@ pub fn handleNetSend(
             g.tree_lock.unlock(s);
         }
         if (g.parent) |p| sbi_core.deliverToQueue(p, &p.net_rx, pkt_buf);
-    } else if (dest_cid == guest.CID_PARENT or (dest_cid == 1 and !g.is_root)) {
+    } else if (dest_cid == guest.CID_PARENT or
+        (dest_cid == guest.CID_SELF and !g.is_root))
+    {
         if (g.parent) |p| sbi_core.deliverToQueue(p, &p.net_rx, pkt_buf);
     } else if (dest_cid >= guest.CID_FIRST_CHILD) {
         if (g.getGuestByCid(dest_cid)) |target| {
@@ -328,4 +332,50 @@ pub fn handleNetSend(
         }
     }
     sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
+}
+
+test "SBI IPC manifest and network handlers" {
+    std.testing.refAllDecls(@This());
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const arch = @import("interface").riscv;
+    var phys_test = try physmem.initForTest(alloc, 128);
+    defer phys_test.deinit();
+
+    const g = try guest.createGuest(alloc, true, true, null, 0, 0, 0, .riscv64);
+    defer g.deinit();
+    const page = try physmem.allocPage();
+    try g.space.map(
+        0x80000000,
+        page,
+        physmem.PageSize,
+        sv39x4.PTEFlags.leaf_rw_user,
+    );
+    physmem.decrementPageRef(page);
+
+    var vc = vcore.VirtualCore.init(0, g, 0x80000000, 0, .normal);
+    var ctx: riscv.ThreadContext = @splat(0);
+
+    const payload = "manifest-test";
+    try g.space.copyToGuest(0x80000200, payload);
+    const set_args = interface.ManifestArgs{
+        .target_cid = guest.CID_SELF,
+        .data_ptr = 0x80000200,
+        .max_len = payload.len,
+        .actual_len = 0,
+    };
+    try g.space.writeGuestStruct(interface.ManifestArgs, 0x80000000, set_args);
+    handleSetManifest(&vc, &ctx, g, 0x80000000);
+    try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
+
+    const get_args = interface.ManifestArgs{
+        .target_cid = guest.CID_SELF,
+        .data_ptr = 0x80000400,
+        .max_len = 4096,
+        .actual_len = 0,
+    };
+    try g.space.writeGuestStruct(interface.ManifestArgs, 0x80000000, get_args);
+    handleGetManifest(&vc, &ctx, g, 0x80000000);
+    try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
+    try testing.expectEqual(payload.len, ctx[@backingInt(arch.Register.a1)]);
 }

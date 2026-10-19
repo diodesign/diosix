@@ -39,8 +39,6 @@ pub const DYNAMIC_CHILD_BUCKETS: usize = lineage_mod.DYNAMIC_CHILD_BUCKETS;
 pub const MAX_CHILD_HANDLES: usize = lineage_mod.MAX_CHILD_HANDLES;
 pub const max_child_handles: usize = MAX_CHILD_HANDLES;
 pub const max_events: usize = queues_mod.max_events;
-pub const max_ipc_messages: usize = 16;
-pub const max_ipc_msg_len: usize = 4096;
 pub const max_vcores: usize = 4096;
 pub const STATIC_VCORES: usize = lineage_mod.STATIC_VCORES;
 pub const VCORE_HASH_BUCKETS: usize = lineage_mod.VCORE_HASH_BUCKETS;
@@ -140,7 +138,6 @@ pub const Guest = struct {
     pub const setManifest = quota_mod.setManifest;
     pub const readManifest = quota_mod.readManifest;
     pub const getManifestLength = quota_mod.getManifestLength;
-    pub const getManifest = quota_mod.getManifest;
     pub const stop = quota_mod.stop;
     pub const resetForRun = quota_mod.resetForRun;
 
@@ -213,7 +210,7 @@ pub const Guest = struct {
             else
                 0,
             .pit = .{},
-            .ioapic_mem = std.mem.zeroes([IOAPIC_PAGE_SIZE]u8),
+            .ioapic_mem = @splat(0),
             .uart = .{ .guest_id = id, .out_fn = guestUartOutput },
             .timer = .{},
             .pic = .{},
@@ -407,6 +404,9 @@ test "guest lifecycle, cascading termination, and multicore reset" {
     _ = queues_mod;
     _ = quota_mod;
     _ = lineage_mod;
+    _ = @import("guest/failover.zig");
+    _ = @import("guest/dtb.zig");
+    std.testing.refAllDecls(@This());
     scheduler.init();
     scheduler.initCpu();
     quota_mod.resetGuestManagerForTest();

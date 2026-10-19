@@ -154,9 +154,10 @@ pub const OskState = struct {
         switch (action) {
             .char => |c| {
                 if (self.input_len < MAX_OSK_BUFFER_LEN) {
-                    const is_upper = self.layout == .qwerty_upper and
-                        c >= 'a' and c <= 'z';
-                    const out_char: u8 = if (is_upper) c - 32 else c;
+                    const out_char: u8 = if (self.layout == .qwerty_upper)
+                        std.ascii.toUpper(c)
+                    else
+                        c;
                     self.input_buf[self.input_len] = out_char;
                     self.input_len += 1;
                 }
@@ -276,6 +277,7 @@ pub const OskState = struct {
 const testing = std.testing;
 
 test "OskState auto-shows on touch_tablet seat and handles keystrokes" {
+    testing.refAllDecls(@This());
     var osk = OskState.init(.touch_tablet);
     try testing.expect(osk.visible);
     try testing.expectEqual(OskLayout.qwerty_lower, osk.layout);

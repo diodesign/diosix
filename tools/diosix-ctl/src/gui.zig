@@ -30,10 +30,7 @@ const TourOption = enum {
     @"-j",
 };
 
-const JsonFlag = enum {
-    @"--json",
-    @"-j",
-};
+const JsonFlag = common.JsonFlag;
 
 pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
@@ -54,8 +51,7 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const subcmd = std.mem.span(args[0]);
     var json_mode = false;
     for (args[1..]) |arg| {
-        const span = std.mem.span(arg);
-        if (std.meta.stringToEnum(JsonFlag, span) != null) {
+        if (common.isJsonFlag(std.mem.span(arg))) {
             json_mode = true;
         }
     }
@@ -114,7 +110,7 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 printStr("Error: Invalid GUI action identifier.\n");
                 return;
             }
-            writeFile("/run/diosix/gui_cmd", action) catch {};
+            try writeFile("/run/diosix/gui_cmd", action);
             if (json_mode) {
                 var jbuf: [256]u8 = undefined;
                 const jout = std.fmt.bufPrint(
@@ -153,9 +149,9 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             const safe_path = sanitizeJsonStr(&safe_path_buf, out_path);
             if (readBinaryFile("/dev/fb0", 16 * 1024 * 1024)) |fb_bytes| {
                 defer unmapBinaryFile(fb_bytes);
-                writeFile(safe_path, fb_bytes) catch {};
+                try writeFile(safe_path, fb_bytes);
             } else |_| {
-                writeFile(safe_path, "DIOSIX_FRAMEBUFFER_SNAPSHOT") catch {};
+                try writeFile(safe_path, "DIOSIX_FRAMEBUFFER_SNAPSHOT");
             }
             if (json_mode) {
                 var jbuf: [256]u8 = undefined;

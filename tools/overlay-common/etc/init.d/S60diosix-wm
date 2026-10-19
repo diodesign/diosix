@@ -5,19 +5,14 @@
 
 case "$1" in
   start)
-    GUI_BIN=""
-    if [ -x /usr/bin/diosix-gui ]; then
-        GUI_BIN="/usr/bin/diosix-gui"
-    elif [ -x /usr/bin/diosix-wm ]; then
-        GUI_BIN="/usr/bin/diosix-wm"
-    fi
+    GUI_BIN="/usr/bin/diosix-gui"
 
-    if pidof diosix-gui >/dev/null 2>&1 || pidof diosix-wm >/dev/null 2>&1; then
+    if pidof diosix-gui >/dev/null 2>&1; then
         echo "Diosix GUI is already running."
         exit 0
     fi
 
-    if [ -n "$GUI_BIN" ] && [ -c /dev/dri/card0 -o -c /dev/fb0 ]; then
+    if [ -x "$GUI_BIN" ] && [ -c /dev/dri/card0 -o -c /dev/fb0 ]; then
         [ -x /usr/sbin/diosix-alsa-init ] && /usr/sbin/diosix-alsa-init
         echo "Starting Diosix GUI ($GUI_BIN)..."
         $GUI_BIN > /var/log/diosix-gui.log 2>&1 &
@@ -27,7 +22,7 @@ case "$1" in
     ;;
   stop)
     echo "Stopping Diosix GUI..."
-    pkill -x diosix-gui 2>/dev/null || pkill -x diosix-wm 2>/dev/null || true
+    pkill -x diosix-gui 2>/dev/null || true
     ;;
   restart)
     $0 stop

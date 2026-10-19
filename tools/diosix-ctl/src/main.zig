@@ -156,14 +156,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
                     !std.mem.startsWith(u8, std.mem.span(argv[2]), "-"))
                 {
                     const span = std.mem.span(argv[2]);
-                    if (std.mem.eql(u8, span, "parent") or
-                        std.mem.eql(u8, span, "0"))
-                    {
-                        printStr(
-                            "Error: Cannot query or set quotas on parent " ++
-                                "VM (CID 0).\n",
-                        );
-                        return;
+                    if (std.meta.stringToEnum(common.TargetAlias, span)) |al| {
+                        if (al == .parent or al == .@"0") {
+                            printStr(
+                                "Error: Cannot query or set quotas " ++
+                                    "on parent VM (CID 0).\n",
+                            );
+                            return;
+                        }
                     }
                     target_cid = parseCid(span) catch {
                         var err_buf: [128]u8 = undefined;

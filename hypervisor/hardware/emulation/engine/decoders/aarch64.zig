@@ -22,4 +22,5 @@ test "AArch64 stub decoder" {
     const dec = decode(0xd503201f);
     try std.testing.expectEqual(@as(u8, 4), dec.len);
     try std.testing.expectEqual(@as(u32, 0xd503201f), dec.insn.unknown);
+    std.testing.refAllDecls(@This());
 }

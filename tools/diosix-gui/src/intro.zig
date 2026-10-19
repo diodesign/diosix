@@ -18,10 +18,13 @@ pub const Particle = intro_fx.Particle;
 pub const easeInOut = intro_fx.easeInOut;
 pub const interpolateColor = intro_fx.interpolateColor;
 
-pub const SENTINEL_PRIMARY: [*:0]const u8 = "/run/diosix_intro_played";
-pub const SENTINEL_FALLBACK: [*:0]const u8 = "/tmp/.diosix_intro_played";
+pub const RUN_DIOSIX_DIR: [*:0]const u8 = "/run/diosix";
+pub const INTRO_FLAG_PATH: [*:0]const u8 = "/run/diosix/intro_played";
+pub const SENTINEL_PRIMARY: [*:0]const u8 = INTRO_FLAG_PATH;
 
 pub const TOTAL_INTRO_DURATION_MS: u32 = 10_000; // 10 seconds.
+
+var intro_played_in_process: bool = false;
 
 const CmdlineToken = enum {
     @"diosix.mode=dev",
@@ -68,46 +71,31 @@ pub fn shouldPlayIntro() bool {
     if (!@import("builtin").is_test and isDevFastBoot()) {
         return false;
     }
+    if (intro_played_in_process) return false;
 
-    // 1. Check primary sentinel (/run).
     const rc_run = linux.open(
-        SENTINEL_PRIMARY,
+        INTRO_FLAG_PATH,
         .{ .ACCMODE = .RDONLY, .NOFOLLOW = true },
         0,
     );
     if (@as(isize, @bitCast(rc_run)) >= 0) {
         _ = linux.close(@intCast(rc_run));
+        intro_played_in_process = true;
         return false;
     }
 
-    // 2. Check fallback sentinel (/tmp) with NOFOLLOW.
-    const rc_tmp = linux.open(
-        SENTINEL_FALLBACK,
-        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true },
-        0,
-    );
-    if (@as(isize, @bitCast(rc_tmp)) >= 0) {
-        _ = linux.close(@intCast(rc_tmp));
-        return false;
-    }
-
-    // 3. Mark as played for this boot (NOFOLLOW and restricted 0600 mode).
+    _ = linux.mkdir(RUN_DIOSIX_DIR, 0o755);
     const create_flags = linux.O{
         .ACCMODE = .WRONLY,
         .CREAT = true,
         .TRUNC = true,
         .NOFOLLOW = true,
     };
-    const creat_run = linux.open(SENTINEL_PRIMARY, create_flags, 0o600);
+    const creat_run = linux.open(INTRO_FLAG_PATH, create_flags, 0o600);
     if (@as(isize, @bitCast(creat_run)) >= 0) {
         _ = linux.close(@intCast(creat_run));
     }
-
-    const creat_tmp = linux.open(SENTINEL_FALLBACK, create_flags, 0o600);
-    if (@as(isize, @bitCast(creat_tmp)) >= 0) {
-        _ = linux.close(@intCast(creat_tmp));
-    }
-
+    intro_played_in_process = true;
     return true;
 }
 
@@ -322,6 +310,8 @@ pub const IntroState = struct {
 };
 
 test "intro: sentinel file checking" {
+    std.testing.refAllDecls(@This());
+    _ = intro_fx;
     const is_first = shouldPlayIntro();
     const is_second = shouldPlayIntro();
     try std.testing.expect(is_first or !is_first);

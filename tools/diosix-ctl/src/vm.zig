@@ -9,18 +9,20 @@ const common = @import("common.zig");
 const vm_info = @import("vm/info.zig");
 const vm_run = @import("vm/run.zig");
 const vm_install = @import("vm/install.zig");
+const vm_restart = @import("vm/restart.zig");
 
 pub const formatGuestDetail = vm_info.formatGuestDetail;
 pub const formatSelfInfo = vm_info.formatSelfInfo;
 pub const cmdInfo = vm_info.cmdInfo;
 pub const cmdRun = vm_run.cmdRun;
 pub const cmdInstallGuest = vm_install.cmdInstallGuest;
-pub const cmdRestart = vm_install.cmdRestart;
+pub const cmdRestart = vm_restart.cmdRestart;
 
 const CID_PARENT = common.CID_PARENT;
 const CID_SELF = common.CID_SELF;
 const CID_FIRST_CHILD = common.CID_FIRST_CHILD;
 const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
+const GUEST_REGISTRY_PATH = common.GUEST_REGISTRY_PATH;
 const PAGE_SIZE_KB = common.PAGE_SIZE_KB;
 const KB_PER_MB = common.KB_PER_MB;
 
@@ -42,12 +44,7 @@ const QuotaOption = enum {
     @"--descendants",
 };
 
-const TargetAlias = enum {
-    self,
-    root,
-    parent,
-    @"0",
-};
+const TargetAlias = common.TargetAlias;
 
 pub fn cmdQuota(
     client: *api.DiosixClient,
@@ -298,7 +295,7 @@ pub fn cmdList(client: *api.DiosixClient) !void {
 
     var guest_count: usize = 0;
     if (readBinaryFile(
-        "/var/run/diosix/guests.toml",
+        GUEST_REGISTRY_PATH,
         MAX_MANIFEST_SIZE,
     )) |content| {
         defer unmapBinaryFile(content);
@@ -348,7 +345,7 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
                 printStr("Error: Cannot stop parent VM (CID 0).\n");
                 return false;
             },
-            .self => {
+            .self, .current => {
                 if (client.getInfo(1)) |info| {
                     if (info.is_root != 0) {
                         var buf: [160]u8 = undefined;
@@ -378,7 +375,7 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
     var name_storage: [64]u8 = undefined;
 
     if (readBinaryFile(
-        "/var/run/diosix/guests.toml",
+        GUEST_REGISTRY_PATH,
         MAX_MANIFEST_SIZE,
     )) |content| {
         defer unmapBinaryFile(content);
@@ -425,6 +422,7 @@ test "vm: QuotaOption enum parses expected CLI flags" {
     _ = vm_info;
     _ = vm_run;
     _ = vm_install;
+    _ = vm_restart;
     try std.testing.expectEqual(
         QuotaOption.@"--ram",
         std.meta.stringToEnum(QuotaOption, "--ram").?,

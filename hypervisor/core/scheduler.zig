@@ -82,36 +82,65 @@ pub fn queue(vc: *vcore.VirtualCore) void {
         (vc.guest.is_root and vc.id == pc.hardware_hart_id);
 
     vc.scheduler_node.contents = vc;
-    if (is_local and pc.run_queue_count < MAX_LOCAL_VCORES) {
-        const node_ptr: *dsa.LinkedList(*anyopaque).Node =
-            @ptrCast(&vc.scheduler_node);
-        pc.run_queue.pushEnd(node_ptr);
-        pc.run_queue_count += 1;
-    } else {
-        // Offload to lock-protected global queue for cross-CPU work/overflow.
-        const guard = global_scheduler.acquire();
-        guard.get().run_queue.pushEnd(&vc.scheduler_node);
-        guard.release();
-
-        // Wake up other physical CPUs so an idle core can pick up the work.
-        pcore.broadcastIpi();
+    if (is_local) {
+        const run_lock = pcore.getRunLock(pc);
+        const run_flags = run_lock.lock();
+        if (pc.run_queue_count < MAX_LOCAL_VCORES) {
+            const node_ptr: *dsa.LinkedList(*anyopaque).Node =
+                @ptrCast(&vc.scheduler_node);
+            pc.run_queue.pushEnd(node_ptr);
+            pc.run_queue_count += 1;
+            run_lock.unlock(run_flags);
+            return;
+        }
+        run_lock.unlock(run_flags);
     }
+
+    // Offload to lock-protected global queue for cross-CPU work/overflow.
+    const guard = global_scheduler.acquire();
+    guard.get().run_queue.pushEnd(&vc.scheduler_node);
+    guard.release();
+
+    // Wake up other physical CPUs so an idle core can pick up the work.
+    pcore.broadcastIpi();
+}
+
+fn dequeueFromCore(
+    target_pc: *riscv.CpuContext,
+    vc: *vcore.VirtualCore,
+) bool {
+    const run_lock = pcore.getRunLock(target_pc);
+    const run_flags = run_lock.lock();
+    defer run_lock.unlock(run_flags);
+
+    var it_local = target_pc.run_queue.start;
+    while (it_local) |node| {
+        const local_vc: *vcore.VirtualCore =
+            @ptrCast(@alignCast(node.contents));
+        if (local_vc == vc) {
+            target_pc.run_queue.remove(node);
+            if (target_pc.run_queue_count > 0) target_pc.run_queue_count -= 1;
+            @atomicStore(bool, &vc.is_queued, false, .release);
+            return true;
+        }
+        it_local = node.next;
+    }
+    return false;
 }
 
 // Remove a virtual core from the run queue if present.
 pub fn dequeue(vc: *vcore.VirtualCore) void {
     const pc = pcore.this();
-    var it_local = pc.run_queue.start;
-    while (it_local) |node| {
-        const local_vc: *vcore.VirtualCore =
-            @ptrCast(@alignCast(node.contents));
-        if (local_vc == vc) {
-            pc.run_queue.remove(node);
-            if (pc.run_queue_count > 0) pc.run_queue_count -= 1;
-            @atomicStore(bool, &vc.is_queued, false, .release);
-            return;
+    if (dequeueFromCore(pc, vc)) return;
+
+    if (pcore.fromHartId(vc.id)) |hart_pc| {
+        if (hart_pc != pc and dequeueFromCore(hart_pc, vc)) return;
+    }
+
+    for (&pcore.core_table) |*row| {
+        if (row.static_ptr) |other_pc| {
+            if (other_pc != pc and dequeueFromCore(other_pc, vc)) return;
         }
-        it_local = node.next;
     }
 
     const guard = global_scheduler.acquire();
@@ -154,6 +183,10 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const guard = global_scheduler.acquire();
     defer guard.release();
     const state = guard.get();
+
+    const run_lock = pcore.getRunLock(pc);
+    const run_flags = run_lock.lock();
+    defer run_lock.unlock(run_flags);
 
     // Find best candidate in local run queue (lowest vruntime).
     var best_local_node: ?*dsa.LinkedList(*anyopaque).Node = null;
@@ -284,6 +317,7 @@ pub fn yield(vc: *vcore.VirtualCore) void {
 }
 
 test "scheduler basic queuing and picking" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
     riscv.initMockHardware();

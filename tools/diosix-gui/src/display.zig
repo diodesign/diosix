@@ -183,8 +183,8 @@ pub const Display = struct {
 };
 
 pub const InputEvent = extern struct {
-    sec: isize,
-    usec: isize,
+    sec: i64,
+    usec: i64,
     type: u16,
     code: u16,
     value: i32,
@@ -217,11 +217,19 @@ pub const input_absinfo = extern struct {
     resolution: i32 = 0,
 };
 
+const IOC_READ: u32 = 2;
+const IOC_DIRSHIFT: u5 = 30;
+const IOC_SIZESHIFT: u5 = 16;
+const IOC_TYPESHIFT: u5 = 8;
+const EV_IOC_TYPE: u32 = 'E';
+const EVIOCGABS_BASE: u32 = 0x40;
+
 pub fn EVIOCGABS(abs: u32) u32 {
-    const ioc_read: u32 = 2;
     const size: u32 = @sizeOf(input_absinfo);
-    const type_char: u32 = 'E';
-    return (ioc_read << 30) | (size << 16) | (type_char << 8) | (0x40 + abs);
+    return (IOC_READ << IOC_DIRSHIFT) |
+        (size << IOC_SIZESHIFT) |
+        (EV_IOC_TYPE << IOC_TYPESHIFT) |
+        (EVIOCGABS_BASE + abs);
 }
 
 pub const InputDeviceInfo = struct {
@@ -427,4 +435,8 @@ pub fn pollIntroInput(
         }
         if (!intro_state.is_active) break;
     }
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

@@ -72,45 +72,56 @@ pub const ConfigApp = struct {
         );
 
         // 2. Left sidebar (navigation).
-        const sidebar_w: u32 = 180;
+        const sidebar_w: u32 = ui.Layout.SIDEBAR_WIDTH;
         self.canvas.fillRect(
             .{ .x = 0, .y = 0, .w = sidebar_w, .h = h },
             ui.Color.SIDEBAR_BG,
         );
         self.canvas.fillRect(
-            .{ .x = @as(i32, @intCast(sidebar_w - 1)), .y = 0, .w = 1, .h = h },
+            .{
+                .x = @as(i32, @intCast(sidebar_w - 1)),
+                .y = 0,
+                .w = ui.Layout.CARD_BORDER_WIDTH,
+                .h = h,
+            },
             ui.Color.CARD_BORDER,
         );
 
         // Sidebar navigation items.
-        var tab_y: i32 = 20;
-        const tab_height: u32 = 36;
+        var tab_y: i32 = ui.Layout.TAB_START_Y;
+        const tab_height: u32 = ui.Layout.TAB_HEIGHT;
         var tab_idx: usize = 0;
-        while (tab_idx < 4) : (tab_idx += 1) {
+        while (tab_idx < ui.Layout.TAB_COUNT) : (tab_idx += 1) {
             const is_active = (tab_idx == @backingInt(self.current_tab));
             if (is_active) {
                 self.canvas.fillRect(
                     .{
-                        .x = 10,
+                        .x = ui.Layout.SIDEBAR_MARGIN_X,
                         .y = tab_y,
-                        .w = sidebar_w - 20,
+                        .w = sidebar_w - ui.Layout.SIDEBAR_PADDING_W,
                         .h = tab_height,
                     },
                     ui.Color.CARD_BG,
                 );
                 self.canvas.fillRect(
-                    .{ .x = 10, .y = tab_y, .w = 4, .h = tab_height },
+                    .{
+                        .x = ui.Layout.SIDEBAR_MARGIN_X,
+                        .y = tab_y,
+                        .w = ui.Layout.TAB_INDICATOR_W,
+                        .h = tab_height,
+                    },
                     ui.Color.ACCENT_GREEN,
                 );
             }
-            tab_y += @as(i32, @intCast(tab_height + 8));
+            tab_y += @as(i32, @intCast(tab_height + ui.Layout.TAB_GAP));
         }
 
         // 3. Main content area: VM cards list.
-        const content_x: i32 = @as(i32, @intCast(sidebar_w)) + 20;
-        var card_y: i32 = 20;
-        const card_w: u32 = w -| (sidebar_w + 40);
-        const card_h: u32 = 50;
+        const margin_i32: i32 = @intCast(ui.Layout.CONTENT_MARGIN);
+        const content_x: i32 = @as(i32, @intCast(sidebar_w)) + margin_i32;
+        var card_y: i32 = margin_i32;
+        const card_w: u32 = w -| (sidebar_w + ui.Layout.CONTENT_MARGIN * 2);
+        const card_h: u32 = ui.Layout.CARD_HEIGHT;
 
         for (self.vms.items) |*vm| {
             vm.render(&self.canvas, .{
@@ -119,23 +130,24 @@ pub const ConfigApp = struct {
                 .w = card_w,
                 .h = card_h,
             });
-            card_y += @as(i32, @intCast(card_h + 12));
+            card_y += @as(i32, @intCast(card_h + ui.Layout.CARD_GAP));
         }
     }
 };
 
 pub fn main() !void {
-    var debug_allocator = std.heap.DebugAllocator(.{}){};
-    defer _ = debug_allocator.deinit();
-    const allocator = debug_allocator.allocator();
+    const allocator = std.heap.page_allocator;
 
-    var app = try ConfigApp.init(allocator, 800, 500);
+    var app = try ConfigApp.init(
+        allocator,
+        ui.Layout.DEFAULT_WINDOW_WIDTH,
+        ui.Layout.DEFAULT_WINDOW_HEIGHT,
+    );
     defer app.deinit();
 
     app.render();
 
-    const msg = try std.fmt.allocPrint(
-        allocator,
+    const msg = try allocator.print(
         "Diosix Configuration Manager (diosix-config) rendered {d}x{d} " ++
             "surface.\n",
         .{ app.canvas.width, app.canvas.height },

@@ -24,7 +24,8 @@ pub fn handleLegacySendIpi(
         hart_mask = std.math.maxInt(usize);
     } else if (vc.exec_path == .emulated) {
         if (vc.exec_path.emulated.engine) |eng| {
-            hart_mask = eng.tlb.readU32(@truncate(mask_ptr), eng.bus).val;
+            const res = eng.tlb.readU32(@truncate(mask_ptr), eng.bus);
+            if (res.trap == null) hart_mask = res.val;
         }
     } else if (riscv.hasHExtension()) {
         const pcpu = pcore.this();
@@ -255,14 +256,13 @@ pub fn handleHSM(
                     tv.pc = @truncate(a1);
                     tv.setReg(@backingInt(arch.Register.a0), a0);
                     tv.setReg(@backingInt(arch.Register.a1), a2);
-                    tv.privilege_mode = 1;
-                    tv.priv_mode = 1;
+                    tv.privilege_mode = arch.PRIV_SUPERVISOR;
                     tv.satp = 0;
                     tv.medeleg = 0xffff;
                     tv.mideleg = 0xffff;
                     tv.mstatus = (1 << riscv.SSTATUS.SPP_SHIFT) |
                         riscv.SSTATUS.SPIE;
-                    tv.vstimecmp = std.math.maxInt(u64);
+                    tv.vstimecmp = riscv.TIMER_INFINITY;
                     tv.clearMipBit(sbi_core.MIP_STIP_BIT);
                     tv.clearMipBit(sbi_core.MIP_SSIP_BIT);
                     tv.running = true;
@@ -338,7 +338,7 @@ pub fn handleDebugConsole(
 
     switch (function) {
         interface.DBCN.CONSOLE_WRITE => {
-            const num_bytes = @min(a0, sbi_core.DBCN_MAX_WRITE_BYTES);
+            const num_bytes: usize = @min(a0, sbi_core.DBCN_MAX_WRITE_BYTES);
             _ = std.math.add(usize, gpa, num_bytes) catch {
                 sbi_core.setResult(
                     vc,
@@ -351,7 +351,7 @@ pub fn handleDebugConsole(
             var written: usize = 0;
             var buf: [sbi_core.DBCN_CHUNK_BUFFER_SIZE]u8 = undefined;
             while (written < num_bytes) {
-                const chunk = @min(num_bytes - written, buf.len);
+                const chunk: usize = @min(num_bytes - written, buf.len);
                 g.space.copyFromGuest(buf[0..chunk], gpa + written) catch {
                     sbi_core.setResult(
                         vc,
@@ -367,7 +367,7 @@ pub fn handleDebugConsole(
             sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, written);
         },
         interface.DBCN.CONSOLE_READ => {
-            const num_bytes = @min(a0, sbi_core.DBCN_MAX_WRITE_BYTES);
+            const num_bytes: usize = @min(a0, sbi_core.DBCN_MAX_WRITE_BYTES);
             _ = std.math.add(usize, gpa, num_bytes) catch {
                 sbi_core.setResult(
                     vc,
@@ -405,4 +405,33 @@ pub fn handleDebugConsole(
             0,
         ),
     }
+}
+
+test "SBI Standard HSM status query" {
+    std.testing.refAllDecls(@This());
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const guest = @import("../guest.zig");
+    const physmem = @import("../physmem.zig");
+    var phys_test = try physmem.initForTest(alloc, 128);
+    defer phys_test.deinit();
+
+    const g = try guest.createGuest(alloc, true, true, null, 0, 0, 0, .riscv64);
+    defer g.deinit();
+    const vc = try g.addVcore(0, 0x80000000, 0, .normal, null);
+    var ctx: riscv.ThreadContext = @splat(0);
+
+    handleHSM(vc, 0, &ctx, interface.HSM.HART_GET_STATUS, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
+    try testing.expectEqual(
+        interface.HSM.STATUS_STOPPED,
+        ctx[@backingInt(arch.Register.a1)],
+    );
+
+    vc.state = .ready;
+    handleHSM(vc, 0, &ctx, interface.HSM.HART_GET_STATUS, 0, 0, 0);
+    try testing.expectEqual(
+        interface.HSM.STATUS_STARTED,
+        ctx[@backingInt(arch.Register.a1)],
+    );
 }

@@ -38,7 +38,7 @@ pub const DefaultSizeCells: usize = 1;
 
 // Advance to the next u32 boundary (always moves forward by at least 1 byte).
 pub inline fn alignToNextU32(address: usize) usize {
-    return (address & ~(@as(usize, @alignOf(u32) - 1))) + @sizeOf(u32);
+    return std.mem.alignBackward(usize, address, @alignOf(u32)) + @sizeOf(u32);
 }
 
 // Round up to the nearest u32 boundary (no-op if already aligned).
@@ -54,7 +54,7 @@ pub inline fn isAlignedU32(address: usize) bool {
 pub inline fn readU32(src: [*]const u8, offset: usize) !u32 {
     const target_ptr = src + offset;
     const addr = @intFromPtr(target_ptr);
-    if ((addr & (@alignOf(u32) - 1)) != 0) {
+    if (!isAlignedU32(addr)) {
         return DeviceTreeError.BadAlignment;
     }
     const word: *const u32 = @ptrFromInt(addr);
@@ -179,7 +179,7 @@ pub const AddressSizeCells = struct {
 
 // Properties are stored as raw big-endian byte arrays matching DTB wire format.
 pub const DeviceTreeProperty = struct {
-    data: ?[]u8, // null for empty property, owned bytes for data.
+    data: ?[]u8, // Null for empty property, owned bytes for data.
 
     pub const empty = DeviceTreeProperty{ .data = null };
 
@@ -209,7 +209,8 @@ pub const DeviceTreeProperty = struct {
         allocator: Allocator,
         text: []const u8,
     ) !DeviceTreeProperty {
-        const buf = try allocator.alloc(u8, text.len + 1);
+        const len = try std.math.add(usize, text.len, 1);
+        const buf = try allocator.alloc(u8, len);
         @memcpy(buf[0..text.len], text);
         buf[text.len] = 0;
         return .{ .data = buf };
@@ -219,7 +220,8 @@ pub const DeviceTreeProperty = struct {
         allocator: Allocator,
         values: []const u32,
     ) !DeviceTreeProperty {
-        const buf = try allocator.alloc(u8, values.len * 4);
+        const byte_len = try std.math.mul(usize, values.len, @sizeOf(u32));
+        const buf = try allocator.alloc(u8, byte_len);
         for (values, 0..) |v, i| {
             std.mem.writeInt(u32, buf[i * 4 ..][0..4], v, .big);
         }
@@ -230,7 +232,8 @@ pub const DeviceTreeProperty = struct {
         allocator: Allocator,
         values: []const u64,
     ) !DeviceTreeProperty {
-        const buf = try allocator.alloc(u8, values.len * 8);
+        const byte_len = try std.math.mul(usize, values.len, @sizeOf(u64));
+        const buf = try allocator.alloc(u8, byte_len);
         for (values, 0..) |v, i| {
             std.mem.writeInt(u64, buf[i * 8 ..][0..8], v, .big);
         }
@@ -311,6 +314,7 @@ pub const DeviceTreeProperty = struct {
 };
 
 test "property from/as u32, text, multi u32, and multi u64" {
+    std.testing.refAllDecls(@This());
     const allocator = std.testing.allocator;
 
     var prop_u32 = try DeviceTreeProperty.fromU32(allocator, 0x12345678);

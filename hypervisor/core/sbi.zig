@@ -26,8 +26,8 @@ pub const isCharterSealed = charter.isCharterSealed;
 pub const RV32_WORD_MASK: u64 = 0xffff_ffff;
 pub const RV32_HIGH_SHIFT: u6 = 32;
 pub const ECALL_INSTRUCTION_SIZE_BYTES: usize = 4;
-pub const MIP_SSIP_BIT: u6 = 1;
-pub const MIP_STIP_BIT: u6 = 5;
+pub const MIP_SSIP_BIT: u6 = arch.MIP.SSIP_BIT;
+pub const MIP_STIP_BIT: u6 = arch.MIP.STIP_BIT;
 pub const DBCN_CHUNK_BUFFER_SIZE: usize = 256;
 pub const DBCN_MAX_WRITE_BYTES: usize = 4096;
 
@@ -38,8 +38,8 @@ pub const DIOSIX_CHILD_MEM_BASE: usize = 0x200000000;
 pub const DIOSIX_CHILD_MEM_MAX_SIZE: usize = 256 * 1024 * 1024;
 pub const MAX_MANIFEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const MAX_USER_CID_DISCRIMINATOR: usize = physmem.PageSize;
-pub const DEFAULT_VERSION_MAJOR: u16 = 26;
-pub const DEFAULT_VERSION_MINOR: u16 = 1;
+pub const DEFAULT_VERSION_MAJOR: u16 = interface.DEFAULT_VERSION_MAJOR;
+pub const DEFAULT_VERSION_MINOR: u16 = interface.DEFAULT_VERSION_MINOR;
 
 // SBI Error Codes.
 pub const SBI_SUCCESS = interface.SUCCESS;
@@ -229,7 +229,7 @@ fn handleTimer(
 ) void {
     if (vc.exec_path == .emulated) {
         vc.timer_target = stime;
-        vc.timer_scheduled = (stime != 0 and stime != std.math.maxInt(u64));
+        vc.timer_scheduled = (stime != 0 and stime != riscv.TIMER_INFINITY);
         if (sub_idx < vcore.max_sub_vcores) {
             const sub = &vc.exec_path.emulated.sub_vcores[sub_idx];
             sub.timer_target = stime;
@@ -247,7 +247,7 @@ fn handleTimer(
             vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
             riscv.writeHvip(vc.getNativeMachine().hvip);
         }
-        if (stime != 0 and stime != std.math.maxInt(u64)) {
+        if (stime != 0 and stime != riscv.TIMER_INFINITY) {
             riscv.setTimer(stime);
         }
     }
@@ -381,9 +381,12 @@ pub fn broadcastPhysicalIPI() void {
 }
 
 test "parseVersionString CalVer major.minor.patch parsing" {
+    std.testing.refAllDecls(@This());
     _ = charter;
     _ = diosix_sbi;
     _ = standard;
+    _ = @import("sbi/ipc.zig");
+    _ = @import("sbi/info.zig");
     const testing = std.testing;
     const v1 = parseVersionString("26.1\n");
     try testing.expectEqual(@as(u16, 26), v1.major);
@@ -419,7 +422,7 @@ test "SBI Base extension dispatch" {
     defer g.deinit();
 
     var vc = vcore.VirtualCore.init(0, g, 0x80000000, 0, .normal);
-    var ctx: riscv.ThreadContext = std.mem.zeroes(riscv.ThreadContext);
+    var ctx: riscv.ThreadContext = @splat(0);
 
     ctx[@backingInt(arch.Register.a7)] = interface.EXT.BASE;
     ctx[@backingInt(arch.Register.a6)] = interface.BASE.GET_SPEC_VERSION;

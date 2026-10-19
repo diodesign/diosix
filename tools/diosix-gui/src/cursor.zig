@@ -76,6 +76,7 @@ pub const Cursor = struct {
 };
 
 test "cursor: verify pointer sprite dimensions and pure white interior" {
+    std.testing.refAllDecls(@This());
     try std.testing.expectEqual(
         @as(usize, CURSOR_WIDTH * CURSOR_HEIGHT),
         POINTER_PIXELS.len,

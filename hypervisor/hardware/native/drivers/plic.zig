@@ -57,7 +57,9 @@ pub fn completeInterrupt(hartid: usize, source: u32) void {
 }
 
 test "plic driver init and test-safe access" {
+    std.testing.refAllDecls(@This());
     init(0x0c000000);
+    defer base_address = null;
     try std.testing.expectEqual(@as(?usize, 0x0c000000), base_address);
     setPriority(1, 1);
     setThreshold(0, 0);

@@ -55,7 +55,7 @@ default_vcpus = 1
 default_ram_mb = 512
 default_disk_mb = 2048
 filename = "alpine-standard-3.21-riscv64.iso"
-url = "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/riscv64/alpine-standard-3.21.0-riscv64.iso"
+url = "https://images.diosix.org/26.2/riscv64/alpine-standard-3.21-riscv64.iso"
 sha256 = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [[image]]
@@ -70,7 +70,7 @@ default_vcpus = 2
 default_ram_mb = 1024
 default_disk_mb = 4096
 filename = "FreeBSD-14.2-RELEASE-riscv64-disc1.iso"
-url = "https://download.freebsd.org/releases/riscv/riscv64/ISO-IMAGES/14.2/FreeBSD-14.2-RELEASE-riscv-riscv64-disc1.iso"
+url = "https://images.diosix.org/26.2/riscv64/FreeBSD-14.2-riscv64-disc1.iso"
 sha256 = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [[image]]
@@ -100,5 +100,5 @@ default_vcpus = 2
 default_ram_mb = 1024
 default_disk_mb = 4096
 filename = "NetBSD-10.1-riscv64.iso"
-url = "https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/images/NetBSD-10.1-riscv64.iso"
+url = "https://images.diosix.org/26.2/riscv64/NetBSD-10.1-riscv64.iso"
 sha256 = "4123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

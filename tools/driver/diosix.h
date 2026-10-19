@@ -12,10 +12,14 @@
 #ifndef DIOSIX_DRIVER_H
 #define DIOSIX_DRIVER_H
 
+#ifdef __KERNEL__
 #include <linux/types.h>
 #include <linux/fs.h>
+#else
+#include <stdint.h>
+#endif
 
-#define EXT_DIOSIX 0x0A000005
+#define EXT_DIOSIX 0x0a000005
 
 #define DIOSIX_FUNC_TERMINATE             0
 #define DIOSIX_FUNC_EXIT                  0
@@ -52,11 +56,11 @@
 #define IOCTL_KILL                  0x1006
 #define IOCTL_YIELD                 0x1007
 #define IOCTL_WAIT_EVENT            0x1008
-#define IOCTL_GET_HV_INFO           0x100B
-#define IOCTL_GET_MANIFEST          0x100C
-#define IOCTL_SET_MANIFEST          0x100D
-#define IOCTL_MAP_CHILD_MEM         0x100E
-#define IOCTL_UNMAP_CHILD_MEM       0x100F
+#define IOCTL_GET_HV_INFO           0x100b
+#define IOCTL_GET_MANIFEST          0x100c
+#define IOCTL_SET_MANIFEST          0x100d
+#define IOCTL_MAP_CHILD_MEM         0x100e
+#define IOCTL_UNMAP_CHILD_MEM       0x100f
 #define IOCTL_START                 0x1010
 #define IOCTL_SEAL_CHARTER          0x1011
 #define IOCTL_GET_CHARTER           0x1012
@@ -64,12 +68,20 @@
 #define IOCTL_RESET_STEWARD         0x1014
 #define IOCTL_REQUEST_ROOT_FAILOVER 0x1015
 
-#define DIOSIX_CHILD_MEM_BASE     0x200000000UL
-#define DIOSIX_CHILD_MEM_MAX_SIZE (256UL * 1024 * 1024)
-#define DIOSIX_MAX_ELF_SIZE       (512UL * 1024 * 1024)
-#define DIOSIX_MAX_DTB_SIZE       (16UL * 1024 * 1024)
-#define DIOSIX_MAX_MANIFEST_SIZE  (1024UL * 1024)
-#define DIOSIX_NET_MAX_FRAME_SIZE 1536UL
+#define DIOSIX_CHILD_MEM_BASE       0x200000000UL
+#define DIOSIX_CHILD_MEM_MAX_SIZE   (256UL * 1024 * 1024)
+#define DIOSIX_MAX_ELF_SIZE         (512UL * 1024 * 1024)
+#define DIOSIX_MAX_DTB_SIZE         (16UL * 1024 * 1024)
+#define DIOSIX_MAX_MANIFEST_SIZE    (1024UL * 1024)
+#define DIOSIX_MAX_EXACT_ALLOC_SIZE (2UL * 1024 * 1024)
+#define DIOSIX_NET_MAX_FRAME_SIZE   1536UL
+
+#define DIOSIX_CID_SELF             1UL
+#define DIOSIX_WAIT_FLAG_NONBLOCK   0x1UL
+#define DIOSIX_EVENT_POLL_MS        50
+#define DIOSIX_CHARTER_OP_QUERY     0UL
+#define DIOSIX_CHARTER_OP_SEAL      1UL
+#define DIOSIX_MAC_PREFIX_BYTE0     0x02
 
 struct charter_args {
     uint8_t  charter_hash[32];
@@ -84,22 +96,22 @@ struct charter_args {
 };
 
 struct map_child_mem_args {
-    unsigned long child_id;
-    unsigned long child_gpa;
-    unsigned long parent_gpa;
-    unsigned long size;
-    unsigned long flags;
+    uint64_t child_id;
+    uint64_t child_gpa;
+    uint64_t parent_gpa;
+    uint64_t size;
+    uint64_t flags;
 };
 
 struct unmap_child_mem_args {
-    unsigned long parent_gpa;
-    unsigned long size;
+    uint64_t parent_gpa;
+    uint64_t size;
 };
 
 struct start_args {
-    unsigned long child_id;
-    unsigned long entry_point;
-    unsigned long dtb_ptr;
+    uint64_t child_id;
+    uint64_t entry_point;
+    uint64_t dtb_ptr;
 };
 
 struct hypervisor_info {
@@ -123,62 +135,63 @@ struct hypervisor_info {
 };
 
 struct diosix_event {
-    unsigned long cid;
+    uint64_t cid;
     uint32_t event_type;
     uint32_t exit_code;
     uint64_t _reserved;
 };
 
 struct wait_event_args {
-    unsigned long target_cid;
-    unsigned long flags;
+    uint64_t target_cid;
+    uint64_t flags;
     struct diosix_event event;
 };
 
 struct quota_args {
-    unsigned long target_cid;
-    unsigned long max_ram_pages;
-    unsigned long max_vcpus;
-    unsigned long max_child_depth;
-    unsigned long max_descendants;
+    uint64_t target_cid;
+    uint64_t max_ram_pages;
+    uint64_t max_vcpus;
+    uint64_t max_child_depth;
+    uint64_t max_descendants;
 };
 
 struct manifest_args {
-    unsigned long target_cid;
-    unsigned long data_ptr;
-    unsigned long max_len;
-    unsigned long actual_len;
+    uint64_t target_cid;
+    uint64_t data_ptr;
+    uint64_t max_len;
+    uint64_t actual_len;
 };
 
 struct run_args {
-    unsigned long child_id;
-    unsigned long elf_ptr;
-    unsigned long elf_size;
-    unsigned long dtb_ptr;
-    unsigned long dtb_size;
-    unsigned long target_arch;
-    unsigned long flags;
+    uint64_t child_id;
+    uint64_t elf_ptr;
+    uint64_t elf_size;
+    uint64_t dtb_ptr;
+    uint64_t dtb_size;
+    uint64_t target_arch;
+    uint64_t flags;
 };
 
 struct terminate_args {
-    unsigned long target_id;
-    unsigned long exit_code;
+    uint64_t target_id;
+    uint64_t exit_code;
 };
 
 struct guest_info {
-    unsigned long guest_id;
-    unsigned long parent_id;
-    unsigned char is_trusted;
-    unsigned char is_root;
-    unsigned char target_arch;
-    unsigned char assigned_cid;
-    unsigned long vcpus;
-    unsigned long self_ram_pages;
-    unsigned long used_vcpus;
-    unsigned long max_vcpus;
-    unsigned long used_ram_pages;
-    unsigned long max_ram_pages;
-    unsigned long child_count;
+    uint64_t guest_id;
+    uint64_t parent_id;
+    uint8_t  is_trusted;
+    uint8_t  is_root;
+    uint8_t  target_arch;
+    uint8_t  assigned_cid;
+    uint8_t  _pad[4];
+    uint64_t vcpus;
+    uint64_t self_ram_pages;
+    uint64_t used_vcpus;
+    uint64_t max_vcpus;
+    uint64_t used_ram_pages;
+    uint64_t max_ram_pages;
+    uint64_t child_count;
 };
 
 long diosix_ioctl_governance(unsigned int cmd, unsigned long arg);

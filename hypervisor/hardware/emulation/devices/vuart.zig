@@ -131,4 +131,5 @@ test "16550 UART read write and DLAB latching" {
     uart.write(UART_REG_LCR, LCR_8N1);
     try testing.expectEqual(@as(u8, 0x05), uart.read(UART_REG_IER_DLM));
     try testing.expectEqual(@as(u8, 0x00), uart.read(UART_REG_RBR_THR_DLL));
+    testing.refAllDecls(@This());
 }

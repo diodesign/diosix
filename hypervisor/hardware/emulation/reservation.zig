@@ -6,6 +6,8 @@
 const std = @import("std");
 
 pub const STATIC_RESERVATION_HARTS: usize = 32;
+pub const CACHE_LINE_SIZE: usize = 64;
+pub const CACHE_LINE_MASK: usize = CACHE_LINE_SIZE - 1;
 
 pub const DynamicReservationNode = struct {
     hart_id: usize,
@@ -69,7 +71,7 @@ fn getOrCreateDynamicNode(hart_id: usize) ?*DynamicReservationNode {
 }
 
 pub fn setReservation(hart_id: usize, paddr: usize) void {
-    const line = paddr & ~@as(usize, 0x3f);
+    const line = paddr & ~CACHE_LINE_MASK;
     if (hart_id < STATIC_RESERVATION_HARTS) {
         reservation_table[hart_id].static_addr.store(line, .release);
         return;
@@ -80,7 +82,7 @@ pub fn setReservation(hart_id: usize, paddr: usize) void {
 }
 
 pub fn checkAndClearReservation(hart_id: usize, paddr: usize) bool {
-    const line = paddr & ~@as(usize, 0x3f);
+    const line = paddr & ~CACHE_LINE_MASK;
     if (hart_id < STATIC_RESERVATION_HARTS) {
         const cur = reservation_table[hart_id].static_addr.swap(0, .acq_rel);
         return (cur == line and line != 0);
@@ -114,7 +116,7 @@ pub fn clearReservation(hart_id: usize) void {
 }
 
 pub fn invalidateReservations(paddr: usize) void {
-    const line = paddr & ~@as(usize, 0x3f);
+    const line = paddr & ~CACHE_LINE_MASK;
     // Column 1: static reservations 0..31.
     for (0..STATIC_RESERVATION_HARTS) |i| {
         if (reservation_table[i].static_addr.load(.monotonic) == line) {
@@ -143,6 +145,7 @@ pub fn resetReservations() void {
 
 test "Dynamic atomic reservations with two-column table and collisions" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
 
     resetReservations();
     defer resetReservations();

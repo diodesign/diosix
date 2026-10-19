@@ -27,12 +27,7 @@ const InfoOption = enum {
     @"-j",
 };
 
-const TargetAlias = enum {
-    self,
-    root,
-    parent,
-    @"0",
-};
+const TargetAlias = common.TargetAlias;
 
 pub fn formatGuestDetail(
     buf: []u8,
@@ -241,7 +236,7 @@ pub fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         var found = false;
 
         if (readBinaryFile(
-            "/var/run/diosix/guests.toml",
+            common.GUEST_REGISTRY_PATH,
             MAX_MANIFEST_SIZE,
         )) |content| {
             defer unmapBinaryFile(content);

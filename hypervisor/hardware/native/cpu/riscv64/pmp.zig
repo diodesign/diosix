@@ -29,8 +29,16 @@ pub const PMPAccess = struct {
     pub const rwx: u8 = read | write | execute;
     pub const tor: u8 = 1 << 3; // Top of Range mode
     pub const napot: u8 = 3 << 3; // Naturally Aligned Power of Two mode (0x18)
-    pub const rwx_mask: u8 = 0x07;
+    pub const locked: u8 = 1 << 7; // Lock entry (enforced in M-mode too)
+    pub const rwx_mask: u8 = rwx;
+    pub const tor_locked_rwx: u8 = rwx | tor | locked;
 };
+
+pub const TOR_LOCKED_RWX: u8 = PMPAccess.tor_locked_rwx;
+pub const PMP_ADDR_SHIFT: u6 = 2;
+pub const ENTRIES_PER_PMPCFG: usize = 8;
+pub const PMPCFG_ENTRY_BITS: usize = 8;
+pub const PMPCFG_ENTRY_MASK: usize = 0xff;
 
 pub const Region = struct {
     base: usize,
@@ -96,8 +104,9 @@ pub const PMPConfig = struct {
                 entry += 1;
             } else {
                 if (entry + 2 > NUM_PMP_ENTRIES) break;
-                const base_shifted = reg.base >> 2;
-                const top_shifted = (reg.base + reg.size) >> 2;
+                const top = std.math.add(usize, reg.base, reg.size) catch break;
+                const base_shifted = reg.base >> PMP_ADDR_SHIFT;
+                const top_shifted = top >> PMP_ADDR_SHIFT;
                 const cfg = PMPAccess.tor | (reg.flags & PMPAccess.rwx_mask);
 
                 writePmpAddr(entry, base_shifted);
@@ -216,9 +225,10 @@ pub const PMPConfig = struct {
         if (comptime is_test) return;
         if (index >= NUM_PMP_ENTRIES) return;
 
-        const reg_index = index / 8;
-        const byte_pos: u6 = @intCast((index % 8) * 8);
-        const mask = ~(@as(usize, 0xff) << byte_pos);
+        const reg_index = index / ENTRIES_PER_PMPCFG;
+        const byte_pos: u6 =
+            @intCast((index % ENTRIES_PER_PMPCFG) * PMPCFG_ENTRY_BITS);
+        const mask = ~(@as(usize, PMPCFG_ENTRY_MASK) << byte_pos);
         const value = @as(usize, cfg) << byte_pos;
 
         if (reg_index == 0) {
@@ -249,12 +259,25 @@ extern const __hypervisor_end: u8;
 
 const CPU_STACK_SIZE: usize = 512 * 1024;
 
+pub fn isHypervisorAddress(addr: usize, size: usize) bool {
+    if (comptime is_test) return false;
+    const hv_start = @intFromPtr(&__hypervisor_start);
+    const hv_end = @intFromPtr(&__hypervisor_end);
+    const hv_top = std.math.add(
+        usize,
+        hv_end,
+        riscv.STATIC_PHYS_CORES << riscv.CPU_SLAB_SHIFT,
+    ) catch std.math.maxInt(usize);
+    const end = std.math.add(usize, addr, size) catch return true;
+    return addr < hv_top and end > hv_start;
+}
+
 pub fn applyEmulatorPmp(
     cpu_core_id: usize,
     base_hpa: usize,
     range_size: usize,
 ) void {
-    if (is_test) return;
+    if (comptime is_test) return;
 
     PMPConfig.clearAllPmp();
 
@@ -265,13 +288,13 @@ pub fn applyEmulatorPmp(
     const rw_cfg = PMPAccess.tor | PMPAccess.read | PMPAccess.write;
 
     // Entry 0 and 1: Hypervisor text + rodata (RX).
-    PMPConfig.writePmpAddr(0, hv_start >> 2);
-    PMPConfig.writePmpAddr(1, data_start >> 2);
+    PMPConfig.writePmpAddr(0, hv_start >> PMP_ADDR_SHIFT);
+    PMPConfig.writePmpAddr(1, data_start >> PMP_ADDR_SHIFT);
     PMPConfig.writePmpCfg(1, rx_cfg);
 
     // Entry 2 and 3: Hypervisor data + bss + embedded rootvm (RW).
-    PMPConfig.writePmpAddr(2, data_start >> 2);
-    PMPConfig.writePmpAddr(3, hv_end >> 2);
+    PMPConfig.writePmpAddr(2, data_start >> PMP_ADDR_SHIFT);
+    PMPConfig.writePmpAddr(3, hv_end >> PMP_ADDR_SHIFT);
     PMPConfig.writePmpCfg(3, rw_cfg);
 
     // Entry 4 and 5: Current CPU core slab (RW).
@@ -279,15 +302,20 @@ pub fn applyEmulatorPmp(
         hv_end + (cpu_core_id << riscv.CPU_SLAB_SHIFT)
     else
         @intFromPtr(riscv.getCPUContext()) - CPU_STACK_SIZE;
-    PMPConfig.writePmpAddr(4, slab_base >> 2);
-    PMPConfig.writePmpAddr(5, (slab_base + riscv.CPU_SLAB_SIZE) >> 2);
+    PMPConfig.writePmpAddr(4, slab_base >> PMP_ADDR_SHIFT);
+    PMPConfig.writePmpAddr(
+        5,
+        (slab_base + riscv.CPU_SLAB_SIZE) >> PMP_ADDR_SHIFT,
+    );
     PMPConfig.writePmpCfg(5, rw_cfg);
 
     // Entry 6 and 7: Guest RAM (RW).
     if (range_size > 0) {
-        PMPConfig.writePmpAddr(6, base_hpa >> 2);
-        PMPConfig.writePmpAddr(7, (base_hpa + range_size) >> 2);
-        PMPConfig.writePmpCfg(7, rw_cfg);
+        if (std.math.add(usize, base_hpa, range_size)) |top_hpa| {
+            PMPConfig.writePmpAddr(6, base_hpa >> PMP_ADDR_SHIFT);
+            PMPConfig.writePmpAddr(7, top_hpa >> PMP_ADDR_SHIFT);
+            PMPConfig.writePmpCfg(7, rw_cfg);
+        } else |_| {}
     }
 
     // Entry 8: Deny-all for the rest of the address space (NAPOT, no perms).
@@ -296,6 +324,7 @@ pub fn applyEmulatorPmp(
 }
 
 test "PMP configuration regions and capacity limits" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
     var config = try PMPConfig.init(testing.allocator);

@@ -439,4 +439,5 @@ test "diosix-gui: tapping contracted menu item does not trigger back nav" {
     try testing.expectEqual(gui_mod.MENU_FULL_H, win_menu_repop.height);
     try testing.expectEqual(@as(usize, 6), win_menu_repop.icons.items.len);
     try testing.expect(gui.active_menu_id == null);
+    testing.refAllDecls(@This());
 }

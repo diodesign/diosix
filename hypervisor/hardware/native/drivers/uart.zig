@@ -49,7 +49,9 @@ pub fn getchar() i16 {
 }
 
 test "uart driver init and test-safe access" {
+    std.testing.refAllDecls(@This());
     init(0x10000000);
+    defer base_address = null;
     try std.testing.expectEqual(@as(?usize, 0x10000000), base_address);
     putchar('A');
     try std.testing.expectEqual(@as(i16, -1), getchar());

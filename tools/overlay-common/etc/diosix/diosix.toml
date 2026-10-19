@@ -29,26 +29,27 @@ constitution_doc = "/etc/diosix/constitution.md"
 install_config = "/etc/diosix/install.toml"
 
 [[tour]]
-title = "Step 1/5: Root VM & Hardware Trust"
+title = "Step 1/5: Root VM & Hardware Isolation"
 summary = "Root VM (CID 1) manages drivers, storage, and child VMs via SBI."
 cli_hint = "dsx host info && dsx info"
 
 [[tour]]
-title = "Step 2/5: Virtual Machine Fleet & Isolation"
-summary = "Child VMs run in Stage-2 memory partitions with isolated networks."
-cli_hint = "dsx image catalog && dsx image list"
-
-[[tour]]
-title = "Step 3/5: Passkey & Zero-Password Security"
+title = "Step 2/5: Zero-Password Passkey Security"
 summary = "Password login is disabled; operators use FIDO2, TPM2, QR, or UART."
 cli_hint = "dsx auth status && dsx auth list"
 
 [[tour]]
-title = "Step 4/5: Autonomic Steward Collective"
-summary = "Steward VMs enforce the sealed M-mode Charter via M-of-N quorums."
-cli_hint = "dsx charter status && dsx charter audit"
+title = "Step 3/5: Guest OS & Image Catalog"
+summary = "Pull SHA-256 verified Guest OS ISOs and Steward VMs from catalog."
+cli_hint = "dsx image catalog && dsx image list"
 
 [[tour]]
-title = "Step 5/5: Bare-Metal Host Installation"
+title = "Step 4/5: Autonomic Steward Collective & Charter"
+summary = "Steward VMs enforce the sealed M-mode Charter via M-of-N quorums."
+cli_hint = "dsx charter status"
+
+[[tour]]
+title = "Step 5/5: Live Test-Drive & Host Installation"
 summary = "Install the Diosix boot image and state volume onto NVMe or VirtIO."
 cli_hint = "dsx host install --mode basic --dry-run"
+

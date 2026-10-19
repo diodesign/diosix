@@ -9,6 +9,8 @@ const std = @import("std");
 const emulation_native = @import("emulation");
 const VCpu = emulation_native.VCpu;
 
+pub const REG_X1: u5 = 1;
+
 pub const ExceptionAction = enum {
     emulated,
     delivered,
@@ -23,7 +25,7 @@ pub fn initRegisters(
     vcore_id: usize,
 ) void {
     vcpu.pc = @truncate(entry);
-    vcpu.setReg(1, @truncate(dtb));
+    vcpu.setReg(REG_X1, @truncate(dtb));
     _ = vcore_id;
 }
 
@@ -42,7 +44,7 @@ test "aarch64 arch register initialization and PC accessors" {
     var cpu = VCpu{};
     initRegisters(&cpu, 0x40080000, 0x44000000, 0);
     try testing.expectEqual(@as(u32, 0x40080000), readPC(&cpu));
-    const x1_val: u32 = @truncate(cpu.getReg(1));
+    const x1_val: u32 = @truncate(cpu.getReg(REG_X1));
     try testing.expectEqual(@as(u32, 0x44000000), x1_val);
 
     writePC(&cpu, 0x40080100);

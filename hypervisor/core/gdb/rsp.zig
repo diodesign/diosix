@@ -7,10 +7,10 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const debug = @import("../debug.zig");
 const vcore = @import("../vcore.zig");
 const physmem = @import("../physmem.zig");
 const bp_mod = @import("breakpoints.zig");
+pub const packets = @import("packets.zig");
 
 pub const X86_64_TARGET_XML = bp_mod.X86_64_TARGET_XML;
 pub const STATIC_BREAKPOINTS = bp_mod.STATIC_BREAKPOINTS;
@@ -20,99 +20,27 @@ pub const SwBreakpoint = bp_mod.SwBreakpoint;
 pub const BreakpointTable = bp_mod.BreakpointTable;
 pub const sw_breakpoints = &bp_mod.sw_breakpoints;
 
-const HEX_DIGITS = "0123456789abcdef";
+pub const PacketState = packets.PacketState;
+pub const readSerialByte = packets.readSerialByte;
+pub const writeSerialByte = packets.writeSerialByte;
+pub const sendAck = packets.sendAck;
+pub const calcChecksum = packets.calcChecksum;
+pub const computeChecksum = packets.computeChecksum;
+pub const hexVal = packets.hexVal;
+pub const encodeHexByte = packets.encodeHexByte;
+pub const encodeHexBytes = packets.encodeHexBytes;
+pub const decodeHexBytes = packets.decodeHexBytes;
+pub const sendPacket = packets.sendPacket;
+pub const sendOutputPacket = packets.sendOutputPacket;
+pub const encodeHexLE = packets.encodeHexLE;
+pub const parseHexAddr = packets.parseHexAddr;
+pub const parseHexByte = packets.parseHexByte;
+pub const parseAddrLen = packets.parseAddrLen;
+pub const parseAddrAndLen = packets.parseAddrAndLen;
 
 pub var active_thread: usize = 1;
 pub var active_vc: ?*vcore.VirtualCore = null;
 pub var gdb_connected: bool = false;
-
-fn writeSerialByte(ch: u8) void {
-    debug.hw_putchar(ch);
-}
-
-pub fn readSerialByte() i16 {
-    return debug.hw_getchar();
-}
-
-/// Compute modulo 256 sum of payload slice.
-pub fn calcChecksum(payload: []const u8) u8 {
-    var sum: u8 = 0;
-    for (payload) |b| sum = sum +% b;
-    return sum;
-}
-
-/// Encode raw bytes into lowercase hexadecimal characters in `dst`.
-pub fn encodeHexBytes(src: []const u8, dst: []u8) usize {
-    for (src, 0..) |b, idx| {
-        dst[idx * 2] = HEX_DIGITS[(b >> 4) & 0xf];
-        dst[idx * 2 + 1] = HEX_DIGITS[b & 0xf];
-    }
-    return src.len * 2;
-}
-
-/// Decode `dst.len` bytes from `hex_payload` (2 hex chars per byte).
-fn decodeHexBytes(hex_payload: []const u8, dst: []u8) bool {
-    if (hex_payload.len < dst.len * 2) return false;
-    for (dst, 0..) |*out, idx| {
-        out.* = parseHexByte(hex_payload[idx * 2 .. idx * 2 + 2]) orelse
-            return false;
-    }
-    return true;
-}
-
-/// Send formatted GDB RSP packet: `$[payload]#[checksum_hex_2bytes]`.
-pub fn sendPacket(payload: []const u8) void {
-    writeSerialByte('$');
-    for (payload) |ch| writeSerialByte(ch);
-    writeSerialByte('#');
-
-    const sum = calcChecksum(payload);
-    writeSerialByte(HEX_DIGITS[(sum >> 4) & 0xf]);
-    writeSerialByte(HEX_DIGITS[sum & 0xf]);
-}
-
-/// Send hex-encoded text string response inside an 'O' packet.
-pub fn sendOutputPacket(text: []const u8) void {
-    var hex_buf: [1024]u8 = undefined;
-    const max_text_len = (hex_buf.len - 1) / 2;
-    if (text.len > max_text_len) return;
-
-    hex_buf[0] = 'O';
-    const hex_len = encodeHexBytes(text, hex_buf[1..]);
-    sendPacket(hex_buf[0 .. 1 + hex_len]);
-}
-
-fn encodeHexLE(comptime T: type, val: T, buf: []u8) usize {
-    const size = @sizeOf(T);
-    var offset: usize = 0;
-    var i: usize = 0;
-    while (i < size) : (i += 1) {
-        const shift: std.math.Log2Int(T) = @intCast(i * 8);
-        const byte: u8 = @truncate(val >> shift);
-        buf[offset] = HEX_DIGITS[(byte >> 4) & 0xf];
-        buf[offset + 1] = HEX_DIGITS[byte & 0xf];
-        offset += 2;
-    }
-    return offset;
-}
-
-pub fn parseHexAddr(slice: []const u8) ?u64 {
-    var end: usize = 0;
-    while (end < slice.len and
-        slice[end] != ',' and
-        slice[end] != ':') : (end += 1)
-    {}
-    if (end == 0) return null;
-    return std.fmt.parseInt(u64, slice[0..end], 16) catch null;
-}
-
-/// Parse 2 hex characters into a `u8` byte.
-pub fn parseHexByte(slice: []const u8) ?u8 {
-    if (slice.len < 2) return null;
-    const hi = std.fmt.charToDigit(slice[0], 16) catch return null;
-    const lo = std.fmt.charToDigit(slice[1], 16) catch return null;
-    return @as(u8, @intCast((hi << 4) | lo));
-}
 
 pub fn readX86_64Registers(uc: ?*anyopaque, buf: []u8) usize {
     _ = uc;
@@ -151,23 +79,14 @@ pub fn readRV64Registers(buf: []u8) usize {
     return offset;
 }
 
-fn parseAddrAndLen(slice: []const u8) ?struct { addr: u64, len: usize } {
-    const comma_idx = std.mem.indexOfScalar(u8, slice, ',') orelse return null;
-    const addr = std.fmt.parseInt(u64, slice[0..comma_idx], 16) catch
-        return null;
-    const len = std.fmt.parseInt(usize, slice[comma_idx + 1 ..], 16) catch
-        return null;
-    return .{ .addr = addr, .len = len };
-}
-
 fn handleMemoryRead(payload: []const u8) void {
-    const parsed = parseAddrAndLen(payload[1..]) orelse {
+    const parsed = parseAddrLen(payload[1..]) orelse {
         sendPacket("E01");
         return;
     };
     var mem_buf: [256]u8 = undefined;
     var hex_res: [512]u8 = undefined;
-    const read_len = @min(parsed.len, mem_buf.len / 2);
+    const read_len: usize = @min(parsed.len, mem_buf.len);
 
     if (active_thread == 1) {
         const host_addr = std.math.cast(usize, parsed.addr) orelse {
@@ -204,7 +123,7 @@ fn handleMemoryWrite(payload: []const u8) void {
         sendPacket("E01");
         return;
     };
-    const parsed = parseAddrAndLen(payload[1 .. 1 + colon_idx]) orelse {
+    const parsed = parseAddrLen(payload[1 .. 1 + colon_idx]) orelse {
         sendPacket("E01");
         return;
     };
@@ -215,7 +134,7 @@ fn handleMemoryWrite(payload: []const u8) void {
     }
 
     var write_buf: [256]u8 = undefined;
-    const write_len = @min(parsed.len, write_buf.len);
+    const write_len: usize = @min(parsed.len, write_buf.len);
     if (!decodeHexBytes(hex_payload, write_buf[0..write_len])) {
         sendPacket("E01");
         return;
@@ -257,13 +176,7 @@ fn handleQuery(payload: []const u8) void {
         sendPacket("PacketSize=1000;qXfer:features:read+");
     } else if (std.mem.startsWith(u8, payload, "qXfer:")) {
         if (std.mem.startsWith(u8, payload, "qXfer:features:read:target.xml")) {
-            var reply_buf: [2048]u8 = undefined;
-            reply_buf[0] = 'l';
-            @memcpy(
-                reply_buf[1 .. 1 + X86_64_TARGET_XML.len],
-                X86_64_TARGET_XML,
-            );
-            sendPacket(reply_buf[0 .. 1 + X86_64_TARGET_XML.len]);
+            sendPacket("l" ++ X86_64_TARGET_XML);
         } else {
             sendPacket("");
         }
@@ -331,10 +244,11 @@ pub fn handlePacketPayload(payload: []const u8) void {
                 if (vc.exec_path == .emulated and reg_num == 16) {
                     if (vc.exec_path.emulated.vcpu) |vcpu| {
                         var bytes: [8]u8 = @splat(0);
-                        _ = decodeHexBytes(
-                            val_str,
-                            bytes[0..@min(8, val_str.len / 2)],
+                        const max_bytes: usize = @min(
+                            bytes.len,
+                            val_str.len / 2,
                         );
+                        _ = decodeHexBytes(val_str, bytes[0..max_bytes]);
                         vcpu.pc = @truncate(
                             std.mem.readInt(u64, &bytes, .little),
                         );
@@ -402,12 +316,6 @@ pub fn notifyTrap(sig: u8) void {
     sendPacket(msg);
 }
 
-pub const PacketState = enum {
-    idle,
-    reading_payload,
-    reading_checksum_hi,
-    reading_checksum_lo,
-};
 var pkt_state: PacketState = .idle;
 var payload_buf: [2048]u8 = undefined;
 var payload_len: usize = 0;
@@ -462,15 +370,15 @@ pub fn handleSerialByte(ch: u8) void {
             pkt_state = .idle;
 
             const received_sum = parseHexByte(&sum_chars) orelse {
-                writeSerialByte('-');
+                sendAck(false);
                 return;
             };
             const payload_slice = payload_buf[0..payload_len];
-            if (received_sum == calcChecksum(payload_slice)) {
-                writeSerialByte('+');
+            if (received_sum == computeChecksum(payload_slice)) {
+                sendAck(true);
                 handlePacketPayload(payload_slice);
             } else {
-                writeSerialByte('-');
+                sendAck(false);
             }
         },
     }
@@ -488,6 +396,16 @@ pub inline fn onException(context: anytype) void {
     _ = context;
 }
 
-test {
+test "RSP checksum, hex encoding, and address parsing" {
     _ = bp_mod;
+    _ = packets;
+    std.testing.refAllDecls(@This());
+    const testing = std.testing;
+    try testing.expectEqual(@as(u8, 'O' + 'K'), calcChecksum("OK"));
+    var hex_out: [4]u8 = undefined;
+    const hex_len = encodeHexBytes("\xab\xcd", &hex_out);
+    try testing.expectEqual(@as(usize, 4), hex_len);
+    try testing.expectEqualStrings("abcd", &hex_out);
+    try testing.expectEqual(@as(?u8, 0xab), parseHexByte("ab"));
+    try testing.expectEqual(@as(?u64, 0x80001000), parseHexAddr("80001000,4"));
 }

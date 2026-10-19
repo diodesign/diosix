@@ -442,6 +442,7 @@ test "diosix-gui: mouse wheel scroll navigation" {
 }
 
 test {
+    testing.refAllDecls(@This());
     _ = drm;
     _ = intro_mod;
     _ = audio_mod;
@@ -451,6 +452,25 @@ test {
     _ = cursor_mod;
     _ = gui_mod.osk_mod;
     _ = gui_mod.welcome_mod;
+    _ = @import("backdrop.zig");
+    _ = @import("backdrop/blur.zig");
+    _ = @import("display.zig");
+    _ = @import("glass.zig");
+    _ = @import("gui/chrome.zig");
+    _ = @import("gui/input.zig");
+    _ = @import("gui/nav.zig");
+    _ = @import("gui/render.zig");
+    _ = @import("icon/render.zig");
+    _ = @import("icon/text.zig");
+    _ = @import("icon/viewport.zig");
+    _ = @import("icon/widgets.zig");
+    _ = @import("intro/fx.zig");
+    _ = @import("panes.zig");
+    _ = @import("panes/catalog.zig");
+    _ = @import("panes/modal.zig");
+    _ = @import("panes/osk.zig");
+    _ = @import("panes/vm.zig");
+    _ = @import("window/input.zig");
     _ = @import("tests/gui.zig");
     _ = @import("tests/nav.zig");
     _ = @import("tests/panes.zig");

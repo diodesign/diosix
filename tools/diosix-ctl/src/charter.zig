@@ -10,6 +10,7 @@
 const std = @import("std");
 const interface = @import("interface").sbi;
 const whisper = @import("whisper.zig");
+const common = @import("common.zig");
 
 pub const ProposalAction = whisper.ProposalAction;
 pub const ProposalCheckResult = whisper.ProposalCheckResult;
@@ -31,11 +32,7 @@ pub const MAX_UNIT_ID_LEN: usize = 64;
 pub const MAX_ARTIFACT_LEN: usize = 128;
 pub const MAX_PUBKEY_LEN: usize = 256;
 
-fn setFixedBuf(buf: []u8, len_out: *usize, val: []const u8) void {
-    const copy_len = @min(val.len, buf.len);
-    @memcpy(buf[0..copy_len], val[0..copy_len]);
-    len_out.* = copy_len;
-}
+const setFixedBuf = common.setFixedBuf;
 
 pub const WorkloadUnit = struct {
     id_buf: [MAX_UNIT_ID_LEN]u8 = @splat(0),
@@ -135,25 +132,7 @@ pub const ParsedCharter = struct {
     }
 };
 
-fn unquote(val: []const u8) []const u8 {
-    var s = std.mem.trim(u8, val, " \t\r\n");
-    if (std.mem.indexOfScalar(u8, s, '#')) |comment_idx| {
-        if (s.len == 0 or s[0] != '"') {
-            s = std.mem.trim(u8, s[0..comment_idx], " \t\r\n");
-        } else if (std.mem.indexOfScalarPos(u8, s, 1, '"')) |close_q| {
-            if (comment_idx > close_q) {
-                s = std.mem.trim(u8, s[0..comment_idx], " \t\r\n");
-            }
-        }
-    }
-    if (s.len >= 2 and
-        ((s[0] == '"' and s[s.len - 1] == '"') or
-            (s[0] == '\'' and s[s.len - 1] == '\'')))
-    {
-        return s[1 .. s.len - 1];
-    }
-    return s;
-}
+const unquote = common.unquoteToml;
 
 fn parseInlineIntField(
     inline_table: []const u8,
@@ -201,11 +180,7 @@ pub fn computeCharterSha256(
     out_hex: *[64]u8,
 ) void {
     std.crypto.hash.sha2.Sha256.hash(content, out_bytes, .{});
-    const hex_chars = "0123456789abcdef";
-    for (out_bytes.*, 0..) |b, i| {
-        out_hex[i * 2] = hex_chars[b >> 4];
-        out_hex[i * 2 + 1] = hex_chars[b & 0x0f];
-    }
+    _ = common.bytesToHex(out_bytes, out_hex);
 }
 
 /// Merge any unit spec fields populated on `src` before `.id` was encountered
@@ -453,6 +428,9 @@ pub fn parseCharterToml(content: []const u8) !ParsedCharter {
 test "parseCharterToml parses Charter and merges out-of-order unit keys" {
     std.testing.refAllDecls(@This());
     _ = whisper;
+    _ = @import("charter/cmd.zig");
+    _ = @import("charter/status.zig");
+    _ = @import("charter/whisper.zig");
     const testing = std.testing;
     const sample =
         \\[charter]

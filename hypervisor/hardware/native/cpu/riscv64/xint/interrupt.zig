@@ -3,6 +3,7 @@
 // Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
 const main = @import("../../../../../main.zig");
 const debug = @import("../../../../../core/debug.zig");
 const riscv = @import("../mod.zig");
@@ -135,6 +136,8 @@ fn updateActiveVCoreTimer(vc: *vcore.VirtualCore, next_timer: *u64) void {
     }
 }
 
+const SSTC_WFI_POLL_TICKS: u64 = 5_000;
+
 fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) void {
     const b_timer_prev = pcpu.blocked_lock.lock();
     defer pcpu.blocked_lock.unlock(b_timer_prev);
@@ -182,7 +185,7 @@ fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) void {
                 {
                     wake = true;
                 } else if (!wake) {
-                    const poll_target = now + 5000;
+                    const poll_target = now + SSTC_WFI_POLL_TICKS;
                     if (poll_target < next_timer.*) next_timer.* = poll_target;
                 }
             }
@@ -390,7 +393,7 @@ pub fn programHardwareTimerAndMie(
 }
 
 test "interrupt: clearClaimedExternalIrq re-enables MIE" {
-    const std = @import("std");
+    std.testing.refAllDecls(@This());
     riscv.initMockHardware();
     riscv.writeMip(0);
     riscv.writeMie(0);

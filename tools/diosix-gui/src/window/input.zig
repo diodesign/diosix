@@ -277,7 +277,8 @@ pub fn handleMouseMove(
             const dist_sq = dx * dx + dy * dy;
 
             // Show scrollbar when hovering within 16px of track or dragging.
-            const target_alpha: u8 = if (dist_sq <= 256) 240 else 0;
+            const max_dist_sq = Window.SCROLLBAR_PROXIMITY_DIST_SQ;
+            const target_alpha: u8 = if (dist_sq <= max_dist_sq) 240 else 0;
             if (self.scrollbar_alpha != target_alpha) {
                 self.scrollbar_alpha = target_alpha;
                 changed = true;
@@ -423,4 +424,8 @@ pub fn findIconAt(self: *Window, px: i32, py: i32) ?*Icon {
         }
     }
     return null;
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

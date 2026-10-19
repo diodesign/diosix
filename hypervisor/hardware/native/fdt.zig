@@ -24,6 +24,17 @@ pub const DEFAULT_CLINT_BASE: usize = 0x02000000;
 pub const DEFAULT_PLIC_BASE: usize = 0x0c000000;
 
 pub const FdtHeader = struct {
+    pub const OFF_MAGIC: usize = 0;
+    pub const OFF_TOTALSIZE: usize = 4;
+    pub const OFF_DT_STRUCT: usize = 8;
+    pub const OFF_DT_STRINGS: usize = 12;
+    pub const OFF_MEM_RSVMAP: usize = 16;
+    pub const OFF_VERSION: usize = 20;
+    pub const OFF_LAST_COMP_VERSION: usize = 24;
+    pub const OFF_BOOT_CPUID_PHYS: usize = 28;
+    pub const OFF_SIZE_DT_STRINGS: usize = 32;
+    pub const OFF_SIZE_DT_STRUCT: usize = 36;
+
     magic: u32,
     totalsize: u32,
     off_dt_struct: u32,
@@ -59,6 +70,13 @@ pub const SystemHardwareInfo = struct {
     plic_base: ?usize = null,
 };
 
+const PropName = enum {
+    @"#address-cells",
+    @"#size-cells",
+    reg,
+    compatible,
+};
+
 /// Read 32-bit big-endian integer from unaligned memory.
 inline fn readU32Be(ptr: [*]const u8) u32 {
     return (@as(u32, ptr[0]) << 24) |
@@ -74,22 +92,24 @@ inline fn readU64Be(ptr: [*]const u8) u64 {
 
 /// Parse FDT header from raw memory pointer with comprehensive bounds checking.
 pub fn parseHeader(dtb_ptr: [*]const u8) FdtError!FdtHeader {
-    const magic = readU32Be(dtb_ptr);
+    const magic = readU32Be(dtb_ptr + FdtHeader.OFF_MAGIC);
     if (magic != FDT_MAGIC) return FdtError.BadMagic;
 
-    const totalsize = readU32Be(dtb_ptr + 4);
+    const totalsize = readU32Be(dtb_ptr + FdtHeader.OFF_TOTALSIZE);
     if (totalsize < FDT_HEADER_SIZE or totalsize > MAX_FDT_SIZE) {
         return FdtError.TruncatedHeader;
     }
 
-    const off_dt_struct = readU32Be(dtb_ptr + 8);
-    const off_dt_strings = readU32Be(dtb_ptr + 12);
-    const off_mem_rsvmap = readU32Be(dtb_ptr + 16);
-    const version = readU32Be(dtb_ptr + 20);
-    const last_comp_version = readU32Be(dtb_ptr + 24);
-    const boot_cpuid_phys = readU32Be(dtb_ptr + 28);
-    const size_dt_strings = readU32Be(dtb_ptr + 32);
-    const size_dt_struct = readU32Be(dtb_ptr + 36);
+    const off_dt_struct = readU32Be(dtb_ptr + FdtHeader.OFF_DT_STRUCT);
+    const off_dt_strings = readU32Be(dtb_ptr + FdtHeader.OFF_DT_STRINGS);
+    const off_mem_rsvmap = readU32Be(dtb_ptr + FdtHeader.OFF_MEM_RSVMAP);
+    const version = readU32Be(dtb_ptr + FdtHeader.OFF_VERSION);
+    const last_comp_version = readU32Be(
+        dtb_ptr + FdtHeader.OFF_LAST_COMP_VERSION,
+    );
+    const boot_cpuid_phys = readU32Be(dtb_ptr + FdtHeader.OFF_BOOT_CPUID_PHYS);
+    const size_dt_strings = readU32Be(dtb_ptr + FdtHeader.OFF_SIZE_DT_STRINGS);
+    const size_dt_struct = readU32Be(dtb_ptr + FdtHeader.OFF_SIZE_DT_STRUCT);
 
     const end_struct = std.math.add(u32, off_dt_struct, size_dt_struct) catch
         return FdtError.CorruptStructure;
@@ -154,7 +174,11 @@ pub fn parseHardwareInfo(dtb_ptr: [*]const u8) FdtError!SystemHardwareInfo {
 
                 current_node = name_start[0..len];
 
-                const aligned_len = (len + 1 + 3) & ~@as(usize, 3);
+                const aligned_len = std.mem.alignForward(
+                    usize,
+                    len + 1,
+                    @sizeOf(u32),
+                );
                 offset = std.math.add(usize, offset, aligned_len) catch
                     return FdtError.CorruptStructure;
             },
@@ -188,74 +212,107 @@ pub fn parseHardwareInfo(dtb_ptr: [*]const u8) FdtError!SystemHardwareInfo {
                 const prop_name = prop_name_ptr[0..pname_len];
                 const node_name = current_node;
 
-                if (std.mem.eql(u8, prop_name, "#address-cells") and
-                    prop_len >= 4)
-                {
-                    const cells = readU32Be(val_ptr);
-                    if (cells >= 1 and cells <= 2) address_cells = cells;
-                } else if (std.mem.eql(u8, prop_name, "#size-cells") and
-                    prop_len >= 4)
-                {
-                    const cells = readU32Be(val_ptr);
-                    if (cells >= 1 and cells <= 2) size_cells = cells;
-                } else if (std.mem.startsWith(u8, node_name, "memory") and
-                    std.mem.eql(u8, prop_name, "reg"))
-                {
-                    if (address_cells == 2) {
-                        if (size_cells == 2 and prop_len >= 16) {
-                            info.ram_base = readU64Be(val_ptr);
-                            info.ram_size = readU64Be(val_ptr + 8);
-                        } else if (size_cells == 1 and prop_len >= 12) {
-                            info.ram_base = readU64Be(val_ptr);
-                            info.ram_size = readU32Be(val_ptr + 8);
-                        }
-                    } else if (address_cells == 1) {
-                        if (size_cells == 2 and prop_len >= 12) {
-                            info.ram_base = readU32Be(val_ptr);
-                            info.ram_size = readU64Be(val_ptr + 4);
-                        } else if (prop_len >= 8) {
-                            info.ram_base = readU32Be(val_ptr);
-                            info.ram_size = readU32Be(val_ptr + 4);
-                        }
-                    }
-                } else if (std.mem.eql(u8, prop_name, "compatible")) {
-                    const compat_val = val_ptr[0..prop_len];
-                    if (containsString(compat_val, "ns16550a") or
-                        containsString(compat_val, "sifive,uart0") or
-                        containsString(compat_val, "snps,dw-apb-uart"))
-                    {
-                        if (info.uart_base == null) {
-                            info.uart_base = DEFAULT_UART_BASE;
-                        }
-                    } else if (containsString(compat_val, "riscv,clint0") or
-                        containsString(compat_val, "sifive,clint0"))
-                    {
-                        if (info.clint_base == null) {
-                            info.clint_base = DEFAULT_CLINT_BASE;
-                        }
-                    } else if (containsString(compat_val, "riscv,plic0") or
-                        containsString(compat_val, "sifive,plic-1.0.0"))
-                    {
-                        if (info.plic_base == null) {
-                            info.plic_base = DEFAULT_PLIC_BASE;
-                        }
-                    }
-                } else if (std.mem.eql(u8, prop_name, "reg")) {
-                    const base = readCellBase(val_ptr, address_cells, prop_len);
-                    if (base != 0) {
-                        if (containsString(node_name, "uart") or
-                            containsString(node_name, "serial"))
-                        {
-                            info.uart_base = @truncate(base);
-                        } else if (containsString(node_name, "clint")) {
-                            info.clint_base = @truncate(base);
-                        } else if (containsString(node_name, "plic")) {
-                            info.plic_base = @truncate(base);
-                        }
+                if (std.meta.stringToEnum(PropName, prop_name)) |prop| {
+                    switch (prop) {
+                        .@"#address-cells" => {
+                            if (prop_len >= 4) {
+                                const cells = readU32Be(val_ptr);
+                                if (cells >= 1 and cells <= 2) {
+                                    address_cells = cells;
+                                }
+                            }
+                        },
+                        .@"#size-cells" => {
+                            if (prop_len >= 4) {
+                                const cells = readU32Be(val_ptr);
+                                if (cells >= 1 and cells <= 2) {
+                                    size_cells = cells;
+                                }
+                            }
+                        },
+                        .reg => {
+                            if (std.mem.startsWith(u8, node_name, "memory")) {
+                                if (address_cells == 2) {
+                                    if (size_cells == 2 and prop_len >= 16) {
+                                        info.ram_base = readU64Be(val_ptr);
+                                        info.ram_size = readU64Be(val_ptr + 8);
+                                    } else if (size_cells == 1 and
+                                        prop_len >= 12)
+                                    {
+                                        info.ram_base = readU64Be(val_ptr);
+                                        info.ram_size = readU32Be(val_ptr + 8);
+                                    }
+                                } else if (address_cells == 1) {
+                                    if (size_cells == 2 and prop_len >= 12) {
+                                        info.ram_base = readU32Be(val_ptr);
+                                        info.ram_size = readU64Be(val_ptr + 4);
+                                    } else if (prop_len >= 8) {
+                                        info.ram_base = readU32Be(val_ptr);
+                                        info.ram_size = readU32Be(val_ptr + 4);
+                                    }
+                                }
+                            } else {
+                                const base = readCellBase(
+                                    val_ptr,
+                                    address_cells,
+                                    prop_len,
+                                );
+                                if (base != 0) {
+                                    if (containsString(node_name, "uart") or
+                                        containsString(node_name, "serial"))
+                                    {
+                                        info.uart_base = @truncate(base);
+                                    } else if (containsString(
+                                        node_name,
+                                        "clint",
+                                    )) {
+                                        info.clint_base = @truncate(base);
+                                    } else if (containsString(
+                                        node_name,
+                                        "plic",
+                                    )) {
+                                        info.plic_base = @truncate(base);
+                                    }
+                                }
+                            }
+                        },
+                        .compatible => {
+                            const compat_val = val_ptr[0..prop_len];
+                            if (containsString(compat_val, "ns16550a") or
+                                containsString(compat_val, "sifive,uart0") or
+                                containsString(compat_val, "snps,dw-apb-uart"))
+                            {
+                                if (info.uart_base == null) {
+                                    info.uart_base = DEFAULT_UART_BASE;
+                                }
+                            } else if (containsString(
+                                compat_val,
+                                "riscv,clint0",
+                            ) or
+                                containsString(compat_val, "sifive,clint0"))
+                            {
+                                if (info.clint_base == null) {
+                                    info.clint_base = DEFAULT_CLINT_BASE;
+                                }
+                            } else if (containsString(
+                                compat_val,
+                                "riscv,plic0",
+                            ) or
+                                containsString(compat_val, "sifive,plic-1.0.0"))
+                            {
+                                if (info.plic_base == null) {
+                                    info.plic_base = DEFAULT_PLIC_BASE;
+                                }
+                            }
+                        },
                     }
                 }
 
-                const aligned_prop_len = (prop_len + 3) & ~@as(usize, 3);
+                const aligned_prop_len = std.mem.alignForward(
+                    usize,
+                    prop_len,
+                    @sizeOf(u32),
+                );
                 offset = std.math.add(usize, offset, aligned_prop_len) catch
                     return FdtError.CorruptStructure;
             },
@@ -273,6 +330,7 @@ fn containsString(haystack: []const u8, needle: []const u8) bool {
 }
 
 test "FDT header parsing" {
+    std.testing.refAllDecls(@This());
     var raw_header: [40]u8 = std.mem.zeroes([40]u8);
     raw_header[0] = 0xd0;
     raw_header[1] = 0x0d;
@@ -372,7 +430,11 @@ test "FDT parseHardwareInfo with long node name and reg before compatible" {
     s_idx += 4;
     @memcpy(dtb[s_idx..][0..long_name.len], long_name);
     dtb[s_idx + long_name.len] = 0;
-    const aligned_name_len = (long_name.len + 1 + 3) & ~@as(usize, 3);
+    const aligned_name_len = std.mem.alignForward(
+        usize,
+        long_name.len + 1,
+        @sizeOf(u32),
+    );
     s_idx += aligned_name_len;
 
     // FDT_PROP reg = 0x10002000, len 8 (placed BEFORE compatible!)
@@ -396,7 +458,7 @@ test "FDT parseHardwareInfo with long node name and reg before compatible" {
     std.mem.writeInt(u32, dtb[s_idx..][0..4], 31, .big);
     s_idx += 4;
     @memcpy(dtb[s_idx..][0..compat.len], compat);
-    s_idx += (compat.len + 3) & ~@as(usize, 3);
+    s_idx += std.mem.alignForward(usize, compat.len, @sizeOf(u32));
 
     // FDT_END_NODE (serial) + FDT_END_NODE (root) + FDT_END
     std.mem.writeInt(u32, dtb[s_idx..][0..4], FDT_END_NODE, .big);

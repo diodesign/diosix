@@ -427,4 +427,5 @@ test "RV32 standard division, remainder and arithmetic corner cases" {
     const zero_extended_half = @as(u64, half_val);
     try std.testing.expectEqual(@as(i64, -32768), sign_extended_half);
     try std.testing.expectEqual(@as(u64, 32768), zero_extended_half);
+    std.testing.refAllDecls(@This());
 }

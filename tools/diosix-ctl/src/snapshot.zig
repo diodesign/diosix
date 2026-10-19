@@ -12,22 +12,77 @@ pub fn resolveSnapshotPath(
     snap_id: []const u8,
     out_buf: []u8,
 ) ?[]const u8 {
-    if (!common.isSafeStoragePath(snap_id, "/var/lib/diosix/snapshots/")) {
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const snaps_dir = sys_cfg.snapshotsDir();
+    var prefix_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    const allowed_prefix = std.fmt.bufPrint(
+        &prefix_buf,
+        "{s}/",
+        .{snaps_dir},
+    ) catch "/var/lib/diosix/snapshots/";
+    if (!common.isSafeStoragePath(snap_id, allowed_prefix)) {
         return null;
     }
     if (std.mem.startsWith(u8, snap_id, "/")) return snap_id;
     if (std.mem.endsWith(u8, snap_id, ".snap")) {
         return std.fmt.bufPrint(
             out_buf,
-            "/var/lib/diosix/snapshots/{s}",
-            .{snap_id},
+            "{s}/{s}",
+            .{ snaps_dir, snap_id },
         ) catch null;
     }
     return std.fmt.bufPrint(
         out_buf,
-        "/var/lib/diosix/snapshots/{s}.snap",
-        .{snap_id},
+        "{s}/{s}.snap",
+        .{ snaps_dir, snap_id },
     ) catch null;
+}
+
+fn snapshotExists(snaps_dir: []const u8, snap_id: []const u8) bool {
+    var path_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    var path_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    if (resolveSnapshotPath(snap_id, &path_buf)) |p| {
+        if (common.toPathZ(p, &path_z_buf)) |pz| {
+            if (common.fileExistsPath(pz.ptr)) return true;
+        }
+    }
+    var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    const dir_z = common.toPathZ(snaps_dir, &dir_z_buf) orelse return false;
+    const dir_res = linux.open(
+        dir_z.ptr,
+        .{ .ACCMODE = .RDONLY, .DIRECTORY = true },
+        0,
+    );
+    const dir_signed: isize = @bitCast(dir_res);
+    if (dir_signed < 0) return false;
+    const dir_fd: i32 = @intCast(dir_signed);
+    defer _ = linux.close(dir_fd);
+
+    var suffix_buf: [128]u8 = undefined;
+    const suffix = std.fmt.bufPrint(
+        &suffix_buf,
+        "_{s}.snap",
+        .{snap_id},
+    ) catch return false;
+
+    var dents_buf: [4096]u8 = undefined;
+    while (true) {
+        const nread_res = linux.getdents64(dir_fd, &dents_buf, dents_buf.len);
+        const nread: isize = @bitCast(nread_res);
+        if (nread <= 0) break;
+
+        var pos: usize = 0;
+        const total: usize = @intCast(nread);
+        while (pos < total) {
+            const dent: *const common.LinuxDirent64 =
+                @ptrCast(@alignCast(&dents_buf[pos]));
+            pos += dent.d_reclen;
+            const dname_ptr: [*:0]const u8 = @ptrCast(&dent.d_name);
+            const dname = std.mem.span(dname_ptr);
+            if (std.mem.endsWith(u8, dname, suffix)) return true;
+        }
+    }
+    return false;
 }
 
 pub fn cmdSnapshot(
@@ -35,6 +90,8 @@ pub fn cmdSnapshot(
     args: []const [*:0]const u8,
 ) !void {
     const exe_name = common.getExeName();
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const snaps_dir = sys_cfg.snapshotsDir();
     _ = client;
     if (args.len == 0) {
         var buf: [512]u8 = undefined;
@@ -84,13 +141,16 @@ pub fn cmdSnapshot(
             }
 
             _ = linux.mkdir("/var/lib/diosix", 0o755);
-            _ = linux.mkdir("/var/lib/diosix/snapshots", 0o755);
+            var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            if (common.toPathZ(snaps_dir, &dir_z_buf)) |dz| {
+                _ = linux.mkdir(dz.ptr, 0o755);
+            }
 
             var snap_path_buf: [common.MAX_PATH_LEN]u8 = undefined;
             const snap_path = std.fmt.bufPrint(
                 &snap_path_buf,
-                "/var/lib/diosix/snapshots/{s}_{s}.snap",
-                .{ target_name, snap_id },
+                "{s}/{s}_{s}.snap",
+                .{ snaps_dir, target_name, snap_id },
             ) catch return;
 
             var snap_header_buf: [512]u8 = undefined;
@@ -126,10 +186,12 @@ pub fn cmdSnapshot(
             );
 
             _ = linux.mkdir("/var/lib/diosix", 0o755);
-            _ = linux.mkdir("/var/lib/diosix/snapshots", 0o755);
+            var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            const dir_z = common.toPathZ(snaps_dir, &dir_z_buf) orelse return;
+            _ = linux.mkdir(dir_z.ptr, 0o755);
 
             const dir_res = linux.open(
-                "/var/lib/diosix/snapshots",
+                dir_z.ptr,
                 .{ .ACCMODE = .RDONLY, .DIRECTORY = true },
                 0,
             );
@@ -164,8 +226,8 @@ pub fn cmdSnapshot(
                         var fp_buf: [common.MAX_PATH_LEN]u8 = undefined;
                         const file_path = std.fmt.bufPrint(
                             &fp_buf,
-                            "/var/lib/diosix/snapshots/{s}",
-                            .{dname},
+                            "{s}/{s}",
+                            .{ snaps_dir, dname },
                         ) catch continue;
 
                         var target_vm: []const u8 = "guest";
@@ -194,6 +256,16 @@ pub fn cmdSnapshot(
                 common.printStr("Error: Invalid snapshot ID.\n");
                 return;
             }
+            if (!snapshotExists(snaps_dir, snap_id)) {
+                var err_buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(
+                    &err_buf,
+                    "Error: Snapshot '{s}' not found.\n",
+                    .{snap_id},
+                ) catch "Error: Snapshot not found.\n";
+                common.printStr(msg);
+                return;
+            }
             var out_buf: [256]u8 = undefined;
             const out_msg = std.fmt.bufPrint(
                 &out_buf,
@@ -215,8 +287,16 @@ pub fn cmdSnapshot(
             };
 
             var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-            if (common.toPathZ(path, &z_buf)) |z_path| {
-                _ = linux.unlink(z_path.ptr);
+            const z_path = common.toPathZ(path, &z_buf) orelse return;
+            if (@as(isize, @bitCast(linux.unlink(z_path.ptr))) < 0) {
+                var err_buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(
+                    &err_buf,
+                    "Error: Snapshot '{s}' not found.\n",
+                    .{snap_id},
+                ) catch "Error: Snapshot not found.\n";
+                common.printStr(msg);
+                return;
             }
             var out_buf: [256]u8 = undefined;
             const out_msg = std.fmt.bufPrint(

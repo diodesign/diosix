@@ -9,9 +9,9 @@ const std = @import("std");
 const bus = @import("bus.zig");
 
 pub const VIRTIO_ID_INPUT: u32 = 18;
-pub const VIRTIO_VENDOR_ID: u32 = 0x554d4551; // "QEMU" / Standard VirtIO.
-pub const VIRTIO_MAGIC: u32 = 0x74726976; // "virt".
-pub const VIRTIO_VERSION: u32 = 2; // Modern VirtIO.
+pub const VIRTIO_VENDOR_ID: u32 = bus.VIRTIO_MMIO_VENDOR_QEMU;
+pub const VIRTIO_MAGIC: u32 = bus.VIRTIO_MMIO_MAGIC;
+pub const VIRTIO_VERSION: u32 = bus.VIRTIO_MMIO_VERSION_2;
 
 pub const QUEUE_SIZE_MAX: u16 = 64;
 pub const NUM_QUEUES: usize = 2; // 0 = eventq, 1 = statusq.
@@ -39,6 +39,8 @@ pub const EV_SYN: u16 = 0x00;
 pub const EV_KEY: u16 = 0x01;
 pub const EV_REL: u16 = 0x02;
 pub const EV_ABS: u16 = 0x03;
+pub const EV_BITS_BITMAP_BYTES: usize = 8;
+pub const EV_KEY_SUPPORTED_BYTE0: u32 = 0xff;
 
 pub const VirtioInputEvent = extern struct {
     type: u16,
@@ -80,27 +82,17 @@ pub const VirtioInput = struct {
     }
 
     pub fn readReg(self: *VirtioInput, offset: u32) u32 {
-        const q_valid = self.queue_sel < NUM_QUEUES;
-        const feat_v1: u32 = if (self.device_features_sel == 1) 1 else 0;
+        const irq = self.interrupt_status.load(.acquire);
+        if (bus.readVirtioCommon(
+            self,
+            VIRTIO_ID_INPUT,
+            NUM_QUEUES,
+            QUEUE_SIZE_MAX,
+            irq,
+            offset,
+        )) |common| return common;
+
         return switch (offset) {
-            bus.VIRTIO_MMIO_REG_MAGIC_VALUE => VIRTIO_MAGIC,
-            bus.VIRTIO_MMIO_REG_VERSION => VIRTIO_VERSION,
-            bus.VIRTIO_MMIO_REG_DEVICE_ID => VIRTIO_ID_INPUT,
-            bus.VIRTIO_MMIO_REG_VENDOR_ID => VIRTIO_VENDOR_ID,
-            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES => feat_v1,
-            bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX => if (q_valid)
-                QUEUE_SIZE_MAX
-            else
-                0,
-            bus.VIRTIO_MMIO_REG_QUEUE_READY => if (q_valid and
-                self.queues[self.queue_sel].ready)
-                1
-            else
-                0,
-            bus.VIRTIO_MMIO_REG_INTERRUPT_STATUS => self.interrupt_status.load(
-                .acquire,
-            ),
-            bus.VIRTIO_MMIO_REG_STATUS => self.status,
             // Config space.
             REG_INPUT_CFG_SELECT => self.cfg_select,
             REG_INPUT_CFG_SUBSEL => self.cfg_subsel,
@@ -173,7 +165,7 @@ pub const VirtioInput = struct {
     pub fn getConfigSize(self: *const VirtioInput) usize {
         return switch (self.cfg_select) {
             VIRTIO_INPUT_CFG_ID_NAME => self.device_name.len,
-            VIRTIO_INPUT_CFG_EV_BITS => 8,
+            VIRTIO_INPUT_CFG_EV_BITS => EV_BITS_BITMAP_BYTES,
             else => 0,
         };
     }
@@ -187,7 +179,7 @@ pub const VirtioInput = struct {
             },
             VIRTIO_INPUT_CFG_EV_BITS => {
                 if (self.cfg_subsel == EV_KEY and byte_idx == 0) {
-                    return 0xff; // Support keys.
+                    return EV_KEY_SUPPORTED_BYTE0;
                 }
             },
             else => {},
@@ -296,4 +288,5 @@ test "VirtIO Input register probe, config query, and event queueing" {
     try testing.expectEqual(MAX_EVENTS_BUFFER, input.event_count);
     const head_ev = input.popEvent().?;
     try testing.expectEqual(@as(u16, 5), head_ev.code);
+    testing.refAllDecls(@This());
 }

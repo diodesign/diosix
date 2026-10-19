@@ -13,7 +13,11 @@ pub const boot_loader = @import("loader.zig");
 const SBI_EXT_LEGACY_PUTCHAR: usize = 0x01;
 const SBI_EXT_DIOSIX: usize = 0x0a000005;
 const SBI_DIOSIX_FUNC_YIELD: usize = 1;
+const EFI_IMAGE_HANDLE_STUB: usize = 1;
 const SHIM_LINK_BASE: usize = 0xe000_0000;
+const SHIM_RAM_ALIGN_MASK: usize = 0x001f_ffff;
+const DEFAULT_PAYLOAD_OFFSET: usize = 0x0040_0000;
+const MIN_PAYLOAD_WINDOW_MARGIN: usize = 0x0010_0000;
 
 const is_riscv_freestanding =
     (builtin.cpu.arch == .riscv64 and builtin.os.tag == .freestanding);
@@ -83,7 +87,11 @@ fn handoffLoadedKernel(
     const entry_addr = dest_base + loaded.entry_offset;
     if (loaded.format == .pe32_plus_efi) {
         boot_loader.initMinimalEfiTables(&efi_sys_table, &efi_boot_services);
-        jumpToGuestKernel(1, @intFromPtr(&efi_sys_table), entry_addr);
+        jumpToGuestKernel(
+            EFI_IMAGE_HANDLE_STUB,
+            @intFromPtr(&efi_sys_table),
+            entry_addr,
+        );
     } else {
         jumpToGuestKernel(hart_id, dtb_addr, entry_addr);
     }
@@ -94,7 +102,7 @@ fn relocateSlice(ram_base: usize, s: []const u8) []const u8 {
     const offset = if (raw_ptr >= SHIM_LINK_BASE)
         raw_ptr - SHIM_LINK_BASE
     else
-        raw_ptr & 0x001f_ffff;
+        raw_ptr & SHIM_RAM_ALIGN_MASK;
     const reloc_ptr: [*]const u8 = @ptrFromInt(ram_base + offset);
     return reloc_ptr[0..s.len];
 }
@@ -110,7 +118,7 @@ export fn shimMain(hart_id: usize, dtb_addr: usize) callconv(.c) noreturn {
         )
     else
         SHIM_LINK_BASE;
-    const ram_base = pc & ~@as(usize, 0x001f_ffff);
+    const ram_base = pc & ~SHIM_RAM_ALIGN_MASK;
 
     sbiPrintReloc(
         ram_base,
@@ -121,14 +129,28 @@ export fn shimMain(hart_id: usize, dtb_addr: usize) callconv(.c) noreturn {
         const safe_window =
             if (dtb_addr > ram_base) (dtb_addr - ram_base) else 0;
 
-        if (safe_window > boot_loader.SHIM_KERNEL_DEST_OFFSET + 0x0010_0000) {
+        if (safe_window >
+            boot_loader.SHIM_KERNEL_DEST_OFFSET + MIN_PAYLOAD_WINDOW_MARGIN)
+        {
             const hdr_ptr: [*]const u8 =
                 @ptrFromInt(ram_base + boot_loader.SHIM_HEADER_OFFSET);
-            const magic = std.mem.readInt(u64, hdr_ptr[0..8], .little);
-            const raw_off = std.mem.readInt(u64, hdr_ptr[8..16], .little);
-            const raw_len = std.mem.readInt(u64, hdr_ptr[16..24], .little);
+            const magic = std.mem.readInt(
+                u64,
+                hdr_ptr[boot_loader.SHIM_HDR_MAGIC_OFFSET..][0..8],
+                .little,
+            );
+            const raw_off = std.mem.readInt(
+                u64,
+                hdr_ptr[boot_loader.SHIM_HDR_PAYLOAD_OFF_OFFSET..][0..8],
+                .little,
+            );
+            const raw_len = std.mem.readInt(
+                u64,
+                hdr_ptr[boot_loader.SHIM_HDR_PAYLOAD_LEN_OFFSET..][0..8],
+                .little,
+            );
 
-            var payload_off: usize = 0x0040_0000;
+            var payload_off: usize = DEFAULT_PAYLOAD_OFFSET;
             var payload_len: usize = 0;
 
             if (magic == boot_loader.SHIM_HEADER_MAGIC) {
@@ -140,9 +162,9 @@ export fn shimMain(hart_id: usize, dtb_addr: usize) callconv(.c) noreturn {
                     payload_off = cast_off;
                     payload_len = @min(cast_len, safe_window - cast_off);
                 }
-            } else if (safe_window > 0x0040_0000) {
-                payload_off = 0x0040_0000;
-                payload_len = safe_window - 0x0040_0000;
+            } else if (safe_window > DEFAULT_PAYLOAD_OFFSET) {
+                payload_off = DEFAULT_PAYLOAD_OFFSET;
+                payload_len = safe_window - DEFAULT_PAYLOAD_OFFSET;
             }
 
             if (payload_len > 0 and

@@ -7,12 +7,15 @@ const std = @import("std");
 const fb = @import("framebuffer.zig");
 const font = @import("font.zig");
 pub const icon_render = @import("icon/render.zig");
+pub const icon_text = @import("icon/text.zig");
 
 pub const BACK_ARROW_WIDTH = icon_render.BACK_ARROW_WIDTH;
 pub const BACK_ARROW_HEIGHT = icon_render.BACK_ARROW_HEIGHT;
 pub const BACK_ARROW_BITMAP = icon_render.BACK_ARROW_BITMAP;
 pub const drawBackArrow = icon_render.drawBackArrow;
 pub const drawBackArrowWithShadow = icon_render.drawBackArrowWithShadow;
+pub const ASCII_PRINTABLE_MIN: u8 = font.ASCII_PRINTABLE_MIN;
+pub const ASCII_PRINTABLE_MAX: u8 = font.ASCII_PRINTABLE_MAX;
 const Str = []const u8;
 
 pub const IconType = enum {
@@ -339,151 +342,19 @@ pub const Icon = struct {
         self.setSliderValue(self.slider_val + delta * self.slider_step);
     }
 
-    pub const SelectionBounds = struct {
-        min: usize,
-        max: usize,
-    };
-
-    pub fn hasSelection(self: *const Icon) bool {
-        if (self.selection_start) |s| {
-            if (self.selection_end) |e| return s != e;
-        }
-        return false;
-    }
-
-    pub fn getSelectionBounds(self: *const Icon) ?SelectionBounds {
-        if (self.selection_start) |s| {
-            if (self.selection_end) |e| {
-                if (s == e) return null;
-                return .{
-                    .min = @min(s, e),
-                    .max = @min(@max(s, e), self.text_len),
-                };
-            }
-        }
-        return null;
-    }
-
-    pub fn clearSelection(self: *Icon) void {
-        self.selection_start = null;
-        self.selection_end = null;
-        self.is_dragging_select = false;
-    }
-
-    pub fn selectAll(self: *Icon) void {
-        if (self.icon_type != .read_write_text) return;
-        self.selection_start = 0;
-        self.selection_end = self.text_len;
-        self.cursor_pos = self.text_len;
-    }
-
-    pub fn clearField(self: *Icon) void {
-        if (self.icon_type != .read_write_text) return;
-        self.text_len = 0;
-        self.cursor_pos = 0;
-        self.clearSelection();
-        if (self.text_buf.len > 0) self.text_buf[0] = 0;
-    }
-
-    pub fn getSelectedText(self: *const Icon) []const u8 {
-        if (self.getSelectionBounds()) |b| {
-            return self.text_buf[b.min..b.max];
-        }
-        return "";
-    }
-
-    fn deleteRange(self: *Icon, min: usize, max: usize) bool {
-        if (self.icon_type != .read_write_text or max <= min) return false;
-        const count = max - min;
-        var i = max;
-        while (i < self.text_len) : (i += 1) {
-            self.text_buf[i - count] = self.text_buf[i];
-        }
-        self.text_len -= count;
-        if (self.text_len < self.text_buf.len) {
-            self.text_buf[self.text_len] = 0;
-        }
-        self.cursor_pos = min;
-        return true;
-    }
-
-    pub fn deleteSelection(self: *Icon) bool {
-        const bounds = self.getSelectionBounds() orelse return false;
-        const deleted = self.deleteRange(bounds.min, bounds.max);
-        if (deleted) self.clearSelection();
-        return deleted;
-    }
-
-    pub fn insertChar(self: *Icon, c: u8) void {
-        if (self.icon_type != .read_write_text) return;
-        if (self.text_len >= self.max_input_len or
-            self.text_len + 1 >= self.text_buf.len) return;
-        if (c < 32 or c > 126) return;
-
-        self.cursor_pos = @min(self.cursor_pos, self.text_len);
-        var i = self.text_len;
-        while (i > self.cursor_pos) : (i -= 1) {
-            self.text_buf[i] = self.text_buf[i - 1];
-        }
-        self.text_buf[self.cursor_pos] = c;
-        self.text_len += 1;
-        self.text_buf[self.text_len] = 0;
-        self.cursor_pos += 1;
-    }
-
-    pub fn deleteBackward(self: *Icon) void {
-        if (self.icon_type != .read_write_text) return;
-        if (self.cursor_pos == 0 or self.text_len == 0) return;
-        const end = @min(self.cursor_pos, self.text_len);
-        _ = self.deleteRange(end - 1, end);
-    }
-
-    pub fn deleteForward(self: *Icon) void {
-        if (self.icon_type != .read_write_text) return;
-        if (self.cursor_pos >= self.text_len or self.text_len == 0) return;
-        _ = self.deleteRange(self.cursor_pos, self.cursor_pos + 1);
-    }
-
-    pub fn insertString(self: *Icon, str: []const u8) void {
-        if (self.icon_type != .read_write_text) return;
-        _ = self.deleteSelection();
-        for (str) |c| {
-            if (self.text_len >= self.max_input_len or
-                self.text_len + 1 >= self.text_buf.len) break;
-            if (c >= 32 and c <= 126) self.insertChar(c);
-        }
-    }
-
-    pub fn getCharIndexAtX(self: *const Icon, win_x: i32, px: i32) usize {
-        const pad_x: i32 = 8;
-        const inner_w: u32 = if (self.width > 16) self.width - 16 else 0;
-        const txt = self.getText();
-        const safe_cur = @min(self.cursor_pos, txt.len);
-        const cur_offset = font.measureString(txt[0..safe_cur]);
-        const scroll_x: i32 = if (inner_w > 8 and cur_offset + 8 > inner_w)
-            @intCast(cur_offset + 8 - inner_w)
-        else
-            0;
-        const text_start_x = win_x + self.rel_x + pad_x - scroll_x;
-        if (px <= text_start_x) return 0;
-
-        const rel_px = px - text_start_x;
-        var cur_x: i32 = 0;
-        for (txt, 0..) |c, i| {
-            const char_w: i32 = if (c >= 32 and c <= 126)
-                @intCast(font.GLYPHS[c - 32].advance)
-            else if (c == ' ')
-                6
-            else if (c == '\t')
-                24
-            else
-                8;
-
-            if (rel_px < cur_x + @divTrunc(char_w, 2)) return i;
-            cur_x += char_w;
-        }
-        return self.text_len;
-    }
+    pub const SelectionBounds = icon_text.SelectionBounds;
+    pub const hasSelection = icon_text.hasSelection;
+    pub const getSelectionBounds = icon_text.getSelectionBounds;
+    pub const clearSelection = icon_text.clearSelection;
+    pub const selectAll = icon_text.selectAll;
+    pub const clearField = icon_text.clearField;
+    pub const getSelectedText = icon_text.getSelectedText;
+    pub const deleteSelection = icon_text.deleteSelection;
+    pub const insertChar = icon_text.insertChar;
+    pub const deleteBackward = icon_text.deleteBackward;
+    pub const deleteForward = icon_text.deleteForward;
+    pub const insertString = icon_text.insertString;
+    pub const getCharIndexAtX = icon_text.getCharIndexAtX;
 
     pub fn hitTest(self: *const Icon, wx: i32, wy: i32, px: i32, py: i32) bool {
         return self.is_selectable and self.containsPoint(wx, wy, px, py);
@@ -491,3 +362,9 @@ pub const Icon = struct {
 
     pub const render = icon_render.renderIcon;
 };
+
+test {
+    _ = icon_render;
+    _ = icon_text;
+    std.testing.refAllDecls(@This());
+}

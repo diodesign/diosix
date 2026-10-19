@@ -9,21 +9,26 @@
 const std = @import("std");
 const decoder_rv32 = @import("../../decoders/rv32.zig");
 const vcpu_mod = @import("../../../vcpu.zig");
-const softtlb_mod = @import("../../../softtlb.zig");
+const mem = @import("mem.zig");
 const riscv = @import("interface").riscv;
 
-pub inline fn u32Gpr(self: anytype, r: u5) u32 {
-    return @truncate(self.vcpu.getGpr(r));
-}
+pub const u32Gpr = mem.u32Gpr;
+pub const i32Gpr = mem.i32Gpr;
+pub const execAmo = mem.execAmo;
 
-pub inline fn i32Gpr(self: anytype, r: u5) i32 {
-    return @bitCast(u32Gpr(self, r));
-}
+pub const VREG_BYTES: u32 = 32;
+pub const CSR_PRIV_SHIFT: u4 = 8;
+pub const CSR_PRIV_MASK: u12 = 0x3;
+pub const CSR_ACCESS_SHIFT: u4 = 10;
+pub const CSR_ACCESS_READ_ONLY: u12 = 0x3;
+pub const NAN_BOX_F32_PREFIX: u64 = 0xffff_ffff_0000_0000;
+pub const WORD_BITS: u6 = 32;
 
 fn checkCsrAccess(priv: u8, csr: u12, will_write: bool) bool {
-    const min_priv: u8 = @truncate((csr >> 8) & 3);
+    const min_priv: u8 = @truncate((csr >> CSR_PRIV_SHIFT) & CSR_PRIV_MASK);
     if (priv < min_priv) return false;
-    const is_ro = ((csr >> 10) & 3) == 3;
+    const is_ro = ((csr >> CSR_ACCESS_SHIFT) & CSR_PRIV_MASK) ==
+        CSR_ACCESS_READ_ONLY;
     if (will_write and is_ro) return false;
     return true;
 }
@@ -48,17 +53,27 @@ pub inline fn isCsrAccessPermitted(
 }
 
 pub inline fn handleCsrPostWrite(self: anytype, csr: u12) void {
-    if (csr == riscv.CSR.SATP) {
-        self.tlb.satp = self.vcpu.satp;
-        self.tlb.flush();
-    } else if (csr == riscv.CSR.SSTATUS or csr == riscv.CSR.MSTATUS) {
-        const diff = self.tlb.mstatus ^ self.vcpu.mstatus;
-        self.tlb.mstatus = self.vcpu.mstatus;
-        if ((diff & riscv.MSTATUS.TRANSLATION_AFFECTING_MASK) != 0) {
-            self.tlb.flush();
-        }
+    if (csr == riscv.CSR.SATP or
+        csr == riscv.CSR.SSTATUS or
+        csr == riscv.CSR.MSTATUS)
+    {
+        self.tlb.syncCpuState(
+            self.vcpu.satp,
+            self.vcpu.privilege_mode,
+            self.vcpu.mstatus,
+        );
     }
 }
+
+pub const CAUSE_ILLEGAL_INSN: u32 =
+    @backingInt(riscv.Cause.illegal_instruction);
+pub const CAUSE_BREAKPOINT: u32 = @backingInt(riscv.Cause.breakpoint);
+pub const CAUSE_USER_ECALL: u32 =
+    @backingInt(riscv.Cause.user_environment_call);
+pub const CAUSE_SUPERVISOR_ECALL: u32 =
+    @backingInt(riscv.Cause.supervisor_environment_call);
+pub const CAUSE_MACHINE_ECALL: u32 =
+    @backingInt(riscv.Cause.machine_environment_call);
 
 pub const CsrOp = enum { write, set, clear };
 
@@ -72,7 +87,7 @@ pub fn execCsr(
     op: CsrOp,
 ) bool {
     if (!isCsrAccessPermitted(self, csr, will_write)) {
-        self.trap(2, pc_before, 0);
+        self.trap(CAUSE_ILLEGAL_INSN, pc_before, 0);
         return false;
     }
     const old = self.vcpu.readCsr(csr);
@@ -89,39 +104,12 @@ pub fn execCsr(
     return true;
 }
 
-pub fn execAmo(
-    self: anytype,
-    pc_before: u32,
-    next_pc: u32,
-    d: decoder_rv32.AmoType,
-    op: softtlb_mod.SoftTlb.AmoOp,
-) void {
-    const vaddr = u32Gpr(self, d.rs1);
-    const val = u32Gpr(self, d.rs2);
-    const res = self.tlb.amoU32(vaddr, val, op, self.bus);
-    if (res.trap) |cause| {
-        self.trap(cause, pc_before, vaddr);
-        return;
-    }
-    if (d.rd != 0) self.vcpu.setGpr(d.rd, res.val);
-    self.vcpu.pc = next_pc;
-}
-
 fn syncPrivChange(self: anytype, new_priv: u2) void {
-    const mask: u32 = riscv.MSTATUS.TRANSLATION_AFFECTING_MASK;
-    if (self.vcpu.privilege_mode != new_priv or
-        self.tlb.satp != self.vcpu.satp or
-        ((self.tlb.mstatus ^ self.vcpu.mstatus) & mask) != 0)
-    {
-        self.tlb.privilege_mode = new_priv;
-        self.tlb.satp = self.vcpu.satp;
-        self.tlb.mstatus = self.vcpu.mstatus;
-        self.tlb.flush();
-    } else {
-        self.tlb.mstatus = self.vcpu.mstatus;
+    if (self.vcpu.privilege_mode != new_priv) {
+        self.tlb.privilege_mode = self.vcpu.privilege_mode;
     }
+    self.tlb.syncCpuState(self.vcpu.satp, new_priv, self.vcpu.mstatus);
     self.vcpu.privilege_mode = new_priv;
-    self.vcpu.priv_mode = new_priv;
 }
 
 pub fn execSret(self: anytype, pc_before: u32) void {
@@ -129,15 +117,16 @@ pub fn execSret(self: anytype, pc_before: u32) void {
         (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR and
             (self.vcpu.mstatus & riscv.MSTATUS.TSR) != 0))
     {
-        self.trap(2, pc_before, 0);
+        self.trap(CAUSE_ILLEGAL_INSN, pc_before, 0);
         return;
     }
     const spp = (self.vcpu.mstatus >> riscv.SSTATUS.SPP_SHIFT) & 1;
-    const spie = (self.vcpu.mstatus >> 5) & 1;
-    var mstatus = self.vcpu.mstatus;
-    mstatus = (mstatus & ~@as(u32, 0x02)) | (spie << 1);
-    mstatus |= (1 << 5);
-    mstatus &= ~@as(u32, 1 << riscv.SSTATUS.SPP_SHIFT);
+    const spie_set =
+        (self.vcpu.mstatus & @as(u32, @truncate(riscv.MSTATUS.SPIE))) != 0;
+    var mstatus = self.vcpu.mstatus &
+        ~@as(u32, @truncate(riscv.MSTATUS.SIE | riscv.MSTATUS.SPP));
+    if (spie_set) mstatus |= @truncate(riscv.MSTATUS.SIE);
+    mstatus |= @truncate(riscv.MSTATUS.SPIE);
     self.vcpu.mstatus = mstatus;
 
     syncPrivChange(self, @truncate(spp));
@@ -148,15 +137,17 @@ pub fn execSret(self: anytype, pc_before: u32) void {
 
 pub fn execMret(self: anytype, pc_before: u32) void {
     if (self.vcpu.privilege_mode < vcpu_mod.PRIV_MACHINE) {
-        self.trap(2, pc_before, 0);
+        self.trap(CAUSE_ILLEGAL_INSN, pc_before, 0);
         return;
     }
-    const mpp = (self.vcpu.mstatus >> riscv.MSTATUS.MPP_SHIFT) & 3;
-    const mpie = (self.vcpu.mstatus >> 7) & 1;
-    var mstatus = self.vcpu.mstatus;
-    mstatus = (mstatus & ~@as(u32, 0x08)) | (mpie << 3);
-    mstatus |= (1 << 7);
-    mstatus &= ~@as(u32, riscv.MSTATUS.MPP_MASK);
+    const mpp = (self.vcpu.mstatus >> riscv.MSTATUS.MPP_SHIFT) &
+        vcpu_mod.PRIV_MACHINE;
+    const mpie_set =
+        (self.vcpu.mstatus & @as(u32, @truncate(riscv.MSTATUS.MPIE))) != 0;
+    var mstatus = self.vcpu.mstatus &
+        ~@as(u32, @truncate(riscv.MSTATUS.MIE | riscv.MSTATUS.MPP_MASK));
+    if (mpie_set) mstatus |= @truncate(riscv.MSTATUS.MIE);
+    mstatus |= @truncate(riscv.MSTATUS.MPIE);
     self.vcpu.mstatus = mstatus;
 
     syncPrivChange(self, @truncate(mpp));
@@ -169,8 +160,8 @@ pub fn execFpLoad(
     d: decoder_rv32.LoadType,
     is_double: bool,
 ) bool {
-    if (((self.vcpu.mstatus >> 13) & 3) == 0) {
-        self.trap(2, pc_before, 0);
+    if ((self.vcpu.mstatus & vcpu_mod.MSTATUS_FS_MASK_U32) == 0) {
+        self.trap(CAUSE_ILLEGAL_INSN, pc_before, 0);
         return false;
     }
     const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
@@ -180,17 +171,17 @@ pub fn execFpLoad(
         return false;
     }
     if (is_double) {
-        const res_hi = self.tlb.readU32(vaddr +% 4, self.bus);
+        const res_hi = self.tlb.readU32(vaddr +% @sizeOf(u32), self.bus);
         if (res_hi.trap) |cause| {
-            self.trap(cause, pc_before, vaddr +% 4);
+            self.trap(cause, pc_before, vaddr +% @sizeOf(u32));
             return false;
         }
         self.vcpu.fpregs[d.rd] = @as(u64, res_lo.val) |
-            (@as(u64, res_hi.val) << 32);
+            (@as(u64, res_hi.val) << WORD_BITS);
     } else {
-        self.vcpu.fpregs[d.rd] = 0xffff_ffff_0000_0000 | @as(u64, res_lo.val);
+        self.vcpu.fpregs[d.rd] = NAN_BOX_F32_PREFIX | @as(u64, res_lo.val);
     }
-    self.vcpu.mstatus |= (3 << 13);
+    self.vcpu.mstatus |= vcpu_mod.MSTATUS_FS_DIRTY_U32;
     return true;
 }
 
@@ -200,8 +191,8 @@ pub fn execFpStore(
     d: decoder_rv32.StoreType,
     is_double: bool,
 ) bool {
-    if (((self.vcpu.mstatus >> 13) & 3) == 0) {
-        self.trap(2, pc_before, 0);
+    if ((self.vcpu.mstatus & vcpu_mod.MSTATUS_FS_MASK_U32) == 0) {
+        self.trap(CAUSE_ILLEGAL_INSN, pc_before, 0);
         return false;
     }
     const vaddr = u32Gpr(self, d.rs1) +% @as(u32, @bitCast(d.offset));
@@ -211,13 +202,18 @@ pub fn execFpStore(
         return false;
     }
     if (is_double) {
-        const val_hi = @as(u32, @truncate(self.vcpu.fpregs[d.rs2] >> 32));
-        if (self.tlb.writeU32(vaddr +% 4, val_hi, self.bus)) |cause| {
-            self.trap(cause, pc_before, vaddr +% 4);
+        const val_hi =
+            @as(u32, @truncate(self.vcpu.fpregs[d.rs2] >> WORD_BITS));
+        if (self.tlb.writeU32(
+            vaddr +% @sizeOf(u32),
+            val_hi,
+            self.bus,
+        )) |cause| {
+            self.trap(cause, pc_before, vaddr +% @sizeOf(u32));
             return false;
         }
     }
-    self.vcpu.mstatus |= (3 << 13);
+    self.vcpu.mstatus |= vcpu_mod.MSTATUS_FS_DIRTY_U32;
     return true;
 }
 
@@ -229,12 +225,15 @@ pub fn execVecMem(
     vreg: u5,
     is_store: bool,
 ) void {
-    if (((self.vcpu.mstatus >> 9) & 3) == 0) {
-        self.trap(2, pc_before, 0);
+    if ((self.vcpu.mstatus & vcpu_mod.MSTATUS_VS_MASK_U32) == 0) {
+        self.trap(CAUSE_ILLEGAL_INSN, pc_before, 0);
         return;
     }
     const base_vaddr = u32Gpr(self, rs1);
-    const count = @min(if (self.vcpu.vl == 0) 32 else self.vcpu.vl, 32);
+    const count: u32 = @min(
+        if (self.vcpu.vl == 0) VREG_BYTES else self.vcpu.vl,
+        VREG_BYTES,
+    );
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         if (is_store) {
@@ -256,8 +255,17 @@ pub fn execVecMem(
 }
 
 test "checkCsrAccess privilege and read-only enforcement" {
-    try std.testing.expect(!checkCsrAccess(0, 0x180, false));
-    try std.testing.expect(checkCsrAccess(1, 0x180, true));
-    try std.testing.expect(!checkCsrAccess(3, 0xc00, true));
-    try std.testing.expect(checkCsrAccess(0, 0xc00, false));
+    std.testing.refAllDecls(@This());
+    try std.testing.expect(
+        !checkCsrAccess(riscv.PRIV_USER, riscv.CSR.SATP, false),
+    );
+    try std.testing.expect(
+        checkCsrAccess(riscv.PRIV_SUPERVISOR, riscv.CSR.SATP, true),
+    );
+    try std.testing.expect(
+        !checkCsrAccess(riscv.PRIV_MACHINE, riscv.CSR.CYCLE, true),
+    );
+    try std.testing.expect(
+        checkCsrAccess(riscv.PRIV_USER, riscv.CSR.CYCLE, false),
+    );
 }

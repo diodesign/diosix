@@ -14,6 +14,8 @@ pub const MAX_PACKET_LEN: usize = 1536;
 pub const MAX_NET_PACKETS: usize = 64;
 
 pub const PIT_NUM_CHANNELS: usize = 3;
+pub const PIT_BYTE_LSB: u2 = 1;
+pub const PIT_BYTE_MSB: u2 = 2;
 pub const PIT_ACCESS_LSB_MSB: u8 = 3;
 pub const PIT_PORT61_GATE2_ENABLED: u8 = 0x01;
 pub const PIC_ALL_IRQS_MASKED: u8 = 0xff;
@@ -170,27 +172,12 @@ pub const PacketQueue = struct {
         return true;
     }
 
-    pub fn peek(self: *PacketQueue) ?*const Packet {
-        const s = self.lock.lock();
-        defer self.lock.unlock(s);
-        if (self.count == 0) return null;
-        return &self.packets[self.tail];
-    }
-
-    pub fn drop(self: *PacketQueue) void {
-        const s = self.lock.lock();
-        defer self.lock.unlock(s);
-        if (self.count == 0) return;
-        self.tail = (self.tail + 1) % MAX_NET_PACKETS;
-        self.count -= 1;
-    }
-
     pub fn pop(self: *PacketQueue, out_buf: []u8) ?usize {
         const s = self.lock.lock();
         defer self.lock.unlock(s);
         if (self.count == 0) return null;
         const pkt = &self.packets[self.tail];
-        const copy_len = @min(out_buf.len, @as(usize, pkt.len));
+        const copy_len: usize = @min(out_buf.len, @as(usize, pkt.len));
         @memcpy(out_buf[0..copy_len], pkt.data[0..copy_len]);
         self.tail = (self.tail + 1) % MAX_NET_PACKETS;
         self.count -= 1;
@@ -207,7 +194,7 @@ pub const PacketQueue = struct {
         defer self.lock.unlock(s);
         if (self.count == 0) return 0;
         const pkt = &self.packets[self.tail];
-        const copy_len = @min(max_len, @as(usize, pkt.len));
+        const copy_len: usize = @min(max_len, @as(usize, pkt.len));
         try space.copyToGuest(gpa, pkt.data[0..copy_len]);
         self.tail = (self.tail + 1) % MAX_NET_PACKETS;
         self.count -= 1;
@@ -222,6 +209,7 @@ pub const PacketQueue = struct {
 };
 
 test "EventQueue filtered polling by CID and PacketQueue FIFO semantics" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
     var q = EventQueue{};

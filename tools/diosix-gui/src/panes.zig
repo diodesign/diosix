@@ -471,3 +471,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         radio_x += @as(i32, @intCast(th.w)) + 14;
     }
 }
+
+test {
+    @import("std").testing.refAllDecls(@This());
+}

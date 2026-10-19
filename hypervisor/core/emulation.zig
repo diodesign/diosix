@@ -21,42 +21,6 @@ pub const Engine = emulation_native.Engine;
 const rv32_arch = @import("../hardware/emulation/arch/riscv32/mod.zig");
 const sbi = @import("sbi.zig");
 
-pub const TpGuard = struct {
-    saved_tp: usize = 0,
-    swapped: bool = false,
-
-    pub fn init() TpGuard {
-        if (comptime @import("builtin").is_test) return .{};
-        var current: usize = undefined;
-        asm volatile (
-            \\mv %[current], tp
-            : [current] "=r" (current),
-        );
-        if (riscv.isHostTp(current)) {
-            return .{ .saved_tp = current, .swapped = false };
-        } else {
-            const host_tp = riscv.readSscratch();
-            asm volatile (
-                \\mv tp, %[host_tp]
-                :
-                : [host_tp] "r" (host_tp),
-            );
-            return .{ .saved_tp = current, .swapped = true };
-        }
-    }
-
-    pub fn deinit(self: TpGuard) void {
-        if (comptime @import("builtin").is_test) return;
-        if (self.swapped) {
-            asm volatile (
-                \\mv tp, %[saved]
-                :
-                : [saved] "r" (self.saved_tp),
-            );
-        }
-    }
-};
-
 pub inline fn readSModeTime() u64 {
     return riscv.readTime();
 }
@@ -74,8 +38,8 @@ const JIT_CODE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 const MAX_EMULATED_VCORES: usize = 4;
 const INITIAL_GUEST_INSN_TIME: u64 = 10_000_000;
 const DELEGATE_ALL_MASK: u32 = 0xffff;
-const DEFAULT_MISA_RV32: u32 = (1 << 30) | (1 << 8) | (1 << 12) |
-    (1 << 0) | (1 << 5) | (1 << 3) | (1 << 2);
+const DEFAULT_MISA_RV32: u32 =
+    riscv.IsaExtension.MXL_32 | @as(u32, @truncate(riscv.IsaExtension.gc));
 const SAFETY_WAKE_TICKS: u64 = 10_000;
 const DEFAULT_INSN_BUDGET: usize = 2_000_000;
 
@@ -151,11 +115,10 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 
     @memset(@as([*]u8, @ptrCast(vcpu_ptr))[0..@sizeOf(VCpu)], 0);
     vcpu_ptr.id = vc.id;
-    vcpu_ptr.privilege_mode = 1;
-    vcpu_ptr.priv_mode = 1;
+    vcpu_ptr.privilege_mode = riscv.PrivilegeMode.PRIV_SUPERVISOR;
     vcpu_ptr.medeleg = DELEGATE_ALL_MASK;
     vcpu_ptr.mideleg = DELEGATE_ALL_MASK;
-    vcpu_ptr.vstimecmp = ~@as(u64, 0);
+    vcpu_ptr.vstimecmp = riscv.TIMER_INFINITY;
     vcpu_ptr.misa = DEFAULT_MISA_RV32;
 
     if (vc.id == 0) {
@@ -164,8 +127,8 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         VCpu.max_guest_time.store(0, .monotonic);
         VCpu.guest_insn_time.store(INITIAL_GUEST_INSN_TIME, .monotonic);
         vcpu_ptr.pc = @truncate(em.entry);
-        vcpu_ptr.setReg(10, @truncate(vc.id));
-        vcpu_ptr.setReg(11, @truncate(em.dtb));
+        vcpu_ptr.setReg(@backingInt(riscv.Register.a0), @truncate(vc.id));
+        vcpu_ptr.setReg(@backingInt(riscv.Register.a1), @truncate(em.dtb));
         vcpu_ptr.running = true;
 
         if (vc.guest.uart.out_fn == null) {
@@ -266,7 +229,7 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
         } else {
             const pcpu = pcore.this();
             const now = riscv.readTime();
-            var min_target: u64 = std.math.maxInt(u64);
+            var min_target: u64 = riscv.TIMER_INFINITY;
             const b_emu_prev = pcpu.blocked_lock.lock();
             var it = pcpu.blocked_queue.start;
             while (it) |node| {
@@ -302,9 +265,9 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                     const mtimecmp = if (vc.exec_path.emulated.engine) |eng|
                         eng.bus.timer.getMtimecmp(vc.id)
                     else
-                        ~@as(u64, 0);
+                        riscv.TIMER_INFINITY;
                     const guest_target = @min(vtimecmp, mtimecmp);
-                    if (guest_target != ~@as(u64, 0)) {
+                    if (guest_target != riscv.TIMER_INFINITY) {
                         const cur_guest_time = VCpu.readGuestTime();
                         if (cur_guest_time >= guest_target) {
                             wake = true;
@@ -314,7 +277,7 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                         }
                     }
                 } else if (vc.timer_scheduled and
-                    vc.timer_target != std.math.maxInt(u64))
+                    vc.timer_target != riscv.TIMER_INFINITY)
                 {
                     if (now >= vc.timer_target) {
                         wake = true;
@@ -443,6 +406,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
 }
 
 test "Emulated VCore dynamic slot allocation, isolation, and reclaim" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     const allocator = testing.allocator;
 

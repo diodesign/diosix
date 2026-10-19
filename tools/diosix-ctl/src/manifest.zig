@@ -4,12 +4,17 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const lexer_mod = @import("manifest/lexer.zig");
 const policy = @import("manifest/policy.zig");
 
+pub const TokenTag = lexer_mod.TokenTag;
+pub const Token = lexer_mod.Token;
+pub const ManifestLexer = lexer_mod.ManifestLexer;
 pub const matchPattern = policy.matchPattern;
 pub const parseChildManifest = policy.parseChildManifest;
 pub const pruneSystemManifest = policy.pruneSystemManifest;
 pub const serializeChildManifest = policy.serializeChildManifest;
+pub const serializeCapabilitiesToml = policy.serializeCapabilitiesToml;
 pub const validateSystemManifest = policy.validateSystemManifest;
 pub const validateChildManifest = policy.validateChildManifest;
 pub const resolveService = policy.resolveService;
@@ -97,6 +102,7 @@ pub const SystemManifest = struct {
 
     pub fn addString(self: *SystemManifest, str: []const u8) ![]const u8 {
         const duped = try self.allocator.dupe(u8, str);
+        errdefer self.allocator.free(duped);
         try self.strings.append(self.allocator, duped);
         return duped;
     }
@@ -136,140 +142,9 @@ pub const ChildManifest = struct {
 
     pub fn addString(self: *ChildManifest, str: []const u8) ![]const u8 {
         const duped = try self.allocator.dupe(u8, str);
+        errdefer self.allocator.free(duped);
         try self.strings.append(self.allocator, duped);
         return duped;
-    }
-};
-
-pub const TokenTag = enum {
-    string,
-    ident,
-    number,
-    bracket_open,
-    bracket_close,
-    brace_open,
-    brace_close,
-    equals,
-    comma,
-    dot,
-    newline,
-    eof,
-};
-
-pub const Token = struct {
-    tag: TokenTag,
-    val: []const u8,
-};
-
-pub const ManifestLexer = struct {
-    source: []const u8,
-    cursor: usize = 0,
-
-    pub fn init(source: []const u8) ManifestLexer {
-        return .{ .source = source };
-    }
-
-    fn skipWhitespace(self: *ManifestLexer) void {
-        while (self.cursor < self.source.len) {
-            const c = self.source[self.cursor];
-            if (c == ' ' or c == '\t' or c == '\r') {
-                self.cursor += 1;
-            } else if (c == '#') {
-                while (self.cursor < self.source.len and
-                    self.source[self.cursor] != '\n') : (self.cursor += 1)
-                {}
-            } else {
-                break;
-            }
-        }
-    }
-
-    pub fn next(self: *ManifestLexer) Token {
-        self.skipWhitespace();
-        if (self.cursor >= self.source.len) {
-            return .{ .tag = .eof, .val = "" };
-        }
-
-        const start = self.cursor;
-        const c = self.source[self.cursor];
-
-        switch (c) {
-            '\n' => {
-                self.cursor += 1;
-                return .{ .tag = .newline, .val = "\n" };
-            },
-            '[' => {
-                self.cursor += 1;
-                return .{ .tag = .bracket_open, .val = "[" };
-            },
-            ']' => {
-                self.cursor += 1;
-                return .{ .tag = .bracket_close, .val = "]" };
-            },
-            '{' => {
-                self.cursor += 1;
-                return .{ .tag = .brace_open, .val = "{" };
-            },
-            '}' => {
-                self.cursor += 1;
-                return .{ .tag = .brace_close, .val = "}" };
-            },
-            '=' => {
-                self.cursor += 1;
-                return .{ .tag = .equals, .val = "=" };
-            },
-            ',' => {
-                self.cursor += 1;
-                return .{ .tag = .comma, .val = "," };
-            },
-            '.' => {
-                self.cursor += 1;
-                return .{ .tag = .dot, .val = "." };
-            },
-            '"', '\'' => {
-                const quote = c;
-                self.cursor += 1;
-                const str_start = self.cursor;
-                while (self.cursor < self.source.len and
-                    self.source[self.cursor] != quote)
-                {
-                    if (self.source[self.cursor] == '\\' and
-                        self.cursor + 1 < self.source.len)
-                    {
-                        self.cursor += 2;
-                    } else {
-                        self.cursor += 1;
-                    }
-                }
-                const str_end = self.cursor;
-                if (self.cursor < self.source.len and
-                    self.source[self.cursor] == quote)
-                {
-                    self.cursor += 1;
-                }
-                return .{
-                    .tag = .string,
-                    .val = self.source[str_start..str_end],
-                };
-            },
-            else => {},
-        }
-
-        while (self.cursor < self.source.len) {
-            const ch = self.source[self.cursor];
-            if (std.ascii.isAlphanumeric(ch) or
-                ch == '_' or ch == '-' or ch == '.' or
-                ch == '/' or ch == ':')
-            {
-                self.cursor += 1;
-            } else {
-                break;
-            }
-        }
-        // Guarantee monotonic cursor progress on unexpected characters.
-        if (self.cursor == start) self.cursor += 1;
-
-        return .{ .tag = .ident, .val = self.source[start..self.cursor] };
     }
 };
 
@@ -491,8 +366,20 @@ pub fn parseSystemManifest(
     return manifest;
 }
 
-test {
+test "manifest: parses system manifest and manages string pool" {
     std.testing.refAllDecls(@This());
+    _ = lexer_mod;
     _ = policy;
     _ = @import("tests/manifest.zig");
+
+    var sys = try parseSystemManifest(
+        std.testing.allocator,
+        "[system]\nversion = \"1.0\"\ndomain = \"test.local\"\n" ++
+            "[domains.web]\nram = \"256M\"\nvcpus = 2\n",
+    );
+    defer sys.deinit();
+    try std.testing.expectEqualStrings("test.local", sys.domain);
+    const web = sys.domains.get("web").?;
+    try std.testing.expectEqual(@as(usize, 2), web.vcpus);
+    try std.testing.expectEqualStrings("256M", web.ram);
 }

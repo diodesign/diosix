@@ -482,3 +482,7 @@ pub fn exportSemanticStateJson(self: *const DiosixGui, buf: []u8) []const u8 {
         self.welcome_state.current_step + 1,
     }) catch "";
 }
+
+test {
+    std.testing.refAllDecls(@This());
+}

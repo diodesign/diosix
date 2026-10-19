@@ -58,7 +58,8 @@ fn ns16550_getchar() i16 {
 // CLINT timer driver implementation.
 fn clint_setTimer(stime: u64) void {
     if (riscv.clint_base) |base| {
-        const offset = CLINT_MTIMECMP_OFFSET + 8 * riscv.readMhartid();
+        const offset =
+            CLINT_MTIMECMP_OFFSET + @sizeOf(u64) * riscv.readMhartid();
         const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(base + offset));
         mtimecmp_ptr.* = stime;
     }
@@ -106,6 +107,7 @@ pub fn init() void {
 }
 
 test "drivers init registers active drivers when MMIO bases are present" {
+    std.testing.refAllDecls(@This());
     const saved_uart = riscv.uart_base;
     const saved_clint = riscv.clint_base;
     const saved_test = riscv.test_device_base;

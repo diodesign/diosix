@@ -78,6 +78,12 @@ hw_run_vcore:
   ld t0, 64(a2)     # vstimecmp
   csrw CSR_VSTIMECMP, t0
 2:
+  la t0, riscv_supports_smstateen
+  lbu t0, 0(t0)
+  beqz t0, 3f
+  ld t0, GS_VSENVCFG_OFFSET(a2) # vsenvcfg
+  csrw CSR_SENVCFG, t0
+3:
   .endif
 
   # Flush any stale G-stage TLB entries
@@ -87,10 +93,16 @@ hw_run_vcore_no_h:
   .if LEGACY_CPU == 0
   la t0, riscv_supports_sstc
   lbu t0, 0(t0)
-  beqz t0, 3f
+  beqz t0, 4f
   ld t0, 64(a2)     # vstimecmp field is used for stimecmp in PMP fallback
   csrw CSR_STIMECMP, t0 # stimecmp
-3:
+4:
+  la t0, riscv_supports_smstateen
+  lbu t0, 0(t0)
+  beqz t0, 5f
+  ld t0, GS_VSENVCFG_OFFSET(a2) # vsenvcfg
+  csrw CSR_SENVCFG, t0
+5:
   .endif
 
   # use a0 as temporary base pointer for GPR restoration

@@ -28,9 +28,25 @@ pub const Color = struct {
     pub const TRANSPARENT: u32 = 0x00000000;
     pub const GLOVE_SHADING: u32 = 0x00b0b8c8;
     pub const GLOVE_CUFF: u32 = 0x00284060;
+    pub const SHIFT_R: u5 = 16;
+    pub const SHIFT_G: u5 = 8;
 
-    pub inline fn rgb(r: u8, g: u8, b: u8) u32 {
-        return (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
+    pub inline fn r(c: u32) u8 {
+        return @truncate(c >> SHIFT_R);
+    }
+
+    pub inline fn g(c: u32) u8 {
+        return @truncate(c >> SHIFT_G);
+    }
+
+    pub inline fn b(c: u32) u8 {
+        return @truncate(c);
+    }
+
+    pub inline fn rgb(red: u8, green: u8, blue: u8) u32 {
+        return (@as(u32, red) << SHIFT_R) |
+            (@as(u32, green) << SHIFT_G) |
+            @as(u32, blue);
     }
 
     // Translucent Modern Slate Glass Theme (80% opaque, 20% transparent).
@@ -168,18 +184,18 @@ pub fn blendPixel(bg: u32, fg: u32, alpha: u8) u32 {
     if (alpha == 0) return bg;
     const inv_alpha: u32 = 255 - alpha;
     const a: u32 = alpha;
-    const fg_r = (fg >> 16) & 0xff;
-    const fg_g = (fg >> 8) & 0xff;
-    const fg_b = fg & 0xff;
+    const fg_r: u32 = Color.r(fg);
+    const fg_g: u32 = Color.g(fg);
+    const fg_b: u32 = Color.b(fg);
 
-    const bg_r = (bg >> 16) & 0xff;
-    const bg_g = (bg >> 8) & 0xff;
-    const bg_b = bg & 0xff;
+    const bg_r: u32 = Color.r(bg);
+    const bg_g: u32 = Color.g(bg);
+    const bg_b: u32 = Color.b(bg);
 
-    const r = (fg_r * a + bg_r * inv_alpha) >> 8;
-    const g = (fg_g * a + bg_g * inv_alpha) >> 8;
-    const b = (fg_b * a + bg_b * inv_alpha) >> 8;
-    return (r << 16) | (g << 8) | b;
+    const out_r: u8 = @intCast((fg_r * a + bg_r * inv_alpha) >> 8);
+    const out_g: u8 = @intCast((fg_g * a + bg_g * inv_alpha) >> 8);
+    const out_b: u8 = @intCast((fg_b * a + bg_b * inv_alpha) >> 8);
+    return Color.rgb(out_r, out_g, out_b);
 }
 
 pub const Surface = struct {
@@ -372,6 +388,7 @@ pub const Surface = struct {
 
 test "framebuffer: blendPixel and box geometry" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
     try testing.expectEqual(@as(u32, 0x00000000), blendPixel(0, 0x00ffffff, 0));
     try testing.expectEqual(
         @as(u32, 0x00ffffff),

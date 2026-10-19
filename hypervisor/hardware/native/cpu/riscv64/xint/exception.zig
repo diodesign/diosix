@@ -110,6 +110,10 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     }
 }
 
+const HTVAL_GPA_SHIFT: u6 = 2;
+const STVEC_MODE_MASK: usize = 0b11;
+const CPU_FATAL_ARRAY_LEN: usize = 4096;
+
 fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     const pcpu = pcore.this();
     const vc_raw = pcpu.active_vcore orelse return;
@@ -122,7 +126,7 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
         gpa = if (mtval2 != 0) mtval2 else htval_val;
         // Per the RISC-V Hypervisor specification, mtval2 and htval hold
         // the guest physical address shifted right by 2 bits.
-        if (gpa != 0) gpa <<= 2;
+        if (gpa != 0) gpa <<= HTVAL_GPA_SHIFT;
     } else {
         gpa = irq.val;
     }
@@ -175,30 +179,33 @@ pub fn reflectExceptionToGuest(
     // Virtual instruction exceptions (cause 22) must be reflected to the
     // guest as illegal instruction (cause 2) per the RISC-V H-extension spec.
     gs.vscause = if (irq.cause == .virtual_instruction)
-        2
+        @backingInt(riscv.Cause.illegal_instruction)
     else
         @backingInt(irq.cause);
     gs.vstval = irq.val;
 
     // Update VSSTATUS/SSTATUS: SPP = prev priv, SPIE = old SIE, SIE = 0.
-    const spp: usize = if (irq.privilege_mode == .supervisor) 1 else 0;
     const sie_active = (gs.vsstatus & riscv.SSTATUS.SIE) != 0;
-    gs.vsstatus &= ~@as(usize, riscv.SSTATUS.SIE | riscv.SSTATUS.SPIE);
-    gs.vsstatus &= ~(@as(usize, 1) << riscv.SSTATUS.SPP_SHIFT);
-    gs.vsstatus |= (spp << riscv.SSTATUS.SPP_SHIFT);
+    gs.vsstatus &= ~@as(
+        usize,
+        riscv.SSTATUS.SIE | riscv.SSTATUS.SPIE | riscv.MSTATUS.SPP,
+    );
+    if (irq.privilege_mode == .supervisor) {
+        gs.vsstatus |= riscv.MSTATUS.SPP;
+    }
     if (sie_active) {
         gs.vsstatus |= riscv.SSTATUS.SPIE;
     }
 
     // Enter Supervisor mode (MPP = 1) on mret.
     ms.mstatus &= ~@as(usize, riscv.MSTATUS.MPP_MASK);
-    ms.mstatus |= (@as(usize, 1) << riscv.MSTATUS.MPP_SHIFT);
+    ms.mstatus |= riscv.MSTATUS.MPP_SUPERVISOR;
 
     if (riscv.hasHExtension()) {
         ms.mstatus |= riscv.MSTATUS.MPV;
     }
 
-    const base = gs.vstvec & ~@as(usize, 0b11);
+    const base = gs.vstvec & ~STVEC_MODE_MASK;
     if (base == 0) {
         debug.printf(
             "FATAL: Reflecting exception to NULL vstvec — terminating guest.\n",
@@ -220,7 +227,7 @@ pub fn reflectExceptionToGuest(
 }
 
 var fatal_exception_active = std.atomic.Value(bool).init(false);
-var cpu_in_fatal = std.mem.zeroes([256]bool);
+var cpu_in_fatal = std.mem.zeroes([CPU_FATAL_ARRAY_LEN]bool);
 
 /// Handle an unrecoverable exception in M-mode or an unhandled guest crash.
 pub fn fatalException(
@@ -334,6 +341,7 @@ pub fn fatalException(
 }
 
 test "exception: reflectExceptionToGuest maps virtual_instruction" {
+    std.testing.refAllDecls(@This());
     riscv.initMockHardware();
     const physmem = @import("../../../../../core/physmem.zig");
     var phys_test = try physmem.initForTest(std.testing.allocator, 2048);
@@ -361,16 +369,19 @@ test "exception: reflectExceptionToGuest maps virtual_instruction" {
         .cause = .virtual_instruction,
         .pc = 0x80001234,
         .sp = 0x80009000,
-        .val = 0x10500073,
+        .val = riscv.Instr.WFI,
     };
 
     try reflectExceptionToGuest(&vc, irq);
     const gs = vc.getNativeGuestState();
-    try std.testing.expectEqual(@as(usize, 0x80001234), gs.vsepc);
-    try std.testing.expectEqual(@as(usize, 2), gs.vscause);
-    try std.testing.expectEqual(@as(usize, 0x10500073), gs.vstval);
+    try std.testing.expectEqual(@as(u64, 0x80001234), gs.vsepc);
     try std.testing.expectEqual(
-        @as(usize, 0x80200000),
+        @as(u64, @backingInt(riscv.Cause.illegal_instruction)),
+        gs.vscause,
+    );
+    try std.testing.expectEqual(@as(u64, riscv.Instr.WFI), gs.vstval);
+    try std.testing.expectEqual(
+        @as(u64, 0x80200000),
         vc.getNativeMachine().mepc,
     );
     try std.testing.expect((gs.vsstatus & riscv.SSTATUS.SIE) == 0);

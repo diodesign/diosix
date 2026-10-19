@@ -8,7 +8,7 @@ version = "1.0"
 domain = "diosix.local"
 
 # ------------------------------------------------------------------------------
-# System Domain: Hosts core system services (network stack, graphics server, etc.)
+# System Domain: Hosts core system services (network stack, graphics server)
 # ------------------------------------------------------------------------------
 [domains.sys]
 name = "sys-domain"

@@ -192,6 +192,7 @@ pub const MockRam = struct {
 
 test "VirtIO-vsock router prevents CID spoofing" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
 
     var ram_dest = MockRam{};
     const mem_dest = ram_dest.accessor();

@@ -10,8 +10,10 @@ const atomic = @import("atomic.zig");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
 const drivers = @import("drivers.zig");
 
-// Circular queue size for console text streams.
-const queue_size = 4096;
+// Circular queue sizes and fallback UART address for console text streams.
+pub const OUTPUT_QUEUE_SIZE: usize = 4096;
+pub const STDIN_QUEUE_SIZE: usize = 256;
+pub const DEFAULT_UART_BASE: usize = 0x10000000;
 
 // Generic circular queue (allocation-free & interrupt-safe).
 pub fn GenericQueue(comptime T: type, comptime size: usize) type {
@@ -43,10 +45,10 @@ pub fn GenericQueue(comptime T: type, comptime size: usize) type {
 
 const ConsoleState = struct {
     // Single shared output queue for hypervisor console output.
-    output_queue: GenericQueue(u8, queue_size) = .{},
+    output_queue: GenericQueue(u8, OUTPUT_QUEUE_SIZE) = .{},
 
     // Shared input queue for console keyboard input.
-    stdin_queue: GenericQueue(u8, 256) = .{},
+    stdin_queue: GenericQueue(u8, STDIN_QUEUE_SIZE) = .{},
 };
 
 // Global thread-safe debug console state.
@@ -77,7 +79,7 @@ pub fn hw_putchar(c: u8) void {
     if (drivers.console) |drv| {
         drv.putchar(c);
     } else {
-        const uart = riscv.uart_base orelse 0x10000000;
+        const uart = riscv.uart_base orelse DEFAULT_UART_BASE;
         const tx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.THR));
         tx_reg.* = c;
     }
@@ -88,7 +90,7 @@ pub fn hw_getchar() i16 {
     if (drivers.console) |drv| {
         return drv.getchar();
     } else {
-        const uart = riscv.uart_base orelse 0x10000000;
+        const uart = riscv.uart_base orelse DEFAULT_UART_BASE;
         const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
         const rx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.RBR));
         if (status_reg.* & UART.LSR_DR != 0) {
@@ -241,6 +243,7 @@ pub fn getchar() i16 {
 }
 
 test "debug console circular queue push, pop, capacity, and wrap-around" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     var q = GenericQueue(u8, 4){};
     try testing.expect(q.isEmpty());

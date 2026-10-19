@@ -3,6 +3,7 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
 const metadata = @import("metadata");
 
 export const banner: [*:0]const u8 = metadata.banner ++ "\x00";
@@ -15,3 +16,7 @@ export const build_user: [*:0]const u8 = metadata.build_user ++ "\x00";
 export const build_hostname: [*:0]const u8 = metadata.build_hostname ++ "\x00";
 export const zig_version: [*:0]const u8 = metadata.zig_version ++ "\x00";
 export const cpu_arch: [*:0]const u8 = metadata.cpu_arch ++ "\x00";
+
+test {
+    std.testing.refAllDecls(@This());
+}

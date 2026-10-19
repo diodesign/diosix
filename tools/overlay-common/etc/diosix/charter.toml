@@ -1,8 +1,8 @@
 # Diosix Workload-Agnostic Constitutional Charter
 #
-# Sealed in the M-mode hypervisor via `dsx charter deploy` (DIOSIX.SEAL_CHARTER).
-# Once sealed, any Steward termination, quota reduction, or Charter amendment
-# requires M-of-N Steward quorum ratification.
+# Sealed in the M-mode hypervisor via `dsx charter deploy`
+# (`DIOSIX.SEAL_CHARTER`). Once sealed, any Steward termination, quota
+# reduction, or Charter amendment requires M-of-N Steward quorum ratification.
 
 [charter]
 id = "autonomous-mesh-01"

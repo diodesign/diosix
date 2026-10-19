@@ -16,6 +16,7 @@ const MAX_DTB_FILE_SIZE = common.MAX_DTB_FILE_SIZE;
 const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
 const PAGE_SIZE_KB = common.PAGE_SIZE_KB;
 const KB_PER_MB = common.KB_PER_MB;
+pub const MIB_SHIFT: u6 = 20;
 
 const printStr = common.printStr;
 const isArch = common.isArch;
@@ -220,7 +221,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
     if (domain_name) |dname| {
         if (vm_name == null) vm_name = dname;
-        const m_file = manifest_path orelse "/etc/diosix/system.toml";
+        const m_file = manifest_path orelse sys_cfg.systemManifestPath();
         if (readBinaryFile(m_file, MAX_MANIFEST_SIZE)) |m_content| {
             defer unmapBinaryFile(m_content);
             if (manifest.parseSystemManifest(allocator, m_content)) |sys_m_v| {
@@ -294,7 +295,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         const err_msg = std.fmt.bufPrint(
             &err_buf,
             "Error: Guest ELF binary '{s}' not found (checked current dir, " ++
-                "/var/lib/diosix/images/, /boot/).\n",
+                "/var/lib/diosix/images/).\n",
             .{elf_path.?},
         ) catch "Error: ELF binary not found.\n";
         printStr(err_msg);
@@ -323,14 +324,14 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         {
             final_cdrom = std.fmt.bufPrint(
                 &final_cdrom_buf,
-                "/var/lib/diosix/iso/{s}",
-                .{c},
+                "{s}/{s}",
+                .{ sys_cfg.isoDir(), c },
             ) catch c;
         } else {
             final_cdrom = std.fmt.bufPrint(
                 &final_cdrom_buf,
-                "/var/lib/diosix/iso/{s}.iso",
-                .{c},
+                "{s}/{s}.iso",
+                .{ sys_cfg.isoDir(), c },
             ) catch c;
         }
     }
@@ -385,7 +386,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         dtb_data,
         shim_payload_data,
         base_gpa,
-        ram_mb * 1024 * 1024,
+        ram_mb << MIB_SHIFT,
         vcpus,
     ) catch |err| {
         printApiError("Load guest ELF", err);
@@ -397,8 +398,11 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const final_ip: []const u8 = if (ip_str.len > 0)
         ip_str
     else
-        std.fmt.bufPrint(&final_ip_buf, "10.0.3.{d}", .{child_cid}) catch
-            "10.0.3.2";
+        std.fmt.bufPrint(
+            &final_ip_buf,
+            "{s}{d}",
+            .{ sys_cfg.subnetPrefix(), child_cid },
+        ) catch "10.0.3.2";
 
     var final_ram_buf: [32]u8 = undefined;
     const final_ram_str = std.fmt.bufPrint(

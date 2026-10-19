@@ -304,6 +304,7 @@ pub const HeapAllocator = struct {
 };
 
 test "heap allocator basic alloc and free" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
     var heap_memory: [1024]u8 align(64) = undefined;

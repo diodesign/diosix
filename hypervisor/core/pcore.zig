@@ -12,11 +12,13 @@ const atomic = @import("atomic.zig");
 pub const TABLE_ROWS: usize = 32;
 pub const MAX_SYSTEM_CORES: usize = 4096;
 pub const DYNAMIC_CORE_HEAP_SIZE: usize = 128 * 1024;
+pub const TP_REQUIRED_ALIGNMENT: usize = 16;
 
 pub const DynamicCoreNode = struct {
     id: usize,
     hart_id: usize,
     context: riscv.CpuContext,
+    run_lock: atomic.SpinLock = atomic.SpinLock.init(),
     heap_mem: []u8,
     next: ?*DynamicCoreNode = null,
 };
@@ -37,6 +39,8 @@ fn initCoreTable() [TABLE_ROWS]TableRow {
 // Column 2: linked list heads for dynamic cores (bucket = id % TABLE_ROWS).
 pub var core_table: [TABLE_ROWS]TableRow = initCoreTable();
 pub var static_contexts: [TABLE_ROWS]riscv.CpuContext = undefined;
+pub var static_run_locks: [TABLE_ROWS]atomic.SpinLock =
+    @splat(atomic.SpinLock.init());
 pub var next_cpu_id: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
 pub var dynamic_heap_ready: std.atomic.Value(bool) =
     std.atomic.Value(bool).init(false);
@@ -44,6 +48,14 @@ pub var host_stopping: std.atomic.Value(bool) =
     std.atomic.Value(bool).init(false);
 pub var global_allocator: ?std.mem.Allocator = null;
 var table_lock: atomic.SpinLock = atomic.SpinLock.init();
+
+pub fn getRunLock(ctx: *riscv.CpuContext) *atomic.SpinLock {
+    if (ctx.cpu_core_id < TABLE_ROWS) {
+        return &static_run_locks[ctx.cpu_core_id];
+    }
+    const node: *DynamicCoreNode = @fieldParentPtr("context", ctx);
+    return &node.run_lock;
+}
 
 pub fn claimNextCpuId() usize {
     return next_cpu_id.fetchAdd(1, .seq_cst);
@@ -67,6 +79,7 @@ pub fn registerStaticCore(
     ctx.cpu_core_id = id;
     ctx.hardware_hart_id = hart_id;
     ctx.is_parked = false;
+    static_run_locks[id] = atomic.SpinLock.init();
     core_table[id].static_ptr = ctx;
     if (id < riscv.cpu_to_hart_map.len) riscv.cpu_to_hart_map[id] = hart_id;
     if (id < riscv.cpu_contexts.len) riscv.cpu_contexts[id] = ctx;
@@ -88,6 +101,7 @@ pub fn registerDynamicCore(id: usize, hart_id: usize) !*riscv.CpuContext {
     @memset(@as([*]u8, @ptrCast(node))[0..@sizeOf(DynamicCoreNode)], 0);
     node.id = id;
     node.hart_id = hart_id;
+    node.run_lock = atomic.SpinLock.init();
     node.heap_mem = heap_mem;
 
     node.context.cpu_core_id = id;
@@ -148,7 +162,7 @@ pub fn fromHartId(hart_id: usize) ?*riscv.CpuContext {
 }
 
 pub fn isHostTp(tp_val: usize) bool {
-    if (tp_val == 0 or tp_val % 16 != 0) return false;
+    if (tp_val == 0 or tp_val % TP_REQUIRED_ALIGNMENT != 0) return false;
 
     for (&core_table) |*row| {
         if (row.static_ptr) |ctx| {
@@ -185,7 +199,11 @@ pub fn countOnline() usize {
 pub fn getTotalFreeHeapBytes() usize {
     var total: usize = 0;
     for (&core_table) |*row| {
-        if (row.static_ptr) |ctx| total += ctx.allocator.free_size;
+        if (row.static_ptr) |ctx| {
+            const af = ctx.allocator.lock.lock();
+            defer ctx.allocator.lock.unlock(af);
+            total += ctx.allocator.free_size;
+        }
     }
     const flags = table_lock.lock();
     defer table_lock.unlock(flags);
@@ -193,6 +211,8 @@ pub fn getTotalFreeHeapBytes() usize {
     for (&core_table) |*row| {
         var cur = row.dynamic_head;
         while (cur) |node| : (cur = node.next) {
+            const af = node.context.allocator.lock.lock();
+            defer node.context.allocator.lock.unlock(af);
             total += node.context.allocator.free_size;
         }
     }
@@ -358,128 +378,106 @@ fn initStaticTestCore(id: usize, hart_id: usize) void {
 }
 
 test "physical CPU: claimNextCpuId and static cores 0..31 via Column 1" {
+    std.testing.refAllDecls(@This());
+    const testing = std.testing;
     resetForTest();
     defer resetForTest();
 
-    try std.testing.expectEqual(@as(usize, 0), claimNextCpuId());
-    try std.testing.expectEqual(@as(usize, 1), claimNextCpuId());
-
+    try testing.expectEqual(@as(usize, 0), claimNextCpuId());
+    try testing.expectEqual(@as(usize, 1), claimNextCpuId());
     for (0..TABLE_ROWS) |id| initStaticTestCore(id, id * 10);
 
     const core3 = fromId(3);
-    try std.testing.expectEqual(@as(usize, 3), core3.?.cpu_core_id);
-    try std.testing.expectEqual(@as(usize, 30), core3.?.hardware_hart_id);
-    try std.testing.expectEqual(
-        @intFromPtr(&static_contexts[3]),
-        @intFromPtr(core3.?),
-    );
+    try testing.expectEqual(@as(usize, 3), core3.?.cpu_core_id);
+    try testing.expectEqual(@as(usize, 30), core3.?.hardware_hart_id);
+    try testing.expectEqual(&static_contexts[3], core3.?);
 
     for (0..TABLE_ROWS) |id| {
         const ctx = fromId(id);
-        try std.testing.expectEqual(id, ctx.?.cpu_core_id);
-        try std.testing.expectEqual(id * 10, ctx.?.hardware_hart_id);
+        try testing.expectEqual(id, ctx.?.cpu_core_id);
+        try testing.expectEqual(id * 10, ctx.?.hardware_hart_id);
     }
-
-    try std.testing.expect(fromId(32) == null);
-    try std.testing.expectEqual(@as(usize, 32), countOnline());
+    try testing.expect(fromId(32) == null);
+    try testing.expectEqual(@as(usize, 32), countOnline());
 }
 
 test "physical CPU: dynamic core 38 allocates into bucket 6 and collisions" {
+    const testing = std.testing;
     resetForTest();
     defer resetForTest();
 
     initStaticTestCore(3, 300);
-    try std.testing.expect(!isDynamicHeapReady());
-    try std.testing.expectError(
-        error.HeapNotReady,
-        registerDynamicCore(38, 380),
-    );
+    try testing.expect(!isDynamicHeapReady());
+    try testing.expectError(error.HeapNotReady, registerDynamicCore(38, 380));
 
-    setDynamicHeapReady(std.testing.allocator);
-    try std.testing.expect(isDynamicHeapReady());
+    setDynamicHeapReady(testing.allocator);
+    try testing.expect(isDynamicHeapReady());
 
     const core38 = try registerDynamicCore(38, 380);
-    try std.testing.expectEqual(@as(usize, 38), core38.cpu_core_id);
-    try std.testing.expectEqual(@as(usize, 380), core38.hardware_hart_id);
-    try std.testing.expectEqual(
-        @as(usize, 38),
-        core_table[6].dynamic_head.?.id,
-    );
+    try testing.expectEqual(@as(usize, 38), core38.cpu_core_id);
+    try testing.expectEqual(@as(usize, 380), core38.hardware_hart_id);
+    try testing.expectEqual(@as(usize, 38), core_table[6].dynamic_head.?.id);
 
     const core70 = try registerDynamicCore(70, 700);
-    try std.testing.expectEqual(@intFromPtr(core38), @intFromPtr(fromId(38).?));
-    try std.testing.expectEqual(@intFromPtr(core70), @intFromPtr(fromId(70).?));
-    try std.testing.expectEqual(
-        @intFromPtr(core38),
-        @intFromPtr(fromHartId(380).?),
-    );
-    try std.testing.expectEqual(
-        @intFromPtr(core70),
-        @intFromPtr(fromHartId(700).?),
-    );
-    try std.testing.expectEqual(@as(usize, 3), fromId(3).?.cpu_core_id);
-    try std.testing.expect(fromHartId(300) != null and fromHartId(999) == null);
-    try std.testing.expectEqual(@as(usize, 3), countOnline());
+    try testing.expectEqual(core38, fromId(38).?);
+    try testing.expectEqual(core70, fromId(70).?);
+    try testing.expectEqual(core38, fromHartId(380).?);
+    try testing.expectEqual(core70, fromHartId(700).?);
+    try testing.expectEqual(@as(usize, 3), fromId(3).?.cpu_core_id);
+    try testing.expect(fromHartId(300) != null and fromHartId(999) == null);
+    try testing.expectEqual(@as(usize, 3), countOnline());
 }
 
 test "physical CPU: scaling up to 4096 cores dynamically" {
+    const testing = std.testing;
     resetForTest();
     defer resetForTest();
 
-    setDynamicHeapReady(std.testing.allocator);
+    setDynamicHeapReady(testing.allocator);
     for (0..TABLE_ROWS) |id| initStaticTestCore(id, id + 1000);
 
     const target_cores: usize = 512;
     for (TABLE_ROWS..target_cores) |id| {
         _ = try registerDynamicCore(id, id + 1000);
     }
-    try std.testing.expectEqual(target_cores, countOnline());
+    try testing.expectEqual(target_cores, countOnline());
 
     for (0..target_cores) |check_id| {
         const ctx = fromId(check_id);
-        try std.testing.expectEqual(check_id, ctx.?.cpu_core_id);
-        const hart_ctx = fromHartId(check_id + 1000);
-        try std.testing.expectEqual(
-            @intFromPtr(ctx.?),
-            @intFromPtr(hart_ctx.?),
-        );
+        try testing.expectEqual(check_id, ctx.?.cpu_core_id);
+        try testing.expectEqual(ctx.?, fromHartId(check_id + 1000).?);
     }
-
-    try std.testing.expectError(
+    try testing.expectError(
         error.ExceedsMaxCores,
         registerDynamicCore(MAX_SYSTEM_CORES, 9999),
     );
 }
 
 test "physical CPU: isHostTp, sendIpiToCpu, duplicates, and parkOtherCores" {
+    const testing = std.testing;
     resetForTest();
     defer resetForTest();
 
-    setDynamicHeapReady(std.testing.allocator);
+    setDynamicHeapReady(testing.allocator);
     registerStaticCore(0, 100, riscv.getCPUContext());
     initStaticTestCore(1, 10);
     const dyn_ctx = try registerDynamicCore(40, 400);
 
-    try std.testing.expect(isHostTp(@intFromPtr(riscv.getCPUContext())));
-    try std.testing.expect(isHostTp(@intFromPtr(dyn_ctx)));
-    try std.testing.expect(!isHostTp(0) and !isHostTp(0x1234));
-    try std.testing.expect(!isHostTp(@intFromPtr(&static_contexts[1]) + 1));
+    try testing.expect(isHostTp(@intFromPtr(riscv.getCPUContext())));
+    try testing.expect(isHostTp(@intFromPtr(dyn_ctx)));
+    try testing.expect(!isHostTp(0) and !isHostTp(0x1234));
+    try testing.expect(!isHostTp(@intFromPtr(&static_contexts[1]) + 1));
 
     sendIpiToCpu(0);
     sendIpiToCpu(40);
     sendIpiToCpu(999);
 
-    try std.testing.expectError(
-        error.AlreadyExists,
-        registerDynamicCore(40, 401),
-    );
-    try std.testing.expectError(
-        error.AlreadyExists,
-        registerDynamicCore(41, 400),
-    );
+    const err_dup = error.AlreadyExists;
+    try testing.expectError(err_dup, registerDynamicCore(40, 401));
+    try testing.expectError(err_dup, registerDynamicCore(41, 400));
 
     static_contexts[1].is_parked = true;
     dyn_ctx.is_parked = true;
     parkOtherCores();
-    try std.testing.expect(host_stopping.load(.acquire));
+    try testing.expect(host_stopping.load(.acquire));
 }

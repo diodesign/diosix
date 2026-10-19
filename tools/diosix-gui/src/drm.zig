@@ -30,11 +30,11 @@ pub const drm_version = extern struct {
     version_major: i32 = 0,
     version_minor: i32 = 0,
     version_patchlevel: i32 = 0,
-    name_len: usize = 0,
+    name_len: u64 = 0,
     name: [*]u8 = undefined,
-    date_len: usize = 0,
+    date_len: u64 = 0,
     date: [*]u8 = undefined,
-    desc_len: usize = 0,
+    desc_len: u64 = 0,
     desc: [*]u8 = undefined,
 };
 
@@ -422,7 +422,7 @@ pub const DrmDevice = struct {
         };
         const rc = linux.ioctl(self.fd, DRM_IOCTL_VERSION, @intFromPtr(&v));
         if (@as(isize, @bitCast(rc)) == 0 and v.name_len > 0) {
-            const copy_len = @min(v.name_len, buf.len);
+            const copy_len: usize = @intCast(@min(v.name_len, buf.len));
             @memcpy(buf[0..copy_len], name_buf[0..copy_len]);
             return buf[0..copy_len];
         }
@@ -461,6 +461,7 @@ pub const DrmDevice = struct {
 
 test "drm: types and ioctls" {
     const testing = std.testing;
+    std.testing.refAllDecls(@This());
     try testing.expectEqual(@as(usize, 64), @sizeOf(drm_mode_card_res));
     try testing.expectEqual(@as(usize, 104), @sizeOf(drm_mode_crtc));
     try testing.expectEqual(@as(usize, 80), @sizeOf(drm_mode_get_connector));

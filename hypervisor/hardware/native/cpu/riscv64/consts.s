@@ -40,6 +40,10 @@
 .equ CSR_HENVCFG,            0x60a
 .equ CSR_VSTIMECMP,          0x24d
 .equ CSR_STIMECMP,           0x14d
+.equ CSR_SENVCFG,            0x10a
+
+# GuestState struct offsets.
+.equ GS_VSENVCFG_OFFSET,     72
 
 # mstatus bits.
 .equ MSTATUS_VS_DIRTY,       (3 << 9)   # Vector extension dirty state
@@ -67,8 +71,13 @@
 # supervisor ecall 9, and machine ecall 11).
 .equ MEDELEG_DELEGATED,      0xb1fb
 
-# Device tree header constants.
+# Device tree header and early boot constants.
 .equ DTB_MAGIC_OFFSET,            0
 .equ DTB_HEADER_TOTALSIZE_OFFSET, 4
-.equ DTB_MAGIC_LE,                0xedfe0dd0 # 0xd00dfeed in little-endian word
+.equ DTB_MAGIC_BYTE0,             0xd0
+.equ DTB_MAGIC_BYTE1,             0x0d
+.equ DTB_MAGIC_BYTE2,             0xfe
+.equ DTB_MAGIC_BYTE3,             0xed
 .equ MAX_DTB_SIZE,                (2 * 1024 * 1024)
+.equ STACK_ALIGN_MASK,            -8
+.equ INITIAL_FDT_PAD_BYTES,       16384

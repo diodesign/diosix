@@ -9,146 +9,27 @@ const api = @import("api.zig");
 const common = @import("common.zig");
 const image = @import("image.zig");
 const snapshot = @import("snapshot.zig");
+const disk = @import("storage/disk.zig");
 
 pub const CATALOG_CONFIG_PATH = image.CATALOG_CONFIG_PATH;
+pub const EXT4_SUPERBLOCK_OFFSET = disk.EXT4_SUPERBLOCK_OFFSET;
+pub const EXT4_MAGIC_OFFSET = disk.EXT4_MAGIC_OFFSET;
+pub const EXT4_SUPER_MAGIC = disk.EXT4_SUPER_MAGIC;
+pub const MIB_BYTES = disk.MIB_BYTES;
+
 pub const findAttachedGuest = common.findAttachedGuest;
 pub const fetchRemoteFile = image.fetchRemoteFile;
 pub const pullRemoteOrStageImage = image.pullRemoteOrStageImage;
 pub const cmdImage = image.cmdImage;
 pub const cmdSnapshot = snapshot.cmdSnapshot;
-
-pub fn detectDiskFormat(file_path_z: [*:0]const u8) []const u8 {
-    const fd_res = linux.open(
-        @ptrCast(file_path_z),
-        .{ .ACCMODE = .RDONLY },
-        0,
-    );
-    const fd_signed: isize = @bitCast(fd_res);
-    if (fd_signed < 0) return "raw";
-    const fd: i32 = @intCast(fd_signed);
-    defer _ = linux.close(fd);
-
-    const seek_res = linux.lseek(fd, 1080, linux.SEEK.SET);
-    const seek_signed: isize = @bitCast(seek_res);
-    if (seek_signed == 1080) {
-        var magic_buf: [2]u8 = undefined;
-        const nread_res = linux.read(fd, &magic_buf, 2);
-        const nread: isize = @bitCast(nread_res);
-        if (nread == 2 and magic_buf[0] == 0x53 and magic_buf[1] == 0xef) {
-            return "ext4";
-        }
-    }
-    return "raw";
-}
-
-pub fn resolveDiskPath(disk_name: []const u8, out_buf: []u8) ?[]const u8 {
-    if (!common.isSafeStoragePath(disk_name, "/var/lib/diosix/disks/")) {
-        return null;
-    }
-    if (std.mem.startsWith(u8, disk_name, "/")) return disk_name;
-    const has_ext = std.mem.endsWith(u8, disk_name, ".img") or
-        std.mem.endsWith(u8, disk_name, ".raw");
-    const ext = if (has_ext) "" else ".img";
-    return std.fmt.bufPrint(
-        out_buf,
-        "/var/lib/diosix/disks/{s}{s}",
-        .{ disk_name, ext },
-    ) catch null;
-}
-
-pub fn formatAndSeedDisk(
-    disk_path_z: [*:0]const u8,
-    disk_label: []const u8,
-) void {
-    var label_buf: [64]u8 = undefined;
-    const label_slice = std.fmt.bufPrint(
-        &label_buf,
-        "{s}",
-        .{disk_label},
-    ) catch "diosix-data";
-    var label_z_buf: [64]u8 = undefined;
-    const label_z = common.toPathZ(label_slice, &label_z_buf) orelse return;
-
-    const mkfs_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-        "/usr/sbin/mkfs.ext4", "-F",        "-q", "-L",
-        label_z.ptr,           disk_path_z, null,
-    };
-    if (common.runSubprocess(mkfs_argv) != 0) return;
-
-    const mnt_dir: [:0]const u8 = "/tmp/diosix_staging";
-    _ = linux.mkdir(mnt_dir.ptr, 0o755);
-
-    const mount_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-        "/bin/mount", "-o", "loop", disk_path_z, mnt_dir.ptr, null,
-    };
-    if (common.runSubprocess(mount_argv) == 0) {
-        _ = linux.mkdir("/tmp/diosix_staging/images", 0o755);
-        _ = linux.mkdir("/tmp/diosix_staging/disks", 0o755);
-        _ = linux.mkdir("/tmp/diosix_staging/keys", 0o700);
-
-        const copy_sources = [_][]const u8{
-            "/var/lib/diosix/images/linux-guest.elf",
-            "/boot/vmlinux.elf",
-            "/boot/linux-guest.elf",
-            "/var/lib/diosix/images/default.elf",
-            "/boot/default.elf",
-        };
-        for (copy_sources) |src| {
-            var src_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-            const src_z = common.toPathZ(src, &src_z_buf) orelse continue;
-
-            const dst1 = "/tmp/diosix_staging/images/default.elf";
-            const dst2 = "/tmp/diosix_staging/images/linux-guest.elf";
-            const cp_argv: [*:null]const ?[*:0]const u8 =
-                &[_:null]?[*:0]const u8{
-                    "/bin/cp", "-L", src_z.ptr, dst1, null,
-                };
-            if (common.runSubprocess(cp_argv) == 0) {
-                const cp2_argv: [*:null]const ?[*:0]const u8 =
-                    &[_:null]?[*:0]const u8{
-                        "/bin/cp", "-L", src_z.ptr, dst2, null,
-                    };
-                _ = common.runSubprocess(cp2_argv);
-                break;
-            }
-        }
-
-        const umount_argv: [*:null]const ?[*:0]const u8 =
-            &[_:null]?[*:0]const u8{ "/bin/umount", mnt_dir.ptr, null };
-        _ = common.runSubprocess(umount_argv);
-    }
-}
-
-pub fn provisionVirtualDisk(
-    name: []const u8,
-    size_mb: usize,
-    out_path_buf: []u8,
-) ?[]const u8 {
-    _ = linux.mkdir("/var/lib/diosix", 0o755);
-    _ = linux.mkdir("/var/lib/diosix/disks", 0o755);
-
-    const path = resolveDiskPath(name, out_path_buf) orelse return null;
-    var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const z_path = common.toPathZ(path, &z_buf) orelse return null;
-
-    const fd_res = linux.open(
-        z_path.ptr,
-        .{ .ACCMODE = .RDWR, .CREAT = true },
-        0o644,
-    );
-    const fd_signed: isize = @bitCast(fd_res);
-    if (fd_signed < 0) return null;
-    const fd: i32 = @intCast(fd_signed);
-    defer _ = linux.close(fd);
-
-    const size_bytes: u64 = @as(u64, size_mb) * 1024 * 1024;
-    _ = linux.ftruncate(fd, @intCast(size_bytes));
-
-    formatAndSeedDisk(z_path.ptr, name);
-    return path;
-}
+pub const detectDiskFormat = disk.detectDiskFormat;
+pub const resolveDiskPath = disk.resolveDiskPath;
+pub const formatAndSeedDisk = disk.formatAndSeedDisk;
+pub const provisionVirtualDisk = disk.provisionVirtualDisk;
 
 fn listVirtualDisks() void {
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const disks_dir = sys_cfg.disksDir();
     common.printStr(
         "Disk Name             Capacity   Format   Attached VM        Path\n",
     );
@@ -158,10 +39,12 @@ fn listVirtualDisks() void {
     );
 
     _ = linux.mkdir("/var/lib/diosix", 0o755);
-    _ = linux.mkdir("/var/lib/diosix/disks", 0o755);
+    var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    const dir_z = common.toPathZ(disks_dir, &dir_z_buf) orelse return;
+    _ = linux.mkdir(dir_z.ptr, 0o755);
 
     const dir_res = linux.open(
-        "/var/lib/diosix/disks",
+        dir_z.ptr,
         .{ .ACCMODE = .RDONLY, .DIRECTORY = true },
         0,
     );
@@ -190,8 +73,8 @@ fn listVirtualDisks() void {
             var fp_buf: [common.MAX_PATH_LEN]u8 = undefined;
             const file_path = std.fmt.bufPrint(
                 &fp_buf,
-                "/var/lib/diosix/disks/{s}",
-                .{dname},
+                "{s}/{s}",
+                .{ disks_dir, dname },
             ) catch continue;
             var file_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
             const file_z = common.toPathZ(file_path, &file_z_buf) orelse
@@ -209,7 +92,7 @@ fn listVirtualDisks() void {
                 const end_off = linux.lseek(file_fd, 0, linux.SEEK.END);
                 const end_signed: isize = @bitCast(end_off);
                 if (end_signed > 0) {
-                    size_mb_val = @intCast(@divTrunc(end_signed, 1024 * 1024));
+                    size_mb_val = @intCast(@divTrunc(end_signed, MIB_BYTES));
                 }
                 _ = linux.close(file_fd);
             }
@@ -373,7 +256,7 @@ pub fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             const end_signed: isize = @bitCast(end_off);
             const size_bytes: u64 =
                 if (end_signed > 0) @intCast(end_signed) else 0;
-            const size_mb_val = size_bytes / (1024 * 1024);
+            const size_mb_val = size_bytes / (MIB_BYTES);
 
             const fmt_str = detectDiskFormat(file_z.ptr);
             var att_buf: [64]u8 = undefined;
@@ -430,11 +313,8 @@ pub fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             }
             var out_buf: [256]u8 = undefined;
             const out_fmt = "✓ Virtual disk '{s}' deleted.\n";
-            const out_msg = std.fmt.bufPrint(
-                &out_buf,
-                out_fmt,
-                .{disk_name},
-            ) catch return;
+            const out_msg =
+                std.fmt.bufPrint(&out_buf, out_fmt, .{disk_name}) catch return;
             common.printStr(out_msg);
         },
         .resize => {
@@ -453,7 +333,7 @@ pub fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 return;
             };
             const size_mb = common.parseMemorySizeMb(size_str);
-            const size_bytes: u64 = @as(u64, size_mb) * 1024 * 1024;
+            const size_bytes: u64 = @as(u64, size_mb) * MIB_BYTES;
 
             var path_buf: [common.MAX_PATH_LEN]u8 = undefined;
             const path = resolveDiskPath(disk_name, &path_buf) orelse {
@@ -475,11 +355,9 @@ pub fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             _ = linux.ftruncate(fd, @intCast(size_bytes));
             var out_buf: [256]u8 = undefined;
             const r_fmt = "✓ Virtual disk '{s}' resized to {d} MB ({s}).\n";
-            const out_msg = std.fmt.bufPrint(
-                &out_buf,
-                r_fmt,
-                .{ disk_name, size_mb, size_str },
-            ) catch return;
+            const r_args = .{ disk_name, size_mb, size_str };
+            const out_msg =
+                std.fmt.bufPrint(&out_buf, r_fmt, r_args) catch return;
             common.printStr(out_msg);
         },
     }
@@ -489,6 +367,7 @@ test "storage: resolveDiskPath validates names and rejects traversal" {
     std.testing.refAllDecls(@This());
     _ = image;
     _ = snapshot;
+    _ = disk;
     var buf: [common.MAX_PATH_LEN]u8 = undefined;
     try std.testing.expectEqualStrings(
         "/var/lib/diosix/disks/data.img",

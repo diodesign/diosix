@@ -358,3 +358,7 @@ test "parseIso9660Volume and findIso9660Path with nested directories" {
     try testing.expectEqual(@as(u32, 21), nested_ext.extent_lba);
     try testing.expectEqual(@as(u32, 1024), nested_ext.data_length);
 }
+
+test {
+    std.testing.refAllDecls(@This());
+}

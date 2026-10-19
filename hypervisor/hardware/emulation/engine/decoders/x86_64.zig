@@ -22,4 +22,5 @@ test "x86_64 stub decoder" {
     const dec = decode(0x90);
     try std.testing.expectEqual(@as(u8, 1), dec.len);
     try std.testing.expectEqual(@as(u32, 0x90), dec.insn.unknown);
+    std.testing.refAllDecls(@This());
 }

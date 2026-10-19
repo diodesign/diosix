@@ -4,14 +4,20 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const bus = @import("../bus.zig");
 
 pub const VIRTIO_ID_GPU: u32 = 16;
-pub const VIRTIO_VENDOR_ID: u32 = 0x554d4551; // "QEMU" / Standard VirtIO.
-pub const VIRTIO_MAGIC: u32 = 0x74726976; // "virt".
-pub const VIRTIO_VERSION: u32 = 2; // Modern VirtIO.
+pub const VIRTIO_VENDOR_ID: u32 = bus.VIRTIO_MMIO_VENDOR_QEMU;
+pub const VIRTIO_MAGIC: u32 = bus.VIRTIO_MMIO_MAGIC;
+pub const VIRTIO_VERSION: u32 = bus.VIRTIO_MMIO_VERSION_2;
 
 pub const QUEUE_SIZE_MAX: u16 = 64;
 pub const NUM_QUEUES: usize = 2; // 0 = controlq, 1 = cursorq.
+
+pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
+pub const DEFAULT_DISPLAY_HEIGHT: u32 = 720;
+pub const MAX_RESOURCE_DIMENSION: u32 = 4096;
+pub const BYTES_PER_PIXEL_RGBA: u32 = 4;
 
 // VirtIO GPU Pixel Formats.
 pub const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;

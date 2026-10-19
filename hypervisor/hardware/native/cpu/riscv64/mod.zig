@@ -147,19 +147,10 @@ pub var uart_base: ?usize = null;
 pub var test_device_base: ?usize = null;
 pub var plic_base: ?usize = null;
 
-pub const CLINT = struct {
-    pub const MTIMECMP_BASE = 0x4000;
-    pub const MTIME_OFFSET = 0xbff8;
-
-    pub fn msip(hart: usize) ?*volatile u32 {
-        const base = clint_base orelse return null;
-        const offset = std.math.mul(usize, 4, hart) catch return null;
-        const addr = std.math.add(usize, base, offset) catch return null;
-        return @ptrFromInt(addr);
-    }
-};
+pub const CLINT = @import("../../drivers/clint.zig");
 
 pub const SiFiveTest = struct {
+    pub const DEFAULT_BASE: usize = 0x100000;
     pub const FINISHER_PASS = 0x5555;
     pub const FINISHER_RESET = 0x7777;
 };
@@ -176,6 +167,13 @@ pub const TIMER_INFINITY: u64 = 0xffffffffffffffff;
 pub const TIMESLICE_TICKS: u64 = 100_000; // 10 ms
 pub const EXT_IRQ_POLL_TICKS: u64 = 1_000; // 100 us
 pub const WATCHDOG_TICKS: u64 = 100_000_000; // 10 s
+
+// hgatp probe constants for SV39x4 (mode=8, vmid=1, dummy PPN=0x82edc).
+const HGATP_PROBE_MODE_SV39X4: u64 = 8 << 60;
+const HGATP_PROBE_VMID: u64 = 1 << 44;
+const HGATP_PROBE_PPN: u64 = 0x82edc;
+const HGATP_PROBE_VAL: u64 =
+    HGATP_PROBE_MODE_SV39X4 | HGATP_PROBE_VMID | HGATP_PROBE_PPN;
 
 fn initCpuToHartMap() [STATIC_PHYS_CORES]usize {
     var map: [STATIC_PHYS_CORES]usize = undefined;
@@ -201,7 +199,7 @@ extern fn hw_shutdown() void;
 extern fn hw_pause() void;
 extern fn hw_pmp_init() void;
 
-pub const ThreadContext = [32]usize;
+pub const ThreadContext = [32]u64;
 
 pub const CpuContext = struct {
     cpu_core_id: usize,
@@ -227,27 +225,50 @@ pub const CpuContext = struct {
 };
 
 pub const MachineState = extern struct {
-    mepc: usize,
-    mstatus: usize,
-    hstatus: usize,
-    hgatp: usize,
-    hvip: usize,
-    hedeleg: usize,
-    hideleg: usize,
+    mepc: u64,
+    mstatus: u64,
+    hstatus: u64,
+    hgatp: u64,
+    hvip: u64,
+    hedeleg: u64,
+    hideleg: u64,
 };
 
 pub const GuestState = extern struct {
-    vsstatus: usize,
-    vsie: usize,
-    vstvec: usize,
-    vsscratch: usize,
-    vsepc: usize,
-    vscause: usize,
-    vstval: usize,
-    vsatp: usize,
-    vstimecmp: usize,
-    vsenvcfg: usize,
+    vsstatus: u64,
+    vsie: u64,
+    vstvec: u64,
+    vsscratch: u64,
+    vsepc: u64,
+    vscause: u64,
+    vstval: u64,
+    vsatp: u64,
+    vstimecmp: u64,
+    vsenvcfg: u64,
 };
+
+comptime {
+    const assert = std.debug.assert;
+    assert(@sizeOf(ThreadContext) == 32 * @sizeOf(u64));
+    assert(@sizeOf(CpuContext) <= 4096);
+    assert(@offsetOf(MachineState, "mepc") == 0);
+    assert(@offsetOf(MachineState, "mstatus") == 8);
+    assert(@offsetOf(MachineState, "hstatus") == 16);
+    assert(@offsetOf(MachineState, "hgatp") == 24);
+    assert(@offsetOf(MachineState, "hvip") == 32);
+    assert(@offsetOf(MachineState, "hedeleg") == 40);
+    assert(@offsetOf(MachineState, "hideleg") == 48);
+    assert(@offsetOf(GuestState, "vsstatus") == 0);
+    assert(@offsetOf(GuestState, "vsie") == 8);
+    assert(@offsetOf(GuestState, "vstvec") == 16);
+    assert(@offsetOf(GuestState, "vsscratch") == 24);
+    assert(@offsetOf(GuestState, "vsepc") == 32);
+    assert(@offsetOf(GuestState, "vscause") == 40);
+    assert(@offsetOf(GuestState, "vstval") == 48);
+    assert(@offsetOf(GuestState, "vsatp") == 56);
+    assert(@offsetOf(GuestState, "vstimecmp") == 64);
+    assert(@offsetOf(GuestState, "vsenvcfg") == 72);
+}
 
 pub inline fn getCPUContext() *CpuContext {
     if (is_test) return &mock.test_cpu_ctx;
@@ -276,82 +297,62 @@ pub fn initCPUHeapAllocator() !void {
 }
 
 pub fn getCPUHeapAllocator() alloc.Allocator {
-    const cpu_context = getCPUContext();
-    return cpu_context.allocator.allocator();
+    return getCPUContext().allocator.allocator();
 }
 
 pub fn auditCpuFeatures() !void {
     if (is_test) return;
-
     debug.printf("CPU features audit:\n", .{});
 
     const pcpu = getCPUContext();
     if (!config.legacy_cpu) {
-        // Probe Smstateen (0x30c).
+        // Probe Smstateen (0x30c) and Sstc (0x14d).
         pcpu.probing_active = true;
         pcpu.probe_failed = false;
         _ = readMstateen0();
         riscv_supports_smstateen = !pcpu.probe_failed;
 
-        // Probe Sstc (0x14d) by verifying that writing to stimecmp toggles STIP
-        // (bit 5) in mip while menvcfg.STCE (bit 63) is enabled.
         pcpu.probing_active = true;
         pcpu.probe_failed = false;
-
         const old_menvcfg = readMenvcfg();
-        const stce_bit = @as(usize, 1) << 63;
-        writeMenvcfg(old_menvcfg | stce_bit);
-
+        writeMenvcfg(old_menvcfg | ENVCFG.STCE);
         const old_stimecmp = readStimecmp();
         writeStimecmp(TIMER_INFINITY);
         const mip_clear = readMip();
         writeStimecmp(0);
         const mip_set = readMip();
-
         writeStimecmp(old_stimecmp);
         writeMenvcfg(old_menvcfg);
 
-        const stip_bit = @as(usize, 1) << 5;
-        const stip_cleared = (mip_clear & stip_bit) == 0;
-        const stip_asserted = (mip_set & stip_bit) != 0;
-
+        const stip_cleared = (mip_clear & MIP.STIP) == 0;
+        const stip_asserted = (mip_set & MIP.STIP) != 0;
         riscv_supports_sstc =
             !pcpu.probe_failed and stip_cleared and stip_asserted;
-
         if (riscv_supports_sstc) {
-            writeMenvcfg(old_menvcfg | stce_bit);
+            writeMenvcfg(old_menvcfg | ENVCFG.STCE);
             writeStimecmp(TIMER_INFINITY);
         }
-
         pcpu.probing_active = false;
     }
 
     const has_h = hasHExtension();
-    debug.printf(
-        " - Hardware virtualization (H) {s}\n",
-        .{if (has_h) "detected" else "absent"},
-    );
-    debug.printf(
-        " - Enhanced isolation (Smstateen) {s}\n",
-        .{if (riscv_supports_smstateen) "detected" else "absent"},
-    );
-    debug.printf(
-        " - Efficient timer interrupts (Sstc) {s}\n",
-        .{if (riscv_supports_sstc) "detected" else "absent"},
-    );
+    const h_str = if (has_h) "detected" else "absent";
+    const sm_str = if (riscv_supports_smstateen) "detected" else "absent";
+    const sstc_str = if (riscv_supports_sstc) "detected" else "absent";
+    debug.printf(" - Hardware virtualization (H) {s}\n", .{h_str});
+    debug.printf(" - Enhanced isolation (Smstateen) {s}\n", .{sm_str});
+    debug.printf(" - Efficient timer interrupts (Sstc) {s}\n", .{sstc_str});
 
     if (has_h) {
-        const val_hgatp: u64 = (8 << 60) | (1 << 44) | 0x82edc;
-        writeHgatp(val_hgatp);
+        writeHgatp(HGATP_PROBE_VAL);
         const read_hgatp = readHgatp();
-        if (read_hgatp != val_hgatp) {
+        if (read_hgatp != HGATP_PROBE_VAL) {
             debug.printf(
                 "CRITICAL: hgatp write failure (wrote 0x{x}, read 0x{x})\n",
-                .{ val_hgatp, read_hgatp },
+                .{ HGATP_PROBE_VAL, read_hgatp },
             );
             return error.HardwareIncompatible;
         }
-
         const initial_mstatus = readMstatus();
         writeMstatus(initial_mstatus | MSTATUS.MPV);
         const mstatus_with_v = readMstatus();
@@ -372,10 +373,7 @@ pub fn setTimer(stime: u64) void {
     if (drivers.timer) |drv| {
         drv.setTimer(stime);
     } else {
-        const base = clint_base orelse 0x02000000;
-        const addr = base + CLINT.MTIMECMP_BASE + 8 * readMhartid();
-        const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(addr));
-        mtimecmp_ptr.* = stime;
+        CLINT.setTimer(readMhartid(), stime);
     }
 }
 
@@ -444,7 +442,7 @@ pub fn reboot() void {
     pcore.parkOtherCores();
     const drivers = @import("../../../../core/drivers.zig");
     if (drivers.reset) |drv| drv.reset();
-    const base = test_device_base orelse 0x100000;
+    const base = test_device_base orelse SiFiveTest.DEFAULT_BASE;
     const ptr = @as(*volatile u32, @ptrFromInt(base));
     ptr.* = SiFiveTest.FINISHER_RESET;
     while (true) {}
@@ -456,7 +454,7 @@ pub fn shutdown() void {
     pcore.parkOtherCores();
     const drivers = @import("../../../../core/drivers.zig");
     if (drivers.reset) |drv| drv.shutdown();
-    const base = test_device_base orelse 0x100000;
+    const base = test_device_base orelse SiFiveTest.DEFAULT_BASE;
     const ptr = @as(*volatile u32, @ptrFromInt(base));
     ptr.* = SiFiveTest.FINISHER_PASS;
     while (true) {}
@@ -468,8 +466,13 @@ pub fn pause() void {
 }
 
 test "riscv mock hardware initialization and heap allocator" {
+    std.testing.refAllDecls(@This());
     _ = csr;
     _ = guest_csr;
+    _ = mock;
+    _ = @import("pmp.zig");
+    _ = @import("sv39x4.zig");
+    _ = @import("xint.zig");
     initMockHardware();
     try initCPUHeapAllocator();
     const a = getCPUHeapAllocator();

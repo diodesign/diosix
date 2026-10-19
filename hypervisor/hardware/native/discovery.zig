@@ -8,6 +8,7 @@ const fdt = @import("fdt.zig");
 const uart = @import("drivers/uart.zig");
 const clint = @import("drivers/clint.zig");
 const plic = @import("drivers/plic.zig");
+const riscv = @import("cpu/riscv64/mod.zig");
 
 pub const HostHardware = struct {
     ram_base: u64,
@@ -32,29 +33,49 @@ pub const DEFAULT_HOST_HARDWARE = HostHardware{
 };
 
 pub fn probe(fdt_paddr: usize) HostHardware {
-    if (fdt_paddr == 0) {
-        return DEFAULT_HOST_HARDWARE;
-    }
+    const hw = blk: {
+        if (fdt_paddr == 0) {
+            break :blk DEFAULT_HOST_HARDWARE;
+        }
 
-    const dtb_ptr = @as([*]const u8, @ptrFromInt(fdt_paddr));
-    const info = fdt.parseHardwareInfo(dtb_ptr) catch {
-        return DEFAULT_HOST_HARDWARE;
+        const dtb_ptr = @as([*]const u8, @ptrFromInt(fdt_paddr));
+        const info = fdt.parseHardwareInfo(dtb_ptr) catch {
+            break :blk DEFAULT_HOST_HARDWARE;
+        };
+
+        if (info.uart_base) |u| uart.init(u);
+        if (info.clint_base) |c| clint.init(c);
+        if (info.plic_base) |p| plic.init(p);
+
+        break :blk HostHardware{
+            .ram_base = info.ram_base,
+            .ram_size = info.ram_size,
+            .uart_base = info.uart_base,
+            .clint_base = info.clint_base,
+            .plic_base = info.plic_base,
+        };
     };
 
-    if (info.uart_base) |u| uart.init(u);
-    if (info.clint_base) |c| clint.init(c);
-    if (info.plic_base) |p| plic.init(p);
-
-    return HostHardware{
-        .ram_base = info.ram_base,
-        .ram_size = info.ram_size,
-        .uart_base = info.uart_base,
-        .clint_base = info.clint_base,
-        .plic_base = info.plic_base,
-    };
+    riscv.uart_base = hw.uart_base;
+    riscv.clint_base = hw.clint_base;
+    riscv.plic_base = hw.plic_base;
+    return hw;
 }
 
 test "discovery probe fallback on null FDT address" {
+    std.testing.refAllDecls(@This());
+    _ = fdt;
+    _ = uart;
+    _ = clint;
+    _ = plic;
+    defer {
+        riscv.uart_base = null;
+        riscv.clint_base = null;
+        riscv.plic_base = null;
+        uart.base_address = null;
+        clint.base_address = null;
+        plic.base_address = null;
+    }
     const hw = probe(0);
     try std.testing.expectEqual(DEFAULT_RAM_BASE, hw.ram_base);
     try std.testing.expectEqual(DEFAULT_RAM_SIZE, hw.ram_size);

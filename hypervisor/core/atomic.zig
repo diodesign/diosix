@@ -5,6 +5,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const riscv = @import("interface").riscv;
+const assert = std.debug.assert;
 const Value = std.atomic.Value;
 const AtomicOrder = std.builtin.AtomicOrder;
 
@@ -18,7 +20,10 @@ pub fn readBool(ptr: *bool) bool {
 }
 
 // MIE bit in mstatus (bit 3): controls M-mode global interrupt enable.
-const MSTATUS_MIE: usize = 1 << 3;
+pub const MSTATUS_MIE: usize = riscv.MSTATUS.MIE;
+comptime {
+    assert(MSTATUS_MIE == 0x8);
+}
 
 // Disable M-mode interrupts and return previous mstatus value.
 // This prevents deadlock when a timer interrupt fires while holding a lock.
@@ -132,6 +137,7 @@ pub fn LockPayload(comptime T: type) type {
 }
 
 test "atomic bool read and write" {
+    std.testing.refAllDecls(@This());
     var flag: bool = false;
     try std.testing.expect(!readBool(&flag));
     writeBool(&flag, true);

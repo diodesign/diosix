@@ -14,6 +14,7 @@ const sbi = @import("interface").sbi;
 pub const max_vmids: u16 = 4096;
 pub const BITS_PER_WORD: usize = @bitSizeOf(u64);
 pub const VMID_BITMAP_WORDS: usize = max_vmids / BITS_PER_WORD;
+pub const MAX_STOP_SPINS: usize = 100_000;
 
 pub const QuotaSet = struct {
     max_ram_pages: usize = std.math.maxInt(usize),
@@ -30,7 +31,7 @@ pub const QuotaSet = struct {
 // Global guest manager state to encapsulate VMIDs and guest ID counters.
 const GuestManagerState = struct {
     vmid_bitmap: [VMID_BITMAP_WORDS]u64 = blk: {
-        var bm = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
+        var bm: [VMID_BITMAP_WORDS]u64 = @splat(0);
         // VMID 0 is permanently reserved in RISC-V hgatp.
         bm[0] = 1;
         break :blk bm;
@@ -58,7 +59,7 @@ pub fn resetGuestManagerForTest() void {
     defer guard.release();
     const state = guard.get();
     state.guest_id_next = sbi.CID_SELF;
-    state.vmid_bitmap = std.mem.zeroes([VMID_BITMAP_WORDS]u64);
+    state.vmid_bitmap = @splat(0);
     state.vmid_bitmap[0] = 1;
 }
 
@@ -99,77 +100,68 @@ pub fn freeVmid(id: u16) void {
     state.vmid_bitmap[wi] &= ~(@as(u64, 1) << bit);
 }
 
+fn applyClampedQuota(
+    target: *guest_mod.Guest,
+    ceil: *const guest_mod.Guest,
+    args: sbi.QuotaArgs,
+) void {
+    if (args.max_ram_pages > 0) {
+        const max_r = @min(
+            ceil.quotas.max_ram_pages,
+            @as(usize, @intCast(args.max_ram_pages)),
+        );
+        target.quotas.max_ram_pages = @min(target.quotas.max_ram_pages, max_r);
+        target.quotas.used_ram_pages = @min(
+            target.quotas.used_ram_pages,
+            target.quotas.max_ram_pages,
+        );
+        const max_bytes = std.math.mul(
+            usize,
+            target.quotas.max_ram_pages,
+            physmem.PageSize,
+        ) catch std.math.maxInt(usize);
+        if (target == ceil) {
+            if (target.space.range_size == 0 or
+                target.space.range_size > max_bytes)
+            {
+                target.space.setRangeSize(max_bytes);
+            }
+        } else {
+            target.space.setRangeSize(max_bytes);
+        }
+    }
+    if (args.max_vcpus > 0) {
+        const max_v = @min(ceil.quotas.max_vcpus, @as(usize, args.max_vcpus));
+        target.quotas.max_vcpus = @min(target.quotas.max_vcpus, max_v);
+        if (target != ceil) {
+            target.quotas.used_vcpus =
+                @min(target.quotas.used_vcpus, target.quotas.max_vcpus);
+        }
+    }
+    if (args.max_child_depth > 0) {
+        const max_d = @min(
+            ceil.quotas.max_child_depth,
+            @as(usize, args.max_child_depth),
+        );
+        target.quotas.max_child_depth =
+            @min(target.quotas.max_child_depth, max_d);
+    }
+    if (args.max_descendants > 0) {
+        const max_desc = @min(
+            ceil.quotas.max_descendants,
+            @as(usize, args.max_descendants),
+        );
+        target.quotas.max_descendants =
+            @min(target.quotas.max_descendants, max_desc);
+    }
+}
+
 pub fn setQuota(self: *guest_mod.Guest, args: sbi.QuotaArgs) !void {
     if (args.target_cid == sbi.CID_SELF) {
-        if (args.max_ram_pages > 0) {
-            const max_r: usize = @intCast(args.max_ram_pages);
-            self.quotas.max_ram_pages = @min(self.quotas.max_ram_pages, max_r);
-            self.quotas.used_ram_pages = @min(
-                self.quotas.used_ram_pages,
-                self.quotas.max_ram_pages,
-            );
-            const max_bytes = std.math.mul(
-                usize,
-                self.quotas.max_ram_pages,
-                physmem.PageSize,
-            ) catch std.math.maxInt(usize);
-            if (self.space.range_size == 0 or
-                self.space.range_size > max_bytes)
-            {
-                self.space.setRangeSize(max_bytes);
-            }
-        }
-        if (args.max_vcpus > 0) {
-            self.quotas.max_vcpus =
-                @min(self.quotas.max_vcpus, @as(usize, args.max_vcpus));
-        }
-        if (args.max_child_depth > 0) {
-            self.quotas.max_child_depth = @min(
-                self.quotas.max_child_depth,
-                @as(usize, args.max_child_depth),
-            );
-        }
-        if (args.max_descendants > 0) {
-            self.quotas.max_descendants = @min(
-                self.quotas.max_descendants,
-                @as(usize, args.max_descendants),
-            );
-        }
+        applyClampedQuota(self, self, args);
     } else if (args.target_cid >= sbi.CID_FIRST_CHILD) {
         if (self.getGuestByCid(args.target_cid)) |child| {
-            if (args.max_ram_pages > 0) {
-                const max_r: usize = @intCast(args.max_ram_pages);
-                child.quotas.max_ram_pages =
-                    @min(child.quotas.max_ram_pages, max_r);
-                child.quotas.used_ram_pages = @min(
-                    child.quotas.used_ram_pages,
-                    child.quotas.max_ram_pages,
-                );
-                const new_range = std.math.mul(
-                    usize,
-                    child.quotas.max_ram_pages,
-                    physmem.PageSize,
-                ) catch std.math.maxInt(usize);
-                child.space.setRangeSize(new_range);
-            }
-            if (args.max_vcpus > 0) {
-                child.quotas.max_vcpus =
-                    @min(child.quotas.max_vcpus, @as(usize, args.max_vcpus));
-                child.quotas.used_vcpus =
-                    @min(child.quotas.used_vcpus, child.quotas.max_vcpus);
-            }
-            if (args.max_child_depth > 0) {
-                child.quotas.max_child_depth = @min(
-                    child.quotas.max_child_depth,
-                    @as(usize, args.max_child_depth),
-                );
-            }
-            if (args.max_descendants > 0) {
-                child.quotas.max_descendants = @min(
-                    child.quotas.max_descendants,
-                    @as(usize, args.max_descendants),
-                );
-            }
+            applyClampedQuota(child, self, args);
         } else {
             return error.InvalidParam;
         }
@@ -289,7 +281,7 @@ pub fn readManifest(self: *guest_mod.Guest, out_buf: []u8) ?usize {
     const s = self.manifest_lock.lock();
     defer self.manifest_lock.unlock(s);
     if (self.manifest) |m| {
-        const copy_len = @min(out_buf.len, m.len);
+        const copy_len: usize = @min(out_buf.len, m.len);
         @memcpy(out_buf[0..copy_len], m[0..copy_len]);
         return m.len;
     }
@@ -300,10 +292,6 @@ pub fn getManifestLength(self: *guest_mod.Guest) usize {
     const s = self.manifest_lock.lock();
     defer self.manifest_lock.unlock(s);
     return if (self.manifest) |m| m.len else 0;
-}
-
-pub fn getManifest(self: *const guest_mod.Guest) ?[]const u8 {
-    return self.manifest;
 }
 
 pub fn stop(self: *guest_mod.Guest) void {
@@ -332,7 +320,10 @@ pub fn stop(self: *guest_mod.Guest) void {
         it = self.vcores.start;
         while (it) |node| : (it = node.next) {
             const vc = node.contents;
-            while ((@as(*volatile ?usize, &vc.running_on_cpu)).* != null) {
+            var spins: usize = 0;
+            while ((@as(*volatile ?usize, &vc.running_on_cpu)).* != null and
+                spins < MAX_STOP_SPINS) : (spins += 1)
+            {
                 if (vc.running_on_cpu == my_cpu) break;
                 std.atomic.spinLoopHint();
             }
@@ -361,6 +352,7 @@ pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
 }
 
 test "guest quota management, manifest, and VMID double-free guard" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -420,7 +412,9 @@ test "guest quota management, manifest, and VMID double-free guard" {
 
     const sample_manifest = "[vm]\nname = \"test-child\"\ncid = 2\n";
     try child.setManifest(sample_manifest);
-    try testing.expectEqualStrings(sample_manifest, child.getManifest().?);
+    var read_buf: [64]u8 = undefined;
+    const mlen = child.readManifest(&read_buf).?;
+    try testing.expectEqualStrings(sample_manifest, read_buf[0..mlen]);
 
     try testing.expect(!child.checkQuota(std.math.maxInt(usize), 1, 1));
     try testing.expect(!child.checkQuota(1, std.math.maxInt(usize), 1));

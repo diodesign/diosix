@@ -186,3 +186,7 @@ pub fn drawBrandingAnimation(
         );
     }
 }
+
+test {
+    std.testing.refAllDecls(@This());
+}

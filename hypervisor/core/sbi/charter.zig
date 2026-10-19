@@ -22,8 +22,7 @@ pub const MAX_STEWARD_CID_EXCL: usize =
 
 pub const CharterState = struct {
     sealed: bool = false,
-    charter_hash: [interface.CHARTER_HASH_LEN]u8 =
-        std.mem.zeroes([interface.CHARTER_HASH_LEN]u8),
+    charter_hash: [interface.CHARTER_HASH_LEN]u8 = @splat(0),
     quorum_required: u16 = 2,
     quorum_total: u16 = 3,
     standby_replicas: u16 = 1,
@@ -211,7 +210,10 @@ pub fn handleWhisperSend(
         reply(vc, ctx, sbi_core.SBI_ERR_FAILED, 0);
         return;
     };
-    defer g.allocator.free(msg_buf);
+    defer {
+        std.crypto.secureZero(u8, msg_buf);
+        g.allocator.free(msg_buf);
+    }
 
     g.space.copyFromGuest(msg_buf, a0) catch {
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
@@ -263,7 +265,7 @@ pub fn handleWhisperRecv(vc: *VCore, ctx: *Ctx, a0: usize, a1: usize) void {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
-    const max_len = @min(a1, guest.MAX_PACKET_LEN);
+    const max_len: usize = @min(a1, guest.MAX_PACKET_LEN);
     if (g.whisper_rx.popToGuest(&g.space, a0, max_len)) |copy_len| {
         reply(vc, ctx, sbi_core.SBI_SUCCESS, copy_len);
     } else |_| {
@@ -360,18 +362,17 @@ fn spawnTestGuest(
 }
 
 fn spawnTestSteward(alloc: std.mem.Allocator, root: *Guest) !*Guest {
-    const rwx = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write |
-        sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed |
-        sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
+    const rw = sv39x4.PTEFlags.leaf_rw_user;
     const st = try spawnTestGuest(alloc, false, root);
     st.is_steward = true;
     const page = try physmem.allocPage();
-    try st.space.map(0x80000000, page, physmem.PageSize, rwx);
+    try st.space.map(0x80000000, page, physmem.PageSize, rw);
     physmem.decrementPageRef(page);
     return st;
 }
 
 test "SBI Diosix Phase 5: Charter sealing, Steward quorum guard, and failover" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     resetCharterForTest();
     defer resetCharterForTest();
@@ -381,13 +382,11 @@ test "SBI Diosix Phase 5: Charter sealing, Steward quorum guard, and failover" {
     var phys_test = try physmem.initForTest(testing.allocator, 256);
     defer phys_test.deinit();
 
-    const rwx = sv39x4.PTEFlags.read | sv39x4.PTEFlags.write |
-        sv39x4.PTEFlags.valid | sv39x4.PTEFlags.accessed |
-        sv39x4.PTEFlags.dirty | sv39x4.PTEFlags.user;
+    const rw = sv39x4.PTEFlags.leaf_rw_user;
     const root_vm = try spawnTestGuest(testing.allocator, true, null);
     defer root_vm.deinit();
     const root_page = try physmem.allocPage();
-    try root_vm.space.map(0x80000000, root_page, physmem.PageSize, rwx);
+    try root_vm.space.map(0x80000000, root_page, physmem.PageSize, rw);
     physmem.decrementPageRef(root_page);
 
     const standby_root = try spawnTestGuest(testing.allocator, false, root_vm);
@@ -407,7 +406,7 @@ test "SBI Diosix Phase 5: Charter sealing, Steward quorum guard, and failover" {
     var s1_vc = vcore.VirtualCore.init(0, steward1, 0x80000000, 0, .normal);
     var s2_vc = vcore.VirtualCore.init(0, steward2, 0x80000000, 0, .normal);
     var s3_vc = vcore.VirtualCore.init(0, steward3, 0x80000000, 0, .normal);
-    var ctx: riscv.ThreadContext = std.mem.zeroes(riscv.ThreadContext);
+    var ctx: riscv.ThreadContext = @splat(0);
 
     var cargs = interface.CharterArgs{
         .quorum_required = 2,

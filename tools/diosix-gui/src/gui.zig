@@ -46,9 +46,14 @@ pub const ICON_OSK_DISPLAY_ID: u32 = 1450;
 pub const ICON_WELCOME_TOUR_BTN_ID: u32 = 1460;
 pub const ICON_WELCOME_INSTALL_BTN_ID: u32 = 1461;
 pub const ICON_WELCOME_DISMISS_BTN_ID: u32 = 1462;
+pub const ICON_WELCOME_SUBTITLE1_ID: u32 = 1463;
+pub const ICON_WELCOME_SUBTITLE2_ID: u32 = 1464;
 pub const ICON_TOUR_PREV_BTN_ID: u32 = 1470;
 pub const ICON_TOUR_NEXT_BTN_ID: u32 = 1471;
 pub const ICON_TOUR_CLOSE_BTN_ID: u32 = 1472;
+pub const ICON_TOUR_SUMMARY1_ID: u32 = 1473;
+pub const ICON_TOUR_SUMMARY2_ID: u32 = 1474;
+pub const ICON_TOUR_CLI_HINT_ID: u32 = 1475;
 
 // Main Menu IDs.
 pub const ICON_MENU_SOFTWARE_ID: u32 = 1001;
@@ -81,6 +86,7 @@ pub const ICON_DRAWER_SPEC2_ID: u32 = 1253;
 pub const ICON_DRAWER_SPEC3_ID: u32 = 1254;
 pub const ICON_DRAWER_NOTICE1_ID: u32 = 1255;
 pub const ICON_DRAWER_NOTICE2_ID: u32 = 1256;
+pub const ICON_DRAWER_OPS_HDR_ID: u32 = 1259;
 pub const ICON_DRAWER_BTN_START_ID: u32 = 1260;
 pub const ICON_DRAWER_BTN_STOP_ID: u32 = 1261;
 pub const ICON_DRAWER_BTN_PAUSE_ID: u32 = 1262;
@@ -465,3 +471,7 @@ pub const DiosixGui = struct {
     pub const setBackdropBotColor = gui_render.setBackdropBotColor;
     pub const handleOskAction = panes.handleOskAction;
 };
+
+test {
+    std.testing.refAllDecls(@This());
+}

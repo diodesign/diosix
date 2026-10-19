@@ -7,12 +7,23 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const decoder_rv32 = @import("../../decoders/rv32.zig");
 const rv64 = @import("../../emitters/rv64.zig");
 const cache_mod = @import("../cache.zig");
 const block_mod = @import("../block.zig");
 const emit_tlb = @import("tlb.zig");
 
 const TranslationBlock = block_mod.TranslationBlock;
+const T0 = block_mod.HOST_REG_T0;
+const T1 = block_mod.HOST_REG_T1;
+const S11 = block_mod.HOST_REG_S11;
+const OFF_T0 = block_mod.VCPU_OFF_T0;
+const OFF_T1 = block_mod.VCPU_OFF_T1;
+const OFF_S11 = block_mod.VCPU_OFF_S11;
+
+pub const MemOp = emit_tlb.MemOp;
+pub const INSN_PLACEHOLDER = emit_tlb.INSN_PLACEHOLDER;
+pub const WORD_BITS = emit_tlb.WORD_BITS;
 
 pub const emitSoftTlbLoad = emit_tlb.emitSoftTlbLoad;
 pub const emitSoftTlbStore = emit_tlb.emitSoftTlbStore;
@@ -20,6 +31,100 @@ pub const emitSoftTlbAtomic = emit_tlb.emitSoftTlbAtomic;
 
 inline fn emit(tb: *TranslationBlock, off: *usize, insn: u32) void {
     rv64.emit(tb.host_code, off, insn);
+}
+
+pub fn emitLoad(
+    eng: anytype,
+    tb: *TranslationBlock,
+    off: *usize,
+    pc: u32,
+    op: u3,
+    rd: u5,
+    rs1: u5,
+    offset: i32,
+) void {
+    const imm = @as(i12, @truncate(offset));
+    const tlb_addr = @intFromPtr(&eng.tlb.entries[0]);
+    if (eng.tlb.getDirectMappingRegion(pc)) |region| {
+        tb.is_fast_path = true;
+        if (rs1 == block_mod.GUEST_REG_SP or rs1 == block_mod.GUEST_REG_FP) {
+            emitFastLoad(tb, off, op, rd, rs1, imm, region.delta);
+        } else {
+            emitFastLoadWithFallback(
+                tlb_addr,
+                tb,
+                off,
+                pc,
+                op,
+                rd,
+                rs1,
+                imm,
+                region.vaddr_start,
+                region.vaddr_end,
+                region.hpa_start,
+            );
+        }
+    } else {
+        emitSoftTlbLoad(tlb_addr, tb, off, pc, op, rd, rs1, imm);
+    }
+}
+
+pub fn emitStore(
+    eng: anytype,
+    tb: *TranslationBlock,
+    off: *usize,
+    pc: u32,
+    op: u3,
+    rs1: u5,
+    rs2: u5,
+    offset: i32,
+) void {
+    const imm = @as(i12, @truncate(offset));
+    const tlb_addr = @intFromPtr(&eng.tlb.entries[0]);
+    if (eng.tlb.getDirectMappingRegion(pc)) |region| {
+        tb.is_fast_path = true;
+        if (rs1 == block_mod.GUEST_REG_SP or rs1 == block_mod.GUEST_REG_FP) {
+            emitFastStore(tb, off, op, rs1, rs2, imm, region.delta);
+        } else {
+            emitFastStoreWithFallback(
+                tlb_addr,
+                tb,
+                off,
+                pc,
+                op,
+                rs1,
+                rs2,
+                imm,
+                region.vaddr_start,
+                region.vaddr_end,
+                region.hpa_start,
+            );
+        }
+    } else {
+        emitSoftTlbStore(tlb_addr, tb, off, pc, op, rs1, rs2, imm);
+    }
+}
+
+pub fn emitAmo(
+    tlb_addr: usize,
+    tb: *TranslationBlock,
+    off: *usize,
+    pc: u32,
+    funct5: u5,
+    d: decoder_rv32.AmoType,
+) void {
+    emitSoftTlbAtomic(
+        tlb_addr,
+        tb,
+        off,
+        pc,
+        funct5,
+        d.aq,
+        d.rl,
+        d.rd,
+        d.rs1,
+        d.rs2,
+    );
 }
 
 pub fn emitFastLoad(
@@ -34,44 +139,40 @@ pub fn emitFastLoad(
     if (rd == 0) return;
 
     const total_offset = @as(i64, @intCast(imm)) + delta;
-    const needs_t1 = (rs1 == 5 or rs1 == 27 or rd == 5 or rd == 27);
+    const needs_t1 = (rs1 == T0 or rs1 == S11 or rd == T0 or rd == S11);
 
-    emit(tb, off, rv64.sd(27, 5, 40));
-    if (needs_t1) emit(tb, off, rv64.sd(27, 6, 48));
+    emit(tb, off, rv64.sd(S11, T0, OFF_T0));
+    if (needs_t1) emit(tb, off, rv64.sd(S11, T1, OFF_T1));
 
-    const off_i32 = @as(i32, @truncate(total_offset));
-    const upper = @as(i20, @truncate((off_i32 +% 0x800) >> 12));
-    const off_u32 = @as(u32, @bitCast(off_i32));
-    const lower = @as(i12, @bitCast(@as(u12, @truncate(off_u32 & 0xfff))));
+    const sp = rv64.splitImm32(@bitCast(@as(i32, @truncate(total_offset))));
+    emit(tb, off, rv64.lui(T0, sp.upper));
+    emit(tb, off, rv64.addiw(T0, T0, sp.lower));
 
-    emit(tb, off, rv64.lui(5, upper));
-    emit(tb, off, rv64.addiw(5, 5, lower));
-
-    if (rs1 == 5) {
-        emit(tb, off, rv64.ld(6, 27, 40));
-        emit(tb, off, rv64.add(5, 5, 6));
-    } else if (rs1 == 27) {
-        emit(tb, off, rv64.ld(6, 27, 216));
-        emit(tb, off, rv64.add(5, 5, 6));
+    if (rs1 == T0) {
+        emit(tb, off, rv64.ld(T1, S11, OFF_T0));
+        emit(tb, off, rv64.add(T0, T0, T1));
+    } else if (rs1 == S11) {
+        emit(tb, off, rv64.ld(T1, S11, OFF_S11));
+        emit(tb, off, rv64.add(T0, T0, T1));
     } else if (rs1 != 0) {
-        emit(tb, off, rv64.add(5, 5, rs1));
+        emit(tb, off, rv64.add(T0, T0, rs1));
     }
 
-    emit(tb, off, rv64.slli(5, 5, 32));
-    emit(tb, off, rv64.srli(5, 5, 32));
+    emit(tb, off, rv64.slli(T0, T0, WORD_BITS));
+    emit(tb, off, rv64.srli(T0, T0, WORD_BITS));
 
-    emit_tlb.emitLoadFromT0(tb, off, op, rd, 6);
-    if (op != 6 and op != 7) {
-        if (rd == 5) {
-            emit(tb, off, rv64.addi(5, 6, 0));
-            emit(tb, off, rv64.sd(27, 5, 40));
-        } else if (rd == 27) {
-            emit(tb, off, rv64.sd(27, 6, 216));
+    emit_tlb.emitLoadFromT0(tb, off, op, rd, T1);
+    if (op != MemOp.FLW and op != MemOp.FLD) {
+        if (rd == T0) {
+            emit(tb, off, rv64.addi(T0, T1, 0));
+            emit(tb, off, rv64.sd(S11, T0, OFF_T0));
+        } else if (rd == S11) {
+            emit(tb, off, rv64.sd(S11, T1, OFF_S11));
         }
     }
 
-    if (needs_t1 and rd != 6) emit(tb, off, rv64.ld(6, 27, 48));
-    if (rd != 5) emit(tb, off, rv64.ld(5, 27, 40));
+    if (needs_t1 and rd != T1) emit(tb, off, rv64.ld(T1, S11, OFF_T1));
+    if (rd != T0) emit(tb, off, rv64.ld(T0, S11, OFF_T0));
 }
 
 pub fn emitFastStore(
@@ -84,37 +185,33 @@ pub fn emitFastStore(
     delta: i64,
 ) void {
     const total_offset = @as(i64, @intCast(imm)) + delta;
-    const needs_t1 = (rs1 == 5 or rs1 == 27 or
-        (op != 6 and op != 7 and (rs2 == 5 or rs2 == 27)));
+    const needs_t1 = (rs1 == T0 or rs1 == S11 or
+        (op != MemOp.FSW and op != MemOp.FSD and (rs2 == T0 or rs2 == S11)));
 
-    emit(tb, off, rv64.sd(27, 5, 40));
-    if (needs_t1) emit(tb, off, rv64.sd(27, 6, 48));
+    emit(tb, off, rv64.sd(S11, T0, OFF_T0));
+    if (needs_t1) emit(tb, off, rv64.sd(S11, T1, OFF_T1));
 
-    const off_i32 = @as(i32, @truncate(total_offset));
-    const upper = @as(i20, @truncate((off_i32 +% 0x800) >> 12));
-    const off_u32 = @as(u32, @bitCast(off_i32));
-    const lower = @as(i12, @bitCast(@as(u12, @truncate(off_u32 & 0xfff))));
+    const sp = rv64.splitImm32(@bitCast(@as(i32, @truncate(total_offset))));
+    emit(tb, off, rv64.lui(T0, sp.upper));
+    emit(tb, off, rv64.addiw(T0, T0, sp.lower));
 
-    emit(tb, off, rv64.lui(5, upper));
-    emit(tb, off, rv64.addiw(5, 5, lower));
-
-    if (rs1 == 5) {
-        emit(tb, off, rv64.ld(6, 27, 40));
-        emit(tb, off, rv64.add(5, 5, 6));
-    } else if (rs1 == 27) {
-        emit(tb, off, rv64.ld(6, 27, 216));
-        emit(tb, off, rv64.add(5, 5, 6));
+    if (rs1 == T0) {
+        emit(tb, off, rv64.ld(T1, S11, OFF_T0));
+        emit(tb, off, rv64.add(T0, T0, T1));
+    } else if (rs1 == S11) {
+        emit(tb, off, rv64.ld(T1, S11, OFF_S11));
+        emit(tb, off, rv64.add(T0, T0, T1));
     } else if (rs1 != 0) {
-        emit(tb, off, rv64.add(5, 5, rs1));
+        emit(tb, off, rv64.add(T0, T0, rs1));
     }
 
-    emit(tb, off, rv64.slli(5, 5, 32));
-    emit(tb, off, rv64.srli(5, 5, 32));
+    emit(tb, off, rv64.slli(T0, T0, WORD_BITS));
+    emit(tb, off, rv64.srli(T0, T0, WORD_BITS));
 
     emit_tlb.emitStoreToT0(tb, off, op, rs2, false);
 
-    if (needs_t1) emit(tb, off, rv64.ld(6, 27, 48));
-    emit(tb, off, rv64.ld(5, 27, 40));
+    if (needs_t1) emit(tb, off, rv64.ld(T1, S11, OFF_T1));
+    emit(tb, off, rv64.ld(T0, S11, OFF_T0));
 }
 
 fn emitFastRangeCheckAndHpa(
@@ -126,41 +223,31 @@ fn emitFastRangeCheckAndHpa(
     vaddr_end: u32,
     hpa_start: usize,
 ) usize {
-    emit_tlb.emitEffectiveGva(tb, off, 5, rs1, imm);
+    emit_tlb.emitEffectiveGva(tb, off, T0, rs1, imm);
 
-    const vstart_i32 = @as(i32, @bitCast(vaddr_start));
-    const vstart_upper = @as(i20, @truncate((vstart_i32 +% 0x800) >> 12));
-    const vstart_u12: u12 = @truncate(vaddr_start & 0xfff);
-    const vstart_lower: i12 = @bitCast(vstart_u12);
-    emit(tb, off, rv64.lui(6, vstart_upper));
-    emit(tb, off, rv64.addiw(6, 6, vstart_lower));
-    emit(tb, off, rv64.subw(6, 5, 6));
+    const vstart = rv64.splitImm32(vaddr_start);
+    emit(tb, off, rv64.lui(T1, vstart.upper));
+    emit(tb, off, rv64.addiw(T1, T1, vstart.lower));
+    emit(tb, off, rv64.subw(T1, T0, T1));
 
-    const size = vaddr_end -% vaddr_start;
-    const size_i32 = @as(i32, @bitCast(size));
-    const size_upper = @as(i20, @truncate((size_i32 +% 0x800) >> 12));
-    const size_u12: u12 = @truncate(size & 0xfff);
-    const size_lower: i12 = @bitCast(size_u12);
-    emit(tb, off, rv64.lui(5, size_upper));
-    emit(tb, off, rv64.addiw(5, 5, size_lower));
+    const size_sp = rv64.splitImm32(vaddr_end -% vaddr_start);
+    emit(tb, off, rv64.lui(T0, size_sp.upper));
+    emit(tb, off, rv64.addiw(T0, T0, size_sp.lower));
 
-    emit(tb, off, rv64.slli(6, 6, 32));
-    emit(tb, off, rv64.srli(6, 6, 32));
-    emit(tb, off, rv64.slli(5, 5, 32));
-    emit(tb, off, rv64.srli(5, 5, 32));
+    emit(tb, off, rv64.slli(T1, T1, WORD_BITS));
+    emit(tb, off, rv64.srli(T1, T1, WORD_BITS));
+    emit(tb, off, rv64.slli(T0, T0, WORD_BITS));
+    emit(tb, off, rv64.srli(T0, T0, WORD_BITS));
 
     const bgeu_patch_pos = off.*;
-    emit(tb, off, 0); // Placeholder.
+    emit(tb, off, INSN_PLACEHOLDER);
 
-    const hpa_i32 = @as(i32, @truncate(@as(isize, @bitCast(hpa_start))));
-    const hpa_upper = @as(i20, @truncate((hpa_i32 +% 0x800) >> 12));
-    const hpa_u32 = @as(u32, @bitCast(hpa_i32));
-    const hpa_lower = @as(i12, @bitCast(@as(u12, @truncate(hpa_u32 & 0xfff))));
-    emit(tb, off, rv64.lui(5, hpa_upper));
-    emit(tb, off, rv64.addiw(5, 5, hpa_lower));
-    emit(tb, off, rv64.slli(5, 5, 32));
-    emit(tb, off, rv64.srli(5, 5, 32));
-    emit(tb, off, rv64.add(5, 5, 6));
+    const hpa_sp = rv64.splitImm32(@truncate(hpa_start));
+    emit(tb, off, rv64.lui(T0, hpa_sp.upper));
+    emit(tb, off, rv64.addiw(T0, T0, hpa_sp.lower));
+    emit(tb, off, rv64.slli(T0, T0, WORD_BITS));
+    emit(tb, off, rv64.srli(T0, T0, WORD_BITS));
+    emit(tb, off, rv64.add(T0, T0, T1));
     return bgeu_patch_pos;
 }
 
@@ -179,8 +266,8 @@ pub fn emitFastLoadWithFallback(
 ) void {
     if (rd == 0) return;
 
-    emit(tb, off, rv64.sd(27, 5, 40));
-    emit(tb, off, rv64.sd(27, 6, 48));
+    emit(tb, off, rv64.sd(S11, T0, OFF_T0));
+    emit(tb, off, rv64.sd(S11, T1, OFF_T1));
 
     const bgeu_patch_pos = emitFastRangeCheckAndHpa(
         tb,
@@ -192,28 +279,28 @@ pub fn emitFastLoadWithFallback(
         hpa_start,
     );
 
-    emit_tlb.emitLoadFromT0(tb, off, op, rd, 6);
-    if (op != 6 and op != 7) {
-        if (rd == 5) {
-            emit(tb, off, rv64.addi(5, 6, 0));
-            emit(tb, off, rv64.sd(27, 5, 40));
-        } else if (rd == 27) {
-            emit(tb, off, rv64.sd(27, 6, 216));
+    emit_tlb.emitLoadFromT0(tb, off, op, rd, T1);
+    if (op != MemOp.FLW and op != MemOp.FLD) {
+        if (rd == T0) {
+            emit(tb, off, rv64.addi(T0, T1, 0));
+            emit(tb, off, rv64.sd(S11, T0, OFF_T0));
+        } else if (rd == S11) {
+            emit(tb, off, rv64.sd(S11, T1, OFF_S11));
         }
     }
 
-    if (rd != 6) emit(tb, off, rv64.ld(6, 27, 48));
-    if (rd != 5) emit(tb, off, rv64.ld(5, 27, 40));
+    if (rd != T1) emit(tb, off, rv64.ld(T1, S11, OFF_T1));
+    if (rd != T0) emit(tb, off, rv64.ld(T0, S11, OFF_T0));
 
     const jal_done_pos = off.*;
-    emit(tb, off, 0); // Placeholder.
+    emit(tb, off, INSN_PLACEHOLDER);
 
     const slow_path_target = off.*;
     const bgeu_rel = @as(i32, @intCast(slow_path_target - bgeu_patch_pos));
     std.mem.writeInt(
         u32,
         tb.host_code[bgeu_patch_pos..][0..4],
-        rv64.bgeu(6, 5, @as(i13, @truncate(bgeu_rel))),
+        rv64.bgeu(T1, T0, @as(i13, @truncate(bgeu_rel))),
         .little,
     );
 
@@ -251,8 +338,8 @@ pub fn emitFastStoreWithFallback(
     vaddr_end: u32,
     hpa_start: usize,
 ) void {
-    emit(tb, off, rv64.sd(27, 5, 40));
-    emit(tb, off, rv64.sd(27, 6, 48));
+    emit(tb, off, rv64.sd(S11, T0, OFF_T0));
+    emit(tb, off, rv64.sd(S11, T1, OFF_T1));
 
     const bgeu_patch_pos = emitFastRangeCheckAndHpa(
         tb,
@@ -265,18 +352,18 @@ pub fn emitFastStoreWithFallback(
     );
 
     emit_tlb.emitStoreToT0(tb, off, op, rs2, true);
-    emit(tb, off, rv64.ld(6, 27, 48));
-    emit(tb, off, rv64.ld(5, 27, 40));
+    emit(tb, off, rv64.ld(T1, S11, OFF_T1));
+    emit(tb, off, rv64.ld(T0, S11, OFF_T0));
 
     const jal_done_pos = off.*;
-    emit(tb, off, 0); // Placeholder.
+    emit(tb, off, INSN_PLACEHOLDER);
 
     const slow_path_target = off.*;
     const bgeu_rel = @as(i32, @intCast(slow_path_target - bgeu_patch_pos));
     std.mem.writeInt(
         u32,
         tb.host_code[bgeu_patch_pos..][0..4],
-        rv64.bgeu(6, 5, @as(i13, @truncate(bgeu_rel))),
+        rv64.bgeu(T1, T0, @as(i13, @truncate(bgeu_rel))),
         .little,
     );
 
@@ -309,9 +396,10 @@ test "emitFastLoad and emitFastStore emit valid sequences" {
     const tb = try cache_inst.allocateBlock(0x8000_0000, 0, false, 256);
     var off: usize = 0;
 
-    emitFastLoad(tb, &off, 2, 10, 2, 8, 0);
+    emitFastLoad(tb, &off, MemOp.LW, 10, 2, 8, 0);
     const after_load = off;
     try std.testing.expect(after_load > 0);
-    emitFastStore(tb, &off, 2, 2, 10, 8, 0);
+    emitFastStore(tb, &off, MemOp.SW, 2, 10, 8, 0);
     try std.testing.expect(off > after_load);
+    std.testing.refAllDecls(@This());
 }

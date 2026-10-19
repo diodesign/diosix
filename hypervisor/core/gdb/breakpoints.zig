@@ -60,6 +60,10 @@ pub const BreakpointTable = struct {
     dynamic_pool: [MAX_DYNAMIC_BREAKPOINTS]SwBreakpoint = @splat(.{}),
     dynamic_count: usize = 0,
 
+    pub fn bucketIndex(addr: u64) usize {
+        return @intCast((addr >> 2) % DYNAMIC_HASH_BUCKETS);
+    }
+
     pub fn reset(self: *BreakpointTable) void {
         for (&self.static_slots) |*bp| bp.* = .{};
         self.dynamic_buckets = @splat(null);
@@ -70,7 +74,7 @@ pub const BreakpointTable = struct {
         for (&self.static_slots) |*bp| {
             if (bp.active and bp.addr == addr) return bp;
         }
-        const bucket = @as(usize, @intCast((addr >> 2) % DYNAMIC_HASH_BUCKETS));
+        const bucket = bucketIndex(addr);
         var curr = self.dynamic_buckets[bucket];
         while (curr) |bp| : (curr = bp.next) {
             if (bp.active and bp.addr == addr) return bp;
@@ -97,7 +101,7 @@ pub const BreakpointTable = struct {
             }
         }
 
-        const bucket = @as(usize, @intCast((addr >> 2) % DYNAMIC_HASH_BUCKETS));
+        const bucket = bucketIndex(addr);
         var curr = self.dynamic_buckets[bucket];
         while (curr) |bp| : (curr = bp.next) {
             if (!bp.active) {
@@ -188,11 +192,12 @@ pub fn removeAllBreakpoints(active_vc: ?*vcore.VirtualCore) void {
 }
 
 test "GDB RSP BreakpointTable static and dynamic hash buckets" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     var table = BreakpointTable{};
 
     var i: u64 = 0;
-    while (i < 32) : (i += 1) {
+    while (i < STATIC_BREAKPOINTS) : (i += 1) {
         const addr = 0x1000 + i * 4;
         const bp = table.allocate(addr, @as(u8, @intCast(i & 0xff)));
         try testing.expect(bp != null);
@@ -201,7 +206,7 @@ test "GDB RSP BreakpointTable static and dynamic hash buckets" {
     }
 
     i = 0;
-    while (i < 32) : (i += 1) {
+    while (i < STATIC_BREAKPOINTS) : (i += 1) {
         const addr = 0x1000 + i * 4;
         const bp = table.find(addr);
         try testing.expect(bp != null);

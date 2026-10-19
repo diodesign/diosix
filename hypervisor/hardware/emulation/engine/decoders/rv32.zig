@@ -8,144 +8,37 @@
 
 const std = @import("std");
 const rv32c = @import("rv32c.zig");
+const encoding = @import("rv32/encoding.zig");
 
 pub const decompressRvc = rv32c.decompressRvc;
-const signExtend = rv32c.signExtend;
+pub const signExtend = encoding.signExtend;
+pub const LoadType = encoding.LoadType;
+pub const BType = encoding.BType;
+pub const StoreType = encoding.StoreType;
+pub const CsrRType = encoding.CsrRType;
+pub const CsrIType = encoding.CsrIType;
+pub const LrType = encoding.LrType;
+pub const AmoType = encoding.AmoType;
+pub const Instruction = encoding.Instruction;
+pub const DecodedInsn = encoding.DecodedInsn;
 
-pub const LoadType = struct { rd: u5, rs1: u5, offset: i32 };
-pub const BType = struct { rs1: u5, rs2: u5, offset: i32 };
-pub const StoreType = BType;
-pub const CsrRType = struct { rd: u5, rs1: u5, csr: u12 };
-pub const CsrIType = struct { rd: u5, uimm: u5, csr: u12 };
-pub const LrType = struct { rd: u5, rs1: u5, aq: u1, rl: u1 };
-pub const AmoType = struct { rd: u5, rs1: u5, rs2: u5, aq: u1, rl: u1 };
-
-/// Parsed RV32 instruction representation.
-pub const Instruction = union(enum) {
-    // R-Type instructions.
-    add: struct { rd: u5, rs1: u5, rs2: u5 },
-    sub: struct { rd: u5, rs1: u5, rs2: u5 },
-    sll: struct { rd: u5, rs1: u5, rs2: u5 },
-    slt: struct { rd: u5, rs1: u5, rs2: u5 },
-    sltu: struct { rd: u5, rs1: u5, rs2: u5 },
-    xor_: struct { rd: u5, rs1: u5, rs2: u5 },
-    srl: struct { rd: u5, rs1: u5, rs2: u5 },
-    sra: struct { rd: u5, rs1: u5, rs2: u5 },
-    or_: struct { rd: u5, rs1: u5, rs2: u5 },
-    and_: struct { rd: u5, rs1: u5, rs2: u5 },
-    mul: struct { rd: u5, rs1: u5, rs2: u5 },
-    mulh: struct { rd: u5, rs1: u5, rs2: u5 },
-    mulhsu: struct { rd: u5, rs1: u5, rs2: u5 },
-    mulhu: struct { rd: u5, rs1: u5, rs2: u5 },
-    div: struct { rd: u5, rs1: u5, rs2: u5 },
-    divu: struct { rd: u5, rs1: u5, rs2: u5 },
-    rem: struct { rd: u5, rs1: u5, rs2: u5 },
-    remu: struct { rd: u5, rs1: u5, rs2: u5 },
-
-    // I-Type instructions.
-    addi: struct { rd: u5, rs1: u5, imm: i32 },
-    slti: struct { rd: u5, rs1: u5, imm: i32 },
-    sltiu: struct { rd: u5, rs1: u5, imm: i32 },
-    xori: struct { rd: u5, rs1: u5, imm: i32 },
-    ori: struct { rd: u5, rs1: u5, imm: i32 },
-    andi: struct { rd: u5, rs1: u5, imm: i32 },
-    slli: struct { rd: u5, rs1: u5, shamt: u5 },
-    srli: struct { rd: u5, rs1: u5, shamt: u5 },
-    srai: struct { rd: u5, rs1: u5, shamt: u5 },
-
-    // Loads.
-    lb: LoadType,
-    lh: LoadType,
-    lw: LoadType,
-    lbu: LoadType,
-    lhu: LoadType,
-
-    // Stores.
-    sb: StoreType,
-    sh: StoreType,
-    sw: StoreType,
-
-    // Branches.
-    beq: BType,
-    bne: BType,
-    blt: BType,
-    bge: BType,
-    bltu: BType,
-    bgeu: BType,
-
-    // Jump & Link.
-    jal: struct { rd: u5, offset: i32 },
-    jalr: LoadType,
-
-    // Upper Immediates.
-    lui: struct { rd: u5, imm: i32 },
-    auipc: struct { rd: u5, imm: i32 },
-
-    // System & Traps.
-    ecall,
-    ebreak,
-    fence,
-    fence_i,
-    pause,
-    mret,
-    sret,
-    wfi,
-    sfence_vma: struct { rs1: u5, rs2: u5 },
-
-    // CSR instructions.
-    csrrw: CsrRType,
-    csrrs: CsrRType,
-    csrrc: CsrRType,
-    csrrwi: CsrIType,
-    csrrsi: CsrIType,
-    csrrci: CsrIType,
-
-    // Atomic instructions (A-extension).
-    lr_w: LrType,
-    sc_w: AmoType,
-    amoswap_w: AmoType,
-    amoadd_w: AmoType,
-    amoxor_w: AmoType,
-    amoand_w: AmoType,
-    amoor_w: AmoType,
-    amomin_w: AmoType,
-    amomax_w: AmoType,
-    amominu_w: AmoType,
-    amomaxu_w: AmoType,
-
-    // Floating-Point instructions (F/D extensions).
-    flw: LoadType,
-    fld: LoadType,
-    fsw: StoreType,
-    fsd: StoreType,
-    fp_op: struct { raw: u32 },
-
-    // Vector instructions.
-    vsetvli: struct { rd: u5, rs1: u5, vtype: u12 },
-    vload: struct { vd: u5, rs1: u5, width: u3 },
-    vstore: struct { vs3: u5, rs1: u5, width: u3 },
-    vector_op: struct { rd: u5, rs1: u5, rs2: u5 },
-
-    unknown: u32,
-};
-
-pub const DecodedInsn = struct {
-    insn: Instruction,
-    len: u8, // 2 for 16-bit compressed instruction, 4 for standard 32-bit.
-};
+const AmoFunct5 = encoding.AmoFunct5;
 
 /// Decode standard 32-bit RV32I or decompressed 16-bit RV32C instruction.
 pub fn decode(raw_code: u32) DecodedInsn {
     var code = raw_code;
-    var len: u8 = 4;
+    var len: u8 = encoding.INSN_LEN_STANDARD;
 
     // Check if 16-bit compressed instruction (bits [1:0] != 0b11).
-    if ((code & 0x3) != 0x3) {
+    if ((code & encoding.RVC_QUADRANT_MASK) != encoding.RVC_QUADRANT_32BIT) {
         if (decompressRvc(@as(u16, @truncate(code)))) |decompressed| {
             code = decompressed;
-            len = 2;
+            len = encoding.INSN_LEN_COMPRESSED;
         } else {
-            return .{ .insn = .{ .unknown = code }, .len = 2 };
+            return .{
+                .insn = .{ .unknown = code },
+                .len = encoding.INSN_LEN_COMPRESSED,
+            };
         }
     }
 
@@ -156,102 +49,87 @@ pub fn decode(raw_code: u32) DecodedInsn {
     const rs2 = @as(u5, @truncate((code >> 20) & 0x1f));
     const funct7 = @as(u7, @truncate((code >> 25) & 0x7f));
 
-    const i_imm = signExtend((code >> 20) & 0xfff, 12);
-    const s_imm = signExtend(
-        ((code >> 7) & 0x1f) | (((code >> 25) & 0x7f) << 5),
-        12,
-    );
-    const b_imm = signExtend(
-        (((code >> 8) & 0xf) << 1) |
-            (((code >> 25) & 0x3f) << 5) |
-            (((code >> 7) & 0x1) << 11) |
-            (((code >> 31) & 0x1) << 12),
-        13,
-    );
-    const u_imm = signExtend((code >> 12) & 0xfffff, 20);
-    const j_imm = signExtend(
-        (((code >> 21) & 0x3ff) << 1) |
-            (((code >> 20) & 0x1) << 11) |
-            (((code >> 12) & 0xff) << 12) |
-            (((code >> 31) & 0x1) << 20),
-        21,
-    );
+    const i_imm = encoding.decodeIImm(code);
+    const s_imm = encoding.decodeSImm(code);
+    const b_imm = encoding.decodeBImm(code);
+    const u_imm = encoding.decodeUImm(code);
+    const j_imm = encoding.decodeJImm(code);
     const csr_id: u12 = @truncate(@as(u32, @bitCast(i_imm)));
 
     const parsed: Instruction = switch (opcode) {
-        0x33 => switch (funct3) {
-            0x0 => if (funct7 == 0x20)
+        encoding.OPC_OP => switch (funct3) {
+            0x0 => if (funct7 == encoding.FUNCT7_SUB_SRA)
                 .{ .sub = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x01)
+            else if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .mul = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .add = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
                 .{ .unknown = code },
-            0x1 => if (funct7 == 0x01)
+            0x1 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .mulh = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .sll = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
                 .{ .unknown = code },
-            0x2 => if (funct7 == 0x01)
+            0x2 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .mulhsu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .slt = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
                 .{ .unknown = code },
-            0x3 => if (funct7 == 0x01)
+            0x3 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .mulhu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .sltu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
                 .{ .unknown = code },
-            0x4 => if (funct7 == 0x01)
+            0x4 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .div = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .xor_ = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
                 .{ .unknown = code },
-            0x5 => if (funct7 == 0x20)
+            0x5 => if (funct7 == encoding.FUNCT7_SUB_SRA)
                 .{ .sra = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x01)
+            else if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .divu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .srl = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
                 .{ .unknown = code },
-            0x6 => if (funct7 == 0x01)
+            0x6 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .rem = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .or_ = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
                 .{ .unknown = code },
-            0x7 => if (funct7 == 0x01)
+            0x7 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .remu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .and_ = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
                 .{ .unknown = code },
         },
-        0x13 => switch (funct3) {
+        encoding.OPC_OP_IMM => switch (funct3) {
             0x0 => .{ .addi = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
-            0x1 => if (funct7 == 0x00)
+            0x1 => if (funct7 == encoding.FUNCT7_BASE)
                 .{ .slli = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } }
             else
                 .{ .unknown = code },
             0x2 => .{ .slti = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x3 => .{ .sltiu = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x4 => .{ .xori = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
-            0x5 => if (funct7 == 0x20)
+            0x5 => if (funct7 == encoding.FUNCT7_SUB_SRA)
                 .{ .srai = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } }
-            else if (funct7 == 0x00)
+            else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .srli = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } }
             else
                 .{ .unknown = code },
             0x6 => .{ .ori = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x7 => .{ .andi = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
         },
-        0x03 => switch (funct3) {
+        encoding.OPC_LOAD => switch (funct3) {
             0x0 => .{ .lb = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
             0x1 => .{ .lh = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
             0x2 => .{ .lw = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
@@ -259,25 +137,30 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x5 => .{ .lhu = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
             else => .{ .unknown = code },
         },
-        0x07 => switch (funct3) {
+        encoding.OPC_LOAD_FP => switch (funct3) {
             0x2 => .{ .flw = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
             0x3 => .{ .fld = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
             else => .{ .vload = .{ .vd = rd, .rs1 = rs1, .width = funct3 } },
         },
-        0x23 => switch (funct3) {
+        encoding.OPC_STORE => switch (funct3) {
             0x0 => .{ .sb = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             0x1 => .{ .sh = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             0x2 => .{ .sw = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             else => .{ .unknown = code },
         },
-        0x27 => switch (funct3) {
+        encoding.OPC_STORE_FP => switch (funct3) {
             0x2 => .{ .fsw = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             0x3 => .{ .fsd = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             else => .{ .vstore = .{ .vs3 = rd, .rs1 = rs1, .width = funct3 } },
         },
-        0x53, 0x43, 0x47, 0x4b, 0x4f => .{ .fp_op = .{ .raw = code } },
+        encoding.OPC_OP_FP,
+        encoding.OPC_MADD,
+        encoding.OPC_MSUB,
+        encoding.OPC_NMSUB,
+        encoding.OPC_NMADD,
+        => .{ .fp_op = .{ .raw = code } },
 
-        0x63 => switch (funct3) {
+        encoding.OPC_BRANCH => switch (funct3) {
             0x0 => .{ .beq = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
             0x1 => .{ .bne = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
             0x4 => .{ .blt = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
@@ -286,27 +169,31 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x7 => .{ .bgeu = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
             else => .{ .unknown = code },
         },
-        0x6f => .{ .jal = .{ .rd = rd, .offset = j_imm } },
-        0x67 => .{ .jalr = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
-        0x37 => .{ .lui = .{ .rd = rd, .imm = u_imm } },
-        0x17 => .{ .auipc = .{ .rd = rd, .imm = u_imm } },
-        0x73 => switch (funct3) {
+        encoding.OPC_JAL => .{ .jal = .{ .rd = rd, .offset = j_imm } },
+        encoding.OPC_JALR => .{
+            .jalr = .{ .rd = rd, .rs1 = rs1, .offset = i_imm },
+        },
+        encoding.OPC_LUI => .{ .lui = .{ .rd = rd, .imm = u_imm } },
+        encoding.OPC_AUIPC => .{ .auipc = .{ .rd = rd, .imm = u_imm } },
+        encoding.OPC_SYSTEM => switch (funct3) {
             0x0 => switch (i_imm >> 5) {
-                0x000 => switch (i_imm & 0x1f) {
-                    0x00 => .ecall,
-                    0x01 => .ebreak,
+                encoding.FUNCT7_SYS_PRIV => switch (i_imm & 0x1f) {
+                    encoding.SYS_RS2_ECALL => .ecall,
+                    encoding.SYS_RS2_EBREAK => .ebreak,
                     else => .{ .unknown = code },
                 },
-                0x008 => switch (i_imm & 0x1f) {
-                    0x02 => .sret,
-                    0x05 => .wfi,
+                encoding.FUNCT7_SYS_SRET_WFI => switch (i_imm & 0x1f) {
+                    encoding.SYS_RS2_RET => .sret,
+                    encoding.SYS_RS2_WFI => .wfi,
                     else => .{ .unknown = code },
                 },
-                0x018 => switch (i_imm & 0x1f) {
-                    0x02 => .mret,
+                encoding.FUNCT7_SYS_MRET => switch (i_imm & 0x1f) {
+                    encoding.SYS_RS2_RET => .mret,
                     else => .{ .unknown = code },
                 },
-                0x009 => .{ .sfence_vma = .{ .rs1 = rs1, .rs2 = rs2 } },
+                encoding.FUNCT7_SYS_SFENCE_VMA => .{
+                    .sfence_vma = .{ .rs1 = rs1, .rs2 = rs2 },
+                },
                 else => .{ .unknown = code },
             },
             0x1 => .{ .csrrw = .{ .rd = rd, .rs1 = rs1, .csr = csr_id } },
@@ -317,17 +204,17 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x7 => .{ .csrrci = .{ .rd = rd, .uimm = rs1, .csr = csr_id } },
             else => .{ .unknown = code },
         },
-        0x0f => switch (funct3) {
-            0x0 => if (code == 0x0100000f) .pause else .fence,
+        encoding.OPC_MISC_MEM => switch (funct3) {
+            0x0 => if (code == encoding.INSN_PAUSE) .pause else .fence,
             0x1 => .fence_i,
             else => .{ .unknown = code },
         },
-        0x57 => switch (funct3) {
+        encoding.OPC_OP_V => switch (funct3) {
             0x7 => .{ .vsetvli = .{ .rd = rd, .rs1 = rs1, .vtype = csr_id } },
             else => .{ .vector_op = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } },
         },
-        0x2f => {
-            if (funct3 != 0x2) {
+        encoding.OPC_AMO => {
+            if (funct3 != encoding.FUNCT3_AMO_W) {
                 return .{ .insn = .{ .unknown = code }, .len = len };
             }
             const funct5 = @as(u5, @truncate((code >> 27) & 0x1f));
@@ -342,17 +229,17 @@ pub fn decode(raw_code: u32) DecodedInsn {
             };
             const lr = LrType{ .rd = rd, .rs1 = rs1, .aq = aq, .rl = rl };
             const amo_insn: Instruction = switch (funct5) {
-                0x01 => .{ .amoswap_w = amo },
-                0x00 => .{ .amoadd_w = amo },
-                0x02 => .{ .lr_w = lr },
-                0x03 => .{ .sc_w = amo },
-                0x04 => .{ .amoxor_w = amo },
-                0x0c => .{ .amoand_w = amo },
-                0x08 => .{ .amoor_w = amo },
-                0x10 => .{ .amomin_w = amo },
-                0x14 => .{ .amomax_w = amo },
-                0x18 => .{ .amominu_w = amo },
-                0x1c => .{ .amomaxu_w = amo },
+                AmoFunct5.SWAP => .{ .amoswap_w = amo },
+                AmoFunct5.ADD => .{ .amoadd_w = amo },
+                AmoFunct5.LR => .{ .lr_w = lr },
+                AmoFunct5.SC => .{ .sc_w = amo },
+                AmoFunct5.XOR => .{ .amoxor_w = amo },
+                AmoFunct5.AND => .{ .amoand_w = amo },
+                AmoFunct5.OR => .{ .amoor_w = amo },
+                AmoFunct5.MIN => .{ .amomin_w = amo },
+                AmoFunct5.MAX => .{ .amomax_w = amo },
+                AmoFunct5.MINU => .{ .amominu_w = amo },
+                AmoFunct5.MAXU => .{ .amomaxu_w = amo },
                 else => .{ .unknown = code },
             };
             return .{ .insn = amo_insn, .len = len };
@@ -475,9 +362,10 @@ test "Barriers & CSR Instructions Decoding" {
     const fence_i_dec = decode(0x0000100f);
     try std.testing.expect(fence_i_dec.insn == .fence_i);
 
-    // csrrs a0, time, x0 (0xc0102573: rd=10, rs1=0, csr=0xC01).
+    // csrrs a0, time, x0 (0xc0102573: rd=10, rs1=0, csr=0xc01).
     const csr_dec = decode(0xc0102573);
     try std.testing.expectEqual(@as(u5, 10), csr_dec.insn.csrrs.rd);
     try std.testing.expectEqual(@as(u5, 0), csr_dec.insn.csrrs.rs1);
     try std.testing.expectEqual(@as(u12, 0xc01), csr_dec.insn.csrrs.csr);
+    std.testing.refAllDecls(@This());
 }

@@ -3,6 +3,7 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
 const fb = @import("framebuffer.zig");
 const Box = fb.Box;
 const Color = fb.Color;
@@ -196,4 +197,8 @@ pub fn drawWindowPane(self: *Surface, box: Box) void {
     const op = Color.GLASS_OPACITY;
     const bdr = Color.GLASS_BORDER;
     drawGlassPane(self, box, 12, bg, op, bdr, true, true);
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

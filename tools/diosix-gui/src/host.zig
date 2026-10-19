@@ -5,39 +5,35 @@
 
 const std = @import("std");
 const linux = std.os.linux;
+const sbi = @import("interface").sbi;
 
 // Hypervisor IOCTL definitions matching /dev/diosix driver and interface.
 pub const IOCTL_BASE: u32 = 0x1000;
 pub const IOCTL_TERMINATE: u32 = IOCTL_BASE + 6; // 0x1006.
-pub const IOCTL_GET_HV_INFO: u32 = IOCTL_BASE + 11; // 0x100B.
-pub const BUILD_COMMIT_LEN: usize = 16;
-pub const HOST_CPU_ISA_LEN: usize = 32;
-pub const BUILD_DESC_LEN: usize = 192;
-pub const DEFAULT_TIMER_FREQ_HZ: u32 = 10_000_000;
+pub const IOCTL_GET_HV_INFO: u32 = IOCTL_BASE + 11; // 0x100b.
+pub const BUILD_COMMIT_LEN: usize = sbi.BUILD_COMMIT_LEN;
+pub const HOST_CPU_ISA_LEN: usize = sbi.HOST_CPU_ISA_LEN;
+pub const ISA_STR_LEN: usize = sbi.HOST_CPU_ISA_LEN;
+pub const BUILD_DESC_LEN: usize = sbi.BUILD_DESC_LEN;
+pub const DEFAULT_TIMER_FREQ_HZ: u32 = sbi.HOST_TIMER_FREQ_HZ;
 pub const SECS_PER_DAY: u64 = 86_400;
 pub const SECS_PER_HOUR: u64 = 3_600;
 pub const SECS_PER_MIN: u64 = 60;
+pub const HOURS_PER_DAY: u64 = 24;
 pub const MIN_VALID_EPOCH_SECS: u64 = 1_704_067_200; // 2024-01-01T00:00:00Z.
+pub const EXIT_CODE_POWEROFF: u64 = 0;
+pub const EXIT_CODE_REBOOT: u64 = 1;
 
-pub const HypervisorInfo = extern struct {
-    abi_version_major: u16 = 0,
-    abi_version_minor: u16 = 2,
-    abi_version_patch: u16 = 0,
-    version_major: u16 = 26,
-    version_minor: u16 = 1,
-    version_patch: u16 = 0,
-    _reserved1: u32 = 0,
-    build_commit: [BUILD_COMMIT_LEN]u8 = std.mem.zeroes([BUILD_COMMIT_LEN]u8),
-    features: u64 = 0,
-    host_physical_cores: u32 = 0,
-    host_timer_freq_hz: u32 = DEFAULT_TIMER_FREQ_HZ,
-    host_total_ram_kb: u64 = 0,
-    host_free_ram_kb: u64 = 0,
-    hv_reserved_bytes: u64 = 0,
-    hv_heap_free_bytes: u64 = 0,
-    host_cpu_isa: [HOST_CPU_ISA_LEN]u8 = std.mem.zeroes([HOST_CPU_ISA_LEN]u8),
-    build_desc: [BUILD_DESC_LEN]u8 = std.mem.zeroes([BUILD_DESC_LEN]u8),
-};
+pub const DAYS_FROM_0000_TO_1970: u64 = 719_468;
+pub const DAYS_PER_400Y_ERA: u64 = 146_097;
+pub const DAYS_PER_4Y_CYCLE: u64 = 1_460;
+pub const DAYS_PER_100Y_CENTURY: u64 = 36_524;
+pub const DAYS_PER_YEAR: u64 = 365;
+pub const YEARS_PER_ERA: u64 = 400;
+pub const DAYS_PER_5M_CYCLE: u64 = 153;
+
+pub const HypervisorInfo = sbi.HypervisorInfo;
+const TerminateArgs = sbi.TerminateArgs;
 
 // Power Action definition.
 pub const PowerAction = enum {
@@ -60,19 +56,17 @@ pub fn executePowerAction(action: PowerAction) void {
     }
 
     // 1. Terminate Root VM via /dev/diosix hypervisor interface (CID_SELF = 1).
-    // exit_code 1 = reboot, exit_code 0 = poweroff.
     const fd_rc = linux.open("/dev/diosix", .{ .ACCMODE = .RDWR }, 0);
     const signed_fd: isize = @bitCast(fd_rc);
     if (signed_fd >= 0) {
         const fd: i32 = @intCast(signed_fd);
         defer _ = linux.close(fd);
-        const Args = extern struct {
-            target_id: u64,
-            exit_code: u64,
-        };
-        var args = Args{
-            .target_id = 1,
-            .exit_code = if (action == .restart) 1 else 0,
+        var args = TerminateArgs{
+            .target_id = sbi.CID_SELF,
+            .exit_code = if (action == .restart)
+                EXIT_CODE_REBOOT
+            else
+                EXIT_CODE_POWEROFF,
         };
         _ = linux.ioctl(fd, IOCTL_TERMINATE, @intFromPtr(&args));
     }
@@ -335,17 +329,19 @@ pub fn epochToUtc(epoch_secs: u64) DateTimeUtc {
     secs /= SECS_PER_MIN;
     const min: u8 = @intCast(secs % SECS_PER_MIN);
     secs /= SECS_PER_MIN;
-    const hour: u8 = @intCast(secs % 24);
-    var days: u64 = secs / 24;
+    const hour: u8 = @intCast(secs % HOURS_PER_DAY);
+    var days: u64 = secs / HOURS_PER_DAY;
 
-    days += 719468;
-    const era: u64 = days / 146097;
-    const doe: u64 = days - era * 146097;
-    const yoe: u64 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const y: u64 = yoe + era * 400;
-    const doy: u64 = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const mp: u64 = (5 * doy + 2) / 153;
-    const d: u8 = @intCast(doy - (153 * mp + 2) / 5 + 1);
+    days += DAYS_FROM_0000_TO_1970;
+    const era: u64 = days / DAYS_PER_400Y_ERA;
+    const doe: u64 = days - era * DAYS_PER_400Y_ERA;
+    const yoe: u64 = (doe - doe / DAYS_PER_4Y_CYCLE +
+        doe / DAYS_PER_100Y_CENTURY -
+        doe / (DAYS_PER_400Y_ERA - 1)) / DAYS_PER_YEAR;
+    const y: u64 = yoe + era * YEARS_PER_ERA;
+    const doy: u64 = doe - (DAYS_PER_YEAR * yoe + yoe / 4 - yoe / 100);
+    const mp: u64 = (5 * doy + 2) / DAYS_PER_5M_CYCLE;
+    const d: u8 = @intCast(doy - (DAYS_PER_5M_CYCLE * mp + 2) / 5 + 1);
     const m: u8 = @intCast(if (mp < 10) mp + 3 else mp - 9);
     const final_y: u32 = @intCast(if (m <= 2) y + 1 else y);
 
@@ -443,6 +439,7 @@ pub fn getHvFootprintString(buffer: []u8) []const u8 {
 
 test "HypervisorInfo ABI layout and version formatting in diosix-gui" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
     defer mock_hypervisor_info = null;
 
     try testing.expectEqual(@as(usize, 304), @sizeOf(HypervisorInfo));

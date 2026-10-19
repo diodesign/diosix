@@ -1,6 +1,7 @@
 // Flattened Device Tree (DTB) structured node tree and query API.
 //
-// Copyright (c) 2024-2026 Chris Sherlock.
+// Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -10,8 +11,8 @@ pub const blob = @import("dt/blob.zig");
 
 pub const DeviceTreeError = prop.DeviceTreeError;
 pub const DtbMagic = prop.DtbMagic;
-pub const DtbMinSupportedVersion = prop.DtbMinSupportedVersion;
-pub const DtbMaxSupportedVersion = prop.DtbMaxSupportedVersion;
+pub const LastSupportedVersion = prop.LastSupportedVersion;
+pub const DtbVersion = prop.DtbVersion;
 pub const MaxDtbSize = prop.MaxDtbSize;
 pub const DefaultAddressCells = prop.DefaultAddressCells;
 pub const DefaultSizeCells = prop.DefaultSizeCells;
@@ -23,6 +24,10 @@ pub const DeviceTreeBlob = blob.DeviceTreeBlob;
 const readBeU32 = prop.readBeU32;
 const readBeU64 = prop.readBeU64;
 const countChar = prop.countChar;
+
+pub const INIT_NODE_CAPACITY: usize = 16;
+pub const INIT_RESERVED_CAPACITY: usize = 4;
+pub const INIT_PROP_CAPACITY: usize = 8;
 
 pub const PropertyEntry = struct {
     name: []u8,
@@ -93,20 +98,23 @@ pub const DeviceTree = struct {
         const dt = try allocator.create(DeviceTree);
         errdefer allocator.destroy(dt);
 
-        const nodes = try allocator.alloc(DeviceTreeNode, 16);
+        const nodes = try allocator.alloc(DeviceTreeNode, INIT_NODE_CAPACITY);
         errdefer allocator.free(nodes);
 
-        const reserved = try allocator.alloc(ReservedMemoryEntry, 4);
+        const reserved = try allocator.alloc(
+            ReservedMemoryEntry,
+            INIT_RESERVED_CAPACITY,
+        );
         errdefer allocator.free(reserved);
 
         dt.* = .{
             .nodes = nodes,
             .node_count = 0,
-            .node_capacity = 16,
+            .node_capacity = INIT_NODE_CAPACITY,
             .boot_cpu_id = 0,
             .reserved_memory = reserved,
             .reserved_count = 0,
-            .reserved_capacity = 4,
+            .reserved_capacity = INIT_RESERVED_CAPACITY,
             .allocator = allocator,
         };
         return dt;
@@ -141,7 +149,7 @@ pub const DeviceTree = struct {
         mem_size: u64,
     ) !void {
         if (self.reserved_count >= self.reserved_capacity) {
-            const new_cap = self.reserved_capacity * 2;
+            const new_cap = try std.math.mul(usize, self.reserved_capacity, 2);
             const new_buf = try self.allocator.alloc(
                 ReservedMemoryEntry,
                 new_cap,
@@ -192,7 +200,7 @@ pub const DeviceTree = struct {
 
     fn ensureNodeCapacity(self: *DeviceTree) !void {
         if (self.node_count < self.node_capacity) return;
-        const new_cap = self.node_capacity * 2;
+        const new_cap = try std.math.mul(usize, self.node_capacity, 2);
         const new_buf = try self.allocator.alloc(DeviceTreeNode, new_cap);
         @memcpy(new_buf[0..self.node_count], self.nodes[0..self.node_count]);
         self.allocator.free(self.nodes[0..self.node_capacity]);
@@ -223,7 +231,10 @@ pub const DeviceTree = struct {
             }
             const path = try self.allocator.dupe(u8, node_path);
             errdefer self.allocator.free(path);
-            const props = try self.allocator.alloc(PropertyEntry, 8);
+            const props = try self.allocator.alloc(
+                PropertyEntry,
+                INIT_PROP_CAPACITY,
+            );
             errdefer self.allocator.free(props);
 
             self.nodes[pos] = .{
@@ -244,7 +255,7 @@ pub const DeviceTree = struct {
         }
 
         if (node.prop_count >= node.props.len) {
-            const new_cap = node.props.len * 2;
+            const new_cap = try std.math.mul(usize, node.props.len, 2);
             const new_buf = try self.allocator.alloc(PropertyEntry, new_cap);
             @memcpy(
                 new_buf[0..node.prop_count],
@@ -405,6 +416,7 @@ pub fn getParent(allocator: Allocator, path: []const u8) ![]u8 {
 test {
     _ = prop;
     _ = blob;
+    std.testing.refAllDecls(@This());
 }
 
 test "device tree manipulation, iteration, and getParent" {

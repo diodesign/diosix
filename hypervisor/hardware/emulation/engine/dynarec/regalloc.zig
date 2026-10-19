@@ -15,4 +15,5 @@ test "mapGuestGprToHost 1-to-1 mapping" {
         const reg: u5 = @intCast(i);
         try std.testing.expectEqual(reg, mapGuestGprToHost(reg));
     }
+    std.testing.refAllDecls(@This());
 }

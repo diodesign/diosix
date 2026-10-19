@@ -67,6 +67,8 @@ pub const IsaExtension = struct {
 
     pub const g: usize = i | m | a | f | d; // G = IMAFD.
     pub const gc: usize = g | c;
+    pub const MXL_64: usize = @as(usize, 2) << 62;
+    pub const MXL_32: u32 = @as(u32, 1) << 30;
 };
 
 // CSR bit-fields.
@@ -76,8 +78,10 @@ pub const MSTATUS = struct {
     pub const MPP_USER: usize = 0 << MPP_SHIFT;
     pub const MPP_SUPERVISOR: usize = 1 << MPP_SHIFT;
     pub const MPP_MACHINE: usize = 3 << MPP_SHIFT;
-    pub const MIE = 1 << 3;
+    pub const SPP = 1 << 8;
     pub const MPIE = 1 << 7;
+    pub const SPIE = 1 << 5;
+    pub const MIE = 1 << 3;
     pub const SIE = 1 << 1;
     pub const MPRV = 1 << 17; // Modify PRiVilege: alters data access privilege.
     pub const SUM = 1 << 18; // Permit Supervisor User Memory access.
@@ -85,6 +89,7 @@ pub const MSTATUS = struct {
     pub const TVM = 1 << 20; // Trap Virtual Memory: intercepts SATP in S-mode.
     pub const TW = 1 << 21; // Timeout Wait: intercepts WFI in S/VS mode.
     pub const TSR = 1 << 22; // Trap SRET: intercepts SRET in S-mode.
+    pub const SD_RV32: u32 = 1 << 31;
     pub const MPV: u64 = 1 << 39;
 
     // Mask of flags affecting virtual memory translation & access permissions.
@@ -98,12 +103,6 @@ pub const MSTATUS = struct {
     pub const FS_MASK = 0b11 << FS_SHIFT;
     pub const FS_DIRTY: usize = 0b11 << FS_SHIFT;
 };
-
-// Trap delegation masks.
-pub const HEDELEG_DELEGATED: usize = 0xb1fb;
-pub const HIDELEG_DELEGATED: usize = 0x1666;
-pub const MEDELEG_DELEGATED: usize = 0xb1fb;
-pub const MIDELEG_DELEGATED: usize = 0x0444;
 
 pub const SSTATUS = struct {
     pub const SPP_SHIFT = 8;
@@ -136,7 +135,8 @@ pub const MIE = struct {
     pub const MTIE: usize = 1 << 7;
     pub const SEIE: usize = 1 << 9;
     pub const MEIE: usize = 1 << 11;
-    pub const ALL_PHYSICAL: usize = MSIE | MTIE | MEIE | SEIE; // 0xa88.
+    pub const SGEIE: usize = 1 << 12;
+    pub const ALL_PHYSICAL: usize = MSIE | MTIE | MEIE | SEIE;
 };
 
 pub const MIP = struct {
@@ -159,18 +159,18 @@ pub const MCOUNTEREN = struct {
     pub const CY: usize = 1 << 0;
     pub const TM: usize = 1 << 1;
     pub const IR: usize = 1 << 2;
-    pub const DEFAULT_COUNTERS: usize = CY | TM | IR; // 7.
+    pub const DEFAULT_COUNTERS: usize = CY | TM | IR;
 };
 
 pub const ENVCFG = struct {
     pub const FIOM: usize = 1 << 0;
     pub const CBIE_SHIFT: u6 = 4;
-    pub const CBIE_MASK: usize = 3 << 4;
+    pub const CBIE_MASK: usize = 0b11 << CBIE_SHIFT;
+    pub const CBIE_ALL: usize = 0b11 << CBIE_SHIFT;
     pub const CBCFE: usize = 1 << 6;
     pub const CBZE: usize = 1 << 7;
     pub const STCE: usize = @as(usize, 1) << 63;
-    // 240 (0xF0).
-    pub const CACHE_OPS_ALL: usize = CBZE | CBCFE | (3 << CBIE_SHIFT);
+    pub const CACHE_OPS_ALL: usize = CBZE | CBCFE | CBIE_ALL;
 };
 
 pub const STATEEN = struct {
@@ -221,15 +221,41 @@ pub const Cause = enum(usize) {
     supervisor_interrupt = INTERRUPT_BIT | 9,
     machine_interrupt = INTERRUPT_BIT | 11,
 
-    unknown = 0xffffffffffffffff,
+    unknown = std.math.maxInt(usize),
 };
+
+// Trap delegation masks derived from Cause, HVIP, and MIE bit positions.
+pub const DELEGATED_EXCEPTIONS: usize =
+    (1 << @backingInt(Cause.instruction_alignment)) |
+    (1 << @backingInt(Cause.instruction_access)) |
+    (1 << @backingInt(Cause.breakpoint)) |
+    (1 << @backingInt(Cause.load_alignment)) |
+    (1 << @backingInt(Cause.load_access)) |
+    (1 << @backingInt(Cause.store_alignment)) |
+    (1 << @backingInt(Cause.store_access)) |
+    (1 << @backingInt(Cause.user_environment_call)) |
+    (1 << @backingInt(Cause.instruction_page_fault)) |
+    (1 << @backingInt(Cause.load_page_fault)) |
+    (1 << @backingInt(Cause.store_page_fault));
+pub const HEDELEG_DELEGATED: usize = DELEGATED_EXCEPTIONS;
+pub const MEDELEG_DELEGATED: usize = DELEGATED_EXCEPTIONS;
+pub const MIDELEG_DELEGATED: usize = HVIP.VSSIP | HVIP.VSTIP | HVIP.VSEIP;
+pub const HIDELEG_DELEGATED: usize = MIE.SSIE | HVIP.VSSIP | MIE.STIE |
+    HVIP.VSTIP | MIE.SEIE | HVIP.VSEIP | MIE.SGEIE;
 
 pub fn toCause(val: usize) Cause {
     return std.enums.fromInt(Cause, val) orelse .unknown;
 }
 
+pub const HTVAL_GPA_SHIFT: u6 = 2;
+
 // Standard RISC-V CSR numbers.
 pub const CSR = struct {
+    // Floating-point control and status CSRs.
+    pub const FFLAGS = 0x001;
+    pub const FRM = 0x002;
+    pub const FCSR = 0x003;
+
     // User / Supervisor / Machine standard CSRs.
     pub const CYCLE = 0xc00;
     pub const TIME = 0xc01;
@@ -249,6 +275,7 @@ pub const CSR = struct {
     pub const STVAL = 0x143;
     pub const SIP = 0x144;
     pub const STIMECMP = 0x14d;
+    pub const STIMECMPH = 0x15d;
     pub const SATP = 0x180;
 
     pub const MSTATUS = 0x300;
@@ -259,11 +286,20 @@ pub const CSR = struct {
     pub const MTVEC = 0x305;
     pub const MCOUNTEREN = 0x306;
     pub const MENVCFG = 0x30a;
+    pub const MSTATEEN0 = 0x30c;
     pub const MSCRATCH = 0x340;
     pub const MEPC = 0x341;
     pub const MCAUSE = 0x342;
     pub const MTVAL = 0x343;
     pub const MIP = 0x344;
+    pub const MTINST = 0x34a;
+    pub const MTVAL2 = 0x34b;
+
+    // Machine Information Registers.
+    pub const MVENDORID = 0xf11;
+    pub const MARCHID = 0xf12;
+    pub const MIMPID = 0xf13;
+    pub const MHARTID = 0xf14;
 
     // Entropy Source (Zkr).
     pub const SEED = 0x015;
@@ -286,7 +322,7 @@ pub const CSR = struct {
 
     // Execution environment configuration.
     pub const HENVCFG = 0x60a;
-    pub const VSENVCFG = 0x20a;
+    pub const HSTATEEN0 = 0x60c;
 
     // Timer/Counter CSRs.
     pub const VSTIMECMP = 0x24d;
@@ -294,11 +330,22 @@ pub const CSR = struct {
 
 // RISC-V instruction decoding constants.
 pub const Instr = struct {
+    pub const PARCEL_ALIGN_MASK = 0x2;
+    pub const INSN_32BIT_MASK = 0b11;
+    pub const INSN_SIZE_BYTES = 4;
+
     pub const OPCODE_MASK = 0x7f;
     pub const CSR_MASK = 0xfff;
+    pub const REG_MASK = 0x1f;
     pub const RD_MASK = 0x1f;
     pub const RS1_MASK = 0x1f;
     pub const FUNCT3_MASK = 0x7;
+
+    pub const RD_SHIFT = 7;
+    pub const FUNCT3_SHIFT = 12;
+    pub const RS1_SHIFT = 15;
+    pub const RS2_SHIFT = 20;
+    pub const CSR_SHIFT = 20;
 
     pub const OPCODE_SYSTEM = 0x73;
     pub const OPCODE_MISC_MEM = 0x0f;
@@ -313,11 +360,15 @@ pub const Instr = struct {
 
     // Specific standard instruction encodings.
     pub const WFI = 0x10500073;
+    pub const WRS_NTO = 0x00d0_0073;
+    pub const WRS_STO = 0x01d0_0073;
+    pub const PAUSE = 0x0100_000f;
     pub const FENCE_I = 0x0000100f;
     pub const FUNCT3_FENCE = 0;
 };
 
 test "RISC-V cause decoding and CSR bitmask invariants" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
     try testing.expectEqual(Cause.instruction_alignment, toCause(0));
@@ -342,4 +393,7 @@ test "RISC-V cause decoding and CSR bitmask invariants" {
     try testing.expectEqual(@as(usize, 1 << 20), HSTATUS.VTVM);
     try testing.expectEqual(@as(usize, 0xa88), MIE.ALL_PHYSICAL);
     try testing.expectEqual(@as(usize, 0xf0), ENVCFG.CACHE_OPS_ALL);
+    try testing.expectEqual(@as(usize, 0xb1fb), HEDELEG_DELEGATED);
+    try testing.expectEqual(@as(usize, 0x1666), HIDELEG_DELEGATED);
+    try testing.expectEqual(@as(usize, 0x0444), MIDELEG_DELEGATED);
 }

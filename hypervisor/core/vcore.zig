@@ -60,6 +60,7 @@ fn initIoapicRedtbl() [IOAPIC_NUM_REDIR_ENTRIES]u64 {
 
 pub const max_sub_vcores: usize = 8;
 pub const emulation_timeslice_instructions: u32 = 2_000_000;
+pub const MAX_DEINIT_SPINS: usize = 100_000;
 
 pub const LapicTimerState = struct {
     lvt_timer: u32 = LAPIC_LVT_MASKED,
@@ -97,7 +98,7 @@ pub const VirtualCore = struct {
     guest: *guest.Guest,
     guest_id: usize,
     state: VirtualCoreState = .stopped,
-    context: riscv.ThreadContext = std.mem.zeroes(riscv.ThreadContext),
+    context: riscv.ThreadContext = @splat(0),
     machine: riscv.MachineState = undefined,
     guest_state: riscv.GuestState = undefined,
 
@@ -135,8 +136,7 @@ pub const VirtualCore = struct {
             preempt_pending: bool = false,
             exception_cause: u32 = 0,
             hsm_started: bool = false,
-            lapic_mem: [LAPIC_PAGE_SIZE]u8 =
-                std.mem.zeroes([LAPIC_PAGE_SIZE]u8),
+            lapic_mem: [LAPIC_PAGE_SIZE]u8 = @splat(0),
             sc_hook_addr: u64 = 0,
             idle_hook_addr: u64 = 0,
             icr_dest: u32 = 0,
@@ -201,7 +201,7 @@ pub const VirtualCore = struct {
         self.guest_state = std.mem.zeroes(riscv.GuestState);
         self.guest_state.vsstatus =
             riscv.SSTATUS.SPIE | riscv.MSTATUS.FS_DIRTY;
-        self.guest_state.vstimecmp = std.math.maxInt(u64);
+        self.guest_state.vstimecmp = riscv.TIMER_INFINITY;
         self.guest_state.vsenvcfg =
             riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL;
         self.context[@backingInt(riscv.Register.a0)] = self.id;
@@ -219,7 +219,7 @@ pub const VirtualCore = struct {
             riscv.MSTATUS.MPIE |
             riscv.MSTATUS.FS_DIRTY;
         self.guest_state = std.mem.zeroes(riscv.GuestState);
-        self.guest_state.vstimecmp = std.math.maxInt(u64);
+        self.guest_state.vstimecmp = riscv.TIMER_INFINITY;
         self.context[@backingInt(riscv.Register.sp)] =
             @intFromPtr(stack.ptr) + stack.len;
         self.context[@backingInt(riscv.Register.gp)] = readHostGp();
@@ -325,7 +325,7 @@ pub const VirtualCore = struct {
         self.wfi_blocked = false;
         self.is_queued = false;
         self.running_on_cpu = null;
-        self.context = std.mem.zeroes(riscv.ThreadContext);
+        self.context = @splat(0);
 
         if (self.exec_path == .native) {
             self.configureNativeState(entry, dtb);
@@ -348,14 +348,23 @@ pub const VirtualCore = struct {
         _ = @atomicRmw(bool, &self.wfi_blocked, .Xchg, false, .acq_rel);
 
         if (!builtin.is_test) {
+            var spins: usize = 0;
             while ((@as(*volatile ?usize, &self.blocked_on_cpu)).*) |home_cpu| {
+                if (spins >= MAX_DEINIT_SPINS) break;
+                spins += 1;
                 pcore.sendIpiToCpu(home_cpu);
                 std.atomic.spinLoopHint();
             }
-            while ((@as(*volatile ?usize, &self.running_on_cpu)).* != null) {
+            spins = 0;
+            while ((@as(*volatile ?usize, &self.running_on_cpu)).* != null and
+                spins < MAX_DEINIT_SPINS) : (spins += 1)
+            {
                 std.atomic.spinLoopHint();
             }
-            while (@atomicLoad(bool, &self.is_queued, .acquire)) {
+            spins = 0;
+            while (@atomicLoad(bool, &self.is_queued, .acquire) and
+                spins < MAX_DEINIT_SPINS) : (spins += 1)
+            {
                 std.atomic.spinLoopHint();
             }
         }
@@ -443,21 +452,14 @@ pub const VirtualCore = struct {
 };
 
 test "virtual core initialization and emulated stack page reclamation" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     const alloc = testing.allocator;
     const id: VirtualCoreID = 42;
     var phys_test = try physmem.initForTest(alloc, 2048);
     defer phys_test.deinit();
-    const parent = try guest.createGuest(
-        alloc,
-        false,
-        false,
-        null,
-        0,
-        0,
-        0,
-        .riscv64,
-    );
+    const parent =
+        try guest.createGuest(alloc, false, false, null, 0, 0, 0, .riscv64);
     defer parent.deinit();
     const vc = try VirtualCore.initChecked(id, parent, 0x8000, 0x9000, .normal);
     try testing.expectEqual(id, vc.id);
@@ -469,13 +471,14 @@ test "virtual core initialization and emulated stack page reclamation" {
     try testing.expectEqual(id, vc.context[a0_idx]);
     try testing.expectEqual(@as(u32, 1024), vc.weight);
     try testing.expectEqual(@as(u64, 0), vc.vruntime);
+    const base: usize = 0x80000000;
     const emu_guest = try guest.createGuest(
         alloc,
         false,
         false,
         null,
-        0x80000000,
-        0x80000000,
+        base,
+        base,
         0x1000,
         .riscv32,
     );

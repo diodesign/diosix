@@ -10,12 +10,15 @@ const bus = @import("bus.zig");
 const router_mod = @import("vsock/router.zig");
 
 pub const VIRTIO_ID_VSOCK: u32 = 19;
-pub const VIRTIO_VENDOR_ID: u32 = 0x554d4551; // "QEMU" / Standard VirtIO.
-pub const VIRTIO_MAGIC: u32 = 0x74726976; // "virt".
-pub const VIRTIO_VERSION: u32 = 2; // Non-legacy / Modern.
+pub const VIRTIO_VENDOR_ID: u32 = bus.VIRTIO_MMIO_VENDOR_QEMU;
+pub const VIRTIO_MAGIC: u32 = bus.VIRTIO_MMIO_MAGIC;
+pub const VIRTIO_VERSION: u32 = bus.VIRTIO_MMIO_VERSION_2;
 
 pub const QUEUE_SIZE_MAX: u16 = 128;
 pub const NUM_QUEUES: usize = 3; // 0 = rx, 1 = tx, 2 = event.
+pub const QUEUE_INDEX_RX: usize = 0;
+pub const QUEUE_INDEX_TX: usize = 1;
+pub const MAX_PACKET_PAYLOAD: usize = 4096;
 
 pub const VIRTIO_VSOCK_TYPE_STREAM = router_mod.VIRTIO_VSOCK_TYPE_STREAM;
 pub const VIRTIO_VSOCK_TYPE_SEQPACKET = router_mod.VIRTIO_VSOCK_TYPE_SEQPACKET;
@@ -55,6 +58,7 @@ pub const VirtioVsock = struct {
     router: ?*VsockRouter = &router_mod.global_vsock_router,
     router_next: ?*VirtioVsock = null,
     rx_lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    tx_lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     /// Initialize a `VirtioVsock` instance by value.
     /// Note: Call `router.register(&vsock)` on the pinned destination struct
@@ -66,33 +70,25 @@ pub const VirtioVsock = struct {
         };
     }
 
+    pub const REG_VSOCK_CID_LEGACY: u32 = 0x0fc;
+
     pub fn readReg(self: *VirtioVsock, offset: u32) u32 {
-        const q_valid = self.queue_sel < NUM_QUEUES;
-        const feat_v1: u32 = if (self.device_features_sel == 1) 1 else 0;
+        const irq = @atomicLoad(u32, &self.interrupt_status, .seq_cst);
+        if (bus.readVirtioCommon(
+            self,
+            VIRTIO_ID_VSOCK,
+            NUM_QUEUES,
+            QUEUE_SIZE_MAX,
+            irq,
+            offset,
+        )) |common| return common;
+
         return switch (offset) {
-            bus.VIRTIO_MMIO_REG_MAGIC_VALUE => VIRTIO_MAGIC,
-            bus.VIRTIO_MMIO_REG_VERSION => VIRTIO_VERSION,
-            bus.VIRTIO_MMIO_REG_DEVICE_ID => VIRTIO_ID_VSOCK,
-            bus.VIRTIO_MMIO_REG_VENDOR_ID => VIRTIO_VENDOR_ID,
-            bus.VIRTIO_MMIO_REG_DEVICE_FEATURES => feat_v1,
-            bus.VIRTIO_MMIO_REG_QUEUE_NUM_MAX => if (q_valid)
-                QUEUE_SIZE_MAX
-            else
-                0,
-            bus.VIRTIO_MMIO_REG_QUEUE_READY => if (q_valid and
-                self.queues[self.queue_sel].ready)
-                1
-            else
-                0,
-            bus.VIRTIO_MMIO_REG_INTERRUPT_STATUS => @atomicLoad(
-                u32,
-                &self.interrupt_status,
-                .seq_cst,
-            ),
-            bus.VIRTIO_MMIO_REG_STATUS => self.status,
-            0x0fc, bus.VIRTIO_MMIO_REG_CONFIG_BASE => @truncate(self.guest_cid),
+            REG_VSOCK_CID_LEGACY,
+            bus.VIRTIO_MMIO_REG_CONFIG_BASE,
+            => @truncate(self.guest_cid),
             bus.VIRTIO_MMIO_REG_CONFIG_BASE + 4 => @truncate(
-                self.guest_cid >> 32,
+                self.guest_cid >> bus.HIGH_WORD_SHIFT,
             ),
             else => 0,
         };
@@ -109,7 +105,7 @@ pub const VirtioVsock = struct {
 
         switch (offset) {
             bus.VIRTIO_MMIO_REG_QUEUE_NOTIFY => {
-                if (val == 1) self.processTx();
+                if (val == QUEUE_INDEX_TX) self.processTx();
             },
             bus.VIRTIO_MMIO_REG_INTERRUPT_ACK => {
                 _ = @atomicRmw(
@@ -131,9 +127,37 @@ pub const VirtioVsock = struct {
         }
     }
 
+    fn pushUsedElem(
+        mem: MemoryAccessor,
+        q: *VirtQueue,
+        desc_head_idx: u16,
+        len: u32,
+    ) void {
+        const used_slot = q.last_used_idx % q.num;
+        const used_elem = VirtqUsedElem{
+            .id = desc_head_idx,
+            .len = len,
+        };
+        const used_off = 4 +% (@as(u64, used_slot) *% @sizeOf(VirtqUsedElem));
+        const used_addr = q.device_gpa +% used_off;
+        _ = mem.write(used_addr, std.mem.asBytes(&used_elem));
+
+        q.last_used_idx +%= 1;
+        _ = mem.write(
+            q.device_gpa +% 2,
+            std.mem.asBytes(&q.last_used_idx),
+        );
+        q.last_avail_idx +%= 1;
+    }
+
     pub fn processTx(self: *VirtioVsock) void {
+        while (self.tx_lock.swap(true, .acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.tx_lock.store(false, .release);
+
         const mem = self.mem orelse return;
-        var tx_q = &self.queues[1];
+        const tx_q = &self.queues[QUEUE_INDEX_TX];
         if (!tx_q.ready or tx_q.num == 0 or
             tx_q.driver_gpa == 0 or tx_q.device_gpa == 0)
         {
@@ -167,13 +191,13 @@ pub const VirtioVsock = struct {
             if (desc.len >= @sizeOf(VirtioVsockHdr)) {
                 var hdr: VirtioVsockHdr = undefined;
                 if (mem.read(desc.addr, std.mem.asBytes(&hdr))) {
-                    var payload_buf: [4096]u8 = undefined;
+                    var payload_buf: [MAX_PACKET_PAYLOAD]u8 = undefined;
                     var payload_slice: []const u8 = &.{};
-                    const payload_len = @min(hdr.len, payload_buf.len);
+                    const payload_len: usize = @min(hdr.len, payload_buf.len);
 
                     if (payload_len > 0) {
                         if (desc.len > @sizeOf(VirtioVsockHdr)) {
-                            const avail_in_desc = @min(
+                            const avail_in_desc: usize = @min(
                                 payload_len,
                                 desc.len - @sizeOf(VirtioVsockHdr),
                             );
@@ -196,7 +220,7 @@ pub const VirtioVsock = struct {
                                 next_addr,
                                 std.mem.asBytes(&next_desc),
                             )) {
-                                const copy_len =
+                                const copy_len: usize =
                                     @min(payload_len, next_desc.len);
                                 if (mem.read(
                                     next_desc.addr,
@@ -214,23 +238,7 @@ pub const VirtioVsock = struct {
                 }
             }
 
-            const used_slot = tx_q.last_used_idx % tx_q.num;
-            const used_elem = VirtqUsedElem{
-                .id = desc_head_idx,
-                .len = 0,
-            };
-            const elem_size = @sizeOf(VirtqUsedElem);
-            const used_off = 4 +% (@as(u64, used_slot) *% elem_size);
-            const used_addr = tx_q.device_gpa +% used_off;
-            _ = mem.write(used_addr, std.mem.asBytes(&used_elem));
-
-            tx_q.last_used_idx +%= 1;
-            _ = mem.write(
-                tx_q.device_gpa +% 2,
-                std.mem.asBytes(&tx_q.last_used_idx),
-            );
-
-            tx_q.last_avail_idx +%= 1;
+            pushUsedElem(mem, tx_q, desc_head_idx, 0);
         }
 
         _ = @atomicRmw(u32, &self.interrupt_status, .Or, 1, .seq_cst);
@@ -247,7 +255,7 @@ pub const VirtioVsock = struct {
         defer self.rx_lock.store(false, .release);
 
         const mem = self.mem orelse return false;
-        var rx_q = &self.queues[0];
+        const rx_q = &self.queues[QUEUE_INDEX_RX];
         if (!rx_q.ready or rx_q.num == 0 or
             rx_q.driver_gpa == 0 or rx_q.device_gpa == 0)
         {
@@ -299,7 +307,8 @@ pub const VirtioVsock = struct {
                 const next_addr = rx_q.desc_gpa +% next_off;
                 if (mem.read(next_addr, std.mem.asBytes(&next_desc))) {
                     if ((next_desc.flags & VIRTQ_DESC_F_WRITE) != 0) {
-                        const copy_len = @min(payload.len, next_desc.len);
+                        const copy_len: usize =
+                            @min(payload.len, next_desc.len);
                         if (mem.write(next_desc.addr, payload[0..copy_len])) {
                             payload_written = @truncate(copy_len);
                         }
@@ -312,22 +321,7 @@ pub const VirtioVsock = struct {
         if (!mem.write(desc.addr, std.mem.asBytes(&rx_hdr))) return false;
 
         const total_written: u32 = @sizeOf(VirtioVsockHdr) + payload_written;
-
-        const used_slot = rx_q.last_used_idx % rx_q.num;
-        const used_elem = VirtqUsedElem{
-            .id = desc_head_idx,
-            .len = total_written,
-        };
-        const used_off = 4 +% (@as(u64, used_slot) *% @sizeOf(VirtqUsedElem));
-        const used_addr = rx_q.device_gpa +% used_off;
-        _ = mem.write(used_addr, std.mem.asBytes(&used_elem));
-
-        rx_q.last_used_idx +%= 1;
-        _ = mem.write(
-            rx_q.device_gpa +% 2,
-            std.mem.asBytes(&rx_q.last_used_idx),
-        );
-        rx_q.last_avail_idx +%= 1;
+        pushUsedElem(mem, rx_q, desc_head_idx, total_written);
 
         _ = @atomicRmw(u32, &self.interrupt_status, .Or, 1, .seq_cst);
         return true;
@@ -336,6 +330,7 @@ pub const VirtioVsock = struct {
 
 test "VirtIO-vsock MMIO register discovery and feature negotiation" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
     _ = router_mod;
 
     var vsock = VirtioVsock.init(2, null);
@@ -384,7 +379,7 @@ test "VirtIO-vsock inter-VM packet routing between Root VM and Guest VM" {
     router.register(&root_vsock);
     router.register(&guest_vsock);
 
-    guest_vsock.queues[0] = .{
+    guest_vsock.queues[QUEUE_INDEX_RX] = .{
         .ready = true,
         .desc_gpa = 0x1000,
         .driver_gpa = 0x2000,
@@ -444,27 +439,31 @@ test "VirtIO-vsock safety against zero queue size and OOB descriptor heads" {
     var vsock = VirtioVsock.init(3, mem);
 
     // 1. Malicious guest attempts to configure queue size = 0.
-    vsock.writeReg(0x030, 1);
+    vsock.writeReg(0x030, QUEUE_INDEX_TX);
     vsock.writeReg(0x038, 0);
-    try testing.expect(vsock.queues[1].num > 0);
+    try testing.expect(vsock.queues[QUEUE_INDEX_TX].num > 0);
 
     // 2. Queue notify on unconfigured queue must not divide by zero.
-    vsock.queues[1].num = 0;
-    vsock.queues[1].ready = true;
+    vsock.queues[QUEUE_INDEX_TX].num = 0;
+    vsock.queues[QUEUE_INDEX_TX].ready = true;
     vsock.processTx();
 
     // 3. Out-of-bounds descriptor head index must not read OOB.
-    vsock.queues[1].num = 16;
-    vsock.queues[1].driver_gpa = 0x2000;
-    vsock.queues[1].desc_gpa = 0x1000;
-    vsock.queues[1].device_gpa = 0x3000;
-    vsock.queues[1].last_avail_idx = 0;
-
+    vsock.queues[QUEUE_INDEX_TX] = .{
+        .num = 16,
+        .ready = true,
+        .desc_gpa = 0x1000,
+        .driver_gpa = 0x2000,
+        .device_gpa = 0x3000,
+    };
     const bad_avail_idx: u16 = 1;
     _ = mem.write(0x2002, std.mem.asBytes(&bad_avail_idx));
     const bad_desc_head: u16 = 999;
     _ = mem.write(0x2004, std.mem.asBytes(&bad_desc_head));
 
     vsock.processTx();
-    try testing.expectEqual(@as(u16, 0), vsock.queues[1].last_used_idx);
+    try testing.expectEqual(
+        @as(u16, 0),
+        vsock.queues[QUEUE_INDEX_TX].last_used_idx,
+    );
 }

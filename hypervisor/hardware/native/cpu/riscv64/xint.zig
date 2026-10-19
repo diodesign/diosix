@@ -32,7 +32,7 @@ pub fn init() void {
     // Enable physical Vector (VS) and Floating-point (FS) extensions (Dirty)
     // and set TW so VS-mode WFI traps to M-mode.
     var mstatus = riscv.readMstatus();
-    mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) | (3 << riscv.MSTATUS.FS_SHIFT);
+    mstatus |= riscv.MSTATUS.VS_DIRTY | riscv.MSTATUS.FS_DIRTY;
     mstatus |= riscv.MSTATUS.TW;
     riscv.writeMstatus(mstatus);
 }
@@ -63,7 +63,7 @@ pub fn initCpuFeatures() void {
     }
 
     if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-        riscv.writeStimecmp(std.math.maxInt(u64));
+        riscv.writeStimecmp(riscv.TIMER_INFINITY);
     }
 
     // Delegate virtual supervisor interrupts (VSSIP, VSTIP, VSEIP) to VS-mode
@@ -98,6 +98,7 @@ pub const IRQ = struct {
 };
 
 const MAX_TRAP_LOGS = 100;
+const TRAP_LOOP_WARN_THRESHOLD: usize = 2;
 const TRAP_LOOP_HARD_LIMIT: usize = 64;
 
 pub var total_trap_count: usize = 0;
@@ -172,7 +173,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
                 cpu.active_vcore = null;
             }
             cpu.trap_loop_count = 0;
-        } else if (cpu.trap_loop_count > 2) {
+        } else if (cpu.trap_loop_count > TRAP_LOOP_WARN_THRESHOLD) {
             debug.printf(
                 "!!! LOOP DETECTED on Core {}: pc=0x{x} cause={s} count={}\n",
                 .{
@@ -279,8 +280,8 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
             syncGuestStateToHardware(vc);
         } else if (vc.exec_path == .emulated) {
             vc.getNativeMachine().mstatus |=
-                (3 << riscv.MSTATUS.VS_SHIFT) |
-                (3 << riscv.MSTATUS.FS_SHIFT) |
+                riscv.MSTATUS.VS_DIRTY |
+                riscv.MSTATUS.FS_DIRTY |
                 riscv.MSTATUS.TW;
             riscv.writeMstatus(vc.getNativeMachine().mstatus);
             riscv.writeMepc(vc.getNativeMachine().mepc);
@@ -397,8 +398,8 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         ms.hvip |= riscv.HVIP.VSSIP;
     }
 
-    ms.mstatus |= (3 << riscv.MSTATUS.VS_SHIFT) |
-        (3 << riscv.MSTATUS.FS_SHIFT) |
+    ms.mstatus |= riscv.MSTATUS.VS_DIRTY |
+        riscv.MSTATUS.FS_DIRTY |
         riscv.MSTATUS.TW;
     riscv.writeMepc(ms.mepc);
     riscv.writeMstatus(ms.mstatus);
@@ -413,7 +414,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeHstatus(ms.hstatus);
         riscv.writeHgatp(ms.hgatp);
 
-        var hvip_val = ms.hvip;
+        var hvip_val: usize = ms.hvip;
         if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
             hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
         } else if (gs.vstimecmp != 0 and
@@ -465,6 +466,7 @@ fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
 }
 
 test {
+    std.testing.refAllDecls(@This());
     _ = csr_emu;
     _ = exception;
     _ = interrupt;

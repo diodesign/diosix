@@ -9,13 +9,16 @@ const api = @import("api.zig");
 const catalog = @import("catalog.zig");
 const common = @import("common.zig");
 const image_pull = @import("image/pull.zig");
+const image_import = @import("image/import.zig");
 
 pub const CATALOG_CONFIG_PATH = "/etc/diosix/catalog.toml";
 pub const fetchRemoteFile = image_pull.fetchRemoteFile;
 pub const pullRemoteOrStageImage = image_pull.pullRemoteOrStageImage;
+pub const cmdImageImport = image_import.cmdImageImport;
 
 fn listImagesInDir(
     dir_path: []const u8,
+    iso_dir: []const u8,
     only_elf: bool,
     active_catalog: []const catalog.CatalogEntry,
 ) usize {
@@ -93,7 +96,7 @@ fn listImagesInDir(
 
             const is_iso = !only_elf and
                 (std.mem.endsWith(u8, dname, ".iso") or
-                    std.mem.eql(u8, dir_path, "/var/lib/diosix/iso"));
+                    std.mem.eql(u8, dir_path, iso_dir));
             const meta = catalog.inferImageMetadata(
                 dname,
                 is_iso,
@@ -136,6 +139,9 @@ fn listImagesInDir(
 
 pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const images_dir = sys_cfg.imagesDir();
+    const iso_dir = sys_cfg.isoDir();
     _ = client;
     if (args.len == 0) {
         var buf: [1024]u8 = undefined;
@@ -161,7 +167,7 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     var active_catalog: []const catalog.CatalogEntry =
         &catalog.OFFICIAL_CATALOG;
     if (common.readBinaryFile(
-        CATALOG_CONFIG_PATH,
+        sys_cfg.catalogConfigPath(),
         common.MAX_MANIFEST_SIZE,
     )) |content| {
         cat_mapped = content;
@@ -194,16 +200,15 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         return;
     };
 
-    const CommonImgFlag = enum { @"--remote", @"-r", @"--json", @"-j" };
+    const RemoteFlag = enum { @"--remote", @"-r" };
     var remote_flag = false;
     var json_flag = false;
     for (args[1..]) |arg| {
         const span = std.mem.span(arg);
-        if (std.meta.stringToEnum(CommonImgFlag, span)) |f| {
-            switch (f) {
-                .@"--remote", .@"-r" => remote_flag = true,
-                .@"--json", .@"-j" => json_flag = true,
-            }
+        if (common.isJsonFlag(span)) {
+            json_flag = true;
+        } else if (std.meta.stringToEnum(RemoteFlag, span) != null) {
+            remote_flag = true;
         }
     }
 
@@ -231,23 +236,27 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             );
 
             _ = linux.mkdir("/var/lib/diosix", 0o755);
-            _ = linux.mkdir("/var/lib/diosix/images", 0o755);
-            _ = linux.mkdir("/var/lib/diosix/iso", 0o755);
-
-            var total_found: usize = 0;
-            total_found += listImagesInDir(
-                "/var/lib/diosix/images",
-                false,
-                active_catalog,
-            );
-            total_found += listImagesInDir(
-                "/var/lib/diosix/iso",
-                false,
-                active_catalog,
-            );
-            if (total_found == 0) {
-                _ = listImagesInDir("/boot", true, active_catalog);
+            var img_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            if (common.toPathZ(images_dir, &img_z_buf)) |iz| {
+                _ = linux.mkdir(iz.ptr, 0o755);
             }
+            var iso_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            if (common.toPathZ(iso_dir, &iso_z_buf)) |sz| {
+                _ = linux.mkdir(sz.ptr, 0o755);
+            }
+
+            _ = listImagesInDir(
+                images_dir,
+                iso_dir,
+                false,
+                active_catalog,
+            );
+            _ = listImagesInDir(
+                iso_dir,
+                iso_dir,
+                false,
+                active_catalog,
+            );
         },
         .pull, .fetch => {
             try image_pull.cmdImagePull(
@@ -258,7 +267,7 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             );
         },
         .import, .add => {
-            try image_pull.cmdImageImport(exe_name, args);
+            try image_import.cmdImageImport(exe_name, args);
         },
         .delete, .rm => {
             if (args.len < 2) {
@@ -279,20 +288,20 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             else if (std.mem.endsWith(u8, img_name, ".iso"))
                 std.fmt.bufPrint(
                     &path_buf,
-                    "/var/lib/diosix/iso/{s}",
-                    .{img_name},
+                    "{s}/{s}",
+                    .{ iso_dir, img_name },
                 ) catch "/var/lib/diosix/iso/image.iso"
             else if (std.mem.endsWith(u8, img_name, ".elf"))
                 std.fmt.bufPrint(
                     &path_buf,
-                    "/var/lib/diosix/images/{s}",
-                    .{img_name},
+                    "{s}/{s}",
+                    .{ images_dir, img_name },
                 ) catch "/var/lib/diosix/images/image.elf"
             else
                 std.fmt.bufPrint(
                     &path_buf,
-                    "/var/lib/diosix/images/{s}.elf",
-                    .{img_name},
+                    "{s}/{s}.elf",
+                    .{ images_dir, img_name },
                 ) catch "/var/lib/diosix/images/image.elf";
 
             var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
@@ -323,4 +332,5 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 test "image: declarations and image_pull re-exports compile cleanly" {
     std.testing.refAllDecls(@This());
     _ = image_pull;
+    _ = image_import;
 }

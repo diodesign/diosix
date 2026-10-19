@@ -9,8 +9,11 @@ const fb = @import("framebuffer.zig");
 
 pub const GLYPH_HEIGHT: u32 = 18;
 pub const SPACE_ADVANCE: u8 = 6;
-pub const TAB_ADVANCE: u8 = 24; // 4 space columns.
+pub const TAB_SPACES: u8 = 4;
+pub const TAB_ADVANCE: u8 = SPACE_ADVANCE * TAB_SPACES;
 pub const FALLBACK_ADVANCE: u8 = 8;
+pub const ASCII_PRINTABLE_MIN: u8 = 0x20;
+pub const ASCII_PRINTABLE_MAX: u8 = 0x7e;
 
 pub const Glyph = struct {
     advance: u8,
@@ -174,8 +177,8 @@ pub fn drawTextWithAlpha(
 
     var cur_x = x;
     for (text) |c| {
-        if (c >= 32 and c <= 126) {
-            const glyph = GLYPHS[c - 32];
+        if (c >= ASCII_PRINTABLE_MIN and c <= ASCII_PRINTABLE_MAX) {
+            const glyph = GLYPHS[c - ASCII_PRINTABLE_MIN];
             if (glyph.width > 0 and glyph.height > 0) {
                 const gx = cur_x + glyph.offset_x;
                 const gy = y + glyph.offset_y;
@@ -260,8 +263,8 @@ pub fn drawTextWithShadowAlpha(
 pub fn measureString(text: []const u8) u32 {
     var cur_w: u32 = 0;
     for (text) |c| {
-        if (c >= 32 and c <= 126) {
-            cur_w += GLYPHS[c - 32].advance;
+        if (c >= ASCII_PRINTABLE_MIN and c <= ASCII_PRINTABLE_MAX) {
+            cur_w += GLYPHS[c - ASCII_PRINTABLE_MIN].advance;
         } else if (c == ' ') {
             cur_w += SPACE_ADVANCE;
         } else if (c == '\t') {
@@ -312,8 +315,8 @@ pub fn drawTextScaled(
     const s_den_i: i32 = @intCast(scale_den);
     var cur_x = x;
     for (text) |c| {
-        if (c >= 32 and c <= 126) {
-            const glyph = GLYPHS[c - 32];
+        if (c >= ASCII_PRINTABLE_MIN and c <= ASCII_PRINTABLE_MAX) {
+            const glyph = GLYPHS[c - ASCII_PRINTABLE_MIN];
             const scaled_advance =
                 @divTrunc(@as(i32, @intCast(glyph.advance)) * s_num_i, s_den_i);
             if (glyph.width > 0 and glyph.height > 0) {
@@ -424,4 +427,8 @@ pub fn drawTextScaledWithShadow(
         scale_den,
     );
     drawTextScaled(surface, text, x, y, fg_color, scale_num, scale_den);
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

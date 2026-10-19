@@ -50,10 +50,7 @@ const HostInstallOption = enum {
     @"-h",
 };
 
-const JsonFlag = enum {
-    @"--json",
-    @"-j",
-};
+const JsonFlag = common.JsonFlag;
 
 pub fn cmdHost(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
@@ -71,8 +68,7 @@ pub fn cmdHost(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const subcmd = std.mem.span(args[0]);
     var json_mode = false;
     for (args[1..]) |arg| {
-        const span = std.mem.span(arg);
-        if (std.meta.stringToEnum(JsonFlag, span) != null) {
+        if (common.isJsonFlag(std.mem.span(arg))) {
             json_mode = true;
         }
     }
@@ -432,7 +428,7 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
         var rec_buf: [512]u8 = undefined;
         const rec_toml = installer.formatInstallReceiptToml(&rec_buf, plan);
         if (rec_toml.len > 0) {
-            writeFile(installer.INSTALL_RECEIPT_PATH, rec_toml) catch {};
+            try writeFile(installer.INSTALL_RECEIPT_PATH, rec_toml);
         }
     }
 

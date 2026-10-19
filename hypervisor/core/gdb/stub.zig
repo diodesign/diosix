@@ -7,10 +7,12 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
+const std = @import("std");
 const config = @import("config");
 
 test {
     _ = @import("rsp.zig");
+    std.testing.refAllDecls(@This());
 }
 
 pub const stub = if (config.enable_gdb)

@@ -13,6 +13,8 @@ const builtin = @import("builtin");
 pub const MAX_BLOCKS: usize = 16384;
 pub const HASH_SIZE: usize = 32768;
 pub const JIT_CACHE_SIZE: usize = 8 * 1024 * 1024; // 8MB JIT code buffer pool.
+pub const MAX_HASH_PROBES: usize = 8;
+pub const CODE_BLOCK_ALIGNMENT: usize = @alignOf(u64);
 
 pub fn getExitAddr() usize {
     if (comptime builtin.target.cpu.arch.isRISCV()) {
@@ -64,7 +66,7 @@ pub const Cache = struct {
     pub fn lookup(self: *Cache, guest_pc: u32, satp: u32) ?*TranslationBlock {
         var slot = hash(guest_pc);
         var tries: usize = 0;
-        while (tries < 8) : (tries += 1) {
+        while (tries < MAX_HASH_PROBES) : (tries += 1) {
             if (self.hash_table[slot]) |tb| {
                 if (tb.layout_epoch == self.layout_epoch and
                     tb.guest_pc == guest_pc and
@@ -88,7 +90,11 @@ pub const Cache = struct {
         max_host_len: usize,
     ) !*TranslationBlock {
         if (self.block_count >= MAX_BLOCKS) return error.CacheFull;
-        const aligned_offset = (self.code_offset + 7) & ~@as(usize, 7);
+        const aligned_offset = std.mem.alignForward(
+            usize,
+            self.code_offset,
+            CODE_BLOCK_ALIGNMENT,
+        );
         if (aligned_offset + max_host_len > self.code_buffer.len) {
             return error.CodeBufferFull;
         }
@@ -116,13 +122,17 @@ pub const Cache = struct {
         tb: *TranslationBlock,
         code_bytes: usize,
     ) void {
-        const aligned = (code_bytes + 7) & ~@as(usize, 7);
+        const aligned = std.mem.alignForward(
+            usize,
+            code_bytes,
+            CODE_BLOCK_ALIGNMENT,
+        );
         tb.host_code = tb.host_code[0..aligned];
         self.code_offset += aligned;
 
         var slot = hash(tb.guest_pc);
         var tries: usize = 0;
-        while (tries < 8) : (tries += 1) {
+        while (tries < MAX_HASH_PROBES) : (tries += 1) {
             if (self.hash_table[slot]) |existing| {
                 if (existing.guest_pc == tb.guest_pc and
                     (existing.is_global or existing.satp == tb.satp))
@@ -138,7 +148,9 @@ pub const Cache = struct {
         } else {
             // Replace the last probed slot so recently executed blocks are
             // indexed.
-            self.hash_table[(hash(tb.guest_pc) + 7) & (HASH_SIZE - 1)] = tb;
+            const last_slot =
+                (hash(tb.guest_pc) + (MAX_HASH_PROBES - 1)) & (HASH_SIZE - 1);
+            self.hash_table[last_slot] = tb;
         }
 
         rv64.fenceI();
@@ -216,4 +228,5 @@ test "Cache allocate, commit, lookup, and flush" {
         @as(?*TranslationBlock, null),
         cache.lookup(0x8000_0000, 0x8008_0001),
     );
+    std.testing.refAllDecls(@This());
 }

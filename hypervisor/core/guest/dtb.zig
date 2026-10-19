@@ -7,6 +7,16 @@ const std = @import("std");
 const dt = @import("../dt.zig");
 const guest = @import("../guest.zig");
 const debug = @import("../debug.zig");
+const sbi = @import("interface").sbi;
+
+pub const MAX_DT_ITER_DEPTH: usize = 10;
+pub const AARCH64_PL011_BASE: u64 = 0x09000000;
+pub const AARCH64_PL011_SIZE: u64 = 0x1000;
+pub const AARCH64_GICD_BASE: u64 = 0x08000000;
+pub const AARCH64_GICD_SIZE: u64 = 0x10000;
+pub const AARCH64_GICC_BASE: u64 = 0x08010000;
+pub const AARCH64_GICC_SIZE: u64 = 0x10000;
+pub const AARCH64_TIMER_IRQ_FLAGS: u32 = 0x304;
 
 const BASE_RISCV_BOOTARGS =
     "console=hvc0 earlycon=sbi rootfstype=ramfs cma=32M no4lvl maxcpus={} " ++
@@ -41,8 +51,7 @@ pub fn buildRiscvGuestDtb(
         } else break;
     }
 
-    const guest_memory_node = try std.fmt.allocPrint(
-        cpu_allocator,
+    const guest_memory_node = try cpu_allocator.print(
         "/memory@{x}",
         .{root_vm_gpa_base},
     );
@@ -68,14 +77,12 @@ pub fn buildRiscvGuestDtb(
     else
         "";
     const bootargs = if (host_bootargs.len > 0)
-        try std.fmt.allocPrint(
-            cpu_allocator,
+        try cpu_allocator.print(
             BASE_RISCV_BOOTARGS ++ " {s}",
             .{ guest_cpus, mitigations, host_bootargs },
         )
     else
-        try std.fmt.allocPrint(
-            cpu_allocator,
+        try cpu_allocator.print(
             BASE_RISCV_BOOTARGS,
             .{ guest_cpus, mitigations },
         );
@@ -95,7 +102,7 @@ pub fn buildRiscvGuestDtb(
     // Clear host-specific reserved memory nodes and entries.
     device_tree.reserved_count = 0;
     while (true) {
-        var res_it = device_tree.iter("/reserved-memory", 10);
+        var res_it = device_tree.iter("/reserved-memory", MAX_DT_ITER_DEPTH);
         if (res_it.next()) |path| {
             device_tree.deleteNode(path);
         } else break;
@@ -104,7 +111,7 @@ pub fn buildRiscvGuestDtb(
     // Remove AIA interrupt controller nodes (aplic and imsic) so the guest
     // kernel falls back to PLIC.
     while (true) {
-        var aia_it = device_tree.iter("/", 10);
+        var aia_it = device_tree.iter("/", MAX_DT_ITER_DEPTH);
         var found_aia: ?[]const u8 = null;
         while (aia_it.next()) |path| {
             if (std.mem.indexOf(u8, path, "aplic") != null or
@@ -119,24 +126,20 @@ pub fn buildRiscvGuestDtb(
         } else break;
     }
 
-    // Set /cpus timebase-frequency to 10 MHz (0x00989680).
+    // Set /cpus timebase-frequency to the host timer frequency (10 MHz).
     try device_tree.editProperty(
         "/cpus",
         "timebase-frequency",
-        try dt.DeviceTreeProperty.fromBytes(
+        try dt.DeviceTreeProperty.fromU32(
             cpu_allocator,
-            &[_]u8{ 0x00, 0x98, 0x96, 0x80 },
+            sbi.HOST_TIMER_FREQ_HZ,
         ),
     );
 
-    var cpu_it = device_tree.iter("/cpus/cpu@", 10);
+    var cpu_it = device_tree.iter("/cpus/cpu@", MAX_DT_ITER_DEPTH);
     var enabled_cpu_index: usize = 0;
     while (cpu_it.next()) |path| {
-        var slash_count: usize = 0;
-        for (path) |c| {
-            if (c == '/') slash_count += 1;
-        }
-        if (slash_count != 2) continue;
+        if (dt.prop.countChar(path, '/') != 2) continue;
 
         if (guest_arch == .riscv32) {
             try device_tree.editProperty(
@@ -217,7 +220,7 @@ pub fn buildRiscvGuestDtb(
 
     // Delete extra CPU nodes beyond cpu_count and all their descendants.
     while (true) {
-        var del_it = device_tree.iter("/cpus/cpu@", 10);
+        var del_it = device_tree.iter("/cpus/cpu@", MAX_DT_ITER_DEPTH);
         var del_index: usize = 0;
         var found_to_delete: ?[]const u8 = null;
         var delete_prefix: ?[]const u8 = null;
@@ -231,11 +234,7 @@ pub fn buildRiscvGuestDtb(
                 delete_prefix = null;
             }
 
-            var slash_cnt: usize = 0;
-            for (path) |c| {
-                if (c == '/') slash_cnt += 1;
-            }
-            if (slash_cnt == 2) {
+            if (dt.prop.countChar(path, '/') == 2) {
                 if (del_index >= cpu_count) {
                     delete_prefix = path;
                     found_to_delete = path;
@@ -295,13 +294,12 @@ pub fn buildAarch64Dtb(
         "earlycon=pl011,mmio32,0x09000000 console=ttyAMA0 " ++
         "nokaslr norandmaps panic=30 mitigations=off";
     const arm_bootargs = if (host_bootargs.len > 0)
-        try std.fmt.allocPrint(
-            allocator,
+        try allocator.print(
             base_arm_args ++ " {s}",
             .{host_bootargs},
         )
     else
-        try std.fmt.allocPrint(allocator, base_arm_args, .{});
+        try allocator.dupe(u8, base_arm_args);
     defer allocator.free(arm_bootargs);
 
     try arm_dt.editProperty(
@@ -315,8 +313,7 @@ pub fn buildAarch64Dtb(
         try dt.DeviceTreeProperty.fromText(allocator, "/pl011@9000000"),
     );
 
-    const mem_node = try std.fmt.allocPrint(
-        allocator,
+    const mem_node = try allocator.print(
         "/memory@{x}",
         .{ram_base},
     );
@@ -347,8 +344,7 @@ pub fn buildAarch64Dtb(
     );
 
     for (0..cpu_count) |i| {
-        const cpu_node = try std.fmt.allocPrint(
-            allocator,
+        const cpu_node = try allocator.print(
             "/cpus/cpu@{}",
             .{i},
         );
@@ -391,14 +387,15 @@ pub fn buildAarch64Dtb(
         "compatible",
         try dt.DeviceTreeProperty.fromText(allocator, "arm,armv8-timer"),
     );
+    const irq_fl = AARCH64_TIMER_IRQ_FLAGS;
     try arm_dt.editProperty(
         "/timer",
         "interrupts",
         try dt.DeviceTreeProperty.fromMultiU32(allocator, &.{
-            1, 13, 0x304,
-            1, 14, 0x304,
-            1, 11, 0x304,
-            1, 10, 0x304,
+            1, 13, irq_fl,
+            1, 14, irq_fl,
+            1, 11, irq_fl,
+            1, 10, irq_fl,
         }),
     );
     try arm_dt.editProperty(
@@ -417,7 +414,7 @@ pub fn buildAarch64Dtb(
         "reg",
         try dt.DeviceTreeProperty.fromMultiU64(
             allocator,
-            &.{ 0x09000000, 0x1000 },
+            &.{ AARCH64_PL011_BASE, AARCH64_PL011_SIZE },
         ),
     );
     try arm_dt.editProperty(
@@ -445,8 +442,8 @@ pub fn buildAarch64Dtb(
         "/intc@8000000",
         "reg",
         try dt.DeviceTreeProperty.fromMultiU64(allocator, &.{
-            0x08000000, 0x10000,
-            0x08010000, 0x10000,
+            AARCH64_GICD_BASE, AARCH64_GICD_SIZE,
+            AARCH64_GICC_BASE, AARCH64_GICC_SIZE,
         }),
     );
     try arm_dt.editProperty(
@@ -464,6 +461,7 @@ pub fn buildAarch64Dtb(
 }
 
 test "buildAarch64Dtb creates expected nodes and bootargs" {
+    std.testing.refAllDecls(@This());
     const allocator = std.testing.allocator;
     const tree = try buildAarch64Dtb(
         allocator,

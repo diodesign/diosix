@@ -305,3 +305,7 @@ pub fn buildHardwarePane(self: *DiosixGui) !void {
 
     try addSlateCardList(win, pad_x, 44, card_w, &items);
 }
+
+test {
+    @import("std").testing.refAllDecls(@This());
+}

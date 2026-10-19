@@ -74,17 +74,17 @@ clear_bss_done:
     bgeu      a1, t1, setup_cpu_slab
 
     # Validate DTB magic (0xd00dfeed big-endian) byte-by-byte.
-    lbu       t0, 0(a1)
-    li        t2, 0xd0
+    lbu       t0, (DTB_MAGIC_OFFSET + 0)(a1)
+    li        t2, DTB_MAGIC_BYTE0
     bne       t0, t2, setup_cpu_slab
-    lbu       t0, 1(a1)
-    li        t2, 0x0d
+    lbu       t0, (DTB_MAGIC_OFFSET + 1)(a1)
+    li        t2, DTB_MAGIC_BYTE1
     bne       t0, t2, setup_cpu_slab
-    lbu       t0, 2(a1)
-    li        t2, 0xfe
+    lbu       t0, (DTB_MAGIC_OFFSET + 2)(a1)
+    li        t2, DTB_MAGIC_BYTE2
     bne       t0, t2, setup_cpu_slab
-    lbu       t0, 3(a1)
-    li        t2, 0xed
+    lbu       t0, (DTB_MAGIC_OFFSET + 3)(a1)
+    li        t2, DTB_MAGIC_BYTE3
     bne       t0, t2, setup_cpu_slab
 
     # Extract big-endian totalsize from DTB offset 4.
@@ -105,7 +105,7 @@ clear_bss_done:
 
     # Align size to 8 bytes and copy backwards (overlap-safe since a1 < t1).
     addi      t0, t0, 7
-    andi      t0, t0, -8
+    andi      t0, t0, STACK_ALIGN_MASK
     add       t2, a1, t0
     add       t4, t1, t0
 copy_dtb_loop:
@@ -181,5 +181,5 @@ dyn_boot_lock:
 .section .bss
 .align 16
 dyn_boot_stack:
-    .space 16384
+    .space INITIAL_FDT_PAD_BYTES
 dyn_boot_stack_top:

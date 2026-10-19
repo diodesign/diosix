@@ -11,6 +11,7 @@ const emulation_native = @import("emulation");
 pub const VCpu = emulation_native.VCpu;
 pub const Engine = emulation_native.Engine;
 const riscv = @import("../../../native/cpu/riscv64/mod.zig");
+const riscv_if = @import("interface").riscv;
 
 pub const ExceptionAction = enum {
     emulated,
@@ -20,9 +21,16 @@ pub const ExceptionAction = enum {
 };
 
 /// Exception delegation mask for medeleg.
-const MEDELEG_DEFAULT: u32 = 0xbdff;
+const MEDELEG_DEFAULT: u32 = @truncate(
+    riscv_if.DELEGATED_EXCEPTIONS |
+        (1 << @backingInt(riscv.Cause.illegal_instruction)) |
+        (1 << @backingInt(riscv.Cause.virtual_supervisor_environment_call)) |
+        (1 << @backingInt(riscv.Cause.machine_environment_call)),
+);
 /// Interrupt delegation mask for mideleg.
-const MIDELEG_DEFAULT: u32 = 0x222;
+const MIDELEG_DEFAULT: u32 = @truncate(
+    riscv.MIP.SSIP | riscv.MIP.STIP | riscv.MIP.SEIP,
+);
 
 /// Set up initial RISC-V register state for a new emulated vcore.
 pub fn initRegisters(
@@ -32,21 +40,28 @@ pub fn initRegisters(
     vcore_id: usize,
 ) void {
     vcpu.pc = @truncate(entry);
-    vcpu.setReg(@backingInt(riscv.Register.a0), @truncate(vcore_id));
-    vcpu.setReg(@backingInt(riscv.Register.a1), @truncate(dtb));
+    vcpu.setReg(
+        @truncate(@backingInt(riscv.Register.a0)),
+        @truncate(vcore_id),
+    );
+    vcpu.setReg(
+        @truncate(@backingInt(riscv.Register.a1)),
+        @truncate(dtb),
+    );
 
     vcpu.medeleg = MEDELEG_DEFAULT;
     vcpu.mideleg = MIDELEG_DEFAULT;
     vcpu.privilege_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
-    vcpu.priv_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
     vcpu.softtlb.privilege_mode = emulation_native.vcpu.PRIV_SUPERVISOR;
-    vcpu.mstatus = (1 << riscv.MSTATUS.MPP_SHIFT) |
-        (1 << riscv.SSTATUS.SPP_SHIFT) |
-        riscv.MSTATUS.MPIE |
-        riscv.SSTATUS.SPIE |
-        (1 << 21) |
-        (3 << riscv.MSTATUS.FS_SHIFT) |
-        (3 << riscv.MSTATUS.VS_SHIFT);
+    vcpu.mstatus = @truncate(
+        riscv.MSTATUS.MPP_SUPERVISOR |
+            riscv.MSTATUS.SPP |
+            riscv.MSTATUS.MPIE |
+            riscv.MSTATUS.SPIE |
+            riscv.MSTATUS.TW |
+            riscv.MSTATUS.FS_DIRTY |
+            riscv.MSTATUS.VS_DIRTY,
+    );
     vcpu.time = riscv.readTime();
 }
 
@@ -79,15 +94,16 @@ test "riscv32 arch register initialization and accessors" {
     try testing.expectEqual(@as(u32, 0x80000000), readPC(&cpu));
     try testing.expectEqual(
         @as(u32, 3),
-        readGpr(&cpu, @backingInt(riscv.Register.a0)),
+        readGpr(&cpu, @truncate(@backingInt(riscv.Register.a0))),
     );
     try testing.expectEqual(
         @as(u32, 0x82200000),
-        readGpr(&cpu, @backingInt(riscv.Register.a1)),
+        readGpr(&cpu, @truncate(@backingInt(riscv.Register.a1))),
     );
 
+    const t0: u5 = @truncate(@backingInt(riscv.Register.t0));
     writePC(&cpu, 0x80001000);
-    writeGpr(&cpu, 5, 0xcafebabe);
+    writeGpr(&cpu, t0, 0xcafebabe);
     try testing.expectEqual(@as(u32, 0x80001000), readPC(&cpu));
-    try testing.expectEqual(@as(u32, 0xcafebabe), readGpr(&cpu, 5));
+    try testing.expectEqual(@as(u32, 0xcafebabe), readGpr(&cpu, t0));
 }

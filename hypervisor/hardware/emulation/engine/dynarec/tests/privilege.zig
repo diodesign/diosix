@@ -60,11 +60,11 @@ test "Dynarec global vs ASID-specific block retention across context switches" {
 }
 
 test "Dynarec Zihintpause instruction decoding and verification" {
-    // 0x0100000F is standard RISC-V PAUSE (fence w, 0).
+    // 0x0100000f is standard RISC-V PAUSE (fence w, 0).
     const pause_dec = decoder_rv32.decode(0x0100_000f);
     try std.testing.expectEqual(decoder_rv32.Instruction.pause, pause_dec.insn);
 
-    // Regular fence (e.g. fence rw, rw: 0x0FF0000F) must decode as .fence.
+    // Regular fence (e.g. fence rw, rw: 0x0ff0000f) must decode as .fence.
     const fence_dec = decoder_rv32.decode(0x0ff0_000f);
     try std.testing.expectEqual(decoder_rv32.Instruction.fence, fence_dec.insn);
 }
@@ -76,7 +76,7 @@ test "Dynamic direct RAM mapping region resolution" {
     const ram_size: usize = 512 * 1024 * 1024;
     tlb.initOnPtr(gpa_base, hpa_base, ram_size);
 
-    // 1. Direct physical RAM address in direct window [0x80000000, 0xA0000000).
+    // 1. Direct physical RAM address in direct window [0x80000000, 0xa0000000).
     const ram_region = tlb.getDirectMappingRegion(0x8000_1000);
     try std.testing.expect(ram_region != null);
     try std.testing.expectEqual(
@@ -86,9 +86,9 @@ test "Dynamic direct RAM mapping region resolution" {
     try std.testing.expectEqual(@as(u32, 0xa000_0000), ram_region.?.vaddr_end);
     try std.testing.expectEqual(hpa_base, ram_region.?.hpa_start);
 
-    // 2. Verified Sv32 superpage mapping [0xC0000000, 0xC0400000).
+    // 2. Verified Sv32 superpage mapping [0xc0000000, 0xc0400000).
     tlb.satp = 0x8000_0000;
-    tlb.privilege_mode = 1;
+    tlb.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
     const slot = (0xc001_7bc4 >> 22) &
         (softtlb_mod.MAX_CONTIGUOUS_REGIONS - 1);
     tlb.contiguous_regions[slot] = .{
@@ -135,85 +135,87 @@ test "Dynarec privilege checks and architectural exception synchronization" {
     var jit_buffer: [4096]u8 align(4096) = undefined;
     eng.initOnPtr(&jit_buffer, &vcpu, &tlb, &bus);
 
-    // 1. User mode write to supervisor CSR satp (0x180) -> Cause 2.
+    const ill_cause: u32 = @backingInt(riscv.Cause.illegal_instruction);
+
+    // 1. User mode write to supervisor CSR satp (0x180) -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_USER;
-    vcpu.medeleg = 0xffff;
+    vcpu.medeleg = vcpu_mod.DELEGATE_ALL_MASK;
     vcpu.stvec = 0x8000_0000;
     const csrw_satp = decoder_rv32.decode(0x1805_1073);
     _ = eng.executeDecoded(csrw_satp, 0x1805_1073, 0x1000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0x1000), vcpu.sepc);
 
-    // 2. Write to read-only CSR cycle (0xC00) in M-mode -> Cause 2.
+    // 2. Write to read-only CSR cycle (0xc00) in M-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_MACHINE;
     vcpu.mcause = 0;
     const csrw_cycle = decoder_rv32.decode(0xc005_1073);
     _ = eng.executeDecoded(csrw_cycle, 0xc005_1073, 0x2000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.mcause);
+    try std.testing.expectEqual(ill_cause, vcpu.mcause);
     try std.testing.expectEqual(@as(u32, 0x2000), vcpu.mepc);
 
-    // 3. sret in U-mode -> Cause 2.
+    // 3. sret in U-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_USER;
     vcpu.scause = 0;
     const sret_insn = decoder_rv32.decode(0x1020_0073);
     _ = eng.executeDecoded(sret_insn, 0x1020_0073, 0x3000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0x3000), vcpu.sepc);
 
-    // 4. mret in S-mode -> Cause 2.
+    // 4. mret in S-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
     vcpu.scause = 0;
     const mret_insn = decoder_rv32.decode(0x3020_0073);
     _ = eng.executeDecoded(mret_insn, 0x3020_0073, 0x4000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0x4000), vcpu.sepc);
 
-    // 5. sfence.vma in U-mode -> Cause 2.
+    // 5. sfence.vma in U-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_USER;
     vcpu.scause = 0;
     const sfence_insn = decoder_rv32.decode(0x1200_0073);
     _ = eng.executeDecoded(sfence_insn, 0x1200_0073, 0x5000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0x5000), vcpu.sepc);
 
-    // 6. satp write with mstatus.TVM = 1 in S-mode -> Cause 2.
+    // 6. satp write with mstatus.TVM = 1 in S-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
     vcpu.mstatus = riscv.MSTATUS.TVM;
     vcpu.scause = 0;
     _ = eng.executeDecoded(csrw_satp, 0x1805_1073, 0x6000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0x6000), vcpu.sepc);
 
-    // 7. sfence.vma with mstatus.TVM = 1 in S-mode -> Cause 2.
+    // 7. sfence.vma with mstatus.TVM = 1 in S-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
     vcpu.mstatus = riscv.MSTATUS.TVM;
     vcpu.scause = 0;
     _ = eng.executeDecoded(sfence_insn, 0x1200_0073, 0x7000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0x7000), vcpu.sepc);
 
-    // 8. wfi in U-mode -> Cause 2.
+    // 8. wfi in U-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_USER;
     vcpu.scause = 0;
     const wfi_insn = decoder_rv32.decode(0x1050_0073);
     _ = eng.executeDecoded(wfi_insn, 0x1050_0073, 0x8000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0x8000), vcpu.sepc);
 
-    // 9. wfi with mstatus.TW = 1 in S-mode -> Cause 2.
+    // 9. wfi with mstatus.TW = 1 in S-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
     vcpu.mstatus = riscv.MSTATUS.TW;
     vcpu.scause = 0;
     _ = eng.executeDecoded(wfi_insn, 0x1050_0073, 0x9000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0x9000), vcpu.sepc);
 
-    // 10. sret with mstatus.TSR = 1 in S-mode -> Cause 2.
+    // 10. sret with mstatus.TSR = 1 in S-mode -> Illegal Instruction.
     vcpu.privilege_mode = vcpu_mod.PRIV_SUPERVISOR;
     vcpu.mstatus = riscv.MSTATUS.TSR;
     vcpu.scause = 0;
     _ = eng.executeDecoded(sret_insn, 0x1020_0073, 0xa000);
-    try std.testing.expectEqual(@as(u32, 2), vcpu.scause);
+    try std.testing.expectEqual(ill_cause, vcpu.scause);
     try std.testing.expectEqual(@as(u32, 0xa000), vcpu.sepc);
 }
 
@@ -323,4 +325,5 @@ test "Dynarec RV32I logical, shift, comparison and branch emission" {
     emitter_rv64.emit(tb.host_code, &off, emitter_rv64.bgeu(10, 11, 28));
 
     try std.testing.expectEqual(@as(usize, 68), off);
+    std.testing.refAllDecls(@This());
 }

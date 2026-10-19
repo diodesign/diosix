@@ -9,6 +9,7 @@ const api = @import("api.zig");
 const registry = @import("registry.zig");
 const sysconfig = @import("sysconfig.zig");
 
+pub const GUEST_REGISTRY_PATH = registry.GUEST_REGISTRY_PATH;
 pub const GuestRegistryKey = registry.GuestRegistryKey;
 pub const GuestRegistryEntry = registry.GuestRegistryEntry;
 pub const GuestRegistryIter = registry.GuestRegistryIter;
@@ -31,7 +32,30 @@ pub const MAX_MANIFEST_SIZE: usize = 1024 * 1024;
 
 pub const PAGE_SIZE_KB: usize = 4;
 pub const KB_PER_MB: usize = 1024;
+pub const DEV_MEM_PAGE_SIZE: usize = 4096;
+pub const DEFAULT_FILE_MODE: usize = 0o644;
+pub const PRIVATE_FILE_MODE: usize = 0o600;
 pub const CATALOG_CONFIG_PATH = "/etc/diosix/catalog.toml";
+
+pub const WAIT_SIGNAL_MASK: i32 = 0x7f;
+pub const WAIT_EXIT_SHIFT: u5 = 8;
+pub const WAIT_EXIT_MASK: i32 = 0xff;
+pub const WAIT_SIGNAL_EXIT_BASE: u32 = 128;
+pub const SUBPROCESS_EXEC_ERR: u8 = 127;
+pub const SUBPROCESS_WAIT_ERR: u32 = 255;
+
+pub const TargetAlias = enum {
+    self,
+    parent,
+    root,
+    current,
+    @"0",
+};
+
+pub const JsonFlag = enum {
+    @"--json",
+    @"-j",
+};
 
 pub const LinuxDirent64 = extern struct {
     d_ino: u64,
@@ -45,12 +69,15 @@ pub fn printStr(str: []const u8) void {
     _ = linux.write(linux.STDOUT_FILENO, str.ptr, str.len);
 }
 
+pub fn isJsonFlag(arg: []const u8) bool {
+    return std.meta.stringToEnum(JsonFlag, arg) != null;
+}
+
 pub fn parseCid(str: []const u8) !usize {
-    const CidAlias = enum { self, parent };
-    if (std.meta.stringToEnum(CidAlias, str)) |alias| {
+    if (std.meta.stringToEnum(TargetAlias, str)) |alias| {
         return switch (alias) {
-            .self => CID_SELF,
-            .parent => CID_PARENT,
+            .self, .current => CID_SELF,
+            .parent, .root, .@"0" => CID_PARENT,
         };
     }
     return std.fmt.parseInt(usize, str, 10);
@@ -125,14 +152,58 @@ pub fn sanitizeJsonStr(buf: []u8, raw: []const u8) []const u8 {
     return buf[0..out_len];
 }
 
-pub fn trimWhitespace(s: []const u8) []const u8 {
+pub fn trimAscii(s: []const u8) []const u8 {
     return std.mem.trim(u8, s, " \t\r\n");
+}
+
+pub fn trimWhitespace(s: []const u8) []const u8 {
+    return trimAscii(s);
+}
+
+pub fn unquoteToml(raw: []const u8) []const u8 {
+    var s = trimAscii(raw);
+    if (std.mem.indexOfScalar(u8, s, '#')) |c_idx| {
+        if (s.len == 0 or (s[0] != '"' and s[0] != '\'')) {
+            s = trimAscii(s[0..c_idx]);
+        } else if (std.mem.indexOfScalarPos(u8, s, 1, s[0])) |close_q| {
+            if (c_idx > close_q) s = trimAscii(s[0..c_idx]);
+        }
+    }
+    if (s.len >= 2 and
+        ((s[0] == '"' and s[s.len - 1] == '"') or
+            (s[0] == '\'' and s[s.len - 1] == '\'')))
+    {
+        return s[1 .. s.len - 1];
+    }
+    return s;
 }
 
 pub fn copyStr(buf: []u8, src: []const u8) []const u8 {
     const copy_len = @min(buf.len, src.len);
     @memcpy(buf[0..copy_len], src[0..copy_len]);
     return buf[0..copy_len];
+}
+
+pub fn setFixedBuf(dest: []u8, len_out: *usize, src: []const u8) void {
+    const n = @min(src.len, dest.len);
+    @memcpy(dest[0..n], src[0..n]);
+    len_out.* = n;
+}
+
+pub fn bytesToHex(bytes: []const u8, out: []u8) []const u8 {
+    const hex_chars = "0123456789abcdef";
+    const n = @min(bytes.len, out.len / 2);
+    for (bytes[0..n], 0..) |b, i| {
+        out[i * 2] = hex_chars[b >> 4];
+        out[i * 2 + 1] = hex_chars[b & 0x0f];
+    }
+    return out[0 .. n * 2];
+}
+
+pub fn sha256Hex(data: []const u8, out: *[64]u8) []const u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(data, &digest, .{});
+    return bytesToHex(&digest, out);
 }
 
 pub fn toPathZ(path: []const u8, buf: []u8) ?[:0]const u8 {
@@ -200,14 +271,18 @@ pub fn readBinaryFile(path: []const u8, max_size: usize) ![]u8 {
     const fd: i32 = @intCast(fd_signed);
     defer _ = linux.close(fd);
 
-    const end_offset = linux.lseek(fd, 0, 2); // SEEK_END.
-    _ = linux.lseek(fd, 0, 0); // SEEK_SET.
+    const end_offset = linux.lseek(fd, 0, linux.SEEK.END);
+    _ = linux.lseek(fd, 0, linux.SEEK.SET);
     const end_signed: isize = @bitCast(end_offset);
     var file_size: usize = max_size;
     if (end_signed > 0) {
         file_size = @min(@as(usize, @intCast(end_signed)), max_size);
     }
-    const alloc_size = (file_size + 4095) & ~@as(usize, 4095);
+    const alloc_size = std.mem.alignForward(
+        usize,
+        file_size,
+        DEV_MEM_PAGE_SIZE,
+    );
 
     const anon_res = linux.mmap(
         null,
@@ -232,7 +307,11 @@ pub fn readBinaryFile(path: []const u8, max_size: usize) ![]u8 {
         _ = linux.munmap(buf, alloc_size);
         return @constCast(&[_]u8{});
     }
-    const used_alloc = (total_read + 4095) & ~@as(usize, 4095);
+    const used_alloc = std.mem.alignForward(
+        usize,
+        total_read,
+        DEV_MEM_PAGE_SIZE,
+    );
     if (used_alloc < alloc_size) {
         _ = linux.munmap(buf + used_alloc, alloc_size - used_alloc);
     }
@@ -241,7 +320,11 @@ pub fn readBinaryFile(path: []const u8, max_size: usize) ![]u8 {
 
 pub fn unmapBinaryFile(slice: []const u8) void {
     if (slice.len > 0) {
-        const alloc_size = (slice.len + 4095) & ~@as(usize, 4095);
+        const alloc_size = std.mem.alignForward(
+            usize,
+            slice.len,
+            DEV_MEM_PAGE_SIZE,
+        );
         _ = linux.munmap(@constCast(slice.ptr), alloc_size);
     }
 }
@@ -258,7 +341,7 @@ pub fn writeFile(path: []const u8, content: []const u8) !void {
         .TRUNC = true,
     };
     const zpath: [*:0]const u8 = @ptrCast(path_buf[0..path.len :0]);
-    const fd_res = linux.open(zpath, flags, 0o644);
+    const fd_res = linux.open(zpath, flags, DEFAULT_FILE_MODE);
     const fd_signed: isize = @bitCast(fd_res);
     if (fd_signed < 0) return error.CannotOpenFile;
     const fd: i32 = @intCast(fd_signed);
@@ -269,7 +352,7 @@ pub fn writeFile(path: []const u8, content: []const u8) !void {
         const rem = content.len - written;
         const rc = linux.write(fd, content.ptr + written, rem);
         const signed_rc: isize = @bitCast(rc);
-        if (signed_rc <= 0) break;
+        if (signed_rc <= 0) return error.WriteFailed;
         written += @intCast(signed_rc);
     }
 }
@@ -284,28 +367,36 @@ pub fn fileExistsPath(path: [*:0]const u8) bool {
     return false;
 }
 
-pub fn appendFileLine(path: [*:0]const u8, line: []const u8) void {
+pub fn appendFileLine(path: [*:0]const u8, line: []const u8) !void {
     const flags: linux.O = .{
         .ACCMODE = .WRONLY,
         .CREAT = true,
         .APPEND = true,
     };
-    const fd_res = linux.open(path, flags, 0o600);
+    const fd_res = linux.open(path, flags, PRIVATE_FILE_MODE);
     const fd_signed: isize = @bitCast(fd_res);
-    if (fd_signed >= 0) {
-        const fd: i32 = @intCast(fd_signed);
-        defer _ = linux.close(fd);
-        _ = linux.write(fd, line.ptr, line.len);
-        if (line.len == 0 or line[line.len - 1] != '\n') {
-            _ = linux.write(fd, "\n", 1);
-        }
+    if (fd_signed < 0) return error.CannotOpenFile;
+    const fd: i32 = @intCast(fd_signed);
+    defer _ = linux.close(fd);
+
+    var written: usize = 0;
+    while (written < line.len) {
+        const rc = linux.write(fd, line.ptr + written, line.len - written);
+        const signed_rc: isize = @bitCast(rc);
+        if (signed_rc <= 0) return error.WriteFailed;
+        written += @intCast(signed_rc);
+    }
+    if (line.len == 0 or line[line.len - 1] != '\n') {
+        const nl_rc = linux.write(fd, "\n", 1);
+        const nl_signed: isize = @bitCast(nl_rc);
+        if (nl_signed <= 0) return error.WriteFailed;
     }
 }
 
 pub fn runSubprocess(argv: [*:null]const ?[*:0]const u8) u32 {
     const pid_res = linux.fork();
     const pid_signed: isize = @bitCast(pid_res);
-    if (pid_signed < 0) return 255;
+    if (pid_signed < 0) return SUBPROCESS_WAIT_ERR;
     if (pid_signed == 0) {
         const devnull_res = linux.open("/dev/null", .{ .ACCMODE = .RDWR }, 0);
         const devnull_signed: isize = @bitCast(devnull_res);
@@ -319,7 +410,7 @@ pub fn runSubprocess(argv: [*:null]const ?[*:0]const u8) u32 {
             null,
         };
         _ = linux.execve(argv[0].?, argv, envp);
-        linux.exit(127);
+        linux.exit(SUBPROCESS_EXEC_ERR);
     }
     const pid: i32 = @intCast(pid_signed);
     var status: i32 = 0;
@@ -328,12 +419,13 @@ pub fn runSubprocess(argv: [*:null]const ?[*:0]const u8) u32 {
         const wait_signed: isize = @bitCast(wait_res);
         if (wait_signed >= 0) break;
         if (wait_signed == -@as(isize, @backingInt(linux.E.INTR))) continue;
-        return 255;
+        return SUBPROCESS_WAIT_ERR;
     }
-    if ((status & 0x7f) == 0) {
-        return @intCast((status >> 8) & 0xff);
+    if ((status & WAIT_SIGNAL_MASK) == 0) {
+        return @intCast((status >> WAIT_EXIT_SHIFT) & WAIT_EXIT_MASK);
     }
-    return 128 + @as(u32, @intCast(status & 0x7f));
+    return WAIT_SIGNAL_EXIT_BASE +
+        @as(u32, @intCast(status & WAIT_SIGNAL_MASK));
 }
 
 pub fn detectSeatProfile() []const u8 {
@@ -361,7 +453,7 @@ pub fn detectBootMode() []const u8 {
     return "installed";
 }
 
-pub fn generateEntropyBytes(out: []u8) void {
+pub fn generateEntropyBytes(out: []u8) !void {
     const gr_rc = linux.getrandom(out.ptr, out.len, 0);
     const gr_signed: isize = @bitCast(gr_rc);
     if (gr_signed == @as(isize, @intCast(out.len))) return;
@@ -381,9 +473,7 @@ pub fn generateEntropyBytes(out: []u8) void {
         }
         if (read_total == out.len) return;
     }
-    for (out, 0..) |*b, idx| {
-        b.* = @truncate((idx *% 0x9e3779b9) ^ 0xa5);
-    }
+    return error.EntropyUnavailable;
 }
 
 pub fn loadRuntimeSystemConfig() sysconfig.SystemConfig {

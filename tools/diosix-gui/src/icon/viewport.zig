@@ -456,3 +456,7 @@ pub fn renderSlateCard(
         surface.popClip(sub_clip);
     }
 }
+
+test {
+    std.testing.refAllDecls(@This());
+}

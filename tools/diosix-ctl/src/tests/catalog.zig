@@ -141,4 +141,5 @@ test "formatCatalogTable and formatCatalogJson follow sentence-case style" {
     try testing.expect(
         std.mem.indexOf(u8, js, "\"id\":\"openbsd-riscv64\"") != null,
     );
+    testing.refAllDecls(@This());
 }

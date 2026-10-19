@@ -7,6 +7,13 @@
 const std = @import("std");
 
 pub const MAX_NOISE_DIM: usize = 256;
+pub const FP16_SHIFT: u5 = 16;
+pub const FP16_SCALE: usize = 1 << FP16_SHIFT;
+pub const FP8_SHIFT: u5 = 8;
+pub const FP8_SCALE: i32 = 1 << FP8_SHIFT;
+pub const FP8_MASK: usize = 0xff;
+pub const GRAD_SHIFT: u5 = 7;
+pub const GRAD_MASK: u32 = 0x07;
 
 // 8 standard 2D unit/diagonal gradients scaled to ~128 (7-bit fixed point).
 // Axis vectors: 128. Diagonal vectors: 90 (90 * sqrt(2) ~= 127.3).
@@ -25,15 +32,15 @@ pub inline fn getGradientIndex(
     const wy: u32 = @intCast(y % freq);
     var h: u32 = wx *% 374761393 +% wy *% 668265263 +% seed;
     h = (h ^ (h >> 13)) *% 1274126177;
-    h = h ^ (h >> 16);
-    return @intCast(h & 7);
+    h = h ^ (h >> FP16_SHIFT);
+    return @intCast(h & GRAD_MASK);
 }
 
 // Fixed-point smoothstep polynomial: s(t) = t^2 * (3 - 2t).
 // t is in [0..256] (8.8 fixed point), returns [0..256].
 pub inline fn smoothstep8(t: i32) i32 {
-    const clamped = std.math.clamp(t, 0, 256);
-    return (clamped * clamped * (768 - 2 * clamped)) >> 16;
+    const clamped = std.math.clamp(t, 0, FP8_SCALE);
+    return (clamped * clamped * (3 * FP8_SCALE - 2 * clamped)) >> FP16_SHIFT;
 }
 
 // Evaluates a single octave of 2D periodic gradient noise at integer pixel
@@ -46,41 +53,41 @@ pub fn evaluatePeriodicGradientNoise(
     seed: u32,
 ) i32 {
     if (dim == 0 or freq == 0) return 0;
-    const step_fp: usize = (freq * 65536) / dim;
+    const step_fp: usize = (freq * FP16_SCALE) / dim;
 
     const x_fp = x * step_fp;
     const y_fp = y * step_fp;
 
-    const x0 = (x_fp >> 16) % freq;
+    const x0 = (x_fp >> FP16_SHIFT) % freq;
     const x1 = (x0 + 1) % freq;
-    const y0 = (y_fp >> 16) % freq;
+    const y0 = (y_fp >> FP16_SHIFT) % freq;
     const y1 = (y0 + 1) % freq;
 
-    const fx: i32 = @intCast((x_fp >> 8) & 0xff);
-    const fy: i32 = @intCast((y_fp >> 8) & 0xff);
+    const fx: i32 = @intCast((x_fp >> FP8_SHIFT) & FP8_MASK);
+    const fy: i32 = @intCast((y_fp >> FP8_SHIFT) & FP8_MASK);
 
     const sx = smoothstep8(fx);
     const sy = smoothstep8(fy);
 
     // Distance vectors from cell corners in [-128..127].
     const dx0 = fx >> 1;
-    const dx1 = (fx - 256) >> 1;
+    const dx1 = (fx - FP8_SCALE) >> 1;
     const dy0 = fy >> 1;
-    const dy1 = (fy - 256) >> 1;
+    const dy1 = (fy - FP8_SCALE) >> 1;
 
     const g00 = getGradientIndex(x0, y0, freq, seed);
     const g10 = getGradientIndex(x1, y0, freq, seed);
     const g01 = getGradientIndex(x0, y1, freq, seed);
     const g11 = getGradientIndex(x1, y1, freq, seed);
 
-    const d00 = (dx0 * GRAD_X[g00] + dy0 * GRAD_Y[g00]) >> 7;
-    const d10 = (dx1 * GRAD_X[g10] + dy0 * GRAD_Y[g10]) >> 7;
-    const d01 = (dx0 * GRAD_X[g01] + dy1 * GRAD_Y[g01]) >> 7;
-    const d11 = (dx1 * GRAD_X[g11] + dy1 * GRAD_Y[g11]) >> 7;
+    const d00 = (dx0 * GRAD_X[g00] + dy0 * GRAD_Y[g00]) >> GRAD_SHIFT;
+    const d10 = (dx1 * GRAD_X[g10] + dy0 * GRAD_Y[g10]) >> GRAD_SHIFT;
+    const d01 = (dx0 * GRAD_X[g01] + dy1 * GRAD_Y[g01]) >> GRAD_SHIFT;
+    const d11 = (dx1 * GRAD_X[g11] + dy1 * GRAD_Y[g11]) >> GRAD_SHIFT;
 
-    const top = d00 + (((d10 - d00) * sx) >> 8);
-    const bot = d01 + (((d11 - d01) * sx) >> 8);
-    return top + (((bot - top) * sy) >> 8);
+    const top = d00 + (((d10 - d00) * sx) >> FP8_SHIFT);
+    const bot = d01 + (((d11 - d01) * sx) >> FP8_SHIFT);
+    return top + (((bot - top) * sy) >> FP8_SHIFT);
 }
 
 // Generates a seamless, tiling 2D cloud texture buffer of size dim x dim
@@ -96,8 +103,8 @@ pub fn generatePeriodicFbm(
     std.debug.assert(dim <= MAX_NOISE_DIM);
     std.debug.assert(out.len >= dim * dim);
 
-    var accum_buf: [MAX_NOISE_DIM * MAX_NOISE_DIM]i32 = undefined;
-    const accum = accum_buf[0 .. dim * dim];
+    const accum = std.heap.page_allocator.alloc(i32, dim * dim) catch return;
+    defer std.heap.page_allocator.free(accum);
     @memset(accum, 0);
 
     var amp: i32 = 128;
@@ -141,6 +148,7 @@ pub fn generatePeriodicFbm(
 }
 
 test "noise: smoothstep boundary conditions" {
+    std.testing.refAllDecls(@This());
     try std.testing.expectEqual(@as(i32, 0), smoothstep8(0));
     try std.testing.expectEqual(@as(i32, 128), smoothstep8(128));
     try std.testing.expectEqual(@as(i32, 256), smoothstep8(256));

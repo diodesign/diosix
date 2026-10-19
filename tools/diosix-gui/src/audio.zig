@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const linux = std.os.linux;
+const display_mod = @import("display.zig");
 
 pub const INTRO_WAV_BYTES: []const u8 = @embedFile("intro.wav");
 
@@ -20,7 +21,7 @@ pub const WavInfo = struct {
 };
 
 pub fn parseWav(wav_bytes: []const u8) ?WavInfo {
-    if (wav_bytes.len < 44) return null;
+    if (wav_bytes.len < WAV_MIN_HEADER_LEN) return null;
     if (!std.mem.eql(u8, wav_bytes[0..4], "RIFF")) return null;
     if (!std.mem.eql(u8, wav_bytes[8..12], "WAVE")) return null;
 
@@ -52,13 +53,13 @@ pub fn parseWav(wav_bytes: []const u8) ?WavInfo {
                     if (chunk_size < 16 or pos + 16 > wav_bytes.len) {
                         return null;
                     }
-                    // audio_format must be 1 (PCM).
+                    // audio_format must be PCM_FORMAT_TAG (1 = PCM).
                     const audio_format = std.mem.readInt(
                         u16,
                         wav_bytes[pos .. pos + 2][0..2],
                         .little,
                     );
-                    if (audio_format != 1) return null;
+                    if (audio_format != PCM_FORMAT_TAG) return null;
                     channels = std.mem.readInt(
                         u16,
                         wav_bytes[pos + 2 .. pos + 4][0..2],
@@ -120,20 +121,19 @@ pub fn parseWav(wav_bytes: []const u8) ?WavInfo {
     };
 }
 
-// OSS constants.
+// OSS and PCM constants.
+pub const WAV_MIN_HEADER_LEN: usize = 44;
+pub const PCM_FORMAT_TAG: u16 = 1;
+pub const PCM_24BIT_SIGN_BIT: u32 = 0x80;
+pub const PCM_24BIT_SIGN_EXT: u32 = 0xff000000;
+pub const PCM_CHUNK_BYTES: usize = 16384;
 const SNDCTL_DSP_RESET: u32 = 0x00005000;
 const SNDCTL_DSP_SPEED: u32 = 0xc0045002;
 const SNDCTL_DSP_CHANNELS: u32 = 0xc0045006;
 const SNDCTL_DSP_SETFMT: u32 = 0xc0045005;
 const AFMT_S16_LE: u32 = 0x00000010;
 
-fn getMilliTimestamp() i64 {
-    var ts: linux.timespec = undefined;
-    _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
-    const sec_ms = @as(i64, @intCast(ts.sec)) * 1000;
-    const nsec_ms = @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
-    return sec_ms + nsec_ms;
-}
+const getMilliTimestamp = display_mod.getMilliTimestamp;
 
 pub const AudioPlayer = struct {
     thread: ?std.Thread = null,
@@ -252,7 +252,7 @@ pub const AudioPlayer = struct {
         self.playback_started.store(true, .release);
 
         // 16-bit conversion buffer (4096 stereo samples = 16384 bytes).
-        var chunk_buf: [16384]u8 = undefined;
+        var chunk_buf: [PCM_CHUNK_BYTES]u8 = undefined;
         const chunk_samples: usize =
             chunk_buf.len / (@as(usize, info.channels) * 2);
 
@@ -290,8 +290,9 @@ pub const AudioPlayer = struct {
                         const b0 = @as(u32, pcm_raw[src_offset + 0]);
                         const b1 = @as(u32, pcm_raw[src_offset + 1]);
                         const b2 = @as(u32, pcm_raw[src_offset + 2]);
+                        const is_neg = (b2 & PCM_24BIT_SIGN_BIT) != 0;
                         const sign_ext: u32 =
-                            if ((b2 & 0x80) != 0) 0xff000000 else 0;
+                            if (is_neg) PCM_24BIT_SIGN_EXT else 0;
                         const val24: i32 = @bitCast(
                             (b0 | (b1 << 8) | (b2 << 16)) | sign_ext,
                         );
@@ -361,6 +362,7 @@ pub const AudioPlayer = struct {
 };
 
 test "audio: parse intro.wav metadata" {
+    std.testing.refAllDecls(@This());
     const info = parseWav(INTRO_WAV_BYTES);
     try std.testing.expect(info != null);
     const w = info.?;

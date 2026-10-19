@@ -8,6 +8,10 @@ const linux = std.os.linux;
 const api = @import("api.zig");
 const passkey = @import("passkey.zig");
 const common = @import("common.zig");
+const enroll = @import("auth/enroll.zig");
+
+pub const AuthEnrollOption = enroll.AuthEnrollOption;
+pub const cmdAuthEnroll = enroll.cmdAuthEnroll;
 
 const printStr = common.printStr;
 const sanitizeJsonStr = common.sanitizeJsonStr;
@@ -16,7 +20,6 @@ const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
 const writeFile = common.writeFile;
 const fileExistsPath = common.fileExistsPath;
-const appendFileLine = common.appendFileLine;
 const detectSeatProfile = common.detectSeatProfile;
 const detectBootMode = common.detectBootMode;
 const generateEntropyBytes = common.generateEntropyBytes;
@@ -30,20 +33,6 @@ const AuthSubcommand = enum {
     verify,
 };
 
-const AuthEnrollOption = enum {
-    @"--key",
-    @"-k",
-    @"--file",
-    @"-f",
-    @"--label",
-    @"-l",
-    @"--tpm",
-    @"--fido2",
-    @"--qr",
-    @"--json",
-    @"-j",
-};
-
 const AuthVerifyOption = enum {
     @"--challenge",
     @"-c",
@@ -53,6 +42,7 @@ const AuthVerifyOption = enum {
 
 pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
+    const sys_cfg = common.loadRuntimeSystemConfig();
     _ = client;
     if (args.len == 0) {
         var buf: [1024]u8 = undefined;
@@ -75,22 +65,31 @@ pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const subcmd = std.mem.span(args[0]);
     var json_mode = false;
     for (args[1..]) |arg| {
-        const span = std.mem.span(arg);
-        if (std.mem.eql(u8, span, "--json") or std.mem.eql(u8, span, "-j")) {
+        if (common.isJsonFlag(std.mem.span(arg))) {
             json_mode = true;
         }
     }
 
     _ = linux.mkdir("/var/lib/diosix", 0o755);
-    _ = linux.mkdir("/var/lib/diosix/keys", 0o700);
+    var keys_dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    if (common.toPathZ(sys_cfg.keysDir(), &keys_dir_z_buf)) |kdz| {
+        _ = linux.mkdir(kdz.ptr, 0o700);
+    }
     _ = linux.mkdir("/run/diosix", 0o755);
     _ = linux.mkdir("/root/.ssh", 0o700);
+
+    var auth_pk_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    const auth_pk_path = std.fmt.bufPrint(
+        &auth_pk_buf,
+        "{s}/authorized_passkeys",
+        .{sys_cfg.keysDir()},
+    ) catch passkey.AUTHORIZED_PASSKEYS_PATH;
 
     var pk_mapped: ?[]u8 = null;
     defer if (pk_mapped) |m| unmapBinaryFile(m);
     var entries: [passkey.MAX_PASSKEYS]passkey.PasskeyEntry = undefined;
     var entry_count: usize = 0;
-    if (readBinaryFile(passkey.AUTHORIZED_PASSKEYS_PATH, 65536)) |content| {
+    if (readBinaryFile(auth_pk_path, 65536)) |content| {
         pk_mapped = content;
         entry_count = passkey.parseAuthorizedPasskeys(content, &entries);
     } else |_| {}
@@ -218,7 +217,8 @@ pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         },
         .challenge => {
             var nonce_bytes: [passkey.CHALLENGE_BYTES]u8 = undefined;
-            generateEntropyBytes(&nonce_bytes);
+            try generateEntropyBytes(&nonce_bytes);
+            defer std.crypto.secureZero(u8, &nonce_bytes);
             var nonce_hex_buf: [passkey.CHALLENGE_HEX_LEN]u8 = undefined;
             const nonce_hex = passkey.bytesToHex(&nonce_bytes, &nonce_hex_buf);
 
@@ -229,7 +229,7 @@ pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 cfmt,
                 .{nonce_hex},
             ) catch return;
-            writeFile(passkey.CHALLENGE_STATE_PATH, chal_str) catch {};
+            try writeFile(passkey.CHALLENGE_STATE_PATH, chal_str);
 
             var out_buf: [256]u8 = undefined;
             const out = if (json_mode)
@@ -325,166 +325,9 @@ pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     }
 }
 
-fn cmdAuthEnroll(
-    args: []const [*:0]const u8,
-    seat_profile: []const u8,
-    initial_json: bool,
-) !void {
-    var key_arg: ?[]const u8 = null;
-    var file_arg: ?[]const u8 = null;
-    var label_arg: []const u8 = "operator@diosix";
-    var tpm_mode = false;
-    var fido2_mode = false;
-    var qr_mode = false;
-    var json_mode = initial_json;
-
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const span = std.mem.span(args[i]);
-        if (std.meta.stringToEnum(AuthEnrollOption, span)) |opt| {
-            switch (opt) {
-                .@"--key", .@"-k" => {
-                    if (i + 1 >= args.len) {
-                        printStr(
-                            "Error: Option '--key' requires a public key.\n",
-                        );
-                        return;
-                    }
-                    i += 1;
-                    key_arg = std.mem.span(args[i]);
-                },
-                .@"--file", .@"-f" => {
-                    if (i + 1 >= args.len) {
-                        printStr(
-                            "Error: Option '--file' requires a file path.\n",
-                        );
-                        return;
-                    }
-                    i += 1;
-                    file_arg = std.mem.span(args[i]);
-                },
-                .@"--label", .@"-l" => {
-                    if (i + 1 >= args.len) {
-                        printStr(
-                            "Error: Option '--label' requires a label.\n",
-                        );
-                        return;
-                    }
-                    i += 1;
-                    label_arg = std.mem.span(args[i]);
-                },
-                .@"--tpm" => tpm_mode = true,
-                .@"--fido2" => fido2_mode = true,
-                .@"--qr" => qr_mode = true,
-                .@"--json", .@"-j" => json_mode = true,
-            }
-        }
-    }
-
-    if (qr_mode) {
-        var nonce_bytes: [passkey.CHALLENGE_BYTES]u8 = undefined;
-        generateEntropyBytes(&nonce_bytes);
-        var nonce_hex_buf: [passkey.CHALLENGE_HEX_LEN]u8 = undefined;
-        const nonce_hex = passkey.bytesToHex(&nonce_bytes, &nonce_hex_buf);
-        var uri_buf: [256]u8 = undefined;
-        const uri = passkey.formatEnrollmentQrUri(
-            &uri_buf,
-            nonce_hex,
-            seat_profile,
-        );
-
-        var out_buf: [384]u8 = undefined;
-        const out = if (json_mode)
-            std.fmt.bufPrint(
-                &out_buf,
-                "{{\"status\":\"qr_ready\",\"uri\":\"{s}\"," ++
-                    "\"seat\":\"{s}\",\"challenge\":\"{s}\"}}\n",
-                .{ uri, seat_profile, nonce_hex },
-            ) catch return
-        else
-            std.fmt.bufPrint(
-                &out_buf,
-                "WebAuthn passkey QR URI : {s}\n",
-                .{uri},
-            ) catch return;
-        printStr(out);
-        return;
-    }
-
-    var synth_line_buf: [256]u8 = undefined;
-    var file_mapped: ?[]u8 = null;
-    defer if (file_mapped) |m| unmapBinaryFile(m);
-
-    var line_to_enroll: ?[]const u8 = key_arg;
-    if (line_to_enroll == null and file_arg != null) {
-        if (readBinaryFile(file_arg.?, 4096)) |fbytes| {
-            file_mapped = fbytes;
-            line_to_enroll = trimWhitespace(fbytes);
-        } else |_| {
-            printStr("Error: Could not read public key file.\n");
-            return;
-        }
-    } else if (line_to_enroll == null and (tpm_mode or fido2_mode)) {
-        var seed: [32]u8 = undefined;
-        generateEntropyBytes(&seed);
-        const kp = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(
-            seed,
-        ) catch return;
-        var b64_buf: [68]u8 = undefined;
-        const b64_str = passkey.encodeOpenSshEd25519BlobBase64(
-            kp.public_key.toBytes(),
-            &b64_buf,
-        );
-        const prefix_comment = if (tpm_mode) "tpm2:" else "fido2:";
-        line_to_enroll = std.fmt.bufPrint(
-            &synth_line_buf,
-            "ssh-ed25519 {s} {s}{s}",
-            .{ b64_str, prefix_comment, label_arg },
-        ) catch return;
-    }
-
-    if (line_to_enroll == null) {
-        printStr(
-            "Error: Specify '--key <pubkey>', '--file <path>', " ++
-                "'--tpm', '--fido2', or '--qr'.\n",
-        );
-        return;
-    }
-
-    const validated = passkey.parsePasskeyLine(line_to_enroll.?) orelse {
-        printStr(
-            "Error: Invalid OpenSSH or FIDO2 passkey public key format.\n",
-        );
-        return;
-    };
-
-    appendFileLine(passkey.AUTHORIZED_PASSKEYS_PATH, line_to_enroll.?);
-    appendFileLine(passkey.ROOT_AUTHORIZED_KEYS_PATH, line_to_enroll.?);
-
-    var out_buf: [384]u8 = undefined;
-    var c_buf: [128]u8 = undefined;
-    const out = if (json_mode)
-        std.fmt.bufPrint(
-            &out_buf,
-            "{{\"status\":\"enrolled\",\"kind\":\"{s}\"," ++
-                "\"fingerprint\":\"{s}\",\"comment\":\"{s}\"}}\n",
-            .{
-                validated.kind.label(),
-                &validated.fingerprint_hex,
-                sanitizeJsonStr(&c_buf, validated.comment),
-            },
-        ) catch return
-    else
-        std.fmt.bufPrint(
-            &out_buf,
-            "✓ Enrolled passkey ({s}, fingerprint {s})\n",
-            .{ validated.kind.label(), &validated.fingerprint_hex },
-        ) catch return;
-    printStr(out);
-}
-
 test "auth_cmd: subcommand and option enums parse cleanly" {
     std.testing.refAllDecls(@This());
+    _ = enroll;
     try std.testing.expectEqual(
         AuthSubcommand.enroll,
         std.meta.stringToEnum(AuthSubcommand, "enroll").?,

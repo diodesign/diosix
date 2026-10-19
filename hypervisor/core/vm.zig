@@ -278,7 +278,7 @@ pub const GuestSpace = struct {
             const cur_gpa = dst_gpa + check_off;
             const cur_hpa = try self.translateGPA(cur_gpa);
             const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
-            const chunk = @min(src.len - check_off, page_rem);
+            const chunk: usize = @min(src.len - check_off, page_rem);
             if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
                 return error.AccessDenied;
             }
@@ -291,7 +291,7 @@ pub const GuestSpace = struct {
             const cur_gpa = dst_gpa + transferred;
             const cur_hpa = try self.translateGPA(cur_gpa);
             const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
-            const chunk = @min(src.len - transferred, page_rem);
+            const chunk: usize = @min(src.len - transferred, page_rem);
             if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
                 return error.AccessDenied;
             }
@@ -320,7 +320,7 @@ pub const GuestSpace = struct {
             const cur_gpa = src_gpa + check_off;
             const cur_hpa = try self.translateGPA(cur_gpa);
             const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
-            const chunk = @min(dst.len - check_off, page_rem);
+            const chunk: usize = @min(dst.len - check_off, page_rem);
             if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
                 return error.AccessDenied;
             }
@@ -333,7 +333,7 @@ pub const GuestSpace = struct {
             const cur_gpa = src_gpa + transferred;
             const cur_hpa = try self.translateGPA(cur_gpa);
             const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
-            const chunk = @min(dst.len - transferred, page_rem);
+            const chunk: usize = @min(dst.len - transferred, page_rem);
             if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
                 return error.AccessDenied;
             }
@@ -368,6 +368,7 @@ pub const GuestSpace = struct {
 };
 
 test "GuestSpace GPA to HPA translation and PMP fallback shielding" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
     var phys_test = try physmem.initForTest(testing.allocator, 128);
