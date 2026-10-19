@@ -2,10 +2,15 @@
 
 ## 1. Overview and security model
 
-Diosix isolates the **presentation layer** (`sys.gui`) from the **host
-administration layer** (`sys.config`) while providing a zero-dependency
-Direct Rendering Manager / Kernel Mode Setting (DRM/KMS) desktop environment
-(`diosix-gui`):
+Diosix isolates the **presentation layer** (`sys.gui`, Context ID (CID) `2`)
+from the **host administration layer** (`sys.config`) while providing a
+zero-dependency Direct Rendering Manager (DRM) and Kernel Mode Setting (KMS)
+desktop environment (`diosix-gui`). Domains communicate over Virtual Socket
+(VSOCK) and shared-memory Inter-Process Communication (IPC) channels, rendering
+Remote Framebuffer (RFB) and Wayland client surfaces inside Windows, Icons,
+Menus, and Pointer (WIMP) frames with a dockable On-Screen Keyboard (OSK), a
+Virtual Machine (VM) management dashboard, and isolated Wide Area Network (WAN)
+rules:
 
 ```text
 +----------------------------------------------------------------------------+
@@ -17,10 +22,10 @@ Direct Rendering Manager / Kernel Mode Setting (DRM/KMS) desktop environment
 |               GUI DOMAIN (`sys.gui` / CID 2 - Hardware Trust)              |
 |                                                                            |
 |  +----------------------------------------------------------------------+  |
-|  |            Monolithic Desktop Compositor (diosix-gui / diosix-wm)    |  |
+|  |                 Monolithic Desktop Compositor (diosix-gui)           |  |
 |  |                                                                      |  |
 |  |  * Drives DRM/KMS scanout buffer & captures evdev/touch seat input   |  |
-|  |  * Optical glass panes, dynamic sky backdrop, and Wimp window frames |  |
+|  |  * Optical glass panes, dynamic sky backdrop, and WIMP window frames |  |
 |  |  * Dockable on-screen virtual keyboard (OSK) & 5-step Guided Tour    |  |
 |  |  * Headless semantic JSON control plane (/run/diosix/gui_state.json) |  |
 |  +------------------^----------------------------^--------------------^-+  |
@@ -51,7 +56,7 @@ Direct Rendering Manager / Kernel Mode Setting (DRM/KMS) desktop environment
 
 ## 2. Monolithic desktop compositor (`diosix-gui`)
 
-Located in [`tools/diosix-gui/src/`](../tools/diosix-gui/src):
+Located in `tools/diosix-gui/src/`:
 
 *   **[`framebuffer.zig`](../tools/diosix-gui/src/framebuffer.zig),
     [`glass.zig`](../tools/diosix-gui/src/glass.zig), and
@@ -59,26 +64,26 @@ Located in [`tools/diosix-gui/src/`](../tools/diosix-gui/src):
     32-bit XRGB8888 software rasterizer, optical superellipse glass pane shader,
     and procedural terrain/cloud sky backdrop renderer.
 *   **[`window.zig`](../tools/diosix-gui/src/window.zig) and
-    [`window/input.zig`](../tools/diosix-gui/src/window/input.zig)**: Window
-    chrome, titlebar hit-testing, scrollbars, and mouse/keyboard dispatch.
+    [`input.zig`](../tools/diosix-gui/src/window/input.zig)**: Window chrome,
+    titlebar hit-testing, scrollbars, and mouse/keyboard dispatch.
 *   **[`icon.zig`](../tools/diosix-gui/src/icon.zig),
-    [`icon/render.zig`](../tools/diosix-gui/src/icon/render.zig), and
-    [`icon/viewport.zig`](../tools/diosix-gui/src/icon/viewport.zig)**: Widget
+    [`render.zig`](../tools/diosix-gui/src/icon/render.zig), and
+    [`viewport.zig`](../tools/diosix-gui/src/icon/viewport.zig)**: Widget
     primitives (buttons, badges, sliders, progress bars, RFB/Wayland client
     viewports, and vector action glyphs).
 *   **[`panes.zig`](../tools/diosix-gui/src/panes.zig),
-    [`panes/vm.zig`](../tools/diosix-gui/src/panes/vm.zig),
-    [`panes/catalog.zig`](../tools/diosix-gui/src/panes/catalog.zig), and
-    [`panes/modal.zig`](../tools/diosix-gui/src/panes/modal.zig)**: Layout
-    builders for the VM Fleet Overview, slide-out VM Action Drawer, Software
-    and Hardware panes, Power modal, Welcome modal, 5-step Guided Tour, and
-    dockable On-Screen Keyboard (OSK).
+    [`vm.zig`](../tools/diosix-gui/src/panes/vm.zig),
+    [`catalog.zig`](../tools/diosix-gui/src/panes/catalog.zig), and
+    [`modal.zig`](../tools/diosix-gui/src/panes/modal.zig)**: Layout builders
+    for the VM Fleet Overview, slide-out VM Action Drawer, Software and
+    Hardware panes, Power modal, Welcome modal, 5-step Guided Tour, and
+    dockable OSK.
 *   **[`gui.zig`](../tools/diosix-gui/src/gui.zig),
-    [`gui/input.zig`](../tools/diosix-gui/src/gui/input.zig),
-    [`gui/nav.zig`](../tools/diosix-gui/src/gui/nav.zig), and
-    [`gui/render.zig`](../tools/diosix-gui/src/gui/render.zig)**: Core
-    compositor state machine, dirty-rectangle damage tracking, keyboard focus
-    navigation, and semantic JSON state serialization.
+    [`input.zig`](../tools/diosix-gui/src/gui/input.zig),
+    [`nav.zig`](../tools/diosix-gui/src/gui/nav.zig), and
+    [`render.zig`](../tools/diosix-gui/src/gui/render.zig)**: Core compositor
+    state machine, dirty-rectangle damage tracking, keyboard focus navigation,
+    and semantic JSON state serialization.
 *   **[`osk.zig`](../tools/diosix-gui/src/osk.zig) and
     [`welcome.zig`](../tools/diosix-gui/src/welcome.zig)**: Hardware seat
     profiles (`touch-tablet`, `desktop-kbd`, `headless-serial`), virtual
@@ -92,13 +97,15 @@ Located in [`tools/diosix-gui/src/`](../tools/diosix-gui/src):
 
 ## 3. Configuration GUI component (`diosix-config`)
 
-Located in [`tools/diosix-config/src/`](../tools/diosix-config/src):
+Located in `tools/diosix-config/src/`:
 
 *   **[`ui.zig`](../tools/diosix-config/src/ui.zig)**: Widget library providing
-    VM cards, navigation sidebars, memory/vCPU sliders, and action buttons.
+    VM cards, navigation sidebars, memory and Virtual CPU (vCPU) sliders, and
+    action buttons.
 *   **[`main.zig`](../tools/diosix-config/src/main.zig)**: Application
     lifecycle, tab controller (Dashboard, Virtual Machines, Storage Disks,
-    Network Matrix), and hypervisor API bridge.
+    Network Matrix), and hypervisor Application Programming Interface (API)
+    bridge.
 
 ---
 

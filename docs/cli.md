@@ -2,9 +2,9 @@
 
 The `dsx` utility (also available via the `diosix-ctl` symlink) is the primary
 command-line interface for managing guest Virtual Machines (VMs) on the Diosix
-Type-1 hypervisor. It communicates with the hypervisor kernel through the
-`/dev/diosix` character device driver using Supervisor Binary Interface (SBI)
-hypercalls.
+Type-1 Machine-mode (M-mode) hypervisor. It communicates with the hypervisor
+kernel through the `/dev/diosix` character device driver using Supervisor Binary
+Interface (SBI) hypercalls.
 
 Running `dsx` requires superuser (`root`) privileges inside the guest operating
 system to access the `/dev/diosix` interface.
@@ -21,7 +21,7 @@ configuration files):
 | :--- | :--- | :--- | :--- |
 | `boot/hypervisor.conf` | Build-time (`scripts/build.sh` -> `build.zig`) | `0644` | M-mode hypervisor hardware sizing defaults (`ROOT_RAM_MIN_MB=128`, `ROOT_RAM_MAX_MB=256`, `ROOT_RAM_HOST_DIVISOR=8`, `ROOT_VCPUS_MAX=4`). |
 | `/etc/diosix/diosix.toml` | Runtime (`dsx` / Root VM) | `0644` (`root:root`) | Default child VM sizing (`default_vcpus`, `default_ram`, `default_disk_mb`), repository paths, and Guided Tour steps (`[[tour]]`). |
-| `/etc/diosix/catalog.toml` | Runtime (`dsx image` / `dsx install-guest`) | `0644` (`root:root`) | DNF/APT-style Guest OS and Steward VM repository catalog with pinned 64-character SHA-256 digests. |
+| `/etc/diosix/catalog.toml` | Runtime (`dsx image` / `dsx install-guest`) | `0644` (`root:root`) | DNF/APT-style Guest OS and Steward VM repository catalog with pinned 64-character Secure Hash Algorithm 256 (SHA-256) digests. |
 | `/etc/diosix/install.toml` | Runtime (`dsx host install`) | `0644` (`root:root`) | Default bare-metal installation profile (`mode`, `target_disk`, `boot_part_mb`, `state_part_mb`, `enable_stewards`, `standby_root_vm`). |
 | `/etc/diosix/charter.toml` | Runtime (`dsx charter`) | `0644` (`root:root`) | Constitutional Charter defining M-of-N Steward quorum thresholds, workload units, and hardware isolation invariants. |
 | `/etc/diosix/constitution.md` | Runtime (`dsx charter`) | `0644` (`root:root`) | Human- and Steward-readable Constitutional invariants and operational rules. |
@@ -35,9 +35,9 @@ configuration files):
 Commands accepting a `<cid>` or `<target>` argument support numeric IDs,
 friendly VM names, and symbolic aliases:
 
-*   **`self`** or **`1`**: Refers to the calling Virtual Machine.
-*   **`parent`** or **`0`**: Refers to the immediate parent Virtual Machine.
-*   **`2..N`**: Numeric Context ID of a direct child Virtual Machine.
+*   **`self`** or **`1`**: Refers to the calling VM.
+*   **`parent`** or **`0`**: Refers to the immediate parent VM.
+*   **`2..N`**: Numeric Context ID (CID) of a direct child VM.
 *   **`<name>`**: Human-friendly domain or VM name registered at creation
     (for example, `sys`, `user`, or `debian-cloud`).
 
@@ -54,9 +54,9 @@ dsx info [name|cid|self] [--json]
 ```
 
 *   `name|cid|self` *(optional)*: Target VM to inspect. Defaults to `self`
-    (Context ID 1). Passing `2..N` or a registered child name queries a direct
-    child VM. Querying the parent VM (`parent` or `0`) is strictly denied and
-    returns an error.
+    (CID 1). Passing `2..N` or a registered child name queries a direct child
+    VM. Querying the parent VM (`parent` or `0`) is strictly denied and returns
+    an error.
 *   `--json` / `-j` *(optional)*: Emits machine-readable JSON output.
 
 Example output for calling VM (`dsx info`):
@@ -85,7 +85,7 @@ IP / Endpoint  : 10.0.3.2
 
 ---
 
-### `dsx host`
+### `dsx host` (top-level aliases: `dsx reboot`, `dsx poweroff`, `dsx shutdown`)
 Inspects and manages the physical host machine, bare-metal installation, and
 hypervisor kernel. Physical reset and installation operations are restricted to
 the Root VM.
@@ -95,32 +95,40 @@ dsx host <info [--json]|install [options]|reboot|poweroff|shutdown>
 ```
 
 *   `host info [--json]`: Queries hypervisor release version and channel
-    (`stable` or `beta`), Git commit hash, ABI version, physical host CPU core
-    count and ISA, host RAM totals, hypervisor memory footprint, and hardware
+    (`stable` or `beta`), Git commit hash, Application Binary Interface (ABI)
+    version, physical host CPU core count and Instruction Set Architecture
+    (ISA), host RAM totals, hypervisor memory footprint, and hardware
     capabilities. Pass `--json` (or `-j`) for machine-readable JSON output.
 *   `host install [--mode basic|expert] [--disk <dev>] [--config <file.toml>]`
-    `[--stewards] [--standby-root] [--dry-run] [--json]`:
+    `[--hostname <name>] [--stewards] [--standby-root] [--dry-run] [--json]`:
     Partitions and installs the immutable Diosix boot image (`diosix-boot.efi`)
-    and persistent `/var/lib/diosix` data volume onto a bare-metal NVMe, virtio,
-    or SATA target disk.
-    *   `--mode basic|expert` *(optional)*: Installation workflow (`basic`
-        guided 3-step install or `expert` custom partitioning/encryption).
-    *   `--disk <dev>` *(optional)*: Target block device (e.g. `/dev/vdb` or
-        `/dev/nvme0n1`). Rejects paths outside `/dev/` or containing `..`.
-    *   `--config <file.toml>` *(optional)*: Declarative unattended installation
-        manifest (`diosix-install.toml`).
+    and persistent `/var/lib/diosix` data volume onto a bare-metal Non-Volatile
+    Memory Express (NVMe), VirtIO, or Serial Advanced Technology Attachment
+    (SATA) target disk.
+    *   `--mode basic|expert` / `-m <mode>` *(optional)*: Installation workflow
+        (`basic` guided 3-step install or `expert` custom partitioning and
+        encryption).
+    *   `--disk <dev>` / `-d <dev>` *(optional)*: Target block device (such as
+        `/dev/vdb` or `/dev/nvme0n1`). Rejects paths containing `..`.
+    *   `--config <file.toml>` / `-c <file.toml>` *(optional)*: Declarative
+        unattended installation manifest (`diosix-install.toml`).
+    *   `--hostname <name>` *(optional)*: Hostname to assign to the installed
+        system (`1..64` RFC-1123 alphanumeric or hyphen characters).
     *   `--stewards` *(optional)*: Pre-stage the 3-node Tier-1 Autonomic Steward
         collective (`steward-sec`, `steward-ops`, `steward-gov`).
     *   `--standby-root` *(optional)*: Pre-stage a warm Standby Root VM
-        (`CID 2`) for zero-SPOF failover.
+        (`CID 2`) for zero Single Point of Failure (SPOF) failover.
     *   `--dry-run` *(optional)*: Validate target disk, partition layout, and
         cryptographic passkey requirements without writing to disk.
-*   `host reboot`: Performs a clean hardware reset of the physical host machine.
-*   `host poweroff` (or `host shutdown`): Powers off the physical host hardware.
+    *   `--json` / `-j` *(optional)*: Emit structured JSON installation output.
+*   `host reboot` (or `dsx reboot`): Performs a clean hardware reset of the
+    physical host machine.
+*   `host poweroff` (or `host shutdown`, `dsx poweroff`, `dsx shutdown`): Powers
+    off the physical host hardware.
 
 Host hypervisor info output (`dsx host info`):
 ```text
-Hypervisor build : Version 26.1 (beta) main/b3d4773 Sun Oct 18 2026 chris@violet (Zig 0.17.0 riscv64)
+Hypervisor build : Version 26.1 (beta) devel/b3d4773 (Zig 0.17.0 riscv64)
 Footprint        : 512 KB reserved, 256 KB free
 ABI version      : 0.2.0
 Host cores       : 4 physical hart(s) RV64GC
@@ -145,41 +153,45 @@ Capabilities     :
 >   a `1 GiB` host allocates `128 MiB` to the Root VM, a `2 GiB` host allocates
 >   `256 MiB`, and a `128 GiB` server still caps the Root VM at `256 MiB` so
 >   over 99.8% of host RAM remains in the free pool for child VMs.
-> - **Root VM vCPU scaling**: Scales 1:1 with discovered physical CPU cores,
->   clamped between `1` and `4` vCPUs.
+> - **Root VM Virtual CPU (vCPU) scaling**: Scales 1:1 with discovered physical
+>   CPU cores, clamped between `1` and `4` vCPUs.
 
 ---
 
-### `dsx run`
-Launches an isolated child Virtual Machine in the background with private SSH
-networking, Device Tree blob configuration, and optional manifest staging.
+### `dsx run` (alias: `dsx create`)
+Launches an isolated child VM in the background with private SSH networking,
+Device Tree Blob (DTB) configuration, and optional manifest staging.
 
 ```bash
 dsx run <image|name> [options]
 dsx run --manifest <system.toml> --domain <domain_name> [options]
 ```
 
-*   `image|name`: Name or path of the guest ELF binary. If a bare name is
-    provided (such as `linux-guest`), `dsx` automatically searches the
-    current working directory, `/var/lib/diosix/images/`, and `/boot/`.
+*   `image|name`: Name or path of the guest Executable and Linkable Format (ELF)
+    binary (or `.iso` installer image). If a bare name is provided (such as
+    `linux-guest`), `dsx` automatically searches the current working directory
+    and `/var/lib/diosix/images/`.
 *   `--name <name>` *(optional)*: Friendly name for the VM (defaults to the
     domain name or image name).
 *   `--vcpus <N>` *(optional)*: Number of virtual CPU cores (default: 1).
 *   `--ram <size>` *(optional)*: RAM allocation ceiling (e.g. `256M`, `2GiB`).
-*   `--disk <name|size>` *(optional)*: Attaches an existing virtual disk by name
-    (e.g. `--disk user-data`), or auto-provisions and formats an ext4 virtual
-    disk of the specified size (e.g. `--disk 1G`). Auto-provisioned disks are
-    formatted as ext4 and pre-seeded with guest images (`/images/default.elf`)
-    and restricted directories (`/keys` mode 0700) so child VMs can recursively
-    deploy grandchild VMs without leaking parent credentials.
+*   `--disk <name|size>` / `-d <name|size>` *(optional)*: Attaches an existing
+    virtual disk by name (e.g. `--disk user-data`), or auto-provisions and
+    formats an ext4 virtual disk of the specified size (e.g. `--disk 1G`).
+    Auto-provisioned disks are formatted as ext4 and pre-seeded with guest
+    images (`/images/default.elf`) and restricted directories (`/keys` mode
+    `0700`) so child VMs can recursively deploy grandchild VMs without leaking
+    parent credentials.
 *   `--cdrom <iso|path>` (or `--iso <path>` / `--media <path>`) *(optional)*:
     Attach a read-only installer ISO or live media.
 *   `--ip <address>` *(optional)*: Static private IP (default: `10.0.3.<cid>`).
 *   `--domain <name>` *(optional)*: Extracts configuration and policies for the
     domain from `/etc/diosix/system.toml`.
-*   `--manifest <path>` *(optional)*: System manifest path.
-*   `--trusted` *(optional)*: Grants physical hardware trust
-    (default: untrusted).
+*   `--manifest <path>` / `-m <path>` *(optional)*: System manifest path.
+*   `--dtb <path>` *(optional)*: Custom DTB file path (defaults to
+    `/sys/firmware/fdt`).
+*   `--trusted` / `--untrusted` *(optional)*: Grants or withholds physical
+    hardware trust (default: untrusted).
 *   `--steward` *(optional)*: Marks the child VM as a hardware-protected Tier-1
     Autonomic Steward (`RunFlags.STEWARD`). Once the Constitutional Charter is
     sealed in M-mode, the Root VM cannot unilaterally terminate or starve a
@@ -191,14 +203,13 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
     (`RunFlags.CONFIDENTIAL`). Once the Constitutional Charter is sealed in
     M-mode, `MAP_CHILD_MEM` on a confidential VM is strictly rejected by the
     hypervisor even from the Root VM.
-*   `--arch <arch>` *(optional)*: Target architecture (`riscv64`, `riscv32`,
-    `aarch64`, `x86_64`).
+*   `--arch <arch>` / `-a <arch>` *(optional)*: Target architecture (`riscv64`,
+    `riscv32`, `aarch64`, `x86_64`).
 
 Examples:
 ```bash
-# Launch an OS installer attaching an ISO and a new 8 GB target disk
-dsx run debian-installer --cdrom debian-12.iso --disk debian-root \
-    --disk-size 8GiB
+# Launch an OS installer attaching an ISO and a new 8 GiB target disk
+dsx run debian-installer --cdrom debian-12.iso --disk 8GiB
 
 # Launch a sandboxed user VM with 1 GB persistent storage disk attached
 dsx run linux-guest --name user --vcpus 2 --ram 256M --disk 1G
@@ -212,13 +223,14 @@ dsx run --manifest /etc/diosix/system.toml --domain user
 
 ---
 
-### `dsx list` / `dsx ps`
-Displays a tabular list of all active virtual machines, including Context IDs,
-virtual CPU counts, RAM quotas, runtime status, trust levels, and IP endpoints.
+### `dsx list` (aliases: `dsx ps`, `dsx ls`)
+Displays a tabular list of all active VMs, including CIDs, vCPU counts, RAM
+quotas, runtime status, trust levels, and IP endpoints.
 
 ```bash
 dsx list
 dsx ps
+dsx ls
 ```
 
 Example output:
@@ -231,7 +243,7 @@ CID   Name             vCPUs   RAM       Status    Trust       IP / Endpoint
 
 ---
 
-### `dsx ssh` (aliases: `dsx login`, `dsx exec`)
+### `dsx ssh` (aliases: `dsx login`, `dsx console`, `dsx exec`)
 Opens an interactive login shell or runs a remote command in a child VM over
 private point-to-point network channels using the cluster management Ed25519
 keypair (with only the public key provisioned in the child VM's authorized
@@ -243,7 +255,7 @@ dsx ssh [--user <username>] <name|cid> [-- [command...]]
 ```
 
 *   `[user@]target`: Optional remote username (defaults to `root`) and target
-    VM friendly name or numeric Context ID.
+    VM friendly name or numeric CID.
 *   `--user <username>` / `-u <username>` *(optional)*: Alternative flag to
     specify the SSH user account.
 *   `-- [command...]` *(optional)*: Remote command string to execute
@@ -266,13 +278,14 @@ dsx ssh root@2 -- cat /etc/os-release
 
 ---
 
-### `dsx stop` / `dsx kill`
-Stops and terminates a running guest Virtual Machine and its descendants,
-reclaiming allocated physical memory and scheduler quotas back to the parent VM.
+### `dsx stop` (aliases: `dsx kill`, `dsx terminate`)
+Stops and terminates a running guest VM and its descendants, reclaiming
+allocated physical memory and scheduler quotas back to the parent VM.
 
 ```bash
 dsx stop <name|cid|self>
 dsx kill <name|cid|self>
+dsx terminate <name|cid|self>
 ```
 
 *   `name|cid`: Target child VM to terminate.
@@ -294,8 +307,8 @@ dsx stop self
 ---
 
 ### `dsx restart`
-Stops a running child Virtual Machine and restarts it with its configured image
-and quota parameters.
+Stops a running child VM and restarts it with its configured image and quota
+parameters.
 
 ```bash
 dsx restart <name|cid>
@@ -321,7 +334,7 @@ dsx quota [cid|self] [--ram <MB>] [--vcpus <N>] [--depth <N>] \
 *   `cid|self` *(optional)*: Target VM to inspect or configure
     (default: `self`).
 *   `--ram <MB>` *(optional)*: Sets maximum physical RAM ceiling in megabytes.
-*   `--vcpus <N>` *(optional)*: Sets maximum virtual CPU count.
+*   `--vcpus <N>` *(optional)*: Sets maximum vCPU count.
 *   `--depth <N>` *(optional)*: Sets maximum child nesting depth.
 *   `--descendants <N>` *(optional)*: Sets maximum descendant VM count.
 
@@ -333,7 +346,7 @@ Examples:
 # Query active resource quotas and child allocations
 dsx quota
 
-# Limit child VM 2 to 128 MB RAM and 1 VCPU
+# Limit child VM 2 to 128 MB RAM and 1 vCPU
 dsx quota 2 --ram 128 --vcpus 1
 
 # Self-sandbox calling VM to 256 MB RAM
@@ -342,11 +355,12 @@ dsx quota self --ram 256
 
 ---
 
-### `dsx manifest`
+### `dsx manifest` (top-level resolve alias: `dsx resolve`)
 Inspects, validates, attenuates, and stages hierarchical capability manifests.
 
 ```bash
 dsx manifest <subcmd> [options]
+dsx resolve <service_alias> [--manifest <file.toml>]
 ```
 
 Subcommands:
@@ -356,8 +370,9 @@ Subcommands:
     capability constraints.
 *   `prune <system.toml> --domain <name> [-o <out.toml>]`: Attenuates the system
     manifest for a target child domain, filtering out unneeded domains.
-*   `resolve <service_alias> [--manifest <file.toml>]`: Resolves a required
-    service alias against active policy to locate target Context IDs and routes.
+*   `resolve <service_alias> [--manifest <file.toml>]` (or `dsx resolve`):
+    Resolves a required service alias against active policy to locate target
+    CIDs and routes.
 *   `set <cid> <file.toml>`: Stages an attenuated domain manifest in hypervisor
     memory for a child VM via the `SET_MANIFEST` SBI call.
 
@@ -374,13 +389,14 @@ dsx manifest set 2 /tmp/sys-child.toml
 
 # Resolve a service alias across domain boundaries
 dsx manifest resolve gui.display --manifest /tmp/user-child.toml
+dsx resolve gui.display -m /tmp/user-child.toml
 ```
 
 ---
 
 ### `dsx disk` (alias: `dsx storage`)
 Manages persistent virtual block storage images in `/var/lib/diosix/disks/` for
-child virtual machines.
+child VMs.
 
 ```bash
 dsx disk <subcmd> [options]
@@ -389,7 +405,7 @@ dsx disk <subcmd> [options]
 Subcommands:
 *   `create <name> [--size <size>]`: Creates an ext4-formatted virtual disk
     image (default: `1GiB`) and pre-stages the guest image repository
-    (`/images/default.elf`) and permissions (`/keys` mode 0700) in full parity
+    (`/images/default.elf`) and permissions (`/keys` mode `0700`) in full parity
     with `dsx run --disk <size>`.
 *   `list` (or `ls`): Lists all provisioned virtual disks with their capacity,
     filesystem format (`ext4` or `raw`), currently attached VM
@@ -465,12 +481,12 @@ Subcommands:
     matching `dsx image catalog`. Pass `--remote` (`-r`) to list the remote
     catalog.
 *   `catalog [--json]`: Reads `/etc/diosix/catalog.toml` (falling back to the
-    built-in catalog if absent) and lists available S/U-mode Guest OS installer
-    ISOs (`debian-riscv64`, `alpine-riscv64`, `freebsd-riscv64`,
-    `openbsd-riscv64`, `netbsd-riscv64`) and the Tier-1 Autonomic Steward VM
-    (`steward`). Administrators can add custom or private mirror entries
-    directly in `/etc/diosix/catalog.toml`. Pass `--json` (`-j`) for
-    machine-readable output.
+    built-in catalog if absent) and lists available Supervisor-mode (S-mode) and
+    User-mode (U-mode) Guest OS installer ISOs (`debian-riscv64`,
+    `alpine-riscv64`, `freebsd-riscv64`, `openbsd-riscv64`, `netbsd-riscv64`)
+    and the Tier-1 Autonomic Steward VM (`steward`). Administrators can add
+    custom or private mirror entries directly in `/etc/diosix/catalog.toml`.
+    Pass `--json` (`-j`) for machine-readable output.
 *   `pull <catalog-id|url> [--name <name>] [--sha256 <hex>]`
     `[--allow-unverified] [--offline-stub] [--json]` (or `fetch`): Downloads an
     image by its `Catalog ID` (or short alias) from `/etc/diosix/catalog.toml`,
@@ -485,7 +501,7 @@ Subcommands:
     *   **Offline testing (`--offline-stub`)**: If a remote mirror is
         unreachable, `dsx image pull` fails closed by default. Pass
         `--offline-stub` only when synthesizing a local test stub in airgapped
-        CI environments.
+        continuous integration (CI) environments.
 *   `import <file> [--name <name>]` (or `add`): Imports a local ISO or ELF
     kernel into the repository.
 *   `delete <name>` (or `rm`): Deletes an image or ISO from the repository.
@@ -519,8 +535,8 @@ dsx image delete debian-12.iso
 ---
 
 ### `dsx install-guest`
-Automates the end-to-end provisioning of an S/U-mode Guest OS from an installer
-ISO into a persistent virtual disk using the freestanding S-mode Guest
+Automates the end-to-end provisioning of an S-mode and U-mode Guest OS from an
+installer ISO into a persistent virtual disk using the freestanding S-mode Guest
 Bootloader Shim (`guest-shim-riscv64.elf`).
 
 ```bash
@@ -535,8 +551,7 @@ dsx install-guest <os-name|iso> [--name <vm>] [--disk <disk>] \
     `/var/lib/diosix/disks/` (created automatically if it does not exist).
 *   `--size <size>` *(optional)*: Capacity for the target virtual disk
     (default: catalog spec or `4GiB`).
-*   `--vcpus <N>` *(optional)*: Virtual CPU count
-    (default: catalog spec or `2`).
+*   `--vcpus <N>` *(optional)*: vCPU count (default: catalog spec or `2`).
 *   `--ram <size>` *(optional)*: RAM allocation ceiling (default: catalog spec
     or `1024M`).
 *   `--offline-stub` *(optional)*: Synthesize a minimal bootable ISO9660 test
@@ -555,13 +570,15 @@ dsx install-guest debian-riscv64 --disk debian-root --size 4GiB
 dsx install-guest freebsd-riscv64 --name bsd-db --disk bsd-data --size 8GiB
 ```
 
-### `dsx auth`
-Manages zero-password passkey authentication, FIDO2/TPM 2.0 hardware token
-enrollment, QR WebAuthn pairing, and single-use UART serial challenge-response
-verification.
+### `dsx auth` (alias: `dsx passkey`)
+Manages zero-password passkey authentication, Fast Identity Online 2 (FIDO2) and
+Trusted Platform Module (TPM) 2.0 hardware token enrollment, Quick Response (QR)
+WebAuthn pairing, and single-use Universal Asynchronous Receiver-Transmitter
+(UART) serial challenge-response verification.
 
 ```bash
 dsx auth <subcmd> [options]
+dsx passkey <subcmd> [options]
 ```
 
 Subcommands:
@@ -618,8 +635,8 @@ dsx gui <state|trigger <action>|screenshot [--out <path>]> [--json]
 Subcommands:
 *   `state [--json]`: Queries `/run/diosix/gui_state.json` and displays the
     active seat profile (`touch-tablet`, `desktop-kbd`, `headless-serial`),
-    on-screen virtual keyboard (`OSK`) visibility and layout (`qwerty` or
-    `symbols`), Welcome/Tour modal state, and visible windows.
+    On-Screen Keyboard (OSK) visibility and layout (`qwerty` or `symbols`),
+    Welcome/Tour modal state, and visible windows.
 *   `trigger <action> [--json]`: Sends a semantic command to
     `/run/diosix/gui_cmd` (`open-menu`, `close-menu`, `toggle-osk`,
     `open-welcome`, `start-tour`, `next-tour`, `open-fleet`, `open-help`,
@@ -691,7 +708,7 @@ Subcommands:
     specified target CID. Only VMs spawned with `--steward` (`CID 2..63`) can
     cast ratification votes; the Root VM cannot forge Steward votes.
 *   `whisper <send|recv> [options] [--json]`: Formats, sends, or parses
-    deterministic Whisper Mesh BFT consensus frames
+    deterministic Whisper Mesh Byzantine Fault Tolerant (BFT) consensus frames
     (`whisper:v1:<type>:<sender_cid>:<target_cid>:<payload>`).
 *   `reset-steward <cid> [--json]`: Resets a compromised or drifted Steward VM
     back to its initial M-mode entry point and clean register state
@@ -722,8 +739,8 @@ dsx charter audit --json
 ---
 
 ### `dsx drop-trust`
-Irrevocably revokes hardware trust for the calling Virtual Machine. Once
-dropped, the hypervisor unmaps host physical memory-mapped I/O (MMIO) pages and
+Irrevocably revokes hardware trust for the calling VM. Once dropped, the
+hypervisor unmaps host physical Memory-Mapped Input/Output (MMIO) pages and
 disables direct interrupt routing for the VM.
 
 ```bash

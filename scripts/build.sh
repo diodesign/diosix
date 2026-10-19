@@ -45,5 +45,4 @@ exec zig build \
   -Droot-ram-max-mb="${ROOT_RAM_MAX_MB:-256}" \
   -Droot-ram-divisor="${ROOT_RAM_HOST_DIVISOR:-8}" \
   -Droot-vcpus-max="${ROOT_VCPUS_MAX:-4}" \
-  "${EXTRA_ARGS[@]}" \
   "${BUILD_ARGS[@]}"

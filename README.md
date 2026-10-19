@@ -133,9 +133,9 @@ For more information about Diosix, see the following documentation:
 *  **[Diosix architecture](docs/architecture.md):** Learn about the
    hypervisor's hierarchical guest model, privileged Root VM design, security
    boundary rules, and memory address space terminology.
-*  **[Interface and ABI](docs/interface.md):** Discover the hypervisor's
-   Supervisor Binary Interface (SBI) extensions, Context ID (CID) capability
-   model, and Linux driver interface.
+*  **[Interface and Application Binary Interface (ABI)](docs/interface.md):**
+   Discover the hypervisor's Supervisor Binary Interface (SBI) extensions,
+   Context ID (CID) capability model, and Linux driver interface.
 *  **[Command-line interface](docs/cli.md):** Learn how to use the
    `diosix-ctl` (`dsx`) utility to run, control, and communicate with guest
    VMs.
@@ -149,14 +149,16 @@ For more information about Diosix, see the following documentation:
    hardware targets.
 *  **[Develop Diosix](docs/development.md):** View the project's programming
    guidelines, memory ownership rules, unit testing commands, Git branching
-   workflows, and Calendar Versioning (CalVer) release model.
+   workflows, Calendar Versioning (CalVer) release model, and how to use the
+   official [Diosix agent skills](https://github.com/diodesign/diosix-agent-skills)
+   with AI coding agents.
 *  **[GUI and system configuration architecture](docs/gui-architecture.md):**
-   Explore the monolithic DRM/KMS desktop compositor (`diosix-gui`) and domain
-   isolation model.
+   Explore the monolithic Direct Rendering Manager (DRM) and Kernel Mode
+   Setting (KMS) desktop compositor (`diosix-gui`) and domain isolation model.
 *  **[Release and Steward architecture](docs/release-architecture.md):**
    Learn about CalVer release channels, hardware seat profiles, the
-   freestanding S-mode guest bootloader shim, passkey-only authentication, and
-   the autonomic Steward VM collective.
+   freestanding Supervisor-mode (S-mode) guest bootloader shim, passkey-only
+   authentication, and the autonomic Steward VM collective.
 
 For more information about the technology used by the hypervisor, see the
 following external documentation:

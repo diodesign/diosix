@@ -37,7 +37,9 @@ jobs:
           docker run --rm diosix-ubuntu sh -c ' \
             ./scripts/build.sh run > qemu.log 2>&1 & \
             QEMU_PID=$! && \
-            timeout 60s sh -c "until grep -q \"diosix-rootvm login:\" qemu.log; do sleep 1; done" && \
+            timeout 60s sh -c \
+              "until grep -q \"diosix-rootvm login:\" qemu.log; \
+              do sleep 1; done" && \
             kill $QEMU_PID || true'
 
       - name: Clean up Docker image
@@ -70,7 +72,9 @@ jobs:
           docker run --rm diosix-fedora sh -c ' \
             ./scripts/build.sh run > qemu.log 2>&1 & \
             QEMU_PID=$! && \
-            timeout 60s sh -c "until grep -q \"diosix-rootvm login:\" qemu.log; do sleep 1; done" && \
+            timeout 60s sh -c \
+              "until grep -q \"diosix-rootvm login:\" qemu.log; \
+              do sleep 1; done" && \
             kill $QEMU_PID || true'
 
       - name: Clean up Docker image

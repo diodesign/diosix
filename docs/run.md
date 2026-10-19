@@ -85,8 +85,7 @@ storage partition at `/var/lib/diosix`. The storage partition provides:
 
 *   Pre-seeded base guest OS images at `/var/lib/diosix/images/` (such as
     `linux-guest.elf`).
-*   System domain manifests at `/var/lib/diosix/manifests/` (such as
-    `system.toml`).
+*   Declarative system domain configuration at `/etc/diosix/system.toml`.
 *   Persistent disk space for stateful guest VMs.
 
 ---

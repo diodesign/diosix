@@ -93,6 +93,76 @@ Code contributions must follow the [style guide](style-guide.md):
 
 ---
 
+## Develop with AI agents
+
+If you use an Artificial Intelligence (AI) coding agent to write, review, or
+document Diosix code, we strongly encourage you to install the official Diosix
+agent skills from the
+[diosix-agent-skills](https://github.com/diodesign/diosix-agent-skills)
+repository. These are the same skills the maintainers use on this project, so
+agent-generated changes follow the project's conventions from the first draft.
+
+The repository provides three skills:
+
+*   `developing-diosix`: Zig 0.17 idioms, memory and buffer rules, RISC-V
+    M-mode constraints, and the architecture and style rules in this guide,
+    including the backwards-compatibility policy below.
+*   `reviewing-diosix`: A pre-commit and pre-merge audit covering magic
+    numbers, borrow-checker and lifetime hazards, test coverage, the
+    500-line and 80-column limits, and more.
+*   `documenting-diosix`: The rules in the [style guide](style-guide.md) for
+    keeping `docs/` and `README.md` synchronized with the implementation.
+
+To use them, clone the repository and add the skills to your agent's skills
+directory, following your agent's documentation. For example:
+
+```sh
+git clone https://github.com/diodesign/diosix-agent-skills.git
+```
+
+Agents make mistakes, so you remain responsible for every change you submit.
+Review all agent-generated code and documentation, run
+`./scripts/build.sh test --summary all`, and confirm that the change passes the
+`reviewing-diosix` checks before you open a pull request. Keep personal agent
+configuration out of the repository: the `.agents` directory is listed in
+[`.gitignore`](../.gitignore) for this purpose.
+
+Tooling choices are entirely up to you. The Diosix project treats AI assistants
+like any other editor or compiler. What matters is the outcome. Every submission
+is judged solely on the quality, correctness, and consistency of the resulting
+code and documentation.
+
+---
+
+## Backwards compatibility and internal refactoring
+
+Maintainers distinguish between external contracts that users depend on and
+internal implementation details that ship together inside the repository:
+
+*   **Preserve external contracts**: Maintain backwards compatibility for the
+    SBI hypercall Application Binary Interface (ABI) in
+    [`sbi.zig`](../hypervisor/interface/sbi.zig), Linux kernel driver `ioctl`
+    structures in [`diosix.h`](../tools/driver/diosix.h), documented `dsx`
+    commands and `--json` output schemas, and user-authored configuration files
+    under `/etc/diosix/`. When an external flag or configuration key is
+    superseded, keep the compatibility alias isolated in the parser layer and
+    annotate it with a target removal version
+    (`// DEPRECATED(26.1): remove in 27.0`).
+*   **Update co-versioned internal plumbing atomically**: Never accumulate
+    multi-path fallback arrays (such as probing multiple legacy directories in
+    `/boot`, `/var/lib/diosix`, and `/usr/share/diosix`) when both the producer
+    and consumer live in this repository. When changing an internal file path,
+    build artifact location, or module interface, update all in-tree scripts,
+    tools, and integration tests in the same commit so runtime code relies on a
+    single canonical location.
+*   **Migrate persistent disk state at the boundary**: If persistent storage on
+    `/var/lib/diosix` may contain files created by an earlier release layout,
+    perform a one-time migration or symlink update during boot initialization or
+    `dsx host install` rather than probing legacy paths across userland tools at
+    runtime.
+
+---
+
 ## Versioning and branching model
 
 Diosix manages development and releases using a staging-to-release workflow.

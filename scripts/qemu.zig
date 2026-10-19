@@ -8,6 +8,9 @@ const ArrayList = std.ArrayList;
 
 const AudioBackend = enum { auto, pipewire, pa, alsa, sdl, wav, none };
 
+pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
+pub const DEFAULT_DISPLAY_HEIGHT: u32 = 800;
+
 fn appendTpmArgs(b: *std.Build, args: *ArrayList([]const u8)) !void {
     try args.appendSlice(b.allocator, &.{
         "-chardev", "socket,id=chrtpm,path=/tmp/diosix-tpm/swtpm-sock",
@@ -85,6 +88,7 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         cfg.rootvm_elf_path, storage_img_path,
         "256M",
     });
+    create_storage_cmd.addFileInput(b.path("scripts/create_storage_disk.sh"));
     create_storage_cmd.step.dependOn(&cfg.run_buildroot.step);
 
     try qemu_args.appendSlice(b.allocator, &.{
@@ -126,6 +130,7 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     const live_img_path = "zig-out/diosix-live-riscv64.img";
     const create_live_cmd =
         b.addSystemCommand(&.{ "bash", "scripts/make_live_image.sh" });
+    create_live_cmd.addFileInput(b.path("scripts/make_live_image.sh"));
     create_live_cmd.addFileArg(cfg.vmdiosix.getEmittedBin());
     create_live_cmd.addArgs(&.{ cfg.rootvm_elf_path, live_img_path, "512" });
     create_live_cmd.step.dependOn(b.getInstallStep());
@@ -161,16 +166,23 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
             );
         } else try qemu_gui_args.append(b.allocator, arg);
     }
+    const gpu_dev = if (cfg.qemu_gl_opt)
+        b.fmt("virtio-gpu-gl-pci,xres={d},yres={d}", .{
+            DEFAULT_DISPLAY_WIDTH,
+            DEFAULT_DISPLAY_HEIGHT,
+        })
+    else
+        b.fmt("virtio-gpu-pci,xres={d},yres={d}", .{
+            DEFAULT_DISPLAY_WIDTH,
+            DEFAULT_DISPLAY_HEIGHT,
+        });
     if (cfg.qemu_gl_opt) {
         try qemu_gui_args.appendSlice(b.allocator, &.{
             "-display", "gtk,gl=on,zoom-to-fit=off",
-            "-device",  "virtio-gpu-gl-pci,xres=1280,yres=800",
+            "-device",  gpu_dev,
         });
     } else {
-        try qemu_gui_args.appendSlice(
-            b.allocator,
-            &.{ "-device", "virtio-gpu-pci,xres=1280,yres=800" },
-        );
+        try qemu_gui_args.appendSlice(b.allocator, &.{ "-device", gpu_dev });
     }
     try qemu_gui_args.appendSlice(b.allocator, &.{
         "-device", "virtio-keyboard-pci",
@@ -247,4 +259,8 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         "Run the hypervisor GUI with virtual TPM 2.0 (swtpm)",
         qemu_tpm_args.items,
     );
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

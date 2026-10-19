@@ -99,12 +99,12 @@ completely denied.
 
 #### Memory management and SoftTLB
 
-Guest virtual-to-physical address translation is managed by a software memory
-management unit (`SoftTLB`). The `SoftTLB` maintains a 1024-entry direct-mapped
-fast-path cache and falls back to a software page-table walker on cache misses.
-MMIO accesses to peripheral registers (such as the Universal Asynchronous
-Receiver-Transmitter (UART) at `0x10000000` or CLINT at `0x02000000`) are
-intercepted and routed to virtual device models in
+Guest virtual-to-physical address translation is managed by a Software
+Translation Lookaside Buffer (`SoftTLB`). The `SoftTLB` maintains a 4096-entry
+direct-mapped fast-path cache and falls back to a software page-table walker on
+cache misses. MMIO accesses to peripheral registers (such as the Universal
+Asynchronous Receiver-Transmitter (UART) at `0x10000000` or CLINT at
+`0x02000000`) are intercepted and routed to virtual device models in
 `hypervisor/hardware/emulation/devices/`.
 
 #### Dynamic translation and register pinning

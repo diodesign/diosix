@@ -68,7 +68,7 @@ CONFIG_HIDRAW=y
 CONFIG_HID_GENERIC=y
 # CONFIG_THERMAL is not set
 
-# Input & Seat Devices (evdev, VirtIO tablet/keyboard/mouse, Touchscreen & uinput)
+# Input & Seat Devices (evdev, VirtIO tablet/kbd/mouse, Touchscreen & uinput)
 CONFIG_INPUT=y
 CONFIG_INPUT_EVDEV=y
 CONFIG_INPUT_KEYBOARD=y
@@ -125,7 +125,7 @@ CONFIG_SND_HDA_GENERIC=y
 CONFIG_SND_HDA_CODEC_REALTEK=y
 CONFIG_SND_VIRTIO=y
 
-# Graphics, Framebuffers & Displays (VirtIO-GPU, SimpleDRM & Framebuffer support)
+# Graphics, Framebuffers & Displays (VirtIO-GPU, SimpleDRM & Framebuffer)
 CONFIG_DRM=y
 CONFIG_DRM_KMS_HELPER=y
 CONFIG_DRM_VIRTIO_GPU=y

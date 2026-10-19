@@ -28,10 +28,10 @@ usage() {
 ${BOLD}Diosix Debian RISC-V Desktop Provisioner${RESET}
 
 This script automates setting up a Debian desktop environment for use with
-${BOLD}diosix-gui${RESET} (${BOLD}diosix-wm${RESET}). It supports two display integration modes:
-  1. ${BOLD}Rooted Desktop Window (RFB / VNC)${RESET}: Full XFCE/LXDE desktop session
+${BOLD}diosix-gui${RESET}. Two display integration modes are supported:
+  1. ${BOLD}Rooted Desktop (RFB/VNC)${RESET}: Full XFCE/LXDE desktop session
      streamed into a native window in diosix-gui (target: 10.0.3.2:5900).
-  2. ${BOLD}Seamless Wayland Windows${RESET}: Guest applications render to individual
+  2. ${BOLD}Seamless Wayland${RESET}: Guest apps render to individual
      native windows via the built-in Wayland bridge (TCP port 8484).
 
 ${BOLD}Usage:${RESET}
@@ -45,10 +45,10 @@ ${BOLD}Commands:${RESET}
 
 ${BOLD}Quick Start inside Diosix Root VM:${RESET}
   # Create a virtual disk for Debian:
-  dsx disk create debian --size 4096
+  dsx disk create debian --size 4096M
 
   # Launch Debian with rootfs attached to virtio-blk:
-  dsx run default --name debian-vm --disk debian.img --ram 1024M --vcpus 2
+  dsx run linux-guest --name debian-vm --disk debian.img --ram 1024M --vcpus 2
 
   # In diosix-gui, 'Debian Desktop' connects automatically to 10.0.3.2:5900.
 
@@ -222,14 +222,15 @@ ${BOLD}1. Overview${RESET}
 ${BOLD}2. Disk Setup (Root VM)${RESET}
    Inside the Diosix Root VM (via terminal or SSH):
      # 1. Create a 4GB virtual disk:
-     dsx disk create debian --size 4096
+     dsx disk create debian --size 4096M
 
      # 2. Check disk status:
      dsx disk list
 
 ${BOLD}3. Booting the Debian Guest${RESET}
    Start the Debian VM with virtio-blk storage attached:
-     dsx run default --name debian-vm --disk debian.img --ram 1024M --vcpus 2
+     dsx run linux-guest --name debian-vm \
+         --disk debian.img --ram 1024M --vcpus 2
 
 ${BOLD}4. Inside Debian Guest (via 'dsx ssh debian-vm')${RESET}
    # Install desktop packages and VNC server:

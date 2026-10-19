@@ -6,10 +6,11 @@ hardware-level memory protections, and network boundary controls.
 
 ## Trusted computing base
 
-The hypervisor and its progenitor **Root VM** (Unix init-equivalent) form
-the core of the TCB. The hypervisor enforces physical memory separation,
-virtual CPU scheduling, and resource quotas. The Root VM manages host hardware
-drivers, storage volumes, and initial guest orchestration.
+The hypervisor and its progenitor **Root Virtual Machine (VM)** (Unix
+`init`-equivalent) form the core of the TCB. The hypervisor enforces physical
+memory separation, Virtual CPU (vCPU) scheduling, and resource quotas. The Root
+VM manages host hardware drivers, storage volumes, and initial guest
+orchestration.
 
 ## Hardware-enforced isolation
 
@@ -22,11 +23,11 @@ guest sandboxing:
     memory outside their assigned GPA ranges or read hypervisor memory.
 *   **Physical Memory Protection (PMP)**: On target platforms lacking the
     H-extension, Diosix configures machine-mode PMP registers to strictly bound
-    guest physical memory access to designated DRAM regions.
-*   **Hardware trust restriction**: Any mapping of physical Memory-Mapped I/O
-    (MMIO) addresses or routing of physical device interrupts requires the
-    hardware trust privilege. Untrusted guest VMs cannot access host hardware
-    peripherals.
+    guest physical memory access to designated Dynamic RAM (DRAM) regions.
+*   **Hardware trust restriction**: Any mapping of physical Memory-Mapped
+    Input/Output (MMIO) addresses or routing of physical device interrupts
+    requires the hardware trust privilege. Untrusted guest VMs cannot access
+    host hardware peripherals.
 
 ## Tree-based segmentation and relative context IDs
 
@@ -52,16 +53,17 @@ two-tier unidirectional downward hierarchy:
 
 *   **Zero-password passkey operator ingress (Host -> Root VM)**: Password and
     blank-password logins are disabled across all VMs
-    (`dropbear -R -s -g -p 22`).
-    Principals authenticate to the Root VM exclusively via cryptographic
-    passkeys enrolled in `/var/lib/diosix/keys/authorized_passkeys`
-    (`sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com` FIDO2
-    hardware tokens, TPM 2.0 platform-bound passkeys, WebAuthn QR pairing, or
-    single-use Ed25519 UART challenge-response via `dsx auth challenge` /
-    `dsx auth verify`). In developer builds (`diosix.mode=dev`),
-    `scripts/create_storage_disk.sh` automatically injects the developer's host
-    public key into `/var/lib/diosix/keys/dev_authorized_keys` for zero-toil
-    testing.
+    (`dropbear -R -s -g -p 22`). Principals authenticate to the Root VM
+    exclusively via cryptographic passkeys enrolled in
+    `/var/lib/diosix/keys/authorized_passkeys` (`sk-ssh-ed25519@openssh.com`
+    and `sk-ecdsa-sha2-nistp256@openssh.com` Fast Identity Online 2 (FIDO2)
+    hardware tokens, Trusted Platform Module (TPM) 2.0 platform-bound passkeys,
+    Quick Response (QR) WebAuthn pairing, or single-use Ed25519 Universal
+    Asynchronous Receiver-Transmitter (UART) challenge-response via
+    `dsx auth challenge` / `dsx auth verify`). In developer builds
+    (`diosix.mode=dev`), `scripts/create_storage_disk.sh` automatically injects
+    the developer's host public key into
+    `/var/lib/diosix/keys/dev_authorized_keys` for zero-toil testing.
 *   **Dynamic cluster management keys**: Each parent VM generates an internal
     Dropbear management keypair on first boot
     (`/var/lib/diosix/keys/id_management`) and stages only its public key
@@ -115,8 +117,8 @@ manifests upon domain startup:
 *   **Air-gapped domain isolation**: Domains that omit external network
     capabilities (such as the `[domains.vault]` domain, which specifies only
     `gui.*` display capabilities and omits `net.wan`) receive no network
-    routes or WAN gateway forwarding. Sensitive workloads remain air-gapped
-    from external network interfaces.
+    routes or Wide Area Network (WAN) gateway forwarding. Sensitive workloads
+    remain air-gapped from external network interfaces.
 
 ## Least privilege lifecycle
 
@@ -138,12 +140,13 @@ Interface (SBI) hypercalls:
 To eliminate single points of failure and bound administrative or autonomous
 agent authority, Diosix enforces a hardware-backed **Constitutional Charter**
 (`/etc/diosix/charter.toml` and `/etc/diosix/constitution.md`) directly in
-M-mode:
+Machine mode (M-mode):
 
-*   **M-mode Constitutional Guard (`DIOSIX_SEAL_CHARTER`, `FID 19`)**: Once the
-    Root VM seals the 256-bit SHA-256 digest and quorum parameters of
-    `charter.toml` into M-mode, the Charter becomes immutable without an
-    `M-of-N` Steward quorum ratification (`DIOSIX_RATIFY_CHARTER`, `FID 20`).
+*   **M-mode Constitutional Guard (`DIOSIX_SEAL_CHARTER`, Function ID (FID)
+    `19`)**: Once the Root VM seals the 256-bit Secure Hash Algorithm 256
+    (SHA-256) digest and quorum parameters of `charter.toml` into M-mode, the
+    Charter becomes immutable without an `M-of-N` Steward quorum ratification
+    (`DIOSIX_RATIFY_CHARTER`, `FID 20`).
 *   **Hardware-protected Steward VMs (`RunFlags.STEWARD`)**: Tier-1 Steward VMs
     (`steward-sec`, `steward-ops`, `steward-gov`) run in isolated Stage-2
     memory partitions. When the Charter is sealed, the M-mode hypervisor blocks
@@ -160,14 +163,15 @@ M-mode:
 *   **Whisper Mesh (`DIOSIX_WHISPER_SEND` / `DIOSIX_WHISPER_RECV`)**: Steward
     VMs communicate over a dedicated M-mode ring buffer channel (`whisper_rx`)
     completely independent of the Root VM's virtual network switch (`diosix0`),
-    ensuring Stewards can reach BFT consensus even if the Root VM's network
-    stack is unresponsive.
-*   **Zero-SPOF Standby Root failover (`RunFlags.STANDBY_ROOT`)**: A warm
-    Standby Root VM can be pre-staged alongside the active Root VM. If the
-    primary Root VM suffers an unrecoverable panic or is voted out via
-    `DIOSIX_REQUEST_ROOT_FAILOVER` (`FID 24`), M-mode atomically reparents all
-    surviving Steward and workload VMs to the Standby Root VM and transfers
-    Root VM privileges without interrupting running child workloads.
+    ensuring Stewards can reach Byzantine Fault Tolerant (BFT) consensus even if
+    the Root VM's network stack is unresponsive.
+*   **Zero Single Point of Failure (SPOF) Standby Root failover
+    (`RunFlags.STANDBY_ROOT`)**: A warm Standby Root VM can be pre-staged
+    alongside the active Root VM. If the primary Root VM suffers an
+    unrecoverable panic or is voted out via `DIOSIX_REQUEST_ROOT_FAILOVER`
+    (`FID 24`), M-mode atomically reparents all surviving Steward and workload
+    VMs to the Standby Root VM and transfers Root VM privileges without
+    interrupting running child workloads.
 
 ## Reporting security issues <a name="reporting-security-issues"></a>
 

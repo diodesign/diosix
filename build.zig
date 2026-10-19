@@ -15,39 +15,63 @@ const build_qemu = @import("scripts/qemu.zig");
 const GuestProfile = enum { rootvm, usable, minimal };
 
 const ctl_sources = [_][]const u8{
-    "main.zig",      "api.zig",         "auth.zig",      "catalog.zig",
-    "charter.zig",   "charter/cmd.zig", "common.zig",    "governance.zig",
-    "gui.zig",       "host.zig",        "image.zig",     "image/pull.zig",
-    "installer.zig", "loader.zig",      "manifest.zig",  "manifest/policy.zig",
-    "passkey.zig",   "registry.zig",    "snapshot.zig",  "ssh.zig",
-    "ssh/sync.zig",  "storage.zig",     "sysconfig.zig", "vm.zig",
-    "vm/info.zig",   "vm/install.zig",  "vm/run.zig",    "vm/stage.zig",
-    "whisper.zig",
+    "main.zig",            "api.zig",             "auth.zig",
+    "auth/enroll.zig",     "catalog.zig",         "catalog/format.zig",
+    "charter.zig",         "charter/cmd.zig",     "charter/status.zig",
+    "charter/whisper.zig", "common.zig",          "governance.zig",
+    "gui.zig",             "host.zig",            "image.zig",
+    "image/import.zig",    "image/pull.zig",      "installer.zig",
+    "loader.zig",          "manifest.zig",        "manifest/cmd.zig",
+    "manifest/lexer.zig",  "manifest/policy.zig", "passkey.zig",
+    "registry.zig",        "snapshot.zig",        "ssh.zig",
+    "ssh/sync.zig",        "storage.zig",         "storage/disk.zig",
+    "sysconfig.zig",       "sysconfig/tour.zig",  "tests/catalog.zig",
+    "tests/main.zig",      "tests/manifest.zig",  "vm.zig",
+    "vm/info.zig",         "vm/install.zig",      "vm/restart.zig",
+    "vm/run.zig",          "vm/stage.zig",        "whisper.zig",
 };
 const gui_sources = [_][]const u8{
-    "main.zig",             "audio.zig",         "backdrop.zig",
-    "cursor.zig",           "display.zig",       "drm.zig",
-    "font.zig",             "font/banner.zig",   "font/banner_font.bin",
-    "font/banner_glow.bin", "framebuffer.zig",   "glass.zig",
-    "gui.zig",              "gui/input.zig",     "gui/nav.zig",
-    "gui/render.zig",       "host.zig",          "icon.zig",
-    "icon/render.zig",      "icon/viewport.zig", "intro.zig",
-    "intro/fx.zig",         "noise.zig",         "osk.zig",
-    "panes.zig",            "panes/catalog.zig", "panes/modal.zig",
-    "panes/vm.zig",         "tests.zig",         "welcome.zig",
-    "window.zig",           "window/input.zig",  "cloud_map.bin",
+    "main.zig",             "audio.zig",        "backdrop.zig",
+    "backdrop/blur.zig",    "cloud_map.bin",    "cursor.zig",
+    "display.zig",          "drm.zig",          "font.zig",
+    "font_bitmaps.bin",     "font/banner.zig",  "font/banner_font.bin",
+    "font/banner_glow.bin", "framebuffer.zig",  "glass.zig",
+    "gui.zig",              "gui/chrome.zig",   "gui/input.zig",
+    "gui/nav.zig",          "gui/render.zig",   "host.zig",
+    "icon.zig",             "icon/render.zig",  "icon/text.zig",
+    "icon/viewport.zig",    "icon/widgets.zig", "intro.zig",
+    "intro.wav",            "intro/fx.zig",     "noise.zig",
+    "osk.zig",              "panes.zig",        "panes/catalog.zig",
+    "panes/modal.zig",      "panes/osk.zig",    "panes/vm.zig",
+    "tests.zig",            "tests/gui.zig",    "tests/nav.zig",
+    "tests/panes.zig",      "tests/visual.zig", "welcome.zig",
+    "window.zig",           "window/input.zig",
+};
+const shim_sources = [_][]const u8{
+    "main.zig",    "loader.zig",       "efi.zig",
+    "storage.zig", "tests/loader.zig",
 };
 const overlay_configs = [_][]const u8{
     "constitution.md", "charter.toml", "diosix.toml",
     "install.toml",    "catalog.toml", "system.toml",
 };
 const extra_rootvm_inputs = [_][]const u8{
-    "scripts/build_rootvm.sh",          "tools/diosix-config/src/main.zig",
-    "tools/diosix-config/src/ui.zig",   "tools/guest-shim/src/main.zig",
-    "tools/guest-shim/src/loader.zig",  "tools/guest-shim/src/efi.zig",
-    "tools/guest-shim/src/storage.zig", "tools/alsa-init/main.c",
-    "tools/driver/diosix.h",            "tools/driver/diosix.c",
-    "tools/driver/governance.c",        "tools/driver/net.c",
+    "scripts/build_rootvm.sh",
+    "scripts/build_micro_iso.py",
+    "tools/diosix-config/src/main.zig",
+    "tools/diosix-config/src/ui.zig",
+    "tools/alsa-init/main.c",
+    "tools/driver/Makefile",
+    "tools/driver/diosix.h",
+    "tools/driver/diosix.c",
+    "tools/driver/governance.c",
+    "tools/driver/net.c",
+    "tools/guest-shim/linker.ld",
+    "tools/micro-guest/guest.s",
+    "tools/overlay-common/etc/init.d/S45alsa-init",
+    "tools/overlay-common/etc/init.d/S50diosix",
+    "tools/overlay-common/etc/init.d/S50dropbear",
+    "tools/overlay-common/etc/init.d/S60diosix-wm",
 };
 
 fn addRootvmInputs(b: *std.Build, cmd: *std.Build.Step.Run) void {
@@ -57,6 +81,9 @@ fn addRootvmInputs(b: *std.Build, cmd: *std.Build.Step.Run) void {
     }
     for (gui_sources) |f| {
         cmd.addFileInput(b.path(b.fmt("tools/diosix-gui/src/{s}", .{f})));
+    }
+    for (shim_sources) |f| {
+        cmd.addFileInput(b.path(b.fmt("tools/guest-shim/src/{s}", .{f})));
     }
     for (overlay_configs) |f| {
         const p = b.fmt("tools/overlay-common/etc/diosix/{s}", .{f});

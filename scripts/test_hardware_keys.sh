@@ -10,6 +10,7 @@
 set -eo pipefail
 
 BOLD="$(printf '\033[1m')"
+DIM="$(printf '\033[2m')"
 GREEN="$(printf '\033[32m')"
 BLUE="$(printf '\033[34m')"
 YELLOW="$(printf '\033[33m')"
@@ -32,12 +33,12 @@ ${BOLD}Usage:${RESET}
   $0 [command]
 
 ${BOLD}Commands:${RESET}
-  ${CYAN}tpm-start${RESET}       Initialize and launch virtual TPM 2.0 emulator (swtpm)
+  ${CYAN}tpm-start${RESET}       Launch virtual TPM 2.0 emulator (swtpm)
   ${CYAN}tpm-status${RESET}      Check virtual TPM 2.0 status and socket health
   ${CYAN}tpm-stop${RESET}        Stop running virtual TPM 2.0 emulator
   ${CYAN}run-tpm${RESET}         Launch Diosix GUI with virtual TPM 2.0 attached
-  ${CYAN}scan-usb${RESET}        Scan host for physical FIDO2/U2F keys and print flags
-  ${CYAN}guide${RESET}           Show guest-side verification and testing commands
+  ${CYAN}scan-usb${RESET}        Scan host for FIDO2/U2F keys and print flags
+  ${CYAN}guide${RESET}           Show guest verification and testing commands
   ${CYAN}clean${RESET}           Stop daemon and purge /tmp/diosix-tpm
 
 EOF
@@ -90,8 +91,10 @@ cmd_scan_usb() {
                 grep -oE "ID [0-9a-fA-F]{4}:[0-9a-fA-F]{4}" | cut -d' ' -f2)
             log_ok "Detected Security Key: ${BOLD}$line${RESET}"
             echo -e "    ${DIM}->${RESET} To pass this key into Diosix, run:"
-            echo -e "       ${CYAN}./scripts/build.sh run-gui -Dusb-key=${id}${RESET}"
-            echo -e "       ${CYAN}./scripts/build.sh run-tpm -Dusb-key=${id}${RESET}"
+            local gui_cmd="./scripts/build.sh run-gui -Dusb-key=${id}"
+            local tpm_cmd="./scripts/build.sh run-tpm -Dusb-key=${id}"
+            echo -e "       ${CYAN}${gui_cmd}${RESET}"
+            echo -e "       ${CYAN}${tpm_cmd}${RESET}"
         fi
     done < <(lsusb)
 

@@ -6,10 +6,11 @@ Following our review of the Diosix codebase ([`build.zig`](../build.zig),
 [`entry.s`](../hypervisor/hardware/native/cpu/riscv64/entry.s),
 [`boot.zig`](../hypervisor/core/boot.zig),
 [`sbi.zig`](../hypervisor/core/sbi.zig),
-[`diosix-ctl`](../tools/diosix-ctl/src/main.zig),
-[`diosix-gui`](../tools/diosix-gui/src/main.zig)), this document establishes
+[`main.zig`](../tools/diosix-ctl/src/main.zig),
+[`main.zig`](../tools/diosix-gui/src/main.zig)), this document establishes
 the blueprint for Diosix public releases, zero-password security, agent-native
-automation, and the **Autonomic Middle Tier (Steward VM collective)**:
+automation, and the **Autonomic Middle Tier (Steward Virtual Machine (VM)
+collective)**:
 
 > [!IMPORTANT]
 > **Confirmed core design decisions**
@@ -17,23 +18,28 @@ automation, and the **Autonomic Middle Tier (Steward VM collective)**:
 >    bootloader dependencies)**: Rather than relying on GRUB, EDK2, or U-Boot
 >    menus—or splitting live and installer downloads—Diosix ships **one
 >    universal binary (`vmdiosix`)** and **one unified removable image
->    (`diosix-YY.M-riscv64.img.zst`)**. Diosix boots directly in M-mode and
->    presents its own native Zig boot selector (graphical on display/touch
->    targets via [`diosix-gui`](../tools/diosix-gui/src/main.zig), TUI on
->    serial/headless targets via [`dsx`](../tools/diosix-ctl/src/main.zig)).
-> 2. **CalVer `YY.MINOR.PATCH` versioning**: Odd minor versions (`26.1`) denote
->    **Beta** releases working toward the subsequent even **Stable** release
->    (`26.2`), with an optional `.PATCH` (`26.2.1`) mapped to
->    `HypervisorInfo.version_patch` for critical security and bug fixes.
-> 3. **Freestanding Zig S-mode Guest Bootloader Shim
->    (`diosix-guest-shim.elf`)**: To boot any S/U-mode guest OS (Linux, FreeBSD,
->    OpenBSD, NetBSD, QNX, or custom kernels) from remote installer ISOs or
->    virtual disks without external firmware dependencies, Diosix provides its
->    own lightweight, freestanding Zig S-mode bootloader shim.
+>    (`diosix-YY.M-riscv64.img.zst`)**. Diosix boots directly in Machine mode
+>    (M-mode) and presents its own native Zig boot selector (graphical on
+>    display/touch targets via [`main.zig`](../tools/diosix-gui/src/main.zig),
+>    Terminal User Interface (TUI) on serial/headless targets via
+>    [`main.zig`](../tools/diosix-ctl/src/main.zig)).
+> 2. **Calendar Versioning (`CalVer`) `YY.MINOR.PATCH` versioning**: Odd minor
+>    versions (`26.1`) denote **Beta** releases working toward the subsequent
+>    even **Stable** release (`26.2`), with an optional `.PATCH` (`26.2.1`)
+>    mapped to `HypervisorInfo.version_patch` for critical security and bug
+>    fixes.
+> 3. **Freestanding Zig Supervisor-mode (S-mode) guest bootloader shim
+>    (`guest-shim-riscv64.elf`)**: To boot any S-mode and User-mode (U-mode)
+>    guest OS (Linux, FreeBSD, OpenBSD, NetBSD, QNX, or custom kernels) from
+>    remote installer ISOs or virtual disks without external firmware
+>    dependencies, Diosix provides its own lightweight, freestanding Zig S-mode
+>    bootloader shim.
 > 4. **100% password-less, passkey-only identity**: All targets authenticate
->    exclusively via FIDO2 USB/NFC security keys, TPM 2.0 platform passkeys, QR
->    WebAuthn cross-device passkeys, or UART challenge-response signatures—with
->    zero-toil auto-enrollment in developer builds.
+>    exclusively via Fast Identity Online 2 (FIDO2) USB or Near-Field
+>    Communication (NFC) security keys, Trusted Platform Module (TPM) 2.0
+>    platform passkeys, Quick Response (QR) WebAuthn cross-device passkeys, or
+>    Universal Asynchronous Receiver-Transmitter (UART) challenge-response
+>    signatures—with zero-toil auto-enrollment in developer builds.
 > 5. **Optional on-demand autonomic middle tier (`Root -> Leafs` or
 >    `Root -> Stewards -> Leafs`)**: `vmdiosix` embeds only the lightweight
 >    Root VM. Principals can run a classic 2-tier `Root -> Workload VMs` setup
@@ -51,7 +57,7 @@ automation, and the **Autonomic Middle Tier (Steward VM collective)**:
 | Concept | Diosix standard term | Scope | Mechanism |
 | :--- | :--- | :--- | :--- |
 | **Version number** (`26.1`, `26.2.1`) | **Release channel & series** (`CalVer`) | Build / tag time | `YY.MINOR[.PATCH]` (`odd` = **Beta**, `even` = **Stable**, `dev` = **Dev**) |
-| **Release targets** (Touch/Display vs. Serial/SSH) | **Hardware seat profiles** (`Seat adaptation`) | Runtime auto-detected | Dynamic DTB + Linux `drm`/`evdev` probing (`touch-tablet`, `desktop-kbd`, `headless-serial`) |
+| **Release targets** (Touch/Display vs. Serial/SSH) | **Hardware seat profiles** (`Seat adaptation`) | Runtime auto-detected | Dynamic Device Tree Blob (DTB) + Linux Direct Rendering Manager (`drm`)/`evdev` probing (`touch-tablet`, `desktop-kbd`, `headless-serial`) |
 | **Release levels** (Graphical vs. Terminal) | **System personalities** (`UI mode`) | Native boot selector | `diosix.ui=auto\|gui\|tui` (Graphical desktop vs. Terminal CLI/scriptable) |
 | **Release types** (Live, Installer, QEMU Dev) | **Boot & deployment modes** (`Lifecycle`) | Native boot selector | `diosix.mode=live\|install\|installed\|dev` |
 
@@ -61,8 +67,8 @@ automation, and the **Autonomic Middle Tier (Steward VM collective)**:
 | :--- | :--- | :--- |
 | **Overall host owner** | **The Principal** (or **Host Sovereign**) | The human owner (or delegating organization) holding the root FIDO2 passkey authority. Chooses between 2-tier (`Root -> Leafs`) and 3-tier (`Root -> Stewards -> Leafs`) operation and signs **Charters**. |
 | **External AI provisioner** | **Operator Agent** (or **Provisioning Agent**) | An external AI agent acting like a human sysadmin over `agent-ctl.sock` or SSH to install/configure the host on behalf of the Principal. |
-| **Tier 0: Progenitor VM** | **Root VM** (`CID 1`, `is_trusted = true`) + **Standby Root VMs** | Embedded in `vmdiosix`. Acts as a "benevolent dictator" managing physical hardware drivers, storage/network multiplexing, and seat UI. Can have warm/cold **Standby Root VMs** promoted by M-mode if the primary Root VM crashes or goes rogue. |
-| **Tier 1: Manager VMs (Optional, pulled online)** | **Steward VMs** (forming the **Steward collective**) | Pulled on demand from the online catalog (`dsx image pull steward`). Untrusted for direct host MMIO (`is_trusted = false`), spawned as children of Root VM (`CID 2..K`). Each runs one autonomous Steward agent bound by the **Diosix Constitution** and the Principal's **Charter**. |
+| **Tier 0: Progenitor VM** | **Root VM** (Context ID (CID) `1`, `is_trusted = true`) + **Standby Root VMs** | Embedded in `vmdiosix`. Acts as a "benevolent dictator" managing physical hardware drivers, storage/network multiplexing, and seat UI. Can have warm/cold **Standby Root VMs** promoted by M-mode if the primary Root VM crashes or goes rogue. |
+| **Tier 1: Manager VMs (Optional, pulled online)** | **Steward VMs** (forming the **Steward collective**) | Pulled on demand from the online catalog (`dsx image pull steward`). Untrusted for direct host Memory-Mapped Input/Output (MMIO) (`is_trusted = false`), spawned as children of Root VM (`CID 2..K`). Each runs one autonomous Steward agent bound by the **Diosix Constitution** and the Principal's **Charter**. |
 | **Tier 2: Leaf guest VMs** | **Workload VMs** (or **Leaf VMs**) | Workload-agnostic guest VMs (any OS, unikernel, or service) spawned either directly under the Root VM (2-tier mode) or under Steward VMs (3-tier autonomic mode). |
 | **The signed contract** | **The Charter** (`charter.toml` + `.sig`) | Workload-agnostic, cryptographically signed specification defining **Constitutional invariants** (immutable constraints) and **Operational objectives** (target state). |
 | **Foundational agent prompt** | **The Diosix Constitution** | Base system prompt and operational axioms provided to every Steward agent explaining Diosix mechanics, relative CIDs, quotas, Whisper consensus, and fiduciary duty to the Charter. |
@@ -77,9 +83,9 @@ automation, and the **Autonomic Middle Tier (Steward VM collective)**:
      `26.2` (H1 Stable: `26.2.0`, `26.2.1`).
    - **H2 cycle**: `26.3` (Beta series: `26.3.0`, `26.3.1`) $\longrightarrow$
      `26.4` (H2 Stable: `26.4.0`, `26.4.1`).
-2. **Zero-breakage ABI extension**:
-   - In [`hypervisor/interface/sbi.zig`](../hypervisor/interface/sbi.zig)
-     (documented in [`docs/interface.md`](interface.md)),
+2. **Zero-breakage Application Binary Interface (ABI) extension**:
+   - In [`sbi.zig`](../hypervisor/interface/sbi.zig)
+     (documented in [`interface.md`](interface.md)),
      `struct hypervisor_info` repurposes `uint16_t _reserved0` as
      `version_patch: u16` and adds `CAP_RELEASE_STABLE`
      (`version_minor % 2 == 0`) to `features`.
@@ -87,7 +93,7 @@ automation, and the **Autonomic Middle Tier (Steward VM collective)**:
 | Channel | Version pattern | Git branch | Zig optimize mode | Auth policy | Native boot selector default |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Dev / local** | `26.1-dev+<sha>` | `devel` / feature | `Debug` or `ReleaseSafe` | Auto-enrolled host dev key + local autologin | Bypassed (`diosix.mode=dev` instant boot) |
-| **Beta (public)** | `26.1` (`26.1.x`) | `devel` (tagged `v26.1.x`) | `ReleaseSafe` | Passkey-only (`live` local TOFU $\to$ `installed` locked) | Shown on Live/Install media (with Beta badge) |
+| **Beta (public)** | `26.1` (`26.1.x`) | `devel` (tagged `v26.1.x`) | `ReleaseSafe` | Passkey-only (`live` local Trust On First Use (TOFU) $\to$ `installed` locked) | Shown on Live/Install media (with Beta badge) |
 | **Stable (public)** | `26.2` (`26.2.x`) | `stable` (tagged `v26.2.x`) | `ReleaseSafe` | Passkey-only (`live` local TOFU $\to$ `installed` locked) | Shown on Live/Install media |
 
 ---
@@ -112,12 +118,11 @@ flowchart LR
     MENU --> M3["3. Install Diosix (Expert Mode)"]
 ```
 
-1. **Tiny freestanding Zig stage-1 disk loader (`tools/diosix-stage1/`)**:
-   - For physical RISC-V SoCs whose mask ROM loads a raw sector offset or GPT
-     partition (`FIRMWARE` slice) into SRAM/DRAM in M-mode, Diosix provides a
-     <16 KB freestanding Zig stage-1 loader that reads `vmdiosix.bin` from the
-     GPT boot partition into `0x80000000` and jumps to `_start(hartid, dtb)` in
-     M-mode.
+1. **Freestanding Zig S-mode guest bootloader shim (`tools/guest-shim/`)**:
+   - For guest VMs booting from virtual disks or ISO images, Diosix provides a
+     lightweight freestanding Zig bootloader shim (`tools/guest-shim/`) that
+     loads guest Executable and Linkable Format (ELF) or flat kernel images into
+     DRAM without external firmware dependencies.
 2. **Native Diosix boot selector (inside Root VM early init)**:
    - When `vmdiosix` boots from the unified removable USB/SD image
      (`diosix-YY.M-riscv64.img`), the Root VM starts in under 1 second and
@@ -129,8 +134,8 @@ flowchart LR
    - **Atomic boot hart lottery
      ([`entry.s`](../hypervisor/hardware/native/cpu/riscv64/entry.s))**:
      Replace `beq x0, a0, early_boot_prep` with an atomic `amoswap.w.aq`
-     lottery so SoCs whose application harts start at `mhartid >= 1` boot
-     cleanly.
+     lottery so System-on-Chip (SoC) platforms whose application harts start at
+     `mhartid >= 1` boot cleanly.
    - **Forward host `/chosen/bootargs`
      ([`boot.zig`](../hypervisor/core/boot.zig))**: Read incoming
      `/chosen/bootargs` from the host DTB and append them to the Root VM's
@@ -138,10 +143,10 @@ flowchart LR
 
 ---
 
-## 5. Freestanding Zig S-mode Guest Bootloader Shim (`diosix-guest-shim.elf`)
+## 5. Freestanding Zig S-mode guest bootloader shim (`guest-shim-riscv64.elf`)
 
-To boot **any S/U-mode guest kernel** (Linux, FreeBSD, OpenBSD, NetBSD, QNX,
-Haiku, or custom microkernels) from either remote installer ISOs or local
+To boot **any S-mode and U-mode guest kernel** (Linux, FreeBSD, OpenBSD, NetBSD,
+QNX, Haiku, or custom microkernels) from either remote installer ISOs or local
 virtual disks without external firmware dependencies:
 
 1. **Tiny (~32 KB) freestanding Zig binary (`tools/guest-shim/`)**:
@@ -149,18 +154,19 @@ virtual disks without external firmware dependencies:
      shims) and staged in the Root VM at
      `/usr/share/diosix/shim/guest-shim-riscv64.elf`.
 2. **Multi-OS binary and filesystem support**:
-   - **Block and FS readers**: Minimal read-only drivers for VirtIO-blk,
-     GPT/MBR partition tables, ISO9660 (El Torito), FAT32, ext2/ext4, and BSD
-     UFS2.
+   - **Block and filesystem (FS) readers**: Minimal read-only drivers for
+     VirtIO-blk, GPT/Master Boot Record (MBR) partition tables, ISO9660 (El
+     Torito), File Allocation Table 32 (FAT32), ext2/ext4, and BSD Unix File
+     System 2 (UFS2).
    - **Executable loaders**: ELF64/ELF32, RISC-V Linux/BSD flat `Image` headers
-     (`RSC\x05`), and a minimal ~10-function `EFI_BOOT_SERVICES` PE32+ (`.efi`)
-     shim so unmodified FreeBSD/OpenBSD/Linux EFI loaders boot cleanly into
-     S-mode.
+     (`RSC\x05`), and a minimal ~10-function `EFI_BOOT_SERVICES` Portable
+     Executable 32+ (PE32+ `.efi`) shim so unmodified FreeBSD/OpenBSD/Linux EFI
+     loaders boot cleanly into S-mode.
 3. **Seamless installer-to-disk transition**:
    - Boots from attached `--cdrom <os.iso>` on first run; when the guest OS
-     installer finishes and calls SBI `SRST` (`reboot`), `dsx` detaches the ISO
-     and restarts `diosix-guest-shim.elf`, which boots directly from the newly
-     populated `/dev/vda` virtual disk.
+     installer finishes and calls Supervisor Binary Interface (SBI) `SRST`
+     (`reboot`), `dsx` detaches the ISO and restarts `guest-shim-riscv64.elf`,
+     which boots directly from the newly populated `/dev/vda` virtual disk.
 
 ---
 
@@ -176,7 +182,8 @@ virtual disks without external firmware dependencies:
 2. **Universal passkey verification
    (`/var/lib/diosix/keys/authorized_passkeys`)**:
    - **Desktop / laptop GUI (`desktop-kbd`)**: USB/NFC FIDO2 security key touch
-     (`/dev/hidraw*` CTAP2) or WebAuthn QR code scan.
+     (`/dev/hidraw*` Client to Authenticator Protocol 2 (CTAP2)) or WebAuthn QR
+     code scan.
    - **Touchscreen tablet / phone (`touch-tablet`)**: **Device-bound platform
      passkey** sealed in the host **TPM 2.0** (`/dev/tpmrm0`) unlocked via a
      hardware-rate-limited touch gesture/PIN (or smartphone QR passkey).
@@ -196,15 +203,16 @@ virtual disks without external firmware dependencies:
 ## 7. Hardware seat profiles, OSK, and onboarding experience
 
 1. **Dynamic seat profiles and on-screen keyboard
-   (`tools/diosix-gui/src/osk.zig`)**:
+   ([`osk.zig`](../tools/diosix-gui/src/osk.zig))**:
    - Enable `CONFIG_INPUT_TOUCHSCREEN=y`, `CONFIG_HID_MULTITOUCH=y`,
      `CONFIG_DRM_SIMPLEDRM=y`, and `CONFIG_INPUT_UINPUT=y` in
      [`linux-rootvm-hardware.fragment`](../boot/linux-rootvm-hardware.fragment).
    - When an `EV_ABS` touchscreen is detected, `diosix-gui` activates
      `touch-tablet` mode (Tap $\to$ `Select`, Long-Press $\to$ `Menu`,
      2-Finger Tap $\to$ `Adjust`) and docks the native **On-Screen Keyboard
-     (`!Keyboard`)**.
-2. **Welcome modal and Guided Tour (`welcome.zig`, `tour.zig`, `dsx tour`)**:
+     (OSK, `!Keyboard`)**.
+2. **Welcome modal and Guided Tour (`welcome.zig`, `panes/modal.zig`,
+   `dsx tour`)**:
    - Displayed on `diosix.mode=live` and first post-install boot
      (`! /var/lib/diosix/.onboarding_done`).
 
@@ -217,17 +225,17 @@ virtual disks without external firmware dependencies:
      `ssh -s diosix-agent` or framed UART on physical boards). Emits
      deterministic JSON boot/install beacons (`@@DIOSIX_EVENT`) and accepts
      JSON-RPC commands (`dsx --json`).
-2. **Declarative unattended install (`diosix-install.toml`)**:
-   - `dsx host install --config /boot/diosix-install.toml --json` executes
+2. **Declarative unattended install (`/etc/diosix/install.toml`)**:
+   - `dsx host install --config /etc/diosix/install.toml --json` executes
      Basic or Expert host installation non-interactively with JSON progress
      streaming.
 3. **Semantic GUI introspection
    (`dsx gui state --json` / `trigger <icon_id>` / `screenshot`)**:
    - Exposes the deterministic window and icon IDs in
-     [`tools/diosix-gui/src/gui.zig`](../tools/diosix-gui/src/gui.zig) over
-     `/run/diosix/gui-agent.sock` so Operator Agents can inspect widget state,
-     click buttons by ID, and capture framebuffer screenshots even in headless
-     QEMU (`-display none`).
+     [`gui.zig`](../tools/diosix-gui/src/gui.zig) over
+     `/run/diosix/gui_state.json` and `/run/diosix/gui_cmd` so Operator Agents
+     can inspect widget state, trigger actions by ID, and capture framebuffer
+     screenshots even in headless QEMU (`-display none`).
 
 ---
 
@@ -294,9 +302,9 @@ single compromised component can destroy the system or seize total control**:
      freestanding Zig code**.
    - Neither the Root VM nor the Steward collective can ever execute code in
      M-mode or map hypervisor physical memory (strictly blocked by G-stage page
-     tables / PMP and
-     [`physmem.isHypervisorMemory`](../hypervisor/core/sbi.zig)). **Stewards
-     can never take over the M-mode hypervisor.**
+     tables / Physical Memory Protection (PMP) and `physmem.isHypervisorMemory`
+     in [`physmem.zig`](../hypervisor/core/physmem.zig)). **Stewards can never
+     take over the M-mode hypervisor.**
 2. **The Root VM as a checked "benevolent dictator"**:
    - In normal operation, the Root VM (`CID 1`) is the privileged coordinator
      that owns physical hardware drivers (`is_trusted = true`) and provides
@@ -322,8 +330,8 @@ single compromised component can destroy the system or seize total control**:
      - **Rogue Root VM impeachment (`DIOSIX.REQUEST_ROOT_FAILOVER`)**: If the
        active Root VM is compromised and attempts hostile actions (for example,
        repeatedly issuing unconstitutional `TERMINATE` calls or blackholing
-       I/O), an $M$-of-$N$ supermajority of Steward VMs can sign a
-       `REQUEST_ROOT_FAILOVER` petition to M-mode. Upon verifying the
+       Input/Output (I/O)), an $M$-of-$N$ supermajority of Steward VMs can sign
+       a `REQUEST_ROOT_FAILOVER` petition to M-mode. Upon verifying the
        $M$-of-$N$ signatures against the sealed Charter, M-mode terminates the
        compromised Root VM and promotes a clean Standby Root VM.
 4. **Ultimate physical sovereignty (power-off + live media recovery)**:
@@ -343,9 +351,9 @@ single compromised component can destroy the system or seize total control**:
 
 1. **The Diosix Constitution (`/etc/diosix/constitution.md`)**:
    - Every Steward VM boots with a foundational system prompt—**The Diosix
-     Constitution**—that instructs its LLM on:
-     - How the Diosix hierarchical tree, relative Context IDs (`CID 0, 1,
-       2..N`), and resource quotas operate;
+     Constitution**—that instructs its Large Language Model (LLM) on:
+     - How the Diosix hierarchical tree, relative CIDs (`CID 0, 1, 2..N`), and
+       resource quotas operate;
      - How to communicate and vote with peer Stewards over the **Whisper
        Mesh**;
      - Its strict fiduciary duty to uphold the Principal's signed **Charter**
@@ -373,10 +381,10 @@ single compromised component can destroy the system or seize total control**:
        - If Steward $\alpha$'s self-modification degrades its performance,
          violates Charter invariants, or causes erratic Whisper behavior, the
          remaining Stewards ($\beta, \gamma$) deterministically detect the
-         SLA/protocol deviation and **vote ($M$-of-$N$) to reset Steward
-         $\alpha$ to its clean base image or last known-good snapshot
-         (`DIOSIX.RESET_STEWARD`)**, seamlessly compensating for its child
-         workloads in the meantime.
+         Service-Level Agreement (SLA) or protocol deviation and **vote
+         ($M$-of-$N$) to reset Steward $\alpha$ to its clean base image or last
+         known-good snapshot (`DIOSIX.RESET_STEWARD`)**, seamlessly compensating
+         for its child workloads in the meantime.
 
 ### 9.4 Workload-agnostic signed Charter (`charter.toml`)
 
@@ -437,11 +445,12 @@ Steward VMs coordinate over a dual-transport mesh:
    `WHISPER_RECV`)**: Zero-copy, uncensorable message ring in hypervisor memory
    connecting sibling Steward VMs directly so even a rogue Root VM cannot drop
    or forge consensus packets.
-2. **Inter-host federated Whisper (WireGuard / Noise over LAN/WAN)**: When
-   permitted by the Charter, Steward collectives across multiple physical
-   Diosix hosts form an ad-hoc self-organizing compute mesh—discovering peers,
-   sharing health/capacity telemetry, and migrating or spawning workload units
-   across hosts to survive hardware failures.
+2. **Inter-host federated Whisper (WireGuard / Noise over Local Area Network
+   (LAN) and Wide Area Network (WAN))**: When permitted by the Charter, Steward
+   collectives across multiple physical Diosix hosts form an ad-hoc
+   self-organizing compute mesh—discovering peers, sharing health/capacity
+   telemetry, and migrating or spawning workload units across hosts to survive
+   hardware failures.
 
 ---
 
@@ -451,17 +460,17 @@ Steward VMs coordinate over a dual-transport mesh:
 1. **Atomic boot hart lottery and bootargs forwarding**: Update
    [`entry.s`](../hypervisor/hardware/native/cpu/riscv64/entry.s) and
    [`boot.zig`](../hypervisor/core/boot.zig).
-2. **`version_patch` ABI**: Wire `YY.MINOR[.PATCH]` into
-   [`HypervisorInfo`](../hypervisor/interface/sbi.zig) and `dsx host info`.
+2. **`version_patch` ABI**: Wire `YY.MINOR[.PATCH]` into `HypervisorInfo` in
+   [`sbi.zig`](../hypervisor/interface/sbi.zig) and `dsx host info`.
 3. **Native Diosix boot selector and dev fast-boot**: Bypass intro/welcome in
    `diosix.mode=dev` (`zig build run` / `run-gui`), and add the native GUI/TUI
    boot selector when booting from unified Live/Install media.
 
-### Phase 2: Freestanding Zig S-mode Guest Bootloader Shim
+### Phase 2: Freestanding Zig S-mode guest bootloader shim
 1. **Build `tools/guest-shim/`**: Implement the freestanding Zig S-mode guest
    bootloader supporting VirtIO-blk, ISO9660/FAT32/GPT/UFS, ELF64, RISC-V
    `Image`, and minimal UEFI Boot Services (`.efi`) so Diosix boots any
-   S/U-mode guest OS (Linux, *BSD, QNX) natively.
+   S-mode and U-mode guest OS (Linux, *BSD, QNX) natively.
 2. **Remote guest and Steward catalog (`dsx image pull` &
    `dsx install-guest`)**: Add signed remote catalog fetching for both Guest OS
    images and on-demand **Steward VM** appliances.
@@ -481,26 +490,26 @@ Steward VMs coordinate over a dual-transport mesh:
 ### Phase 4: Seat profiles, touchscreen/OSK, host installer, and agent plane
 1. **Touchscreen and OSK**: Enable touchscreen/SimpleDRM kernel drivers in
    [`linux-rootvm-hardware.fragment`](../boot/linux-rootvm-hardware.fragment),
-   add touch gestures and the dockable On-Screen Keyboard (`osk.zig`), and
-   build the Welcome + 5-step Guided Tour (`welcome.zig`, `tour.zig`).
+   add touch gestures and the dockable OSK (`osk.zig`), and build the Welcome +
+   5-step Guided Tour (`welcome.zig`, `panes/modal.zig`).
 2. **Unified host installer (`Basic`, `Expert`, `Unattended`)**: Implement
-   `dsx host install` and the GUI installer window with `diosix-install.toml`
-   unattended support (allowing selection of 2-tier vs. 3-tier Steward topology
-   in Expert mode).
+   `dsx host install` and the GUI installer window with
+   `/etc/diosix/install.toml` unattended support (allowing selection of 2-tier
+   vs. 3-tier Steward topology in Expert mode).
 3. **Operator Agent control plane**: Add `--json` across `dsx`, wire
    `zig-out/agent-ctl.sock` in [`build.zig`](../build.zig), and expose semantic
    GUI inspection (`dsx gui state --json` / `trigger` / `screenshot`).
 
-### Phase 5: The Autonomic Steward collective, Standby Root, and Whisper Mesh
+### Phase 5: The autonomic Steward collective, Standby Root, and Whisper Mesh
 1. **M-mode Charter, Whisper, and Root failover hypercalls
-   ([`hypervisor/core/sbi.zig`](../hypervisor/core/sbi.zig))**: Implement
-   `DIOSIX.SEAL_CHARTER`, `RATIFY_CHARTER`, `WHISPER_SEND`, `WHISPER_RECV`,
-   `RESET_STEWARD`, and **Standby Root VM promotion / subtree reparenting**
-   (`REQUEST_ROOT_FAILOVER`).
+   ([`charter.zig`](../hypervisor/core/sbi/charter.zig))**:
+   Implement `DIOSIX.SEAL_CHARTER`, `RATIFY_CHARTER`, `WHISPER_SEND`,
+   `WHISPER_RECV`, `RESET_STEWARD`, and **Standby Root VM promotion / subtree
+   reparenting** (`REQUEST_ROOT_FAILOVER`).
 2. **Steward runtime (`tools/diosix-steward/`)**: Build the `diosix-steward`
    agent daemon containing the **Diosix Constitution**, deterministic invariant
    verifier, Whisper BFT consensus engine, self-modification sandbox hooks, and
-   RVV/API LLM planner.
+   RISC-V Vector (RVV) or Application Programming Interface (API) LLM planner.
 3. **CLI and GUI Charter management**: Add
    `dsx charter <deploy|status|propose|audit>` and a **Steward collective &
-   Charter health** view in [`diosix-gui`](../tools/diosix-gui/src/gui.zig).
+   Charter health** view in [`gui.zig`](../tools/diosix-gui/src/gui.zig).

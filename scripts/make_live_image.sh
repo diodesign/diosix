@@ -24,7 +24,7 @@ BLUE="\033[34m"
 RESET="\033[0m"
 
 log_banner() {
-    echo -e "${BOLD}${BLUE}=== Diosix Live & Installer Image Builder ===${RESET}"
+    echo -e "${BOLD}${BLUE}=== Diosix Live Image Builder ===${RESET}"
 }
 
 log_step() {
@@ -95,7 +95,7 @@ mcopy -i "$ESP_IMG" "$HYPERVISOR_BIN" "::/EFI/BOOT/BOOTRISCV64.EFI"
 log_ok "ESP partition populated (extlinux.conf, vmdiosix.elf, BOOTRISCV64.EFI)."
 
 # 3. Build Partition 2: Persistent Storage Pool (ext4).
-log_step "[2/4] Generating Persistent Storage Volume (ext4, ${DATA_SIZE_MB}MB)..."
+log_step "[2/4] Generating Persistent Storage (ext4, ${DATA_SIZE_MB}MB)..."
 STAGING_DIR="$TMP_DIR/staging"
 mkdir -p "$STAGING_DIR/images" "$STAGING_DIR/manifests" \
     "$STAGING_DIR/keys" "$STAGING_DIR/disks"
@@ -152,13 +152,18 @@ DATA_SECTORS=$((DATA_SIZE_MB * 1024 * 1024 / 512))
 ESP_TYPE="C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
 DATA_TYPE="0FC63DE6-8442-43D4-BA40-5242857580A6"
 
+ESP_LINE="start=${ESP_START}, size=${ESP_SECTORS}, type=${ESP_TYPE}"
+ESP_LINE="${ESP_LINE}, name=\"ESP_BOOT\", bootable"
+DATA_LINE="start=${DATA_START}, size=${DATA_SECTORS}, type=${DATA_TYPE}"
+DATA_LINE="${DATA_LINE}, name=\"DIOSIX_DATA\""
+
 SFDISK_SCRIPT=$(cat <<EOF
 label: gpt
 unit: sectors
 sector-size: 512
 
-start=${ESP_START}, size=${ESP_SECTORS}, type=${ESP_TYPE}, name="ESP_BOOT", bootable
-start=${DATA_START}, size=${DATA_SECTORS}, type=${DATA_TYPE}, name="DIOSIX_DATA"
+${ESP_LINE}
+${DATA_LINE}
 EOF
 )
 
@@ -177,5 +182,6 @@ IMG_SZ=$(du -h "$OUT_IMG" | cut -f1)
 echo -e "    ${DIM}->${RESET} Output image  : ${BOLD}$OUT_IMG${RESET} ($IMG_SZ)"
 FLASH_CMD="sudo dd if=$OUT_IMG of=/dev/sdX bs=4M status=progress conv=fsync"
 echo -e "    ${DIM}->${RESET} Flash command : ${CYAN}${FLASH_CMD}${RESET}"
-echo -e "    ${DIM}->${RESET} QEMU test     : ${CYAN}./scripts/build.sh run-live${RESET}"
+QEMU_CMD="./scripts/build.sh run-live"
+echo -e "    ${DIM}->${RESET} QEMU test     : ${CYAN}${QEMU_CMD}${RESET}"
 echo ""

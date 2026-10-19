@@ -1,20 +1,24 @@
-# standard for zig and diosix
+# Zig compiler cache and build output directories.
 .zig-cache/
 zig-out/
 
-# binaries and build outputs
+# Standalone compiled binaries, raw dumps, disk/ISO images, and temp files.
 *.elf
 *.bin
-!tools/diosix-gui/src/*.bin
 *.iso
 *.img
 *.tmp*
-tools/overlay-common/boot/
-tools/overlay-common/usr/
-tools/overlay-common/root/
+
+# Keep pre-rendered GUI font and cloud-map assets embedded via @embedFile.
+!tools/diosix-gui/src/*.bin
+!tools/diosix-gui/src/**/*.bin
+
+# Never commit private SSH or passkey material into the static rootfs overlay.
 tools/overlay-common/etc/diosix/keys/*
 !tools/overlay-common/etc/diosix/keys/.gitkeep
 
-# log text files from debugging
-*.txt
+# Local QEMU, build, and test debug logs.
 *.log
+
+# Local developer custom agent configurations.
+.agents

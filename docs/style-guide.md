@@ -49,7 +49,7 @@ definitions:
     or development system where the source code is compiled and the
     executable binaries (the hypervisor and guest payloads) are built.
 *   **Host hardware** (or **host system**): The physical machine, board,
-    or SoC that runs the compiled hypervisor.
+    or System-on-Chip (SoC) that runs the compiled hypervisor.
 *   **Target platform** (or **target system**): The board, CPU architecture
     configuration, or emulator machine designed to execute the compiled
     hypervisor.
@@ -86,12 +86,12 @@ submodule in the parent file's `test` block (`_ = @import("vm/run.zig");`) so
 and comments at 80 characters or fewer.
 
 All source files must use concise `snake_case` filenames without redundant
-project, directory, or sibling prefixes. For example, name the API module
-inside a Diosix tool `api.zig` rather than `diosix_api.zig`, and name a VM
-submodule inside `vm/` `info.zig` rather than `vm_info.zig`. Never duplicate
-shared primitives (such as `Spinlock`, page-alignment math, or path validators)
-across files; import them from `hypervisor/interface/`,
-`hypervisor/core/atomic.zig`, or `common.zig`.
+project, directory, or sibling prefixes. For example, name the Application
+Programming Interface (API) module inside a Diosix tool `api.zig` rather than
+`diosix_api.zig`, and name a VM submodule inside `vm/` `info.zig` rather than
+`vm_info.zig`. Never duplicate shared primitives (such as `Spinlock`,
+page-alignment math, or path validators) across files; import them from
+`hypervisor/interface/`, `hypervisor/core/atomic.zig`, or `common.zig`.
 
 For functions and methods, use `camelCase`. Types, structs, unions, and enums
 must use `PascalCase`. Local variables and struct fields must use `snake_case`,
@@ -121,14 +121,18 @@ literal requires an inline comment to explain its meaning (such as
 `(vaddr & 0xfff) > 0xffc` or `(pte & 0xe) == 0`), replace it with a named
 constant, `enum` tag, or self-documenting inline helper (`PAGE_OFFSET_MASK`,
 `crossesPageBoundary(vaddr, @sizeOf(u32))`, `PTE.isPointer(pte)`). Use explicit
-fixed-width integer types (`u64`, `u32`, `u16`, `u8`) in ABI structs
-(`extern struct`, `packed struct`) and 64-bit guest register state rather than
-`usize`, and explicitly annotate local variables initialized from `@min` or
-`@max` with a comptime literal (`const row_w: usize = @min(width, 1280);`).
+fixed-width integer types (`u64`, `u32`, `u16`, `u8`) in Application Binary
+Interface (ABI) structs (`extern struct`, `packed struct`) and 64-bit guest
+register state rather than `usize`, and explicitly annotate local variables
+initialized from `@min` or `@max` with a comptime literal
+(`const row_w: usize = @min(width, 1280);`).
 
 Separate mechanism from policy: implement behavior in code and store tunable
 parameters in configuration files under `/etc/diosix/` with appropriate
-least-privilege file permissions.
+least-privilege file permissions. Avoid accumulating multi-path fallback arrays
+for internal files or symbols that ship together in the repository; update all
+in-tree producers, consumers, and tests atomically to reference a single
+canonical path.
 
 Be explicit about memory management and allocations. During early M-mode boot
 before a heap allocator is initialized, static pre-allocated buffers are

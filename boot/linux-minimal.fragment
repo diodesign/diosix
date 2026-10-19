@@ -47,8 +47,6 @@ CONFIG_CIFS=y
 # CONFIG_WIRELESS is not set
 # CONFIG_MEDIA_SUPPORT is not set
 # CONFIG_NFC is not set
-# CONFIG_INPUT is not set
-# CONFIG_SERIO is not set
 # CONFIG_HPET is not set
 # CONFIG_ACPI is not set
 # CONFIG_VT is not set
@@ -116,7 +114,6 @@ CONFIG_ARCH_VIRT=y
 
 # Disable DMA engine and unused virtio drivers
 # CONFIG_DMADEVICES is not set
-# CONFIG_VIRTIO_MMIO is not set
 # CONFIG_VIRTIO_BALLOON is not set
 # CONFIG_VIRTIO_INPUT is not set
 

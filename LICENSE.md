@@ -1,6 +1,7 @@
 # Licensing of Diosix
 
-Unless otherwise stated, the following license applies to the Diosix source code and binaries:
+Unless otherwise stated, the following license applies to the Diosix source
+code and binaries:
 
 ## MIT License (MIT)
 

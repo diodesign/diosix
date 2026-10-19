@@ -61,11 +61,13 @@ mkdir -p "$(dirname "$BUILDROOT_DIR")"
 HASH_FILE="${OUT_FILE}.sha256"
 CURRENT_HASH=$(
     (
-        find tools/overlay-common -type f ! -name 'micro-guest.elf' \
+        find tools/overlay-common -type f \
             -exec sha256sum {} + 2>/dev/null
+        find tools/diosix-ctl/src tools/diosix-gui/src \
+            tools/diosix-config/src tools/guest-shim -name '*.zig' \
+            | sort | xargs cat | sha256sum
         sha256sum "$CONFIG_FILE" "$0" "$(dirname "$CONFIG_FILE")"/*.fragment \
-            tools/diosix-ctl/src/*.zig tools/guest-shim/src/*.zig \
-            tools/guest-shim/linker.ld tools/diosix-gui/src/*.zig \
+            tools/guest-shim/linker.ld \
             tools/driver/* tools/alsa-init/* tools/micro-guest/* 2>/dev/null
     ) | awk '{print $1}' | sort | sha256sum | cut -d' ' -f1
 )
@@ -94,7 +96,8 @@ if [ -f "$OUT_FILE" ] && [ -f "$HASH_FILE" ]; then
     if [ "$CURRENT_HASH" = "$RECORDED_HASH" ]; then
         SIZE=$(du -h "$OUT_FILE" | cut -f1)
         H_SHORT="${CURRENT_HASH:0:12}"
-        log_ok "Root VM up-to-date (${BOLD}${GUEST_ARCH}${RESET} | ${SIZE} | ${H_SHORT}...). Skipped."
+        MSG="Root VM up-to-date (${BOLD}${GUEST_ARCH}${RESET}"
+        log_ok "${MSG} | ${SIZE} | ${H_SHORT}...). Skipped."
         write_rootvm_s
         exit 0
     fi
@@ -125,16 +128,11 @@ if [ -d "tools/guest-shim" ]; then
     log_info "Compiling freestanding S-mode guest bootloader shim..."
     SHIM_DIR="$DYNAMIC_OVERLAY/usr/share/diosix/shim"
     SHIM_ELF="guest-shim-riscv64.elf"
-    mkdir -p "$SHIM_DIR" "$DYNAMIC_OVERLAY/var/lib/diosix/images" \
-        "$DYNAMIC_OVERLAY/boot"
+    mkdir -p "$SHIM_DIR"
     if zig build-exe -target riscv64-freestanding-none -O ReleaseSmall \
         -mcmodel=medium --script tools/guest-shim/linker.ld \
         tools/guest-shim/src/main.zig --name "$SHIM_ELF" \
         -femit-bin="${SHIM_DIR}/${SHIM_ELF}" >/dev/null 2>&1; then
-        ln -sf "/usr/share/diosix/shim/${SHIM_ELF}" \
-            "$DYNAMIC_OVERLAY/var/lib/diosix/images/guest-shim.elf"
-        ln -sf "/usr/share/diosix/shim/${SHIM_ELF}" \
-            "$DYNAMIC_OVERLAY/boot/guest-shim.elf"
         log_ok "Installed ${SHIM_ELF} in overlay (/usr/share/diosix/shim/)."
     else
         log_warn "Failed to cross-compile ${SHIM_ELF}."
@@ -156,6 +154,20 @@ if [ -d "tools/diosix-gui" ]; then
     fi
 fi
 
+if [ -d "tools/diosix-config" ]; then
+    log_info "Compiling diosix-config for ${BOLD}${ZIG_TARGET}${RESET}..."
+    if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast \
+        --dep interface -Mroot=tools/diosix-config/src/main.zig \
+        -Minterface=hypervisor/interface/lib.zig \
+        --name diosix-config \
+        -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-config"; then
+        log_ok "Installed diosix-config in overlay (/usr/bin/)."
+    else
+        log_err "Failed to cross-compile diosix-config for ${ZIG_TARGET}."
+        exit 1
+    fi
+fi
+
 if [ -f "tools/alsa-init/main.c" ]; then
     log_info "Compiling diosix-alsa-init for ${BOLD}${ZIG_TARGET}${RESET}..."
     ALSA_BIN="$DYNAMIC_OVERLAY/usr/sbin/diosix-alsa-init"
@@ -168,14 +180,17 @@ fi
 
 # Compile and install lightweight guest payload for nested testing.
 if [ -f "tools/micro-guest/guest.s" ]; then
-    mkdir -p "$DYNAMIC_OVERLAY/boot" "$DYNAMIC_OVERLAY/var/lib/diosix/images"
+    SHARE_IMAGES_DIR="$DYNAMIC_OVERLAY/usr/share/diosix/images"
+    mkdir -p "$SHARE_IMAGES_DIR" \
+        "$DYNAMIC_OVERLAY/var/lib/diosix/images" \
+        "$DYNAMIC_OVERLAY/var/lib/diosix/iso"
     CC_GUEST="riscv64-linux-gnu-gcc"
     BR_GCC="$BUILDROOT_DIR/output/host/bin/riscv64-buildroot-linux-gnu-gcc"
     if [ -x "$BR_GCC" ]; then
         CC_GUEST="$BR_GCC"
     fi
-    MICRO_ELF="$DYNAMIC_OVERLAY/boot/micro-guest.elf"
-    MICRO_ISO="$DYNAMIC_OVERLAY/boot/micro-guest.iso"
+    MICRO_ELF="${SHARE_IMAGES_DIR}/micro-guest.elf"
+    MICRO_ISO="${SHARE_IMAGES_DIR}/micro-guest.iso"
     LD_FLAGS="-Wl,-Ttext=0x80000000,-N,--build-id=none"
     if command -v "$CC_GUEST" >/dev/null 2>&1; then
         "$CC_GUEST" -nostdlib -static "$LD_FLAGS" \
@@ -185,14 +200,14 @@ if [ -f "tools/micro-guest/guest.s" ]; then
             tools/micro-guest/guest.s -o "$MICRO_ELF" 2>/dev/null || true
     fi
     if [ -f "$MICRO_ELF" ]; then
-        ln -sf /boot/micro-guest.elf \
+        ln -sf /usr/share/diosix/images/micro-guest.elf \
             "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest.elf" \
             2>/dev/null || true
         if [ -f "scripts/build_micro_iso.py" ]; then
             python3 scripts/build_micro_iso.py "$MICRO_ELF" \
                 "$MICRO_ISO" 2>/dev/null || true
-            ln -sf /boot/micro-guest.iso \
-                "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest.iso" \
+            ln -sf /usr/share/diosix/images/micro-guest.iso \
+                "$DYNAMIC_OVERLAY/var/lib/diosix/iso/micro-guest.iso" \
                 2>/dev/null || true
         fi
         log_ok "Installed micro-guest ELF and ISO payloads in overlay."
@@ -259,7 +274,7 @@ if [ -f "$BUILDROOT_DIR/.config.old" ]; then
     NEW_KV=$(grep -E '^BR2_LINUX_KERNEL_VERSION=' \
         "$BUILDROOT_DIR/.config" | cut -d'"' -f2 || true)
     if [ "$OLD_KV" != "$NEW_KV" ] && [ -n "$OLD_KV" ]; then
-        log_info "Linux kernel version changed ($OLD_KV -> $NEW_KV). Cleaning..."
+        log_info "Kernel version changed ($OLD_KV -> $NEW_KV). Cleaning..."
         make -C "$BUILDROOT_DIR" \
             linux-dirclean linux-headers-dirclean >/dev/null 2>&1 || true
     fi
@@ -408,7 +423,7 @@ set -e
 printf "\r\033[K"
 
 if [ "$MAKE_EXIT_CODE" -ne 0 ]; then
-    echo -e "\n${BOLD}\033[31mError:${RESET} Buildroot failed ($MAKE_EXIT_CODE)!"
+    echo -e "\n${BOLD}${RED}Error:${RESET} Buildroot failed ($MAKE_EXIT_CODE)!"
     echo -e "Last 25 log lines:"
     tail -n 25 "$MAKE_LOG" 2>/dev/null || true
     exit "$MAKE_EXIT_CODE"
@@ -418,7 +433,7 @@ fi
 mkdir -p "$(dirname "$OUT_FILE")"
 IMAGE_PATH="$BUILDROOT_DIR/output/images/vmlinux"
 if [ ! -f "$IMAGE_PATH" ]; then
-    echo -e "\n${BOLD}\033[31mError:${RESET} Missing image '$IMAGE_PATH'!"
+    echo -e "\n${BOLD}${RED}Error:${RESET} Missing image '$IMAGE_PATH'!"
     exit 1
 fi
 
@@ -430,7 +445,8 @@ END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 SIZE=$(du -h "$OUT_FILE" | cut -f1)
 
-echo -e "\n${BOLD}${GREEN}✓ Root VM build complete!${RESET} (${BOLD}${SIZE}${RESET} in ${ELAPSED}s)"
+DONE_MSG="${BOLD}${GREEN}✓ Root VM build complete!${RESET}"
+echo -e "\n${DONE_MSG} (${BOLD}${SIZE}${RESET} in ${ELAPSED}s)"
 log_info "Kernel image : ${BOLD}$OUT_FILE${RESET}"
 log_info "Hash check   : ${CURRENT_HASH:0:16}..."
 log_info "Descriptor   : $ROOTVM_S_PATH\n"
