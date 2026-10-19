@@ -1,10 +1,10 @@
-# Fedora 44 build and run environment for Diosix
+# Fedora 44 build and run environment for Diosix.
 FROM fedora:44
 
-# Allow Buildroot to compile as root inside the container
+# Allow Buildroot to compile as root inside the container.
 ENV FORCE_UNSAFE_CONFIGURE=1
 
-# Install core development tools, Buildroot host tools, and QEMU emulation
+# Install core development tools, Buildroot host tools, and QEMU emulation.
 RUN dnf update -y && dnf install -y \
     @development-tools \
     gcc-c++ \
@@ -32,9 +32,13 @@ RUN dnf update -y && dnf install -y \
     qemu-system-riscv \
     && dnf clean all
 
-# Dynamically detect host CPU architecture and install the latest master version of Zig (0.17.0-dev)
+# Detect host CPU architecture and install Zig 0.17.0-dev.
 RUN ARCH="$(uname -m)-linux" \
-    && ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c "import sys, json; print(json.load(sys.stdin)['master']['$ARCH']['tarball'])") \
+    && PY_CMD="import sys, json; " \
+    && PY_CMD="${PY_CMD}d = json.load(sys.stdin)['master']['$ARCH']; " \
+    && PY_CMD="${PY_CMD}print(d['tarball'])" \
+    && ZIG_URL=$(curl -s https://ziglang.org/download/index.json \
+        | python3 -c "$PY_CMD") \
     && echo "Downloading Zig for $ARCH from: $ZIG_URL" \
     && curl -L "$ZIG_URL" -o zig.tar.xz \
     && tar -xf zig.tar.xz -C /opt \
@@ -42,9 +46,9 @@ RUN ARCH="$(uname -m)-linux" \
     && ln -s "/opt/$ZIG_DIR/zig" /usr/local/bin/zig \
     && rm zig.tar.xz
 
-# Set up project workspace
+# Set up project workspace.
 WORKDIR /diosix
 COPY . .
 
-# Default command builds the default QEMU target system
+# Default command builds the default QEMU target system.
 CMD ["./scripts/build.sh"]

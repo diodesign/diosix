@@ -1,64 +1,147 @@
-// diosix build management
+// Diosix build management.
 //
-// Don't invoke this file directly. Instead use the wrapper `./scripts/build.sh`.
-// This wrapper ensures that all necessary build-time metadata is freshly captured
-// and passed to the build automatically.
+// Don't invoke this file directly. Instead use `./scripts/build.sh`.
+// This wrapper ensures that all necessary build-time metadata is freshly
+// captured and passed to the build automatically.
 //
 // Copyright (c) 2024, 2025, 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const ArrayList = std.ArrayList;
 const Target = std.Target;
 const RISCVextensions = Target.Cpu.Feature.Set;
+const build_qemu = @import("scripts/qemu.zig");
+
+const GuestProfile = enum { rootvm, usable, minimal };
+
+const ctl_sources = [_][]const u8{
+    "main.zig",      "api.zig",         "auth.zig",      "catalog.zig",
+    "charter.zig",   "charter/cmd.zig", "common.zig",    "governance.zig",
+    "gui.zig",       "host.zig",        "image.zig",     "image/pull.zig",
+    "installer.zig", "loader.zig",      "manifest.zig",  "manifest/policy.zig",
+    "passkey.zig",   "registry.zig",    "snapshot.zig",  "ssh.zig",
+    "ssh/sync.zig",  "storage.zig",     "sysconfig.zig", "vm.zig",
+    "vm/info.zig",   "vm/install.zig",  "vm/run.zig",    "vm/stage.zig",
+    "whisper.zig",
+};
+const gui_sources = [_][]const u8{
+    "main.zig",             "audio.zig",         "backdrop.zig",
+    "cursor.zig",           "display.zig",       "drm.zig",
+    "font.zig",             "font/banner.zig",   "font/banner_font.bin",
+    "font/banner_glow.bin", "framebuffer.zig",   "glass.zig",
+    "gui.zig",              "gui/input.zig",     "gui/nav.zig",
+    "gui/render.zig",       "host.zig",          "icon.zig",
+    "icon/render.zig",      "icon/viewport.zig", "intro.zig",
+    "intro/fx.zig",         "noise.zig",         "osk.zig",
+    "panes.zig",            "panes/catalog.zig", "panes/modal.zig",
+    "panes/vm.zig",         "tests.zig",         "welcome.zig",
+    "window.zig",           "window/input.zig",  "cloud_map.bin",
+};
+const overlay_configs = [_][]const u8{
+    "constitution.md", "charter.toml", "diosix.toml",
+    "install.toml",    "catalog.toml", "system.toml",
+};
+const extra_rootvm_inputs = [_][]const u8{
+    "scripts/build_rootvm.sh",          "tools/diosix-config/src/main.zig",
+    "tools/diosix-config/src/ui.zig",   "tools/guest-shim/src/main.zig",
+    "tools/guest-shim/src/loader.zig",  "tools/guest-shim/src/efi.zig",
+    "tools/guest-shim/src/storage.zig", "tools/alsa-init/main.c",
+    "tools/driver/diosix.h",            "tools/driver/diosix.c",
+    "tools/driver/governance.c",        "tools/driver/net.c",
+};
+
+fn addRootvmInputs(b: *std.Build, cmd: *std.Build.Step.Run) void {
+    for (extra_rootvm_inputs) |p| cmd.addFileInput(b.path(p));
+    for (ctl_sources) |f| {
+        cmd.addFileInput(b.path(b.fmt("tools/diosix-ctl/src/{s}", .{f})));
+    }
+    for (gui_sources) |f| {
+        cmd.addFileInput(b.path(b.fmt("tools/diosix-gui/src/{s}", .{f})));
+    }
+    for (overlay_configs) |f| {
+        const p = b.fmt("tools/overlay-common/etc/diosix/{s}", .{f});
+        cmd.addFileInput(b.path(p));
+    }
+}
+
+fn optStr(
+    b: *std.Build,
+    n: []const u8,
+    d: []const u8,
+    v: []const u8,
+) []const u8 {
+    return b.option([]const u8, n, d) orelse v;
+}
+
+fn optBool(b: *std.Build, n: []const u8, d: []const u8, def: bool) bool {
+    return b.option(bool, n, d) orelse def;
+}
+
+fn optU32(b: *std.Build, name: []const u8, desc: []const u8, def: u32) u32 {
+    return b.option(u32, name, desc) orelse def;
+}
+
+fn linkMetadataObj(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    name: []const u8,
+    metadata: *std.Build.Step.Options,
+) void {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("hypervisor/core/metadata.zig"),
+        .optimize = exe.root_module.optimize.?,
+        .target = exe.root_module.resolved_target.?,
+    });
+    mod.addOptions("metadata", metadata);
+    const obj = b.addObject(.{ .name = name, .root_module = mod });
+    exe.root_module.addObjectFile(obj.getEmittedBin());
+}
+
+fn addHostTestStep(
+    b: *std.Build,
+    name: []const u8,
+    root_path: []const u8,
+    optimize: std.builtin.OptimizeMode,
+    iface: *std.Build.Module,
+) *std.Build.Step.Run {
+    const mod = b.createModule(.{
+        .root_source_file = b.path(root_path),
+        .optimize = optimize,
+        .target = b.graph.host,
+    });
+    if (!std.mem.endsWith(u8, root_path, "interface/lib.zig")) {
+        mod.addImport("interface", iface);
+    }
+    return b.addRunArtifact(b.addTest(.{ .root_module = mod, .name = name }));
+}
 
 pub fn build(b: *std.Build) !void {
-    // Ensure the host compiler meets minimum version requirements (Zig 0.17.0+)
-    const min_zig_version = std.SemanticVersion.parse("0.17.0-dev") catch unreachable;
-    const current_zig_version = @import("builtin").zig_version;
-    if (current_zig_version.order(min_zig_version) == .lt) {
-        std.debug.print("\nError: Diosix requires Zig 0.17.0 or newer. Found Zig {}.\n\n", .{current_zig_version});
+    // Ensure host compiler meets minimum version requirements (Zig 0.17.0+).
+    const min_ver = std.SemanticVersion.parse("0.17.0-dev") catch unreachable;
+    const cur_ver = @import("builtin").zig_version;
+    if (cur_ver.order(min_ver) == .lt) {
+        std.debug.print("Error: Requires Zig 0.17.0+ ({}).\n", .{cur_ver});
         return error.UnsupportedZigVersion;
     }
 
-    const git_branch = b.option([]const u8, "git_branch", "Current git branch") orelse "unknown branch";
-    const git_revision = b.option([]const u8, "git_revision", "Current git revision") orelse "unknown revision";
-    const zig_version_opt = b.option([]const u8, "zig_version", "Current zig version") orelse "unknown zig version";
-    const build_user = b.option([]const u8, "build_user", "Current build user") orelse "unknown build user";
-    const build_hostname = b.option([]const u8, "build_hostname", "Current build hostname") orelse "unknown build host";
-    const build_date = b.option([]const u8, "build_date", "Current build date") orelse "unknown build date";
+    const qemu_cpu_opt = b.option([]const u8, "qemu-cpu", "QEMU CPU model");
+    const legacy_cpu = optBool(b, "legacy-cpu", "Disable Sstc", false);
+    const pmp_fallback = optBool(b, "pmp", "PMP fallback mode", false);
+    const smp_cores = optU32(b, "smp", "Number of SMP CPU cores", 4);
+    const mem_size = optStr(b, "mem", "Emulator memory size (e.g. 2G)", "2G");
+    const qemu_gl_opt = optBool(b, "gl", "Enable OpenGL virgl for GUI", true);
+    const qemu_audio_opt = optStr(b, "qemu-audio", "Audio backend", "auto");
+    const qemu_extra_opt = b.option([]const u8, "qemu-extra", "Extra args");
+    const qemu_tpm_opt = optBool(b, "tpm", "Enable virtual TPM 2.0", false);
+    const qemu_usb_key_opt = b.option([]const u8, "usb-key", "USB key vid:pid");
+    const welcome_opt = optBool(b, "welcome", "Force welcome tour", false);
 
-    const qemu_cpu_opt = b.option([]const u8, "qemu-cpu", "Override the CPU model/extensions passed to QEMU");
-    const legacy_cpu = b.option(bool, "legacy-cpu", "Compile out Sstc and Smstateen support") orelse false;
-    const pmp_fallback = b.option(bool, "pmp", "Run in PMP fallback mode (disable H-extension)") orelse false;
-    const smp_cores = b.option(u32, "smp", "Number of SMP CPU cores for emulator") orelse 4;
-    const mem_size = b.option([]const u8, "mem", "Memory size for emulator (e.g. 2G)") orelse "2G";
-    const qemu_gl_opt = b.option(bool, "gl", "Enable OpenGL virgl acceleration for QEMU GUI (virtio-gpu-gl-pci)") orelse true;
-    const qemu_audio_opt = b.option([]const u8, "qemu-audio", "Audio backend for QEMU: auto, pipewire, pa, alsa, none") orelse "auto";
-    const qemu_extra_opt = b.option([]const u8, "qemu-extra", "Extra arguments to pass to QEMU");
-
-    // Generate config.s dynamically
-    const config_s_content = try std.fmt.allocPrint(b.allocator,
-        \\# Dynamically generated by build.zig. DO NOT EDIT.
-        \\.equ LEGACY_CPU, {d}
-        \\
-    , .{@intFromBool(legacy_cpu)});
-
-    // we're building primarily for riscv64 systems, and expect RV64IMAC as a minimum.
-    // override zig's CPU extension list with our own.
+    // We build primarily for riscv64 systems and expect RV64IMAC as a minimum.
     var min_cpu_features = RISCVextensions.empty;
-    const i: std.Target.riscv.Feature = .i;
-    const m: std.Target.riscv.Feature = .m;
-    const a: std.Target.riscv.Feature = .a;
-    const c: std.Target.riscv.Feature = .c;
-    const h: std.Target.riscv.Feature = .h;
-    min_cpu_features.addFeature(@intFromEnum(i));
-    min_cpu_features.addFeature(@intFromEnum(m));
-    min_cpu_features.addFeature(@intFromEnum(a));
-    min_cpu_features.addFeature(@intFromEnum(c));
-    min_cpu_features.addFeature(@intFromEnum(h));
+    for ([_]std.Target.riscv.Feature{ .i, .m, .a, .c, .h }) |feat| {
+        min_cpu_features.addFeature(@backingInt(feat));
+    }
 
-    // insist on building for riscv64 targets
     const target = b.standardTargetOptions(.{
         .default_target = .{
             .cpu_arch = Target.Cpu.Arch.riscv64,
@@ -68,60 +151,31 @@ pub fn build(b: *std.Build) !void {
             .cpu_features_add = min_cpu_features,
         },
     });
-
-    // allow user to control or override optimizations and release mode
     const optimize = b.standardOptimizeOption(.{});
-
     const interface_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/interface/lib.zig"),
     });
 
-    // Allow user to select the guest Root VM architecture and profile
-    const guest_arch_opt = b.option([]const u8, "guest-arch", "Select the guest architecture to build for: riscv64, riscv32, aarch64, aarch32, x86_64, mips, mips64, ppc") orelse "riscv64";
-    const guest_config_opt = b.option([]const u8, "guest-config", "Path to custom Buildroot defconfig");
-    const guest_profile_opt = b.option([]const u8, "guest-profile", "Select guest profile: rootvm, usable, minimal") orelse "rootvm";
+    const guest_arch_opt = optStr(b, "guest-arch", "Guest arch", "riscv64");
+    const guest_config_opt = b.option([]const u8, "guest-config", "Defconfig");
+    const guest_profile_opt = optStr(b, "guest-profile", "Profile", "rootvm");
+    const profile_tag = if (std.meta.stringToEnum(
+        GuestProfile,
+        guest_profile_opt,
+    )) |prof| @tagName(prof) else guest_profile_opt;
 
-    const config_filename = if (guest_config_opt) |cfg|
-        try b.allocator.dupe(u8, cfg)
-    else if (std.mem.eql(u8, guest_profile_opt, "rootvm") and std.mem.eql(u8, guest_arch_opt, "riscv64"))
-        try b.allocator.dupe(u8, "boot/riscv64-linux-rootvm.config")
-    else if (std.mem.eql(u8, guest_profile_opt, "usable") and std.mem.eql(u8, guest_arch_opt, "riscv64"))
-        try b.allocator.dupe(u8, "boot/riscv64-linux-usable.config")
-    else if (std.mem.eql(u8, guest_profile_opt, "minimal") and std.mem.eql(u8, guest_arch_opt, "riscv32"))
-        try b.allocator.dupe(u8, "boot/riscv32-linux-minimal.config")
-    else
-        try std.fmt.allocPrint(b.allocator, "boot/{s}-linux-{s}.config", .{ guest_arch_opt, guest_profile_opt });
-    defer b.allocator.free(config_filename);
-
-    const rootvm_elf_path = b.fmt("zig-out/guest-{s}/bin/rootvm.elf", .{guest_arch_opt});
+    const config_filename = guest_config_opt orelse
+        b.fmt("boot/{s}-linux-{s}.config", .{ guest_arch_opt, profile_tag });
+    const rootvm_elf_path =
+        b.fmt("zig-out/guest-{s}/bin/rootvm.elf", .{guest_arch_opt});
     const buildroot_dir = b.fmt("zig-out/buildroot-{s}", .{guest_arch_opt});
 
-    const run_buildroot = b.addSystemCommand(&.{ "bash", "scripts/build_rootvm.sh" });
+    const run_buildroot =
+        b.addSystemCommand(&.{ "bash", "scripts/build_rootvm.sh" });
     run_buildroot.addFileArg(b.path(config_filename));
-    run_buildroot.addArg(rootvm_elf_path);
-    run_buildroot.addArg(buildroot_dir);
-    run_buildroot.addArg(guest_arch_opt);
+    run_buildroot.addArgs(&.{ rootvm_elf_path, buildroot_dir, guest_arch_opt });
     const rootvm_s_file = run_buildroot.addOutputFileArg("rootvm.s");
-    run_buildroot.addFileInput(b.path("scripts/build_rootvm.sh"));
-    run_buildroot.addFileInput(b.path("tools/diosix-ctl/src/main.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-ctl/src/manifest.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/main.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/framebuffer.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/font.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/cursor.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/icon.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/window.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/drm.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/gui.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/host_info.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/audio.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/intro.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/noise.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/banner_font.zig"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/banner_font.bin"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/banner_glow.bin"));
-    run_buildroot.addFileInput(b.path("tools/diosix-gui/src/cloud_map.bin"));
-    run_buildroot.addFileInput(b.path("tools/driver/diosix.c"));
+    addRootvmInputs(b, run_buildroot);
     run_buildroot.stdio = .inherit;
 
     const emulation_module = b.createModule(.{
@@ -129,261 +183,124 @@ pub fn build(b: *std.Build) !void {
     });
     emulation_module.addImport("interface", interface_module);
 
-    const vmdiosix = b.addExecutable(.{ .name = "vmdiosix", .root_module = b.createModule(.{
-        .root_source_file = b.path("hypervisor/main.zig"),
-        .optimize = optimize,
-        .target = target,
-        .code_model = .medium,
-    }), .linkage = .static });
+    const vmdiosix = b.addExecutable(.{
+        .name = "vmdiosix",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("hypervisor/main.zig"),
+            .optimize = optimize,
+            .target = target,
+            .code_model = .medium,
+        }),
+        .linkage = .static,
+    });
     vmdiosix.root_module.addImport("interface", interface_module);
     vmdiosix.root_module.addImport("emulation", emulation_module);
 
-    // include the assembly files and linker script
-    const assembly_files = [_][]const u8{
+    for ([_][]const u8{
         "hypervisor/hardware/native/cpu/riscv64/entry.s",
         "hypervisor/hardware/native/cpu/riscv64/xint.s",
         "hypervisor/hardware/native/cpu/riscv64/util.s",
-    };
-    for (assembly_files) |asm_file| {
-        vmdiosix.root_module.addAssemblyFile(b.path(asm_file));
-    }
+    }) |asm_file| vmdiosix.root_module.addAssemblyFile(b.path(asm_file));
     vmdiosix.root_module.addAssemblyFile(rootvm_s_file);
+    vmdiosix.setLinkerScript(
+        b.path("hypervisor/hardware/native/cpu/riscv64/linker.ld"),
+    );
 
-    vmdiosix.setLinkerScript(b.path("hypervisor/hardware/native/cpu/riscv64/linker.ld"));
-
-    // Register all dependencies (like consts.s) so modifying any of them triggers a full rebuild
-    var dep_step = b.addWriteFiles();
-    const filename = "consts.s";
-    _ = dep_step.addCopyFile(b.path("hypervisor/hardware/native/cpu/riscv64/consts.s"), filename);
+    const dep_step = b.addWriteFiles();
+    _ = dep_step.addCopyFile(
+        b.path("hypervisor/hardware/native/cpu/riscv64/consts.s"),
+        "consts.s",
+    );
+    _ = dep_step.add(
+        "config.s",
+        b.fmt(
+            "# Generated.\n.equ LEGACY_CPU, {d}\n",
+            .{@intFromBool(legacy_cpu)},
+        ),
+    );
     vmdiosix.root_module.addIncludePath(dep_step.getDirectory());
     vmdiosix.step.dependOn(&dep_step.step);
 
-    // include build-time config options
-    const driver_ns16550 = b.option(bool, "driver-ns16550", "Compile in NS16550 UART driver") orelse true;
-    const driver_clint = b.option(bool, "driver-clint", "Compile in CLINT timer driver") orelse true;
-    const driver_sifive_test = b.option(bool, "driver-sifive-test", "Compile in SiFive test device driver") orelse true;
-    const enable_gdb = b.option(bool, "gdb", "Enable embedded GDB RSP remote debugging stub") orelse false;
-
     const hypervisor_options = b.addOptions();
     hypervisor_options.addOption(bool, "legacy_cpu", legacy_cpu);
-    hypervisor_options.addOption(bool, "compile_ns16550", driver_ns16550);
-    hypervisor_options.addOption(bool, "compile_clint", driver_clint);
-    hypervisor_options.addOption(bool, "compile_sifive_test", driver_sifive_test);
-    hypervisor_options.addOption(bool, "enable_gdb", enable_gdb);
+    for ([_]struct { []const u8, []const u8, []const u8, bool }{
+        .{ "compile_ns16550", "driver-ns16550", "NS16550 driver", true },
+        .{ "compile_clint", "driver-clint", "CLINT timer driver", true },
+        .{ "compile_sifive_test", "driver-sifive-test", "SiFive test", true },
+        .{ "enable_gdb", "gdb", "Enable embedded GDB RSP stub", false },
+    }) |opt| {
+        const val = optBool(b, opt[1], opt[2], opt[3]);
+        hypervisor_options.addOption(bool, opt[0], val);
+    }
+    for ([_]struct { []const u8, []const u8, []const u8, u32 }{
+        .{ "root_ram_min_mb", "root-ram-min-mb", "Min Root VM RAM (MiB)", 128 },
+        .{ "root_ram_max_mb", "root-ram-max-mb", "Max Root VM RAM (MiB)", 256 },
+        .{ "root_ram_divisor", "root-ram-divisor", "Root VM RAM divisor", 8 },
+        .{ "root_vcpus_max", "root-vcpus-max", "Max Root VM vCPUs", 4 },
+    }) |opt| {
+        const val = optU32(b, opt[1], opt[2], opt[3]);
+        hypervisor_options.addOption(u32, opt[0], val);
+    }
     vmdiosix.root_module.addOptions("config", hypervisor_options);
 
-    // Generate config.s dynamically inside the build cache
-    const config_step = b.addWriteFiles();
-    _ = config_step.add("config.s", config_s_content);
-    vmdiosix.root_module.addIncludePath(config_step.getDirectory());
-    vmdiosix.step.dependOn(&config_step.step);
-
-    // include build-time metadata as options available to main.zig
-    // this includes boot banner text, and details of the build and current version
     const metadata = b.addOptions();
-
     metadata.addOption([]const u8, "banner", @embedFile("boot/banner.txt"));
     metadata.addOption([]const u8, "project_version", @embedFile("VERSION"));
-    metadata.addOption([]const u8, "git_branch", git_branch);
-    metadata.addOption([]const u8, "git_revision", git_revision);
-    metadata.addOption([]const u8, "build_date", build_date);
-    metadata.addOption([]const u8, "build_user", build_user);
-    metadata.addOption([]const u8, "build_hostname", build_hostname);
-    metadata.addOption([]const u8, "zig_version", zig_version_opt);
+    for ([_][2][]const u8{
+        .{ "git_branch", "Current git branch" },
+        .{ "git_revision", "Current git rev" },
+        .{ "build_date", "Build date" },
+        .{ "build_user", "Build user" },
+        .{ "build_hostname", "Build host" },
+        .{ "zig_version", "Current zig version" },
+    }) |m| {
+        const val = optStr(b, m[0], m[1], "unknown");
+        metadata.addOption([]const u8, m[0], val);
+    }
     metadata.addOption([]const u8, "cpu_arch", "riscv64");
+    linkMetadataObj(b, vmdiosix, "metadata_info", metadata);
 
-    // Compile the metadata object file separately to decouple options invalidation.
-    // This holds the versioning strings and is linked to the main executable.
-    const metadata_obj = b.addObject(.{
-        .name = "metadata_info",
+    const dest_override: std.Build.InstallDir =
+        .{ .custom = b.fmt("guest-{s}/bin", .{guest_arch_opt}) };
+    const install_opts: std.Build.Step.InstallArtifact.Options =
+        .{ .dest_dir = .{ .override = dest_override } };
+    b.getInstallStep().dependOn(
+        &b.addInstallArtifact(vmdiosix, install_opts).step,
+    );
+
+    const guest_shim = b.addExecutable(.{
+        .name = "guest-shim-riscv64.elf",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("hypervisor/core/metadata.zig"),
+            .root_source_file = b.path("tools/guest-shim/src/main.zig"),
             .optimize = optimize,
             .target = target,
+            .code_model = .medium,
         }),
+        .linkage = .static,
     });
-    metadata_obj.root_module.addOptions("metadata", metadata);
-    vmdiosix.root_module.addObjectFile(metadata_obj.getEmittedBin());
+    guest_shim.setLinkerScript(b.path("tools/guest-shim/linker.ld"));
+    b.getInstallStep().dependOn(
+        &b.addInstallArtifact(guest_shim, install_opts).step,
+    );
 
-    const install_step = b.addInstallArtifact(vmdiosix, .{ .dest_dir = .{ .override = .{ .custom = b.fmt("guest-{s}/bin", .{guest_arch_opt}) } } });
-    b.getInstallStep().dependOn(&install_step.step);
+    try build_qemu.registerQemuSteps(b, .{
+        .vmdiosix = vmdiosix,
+        .run_buildroot = run_buildroot,
+        .rootvm_elf_path = rootvm_elf_path,
+        .legacy_cpu = legacy_cpu,
+        .pmp_fallback = pmp_fallback,
+        .smp_cores = smp_cores,
+        .mem_size = mem_size,
+        .qemu_cpu_opt = qemu_cpu_opt,
+        .qemu_gl_opt = qemu_gl_opt,
+        .qemu_audio_opt = qemu_audio_opt,
+        .qemu_extra_opt = qemu_extra_opt,
+        .qemu_tpm_opt = qemu_tpm_opt,
+        .qemu_usb_key_opt = qemu_usb_key_opt,
+        .welcome_opt = welcome_opt,
+    });
 
-    // create a 'zig build run' command to execute the hypervisor in a suitable emulator
-    var qemu_args = ArrayList([]const u8).empty;
-    defer qemu_args.deinit(b.allocator);
-
-    try qemu_args.append(b.allocator, "qemu-system-riscv64");
-    try qemu_args.append(b.allocator, "-nographic");
-    try qemu_args.append(b.allocator, "-s");
-    try qemu_args.append(b.allocator, "-machine");
-    try qemu_args.append(b.allocator, "virt");
-    try qemu_args.append(b.allocator, "-cpu");
-    if (qemu_cpu_opt) |cpu| {
-        try qemu_args.append(b.allocator, cpu);
-    } else {
-        var cpu_buf = ArrayList(u8).empty;
-        defer cpu_buf.deinit(b.allocator);
-        try cpu_buf.appendSlice(b.allocator, "rv64");
-        if (pmp_fallback) {
-            try cpu_buf.appendSlice(b.allocator, ",h=false");
-        } else {
-            try cpu_buf.appendSlice(b.allocator, ",h=true");
-        }
-        if (legacy_cpu) {
-            try cpu_buf.appendSlice(b.allocator, ",smstateen=false,sstc=false");
-        } else {
-            try cpu_buf.appendSlice(b.allocator, ",smstateen=true,sstc=true");
-        }
-        try cpu_buf.appendSlice(b.allocator, ",v=true");
-        try qemu_args.append(b.allocator, try cpu_buf.toOwnedSlice(b.allocator));
-    }
-    try qemu_args.append(b.allocator, "-smp");
-    try qemu_args.append(b.allocator, b.fmt("{d}", .{smp_cores}));
-    try qemu_args.append(b.allocator, "-m");
-    try qemu_args.append(b.allocator, mem_size);
-    // Step to generate storage.img containing secondary guest VM images
-    const storage_img_path = "zig-out/storage.img";
-    const create_storage_cmd = b.addSystemCommand(&.{ "bash", "scripts/create_storage_disk.sh" });
-    create_storage_cmd.addArg(rootvm_elf_path);
-    create_storage_cmd.addArg(storage_img_path);
-    create_storage_cmd.addArg("256M");
-    create_storage_cmd.step.dependOn(&run_buildroot.step);
-
-    try qemu_args.append(b.allocator, "-drive");
-    try qemu_args.append(b.allocator, "file=" ++ storage_img_path ++ ",if=none,format=raw,id=hd0");
-    try qemu_args.append(b.allocator, "-device");
-    try qemu_args.append(b.allocator, "virtio-blk-device,drive=hd0");
-    try qemu_args.append(b.allocator, "-netdev");
-    try qemu_args.append(b.allocator, "user,id=net0");
-    try qemu_args.append(b.allocator, "-device");
-    try qemu_args.append(b.allocator, "virtio-net-device,netdev=net0");
-
-    var run_step_args = ArrayList([]const u8).empty;
-    defer run_step_args.deinit(b.allocator);
-    try run_step_args.appendSlice(b.allocator, qemu_args.items);
-    try run_step_args.append(b.allocator, "-bios");
-    try run_step_args.append(b.allocator, "none");
-    try run_step_args.append(b.allocator, "-kernel");
-
-    const run_step = b.addSystemCommand(run_step_args.items);
-    run_step.step.dependOn(b.getInstallStep());
-    run_step.step.dependOn(&create_storage_cmd.step);
-
-    // the last argument to qemu is the kernel file to run
-    run_step.addArtifactArg(vmdiosix);
-    run_step.stdio = .inherit;
-    const run_option = b.step("run", "Run the hypervisor");
-    run_option.dependOn(&run_step.step);
-
-    // Step to generate bootable hybrid GPT live disk image
-    const live_img_path = "zig-out/diosix-live-riscv64.img";
-    const create_live_cmd = b.addSystemCommand(&.{ "bash", "scripts/make_live_image.sh" });
-    create_live_cmd.addFileArg(vmdiosix.getEmittedBin());
-    create_live_cmd.addArg(rootvm_elf_path);
-    create_live_cmd.addArg(live_img_path);
-    create_live_cmd.addArg("512");
-    create_live_cmd.step.dependOn(b.getInstallStep());
-    create_live_cmd.step.dependOn(&run_buildroot.step);
-
-    const live_image_option = b.step("live-image", "Build bootable hybrid GPT live & installer disk image");
-    live_image_option.dependOn(&create_live_cmd.step);
-
-    // Create a 'zig build run-live' command to execute with the live GPT disk image
-    var qemu_live_args = ArrayList([]const u8).empty;
-    defer qemu_live_args.deinit(b.allocator);
-    for (qemu_args.items) |arg| {
-        if (std.mem.eql(u8, arg, "file=" ++ storage_img_path ++ ",if=none,format=raw,id=hd0")) {
-            try qemu_live_args.append(b.allocator, "file=" ++ live_img_path ++ ",if=none,format=raw,id=hd0");
-        } else {
-            try qemu_live_args.append(b.allocator, arg);
-        }
-    }
-    try qemu_live_args.append(b.allocator, "-bios");
-    try qemu_live_args.append(b.allocator, "none");
-    try qemu_live_args.append(b.allocator, "-kernel");
-
-    const run_live_step = b.addSystemCommand(qemu_live_args.items);
-    run_live_step.step.dependOn(b.getInstallStep());
-    run_live_step.step.dependOn(&create_live_cmd.step);
-    run_live_step.addArtifactArg(vmdiosix);
-    run_live_step.stdio = .inherit;
-
-    const run_live_option = b.step("run-live", "Run the hypervisor with the live GPT disk image attached");
-    run_live_option.dependOn(&run_live_step.step);
-
-    // Create a 'zig build run-gui' command to launch with VirtIO-GPU and graphical window
-    var qemu_gui_args = ArrayList([]const u8).empty;
-    defer qemu_gui_args.deinit(b.allocator);
-    for (qemu_args.items) |arg| {
-        if (std.mem.eql(u8, arg, "-nographic")) {
-            try qemu_gui_args.append(b.allocator, "-serial");
-            try qemu_gui_args.append(b.allocator, "mon:stdio");
-        } else {
-            try qemu_gui_args.append(b.allocator, arg);
-        }
-    }
-    if (qemu_gl_opt) {
-        try qemu_gui_args.append(b.allocator, "-display");
-        try qemu_gui_args.append(b.allocator, "gtk,gl=on,zoom-to-fit=off");
-        try qemu_gui_args.append(b.allocator, "-device");
-        try qemu_gui_args.append(b.allocator, "virtio-gpu-gl-pci,xres=1280,yres=800");
-    } else {
-        try qemu_gui_args.append(b.allocator, "-device");
-        try qemu_gui_args.append(b.allocator, "virtio-gpu-pci,xres=1280,yres=800");
-    }
-    try qemu_gui_args.append(b.allocator, "-device");
-    try qemu_gui_args.append(b.allocator, "virtio-keyboard-pci");
-    try qemu_gui_args.append(b.allocator, "-device");
-    try qemu_gui_args.append(b.allocator, "virtio-tablet-pci");
-    var audio_backend: []const u8 = "pa";
-    if (std.mem.eql(u8, qemu_audio_opt, "auto")) {
-        var has_pipewire = false;
-        if (b.graph.environ_map.get("XDG_RUNTIME_DIR")) |xdg| {
-            const pw_path = std.fmt.allocPrint(b.allocator, "{s}/pipewire-0", .{xdg}) catch null;
-            if (pw_path) |p| {
-                defer b.allocator.free(p);
-                if (std.Io.Dir.cwd().access(b.graph.io, p, .{})) |_| {
-                    has_pipewire = true;
-                } else |_| {}
-            }
-        }
-        if (has_pipewire) {
-            audio_backend = "pipewire";
-        }
-    } else {
-        audio_backend = qemu_audio_opt;
-    }
-    std.debug.print("DEBUG_AUDIO: backend={s}\n", .{audio_backend});
-
-    if (!std.mem.eql(u8, audio_backend, "none")) {
-        try qemu_gui_args.append(b.allocator, "-audiodev");
-        try qemu_gui_args.append(b.allocator, try std.fmt.allocPrint(b.allocator, "{s},id=audio0", .{audio_backend}));
-        try qemu_gui_args.append(b.allocator, "-device");
-        try qemu_gui_args.append(b.allocator, "intel-hda");
-        try qemu_gui_args.append(b.allocator, "-device");
-        try qemu_gui_args.append(b.allocator, "hda-duplex,audiodev=audio0");
-    }
-    if (qemu_extra_opt) |extra| {
-        var it = std.mem.tokenizeScalar(u8, extra, ' ');
-        while (it.next()) |tok| {
-            try qemu_gui_args.append(b.allocator, tok);
-        }
-    }
-    try qemu_gui_args.append(b.allocator, "-bios");
-    try qemu_gui_args.append(b.allocator, "none");
-    try qemu_gui_args.append(b.allocator, "-kernel");
-
-    const run_gui_step = b.addSystemCommand(qemu_gui_args.items);
-    run_gui_step.step.dependOn(b.getInstallStep());
-    run_gui_step.step.dependOn(&create_storage_cmd.step);
-    run_gui_step.addArtifactArg(vmdiosix);
-    run_gui_step.stdio = .inherit;
-
-    const run_gui_option = b.step("run-gui", "Run the hypervisor with VirtIO-GPU and graphical window enabled");
-    run_gui_option.dependOn(&run_gui_step.step);
-
-    // run all the unit tests on the host system
-    // tests use a separate module targeting native so the test runner has OS support
+    // Run all unit tests on the host system.
     const test_module = b.createModule(.{
         .root_source_file = b.path("hypervisor/main.zig"),
         .optimize = optimize,
@@ -392,70 +309,37 @@ pub fn build(b: *std.Build) !void {
     test_module.addImport("interface", interface_module);
     test_module.addImport("emulation", emulation_module);
     test_module.addOptions("config", hypervisor_options);
-    const unit_tests = b.addTest(.{
-        .root_module = test_module,
-        .name = "diosix-unit-tests",
-    });
-
-    // Compile and link the metadata info separately for host unit tests
-    const test_metadata_obj = b.addObject(.{
-        .name = "metadata_info_test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("hypervisor/core/metadata.zig"),
-            .optimize = optimize,
-            .target = b.graph.host,
-        }),
-    });
-    test_metadata_obj.root_module.addOptions("metadata", metadata);
-    unit_tests.root_module.addObjectFile(test_metadata_obj.getEmittedBin());
-
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-
-    const ctl_test_module = b.createModule(.{
-        .root_source_file = b.path("tools/diosix-ctl/src/main.zig"),
-        .optimize = optimize,
-        .target = b.graph.host,
-    });
-    ctl_test_module.addImport("interface", interface_module);
-    const ctl_unit_tests = b.addTest(.{
-        .root_module = ctl_test_module,
-        .name = "diosix-ctl-unit-tests",
-    });
-    const run_ctl_unit_tests = b.addRunArtifact(ctl_unit_tests);
-
-    const gui_test_module = b.createModule(.{
-        .root_source_file = b.path("tools/diosix-gui/src/main.zig"),
-        .optimize = optimize,
-        .target = b.graph.host,
-    });
-    const gui_unit_tests = b.addTest(.{
-        .root_module = gui_test_module,
-        .name = "diosix-gui-unit-tests",
-    });
-    const run_gui_unit_tests = b.addRunArtifact(gui_unit_tests);
-
-    const config_test_module = b.createModule(.{
-        .root_source_file = b.path("tools/diosix-config/src/main.zig"),
-        .optimize = optimize,
-        .target = b.graph.host,
-    });
-    const config_unit_tests = b.addTest(.{
-        .root_module = config_test_module,
-        .name = "diosix-config-unit-tests",
-    });
-    const run_config_unit_tests = b.addRunArtifact(config_unit_tests);
+    const unit_tests =
+        b.addTest(.{ .root_module = test_module, .name = "diosix-unit-tests" });
+    linkMetadataObj(b, unit_tests, "metadata_info_test", metadata);
 
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_unit_tests.step);
-    test_step.dependOn(&run_ctl_unit_tests.step);
-    test_step.dependOn(&run_gui_unit_tests.step);
-    test_step.dependOn(&run_config_unit_tests.step);
+    test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+    for ([_][2][]const u8{
+        .{ "diosix-ctl-unit-tests", "tools/diosix-ctl/src/main.zig" },
+        .{ "diosix-interface-unit-tests", "hypervisor/interface/lib.zig" },
+        .{
+            "diosix-emulation-unit-tests",
+            "hypervisor/hardware/emulation/mod.zig",
+        },
+        .{ "diosix-gui-unit-tests", "tools/diosix-gui/src/main.zig" },
+        .{ "diosix-config-unit-tests", "tools/diosix-config/src/main.zig" },
+        .{ "diosix-guest-shim-unit-tests", "tools/guest-shim/src/main.zig" },
+    }) |t| {
+        const run_t = addHostTestStep(
+            b,
+            t[0],
+            t[1],
+            optimize,
+            interface_module,
+        );
+        test_step.dependOn(&run_t.step);
+    }
 
-    const run_integration_tests = b.addSystemCommand(&[_][]const u8{
-        "python3",
-        "scripts/test_manifest_integration.py",
-    });
-    run_integration_tests.step.dependOn(b.getInstallStep());
-    const integration_test_step = b.step("test-integration", "Run full-stack QEMU integration test suite");
-    integration_test_step.dependOn(&run_integration_tests.step);
+    const run_integration = b.addSystemCommand(
+        &.{ "python3", "scripts/test_manifest_integration.py" },
+    );
+    run_integration.step.dependOn(b.getInstallStep());
+    b.step("test-integration", "Run full-stack QEMU integration test suite")
+        .dependOn(&run_integration.step);
 }
