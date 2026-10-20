@@ -10,6 +10,9 @@ on:
       - devel
       - stable
 
+permissions:
+  contents: read
+
 jobs:
   ubuntu-build:
     name: Ubuntu 22.04 build and test
