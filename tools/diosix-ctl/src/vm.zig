@@ -29,7 +29,6 @@ const KB_PER_MB = common.KB_PER_MB;
 const printStr = common.printStr;
 const parseCid = common.parseCid;
 const printApiError = common.printApiError;
-const copyStr = common.copyStr;
 const parseMemorySizeMb = common.parseMemorySizeMb;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
@@ -148,21 +147,17 @@ pub fn cmdQuota(
                 },
             }
         } else if (std.mem.startsWith(u8, flag, "-")) {
-            var err_buf: [128]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(
-                &err_buf,
+            common.printFmt(
                 "Error: Unknown option '{s}'. Available: --ram, --vcpus, " ++
                     "--depth, --descendants.\n",
                 .{flag},
-            ) catch "Error: Unknown option.\n";
-            printStr(err_msg);
+            );
             return;
         }
     }
 
     if (!has_update) {
         if (client.getInfo(target_cid)) |info| {
-            var buf: [512]u8 = undefined;
             const used_ram_mb =
                 (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
             const max_ram_mb = if (info.max_ram_pages == std.math.maxInt(usize))
@@ -197,8 +192,8 @@ pub fn cmdQuota(
                 "  RAM Capacity : {d} MB used " ++
                 "({d} MB self, {d} MB allocated to children)\n" ++
                 "  Child VMs    : {d} active\n";
-            const msg = if (has_caps)
-                std.fmt.bufPrint(&buf, cap_fmt, .{
+            if (has_caps) {
+                common.printFmt(cap_fmt, .{
                     target_cid,
                     info.used_vcpus,
                     info.max_vcpus,
@@ -209,9 +204,9 @@ pub fn cmdQuota(
                     self_ram_mb,
                     child_ram_mb,
                     info.child_count,
-                }) catch return
-            else
-                std.fmt.bufPrint(&buf, uncap_fmt, .{
+                });
+            } else {
+                common.printFmt(uncap_fmt, .{
                     target_cid,
                     info.used_vcpus,
                     self_vcpus,
@@ -220,9 +215,8 @@ pub fn cmdQuota(
                     self_ram_mb,
                     child_ram_mb,
                     info.child_count,
-                }) catch return;
-
-            printStr(msg);
+                });
+            }
             return;
         } else |err| {
             printApiError("Query quotas", err);
@@ -276,12 +270,15 @@ pub fn cmdList(client: *api.DiosixClient) !void {
             "IP / Endpoint\n",
     );
 
-    var self_ram_buf: [32]u8 = undefined;
-    const self_ram_str = std.fmt.bufPrint(
-        &self_ram_buf,
+    const allocator = std.heap.page_allocator;
+    const self_ram_str = allocator.print(
         "{d} MB",
         .{if (ram_mb > 0) ram_mb else default_ram},
-    ) catch "256 MB";
+    ) catch {
+        printStr("Error: Out of memory formatting VM list.\n");
+        return;
+    };
+    defer allocator.free(self_ram_str);
     const self_name = if (is_root) "root (self)" else "self";
     printGuestLine(
         1,
@@ -302,12 +299,11 @@ pub fn cmdList(client: *api.DiosixClient) !void {
         var iter = common.GuestRegistryIter.init(content);
         while (iter.next()) |entry| {
             const c_mb = parseMemorySizeMb(entry.ram);
-            var child_ram_buf: [32]u8 = undefined;
-            const child_ram_str = std.fmt.bufPrint(
-                &child_ram_buf,
-                "{d} MB",
-                .{c_mb},
-            ) catch entry.ram;
+            const child_ram_str = allocator.print("{d} MB", .{c_mb}) catch {
+                printStr("Error: Out of memory formatting VM list.\n");
+                return;
+            };
+            defer allocator.free(child_ram_str);
             printGuestLine(
                 entry.cid,
                 entry.name,
@@ -329,13 +325,7 @@ pub fn cmdList(client: *api.DiosixClient) !void {
 pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
     const exe_name = common.getExeName();
     if (args.len == 0) {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
-            "Usage: {s} stop <name|cid|self>\n",
-            .{exe_name},
-        ) catch return false;
-        printStr(msg);
+        common.printFmt("Usage: {s} stop <name|cid|self>\n", .{exe_name});
         return false;
     }
     const target_str = std.mem.span(args[0]);
@@ -348,14 +338,11 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
             .self, .current => {
                 if (client.getInfo(1)) |info| {
                     if (info.is_root != 0) {
-                        var buf: [160]u8 = undefined;
-                        const msg = std.fmt.bufPrint(
-                            &buf,
+                        common.printFmt(
                             "Root VM cannot be stopped directly. Use " ++
                                 "'{s} host poweroff' or '{s} host reboot'.\n",
                             .{ exe_name, exe_name },
-                        ) catch return false;
-                        printStr(msg);
+                        );
                         return false;
                     }
                 } else |_| {}
@@ -372,7 +359,9 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
 
     var target_cid = parseCid(target_str) catch 0;
     var target_name: []const u8 = target_str;
-    var name_storage: [64]u8 = undefined;
+    // Registry names live in a mapping released below, so keep a heap copy.
+    var owned_name: ?[]u8 = null;
+    defer if (owned_name) |owned| std.heap.page_allocator.free(owned);
 
     if (readBinaryFile(
         GUEST_REGISTRY_PATH,
@@ -383,21 +372,26 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
         while (iter.next()) |entry| {
             if (matchTarget(target_str, target_cid, entry.cid, entry.name)) {
                 target_cid = entry.cid;
-                target_name = copyStr(&name_storage, entry.name);
+                const copy = std.heap.page_allocator.dupe(
+                    u8,
+                    entry.name,
+                ) catch {
+                    printStr("Error: Out of memory reading VM name.\n");
+                    return false;
+                };
+                owned_name = copy;
+                target_name = copy;
                 break;
             }
         }
     } else |_| {}
 
     if (target_cid < CID_FIRST_CHILD) {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
+        common.printFmt(
             "Error: Unknown or invalid child VM '{s}'. " ++
                 "Use '{s} list' to inspect active VMs.\n",
             .{ target_str, exe_name },
-        ) catch return false;
-        printStr(msg);
+        );
         return false;
     }
 
@@ -407,13 +401,10 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
     };
     removeGuestFromRegistry(target_cid);
 
-    var msg_buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrint(
-        &msg_buf,
+    common.printFmt(
         "✓ Child VM '{s}' (CID {d}) terminated.\n",
         .{ target_name, target_cid },
-    ) catch return true;
-    printStr(msg);
+    );
     return true;
 }
 

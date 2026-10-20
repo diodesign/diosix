@@ -10,6 +10,7 @@ const Icon = icon_mod.Icon;
 const window_mod = @import("window.zig");
 const Window = window_mod.Window;
 const host_info = @import("host.zig");
+const text_label = @import("label.zig");
 const gui_mod = @import("gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 const panes_catalog = @import("panes/catalog.zig");
@@ -96,7 +97,8 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
     host_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
     _ = try win.addIcon(host_hdr);
 
-    var uptime_buf: [64]u8 = undefined;
+    // Icons copy each label at once, so one scratch buffer is reused.
+    var label_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     try addStatusRow(
         win,
         gui_mod.ICON_STATUS_HOST_UPTIME_LABEL_ID,
@@ -104,10 +106,9 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
         col2_w,
         34,
         "Uptime",
-        host_info.formatUptime(&uptime_buf),
+        host_info.formatUptime(&label_buf),
     );
 
-    var cpu_buf: [64]u8 = undefined;
     try addStatusRow(
         win,
         gui_mod.ICON_STATUS_HOST_CPU_LABEL_ID,
@@ -115,10 +116,9 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
         col2_w,
         54,
         "CPU cores",
-        host_info.getHostCpuString(&cpu_buf),
+        host_info.getHostCpuString(&label_buf),
     );
 
-    var ram_buf: [80]u8 = undefined;
     try addStatusRow(
         win,
         gui_mod.ICON_STATUS_HOST_RAM_LABEL_ID,
@@ -126,10 +126,9 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
         col2_w,
         74,
         "RAM",
-        host_info.getHostRamString(&ram_buf),
+        host_info.getHostRamString(&label_buf),
     );
 
-    var dt_buf: [80]u8 = undefined;
     try addStatusRow(
         win,
         gui_mod.ICON_STATUS_HOST_TIME_LABEL_ID,
@@ -137,7 +136,7 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
         col2_w,
         94,
         "Time and date",
-        host_info.getHostDateTimeString(&dt_buf),
+        host_info.getHostDateTimeString(&label_buf),
     );
 
     const hv_id = gui_mod.ICON_STATUS_HV_HDR_ID;
@@ -145,8 +144,8 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
     hv_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
     _ = try win.addIcon(hv_hdr);
 
-    var b1_buf: [160]u8 = undefined;
-    var b2_buf: [160]u8 = undefined;
+    var b1_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+    var b2_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const split = host_info.getHvBuildSplit(&b1_buf, &b2_buf);
     try addStatusRow(
         win,
@@ -169,7 +168,6 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
     );
     _ = try win.addIcon(icon_b2);
 
-    var foot_buf: [80]u8 = undefined;
     try addStatusRow(
         win,
         gui_mod.ICON_STATUS_HV_FOOTPRINT_LABEL_ID,
@@ -177,7 +175,7 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
         col2_w,
         180,
         "Footprint",
-        host_info.getHvFootprintString(&foot_buf),
+        host_info.getHvFootprintString(&label_buf),
     );
 }
 
@@ -185,32 +183,30 @@ pub fn updateStatusPaneData(self: *DiosixGui) void {
     const secs = host_info.getHostUptimeSeconds();
     self.last_uptime_sec = secs orelse 0;
 
-    var uptime_buf: [64]u8 = undefined;
-    const uptime_str = host_info.formatUptime(&uptime_buf);
+    // Icons copy each label at once, so one scratch buffer is reused.
+    var label_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+    const uptime_str = host_info.formatUptime(&label_buf);
     if (self.findIcon(WIN_STATUS_ID, gui_mod.ICON_STATUS_HOST_UPTIME_ID)) |ic| {
         ic.setText(uptime_str);
     }
 
-    var cpu_buf: [64]u8 = undefined;
-    const cpu_str = host_info.getHostCpuString(&cpu_buf);
+    const cpu_str = host_info.getHostCpuString(&label_buf);
     if (self.findIcon(WIN_STATUS_ID, gui_mod.ICON_STATUS_HOST_CPU_ID)) |ic| {
         ic.setText(cpu_str);
     }
 
-    var ram_buf: [80]u8 = undefined;
-    const ram_str = host_info.getHostRamString(&ram_buf);
+    const ram_str = host_info.getHostRamString(&label_buf);
     if (self.findIcon(WIN_STATUS_ID, gui_mod.ICON_STATUS_HOST_RAM_ID)) |ic| {
         ic.setText(ram_str);
     }
 
-    var dt_buf: [80]u8 = undefined;
-    const dt_str = host_info.getHostDateTimeString(&dt_buf);
+    const dt_str = host_info.getHostDateTimeString(&label_buf);
     if (self.findIcon(WIN_STATUS_ID, gui_mod.ICON_STATUS_HOST_TIME_ID)) |ic| {
         ic.setText(dt_str);
     }
 
-    var b1_buf: [160]u8 = undefined;
-    var b2_buf: [160]u8 = undefined;
+    var b1_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+    var b2_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const split = host_info.getHvBuildSplit(&b1_buf, &b2_buf);
     if (self.findIcon(WIN_STATUS_ID, gui_mod.ICON_STATUS_HV_BUILD1_ID)) |ic| {
         ic.setText(split.line1);
@@ -219,8 +215,7 @@ pub fn updateStatusPaneData(self: *DiosixGui) void {
         ic.setText(split.line2);
     }
 
-    var foot_buf: [80]u8 = undefined;
-    const foot_str = host_info.getHvFootprintString(&foot_buf);
+    const foot_str = host_info.getHvFootprintString(&label_buf);
     const foot_id = gui_mod.ICON_STATUS_HV_FOOTPRINT_ID;
     if (self.findIcon(WIN_STATUS_ID, foot_id)) |ic| {
         ic.setText(foot_str);

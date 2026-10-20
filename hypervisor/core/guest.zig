@@ -20,13 +20,21 @@ const pcore = @import("pcore.zig");
 const debug = @import("debug.zig");
 const sbi = @import("interface").sbi;
 const emulation = @import("emulation");
+const config = @import("config");
 
 pub const queues_mod = @import("guest/queues.zig");
 pub const quota_mod = @import("guest/quota.zig");
 pub const lineage_mod = @import("guest/lineage.zig");
 
 pub const GuestID = usize;
-pub const GuestState = enum { valid, dying, restarting };
+pub const GuestState = enum(u8) {
+    valid,
+    dying,
+    restarting,
+
+    pub const active = GuestState.valid;
+};
+pub const GuestLifecycleState = GuestState;
 pub const QuotaSet = quota_mod.QuotaSet;
 pub const TargetArch = sbi.TargetArch;
 
@@ -44,7 +52,11 @@ pub const STATIC_VCORES: usize = lineage_mod.STATIC_VCORES;
 pub const VCORE_HASH_BUCKETS: usize = lineage_mod.VCORE_HASH_BUCKETS;
 pub const max_vmids: u16 = quota_mod.max_vmids;
 
-pub const DEFAULT_ROOT_MAX_VCPUS: usize = 16;
+pub const DEFAULT_ROOT_MAX_VCPUS: usize =
+    if (@hasDecl(config, "root_vcpus_max"))
+        @max(1, @as(usize, config.root_vcpus_max))
+    else
+        16;
 pub const MAX_MANIFEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const IOAPIC_PAGE_SIZE: usize = physmem.PageSize;
 pub const X86_EARLY_PGT_GPA_OFFSET: usize = 0x70000;
@@ -75,44 +87,34 @@ pub const Guest = struct {
     is_standby_root: bool = false,
     is_confidential: bool = false,
     target_arch: TargetArch,
-
     quotas: QuotaSet,
-
     parent: ?*Guest,
     children: dsa.LinkedList(*Guest),
     child_node: ?*dsa.LinkedList(*Guest).Node = null,
     local_cid: usize = CID_SELF,
-
     child_static_handles: [STATIC_CHILD_HANDLES]?*Guest = @splat(null),
     child_dynamic_buckets: [DYNAMIC_CHILD_BUCKETS]?*Guest = @splat(null),
     child_handle_next: ?*Guest = null,
     next_dynamic_handle: usize = STATIC_CHILD_HANDLES,
-
     events: EventQueue = .{},
     net_rx: PacketQueue = .{},
     whisper_rx: PacketQueue = .{},
-
     initial_entry_point: usize = 0,
     initial_dtb_ptr: usize = 0,
     steward_reset_count: usize = 0,
     exit_code: usize = 0,
-
     vcores: dsa.LinkedList(*vcore.VirtualCore),
     space: vm_space.GuestSpace,
     vmid: u16,
     early_pgt_gpa: usize,
-
     vcore_static: [STATIC_VCORES]?*vcore.VirtualCore = @splat(null),
     vcore_dynamic_buckets: [VCORE_HASH_BUCKETS]?*vcore.VirtualCore =
         @splat(null),
-
     pit: PitState,
     ioapic_mem: [IOAPIC_PAGE_SIZE]u8,
-
     manifest: ?[]u8 = null,
     manifest_lock: atomic.SpinLock = atomic.SpinLock.init(),
     tree_lock: atomic.SpinLock = atomic.SpinLock.init(),
-
     vsock: emulation.VirtioVsock = .{},
     uart: emulation.VirtualUart = .{},
     timer: emulation.VirtualTimer = .{},
@@ -128,7 +130,6 @@ pub const Guest = struct {
     pub const resetSteward = lineage_mod.resetSteward;
     pub const findStandbyRoot = lineage_mod.findStandbyRoot;
     pub const promoteStandbyRoot = lineage_mod.promoteStandbyRoot;
-
     pub const setQuota = quota_mod.setQuota;
     pub const reduceQuota = quota_mod.reduceQuota;
     pub const checkQuota = quota_mod.checkQuota;
@@ -140,6 +141,7 @@ pub const Guest = struct {
     pub const getManifestLength = quota_mod.getManifestLength;
     pub const stop = quota_mod.stop;
     pub const resetForRun = quota_mod.resetForRun;
+    pub const hasAnyVcoreStarted = quota_mod.hasAnyVcoreStarted;
 
     fn guestReadMemory(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
         const g: *Guest = @ptrCast(@alignCast(ctx));
@@ -200,8 +202,6 @@ pub const Guest = struct {
             },
             .parent = parent,
             .children = .{ .start = null, .end = null },
-            .child_node = null,
-            .local_cid = CID_SELF,
             .vcores = .{ .start = null, .end = null },
             .vmid = vmid,
             .space = space,
@@ -212,8 +212,6 @@ pub const Guest = struct {
             .pit = .{},
             .ioapic_mem = @splat(0),
             .uart = .{ .guest_id = id, .out_fn = guestUartOutput },
-            .timer = .{},
-            .pic = .{},
             .allocator = allocator,
         };
         self.children.init();
@@ -222,10 +220,8 @@ pub const Guest = struct {
         if (parent) |p| {
             const node = try allocator.create(dsa.LinkedList(*Guest).Node);
             errdefer allocator.destroy(node);
-
             self.local_cid = try p.allocChildHandle(self);
             errdefer p.freeChildHandle(self);
-
             node.* = .{ .next = null, .previous = null, .contents = self };
             {
                 const s = p.tree_lock.lock();
@@ -234,7 +230,6 @@ pub const Guest = struct {
             }
             self.child_node = node;
             self.quotas.current_depth = p.quotas.current_depth + 1;
-
             var p_anc: ?*Guest = p;
             while (p_anc) |anc| : (p_anc = anc.parent) {
                 anc.quotas.used_descendants += 1;
@@ -297,7 +292,6 @@ pub const Guest = struct {
         self.vcore_dynamic_buckets = @splat(null);
         self.child_static_handles = @splat(null);
         self.child_dynamic_buckets = @splat(null);
-
         self.space.deinit();
 
         var it_child = self.children.start;
@@ -308,7 +302,6 @@ pub const Guest = struct {
             self.allocator.destroy(node);
             it_child = next;
         }
-
         if (self.parent) |p| {
             p.freeChildHandle(self);
             if (self.child_node) |node| {
@@ -319,12 +312,10 @@ pub const Guest = struct {
                 self.child_node = null;
             }
         }
-
         self.unregisterResources();
         self.allocator.destroy(self);
     }
 
-    /// Add a virtual core to this guest.
     pub fn addVcore(
         self: *Guest,
         vid: vcore.VirtualCoreID,
@@ -334,10 +325,8 @@ pub const Guest = struct {
         sched_queue: ?*const fn (*vcore.VirtualCore) void,
     ) !*vcore.VirtualCore {
         if (self.findVcore(vid) != null) return error.DuplicateVcore;
-
         const vc = try self.allocator.create(vcore.VirtualCore);
         errdefer self.allocator.destroy(vc);
-
         vc.* = try vcore.VirtualCore.initChecked(
             vid,
             self,
@@ -346,19 +335,15 @@ pub const Guest = struct {
             priority,
         );
         errdefer vc.deinit();
-
         vc.blocked_node.contents = @ptrCast(vc);
         if (vc.exec_path == .emulated) {
             vc.context[@backingInt(riscv.Register.a0)] = @intFromPtr(vc);
         }
-
-        const node = try self.allocator.create(
-            dsa.LinkedList(*vcore.VirtualCore).Node,
-        );
+        const VcNode = dsa.LinkedList(*vcore.VirtualCore).Node;
+        const node = try self.allocator.create(VcNode);
         node.* = .{ .next = null, .previous = null, .contents = vc };
         self.vcores.pushEnd(node);
         self.quotas.used_vcpus = self.vcores.count();
-
         lineage_mod.registerVcoreLookup(self, vid, vc);
         if (sched_queue) |q| q(vc);
         return vc;

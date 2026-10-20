@@ -42,7 +42,6 @@ pub const MIDELEG_DELEGATED = interface.MIDELEG_DELEGATED;
 pub const readMcause = csr.readMcause;
 pub const fence = csr.fence;
 pub const flushIcache = csr.flushIcache;
-pub const readRA = csr.readRA;
 pub const readMepc = csr.readMepc;
 pub const writeMepc = csr.writeMepc;
 pub const readMvendorid = csr.readMvendorid;
@@ -100,8 +99,6 @@ pub const readVsstatus = guest_csr.readVsstatus;
 pub const writeVsstatus = guest_csr.writeVsstatus;
 pub const readVsie = guest_csr.readVsie;
 pub const writeVsie = guest_csr.writeVsie;
-pub const readVsip = guest_csr.readVsip;
-pub const writeVsip = guest_csr.writeVsip;
 pub const readVstvec = guest_csr.readVstvec;
 pub const writeVstvec = guest_csr.writeVstvec;
 pub const readVsscratch = guest_csr.readVsscratch;
@@ -175,29 +172,15 @@ const HGATP_PROBE_PPN: u64 = 0x82edc;
 const HGATP_PROBE_VAL: u64 =
     HGATP_PROBE_MODE_SV39X4 | HGATP_PROBE_VMID | HGATP_PROBE_PPN;
 
-fn initCpuToHartMap() [STATIC_PHYS_CORES]usize {
-    var map: [STATIC_PHYS_CORES]usize = undefined;
-    for (0..STATIC_PHYS_CORES) |i| map[i] = i;
-    return map;
-}
-pub var cpu_to_hart_map: [STATIC_PHYS_CORES]usize = initCpuToHartMap();
-pub var cpu_contexts = std.mem.zeroes([STATIC_PHYS_CORES]?*CpuContext);
-
 pub var test_time: u64 = 0;
 
 pub export var riscv_supports_sstc: bool = false;
 pub export var riscv_supports_smstateen: bool = false;
 
-extern fn hw_putchar(c: u8) void;
-extern fn hw_getchar() i16;
-extern fn hw_set_timer(stime: u64) void;
 extern fn hw_private_variables() *CpuContext;
 extern fn hw_heap_base() usize;
 extern fn hw_heap_size() usize;
-extern fn hw_reboot() void;
-extern fn hw_shutdown() void;
 extern fn hw_pause() void;
-extern fn hw_pmp_init() void;
 
 pub const ThreadContext = [32]u64;
 
@@ -344,8 +327,11 @@ pub fn auditCpuFeatures() !void {
     debug.printf(" - Efficient timer interrupts (Sstc) {s}\n", .{sstc_str});
 
     if (has_h) {
+        const initial_hgatp = readHgatp();
         writeHgatp(HGATP_PROBE_VAL);
         const read_hgatp = readHgatp();
+        writeHgatp(initial_hgatp);
+        hfenceGvma();
         if (read_hgatp != HGATP_PROBE_VAL) {
             debug.printf(
                 "CRITICAL: hgatp write failure (wrote 0x{x}, read 0x{x})\n",
@@ -392,72 +378,33 @@ pub inline fn setTp(val: usize) void {
     );
 }
 
-pub fn isHostTp(tp_val: usize) bool {
-    if (is_test) return false;
-    return @import("../../../../core/pcore.zig").isHostTp(tp_val);
-}
-
 pub fn getOnlineCpuCount() u32 {
     if (is_test) return 1;
     const count = @import("../../../../core/pcore.zig").countOnline();
     return if (count > 0) @as(u32, @intCast(count)) else 1;
 }
 
-pub const TpGuard = struct {
-    saved_tp: usize = 0,
-    swapped: bool = false,
-
-    pub inline fn init() TpGuard {
-        if (is_test) return .{};
-        var current: usize = undefined;
-        asm volatile ("mv %[current], tp"
-            : [current] "=r" (current),
-        );
-        if (isHostTp(current)) {
-            return .{ .saved_tp = current, .swapped = false };
-        }
-        var host_tp: usize = undefined;
-        asm volatile (
-            \\csrr %[host_tp], mscratch
-            \\mv tp, %[host_tp]
-            : [host_tp] "=r" (host_tp),
-        );
-        return .{ .saved_tp = current, .swapped = true };
-    }
-
-    pub inline fn deinit(self: TpGuard) void {
-        if (is_test) return;
-        if (self.swapped) {
-            asm volatile ("mv tp, %[saved]"
-                :
-                : [saved] "r" (self.saved_tp),
-            );
-        }
-    }
-};
-
-pub fn reboot() void {
-    if (is_test) return;
+fn finishPowerState(finisher_code: u32, is_reset: bool) noreturn {
     const pcore = @import("../../../../core/pcore.zig");
     pcore.parkOtherCores();
     const drivers = @import("../../../../core/drivers.zig");
-    if (drivers.reset) |drv| drv.reset();
+    if (drivers.reset) |drv| {
+        if (is_reset) drv.reset() else drv.shutdown();
+    }
     const base = test_device_base orelse SiFiveTest.DEFAULT_BASE;
     const ptr = @as(*volatile u32, @ptrFromInt(base));
-    ptr.* = SiFiveTest.FINISHER_RESET;
+    ptr.* = finisher_code;
     while (true) {}
+}
+
+pub fn reboot() void {
+    if (is_test) return;
+    finishPowerState(SiFiveTest.FINISHER_RESET, true);
 }
 
 pub fn shutdown() void {
     if (is_test) return;
-    const pcore = @import("../../../../core/pcore.zig");
-    pcore.parkOtherCores();
-    const drivers = @import("../../../../core/drivers.zig");
-    if (drivers.reset) |drv| drv.shutdown();
-    const base = test_device_base orelse SiFiveTest.DEFAULT_BASE;
-    const ptr = @as(*volatile u32, @ptrFromInt(base));
-    ptr.* = SiFiveTest.FINISHER_PASS;
-    while (true) {}
+    finishPowerState(SiFiveTest.FINISHER_PASS, false);
 }
 
 pub fn pause() void {

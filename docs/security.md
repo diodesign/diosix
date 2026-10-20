@@ -95,10 +95,10 @@ by stateful iptables firewall rules configured on the Root VM router:
 *   **Parent inbound denial**: The parent router installs packet-filter rules
     dropping all new connection attempts originating from child VMs
     (`-A INPUT -i diosix0 -m conntrack --ctstate NEW -j DROP` and
-    `-A INPUT -s 10.0.0.0/16 -m conntrack --ctstate NEW -j DROP`). Child VMs
+    `-A INPUT -s 10.0.3.0/24 -m conntrack --ctstate NEW -j DROP`). Child VMs
     cannot connect to parent listening services, including SSH on port 22.
 *   **Cross-guest lateral denial**: The router denies forwarding between
-    virtual child subnets (`-A FORWARD -s 10.0.0.0/16 -d 10.0.0.0/16 -j DROP`).
+    virtual child subnets (`-A FORWARD -s 10.0.3.0/24 -d 10.0.3.0/24 -j DROP`).
     Sibling guest VMs cannot probe, port scan, or communicate laterally with
     one another across the virtual network.
 *   **Stateful return traffic**: Established and related responses to

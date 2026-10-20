@@ -9,11 +9,12 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const sysconfig = @import("sysconfig.zig");
 
-pub const AUTHORIZED_PASSKEYS_PATH = "/var/lib/diosix/keys/authorized_passkeys";
-pub const DEV_AUTHORIZED_KEYS_PATH = "/var/lib/diosix/keys/dev_authorized_keys";
-pub const ROOT_AUTHORIZED_KEYS_PATH = "/root/.ssh/authorized_keys";
-pub const CHALLENGE_STATE_PATH = "/run/diosix/auth_challenge";
+pub const AUTHORIZED_PASSKEYS_PATH = sysconfig.AUTHORIZED_PASSKEYS_PATH;
+pub const DEV_AUTHORIZED_KEYS_PATH = sysconfig.DEV_AUTHORIZED_KEYS_PATH;
+pub const ROOT_AUTHORIZED_KEYS_PATH = sysconfig.ROOT_AUTHORIZED_KEYS_PATH;
+pub const CHALLENGE_STATE_PATH = sysconfig.CHALLENGE_STATE_PATH;
 
 pub const MAX_PASSKEYS: usize = 32;
 pub const CHALLENGE_BYTES: usize = 32;
@@ -21,6 +22,25 @@ pub const CHALLENGE_HEX_LEN: usize = CHALLENGE_BYTES * 2;
 pub const ED25519_PUBKEY_LEN: usize = 32;
 pub const ED25519_SIG_LEN: usize = 64;
 pub const ED25519_SIG_HEX_LEN: usize = ED25519_SIG_LEN * 2;
+
+/// Hex characters in the short passkey fingerprint: the first 8 bytes of the
+/// SHA-256 digest of the wire blob.
+pub const FINGERPRINT_HEX_LEN: usize = 16;
+
+/// OpenSSH wire blob for an Ed25519 key: u32 length + "ssh-ed25519" (11
+/// bytes) + u32 length + 32-byte public key.
+pub const ED25519_WIRE_BLOB_LEN: usize = 4 + 11 + 4 + ED25519_PUBKEY_LEN;
+
+/// Base64 length of `ED25519_WIRE_BLOB_LEN` bytes: ceil(51 / 3) * 4.
+pub const ED25519_WIRE_B64_LEN: usize = 68;
+
+/// Largest decoded wire blob accepted from an authorized_passkeys line. The
+/// biggest supported type (sk-ecdsa-sha2-nistp256@openssh.com) is about 200
+/// bytes, so this leaves ample headroom while bounding stack use.
+const MAX_WIRE_BLOB_LEN: usize = 512;
+
+const Ed25519 = std.crypto.sign.Ed25519;
+const Sha256 = std.crypto.hash.sha2.Sha256;
 
 pub const PasskeyKind = enum {
     fido2_ed25519,
@@ -46,7 +66,7 @@ pub const PasskeyEntry = struct {
     base64_blob: []const u8,
     comment: []const u8,
     ed25519_pubkey: ?[ED25519_PUBKEY_LEN]u8,
-    fingerprint_hex: [16]u8,
+    fingerprint_hex: [FINGERPRINT_HEX_LEN]u8,
 };
 
 fn trimAscii(s: []const u8) []const u8 {
@@ -110,9 +130,9 @@ pub fn extractEd25519PubkeyFromWireBlob(
 /// 51 bytes total) and Base64-encodes it.
 pub fn encodeOpenSshEd25519BlobBase64(
     pubkey: [ED25519_PUBKEY_LEN]u8,
-    out_b64: *[68]u8,
+    out_b64: *[ED25519_WIRE_B64_LEN]u8,
 ) []const u8 {
-    var wire: [51]u8 = undefined;
+    var wire: [ED25519_WIRE_BLOB_LEN]u8 = undefined;
     std.mem.writeInt(u32, wire[0..4], 11, .big);
     @memcpy(wire[4..15], "ssh-ed25519");
     std.mem.writeInt(u32, wire[15..19], 32, .big);
@@ -146,7 +166,7 @@ pub fn parsePasskeyLine(raw_line: []const u8) ?PasskeyEntry {
 
     const kind = classifyKeyType(key_type, comment) orelse return null;
 
-    var decoded_buf: [512]u8 = undefined;
+    var decoded_buf: [MAX_WIRE_BLOB_LEN]u8 = undefined;
     const decoded_len =
         std.base64.standard.Decoder.calcSizeForSlice(b64_blob) catch
             return null;
@@ -167,10 +187,10 @@ pub fn parsePasskeyLine(raw_line: []const u8) ?PasskeyEntry {
     if (!std.mem.eql(u8, wire_type, key_type)) return null;
 
     // Compute short 16-char SHA-256 fingerprint of the wire blob.
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(wire_blob, &digest, .{});
-    var fp_hex: [16]u8 = undefined;
-    _ = bytesToHex(digest[0..8], &fp_hex);
+    var digest: [Sha256.digest_length]u8 = undefined;
+    Sha256.hash(wire_blob, &digest, .{});
+    var fp_hex: [FINGERPRINT_HEX_LEN]u8 = undefined;
+    _ = bytesToHex(digest[0 .. FINGERPRINT_HEX_LEN / 2], &fp_hex);
 
     return PasskeyEntry{
         .kind = kind,
@@ -228,13 +248,12 @@ pub fn verifyChallengeSignature(
         return null;
     if (decoded_sig.len != ED25519_SIG_LEN) return null;
 
-    const sig = std.crypto.sign.Ed25519.Signature.fromBytes(sig_bytes);
+    const sig = Ed25519.Signature.fromBytes(sig_bytes);
 
     for (entries, 0..) |entry, idx| {
         if (entry.ed25519_pubkey) |pk_bytes| {
-            const pk = std.crypto.sign.Ed25519.PublicKey.fromBytes(
-                pk_bytes,
-            ) catch continue;
+            // A malformed enrolled key can never match; skip it.
+            const pk = Ed25519.PublicKey.fromBytes(pk_bytes) catch continue;
             if (sig.verify(challenge_msg, pk)) |_| {
                 return idx;
             } else |_| {}
@@ -244,17 +263,16 @@ pub fn verifyChallengeSignature(
 }
 
 /// Generates a deterministic WebAuthn / FIDO2 hybrid QR enrollment URI for
-/// smartphone/tablet pairing.
+/// smartphone/tablet pairing. The caller frees the result with `allocator`.
 pub fn formatEnrollmentQrUri(
-    buf: []u8,
+    allocator: std.mem.Allocator,
     challenge_hex: []const u8,
     seat_profile: []const u8,
-) []const u8 {
-    return std.fmt.bufPrint(
-        buf,
+) ![]u8 {
+    return allocator.print(
         "diosix://passkey-enroll?rp=diosix.local&seat={s}&challenge={s}",
         .{ seat_profile, challenge_hex },
-    ) catch "";
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -262,22 +280,33 @@ pub fn formatEnrollmentQrUri(
 // -----------------------------------------------------------------------------
 const testing = std.testing;
 
+test "formatEnrollmentQrUri never truncates long seat profiles" {
+    const seat: [400]u8 = @splat('s');
+    const uri = try formatEnrollmentQrUri(testing.allocator, "abcd", &seat);
+    defer testing.allocator.free(uri);
+    const expected = try testing.allocator.print(
+        "diosix://passkey-enroll?rp=diosix.local&seat={s}&challenge=abcd",
+        .{&seat},
+    );
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, uri);
+}
+
 test "parsePasskeyLine validates FIDO2 sk-ssh-ed25519 and ssh-ed25519 keys" {
     testing.refAllDecls(@This());
-    const seed: [32]u8 = @splat(0x42);
-    const kp = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
-    var b64_buf: [68]u8 = undefined;
+    const seed: [Ed25519.KeyPair.seed_length]u8 = @splat(0x42);
+    const kp = try Ed25519.KeyPair.generateDeterministic(seed);
+    var b64_buf: [ED25519_WIRE_B64_LEN]u8 = undefined;
     const b64_str = encodeOpenSshEd25519BlobBase64(
         kp.public_key.toBytes(),
         &b64_buf,
     );
 
-    var line_buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(
-        &line_buf,
+    const line = try testing.allocator.print(
         "ssh-ed25519 {s} tpm2:platform-passkey",
         .{b64_str},
     );
+    defer testing.allocator.free(line);
 
     const parsed = parsePasskeyLine(line).?;
     try testing.expectEqual(PasskeyKind.tpm2_platform, parsed.kind);
@@ -299,13 +328,14 @@ test "parsePasskeyLine validates FIDO2 sk-ssh-ed25519 and ssh-ed25519 keys" {
     @memcpy(sk_wire[34..66], &kp.public_key.toBytes());
     std.mem.writeInt(u32, sk_wire[66..70], 4, .big);
     @memcpy(sk_wire[70..74], "ssh:");
-    var sk_b64_buf: [128]u8 = undefined;
-    const sk_b64 = std.base64.standard.Encoder.encode(&sk_b64_buf, &sk_wire);
-    const sk_line = try std.fmt.bufPrint(
-        &line_buf,
+    const Base64 = std.base64.standard.Encoder;
+    var sk_b64_buf: [Base64.calcSize(sk_wire.len)]u8 = undefined;
+    const sk_b64 = Base64.encode(&sk_b64_buf, &sk_wire);
+    const sk_line = try testing.allocator.print(
         "sk-ssh-ed25519@openssh.com {s} yubikey-5-nfc",
         .{sk_b64},
     );
+    defer testing.allocator.free(sk_line);
     const sk_parsed = parsePasskeyLine(sk_line).?;
     try testing.expectEqual(PasskeyKind.fido2_ed25519, sk_parsed.kind);
     try testing.expectEqualSlices(
@@ -327,20 +357,19 @@ test "parsePasskeyLine validates FIDO2 sk-ssh-ed25519 and ssh-ed25519 keys" {
 }
 
 test "verifyChallengeSignature verifies real Ed25519 UART signatures" {
-    const seed: [32]u8 = @splat(0x7a);
-    const kp = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
-    var b64_buf: [68]u8 = undefined;
+    const seed: [Ed25519.KeyPair.seed_length]u8 = @splat(0x7a);
+    const kp = try Ed25519.KeyPair.generateDeterministic(seed);
+    var b64_buf: [ED25519_WIRE_B64_LEN]u8 = undefined;
     const b64_str = encodeOpenSshEd25519BlobBase64(
         kp.public_key.toBytes(),
         &b64_buf,
     );
 
-    var line_buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(
-        &line_buf,
+    const line = try testing.allocator.print(
         "ssh-ed25519 {s} operator@yubikey\n",
         .{b64_str},
     );
+    defer testing.allocator.free(line);
 
     var entries: [4]PasskeyEntry = undefined;
     const count = parseAuthorizedPasskeys(line, &entries);

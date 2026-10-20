@@ -176,39 +176,49 @@ pub fn readU32(self: *SoftTlb, vaddr: u32, bus: *bus_mod.Bus) AccessResult {
     return .{ .val = val };
 }
 
-pub fn writeU8(self: *SoftTlb, vaddr: u32, val: u8, bus: *bus_mod.Bus) ?u32 {
-    const paddr = self.translateFast(vaddr, true, false) orelse
-        (self.translateFull(vaddr, true, false, bus) orelse {
-            return TRAP_STORE_PAGE_FAULT;
-        });
+inline fn translateWriteAddr(
+    self: *SoftTlb,
+    vaddr: u32,
+    bus: *bus_mod.Bus,
+) ?usize {
+    return self.translateFast(vaddr, true, false) orelse
+        self.translateFull(vaddr, true, false, bus);
+}
+
+inline fn writeTranslatedByte(
+    paddr: usize,
+    val: u8,
+    bus: *bus_mod.Bus,
+) void {
     const p32: u32 = @truncate(paddr);
     if (bus.isMmio(p32)) {
         bus.write(p32, val, 1);
-        return null;
+        return;
     }
     const ptr = @as(*align(1) u8, @ptrFromInt(paddr));
     @atomicStore(u8, ptr, val, .release);
     vcpu_mod.VCpu.invalidateReservations(paddr);
+}
+
+pub fn writeU8(self: *SoftTlb, vaddr: u32, val: u8, bus: *bus_mod.Bus) ?u32 {
+    const paddr = translateWriteAddr(self, vaddr, bus) orelse
+        return TRAP_STORE_PAGE_FAULT;
+    writeTranslatedByte(paddr, val, bus);
     return null;
 }
 
 pub fn writeU16(self: *SoftTlb, vaddr: u32, val: u16, bus: *bus_mod.Bus) ?u32 {
     if (crossesPageBoundary(vaddr, @sizeOf(u16))) {
-        if (writeU8(self, vaddr, @truncate(val), bus)) |trap| return trap;
-        if (writeU8(
-            self,
-            vaddr +% 1,
-            @truncate(val >> BITS_PER_BYTE),
-            bus,
-        )) |trap| {
-            return trap;
-        }
+        const paddr0 = translateWriteAddr(self, vaddr, bus) orelse
+            return TRAP_STORE_PAGE_FAULT;
+        const paddr1 = translateWriteAddr(self, vaddr +% 1, bus) orelse
+            return TRAP_STORE_PAGE_FAULT;
+        writeTranslatedByte(paddr0, @truncate(val), bus);
+        writeTranslatedByte(paddr1, @truncate(val >> BITS_PER_BYTE), bus);
         return null;
     }
-    const paddr = self.translateFast(vaddr, true, false) orelse
-        (self.translateFull(vaddr, true, false, bus) orelse {
-            return TRAP_STORE_PAGE_FAULT;
-        });
+    const paddr = translateWriteAddr(self, vaddr, bus) orelse
+        return TRAP_STORE_PAGE_FAULT;
     const p32: u32 = @truncate(paddr);
     if (bus.isMmio(p32)) {
         bus.write(p32, val, 2);
@@ -230,18 +240,21 @@ pub fn writeU16(self: *SoftTlb, vaddr: u32, val: u16, bus: *bus_mod.Bus) ?u32 {
 
 pub fn writeU32(self: *SoftTlb, vaddr: u32, val: u32, bus: *bus_mod.Bus) ?u32 {
     if (crossesPageBoundary(vaddr, @sizeOf(u32))) {
+        var paddrs: [4]usize = undefined;
         var i: u32 = 0;
         while (i < 4) : (i += 1) {
+            paddrs[i] = translateWriteAddr(self, vaddr +% i, bus) orelse
+                return TRAP_STORE_PAGE_FAULT;
+        }
+        i = 0;
+        while (i < 4) : (i += 1) {
             const shift: u5 = @truncate(i * BITS_PER_BYTE);
-            const b: u8 = @truncate(val >> shift);
-            if (writeU8(self, vaddr +% i, b, bus)) |trap| return trap;
+            writeTranslatedByte(paddrs[i], @truncate(val >> shift), bus);
         }
         return null;
     }
-    const paddr = self.translateFast(vaddr, true, false) orelse
-        (self.translateFull(vaddr, true, false, bus) orelse {
-            return TRAP_STORE_PAGE_FAULT;
-        });
+    const paddr = translateWriteAddr(self, vaddr, bus) orelse
+        return TRAP_STORE_PAGE_FAULT;
     const p32: u32 = @truncate(paddr);
     if (bus.isMmio(p32)) {
         bus.write(p32, val, 4);

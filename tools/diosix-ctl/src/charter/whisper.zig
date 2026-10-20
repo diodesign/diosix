@@ -51,11 +51,15 @@ pub const WhisperMessageType = enum {
     }
 };
 
+/// Maximum Whisper payload carried in a frame. This is a fixed field width of
+/// the Whisper wire format, so longer payloads are truncated when parsed.
+pub const WHISPER_PAYLOAD_MAX: usize = 128;
+
 pub const WhisperFrame = struct {
     msg_type: WhisperMessageType,
     sender_cid: usize,
     target_cid: usize,
-    payload_buf: [128]u8 = @splat(0),
+    payload_buf: [WHISPER_PAYLOAD_MAX]u8 = @splat(0),
     payload_len: usize = 0,
 
     pub fn payload(self: *const WhisperFrame) []const u8 {
@@ -64,18 +68,19 @@ pub const WhisperFrame = struct {
 };
 
 /// Format a deterministic Whisper Mesh consensus frame
-/// (`whisper:v1:<type>:<sender_cid>:<target_cid>:<payload>`).
+/// (`whisper:v1:<type>:<sender_cid>:<target_cid>:<payload>`). The caller owns
+/// the returned slice.
 pub fn formatWhisperFrame(
-    out_buf: []u8,
+    allocator: std.mem.Allocator,
     msg_type: WhisperMessageType,
     sender_cid: usize,
     target_cid: usize,
     payload_str: []const u8,
-) ![]const u8 {
+) ![]u8 {
     for (payload_str) |c| {
         if (c < 0x20 or c == 0x7f) return error.InvalidWhisperPayload;
     }
-    return std.fmt.bufPrint(out_buf, "whisper:v1:{s}:{d}:{d}:{s}", .{
+    return allocator.print("whisper:v1:{s}:{d}:{d}:{s}", .{
         msg_type.toStr(),
         sender_cid,
         target_cid,
@@ -117,6 +122,7 @@ pub fn cmdCharterWhisper(
     arg_start: usize,
     json_mode: bool,
 ) void {
+    const allocator = std.heap.page_allocator;
     var w_op: WhisperOp = .recv;
     if (arg_start < args.len) {
         const s = std.mem.span(args[arg_start]);
@@ -156,36 +162,37 @@ pub fn cmdCharterWhisper(
                 }
             }
 
-            var frame_buf: [256]u8 = undefined;
             const frame = formatWhisperFrame(
-                &frame_buf,
+                allocator,
                 msg_type,
                 sender_cid,
                 target_cid,
                 payload,
-            ) catch {
-                common.printStr(
-                    "Error: Whisper frame exceeds maximum buffer size.\n",
-                );
+            ) catch |err| {
+                switch (err) {
+                    error.InvalidWhisperPayload => common.printStr(
+                        "Error: Whisper payload contains control " ++
+                            "characters.\n",
+                    ),
+                    else => common.printApiError("Whisper send", err),
+                }
                 return;
             };
-            var out_buf: [512]u8 = undefined;
+            defer allocator.free(frame);
             if (json_mode) {
-                var safe_buf: [256]u8 = undefined;
-                const safe_frame = common.sanitizeJsonStr(&safe_buf, frame);
-                const jout = std.fmt.bufPrint(
-                    &out_buf,
+                // Sanitizing only drops bytes, so the frame length bounds it.
+                const safe_buf = allocator.alloc(u8, frame.len) catch |err| {
+                    common.printApiError("Whisper send", err);
+                    return;
+                };
+                defer allocator.free(safe_buf);
+                const safe_frame = common.sanitizeJsonStr(safe_buf, frame);
+                common.printFmt(
                     "{{\"status\":\"formatted\",\"frame\":\"{s}\"}}\n",
                     .{safe_frame},
-                ) catch return;
-                common.printStr(jout);
+                );
             } else {
-                const out = std.fmt.bufPrint(
-                    &out_buf,
-                    "✓ Whisper frame: {s}\n",
-                    .{frame},
-                ) catch return;
-                common.printStr(out);
+                common.printFmt("✓ Whisper frame: {s}\n", .{frame});
             }
         },
         .recv => {
@@ -214,15 +221,21 @@ pub fn cmdCharterWhisper(
                 common.printStr("Error: Invalid Whisper frame.\n");
                 return;
             };
-            var out_buf: [512]u8 = undefined;
             if (json_mode) {
-                var safe_payload_buf: [256]u8 = undefined;
+                // Sanitizing only drops bytes, so the payload length bounds it.
+                const safe_buf = allocator.alloc(
+                    u8,
+                    parsed.payload().len,
+                ) catch |err| {
+                    common.printApiError("Whisper receive", err);
+                    return;
+                };
+                defer allocator.free(safe_buf);
                 const safe_payload = common.sanitizeJsonStr(
-                    &safe_payload_buf,
+                    safe_buf,
                     parsed.payload(),
                 );
-                const jout = std.fmt.bufPrint(
-                    &out_buf,
+                common.printFmt(
                     "{{\"status\":\"received\",\"type\":\"{s}\"," ++
                         "\"sender_cid\":{d},\"target_cid\":{d}," ++
                         "\"payload\":\"{s}\"}}\n",
@@ -232,11 +245,9 @@ pub fn cmdCharterWhisper(
                         parsed.target_cid,
                         safe_payload,
                     },
-                ) catch return;
-                common.printStr(jout);
+                );
             } else {
-                const out = std.fmt.bufPrint(
-                    &out_buf,
+                common.printFmt(
                     "Whisper [{s}] CID {d} -> CID {d}: {s}\n",
                     .{
                         parsed.msg_type.toStr(),
@@ -244,8 +255,7 @@ pub fn cmdCharterWhisper(
                         parsed.target_cid,
                         parsed.payload(),
                     },
-                ) catch return;
-                common.printStr(out);
+                );
             }
         },
     }
@@ -254,8 +264,14 @@ pub fn cmdCharterWhisper(
 test "charter/whisper: Whisper Mesh consensus framing roundtrip" {
     std.testing.refAllDecls(@This());
     const testing = std.testing;
-    var buf: [256]u8 = undefined;
-    const raw = try formatWhisperFrame(&buf, .ratify, 2, 3, "sha256:abcdef");
+    const raw = try formatWhisperFrame(
+        testing.allocator,
+        .ratify,
+        2,
+        3,
+        "sha256:abcdef",
+    );
+    defer testing.allocator.free(raw);
     try testing.expectEqualStrings("whisper:v1:ratify:2:3:sha256:abcdef", raw);
 
     const parsed = try parseWhisperFrame(raw);
@@ -263,4 +279,15 @@ test "charter/whisper: Whisper Mesh consensus framing roundtrip" {
     try testing.expectEqual(@as(usize, 2), parsed.sender_cid);
     try testing.expectEqual(@as(usize, 3), parsed.target_cid);
     try testing.expectEqualStrings("sha256:abcdef", parsed.payload());
+}
+
+test "charter/whisper: control characters in payloads are rejected" {
+    const result = formatWhisperFrame(
+        std.testing.allocator,
+        .heartbeat,
+        2,
+        3,
+        "bad\npayload",
+    );
+    try std.testing.expectError(error.InvalidWhisperPayload, result);
 }

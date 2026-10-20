@@ -19,12 +19,24 @@
 #include <linux/gfp.h>
 #include <linux/dma-mapping.h>
 #include <linux/mm.h>
+#include <linux/mutex.h>
 #include <linux/sched/signal.h>
 #include <asm/sbi.h>
 
 #include "diosix.h"
 
 static struct miscdevice diosix_dev;
+static DEFINE_MUTEX(diosix_child_mem_mutex);
+
+void diosix_child_mem_lock(void)
+{
+    mutex_lock(&diosix_child_mem_mutex);
+}
+
+void diosix_child_mem_unlock(void)
+{
+    mutex_unlock(&diosix_child_mem_mutex);
+}
 
 static int diosix_open(struct inode *inode, struct file *file)
 {
@@ -64,7 +76,7 @@ static long handle_get_info(unsigned long arg)
     );
     if (ret.error) {
         kfree(kinfo);
-        return -EIO;
+        return diosix_sbi_to_errno(ret.error);
     }
     if (copy_to_user((void __user *)arg, kinfo, sizeof(*kinfo))) {
         kfree(kinfo);
@@ -178,12 +190,22 @@ static long handle_run_guest(unsigned long arg)
     );
 
     if (ret.error) {
-        ret_val = -EIO;
+        ret_val = diosix_sbi_to_errno(ret.error);
         goto out_free_dtb;
     }
 
     kargs.child_id = ret.value;
     if (copy_to_user((void __user *)arg, &kargs, sizeof(kargs))) {
+        sbi_ecall(
+            EXT_DIOSIX,
+            DIOSIX_FUNC_TERMINATE,
+            (unsigned long)ret.value,
+            1,
+            0,
+            0,
+            0,
+            0
+        );
         ret_val = -EFAULT;
         goto out_free_dtb;
     }
@@ -241,7 +263,7 @@ static long handle_wait_event(unsigned long arg)
             0
         );
         if (ret.error) {
-            ret_val = -EIO;
+            ret_val = diosix_sbi_to_errno(ret.error);
             break;
         }
         if (ret.value == 1) {
@@ -280,7 +302,7 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     case IOCTL_DROP_TRUST:
         ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_DROP_TRUST, 0, 0, 0, 0, 0, 0);
         if (ret.error)
-            return -EIO;
+            return diosix_sbi_to_errno(ret.error);
         return 0;
 
     case IOCTL_GET_INFO:
@@ -304,7 +326,7 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             0
         );
         if (ret.error)
-            return -EPERM;
+            return diosix_sbi_to_errno(ret.error);
         return 0;
     }
 
@@ -343,7 +365,7 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         kfree(sbi_qargs);
 
         if (ret.error)
-            return -EPERM;
+            return diosix_sbi_to_errno(ret.error);
         return 0;
     }
 
@@ -368,7 +390,7 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         );
         if (ret.error) {
             kfree(hv_info);
-            return -EIO;
+            return diosix_sbi_to_errno(ret.error);
         }
         if (copy_to_user((void __user *)arg, hv_info, sizeof(*hv_info))) {
             kfree(hv_info);
@@ -413,8 +435,12 @@ static int diosix_mmap(struct file *file, struct vm_area_struct *vma)
 
     vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
 
-    if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot))
+    diosix_child_mem_lock();
+    if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot)) {
+        diosix_child_mem_unlock();
         return -EAGAIN;
+    }
+    diosix_child_mem_unlock();
 
     return 0;
 }

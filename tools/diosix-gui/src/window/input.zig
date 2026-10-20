@@ -294,14 +294,19 @@ pub fn handleMouseMove(
     // 3. Active icon drag (exclusive dragging for selected slider or text).
     if (self.active_drag_icon_idx) |drag_idx| {
         if (left_down and drag_idx < self.icons.items.len) {
-            const active_icon = &self.icons.items[drag_idx];
-            if (active_icon.icon_type == .slider) {
-                const old_val = active_icon.slider_val;
-                _ = updateSliderFromMouseX(self, gui_ctx, active_icon, px);
-                if (active_icon.slider_val != old_val) {
+            if (self.icons.items[drag_idx].icon_type == .slider) {
+                if (updateSliderFromMouseX(
+                    self,
+                    gui_ctx,
+                    &self.icons.items[drag_idx],
+                    px,
+                )) {
                     changed = true;
                 }
-            } else if (active_icon.icon_type == .read_write_text) {
+            } else if (self.icons.items[drag_idx].icon_type ==
+                .read_write_text)
+            {
+                const active_icon = &self.icons.items[drag_idx];
                 active_icon.is_dragging_select = true;
                 const new_idx = active_icon.getCharIndexAtX(self.x, px);
                 if (active_icon.selection_end != new_idx or

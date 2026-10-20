@@ -98,9 +98,11 @@ community.
 
 ## Attribution
 
-This code of conduct is adapted from the
-[Contributor Covenant](https://www.contributor-covenant.org/version/2/0/code_of_conduct.html),
+This code of conduct is adapted from the [Contributor Covenant][cc-v2],
 version 2.0. The community impact guidelines were inspired by
-[Mozilla's code of conduct enforcement ladder](https://github.com/mozilla/diversity).
+[Mozilla's code of conduct enforcement ladder][mozilla-coc].
 For answers to common questions about this code of conduct, see the
 [FAQ](https://www.contributor-covenant.org/faq).
+
+[cc-v2]: https://www.contributor-covenant.org/version/2/0/code_of_conduct.html
+[mozilla-coc]: https://github.com/mozilla/diversity

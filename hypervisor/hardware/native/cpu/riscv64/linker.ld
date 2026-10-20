@@ -1,6 +1,6 @@
 /* ELF layout of the hypervisor for QEMU-compatible targets.
  *
- * Copyright (c) 2024, 2026 Chris Williams <chrisw@diosix.org>
+ * Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
  * SPDX-License-Identifier: MIT
  */
 
@@ -26,9 +26,9 @@ SECTIONS
     *(.eh_frame)
   }
 
-  /* Start of writable data section (used by PMP RW region boundary). */
-  __data_start = ALIGN(0x8);
-  .data : ALIGN(0x8)
+  /* Start of writable data section (4 KiB page-aligned for TOR PMP). */
+  __data_start = ALIGN(0x1000);
+  .data : ALIGN(0x1000)
   {
     *(.data*)
   }

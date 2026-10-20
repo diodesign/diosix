@@ -8,6 +8,7 @@ const fb = @import("framebuffer.zig");
 const font = @import("font.zig");
 pub const icon_render = @import("icon/render.zig");
 pub const icon_text = @import("icon/text.zig");
+const text_label = @import("label.zig");
 
 pub const BACK_ARROW_WIDTH = icon_render.BACK_ARROW_WIDTH;
 pub const BACK_ARROW_HEIGHT = icon_render.BACK_ARROW_HEIGHT;
@@ -17,6 +18,19 @@ pub const drawBackArrowWithShadow = icon_render.drawBackArrowWithShadow;
 pub const ASCII_PRINTABLE_MIN: u8 = font.ASCII_PRINTABLE_MIN;
 pub const ASCII_PRINTABLE_MAX: u8 = font.ASCII_PRINTABLE_MAX;
 const Str = []const u8;
+
+// Capacity of Icon.text_buf, the true limit of any displayed label (the last
+// byte is a NUL terminator). Defined in label.zig so scratch buffers can share
+// it without depending on the rendering code.
+pub const TEXT_CAP: usize = text_label.TEXT_CAP;
+// Capacity of Icon.slider_suffix: a short unit such as "%", "px" or "ms".
+pub const SLIDER_SUFFIX_CAP: usize = 16;
+// Capacity of Icon.card_subtitle: the single subtitle line of a slate card.
+pub const CARD_SUBTITLE_CAP: usize = 128;
+// Capacity of Icon.card_badge: a short status word shown on a slate card.
+pub const CARD_BADGE_CAP: usize = 32;
+// Default limit on characters typed into a read-write text field.
+pub const DEFAULT_MAX_INPUT_LEN: usize = 64;
 
 pub const IconType = enum {
     read_only_text,
@@ -51,7 +65,7 @@ pub const Icon = struct {
     width: u32,
     height: u32,
 
-    text_buf: [256]u8 = @splat(0),
+    text_buf: [TEXT_CAP]u8 = @splat(0),
     text_len: usize = 0,
     custom_color: ?u32 = null,
     help_text: ?[]const u8 = null,
@@ -59,7 +73,7 @@ pub const Icon = struct {
 
     // Read-write text field state.
     cursor_pos: usize = 0,
-    max_input_len: usize = 64,
+    max_input_len: usize = DEFAULT_MAX_INPUT_LEN,
     selection_start: ?usize = null,
     selection_end: ?usize = null,
     is_dragging_select: bool = false,
@@ -69,7 +83,7 @@ pub const Icon = struct {
     slider_max: i32 = 100,
     slider_val: i32 = 50,
     slider_step: i32 = 1,
-    slider_suffix: [16]u8 = @splat(0),
+    slider_suffix: [SLIDER_SUFFIX_CAP]u8 = @splat(0),
     slider_suffix_len: usize = 0,
 
     // Progress bar & viewport state.
@@ -97,9 +111,9 @@ pub const Icon = struct {
     is_dragging_slider: bool = false,
 
     // Slate card state.
-    card_subtitle: [128]u8 = @splat(0),
+    card_subtitle: [CARD_SUBTITLE_CAP]u8 = @splat(0),
     card_sub_len: usize = 0,
-    card_badge: [32]u8 = @splat(0),
+    card_badge: [CARD_BADGE_CAP]u8 = @splat(0),
     card_badge_len: usize = 0,
     card_badge_color: u32 = fb.Color.ACCENT_GREEN,
     card_is_supervisor: bool = false,
@@ -364,6 +378,7 @@ pub const Icon = struct {
 };
 
 test {
+    _ = text_label;
     _ = icon_render;
     _ = icon_text;
     std.testing.refAllDecls(@This());

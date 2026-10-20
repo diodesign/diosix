@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const debug = @import("../../../../../core/debug.zig");
+const interface = @import("interface").riscv;
 const riscv = @import("../mod.zig");
 const xint = @import("../xint.zig");
 const csr_emu = @import("csr.zig");
@@ -23,7 +24,7 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
             if (pcpu.probing_active) {
                 pcpu.probe_failed = true;
                 // Advance PC past the 4-byte probing instruction.
-                riscv.writeMepc(irq.pc + 4);
+                riscv.writeMepc(irq.pc + riscv.Instr.INSN_SIZE_BYTES);
                 return;
             }
             fatalException(irq, context);
@@ -48,7 +49,12 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
                 break :blk 0;
             };
 
-            if (csr_emu.emulateInstruction(vc, instr, context) == .handled) {
+            if (csr_emu.emulateInstruction(
+                vc,
+                instr,
+                context,
+                irq.privilege_mode,
+            ) == .handled) {
                 return;
             }
 
@@ -68,7 +74,7 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
                 const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
                 if (vc.exec_path == .emulated) {
                     // Emulator runner yielding: advance PC past ECALL.
-                    vc.getNativeMachine().mepc += 4;
+                    vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
                     scheduler.schedule();
                 } else if (irq.cause == .machine_environment_call) {
                     debug.printf(
@@ -110,9 +116,7 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     }
 }
 
-const HTVAL_GPA_SHIFT: u6 = 2;
 const STVEC_MODE_MASK: usize = 0b11;
-const CPU_FATAL_ARRAY_LEN: usize = 4096;
 
 fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     const pcpu = pcore.this();
@@ -126,7 +130,7 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
         gpa = if (mtval2 != 0) mtval2 else htval_val;
         // Per the RISC-V Hypervisor specification, mtval2 and htval hold
         // the guest physical address shifted right by 2 bits.
-        if (gpa != 0) gpa <<= HTVAL_GPA_SHIFT;
+        if (gpa != 0) gpa <<= interface.HTVAL_GPA_SHIFT;
     } else {
         gpa = irq.val;
     }
@@ -227,7 +231,7 @@ pub fn reflectExceptionToGuest(
 }
 
 var fatal_exception_active = std.atomic.Value(bool).init(false);
-var cpu_in_fatal = std.mem.zeroes([CPU_FATAL_ARRAY_LEN]bool);
+var cpu_in_fatal = std.mem.zeroes([pcore.MAX_SYSTEM_CORES]bool);
 
 /// Handle an unrecoverable exception in M-mode or an unhandled guest crash.
 pub fn fatalException(

@@ -7,6 +7,11 @@ CONFIG_64BIT=y
 CONFIG_ARCH_RV64I=y
 CONFIG_RISCV=y
 CONFIG_ARCH_VIRT=y
+
+# Contiguous Memory Allocator (CMA) for hypercall guest image staging
+CONFIG_CMA=y
+CONFIG_DMA_CMA=y
+CONFIG_CMA_SIZE_MBYTES=128
 # CONFIG_COMPAT is not set
 # CONFIG_ARCH_ANDES is not set
 # CONFIG_ARCH_ANLOGIC is not set

@@ -18,7 +18,6 @@ const is_test = builtin.is_test;
 pub const PMPError = error{
     TooManyRegions,
     InvalidAlignment,
-    AddressNotFound,
 };
 
 pub const PMPAccess = struct {
@@ -34,7 +33,6 @@ pub const PMPAccess = struct {
     pub const tor_locked_rwx: u8 = rwx | tor | locked;
 };
 
-pub const TOR_LOCKED_RWX: u8 = PMPAccess.tor_locked_rwx;
 pub const PMP_ADDR_SHIFT: u6 = 2;
 pub const ENTRIES_PER_PMPCFG: usize = 8;
 pub const PMPCFG_ENTRY_BITS: usize = 8;
@@ -122,6 +120,8 @@ pub const PMPConfig = struct {
             writePmpAddr(entry, ~@as(usize, 0));
             writePmpCfg(entry, PMPAccess.napot);
         }
+
+        riscv.sfenceVma();
     }
 
     pub fn clearAllPmp() void {
@@ -252,76 +252,6 @@ pub const PMPConfig = struct {
         }
     }
 };
-
-extern const __hypervisor_start: u8;
-extern const __data_start: u8;
-extern const __hypervisor_end: u8;
-
-const CPU_STACK_SIZE: usize = 512 * 1024;
-
-pub fn isHypervisorAddress(addr: usize, size: usize) bool {
-    if (comptime is_test) return false;
-    const hv_start = @intFromPtr(&__hypervisor_start);
-    const hv_end = @intFromPtr(&__hypervisor_end);
-    const hv_top = std.math.add(
-        usize,
-        hv_end,
-        riscv.STATIC_PHYS_CORES << riscv.CPU_SLAB_SHIFT,
-    ) catch std.math.maxInt(usize);
-    const end = std.math.add(usize, addr, size) catch return true;
-    return addr < hv_top and end > hv_start;
-}
-
-pub fn applyEmulatorPmp(
-    cpu_core_id: usize,
-    base_hpa: usize,
-    range_size: usize,
-) void {
-    if (comptime is_test) return;
-
-    PMPConfig.clearAllPmp();
-
-    const hv_start = @intFromPtr(&__hypervisor_start);
-    const data_start = @intFromPtr(&__data_start);
-    const hv_end = @intFromPtr(&__hypervisor_end);
-    const rx_cfg = PMPAccess.tor | PMPAccess.read | PMPAccess.execute;
-    const rw_cfg = PMPAccess.tor | PMPAccess.read | PMPAccess.write;
-
-    // Entry 0 and 1: Hypervisor text + rodata (RX).
-    PMPConfig.writePmpAddr(0, hv_start >> PMP_ADDR_SHIFT);
-    PMPConfig.writePmpAddr(1, data_start >> PMP_ADDR_SHIFT);
-    PMPConfig.writePmpCfg(1, rx_cfg);
-
-    // Entry 2 and 3: Hypervisor data + bss + embedded rootvm (RW).
-    PMPConfig.writePmpAddr(2, data_start >> PMP_ADDR_SHIFT);
-    PMPConfig.writePmpAddr(3, hv_end >> PMP_ADDR_SHIFT);
-    PMPConfig.writePmpCfg(3, rw_cfg);
-
-    // Entry 4 and 5: Current CPU core slab (RW).
-    const slab_base = if (cpu_core_id < riscv.STATIC_PHYS_CORES)
-        hv_end + (cpu_core_id << riscv.CPU_SLAB_SHIFT)
-    else
-        @intFromPtr(riscv.getCPUContext()) - CPU_STACK_SIZE;
-    PMPConfig.writePmpAddr(4, slab_base >> PMP_ADDR_SHIFT);
-    PMPConfig.writePmpAddr(
-        5,
-        (slab_base + riscv.CPU_SLAB_SIZE) >> PMP_ADDR_SHIFT,
-    );
-    PMPConfig.writePmpCfg(5, rw_cfg);
-
-    // Entry 6 and 7: Guest RAM (RW).
-    if (range_size > 0) {
-        if (std.math.add(usize, base_hpa, range_size)) |top_hpa| {
-            PMPConfig.writePmpAddr(6, base_hpa >> PMP_ADDR_SHIFT);
-            PMPConfig.writePmpAddr(7, top_hpa >> PMP_ADDR_SHIFT);
-            PMPConfig.writePmpCfg(7, rw_cfg);
-        } else |_| {}
-    }
-
-    // Entry 8: Deny-all for the rest of the address space (NAPOT, no perms).
-    PMPConfig.writePmpAddr(8, ~@as(usize, 0));
-    PMPConfig.writePmpCfg(8, PMPAccess.napot);
-}
 
 test "PMP configuration regions and capacity limits" {
     std.testing.refAllDecls(@This());

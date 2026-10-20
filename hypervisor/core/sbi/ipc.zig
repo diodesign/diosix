@@ -51,7 +51,8 @@ pub fn handleGetManifest(
 
         var copy_len: usize = 0;
         if (target.readManifest(kbuf)) |read_len| {
-            copy_len = @min(alloc_len, read_len);
+            const cl: usize = @min(alloc_len, read_len);
+            copy_len = cl;
             g.space.copyToGuest(data_ptr, kbuf[0..copy_len]) catch {
                 sbi_core.setResult(
                     vc,
@@ -135,6 +136,21 @@ pub fn handleSetManifest(
     sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
 }
 
+fn overlapsOwnRam(
+    g: *const guest.Guest,
+    gpa_start: usize,
+    gpa_end: usize,
+) bool {
+    if (g.space.range_size == 0) return false;
+    const own_start = g.space.base_gpa;
+    const raw_end = own_start +| g.space.range_size;
+    const own_end: usize = if (g.space.base_hpa != 0)
+        raw_end
+    else
+        @min(raw_end, sbi_core.DIOSIX_CHILD_MEM_BASE);
+    return gpa_start < own_end and gpa_end > own_start;
+}
+
 pub fn handleMapChildMem(
     vc: *vcore.VirtualCore,
     context: *riscv.ThreadContext,
@@ -156,7 +172,11 @@ pub fn handleMapChildMem(
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
-    if (child.is_confidential and charter.isCharterSealed()) {
+    const child_started = child.hasAnyVcoreStarted();
+    if ((child.is_steward and charter.isCharterSealed()) or
+        (child.is_confidential and
+            (charter.isCharterSealed() or child_started)))
+    {
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
@@ -179,7 +199,9 @@ pub fn handleMapChildMem(
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;
     };
-    if (c_end > sv39x4.MAX_GPA or p_end > sv39x4.MAX_GPA) {
+    if (c_end > sv39x4.MAX_GPA or p_end > sv39x4.MAX_GPA or
+        overlapsOwnRam(g, p_gpa, p_end))
+    {
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;
     }
@@ -264,7 +286,7 @@ pub fn handleUnmapChildMem(
     };
     const ap_end = sbi_core.DIOSIX_CHILD_MEM_BASE +
         sbi_core.DIOSIX_CHILD_MEM_MAX_SIZE;
-    if (p_end > sv39x4.MAX_GPA or
+    if (p_end > sv39x4.MAX_GPA or overlapsOwnRam(g, p_gpa, p_end) or
         (!g.is_root and
             (p_gpa < sbi_core.DIOSIX_CHILD_MEM_BASE or p_end > ap_end)))
     {

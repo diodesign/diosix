@@ -29,6 +29,11 @@ pub const Region = struct {
         return std.math.add(usize, self.base, self.size) catch
             std.math.maxInt(usize);
     }
+
+    pub fn overlaps(self: Region, other: Region) bool {
+        if (self.size == 0 or other.size == 0) return false;
+        return self.base < other.end() and other.base < self.end();
+    }
 };
 
 pub const PageFlags = struct {
@@ -135,8 +140,10 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     var min_ram: usize = std.math.maxInt(usize);
     var max_ram: usize = 0;
     for (active) |reg| {
-        min_ram = @min(min_ram, reg.base);
-        max_ram = @max(max_ram, reg.end());
+        const min_r: usize = @min(min_ram, reg.base);
+        const max_r: usize = @max(max_ram, reg.end());
+        min_ram = min_r;
+        max_ram = max_r;
     }
     if (max_ram == 0 and !builtin.is_test) return PhysMemError.NoRAMFound;
     phys_mem_state.ram_base = min_ram;
@@ -146,17 +153,25 @@ pub fn init(device_tree: *dt.DeviceTree, rootvm_region: ?Region) !void {
     debug.printf("Allocating {} KB for page metadata\n", .{meta_sz / 1024});
 
     var meta_phys: usize = 0;
+    const meta_aligned_sz = std.mem.alignForward(usize, meta_sz, PageSize);
     for (active) |reg| {
-        if (reg.base < hv_reg.base and hv_reg.base - reg.base >= meta_sz) {
-            meta_phys = reg.base;
-            break;
-        } else if (reg.end() > hv_reg.end()) {
-            const free_start = @max(reg.base, hv_reg.end());
-            if (reg.end() - free_start >= meta_sz) {
-                meta_phys = free_start;
-                break;
+        var cand = std.mem.alignForward(usize, reg.base, PageSize);
+        while (cand +| meta_aligned_sz <= reg.end()) {
+            const cand_reg = Region{ .base = cand, .size = meta_aligned_sz };
+            if (cand_reg.overlaps(hv_reg)) {
+                cand = std.mem.alignForward(usize, hv_reg.end(), PageSize);
+                continue;
             }
+            if (rootvm_region) |rvm| {
+                if (cand_reg.overlaps(rvm)) {
+                    cand = std.mem.alignForward(usize, rvm.end(), PageSize);
+                    continue;
+                }
+            }
+            meta_phys = cand;
+            break;
         }
+        if (meta_phys != 0) break;
     }
     if (meta_phys == 0 and !builtin.is_test) return PhysMemError.OutOfMemory;
     if (!builtin.is_test) {

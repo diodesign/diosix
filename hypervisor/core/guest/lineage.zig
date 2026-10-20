@@ -214,7 +214,8 @@ pub fn createChild(
     };
 
     for (0..num_vcpus) |vc_id| {
-        _ = try child.addVcore(@intCast(vc_id), 0, 0, .normal, null);
+        const vc = try child.addVcore(@intCast(vc_id), 0, 0, .normal, null);
+        vc.state = .stopped;
     }
     child.quotas.used_vcpus = num_vcpus;
 
@@ -226,8 +227,14 @@ pub fn createChild(
 }
 
 pub fn terminateWithCode(self: *guest_mod.Guest, exit_code: usize) void {
-    if (self.state == .dying) return;
-    self.state = .dying;
+    if (@cmpxchgStrong(
+        guest_mod.GuestLifecycleState,
+        &self.state,
+        .active,
+        .dying,
+        .acq_rel,
+        .acquire,
+    ) != null) return;
     self.exit_code = exit_code;
 
     while (blk: {

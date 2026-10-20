@@ -47,7 +47,8 @@ pub var dynamic_heap_ready: std.atomic.Value(bool) =
 pub var host_stopping: std.atomic.Value(bool) =
     std.atomic.Value(bool).init(false);
 pub var global_allocator: ?std.mem.Allocator = null;
-var table_lock: atomic.SpinLock = atomic.SpinLock.init();
+pub var table_lock: atomic.SpinLock = atomic.SpinLock.init();
+pub const dispatch = @import("pcore/dispatch.zig");
 
 pub fn getRunLock(ctx: *riscv.CpuContext) *atomic.SpinLock {
     if (ctx.cpu_core_id < TABLE_ROWS) {
@@ -81,8 +82,6 @@ pub fn registerStaticCore(
     ctx.is_parked = false;
     static_run_locks[id] = atomic.SpinLock.init();
     core_table[id].static_ptr = ctx;
-    if (id < riscv.cpu_to_hart_map.len) riscv.cpu_to_hart_map[id] = hart_id;
-    if (id < riscv.cpu_contexts.len) riscv.cpu_contexts[id] = ctx;
 }
 
 pub fn registerDynamicCore(id: usize, hart_id: usize) !*riscv.CpuContext {
@@ -225,137 +224,23 @@ pub extern fn hw_run_vcore(
     guest_state: *const riscv.GuestState,
 ) noreturn;
 
-pub fn sendIpiToCpu(cpu_id: usize) void {
-    if (builtin.is_test) return;
-    if (fromId(cpu_id)) |ctx| {
-        const hw_hart = ctx.hardware_hart_id;
-        if (hw_hart != this().hardware_hart_id) {
-            if (riscv.CLINT.msip(hw_hart)) |ptr| {
-                ptr.* = 1;
-                return;
-            }
-        } else return;
-    }
-    broadcastIpi();
-}
-
-pub fn broadcastIpi() void {
-    if (builtin.is_test) return;
-    const my_hart = this().hardware_hart_id;
-
-    for (&core_table) |*row| {
-        if (row.static_ptr) |ctx| {
-            if (ctx.hardware_hart_id != my_hart) {
-                if (riscv.CLINT.msip(ctx.hardware_hart_id)) |ptr| ptr.* = 1;
-            }
-        }
-    }
-
-    const flags = table_lock.lock();
-    defer table_lock.unlock(flags);
-
-    for (&core_table) |*row| {
-        var cur = row.dynamic_head;
-        while (cur) |node| : (cur = node.next) {
-            if (node.hart_id != my_hart) {
-                if (riscv.CLINT.msip(node.hart_id)) |ptr| ptr.* = 1;
-            }
-        }
-    }
-}
-
-pub fn parkOtherCores() void {
-    host_stopping.store(true, .release);
-    broadcastIpi();
-    if (countOnline() <= 1) return;
-
-    const my_ctx = this();
-    const max_spins: usize = if (builtin.is_test) 1_000 else 100_000_000;
-    var spins: usize = 0;
-    while (spins < max_spins) : (spins += 1) {
-        var all_parked = true;
-
-        for (&core_table) |*row| {
-            if (row.static_ptr) |ctx| {
-                if (ctx != my_ctx and
-                    !@atomicLoad(bool, &ctx.is_parked, .acquire))
-                {
-                    all_parked = false;
-                    break;
-                }
-            }
-        }
-
-        if (all_parked) {
-            const flags = table_lock.lock();
-            for (&core_table) |*row| {
-                var cur = row.dynamic_head;
-                while (cur) |node| : (cur = node.next) {
-                    if (&node.context != my_ctx and
-                        !@atomicLoad(bool, &node.context.is_parked, .acquire))
-                    {
-                        all_parked = false;
-                        break;
-                    }
-                }
-                if (!all_parked) break;
-            }
-            table_lock.unlock(flags);
-        }
-
-        if (all_parked) return;
-        if (spins % 10_000 == 0) broadcastIpi();
-        riscv.pause();
-    }
-}
-
-pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
-    const cpu = this();
-    if (cpu.active_vcore) |active| {
-        if (@intFromPtr(active) == @intFromPtr(to_vcore) and
-            to_vcore.running_on_cpu == cpu.cpu_core_id)
-        {
-            return;
-        }
-    }
-    if ((@intFromPtr(to_vcore) & (@alignOf(vcore.VirtualCore) - 1)) != 0) {
-        @import("debug.zig").printf(
-            "!!! contextSwitch given misaligned to_vcore 0x{x}\n",
-            .{@intFromPtr(to_vcore)},
-        );
-    }
-    cpu.active_vcore = to_vcore;
-    to_vcore.running_on_cpu = cpu.cpu_core_id;
-    to_vcore.state = .running;
-    to_vcore.last_dispatched_time =
-        if (builtin.is_test) 0 else riscv.readTime();
-
-    const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
-    pmp.PMPConfig.clearAllPmp();
-    pmp.PMPConfig.writePmpAddr(0, std.math.maxInt(usize));
-    pmp.PMPConfig.writePmpCfg(0, pmp.PMPAccess.napot | pmp.PMPAccess.rwx);
-
-    to_vcore.guest.space.apply(to_vcore.guest.vmid);
-    if (to_vcore.exec_path == .emulated and
-        !to_vcore.exec_path.emulated.emu_running)
-    {
-        to_vcore.context[@backingInt(riscv.Register.tp)] = @intFromPtr(cpu);
-        to_vcore.context[@backingInt(riscv.Register.a0)] =
-            @intFromPtr(to_vcore);
-    }
-}
+pub const current = this;
+pub const sendIpiToCpu = dispatch.sendIpiToCpu;
+pub const broadcastIpi = dispatch.broadcastIpi;
+pub const parkOtherCores = dispatch.parkOtherCores;
+pub const contextSwitch = dispatch.contextSwitch;
 
 pub fn deinitDynamicCores() void {
     const flags = table_lock.lock();
     defer table_lock.unlock(flags);
     if (global_allocator) |allocator| {
         for (&core_table) |*row| {
-            var current = row.dynamic_head;
-            while (current) |node| {
+            var current_node = row.dynamic_head;
+            while (current_node) |node| {
                 const next = node.next;
                 if (node.heap_mem.len > 0) allocator.free(node.heap_mem);
                 allocator.destroy(node);
-                current = next;
+                current_node = next;
             }
             row.dynamic_head = null;
         }
@@ -378,6 +263,7 @@ fn initStaticTestCore(id: usize, hart_id: usize) void {
 }
 
 test "physical CPU: claimNextCpuId and static cores 0..31 via Column 1" {
+    _ = dispatch;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
     resetForTest();
@@ -402,6 +288,7 @@ test "physical CPU: claimNextCpuId and static cores 0..31 via Column 1" {
 }
 
 test "physical CPU: dynamic core 38 allocates into bucket 6 and collisions" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     resetForTest();
     defer resetForTest();
@@ -429,6 +316,7 @@ test "physical CPU: dynamic core 38 allocates into bucket 6 and collisions" {
 }
 
 test "physical CPU: scaling up to 4096 cores dynamically" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     resetForTest();
     defer resetForTest();
@@ -454,6 +342,7 @@ test "physical CPU: scaling up to 4096 cores dynamically" {
 }
 
 test "physical CPU: isHostTp, sendIpiToCpu, duplicates, and parkOtherCores" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
     resetForTest();
     defer resetForTest();

@@ -106,7 +106,7 @@ fn applyClampedQuota(
     args: sbi.QuotaArgs,
 ) void {
     if (args.max_ram_pages > 0) {
-        const max_r = @min(
+        const max_r: usize = @min(
             ceil.quotas.max_ram_pages,
             @as(usize, @intCast(args.max_ram_pages)),
         );
@@ -131,7 +131,10 @@ fn applyClampedQuota(
         }
     }
     if (args.max_vcpus > 0) {
-        const max_v = @min(ceil.quotas.max_vcpus, @as(usize, args.max_vcpus));
+        const max_v: usize = @min(
+            ceil.quotas.max_vcpus,
+            @as(usize, @intCast(args.max_vcpus)),
+        );
         target.quotas.max_vcpus = @min(target.quotas.max_vcpus, max_v);
         if (target != ceil) {
             target.quotas.used_vcpus =
@@ -139,17 +142,17 @@ fn applyClampedQuota(
         }
     }
     if (args.max_child_depth > 0) {
-        const max_d = @min(
+        const max_d: usize = @min(
             ceil.quotas.max_child_depth,
-            @as(usize, args.max_child_depth),
+            @as(usize, @intCast(args.max_child_depth)),
         );
         target.quotas.max_child_depth =
             @min(target.quotas.max_child_depth, max_d);
     }
     if (args.max_descendants > 0) {
-        const max_desc = @min(
+        const max_desc: usize = @min(
             ceil.quotas.max_descendants,
-            @as(usize, args.max_descendants),
+            @as(usize, @intCast(args.max_descendants)),
         );
         target.quotas.max_descendants =
             @min(target.quotas.max_descendants, max_desc);
@@ -171,16 +174,16 @@ pub fn setQuota(self: *guest_mod.Guest, args: sbi.QuotaArgs) !void {
 }
 
 pub fn reduceQuota(self: *guest_mod.Guest, new_quotas: QuotaSet) void {
-    self.quotas.max_ram_pages =
-        @min(self.quotas.max_ram_pages, new_quotas.max_ram_pages);
-    self.quotas.max_vcpus =
-        @min(self.quotas.max_vcpus, new_quotas.max_vcpus);
-    self.quotas.max_priority =
-        @min(self.quotas.max_priority, new_quotas.max_priority);
-    self.quotas.max_child_depth =
-        @min(self.quotas.max_child_depth, new_quotas.max_child_depth);
-    self.quotas.max_descendants =
-        @min(self.quotas.max_descendants, new_quotas.max_descendants);
+    const cur = &self.quotas;
+    const mr: usize = @min(cur.max_ram_pages, new_quotas.max_ram_pages);
+    const mv: usize = @min(cur.max_vcpus, new_quotas.max_vcpus);
+    const md: usize = @min(cur.max_child_depth, new_quotas.max_child_depth);
+    const mdesc: usize = @min(cur.max_descendants, new_quotas.max_descendants);
+    cur.max_ram_pages = mr;
+    cur.max_vcpus = mv;
+    cur.max_priority = @min(cur.max_priority, new_quotas.max_priority);
+    cur.max_child_depth = md;
+    cur.max_descendants = mdesc;
 }
 
 pub fn checkQuota(
@@ -189,43 +192,26 @@ pub fn checkQuota(
     vcpus: usize,
     depth: usize,
 ) bool {
-    const new_ram = std.math.add(
-        usize,
-        self.quotas.used_ram_pages,
-        ram_pages,
-    ) catch return false;
-    if (new_ram > self.quotas.max_ram_pages) return false;
-    const new_vcpus = std.math.add(
-        usize,
-        self.quotas.used_vcpus,
-        vcpus,
-    ) catch return false;
-    if (new_vcpus > self.quotas.max_vcpus) return false;
-    if (depth > self.quotas.max_child_depth) return false;
-    const new_desc = std.math.add(
-        usize,
-        self.quotas.used_descendants,
-        1,
-    ) catch return false;
-    if (new_desc > self.quotas.max_descendants) return false;
-
-    if (self.parent) |p| {
-        return p.checkQuota(ram_pages, vcpus, depth);
-    }
-    return true;
+    const q = &self.quotas;
+    const new_ram = std.math.add(usize, q.used_ram_pages, ram_pages) catch
+        return false;
+    if (new_ram > q.max_ram_pages) return false;
+    const new_vcpus = std.math.add(usize, q.used_vcpus, vcpus) catch
+        return false;
+    if (new_vcpus > q.max_vcpus) return false;
+    if (depth > q.max_child_depth) return false;
+    const new_desc = std.math.add(usize, q.used_descendants, 1) catch
+        return false;
+    if (new_desc > q.max_descendants) return false;
+    return if (self.parent) |p| p.checkQuota(ram_pages, vcpus, depth) else true;
 }
 
 pub fn checkRamQuota(self: *const guest_mod.Guest, ram_pages: usize) bool {
-    const new_ram = std.math.add(
-        usize,
-        self.quotas.used_ram_pages,
-        ram_pages,
-    ) catch return false;
-    if (new_ram > self.quotas.max_ram_pages) return false;
-    if (self.parent) |p| {
-        return p.checkRamQuota(ram_pages);
-    }
-    return true;
+    const q = &self.quotas;
+    const new_ram = std.math.add(usize, q.used_ram_pages, ram_pages) catch
+        return false;
+    if (new_ram > q.max_ram_pages) return false;
+    return if (self.parent) |p| p.checkRamQuota(ram_pages) else true;
 }
 
 pub fn consumeQuota(
@@ -243,9 +229,7 @@ pub fn consumeQuota(
         self.quotas.used_vcpus,
         vcpus,
     ) catch self.quotas.max_vcpus;
-    if (self.parent) |p| {
-        p.consumeQuota(ram_pages, vcpus);
-    }
+    if (self.parent) |p| p.consumeQuota(ram_pages, vcpus);
 }
 
 pub fn releaseQuota(
@@ -255,9 +239,7 @@ pub fn releaseQuota(
 ) void {
     self.quotas.used_ram_pages -|= ram_pages;
     self.quotas.used_vcpus -|= vcpus;
-    if (self.parent) |p| {
-        p.releaseQuota(ram_pages, vcpus);
-    }
+    if (self.parent) |p| p.releaseQuota(ram_pages, vcpus);
 }
 
 pub fn setManifest(self: *guest_mod.Guest, data: []const u8) !void {
@@ -266,7 +248,6 @@ pub fn setManifest(self: *guest_mod.Guest, data: []const u8) !void {
     }
     const new_buf = try self.allocator.alloc(u8, data.len);
     @memcpy(new_buf, data);
-
     const old_buf = blk: {
         const s = self.manifest_lock.lock();
         defer self.manifest_lock.unlock(s);
@@ -294,6 +275,17 @@ pub fn getManifestLength(self: *guest_mod.Guest) usize {
     return if (self.manifest) |m| m.len else 0;
 }
 
+pub fn hasAnyVcoreStarted(self: *const guest_mod.Guest) bool {
+    if (self.initial_entry_point != 0) return true;
+    var it = self.vcores.start;
+    while (it) |node| : (it = node.next) {
+        const vc = node.contents;
+        if (vc.state != .stopped or vc.last_queued_time != 0 or
+            vc.last_dispatched_time != 0) return true;
+    }
+    return false;
+}
+
 pub fn stop(self: *guest_mod.Guest) void {
     const builtin = @import("builtin");
     const riscv = @import("../../hardware/native/cpu/riscv64/mod.zig");
@@ -305,11 +297,13 @@ pub fn stop(self: *guest_mod.Guest) void {
     var it = self.vcores.start;
     while (it) |node| : (it = node.next) {
         const vc = node.contents;
+        if (@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
+            _ = vc.tryWake();
+        }
         vc.state = .stopped;
         @atomicStore(bool, &vc.wfi_blocked, false, .release);
-
+        scheduler.dequeue(vc);
         if (!builtin.is_test) {
-            scheduler.dequeue(vc);
             if (vc.running_on_cpu) |home_cpu| {
                 if (home_cpu != my_cpu) pcore.sendIpiToCpu(home_cpu);
             }

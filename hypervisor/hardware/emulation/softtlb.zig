@@ -103,6 +103,7 @@ pub const SoftTlb = struct {
         vaddr_end: u32,
         hpa_start: usize,
         delta: i64,
+        flags: u8 = PTE.VRWX,
     };
 
     pub fn init(gpa_base: usize, hpa_base: usize, ram_size: usize) SoftTlb {
@@ -190,8 +191,11 @@ pub const SoftTlb = struct {
                 return false;
             }
         }
+        const mxr_set =
+            (self.mstatus & @as(u32, @truncate(riscv.MSTATUS.MXR))) != 0;
+        const read_mask: u8 = if (mxr_set) (PTE.R | PTE.X) else PTE.R;
         const req_flag: u8 =
-            if (is_exec) PTE.X else if (is_write) PTE.W else PTE.R;
+            if (is_exec) PTE.X else if (is_write) PTE.W else read_mask;
         return (flags & req_flag) != 0;
     }
 

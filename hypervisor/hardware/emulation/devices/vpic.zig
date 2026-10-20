@@ -7,6 +7,7 @@ const std = @import("std");
 
 pub const STATIC_CONTEXTS: usize = 32;
 pub const DYNAMIC_HASH_BUCKETS: usize = 32;
+pub const DYNAMIC_POOL_CAPACITY: usize = 128;
 pub const MAX_SYSTEM_CONTEXTS: usize = 15872;
 pub const MAX_CONTEXTS: usize = MAX_SYSTEM_CONTEXTS;
 /// Standard QEMU virt PLIC has 96 IRQs (indices 1..96).
@@ -44,7 +45,7 @@ pub const VirtualPlic = struct {
     /// Column 2: Dynamic hash buckets for contexts >= 32 (keyed by ctx % 32).
     dynamic_buckets: [DYNAMIC_HASH_BUCKETS]?*PlicContext = @splat(null),
     /// Embedded pool for dynamic contexts (up to 128 dynamic contexts).
-    dynamic_pool: [128]PlicContext = @splat(.{}),
+    dynamic_pool: [DYNAMIC_POOL_CAPACITY]PlicContext = @splat(.{}),
     pool_count: usize = 0,
     lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 

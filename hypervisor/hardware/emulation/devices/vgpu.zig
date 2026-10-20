@@ -25,6 +25,7 @@ pub const BYTES_PER_PIXEL_RGBA = proto.BYTES_PER_PIXEL_RGBA;
 pub const MAX_SCANOUTS = proto.MAX_SCANOUTS;
 pub const STATIC_RESOURCES = proto.STATIC_RESOURCES;
 pub const DYNAMIC_HASH_BUCKETS = proto.DYNAMIC_HASH_BUCKETS;
+pub const DYNAMIC_POOL_CAPACITY: usize = 128;
 pub const MAX_SYSTEM_RESOURCES = proto.MAX_SYSTEM_RESOURCES;
 pub const MAX_RESOURCES = proto.MAX_RESOURCES;
 
@@ -62,7 +63,7 @@ pub const VirtioGpu = struct {
     /// Column 2: Dynamic hash buckets for resource IDs >= 32 (id % 32).
     dynamic_buckets: [DYNAMIC_HASH_BUCKETS]?*VirtioGpuResource = @splat(null),
     /// Embedded pool for standalone execution (up to 128 dynamic resources).
-    dynamic_pool: [128]VirtioGpuResource = @splat(.{}),
+    dynamic_pool: [DYNAMIC_POOL_CAPACITY]VirtioGpuResource = @splat(.{}),
     pool_count: usize = 0,
     lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -103,6 +104,7 @@ pub const VirtioGpu = struct {
         if (id < STATIC_RESOURCES) {
             const res = &self.static_resources[id];
             if (res.is_active) return null;
+            res.is_active = true;
             return res;
         }
         while (self.lock.swap(true, .acquire)) {
@@ -117,6 +119,7 @@ pub const VirtioGpu = struct {
         while (curr) |res| {
             if (!res.is_active) {
                 res.id = id;
+                res.is_active = true;
                 return res;
             }
             curr = res.next;
@@ -125,6 +128,7 @@ pub const VirtioGpu = struct {
             const res = &self.dynamic_pool[self.pool_count];
             self.pool_count += 1;
             res.id = id;
+            res.is_active = true;
             res.next = self.dynamic_buckets[bucket];
             self.dynamic_buckets[bucket] = res;
             return res;

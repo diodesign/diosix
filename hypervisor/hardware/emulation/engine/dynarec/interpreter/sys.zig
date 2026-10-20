@@ -130,8 +130,6 @@ pub fn execSret(self: anytype, pc_before: u32) void {
     self.vcpu.mstatus = mstatus;
 
     syncPrivChange(self, @truncate(spp));
-    self.vcpu.scause = 0;
-    self.vcpu.stval = 0;
     self.vcpu.pc = self.vcpu.sepc;
 }
 
@@ -213,7 +211,6 @@ pub fn execFpStore(
             return false;
         }
     }
-    self.vcpu.mstatus |= vcpu_mod.MSTATUS_FS_DIRTY_U32;
     return true;
 }
 

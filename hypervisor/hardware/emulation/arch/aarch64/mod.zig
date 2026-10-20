@@ -40,6 +40,7 @@ pub fn writePC(vcpu: *VCpu, pc: u32) void {
 test "aarch64 arch register initialization and PC accessors" {
     const testing = std.testing;
     testing.refAllDecls(@This());
+    _ = @import("psci.zig");
 
     var cpu = VCpu{};
     initRegisters(&cpu, 0x40080000, 0x44000000, 0);

@@ -7,17 +7,23 @@ const std = @import("std");
 const api = @import("api.zig");
 const installer = @import("installer.zig");
 const common = @import("common.zig");
+const sysconfig = @import("sysconfig.zig");
 const gui_cmd = @import("gui.zig");
+const host_info = @import("host/info.zig");
 const linux = std.os.linux;
 
 pub const cmdGui = gui_cmd.cmdGui;
 pub const cmdTour = gui_cmd.cmdTour;
 
+pub const MAX_VERSION_STR_LEN = host_info.MAX_VERSION_STR_LEN;
+pub const formatVersionChannel = host_info.formatVersionChannel;
+pub const extractBuildBranch = host_info.extractBuildBranch;
+pub const allocHostInfo = host_info.allocHostInfo;
+pub const formatHostInfo = host_info.formatHostInfo;
+
 const CID_SELF = common.CID_SELF;
-const KB_PER_MB = common.KB_PER_MB;
 const printStr = common.printStr;
 const printApiError = common.printApiError;
-const sanitizeJsonStr = common.sanitizeJsonStr;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
 const writeFile = common.writeFile;
@@ -55,14 +61,11 @@ const JsonFlag = common.JsonFlag;
 pub fn cmdHost(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
     if (args.len == 0) {
-        var buf: [160]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
+        common.printFmt(
             "Usage: {s} host <info|install|reboot|poweroff|shutdown> " ++
                 "[--json]\n",
             .{exe_name},
-        ) catch return;
-        printStr(msg);
+        );
         return;
     }
     const subcmd = std.mem.span(args[0]);
@@ -80,14 +83,11 @@ pub fn cmdHost(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             .poweroff, .shutdown => try cmdPoweroff(client),
         }
     } else {
-        var buf: [160]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
+        common.printFmt(
             "Unknown host subcommand '{s}'. " ++
                 "Use '{s} host <info|install|reboot|poweroff>'.\n",
             .{ subcmd, exe_name },
-        ) catch return;
-        printStr(msg);
+        );
     }
 }
 
@@ -124,138 +124,8 @@ pub fn cmdReboot(client: *api.DiosixClient) !void {
     };
 }
 
-pub fn formatVersionChannel(
-    buf: []u8,
-    major: u16,
-    minor: u16,
-    patch: u16,
-) []const u8 {
-    if (patch > 0) {
-        return std.fmt.bufPrint(
-            buf,
-            "{d}.{d}.{d}",
-            .{ major, minor, patch },
-        ) catch "0.0";
-    }
-    return std.fmt.bufPrint(buf, "{d}.{d}", .{ major, minor }) catch "0.0";
-}
-
-/// Extracts the git branch from a hypervisor `build_desc` string
-/// (e.g., `"Version 26.1 (beta) main/6f19e11 ..."` -> `"main"`).
-pub fn extractBuildBranch(build_desc: []const u8) []const u8 {
-    var tok_it = std.mem.tokenizeScalar(u8, build_desc, ' ');
-    _ = tok_it.next() orelse return ""; // Skip "Version".
-    _ = tok_it.next() orelse return ""; // Skip version number.
-    var tok = tok_it.next() orelse return "";
-    if (tok.len > 0 and tok[0] == '(') {
-        tok = tok_it.next() orelse return ""; // Skip "(channel)".
-    }
-    if (std.mem.lastIndexOfScalar(u8, tok, '/')) |slash| {
-        if (slash > 0) return tok[0..slash];
-    }
-    return "";
-}
-
-pub fn formatHostInfo(
-    buf: []u8,
-    info: api.HypervisorInfo,
-    json_mode: bool,
-) []const u8 {
-    var ver_buf: [32]u8 = undefined;
-    const ver_str = formatVersionChannel(
-        &ver_buf,
-        info.version_major,
-        info.version_minor,
-        info.version_patch,
-    );
-    const channel_str = if ((info.version_minor % 2) == 0) "stable" else "beta";
-    const raw_commit = std.mem.sliceTo(&info.build_commit, 0);
-    const raw_isa = std.mem.sliceTo(&info.host_cpu_isa, 0);
-    const raw_build = std.mem.sliceTo(&info.build_desc, 0);
-    const raw_branch = extractBuildBranch(raw_build);
-
-    var branch_buf: [64]u8 = undefined;
-    var commit_buf: [api.BUILD_COMMIT_LEN]u8 = undefined;
-    var isa_buf: [api.HOST_CPU_ISA_LEN]u8 = undefined;
-    const branch_str = sanitizeJsonStr(&branch_buf, raw_branch);
-    const commit_str = sanitizeJsonStr(&commit_buf, raw_commit);
-    const isa_str = sanitizeJsonStr(&isa_buf, raw_isa);
-
-    const feat = info.features;
-    const HvFeat = api.HypervisorFeature;
-
-    if (json_mode) {
-        const charter_sealed =
-            if ((feat & HvFeat.CHARTER_SEALED) != 0) "true" else "false";
-        const json_fmt =
-            "{{\"version\":\"{s}\",\"version_major\":{d}," ++
-            "\"version_minor\":{d},\"version_patch\":{d}," ++
-            "\"channel\":\"{s}\",\"branch\":\"{s}\",\"commit\":\"{s}\"," ++
-            "\"abi\":\"{d}.{d}.{d}\",\"cores\":{d},\"isa\":\"{s}\"," ++
-            "\"total_ram_kb\":{d},\"free_ram_kb\":{d}," ++
-            "\"hv_reserved_bytes\":{d},\"hv_heap_free_bytes\":{d}," ++
-            "\"features\":{d},\"charter_sealed\":{s}}}\n";
-        return std.fmt.bufPrint(buf, json_fmt, .{
-            ver_str,
-            info.version_major,
-            info.version_minor,
-            info.version_patch,
-            channel_str,
-            if (branch_str.len > 0) branch_str else "unknown",
-            if (commit_str.len > 0) commit_str else "release",
-            info.abi_version_major,
-            info.abi_version_minor,
-            info.abi_version_patch,
-            info.host_physical_cores,
-            isa_str,
-            info.host_total_ram_kb,
-            info.host_free_ram_kb,
-            info.hv_reserved_bytes,
-            info.hv_heap_free_bytes,
-            info.features,
-            charter_sealed,
-        }) catch "";
-    }
-
-    const hw_mark: u8 = if ((feat & HvFeat.HARDWARE_VIRT) != 0) 'x' else ' ';
-    const s2_mark: u8 = if ((feat & HvFeat.STAGE2_PAGING) != 0) 'x' else ' ';
-    const dy_mark: u8 = if ((feat & HvFeat.DYNAREC) != 0) 'x' else ' ';
-    const vs_mark: u8 = if ((feat & HvFeat.VIRTIO_VSOCK) != 0) 'x' else ' ';
-    const cs_mark: u8 = if ((feat & HvFeat.CHARTER_SEALED) != 0) 'x' else ' ';
-
-    return std.fmt.bufPrint(buf,
-        \\Hypervisor build : {s}
-        \\Footprint        : {d} KB reserved, {d} KB free
-        \\ABI version      : {d}.{d}.{d}
-        \\Host cores       : {d} physical hart(s) {s}
-        \\Host RAM         : {d} MB total / {d} MB free
-        \\Timer frequency  : {d} Hz
-        \\Capabilities     :
-        \\  [{c}] Hardware H-extension (nested virtualization)
-        \\  [{c}] Stage-2 Sv39x4 paging
-        \\  [{c}] Cross-arch JIT dynamic recompilation
-        \\  [{c}] VirtIO-vsock (AF_VSOCK in-hypervisor networking)
-        \\  [{c}] Constitutional Charter sealed in M-mode
-        \\
-    , .{
-        if (raw_build.len > 0) raw_build else "n/a",
-        info.hv_reserved_bytes / 1024,
-        info.hv_heap_free_bytes / 1024,
-        info.abi_version_major,
-        info.abi_version_minor,
-        info.abi_version_patch,
-        info.host_physical_cores,
-        if (isa_str.len > 0) isa_str else "",
-        info.host_total_ram_kb / KB_PER_MB,
-        info.host_free_ram_kb / KB_PER_MB,
-        info.host_timer_freq_hz,
-        hw_mark,
-        s2_mark,
-        dy_mark,
-        vs_mark,
-        cs_mark,
-    }) catch "";
-}
+/// Largest installer configuration file read by `host install`.
+const MAX_INSTALL_CONFIG_BYTES: usize = 64 * 1024;
 
 pub fn cmdHostInfo(client: *api.DiosixClient, json_mode: bool) !void {
     const info = client.getHypervisorInfo() catch |err| {
@@ -263,15 +133,15 @@ pub fn cmdHostInfo(client: *api.DiosixClient, json_mode: bool) !void {
         return;
     };
 
-    var buf: [1024]u8 = undefined;
-    const out = formatHostInfo(&buf, info, json_mode);
-    if (out.len > 0) {
-        printStr(out);
-    }
+    const allocator = std.heap.page_allocator;
+    const out = try allocHostInfo(allocator, info, json_mode);
+    defer allocator.free(out);
+    printStr(out);
 }
 
 pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
+    const allocator = std.heap.page_allocator;
     var mode_opt: installer.InstallMode = .basic;
     var disk_opt: ?[]const u8 = null;
     var config_opt: ?[]const u8 = null;
@@ -343,14 +213,12 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
                 .@"--dry-run" => dry_run = true,
                 .@"--json", .@"-j" => json_mode = true,
                 .@"--help", .@"-h" => {
-                    var hbuf: [512]u8 = undefined;
-                    const hmsg = std.fmt.bufPrint(&hbuf,
+                    common.printFmt(
                         \\Usage: {s} host install [--mode basic|expert]
                         \\  [--disk <dev>] [--config <diosix-install.toml>]
                         \\  [--stewards] [--standby-root] [--dry-run] [--json]
                         \\
-                    , .{exe_name}) catch return;
-                    printStr(hmsg);
+                    , .{exe_name});
                     return;
                 },
             }
@@ -370,7 +238,7 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
     };
 
     if (config_opt) |cfg_path| {
-        if (readBinaryFile(cfg_path, 65536)) |cbytes| {
+        if (readBinaryFile(cfg_path, MAX_INSTALL_CONFIG_BYTES)) |cbytes| {
             cfg_mapped = cbytes;
             plan = installer.parseInstallConfigToml(cbytes);
             plan.dry_run = dry_run;
@@ -379,7 +247,10 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
             printStr("Error: Could not read installer configuration file.\n");
             return;
         }
-    } else if (readBinaryFile(sys_cfg.installConfigPath(), 65536)) |def_bytes| {
+    } else if (readBinaryFile(
+        sys_cfg.installConfigPath(),
+        MAX_INSTALL_CONFIG_BYTES,
+    )) |def_bytes| {
         cfg_mapped = def_bytes;
         plan = installer.parseInstallConfigToml(def_bytes);
         plan.mode = mode_opt;
@@ -399,16 +270,16 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
         }
         plan.target_disk = d;
     } else if (!loaded_config_file or
-        std.mem.eql(u8, plan.target_disk, "/dev/vda"))
+        std.mem.eql(u8, plan.target_disk, sysconfig.DEFAULT_TARGET_DISK))
     {
-        if (fileExistsPath("/dev/nvme0n1")) {
-            plan.target_disk = "/dev/nvme0n1";
-        } else if (fileExistsPath("/dev/vda")) {
-            plan.target_disk = "/dev/vda";
-        } else if (fileExistsPath("/dev/sda")) {
-            plan.target_disk = "/dev/sda";
-        } else if (fileExistsPath("/dev/mmcblk0")) {
-            plan.target_disk = "/dev/mmcblk0";
+        for (sysconfig.CANDIDATE_HOST_DISKS) |cand| {
+            var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            if (common.toPathZ(cand, &z_buf)) |cz| {
+                if (fileExistsPath(cz.ptr)) {
+                    plan.target_disk = cand;
+                    break;
+                }
+            }
         }
     }
 
@@ -424,29 +295,25 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
     }
 
     if (!plan.dry_run) {
-        _ = linux.mkdir("/var/lib/diosix", 0o755);
-        var rec_buf: [512]u8 = undefined;
-        const rec_toml = installer.formatInstallReceiptToml(&rec_buf, plan);
+        _ = linux.mkdir(sysconfig.VAR_LIB_DIOSIX_DIR, 0o755);
+        const rec_toml = try installer.allocInstallReceiptToml(allocator, plan);
+        defer allocator.free(rec_toml);
         if (rec_toml.len > 0) {
             try writeFile(installer.INSTALL_RECEIPT_PATH, rec_toml);
         }
     }
 
-    var out_buf: [1024]u8 = undefined;
-    const out = installer.formatInstallPlanOutput(&out_buf, plan, json_mode);
+    const out = try installer.allocInstallPlanOutput(
+        allocator,
+        plan,
+        json_mode,
+    );
+    defer allocator.free(out);
     if (out.len > 0) printStr(out);
 }
 
-test "host: formatVersionChannel formats CalVer strings" {
+test "host: submodules are wired in" {
     std.testing.refAllDecls(@This());
     _ = gui_cmd;
-    var buf: [32]u8 = undefined;
-    try std.testing.expectEqualStrings(
-        "26.1",
-        formatVersionChannel(&buf, 26, 1, 0),
-    );
-    try std.testing.expectEqualStrings(
-        "26.2.1",
-        formatVersionChannel(&buf, 26, 2, 1),
-    );
+    _ = host_info;
 }

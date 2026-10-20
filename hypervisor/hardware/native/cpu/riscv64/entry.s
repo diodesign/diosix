@@ -1,9 +1,9 @@
 # Prepare QEMU-virt-compatible RV64 system environment for the hypervisor.
 #
-# Copyright (c) 2024, 2026 Chris Williams <chrisw@diosix.org>
+# Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
-.include "hypervisor/hardware/native/cpu/riscv64/consts.s"
+.include "consts.s"
 
 # Physical memory map of a QEMU virt system:
 # [ https://github.com/qemu/qemu/blob/master/hw/riscv/virt.c ]
@@ -181,5 +181,5 @@ dyn_boot_lock:
 .section .bss
 .align 16
 dyn_boot_stack:
-    .space INITIAL_FDT_PAD_BYTES
+    .space DYN_BOOT_STACK_SIZE
 dyn_boot_stack_top:

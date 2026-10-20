@@ -17,6 +17,7 @@ const engine_mod = @import("../engine.zig");
 const riscv = @import("interface").riscv;
 
 test "Dynarec global vs ASID-specific block retention across context switches" {
+    std.testing.refAllDecls(@This());
     const cache_inst = try std.testing.allocator.create(cache_mod.Cache);
     defer std.testing.allocator.destroy(cache_inst);
     var raw_pool: [8192]u8 align(4096) = undefined;
@@ -29,6 +30,7 @@ test "Dynarec global vs ASID-specific block retention across context switches" {
         true,
         256,
     );
+    tb_kernel.priv = vcpu_mod.PRIV_SUPERVISOR;
     cache_inst.commitBlock(tb_kernel, 64);
 
     // 2. Allocate a process-specific user block (satp=0x80001111).
@@ -38,28 +40,51 @@ test "Dynarec global vs ASID-specific block retention across context switches" {
         false,
         256,
     );
+    tb_user_proc1.priv = vcpu_mod.PRIV_USER;
     cache_inst.commitBlock(tb_user_proc1, 64);
 
-    // 3. Lookup with satp=0x80001111 -> both should hit.
-    const hit_kernel_1 = cache_inst.lookup(0xc004_f61e, 0x8000_1111);
+    // 3. Lookup with satp=0x80001111 -> both should hit in their priv modes.
+    const hit_kernel_1 = cache_inst.lookup(
+        0xc004_f61e,
+        0x8000_1111,
+        vcpu_mod.PRIV_SUPERVISOR,
+    );
     try std.testing.expect(hit_kernel_1 != null);
     try std.testing.expectEqual(@as(u32, 0xc004_f61e), hit_kernel_1.?.guest_pc);
 
-    const hit_user_1 = cache_inst.lookup(0x0001_0000, 0x8000_1111);
+    // Kernel block must NOT match in U-mode even though is_global is true.
+    try std.testing.expect(
+        cache_inst.lookup(0xc004_f61e, 0x8000_1111, vcpu_mod.PRIV_USER) == null,
+    );
+
+    const hit_user_1 = cache_inst.lookup(
+        0x0001_0000,
+        0x8000_1111,
+        vcpu_mod.PRIV_USER,
+    );
     try std.testing.expect(hit_user_1 != null);
     try std.testing.expectEqual(@as(u32, 0x0001_0000), hit_user_1.?.guest_pc);
 
     // 4. Context switch: satp changes to 0x80002222 (Process 2).
     // Global kernel block MUST still hit; Process 1 user block MUST miss.
-    const hit_kernel_2 = cache_inst.lookup(0xc004_f61e, 0x8000_2222);
+    const hit_kernel_2 = cache_inst.lookup(
+        0xc004_f61e,
+        0x8000_2222,
+        vcpu_mod.PRIV_SUPERVISOR,
+    );
     try std.testing.expect(hit_kernel_2 != null);
     try std.testing.expectEqual(@as(u32, 0xc004_f61e), hit_kernel_2.?.guest_pc);
 
-    const hit_user_2 = cache_inst.lookup(0x0001_0000, 0x8000_2222);
+    const hit_user_2 = cache_inst.lookup(
+        0x0001_0000,
+        0x8000_2222,
+        vcpu_mod.PRIV_USER,
+    );
     try std.testing.expect(hit_user_2 == null);
 }
 
 test "Dynarec Zihintpause instruction decoding and verification" {
+    std.testing.refAllDecls(@This());
     // 0x0100000f is standard RISC-V PAUSE (fence w, 0).
     const pause_dec = decoder_rv32.decode(0x0100_000f);
     try std.testing.expectEqual(decoder_rv32.Instruction.pause, pause_dec.insn);
@@ -70,6 +95,7 @@ test "Dynarec Zihintpause instruction decoding and verification" {
 }
 
 test "Dynamic direct RAM mapping region resolution" {
+    std.testing.refAllDecls(@This());
     var tlb: softtlb_mod.SoftTlb = undefined;
     const gpa_base: usize = 0x8000_0000;
     const hpa_base: usize = 0xe000_0000;
@@ -117,6 +143,7 @@ test "Dynamic direct RAM mapping region resolution" {
 }
 
 test "Dynarec privilege checks and architectural exception synchronization" {
+    std.testing.refAllDecls(@This());
     var vcpu = vcpu_mod.VCpu{ .id = 0, .pc = 0x8000_0000 };
     var tlb: softtlb_mod.SoftTlb = undefined;
     tlb.initOnPtr(0x8000_0000, 0x8000_0000, 16 * 1024 * 1024);
@@ -220,6 +247,7 @@ test "Dynarec privilege checks and architectural exception synchronization" {
 }
 
 test "RV32 floating-point (F/D) decoding, decompression and emission" {
+    std.testing.refAllDecls(@This());
     const fsd_raw: u32 = 0x02853c27;
     const fsd_dec = decoder_rv32.decode(fsd_raw);
     try std.testing.expectEqual(

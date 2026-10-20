@@ -2,6 +2,9 @@
 #
 # Defines the top-level domain hierarchy, hardware partitions,
 # and service capabilities passed down the VM tree.
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
 
 [system]
 version = "1.0"

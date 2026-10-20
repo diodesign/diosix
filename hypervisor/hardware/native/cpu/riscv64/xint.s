@@ -1,12 +1,12 @@
 # Handle exceptions and interrupts (xint) on QEMU-compatible systems.
 #
-# Copyright (c) 2024, 2026 Chris Williams <chrisw@diosix.org>
+# Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
 .altmacro
 
 # Hypervisor constants, such as stack and lock locations.
-.include "hypervisor/hardware/native/cpu/riscv64/consts.s"
+.include "consts.s"
 
 .section .text
 .align 8

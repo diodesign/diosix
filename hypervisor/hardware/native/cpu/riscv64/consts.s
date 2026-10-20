@@ -1,6 +1,6 @@
 # Hypervisor memory locations and layout for QEMU-compatible RV64 targets.
 #
-# Copyright (c) 2024, 2026 Chris Williams <chrisw@diosix.org>
+# Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
 .equ PAGE_SIZE, (4096)
@@ -42,8 +42,31 @@
 .equ CSR_STIMECMP,           0x14d
 .equ CSR_SENVCFG,            0x10a
 
-# GuestState struct offsets.
+# MachineState struct offsets (keep in sync with cpu/riscv64/mod.zig).
+.equ MS_MEPC_OFFSET,         0
+.equ MS_MSTATUS_OFFSET,      8
+.equ MS_HSTATUS_OFFSET,      16
+.equ MS_HGATP_OFFSET,        24
+.equ MS_HVIP_OFFSET,         32
+.equ MS_HEDELEG_OFFSET,      40
+.equ MS_HIDELEG_OFFSET,      48
+
+# GuestState struct offsets (keep in sync with cpu/riscv64/mod.zig).
+.equ GS_VSSTATUS_OFFSET,     0
+.equ GS_VSIE_OFFSET,         8
+.equ GS_VSTVEC_OFFSET,       16
+.equ GS_VSSCRATCH_OFFSET,    24
+.equ GS_VSEPC_OFFSET,        32
+.equ GS_VSCAUSE_OFFSET,      40
+.equ GS_VSTVAL_OFFSET,       48
+.equ GS_VSATP_OFFSET,        56
+.equ GS_VSTIMECMP_OFFSET,    64
 .equ GS_VSENVCFG_OFFSET,     72
+
+# Emulated vCPU and dynarec frame layout constants.
+.equ VCPU_PC_OFFSET,         256
+.equ VCPU_HOST_SP_OFFSET,    280
+.equ DYNAREC_FRAME_SIZE,     128
 
 # mstatus bits.
 .equ MSTATUS_VS_DIRTY,       (3 << 9)   # Vector extension dirty state
@@ -80,4 +103,5 @@
 .equ DTB_MAGIC_BYTE3,             0xed
 .equ MAX_DTB_SIZE,                (2 * 1024 * 1024)
 .equ STACK_ALIGN_MASK,            -8
-.equ INITIAL_FDT_PAD_BYTES,       16384
+.equ DYN_BOOT_STACK_SIZE,         16384
+

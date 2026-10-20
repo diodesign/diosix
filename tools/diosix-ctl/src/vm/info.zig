@@ -29,6 +29,120 @@ const InfoOption = enum {
 
 const TargetAlias = common.TargetAlias;
 
+const OOM_MSG = "Error: Out of memory formatting output.\n";
+const BUF_TOO_SMALL_MSG = "Error: Output buffer too small.\n";
+
+const GUEST_JSON_FMT =
+    "{{\"name\":\"{s}\",\"cid\":{d},\"status\":\"{s}\"," ++
+    "\"hardware_trust\":\"{s}\",\"ram\":\"{s}\",\"vcpus\":{d}," ++
+    "\"disk\":\"{s}\",\"cdrom\":\"{s}\",\"ip\":\"{s}\"}}\n";
+
+const GUEST_TEXT_FMT =
+    \\Name           : {s}
+    \\Context ID     : {d}
+    \\Status         : {s}
+    \\Hardware trust : {s}
+    \\RAM allocation : {s}
+    \\Virtual CPUs   : {d}
+    \\Storage disk   : {s}
+    \\CD-ROM media   : {s}
+    \\IP / Endpoint  : {s}
+    \\
+;
+
+const SELF_JSON_FMT =
+    "{{\"assigned_cid\":{d},\"architecture\":\"{s}\"," ++
+    "\"root_vm\":{s},\"hardware_trust\":{s},\"ram_mb\":{d}," ++
+    "\"ram_pages\":{d},\"vcpus\":{d},\"child_vms\":{d}}}\n";
+
+const SELF_TEXT_FMT =
+    \\Assigned CID   : {d}
+    \\Architecture   : {s}
+    \\Root VM        : {s}
+    \\Hardware trust : {s}
+    \\RAM allocation : {d} MB ({d} pages)
+    \\Virtual CPUs   : {d}
+    \\Child VMs      : {d}
+    \\
+;
+
+/// Sanitizes several strings into one heap block sized up front, so JSON
+/// fields are never truncated. Sanitizing only ever drops characters, so a
+/// block as large as the sum of the raw strings always suffices.
+const JsonScratch = struct {
+    block: []u8,
+    used: usize = 0,
+
+    fn init(allocator: std.mem.Allocator, capacity: usize) !JsonScratch {
+        return .{ .block = try allocator.alloc(u8, capacity) };
+    }
+
+    fn deinit(self: JsonScratch, allocator: std.mem.Allocator) void {
+        allocator.free(self.block);
+    }
+
+    fn clean(self: *JsonScratch, raw: []const u8) []const u8 {
+        std.debug.assert(raw.len <= self.block.len - self.used);
+        const dest = self.block[self.used..][0..raw.len];
+        const out = sanitizeJsonStr(dest, raw);
+        self.used += out.len;
+        return out;
+    }
+};
+
+/// Copies `text` into `buf` when it fits; otherwise writes a visible error
+/// message instead of silently truncating or returning nothing.
+fn fitOrReport(buf: []u8, text: []const u8) []const u8 {
+    if (text.len <= buf.len) {
+        @memcpy(buf[0..text.len], text);
+        return buf[0..text.len];
+    }
+    return common.copyStr(buf, BUF_TOO_SMALL_MSG);
+}
+
+/// Formats guest details into a heap string owned by the caller.
+fn allocGuestDetail(
+    allocator: std.mem.Allocator,
+    cid: usize,
+    name: []const u8,
+    vcpus: usize,
+    ram: []const u8,
+    ip: []const u8,
+    trust: []const u8,
+    status: []const u8,
+    disk: []const u8,
+    cdrom: []const u8,
+    json_mode: bool,
+) ![]u8 {
+    const disk_s = if (disk.len > 0) disk else "none";
+    const cdrom_s = if (cdrom.len > 0) cdrom else "none";
+    const ip_s = if (ip.len > 0) ip else "none";
+    if (json_mode) {
+        var scratch = try JsonScratch.init(
+            allocator,
+            name.len + status.len + trust.len + ram.len +
+                disk_s.len + cdrom_s.len + ip_s.len,
+        );
+        defer scratch.deinit(allocator);
+        return allocator.print(GUEST_JSON_FMT, .{
+            scratch.clean(name),
+            cid,
+            scratch.clean(status),
+            scratch.clean(trust),
+            scratch.clean(ram),
+            vcpus,
+            scratch.clean(disk_s),
+            scratch.clean(cdrom_s),
+            scratch.clean(ip_s),
+        });
+    }
+    return allocator.print(GUEST_TEXT_FMT, .{
+        name, cid, status, trust, ram, vcpus, disk_s, cdrom_s, ip_s,
+    });
+}
+
+/// Fixed-buffer entry point kept for existing callers; when `buf` is too
+/// small (or memory is exhausted) it returns a visible error message.
 pub fn formatGuestDetail(
     buf: []u8,
     cid: usize,
@@ -42,52 +156,22 @@ pub fn formatGuestDetail(
     cdrom: []const u8,
     json_mode: bool,
 ) []const u8 {
-    if (json_mode) {
-        var name_s: [128]u8 = undefined;
-        var ram_s: [64]u8 = undefined;
-        var ip_s: [64]u8 = undefined;
-        var trust_s: [32]u8 = undefined;
-        var status_s: [32]u8 = undefined;
-        var disk_s: [256]u8 = undefined;
-        var cdrom_s: [256]u8 = undefined;
-        const jfmt =
-            "{{\"name\":\"{s}\",\"cid\":{d},\"status\":\"{s}\"," ++
-            "\"hardware_trust\":\"{s}\",\"ram\":\"{s}\",\"vcpus\":{d}," ++
-            "\"disk\":\"{s}\",\"cdrom\":\"{s}\",\"ip\":\"{s}\"}}\n";
-        return std.fmt.bufPrint(buf, jfmt, .{
-            sanitizeJsonStr(&name_s, name),
-            cid,
-            sanitizeJsonStr(&status_s, status),
-            sanitizeJsonStr(&trust_s, trust),
-            sanitizeJsonStr(&ram_s, ram),
-            vcpus,
-            sanitizeJsonStr(&disk_s, if (disk.len > 0) disk else "none"),
-            sanitizeJsonStr(&cdrom_s, if (cdrom.len > 0) cdrom else "none"),
-            sanitizeJsonStr(&ip_s, if (ip.len > 0) ip else "none"),
-        }) catch "";
-    }
-    return std.fmt.bufPrint(buf,
-        \\Name           : {s}
-        \\Context ID     : {d}
-        \\Status         : {s}
-        \\Hardware trust : {s}
-        \\RAM allocation : {s}
-        \\Virtual CPUs   : {d}
-        \\Storage disk   : {s}
-        \\CD-ROM media   : {s}
-        \\IP / Endpoint  : {s}
-        \\
-    , .{
-        name,
+    const allocator = std.heap.page_allocator;
+    const text = allocGuestDetail(
+        allocator,
         cid,
-        status,
-        trust,
-        ram,
+        name,
         vcpus,
-        if (disk.len > 0) disk else "none",
-        if (cdrom.len > 0) cdrom else "none",
-        if (ip.len > 0) ip else "none",
-    }) catch "";
+        ram,
+        ip,
+        trust,
+        status,
+        disk,
+        cdrom,
+        json_mode,
+    ) catch return common.copyStr(buf, OOM_MSG);
+    defer allocator.free(text);
+    return fitOrReport(buf, text);
 }
 
 fn printGuestDetail(
@@ -102,9 +186,9 @@ fn printGuestDetail(
     cdrom: []const u8,
     json_mode: bool,
 ) void {
-    var buf: [1024]u8 = undefined;
-    const out = formatGuestDetail(
-        &buf,
+    const allocator = std.heap.page_allocator;
+    const out = allocGuestDetail(
+        allocator,
         cid,
         name,
         vcpus,
@@ -115,15 +199,20 @@ fn printGuestDetail(
         disk,
         cdrom,
         json_mode,
-    );
-    if (out.len > 0) printStr(out);
+    ) catch {
+        printStr(OOM_MSG);
+        return;
+    };
+    defer allocator.free(out);
+    printStr(out);
 }
 
-pub fn formatSelfInfo(
-    buf: []u8,
+/// Formats this VM's own info into a heap string owned by the caller.
+fn allocSelfInfo(
+    allocator: std.mem.Allocator,
     info: api.GuestInfo,
     json_mode: bool,
-) []const u8 {
+) ![]u8 {
     const target_arch =
         std.enums.fromInt(api.TargetArch, info.target_arch) orelse .riscv64;
     const arch_name = switch (target_arch) {
@@ -149,11 +238,7 @@ pub fn formatSelfInfo(
         (ram_mb * 1024 / 4);
 
     if (json_mode) {
-        const jfmt =
-            "{{\"assigned_cid\":{d},\"architecture\":\"{s}\"," ++
-            "\"root_vm\":{s},\"hardware_trust\":{s},\"ram_mb\":{d}," ++
-            "\"ram_pages\":{d},\"vcpus\":{d},\"child_vms\":{d}}}\n";
-        return std.fmt.bufPrint(buf, jfmt, .{
+        return allocator.print(SELF_JSON_FMT, .{
             assigned_cid,
             arch_name,
             if (is_root) "true" else "false",
@@ -162,19 +247,10 @@ pub fn formatSelfInfo(
             self_ram_pages,
             vcpus,
             info.child_count,
-        }) catch "";
+        });
     }
 
-    return std.fmt.bufPrint(buf,
-        \\Assigned CID   : {d}
-        \\Architecture   : {s}
-        \\Root VM        : {s}
-        \\Hardware trust : {s}
-        \\RAM allocation : {d} MB ({d} pages)
-        \\Virtual CPUs   : {d}
-        \\Child VMs      : {d}
-        \\
-    , .{
+    return allocator.print(SELF_TEXT_FMT, .{
         assigned_cid,
         arch_name,
         if (is_root) "yes" else "no",
@@ -183,7 +259,22 @@ pub fn formatSelfInfo(
         self_ram_pages,
         vcpus,
         info.child_count,
-    }) catch "";
+    });
+}
+
+/// Fixed-buffer entry point kept for existing callers; when `buf` is too
+/// small (or memory is exhausted) it returns a visible error message.
+pub fn formatSelfInfo(
+    buf: []u8,
+    info: api.GuestInfo,
+    json_mode: bool,
+) []const u8 {
+    const allocator = std.heap.page_allocator;
+    const text = allocSelfInfo(allocator, info, json_mode) catch {
+        return common.copyStr(buf, OOM_MSG);
+    };
+    defer allocator.free(text);
+    return fitOrReport(buf, text);
 }
 
 pub fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
@@ -218,9 +309,13 @@ pub fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             return;
         };
 
-        var buf: [512]u8 = undefined;
-        const out = formatSelfInfo(&buf, info, json_mode);
-        if (out.len > 0) printStr(out);
+        const allocator = std.heap.page_allocator;
+        const out = allocSelfInfo(allocator, info, json_mode) catch {
+            printStr(OOM_MSG);
+            return;
+        };
+        defer allocator.free(out);
+        printStr(out);
     } else {
         const t_str = target_str.?;
         if (alias_opt != null and
@@ -270,12 +365,12 @@ pub fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                     (info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB
                 else
                     256;
-                var ram_buf: [32]u8 = undefined;
-                const ram_str = std.fmt.bufPrint(
-                    &ram_buf,
-                    "{d} MB",
-                    .{ram_mb},
-                ) catch "256 MB";
+                const allocator = std.heap.page_allocator;
+                const ram_str = allocator.print("{d} MB", .{ram_mb}) catch {
+                    printStr(OOM_MSG);
+                    return;
+                };
+                defer allocator.free(ram_str);
                 printGuestDetail(
                     info.guest_id,
                     t_str,
@@ -297,12 +392,43 @@ pub fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     }
 }
 
+/// Roomy enough for any self-info output in the tests below.
+const TEST_BUF_BYTES: usize = 512;
+
 test "vm_info: formatSelfInfo handles zero and unknown target_arch safely" {
     std.testing.refAllDecls(@This());
-    var buf: [512]u8 = undefined;
+    var buf: [TEST_BUF_BYTES]u8 = undefined;
     const info = std.mem.zeroes(api.GuestInfo);
     const out = formatSelfInfo(&buf, info, true);
     try std.testing.expect(
         std.mem.indexOf(u8, out, "\"architecture\":\"riscv64\"") != null,
     );
+}
+
+test "vm_info: fitOrReport reports instead of truncating silently" {
+    var buf: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("abc", fitOrReport(&buf, "abc"));
+    const out = fitOrReport(&buf, "far too long for the buffer");
+    try std.testing.expect(out.len > 0);
+    try std.testing.expect(std.mem.startsWith(u8, BUF_TOO_SMALL_MSG, out));
+}
+
+test "vm_info: JSON guest detail is never truncated" {
+    const long_name: [300]u8 = @splat('n');
+    const out = try allocGuestDetail(
+        std.testing.allocator,
+        2,
+        &long_name,
+        1,
+        "64 MB",
+        "",
+        "trusted",
+        "running",
+        "",
+        "",
+        true,
+    );
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, &long_name) != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"ip\":\"none\"") != null);
 }

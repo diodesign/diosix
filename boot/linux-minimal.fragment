@@ -2,11 +2,6 @@
 CONFIG_EXPERT=y
 CONFIG_EMBEDDED=y
 
-# Contiguous Memory Allocator (CMA) for hypercall guest image staging
-CONFIG_CMA=y
-CONFIG_DMA_CMA=y
-CONFIG_CMA_SIZE_MBYTES=128
-
 # RCU stall timeout for virtualized nested guests
 CONFIG_RCU_CPU_STALL_TIMEOUT=300
 CONFIG_RCU_EXP_CPU_STALL_TIMEOUT=0

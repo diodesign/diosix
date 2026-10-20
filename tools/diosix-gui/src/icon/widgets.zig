@@ -8,6 +8,7 @@ const std = @import("std");
 const fb = @import("../framebuffer.zig");
 const font = @import("../font.zig");
 const icon_mod = @import("../icon.zig");
+const text_label = @import("../label.zig");
 const Icon = icon_mod.Icon;
 const boxOf = fb.Box.fromPosSize;
 
@@ -101,15 +102,15 @@ pub fn renderSlider(
     sy: i32,
     fg_color: u32,
 ) void {
-    var val_buf: [32]u8 = undefined;
+    var val_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const val_str = if (self.slider_suffix_len > 0)
-        std.fmt.bufPrint(
+        text_label.fmtLabel(
             &val_buf,
             "{d}{s}",
             .{ self.slider_val, self.slider_suffix[0..self.slider_suffix_len] },
-        ) catch ""
+        )
     else
-        std.fmt.bufPrint(&val_buf, "{d}", .{self.slider_val}) catch "";
+        text_label.fmtLabel(&val_buf, "{d}", .{self.slider_val});
 
     const val_w = font.measureString(val_str);
     const val_x = sx + @as(i32, @intCast(self.width)) -
@@ -294,12 +295,8 @@ pub fn renderProgressBar(
     fg_color: u32,
 ) void {
     const text_y = sy + 2;
-    var pct_buf: [32]u8 = undefined;
-    const pct_str = std.fmt.bufPrint(
-        &pct_buf,
-        "{d}%",
-        .{self.progress_val},
-    ) catch "";
+    var pct_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+    const pct_str = text_label.fmtLabel(&pct_buf, "{d}%", .{self.progress_val});
     const pct_w = font.measureString(pct_str);
     const pct_x = sx + @as(i32, @intCast(self.width)) -
         @as(i32, @intCast(pct_w));

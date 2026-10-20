@@ -43,10 +43,6 @@ pub fn probe(fdt_paddr: usize) HostHardware {
             break :blk DEFAULT_HOST_HARDWARE;
         };
 
-        if (info.uart_base) |u| uart.init(u);
-        if (info.clint_base) |c| clint.init(c);
-        if (info.plic_base) |p| plic.init(p);
-
         break :blk HostHardware{
             .ram_base = info.ram_base,
             .ram_size = info.ram_size,
@@ -55,6 +51,10 @@ pub fn probe(fdt_paddr: usize) HostHardware {
             .plic_base = info.plic_base,
         };
     };
+
+    if (hw.uart_base) |u| uart.init(u);
+    if (hw.clint_base) |c| clint.init(c);
+    if (hw.plic_base) |p| plic.init(p);
 
     riscv.uart_base = hw.uart_base;
     riscv.clint_base = hw.clint_base;
@@ -82,4 +82,16 @@ test "discovery probe fallback on null FDT address" {
     try std.testing.expectEqual(@as(?usize, DEFAULT_UART_BASE), hw.uart_base);
     try std.testing.expectEqual(@as(?usize, DEFAULT_CLINT_BASE), hw.clint_base);
     try std.testing.expectEqual(@as(?usize, DEFAULT_PLIC_BASE), hw.plic_base);
+    try std.testing.expectEqual(
+        @as(?usize, DEFAULT_UART_BASE),
+        uart.base_address,
+    );
+    try std.testing.expectEqual(
+        @as(?usize, DEFAULT_CLINT_BASE),
+        clint.base_address,
+    );
+    try std.testing.expectEqual(
+        @as(?usize, DEFAULT_PLIC_BASE),
+        plic.base_address,
+    );
 }

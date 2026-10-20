@@ -19,7 +19,8 @@ configuration files):
 
 | File | Scope | Permissions | Purpose |
 | :--- | :--- | :--- | :--- |
-| `boot/hypervisor.conf` | Build-time (`scripts/build.sh` -> `build.zig`) | `0644` | M-mode hypervisor hardware sizing defaults (`ROOT_RAM_MIN_MB=128`, `ROOT_RAM_MAX_MB=256`, `ROOT_RAM_HOST_DIVISOR=8`, `ROOT_VCPUS_MAX=4`). |
+| `build/layout.zon` | Build-time (`build.zig` / `scripts/qemu.zig`) | `0644` | Declarative repository layout, module roots, QEMU paths, and host unit test suites. |
+| `boot/hypervisor.conf` | Build-time (`scripts/build.sh` / `build.zig`) | `0644` | M-mode hypervisor hardware and emulation sizing defaults (`ROOT_RAM_MIN_MB=128`, `ROOT_RAM_MAX_MB=256`, `ROOT_RAM_HOST_DIVISOR=8`, `ROOT_VCPUS_MAX=4`, `CHILD_RAM_DEFAULT_MB=256`, `MAX_EMULATED_VCORES=16`, `INSTRUCTION_BATCH_SIZE=50000`). |
 | `/etc/diosix/diosix.toml` | Runtime (`dsx` / Root VM) | `0644` (`root:root`) | Default child VM sizing (`default_vcpus`, `default_ram`, `default_disk_mb`), repository paths, and Guided Tour steps (`[[tour]]`). |
 | `/etc/diosix/catalog.toml` | Runtime (`dsx image` / `dsx install-guest`) | `0644` (`root:root`) | DNF/APT-style Guest OS and Steward VM repository catalog with pinned 64-character Secure Hash Algorithm 256 (SHA-256) digests. |
 | `/etc/diosix/install.toml` | Runtime (`dsx host install`) | `0644` (`root:root`) | Default bare-metal installation profile (`mode`, `target_disk`, `boot_part_mb`, `state_part_mb`, `enable_stewards`, `standby_root_vm`). |
@@ -50,13 +51,14 @@ Displays status, hardware trust status, architecture, active child count, and
 resource quota usage for the current VM or a target guest VM.
 
 ```bash
-dsx info [name|cid|self] [--json]
+dsx info [name|cid|self|host] [--host|-H] [--json]
 ```
 
-*   `name|cid|self` *(optional)*: Target VM to inspect. Defaults to `self`
+*   `name|cid|self|host` *(optional)*: Target VM to inspect. Defaults to `self`
     (CID 1). Passing `2..N` or a registered child name queries a direct child
-    VM. Querying the parent VM (`parent` or `0`) is strictly denied and returns
-    an error.
+    VM. Passing `host` or `--host` (`-H`) queries the physical host and M-mode
+    hypervisor (equivalent to `dsx host info`). Querying the parent VM
+    (`parent` or `0`) is strictly denied and returns an error.
 *   `--json` / `-j` *(optional)*: Emits machine-readable JSON output.
 
 Example output for calling VM (`dsx info`):
@@ -101,17 +103,20 @@ dsx host <info [--json]|install [options]|reboot|poweroff|shutdown>
     capabilities. Pass `--json` (or `-j`) for machine-readable JSON output.
 *   `host install [--mode basic|expert] [--disk <dev>] [--config <file.toml>]`
     `[--hostname <name>] [--stewards] [--standby-root] [--dry-run] [--json]`:
-    Partitions and installs the immutable Diosix boot image (`diosix-boot.efi`)
-    and persistent `/var/lib/diosix` data volume onto a bare-metal Non-Volatile
-    Memory Express (NVMe), VirtIO, or Serial Advanced Technology Attachment
-    (SATA) target disk.
+    Partitions and installs the immutable A/B Diosix boot slots (`slot_a` and
+    `slot_b`) and persistent `/var/lib/diosix` state partition onto a bare-metal
+    Non-Volatile Memory Express (NVMe), VirtIO, or Serial Advanced Technology
+    Attachment (SATA) target disk, writing an installation receipt to
+    `/var/lib/diosix/install-receipt.toml`.
     *   `--mode basic|expert` / `-m <mode>` *(optional)*: Installation workflow
-        (`basic` guided 3-step install or `expert` custom partitioning and
-        encryption).
-    *   `--disk <dev>` / `-d <dev>` *(optional)*: Target block device (such as
-        `/dev/vdb` or `/dev/nvme0n1`). Rejects paths containing `..`.
+        (`basic` guided 3-step install or `expert` declarative `[install]`
+        profile from `/etc/diosix/install.toml`).
+    *   `--disk <dev>` / `-d <dev>` *(optional)*: Target block device (default:
+        `/dev/vda`; accepts `/dev/*`, `/tmp/*`, or `/var/lib/diosix/*` and
+        rejects paths containing `..`).
     *   `--config <file.toml>` / `-c <file.toml>` *(optional)*: Declarative
-        unattended installation manifest (`diosix-install.toml`).
+        unattended installation manifest (defaults to
+        `/etc/diosix/install.toml` in expert mode).
     *   `--hostname <name>` *(optional)*: Hostname to assign to the installed
         system (`1..64` RFC-1123 alphanumeric or hyphen characters).
     *   `--stewards` *(optional)*: Pre-stage the 3-node Tier-1 Autonomic Steward
@@ -633,17 +638,19 @@ dsx gui <state|trigger <action>|screenshot [--out <path>]> [--json]
 ```
 
 Subcommands:
-*   `state [--json]`: Queries `/run/diosix/gui_state.json` and displays the
-    active seat profile (`touch-tablet`, `desktop-kbd`, `headless-serial`),
-    On-Screen Keyboard (OSK) visibility and layout (`qwerty` or `symbols`),
-    Welcome/Tour modal state, and visible windows.
-*   `trigger <action> [--json]`: Sends a semantic command to
-    `/run/diosix/gui_cmd` (`open-menu`, `close-menu`, `toggle-osk`,
-    `open-welcome`, `start-tour`, `next-tour`, `open-fleet`, `open-help`,
-    `open-about`).
-*   `screenshot [--out /tmp/<file>.ppm] [--json]`: Requests a deterministic
-    framebuffer capture from `diosix-gui` into `/tmp/` (output paths are
-    strictly restricted to `/tmp/` with no `..` traversal).
+*   `state [--json]` (aliases: `status`, `info`): Queries
+    `/run/diosix/gui_state.json` and displays the active seat profile
+    (`touch-tablet`, `desktop-kbd`, `headless-serial`), On-Screen Keyboard
+    (OSK) visibility and layout (`qwerty` or `symbols`), Welcome/Tour modal
+    state, and visible windows.
+*   `trigger <action> [--json]` (aliases: `exec`, `action`, `click`): Sends a
+    semantic command to `/run/diosix/gui_cmd` (`open-menu`, `close-menu`,
+    `toggle-osk`, `open-welcome`, `close-welcome`, `start-tour`, `next-tour`,
+    `prev-tour`, `close-tour`, `open-fleet`, `open-software`, `open-hardware`,
+    `open-help`, `open-about`).
+*   `screenshot [--out /tmp/<file>.ppm] [--json]` (aliases: `snap`, `capture`):
+    Requests a deterministic framebuffer capture from `diosix-gui` into `/tmp/`
+    (output paths are strictly restricted to `/tmp/` with no `..` traversal).
 
 Examples:
 ```bash
@@ -669,9 +676,9 @@ dsx tour [--step <1..5>] [--json]
 ```
 
 *   `--step <1..5>` *(optional)*: Display a specific step (`1` Root VM &
-    Hardware Trust, `2` Virtual Machine Fleet, `3` Passkey & Zero-Password
-    Security, `4` Autonomic Steward Collective, `5` Bare-Metal Host
-    Installation). Omit to display all 5 steps.
+    Hardware Isolation, `2` Zero-Password Passkey Security, `3` Guest OS &
+    Image Catalog, `4` Autonomic Steward Collective & Charter, `5` Live
+    Test-Drive & Host Installation). Omit to display all 5 steps.
 *   `--json` / `-j` *(optional)*: Emit structured JSON output.
 
 ---

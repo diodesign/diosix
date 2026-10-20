@@ -83,6 +83,12 @@ pub const EfiSystemTable64 = extern struct {
     configuration_table: u64 = 0,
 };
 
+comptime {
+    std.debug.assert(@sizeOf(EfiTableHeader) == 24);
+    std.debug.assert(@sizeOf(EfiBootServices64) == 88);
+    std.debug.assert(@sizeOf(EfiSystemTable64) == 120);
+}
+
 /// Loads a PE32+ RISC-V 64 EFI application (.efi) into `dest_buf`.
 pub fn loadPe32PlusEfi(
     pe_data: []const u8,
@@ -106,7 +112,12 @@ pub fn loadPe32PlusEfi(
         coff_off,
         COFF_HEADER_SIZE,
     ) catch return error.InvalidPeHeader;
-    if (opt_off + 2 > pe_data.len) return error.InvalidPeHeader;
+    const opt_magic_end = std.math.add(
+        usize,
+        opt_off,
+        2,
+    ) catch return error.InvalidPeHeader;
+    if (opt_magic_end > pe_data.len) return error.InvalidPeHeader;
 
     const pe_sig =
         std.mem.readInt(u32, pe_data[pe_off .. pe_off + 4][0..4], .little);

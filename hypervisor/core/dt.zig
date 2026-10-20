@@ -100,13 +100,9 @@ pub const DeviceTree = struct {
 
         const nodes = try allocator.alloc(DeviceTreeNode, INIT_NODE_CAPACITY);
         errdefer allocator.free(nodes);
-
-        const reserved = try allocator.alloc(
-            ReservedMemoryEntry,
-            INIT_RESERVED_CAPACITY,
-        );
+        const reserved =
+            try allocator.alloc(ReservedMemoryEntry, INIT_RESERVED_CAPACITY);
         errdefer allocator.free(reserved);
-
         dt.* = .{
             .nodes = nodes,
             .node_count = 0,
@@ -142,7 +138,6 @@ pub const DeviceTree = struct {
         self.boot_cpu_id = cpu_id;
     }
 
-    /// Adds a reserved memory region.
     pub fn addReservedMemory(
         self: *DeviceTree,
         address: u64,
@@ -150,10 +145,8 @@ pub const DeviceTree = struct {
     ) !void {
         if (self.reserved_count >= self.reserved_capacity) {
             const new_cap = try std.math.mul(usize, self.reserved_capacity, 2);
-            const new_buf = try self.allocator.alloc(
-                ReservedMemoryEntry,
-                new_cap,
-            );
+            const new_buf =
+                try self.allocator.alloc(ReservedMemoryEntry, new_cap);
             @memcpy(
                 new_buf[0..self.reserved_count],
                 self.reserved_memory[0..self.reserved_count],
@@ -164,10 +157,8 @@ pub const DeviceTree = struct {
             self.reserved_memory = new_buf;
             self.reserved_capacity = new_cap;
         }
-        self.reserved_memory[self.reserved_count] = .{
-            .address = address,
-            .size = mem_size,
-        };
+        self.reserved_memory[self.reserved_count] =
+            .{ .address = address, .size = mem_size };
         self.reserved_count += 1;
     }
 
@@ -231,12 +222,9 @@ pub const DeviceTree = struct {
             }
             const path = try self.allocator.dupe(u8, node_path);
             errdefer self.allocator.free(path);
-            const props = try self.allocator.alloc(
-                PropertyEntry,
-                INIT_PROP_CAPACITY,
-            );
+            const props =
+                try self.allocator.alloc(PropertyEntry, INIT_PROP_CAPACITY);
             errdefer self.allocator.free(props);
-
             self.nodes[pos] = .{
                 .path = path,
                 .props = props,
@@ -413,13 +401,10 @@ pub fn getParent(allocator: Allocator, path: []const u8) ![]u8 {
     return allocator.dupe(u8, "/");
 }
 
-test {
+test "device tree manipulation, iteration, and getParent" {
     _ = prop;
     _ = blob;
     std.testing.refAllDecls(@This());
-}
-
-test "device tree manipulation, iteration, and getParent" {
     const allocator = std.testing.allocator;
     const dt = try DeviceTree.init(allocator);
     defer dt.deinit();

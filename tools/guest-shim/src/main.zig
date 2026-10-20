@@ -8,19 +8,20 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const interface = @import("interface");
 pub const boot_loader = @import("loader.zig");
 
-const SBI_EXT_LEGACY_PUTCHAR: usize = 0x01;
-const SBI_EXT_DIOSIX: usize = 0x0a000005;
-const SBI_DIOSIX_FUNC_YIELD: usize = 1;
+const SBI_EXT_LEGACY_PUTCHAR: usize = interface.sbi.EXT.LEGACY_CONSOLE_PUTCHAR;
+const SBI_EXT_DIOSIX: usize = interface.sbi.EXT.DIOSIX;
+const SBI_DIOSIX_FUNC_YIELD: usize = interface.sbi.DIOSIX.YIELD;
 const EFI_IMAGE_HANDLE_STUB: usize = 1;
 const SHIM_LINK_BASE: usize = 0xe000_0000;
 const SHIM_RAM_ALIGN_MASK: usize = 0x001f_ffff;
 const DEFAULT_PAYLOAD_OFFSET: usize = 0x0040_0000;
 const MIN_PAYLOAD_WINDOW_MARGIN: usize = 0x0010_0000;
 
-const is_riscv_freestanding =
-    (builtin.cpu.arch == .riscv64 and builtin.os.tag == .freestanding);
+const is_riscv_freestanding = (builtin.target.cpu.arch == .riscv64 and
+    builtin.target.os.tag == .freestanding);
 
 var efi_sys_table: boot_loader.EfiSystemTable64 = undefined;
 var efi_boot_services: boot_loader.EfiBootServices64 = undefined;
@@ -187,20 +188,9 @@ export fn shimMain(hart_id: usize, dtb_addr: usize) callconv(.c) noreturn {
                         "[diosix-shim] ISO9660 boot media detected.\r\n",
                     );
                     if (boot_loader.parseIso9660Volume(payload_slice)) |vol| {
-                        const candidate_paths = .{
-                            "kernel.elf",
-                            "vmlinux.elf",
-                            "Image",
-                            "boot/vmlinux.elf",
-                            "boot/vmlinuz",
-                            "boot/Image",
-                            "boot/kernel/kernel",
-                            "boot/loader.efi",
-                            "efi/boot/bootriscv64.efi",
-                            "bootriscv64.efi",
-                            "loader.efi",
-                        };
-                        inline for (candidate_paths) |cpath_lit| {
+                        inline for (
+                            boot_loader.ISO_BOOT_CANDIDATES,
+                        ) |cpath_lit| {
                             const cpath = relocateSlice(ram_base, cpath_lit);
                             if (boot_loader.findIso9660Path(
                                 payload_slice,
@@ -212,11 +202,15 @@ export fn shimMain(hart_id: usize, dtb_addr: usize) callconv(.c) noreturn {
                                     ext.extent_lba,
                                     boot_loader.ISO_SECTOR_SIZE,
                                 ) catch 0;
-                                const file_end = std.math.add(
-                                    usize,
-                                    file_off,
-                                    ext.data_length,
-                                ) catch 0;
+                                const file_end = if (file_off > 0 or
+                                    ext.extent_lba == 0)
+                                    (std.math.add(
+                                        usize,
+                                        file_off,
+                                        ext.data_length,
+                                    ) catch 0)
+                                else
+                                    0;
                                 if (file_end > file_off and
                                     file_end <= payload_slice.len)
                                 {

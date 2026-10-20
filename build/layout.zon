@@ -1,0 +1,121 @@
+// Declarative build layout and artifact configuration for Diosix.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+.{
+    .min_zig_version = "0.17.0-dev",
+    .default_arch = "riscv64",
+    .default_profile = "rootvm",
+
+    .modules = .{
+        .hypervisor_root = "hypervisor/main.zig",
+        .interface_root = "hypervisor/interface/lib.zig",
+        .emulation_root = "hypervisor/hardware/emulation/mod.zig",
+        .metadata_root = "hypervisor/core/metadata.zig",
+    },
+
+    .hypervisor = .{
+        .name = "vmdiosix",
+        .linker_script = "hypervisor/hardware/native/cpu/riscv64/linker.ld",
+        .asm_consts_src = "hypervisor/hardware/native/cpu/riscv64/consts.s",
+        .asm_consts_name = "consts.s",
+        .asm_config_name = "config.s",
+        .asm_sources = .{
+            "hypervisor/hardware/native/cpu/riscv64/entry.s",
+            "hypervisor/hardware/native/cpu/riscv64/xint.s",
+            "hypervisor/hardware/native/cpu/riscv64/util.s",
+        },
+    },
+
+    .metadata = .{
+        .banner_file = "boot/banner.txt",
+        .version_file = "VERSION",
+        .hypervisor_conf = "boot/hypervisor.conf",
+        .object_name = "metadata_info",
+        .test_object_name = "metadata_info_test",
+    },
+
+    .guest_shim = .{
+        .name = "guest-shim-riscv64.elf",
+        .root_source = "tools/guest-shim/src/main.zig",
+        .linker_script = "tools/guest-shim/linker.ld",
+    },
+
+    .rootvm = .{
+        .build_script = "scripts/build_rootvm.sh",
+        .config_fmt = "boot/{s}-linux-{s}.config",
+        .elf_out_fmt = "zig-out/guest-{s}/bin/rootvm.elf",
+        .buildroot_dir_fmt = "zig-out/buildroot-{s}",
+        .install_dir_fmt = "guest-{s}/bin",
+        .embedded_asm_name = "rootvm.s",
+        .input_files = .{
+            "scripts/build_rootvm.sh",
+            "scripts/build_micro_iso.py",
+        },
+        .input_dirs = .{
+            "tools/alsa-init",
+            "tools/diosix-config/src",
+            "tools/diosix-ctl/src",
+            "tools/diosix-gui/src",
+            "tools/driver",
+            "tools/guest-shim",
+            "tools/micro-guest",
+            "tools/overlay-common",
+        },
+    },
+
+    .qemu = .{
+        .system_bin = "qemu-system-riscv64",
+        .storage_script = "scripts/create_storage_disk.sh",
+        .storage_img = "zig-out/storage.img",
+        .storage_size = "256M",
+        .live_script = "scripts/make_live_image.sh",
+        .live_img = "zig-out/diosix-live-riscv64.img",
+        .live_size_mb = "512",
+        .swtpm_script = "scripts/setup_swtpm.sh",
+        .swtpm_socket = "/tmp/diosix-tpm/swtpm-sock",
+        .default_smp = 4,
+        .default_mem = "2G",
+        .default_audio = "auto",
+        .display_width = 1280,
+        .display_height = 800,
+    },
+
+    .tests = .{
+        .hypervisor_test_name = "diosix-unit-tests",
+        .integration_runner = "python3",
+        .integration_script = "scripts/test_manifest_integration.py",
+        .host_suites = .{
+            .{
+                .name = "diosix-ctl-unit-tests",
+                .root = "tools/diosix-ctl/src/main.zig",
+                .with_interface = true,
+            },
+            .{
+                .name = "diosix-interface-unit-tests",
+                .root = "hypervisor/interface/lib.zig",
+                .with_interface = false,
+            },
+            .{
+                .name = "diosix-emulation-unit-tests",
+                .root = "hypervisor/hardware/emulation/mod.zig",
+                .with_interface = true,
+            },
+            .{
+                .name = "diosix-gui-unit-tests",
+                .root = "tools/diosix-gui/src/main.zig",
+                .with_interface = true,
+            },
+            .{
+                .name = "diosix-config-unit-tests",
+                .root = "tools/diosix-config/src/main.zig",
+                .with_interface = true,
+            },
+            .{
+                .name = "diosix-guest-shim-unit-tests",
+                .root = "tools/guest-shim/src/main.zig",
+                .with_interface = true,
+            },
+        },
+    },
+}

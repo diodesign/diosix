@@ -9,6 +9,7 @@ const font = @import("../font.zig");
 const icon_mod = @import("../icon.zig");
 const Icon = icon_mod.Icon;
 const host_info = @import("../host.zig");
+const text_label = @import("../label.zig");
 const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 
@@ -232,7 +233,7 @@ pub fn buildBackPane(self: *DiosixGui) !void {
 }
 
 pub fn buildBottomPanes(self: *DiosixGui) !void {
-    var ver_buf: [64]u8 = undefined;
+    var ver_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const ver_str = host_info.getVersionString(&ver_buf);
     const ver_text_w = font.measureString(ver_str);
 

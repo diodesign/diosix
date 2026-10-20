@@ -15,6 +15,12 @@ const unmapBinaryFile = common.unmapBinaryFile;
 const appendFileLine = common.appendFileLine;
 const generateEntropyBytes = common.generateEntropyBytes;
 
+const Ed25519 = std.crypto.sign.Ed25519;
+
+/// Largest public key file accepted by `--file`: one OpenSSH key line, far
+/// below a page.
+const MAX_PUBKEY_FILE_BYTES: usize = 4096;
+
 pub const AuthEnrollOption = enum {
     @"--key",
     @"-k",
@@ -86,44 +92,41 @@ pub fn cmdAuthEnroll(
         }
     }
 
+    const allocator = std.heap.page_allocator;
+
     if (qr_mode) {
         var nonce_bytes: [passkey.CHALLENGE_BYTES]u8 = undefined;
         try generateEntropyBytes(&nonce_bytes);
         defer std.crypto.secureZero(u8, &nonce_bytes);
         var nonce_hex_buf: [passkey.CHALLENGE_HEX_LEN]u8 = undefined;
         const nonce_hex = passkey.bytesToHex(&nonce_bytes, &nonce_hex_buf);
-        var uri_buf: [256]u8 = undefined;
-        const uri = passkey.formatEnrollmentQrUri(
-            &uri_buf,
+        const uri = try passkey.formatEnrollmentQrUri(
+            allocator,
             nonce_hex,
             seat_profile,
         );
+        defer allocator.free(uri);
 
-        var out_buf: [384]u8 = undefined;
-        const out = if (json_mode)
-            std.fmt.bufPrint(
-                &out_buf,
+        if (json_mode) {
+            common.printFmt(
                 "{{\"status\":\"qr_ready\",\"uri\":\"{s}\"," ++
                     "\"seat\":\"{s}\",\"challenge\":\"{s}\"}}\n",
                 .{ uri, seat_profile, nonce_hex },
-            ) catch return
-        else
-            std.fmt.bufPrint(
-                &out_buf,
-                "WebAuthn passkey QR URI : {s}\n",
-                .{uri},
-            ) catch return;
-        printStr(out);
+            );
+        } else {
+            common.printFmt("WebAuthn passkey QR URI : {s}\n", .{uri});
+        }
         return;
     }
 
-    var synth_line_buf: [256]u8 = undefined;
+    var synth_line: ?[]u8 = null;
+    defer if (synth_line) |l| allocator.free(l);
     var file_mapped: ?[]u8 = null;
     defer if (file_mapped) |m| unmapBinaryFile(m);
 
     var line_to_enroll: ?[]const u8 = key_arg;
     if (line_to_enroll == null and file_arg != null) {
-        if (readBinaryFile(file_arg.?, 4096)) |fbytes| {
+        if (readBinaryFile(file_arg.?, MAX_PUBKEY_FILE_BYTES)) |fbytes| {
             file_mapped = fbytes;
             line_to_enroll = trimWhitespace(fbytes);
         } else |_| {
@@ -131,24 +134,25 @@ pub fn cmdAuthEnroll(
             return;
         }
     } else if (line_to_enroll == null and (tpm_mode or fido2_mode)) {
-        var seed: [32]u8 = undefined;
+        var seed: [Ed25519.KeyPair.seed_length]u8 = undefined;
         try generateEntropyBytes(&seed);
         defer std.crypto.secureZero(u8, &seed);
-        var kp = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(
-            seed,
-        ) catch return;
+        var kp = Ed25519.KeyPair.generateDeterministic(seed) catch {
+            printStr("Error: Could not generate passkey key pair.\n");
+            return;
+        };
         defer std.crypto.secureZero(u8, &kp.secret_key.bytes);
-        var b64_buf: [68]u8 = undefined;
+        var b64_buf: [passkey.ED25519_WIRE_B64_LEN]u8 = undefined;
         const b64_str = passkey.encodeOpenSshEd25519BlobBase64(
             kp.public_key.toBytes(),
             &b64_buf,
         );
         const prefix_comment = if (tpm_mode) "tpm2:" else "fido2:";
-        line_to_enroll = std.fmt.bufPrint(
-            &synth_line_buf,
+        synth_line = try allocator.print(
             "ssh-ed25519 {s} {s}{s}",
             .{ b64_str, prefix_comment, label_arg },
-        ) catch return;
+        );
+        line_to_enroll = synth_line;
     }
 
     if (line_to_enroll == null) {
@@ -166,39 +170,35 @@ pub fn cmdAuthEnroll(
         return;
     };
 
-    var auth_pk_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    var auth_pk_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const auth_pk_slice = std.fmt.bufPrint(
-        &auth_pk_buf,
+    const auth_pk_z = try allocator.printSentinel(
         "{s}/authorized_passkeys",
         .{sys_cfg.keysDir()},
-    ) catch passkey.AUTHORIZED_PASSKEYS_PATH;
-    const auth_pk_z = common.toPathZ(auth_pk_slice, &auth_pk_z_buf) orelse
-        passkey.AUTHORIZED_PASSKEYS_PATH;
+        0,
+    );
+    defer allocator.free(auth_pk_z);
 
     try appendFileLine(auth_pk_z.ptr, line_to_enroll.?);
     try appendFileLine(passkey.ROOT_AUTHORIZED_KEYS_PATH, line_to_enroll.?);
 
-    var out_buf: [384]u8 = undefined;
-    var c_buf: [128]u8 = undefined;
-    const out = if (json_mode)
-        std.fmt.bufPrint(
-            &out_buf,
+    if (json_mode) {
+        // Sanitizing only removes characters, so the comment length bounds it.
+        const comment_buf = try allocator.alloc(u8, validated.comment.len);
+        defer allocator.free(comment_buf);
+        common.printFmt(
             "{{\"status\":\"enrolled\",\"kind\":\"{s}\"," ++
                 "\"fingerprint\":\"{s}\",\"comment\":\"{s}\"}}\n",
             .{
                 validated.kind.label(),
                 &validated.fingerprint_hex,
-                sanitizeJsonStr(&c_buf, validated.comment),
+                sanitizeJsonStr(comment_buf, validated.comment),
             },
-        ) catch return
-    else
-        std.fmt.bufPrint(
-            &out_buf,
+        );
+    } else {
+        common.printFmt(
             "✓ Enrolled passkey ({s}, fingerprint {s})\n",
             .{ validated.kind.label(), &validated.fingerprint_hex },
-        ) catch return;
-    printStr(out);
+        );
+    }
 }
 
 test "auth/enroll: option enum parses enrollment flags" {

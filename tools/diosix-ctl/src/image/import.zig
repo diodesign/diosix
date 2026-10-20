@@ -7,6 +7,8 @@ const std = @import("std");
 const linux = std.os.linux;
 const catalog = @import("../catalog.zig");
 const common = @import("../common.zig");
+const sysconfig = @import("../sysconfig.zig");
+const disk = @import("../storage/disk.zig");
 
 const ImportFlag = enum { @"--name", @"-n" };
 
@@ -34,14 +36,11 @@ pub fn cmdImageImport(
             idx += 1;
             custom_name = std.mem.span(args[idx]);
         } else if (std.mem.startsWith(u8, span, "-")) {
-            var err_buf: [160]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(
-                &err_buf,
+            common.printFmt(
                 "Error: Unknown option '{s}'. " ++
                     "Usage: {s} image import <file> [--name <name>]\n",
                 .{ span, exe_name },
-            ) catch "Error: Unknown option.\n";
-            common.printStr(err_msg);
+            );
             return;
         }
     }
@@ -51,10 +50,12 @@ pub fn cmdImageImport(
     const base_dir: []const u8 =
         if (is_iso) sys_cfg.isoDir() else sys_cfg.imagesDir();
 
-    _ = linux.mkdir("/var/lib/diosix", 0o755);
-    var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    if (common.toPathZ(base_dir, &dir_z_buf)) |dz| {
-        _ = linux.mkdir(dz.ptr, 0o755);
+    _ = linux.mkdir(sysconfig.VAR_LIB_DIOSIX_DIR, 0o755);
+    {
+        var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+        if (common.toPathZ(base_dir, &dir_z_buf)) |dz| {
+            _ = linux.mkdir(dz.ptr, 0o755);
+        }
     }
 
     const filename: []const u8 = if (custom_name) |cname| cname else blk: {
@@ -72,12 +73,16 @@ pub fn cmdImageImport(
         return;
     }
 
-    var dest_path_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const dest_path = std.fmt.bufPrint(
-        &dest_path_buf,
+    const allocator = std.heap.page_allocator;
+    const dest_path = try allocator.print(
         "{s}/{s}",
         .{ base_dir, filename },
-    ) catch return;
+    );
+    defer allocator.free(dest_path);
+    if (dest_path.len >= common.MAX_PATH_LEN) {
+        disk.reportPathTooLong();
+        return;
+    }
 
     if (common.readBinaryFile(
         src_file,
@@ -93,13 +98,86 @@ pub fn cmdImageImport(
         return;
     }
 
-    var out_buf: [256]u8 = undefined;
-    const out_msg = std.fmt.bufPrint(
-        &out_buf,
+    common.printFmt(
         "✓ Image '{s}' successfully imported into {s}.\n",
         .{ filename, dest_path },
-    ) catch return;
-    common.printStr(out_msg);
+    );
+}
+
+pub fn cmdImageVerify(
+    images_dir: []const u8,
+    iso_dir: []const u8,
+    args: []const [*:0]const u8,
+    active_catalog: []const catalog.CatalogEntry,
+    json_flag: bool,
+) !void {
+    if (args.len < 2) {
+        common.printStr(
+            "Usage: dsx image verify <name> [--sha256 <hex>] [--json]\n",
+        );
+        return;
+    }
+    const img_name = std.mem.span(args[1]);
+    if (!common.isSafeIdentifier(img_name) or
+        !catalog.isValidImageName(img_name))
+    {
+        common.printStr("Error: Invalid image name.\n");
+        return;
+    }
+    var expected_sha: ?[]const u8 = null;
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const span = std.mem.span(args[i]);
+        if (std.mem.eql(u8, span, "--sha256") and i + 1 < args.len) {
+            i += 1;
+            expected_sha = std.mem.span(args[i]);
+        }
+    }
+    if (expected_sha == null) {
+        if (catalog.findEntryInSlice(active_catalog, img_name)) |entry| {
+            if (catalog.hasPinnedSha256(entry)) expected_sha = entry.sha256;
+        }
+    }
+
+    const allocator = std.heap.page_allocator;
+    const is_iso = std.mem.endsWith(u8, img_name, ".iso");
+    const base_dir = if (is_iso) iso_dir else images_dir;
+    const path = try allocator.print("{s}/{s}", .{ base_dir, img_name });
+    defer allocator.free(path);
+    const content = common.readBinaryFile(
+        path,
+        common.MAX_ELF_FILE_SIZE * 4,
+    ) catch {
+        common.printFmt("Error: Image '{s}' not found.\n", .{img_name});
+        return;
+    };
+    defer common.unmapBinaryFile(content);
+
+    var sha_hex: [catalog.SHA256_HEX_LEN]u8 = @splat('0');
+    _ = catalog.computeSha256Hex(content, &sha_hex);
+    const verified = if (expected_sha) |sha|
+        catalog.verifySha256Hex(content, sha)
+    else
+        true;
+
+    if (json_flag) {
+        const safe_name = try common.escapeJsonAlloc(allocator, img_name);
+        defer allocator.free(safe_name);
+        common.printFmt(
+            "{{\"image\":\"{s}\",\"sha256\":\"{s}\",\"verified\":{s}}}\n",
+            .{ safe_name, &sha_hex, if (verified) "true" else "false" },
+        );
+    } else if (verified) {
+        common.printFmt(
+            "✓ Image '{s}' SHA-256: {s}\n",
+            .{ img_name, &sha_hex },
+        );
+    } else {
+        common.printFmt(
+            "Error: Image '{s}' SHA-256 mismatch ({s}).\n",
+            .{ img_name, &sha_hex },
+        );
+    }
 }
 
 test "image/import: option enum parses --name flag" {

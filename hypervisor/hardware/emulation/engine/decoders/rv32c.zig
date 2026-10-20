@@ -17,6 +17,7 @@ pub const RVC_PRIME_REG_BASE: u5 = 8;
 pub const REG_ZERO: u5 = 0;
 pub const REG_RA: u5 = 1;
 pub const REG_SP: u5 = 2;
+pub const RVC_BIT12_MASK: u16 = 0x1000;
 
 fn primeReg(bits: u16) u5 {
     return @as(u5, @truncate(bits & 0x7)) + RVC_PRIME_REG_BASE;
@@ -159,11 +160,13 @@ pub fn decompressRvc(code16: u16) ?u32 {
                     (((code16 >> 12) & 0x1) << 5);
                 switch (funct2) {
                     0b00 => {
-                        // C.SRLI: srli rd', rd', shamt.
+                        // C.SRLI: srli rd', rd', shamt (shamt[5]=1 reserved).
+                        if ((code16 & RVC_BIT12_MASK) != 0) return null;
                         return rv64.srli(rd, rd, @intCast(imm6));
                     },
                     0b01 => {
-                        // C.SRAI: srai rd', rd', shamt.
+                        // C.SRAI: srai rd', rd', shamt (shamt[5]=1 reserved).
+                        if ((code16 & RVC_BIT12_MASK) != 0) return null;
                         return rv64.srai(rd, rd, @intCast(imm6));
                     },
                     0b10 => {
@@ -172,6 +175,7 @@ pub fn decompressRvc(code16: u16) ?u32 {
                         return rv64.andi(rd, rd, imm);
                     },
                     0b11 => {
+                        if ((code16 & RVC_BIT12_MASK) != 0) return null;
                         const rs2 = primeReg(code16 >> 2);
                         const sub_op = (code16 >> 5) & 0x3;
                         return switch (sub_op) {
@@ -194,8 +198,10 @@ pub fn decompressRvc(code16: u16) ?u32 {
             0b000 => {
                 // C.SLLI: slli rd, rd, shamt.
                 const rd = @as(u5, @truncate((code16 >> 7) & 0x1f));
-                const shamt: u32 = ((code16 >> 2) & 0x1f) |
-                    (((code16 >> 12) & 0x1) << 5);
+                if (rd == REG_ZERO or (code16 & RVC_BIT12_MASK) != 0) {
+                    return null;
+                }
+                const shamt: u32 = (code16 >> 2) & 0x1f;
                 return rv64.slli(rd, rd, @intCast(shamt));
             },
             0b001 => {

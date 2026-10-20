@@ -69,7 +69,7 @@ static long handle_get_manifest(unsigned long arg)
     if (ret.error) {
         kfree(kbuf);
         kfree(sbi_margs);
-        return -EIO;
+        return diosix_sbi_to_errno(ret.error);
     }
 
     args.actual_len = sbi_margs->actual_len;
@@ -107,29 +107,25 @@ static long handle_set_manifest(unsigned long arg)
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
-    if (args.max_len > DIOSIX_MAX_MANIFEST_SIZE)
-        return -EINVAL;
-
-    if (args.max_len > 0 && !args.data_ptr)
+    if (args.max_len == 0 || args.max_len > DIOSIX_MAX_MANIFEST_SIZE ||
+        !args.data_ptr)
         return -EINVAL;
 
     sbi_margs = kzalloc(sizeof(*sbi_margs), GFP_KERNEL);
     if (!sbi_margs)
         return -ENOMEM;
 
-    if (args.max_len > 0) {
-        kbuf = kzalloc(args.max_len, GFP_KERNEL);
-        if (!kbuf) {
-            kfree(sbi_margs);
-            return -ENOMEM;
-        }
-        if (copy_from_user(kbuf, (void __user *)args.data_ptr, args.max_len)) {
-            kfree(kbuf);
-            kfree(sbi_margs);
-            return -EFAULT;
-        }
-        kbuf_pa = virt_to_phys(kbuf);
+    kbuf = kzalloc(args.max_len, GFP_KERNEL);
+    if (!kbuf) {
+        kfree(sbi_margs);
+        return -ENOMEM;
     }
+    if (copy_from_user(kbuf, (void __user *)args.data_ptr, args.max_len)) {
+        kfree(kbuf);
+        kfree(sbi_margs);
+        return -EFAULT;
+    }
+    kbuf_pa = virt_to_phys(kbuf);
 
     sbi_margs->target_cid = args.target_cid;
     sbi_margs->data_ptr = (unsigned long)kbuf_pa;
@@ -151,7 +147,7 @@ static long handle_set_manifest(unsigned long arg)
     kfree(sbi_margs);
 
     if (ret.error)
-        return -EIO;
+        return diosix_sbi_to_errno(ret.error);
 
     return 0;
 }
@@ -195,6 +191,7 @@ static long handle_map_child_mem(unsigned long arg)
 
     memcpy(sbi_margs, &args, sizeof(args));
     margs_pa = virt_to_phys(sbi_margs);
+    diosix_child_mem_lock();
     ret = sbi_ecall(
         EXT_DIOSIX,
         DIOSIX_FUNC_MAP_CHILD_MEM,
@@ -205,10 +202,11 @@ static long handle_map_child_mem(unsigned long arg)
         0,
         0
     );
+    diosix_child_mem_unlock();
     kfree(sbi_margs);
 
     if (ret.error)
-        return -EIO;
+        return diosix_sbi_to_errno(ret.error);
 
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -251,6 +249,7 @@ static long handle_unmap_child_mem(unsigned long arg)
 
     memcpy(sbi_uargs, &args, sizeof(args));
     uargs_pa = virt_to_phys(sbi_uargs);
+    diosix_child_mem_lock();
     ret = sbi_ecall(
         EXT_DIOSIX,
         DIOSIX_FUNC_UNMAP_CHILD_MEM,
@@ -261,10 +260,11 @@ static long handle_unmap_child_mem(unsigned long arg)
         0,
         0
     );
+    diosix_child_mem_unlock();
     kfree(sbi_uargs);
 
     if (ret.error)
-        return -EIO;
+        return diosix_sbi_to_errno(ret.error);
 
     return 0;
 }
@@ -301,7 +301,7 @@ static long handle_start_guest(unsigned long arg)
     kfree(sbi_sargs);
 
     if (ret.error)
-        return -EIO;
+        return diosix_sbi_to_errno(ret.error);
 
     return ret.value;
 }
@@ -341,7 +341,7 @@ static long handle_charter(unsigned int cmd, unsigned long arg)
     );
     if (ret.error) {
         kfree(kargs);
-        return -EPERM;
+        return diosix_sbi_to_errno(ret.error);
     }
 
     if (cmd == IOCTL_GET_CHARTER) {
@@ -393,7 +393,7 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
             0
         );
         if (ret.error)
-            return -EPERM;
+            return diosix_sbi_to_errno(ret.error);
         return ret.value;
 
     case IOCTL_RESET_STEWARD:
@@ -410,7 +410,7 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
             0
         );
         if (ret.error)
-            return -EPERM;
+            return diosix_sbi_to_errno(ret.error);
         return ret.value;
 
     case IOCTL_REQUEST_ROOT_FAILOVER:
@@ -427,7 +427,7 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
             0
         );
         if (ret.error)
-            return -EPERM;
+            return diosix_sbi_to_errno(ret.error);
         return ret.value;
 
     default:

@@ -7,6 +7,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 const display_mod = @import("display.zig");
+const paths = @import("paths.zig");
 
 pub const INTRO_WAV_BYTES: []const u8 = @embedFile("intro.wav");
 
@@ -126,6 +127,9 @@ pub const WAV_MIN_HEADER_LEN: usize = 44;
 pub const PCM_FORMAT_TAG: u16 = 1;
 pub const PCM_24BIT_SIGN_BIT: u32 = 0x80;
 pub const PCM_24BIT_SIGN_EXT: u32 = 0xff000000;
+// Streaming chunk size for 16-bit PCM written to ALSA per iteration. The
+// loop converts and writes the file chunk by chunk, so this is a tuning
+// choice (not a limit on clip length): ~93ms of 44.1kHz stereo audio.
 pub const PCM_CHUNK_BYTES: usize = 16384;
 const SNDCTL_DSP_RESET: u32 = 0x00005000;
 const SNDCTL_DSP_SPEED: u32 = 0xc0045002;
@@ -168,7 +172,7 @@ pub const AudioPlayer = struct {
     }
 
     fn runAlsaInit() void {
-        const bin: [*:0]const u8 = "/usr/sbin/diosix-alsa-init";
+        const bin: [*:0]const u8 = paths.ALSA_INIT_BIN_PATH;
         const access_rc = linux.access(bin, linux.R_OK | linux.X_OK);
         if (@as(isize, @bitCast(access_rc)) < 0) return;
 
@@ -193,11 +197,7 @@ pub const AudioPlayer = struct {
             return;
         };
 
-        const dsp_paths = [_][*:0]const u8{
-            "/dev/dsp",
-            "/dev/dsp0",
-            "/dev/sound/dsp",
-        };
+        const dsp_paths = paths.DSP_DEVICE_PATHS;
         var fd: i32 = -1;
         var attempts: usize = 0;
 

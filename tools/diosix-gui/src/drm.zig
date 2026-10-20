@@ -26,16 +26,25 @@ pub const DEFAULT_DEPTH: u32 = 24;
 pub const HW_CURSOR_WIDTH: u32 = 64;
 pub const HW_CURSOR_HEIGHT: u32 = 64;
 
+/// Capacity of the NUL-terminated copy of a DRM card path such as
+/// "/dev/dri/card0". Real paths are under 20 bytes; longer ones are rejected
+/// with error.PathTooLong rather than truncated.
+pub const DRM_CARD_PATH_BUF_BYTES: usize = 64;
+
+/// Size of drm_mode_modeinfo.name: the kernel's DRM_DISPLAY_MODE_LEN. This is
+/// part of the kernel ABI struct layout, so it cannot be resized.
+const DRM_DISPLAY_MODE_LEN: usize = 32;
+
 pub const drm_version = extern struct {
     version_major: i32 = 0,
     version_minor: i32 = 0,
     version_patchlevel: i32 = 0,
     name_len: u64 = 0,
-    name: [*]u8 = undefined,
+    name: ?[*]u8 = null,
     date_len: u64 = 0,
-    date: [*]u8 = undefined,
+    date: ?[*]u8 = null,
     desc_len: u64 = 0,
-    desc: [*]u8 = undefined,
+    desc: ?[*]u8 = null,
 };
 
 pub const drm_mode_card_res = extern struct {
@@ -68,7 +77,7 @@ pub const drm_mode_modeinfo = extern struct {
     vrefresh: u32 = 0,
     flags: u32 = 0,
     type: u32 = 0,
-    name: [32]u8 = undefined,
+    name: [DRM_DISPLAY_MODE_LEN]u8 = @splat(0),
 };
 
 pub const drm_mode_crtc = extern struct {
@@ -164,6 +173,7 @@ pub const DRM_IOCTL_MODE_SETCRTC = DRM_IOWR(0xa2, drm_mode_crtc);
 pub const DRM_IOCTL_MODE_CURSOR = DRM_IOWR(0xa3, drm_mode_cursor);
 pub const DRM_IOCTL_MODE_GETCONNECTOR = DRM_IOWR(0xa7, drm_mode_get_connector);
 pub const DRM_IOCTL_MODE_ADDFB = DRM_IOWR(0xae, drm_mode_fb_cmd);
+pub const DRM_IOCTL_MODE_RMFB = DRM_IOWR(0xaf, u32);
 pub const DRM_IOCTL_MODE_DIRTYFB = DRM_IOWR(0xb1, drm_mode_fb_dirty_cmd);
 pub const DRM_IOCTL_MODE_CREATE_DUMB = DRM_IOWR(0xb2, drm_mode_create_dumb);
 pub const DRM_IOCTL_MODE_MAP_DUMB = DRM_IOWR(0xb3, drm_mode_map_dumb);
@@ -187,7 +197,7 @@ pub const DrmDevice = struct {
     screen_surface: fb.Surface,
 
     pub fn init(card_path: []const u8) !DrmDevice {
-        var z_path: [64]u8 = undefined;
+        var z_path: [DRM_CARD_PATH_BUF_BYTES]u8 = undefined;
         if (card_path.len >= z_path.len) return error.PathTooLong;
         @memcpy(z_path[0..card_path.len], card_path);
         z_path[card_path.len] = 0;
@@ -209,10 +219,10 @@ pub const DrmDevice = struct {
 
         // 1. Probe resources.
         var res = drm_mode_card_res{};
-        var crtc_ids: [16]u32 = undefined;
-        var conn_ids: [16]u32 = undefined;
-        var fb_ids: [16]u32 = undefined;
-        var enc_ids: [16]u32 = undefined;
+        var crtc_ids: [16]u32 = @splat(0);
+        var conn_ids: [16]u32 = @splat(0);
+        var fb_ids: [16]u32 = @splat(0);
+        var enc_ids: [16]u32 = @splat(0);
         res.crtc_id_ptr = @intFromPtr(&crtc_ids);
         res.connector_id_ptr = @intFromPtr(&conn_ids);
         res.fb_id_ptr = @intFromPtr(&fb_ids);
@@ -222,13 +232,12 @@ pub const DrmDevice = struct {
         res.count_fbs = fb_ids.len;
         res.count_encoders = enc_ids.len;
 
-        const res_rc = linux.ioctl(
+        var res_rc = linux.ioctl(
             fd,
             DRM_IOCTL_MODE_GETRESOURCES,
             @intFromPtr(&res),
         );
-        const signed_res: isize = @bitCast(res_rc);
-        if (signed_res < 0 or res.count_crtcs == 0 or
+        if (@as(isize, @bitCast(res_rc)) < 0 or res.count_crtcs == 0 or
             res.count_connectors == 0)
         {
             return error.NoResources;
@@ -243,22 +252,18 @@ pub const DrmDevice = struct {
         const total_conns = @min(res.count_connectors, conn_ids.len);
         while (c_idx < total_conns) : (c_idx += 1) {
             const cid = conn_ids[c_idx];
-            var conn = drm_mode_get_connector{ .connector_id = cid };
-            var modes: [32]drm_mode_modeinfo = undefined;
-            conn.modes_ptr = @intFromPtr(&modes);
-            conn.count_modes = modes.len;
-            conn.count_props = 0;
-            conn.props_ptr = 0;
-            conn.count_encoders = 0;
-            conn.encoders_ptr = 0;
-
-            const conn_rc = linux.ioctl(
+            var modes: [32]drm_mode_modeinfo = @splat(.{});
+            var conn = drm_mode_get_connector{
+                .connector_id = cid,
+                .modes_ptr = @intFromPtr(&modes),
+                .count_modes = modes.len,
+            };
+            res_rc = linux.ioctl(
                 fd,
                 DRM_IOCTL_MODE_GETCONNECTOR,
                 @intFromPtr(&conn),
             );
-            const signed_conn: isize = @bitCast(conn_rc);
-            if (signed_conn == 0 and
+            if (@as(isize, @bitCast(res_rc)) == 0 and
                 conn.connection == DRM_MODE_CONNECTED and
                 conn.count_modes > 0)
             {
@@ -324,6 +329,10 @@ pub const DrmDevice = struct {
         ioctl_rc = linux.ioctl(fd, DRM_IOCTL_MODE_ADDFB, @intFromPtr(&fb_cmd));
         if (@as(isize, @bitCast(ioctl_rc)) < 0) return error.AddFbFailed;
         const fb_id = fb_cmd.fb_id;
+        errdefer {
+            var rm_id = fb_id;
+            _ = linux.ioctl(fd, DRM_IOCTL_MODE_RMFB, @intFromPtr(&rm_id));
+        }
 
         // 5. Map dumb buffer (standard shared RAM - no page faults!).
         var map_dumb = drm_mode_map_dumb{ .handle = fb_handle };
@@ -411,20 +420,21 @@ pub const DrmDevice = struct {
         _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_DIRTYFB, @intFromPtr(&dirty));
     }
 
-    // Query the DRM driver name via DRM_IOCTL_VERSION.
+    // Query the DRM driver name via DRM_IOCTL_VERSION. The kernel writes the
+    // name straight into `buf` (no NUL) and reports its full length, so a
+    // name longer than `buf` is deliberately truncated to the largest prefix
+    // that fits; it is only ever shown in a log line.
     pub fn getDriverName(self: *DrmDevice, buf: []u8) []const u8 {
-        var name_buf: [64]u8 = undefined;
         var v = drm_version{
-            .name_len = name_buf.len,
-            .name = &name_buf,
+            .name_len = buf.len,
+            .name = buf.ptr,
             .date_len = 0,
             .desc_len = 0,
         };
         const rc = linux.ioctl(self.fd, DRM_IOCTL_VERSION, @intFromPtr(&v));
         if (@as(isize, @bitCast(rc)) == 0 and v.name_len > 0) {
-            const copy_len: usize = @intCast(@min(v.name_len, buf.len));
-            @memcpy(buf[0..copy_len], name_buf[0..copy_len]);
-            return buf[0..copy_len];
+            const name_len: usize = @intCast(@min(v.name_len, buf.len));
+            return buf[0..name_len];
         }
         return "unknown";
     }
@@ -443,6 +453,11 @@ pub const DrmDevice = struct {
             }
             self.fb_pixels = null;
         }
+        if (self.fb_id != 0) {
+            var rm_id = self.fb_id;
+            _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_RMFB, @intFromPtr(&rm_id));
+            self.fb_id = 0;
+        }
         if (self.fb_handle != 0) {
             var destroy = drm_mode_destroy_dumb{ .handle = self.fb_handle };
             _ = linux.ioctl(
@@ -458,6 +473,11 @@ pub const DrmDevice = struct {
         }
     }
 };
+
+test "drm: over-long card path is rejected, not truncated" {
+    const long_path: [DRM_CARD_PATH_BUF_BYTES]u8 = @splat('x');
+    try std.testing.expectError(error.PathTooLong, DrmDevice.init(&long_path));
+}
 
 test "drm: types and ioctls" {
     const testing = std.testing;

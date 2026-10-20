@@ -148,6 +148,17 @@ pub fn formatIsaString(
     }
 }
 
+fn appendSegmentsTruncated(buf: []u8, segments: []const []const u8) void {
+    var pos: usize = 0;
+    for (segments) |seg| {
+        if (pos >= buf.len) break;
+        const avail = buf.len - pos;
+        const copy_len: usize = @min(avail, seg.len);
+        @memcpy(buf[pos .. pos + copy_len], seg[0..copy_len]);
+        pos += copy_len;
+    }
+}
+
 pub fn handleGetHvInfo(
     vc: *VCore,
     ctx: *ThreadCtx,
@@ -191,14 +202,27 @@ pub fn handleGetHvInfo(
     info.hv_reserved_bytes = @intCast(physmem.getHvRegion().size);
     info.hv_heap_free_bytes = @intCast(pcore.getTotalFreeHeapBytes());
 
-    _ = std.fmt.bufPrint(
-        info.build_desc[0 .. info.build_desc.len - 1],
-        "Version {s} ({s}) {s}/{s} {s} {s}@{s} (Zig {s} {s})",
-        .{
-            ver_str,    channel,        git_branch,  rev_str,  build_date,
-            build_user, build_hostname, zig_version, cpu_arch,
-        },
-    ) catch "";
+    appendSegmentsTruncated(info.build_desc[0 .. info.build_desc.len - 1], &.{
+        "Version ",
+        ver_str,
+        " (",
+        channel,
+        ") ",
+        std.mem.span(git_branch),
+        "/",
+        rev_str,
+        " ",
+        std.mem.span(build_date),
+        " ",
+        std.mem.span(build_user),
+        "@",
+        std.mem.span(build_hostname),
+        " (Zig ",
+        std.mem.span(zig_version),
+        " ",
+        std.mem.span(cpu_arch),
+        ")",
+    });
 
     formatIsaString(riscv.readMisa(), &info.host_cpu_isa);
 

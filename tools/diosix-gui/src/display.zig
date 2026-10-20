@@ -11,6 +11,7 @@ const drm = @import("drm.zig");
 const gui_mod = @import("gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 const intro_mod = @import("intro.zig");
+const paths = @import("paths.zig");
 
 pub const MS_PER_SEC: i64 = 1000;
 pub const NS_PER_MS: i64 = 1_000_000;
@@ -46,8 +47,7 @@ pub const Display = struct {
     pub fn init(allocator: std.mem.Allocator) !Display {
         var had_access_denied = false;
         // Try DRM/KMS first (e.g. VirtIO-GPU).
-        const dri_paths = [_][]const u8{ "/dev/dri/card0", "/dev/dri/card1" };
-        for (dri_paths) |card_path| {
+        for (paths.DRI_CARD_PATHS) |card_path| {
             if (drm.DrmDevice.init(card_path)) |init_dev| {
                 var dev = init_dev;
                 errdefer dev.deinit();
@@ -77,7 +77,7 @@ pub const Display = struct {
         }
 
         // Fallback to legacy /dev/fb0.
-        const fb_path = "/dev/fb0";
+        const fb_path = paths.FB0_DEVICE_PATH;
         const fd_rc = linux.open(fb_path, .{ .ACCMODE = .RDWR }, 0);
         const signed_fd: isize = @bitCast(fd_rc);
         if (signed_fd >= 0) {
@@ -241,23 +241,25 @@ pub const InputDeviceInfo = struct {
     has_abs: bool = false,
 
     pub fn scaleX(self: *const InputDeviceInfo, raw_x: i32, screen_w: u32) i32 {
-        const span = self.max_x - self.min_x;
+        if (screen_w == 0) return 0;
+        const span: i64 = @as(i64, self.max_x) - @as(i64, self.min_x);
         if (span <= 0) return 0;
         const clamped_raw = std.math.clamp(raw_x, self.min_x, self.max_x);
-        const rel: i64 = @as(i64, clamped_raw - self.min_x);
+        const rel: i64 = @as(i64, clamped_raw) - @as(i64, self.min_x);
         const w_i64: i64 = @intCast(screen_w);
-        const res = @divTrunc(rel * w_i64, @as(i64, span));
+        const res = @divTrunc(rel * w_i64, span);
         const max_coord: i32 = @intCast(screen_w - 1);
         return std.math.clamp(@as(i32, @intCast(res)), 0, max_coord);
     }
 
     pub fn scaleY(self: *const InputDeviceInfo, raw_y: i32, screen_h: u32) i32 {
-        const span = self.max_y - self.min_y;
+        if (screen_h == 0) return 0;
+        const span: i64 = @as(i64, self.max_y) - @as(i64, self.min_y);
         if (span <= 0) return 0;
         const clamped_raw = std.math.clamp(raw_y, self.min_y, self.max_y);
-        const rel: i64 = @as(i64, clamped_raw - self.min_y);
+        const rel: i64 = @as(i64, clamped_raw) - @as(i64, self.min_y);
         const h_i64: i64 = @intCast(screen_h);
-        const res = @divTrunc(rel * h_i64, @as(i64, span));
+        const res = @divTrunc(rel * h_i64, span);
         const max_coord: i32 = @intCast(screen_h - 1);
         return std.math.clamp(@as(i32, @intCast(res)), 0, max_coord);
     }
@@ -283,6 +285,18 @@ fn queryAxis(ifd: i32, a: u32, b: u32, min_p: *i32, max_p: *i32) bool {
     return false;
 }
 
+const INPUT_EVENT_PATH_PREFIX = paths.INPUT_EVENT_PATH_PREFIX;
+
+/// Most decimal digits of a device index (dev_idx is a u8, at most "255").
+const MAX_EVENT_INDEX_DIGITS: usize = std.math.log10_int(
+    @as(u8, std.math.maxInt(u8)),
+) + 1;
+
+/// Capacity for "/dev/input/event<N>" plus its NUL terminator, derived from
+/// the longest possible path so formatting into it can never fail.
+const INPUT_EVENT_PATH_BUF_BYTES: usize =
+    INPUT_EVENT_PATH_PREFIX.len + MAX_EVENT_INDEX_DIGITS + 1;
+
 pub fn openInputDevices(
     input_devs: *[MAX_INPUT_DEVICES]InputDeviceInfo,
     had_eacces: *bool,
@@ -292,12 +306,13 @@ pub fn openInputDevices(
     had_eacces.* = false;
 
     while (dev_idx < MAX_INPUT_DEVICES) : (dev_idx += 1) {
-        var path_buf: [32]u8 = undefined;
+        var path_buf: [INPUT_EVENT_PATH_BUF_BYTES]u8 = undefined;
+        // Cannot fail: the buffer holds the longest possible path plus NUL.
         const p_slice = std.fmt.bufPrint(
             &path_buf,
-            "/dev/input/event{d}",
-            .{dev_idx},
-        ) catch continue;
+            "{s}{d}",
+            .{ INPUT_EVENT_PATH_PREFIX, dev_idx },
+        ) catch unreachable;
         path_buf[p_slice.len] = 0;
         const dev_z: [*:0]const u8 = @ptrCast(path_buf[0..p_slice.len :0]);
         const flags = linux.O{ .ACCMODE = .RDONLY, .NONBLOCK = true };
@@ -350,15 +365,15 @@ pub fn applyMotionEvent(
     pending_y: *i32,
     coords_changed: *bool,
 ) void {
-    const max_x: i32 = @intCast(screen_w - 1);
-    const max_y: i32 = @intCast(screen_h - 1);
+    const max_x: i32 = @intCast(screen_w -| 1);
+    const max_y: i32 = @intCast(screen_h -| 1);
     switch (ev.type) {
         EV_REL => {
             if (ev.code == REL_X) {
-                pending_x.* = std.math.clamp(pending_x.* + ev.value, 0, max_x);
+                pending_x.* = std.math.clamp(pending_x.* +| ev.value, 0, max_x);
                 coords_changed.* = true;
             } else if (ev.code == REL_Y) {
-                pending_y.* = std.math.clamp(pending_y.* + ev.value, 0, max_y);
+                pending_y.* = std.math.clamp(pending_y.* +| ev.value, 0, max_y);
                 coords_changed.* = true;
             }
         },
@@ -435,6 +450,20 @@ pub fn pollIntroInput(
         }
         if (!intro_state.is_active) break;
     }
+}
+
+test "display: event path buffer fits every device index" {
+    var path_buf: [INPUT_EVENT_PATH_BUF_BYTES]u8 = undefined;
+    for (0..std.math.maxInt(u8) + 1) |idx| {
+        const dev_idx: u8 = @intCast(idx);
+        _ = try std.fmt.bufPrint(
+            &path_buf,
+            "{s}{d}",
+            .{ INPUT_EVENT_PATH_PREFIX, dev_idx },
+        );
+    }
+    const longest = "/dev/input/event255";
+    try std.testing.expectEqual(longest.len + 1, INPUT_EVENT_PATH_BUF_BYTES);
 }
 
 test {

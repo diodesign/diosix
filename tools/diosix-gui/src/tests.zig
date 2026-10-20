@@ -458,6 +458,10 @@ test {
     _ = @import("glass.zig");
     _ = @import("gui/chrome.zig");
     _ = @import("gui/input.zig");
+    _ = @import("gui/json.zig");
+    _ = @import("host/mem.zig");
+    _ = @import("ipc.zig");
+    _ = @import("label.zig");
     _ = @import("gui/nav.zig");
     _ = @import("gui/render.zig");
     _ = @import("icon/render.zig");

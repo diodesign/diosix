@@ -1,5 +1,7 @@
 theme: jekyll-theme-minimal
 title: Diosix hypervisor
-description: Diosix is an open-source bare-metal hypervisor written in Zig for multi-core RISC-V systems. It supports RISC-V, Arm, and x86 guests.
+description: >-
+  Diosix is an open-source bare-metal hypervisor written in Zig for
+  multi-core RISC-V systems. It supports RISC-V, Arm, and x86 guests.
 show_downloads: no
 logo: docs/logo.png

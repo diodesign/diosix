@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const atomic = @import("../../../../core/atomic.zig");
 const riscv = @import("mod.zig");
 const csr = @import("csr.zig");
+const guest_csr = @import("csr/guest.zig");
 
 const is_test = builtin.is_test;
 
@@ -17,19 +18,15 @@ pub const MOCK_RAM_ALIGN: usize = 4096;
 pub var test_cpu_ctx: riscv.CpuContext = undefined;
 pub var test_heap: [MOCK_RAM_SIZE]u8 align(MOCK_RAM_ALIGN) = undefined;
 
-fn hw_putchar_mock(_: u8) callconv(.c) void {}
 fn hw_pause_mock() callconv(.c) void {}
 fn hw_pmp_init_mock() callconv(.c) void {}
-fn hw_reboot_mock() callconv(.c) void {}
-fn hw_shutdown_mock() callconv(.c) void {}
-fn hw_set_timer_mock(_: u64) callconv(.c) void {}
 fn hw_xint_init_mock() callconv(.c) void {}
 fn hw_run_vcore_mock(
     _: *riscv.ThreadContext,
     _: *const riscv.MachineState,
     _: *const riscv.GuestState,
 ) callconv(.c) noreturn {
-    while (true) {}
+    @panic("hw_run_vcore_mock reached in host unit test");
 }
 fn hw_dynarec_run_block_mock(_: *[32]u64, _: usize) callconv(.c) usize {
     return 0;
@@ -47,7 +44,6 @@ pub export fn hw_heap_size_mock() usize {
 }
 
 const mock_hypervisor_start: u8 = 0;
-const mock_data_start: u8 = 0;
 const mock_hypervisor_end: u8 = 0;
 
 comptime {
@@ -57,27 +53,13 @@ comptime {
             .name = "__hypervisor_start",
             .linkage = strong,
         });
-        @export(&mock_data_start, .{
-            .name = "__data_start",
-            .linkage = strong,
-        });
         @export(&mock_hypervisor_end, .{
             .name = "__hypervisor_end",
             .linkage = strong,
         });
-        @export(&hw_putchar_mock, .{ .name = "hw_putchar", .linkage = strong });
         @export(&hw_pause_mock, .{ .name = "hw_pause", .linkage = strong });
         @export(&hw_pmp_init_mock, .{
             .name = "hw_pmp_init",
-            .linkage = strong,
-        });
-        @export(&hw_reboot_mock, .{ .name = "hw_reboot", .linkage = strong });
-        @export(&hw_shutdown_mock, .{
-            .name = "hw_shutdown",
-            .linkage = strong,
-        });
-        @export(&hw_set_timer_mock, .{
-            .name = "hw_set_timer",
             .linkage = strong,
         });
         @export(&hw_private_variables_mock, .{
@@ -120,6 +102,8 @@ pub fn initMockHardware() void {
     test_cpu_ctx.in_m_mode = true;
     riscv.test_time = 0;
     csr.resetMockCsrs();
+    guest_csr.mock_vsstatus = 0;
+    guest_csr.mock_sstatus = 0;
     @memset(&test_heap, 0);
 }
 

@@ -128,18 +128,24 @@ initialized from `@min` or `@max` with a comptime literal
 (`const row_w: usize = @min(width, 1280);`).
 
 Separate mechanism from policy: implement behavior in code and store tunable
-parameters in configuration files under `/etc/diosix/` with appropriate
-least-privilege file permissions. Avoid accumulating multi-path fallback arrays
-for internal files or symbols that ship together in the repository; update all
-in-tree producers, consumers, and tests atomically to reference a single
-canonical path.
+parameters, build layouts, and file paths outside the implementation in
+declarative configuration files (`build/layout.zon`, `boot/hypervisor.conf`,
+and `/etc/diosix/*.toml` with least-privilege file permissions) or dedicated
+path modules (`sysconfig.zig`, `paths.zig`). Never scatter hardcoded file paths
+or hand-maintained source file arrays across build scripts or source files.
+Avoid accumulating multi-path fallback arrays for internal files or symbols
+that ship together in the repository; update all in-tree producers, consumers,
+and tests atomically to reference a single canonical path.
 
-Be explicit about memory management and allocations. During early M-mode boot
-before a heap allocator is initialized, static pre-allocated buffers are
-appropriate for safety. As soon as an allocator is available — whether the
-per-core heap allocator in M-mode or dynamic allocators in U-mode utilities —
-allocate and grow buffers dynamically rather than guessing fixed stack buffer
-sizes. Consistently pair allocations with `defer` and `errdefer` to guarantee
-resource cleanup on all control-flow paths, and never discard error return
-values. All code must be formatted using `zig fmt` before it is submitted for
-review.
+Be explicit about memory management, buffer capacities, and formatting. During
+early M-mode boot before a heap allocator is initialized, static pre-allocated
+buffers are appropriate for safety. As soon as an allocator is available —
+whether the per-core heap allocator in M-mode or dynamic allocators in U-mode
+utilities — allocate and grow buffers dynamically rather than guessing fixed
+stack buffer sizes. When a bounded fixed-capacity buffer is required by an ABI
+or zero-allocation hot path, size it with a named constant that documents its
+invariants, and never swallow `std.fmt.bufPrint` errors with `catch ""`; use a
+centralized truncation helper that logs a diagnostic warning on overflow.
+Consistently pair allocations with `defer` and `errdefer` to guarantee resource
+cleanup on all control-flow paths, and never discard error return values. All
+code must be formatted using `zig fmt` before it is submitted for review.

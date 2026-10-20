@@ -16,6 +16,7 @@ pub const cmdCharterPropose = status.cmdCharterPropose;
 pub const cmdCharterAudit = status.cmdCharterAudit;
 
 const printStr = common.printStr;
+const printFmt = common.printFmt;
 const parseCid = common.parseCid;
 const printApiError = common.printApiError;
 
@@ -115,39 +116,32 @@ pub fn cmdCharter(
     }
 
     const cmd = std.meta.stringToEnum(CharterSubcommand, subcmd) orelse {
-        var err_buf: [128]u8 = undefined;
-        const err_msg = std.fmt.bufPrint(
-            &err_buf,
+        printFmt(
             "Error: Unknown charter subcommand '{s}'. " ++
                 "Use '{s} charter help'.\n",
             .{ subcmd, exe_name },
-        ) catch return;
-        printStr(err_msg);
+        );
         return;
     };
 
     switch (cmd) {
-        .help, .@"--help" => {
-            var buf: [1536]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf,
-                \\Usage: {s} charter <subcmd> [options]
-                \\
-                \\Subcommands:
-                \\  status [--file <path>] [--json]      Show Charter state
-                \\  deploy [--file <path>] [--json]      Seal Charter in M-mode
-                \\  propose <action> [options] [--json]  Evaluate proposal
-                \\      [--unit <id>]                    Target unit ID
-                \\      [--count <N>] [--total <M>]      Unit/Steward counts
-                \\      [--quorum]                       Mark quorum ratified
-                \\  ratify [--target <cid>] [--json]     Cast ratification vote
-                \\  whisper <send|recv> [opts] [--json]  Whisper Protocol IPC
-                \\  reset-steward <cid> [--json]         Reset Steward VM
-                \\  failover [--standby <cid>] [--json]  Promote Standby Root
-                \\  audit [--file <path>] [--json]       Audit M-mode Charter
-                \\
-            , .{exe_name}) catch return;
-            printStr(msg);
-        },
+        .help, .@"--help" => printFmt(
+            \\Usage: {s} charter <subcmd> [options]
+            \\
+            \\Subcommands:
+            \\  status [--file <path>] [--json]      Show Charter state
+            \\  deploy [--file <path>] [--json]      Seal Charter in M-mode
+            \\  propose <action> [options] [--json]  Evaluate proposal
+            \\      [--unit <id>]                    Target unit ID
+            \\      [--count <N>] [--total <M>]      Unit/Steward counts
+            \\      [--quorum]                       Mark quorum ratified
+            \\  ratify [--target <cid>] [--json]     Cast ratification vote
+            \\  whisper <send|recv> [opts] [--json]  Whisper Protocol IPC
+            \\  reset-steward <cid> [--json]         Reset Steward VM
+            \\  failover [--standby <cid>] [--json]  Promote Standby Root
+            \\  audit [--file <path>] [--json]       Audit M-mode Charter
+            \\
+        , .{exe_name}),
         .status => cmdCharterStatus(client, file_path, json_mode),
         .deploy, .seal => cmdCharterDeploy(client, file_path, json_mode),
         .propose => cmdCharterPropose(args, arg_start, file_path, json_mode),
@@ -169,22 +163,19 @@ pub fn cmdCharter(
                 printApiError("Ratify Constitutional Charter action", err);
                 return;
             };
-            var out_buf: [256]u8 = undefined;
-            const out = if (json_mode)
-                std.fmt.bufPrint(
-                    &out_buf,
+            if (json_mode) {
+                printFmt(
                     "{{\"status\":\"ratified\",\"target_cid\":{d}," ++
                         "\"ratified_mask\":{d}}}\n",
                     .{ target_cid, bitmap },
-                ) catch return
-            else
-                std.fmt.bufPrint(
-                    &out_buf,
+                );
+            } else {
+                printFmt(
                     "✓ Recorded Steward ratification vote for target " ++
                         "CID {d} (mask: 0x{x}).\n",
                     .{ target_cid, bitmap },
-                ) catch return;
-            printStr(out);
+                );
+            }
         },
         .whisper => whisper.cmdCharterWhisper(args, arg_start, json_mode),
         .@"reset-steward" => {

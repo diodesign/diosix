@@ -11,6 +11,8 @@ const gui_mod = @import("gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 const intro_mod = @import("intro.zig");
 const audio_mod = @import("audio.zig");
+const ipc = @import("ipc.zig");
+const paths = @import("paths.zig");
 pub const display_mod = @import("display.zig");
 pub const noise_mod = @import("noise.zig");
 pub const banner_font_mod = @import("font/banner.zig");
@@ -45,6 +47,17 @@ pub const BTN_MIDDLE = display_mod.BTN_MIDDLE;
 pub const BTN_TOUCH = display_mod.BTN_TOUCH;
 
 const getMilliTimestamp = display_mod.getMilliTimestamp;
+
+/// Capacity for the PID line written to the lock file: pid_t is an i32, so
+/// at most ten digits ("2147483647") plus the trailing newline.
+const MAX_PID_LINE_BYTES: usize = "2147483647\n".len;
+
+/// Capacity for the DRM driver name shown in the startup log line. Kernel
+/// driver names are short identifiers (e.g. "virtio_gpu"); a longer name is
+/// truncated to this prefix, which only affects the log text.
+const DRM_DRIVER_NAME_LOG_BYTES: usize = 64;
+
+const STARTUP_MSG = "Starting Diosix Monolithic GUI (diosix-gui)...\n";
 
 fn pollMainInput(
     devs: []const InputDeviceInfo,
@@ -95,7 +108,7 @@ fn pollMainInput(
                         },
                         EV_REL => {
                             if (ev.code == REL_WHEEL) {
-                                const dy = -ev.value;
+                                const dy = 0 -| ev.value;
                                 gui.handleMouseScroll(pending_x, pending_y, dy);
                             } else {
                                 display_mod.applyMotionEvent(
@@ -132,47 +145,6 @@ fn pollMainInput(
     }
 }
 
-fn checkSemanticIpcCommand(gui: *DiosixGui) void {
-    const flags = linux.O{ .ACCMODE = .RDONLY, .NOFOLLOW = true };
-    const cmd_fd_rc = linux.open("/run/diosix/gui_cmd", flags, 0);
-    const cmd_fd_signed: isize = @bitCast(cmd_fd_rc);
-    if (cmd_fd_signed >= 0) {
-        const cmd_fd: i32 = @intCast(cmd_fd_signed);
-        var cmd_buf: [128]u8 = undefined;
-        const rd_rc = linux.read(cmd_fd, &cmd_buf, cmd_buf.len);
-        _ = linux.close(cmd_fd);
-        _ = linux.unlink("/run/diosix/gui_cmd");
-        const rd_signed: isize = @bitCast(rd_rc);
-        if (rd_signed > 0) {
-            const raw_cmd = cmd_buf[0..@intCast(rd_signed)];
-            const trimmed_cmd = std.mem.trim(u8, raw_cmd, " \t\r\n");
-            if (trimmed_cmd.len > 0) {
-                _ = gui.triggerSemanticAction(trimmed_cmd) catch {};
-            }
-        }
-    }
-}
-
-fn exportSemanticStateFile(gui: *const DiosixGui) void {
-    var state_buf: [512]u8 = undefined;
-    const state_json = gui.exportSemanticStateJson(&state_buf);
-    if (state_json.len > 0) {
-        const flags = linux.O{
-            .ACCMODE = .WRONLY,
-            .CREAT = true,
-            .TRUNC = true,
-            .NOFOLLOW = true,
-        };
-        const st_fd_rc = linux.open("/run/diosix/gui_state.json", flags, 0o600);
-        const st_signed: isize = @bitCast(st_fd_rc);
-        if (st_signed >= 0) {
-            const st_fd: i32 = @intCast(st_signed);
-            _ = linux.write(st_fd, state_json.ptr, state_json.len);
-            _ = linux.close(st_fd);
-        }
-    }
-}
-
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
@@ -188,8 +160,8 @@ pub fn main() !void {
 
     // Singleton lock: kernel-enforced flock preventing concurrent instances.
     var lock_fd: i32 = -1;
-    const run_dir_path = "/run/diosix";
-    const run_lock_path = "/run/diosix/diosix-gui.lock";
+    const run_dir_path = paths.RUN_DIOSIX_DIR;
+    const run_lock_path = paths.GUI_LOCK_PATH;
     const lock_flags = linux.O{
         .ACCMODE = .RDWR,
         .CREAT = true,
@@ -217,24 +189,18 @@ pub fn main() !void {
             _ = linux.close(lock_fd);
             return;
         }
-        var pbuf: [32]u8 = undefined;
+        var pbuf: [MAX_PID_LINE_BYTES]u8 = undefined;
         const my_pid = linux.getpid();
-        const s = std.fmt.bufPrint(&pbuf, "{d}\n", .{my_pid}) catch "";
-        if (s.len > 0) {
-            _ = linux.write(lock_fd, s.ptr, s.len);
-        }
+        // Cannot fail: MAX_PID_LINE_BYTES fits any pid_t plus newline.
+        const s = std.fmt.bufPrint(&pbuf, "{d}\n", .{my_pid}) catch
+            unreachable;
+        _ = linux.write(lock_fd, s.ptr, s.len);
     }
     defer {
         if (lock_fd >= 0) _ = linux.close(lock_fd);
     }
 
-    var stdout_buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrint(
-        &stdout_buf,
-        "Starting Diosix Monolithic GUI (diosix-gui)...\n",
-        .{},
-    ) catch return;
-    _ = linux.write(1, msg.ptr, msg.len);
+    _ = linux.write(1, STARTUP_MSG.ptr, STARTUP_MSG.len);
 
     // 1. Initialize Display.
     var display = Display.init(allocator) catch |err| {
@@ -266,7 +232,7 @@ pub fn main() !void {
         d.hasHardwareAcceleration()
     else
         false;
-    var drv_buf: [64]u8 = undefined;
+    var drv_buf: [DRM_DRIVER_NAME_LOG_BYTES]u8 = undefined;
     if (is_accel) {
         const drv_name = if (display.drm_dev) |*d|
             d.getDriverName(&drv_buf)
@@ -394,9 +360,7 @@ pub fn main() !void {
     while (true) {
         const cur_time = getMilliTimestamp();
         const elapsed_since_render = cur_time - last_render_time;
-        const poll_timeout: i32 = if (gui.hasActiveAnimation())
-            0
-        else if (elapsed_since_render >= FRAME_INTERVAL_MS)
+        const poll_timeout: i32 = if (elapsed_since_render >= FRAME_INTERVAL_MS)
             0
         else
             @intCast(FRAME_INTERVAL_MS - elapsed_since_render);
@@ -418,7 +382,7 @@ pub fn main() !void {
             pollMainInput(input_devs[0..input_count], &pfds, &display, &gui);
         }
 
-        checkSemanticIpcCommand(&gui);
+        ipc.checkSemanticIpcCommand(&gui);
 
         const cursor_should_show = gui.cursor.visible;
         const dx_ne = gui.cursor.x != display.prev_cursor_x;
@@ -426,8 +390,8 @@ pub fn main() !void {
         const cursor_moved = cursor_should_show and (dx_ne or dy_ne);
         const cursor_state_changed = cursor_should_show != display.cursor_drawn;
         const time_due = (now - last_render_time) >= FRAME_INTERVAL_MS;
-        const should_render = time_due or (signed_poll <= 0) or
-            cursor_moved or cursor_state_changed or gui.isDirty();
+        const should_render = gui.isDirty() or cursor_moved or
+            cursor_state_changed or (gui.hasActiveAnimation() and time_due);
 
         if (should_render) {
             last_render_time = now;
@@ -435,7 +399,7 @@ pub fn main() !void {
             const cursor_box = gui.cursor.getBox();
 
             if (!damage.isEmpty()) {
-                exportSemanticStateFile(&gui);
+                ipc.exportSemanticStateFile(&gui);
             }
 
             if (!damage.isEmpty() or cursor_moved or cursor_state_changed) {
@@ -479,4 +443,5 @@ pub fn main() !void {
 test {
     std.testing.refAllDecls(@This());
     _ = @import("tests.zig");
+    _ = ipc;
 }

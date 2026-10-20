@@ -24,16 +24,16 @@ const governance = main.governance;
 const CID_PARENT = common.CID_PARENT;
 const CID_SELF = common.CID_SELF;
 const MAX_PATH_LEN = common.MAX_PATH_LEN;
-const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
 const parseCid = common.parseCid;
 const isArch = common.isArch;
 const parseMemorySizeMb = common.parseMemorySizeMb;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
 const matchTarget = common.matchTarget;
-const formatSelfInfo = vm.formatSelfInfo;
-const formatVersionChannel = host.formatVersionChannel;
-const formatHostInfo = host.formatHostInfo;
+
+const TEST_SHORT_BUF_LEN: usize = 32;
+const TEST_VERSION_MAX_SIZE: usize = 1024;
+const TEST_MISSING_MAX_SIZE: usize = 4096;
 
 test {
     inline for (.{
@@ -55,13 +55,18 @@ test {
         @import("../auth.zig"),
         @import("../auth/enroll.zig"),
         @import("../catalog/format.zig"),
+        @import("../console.zig"),
         @import("../charter/cmd.zig"),
         @import("../charter/status.zig"),
+        @import("../charter/toml.zig"),
         @import("../charter/whisper.zig"),
+        @import("../common/output.zig"),
         @import("../gui.zig"),
+        @import("../host/info.zig"),
         @import("../image.zig"),
         @import("../image/import.zig"),
         @import("../image/pull.zig"),
+        @import("../loader/pe.zig"),
         @import("../manifest/cmd.zig"),
         @import("../manifest/lexer.zig"),
         @import("../manifest/policy.zig"),
@@ -69,14 +74,19 @@ test {
         @import("../snapshot.zig"),
         @import("../ssh/sync.zig"),
         @import("../storage/disk.zig"),
+        @import("../sysconfig/parser.zig"),
         @import("../sysconfig/tour.zig"),
+        @import("../vm/fdt_patch.zig"),
         @import("../vm/info.zig"),
         @import("../vm/install.zig"),
+        @import("../vm/owned.zig"),
         @import("../vm/restart.zig"),
         @import("../vm/run.zig"),
         @import("../vm/stage.zig"),
         @import("../whisper.zig"),
+        @import("cli.zig"),
     }) |mod| testing.refAllDecls(mod);
+    testing.refAllDecls(@This());
 }
 
 test "parseCid resolution" {
@@ -113,10 +123,13 @@ test "parseMemorySizeMb unit conversions" {
 test "readBinaryFile error handling" {
     try testing.expectError(
         error.FileNotFound,
-        readBinaryFile("/nonexistent/file/path/here.bin", 4096),
+        readBinaryFile(
+            "/nonexistent/file/path/here.bin",
+            TEST_MISSING_MAX_SIZE,
+        ),
     );
 
-    const content = try readBinaryFile("VERSION", 1024);
+    const content = try readBinaryFile("VERSION", TEST_VERSION_MAX_SIZE);
     defer unmapBinaryFile(content);
     try testing.expect(content.len > 0);
 }
@@ -168,25 +181,25 @@ test "matchTarget resolution" {
 }
 
 test "RAM string formatting normalization" {
-    var buf1: [32]u8 = undefined;
-    var buf2: [32]u8 = undefined;
-    var buf3: [32]u8 = undefined;
+    var buf1: [TEST_SHORT_BUF_LEN]u8 = undefined;
+    var buf2: [TEST_SHORT_BUF_LEN]u8 = undefined;
+    var buf3: [TEST_SHORT_BUF_LEN]u8 = undefined;
 
-    const s1 = std.fmt.bufPrint(
+    const s1 = try std.fmt.bufPrint(
         &buf1,
         "{d} MB",
         .{parseMemorySizeMb("256M")},
-    ) catch "";
-    const s2 = std.fmt.bufPrint(
+    );
+    const s2 = try std.fmt.bufPrint(
         &buf2,
         "{d} MB",
         .{parseMemorySizeMb("512 MB")},
-    ) catch "";
-    const s3 = std.fmt.bufPrint(
+    );
+    const s3 = try std.fmt.bufPrint(
         &buf3,
         "{d} MB",
         .{parseMemorySizeMb("2GiB")},
-    ) catch "";
+    );
 
     try testing.expectEqualStrings("256 MB", s1);
     try testing.expectEqualStrings("512 MB", s2);
@@ -196,11 +209,11 @@ test "RAM string formatting normalization" {
 test "disk path and capacity resolution" {
     var path_buf: [MAX_PATH_LEN]u8 = undefined;
     const disk_name = "user-data";
-    const full_path = std.fmt.bufPrint(
+    const full_path = try std.fmt.bufPrint(
         &path_buf,
-        "/var/lib/diosix/disks/{s}.img",
-        .{disk_name},
-    ) catch "";
+        "{s}/{s}.img",
+        .{ sysconfig.DEFAULT_DISKS_DIR, disk_name },
+    );
     try testing.expectEqualStrings(
         "/var/lib/diosix/disks/user-data.img",
         full_path,
@@ -214,11 +227,11 @@ test "disk path and capacity resolution" {
 
 test "snapshot path resolution" {
     var snap_buf: [MAX_PATH_LEN]u8 = undefined;
-    const snap_path = std.fmt.bufPrint(
+    const snap_path = try std.fmt.bufPrint(
         &snap_buf,
-        "/var/lib/diosix/snapshots/{s}_{s}.snap",
-        .{ "leenix", "checkpoint-1" },
-    ) catch "";
+        "{s}/{s}_{s}.snap",
+        .{ sysconfig.DEFAULT_SNAPSHOTS_DIR, "leenix", "checkpoint-1" },
+    );
     try testing.expectEqualStrings(
         "/var/lib/diosix/snapshots/leenix_checkpoint-1.snap",
         snap_path,
@@ -228,11 +241,11 @@ test "snapshot path resolution" {
 test "image and cdrom path resolution" {
     var iso_buf: [MAX_PATH_LEN]u8 = undefined;
     const iso_name = "debian-12-netinst";
-    const full_iso_path = std.fmt.bufPrint(
+    const full_iso_path = try std.fmt.bufPrint(
         &iso_buf,
-        "/var/lib/diosix/iso/{s}.iso",
-        .{iso_name},
-    ) catch "";
+        "{s}/{s}.iso",
+        .{ sysconfig.DEFAULT_ISO_DIR, iso_name },
+    );
     try testing.expectEqualStrings(
         "/var/lib/diosix/iso/debian-12-netinst.iso",
         full_iso_path,
@@ -240,250 +253,13 @@ test "image and cdrom path resolution" {
 
     var img_buf: [MAX_PATH_LEN]u8 = undefined;
     const img_name = "debian-installer";
-    const full_img_path = std.fmt.bufPrint(
+    const full_img_path = try std.fmt.bufPrint(
         &img_buf,
-        "/var/lib/diosix/images/{s}.elf",
-        .{img_name},
-    ) catch "";
+        "{s}/{s}.elf",
+        .{ sysconfig.DEFAULT_IMAGES_DIR, img_name },
+    );
     try testing.expectEqualStrings(
         "/var/lib/diosix/images/debian-installer.elf",
         full_img_path,
     );
-}
-
-test "formatVersionChannel CalVer formatting" {
-    var buf: [32]u8 = undefined;
-    try testing.expectEqualStrings(
-        "26.1",
-        formatVersionChannel(&buf, 26, 1, 0),
-    );
-    try testing.expectEqualStrings(
-        "26.2",
-        formatVersionChannel(&buf, 26, 2, 0),
-    );
-    try testing.expectEqualStrings(
-        "26.2.1",
-        formatVersionChannel(&buf, 26, 2, 1),
-    );
-}
-
-test "formatSelfInfo omits context and parent IDs and supports JSON" {
-    const info = api.GuestInfo{
-        .guest_id = 1,
-        .parent_id = 0,
-        .is_trusted = 1,
-        .is_root = 1,
-        .target_arch = 1,
-        .assigned_cid = 1,
-        .vcpus = 4,
-        .self_ram_pages = (256 * 1024) / 4,
-        .used_vcpus = 4,
-        .max_vcpus = 0,
-        .used_ram_pages = (128 * 1024) / 4,
-        .max_ram_pages = 0,
-        .child_count = 0,
-    };
-
-    var text_buf: [512]u8 = undefined;
-    const text_out = formatSelfInfo(&text_buf, info, false);
-    try testing.expect(std.mem.indexOf(u8, text_out, "Context ID") == null);
-    try testing.expect(std.mem.indexOf(u8, text_out, "Parent CID") == null);
-    try testing.expect(
-        std.mem.indexOf(u8, text_out, "Root VM        : yes") != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(
-            u8,
-            text_out,
-            "RAM allocation : 256 MB (65536 pages)",
-        ) != null,
-    );
-
-    var json_buf: [512]u8 = undefined;
-    const json_out = formatSelfInfo(&json_buf, info, true);
-    try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"root_vm\":true") != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"ram_mb\":256") != null,
-    );
-}
-
-test "formatHostInfo text and JSON output with injection sanitization" {
-    var info = api.HypervisorInfo{
-        .version_major = 26,
-        .version_minor = 2,
-        .version_patch = 1,
-        .features = api.HypervisorFeature.HARDWARE_VIRT |
-            api.HypervisorFeature.VIRTIO_VSOCK |
-            api.HypervisorFeature.RELEASE_STABLE |
-            api.HypervisorFeature.CHARTER_SEALED,
-        .host_physical_cores = 4,
-        .host_total_ram_kb = 2048 * 1024,
-        .host_free_ram_kb = 1536 * 1024,
-        .hv_reserved_bytes = 512 * 1024,
-        .hv_heap_free_bytes = 256 * 1024,
-    };
-    @memcpy(info.build_commit[0..9], "a1b2c3d\"\\");
-    @memcpy(info.host_cpu_isa[0..7], "RV64GC\n");
-    const desc =
-        "Version 26.2.1 (stable) oct26-review/a1b2c3d Sun Oct 18 2026 " ++
-        "chris@violet (Zig 0.17.0 riscv64)";
-    @memcpy(info.build_desc[0..desc.len], desc);
-
-    var text_buf: [1024]u8 = undefined;
-    const text_out = formatHostInfo(&text_buf, info, false);
-    try testing.expect(std.mem.indexOf(u8, text_out, "Diosix version") == null);
-    try testing.expect(
-        std.mem.indexOf(
-            u8,
-            text_out,
-            "Hypervisor build : Version 26.2.1 (stable) oct26-review/a1b2c3d",
-        ) != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(
-            u8,
-            text_out,
-            "[x] Hardware H-extension (nested virtualization)",
-        ) != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(
-            u8,
-            text_out,
-            "[x] VirtIO-vsock (AF_VSOCK in-hypervisor networking)",
-        ) != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(
-            u8,
-            text_out,
-            "[x] Constitutional Charter sealed in M-mode",
-        ) != null,
-    );
-
-    var json_buf: [1024]u8 = undefined;
-    const json_out = formatHostInfo(&json_buf, info, true);
-    try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"version\":\"26.2.1\"") != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"channel\":\"stable\"") != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"branch\":\"oct26-review\"") != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"commit\":\"a1b2c3d\"") != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"isa\":\"RV64GC\"") != null,
-    );
-    try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"charter_sealed\":true") != null,
-    );
-}
-
-test "loader canonical paths and SHIM_HEADER_MAGIC are configured" {
-    try testing.expectEqualStrings(
-        "/usr/share/diosix/shim/guest-shim-riscv64.elf",
-        loader.GUEST_SHIM_PATH,
-    );
-    try testing.expectEqualStrings(
-        "/var/lib/diosix/images/default.elf",
-        loader.DEFAULT_GUEST_IMAGE_PATH,
-    );
-    try testing.expectEqualStrings(
-        "/var/lib/diosix/images/micro-guest.elf",
-        loader.FALLBACK_GUEST_IMAGE_PATH,
-    );
-    try testing.expectEqualStrings(
-        "/var/lib/diosix/iso/micro-guest.iso",
-        loader.FALLBACK_GUEST_ISO_PATH,
-    );
-    try testing.expectEqual(
-        @as(u64, 0x4d49_4853_5853_4f44),
-        loader.SHIM_HEADER_MAGIC,
-    );
-}
-
-test "parseProposalAction and shipped TOML configs parse cleanly" {
-    for ([_]struct { []const u8, charter.ProposalAction }{
-        .{ "amend-charter", .amend_charter },
-        .{ "retire-steward", .terminate_steward },
-        .{ "reset-steward", .reset_steward },
-        .{ "promote-standby-root", .root_failover },
-        .{ "terminate-vm", .terminate_units },
-    }) |pair| {
-        try testing.expectEqual(
-            pair[1],
-            governance.parseProposalAction(pair[0]).?,
-        );
-    }
-    try testing.expect(
-        governance.parseProposalAction("unknown-action") == null,
-    );
-
-    const shipped_charter = try readBinaryFile(
-        "tools/overlay-common/etc/diosix/charter.toml",
-        MAX_MANIFEST_SIZE,
-    );
-    defer unmapBinaryFile(shipped_charter);
-    const parsed = try charter.parseCharterToml(shipped_charter);
-    try testing.expectEqualStrings("autonomous-mesh-01", parsed.id());
-    try testing.expectEqual(@as(u16, 2), parsed.quorum_required);
-    try testing.expectEqual(@as(u16, 3), parsed.quorum_total);
-    try testing.expectEqual(@as(u16, 3), parsed.min_stewards);
-
-    const shipped_sys = try readBinaryFile(
-        "tools/overlay-common/etc/diosix/diosix.toml",
-        65536,
-    );
-    defer unmapBinaryFile(shipped_sys);
-    const sys_parsed = sysconfig.parseSystemConfigToml(shipped_sys);
-    try testing.expectEqual(@as(usize, 1), sys_parsed.default_vcpus);
-    try testing.expectEqualStrings("256 MB", sys_parsed.defaultRam());
-    try testing.expectEqual(@as(usize, 5), sys_parsed.tour_count);
-
-    const shipped_install = try readBinaryFile(
-        "tools/overlay-common/etc/diosix/install.toml",
-        65536,
-    );
-    defer unmapBinaryFile(shipped_install);
-    const inst_parsed = installer.parseInstallConfigToml(shipped_install);
-    try testing.expectEqual(@as(usize, 512), inst_parsed.boot_part_mb);
-    try testing.expectEqual(@as(usize, 4096), inst_parsed.state_part_mb);
-}
-
-test "Command enum dispatches all CLI commands and aliases" {
-    const Command = main.Command;
-    for ([_]struct { []const u8, Command }{
-        .{ "host", .host },
-        .{ "run", .run },
-        .{ "create", .create },
-        .{ "install-guest", .@"install-guest" },
-        .{ "list", .list },
-        .{ "ps", .ps },
-        .{ "ssh", .ssh },
-        .{ "charter", .charter },
-        .{ "steward", .steward },
-        .{ "drop-trust", .@"drop-trust" },
-    }) |pair| {
-        try testing.expectEqual(
-            pair[1],
-            std.meta.stringToEnum(Command, pair[0]).?,
-        );
-    }
-    try testing.expect(
-        std.meta.stringToEnum(Command, "nonexistent-cmd") == null,
-    );
-}
-
-test "setExeName and getExeName store and strip path prefixes" {
-    try testing.expectEqualStrings("dsx", common.getExeName());
-    common.setExeName("/usr/bin/diosix-ctl");
-    try testing.expectEqualStrings("diosix-ctl", common.getExeName());
-    common.setExeName("dsx");
-    try testing.expectEqualStrings("dsx", common.getExeName());
 }

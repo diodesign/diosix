@@ -39,6 +39,7 @@ pub const GPT_NUM_PART_ENTRIES_OFFSET: usize = 80;
 pub const GPT_SIZE_OF_PART_ENTRY_OFFSET: usize = 84;
 pub const GPT_MIN_ENTRY_SIZE: u32 = 128;
 pub const GPT_MAX_PARTITIONS: usize = 16;
+pub const MAX_GPT_SCAN_ENTRIES: usize = GPT_MAX_PARTITIONS * 8;
 pub const GPT_ENTRY_GUID_LEN: usize = 16;
 pub const GPT_ENTRY_UNIQUE_GUID_OFFSET: usize = 16;
 pub const GPT_ENTRY_FIRST_LBA_OFFSET: usize = 32;
@@ -234,7 +235,8 @@ pub fn parseGptPartitions(
     ) orelse return error.InvalidGptHeader;
 
     var count: usize = 0;
-    const max_scan = @min(@as(usize, num_entries), GPT_MAX_PARTITIONS * 8);
+    const max_scan: usize =
+        @min(@as(usize, num_entries), MAX_GPT_SCAN_ENTRIES);
     var idx: usize = 0;
     while (idx < max_scan and count < out_partitions.len) : (idx += 1) {
         const step = std.math.mul(
@@ -263,7 +265,7 @@ pub fn parseGptPartitions(
         const first_lba = readU64Le(entry, GPT_ENTRY_FIRST_LBA_OFFSET);
         const last_lba = readU64Le(entry, GPT_ENTRY_LAST_LBA_OFFSET);
         const attrs = readU64Le(entry, GPT_ENTRY_ATTRS_OFFSET);
-        if (first_lba == 0 or last_lba < first_lba) continue;
+        if (first_lba <= GPT_HEADER_LBA or last_lba < first_lba) continue;
 
         var p: GptPartition = .{
             .type_guid = undefined,
@@ -324,7 +326,9 @@ pub fn parseIso9660Volume(iso_data: []const u8) BootLoaderError!IsoVolumeInfo {
         }
     }
 
-    if (!found_pvd or info.root_extent_lba == 0) return error.InvalidIsoVolume;
+    if (!found_pvd or info.root_extent_lba == 0 or info.root_data_length == 0) {
+        return error.InvalidIsoVolume;
+    }
     return info;
 }
 

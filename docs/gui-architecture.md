@@ -59,39 +59,60 @@ rules:
 Located in `tools/diosix-gui/src/`:
 
 *   **[`framebuffer.zig`](../tools/diosix-gui/src/framebuffer.zig),
-    [`glass.zig`](../tools/diosix-gui/src/glass.zig), and
-    [`backdrop.zig`](../tools/diosix-gui/src/backdrop.zig)**: Double-buffered
+    [`glass.zig`](../tools/diosix-gui/src/glass.zig),
+    [`backdrop.zig`](../tools/diosix-gui/src/backdrop.zig),
+    [`blur.zig`](../tools/diosix-gui/src/backdrop/blur.zig),
+    [`noise.zig`](../tools/diosix-gui/src/noise.zig),
+    [`font.zig`](../tools/diosix-gui/src/font.zig),
+    [`banner.zig`](../tools/diosix-gui/src/font/banner.zig), and
+    [`cursor.zig`](../tools/diosix-gui/src/cursor.zig)**: Double-buffered
     32-bit XRGB8888 software rasterizer, optical superellipse glass pane shader,
-    and procedural terrain/cloud sky backdrop renderer.
+    procedural terrain/cloud sky backdrop renderer, anti-aliased glyph
+    rasterizer, and software cursor rendering.
 *   **[`window.zig`](../tools/diosix-gui/src/window.zig) and
     [`input.zig`](../tools/diosix-gui/src/window/input.zig)**: Window chrome,
     titlebar hit-testing, scrollbars, and mouse/keyboard dispatch.
 *   **[`icon.zig`](../tools/diosix-gui/src/icon.zig),
-    [`render.zig`](../tools/diosix-gui/src/icon/render.zig), and
-    [`viewport.zig`](../tools/diosix-gui/src/icon/viewport.zig)**: Widget
+    [`render.zig`](../tools/diosix-gui/src/icon/render.zig),
+    [`text.zig`](../tools/diosix-gui/src/icon/text.zig),
+    [`viewport.zig`](../tools/diosix-gui/src/icon/viewport.zig),
+    [`widgets.zig`](../tools/diosix-gui/src/icon/widgets.zig), and
+    [`label.zig`](../tools/diosix-gui/src/label.zig)**: Widget
     primitives (buttons, badges, sliders, progress bars, RFB/Wayland client
-    viewports, and vector action glyphs).
+    viewports, vector action glyphs, and bounded text formatting).
 *   **[`panes.zig`](../tools/diosix-gui/src/panes.zig),
     [`vm.zig`](../tools/diosix-gui/src/panes/vm.zig),
-    [`catalog.zig`](../tools/diosix-gui/src/panes/catalog.zig), and
-    [`modal.zig`](../tools/diosix-gui/src/panes/modal.zig)**: Layout builders
+    [`catalog.zig`](../tools/diosix-gui/src/panes/catalog.zig),
+    [`modal.zig`](../tools/diosix-gui/src/panes/modal.zig), and
+    [`osk.zig`](../tools/diosix-gui/src/panes/osk.zig)**: Layout builders
     for the VM Fleet Overview, slide-out VM Action Drawer, Software and
     Hardware panes, Power modal, Welcome modal, 5-step Guided Tour, and
     dockable OSK.
 *   **[`gui.zig`](../tools/diosix-gui/src/gui.zig),
+    [`chrome.zig`](../tools/diosix-gui/src/gui/chrome.zig),
     [`input.zig`](../tools/diosix-gui/src/gui/input.zig),
-    [`nav.zig`](../tools/diosix-gui/src/gui/nav.zig), and
-    [`render.zig`](../tools/diosix-gui/src/gui/render.zig)**: Core compositor
-    state machine, dirty-rectangle damage tracking, keyboard focus navigation,
-    and semantic JSON state serialization.
-*   **[`osk.zig`](../tools/diosix-gui/src/osk.zig) and
-    [`welcome.zig`](../tools/diosix-gui/src/welcome.zig)**: Hardware seat
-    profiles (`touch-tablet`, `desktop-kbd`, `headless-serial`), virtual
-    keyboard state machine, and Guided Tour state.
+    [`json.zig`](../tools/diosix-gui/src/gui/json.zig),
+    [`nav.zig`](../tools/diosix-gui/src/gui/nav.zig),
+    [`render.zig`](../tools/diosix-gui/src/gui/render.zig), and
+    [`ipc.zig`](../tools/diosix-gui/src/ipc.zig)**: Core
+    compositor state machine, dirty-rectangle damage tracking, keyboard focus
+    navigation, semantic JSON state serialization, and host/VM action dispatch.
+*   **[`osk.zig`](../tools/diosix-gui/src/osk.zig),
+    [`welcome.zig`](../tools/diosix-gui/src/welcome.zig),
+    [`intro.zig`](../tools/diosix-gui/src/intro.zig),
+    [`fx.zig`](../tools/diosix-gui/src/intro/fx.zig), and
+    [`audio.zig`](../tools/diosix-gui/src/audio.zig)**: Virtual
+    keyboard state machine, Guided Tour state, boot intro sequence, and audio
+    chimes.
 *   **[`drm.zig`](../tools/diosix-gui/src/drm.zig),
-    [`display.zig`](../tools/diosix-gui/src/display.zig), and
+    [`display.zig`](../tools/diosix-gui/src/display.zig),
+    [`host.zig`](../tools/diosix-gui/src/host.zig),
+    [`mem.zig`](../tools/diosix-gui/src/host/mem.zig),
+    [`time.zig`](../tools/diosix-gui/src/host/time.zig),
+    [`paths.zig`](../tools/diosix-gui/src/paths.zig), and
     [`main.zig`](../tools/diosix-gui/src/main.zig)**: Linux DRM/KMS dumb-buffer
-    and `/dev/fb0` display backends, `evdev` input polling, and event loop.
+    and `/dev/fb0` display backends, `evdev` input polling, host telemetry,
+    canonical runtime paths, and event loop.
 
 ---
 
@@ -123,7 +144,6 @@ image = "/var/lib/diosix/images/gui-guest.elf"
 vcpus = 2
 ram = "512 MB"
 ip = "10.0.3.4"
-grant_devices = ["gpu", "input"]
 can_provide = ["gui.*", "display.*", "seat.*"]
 can_require = ["net.*", "fs.*"]
 

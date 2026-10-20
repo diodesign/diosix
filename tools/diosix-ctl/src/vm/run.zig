@@ -9,19 +9,22 @@ const manifest = @import("../manifest.zig");
 const common = @import("../common.zig");
 const loader = @import("../loader.zig");
 const vm_stage = @import("stage.zig");
+const fdt_patch = @import("fdt_patch.zig");
+const owned = @import("owned.zig");
 
 const MAX_PATH_LEN = common.MAX_PATH_LEN;
 const MAX_ELF_FILE_SIZE = common.MAX_ELF_FILE_SIZE;
-const MAX_DTB_FILE_SIZE = common.MAX_DTB_FILE_SIZE;
 const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
 const PAGE_SIZE_KB = common.PAGE_SIZE_KB;
 const KB_PER_MB = common.KB_PER_MB;
 pub const MIB_SHIFT: u6 = 20;
 
+const OwnedStrings = owned.OwnedStrings;
+const OOM_MSG = owned.OOM_MSG;
+
 const printStr = common.printStr;
 const isArch = common.isArch;
 const printApiError = common.printApiError;
-const copyStr = common.copyStr;
 const parseMemorySizeMb = common.parseMemorySizeMb;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
@@ -52,19 +55,30 @@ const RunOption = enum {
     @"--user",
 };
 
+fn takeOptValue(
+    args: []const [*:0]const u8,
+    idx: *usize,
+    err_msg: []const u8,
+) ?[]const u8 {
+    if (idx.* + 1 >= args.len) {
+        printStr(err_msg);
+        return null;
+    }
+    idx.* += 1;
+    return std.mem.span(args[idx.*]);
+}
+
 pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
     const allocator = std.heap.page_allocator;
     if (args.len == 0) {
-        var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf,
+        common.printFmt(
             \\Usage: {s} run <image|name> [--name <name>] [--vcpus <N>]
             \\       [--ram <size>] [--disk <disk>] [--cdrom <iso>] [--ip <ip>]
             \\       [--manifest <path>] [--domain <domain>] [--trusted]
             \\       [--arch <arch>]
             \\
-        , .{exe_name}) catch return;
-        printStr(msg);
+        , .{exe_name});
         return;
     }
 
@@ -91,42 +105,33 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         if (std.meta.stringToEnum(RunOption, span)) |opt| {
             switch (opt) {
                 .@"--name" => {
-                    if (i + 1 >= args.len) {
-                        printStr(
-                            "Error: Option '--name' requires a VM name.\n",
-                        );
-                        return;
-                    }
-                    i += 1;
-                    vm_name = std.mem.span(args[i]);
+                    vm_name = takeOptValue(
+                        args,
+                        &i,
+                        "Error: Option '--name' requires a VM name.\n",
+                    ) orelse return;
                 },
                 .@"--domain" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--domain' requires a domain name.\n");
-                        return;
-                    }
-                    i += 1;
-                    domain_name = std.mem.span(args[i]);
+                    domain_name = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--domain' requires a domain name.\n",
+                    ) orelse return;
                 },
                 .@"--manifest", .@"-m" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--manifest' requires a file path.\n");
-                        return;
-                    }
-                    i += 1;
-                    manifest_path = std.mem.span(args[i]);
+                    manifest_path = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--manifest' requires a file path.\n",
+                    ) orelse return;
                 },
                 .@"--vcpus" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--vcpus' requires a count.\n");
-                        return;
-                    }
-                    i += 1;
-                    vcpus = std.fmt.parseInt(
-                        usize,
-                        std.mem.span(args[i]),
-                        10,
-                    ) catch {
+                    const v_str = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--vcpus' requires a count.\n",
+                    ) orelse return;
+                    vcpus = std.fmt.parseInt(usize, v_str, 10) catch {
                         printStr("Error: Invalid '--vcpus' value.\n");
                         return;
                     };
@@ -136,36 +141,32 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                     }
                 },
                 .@"--ram" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--ram' requires a size.\n");
-                        return;
-                    }
-                    i += 1;
-                    ram_str = std.mem.span(args[i]);
+                    ram_str = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--ram' requires a size.\n",
+                    ) orelse return;
                 },
                 .@"--disk", .@"-d" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--disk' requires a disk or size.\n");
-                        return;
-                    }
-                    i += 1;
-                    disk_str = std.mem.span(args[i]);
+                    disk_str = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--disk' requires a disk or size.\n",
+                    ) orelse return;
                 },
                 .@"--cdrom", .@"--iso", .@"--media" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--cdrom' requires a media path.\n");
-                        return;
-                    }
-                    i += 1;
-                    cdrom_str = std.mem.span(args[i]);
+                    cdrom_str = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--cdrom' requires a media path.\n",
+                    ) orelse return;
                 },
                 .@"--ip" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--ip' requires an IP address.\n");
-                        return;
-                    }
-                    i += 1;
-                    ip_str = std.mem.span(args[i]);
+                    ip_str = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--ip' requires an IP address.\n",
+                    ) orelse return;
                 },
                 .@"--trusted" => trusted = true,
                 .@"--untrusted" => trusted = false,
@@ -173,20 +174,18 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 .@"--standby-root" => is_standby_root = true,
                 .@"--confidential" => is_confidential = true,
                 .@"--dtb" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--dtb' requires a DTB path.\n");
-                        return;
-                    }
-                    i += 1;
-                    dtb_path = std.mem.span(args[i]);
+                    dtb_path = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--dtb' requires a DTB path.\n",
+                    ) orelse return;
                 },
                 .@"--arch", .@"-a" => {
-                    if (i + 1 >= args.len) {
-                        printStr("Error: '--arch' requires an arch name.\n");
-                        return;
-                    }
-                    i += 1;
-                    arch_str = std.mem.span(args[i]);
+                    arch_str = takeOptValue(
+                        args,
+                        &i,
+                        "Error: '--arch' requires an arch name.\n",
+                    ) orelse return;
                 },
                 .@"--user" => {
                     printStr(
@@ -199,25 +198,19 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         } else if (isArch(span)) {
             arch_str = span;
         } else if (std.mem.startsWith(u8, span, "-")) {
-            var err_buf: [128]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(
-                &err_buf,
+            common.printFmt(
                 "Error: Unknown option '{s}'. Use '{s} run' for usage.\n",
                 .{ span, exe_name },
-            ) catch "Error: Unknown option.\n";
-            printStr(err_msg);
+            );
             return;
         } else if (elf_path == null) {
             elf_path = span;
         }
     }
 
-    // Owned stack buffers so domain manifest fields outlive unmapping.
-    var dom_img_buf: [MAX_PATH_LEN]u8 = undefined;
-    var dom_ram_buf: [32]u8 = undefined;
-    var dom_disk_buf: [MAX_PATH_LEN]u8 = undefined;
-    var dom_cdrom_buf: [MAX_PATH_LEN]u8 = undefined;
-    var dom_ip_buf: [64]u8 = undefined;
+    // Owned copies so domain manifest fields outlive unmapping.
+    var domain_strings = OwnedStrings.init(allocator);
+    defer domain_strings.deinit();
 
     if (domain_name) |dname| {
         if (vm_name == null) vm_name = dname;
@@ -228,23 +221,19 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 var sys_m = sys_m_v;
                 defer sys_m.deinit();
                 if (sys_m.domains.get(dname)) |dom| {
-                    if (elf_path == null and dom.image.len > 0) {
-                        elf_path = copyStr(&dom_img_buf, dom.image);
-                    }
+                    vm_stage.copyDomainFields(
+                        &domain_strings,
+                        dom,
+                        &elf_path,
+                        &ram_str,
+                        &disk_str,
+                        &cdrom_str,
+                        &ip_str,
+                    ) catch {
+                        printStr(OOM_MSG);
+                        return;
+                    };
                     if (dom.vcpus > 0 and vcpus == 1) vcpus = dom.vcpus;
-                    const is_def_ram = std.mem.eql(u8, ram_str, "256 MB");
-                    if (dom.ram.len > 0 and is_def_ram) {
-                        ram_str = copyStr(&dom_ram_buf, dom.ram);
-                    }
-                    if (disk_str == null and dom.disk.len > 0) {
-                        disk_str = copyStr(&dom_disk_buf, dom.disk);
-                    }
-                    if (cdrom_str == null and dom.cdrom.len > 0) {
-                        cdrom_str = copyStr(&dom_cdrom_buf, dom.cdrom);
-                    }
-                    if (dom.ip.len > 0 and ip_str.len == 0) {
-                        ip_str = copyStr(&dom_ip_buf, dom.ip);
-                    }
                 }
             } else |_| {}
         } else |_| {}
@@ -267,14 +256,11 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     }
 
     if (elf_path == null) {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
+        common.printFmt(
             "Error: No ELF binary specified. Use '{s} run <image>' " ++
                 "or specify --manifest and --domain.\n",
             .{exe_name},
-        ) catch return;
-        printStr(msg);
+        );
         return;
     }
 
@@ -286,53 +272,57 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             ep;
     }
 
-    var resolved_buf: [MAX_PATH_LEN]u8 = undefined;
-    const elf_data = vm_stage.resolveElfImage(
-        elf_path.?,
-        &resolved_buf,
-    ) orelse {
-        var err_buf: [MAX_PATH_LEN + 128]u8 = undefined;
-        const err_msg = std.fmt.bufPrint(
-            &err_buf,
+    const elf_found = vm_stage.resolveElfImage(elf_path.?) catch {
+        printStr(OOM_MSG);
+        return;
+    };
+    const elf_data = elf_found orelse {
+        common.printFmt(
             "Error: Guest ELF binary '{s}' not found (checked current dir, " ++
-                "/var/lib/diosix/images/).\n",
-            .{elf_path.?},
-        ) catch "Error: ELF binary not found.\n";
-        printStr(err_msg);
+                "{s}/).\n",
+            .{ elf_path.?, sys_cfg.imagesDir() },
+        );
         return;
     };
     defer unmapBinaryFile(elf_data);
 
-    const dtb_src = dtb_path orelse "/sys/firmware/fdt";
-    var dtb_data: []u8 = &[_]u8{};
-    if (readBinaryFile(dtb_src, MAX_DTB_FILE_SIZE)) |dd| {
-        dtb_data = dd;
-    } else |_| {}
+    const dtb_data = fdt_patch.loadHostOrCustomDtb(dtb_path);
     defer unmapBinaryFile(dtb_data);
 
     var final_disk_buf: [MAX_PATH_LEN]u8 = undefined;
-    const final_disk =
-        vm_stage.resolveRunDisk(disk_str, vm_name.?, &final_disk_buf);
+    const final_disk = vm_stage.resolveRunDisk(
+        disk_str,
+        vm_name.?,
+        &final_disk_buf,
+    ) catch |err| {
+        switch (err) {
+            error.PathTooLong => {
+                printStr("Error: Virtual disk path is too long.\n");
+            },
+            error.OutOfMemory => printStr(OOM_MSG),
+        }
+        return;
+    };
 
-    var final_cdrom_buf: [MAX_PATH_LEN]u8 = undefined;
     var final_cdrom: []const u8 = "";
+    var joined_cdrom: ?[]u8 = null;
+    defer if (joined_cdrom) |owned_path| allocator.free(owned_path);
     if (cdrom_str) |c| {
         if (std.mem.startsWith(u8, c, "/")) {
             final_cdrom = c;
-        } else if (std.mem.endsWith(u8, c, ".iso") or
-            std.mem.endsWith(u8, c, ".raw"))
-        {
-            final_cdrom = std.fmt.bufPrint(
-                &final_cdrom_buf,
-                "{s}/{s}",
-                .{ sys_cfg.isoDir(), c },
-            ) catch c;
         } else {
-            final_cdrom = std.fmt.bufPrint(
-                &final_cdrom_buf,
-                "{s}/{s}.iso",
-                .{ sys_cfg.isoDir(), c },
-            ) catch c;
+            const has_media_ext = std.mem.endsWith(u8, c, ".iso") or
+                std.mem.endsWith(u8, c, ".raw");
+            const ext: []const u8 = if (has_media_ext) "" else ".iso";
+            const joined = allocator.print(
+                "{s}/{s}{s}",
+                .{ sys_cfg.isoDir(), c, ext },
+            ) catch {
+                printStr(OOM_MSG);
+                return;
+            };
+            joined_cdrom = joined;
+            final_cdrom = joined;
         }
     }
 
@@ -346,6 +336,12 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
     const arch_enum =
         std.meta.stringToEnum(api.TargetArch, arch_str) orelse .riscv64;
+    const ram_mb = parseMemorySizeMb(ram_str);
+    const final_ram_str = allocator.print("{d} MB", .{ram_mb}) catch {
+        printStr(OOM_MSG);
+        return;
+    };
+    defer allocator.free(final_ram_str);
     var run_flags: usize = if (trusted) api.RunFlags.TRUSTED else 0;
     if (is_steward) run_flags |= api.RunFlags.STEWARD;
     if (is_standby_root) run_flags |= api.RunFlags.STANDBY_ROOT;
@@ -361,7 +357,6 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         return;
     };
 
-    const ram_mb = parseMemorySizeMb(ram_str);
     const ram_pages = (ram_mb * KB_PER_MB) / PAGE_SIZE_KB;
     _ = client.setQuota(child_cid, ram_pages, 0, 0, 0) catch {};
 
@@ -394,22 +389,19 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         return;
     };
 
-    var final_ip_buf: [64]u8 = undefined;
-    const final_ip: []const u8 = if (ip_str.len > 0)
-        ip_str
+    const default_ip: ?[]u8 = if (ip_str.len > 0)
+        null
     else
-        std.fmt.bufPrint(
-            &final_ip_buf,
+        allocator.print(
             "{s}{d}",
             .{ sys_cfg.subnetPrefix(), child_cid },
-        ) catch "10.0.3.2";
-
-    var final_ram_buf: [32]u8 = undefined;
-    const final_ram_str = std.fmt.bufPrint(
-        &final_ram_buf,
-        "{d} MB",
-        .{ram_mb},
-    ) catch "256 MB";
+        ) catch {
+            printStr(OOM_MSG);
+            _ = client.terminate(child_cid, 1) catch {};
+            return;
+        };
+    defer if (default_ip) |ip| allocator.free(ip);
+    const final_ip: []const u8 = default_ip orelse ip_str;
 
     saveGuestRegistry(
         child_cid,
@@ -423,7 +415,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         "running",
     );
 
-    printRunSuccess(
+    vm_stage.printRunSuccess(
         vm_name.?,
         child_cid,
         vcpus,
@@ -434,50 +426,11 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     );
 }
 
-fn printRunSuccess(
-    vm_name: []const u8,
-    child_cid: usize,
-    vcpus: usize,
-    ram_str: []const u8,
-    disk: []const u8,
-    cdrom: []const u8,
-    ip: []const u8,
-) void {
-    var msg_buf: [384]u8 = undefined;
-    const out_msg = if (disk.len > 0 and cdrom.len > 0)
-        std.fmt.bufPrint(
-            &msg_buf,
-            "✓ Child VM '{s}' (CID {d}, {d} vCPUs, {s} RAM, " ++
-                "Disk: {s}, CD-ROM: {s}, IP: {s}) started in background.\n",
-            .{ vm_name, child_cid, vcpus, ram_str, disk, cdrom, ip },
-        ) catch return
-    else if (disk.len > 0)
-        std.fmt.bufPrint(
-            &msg_buf,
-            "✓ Child VM '{s}' (CID {d}, {d} vCPUs, {s} RAM, " ++
-                "Disk: {s}, IP: {s}) started in background.\n",
-            .{ vm_name, child_cid, vcpus, ram_str, disk, ip },
-        ) catch return
-    else if (cdrom.len > 0)
-        std.fmt.bufPrint(
-            &msg_buf,
-            "✓ Child VM '{s}' (CID {d}, {d} vCPUs, {s} RAM, " ++
-                "CD-ROM: {s}, IP: {s}) started in background.\n",
-            .{ vm_name, child_cid, vcpus, ram_str, cdrom, ip },
-        ) catch return
-    else
-        std.fmt.bufPrint(
-            &msg_buf,
-            "✓ Child VM '{s}' (CID {d}, {d} vCPUs, {s} RAM, " ++
-                "IP: {s}) started in background.\n",
-            .{ vm_name, child_cid, vcpus, ram_str, ip },
-        ) catch return;
-    printStr(out_msg);
-}
-
 test "vm_run: RunOption enum parses expected CLI flags" {
     std.testing.refAllDecls(@This());
     _ = vm_stage;
+    _ = fdt_patch;
+    _ = owned;
     try std.testing.expectEqual(
         RunOption.@"--domain",
         std.meta.stringToEnum(RunOption, "--domain").?,

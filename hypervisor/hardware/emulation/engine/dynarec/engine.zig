@@ -254,7 +254,7 @@ pub const Engine = struct {
 
     /// Run JIT/stepped execution loop for a given instruction budget.
     pub fn run(self: *Engine, vcpu: *vcpu_mod.VCpu, budget: usize) ExitReason {
-        _ = vcpu;
+        std.debug.assert(vcpu == self.vcpu);
         const run_start = vcpu_mod.readHostTime();
         defer {
             const run_end = vcpu_mod.readHostTime();
@@ -316,7 +316,11 @@ pub const Engine = struct {
             }
 
             // Tier 1 Dynarec: lookup or translate basic block.
-            if (self.cache.lookup(pc_before, self.vcpu.satp)) |tb| {
+            if (self.cache.lookup(
+                pc_before,
+                self.vcpu.satp,
+                self.vcpu.privilege_mode,
+            )) |tb| {
                 if (self.runCompiledBlock(tb, pc_before, &count)) |exit_res| {
                     return exit_res;
                 }
@@ -382,7 +386,7 @@ pub const Engine = struct {
             } else |_| {}
 
             if (!self.executeDecoded(decoded, fetch_res.val, pc_before)) {
-                return ExitReason.unhandled;
+                return ExitReason.wfi;
             }
         }
         return ExitReason.normal;
@@ -394,6 +398,10 @@ fn readInsnAt(buf: []const u8, offset: usize) u32 {
 }
 
 test "Dynarec RV32A atomic and inlined SoftTLB fast-path emission" {
+    std.testing.refAllDecls(@This());
+    _ = @import("regalloc.zig");
+    _ = @import("tests/instruction.zig");
+    _ = @import("tests/privilege.zig");
     var vcpu = vcpu_mod.VCpu{ .id = 0, .pc = 0x8000_0000 };
     var tlb: softtlb_mod.SoftTlb = undefined;
     tlb.initOnPtr(0x8000_0000, 0x8000_0000, 4096);

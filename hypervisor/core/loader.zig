@@ -83,8 +83,9 @@ const ElfSource = union(enum) {
                     const off = src_offset + copied;
                     const cur_src = std.math.add(usize, gs.base_gpa, off) catch
                         return LoaderError.SegmentOutOfBounds;
-                    const rem = @min(ps - (cur_dst % ps), ps - (cur_src % ps));
-                    const chunk = @min(count - copied, rem);
+                    const rem: usize =
+                        @min(ps - (cur_dst % ps), ps - (cur_src % ps));
+                    const chunk: usize = @min(count - copied, rem);
                     const src_hpa = gs.space.translateGPA(cur_src) catch
                         return LoaderError.TranslationFailed;
                     const dst_hpa = dst_space.translateGPA(cur_dst) catch
@@ -104,6 +105,8 @@ const ElfSource = union(enum) {
     }
 };
 
+pub const MAX_PHNUM: usize = 128;
+
 const ProgramHeader = struct {
     p_type: u32,
     p_offset: u64,
@@ -116,11 +119,14 @@ const ProgramHeader = struct {
 pub const Loader = struct {
     pub const findSymbol = symbols.findSymbol;
 
-    pub fn detectArch(source: []const u8) !guest.TargetArch {
+    pub fn detectArchFromHeader(source: []const u8) !guest.TargetArch {
         if (source.len < elf_spec.MIN_HEADER_LEN or
             !std.mem.eql(u8, source[0..4], elf_spec.MAGIC))
         {
             return LoaderError.InvalidElfHeader;
+        }
+        if (source[elf_spec.EI_DATA] != elf_spec.DATA_LSB) {
+            return LoaderError.UnsupportedElfData;
         }
         const class = source[elf_spec.EI_CLASS];
         const machine = readU16(source, elf_spec.EHDR.MACHINE);
@@ -134,6 +140,8 @@ pub const Loader = struct {
         return LoaderError.UnsupportedElfMachine;
     }
 
+    pub const detectArch = detectArchFromHeader;
+
     pub fn detectArchFromGuest(
         sp: *const vm.GuestSpace,
         gpa: usize,
@@ -143,7 +151,7 @@ pub const Loader = struct {
         var header_buf: [elf_spec.MIN_HEADER_LEN]u8 = undefined;
         sp.copyFromGuest(&header_buf, gpa) catch
             return LoaderError.TranslationFailed;
-        return detectArch(&header_buf);
+        return detectArchFromHeader(&header_buf);
     }
 
     pub fn load(root_vm: *guest.Guest, source: []const u8) !usize {
@@ -192,36 +200,35 @@ pub const Loader = struct {
     }
 
     fn loadImpl(target_vm: *guest.Guest, src: ElfSource) !usize {
-        if (src.len() < elf_spec.MIN_HEADER_LEN) {
+        const hdr_len: usize = @min(src.len(), elf_spec.ELF64_EHDR_SIZE);
+        if (hdr_len < elf_spec.MIN_HEADER_LEN) {
             return LoaderError.InvalidElfHeader;
         }
-        var hdr_buf: [elf_spec.ELF64_EHDR_SIZE]u8 = undefined;
-        try src.readBytes(hdr_buf[0..elf_spec.MIN_HEADER_LEN], 0);
-        if (!std.mem.eql(u8, hdr_buf[0..4], elf_spec.MAGIC)) {
-            return LoaderError.InvalidElfHeader;
-        }
-        if (hdr_buf[elf_spec.EI_DATA] != elf_spec.DATA_LSB) {
-            return LoaderError.UnsupportedElfData;
-        }
+        var hdr_buf: [elf_spec.ELF64_EHDR_SIZE]u8 = @splat(0);
+        try src.readBytes(hdr_buf[0..hdr_len], 0);
+        const detected_arch = try detectArchFromHeader(hdr_buf[0..hdr_len]);
         const lay = ElfLayout.forClass(hdr_buf[elf_spec.EI_CLASS]) orelse
             return LoaderError.UnsupportedElfClass;
-        if (src.len() < lay.ehdr_sz) return LoaderError.InvalidElfHeader;
-        try src.readBytes(hdr_buf[0..lay.ehdr_sz], 0);
+        if (hdr_len < lay.ehdr_sz) return LoaderError.InvalidElfHeader;
+        target_vm.target_arch = detected_arch;
 
         const entry_point = readWord(&hdr_buf, lay.entry, lay.is_32);
         const ph_off = readWord(&hdr_buf, lay.phoff, lay.is_32);
         const ph_size = readU16(&hdr_buf, lay.phentsize);
         const ph_num = readU16(&hdr_buf, lay.phnum);
+        if (ph_num > MAX_PHNUM) return LoaderError.InvalidProgramHeader;
         const total_ph = std.math.mul(u64, ph_num, ph_size) catch
             return LoaderError.InvalidProgramHeader;
         const ph_end = std.math.add(u64, ph_off, total_ph) catch
             return LoaderError.InvalidProgramHeader;
         if (ph_end > src.len()) return LoaderError.InvalidProgramHeader;
 
+        var ph_table: [MAX_PHNUM]ProgramHeader = undefined;
         var min_vaddr: u64 = std.math.maxInt(u64);
         var min_paddr: u64 = std.math.maxInt(u64);
         for (0..ph_num) |i| {
             const ph = try readProgramHeader(src, lay, ph_off, ph_size, i);
+            ph_table[i] = ph;
             if (ph.p_type == elf_spec.PT_LOAD) {
                 if (ph.p_vaddr < min_vaddr) min_vaddr = ph.p_vaddr;
                 if (ph.p_paddr < min_paddr) min_paddr = ph.p_paddr;
@@ -230,8 +237,7 @@ pub const Loader = struct {
         if (min_vaddr == std.math.maxInt(u64)) min_vaddr = 0;
         if (min_paddr == std.math.maxInt(u64)) min_paddr = 0;
 
-        for (0..ph_num) |i| {
-            const ph = try readProgramHeader(src, lay, ph_off, ph_size, i);
+        for (ph_table[0..ph_num]) |ph| {
             if (ph.p_type != elf_spec.PT_LOAD) continue;
             if (ph.p_filesz > 0 and (ph.p_offset > src.len() or
                 ph.p_filesz > src.len() - ph.p_offset))
@@ -294,7 +300,7 @@ pub const Loader = struct {
                 const cur_gpa = std.math.add(usize, gpa, zeroed) catch
                     return LoaderError.SegmentOutOfBounds;
                 const rem = ps - (cur_gpa % ps);
-                const chunk = @min(mem_sz - zeroed, rem);
+                const chunk: usize = @min(mem_sz - zeroed, rem);
                 const cur_hpa = try target_vm.space.translateGPA(cur_gpa);
                 if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
                     return LoaderError.TranslationFailed;

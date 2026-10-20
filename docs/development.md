@@ -86,8 +86,12 @@ Code contributions must follow the [style guide](style-guide.md):
     for types, and `camelCase` for functions.
 *   Use `std.meta.stringToEnum` and `switch` for command, flag, and key
     dispatch rather than `if`/`else if` string comparison chains.
-*   Externalize tunable defaults into `/etc/diosix/*.toml` configuration files
-    rather than hardcoding magic values in source code.
+*   Externalize build layout paths, hardware sizing defaults, and runtime
+    tunables into `build/layout.zon`, `boot/hypervisor.conf`, and
+    `/etc/diosix/*.toml` rather than hardcoding paths or magic values in code.
+*   Never swallow `std.fmt.bufPrint` errors with `catch ""` or use unnamed stack
+    buffer sizes; use dynamic allocation or named capacity constants with
+    centralized truncation helpers.
 *   Format all Zig files using `zig fmt` and verify that documentation in
     `docs/` matches the implementation before committing.
 

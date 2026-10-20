@@ -257,21 +257,6 @@ pub const PageTable = struct {
             return;
         }
 
-        // Allow Root VM to identity-map host RAM (excluding hypervisor memory).
-        if (self.root_base_hpa > 0 and is_trusted and
-            physmem.isRam(gpa, physmem.PageSize))
-        {
-            if (!physmem.isHypervisorMemory(gpa_page, physmem.PageSize)) {
-                try self.mapPage(
-                    gpa_page,
-                    gpa_page,
-                    PTEFlags.leaf_rwx_user,
-                    is_trusted,
-                );
-                return;
-            }
-        }
-
         if (self.walk(gpa, false)) |pte_ptr| {
             if ((pte_ptr.* & PTEFlags.valid) != 0) return;
         } else |_| {}

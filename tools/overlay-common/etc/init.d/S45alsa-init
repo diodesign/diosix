@@ -2,6 +2,8 @@
 #
 # S45alsa-init: Unmute ALSA audio devices and maximize playback volume on boot.
 #
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
 
 case "$1" in
   start)

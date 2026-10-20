@@ -9,8 +9,10 @@
 
 const std = @import("std");
 const linux = std.os.linux;
+const json = @import("gui/json.zig");
+const paths = @import("paths.zig");
 
-pub const DEFAULT_SYSCONFIG_PATH: [*:0]const u8 = "/etc/diosix/diosix.toml";
+pub const DEFAULT_SYSCONFIG_PATH: [*:0]const u8 = paths.DEFAULT_SYSCONFIG_PATH;
 pub const TOUR_STEP_COUNT: usize = 5;
 
 pub const TourStep = struct {
@@ -21,21 +23,52 @@ pub const TourStep = struct {
     cli_hint: []const u8,
 };
 
+/// Capacity of a custom tour step title: one line in the tour modal header.
+pub const TOUR_TITLE_MAX_BYTES: usize = 96;
+/// Capacity of each custom tour summary line: one 20px-high modal row.
+pub const TOUR_SUMMARY_MAX_BYTES: usize = 128;
+/// Capacity of a custom tour CLI hint, shown after "CLI equivalent: ".
+pub const TOUR_HINT_MAX_BYTES: usize = 96;
+
+/// Size of each read() when slurping the system config file.
+const CONFIG_READ_CHUNK_BYTES: usize = 4096;
+/// Upper bound on the system config we are willing to hold in memory.
+const MAX_CONFIG_FILE_BYTES: usize = 1024 * 1024;
+
 pub const CustomTourStep = struct {
-    title_buf: [96]u8 = @splat(0),
+    title_buf: [TOUR_TITLE_MAX_BYTES]u8 = @splat(0),
     title_len: usize = 0,
-    summary1_buf: [128]u8 = @splat(0),
+    summary1_buf: [TOUR_SUMMARY_MAX_BYTES]u8 = @splat(0),
     summary1_len: usize = 0,
-    summary2_buf: [128]u8 = @splat(0),
+    summary2_buf: [TOUR_SUMMARY_MAX_BYTES]u8 = @splat(0),
     summary2_len: usize = 0,
-    hint_buf: [96]u8 = @splat(0),
+    hint_buf: [TOUR_HINT_MAX_BYTES]u8 = @splat(0),
     hint_len: usize = 0,
 };
 
-fn setBuf(buf: []u8, len_out: *usize, src: []const u8) void {
+/// Copy `src` into `buf`, recording the stored length in `len_out`. Returns
+/// true if `src` fitted; otherwise the largest prefix is stored and false is
+/// returned so the caller can warn that the text was cut.
+fn setBuf(buf: []u8, len_out: *usize, src: []const u8) bool {
     const n = @min(src.len, buf.len);
     @memcpy(buf[0..n], src[0..n]);
     len_out.* = n;
+    return n == src.len;
+}
+
+/// Store a [[tour]] field from diosix.toml, warning if it had to be cut.
+fn setTourField(
+    buf: []u8,
+    len_out: *usize,
+    field: []const u8,
+    src: []const u8,
+) void {
+    if (!setBuf(buf, len_out, src)) {
+        std.debug.print(
+            "diosix-gui: [[tour]] {s} is {d} bytes; truncated to {d}.\n",
+            .{ field, src.len, buf.len },
+        );
+    }
 }
 
 pub const TOUR_STEPS = [TOUR_STEP_COUNT]TourStep{
@@ -110,18 +143,19 @@ pub const WelcomeState = struct {
                     if (count < TOUR_STEP_COUNT) {
                         const def = TOUR_STEPS[count];
                         var cs = &self.custom_steps[count];
-                        setBuf(&cs.title_buf, &cs.title_len, def.title);
-                        setBuf(
+                        // Built-in defaults: all fit, checked by a test.
+                        _ = setBuf(&cs.title_buf, &cs.title_len, def.title);
+                        _ = setBuf(
                             &cs.summary1_buf,
                             &cs.summary1_len,
                             def.summary_line1,
                         );
-                        setBuf(
+                        _ = setBuf(
                             &cs.summary2_buf,
                             &cs.summary2_len,
                             def.summary_line2,
                         );
-                        setBuf(&cs.hint_buf, &cs.hint_len, def.cli_hint);
+                        _ = setBuf(&cs.hint_buf, &cs.hint_len, def.cli_hint);
                         active_idx = count;
                         count += 1;
                     } else {
@@ -142,13 +176,13 @@ pub const WelcomeState = struct {
 
             var cs = &self.custom_steps[idx];
             if (std.mem.eql(u8, key, "title")) {
-                setBuf(&cs.title_buf, &cs.title_len, val);
+                setTourField(&cs.title_buf, &cs.title_len, key, val);
             } else if (std.mem.eql(u8, key, "summary")) {
-                setBuf(&cs.summary1_buf, &cs.summary1_len, val);
+                setTourField(&cs.summary1_buf, &cs.summary1_len, key, val);
             } else if (std.mem.eql(u8, key, "summary_line2")) {
-                setBuf(&cs.summary2_buf, &cs.summary2_len, val);
+                setTourField(&cs.summary2_buf, &cs.summary2_len, key, val);
             } else if (std.mem.eql(u8, key, "cli_hint")) {
-                setBuf(&cs.hint_buf, &cs.hint_len, val);
+                setTourField(&cs.hint_buf, &cs.hint_len, key, val);
             }
         }
         if (count > 0) {
@@ -160,7 +194,6 @@ pub const WelcomeState = struct {
     pub fn ensureConfigLoaded(self: *WelcomeState) void {
         if (self.config_loaded) return;
         self.config_loaded = true;
-        var buf: [4096]u8 = undefined;
         const fd_rc = linux.open(
             DEFAULT_SYSCONFIG_PATH,
             .{ .ACCMODE = .RDONLY },
@@ -170,11 +203,34 @@ pub const WelcomeState = struct {
         if (signed_fd < 0) return;
         const fd: i32 = @intCast(signed_fd);
         defer _ = linux.close(fd);
-        const rd_rc = linux.read(fd, &buf, buf.len);
-        const signed_rd: isize = @bitCast(rd_rc);
-        if (signed_rd > 0) {
-            self.loadTourToml(buf[0..@intCast(signed_rd)]);
+
+        const allocator = std.heap.page_allocator;
+        var content: std.ArrayList(u8) = .empty;
+        defer content.deinit(allocator);
+        while (content.items.len < MAX_CONFIG_FILE_BYTES) {
+            content.ensureUnusedCapacity(
+                allocator,
+                CONFIG_READ_CHUNK_BYTES,
+            ) catch {
+                std.debug.print(
+                    "diosix-gui: Out of memory reading config.\n",
+                    .{},
+                );
+                break;
+            };
+            const spare = content.unusedCapacitySlice();
+            const rd_rc = linux.read(fd, spare.ptr, spare.len);
+            const signed_rd: isize = @bitCast(rd_rc);
+            if (signed_rd <= 0) break;
+            content.items.len += @intCast(signed_rd);
         }
+        if (content.items.len >= MAX_CONFIG_FILE_BYTES) {
+            std.debug.print(
+                "diosix-gui: Config exceeds {d} bytes; ignoring the rest.\n",
+                .{MAX_CONFIG_FILE_BYTES},
+            );
+        }
+        if (content.items.len > 0) self.loadTourToml(content.items);
     }
 
     pub fn openWelcome(self: *WelcomeState) void {
@@ -236,31 +292,40 @@ pub const WelcomeState = struct {
     }
 };
 
+/// Render a tour step as CLI text or JSON. The caller owns the result and
+/// must free it with `allocator`.
 pub fn formatTourStepCli(
-    buf: []u8,
+    allocator: std.mem.Allocator,
     step_idx: usize,
     json_mode: bool,
-) []const u8 {
+) std.mem.Allocator.Error![]u8 {
     var ws = WelcomeState{};
     ws.ensureConfigLoaded();
     ws.current_step = step_idx;
     const s = ws.activeTourStep();
     if (json_mode) {
-        return std.fmt.bufPrint(
-            buf,
+        const esc_title = try json.escapeStr(allocator, s.title);
+        defer allocator.free(esc_title);
+        const esc_s1 = try json.escapeStr(allocator, s.summary_line1);
+        defer allocator.free(esc_s1);
+        const esc_s2 = try json.escapeStr(allocator, s.summary_line2);
+        defer allocator.free(esc_s2);
+        const esc_hint = try json.escapeStr(allocator, s.cli_hint);
+        defer allocator.free(esc_hint);
+        return allocator.print(
             "{{\"step\":{d},\"total_steps\":{d},\"title\":\"{s}\"," ++
                 "\"summary\":\"{s} {s}\",\"cli_hint\":\"{s}\"}}\n",
             .{
                 s.step_num,
                 ws.stepCount(),
-                s.title,
-                s.summary_line1,
-                s.summary_line2,
-                s.cli_hint,
+                esc_title,
+                esc_s1,
+                esc_s2,
+                esc_hint,
             },
-        ) catch "";
+        );
     }
-    return std.fmt.bufPrint(buf,
+    return allocator.print(
         \\=== {s} ===
         \\  {s}
         \\  {s}
@@ -271,7 +336,7 @@ pub fn formatTourStepCli(
         s.summary_line1,
         s.summary_line2,
         s.cli_hint,
-    }) catch "";
+    });
 }
 
 // -----------------------------------------------------------------------------
@@ -322,12 +387,31 @@ test "WelcomeState loadTourToml parses [[tour]] blocks from diosix.toml" {
 }
 
 test "formatTourStepCli produces valid text and JSON" {
-    var buf: [512]u8 = undefined;
-    const txt = formatTourStepCli(&buf, 0, false);
+    const txt = try formatTourStepCli(testing.allocator, 0, false);
+    defer testing.allocator.free(txt);
     const expected = "Step 1/5: Root VM & Hardware Isolation";
     try testing.expect(std.mem.indexOf(u8, txt, expected) != null);
 
-    const js = formatTourStepCli(&buf, 3, true);
+    const js = try formatTourStepCli(testing.allocator, 3, true);
+    defer testing.allocator.free(js);
     try testing.expect(std.mem.indexOf(u8, js, "\"step\":4") != null);
     try testing.expect(std.mem.indexOf(u8, js, "dsx charter status") != null);
+}
+
+test "setBuf reports truncation and keeps the largest prefix" {
+    var buf: [4]u8 = undefined;
+    var len: usize = 0;
+    try testing.expect(setBuf(&buf, &len, "abcd"));
+    try testing.expectEqualStrings("abcd", buf[0..len]);
+    try testing.expect(!setBuf(&buf, &len, "abcdef"));
+    try testing.expectEqualStrings("abcd", buf[0..len]);
+}
+
+test "built-in tour text fits the custom step buffers" {
+    for (TOUR_STEPS) |step| {
+        try testing.expect(step.title.len <= TOUR_TITLE_MAX_BYTES);
+        try testing.expect(step.summary_line1.len <= TOUR_SUMMARY_MAX_BYTES);
+        try testing.expect(step.summary_line2.len <= TOUR_SUMMARY_MAX_BYTES);
+        try testing.expect(step.cli_hint.len <= TOUR_HINT_MAX_BYTES);
+    }
 }

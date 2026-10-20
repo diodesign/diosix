@@ -147,6 +147,7 @@ test "atomic bool read and write" {
 }
 
 test "SpinLock, NamedSpinLock, and LockPayload guard semantics" {
+    std.testing.refAllDecls(@This());
     var sl = SpinLock.init();
     const prev = sl.lock();
     try std.testing.expectEqual(@as(u32, 1), sl.lock_value.load(.acquire));

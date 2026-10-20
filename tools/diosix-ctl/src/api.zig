@@ -6,6 +6,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 const interface = @import("interface").sbi;
+const sysconfig = @import("sysconfig.zig");
 
 // Re-export canonical SBI ABI definitions from hypervisor/interface/sbi.zig.
 pub const EXT_DIOSIX: usize = interface.EXT.DIOSIX;
@@ -80,7 +81,7 @@ pub const DiosixClient = struct {
     open_err: ?isize,
 
     pub fn init() DiosixClient {
-        const path = "/dev/diosix";
+        const path = sysconfig.DEFAULT_DEVICE_PATH;
         const rc = linux.open(path, .{ .ACCMODE = .RDWR }, 0);
         const signed_rc: isize = @bitCast(rc);
         if (signed_rc >= 0) {
@@ -246,7 +247,7 @@ pub const DiosixClient = struct {
         _ = try checkIoctlRc(
             linux.ioctl(fd, IOCTL_GET_MANIFEST, @intFromPtr(&args)),
         );
-        return @intCast(args.actual_len);
+        return @min(@as(usize, @intCast(args.actual_len)), buffer.len);
     }
 
     pub fn setManifest(

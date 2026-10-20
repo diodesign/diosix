@@ -426,7 +426,7 @@ Inside Linux guest VMs, the `diosix` character device driver (`tools/driver/`)
 bridges userspace calls to hypervisor SBI extensions via standard Input/Output
 Control (`ioctl`) command numbers:
 
-| IOCTL Name | Value | Description |
+| ioctl name | Value | Description |
 | :--- | :--- | :--- |
 | `IOCTL_DROP_TRUST` | `0x1002` | Relinquishes hardware trust |
 | `IOCTL_RUN` / `IOCTL_SPAWN` | `0x1003` | Loads ELF and boots child VM |

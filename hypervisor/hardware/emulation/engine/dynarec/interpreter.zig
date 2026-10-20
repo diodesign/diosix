@@ -304,15 +304,11 @@ pub fn executeDecoded(
             execVecMem(self, pc_before, next_pc, d.rs1, d.vs3, true);
             return true;
         },
-        .vector_op => |d| {
-            if ((vcpu.mstatus & vcpu_mod.MSTATUS_VS_MASK_U32) == 0) {
-                self.trap(sys.CAUSE_ILLEGAL_INSN, pc_before, 0);
-                return true;
-            }
-            if (d.rd != d.rs1) {
-                @memcpy(vcpu.vregs[d.rd][0..], vcpu.vregs[d.rs1][0..]);
-            }
-            vcpu.pc = next_pc;
+        .vector_op => {
+            self.last_fault_pc = pc_before;
+            self.last_fault_cause = sys.CAUSE_ILLEGAL_INSN;
+            self.last_fault_val = raw_insn;
+            self.trap(sys.CAUSE_ILLEGAL_INSN, pc_before, raw_insn);
             return true;
         },
 
@@ -414,8 +410,9 @@ pub fn executeDecoded(
     return true;
 }
 
-test "interpreter u32Gpr, i32Gpr, and self-referential vector_op" {
+test "interpreter u32Gpr, i32Gpr, and vector_op illegal instruction trap" {
     std.testing.refAllDecls(@This());
+    _ = sys;
     _ = mem;
 
     var vcpu = vcpu_mod.VCpu{
@@ -424,7 +421,6 @@ test "interpreter u32Gpr, i32Gpr, and self-referential vector_op" {
         .mstatus = vcpu_mod.MSTATUS_VS_MASK_U32,
     };
     vcpu.setGpr(10, 0xffff_fffe);
-    vcpu.vregs[5][0] = 0x42;
 
     const softtlb_mod = @import("../../softtlb.zig");
     const bus_mod = @import("../../devices/bus.zig");
@@ -437,18 +433,27 @@ test "interpreter u32Gpr, i32Gpr, and self-referential vector_op" {
         last_fault_pc: u32 = 0,
         last_fault_cause: u32 = 0,
         last_fault_val: u32 = 0,
-        pub fn trap(_: *@This(), _: u32, _: u32, _: u32) void {}
+        pub fn trap(
+            self: *@This(),
+            cause: u32,
+            fault_pc: u32,
+            stval: u32,
+        ) void {
+            self.vcpu.injectException(cause, fault_pc, stval);
+        }
     };
     var env = MockEnv{ .vcpu = &vcpu };
 
     try std.testing.expectEqual(@as(u32, 0xffff_fffe), u32Gpr(&env, 10));
     try std.testing.expectEqual(@as(i32, -2), i32Gpr(&env, 10));
 
-    // Verify vector_op with rd == rs1 does not panic on overlapping @memcpy.
+    // Verify vector_op injects CAUSE_ILLEGAL_INSN.
     const vec_dec = decoder_rv32.DecodedInsn{
         .insn = .{ .vector_op = .{ .rd = 5, .rs1 = 5, .rs2 = 5 } },
         .len = 4,
     };
-    try std.testing.expect(executeDecoded(&env, vec_dec, 0, 0x8000_0000));
-    try std.testing.expectEqual(@as(u8, 0x42), vcpu.vregs[5][0]);
+    try std.testing.expect(
+        executeDecoded(&env, vec_dec, 0x0200_0057, 0x8000_0000),
+    );
+    try std.testing.expectEqual(sys.CAUSE_ILLEGAL_INSN, env.last_fault_cause);
 }

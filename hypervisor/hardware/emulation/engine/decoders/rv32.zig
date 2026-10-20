@@ -26,6 +26,7 @@ const AmoFunct5 = encoding.AmoFunct5;
 
 /// Decode standard 32-bit RV32I or decompressed 16-bit RV32C instruction.
 pub fn decode(raw_code: u32) DecodedInsn {
+    const orig_code = raw_code;
     var code = raw_code;
     var len: u8 = encoding.INSN_LEN_STANDARD;
 
@@ -36,7 +37,7 @@ pub fn decode(raw_code: u32) DecodedInsn {
             len = encoding.INSN_LEN_COMPRESSED;
         } else {
             return .{
-                .insn = .{ .unknown = code },
+                .insn = .{ .unknown = orig_code },
                 .len = encoding.INSN_LEN_COMPRESSED,
             };
         }
@@ -65,31 +66,31 @@ pub fn decode(raw_code: u32) DecodedInsn {
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .add = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x1 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .mulh = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .sll = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x2 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .mulhsu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .slt = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x3 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .mulhu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .sltu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x4 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .div = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .xor_ = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x5 => if (funct7 == encoding.FUNCT7_SUB_SRA)
                 .{ .sra = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else if (funct7 == encoding.FUNCT7_MULDIV)
@@ -97,26 +98,26 @@ pub fn decode(raw_code: u32) DecodedInsn {
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .srl = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x6 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .rem = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .or_ = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x7 => if (funct7 == encoding.FUNCT7_MULDIV)
                 .{ .remu = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .and_ = .{ .rd = rd, .rs1 = rs1, .rs2 = rs2 } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
         },
         encoding.OPC_OP_IMM => switch (funct3) {
             0x0 => .{ .addi = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x1 => if (funct7 == encoding.FUNCT7_BASE)
                 .{ .slli = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x2 => .{ .slti = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x3 => .{ .sltiu = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x4 => .{ .xori = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
@@ -125,7 +126,7 @@ pub fn decode(raw_code: u32) DecodedInsn {
             else if (funct7 == encoding.FUNCT7_BASE)
                 .{ .srli = .{ .rd = rd, .rs1 = rs1, .shamt = @truncate(rs2) } }
             else
-                .{ .unknown = code },
+                .{ .unknown = orig_code },
             0x6 => .{ .ori = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
             0x7 => .{ .andi = .{ .rd = rd, .rs1 = rs1, .imm = i_imm } },
         },
@@ -135,7 +136,7 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x2 => .{ .lw = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
             0x4 => .{ .lbu = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
             0x5 => .{ .lhu = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
-            else => .{ .unknown = code },
+            else => .{ .unknown = orig_code },
         },
         encoding.OPC_LOAD_FP => switch (funct3) {
             0x2 => .{ .flw = .{ .rd = rd, .rs1 = rs1, .offset = i_imm } },
@@ -146,7 +147,7 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x0 => .{ .sb = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             0x1 => .{ .sh = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
             0x2 => .{ .sw = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
-            else => .{ .unknown = code },
+            else => .{ .unknown = orig_code },
         },
         encoding.OPC_STORE_FP => switch (funct3) {
             0x2 => .{ .fsw = .{ .rs1 = rs1, .rs2 = rs2, .offset = s_imm } },
@@ -167,12 +168,12 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x5 => .{ .bge = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
             0x6 => .{ .bltu = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
             0x7 => .{ .bgeu = .{ .rs1 = rs1, .rs2 = rs2, .offset = b_imm } },
-            else => .{ .unknown = code },
+            else => .{ .unknown = orig_code },
         },
         encoding.OPC_JAL => .{ .jal = .{ .rd = rd, .offset = j_imm } },
-        encoding.OPC_JALR => .{
+        encoding.OPC_JALR => if (funct3 == 0x0) .{
             .jalr = .{ .rd = rd, .rs1 = rs1, .offset = i_imm },
-        },
+        } else .{ .unknown = orig_code },
         encoding.OPC_LUI => .{ .lui = .{ .rd = rd, .imm = u_imm } },
         encoding.OPC_AUIPC => .{ .auipc = .{ .rd = rd, .imm = u_imm } },
         encoding.OPC_SYSTEM => switch (funct3) {
@@ -180,21 +181,21 @@ pub fn decode(raw_code: u32) DecodedInsn {
                 encoding.FUNCT7_SYS_PRIV => switch (i_imm & 0x1f) {
                     encoding.SYS_RS2_ECALL => .ecall,
                     encoding.SYS_RS2_EBREAK => .ebreak,
-                    else => .{ .unknown = code },
+                    else => .{ .unknown = orig_code },
                 },
                 encoding.FUNCT7_SYS_SRET_WFI => switch (i_imm & 0x1f) {
                     encoding.SYS_RS2_RET => .sret,
                     encoding.SYS_RS2_WFI => .wfi,
-                    else => .{ .unknown = code },
+                    else => .{ .unknown = orig_code },
                 },
                 encoding.FUNCT7_SYS_MRET => switch (i_imm & 0x1f) {
                     encoding.SYS_RS2_RET => .mret,
-                    else => .{ .unknown = code },
+                    else => .{ .unknown = orig_code },
                 },
                 encoding.FUNCT7_SYS_SFENCE_VMA => .{
                     .sfence_vma = .{ .rs1 = rs1, .rs2 = rs2 },
                 },
-                else => .{ .unknown = code },
+                else => .{ .unknown = orig_code },
             },
             0x1 => .{ .csrrw = .{ .rd = rd, .rs1 = rs1, .csr = csr_id } },
             0x2 => .{ .csrrs = .{ .rd = rd, .rs1 = rs1, .csr = csr_id } },
@@ -202,12 +203,12 @@ pub fn decode(raw_code: u32) DecodedInsn {
             0x5 => .{ .csrrwi = .{ .rd = rd, .uimm = rs1, .csr = csr_id } },
             0x6 => .{ .csrrsi = .{ .rd = rd, .uimm = rs1, .csr = csr_id } },
             0x7 => .{ .csrrci = .{ .rd = rd, .uimm = rs1, .csr = csr_id } },
-            else => .{ .unknown = code },
+            else => .{ .unknown = orig_code },
         },
         encoding.OPC_MISC_MEM => switch (funct3) {
             0x0 => if (code == encoding.INSN_PAUSE) .pause else .fence,
             0x1 => .fence_i,
-            else => .{ .unknown = code },
+            else => .{ .unknown = orig_code },
         },
         encoding.OPC_OP_V => switch (funct3) {
             0x7 => .{ .vsetvli = .{ .rd = rd, .rs1 = rs1, .vtype = csr_id } },
@@ -215,7 +216,7 @@ pub fn decode(raw_code: u32) DecodedInsn {
         },
         encoding.OPC_AMO => {
             if (funct3 != encoding.FUNCT3_AMO_W) {
-                return .{ .insn = .{ .unknown = code }, .len = len };
+                return .{ .insn = .{ .unknown = orig_code }, .len = len };
             }
             const funct5 = @as(u5, @truncate((code >> 27) & 0x1f));
             const aq = @as(u1, @truncate((code >> 26) & 0x1));
@@ -231,7 +232,10 @@ pub fn decode(raw_code: u32) DecodedInsn {
             const amo_insn: Instruction = switch (funct5) {
                 AmoFunct5.SWAP => .{ .amoswap_w = amo },
                 AmoFunct5.ADD => .{ .amoadd_w = amo },
-                AmoFunct5.LR => .{ .lr_w = lr },
+                AmoFunct5.LR => if (rs2 == 0)
+                    .{ .lr_w = lr }
+                else
+                    .{ .unknown = orig_code },
                 AmoFunct5.SC => .{ .sc_w = amo },
                 AmoFunct5.XOR => .{ .amoxor_w = amo },
                 AmoFunct5.AND => .{ .amoand_w = amo },
@@ -240,17 +244,18 @@ pub fn decode(raw_code: u32) DecodedInsn {
                 AmoFunct5.MAX => .{ .amomax_w = amo },
                 AmoFunct5.MINU => .{ .amominu_w = amo },
                 AmoFunct5.MAXU => .{ .amomaxu_w = amo },
-                else => .{ .unknown = code },
+                else => .{ .unknown = orig_code },
             };
             return .{ .insn = amo_insn, .len = len };
         },
-        else => .{ .unknown = code },
+        else => .{ .unknown = orig_code },
     };
 
     return .{ .insn = parsed, .len = len };
 }
 
 test "RV32I Base Integer Instructions Decoding" {
+    std.testing.refAllDecls(@This());
     // add a0, a1, a2 (0x00c58533: rd=10, rs1=11, rs2=12).
     const add_dec = decode(0x00c58533);
     try std.testing.expectEqual(@as(usize, 4), add_dec.len);
@@ -305,6 +310,7 @@ test "RV32I Base Integer Instructions Decoding" {
 }
 
 test "RV32M Multiply & Divide Decoding" {
+    std.testing.refAllDecls(@This());
     // mul a0, a1, a2 (0x02c58533).
     const mul_dec = decode(0x02c58533);
     try std.testing.expectEqual(@as(u5, 10), mul_dec.insn.mul.rd);
@@ -324,6 +330,7 @@ test "RV32M Multiply & Divide Decoding" {
 }
 
 test "RV32A Atomic Memory Instructions Decoding" {
+    std.testing.refAllDecls(@This());
     const eq = std.testing.expectEqual;
     const rd10: u5 = 10;
 
@@ -354,6 +361,8 @@ test "RV32A Atomic Memory Instructions Decoding" {
 }
 
 test "Barriers & CSR Instructions Decoding" {
+    _ = rv32c;
+    _ = encoding;
     // fence (0x0ff0000f).
     const fence_dec = decode(0x0ff0000f);
     try std.testing.expect(fence_dec.insn == .fence);

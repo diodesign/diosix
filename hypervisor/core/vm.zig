@@ -12,6 +12,7 @@ const physmem = @import("physmem.zig");
 const sv39x4 = @import("../hardware/native/cpu/riscv64/sv39x4.zig");
 const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
 const riscv = @import("../hardware/native/cpu/riscv64/mod.zig");
+pub const transfer = @import("vm/transfer.zig");
 
 pub const ALL_PHYSICAL_MEMORY: usize = std.math.maxInt(usize);
 
@@ -146,6 +147,7 @@ pub const GuestSpace = struct {
         if (self.mode == .h_paging) {
             if (self.paging) |*pt| {
                 var offset: usize = 0;
+                errdefer self.unmap(gpa, offset);
                 while (offset < size) : (offset += physmem.PageSize) {
                     try pt.mapPage(
                         gpa + offset,
@@ -261,113 +263,14 @@ pub const GuestSpace = struct {
         }
     }
 
-    /// Safely copies data from a host buffer to guest physical memory space.
-    /// Pre-validates the entire GPA range to avoid partial writes.
-    pub fn copyToGuest(
-        self: *const GuestSpace,
-        dst_gpa: usize,
-        src: []const u8,
-    ) !void {
-        if (src.len == 0) return;
-        _ = std.math.add(usize, dst_gpa, src.len) catch
-            return error.TranslationFailed;
-
-        // Pass 1: Pre-validate all target pages.
-        var check_off: usize = 0;
-        while (check_off < src.len) {
-            const cur_gpa = dst_gpa + check_off;
-            const cur_hpa = try self.translateGPA(cur_gpa);
-            const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
-            const chunk: usize = @min(src.len - check_off, page_rem);
-            if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
-                return error.AccessDenied;
-            }
-            check_off += chunk;
-        }
-
-        // Pass 2: Transfer data page by page.
-        var transferred: usize = 0;
-        while (transferred < src.len) {
-            const cur_gpa = dst_gpa + transferred;
-            const cur_hpa = try self.translateGPA(cur_gpa);
-            const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
-            const chunk: usize = @min(src.len - transferred, page_rem);
-            if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
-                return error.AccessDenied;
-            }
-            @memcpy(
-                @as([*]u8, @ptrFromInt(cur_hpa))[0..chunk],
-                src[transferred .. transferred + chunk],
-            );
-            transferred += chunk;
-        }
-    }
-
-    /// Safely copies data from guest physical memory space into a host buffer.
-    /// Pre-validates the entire GPA range to avoid partial reads.
-    pub fn copyFromGuest(
-        self: *const GuestSpace,
-        dst: []u8,
-        src_gpa: usize,
-    ) !void {
-        if (dst.len == 0) return;
-        _ = std.math.add(usize, src_gpa, dst.len) catch
-            return error.TranslationFailed;
-
-        // Pass 1: Pre-validate all source pages.
-        var check_off: usize = 0;
-        while (check_off < dst.len) {
-            const cur_gpa = src_gpa + check_off;
-            const cur_hpa = try self.translateGPA(cur_gpa);
-            const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
-            const chunk: usize = @min(dst.len - check_off, page_rem);
-            if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
-                return error.AccessDenied;
-            }
-            check_off += chunk;
-        }
-
-        // Pass 2: Transfer data page by page.
-        var transferred: usize = 0;
-        while (transferred < dst.len) {
-            const cur_gpa = src_gpa + transferred;
-            const cur_hpa = try self.translateGPA(cur_gpa);
-            const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
-            const chunk: usize = @min(dst.len - transferred, page_rem);
-            if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
-                return error.AccessDenied;
-            }
-            @memcpy(
-                dst[transferred .. transferred + chunk],
-                @as([*]const u8, @ptrFromInt(cur_hpa))[0..chunk],
-            );
-            transferred += chunk;
-        }
-    }
-
-    /// Reads a typed struct from guest physical address space.
-    pub fn readGuestStruct(
-        self: *const GuestSpace,
-        comptime T: type,
-        gpa: usize,
-    ) !T {
-        var val: T = undefined;
-        try self.copyFromGuest(std.mem.asBytes(&val), gpa);
-        return val;
-    }
-
-    /// Writes a typed struct to guest physical address space.
-    pub fn writeGuestStruct(
-        self: *const GuestSpace,
-        comptime T: type,
-        gpa: usize,
-        val: T,
-    ) !void {
-        try self.copyToGuest(gpa, std.mem.asBytes(&val));
-    }
+    pub const copyToGuest = transfer.copyToGuest;
+    pub const copyFromGuest = transfer.copyFromGuest;
+    pub const readGuestStruct = transfer.readGuestStruct;
+    pub const writeGuestStruct = transfer.writeGuestStruct;
 };
 
 test "GuestSpace GPA to HPA translation and PMP fallback shielding" {
+    _ = transfer;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
 
@@ -408,79 +311,4 @@ test "GuestSpace GPA to HPA translation and PMP fallback shielding" {
     );
     defer pmp_space.deinit();
     try testing.expectEqual(.pmp_fallback, pmp_space.mode);
-}
-
-test "GuestSpace safe copy and struct transfer across page boundaries" {
-    const testing = std.testing;
-
-    var phys_test = try physmem.initForTest(testing.allocator, 128);
-    defer phys_test.deinit();
-
-    const base_gpa: usize = 0x80000000;
-    const base_hpa = physmem.getRamBase() + 8 * physmem.PageSize;
-    const size: usize = 2 * physmem.PageSize;
-
-    var space = try GuestSpace.init(
-        testing.allocator,
-        true,
-        base_gpa,
-        base_hpa,
-        size,
-    );
-    defer space.deinit();
-
-    const TestStruct = extern struct {
-        a: u64,
-        b: u64,
-        c: u32,
-    };
-
-    const straddle_gpa = base_gpa + physmem.PageSize - 8;
-    const original = TestStruct{
-        .a = 0x1122334455667788,
-        .b = 0x8877665544332211,
-        .c = 0xdeadbeef,
-    };
-
-    try space.writeGuestStruct(TestStruct, straddle_gpa, original);
-    const read_back = try space.readGuestStruct(TestStruct, straddle_gpa);
-    try testing.expectEqual(original.a, read_back.a);
-    try testing.expectEqual(original.b, read_back.b);
-    try testing.expectEqual(original.c, read_back.c);
-
-    const out_of_bounds_gpa = base_gpa + size - 4;
-    try testing.expectError(
-        error.TranslationFailed,
-        space.writeGuestStruct(TestStruct, out_of_bounds_gpa, original),
-    );
-    try testing.expectError(
-        error.TranslationFailed,
-        space.writeGuestStruct(
-            TestStruct,
-            std.math.maxInt(usize) - 4,
-            original,
-        ),
-    );
-
-    const hv_hpa = physmem.getHvRegion().base;
-    if (hv_hpa > 0) {
-        var poisoned_space = try GuestSpace.init(
-            testing.allocator,
-            false,
-            0x1000,
-            hv_hpa,
-            physmem.PageSize,
-        );
-        defer poisoned_space.deinit();
-
-        var dummy_buf: [16]u8 = @splat(0xaa);
-        try testing.expectError(
-            error.AccessDenied,
-            poisoned_space.copyToGuest(0x1000, &dummy_buf),
-        );
-        try testing.expectError(
-            error.AccessDenied,
-            poisoned_space.copyFromGuest(&dummy_buf, 0x1000),
-        );
-    }
 }

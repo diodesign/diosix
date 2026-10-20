@@ -17,10 +17,23 @@ pub fn init(base: usize) void {
     base_address = base;
 }
 
+fn contextRegAddr(base: usize, hartid: usize, reg_offset: usize) ?usize {
+    const hart_off = std.math.mul(usize, hartid, CONTEXT_STRIDE) catch
+        return null;
+    const ctx_base = std.math.add(
+        usize,
+        base,
+        CONTEXT_BASE_OFFSET + reg_offset,
+    ) catch return null;
+    return std.math.add(usize, ctx_base, hart_off) catch null;
+}
+
 pub fn setPriority(source: u32, priority: u32) void {
     if (builtin.is_test) return;
     if (base_address) |base| {
-        const priority_ptr = @as(*volatile u32, @ptrFromInt(base + source * 4));
+        const offset = @as(usize, source) * @sizeOf(u32);
+        const addr = std.math.add(usize, base, offset) catch return;
+        const priority_ptr = @as(*volatile u32, @ptrFromInt(addr));
         priority_ptr.* = priority;
     }
 }
@@ -28,8 +41,8 @@ pub fn setPriority(source: u32, priority: u32) void {
 pub fn setThreshold(hartid: usize, threshold: u32) void {
     if (builtin.is_test) return;
     if (base_address) |base| {
-        const addr = base + CONTEXT_BASE_OFFSET +
-            THRESHOLD_OFFSET + hartid * CONTEXT_STRIDE;
+        const addr = contextRegAddr(base, hartid, THRESHOLD_OFFSET) orelse
+            return;
         const threshold_ptr = @as(*volatile u32, @ptrFromInt(addr));
         threshold_ptr.* = threshold;
     }
@@ -38,8 +51,8 @@ pub fn setThreshold(hartid: usize, threshold: u32) void {
 pub fn claimInterrupt(hartid: usize) u32 {
     if (builtin.is_test) return 0;
     if (base_address) |base| {
-        const addr = base + CONTEXT_BASE_OFFSET +
-            CLAIM_OFFSET + hartid * CONTEXT_STRIDE;
+        const addr = contextRegAddr(base, hartid, CLAIM_OFFSET) orelse
+            return 0;
         const claim_ptr = @as(*volatile u32, @ptrFromInt(addr));
         return claim_ptr.*;
     }
@@ -49,8 +62,8 @@ pub fn claimInterrupt(hartid: usize) u32 {
 pub fn completeInterrupt(hartid: usize, source: u32) void {
     if (builtin.is_test) return;
     if (base_address) |base| {
-        const addr = base + CONTEXT_BASE_OFFSET +
-            CLAIM_OFFSET + hartid * CONTEXT_STRIDE;
+        const addr = contextRegAddr(base, hartid, CLAIM_OFFSET) orelse
+            return;
         const claim_ptr = @as(*volatile u32, @ptrFromInt(addr));
         claim_ptr.* = source;
     }

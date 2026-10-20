@@ -445,10 +445,10 @@ styling with contemporary color palettes:
   domain (`sys.gui`). Client applications cannot paint into the frame area. The
   outer edge displays a prominent 3-pixel color band indicating the domain's
   security provenance:
-  - **Emerald Green (`#2ECC71`)**: `[sys.config]` (Trusted Admin Domain).
-  - **Dodger Blue (`#3498DB`)**: `[user.work]` (Work Domain).
-  - **Alizarin Red (`#E74C3C`)**: `[user.web]` (Untrusted Sandboxed Domain).
-  - **Amethyst Purple (`#9B59B6`)**: `[sys.net]` (System Domain Service).
+  - **Emerald Green (`#2ecc71`)**: `[sys.config]` (Trusted Admin Domain).
+  - **Dodger Blue (`#3498db`)**: `[user.work]` (Work Domain).
+  - **Alizarin Red (`#e74c3c`)**: `[user.web]` (Untrusted Sandboxed Domain).
+  - **Amethyst Purple (`#9b59b6`)**: `[sys.net]` (System Domain Service).
 
 ### 5.4 2D graphics, sprites & color management
 
@@ -489,7 +489,7 @@ Multitasking in Diosix operates at two distinct layers:
     poll loop**. The client calls `wimp_poll()`, which suspends the client
     process on an IPC socket until the window manager has work for it.
 
-### 6.2 The Wimp_Poll event contract
+### 6.2 The `Wimp_Poll` event contract
 
 Every native application runs an event loop structured around `wimp_poll`:
 
@@ -586,7 +586,7 @@ accommodated through two presentation modes:
 The graphics and desktop implementation is structured into five sequential
 phases:
 
-### Phase 1: Core performance, DRM KMS acceleration & hardware cursor
+### Phase 1: Core performance, DRM/KMS acceleration & hardware cursor
 - Implement direct Linux Direct Rendering Manager (DRM) and Kernel Mode Setting
   (KMS) hardware acceleration in
   [`drm.zig`](../tools/diosix-gui/src/drm.zig) accessing `/dev/dri/card0`.

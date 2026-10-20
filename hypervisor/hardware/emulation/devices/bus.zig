@@ -82,6 +82,8 @@ pub const VIRTIO_MMIO_REG_CONFIG_BASE: u32 = 0x100;
 // Shared VirtIO Descriptor & Split-Virtqueue Definitions (VirtIO 1.1 Sec 2.6).
 pub const VIRTQ_DESC_F_NEXT: u16 = 1;
 pub const VIRTQ_DESC_F_WRITE: u16 = 2;
+pub const VIRTQ_RING_IDX_OFFSET: u64 = 2;
+pub const VIRTQ_RING_ELEMS_OFFSET: u64 = 4;
 
 pub const VirtqDesc = extern struct {
     addr: u64,
@@ -94,6 +96,11 @@ pub const VirtqUsedElem = extern struct {
     id: u32,
     len: u32,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(VirtqDesc) == 16);
+    std.debug.assert(@sizeOf(VirtqUsedElem) == 8);
+}
 
 pub fn VirtQueueConfig(comptime default_num: u16) type {
     return struct {
@@ -336,6 +343,12 @@ pub const Bus = struct {
 test "MMIO Bus address classification and VirtIO transport probe" {
     const testing = std.testing;
     testing.refAllDecls(@This());
+    _ = vuart_mod;
+    _ = vtimer_mod;
+    _ = vpic_mod;
+    _ = vsock_mod;
+    _ = vgpu_mod;
+    _ = vinput_mod;
 
     try testing.expect(Bus.isMmioAddr(0x10000000)); // UART.
     try testing.expect(Bus.isMmioAddr(0x10001000)); // VirtIO slot 0 (vsock).

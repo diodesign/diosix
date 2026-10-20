@@ -14,8 +14,10 @@
 
 #ifdef __KERNEL__
 #include <linux/types.h>
+#include <linux/errno.h>
 #include <linux/fs.h>
 #else
+#include <errno.h>
 #include <stdint.h>
 #endif
 
@@ -71,17 +73,46 @@
 #define DIOSIX_CHILD_MEM_BASE       0x200000000UL
 #define DIOSIX_CHILD_MEM_MAX_SIZE   (256UL * 1024 * 1024)
 #define DIOSIX_MAX_ELF_SIZE         (512UL * 1024 * 1024)
-#define DIOSIX_MAX_DTB_SIZE         (16UL * 1024 * 1024)
-#define DIOSIX_MAX_MANIFEST_SIZE    (1024UL * 1024)
 #define DIOSIX_MAX_EXACT_ALLOC_SIZE (2UL * 1024 * 1024)
+#define DIOSIX_MAX_DTB_SIZE         DIOSIX_MAX_EXACT_ALLOC_SIZE
+#define DIOSIX_MAX_MANIFEST_SIZE    (1024UL * 1024)
 #define DIOSIX_NET_MAX_FRAME_SIZE   1536UL
 
+#define DIOSIX_CID_PARENT           0UL
 #define DIOSIX_CID_SELF             1UL
 #define DIOSIX_WAIT_FLAG_NONBLOCK   0x1UL
 #define DIOSIX_EVENT_POLL_MS        50
 #define DIOSIX_CHARTER_OP_QUERY     0UL
 #define DIOSIX_CHARTER_OP_SEAL      1UL
 #define DIOSIX_MAC_PREFIX_BYTE0     0x02
+
+#define DIOSIX_SBI_ERR_FAILED            (-1L)
+#define DIOSIX_SBI_ERR_NOT_SUPPORTED     (-2L)
+#define DIOSIX_SBI_ERR_INVALID_PARAM     (-3L)
+#define DIOSIX_SBI_ERR_DENIED            (-4L)
+#define DIOSIX_SBI_ERR_INVALID_ADDRESS   (-5L)
+#define DIOSIX_SBI_ERR_ALREADY_AVAILABLE (-6L)
+
+static inline long diosix_sbi_to_errno(long sbi_err)
+{
+    switch (sbi_err) {
+    case 0:
+        return 0;
+    case DIOSIX_SBI_ERR_NOT_SUPPORTED:
+        return -EOPNOTSUPP;
+    case DIOSIX_SBI_ERR_INVALID_PARAM:
+        return -EINVAL;
+    case DIOSIX_SBI_ERR_DENIED:
+        return -EPERM;
+    case DIOSIX_SBI_ERR_INVALID_ADDRESS:
+        return -EFAULT;
+    case DIOSIX_SBI_ERR_ALREADY_AVAILABLE:
+        return -EEXIST;
+    case DIOSIX_SBI_ERR_FAILED:
+    default:
+        return -EIO;
+    }
+}
 
 struct charter_args {
     uint8_t  charter_hash[32];
@@ -194,6 +225,33 @@ struct guest_info {
     uint64_t child_count;
 };
 
+_Static_assert(sizeof(struct charter_args) == 64, "charter_args ABI size");
+_Static_assert(
+    sizeof(struct map_child_mem_args) == 40,
+    "map_child_mem_args ABI size"
+);
+_Static_assert(
+    sizeof(struct unmap_child_mem_args) == 16,
+    "unmap_child_mem_args ABI size"
+);
+_Static_assert(sizeof(struct start_args) == 24, "start_args ABI size");
+_Static_assert(
+    sizeof(struct hypervisor_info) == 304,
+    "hypervisor_info ABI size"
+);
+_Static_assert(sizeof(struct diosix_event) == 24, "diosix_event ABI size");
+_Static_assert(
+    sizeof(struct wait_event_args) == 40,
+    "wait_event_args ABI size"
+);
+_Static_assert(sizeof(struct quota_args) == 40, "quota_args ABI size");
+_Static_assert(sizeof(struct manifest_args) == 32, "manifest_args ABI size");
+_Static_assert(sizeof(struct run_args) == 56, "run_args ABI size");
+_Static_assert(sizeof(struct terminate_args) == 16, "terminate_args ABI size");
+_Static_assert(sizeof(struct guest_info) == 80, "guest_info ABI size");
+
+void diosix_child_mem_lock(void);
+void diosix_child_mem_unlock(void);
 long diosix_ioctl_governance(unsigned int cmd, unsigned long arg);
 int init_diosix_net(void);
 void cleanup_diosix_net(void);

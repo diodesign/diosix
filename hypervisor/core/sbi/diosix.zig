@@ -133,7 +133,10 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         return;
     };
     const want_trusted = (args.flags & interface.RunFlags.TRUSTED) != 0;
-    if (want_trusted and !g.is_trusted) {
+    const want_steward = (args.flags & interface.RunFlags.STEWARD) != 0;
+    if ((want_trusted and !g.is_trusted) or
+        (want_steward and (!g.is_root or charter.isCharterSealed())))
+    {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
@@ -173,16 +176,30 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         return;
     };
 
+    if (!created_new) {
+        if (child.is_confidential and child.hasAnyVcoreStarted()) {
+            reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+            return;
+        }
+        if (child.is_steward and charter.isCharterSealed() and
+            !charter.checkAndConsumeQuorum(child.local_cid))
+        {
+            reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+            return;
+        }
+    }
+
     if (want_trusted) {
         child.is_trusted = true;
         child.space.is_trusted = true;
     } else {
         child.dropTrust();
     }
-    child.is_steward = (args.flags & interface.RunFlags.STEWARD) != 0;
-    child.is_standby_root =
-        (args.flags & interface.RunFlags.STANDBY_ROOT) != 0 and g.is_root;
-    child.is_confidential = (args.flags & interface.RunFlags.CONFIDENTIAL) != 0;
+    child.is_steward = child.is_steward or want_steward;
+    child.is_standby_root = child.is_standby_root or
+        ((args.flags & interface.RunFlags.STANDBY_ROOT) != 0 and g.is_root);
+    child.is_confidential = child.is_confidential or child.is_steward or
+        ((args.flags & interface.RunFlags.CONFIDENTIAL) != 0);
 
     child.stop();
     if (riscv.hasHExtension()) riscv.hfenceGvma() else riscv.sfenceVma();
@@ -264,6 +281,14 @@ fn handleStart(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
+    if ((child.is_steward and charter.isCharterSealed()) or
+        (child.is_confidential and child.hasAnyVcoreStarted()))
+    {
+        reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+        return;
+    }
+    child.stop();
+    if (riscv.hasHExtension()) riscv.hfenceGvma() else riscv.sfenceVma();
     child.resetForRun(@intCast(sargs.entry_point), @intCast(sargs.dtb_ptr));
     if (child.vcores.start) |vc_node| {
         scheduler.queue(vc_node.contents);

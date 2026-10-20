@@ -10,6 +10,9 @@ const catalog = @import("../catalog.zig");
 const SHA256_HEX_LEN = catalog.SHA256_HEX_LEN;
 const CatalogEntry = catalog.CatalogEntry;
 const OFFICIAL_CATALOG = catalog.OFFICIAL_CATALOG;
+const TEST_PARSED_CAP: usize = 4;
+const TEST_TABLE_BUF_LEN: usize = 2048;
+const TEST_JSON_BUF_LEN: usize = 4096;
 const findEntry = catalog.findEntry;
 const findEntryInSlice = catalog.findEntryInSlice;
 const isValidImageName = catalog.isValidImageName;
@@ -98,7 +101,7 @@ test "parseCatalogToml and inferImageMetadata align image types" {
         \\
     ++ "sha256 = \"0123456789abcdef0123456789abcdef" ++
         "0123456789abcdef0123456789abcdef\"\n";
-    var parsed: [4]CatalogEntry = undefined;
+    var parsed: [TEST_PARSED_CAP]CatalogEntry = undefined;
     const count = parseCatalogToml(sample_toml, &parsed);
     try testing.expectEqual(@as(usize, 1), count);
     try testing.expectEqualStrings("custom-bsd", parsed[0].id);
@@ -121,7 +124,7 @@ test "parseCatalogToml and inferImageMetadata align image types" {
 }
 
 test "formatCatalogTable and formatCatalogJson follow sentence-case style" {
-    var table_buf: [2048]u8 = undefined;
+    var table_buf: [TEST_TABLE_BUF_LEN]u8 = undefined;
     const tbl = formatCatalogTable(&table_buf);
     try testing.expect(std.mem.indexOf(u8, tbl, "OS family") != null);
     try testing.expect(std.mem.indexOf(u8, tbl, "Default spec") != null);
@@ -129,7 +132,7 @@ test "formatCatalogTable and formatCatalogJson follow sentence-case style" {
     try testing.expect(std.mem.indexOf(u8, tbl, "debian-riscv64") != null);
     try testing.expect(std.mem.indexOf(u8, tbl, "freebsd-riscv64") != null);
 
-    var json_buf: [4096]u8 = undefined;
+    var json_buf: [TEST_JSON_BUF_LEN]u8 = undefined;
     const js = formatCatalogJson(&json_buf);
     try testing.expect(std.mem.startsWith(u8, js, "{\"catalog\":["));
     try testing.expect(

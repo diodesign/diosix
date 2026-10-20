@@ -77,12 +77,15 @@ pub fn getDirectMappingRegion(
             const vstart = @as(u32, @truncate(self.guest_gpa_base));
             const vend = vstart +% @as(u32, @truncate(self.guest_ram_size));
             const vstart_sext = @as(i64, @as(i32, @bitCast(vstart)));
+            var flags: u8 = PTE.VRWX;
+            if (self.privilege_mode == riscv.PRIV_USER) flags |= PTE.U;
             return .{
                 .vaddr_start = vstart,
                 .vaddr_end = vend,
                 .hpa_start = self.guest_hpa_base,
                 .delta = @as(i64, @intCast(self.guest_hpa_base)) -
                     vstart_sext,
+                .flags = flags,
             };
         }
         return null;
@@ -92,7 +95,8 @@ pub fn getDirectMappingRegion(
         (vaddr >> SV32_VPN1_SHIFT) & (MAX_CONTIGUOUS_REGIONS - 1);
     const region = &self.contiguous_regions[reg_slot];
     if (region.valid and vaddr >= region.vaddr_start and
-        vaddr < region.vaddr_end)
+        vaddr < region.vaddr_end and
+        self.checkPrivilegeFlags(region.flags, false, false))
     {
         const vstart_sext =
             @as(i64, @as(i32, @bitCast(region.vaddr_start)));
@@ -101,6 +105,7 @@ pub fn getDirectMappingRegion(
             .vaddr_end = region.vaddr_end,
             .hpa_start = region.hpa_start,
             .delta = @as(i64, @intCast(region.hpa_start)) - vstart_sext,
+            .flags = region.flags,
         };
     }
     return null;
@@ -158,6 +163,7 @@ pub fn translateFull(
 
     var final_gpa: usize = 0;
     var pte_flags: u8 = PTE.V;
+    var superpage_ppn1: ?usize = null;
 
     if (PTE.isPointer(pte1)) {
         const pte0_ppn =
@@ -198,20 +204,7 @@ pub fn translateFull(
             (self.guest_gpa_base | ppn1_raw);
         final_gpa = ppn1 | (vaddr & SV32_SUPERPAGE_MASK);
         pte_flags = @truncate(pte1 & PTE.FLAGS_MASK);
-
-        const vstart = vaddr & ~SV32_SUPERPAGE_MASK;
-        const vend = vstart +% SV32_SUPERPAGE_SIZE;
-        if (self.translateGpaToHpa(ppn1)) |hstart| {
-            const reg_slot =
-                (vstart >> SV32_VPN1_SHIFT) & (MAX_CONTIGUOUS_REGIONS - 1);
-            self.contiguous_regions[reg_slot] = .{
-                .vaddr_start = vstart,
-                .vaddr_end = vend,
-                .hpa_start = hstart,
-                .flags = pte_flags,
-                .valid = true,
-            };
-        }
+        superpage_ppn1 = ppn1;
     }
 
     const final_hpa = self.translateGpaToHpa(final_gpa) orelse
@@ -227,6 +220,22 @@ pub fn translateFull(
         self.last_null_pte_flags = pte_flags;
         self.last_null_req_flag = req_flag;
         return null;
+    }
+
+    if (superpage_ppn1) |ppn1| {
+        const vstart = vaddr & ~SV32_SUPERPAGE_MASK;
+        const vend = vstart +% SV32_SUPERPAGE_SIZE;
+        if (self.translateGpaToHpa(ppn1)) |hstart| {
+            const reg_slot =
+                (vstart >> SV32_VPN1_SHIFT) & (MAX_CONTIGUOUS_REGIONS - 1);
+            self.contiguous_regions[reg_slot] = .{
+                .vaddr_start = vstart,
+                .vaddr_end = vend,
+                .hpa_start = hstart,
+                .flags = pte_flags,
+                .valid = true,
+            };
+        }
     }
 
     if (!bus_mod.Bus.isMmioAddr(@truncate(final_hpa))) {

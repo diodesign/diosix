@@ -1,4 +1,4 @@
-// Diosix Guest Registry Persistence (/var/run/diosix/guests.toml).
+// Diosix Guest Registry Persistence (/run/diosix/guests.toml).
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -7,8 +7,9 @@ const std = @import("std");
 const linux = std.os.linux;
 const common = @import("common.zig");
 const manifest = @import("manifest.zig");
+const sysconfig = @import("sysconfig.zig");
 
-pub const GUEST_REGISTRY_PATH = "/var/run/diosix/guests.toml";
+pub const GUEST_REGISTRY_PATH = sysconfig.GUEST_REGISTRY_PATH;
 
 pub const GuestRegistryKey = enum {
     cid,
@@ -114,15 +115,19 @@ pub fn findAttachedGuest(disk_path: []const u8, out_buf: []u8) []const u8 {
             std.mem.endsWith(u8, disk_path, entry.disk) or
             std.mem.endsWith(u8, entry.disk, disk_path);
         if (matches and std.mem.eql(u8, entry.status, "running")) {
+            // The registry mapping is released on return, so a name that
+            // does not fit alongside the CID is copied into `out_buf`.
             return std.fmt.bufPrint(
                 out_buf,
                 "{s} (CID {d})",
                 .{ entry.name, entry.cid },
-            ) catch entry.name;
+            ) catch common.copyStr(out_buf, entry.name);
         }
     }
     return "-";
 }
+
+const OOM_REGISTRY_MSG = "Error: Out of memory updating guest registry.\n";
 
 const REGISTRY_ENTRY_FMT =
     \\[[guest]]
@@ -153,9 +158,7 @@ pub fn removeGuestFromRegistry(target_cid: usize) void {
     var iter = GuestRegistryIter.init(content);
     while (iter.next()) |e| {
         if (e.cid >= common.CID_FIRST_CHILD and e.cid != target_cid) {
-            var entry_buf: [512]u8 = undefined;
-            const entry = std.fmt.bufPrint(
-                &entry_buf,
+            const entry = allocator.print(
                 REGISTRY_ENTRY_FMT,
                 .{
                     e.cid,
@@ -168,8 +171,16 @@ pub fn removeGuestFromRegistry(target_cid: usize) void {
                     e.trust,
                     e.status,
                 },
-            ) catch "";
-            out.appendSlice(allocator, entry) catch {};
+            ) catch {
+                // Rewriting now would silently delete the other guests.
+                common.printStr(OOM_REGISTRY_MSG);
+                return;
+            };
+            defer allocator.free(entry);
+            out.appendSlice(allocator, entry) catch {
+                common.printStr(OOM_REGISTRY_MSG);
+                return;
+            };
         }
     }
 
@@ -190,12 +201,16 @@ pub fn saveGuestRegistry(
     status: []const u8,
 ) void {
     removeGuestFromRegistry(cid);
-    _ = linux.mkdir("/var/run/diosix", 0o755);
+    _ = linux.mkdir(sysconfig.RUN_DIOSIX_DIR, 0o755);
 
-    var entry_buf: [512]u8 = undefined;
-    const entry = std.fmt.bufPrint(&entry_buf, REGISTRY_ENTRY_FMT, .{
+    const allocator = std.heap.page_allocator;
+    const entry = allocator.print(REGISTRY_ENTRY_FMT, .{
         cid, name, vcpus, ram, disk, cdrom, ip, trust, status,
-    }) catch return;
+    }) catch {
+        common.printStr(OOM_REGISTRY_MSG);
+        return;
+    };
+    defer allocator.free(entry);
 
     const flags: linux.O = .{
         .ACCMODE = .WRONLY,
@@ -224,7 +239,6 @@ pub fn printGuestLine(
     trust: []const u8,
     ip: []const u8,
 ) void {
-    var line_buf: [256]u8 = undefined;
     const ep_str = if (std.mem.eql(u8, ip, "local") or cid == 1)
         "local"
     else if (ip.len > 0)
@@ -233,16 +247,18 @@ pub fn printGuestLine(
         "dsx login";
 
     const display_name = if (name.len > 0) name else "guest";
-    const line = std.fmt.bufPrint(
-        &line_buf,
+    common.printFmt(
         "{d:<5} {s:<16} {d:<7} {s:<9} {s:<9} {s:<11} {s}\n",
         .{ cid, display_name, vcpus, ram, status, trust, ep_str },
-    ) catch return;
-    common.printStr(line);
+    );
 }
 
 test "registry: matchTarget and GuestRegistryIter" {
     std.testing.refAllDecls(@This());
+    try std.testing.expectEqualStrings(
+        "/run/diosix/guests.toml",
+        GUEST_REGISTRY_PATH,
+    );
     try std.testing.expect(matchTarget("2", 2, 2, "worker"));
     try std.testing.expect(!matchTarget("2", 2, 20, "20-worker"));
     try std.testing.expect(!matchTarget("", 0, 2, "worker"));

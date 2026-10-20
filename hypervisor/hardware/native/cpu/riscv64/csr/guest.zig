@@ -10,6 +10,9 @@ const riscv = @import("../mod.zig");
 
 const is_test = builtin.is_test;
 
+pub var mock_vsstatus: u64 = 0;
+pub var mock_sstatus: u64 = 0;
+
 // ---- VS-mode (Guest Supervisor) CSRs ----
 // Note: The RISC-V H-extension does not define a separate 0x20a CSR; guest
 // supervisor environment configuration is held in senvcfg (0x10a).
@@ -23,14 +26,17 @@ pub inline fn writeVsenvcfg(val: u64) void {
 }
 
 pub inline fn readVsstatus() u64 {
-    if (is_test) return 0;
+    if (is_test) return mock_vsstatus;
     return asm volatile ("csrr %[ret], vsstatus"
         : [ret] "=r" (-> u64),
     );
 }
 
 pub inline fn writeVsstatus(val: u64) void {
-    if (is_test) return;
+    if (is_test) {
+        mock_vsstatus = val;
+        return;
+    }
     asm volatile ("csrw vsstatus, %[val]"
         :
         : [val] "r" (val),
@@ -47,21 +53,6 @@ pub inline fn readVsie() u64 {
 pub inline fn writeVsie(val: u64) void {
     if (is_test) return;
     asm volatile ("csrw vsie, %[val]"
-        :
-        : [val] "r" (val),
-    );
-}
-
-pub inline fn readVsip() u64 {
-    if (is_test) return 0;
-    return asm volatile ("csrr %[ret], vsip"
-        : [ret] "=r" (-> u64),
-    );
-}
-
-pub inline fn writeVsip(val: u64) void {
-    if (is_test) return;
-    asm volatile ("csrw vsip, %[val]"
         :
         : [val] "r" (val),
     );
@@ -175,14 +166,17 @@ pub inline fn writeVstimecmp(val: u64) void {
 // ---- Physical S-mode (Supervisor) CSRs for non-H fallback ----
 
 pub inline fn readSstatus() u64 {
-    if (is_test) return 0;
+    if (is_test) return mock_sstatus;
     return asm volatile ("csrr %[ret], sstatus"
         : [ret] "=r" (-> u64),
     );
 }
 
 pub inline fn writeSstatus(val: u64) void {
-    if (is_test) return;
+    if (is_test) {
+        mock_sstatus = val;
+        return;
+    }
     asm volatile ("csrw sstatus, %[val]"
         :
         : [val] "r" (val),
@@ -396,10 +390,27 @@ pub fn restoreSState(gs: *const riscv.GuestState) void {
 
 test "guest CSR save/restore helpers in test mode" {
     std.testing.refAllDecls(@This());
+    mock_vsstatus = 0;
+    mock_sstatus = 0;
+    defer {
+        mock_vsstatus = 0;
+        mock_sstatus = 0;
+    }
+
     var gs: riscv.GuestState = std.mem.zeroes(riscv.GuestState);
-    saveVsState(&gs);
+    gs.vsstatus = 0xdead_beef;
     restoreVsState(&gs);
-    saveSState(&gs);
+    try std.testing.expectEqual(@as(u64, 0xdead_beef), mock_vsstatus);
+
+    var saved_vs: riscv.GuestState = std.mem.zeroes(riscv.GuestState);
+    saveVsState(&saved_vs);
+    try std.testing.expectEqual(@as(u64, 0xdead_beef), saved_vs.vsstatus);
+
+    gs.vsstatus = 0xcafe_babe;
     restoreSState(&gs);
-    try std.testing.expectEqual(@as(u64, 0), gs.vsstatus);
+    try std.testing.expectEqual(@as(u64, 0xcafe_babe), mock_sstatus);
+
+    var saved_s: riscv.GuestState = std.mem.zeroes(riscv.GuestState);
+    saveSState(&saved_s);
+    try std.testing.expectEqual(@as(u64, 0xcafe_babe), saved_s.vsstatus);
 }

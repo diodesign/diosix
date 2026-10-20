@@ -20,28 +20,39 @@ pub const SoftTlb = emulation_native.SoftTlb;
 pub const Engine = emulation_native.Engine;
 const rv32_arch = @import("../hardware/emulation/arch/riscv32/mod.zig");
 const sbi = @import("sbi.zig");
+const config = @import("config");
 
 pub inline fn readSModeTime() u64 {
     return riscv.readTime();
 }
 
 /// Result of handling an exception from the dynamic recompiler.
-pub const ExceptionAction = enum {
-    emulated,
-    delivered,
-    unhandled,
-    wfi,
-};
+pub const ExceptionAction = enum { emulated, delivered, unhandled, wfi };
 
 /// 8 MiB code buffer size per emulated vcore.
 const JIT_CODE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
-const MAX_EMULATED_VCORES: usize = 4;
+pub const MAX_EMULATED_VCORES: usize =
+    if (@import("builtin").is_test)
+        4
+    else if (@hasDecl(config, "max_emulated_vcores"))
+        @max(1, @as(usize, config.max_emulated_vcores))
+    else
+        16;
+pub const INSTRUCTION_BATCH_SIZE: usize =
+    if (@hasDecl(config, "instruction_batch_size"))
+        @max(1, @as(usize, config.instruction_batch_size))
+    else
+        2_000_000;
 const INITIAL_GUEST_INSN_TIME: u64 = 10_000_000;
 const DELEGATE_ALL_MASK: u32 = 0xffff;
 const DEFAULT_MISA_RV32: u32 =
     riscv.IsaExtension.MXL_32 | @as(u32, @truncate(riscv.IsaExtension.gc));
 const SAFETY_WAKE_TICKS: u64 = 10_000;
-const DEFAULT_INSN_BUDGET: usize = 2_000_000;
+const DEFAULT_INSN_BUDGET: usize = INSTRUCTION_BATCH_SIZE;
+
+comptime {
+    std.debug.assert(MAX_EMULATED_VCORES > 0 and INSTRUCTION_BATCH_SIZE > 0);
+}
 
 var jit_buffer_pools: [MAX_EMULATED_VCORES][JIT_CODE_BUFFER_SIZE]u8 = undefined;
 var vcpu_pools: [MAX_EMULATED_VCORES]VCpu = undefined;
@@ -65,8 +76,7 @@ pub var global_yield_count = std.atomic.Value(u64).init(0);
 pub var last_telemetry_time = std.atomic.Value(u64).init(0);
 
 pub fn getVirtualSModeTime(vc: *vcore.VirtualCore) u64 {
-    const host_time = riscv.readTime();
-    return @max(vc.virtual_time, host_time);
+    return @max(vc.virtual_time, riscv.readTime());
 }
 
 fn uartOutputCallback(char: u8) void {
@@ -83,20 +93,18 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     defer emulated_slots_lock.unlock(lock_state);
 
     var assigned_slot: ?usize = null;
-    for (0..MAX_EMULATED_VCORES) |i| {
-        if (emulated_slots[i].in_use and
-            emulated_slots[i].guest_id == vc.guest_id and
-            emulated_slots[i].vcore_id == vc.id)
+    for (&emulated_slots, 0..) |slot, i| {
+        if (slot.in_use and slot.guest_id == vc.guest_id and
+            slot.vcore_id == vc.id)
         {
             assigned_slot = i;
             break;
         }
     }
-
     if (assigned_slot == null) {
-        for (0..MAX_EMULATED_VCORES) |i| {
-            if (!emulated_slots[i].in_use) {
-                emulated_slots[i] = .{
+        for (&emulated_slots, 0..) |*slot, i| {
+            if (!slot.in_use) {
+                slot.* = .{
                     .guest_id = vc.guest_id,
                     .vcore_id = vc.id,
                     .in_use = true,
@@ -130,7 +138,6 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         vcpu_ptr.setReg(@backingInt(riscv.Register.a0), @truncate(vc.id));
         vcpu_ptr.setReg(@backingInt(riscv.Register.a1), @truncate(em.dtb));
         vcpu_ptr.running = true;
-
         if (vc.guest.uart.out_fn == null) {
             vc.guest.uart.out_fn = uartOutputCallback;
         }
@@ -144,7 +151,6 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         vc.guest.space.base_hpa,
         vc.guest.space.range_size,
     );
-
     bus_ptr.uart = &vc.guest.uart;
     bus_ptr.timer = &vc.guest.timer;
     bus_ptr.pic = &vc.guest.pic;
@@ -155,11 +161,9 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         softtlb_ptr,
         bus_ptr,
     );
-
     if (em.target_arch == .riscv32 and vc.id == 0) {
         rv32_arch.initRegisters(vcpu_ptr, em.entry, em.dtb, 0);
     }
-
     em.vcpu = vcpu_ptr;
     em.engine = engine_ptr;
     em.slot_idx = vcore_idx;
@@ -169,21 +173,18 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 pub fn deinit(vc: *vcore.VirtualCore) void {
     if (vc.exec_path != .emulated) return;
     const em = &vc.exec_path.emulated;
-
     const lock_state = emulated_slots_lock.lock();
     defer emulated_slots_lock.unlock(lock_state);
 
-    for (0..MAX_EMULATED_VCORES) |i| {
-        if (emulated_slots[i].in_use and
-            emulated_slots[i].guest_id == vc.guest_id and
-            emulated_slots[i].vcore_id == vc.id)
+    for (&emulated_slots) |*slot| {
+        if (slot.in_use and slot.guest_id == vc.guest_id and
+            slot.vcore_id == vc.id)
         {
             if (em.engine) |eng| eng.tlb.flush();
-            emulated_slots[i] = .{};
+            slot.* = .{};
             break;
         }
     }
-
     em.vcpu = null;
     em.engine = null;
     em.slot_idx = null;
@@ -200,7 +201,12 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
     var current_vc: ?*vcore.VirtualCore = initial_vc;
     while (true) {
         if (current_vc) |vc| {
-            if (vc.state == .blocked) {
+            if (vc.exec_path != .emulated) {
+                pcore.this().in_emulation_runner = false;
+                pcore.contextSwitch(vc);
+                return;
+            }
+            if (vc.state == .blocked or vc.state == .stopped) {
                 vc.running_on_cpu = null;
                 pcore.this().active_vcore = null;
                 current_vc = scheduler.pickNext();
@@ -208,14 +214,13 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                 continue;
             }
 
-            run(vc);
-
+            const force_yield = run(vc);
             const em = if (vc.exec_path == .emulated)
                 &vc.exec_path.emulated
             else
                 null;
-            const should_yield = (vc.state == .blocked) or
-                (em != null and em.?.preempt_pending);
+            const should_yield = force_yield or (vc.state == .blocked) or
+                (vc.state == .stopped) or (em != null and em.?.preempt_pending);
             if (should_yield) {
                 if (em) |e| e.preempt_pending = false;
                 scheduler.yield(vc);
@@ -234,9 +239,8 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
             var it = pcpu.blocked_queue.start;
             while (it) |node| {
                 const next_it = node.next;
-                const vc: *vcore.VirtualCore = @ptrCast(
-                    @alignCast(node.contents),
-                );
+                const vc: *vcore.VirtualCore =
+                    @ptrCast(@alignCast(node.contents));
                 if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
                     pcpu.blocked_queue.remove(node);
                     vc.blocked_on_cpu = null;
@@ -244,13 +248,7 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                     continue;
                 }
                 var wake = false;
-                if (@atomicRmw(
-                    bool,
-                    &vc.pending_ipi,
-                    .Xchg,
-                    false,
-                    .acq_rel,
-                )) {
+                if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
                     wake = true;
                     if (vc.exec_path == .emulated) {
                         if (vc.exec_path.emulated.vcpu) |v| {
@@ -266,7 +264,7 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                         eng.bus.timer.getMtimecmp(vc.id)
                     else
                         riscv.TIMER_INFINITY;
-                    const guest_target = @min(vtimecmp, mtimecmp);
+                    const guest_target: u64 = @min(vtimecmp, mtimecmp);
                     if (guest_target != riscv.TIMER_INFINITY) {
                         const cur_guest_time = VCpu.readGuestTime();
                         if (cur_guest_time >= guest_target) {
@@ -307,9 +305,8 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                 riscv.pause();
                 if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| ptr.* = 0;
                 if (pcore.this().active_vcore) |act| {
-                    const act_vc: *vcore.VirtualCore = @ptrCast(
-                        @alignCast(act),
-                    );
+                    const act_vc: *vcore.VirtualCore =
+                        @ptrCast(@alignCast(act));
                     if (!@atomicLoad(bool, &act_vc.wfi_blocked, .acquire) and
                         act_vc.state != .blocked)
                     {
@@ -326,13 +323,14 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
 }
 
 /// Run native dynamic recompiler execution loop for virtual core.
-pub fn run(vc: *vcore.VirtualCore) void {
+pub fn run(vc: *vcore.VirtualCore) bool {
     init(vc) catch |e| {
         debug.printf("Native dynarec init failed: {s}\n", .{@errorName(e)});
-        return;
+        vc.guest.terminateWithCode(1);
+        return true;
     };
 
-    if (vc.exec_path != .emulated) return;
+    if (vc.exec_path != .emulated) return true;
     const em = &vc.exec_path.emulated;
     const vcpu_ptr = em.vcpu.?;
     const engine_ptr = em.engine.?;
@@ -359,21 +357,8 @@ pub fn run(vc: *vcore.VirtualCore) void {
 
     em.exit_count += 1;
 
-    if (exit_reason == .unhandled or exit_reason == .illegal_instruction) {
-        debug.printf(
-            "EMU UNHANDLED: pc=0x{x} last=0x{x} exit={s} cause={} fpc=0x{x}\n",
-            .{
-                vcpu_ptr.pc,
-                engine_ptr.last_pc,
-                @tagName(exit_reason),
-                engine_ptr.last_fault_cause,
-                engine_ptr.last_fault_pc,
-            },
-        );
-    }
-
     switch (exit_reason) {
-        .yield, .normal => {},
+        .yield, .normal => return false,
         .wfi => {
             vc.state = .blocked;
             const pcpu = pcore.this();
@@ -383,6 +368,7 @@ pub fn run(vc: *vcore.VirtualCore) void {
             vc.blocked_on_cpu = pcpu.cpu_core_id;
             @atomicStore(bool, &vc.wfi_blocked, true, .release);
             pcpu.blocked_lock.unlock(b_wfi_emu_prev);
+            return true;
         },
         .page_fault, .illegal_instruction, .unhandled => {
             debug.printf(
@@ -395,12 +381,15 @@ pub fn run(vc: *vcore.VirtualCore) void {
                     engine_ptr.last_fault_val,
                 },
             );
+            vc.guest.terminateWithCode(1);
+            return true;
         },
         .ecall => {
             var context: riscv.ThreadContext = undefined;
             inline for (0..32) |i| context[i] = @truncate(vcpu_ptr.regs[i]);
             sbi.handle(vc, 0, &context);
             inline for (0..32) |i| vcpu_ptr.regs[i] = context[i];
+            return vc.guest.state != .valid;
         },
     }
 }
@@ -425,23 +414,17 @@ test "Emulated VCore dynamic slot allocation, isolation, and reclaim" {
     );
     defer g1.deinit();
 
-    const vc0 = try g1.addVcore(0, 0x80000000, 0x80001000, .normal, null);
-    const vc1 = try g1.addVcore(1, 0x80000000, 0x80001000, .normal, null);
-    const vc2 = try g1.addVcore(2, 0x80000000, 0x80001000, .normal, null);
-    const vc3 = try g1.addVcore(3, 0x80000000, 0x80001000, .normal, null);
-
-    try init(vc0);
-    try init(vc1);
-    try init(vc2);
-    try init(vc3);
-
-    const s0 = vc0.exec_path.emulated.slot_idx.?;
-    const s1 = vc1.exec_path.emulated.slot_idx.?;
-    const s2 = vc2.exec_path.emulated.slot_idx.?;
-    const s3 = vc3.exec_path.emulated.slot_idx.?;
+    var vcs: [4]*vcore.VirtualCore = undefined;
+    for (&vcs, 0..) |*slot, idx| {
+        slot.* = try g1.addVcore(idx, 0x80000000, 0x80001000, .normal, null);
+        try init(slot.*);
+    }
+    const s0 = vcs[0].exec_path.emulated.slot_idx.?;
+    const s1 = vcs[1].exec_path.emulated.slot_idx.?;
+    const s2 = vcs[2].exec_path.emulated.slot_idx.?;
+    const s3 = vcs[3].exec_path.emulated.slot_idx.?;
     try testing.expect(s0 != s1 and s0 != s2 and s0 != s3);
     try testing.expect(s1 != s2 and s1 != s3 and s2 != s3);
-
     try testing.expectEqual(&g1.uart, bus_pools[s0].uart);
     try testing.expectEqual(&g1.timer, bus_pools[s0].timer);
     try testing.expectEqual(&g1.pic, bus_pools[s0].pic);
@@ -450,14 +433,10 @@ test "Emulated VCore dynamic slot allocation, isolation, and reclaim" {
     const vc4 = try g1.addVcore(4, 0x80000000, 0x80001000, .normal, null);
     try testing.expectError(error.OutOfEmulatedVcoreSlots, init(vc4));
 
-    deinit(vc1);
-    try testing.expect(vc1.exec_path.emulated.slot_idx == null);
-
+    deinit(vcs[1]);
+    try testing.expect(vcs[1].exec_path.emulated.slot_idx == null);
     try init(vc4);
     try testing.expectEqual(s1, vc4.exec_path.emulated.slot_idx.?);
 
-    deinit(vc0);
-    deinit(vc2);
-    deinit(vc3);
-    deinit(vc4);
+    for ([_]*vcore.VirtualCore{ vcs[0], vcs[2], vcs[3], vc4 }) |vc| deinit(vc);
 }

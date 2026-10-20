@@ -12,14 +12,15 @@ const linux = std.os.linux;
 const fb = @import("framebuffer.zig");
 const gui_mod = @import("gui.zig");
 const intro_fx = @import("intro/fx.zig");
+const paths = @import("paths.zig");
 const DiosixGui = gui_mod.DiosixGui;
 
 pub const Particle = intro_fx.Particle;
 pub const easeInOut = intro_fx.easeInOut;
 pub const interpolateColor = intro_fx.interpolateColor;
 
-pub const RUN_DIOSIX_DIR: [*:0]const u8 = "/run/diosix";
-pub const INTRO_FLAG_PATH: [*:0]const u8 = "/run/diosix/intro_played";
+pub const RUN_DIOSIX_DIR: [*:0]const u8 = paths.RUN_DIOSIX_DIR;
+pub const INTRO_FLAG_PATH: [*:0]const u8 = paths.INTRO_FLAG_PATH;
 pub const SENTINEL_PRIMARY: [*:0]const u8 = INTRO_FLAG_PATH;
 
 pub const TOTAL_INTRO_DURATION_MS: u32 = 10_000; // 10 seconds.
@@ -49,10 +50,16 @@ pub fn shouldSkipIntroFromCmdline(cmdline: []const u8) bool {
     return is_dev_mode and !force_welcome;
 }
 
+/// Capacity for reading /proc/cmdline: the longest kernel command line Linux
+/// accepts (COMMAND_LINE_SIZE is 4096 on riscv64). Anything smaller could
+/// silently miss a `diosix.mode=dev` flag placed late in the line.
+const MAX_PROC_CMDLINE_BYTES: usize = 4096;
+
 // Check /proc/cmdline to see if this boot session is a developer fast-boot.
 pub fn isDevFastBoot() bool {
-    var buf: [1024]u8 = undefined;
-    const fd_rc = linux.open("/proc/cmdline", .{ .ACCMODE = .RDONLY }, 0);
+    var buf: [MAX_PROC_CMDLINE_BYTES]u8 = undefined;
+    const cmdline_path = paths.PROC_CMDLINE_PATH;
+    const fd_rc = linux.open(cmdline_path, .{ .ACCMODE = .RDONLY }, 0);
     const signed_fd: isize = @bitCast(fd_rc);
     if (signed_fd < 0) return false;
     const fd: i32 = @intCast(signed_fd);
@@ -316,6 +323,21 @@ test "intro: sentinel file checking" {
     const is_second = shouldPlayIntro();
     try std.testing.expect(is_first or !is_first);
     try std.testing.expectEqual(false, is_second);
+}
+
+test "intro: dev flag beyond 1024 bytes is still detected" {
+    const alloc = std.testing.allocator;
+    const filler = try alloc.alloc(u8, MAX_PROC_CMDLINE_BYTES / 2);
+    defer alloc.free(filler);
+    @memset(filler, 'x');
+    const cmdline = try alloc.print(
+        "console=hvc0 junk={s} diosix.mode=dev\n",
+        .{filler},
+    );
+    defer alloc.free(cmdline);
+    try std.testing.expect(cmdline.len > 1024);
+    try std.testing.expect(cmdline.len <= MAX_PROC_CMDLINE_BYTES);
+    try std.testing.expect(shouldSkipIntroFromCmdline(cmdline));
 }
 
 test "intro: dev fast-boot cmdline detection" {

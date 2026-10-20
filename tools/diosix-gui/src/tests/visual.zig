@@ -12,6 +12,10 @@ const DiosixGui = gui_mod.DiosixGui;
 const intro_mod = @import("../intro.zig");
 const host_info = @import("../host.zig");
 
+// Screenshots are capped at one framebuffer row's worth of pixels.
+const PPM_MAX_WIDTH: usize = 1280;
+const PPM_HEADER_MAX_BYTES: usize = "P6\n4294967295 4294967295\n255\n".len;
+
 pub fn writePpmFile(surface: *const fb.Surface, path_z: [*:0]const u8) !void {
     const flags = linux.O{
         .ACCMODE = .WRONLY,
@@ -25,16 +29,17 @@ pub fn writePpmFile(surface: *const fb.Surface, path_z: [*:0]const u8) !void {
     const fd: i32 = @intCast(signed_rc);
     defer _ = linux.close(fd);
 
-    const row_w: usize = @min(surface.width, 1280);
-    var hdr_buf: [32]u8 = undefined;
+    const row_w: usize = @min(surface.width, PPM_MAX_WIDTH);
+    // Longest header: two 10-digit u32 values (width is capped far below).
+    var hdr_buf: [PPM_HEADER_MAX_BYTES]u8 = undefined;
     const hdr = std.fmt.bufPrint(
         &hdr_buf,
         "P6\n{d} {d}\n255\n",
         .{ row_w, surface.height },
-    ) catch return;
+    ) catch unreachable;
     _ = linux.write(fd, hdr.ptr, hdr.len);
 
-    var rgb_row: [1280 * 3]u8 = undefined;
+    var rgb_row: [PPM_MAX_WIDTH * 3]u8 = undefined;
     var y: u32 = 0;
     while (y < surface.height) : (y += 1) {
         var x: u32 = 0;

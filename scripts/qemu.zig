@@ -5,15 +5,17 @@
 
 const std = @import("std");
 const ArrayList = std.ArrayList;
+const layout = @import("../build/layout.zon");
 
 const AudioBackend = enum { auto, pipewire, pa, alsa, sdl, wav, none };
 
-pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
-pub const DEFAULT_DISPLAY_HEIGHT: u32 = 800;
+pub const DEFAULT_DISPLAY_WIDTH: u32 = layout.qemu.display_width;
+pub const DEFAULT_DISPLAY_HEIGHT: u32 = layout.qemu.display_height;
 
 fn appendTpmArgs(b: *std.Build, args: *ArrayList([]const u8)) !void {
+    const sock_arg = "socket,id=chrtpm,path=" ++ layout.qemu.swtpm_socket;
     try args.appendSlice(b.allocator, &.{
-        "-chardev", "socket,id=chrtpm,path=/tmp/diosix-tpm/swtpm-sock",
+        "-chardev", sock_arg,
         "-tpmdev",  "emulator,id=tpm0,chardev=chrtpm",
         "-device",  "tpm-tis-device,tpmdev=tpm0",
     });
@@ -80,19 +82,19 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         .{ h_flag, ext_flag, ext_flag },
     );
 
-    const storage_img_path = "zig-out/storage.img";
+    const storage_img_path = layout.qemu.storage_img;
     const storage_drive_arg =
         "file=" ++ storage_img_path ++ ",if=none,format=raw,id=hd0";
     const create_storage_cmd = b.addSystemCommand(&.{
-        "bash",              "scripts/create_storage_disk.sh",
-        cfg.rootvm_elf_path, storage_img_path,
-        "256M",
+        "bash",                   layout.qemu.storage_script,
+        cfg.rootvm_elf_path,      storage_img_path,
+        layout.qemu.storage_size,
     });
-    create_storage_cmd.addFileInput(b.path("scripts/create_storage_disk.sh"));
+    create_storage_cmd.addFileInput(b.path(layout.qemu.storage_script));
     create_storage_cmd.step.dependOn(&cfg.run_buildroot.step);
 
     try qemu_args.appendSlice(b.allocator, &.{
-        "qemu-system-riscv64",           "-nographic",
+        layout.qemu.system_bin,          "-nographic",
         "-s",                            "-machine",
         "virt",                          "-cpu",
         cpu_arg,                         "-smp",
@@ -104,8 +106,9 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         "virtio-net-device,netdev=net0",
     });
 
-    const setup_tpm_cmd =
-        b.addSystemCommand(&.{ "bash", "scripts/setup_swtpm.sh", "start" });
+    const setup_tpm_cmd = b.addSystemCommand(
+        &.{ "bash", layout.qemu.swtpm_script, "start" },
+    );
     const opt_tpm_step: ?*std.Build.Step =
         if (cfg.qemu_tpm_opt) &setup_tpm_cmd.step else null;
     const dev_append_str = if (cfg.welcome_opt)
@@ -127,12 +130,16 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         run_step_args.items,
     );
 
-    const live_img_path = "zig-out/diosix-live-riscv64.img";
+    const live_img_path = layout.qemu.live_img;
     const create_live_cmd =
-        b.addSystemCommand(&.{ "bash", "scripts/make_live_image.sh" });
-    create_live_cmd.addFileInput(b.path("scripts/make_live_image.sh"));
+        b.addSystemCommand(&.{ "bash", layout.qemu.live_script });
+    create_live_cmd.addFileInput(b.path(layout.qemu.live_script));
     create_live_cmd.addFileArg(cfg.vmdiosix.getEmittedBin());
-    create_live_cmd.addArgs(&.{ cfg.rootvm_elf_path, live_img_path, "512" });
+    create_live_cmd.addArgs(&.{
+        cfg.rootvm_elf_path,
+        live_img_path,
+        layout.qemu.live_size_mb,
+    });
     create_live_cmd.step.dependOn(b.getInstallStep());
     create_live_cmd.step.dependOn(&cfg.run_buildroot.step);
     b.step("live-image", "Build bootable hybrid GPT live & installer image")

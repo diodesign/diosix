@@ -122,6 +122,7 @@ zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall \
     --name diosix-ctl \
     -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
+ln -sf ../sbin/diosix-ctl "$DYNAMIC_OVERLAY/usr/bin/dsx"
 log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
 
 if [ -d "tools/guest-shim" ]; then
@@ -131,8 +132,11 @@ if [ -d "tools/guest-shim" ]; then
     mkdir -p "$SHIM_DIR"
     if zig build-exe -target riscv64-freestanding-none -O ReleaseSmall \
         -mcmodel=medium --script tools/guest-shim/linker.ld \
-        tools/guest-shim/src/main.zig --name "$SHIM_ELF" \
+        --dep interface -Mroot=tools/guest-shim/src/main.zig \
+        -Minterface=hypervisor/interface/lib.zig --name "$SHIM_ELF" \
         -femit-bin="${SHIM_DIR}/${SHIM_ELF}" >/dev/null 2>&1; then
+        ln -sf "shim/${SHIM_ELF}" \
+            "$DYNAMIC_OVERLAY/usr/share/diosix/guest-shim.bin"
         log_ok "Installed ${SHIM_ELF} in overlay (/usr/share/diosix/shim/)."
     else
         log_warn "Failed to cross-compile ${SHIM_ELF}."

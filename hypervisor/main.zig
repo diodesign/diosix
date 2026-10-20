@@ -189,16 +189,9 @@ pub export fn main(cpu_core_id: usize, fdt_paddr: usize) void {
                     );
                 },
                 .emulated => {
-                    const a0_idx = @backingInt(riscv.Register.a0);
-                    const tp_idx = @backingInt(riscv.Register.tp);
-                    vc.context[a0_idx] = @intFromPtr(vc);
-                    vc.context[tp_idx] = @intFromPtr(pcore.this());
                     pcore.this().in_m_mode = true;
-                    pcore.hw_run_vcore(
-                        vc.getNativeContext(),
-                        vc.getNativeMachine(),
-                        vc.getNativeGuestState(),
-                    );
+                    pcore.this().in_emulation_runner = true;
+                    @import("core/emulation.zig").emulatedRunnerSMode(vc);
                 },
             }
         } else {

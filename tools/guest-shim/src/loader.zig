@@ -13,8 +13,24 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const interface = @import("interface");
 pub const storage = @import("storage.zig");
 pub const pe_efi = @import("efi.zig");
+
+// Ordered ISO9660 boot candidate paths probed by the guest bootloader shim.
+pub const ISO_BOOT_CANDIDATES = .{
+    "kernel.elf",
+    "vmlinux.elf",
+    "Image",
+    "boot/vmlinux.elf",
+    "boot/vmlinuz",
+    "boot/Image",
+    "boot/kernel/kernel",
+    "boot/loader.efi",
+    "efi/boot/bootriscv64.efi",
+    "bootriscv64.efi",
+    "loader.efi",
+};
 
 // Re-export storage and PE32+ EFI symbols used by callers.
 pub const SECTOR_SIZE = storage.SECTOR_SIZE;
@@ -45,33 +61,33 @@ pub const loadPe32PlusEfi = pe_efi.loadPe32PlusEfi;
 pub const initMinimalEfiTables = pe_efi.initMinimalEfiTables;
 
 // Executable format constants and ELF header/segment field offsets.
-pub const ELF_MAGIC = "\x7fELF";
-pub const ELF_EI_CLASS: usize = 4;
-pub const ELF_EI_DATA: usize = 5;
-pub const ELF_CLASS_32: u8 = 1;
-pub const ELF_CLASS_64: u8 = 2;
-pub const ELF_DATA_LSB: u8 = 1;
-pub const ELF32_EHDR_SIZE: usize = 52;
-pub const ELF64_EHDR_SIZE: usize = 64;
-pub const ELF32_E_ENTRY_OFFSET: usize = 24;
-pub const ELF32_E_PHOFF_OFFSET: usize = 28;
-pub const ELF32_E_PHENTSIZE_OFFSET: usize = 42;
-pub const ELF32_E_PHNUM_OFFSET: usize = 44;
-pub const ELF64_E_ENTRY_OFFSET: usize = 24;
-pub const ELF64_E_PHOFF_OFFSET: usize = 32;
-pub const ELF64_E_PHENTSIZE_OFFSET: usize = 54;
-pub const ELF64_E_PHNUM_OFFSET: usize = 56;
-pub const ELF32_PHDR_SIZE: usize = 32;
-pub const ELF64_PHDR_SIZE: usize = 56;
-pub const ELF32_P_OFFSET_OFFSET: usize = 4;
-pub const ELF32_P_VADDR_OFFSET: usize = 8;
-pub const ELF32_P_FILESZ_OFFSET: usize = 16;
-pub const ELF32_P_MEMSZ_OFFSET: usize = 20;
-pub const ELF64_P_OFFSET_OFFSET: usize = 8;
-pub const ELF64_P_VADDR_OFFSET: usize = 16;
-pub const ELF64_P_FILESZ_OFFSET: usize = 32;
-pub const ELF64_P_MEMSZ_OFFSET: usize = 40;
-pub const PT_LOAD: u32 = 1;
+pub const ELF_MAGIC = interface.elf.MAGIC;
+pub const ELF_EI_CLASS: usize = interface.elf.EI_CLASS;
+pub const ELF_EI_DATA: usize = interface.elf.EI_DATA;
+pub const ELF_CLASS_32: u8 = interface.elf.CLASS_32;
+pub const ELF_CLASS_64: u8 = interface.elf.CLASS_64;
+pub const ELF_DATA_LSB: u8 = interface.elf.DATA_LSB;
+pub const ELF32_EHDR_SIZE: usize = interface.elf.ELF32_EHDR_SIZE;
+pub const ELF64_EHDR_SIZE: usize = interface.elf.ELF64_EHDR_SIZE;
+pub const ELF32_E_ENTRY_OFFSET: usize = interface.elf.EHDR32.ENTRY;
+pub const ELF32_E_PHOFF_OFFSET: usize = interface.elf.EHDR32.PHOFF;
+pub const ELF32_E_PHENTSIZE_OFFSET: usize = interface.elf.EHDR32.PHENTSIZE;
+pub const ELF32_E_PHNUM_OFFSET: usize = interface.elf.EHDR32.PHNUM;
+pub const ELF64_E_ENTRY_OFFSET: usize = interface.elf.EHDR.ENTRY;
+pub const ELF64_E_PHOFF_OFFSET: usize = interface.elf.EHDR.PHOFF;
+pub const ELF64_E_PHENTSIZE_OFFSET: usize = interface.elf.EHDR.PHENTSIZE;
+pub const ELF64_E_PHNUM_OFFSET: usize = interface.elf.EHDR.PHNUM;
+pub const ELF32_PHDR_SIZE: usize = interface.elf.ELF32_PHDR_SIZE;
+pub const ELF64_PHDR_SIZE: usize = interface.elf.ELF64_PHDR_SIZE;
+pub const ELF32_P_OFFSET_OFFSET: usize = interface.elf.PHDR32.OFFSET;
+pub const ELF32_P_VADDR_OFFSET: usize = interface.elf.PHDR32.VADDR;
+pub const ELF32_P_FILESZ_OFFSET: usize = interface.elf.PHDR32.FILESZ;
+pub const ELF32_P_MEMSZ_OFFSET: usize = interface.elf.PHDR32.MEMSZ;
+pub const ELF64_P_OFFSET_OFFSET: usize = interface.elf.PHDR.OFFSET;
+pub const ELF64_P_VADDR_OFFSET: usize = interface.elf.PHDR.VADDR;
+pub const ELF64_P_FILESZ_OFFSET: usize = interface.elf.PHDR.FILESZ;
+pub const ELF64_P_MEMSZ_OFFSET: usize = interface.elf.PHDR.MEMSZ;
+pub const PT_LOAD: u32 = interface.elf.PT_LOAD;
 pub const MAX_ELF_PHDRS: u16 = 128;
 
 // RISC-V Linux / BSD flat Image header constants.
@@ -385,11 +401,12 @@ pub fn loadRiscvFlatImage(
     else
         image_data.len;
 
-    const copy_len = @min(image_data.len, effective_mem_size);
+    const copy_len: usize = @min(image_data.len, effective_mem_size);
+    const span_len: usize = @max(copy_len, effective_mem_size);
     const total_end = std.math.add(
         usize,
         text_offset,
-        @max(copy_len, effective_mem_size),
+        span_len,
     ) catch return error.DestinationOutOfBounds;
     if (total_end > dest_buf.len) return error.DestinationOutOfBounds;
 

@@ -239,8 +239,13 @@ pub fn emitMulh(
     rs2: u5,
 ) void {
     if (rd == 0) return;
-    emit(tb, off, rv64.mul(rd, rs1, rs2));
-    emit(tb, off, rv64.srai(rd, rd, WORD_BITS));
+    emit(tb, off, rv64.sd(S11, T0, OFF_T0));
+    emit(tb, off, rv64.sd(S11, T1, OFF_T1));
+    const r1 = resolveSavedSource(tb, off, T0, rs1);
+    emit(tb, off, rv64.addiw(T0, r1, 0));
+    const r2 = resolveSavedSource(tb, off, T1, rs2);
+    emit(tb, off, rv64.addiw(T1, r2, 0));
+    finishMulHigh(tb, off, rd);
 }
 
 fn emitZeroExtendGuestReg(
@@ -344,6 +349,7 @@ pub inline fn emitCsrRead(
 }
 
 test "emitLoadImm32 and emitRType emit valid RV64 instructions" {
+    _ = branch_mod;
     const cache_inst = try std.testing.allocator.create(cache_mod.Cache);
     defer std.testing.allocator.destroy(cache_inst);
     var raw_pool: [256]u8 align(4096) = undefined;

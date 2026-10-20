@@ -7,13 +7,29 @@ const std = @import("std");
 const common = @import("../common.zig");
 
 pub const MAX_TOUR_STEPS: usize = 8;
+/// Display capacities for one tour step: a one-line title, a short summary
+/// paragraph, and a single CLI command hint.
+pub const TOUR_TITLE_MAX: usize = 96;
+pub const TOUR_SUMMARY_MAX: usize = 256;
+pub const TOUR_HINT_MAX: usize = 128;
+
+/// Copies `s` into a tour field, warning when it had to be truncated.
+fn setTourField(dest: []u8, len_out: *usize, s: []const u8) void {
+    if (s.len > dest.len) {
+        common.printFmt(
+            "Warning: tour text truncated to {d} bytes: '{s}'\n",
+            .{ dest.len, s },
+        );
+    }
+    common.setFixedBuf(dest, len_out, s);
+}
 
 pub const TourStep = struct {
-    title_buf: [96]u8 = @splat(0),
+    title_buf: [TOUR_TITLE_MAX]u8 = @splat(0),
     title_len: usize = 0,
-    summary_buf: [256]u8 = @splat(0),
+    summary_buf: [TOUR_SUMMARY_MAX]u8 = @splat(0),
     summary_len: usize = 0,
-    hint_buf: [128]u8 = @splat(0),
+    hint_buf: [TOUR_HINT_MAX]u8 = @splat(0),
     hint_len: usize = 0,
 
     pub fn set(
@@ -28,15 +44,15 @@ pub const TourStep = struct {
     }
 
     pub fn setTitle(self: *TourStep, s: []const u8) void {
-        common.setFixedBuf(&self.title_buf, &self.title_len, s);
+        setTourField(&self.title_buf, &self.title_len, s);
     }
 
     pub fn setSummary(self: *TourStep, s: []const u8) void {
-        common.setFixedBuf(&self.summary_buf, &self.summary_len, s);
+        setTourField(&self.summary_buf, &self.summary_len, s);
     }
 
     pub fn setHint(self: *TourStep, s: []const u8) void {
-        common.setFixedBuf(&self.hint_buf, &self.hint_len, s);
+        setTourField(&self.hint_buf, &self.hint_len, s);
     }
 
     pub fn title(self: *const TourStep) []const u8 {
@@ -54,36 +70,37 @@ pub const TourStep = struct {
 
 pub fn initDefaultTourSteps(steps: *[MAX_TOUR_STEPS]TourStep) usize {
     steps[0].set(
-        "Step 1/5: Root VM & Hardware Trust",
-        "The Root VM (CID 1) orchestrates hardware drivers, storage " ++
-            "volumes, and child VM lifecycles via M-mode SBI hypercalls.",
-        "dsx host info && dsx info",
+        "1. Root VM & Hardware Partitioning",
+        "You are inside the Root VM (VM 0). It manages hardware drivers, " ++
+            "storage, and networking while the M-mode hypervisor enforces " ++
+            "strict PMP/Stage-2 memory isolation.",
+        "dsx host info",
     );
     steps[1].set(
-        "Step 2/5: Virtual Machine Fleet & Isolation",
-        "Child VMs run in isolated Stage-2 memory partitions with " ++
-            "private point-to-point networking and zero upward SSH access.",
-        "dsx image catalog && dsx image list",
+        "2. Zero-Configuration VM Quickstart",
+        "Launch isolated Linux or bare-metal Guest VMs with automatic " ++
+            "kernel staging, VirtIO block/network attachment, and DHCP IP " ++
+            "assignment.",
+        "dsx run alpine",
     );
     steps[2].set(
-        "Step 3/5: Passkey & Zero-Password Security",
-        "All password logins are disabled. Operators authenticate via " ++
-            "FIDO2 USB/NFC keys, TPM 2.0 platform passkeys, QR pairing, " ++
-            "or UART challenge-response.",
-        "dsx auth status && dsx auth list",
+        "3. Declarative Fleet & Storage Management",
+        "Create persistent virtual disks, capture instant VM memory/disk " ++
+            "snapshots, and orchestrate multi-VM topologies from " ++
+            "/etc/diosix/system.toml.",
+        "dsx disk list && dsx snapshot list",
     );
     steps[3].set(
-        "Step 4/5: Autonomic Steward Collective",
-        "Tier-1 Steward VMs enforce the sealed M-mode Constitutional " ++
-            "Charter via M-of-N quorum ratification and Standby Root " ++
-            "failover.",
-        "dsx charter status && dsx charter audit",
+        "4. Constitutional AI Steward Governance",
+        "Inspect the immutable M-mode Constitutional Charter, Tier-1 " ++
+            "Steward consensus quorum, and real-time Whisper telemetry bus.",
+        "dsx charter status",
     );
     steps[4].set(
-        "Step 5/5: Bare-Metal Host Installation",
-        "Install the immutable Diosix boot image and persistent " ++
-            "storage partition onto physical NVMe or VirtIO disks.",
-        "dsx host install --mode basic --dry-run",
+        "5. Zero-Password Passkey Authentication",
+        "Diosix eliminates password logins. Enroll FIDO2 hardware keys, " ++
+            "TPM 2.0 platform passkeys, or QR-paired mobile authenticators.",
+        "dsx auth status",
     );
     return 5;
 }
@@ -94,7 +111,19 @@ test "sysconfig/tour: initializes default 5-step guided tour" {
     const count = initDefaultTourSteps(&steps);
     try std.testing.expectEqual(@as(usize, 5), count);
     try std.testing.expectEqualStrings(
-        "Step 1/5: Root VM & Hardware Trust",
+        "1. Root VM & Hardware Partitioning",
         steps[0].title(),
+    );
+    try std.testing.expectEqualStrings(
+        "dsx host info",
+        steps[0].cliHint(),
+    );
+    try std.testing.expectEqualStrings(
+        "5. Zero-Password Passkey Authentication",
+        steps[4].title(),
+    );
+    try std.testing.expectEqualStrings(
+        "dsx auth status",
+        steps[4].cliHint(),
     );
 }

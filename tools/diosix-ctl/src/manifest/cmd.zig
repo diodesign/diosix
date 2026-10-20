@@ -7,12 +7,14 @@ const std = @import("std");
 const api = @import("../api.zig");
 const manifest = @import("../manifest.zig");
 const common = @import("../common.zig");
+const sysconfig = @import("../sysconfig.zig");
 
 const CID_PARENT = common.CID_PARENT;
 const CID_SELF = common.CID_SELF;
 const CID_FIRST_CHILD = common.CID_FIRST_CHILD;
 const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
 const printStr = common.printStr;
+const printFmt = common.printFmt;
 const parseCid = common.parseCid;
 const printApiError = common.printApiError;
 const readBinaryFile = common.readBinaryFile;
@@ -41,8 +43,10 @@ const ManifestPruneOption = enum {
 const ManifestResolveOption = enum { @"--manifest", @"-m" };
 
 fn readLocalManifest(sys_path: []const u8) ?[]u8 {
-    return readBinaryFile("/etc/diosix/manifest.toml", MAX_MANIFEST_SIZE) catch
-        readBinaryFile(sys_path, MAX_MANIFEST_SIZE) catch null;
+    return readBinaryFile(
+        sysconfig.DEFAULT_LOCAL_MANIFEST_PATH,
+        MAX_MANIFEST_SIZE,
+    ) catch readBinaryFile(sys_path, MAX_MANIFEST_SIZE) catch null;
 }
 
 fn printErr(prefix: []const u8, err: anyerror) void {
@@ -51,17 +55,23 @@ fn printErr(prefix: []const u8, err: anyerror) void {
     printStr("\n");
 }
 
-fn printFmt(comptime fmt: []const u8, args: anytype) void {
-    var buf: [512]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    printStr(msg);
-}
-
 fn printManifestText(content: []const u8) void {
     printStr(content);
     if (content.len > 0 and content[content.len - 1] != '\n') {
         printStr("\n");
     }
+}
+
+/// Prints the manifest the hypervisor holds for `target_cid`. Returns false
+/// when the hypervisor has no manifest attached to that VM.
+fn printHvManifest(client: *api.DiosixClient, target_cid: usize) !bool {
+    const allocator = std.heap.page_allocator;
+    const m_buf = try allocator.alloc(u8, MAX_MANIFEST_SIZE);
+    defer allocator.free(m_buf);
+    const actual_len = try client.getManifest(target_cid, m_buf);
+    if (actual_len == 0) return false;
+    printManifestText(m_buf[0..@min(actual_len, m_buf.len)]);
+    return true;
 }
 
 pub fn cmdManifest(
@@ -249,26 +259,19 @@ fn cmdManifestShow(
         defer unmapBinaryFile(content);
         printManifestText(content);
     } else if (use_hv) {
-        var m_buf: [4096]u8 = undefined;
-        const actual_len = client.getManifest(target_cid, &m_buf) catch |err| {
+        const printed = printHvManifest(client, target_cid) catch |err| {
             printApiError("Get hypervisor manifest", err);
             return;
         };
-        if (actual_len == 0) {
+        if (!printed) {
             printStr("# (No manifest attached to this VM in hypervisor)\n");
-        } else {
-            printManifestText(m_buf[0..actual_len]);
         }
     } else if (readLocalManifest(sys_cfg.systemManifestPath())) |content| {
         defer unmapBinaryFile(content);
         printManifestText(content);
     } else {
-        var m_buf: [4096]u8 = undefined;
-        if (client.getManifest(target_cid, &m_buf)) |actual_len| {
-            if (actual_len > 0) {
-                printManifestText(m_buf[0..actual_len]);
-                return;
-            }
+        if (printHvManifest(client, target_cid)) |printed| {
+            if (printed) return;
         } else |_| {}
         printStr(
             "No manifest found at /etc/diosix/manifest.toml " ++
@@ -393,8 +396,9 @@ pub fn cmdResolve(
         const m_buf = try allocator.alloc(u8, MAX_MANIFEST_SIZE);
         defer allocator.free(m_buf);
         if (client.getManifest(CID_SELF, m_buf)) |actual_len| {
-            if (actual_len > 0) {
-                content_slice = try allocator.dupe(u8, m_buf[0..actual_len]);
+            const safe_len = @min(actual_len, m_buf.len);
+            if (safe_len > 0) {
+                content_slice = try allocator.dupe(u8, m_buf[0..safe_len]);
                 is_allocated = true;
             }
         } else |_| {}

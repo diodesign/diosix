@@ -8,6 +8,7 @@ const linux = std.os.linux;
 const api = @import("api.zig");
 const registry = @import("registry.zig");
 const sysconfig = @import("sysconfig.zig");
+const output = @import("common/output.zig");
 
 pub const GUEST_REGISTRY_PATH = registry.GUEST_REGISTRY_PATH;
 pub const GuestRegistryKey = registry.GuestRegistryKey;
@@ -18,6 +19,25 @@ pub const findAttachedGuest = registry.findAttachedGuest;
 pub const removeGuestFromRegistry = registry.removeGuestFromRegistry;
 pub const saveGuestRegistry = registry.saveGuestRegistry;
 pub const printGuestLine = registry.printGuestLine;
+
+pub const printStr = output.printStr;
+pub const printFmt = output.printFmt;
+pub const JsonFlag = output.JsonFlag;
+pub const isJsonFlag = output.isJsonFlag;
+pub const setExeName = output.setExeName;
+pub const getExeName = output.getExeName;
+pub const printApiError = output.printApiError;
+pub const sanitizeJsonStr = output.sanitizeJsonStr;
+pub const writeJsonEscaped = output.writeJsonEscaped;
+pub const escapeJsonAlloc = output.escapeJsonAlloc;
+pub const trimAscii = output.trimAscii;
+pub const trimWhitespace = output.trimWhitespace;
+pub const unquoteToml = output.unquoteToml;
+pub const copyStr = output.copyStr;
+pub const setFixedBuf = output.setFixedBuf;
+pub const bytesToHex = output.bytesToHex;
+pub const sha256Hex = output.sha256Hex;
+pub const toPathZ = output.toPathZ;
 
 pub const CID_PARENT: usize = api.CID_PARENT;
 pub const CID_SELF: usize = api.CID_SELF;
@@ -35,7 +55,10 @@ pub const KB_PER_MB: usize = 1024;
 pub const DEV_MEM_PAGE_SIZE: usize = 4096;
 pub const DEFAULT_FILE_MODE: usize = 0o644;
 pub const PRIVATE_FILE_MODE: usize = 0o600;
-pub const CATALOG_CONFIG_PATH = "/etc/diosix/catalog.toml";
+pub const CATALOG_CONFIG_PATH = sysconfig.DEFAULT_CATALOG_CONFIG_PATH;
+
+const CMDLINE_READ_MAX: usize = 4096;
+const SYSCONFIG_READ_MAX: usize = 65536;
 
 pub const WAIT_SIGNAL_MASK: i32 = 0x7f;
 pub const WAIT_EXIT_SHIFT: u5 = 8;
@@ -52,11 +75,6 @@ pub const TargetAlias = enum {
     @"0",
 };
 
-pub const JsonFlag = enum {
-    @"--json",
-    @"-j",
-};
-
 pub const LinuxDirent64 = extern struct {
     d_ino: u64,
     d_off: i64,
@@ -64,14 +82,6 @@ pub const LinuxDirent64 = extern struct {
     d_type: u8,
     d_name: [0]u8,
 };
-
-pub fn printStr(str: []const u8) void {
-    _ = linux.write(linux.STDOUT_FILENO, str.ptr, str.len);
-}
-
-pub fn isJsonFlag(arg: []const u8) bool {
-    return std.meta.stringToEnum(JsonFlag, arg) != null;
-}
 
 pub fn parseCid(str: []const u8) !usize {
     if (std.meta.stringToEnum(TargetAlias, str)) |alias| {
@@ -87,132 +97,6 @@ pub fn isArch(str: []const u8) bool {
     return std.meta.stringToEnum(api.TargetArch, str) != null;
 }
 
-var stored_exe_name: []const u8 = "dsx";
-
-pub fn setExeName(argv0: [*:0]const u8) void {
-    const span = std.mem.span(argv0);
-    const base = if (std.mem.lastIndexOfScalar(u8, span, '/')) |idx|
-        span[idx + 1 ..]
-    else
-        span;
-    if (base.len > 0) stored_exe_name = base;
-}
-
-pub fn getExeName() []const u8 {
-    return stored_exe_name;
-}
-
-pub fn printApiError(action: []const u8, err: anyerror) void {
-    var buf: [128]u8 = undefined;
-    switch (err) {
-        error.PermissionDenied => printStr(
-            "Error: Permission denied. Only the root user is allowed " ++
-                "to communicate with the hypervisor.\n",
-        ),
-        error.DeviceNotFound => printStr(
-            "Error: /dev/diosix not found. Ensure the diosix kernel " ++
-                "driver is enabled.\n",
-        ),
-        error.FileNotFound => {
-            const fmt = "Error: {s} failed: file not found.\n";
-            const msg = std.fmt.bufPrint(&buf, fmt, .{action}) catch return;
-            printStr(msg);
-        },
-        error.PathTooLong => {
-            const fmt =
-                "Error: {s} failed: file path exceeds maximum length.\n";
-            const msg = std.fmt.bufPrint(&buf, fmt, .{action}) catch return;
-            printStr(msg);
-        },
-        error.OutOfMemory => {
-            const fmt = "Error: {s} failed: out of memory.\n";
-            const msg = std.fmt.bufPrint(&buf, fmt, .{action}) catch return;
-            printStr(msg);
-        },
-        else => {
-            const msg = std.fmt.bufPrint(
-                &buf,
-                "Error: {s} failed ({s}).\n",
-                .{ action, @errorName(err) },
-            ) catch return;
-            printStr(msg);
-        },
-    }
-}
-
-/// Sanitize a string for safe inclusion inside a JSON string literal.
-pub fn sanitizeJsonStr(buf: []u8, raw: []const u8) []const u8 {
-    var out_len: usize = 0;
-    for (raw) |ch| {
-        if (out_len >= buf.len) break;
-        if (ch < 0x20 or ch >= 0x7f or ch == '"' or ch == '\\') continue;
-        buf[out_len] = ch;
-        out_len += 1;
-    }
-    return buf[0..out_len];
-}
-
-pub fn trimAscii(s: []const u8) []const u8 {
-    return std.mem.trim(u8, s, " \t\r\n");
-}
-
-pub fn trimWhitespace(s: []const u8) []const u8 {
-    return trimAscii(s);
-}
-
-pub fn unquoteToml(raw: []const u8) []const u8 {
-    var s = trimAscii(raw);
-    if (std.mem.indexOfScalar(u8, s, '#')) |c_idx| {
-        if (s.len == 0 or (s[0] != '"' and s[0] != '\'')) {
-            s = trimAscii(s[0..c_idx]);
-        } else if (std.mem.indexOfScalarPos(u8, s, 1, s[0])) |close_q| {
-            if (c_idx > close_q) s = trimAscii(s[0..c_idx]);
-        }
-    }
-    if (s.len >= 2 and
-        ((s[0] == '"' and s[s.len - 1] == '"') or
-            (s[0] == '\'' and s[s.len - 1] == '\'')))
-    {
-        return s[1 .. s.len - 1];
-    }
-    return s;
-}
-
-pub fn copyStr(buf: []u8, src: []const u8) []const u8 {
-    const copy_len = @min(buf.len, src.len);
-    @memcpy(buf[0..copy_len], src[0..copy_len]);
-    return buf[0..copy_len];
-}
-
-pub fn setFixedBuf(dest: []u8, len_out: *usize, src: []const u8) void {
-    const n = @min(src.len, dest.len);
-    @memcpy(dest[0..n], src[0..n]);
-    len_out.* = n;
-}
-
-pub fn bytesToHex(bytes: []const u8, out: []u8) []const u8 {
-    const hex_chars = "0123456789abcdef";
-    const n = @min(bytes.len, out.len / 2);
-    for (bytes[0..n], 0..) |b, i| {
-        out[i * 2] = hex_chars[b >> 4];
-        out[i * 2 + 1] = hex_chars[b & 0x0f];
-    }
-    return out[0 .. n * 2];
-}
-
-pub fn sha256Hex(data: []const u8, out: *[64]u8) []const u8 {
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(data, &digest, .{});
-    return bytesToHex(&digest, out);
-}
-
-pub fn toPathZ(path: []const u8, buf: []u8) ?[:0]const u8 {
-    if (path.len == 0 or path.len >= buf.len) return null;
-    @memcpy(buf[0..path.len], path);
-    buf[path.len] = 0;
-    return buf[0..path.len :0];
-}
-
 pub fn isSafeIdentifier(name: []const u8) bool {
     if (name.len == 0 or name.len > 128) return false;
     if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) {
@@ -225,12 +109,18 @@ pub fn isSafeIdentifier(name: []const u8) bool {
     return true;
 }
 
+fn matchesPathPrefix(path: []const u8, prefix: []const u8) bool {
+    if (prefix.len == 0 or !std.mem.startsWith(u8, path, prefix)) return false;
+    if (prefix[prefix.len - 1] == '/') return path.len > prefix.len;
+    return path.len > prefix.len and path[prefix.len] == '/';
+}
+
 pub fn isSafeStoragePath(path: []const u8, allowed_prefix: []const u8) bool {
     if (path.len == 0 or path.len >= MAX_PATH_LEN) return false;
     if (std.mem.indexOf(u8, path, "..") != null) return false;
     if (std.mem.startsWith(u8, path, "/")) {
-        return std.mem.startsWith(u8, path, allowed_prefix) or
-            std.mem.startsWith(u8, path, "/tmp/");
+        return matchesPathPrefix(path, allowed_prefix) or
+            matchesPathPrefix(path, sysconfig.TMP_DIR_PREFIX);
     }
     return isSafeIdentifier(path);
 }
@@ -398,7 +288,11 @@ pub fn runSubprocess(argv: [*:null]const ?[*:0]const u8) u32 {
     const pid_signed: isize = @bitCast(pid_res);
     if (pid_signed < 0) return SUBPROCESS_WAIT_ERR;
     if (pid_signed == 0) {
-        const devnull_res = linux.open("/dev/null", .{ .ACCMODE = .RDWR }, 0);
+        const devnull_res = linux.open(
+            sysconfig.DEV_NULL_PATH,
+            .{ .ACCMODE = .RDWR },
+            0,
+        );
         const devnull_signed: isize = @bitCast(devnull_res);
         if (devnull_signed >= 0) {
             _ = linux.dup2(@intCast(devnull_signed), linux.STDOUT_FILENO);
@@ -429,9 +323,9 @@ pub fn runSubprocess(argv: [*:null]const ?[*:0]const u8) u32 {
 }
 
 pub fn detectSeatProfile() []const u8 {
-    if (fileExistsPath("/dev/dri/card0")) {
-        if (fileExistsPath("/dev/input/touchscreen0") or
-            fileExistsPath("/run/diosix/touch_seat"))
+    if (fileExistsPath(sysconfig.DEV_DRI_CARD0_PATH)) {
+        if (fileExistsPath(sysconfig.DEV_TOUCHSCREEN0_PATH) or
+            fileExistsPath(sysconfig.TOUCH_SEAT_PATH))
         {
             return "touch-tablet";
         }
@@ -441,7 +335,10 @@ pub fn detectSeatProfile() []const u8 {
 }
 
 pub fn detectBootMode() []const u8 {
-    if (readBinaryFile("/proc/cmdline", 4096)) |cmdline| {
+    if (readBinaryFile(
+        sysconfig.PROC_CMDLINE_PATH,
+        CMDLINE_READ_MAX,
+    )) |cmdline| {
         defer unmapBinaryFile(cmdline);
         if (std.mem.indexOf(u8, cmdline, "diosix.mode=dev") != null) {
             return "dev";
@@ -458,7 +355,11 @@ pub fn generateEntropyBytes(out: []u8) !void {
     const gr_signed: isize = @bitCast(gr_rc);
     if (gr_signed == @as(isize, @intCast(out.len))) return;
 
-    const fd_res = linux.open("/dev/urandom", .{ .ACCMODE = .RDONLY }, 0);
+    const fd_res = linux.open(
+        sysconfig.DEV_URANDOM_PATH,
+        .{ .ACCMODE = .RDONLY },
+        0,
+    );
     const fd_signed: isize = @bitCast(fd_res);
     if (fd_signed >= 0) {
         const fd: i32 = @intCast(fd_signed);
@@ -477,16 +378,20 @@ pub fn generateEntropyBytes(out: []u8) !void {
 }
 
 pub fn loadRuntimeSystemConfig() sysconfig.SystemConfig {
-    if (readBinaryFile(sysconfig.DEFAULT_SYSCONFIG_PATH, 65536)) |bytes| {
+    if (readBinaryFile(
+        sysconfig.DEFAULT_SYSCONFIG_PATH,
+        SYSCONFIG_READ_MAX,
+    )) |bytes| {
         defer unmapBinaryFile(bytes);
         return sysconfig.parseSystemConfigToml(bytes);
     } else |_| {}
     return sysconfig.SystemConfig.initDefaults();
 }
 
-test "common: parseCid, parseMemorySizeMb, and matchTarget" {
+test "common: parseCid, parseMemorySizeMb, and isSafeStoragePath" {
     std.testing.refAllDecls(@This());
     _ = registry;
+    _ = output;
 
     try std.testing.expectEqual(CID_SELF, try parseCid("self"));
     try std.testing.expectEqual(CID_PARENT, try parseCid("parent"));
@@ -496,4 +401,13 @@ test "common: parseCid, parseMemorySizeMb, and matchTarget" {
     try std.testing.expectEqual(@as(usize, 512), parseMemorySizeMb("512M"));
     try std.testing.expectEqual(@as(usize, 2), parseMemorySizeMb("2048K"));
     try std.testing.expectEqual(@as(usize, 256), parseMemorySizeMb(""));
+
+    const dir = "/var/lib/diosix/disks";
+    try std.testing.expect(
+        isSafeStoragePath("/var/lib/diosix/disks/a.img", dir),
+    );
+    try std.testing.expect(
+        !isSafeStoragePath("/var/lib/diosix/disks-evil/a.img", dir),
+    );
+    try std.testing.expect(!isSafeStoragePath("/tmp-evil/a.img", dir));
 }

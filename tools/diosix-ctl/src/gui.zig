@@ -8,6 +8,7 @@ const linux = std.os.linux;
 const api = @import("api.zig");
 const installer = @import("installer.zig");
 const common = @import("common.zig");
+const sysconfig = @import("sysconfig.zig");
 
 const printStr = common.printStr;
 const sanitizeJsonStr = common.sanitizeJsonStr;
@@ -32,19 +33,23 @@ const TourOption = enum {
 
 const JsonFlag = common.JsonFlag;
 
+/// Largest GUI state document read back from the running GUI.
+const MAX_GUI_STATE_BYTES: usize = 4096;
+
+/// Largest framebuffer dump copied by `gui screenshot` (16 MiB).
+const MAX_FRAMEBUFFER_BYTES: usize = 16 * 1024 * 1024;
+
 pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
     _ = client;
     if (args.len == 0) {
-        var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf,
+        common.printFmt(
             \\Usage:
             \\  {s} gui state [--json]             Inspect GUI window tree
             \\  {s} gui trigger <action> [--json]  Trigger semantic GUI action
             \\  {s} gui screenshot [path] [--json] Capture framebuffer dump
             \\
-        , .{ exe_name, exe_name, exe_name }) catch return;
-        printStr(msg);
+        , .{ exe_name, exe_name, exe_name });
         return;
     }
 
@@ -56,7 +61,7 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         }
     }
 
-    _ = linux.mkdir("/run/diosix", 0o755);
+    _ = linux.mkdir(sysconfig.RUN_DIOSIX_DIR, 0o755);
 
     const cmd = std.meta.stringToEnum(GuiSubcommand, subcmd) orelse {
         printStr(
@@ -68,7 +73,10 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
     switch (cmd) {
         .state => {
-            if (readBinaryFile("/run/diosix/gui_state.json", 4096)) |sbytes| {
+            if (readBinaryFile(
+                sysconfig.GUI_STATE_PATH,
+                MAX_GUI_STATE_BYTES,
+            )) |sbytes| {
                 defer unmapBinaryFile(sbytes);
                 printStr(sbytes);
                 if (sbytes.len > 0 and sbytes[sbytes.len - 1] != '\n') {
@@ -80,24 +88,18 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             const seat = detectSeatProfile();
             const is_touch = std.mem.eql(u8, seat, "touch-tablet");
             if (json_mode) {
-                var jbuf: [256]u8 = undefined;
-                const jout = std.fmt.bufPrint(
-                    &jbuf,
+                common.printFmt(
                     "{{\"active_pane\":\"fleet\",\"seat_profile\":\"{s}\"," ++
                         "\"osk_visible\":{s},\"tour_visible\":false}}\n",
                     .{ seat, if (is_touch) "true" else "false" },
-                ) catch return;
-                printStr(jout);
+                );
             } else {
-                var obuf: [256]u8 = undefined;
-                const out = std.fmt.bufPrint(
-                    &obuf,
+                common.printFmt(
                     "GUI active pane  : fleet\n" ++
                         "Seat profile     : {s}\n" ++
                         "OSK visible      : {s}\n",
                     .{ seat, if (is_touch) "yes" else "no" },
-                ) catch return;
-                printStr(out);
+                );
             }
         },
         .trigger => {
@@ -110,23 +112,14 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 printStr("Error: Invalid GUI action identifier.\n");
                 return;
             }
-            try writeFile("/run/diosix/gui_cmd", action);
+            try writeFile(sysconfig.GUI_CMD_PATH, action);
             if (json_mode) {
-                var jbuf: [256]u8 = undefined;
-                const jout = std.fmt.bufPrint(
-                    &jbuf,
+                common.printFmt(
                     "{{\"status\":\"dispatched\",\"action\":\"{s}\"}}\n",
                     .{action},
-                ) catch return;
-                printStr(jout);
+                );
             } else {
-                var obuf: [256]u8 = undefined;
-                const out = std.fmt.bufPrint(
-                    &obuf,
-                    "✓ Dispatched GUI action '{s}'\n",
-                    .{action},
-                ) catch return;
-                printStr(out);
+                common.printFmt("✓ Dispatched GUI action '{s}'\n", .{action});
             }
         },
         .screenshot => {
@@ -135,9 +128,10 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 !std.mem.startsWith(u8, std.mem.span(args[1]), "-"))
             {
                 out_path = std.mem.span(args[1]);
-                if (std.mem.indexOf(u8, out_path, "..") != null or
-                    !std.mem.startsWith(u8, out_path, "/tmp/"))
-                {
+                if (!common.isSafeStoragePath(
+                    out_path,
+                    sysconfig.VAR_LIB_DIOSIX_PREFIX,
+                )) {
                     printStr(
                         "Error: Screenshot path must be under /tmp/ " ++
                             "without '..'.\n",
@@ -145,30 +139,29 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                     return;
                 }
             }
-            var safe_path_buf: [128]u8 = undefined;
-            const safe_path = sanitizeJsonStr(&safe_path_buf, out_path);
-            if (readBinaryFile("/dev/fb0", 16 * 1024 * 1024)) |fb_bytes| {
+            const allocator = std.heap.page_allocator;
+            const safe_path_buf = try allocator.alloc(u8, out_path.len);
+            defer allocator.free(safe_path_buf);
+            const safe_path = sanitizeJsonStr(safe_path_buf, out_path);
+            if (readBinaryFile(
+                sysconfig.DEV_FB0_PATH,
+                MAX_FRAMEBUFFER_BYTES,
+            )) |fb_bytes| {
                 defer unmapBinaryFile(fb_bytes);
                 try writeFile(safe_path, fb_bytes);
             } else |_| {
                 try writeFile(safe_path, "DIOSIX_FRAMEBUFFER_SNAPSHOT");
             }
             if (json_mode) {
-                var jbuf: [256]u8 = undefined;
-                const jout = std.fmt.bufPrint(
-                    &jbuf,
+                common.printFmt(
                     "{{\"status\":\"ok\",\"path\":\"{s}\"}}\n",
                     .{safe_path},
-                ) catch return;
-                printStr(jout);
+                );
             } else {
-                var obuf: [256]u8 = undefined;
-                const out = std.fmt.bufPrint(
-                    &obuf,
+                common.printFmt(
                     "✓ Saved GUI screenshot to {s}\n",
                     .{safe_path},
-                ) catch return;
-                printStr(out);
+                );
             }
         },
     }
@@ -210,52 +203,57 @@ pub fn cmdTour(args: []const [*:0]const u8) !void {
 
     if (step_opt) |idx| {
         const step = &sys_cfg.tour_steps[idx];
-        var buf: [512]u8 = undefined;
         if (json_mode) {
-            const jout = std.fmt.bufPrint(
-                &buf,
+            const allocator = std.heap.page_allocator;
+            const safe_title = try common.escapeJsonAlloc(
+                allocator,
+                step.title(),
+            );
+            defer allocator.free(safe_title);
+            const safe_summary = try common.escapeJsonAlloc(
+                allocator,
+                step.summary(),
+            );
+            defer allocator.free(safe_summary);
+            const safe_hint = try common.escapeJsonAlloc(
+                allocator,
+                step.cliHint(),
+            );
+            defer allocator.free(safe_hint);
+            common.printFmt(
                 "{{\"step\":{d},\"total_steps\":{d},\"title\":\"{s}\"," ++
                     "\"summary\":\"{s}\",\"cli_hint\":\"{s}\"}}\n",
                 .{
                     idx + 1,
                     total_steps,
-                    step.title(),
-                    step.summary(),
-                    step.cliHint(),
+                    safe_title,
+                    safe_summary,
+                    safe_hint,
                 },
-            ) catch return;
-            printStr(jout);
+            );
         } else {
-            const out = std.fmt.bufPrint(
-                &buf,
+            common.printFmt(
                 "=== {s} ===\n  {s}\n  Try command : {s}\n",
                 .{ step.title(), step.summary(), step.cliHint() },
-            ) catch return;
-            printStr(out);
+            );
         }
         return;
     }
 
     if (json_mode) {
-        var jbuf: [128]u8 = undefined;
-        const jout = std.fmt.bufPrint(
-            &jbuf,
+        common.printFmt(
             "{{\"tour_steps\":{d},\"status\":\"complete\"}}\n",
             .{total_steps},
-        ) catch return;
-        printStr(jout);
+        );
         return;
     }
 
     for (0..sys_cfg.tour_count) |idx| {
         const step = &sys_cfg.tour_steps[idx];
-        var buf: [512]u8 = undefined;
-        const out = std.fmt.bufPrint(
-            &buf,
+        common.printFmt(
             "=== {s} ===\n  {s}\n  Try command : {s}\n\n",
             .{ step.title(), step.summary(), step.cliHint() },
-        ) catch continue;
-        printStr(out);
+        );
     }
 }
 

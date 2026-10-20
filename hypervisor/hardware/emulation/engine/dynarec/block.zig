@@ -19,6 +19,8 @@ pub const VCPU_OFF_T0: i12 = @as(i12, HOST_REG_T0) * @sizeOf(u64);
 pub const VCPU_OFF_T1: i12 = @as(i12, HOST_REG_T1) * @sizeOf(u64);
 pub const VCPU_OFF_S11: i12 = @as(i12, HOST_REG_S11) * @sizeOf(u64);
 pub const VCPU_OFF_PC: i12 = @offsetOf(vcpu_mod.VCpu, "pc");
+pub const OFF_TLB_PTR: i12 = @offsetOf(vcpu_mod.VCpu, "tlb_entries_ptr");
+pub const VCPU_OFF_TLB_PTR: i12 = OFF_TLB_PTR;
 
 pub const TLB_OFF_VADDR: i12 =
     @offsetOf(softtlb_mod.SoftTlbEntry, "guest_vaddr_page");
@@ -42,6 +44,7 @@ pub const ExitBranch = struct {
 pub const TranslationBlock = struct {
     guest_pc: u32,
     satp: u32 = 0,
+    priv: u8 = 0,
     is_global: bool = false,
     guest_size: u32,
     host_code: []u8,

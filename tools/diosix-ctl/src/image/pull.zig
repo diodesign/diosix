@@ -8,12 +8,18 @@ const linux = std.os.linux;
 const catalog = @import("../catalog.zig");
 const common = @import("../common.zig");
 const loader = @import("../loader.zig");
+const sysconfig = @import("../sysconfig.zig");
+const disk = @import("../storage/disk.zig");
 const import_mod = @import("import.zig");
 
 pub const cmdImageImport = import_mod.cmdImageImport;
 
+/// `catalog.isValidUrl` caps a URL at `MAX_URL_LEN` bytes; one more holds the
+/// NUL terminator, so any validated URL fits.
+const URL_Z_BYTES: usize = catalog.MAX_URL_LEN + 1;
+
 pub fn fetchRemoteFile(url: []const u8, dest_z: [*:0]const u8) !void {
-    var url_z_buf: [catalog.MAX_URL_LEN + 16]u8 = undefined;
+    var url_z_buf: [URL_Z_BYTES]u8 = undefined;
     const url_z = common.toPathZ(url, &url_z_buf) orelse
         return error.InvalidUrl;
 
@@ -29,7 +35,7 @@ pub fn fetchRemoteFile(url: []const u8, dest_z: [*:0]const u8) !void {
     }
 
     const wget_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-        "/usr/bin/wget",
+        sysconfig.WGET_BIN,
         "-q",
         "-T",
         "5",
@@ -45,7 +51,7 @@ pub fn fetchRemoteFile(url: []const u8, dest_z: [*:0]const u8) !void {
     if (wget_rc >= 128) return error.Interrupted;
 
     const curl_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-        "/usr/bin/curl",
+        sysconfig.CURL_BIN,
         "-fsSL",
         "--connect-timeout",
         "5",
@@ -79,24 +85,14 @@ pub fn pullRemoteOrStageImage(
     }
 
     if (!quiet) {
-        var prog_buf: [384]u8 = undefined;
-        const prog_msg = std.fmt.bufPrint(
-            &prog_buf,
-            "==> Pulling image from {s} ...\n",
-            .{url},
-        ) catch "==> Pulling remote image...\n";
-        common.printStr(prog_msg);
+        common.printFmt("==> Pulling image from {s} ...\n", .{url});
     }
 
-    var tmp_path_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const tmp_path = std.fmt.bufPrint(
-        &tmp_path_buf,
-        "{s}.part",
-        .{dest_path},
-    ) catch return error.PathTooLong;
-    var tmp_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const tmp_z = common.toPathZ(tmp_path, &tmp_z_buf) orelse
-        return error.PathTooLong;
+    const allocator = std.heap.page_allocator;
+    const tmp_z = try allocator.printSentinel("{s}.part", .{dest_path}, 0);
+    defer allocator.free(tmp_z);
+    if (tmp_z.len >= common.MAX_PATH_LEN) return error.PathTooLong;
+    const tmp_path: []const u8 = tmp_z;
 
     fetchRemoteFile(url, tmp_z.ptr) catch |err| {
         _ = linux.unlink(tmp_z.ptr);
@@ -120,13 +116,10 @@ pub fn pullRemoteOrStageImage(
         }
         sha_verified = true;
         if (!quiet) {
-            var v_buf: [160]u8 = undefined;
-            const v_msg = std.fmt.bufPrint(
-                &v_buf,
+            common.printFmt(
                 "==> Verified SHA-256 checksum ({s}...)\n",
                 .{sha[0..16]},
-            ) catch "==> Verified SHA-256 checksum.\n";
-            common.printStr(v_msg);
+            );
         }
     }
 
@@ -202,14 +195,11 @@ pub fn cmdImagePull(
                 .@"--json", .@"-j" => json_flag = true,
             }
         } else if (std.mem.startsWith(u8, span, "-")) {
-            var err_buf: [192]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(
-                &err_buf,
+            common.printFmt(
                 "Error: Unknown option '{s}'. Usage: {s} image pull " ++
                     "<id|url> [--name <name>] [--sha256 <hex>]\n",
                 .{ span, exe_name },
-            ) catch "Error: Unknown option.\n";
-            common.printStr(err_msg);
+            );
             return;
         }
     }
@@ -218,14 +208,11 @@ pub fn cmdImagePull(
     const resolved_url: []const u8 =
         if (matched_entry) |e| e.url else target;
     if (matched_entry == null and !catalog.isValidUrl(resolved_url)) {
-        var err_buf: [256]u8 = undefined;
-        const err_msg = std.fmt.bufPrint(
-            &err_buf,
+        common.printFmt(
             "Error: '{s}' is not a known catalog ID and is not a valid " ++
                 "URL. Use '{s} image catalog' to list official images.\n",
             .{ target, exe_name },
-        ) catch "Error: Invalid catalog ID or URL.\n";
-        common.printStr(err_msg);
+        );
         return;
     }
 
@@ -249,15 +236,12 @@ pub fn cmdImagePull(
 
     if (verify_sha == null and !allow_unverified) {
         if (matched_entry) |e| {
-            var err_buf: [256]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(
-                &err_buf,
+            common.printFmt(
                 "Error: Catalog entry '{s}' has no valid pinned SHA-256 " ++
                     "digest in /etc/diosix/catalog.toml " ++
                     "(pass '--sha256 <hex>' or '--allow-unverified').\n",
                 .{e.id},
-            ) catch "Error: Missing pinned SHA-256 digest.\n";
-            common.printStr(err_msg);
+            );
         } else {
             common.printStr(
                 "Error: Pulling a custom URL requires '--sha256 <hex>' " ++
@@ -274,18 +258,24 @@ pub fn cmdImagePull(
     const base_dir: []const u8 =
         if (is_iso) sys_cfg.isoDir() else sys_cfg.imagesDir();
 
-    _ = linux.mkdir("/var/lib/diosix", 0o755);
-    var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    if (common.toPathZ(base_dir, &dir_z_buf)) |dz| {
-        _ = linux.mkdir(dz.ptr, 0o755);
+    _ = linux.mkdir(sysconfig.VAR_LIB_DIOSIX_DIR, 0o755);
+    {
+        var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+        if (common.toPathZ(base_dir, &dir_z_buf)) |dz| {
+            _ = linux.mkdir(dz.ptr, 0o755);
+        }
     }
 
-    var dest_path_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const dest_path = std.fmt.bufPrint(
-        &dest_path_buf,
+    const allocator = std.heap.page_allocator;
+    const dest_path = try allocator.print(
         "{s}/{s}",
         .{ base_dir, filename },
-    ) catch return;
+    );
+    defer allocator.free(dest_path);
+    if (dest_path.len >= common.MAX_PATH_LEN) {
+        disk.reportPathTooLong();
+        return;
+    }
 
     var used_offline_seed = false;
     var sha_verified = false;
@@ -311,14 +301,11 @@ pub fn cmdImagePull(
         if (offline_stub) {
             if (matched_entry) |entry| {
                 if (!json_flag) {
-                    var fb_buf: [256]u8 = undefined;
-                    const fb_msg = std.fmt.bufPrint(
-                        &fb_buf,
+                    common.printFmt(
                         "==> Staging offline test stub for '{s}' " ++
                             "(--offline-stub)...\n",
                         .{entry.id},
-                    ) catch "==> Staging offline test stub...\n";
-                    common.printStr(fb_msg);
+                    );
                 }
                 if (loader.seedOfflineCatalogFallback(entry, dest_path)) {
                     used_offline_seed = true;
@@ -336,19 +323,17 @@ pub fn cmdImagePull(
                 return;
             }
         } else {
-            var dl_buf: [384]u8 = undefined;
-            const dl_msg = std.fmt.bufPrint(
-                &dl_buf,
+            common.printFmt(
                 "Error: Failed to download '{s}'. Verify connectivity " ++
                     "and mirror URL in /etc/diosix/catalog.toml " ++
                     "(or pass '--offline-stub' for offline testing).\n",
                 .{resolved_url},
-            ) catch "Error: Failed to download image from remote mirror.\n";
-            common.printStr(dl_msg);
+            );
             return;
         }
     }
 
+    // A SHA-256 digest is always exactly 64 lowercase hex characters.
     var sha_hex: [catalog.SHA256_HEX_LEN]u8 = @splat('0');
     if (common.readBinaryFile(
         dest_path,
@@ -359,35 +344,33 @@ pub fn cmdImagePull(
     } else |_| {}
 
     if (json_flag) {
-        var jbuf: [512]u8 = undefined;
-        const jout = std.fmt.bufPrint(
-            &jbuf,
+        const safe_name = try common.escapeJsonAlloc(allocator, filename);
+        defer allocator.free(safe_name);
+        const safe_path = try common.escapeJsonAlloc(allocator, dest_path);
+        defer allocator.free(safe_path);
+        common.printFmt(
             "{{\"status\":\"ok\",\"image\":\"{s}\",\"path\":\"{s}\"," ++
                 "\"sha256\":\"{s}\",\"sha256_verified\":{s}," ++
                 "\"offline_seed\":{s}}}\n",
             .{
-                filename,
-                dest_path,
+                safe_name,
+                safe_path,
                 &sha_hex,
                 if (sha_verified) "true" else "false",
                 if (used_offline_seed) "true" else "false",
             },
-        ) catch return;
-        common.printStr(jout);
+        );
     } else {
-        var out_buf: [384]u8 = undefined;
         const suffix = if (sha_verified)
             ", verified"
         else if (used_offline_seed)
             ", offline stub"
         else
             ", unverified";
-        const out_msg = std.fmt.bufPrint(
-            &out_buf,
+        common.printFmt(
             "✓ Pulled '{s}' -> {s} (SHA-256: {s}...{s})\n",
             .{ filename, dest_path, sha_hex[0..16], suffix },
-        ) catch return;
-        common.printStr(out_msg);
+        );
     }
 }
 

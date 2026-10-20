@@ -432,7 +432,7 @@ test "diosix-gui: host_info hypervisor footprint format" {
     host_info.mock_hypervisor_info = mock_info;
     defer host_info.mock_hypervisor_info = null;
 
-    var buf: [80]u8 = undefined;
+    var buf: [host_info.LABEL_BUF_BYTES]u8 = undefined;
     const str = host_info.getHvFootprintString(&buf);
     try testing.expectEqualStrings(
         "15.8 MB free of 16 MB reserved (98% free)",

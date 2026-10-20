@@ -1,8 +1,8 @@
-// Diosix Runtime System & CLI Configuration Parser (/etc/diosix/diosix.toml).
+// Diosix Runtime System & CLI Configuration (/etc/diosix/diosix.toml).
 //
 // Separates implementation mechanisms from user- and maintainer-tunable policy
 // defaults: default VM vCPUs/RAM/disk/subnet, repository directory paths,
-// configuration file locations, and interactive Guided Tour steps.
+// configuration file locations, system binaries, and Guided Tour steps.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -10,51 +10,195 @@
 const std = @import("std");
 const common = @import("common.zig");
 const tour = @import("sysconfig/tour.zig");
+const parser = @import("sysconfig/parser.zig");
 
 pub const DEFAULT_SYSCONFIG_PATH = "/etc/diosix/diosix.toml";
+pub const DEFAULT_DEVICE_PATH = "/dev/diosix";
+
+// Ephemeral runtime state paths (/run/diosix).
+pub const RUN_DIOSIX_DIR = "/run/diosix";
+pub const GUEST_REGISTRY_PATH = "/run/diosix/guests.toml";
+pub const GUI_CMD_PATH = "/run/diosix/gui_cmd";
+pub const GUI_STATE_PATH = "/run/diosix/gui_state.json";
+pub const CHARTER_SECRETS_DIR = "/run/diosix/charter";
+pub const STEWARD_CONSENSUS_PATH = "/run/diosix/steward_consensus";
+pub const AUTH_PENDING_PATH = "/run/diosix/auth.pending";
+pub const CHALLENGE_STATE_PATH = "/run/diosix/auth_challenge.state";
+pub const TOUCH_SEAT_PATH = "/run/diosix/touch_seat";
+pub const DISK_STAGING_PREFIX = "/run/diosix/staging";
+
+// System configuration paths (/etc/diosix & /etc).
+pub const AUTH_ENROLLED_PATH = "/etc/diosix/auth.enrolled";
+pub const NETWORK_INTERFACES_PATH = "/etc/network/interfaces";
+pub const DEFAULT_SYSTEM_MANIFEST_PATH = "/etc/diosix/system.toml";
+pub const DEFAULT_LOCAL_MANIFEST_PATH = "/etc/diosix/manifest.toml";
+pub const DEFAULT_CATALOG_CONFIG_PATH = "/etc/diosix/catalog.toml";
+pub const DEFAULT_CHARTER_CONFIG_PATH = "/etc/diosix/charter.toml";
+pub const DEFAULT_CONSTITUTION_DOC_PATH = "/etc/diosix/constitution.md";
+pub const DEFAULT_INSTALL_CONFIG_PATH = "/etc/diosix/install.toml";
+pub const ETC_MANAGEMENT_PRIVKEY_PATH = "/etc/diosix/management_ed25519";
+pub const ETC_MANAGEMENT_PUBKEY_PATH = "/etc/diosix/management_ed25519.pub";
+
+// Persistent storage & state paths (/var/lib/diosix).
+pub const VAR_LIB_DIOSIX_DIR = "/var/lib/diosix";
+pub const VAR_LIB_DIOSIX_PREFIX = "/var/lib/diosix/";
 pub const DEFAULT_IMAGES_DIR = "/var/lib/diosix/images";
 pub const DEFAULT_ISO_DIR = "/var/lib/diosix/iso";
 pub const DEFAULT_DISKS_DIR = "/var/lib/diosix/disks";
 pub const DEFAULT_SNAPSHOTS_DIR = "/var/lib/diosix/snapshots";
 pub const DEFAULT_KEYS_DIR = "/var/lib/diosix/keys";
+pub const ACTIVE_CHARTER_STATE_PATH = "/var/lib/diosix/charter/active.toml";
+pub const CHARTER_AUDIT_LOG_PATH = "/var/lib/diosix/charter/audit.log";
+pub const WHISPER_SPOOL_PATH = "/var/lib/diosix/charter/whispers.log";
+pub const INSTALL_RECEIPT_PATH = "/var/lib/diosix/install.receipt";
+pub const AUTHORIZED_PASSKEYS_PATH =
+    "/var/lib/diosix/keys/authorized_passkeys";
+pub const DEV_AUTHORIZED_KEYS_PATH = "/var/lib/diosix/keys/authorized_keys";
+pub const DEFAULT_SCREENSHOT_PATH = "/var/lib/diosix/screenshot.bmp";
+
+// Root SSH key paths.
+pub const ROOT_SSH_DIR = "/root/.ssh";
+pub const ROOT_AUTHORIZED_KEYS_PATH = "/root/.ssh/authorized_keys";
+
+// Boot, shim, and default guest image paths.
+pub const GUEST_SHIM_DIR = "/usr/share/diosix";
+pub const GUEST_SHIM_PATH = "/usr/share/diosix/guest-shim.bin";
+pub const GUEST_SHIM_PATHS = [_][]const u8{
+    "/boot/guest-shim.bin",
+    "/usr/share/diosix/guest-shim.bin",
+    "zig-out/bin/guest-shim.bin",
+};
+pub const STEWARD_DEFAULT_KERNELS = [_][]const u8{
+    "/var/lib/diosix/images/steward-kernel.bin",
+    "/boot/Image",
+};
+pub const DEFAULT_GUEST_IMAGE_PATH = "/var/lib/diosix/images/default.bin";
+pub const LINUX_GUEST_IMAGE_PATH = "/var/lib/diosix/images/Image";
+pub const FALLBACK_GUEST_IMAGE_PATH = "/boot/guest-default.bin";
+pub const FALLBACK_GUEST_ISO_PATH = "/boot/guest-default.iso";
+pub const BOOT_KERNEL_IMAGE_PATHS = [_][]const u8{
+    "/boot/Image",
+    "/var/lib/diosix/images/Image",
+};
+pub const BOOT_INITRD_PATHS = [_][]const u8{
+    "/boot/initramfs.cpio.gz",
+    "/boot/rootfs.cpio.gz",
+};
+pub const BOOT_SCRIPT_PATHS = [_][]const u8{
+    "/boot/boot.scr",
+    "/var/lib/diosix/boot.scr",
+};
+
+// Kernel, procfs, sysfs, and device nodes.
+pub const SYS_FIRMWARE_FDT_PATH = "/sys/firmware/fdt";
+pub const PROC_CMDLINE_PATH = "/proc/cmdline";
+pub const DEV_NULL_PATH = "/dev/null";
+pub const DEV_URANDOM_PATH = "/dev/urandom";
+pub const DEV_DRI_CARD0_PATH = "/dev/dri/card0";
+pub const DEV_TOUCHSCREEN0_PATH = "/dev/input/touchscreen0";
+pub const DEV_FB0_PATH = "/dev/fb0";
+pub const DEV_HIDRAW0_PATH = "/dev/hidraw0";
+pub const DEV_HIDRAW1_PATH = "/dev/hidraw1";
+pub const DEV_TPMRM0_PATH = "/dev/tpmrm0";
+pub const DEV_TPM0_PATH = "/dev/tpm0";
+pub const DEFAULT_TARGET_DISK = "/dev/vda";
+pub const CANDIDATE_HOST_DISKS = [_][]const u8{
+    "/dev/nvme0n1",
+    "/dev/vdb",
+    "/dev/vda",
+    "/dev/sda",
+};
+pub const TMP_DIR_PREFIX = "/tmp";
+pub const DEV_DIR_PREFIX = "/dev/";
+
+// System utility binary search paths and canonical tool paths.
+pub const SYSTEM_BIN_SEARCH_PATHS = [_][]const u8{
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
+};
+pub const MKFS_EXT4_BIN = "/sbin/mkfs.ext4";
+pub const MKFS_VFAT_BIN = "/sbin/mkfs.vfat";
+pub const SFDISK_BIN = "/sbin/sfdisk";
+pub const BLKID_BIN = "/sbin/blkid";
+pub const LOSETUP_BIN = "/sbin/losetup";
+pub const RESIZE2FS_BIN = "/sbin/resize2fs";
+pub const MOUNT_BIN = "/bin/mount";
+pub const UMOUNT_BIN = "/bin/umount";
+pub const CP_BIN = "/bin/cp";
+pub const IP_BIN = "/sbin/ip";
+pub const BRCTL_BIN = "/usr/sbin/brctl";
+pub const SSH_BIN = "/usr/bin/ssh";
+pub const SSH_CLIENT_BINS = [_][]const u8{
+    "/usr/bin/ssh",
+    "/usr/bin/dbclient",
+    "/bin/ssh",
+};
+pub const NC_BIN = "/usr/bin/nc";
+pub const WGET_BIN = "/usr/bin/wget";
+pub const CURL_BIN = "/usr/bin/curl";
+
 pub const MAX_TOUR_STEPS = tour.MAX_TOUR_STEPS;
 pub const TourStep = tour.TourStep;
 pub const Config = SystemConfig;
+pub const parseSystemConfigToml = parser.parseSystemConfigToml;
 
 const setBuf = common.setFixedBuf;
+
+/// Capacity for short scalar settings such as "256 MB" or "10.0.3.".
+const SHORT_VALUE_MAX: usize = 32;
+/// Capacity for an architecture name such as "riscv64".
+const ARCH_NAME_MAX: usize = 16;
+/// Capacity for a configured directory or file path. `SystemConfig` is passed
+/// by value, so this is a deliberate policy limit rather than PATH_MAX.
+const CONFIG_PATH_MAX: usize = 128;
+
+/// Stores a parsed config value, or warns and keeps the existing value when it
+/// does not fit, so an over-long path is never silently truncated.
+pub fn setChecked(dest: []u8, len_out: *usize, val: []const u8) void {
+    if (val.len > dest.len) {
+        common.printFmt(
+            "Warning: ignoring config value '{s}' (longer than {d} bytes).\n",
+            .{ val, dest.len },
+        );
+        return;
+    }
+    setBuf(dest, len_out, val);
+}
 
 pub const SystemConfig = struct {
     // [vm_defaults].
     default_vcpus: usize = 1,
-    default_ram_buf: [32]u8 = @splat(0),
+    default_ram_buf: [SHORT_VALUE_MAX]u8 = @splat(0),
     default_ram_len: usize = 0,
     default_disk_mb: usize = 1024,
     install_default_disk_mb: usize = 4096,
-    default_arch_buf: [16]u8 = @splat(0),
+    default_arch_buf: [ARCH_NAME_MAX]u8 = @splat(0),
     default_arch_len: usize = 0,
-    subnet_prefix_buf: [32]u8 = @splat(0),
+    subnet_prefix_buf: [SHORT_VALUE_MAX]u8 = @splat(0),
     subnet_prefix_len: usize = 0,
 
     // [paths] / [storage].
-    images_dir_buf: [128]u8 = @splat(0),
+    images_dir_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     images_dir_len: usize = 0,
-    iso_dir_buf: [128]u8 = @splat(0),
+    iso_dir_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     iso_dir_len: usize = 0,
-    disks_dir_buf: [128]u8 = @splat(0),
+    disks_dir_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     disks_dir_len: usize = 0,
-    snapshots_dir_buf: [128]u8 = @splat(0),
+    snapshots_dir_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     snapshots_dir_len: usize = 0,
-    keys_dir_buf: [128]u8 = @splat(0),
+    keys_dir_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     keys_dir_len: usize = 0,
-    system_manifest_buf: [128]u8 = @splat(0),
+    system_manifest_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     system_manifest_len: usize = 0,
-    catalog_config_buf: [128]u8 = @splat(0),
+    catalog_config_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     catalog_config_len: usize = 0,
-    charter_config_buf: [128]u8 = @splat(0),
+    charter_config_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     charter_config_len: usize = 0,
-    constitution_doc_buf: [128]u8 = @splat(0),
+    constitution_doc_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     constitution_doc_len: usize = 0,
-    install_config_buf: [128]u8 = @splat(0),
+    install_config_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     install_config_len: usize = 0,
 
     // [[tour]].
@@ -78,27 +222,27 @@ pub const SystemConfig = struct {
         setBuf(
             &cfg.system_manifest_buf,
             &cfg.system_manifest_len,
-            "/etc/diosix/system.toml",
+            DEFAULT_SYSTEM_MANIFEST_PATH,
         );
         setBuf(
             &cfg.catalog_config_buf,
             &cfg.catalog_config_len,
-            "/etc/diosix/catalog.toml",
+            DEFAULT_CATALOG_CONFIG_PATH,
         );
         setBuf(
             &cfg.charter_config_buf,
             &cfg.charter_config_len,
-            "/etc/diosix/charter.toml",
+            DEFAULT_CHARTER_CONFIG_PATH,
         );
         setBuf(
             &cfg.constitution_doc_buf,
             &cfg.constitution_doc_len,
-            "/etc/diosix/constitution.md",
+            DEFAULT_CONSTITUTION_DOC_PATH,
         );
         setBuf(
             &cfg.install_config_buf,
             &cfg.install_config_len,
-            "/etc/diosix/install.toml",
+            DEFAULT_INSTALL_CONFIG_PATH,
         );
 
         cfg.tour_count = tour.initDefaultTourSteps(&cfg.tour_steps);
@@ -158,250 +302,20 @@ pub const SystemConfig = struct {
     }
 };
 
-/// Parses `/etc/diosix/diosix.toml` content into a `SystemConfig`, falling back
-/// to safe defaults for any omitted keys.
-pub fn parseSystemConfigToml(content: []const u8) SystemConfig {
-    var cfg = SystemConfig.initDefaults();
-    var has_custom_tour = false;
-
-    const Section = enum {
-        none,
-        vm_defaults,
-        paths,
-        storage,
-        tour,
-    };
-    var section: Section = .none;
-    var active_tour_idx: ?usize = null;
-
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |raw_line| {
-        const line = common.trimAscii(raw_line);
-        if (line.len == 0 or line[0] == '#') continue;
-
-        if (std.mem.eql(u8, line, "[[tour]]")) {
-            section = .tour;
-            if (!has_custom_tour) {
-                has_custom_tour = true;
-                cfg.tour_count = 0;
-            }
-            if (cfg.tour_count < MAX_TOUR_STEPS) {
-                active_tour_idx = cfg.tour_count;
-                cfg.tour_steps[cfg.tour_count] = .{};
-                cfg.tour_count += 1;
-            } else {
-                active_tour_idx = null;
-            }
-            continue;
-        }
-
-        if (line[0] == '[' and line[line.len - 1] == ']') {
-            const hdr = common.trimAscii(line[1 .. line.len - 1]);
-            section = std.meta.stringToEnum(Section, hdr) orelse .none;
-            continue;
-        }
-
-        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-        const key = common.trimAscii(line[0..eq_idx]);
-        const val = common.unquoteToml(line[eq_idx + 1 ..]);
-
-        switch (section) {
-            .vm_defaults, .none => {
-                const VmDefaultKey = enum {
-                    default_vcpus,
-                    default_ram,
-                    default_disk_mb,
-                    install_default_disk_mb,
-                    default_arch,
-                    subnet_prefix,
-                };
-                if (std.meta.stringToEnum(VmDefaultKey, key)) |k| {
-                    switch (k) {
-                        .default_vcpus => {
-                            const n =
-                                std.fmt.parseInt(usize, val, 10) catch 1;
-                            cfg.default_vcpus = @max(1, @min(n, 64));
-                        },
-                        .default_ram => if (val.len > 0) {
-                            setBuf(
-                                &cfg.default_ram_buf,
-                                &cfg.default_ram_len,
-                                val,
-                            );
-                        },
-                        .default_disk_mb => {
-                            const n =
-                                std.fmt.parseInt(usize, val, 10) catch 1024;
-                            cfg.default_disk_mb =
-                                @max(64, @min(n, 1024 * 1024));
-                        },
-                        .install_default_disk_mb => {
-                            const n =
-                                std.fmt.parseInt(usize, val, 10) catch 4096;
-                            cfg.install_default_disk_mb =
-                                @max(128, @min(n, 1024 * 1024));
-                        },
-                        .default_arch => if (val.len > 0) {
-                            setBuf(
-                                &cfg.default_arch_buf,
-                                &cfg.default_arch_len,
-                                val,
-                            );
-                        },
-                        .subnet_prefix => if (val.len > 0) {
-                            setBuf(
-                                &cfg.subnet_prefix_buf,
-                                &cfg.subnet_prefix_len,
-                                val,
-                            );
-                        },
-                    }
-                }
-            },
-            .paths, .storage => {
-                const PathKey = enum {
-                    images_dir,
-                    iso_dir,
-                    disks_dir,
-                    snapshots_dir,
-                    keys_dir,
-                    system_manifest,
-                    catalog_config,
-                    charter_config,
-                    constitution_doc,
-                    install_config,
-                };
-                if (val.len > 0) {
-                    if (std.meta.stringToEnum(PathKey, key)) |k| {
-                        switch (k) {
-                            .images_dir => setBuf(
-                                &cfg.images_dir_buf,
-                                &cfg.images_dir_len,
-                                val,
-                            ),
-                            .iso_dir => setBuf(
-                                &cfg.iso_dir_buf,
-                                &cfg.iso_dir_len,
-                                val,
-                            ),
-                            .disks_dir => setBuf(
-                                &cfg.disks_dir_buf,
-                                &cfg.disks_dir_len,
-                                val,
-                            ),
-                            .snapshots_dir => setBuf(
-                                &cfg.snapshots_dir_buf,
-                                &cfg.snapshots_dir_len,
-                                val,
-                            ),
-                            .keys_dir => setBuf(
-                                &cfg.keys_dir_buf,
-                                &cfg.keys_dir_len,
-                                val,
-                            ),
-                            .system_manifest => setBuf(
-                                &cfg.system_manifest_buf,
-                                &cfg.system_manifest_len,
-                                val,
-                            ),
-                            .catalog_config => setBuf(
-                                &cfg.catalog_config_buf,
-                                &cfg.catalog_config_len,
-                                val,
-                            ),
-                            .charter_config => setBuf(
-                                &cfg.charter_config_buf,
-                                &cfg.charter_config_len,
-                                val,
-                            ),
-                            .constitution_doc => setBuf(
-                                &cfg.constitution_doc_buf,
-                                &cfg.constitution_doc_len,
-                                val,
-                            ),
-                            .install_config => setBuf(
-                                &cfg.install_config_buf,
-                                &cfg.install_config_len,
-                                val,
-                            ),
-                        }
-                    }
-                }
-            },
-            .tour => {
-                const TourKey = enum { title, summary, cli_hint };
-                if (active_tour_idx) |idx| {
-                    var step = &cfg.tour_steps[idx];
-                    if (std.meta.stringToEnum(TourKey, key)) |k| {
-                        switch (k) {
-                            .title => step.setTitle(val),
-                            .summary => step.setSummary(val),
-                            .cli_hint => step.setHint(val),
-                        }
-                    }
-                }
-            },
-        }
-    }
-
-    return cfg;
-}
-
-test "parseSystemConfigToml parses vm_defaults, paths, and tour steps" {
+test "sysconfig: defaults and parser re-exports" {
     std.testing.refAllDecls(@This());
     _ = tour;
-    const testing = std.testing;
-    const sample =
-        \\[vm_defaults]
-        \\default_vcpus = 2
-        \\default_ram = "512 MB"
-        \\default_disk_mb = 2048
-        \\install_default_disk_mb = 8192
-        \\default_arch = "riscv64"
-        \\subnet_prefix = "10.0.9."
-        \\
-        \\[paths]
-        \\images_dir = "/custom/images"
-        \\iso_dir = "/custom/iso"
-        \\disks_dir = "/custom/disks"
-        \\snapshots_dir = "/custom/snapshots"
-        \\keys_dir = "/custom/keys"
-        \\catalog_config = "/etc/diosix/custom-catalog.toml"
-        \\charter_config = "/etc/diosix/custom-charter.toml"
-        \\
-        \\[[tour]]
-        \\title = "Custom Step 1"
-        \\summary = "Custom tour summary"
-        \\cli_hint = "dsx host info"
-    ;
-
-    const cfg = parseSystemConfigToml(sample);
-    try testing.expectEqual(@as(usize, 2), cfg.default_vcpus);
-    try testing.expectEqualStrings("512 MB", cfg.defaultRam());
-    try testing.expectEqual(@as(usize, 2048), cfg.default_disk_mb);
-    try testing.expectEqual(@as(usize, 8192), cfg.install_default_disk_mb);
-    try testing.expectEqualStrings("10.0.9.", cfg.subnetPrefix());
-    try testing.expectEqualStrings("/custom/images", cfg.imagesDir());
-    try testing.expectEqualStrings("/custom/iso", cfg.isoDir());
-    try testing.expectEqualStrings("/custom/disks", cfg.disksDir());
-    try testing.expectEqualStrings("/custom/snapshots", cfg.snapshotsDir());
-    try testing.expectEqualStrings("/custom/keys", cfg.keysDir());
-    try testing.expectEqualStrings(
-        "/etc/diosix/custom-catalog.toml",
-        cfg.catalogConfigPath(),
+    _ = parser;
+    const cfg = SystemConfig.initDefaults();
+    try std.testing.expectEqual(@as(usize, 1), cfg.default_vcpus);
+    try std.testing.expectEqualStrings("256 MB", cfg.defaultRam());
+    try std.testing.expectEqualStrings(
+        DEFAULT_SYSTEM_MANIFEST_PATH,
+        cfg.systemManifestPath(),
     );
-    try testing.expectEqualStrings(
-        "/etc/diosix/custom-charter.toml",
-        cfg.charterConfigPath(),
-    );
-    try testing.expectEqual(@as(usize, 1), cfg.tour_count);
-    try testing.expectEqualStrings("Custom Step 1", cfg.tour_steps[0].title());
-    try testing.expectEqualStrings(
-        "Custom tour summary",
-        cfg.tour_steps[0].summary(),
-    );
-    try testing.expectEqualStrings(
-        "dsx host info",
-        cfg.tour_steps[0].cliHint(),
+    try std.testing.expectEqual(@as(usize, 5), cfg.tour_count);
+    try std.testing.expectEqualStrings(
+        "1. Root VM & Hardware Partitioning",
+        cfg.tour_steps[0].title(),
     );
 }

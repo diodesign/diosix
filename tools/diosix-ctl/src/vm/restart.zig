@@ -8,18 +8,57 @@ const api = @import("../api.zig");
 const common = @import("../common.zig");
 const vm = @import("../vm.zig");
 const vm_run = @import("run.zig");
+const owned = @import("owned.zig");
 
-const MAX_PATH_LEN = common.MAX_PATH_LEN;
 const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
 const GUEST_REGISTRY_PATH = common.GUEST_REGISTRY_PATH;
 const TargetAlias = common.TargetAlias;
+const OwnedStrings = owned.OwnedStrings;
+const OOM_MSG = owned.OOM_MSG;
+
+/// Argument slots for the relaunch: the image, then up to six option/value
+/// pairs (--name, --vcpus, --ram, --disk, --cdrom, --ip), then the trust
+/// flag. That is 14 slots, so 16 always suffices.
+const MAX_RESTART_ARGS: usize = 16;
 
 const printStr = common.printStr;
 const parseCid = common.parseCid;
-const copyStr = common.copyStr;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
 const matchTarget = common.matchTarget;
+
+/// A guest's registry fields, kept after the registry file is unmapped.
+const SavedGuest = struct {
+    name: []const u8,
+    vcpus: usize,
+    ram: []const u8,
+    disk: []const u8 = "",
+    cdrom: []const u8 = "",
+    ip: []const u8 = "",
+    trusted: bool = false,
+};
+
+/// An option that is only passed to the relaunch when its value is set.
+const OptionalArg = struct {
+    flag: [*:0]const u8,
+    value: []const u8,
+};
+
+/// Copies the registry entry's strings into `strings` without truncation.
+fn captureGuest(
+    strings: *OwnedStrings,
+    entry: common.GuestRegistryEntry,
+) !SavedGuest {
+    return .{
+        .name = try strings.dupe(entry.name),
+        .vcpus = entry.vcpus,
+        .ram = try strings.dupe(entry.ram),
+        .disk = try strings.dupe(entry.disk),
+        .cdrom = try strings.dupe(entry.cdrom),
+        .ip = try strings.dupe(entry.ip),
+        .trusted = std.mem.eql(u8, entry.trust, "trusted"),
+    };
+}
 
 pub fn cmdRestart(
     client: *api.DiosixClient,
@@ -28,13 +67,7 @@ pub fn cmdRestart(
     const exe_name = common.getExeName();
     const sys_cfg = common.loadRuntimeSystemConfig();
     if (args.len == 0) {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
-            "Usage: {s} restart <name|cid>\n",
-            .{exe_name},
-        ) catch return;
-        printStr(msg);
+        common.printFmt("Usage: {s} restart <name|cid>\n", .{exe_name});
         return;
     }
     const target_str = std.mem.span(args[0]);
@@ -46,18 +79,13 @@ pub fn cmdRestart(
     }
 
     const target_cid = parseCid(target_str) catch 0;
-    var name_buf: [64]u8 = undefined;
-    var ram_buf: [32]u8 = undefined;
-    var disk_buf: [MAX_PATH_LEN]u8 = undefined;
-    var cdrom_buf: [MAX_PATH_LEN]u8 = undefined;
-    var ip_buf: [64]u8 = undefined;
-    var saved_name: []const u8 = target_str;
-    var saved_vcpus: usize = sys_cfg.default_vcpus;
-    var saved_ram: []const u8 = sys_cfg.defaultRam();
-    var saved_disk: []const u8 = "";
-    var saved_cdrom: []const u8 = "";
-    var saved_ip: []const u8 = "";
-    var saved_trusted = false;
+    var strings = OwnedStrings.init(std.heap.page_allocator);
+    defer strings.deinit();
+    var saved: SavedGuest = .{
+        .name = target_str,
+        .vcpus = sys_cfg.default_vcpus,
+        .ram = sys_cfg.defaultRam(),
+    };
 
     if (readBinaryFile(
         GUEST_REGISTRY_PATH,
@@ -67,13 +95,10 @@ pub fn cmdRestart(
         var iter = common.GuestRegistryIter.init(content);
         while (iter.next()) |entry| {
             if (matchTarget(target_str, target_cid, entry.cid, entry.name)) {
-                saved_name = copyStr(&name_buf, entry.name);
-                saved_vcpus = entry.vcpus;
-                saved_ram = copyStr(&ram_buf, entry.ram);
-                saved_disk = copyStr(&disk_buf, entry.disk);
-                saved_cdrom = copyStr(&cdrom_buf, entry.cdrom);
-                saved_ip = copyStr(&ip_buf, entry.ip);
-                saved_trusted = std.mem.eql(u8, entry.trust, "trusted");
+                saved = captureGuest(&strings, entry) catch {
+                    printStr(OOM_MSG);
+                    return;
+                };
                 break;
             }
         }
@@ -84,30 +109,25 @@ pub fn cmdRestart(
     printStr("Restarting guest VM...\n");
 
     const img_str: [*:0]const u8 =
-        if (saved_disk.len > 0 or saved_cdrom.len > 0)
+        if (saved.disk.len > 0 or saved.cdrom.len > 0)
             "guest-shim"
         else
             "default";
 
-    var vcpu_str_buf: [16]u8 = undefined;
-    const vcpu_str = std.fmt.bufPrint(
-        &vcpu_str_buf,
-        "{d}",
-        .{saved_vcpus},
-    ) catch "1";
+    const z_name = strings.dupe(saved.name) catch {
+        printStr(OOM_MSG);
+        return;
+    };
+    const z_vcpus = strings.print("{d}", .{saved.vcpus}) catch {
+        printStr(OOM_MSG);
+        return;
+    };
+    const z_ram = strings.dupe(saved.ram) catch {
+        printStr(OOM_MSG);
+        return;
+    };
 
-    var z_name_buf: [64]u8 = undefined;
-    var z_vcpus_buf: [16]u8 = undefined;
-    var z_ram_buf: [32]u8 = undefined;
-    var z_disk_buf: [MAX_PATH_LEN]u8 = undefined;
-    var z_cdrom_buf: [MAX_PATH_LEN]u8 = undefined;
-    var z_ip_buf: [64]u8 = undefined;
-
-    const z_name = common.toPathZ(saved_name, &z_name_buf) orelse return;
-    const z_vcpus = common.toPathZ(vcpu_str, &z_vcpus_buf) orelse return;
-    const z_ram = common.toPathZ(saved_ram, &z_ram_buf) orelse return;
-
-    var run_args: [16][*:0]const u8 = undefined;
+    var run_args: [MAX_RESTART_ARGS][*:0]const u8 = undefined;
     var argc: usize = 0;
     run_args[argc] = img_str;
     argc += 1;
@@ -123,31 +143,23 @@ pub fn cmdRestart(
     argc += 1;
     run_args[argc] = z_ram.ptr;
     argc += 1;
-    if (saved_disk.len > 0) {
-        if (common.toPathZ(saved_disk, &z_disk_buf)) |z_disk| {
-            run_args[argc] = "--disk";
-            argc += 1;
-            run_args[argc] = z_disk.ptr;
-            argc += 1;
-        }
+    const optional_args = [_]OptionalArg{
+        .{ .flag = "--disk", .value = saved.disk },
+        .{ .flag = "--cdrom", .value = saved.cdrom },
+        .{ .flag = "--ip", .value = saved.ip },
+    };
+    for (optional_args) |opt| {
+        if (opt.value.len == 0) continue;
+        const z_value = strings.dupe(opt.value) catch {
+            printStr(OOM_MSG);
+            return;
+        };
+        run_args[argc] = opt.flag;
+        argc += 1;
+        run_args[argc] = z_value.ptr;
+        argc += 1;
     }
-    if (saved_cdrom.len > 0) {
-        if (common.toPathZ(saved_cdrom, &z_cdrom_buf)) |z_cdrom| {
-            run_args[argc] = "--cdrom";
-            argc += 1;
-            run_args[argc] = z_cdrom.ptr;
-            argc += 1;
-        }
-    }
-    if (saved_ip.len > 0) {
-        if (common.toPathZ(saved_ip, &z_ip_buf)) |z_ip| {
-            run_args[argc] = "--ip";
-            argc += 1;
-            run_args[argc] = z_ip.ptr;
-            argc += 1;
-        }
-    }
-    run_args[argc] = if (saved_trusted) "--trusted" else "--untrusted";
+    run_args[argc] = if (saved.trusted) "--trusted" else "--untrusted";
     argc += 1;
 
     try vm_run.cmdRun(client, run_args[0..argc]);
@@ -159,4 +171,21 @@ test "vm/restart: TargetAlias enum matches parent and 0" {
         TargetAlias.parent,
         std.meta.stringToEnum(TargetAlias, "parent").?,
     );
+}
+
+test "vm/restart: captureGuest keeps long registry fields intact" {
+    var strings = OwnedStrings.init(std.testing.allocator);
+    defer strings.deinit();
+
+    const long_disk: [common.MAX_PATH_LEN + 1]u8 = @splat('d');
+    const saved = try captureGuest(&strings, .{
+        .cid = 2,
+        .name = "a-guest-name-longer-than-the-old-64-byte-name-buffer-xxxx",
+        .disk = &long_disk,
+        .trust = "trusted",
+    });
+    try std.testing.expectEqualStrings(&long_disk, saved.disk);
+    try std.testing.expectEqualStrings("256 MB", saved.ram);
+    try std.testing.expect(saved.trusted);
+    try std.testing.expectEqual(@as(usize, 0), saved.ip.len);
 }

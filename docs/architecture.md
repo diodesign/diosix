@@ -82,15 +82,13 @@ the hypervisor's M-mode scheduler dynamically configures RISC-V PMP entries on
 context switch:
 
 *   Read/Execute (RX) access is granted only to the hypervisor's code and
-    read-only data sections (`__hypervisor_start` to `__bss_start`) to run the
+    read-only data sections (`__hypervisor_start` to `__data_start`) to run the
     dynamic recompiler engine and decoders.
 *   Read/Write (RW) access is granted to the hypervisor's global data and BSS
-    segments (`__bss_start` to `__hypervisor_end`).
-*   Read/Write (RW) access is granted to the current physical core's private
-    memory slab (a 16 MiB contiguous block including its stack and per-core
-    heap) to service JIT allocations (code translation blocks).
-*   Read/Write (RW) access is granted to the guest's pre-allocated physical RAM
-    region.
+    segments (`__data_start` to `__hypervisor_end`).
+*   RW access is granted to the current physical core's private stack and
+    per-core heap slab to service JIT allocations (code translation blocks).
+*   RW access is granted to the guest's pre-allocated physical RAM region.
 
 All other host memory (including private M-mode exception stacks, other cores'
 heap/stack slabs, and Memory-Mapped Input/Output (MMIO) blocks such as the Core

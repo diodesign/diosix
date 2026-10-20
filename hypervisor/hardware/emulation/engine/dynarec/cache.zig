@@ -63,13 +63,19 @@ pub const Cache = struct {
             (HASH_SIZE - 1);
     }
 
-    pub fn lookup(self: *Cache, guest_pc: u32, satp: u32) ?*TranslationBlock {
+    pub fn lookup(
+        self: *Cache,
+        guest_pc: u32,
+        satp: u32,
+        priv: u8,
+    ) ?*TranslationBlock {
         var slot = hash(guest_pc);
         var tries: usize = 0;
         while (tries < MAX_HASH_PROBES) : (tries += 1) {
             if (self.hash_table[slot]) |tb| {
                 if (tb.layout_epoch == self.layout_epoch and
                     tb.guest_pc == guest_pc and
+                    tb.priv == priv and
                     (tb.is_global or tb.satp == satp))
                 {
                     return tb;
@@ -95,7 +101,12 @@ pub const Cache = struct {
             self.code_offset,
             CODE_BLOCK_ALIGNMENT,
         );
-        if (aligned_offset + max_host_len > self.code_buffer.len) {
+        const end_offset = std.math.add(
+            usize,
+            aligned_offset,
+            max_host_len,
+        ) catch return error.CodeBufferFull;
+        if (end_offset > self.code_buffer.len) {
             return error.CodeBufferFull;
         }
 
@@ -107,8 +118,7 @@ pub const Cache = struct {
             .satp = satp,
             .is_global = is_global,
             .guest_size = 0,
-            .host_code = self.code_buffer[aligned_offset .. aligned_offset +
-                max_host_len],
+            .host_code = self.code_buffer[aligned_offset..end_offset],
             .host_len = 0,
             .layout_epoch = self.layout_epoch,
             .is_fast_path = false,
@@ -135,6 +145,7 @@ pub const Cache = struct {
         while (tries < MAX_HASH_PROBES) : (tries += 1) {
             if (self.hash_table[slot]) |existing| {
                 if (existing.guest_pc == tb.guest_pc and
+                    existing.priv == tb.priv and
                     (existing.is_global or existing.satp == tb.satp))
                 {
                     self.hash_table[slot] = tb;
@@ -167,14 +178,22 @@ pub const Cache = struct {
         // compiled targets.
         if (new_tb.exit_branch1) |b1| {
             if (b1.target_guest_pc > new_tb.guest_pc) {
-                if (self.lookup(b1.target_guest_pc, new_tb.satp)) |target| {
+                if (self.lookup(
+                    b1.target_guest_pc,
+                    new_tb.satp,
+                    new_tb.priv,
+                )) |target| {
                     new_tb.patchBranch(0, target);
                 }
             }
         }
         if (new_tb.exit_branch2) |b2| {
             if (b2.target_guest_pc > new_tb.guest_pc) {
-                if (self.lookup(b2.target_guest_pc, new_tb.satp)) |target| {
+                if (self.lookup(
+                    b2.target_guest_pc,
+                    new_tb.satp,
+                    new_tb.priv,
+                )) |target| {
                     new_tb.patchBranch(1, target);
                 }
             }
@@ -187,6 +206,7 @@ pub const Cache = struct {
             if (tb.exit_branch1) |b1| {
                 if (b1.target_guest_pc == new_tb.guest_pc and
                     new_tb.guest_pc > tb.guest_pc and
+                    tb.priv == new_tb.priv and
                     (new_tb.is_global or tb.satp == new_tb.satp))
                 {
                     tb.patchBranch(0, new_tb);
@@ -195,6 +215,7 @@ pub const Cache = struct {
             if (tb.exit_branch2) |b2| {
                 if (b2.target_guest_pc == new_tb.guest_pc and
                     new_tb.guest_pc > tb.guest_pc and
+                    tb.priv == new_tb.priv and
                     (new_tb.is_global or tb.satp == new_tb.satp))
                 {
                     tb.patchBranch(1, new_tb);
@@ -212,21 +233,26 @@ test "Cache allocate, commit, lookup, and flush" {
     cache.initOnPtr(&buf);
 
     const tb = try cache.allocateBlock(0x8000_0000, 0x8008_0001, false, 32);
+    tb.priv = 1;
     cache.commitBlock(tb, 16);
 
     try std.testing.expectEqual(
         @as(?*TranslationBlock, tb),
-        cache.lookup(0x8000_0000, 0x8008_0001),
+        cache.lookup(0x8000_0000, 0x8008_0001, 1),
     );
     try std.testing.expectEqual(
         @as(?*TranslationBlock, null),
-        cache.lookup(0x8000_0000, 0x8009_0001),
+        cache.lookup(0x8000_0000, 0x8008_0001, 0),
+    );
+    try std.testing.expectEqual(
+        @as(?*TranslationBlock, null),
+        cache.lookup(0x8000_0000, 0x8009_0001, 1),
     );
 
     cache.flush();
     try std.testing.expectEqual(
         @as(?*TranslationBlock, null),
-        cache.lookup(0x8000_0000, 0x8008_0001),
+        cache.lookup(0x8000_0000, 0x8008_0001, 1),
     );
     std.testing.refAllDecls(@This());
 }

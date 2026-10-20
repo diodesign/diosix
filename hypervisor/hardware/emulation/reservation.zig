@@ -6,6 +6,7 @@
 const std = @import("std");
 
 pub const STATIC_RESERVATION_HARTS: usize = 32;
+pub const DYNAMIC_POOL_CAPACITY: usize = 128;
 pub const CACHE_LINE_SIZE: usize = 64;
 pub const CACHE_LINE_MASK: usize = CACHE_LINE_SIZE - 1;
 
@@ -34,24 +35,18 @@ pub var reservation_table: [STATIC_RESERVATION_HARTS]ReservationRow = blk: {
     break :blk arr;
 };
 
-var dynamic_pool: [128]DynamicReservationNode = undefined;
+var dynamic_pool: [DYNAMIC_POOL_CAPACITY]DynamicReservationNode = undefined;
 var dynamic_pool_count: usize = 0;
 var res_lock = std.atomic.Value(bool).init(false);
 
 fn getOrCreateDynamicNode(hart_id: usize) ?*DynamicReservationNode {
-    const bucket = hart_id % STATIC_RESERVATION_HARTS;
-    var curr = reservation_table[bucket].dynamic_head;
-    while (curr) |node| {
-        if (node.hart_id == hart_id) return node;
-        curr = node.next;
-    }
-
     while (res_lock.swap(true, .acquire)) {
         std.atomic.spinLoopHint();
     }
     defer res_lock.store(false, .release);
 
-    curr = reservation_table[bucket].dynamic_head;
+    const bucket = hart_id % STATIC_RESERVATION_HARTS;
+    var curr = reservation_table[bucket].dynamic_head;
     while (curr) |node| {
         if (node.hart_id == hart_id) return node;
         curr = node.next;
@@ -87,6 +82,11 @@ pub fn checkAndClearReservation(hart_id: usize, paddr: usize) bool {
         const cur = reservation_table[hart_id].static_addr.swap(0, .acq_rel);
         return (cur == line and line != 0);
     }
+    while (res_lock.swap(true, .acquire)) {
+        std.atomic.spinLoopHint();
+    }
+    defer res_lock.store(false, .release);
+
     const bucket = hart_id % STATIC_RESERVATION_HARTS;
     var curr = reservation_table[bucket].dynamic_head;
     while (curr) |node| {
@@ -104,6 +104,11 @@ pub fn clearReservation(hart_id: usize) void {
         reservation_table[hart_id].static_addr.store(0, .monotonic);
         return;
     }
+    while (res_lock.swap(true, .acquire)) {
+        std.atomic.spinLoopHint();
+    }
+    defer res_lock.store(false, .release);
+
     const bucket = hart_id % STATIC_RESERVATION_HARTS;
     var curr = reservation_table[bucket].dynamic_head;
     while (curr) |node| {
@@ -124,6 +129,11 @@ pub fn invalidateReservations(paddr: usize) void {
         }
     }
     // Column 2: dynamic linked-list buckets.
+    while (res_lock.swap(true, .acquire)) {
+        std.atomic.spinLoopHint();
+    }
+    defer res_lock.store(false, .release);
+
     for (0..STATIC_RESERVATION_HARTS) |b| {
         var curr = reservation_table[b].dynamic_head;
         while (curr) |node| {
@@ -136,6 +146,11 @@ pub fn invalidateReservations(paddr: usize) void {
 }
 
 pub fn resetReservations() void {
+    while (res_lock.swap(true, .acquire)) {
+        std.atomic.spinLoopHint();
+    }
+    defer res_lock.store(false, .release);
+
     for (0..STATIC_RESERVATION_HARTS) |i| {
         reservation_table[i].static_addr.store(0, .monotonic);
         reservation_table[i].dynamic_head = null;

@@ -8,6 +8,7 @@ const vcpu_mod = @import("../vcpu.zig");
 
 pub const STATIC_HARTS: usize = 32;
 pub const DYNAMIC_HASH_BUCKETS: usize = 32;
+pub const DYNAMIC_POOL_CAPACITY: usize = 128;
 pub const MAX_SYSTEM_HARTS: usize = 4096;
 pub const MAX_HARTS: usize = MAX_SYSTEM_HARTS;
 
@@ -34,7 +35,7 @@ pub const VirtualTimer = struct {
     /// Column 2: Dynamic hash buckets for harts >= 32 (keyed by hart % 32).
     dynamic_buckets: [DYNAMIC_HASH_BUCKETS]?*HartTimerNode = @splat(null),
     /// Dynamic node pool for standalone execution (up to 128 dynamic harts).
-    dynamic_pool: [128]HartTimerNode = @splat(.{
+    dynamic_pool: [DYNAMIC_POOL_CAPACITY]HartTimerNode = @splat(.{
         .hart = 0,
         .mtimecmp = TIMER_INFINITY,
         .next = null,

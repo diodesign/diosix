@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const common = @import("common.zig");
+const sysconfig = @import("sysconfig.zig");
 
 pub const SHA256_HEX_LEN: usize = 64;
 pub const MAX_URL_LEN: usize = 1024;
@@ -30,7 +31,7 @@ pub const CatalogEntry = struct {
     sha256: []const u8,
 };
 
-pub const DEFAULT_CATALOG_CONFIG_PATH = "/etc/diosix/catalog.toml";
+pub const DEFAULT_CATALOG_CONFIG_PATH = sysconfig.DEFAULT_CATALOG_CONFIG_PATH;
 pub const MAX_CATALOG_ENTRIES: usize = 32;
 
 pub const OFFICIAL_CATALOG = [_]CatalogEntry{
@@ -376,14 +377,15 @@ pub fn hasPinnedSha256(entry: CatalogEntry) bool {
 const format = @import("catalog/format.zig");
 
 pub const computeSha256Hex = format.computeSha256Hex;
-pub const formatCatalogTableFromSlice = format.formatCatalogTableFromSlice;
+pub const writeCatalogTable = format.writeCatalogTable;
 pub const formatCatalogTable = format.formatCatalogTable;
-pub const formatCatalogJsonFromSlice = format.formatCatalogJsonFromSlice;
+pub const writeCatalogJson = format.writeCatalogJson;
 pub const formatCatalogJson = format.formatCatalogJson;
 
 /// Verifies `data` against an expected 64-character hexadecimal SHA-256 digest.
 pub fn verifySha256Hex(data: []const u8, expected_hex: []const u8) bool {
     if (!isValidSha256Hex(expected_hex)) return false;
+    // A SHA-256 digest is always exactly 64 lowercase hex characters.
     var computed: [SHA256_HEX_LEN]u8 = undefined;
     _ = computeSha256Hex(data, &computed);
     return std.ascii.eqlIgnoreCase(&computed, expected_hex);

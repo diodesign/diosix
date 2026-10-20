@@ -303,18 +303,17 @@ pub const HeapAllocator = struct {
     }
 };
 
-test "heap allocator basic alloc and free" {
+test "heap allocator basic alloc, free, and alignment" {
     std.testing.refAllDecls(@This());
     const testing = std.testing;
 
-    var heap_memory: [1024]u8 align(64) = undefined;
+    var heap_memory: [2048]u8 align(64) = undefined;
     var heap = HeapAllocator{
         .first = undefined,
         .free_size = 0,
         .inuse_size = 0,
     };
     try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
-
     const allocator = heap.allocator();
 
     const mem1 = try allocator.alloc(u8, 100);
@@ -328,19 +327,6 @@ test "heap allocator basic alloc and free" {
     allocator.free(@as([]u8, mem2));
     try testing.expectEqual(@as(usize, 0), heap.inuse_size);
     try testing.expectEqual(heap_memory.len, heap.free_size);
-}
-
-test "heap allocator alignment" {
-    const testing = std.testing;
-
-    var heap_memory: [2048]u8 align(64) = undefined;
-    var heap = HeapAllocator{
-        .first = undefined,
-        .free_size = 0,
-        .inuse_size = 0,
-    };
-    try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
-    const allocator = heap.allocator();
 
     const mem_align_16 = try allocator.create(u128);
     defer allocator.destroy(mem_align_16);
@@ -355,10 +341,11 @@ test "heap allocator alignment" {
     try testing.expectEqual(@as(usize, 0), @intFromPtr(mem_align_64.ptr) % 64);
 }
 
-test "heap allocator resize and overflow protection" {
+test "heap allocator resize, fragmentation, merging, and out of memory" {
+    std.testing.refAllDecls(@This());
     const testing = std.testing;
 
-    var heap_memory: [1024]u8 align(64) = undefined;
+    var heap_memory: [2048]u8 align(64) = undefined;
     var heap = HeapAllocator{
         .first = undefined,
         .free_size = 0,
@@ -378,28 +365,14 @@ test "heap allocator resize and overflow protection" {
     try testing.expect(success);
     const mem_grown = mem.ptr[0..60];
 
-    success = allocator.resize(@as([]u8, mem_grown), 2048);
+    success = allocator.resize(@as([]u8, mem_grown), 4096);
     try testing.expect(!success);
     try testing.expect(mem_grown.len == 60);
 
     // Overflowing resize length must return false without panicking.
     success = allocator.resize(@as([]u8, mem_grown), std.math.maxInt(usize));
     try testing.expect(!success);
-
     allocator.free(@as([]u8, mem_grown));
-}
-
-test "heap allocator fragmentation and merging" {
-    const testing = std.testing;
-
-    var heap_memory: [2048]u8 align(64) = undefined;
-    var heap = HeapAllocator{
-        .first = undefined,
-        .free_size = 0,
-        .inuse_size = 0,
-    };
-    try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
-    const allocator = heap.allocator();
 
     const mem1 = try allocator.alloc(u8, 100);
     const mem2 = try allocator.alloc(u8, 100);
@@ -412,39 +385,16 @@ test "heap allocator fragmentation and merging" {
 
     const chunk1_start = @intFromPtr(block1) - block1.padding_size;
     const chunk2_start = @intFromPtr(block2) - block2.padding_size;
-
     try testing.expect(chunk1_start + block1.max_size == chunk2_start);
 
     allocator.free(@as([]u8, mem2));
     try testing.expect(block2.state == .free);
-
     allocator.free(@as([]u8, mem1));
     try testing.expect(block1.state == .free);
     try testing.expect(block1.max_size > 100);
-
     allocator.free(@as([]u8, mem3));
     try testing.expectEqual(heap_memory.len, heap.free_size);
-}
 
-test "heap allocator out of memory" {
-    const testing = std.testing;
-
-    var heap_memory: [512]u8 align(64) = undefined;
-    var heap = HeapAllocator{
-        .first = undefined,
-        .free_size = 0,
-        .inuse_size = 0,
-    };
-    try heap.init(@intFromPtr(&heap_memory), heap_memory.len);
-    const allocator = heap.allocator();
-
-    const mem1 = try allocator.alloc(u8, 400);
-    defer allocator.free(@as([]u8, mem1));
-
-    const mem2 = allocator.alloc(u8, 200);
-    try testing.expectError(error.OutOfMemory, mem2);
-
-    allocator.free(@as([]u8, mem1));
-    const mem3 = allocator.alloc(u8, heap_memory.len);
-    try testing.expectError(error.OutOfMemory, mem3);
+    const oom = allocator.alloc(u8, heap_memory.len);
+    try testing.expectError(error.OutOfMemory, oom);
 }

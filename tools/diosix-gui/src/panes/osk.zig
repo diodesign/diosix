@@ -10,6 +10,7 @@ const Icon = icon_mod.Icon;
 const window_mod = @import("../window.zig");
 const Window = window_mod.Window;
 const osk_mod = @import("../osk.zig");
+const text_label = @import("../label.zig");
 const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 
@@ -82,11 +83,15 @@ pub fn buildOskWindow(self: *DiosixGui) !void {
     );
     win.setHelpText("Touchscreen and pointer virtual keyboard (dockable)");
 
-    var disp_buf: [160]u8 = undefined;
-    const disp_str = std.fmt.bufPrint(&disp_buf, "Input [{s}]: {s}_", .{
-        self.osk_state.layout.label(),
-        self.osk_state.getInputText(),
-    }) catch "Input: _";
+    var disp_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+    const disp_str = text_label.fmtLabel(
+        &disp_buf,
+        "Input [{s}]: {s}_",
+        .{
+            self.osk_state.layout.label(),
+            self.osk_state.getInputText(),
+        },
+    );
     var disp_icon = Icon.createReadOnly(
         ICON_OSK_DISPLAY_ID,
         16,

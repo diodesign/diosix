@@ -1,8 +1,8 @@
-// Diosix Constitutional Charter Parser & SHA-256 Sealing.
+// Diosix Constitutional Charter Types & SHA-256 Sealing.
 //
-// Implements workload-agnostic Charter parsing (`charter.toml`), SHA-256
-// Charter sealing, and re-exports Steward invariant verification and Whisper
-// Mesh consensus primitives from `whisper.zig`.
+// Implements workload-agnostic Charter types (`charter.toml`), SHA-256 Charter
+// sealing, and re-exports Steward invariant verification and Whisper Mesh
+// consensus primitives from `whisper.zig`.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -11,6 +11,8 @@ const std = @import("std");
 const interface = @import("interface").sbi;
 const whisper = @import("whisper.zig");
 const common = @import("common.zig");
+const sysconfig = @import("sysconfig.zig");
+const toml = @import("charter/toml.zig");
 
 pub const ProposalAction = whisper.ProposalAction;
 pub const ProposalCheckResult = whisper.ProposalCheckResult;
@@ -21,16 +23,23 @@ pub const WhisperFrame = whisper.WhisperFrame;
 pub const formatWhisperFrame = whisper.formatWhisperFrame;
 pub const parseWhisperFrame = whisper.parseWhisperFrame;
 
-pub const DEFAULT_CHARTER_PATH = "/etc/diosix/charter.toml";
-pub const DEFAULT_CONSTITUTION_PATH = "/etc/diosix/constitution.md";
-pub const ACTIVE_CHARTER_STATE_PATH = "/var/lib/diosix/charter_state.toml";
-pub const CHARTER_AUDIT_LOG_PATH = "/var/lib/diosix/charter_audit.log";
-pub const WHISPER_SPOOL_PATH = "/run/diosix/whisper.ring";
+pub const computeCharterSha256 = toml.computeCharterSha256;
+pub const parseCharterToml = toml.parseCharterToml;
+
+pub const DEFAULT_CHARTER_PATH = sysconfig.DEFAULT_CHARTER_CONFIG_PATH;
+pub const DEFAULT_CONSTITUTION_PATH = sysconfig.DEFAULT_CONSTITUTION_DOC_PATH;
+pub const ACTIVE_CHARTER_STATE_PATH = sysconfig.ACTIVE_CHARTER_STATE_PATH;
+pub const CHARTER_AUDIT_LOG_PATH = sysconfig.CHARTER_AUDIT_LOG_PATH;
+pub const WHISPER_SPOOL_PATH = sysconfig.WHISPER_SPOOL_PATH;
 
 pub const MAX_CHARTER_UNITS: usize = 16;
 pub const MAX_UNIT_ID_LEN: usize = 64;
 pub const MAX_ARTIFACT_LEN: usize = 128;
 pub const MAX_PUBKEY_LEN: usize = 256;
+
+/// SHA-256 always yields a 32-byte digest, i.e. 64 lowercase hex characters.
+pub const SHA256_DIGEST_LEN: usize = std.crypto.hash.sha2.Sha256.digest_length;
+pub const SHA256_HEX_LEN: usize = SHA256_DIGEST_LEN * 2;
 
 const setFixedBuf = common.setFixedBuf;
 
@@ -78,8 +87,8 @@ pub const ParsedCharter = struct {
     unit_count: usize = 0,
 
     // Computed 256-bit SHA-256 digest of the canonical Charter text.
-    sha256_bytes: [32]u8 = @splat(0),
-    sha256_hex: [64]u8 = @splat('0'),
+    sha256_bytes: [SHA256_DIGEST_LEN]u8 = @splat(0),
+    sha256_hex: [SHA256_HEX_LEN]u8 = @splat('0'),
 
     pub fn id(self: *const ParsedCharter) []const u8 {
         if (self.id_len == 0) return "autonomous-mesh-01";
@@ -132,302 +141,10 @@ pub const ParsedCharter = struct {
     }
 };
 
-const unquote = common.unquoteToml;
-
-fn parseInlineIntField(
-    inline_table: []const u8,
-    field_name: []const u8,
-) ?u32 {
-    const inner = std.mem.trim(u8, inline_table, " \t\r\n{}");
-    var it = std.mem.splitScalar(u8, inner, ',');
-    while (it.next()) |pair| {
-        const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
-        const k = std.mem.trim(u8, pair[0..eq], " \t");
-        const v = unquote(pair[eq + 1 ..]);
-        if (std.mem.eql(u8, k, field_name)) {
-            return std.fmt.parseInt(u32, v, 10) catch null;
-        }
-    }
-    return null;
-}
-
-fn parseSizeMb(raw: []const u8) u32 {
-    const s = unquote(raw);
-    if (std.mem.endsWith(u8, s, "GiB") or
-        std.mem.endsWith(u8, s, "GB") or
-        std.mem.endsWith(u8, s, "G"))
-    {
-        const num_end = std.mem.indexOfAny(u8, s, "Gg") orelse s.len;
-        const trimmed = std.mem.trim(u8, s[0..num_end], " \t");
-        const g = std.fmt.parseInt(u32, trimmed, 10) catch return 256;
-        return std.math.mul(u32, g, 1024) catch 256;
-    }
-    if (std.mem.endsWith(u8, s, "MiB") or
-        std.mem.endsWith(u8, s, "MB") or
-        std.mem.endsWith(u8, s, "M"))
-    {
-        const num_end = std.mem.indexOfAny(u8, s, "Mm") orelse s.len;
-        const trimmed = std.mem.trim(u8, s[0..num_end], " \t");
-        return std.fmt.parseInt(u32, trimmed, 10) catch 256;
-    }
-    return std.fmt.parseInt(u32, s, 10) catch 256;
-}
-
-/// Compute the 256-bit SHA-256 digest and lowercase hex string of a Charter.
-pub fn computeCharterSha256(
-    content: []const u8,
-    out_bytes: *[32]u8,
-    out_hex: *[64]u8,
-) void {
-    std.crypto.hash.sha2.Sha256.hash(content, out_bytes, .{});
-    _ = common.bytesToHex(out_bytes, out_hex);
-}
-
-/// Merge any unit spec fields populated on `src` before `.id` was encountered
-/// into `dst` (which may already hold `[invariants.isolation.<id>]` flags).
-fn mergeUnitFields(dst: *WorkloadUnit, src: *const WorkloadUnit) void {
-    if (src.artifact_len > 0) {
-        setFixedBuf(&dst.artifact_buf, &dst.artifact_len, src.artifact());
-    }
-    if (src.min_instances != 1) dst.min_instances = src.min_instances;
-    if (src.target_instances != 1) dst.target_instances = src.target_instances;
-    if (src.max_instances != 4) dst.max_instances = src.max_instances;
-    if (src.vcpus != 1) dst.vcpus = src.vcpus;
-    if (src.ram_mb != 256) dst.ram_mb = src.ram_mb;
-}
-
-fn applyUnitKey(
-    charter: *ParsedCharter,
-    active_unit_idx: *?usize,
-    key: []const u8,
-    val: []const u8,
-) void {
-    const UnitKey = enum {
-        id,
-        artifact,
-        min_instances,
-        target_instances,
-        max_instances,
-        instances,
-        vcpus,
-        ram,
-        quota,
-    };
-    const idx = active_unit_idx.* orelse return;
-    var u = &charter.units[idx];
-    const k = std.meta.stringToEnum(UnitKey, key) orelse return;
-    switch (k) {
-        .id => {
-            for (0..idx) |prev_i| {
-                if (std.mem.eql(u8, charter.units[prev_i].id(), val)) {
-                    mergeUnitFields(&charter.units[prev_i], u);
-                    active_unit_idx.* = prev_i;
-                    charter.unit_count = idx;
-                    return;
-                }
-            }
-            setFixedBuf(&u.id_buf, &u.id_len, val);
-        },
-        .artifact => setFixedBuf(&u.artifact_buf, &u.artifact_len, val),
-        .min_instances => {
-            u.min_instances = std.fmt.parseInt(u16, val, 10) catch 1;
-        },
-        .target_instances => {
-            u.target_instances = std.fmt.parseInt(u16, val, 10) catch 1;
-        },
-        .max_instances => {
-            u.max_instances = std.fmt.parseInt(u16, val, 10) catch 4;
-        },
-        .instances => {
-            if (parseInlineIntField(val, "min")) |v| {
-                u.min_instances = @intCast(v);
-            }
-            if (parseInlineIntField(val, "target")) |v| {
-                u.target_instances = @intCast(v);
-            }
-            if (parseInlineIntField(val, "max")) |v| {
-                u.max_instances = @intCast(v);
-            }
-        },
-        .vcpus => u.vcpus = std.fmt.parseInt(u16, val, 10) catch 1,
-        .ram => u.ram_mb = parseSizeMb(val),
-        .quota => {
-            if (parseInlineIntField(val, "vcpus")) |v| u.vcpus = @intCast(v);
-        },
-    }
-}
-
-/// Parse a `charter.toml` configuration into a validated `ParsedCharter`.
-pub fn parseCharterToml(content: []const u8) !ParsedCharter {
-    var charter = ParsedCharter{};
-    computeCharterSha256(content, &charter.sha256_bytes, &charter.sha256_hex);
-
-    const Section = enum { none, charter, invariants, isolation_unit, unit };
-    var section: Section = .none;
-    var iso_unit_buf: [MAX_UNIT_ID_LEN]u8 = @splat(0);
-    var iso_unit_len: usize = 0;
-    var active_unit_idx: ?usize = null;
-
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \t\r");
-        if (line.len == 0 or line[0] == '#') continue;
-
-        if (std.mem.eql(u8, line, "[[units]]")) {
-            section = .unit;
-            if (charter.unit_count < MAX_CHARTER_UNITS) {
-                active_unit_idx = charter.unit_count;
-                charter.units[charter.unit_count] = .{};
-                charter.unit_count += 1;
-            } else {
-                active_unit_idx = null;
-            }
-            continue;
-        }
-
-        const HeaderSection = enum { charter, invariants };
-        if (line[0] == '[' and line[line.len - 1] == ']') {
-            const header = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
-            if (std.meta.stringToEnum(HeaderSection, header)) |hdr| {
-                section = switch (hdr) {
-                    .charter => .charter,
-                    .invariants => .invariants,
-                };
-            } else if (std.mem.startsWith(
-                u8,
-                header,
-                "invariants.isolation.",
-            )) {
-                section = .isolation_unit;
-                const uname = unquote(header["invariants.isolation.".len..]);
-                setFixedBuf(&iso_unit_buf, &iso_unit_len, uname);
-                _ = charter.findOrCreateUnit(iso_unit_buf[0..iso_unit_len]);
-            } else {
-                section = .none;
-            }
-            continue;
-        }
-
-        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-        const key = std.mem.trim(u8, line[0..eq_idx], " \t");
-        const val = unquote(std.mem.trim(u8, line[eq_idx + 1 ..], " \t"));
-
-        switch (section) {
-            .charter, .none => {
-                const CharterKey = enum {
-                    id,
-                    version,
-                    quorum_required,
-                    quorum_total,
-                    quorum,
-                    standby_replicas,
-                    root_failover,
-                    principal_pubkey,
-                };
-                if (std.meta.stringToEnum(CharterKey, key)) |k| switch (k) {
-                    .id => setFixedBuf(&charter.id_buf, &charter.id_len, val),
-                    .version => {
-                        charter.version =
-                            std.fmt.parseInt(u32, val, 10) catch 1;
-                    },
-                    .quorum_required => {
-                        charter.quorum_required =
-                            std.fmt.parseInt(u16, val, 10) catch 2;
-                    },
-                    .quorum_total => {
-                        charter.quorum_total =
-                            std.fmt.parseInt(u16, val, 10) catch 3;
-                    },
-                    .quorum => {
-                        if (parseInlineIntField(val, "required")) |req| {
-                            charter.quorum_required = @intCast(@min(req, 62));
-                        }
-                        if (parseInlineIntField(val, "total")) |tot| {
-                            charter.quorum_total = @intCast(@min(tot, 62));
-                        }
-                    },
-                    .standby_replicas => {
-                        charter.standby_replicas =
-                            std.fmt.parseInt(u16, val, 10) catch 1;
-                    },
-                    .root_failover => {
-                        if (parseInlineIntField(val, "standby_replicas")) |r| {
-                            charter.standby_replicas = @intCast(@min(r, 8));
-                        }
-                    },
-                    .principal_pubkey => setFixedBuf(
-                        &charter.principal_pubkey_buf,
-                        &charter.principal_pubkey_len,
-                        val,
-                    ),
-                };
-            },
-            .invariants => {
-                const InvariantKey = enum {
-                    min_stewards,
-                    max_simultaneous_unit_termination_pct,
-                    require_quorum_for_volume_deletion,
-                    volume_deletion_timelock_sec,
-                };
-                if (std.meta.stringToEnum(InvariantKey, key)) |k| switch (k) {
-                    .min_stewards => {
-                        charter.min_stewards =
-                            std.fmt.parseInt(u16, val, 10) catch 3;
-                    },
-                    .max_simultaneous_unit_termination_pct => {
-                        const pct = std.fmt.parseInt(u8, val, 10) catch 33;
-                        charter.max_simultaneous_unit_termination_pct =
-                            @min(pct, 100);
-                    },
-                    .require_quorum_for_volume_deletion => {
-                        charter.require_quorum_for_volume_deletion =
-                            std.mem.eql(u8, val, "true");
-                    },
-                    .volume_deletion_timelock_sec => {
-                        charter.volume_deletion_timelock_sec =
-                            std.fmt.parseInt(u32, val, 10) catch 86400;
-                    },
-                };
-            },
-            .isolation_unit => {
-                const IsolationKey = enum {
-                    confidential_memory,
-                    allow_wan_egress,
-                    forbid_volume_export,
-                };
-                const iso_name = iso_unit_buf[0..iso_unit_len];
-                if (charter.findOrCreateUnit(iso_name)) |u| {
-                    const is_t = std.mem.eql(u8, val, "true");
-                    if (std.meta.stringToEnum(IsolationKey, key)) |k| {
-                        switch (k) {
-                            .confidential_memory => {
-                                u.confidential_memory = is_t;
-                            },
-                            .allow_wan_egress => u.allow_wan_egress = is_t,
-                            .forbid_volume_export => {
-                                u.forbid_volume_export = is_t;
-                            },
-                        }
-                    }
-                }
-            },
-            .unit => applyUnitKey(&charter, &active_unit_idx, key, val),
-        }
-    }
-
-    if (charter.quorum_required == 0 or
-        charter.quorum_required > charter.quorum_total or
-        charter.quorum_total > 62)
-    {
-        return error.InvalidQuorumConfig;
-    }
-
-    return charter;
-}
-
 test "parseCharterToml parses Charter and merges out-of-order unit keys" {
     std.testing.refAllDecls(@This());
     _ = whisper;
+    _ = toml;
     _ = @import("charter/cmd.zig");
     _ = @import("charter/status.zig");
     _ = @import("charter/whisper.zig");

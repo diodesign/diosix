@@ -32,6 +32,7 @@ pub const emitter_rv64 = @import("engine/emitters/rv64.zig");
 
 test {
     _ = @import("vcpu.zig");
+    _ = @import("vcpu/csr.zig");
     _ = @import("reservation.zig");
     _ = @import("softtlb.zig");
     _ = @import("softtlb/ops.zig");
@@ -42,6 +43,7 @@ test {
     _ = @import("devices/vpic.zig");
     _ = @import("devices/vsock.zig");
     _ = @import("devices/vsock/router.zig");
+    _ = @import("devices/vsock/queues.zig");
     _ = @import("devices/vgpu.zig");
     _ = @import("devices/vgpu/protocol.zig");
     _ = @import("devices/vgpu/commands.zig");

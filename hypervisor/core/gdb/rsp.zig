@@ -21,6 +21,11 @@ pub const BreakpointTable = bp_mod.BreakpointTable;
 pub const sw_breakpoints = &bp_mod.sw_breakpoints;
 
 pub const PacketState = packets.PacketState;
+pub const RSP_MAX_PACKET_BYTES = packets.RSP_MAX_PACKET_BYTES;
+pub const RSP_MAX_MEM_READ_BYTES = packets.RSP_MAX_MEM_READ_BYTES;
+pub const RSP_REG_HEX_BUF_LEN = packets.RSP_REG_HEX_BUF_LEN;
+pub const RSP_STOP_PACKET_LEN = packets.RSP_STOP_PACKET_LEN;
+pub const RSP_HEX_OUTPUT_BUF_LEN = packets.RSP_HEX_OUTPUT_BUF_LEN;
 pub const readSerialByte = packets.readSerialByte;
 pub const writeSerialByte = packets.writeSerialByte;
 pub const sendAck = packets.sendAck;
@@ -42,13 +47,10 @@ pub var active_thread: usize = 1;
 pub var active_vc: ?*vcore.VirtualCore = null;
 pub var gdb_connected: bool = false;
 
-pub fn readX86_64Registers(uc: ?*anyopaque, buf: []u8) usize {
-    _ = uc;
-    var offset: usize = 0;
-    var i: usize = 0;
-    while (i < 17) : (i += 1) offset += encodeHexLE(u64, 0, buf[offset..]);
-    while (i < 24) : (i += 1) offset += encodeHexLE(u32, 0, buf[offset..]);
-    return offset;
+pub const readX86_64Registers = packets.readX86_64Registers;
+
+pub fn readRV64Registers(buf: []u8) usize {
+    return packets.readRV64RegistersForVcore(active_vc, buf);
 }
 
 fn handleMonitorCommand(cmd: []const u8) void {
@@ -59,11 +61,14 @@ fn handleMonitorCommand(cmd: []const u8) void {
                 "  Thread 3: Emulated Guest (Native Dynarec)\n",
         );
     } else if (std.mem.startsWith(u8, cmd, "zero_page")) {
-        if (active_vc) |vc| {
-            if (vc.exec_path.emulated.vcpu != null) {
-                sendOutputPacket("Native Dynarec VCpu active\n");
-            }
-        }
+        if (active_vc) |vc| switch (vc.exec_path) {
+            .emulated => |emu| {
+                if (emu.vcpu != null) {
+                    sendOutputPacket("Native Dynarec VCpu active\n");
+                }
+            },
+            .native => {},
+        };
     } else {
         sendOutputPacket(
             "Unknown monitor command. Available: targets, zero_page\n",
@@ -71,21 +76,13 @@ fn handleMonitorCommand(cmd: []const u8) void {
     }
 }
 
-pub fn readRV64Registers(buf: []u8) usize {
-    var offset: usize = 0;
-    var i: usize = 0;
-    while (i < 32) : (i += 1) offset += encodeHexLE(u64, 0, buf[offset..]);
-    offset += encodeHexLE(u64, 0x80000000, buf[offset..]);
-    return offset;
-}
-
 fn handleMemoryRead(payload: []const u8) void {
     const parsed = parseAddrLen(payload[1..]) orelse {
         sendPacket("E01");
         return;
     };
-    var mem_buf: [256]u8 = undefined;
-    var hex_res: [512]u8 = undefined;
+    var mem_buf: [RSP_MAX_MEM_READ_BYTES]u8 = undefined;
+    var hex_res: [RSP_MAX_MEM_READ_BYTES * 2]u8 = undefined;
     const read_len: usize = @min(parsed.len, mem_buf.len);
 
     if (active_thread == 1) {
@@ -93,7 +90,9 @@ fn handleMemoryRead(payload: []const u8) void {
             sendPacket("E01");
             return;
         };
-        if (!physmem.isRam(host_addr, read_len)) {
+        if (!physmem.isRam(host_addr, read_len) or
+            physmem.isHypervisorMemory(host_addr, read_len))
+        {
             sendPacket("E01");
             return;
         }
@@ -104,6 +103,10 @@ fn handleMemoryRead(payload: []const u8) void {
     }
 
     if (active_vc) |vc| {
+        if (vc.guest.is_confidential) {
+            sendPacket("E01");
+            return;
+        }
         const gpa = std.math.cast(usize, parsed.addr) orelse {
             sendPacket("E01");
             return;
@@ -133,7 +136,7 @@ fn handleMemoryWrite(payload: []const u8) void {
         return;
     }
 
-    var write_buf: [256]u8 = undefined;
+    var write_buf: [RSP_MAX_MEM_READ_BYTES]u8 = undefined;
     const write_len: usize = @min(parsed.len, write_buf.len);
     if (!decodeHexBytes(hex_payload, write_buf[0..write_len])) {
         sendPacket("E01");
@@ -158,6 +161,10 @@ fn handleMemoryWrite(payload: []const u8) void {
     }
 
     if (active_vc) |vc| {
+        if (vc.guest.is_confidential) {
+            sendPacket("E01");
+            return;
+        }
         const gpa = std.math.cast(usize, parsed.addr) orelse {
             sendPacket("E01");
             return;
@@ -192,7 +199,7 @@ fn handleQuery(payload: []const u8) void {
         sendPacket("QC1");
     } else if (std.mem.startsWith(u8, payload, "qRcmd,")) {
         const hex_in = payload[6..];
-        var cmd_buf: [256]u8 = undefined;
+        var cmd_buf: [RSP_MAX_MEM_READ_BYTES]u8 = undefined;
         var cmd_len: usize = 0;
         var idx: usize = 0;
         while (idx + 1 < hex_in.len and cmd_len < cmd_buf.len) : (idx += 2) {
@@ -214,17 +221,30 @@ pub fn handlePacketPayload(payload: []const u8) void {
     switch (payload[0]) {
         '?' => sendPacket("S05"),
         'g' => {
-            var reg_buf: [512]u8 = undefined;
+            var reg_buf: [RSP_REG_HEX_BUF_LEN]u8 = undefined;
             if (active_thread == 1) {
                 const len = readRV64Registers(&reg_buf);
                 sendPacket(reg_buf[0..len]);
                 return;
             }
             if (active_vc) |vc| {
-                if (vc.exec_path.emulated.vcpu) |vcpu| {
-                    const len = readX86_64Registers(vcpu, &reg_buf);
-                    sendPacket(reg_buf[0..len]);
+                if (vc.guest.is_confidential) {
+                    sendPacket("E01");
                     return;
+                }
+                switch (vc.exec_path) {
+                    .emulated => |emu| {
+                        if (emu.vcpu) |vcpu| {
+                            const len = readX86_64Registers(vcpu, &reg_buf);
+                            sendPacket(reg_buf[0..len]);
+                            return;
+                        }
+                    },
+                    .native => {
+                        const len = readRV64Registers(&reg_buf);
+                        sendPacket(reg_buf[0..len]);
+                        return;
+                    },
                 }
             }
             sendPacket("E01");
@@ -240,21 +260,22 @@ pub fn handlePacketPayload(payload: []const u8) void {
                 sendPacket("E01");
                 return;
             };
-            if (active_vc) |vc| {
-                if (vc.exec_path == .emulated and reg_num == 16) {
-                    if (vc.exec_path.emulated.vcpu) |vcpu| {
-                        var bytes: [8]u8 = @splat(0);
-                        const max_bytes: usize = @min(
-                            bytes.len,
-                            val_str.len / 2,
-                        );
-                        _ = decodeHexBytes(val_str, bytes[0..max_bytes]);
-                        vcpu.pc = @truncate(
-                            std.mem.readInt(u64, &bytes, .little),
-                        );
-                    }
+            if (active_vc) |vc| if (!vc.guest.is_confidential) {
+                switch (vc.exec_path) {
+                    .emulated => |emu| if (reg_num == 16) {
+                        if (emu.vcpu) |vcpu| {
+                            var bytes: [8]u8 = @splat(0);
+                            const max_bytes: usize =
+                                @min(bytes.len, val_str.len / 2);
+                            _ = decodeHexBytes(val_str, bytes[0..max_bytes]);
+                            const raw_pc =
+                                std.mem.readInt(u64, &bytes, .little);
+                            vcpu.pc = @truncate(raw_pc);
+                        }
+                    },
+                    .native => {},
                 }
-            }
+            };
             sendPacket("OK");
         },
         'm' => handleMemoryRead(payload),
@@ -291,13 +312,14 @@ pub fn handlePacketPayload(payload: []const u8) void {
             }
         },
         's' => {
-            if (active_vc) |vc| {
-                if (vc.exec_path == .emulated and
-                    vc.exec_path.emulated.vcpu != null)
-                {
-                    if (vc.exec_path.emulated.engine) |eng| _ = eng.step();
-                }
-            }
+            if (active_vc) |vc| switch (vc.exec_path) {
+                .emulated => |emu| {
+                    if (emu.vcpu != null) {
+                        if (emu.engine) |eng| _ = eng.step();
+                    }
+                },
+                .native => {},
+            };
             sendPacket("S05");
         },
         else => sendPacket(""),
@@ -310,14 +332,14 @@ pub fn removeAllBreakpoints() void {
 
 pub fn notifyTrap(sig: u8) void {
     if (!gdb_connected) return;
-    var buf: [32]u8 = undefined;
+    var buf: [RSP_STOP_PACKET_LEN]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "T{x:0>2}thread:3;", .{sig}) catch
         "T05thread:3;";
     sendPacket(msg);
 }
 
 var pkt_state: PacketState = .idle;
-var payload_buf: [2048]u8 = undefined;
+var payload_buf: [RSP_MAX_PACKET_BYTES]u8 = undefined;
 var payload_len: usize = 0;
 var checksum_hi: u8 = 0;
 
@@ -334,11 +356,12 @@ pub fn handleSerialByte(ch: u8) void {
     }
 
     if (ch == 0x03) {
-        if (active_vc) |vc| {
-            if (vc.exec_path == .emulated) {
-                if (vc.exec_path.emulated.vcpu) |vcpu| vcpu.running = false;
-            }
-        }
+        if (active_vc) |vc| switch (vc.exec_path) {
+            .emulated => |emu| {
+                if (emu.vcpu) |vcpu| vcpu.running = false;
+            },
+            .native => {},
+        };
         sendPacket("S02");
         pkt_state = .idle;
         return;

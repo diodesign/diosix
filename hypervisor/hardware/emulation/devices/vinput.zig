@@ -48,6 +48,10 @@ pub const VirtioInputEvent = extern struct {
     value: u32,
 };
 
+comptime {
+    std.debug.assert(@sizeOf(VirtioInputEvent) == 8);
+}
+
 pub const VirtqDesc = bus.VirtqDesc;
 pub const VirtQueue = bus.VirtQueueConfig(QUEUE_SIZE_MAX);
 

@@ -11,6 +11,7 @@ const common = @import("../common.zig");
 
 const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
 const printStr = common.printStr;
+const printFmt = common.printFmt;
 const printApiError = common.printApiError;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
@@ -39,7 +40,7 @@ pub fn cmdCharterStatus(
     } else |_| {}
 
     var hv_sealed = false;
-    var hv_hash_hex: [64]u8 = @splat('0');
+    var hv_hash_hex: [charter.SHA256_HEX_LEN]u8 = @splat('0');
     var hv_ratified_mask: u64 = 0;
     var hv_failover_epoch: u64 = 0;
     if (client.getCharter()) |hv_c| {
@@ -49,8 +50,15 @@ pub fn cmdCharterStatus(
         hv_failover_epoch = hv_c.failover_epoch;
     } else |_| {}
 
-    var out_buf: [2048]u8 = undefined;
     if (json_mode) {
+        const allocator = std.heap.page_allocator;
+        const safe_file = common.escapeJsonAlloc(allocator, file_path) catch
+            return;
+        defer allocator.free(safe_file);
+        const safe_id = common.escapeJsonAlloc(allocator, parsed.id()) catch
+            return;
+        defer allocator.free(safe_id);
+
         const json_fmt =
             "{{\"file\":\"{s}\",\"file_loaded\":{s},\"id\":\"{s}\"," ++
             "\"version\":{d},\"file_sha256\":\"{s}\"," ++
@@ -59,16 +67,15 @@ pub fn cmdCharterStatus(
             "\"min_stewards\":{d},\"standby_replicas\":{d}," ++
             "\"unit_count\":{d},\"ratified_mask\":{d}," ++
             "\"failover_epoch\":{d}}}\n";
-        const jout = std.fmt.bufPrint(&out_buf, json_fmt, .{
-            file_path,               if (file_loaded) "true" else "false",
-            parsed.id(),             parsed.version,
+        printFmt(json_fmt, .{
+            safe_file,               if (file_loaded) "true" else "false",
+            safe_id,                 parsed.version,
             &parsed.sha256_hex,      if (hv_sealed) "true" else "false",
             &hv_hash_hex,            parsed.quorum_required,
             parsed.quorum_total,     parsed.min_stewards,
             parsed.standby_replicas, parsed.unit_count,
             hv_ratified_mask,        hv_failover_epoch,
-        }) catch return;
-        printStr(jout);
+        });
     } else {
         const seal_str = if (hv_sealed)
             "sealed in M-mode"
@@ -76,7 +83,7 @@ pub fn cmdCharterStatus(
             "unsealed (pending deploy)";
         const load_str = if (file_loaded) "loaded" else "defaults";
         const max_term = parsed.max_simultaneous_unit_termination_pct;
-        const out = std.fmt.bufPrint(&out_buf,
+        printFmt(
             \\=== Diosix Constitutional Charter ===
             \\  Charter file       : {s} ({s})
             \\  Constitution doc   : {s}
@@ -95,8 +102,7 @@ pub fn cmdCharterStatus(
             parsed.quorum_total,           parsed.min_stewards,
             parsed.standby_replicas,       hv_failover_epoch,
             parsed.unit_count,             max_term,
-        }) catch return;
-        printStr(out);
+        });
     }
 }
 
@@ -119,26 +125,29 @@ pub fn cmdCharterDeploy(
         printApiError("Seal Constitutional Charter in M-mode", err);
         return;
     };
-    var out_buf: [512]u8 = undefined;
-    const args_tuple = .{
-        parsed.id(),            &parsed.sha256_hex,
-        parsed.quorum_required, parsed.quorum_total,
-    };
-    const out = if (json_mode)
-        std.fmt.bufPrint(
-            &out_buf,
+    if (json_mode) {
+        const allocator = std.heap.page_allocator;
+        const safe_id = common.escapeJsonAlloc(allocator, parsed.id()) catch
+            return;
+        defer allocator.free(safe_id);
+        printFmt(
             "{{\"status\":\"sealed\",\"id\":\"{s}\",\"sha256\":\"{s}\"," ++
                 "\"quorum_required\":{d},\"quorum_total\":{d}}}\n",
-            args_tuple,
-        ) catch return
-    else
-        std.fmt.bufPrint(
-            &out_buf,
+            .{
+                safe_id,                &parsed.sha256_hex,
+                parsed.quorum_required, parsed.quorum_total,
+            },
+        );
+    } else {
+        printFmt(
             "✓ Constitutional Charter '{s}' sealed in M-mode " ++
                 "(SHA-256: {s}, quorum: {d}-of-{d}).\n",
-            args_tuple,
-        ) catch return;
-    printStr(out);
+            .{
+                parsed.id(),            &parsed.sha256_hex,
+                parsed.quorum_required, parsed.quorum_total,
+            },
+        );
+    }
 }
 
 pub fn cmdCharterPropose(
@@ -207,25 +216,25 @@ pub fn cmdCharterPropose(
         total_count,
         has_quorum,
     );
-    var out_buf: [512]u8 = undefined;
     const mark = if (res.allowed) "✓" else "✗";
     const al_str = if (res.allowed) "true" else "false";
     const rq_str = if (res.requires_quorum) "true" else "false";
-    const j_fmt = "{{\"action\":\"{s}\",\"allowed\":{s}," ++
-        "\"requires_quorum\":{s},\"reason\":\"{s}\"}}\n";
-    const out = if (json_mode)
-        std.fmt.bufPrint(
-            &out_buf,
-            j_fmt,
-            .{ action_str, al_str, rq_str, res.reason },
-        ) catch return
-    else
-        std.fmt.bufPrint(
-            &out_buf,
+    if (json_mode) {
+        const allocator = std.heap.page_allocator;
+        const safe_act = common.escapeJsonAlloc(allocator, action_str) catch
+            return;
+        defer allocator.free(safe_act);
+        printFmt(
+            "{{\"action\":\"{s}\",\"allowed\":{s}," ++
+                "\"requires_quorum\":{s},\"reason\":\"{s}\"}}\n",
+            .{ safe_act, al_str, rq_str, res.reason },
+        );
+    } else {
+        printFmt(
             "{s} Proposal '{s}': {s}\n",
             .{ mark, action_str, res.reason },
-        ) catch return;
-    printStr(out);
+        );
+    }
 }
 
 pub fn cmdCharterAudit(
@@ -233,8 +242,8 @@ pub fn cmdCharterAudit(
     file_path: []const u8,
     json_mode: bool,
 ) void {
-    var file_digest: [32]u8 = @splat(0);
-    var file_hex: [64]u8 = @splat('0');
+    var file_digest: [charter.SHA256_DIGEST_LEN]u8 = @splat(0);
+    var file_hex: [charter.SHA256_HEX_LEN]u8 = @splat('0');
     var file_ok = false;
     if (readBinaryFile(file_path, MAX_MANIFEST_SIZE)) |content| {
         defer unmapBinaryFile(content);
@@ -250,23 +259,21 @@ pub fn cmdCharterAudit(
             std.mem.eql(u8, &hv_c.charter_hash, &file_digest);
     } else |_| {}
 
-    var out_buf: [512]u8 = undefined;
     if (json_mode) {
         const jfmt =
             "{{\"charter_file_present\":{s},\"mmode_sealed\":{s}," ++
             "\"sha256_verified\":{s}}}\n";
-        const jout = std.fmt.bufPrint(&out_buf, jfmt, .{
+        printFmt(jfmt, .{
             if (file_ok) "true" else "false",
             if (mmode_sealed) "true" else "false",
             if (hash_matches) "true" else "false",
-        }) catch return;
-        printStr(jout);
+        });
     } else {
         const match_str = if (hash_matches)
             "verified"
         else
             "unverified (seal with 'dsx charter deploy')";
-        const out = std.fmt.bufPrint(&out_buf,
+        printFmt(
             \\=== Constitutional Audit ===
             \\  Charter file present : {s}
             \\  M-mode Charter sealed: {s}
@@ -276,8 +283,7 @@ pub fn cmdCharterAudit(
             if (file_ok) "yes" else "no",
             if (mmode_sealed) "yes" else "no",
             match_str,
-        }) catch return;
-        printStr(out);
+        });
     }
 }
 

@@ -2,6 +2,24 @@
 #
 # S50diosix: Diosix guest initialization and management service.
 #
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+STATE_DIR="/var/lib/diosix"
+ETC_DIR="/etc/diosix"
+RUN_DIR="/run/diosix"
+SHARE_IMAGES_DIR="/usr/share/diosix/images"
+KEY_DIR="${STATE_DIR}/keys"
+MGT_KEY="${KEY_DIR}/id_management"
+PASSKEYS="${KEY_DIR}/authorized_passkeys"
+DEV_KEYS="${KEY_DIR}/dev_authorized_keys"
+AUTH_KEYS="/root/.ssh/authorized_keys"
+CHILD_SUBNET="10.0.3.0/24"
+CHILD_GW="10.0.3.1"
+WAN_FALLBACK_IP="10.0.2.15"
+WAN_FALLBACK_CIDR="10.0.2.15/24"
+WAN_FALLBACK_GW="10.0.2.2"
+WAN_FALLBACK_DNS="10.0.2.3"
 
 case "$1" in
   start)
@@ -13,16 +31,19 @@ case "$1" in
     fi
     # Set up runtime directories and SSH key permissions.
     mkdir -p /run/dropbear /var/run/dropbear /etc/dropbear \
-        /var/run/diosix /etc/diosix/keys /root/.ssh
+        "$RUN_DIR" /var/run/diosix "$ETC_DIR/keys" /root/.ssh
     chmod 700 /run/dropbear /var/run/dropbear /etc/dropbear \
-        /root/.ssh /etc/diosix/keys 2>/dev/null || true
+        /root/.ssh "$ETC_DIR/keys" 2>/dev/null || true
 
     # Identify VM Context ID (CID).
     SELF_CID=1
     DSX_BIN=""
-    if [ -x /usr/bin/dsx ]; then
-        DSX_BIN="/usr/bin/dsx"
-    fi
+    for candidate in /usr/sbin/dsx /usr/bin/dsx /usr/sbin/diosix-ctl; do
+        if [ -x "$candidate" ]; then
+            DSX_BIN="$candidate"
+            break
+        fi
+    done
     if [ -n "$DSX_BIN" ]; then
         CID_VAL=$("$DSX_BIN" info 2>/dev/null | \
             grep -i "^Assigned CID" | awk '{print $NF}')
@@ -32,8 +53,8 @@ case "$1" in
     fi
 
     # Initialize /root/.ssh/authorized_keys with strict permissions.
-    touch /root/.ssh/authorized_keys 2>/dev/null || true
-    chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
+    touch "$AUTH_KEYS" 2>/dev/null || true
+    chmod 600 "$AUTH_KEYS" 2>/dev/null || true
 
     # Set up standard loopback networking.
     ifconfig lo 127.0.0.1 up 2>/dev/null || true
@@ -45,11 +66,13 @@ case "$1" in
             ifconfig diosix0 "10.0.3.${SELF_CID}" \
                 netmask 255.255.255.0 up 2>/dev/null || true
         ip link set diosix0 up 2>/dev/null || true
-        ip route add 10.0.3.0/24 dev diosix0 2>/dev/null || true
+        ip route add "$CHILD_SUBNET" dev diosix0 2>/dev/null || true
     fi
 
     # Network routing and gateway configuration.
     if [ "$SELF_CID" = "1" ]; then
+        echo "Diosix root VM (trusted host supervisor)" \
+            > /etc/issue 2>/dev/null || true
         # Root VM: Configure physical/virtual WAN uplink.
         WAN_IF=""
         for iface in /sys/class/net/eth* /sys/class/net/en* \
@@ -75,26 +98,32 @@ case "$1" in
             # Set static IP fallback for QEMU user network (10.0.2.15/24).
             if ! ip -4 addr show dev "$WAN_IF" 2>/dev/null | \
                grep -q "inet "; then
-                ip addr add 10.0.2.15/24 dev "$WAN_IF" 2>/dev/null || \
-                    ifconfig "$WAN_IF" 10.0.2.15 \
+                ip addr add "$WAN_FALLBACK_CIDR" dev "$WAN_IF" 2>/dev/null || \
+                    ifconfig "$WAN_IF" "$WAN_FALLBACK_IP" \
                         netmask 255.255.255.0 up 2>/dev/null || true
-                ip route add default via 10.0.2.2 dev "$WAN_IF" 2>/dev/null || \
-                    route add default gw 10.0.2.2 "$WAN_IF" 2>/dev/null || true
+                ip route add default via "$WAN_FALLBACK_GW" \
+                    dev "$WAN_IF" 2>/dev/null || \
+                    route add default gw "$WAN_FALLBACK_GW" \
+                        "$WAN_IF" 2>/dev/null || true
             fi
         fi
 
         # DNS configuration.
-        printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 10.0.2.3\n" \
-            > /etc/resolv.conf
+        printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver %s\n" \
+            "$WAN_FALLBACK_DNS" > /etc/resolv.conf
 
         # Enable IPv4 packet forwarding and NAT masquerade for child domains.
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+        if command -v iptables-restore >/dev/null 2>&1 && \
+           [ -f /etc/iptables.conf ]; then
+            iptables-restore < /etc/iptables.conf 2>/dev/null || true
+        fi
         if command -v iptables >/dev/null 2>&1; then
-            # 1. Outbound NAT masquerade to WAN.
-            iptables -t nat -C POSTROUTING -s 10.0.0.0/16 \
-                ! -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || \
-            iptables -t nat -A POSTROUTING -s 10.0.0.0/16 \
-                ! -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || true
+            # 1. Outbound NAT masquerade from child subnet to WAN.
+            iptables -t nat -C POSTROUTING -s "$CHILD_SUBNET" \
+                ! -d "$CHILD_SUBNET" -j MASQUERADE 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -s "$CHILD_SUBNET" \
+                ! -d "$CHILD_SUBNET" -j MASQUERADE 2>/dev/null || true
 
             # 2. Allow Wayland translation bridge (port 8484) from child VMs.
             iptables -C INPUT -i diosix0 -p tcp --dport 8484 \
@@ -107,53 +136,55 @@ case "$1" in
                 -j DROP 2>/dev/null || \
             iptables -A INPUT -i diosix0 -m conntrack --ctstate NEW \
                 -j DROP 2>/dev/null || true
-            iptables -C INPUT -s 10.0.0.0/16 -m conntrack --ctstate NEW \
+            iptables -C INPUT -s "$CHILD_SUBNET" -m conntrack --ctstate NEW \
                 -j DROP 2>/dev/null || \
-            iptables -A INPUT -s 10.0.0.0/16 -m conntrack --ctstate NEW \
+            iptables -A INPUT -s "$CHILD_SUBNET" -m conntrack --ctstate NEW \
                 -j DROP 2>/dev/null || true
 
             # 4. Block lateral traffic between sibling child VMs.
-            iptables -C FORWARD -s 10.0.0.0/16 -d 10.0.0.0/16 \
+            iptables -C FORWARD -s "$CHILD_SUBNET" -d "$CHILD_SUBNET" \
                 -j DROP 2>/dev/null || \
-            iptables -A FORWARD -s 10.0.0.0/16 -d 10.0.0.0/16 \
+            iptables -A FORWARD -s "$CHILD_SUBNET" -d "$CHILD_SUBNET" \
                 -j DROP 2>/dev/null || true
 
             # 5. Allow outbound WAN traffic and stateful return responses.
-            iptables -C FORWARD -s 10.0.0.0/16 -j ACCEPT 2>/dev/null || \
-            iptables -A FORWARD -s 10.0.0.0/16 -j ACCEPT 2>/dev/null || true
-            iptables -C FORWARD -d 10.0.0.0/16 -m state \
+            iptables -C FORWARD -s "$CHILD_SUBNET" -j ACCEPT 2>/dev/null || \
+            iptables -A FORWARD -s "$CHILD_SUBNET" -j ACCEPT 2>/dev/null || true
+            iptables -C FORWARD -d "$CHILD_SUBNET" -m state \
                 --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
-            iptables -A FORWARD -d 10.0.0.0/16 -m state \
+            iptables -A FORWARD -d "$CHILD_SUBNET" -m state \
                 --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
         fi
     else
+        echo "Diosix guest VM (CID ${SELF_CID})" \
+            > /etc/issue 2>/dev/null || true
         # Child VM: Route through parent VM (10.0.3.1).
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-        ip route add default via 10.0.3.1 dev diosix0 2>/dev/null || \
-            route add default gw 10.0.3.1 diosix0 2>/dev/null || true
+        ip route add default via "$CHILD_GW" dev diosix0 2>/dev/null || \
+            route add default gw "$CHILD_GW" diosix0 2>/dev/null || true
         # Configure DNS fallback.
         if [ ! -s /etc/resolv.conf ] || \
            grep -q "127.0.0.1" /etc/resolv.conf 2>/dev/null; then
             {
                 echo "nameserver 1.1.1.1"
                 echo "nameserver 8.8.8.8"
-                echo "nameserver 10.0.3.1"
+                echo "nameserver ${CHILD_GW}"
             } > /etc/resolv.conf
         fi
     fi
 
     # Automount host storage disk at /var/lib/diosix.
-    mkdir -p /var/lib/diosix /etc/diosix
+    mkdir -p "$STATE_DIR" "$ETC_DIR"
     for dev in /dev/vda2 /dev/vda1 /dev/vda /dev/sda2 /dev/sda1 /dev/sda \
         /dev/nvme0n1p2 /dev/nvme0n1p1 /dev/nvme0n1 \
         /dev/mmcblk0p2 /dev/mmcblk0p1 /dev/mmcblk0; do
         if [ -b "$dev" ]; then
-            if mount -o rw "$dev" /var/lib/diosix 2>/dev/null || \
-               mount "$dev" /var/lib/diosix 2>/dev/null; then
-                echo "Mounted persistent storage $dev on /var/lib/diosix."
-                SYS_TOML="/var/lib/diosix/manifests/system.toml"
-                if [ -f "$SYS_TOML" ] && [ ! -f /etc/diosix/system.toml ]; then
-                    ln -sf "$SYS_TOML" /etc/diosix/system.toml \
+            if mount -o rw "$dev" "$STATE_DIR" 2>/dev/null || \
+               mount "$dev" "$STATE_DIR" 2>/dev/null; then
+                echo "Mounted persistent storage $dev on $STATE_DIR."
+                SYS_TOML="${STATE_DIR}/manifests/system.toml"
+                if [ -f "$SYS_TOML" ] && [ ! -f "${ETC_DIR}/system.toml" ]; then
+                    ln -sf "$SYS_TOML" "${ETC_DIR}/system.toml" \
                         2>/dev/null || true
                 fi
                 break
@@ -161,30 +192,26 @@ case "$1" in
         fi
     done
 
-    mkdir -p /var/lib/diosix/images /var/lib/diosix/iso
-    if [ -f /usr/share/diosix/images/micro-guest.elf ] && \
-       [ ! -e /var/lib/diosix/images/micro-guest.elf ]; then
-        ln -sf /usr/share/diosix/images/micro-guest.elf \
-            /var/lib/diosix/images/micro-guest.elf 2>/dev/null || true
+    mkdir -p "${STATE_DIR}/images" "${STATE_DIR}/iso"
+    if [ -f "${SHARE_IMAGES_DIR}/micro-guest.elf" ] && \
+       [ ! -e "${STATE_DIR}/images/micro-guest.elf" ]; then
+        ln -sf "${SHARE_IMAGES_DIR}/micro-guest.elf" \
+            "${STATE_DIR}/images/micro-guest.elf" 2>/dev/null || true
     fi
-    if [ -f /usr/share/diosix/images/micro-guest.iso ] && \
-       [ ! -e /var/lib/diosix/iso/micro-guest.iso ]; then
-        ln -sf /usr/share/diosix/images/micro-guest.iso \
-            /var/lib/diosix/iso/micro-guest.iso 2>/dev/null || true
+    if [ -f "${SHARE_IMAGES_DIR}/micro-guest.iso" ] && \
+       [ ! -e "${STATE_DIR}/iso/micro-guest.iso" ]; then
+        ln -sf "${SHARE_IMAGES_DIR}/micro-guest.iso" \
+            "${STATE_DIR}/iso/micro-guest.iso" 2>/dev/null || true
     fi
-    GUEST_ELF="/var/lib/diosix/images/linux-guest.elf"
+    GUEST_ELF="${STATE_DIR}/images/linux-guest.elf"
     if [ -f "$GUEST_ELF" ]; then
         ln -sf "$GUEST_ELF" \
-            /var/lib/diosix/images/default.elf 2>/dev/null || true
+            "${STATE_DIR}/images/default.elf" 2>/dev/null || true
     fi
 
     # Configure Zero-Password Passkey & Parent-to-Child Management Keys.
-    KEY_DIR="/var/lib/diosix/keys"
-    MGT_KEY="${KEY_DIR}/id_management"
-    PASSKEYS="${KEY_DIR}/authorized_passkeys"
-    DEV_KEYS="${KEY_DIR}/dev_authorized_keys"
-    mkdir -p "$KEY_DIR" /etc/diosix/keys /run/diosix
-    chmod 700 "$KEY_DIR" /etc/diosix/keys 2>/dev/null || true
+    mkdir -p "$KEY_DIR" "${ETC_DIR}/keys" "$RUN_DIR"
+    chmod 700 "$KEY_DIR" "${ETC_DIR}/keys" 2>/dev/null || true
 
     if [ ! -f "$MGT_KEY" ] && command -v dropbearkey >/dev/null 2>&1; then
         dropbearkey -t ed25519 -f "$MGT_KEY" >/dev/null 2>&1 || true
@@ -197,12 +224,10 @@ case "$1" in
                 grep "^ssh-" > "${MGT_KEY}.pub" || true
             chmod 644 "${MGT_KEY}.pub" 2>/dev/null || true
         fi
-        ln -sf "$MGT_KEY" /etc/diosix/keys/id_management 2>/dev/null || true
+        ln -sf "$MGT_KEY" "${ETC_DIR}/keys/id_management" 2>/dev/null || true
         if [ -s "${MGT_KEY}.pub" ]; then
             ln -sf "${MGT_KEY}.pub" \
-                /etc/diosix/keys/id_management.pub 2>/dev/null || true
-            cat "${MGT_KEY}.pub" >> /root/.ssh/authorized_keys \
-                2>/dev/null || true
+                "${ETC_DIR}/keys/id_management.pub" 2>/dev/null || true
         fi
     fi
 
@@ -222,23 +247,22 @@ case "$1" in
         fi
 
         if [ -s "$PASSKEYS" ]; then
-            cat "$PASSKEYS" >> /root/.ssh/authorized_keys 2>/dev/null || true
+            cat "$PASSKEYS" >> "$AUTH_KEYS" 2>/dev/null || true
         fi
     else
         # Child VM: Extract parent management public key staged in manifest.
         if [ -n "$DSX_BIN" ]; then
             "$DSX_BIN" manifest show --cid 1 --hv 2>/dev/null | \
                 sed -n 's/^# diosix-authorized-key: //p' \
-                >> /root/.ssh/authorized_keys 2>/dev/null || true
+                >> "$AUTH_KEYS" 2>/dev/null || true
         fi
         if [ -s "$PASSKEYS" ]; then
-            cat "$PASSKEYS" >> /root/.ssh/authorized_keys 2>/dev/null || true
+            cat "$PASSKEYS" >> "$AUTH_KEYS" 2>/dev/null || true
         fi
     fi
 
-    sort -u /root/.ssh/authorized_keys \
-        -o /root/.ssh/authorized_keys 2>/dev/null || true
-    chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
+    sort -u "$AUTH_KEYS" -o "$AUTH_KEYS" 2>/dev/null || true
+    chmod 600 "$AUTH_KEYS" 2>/dev/null || true
     echo "Diosix guest services: OK"
     ;;
   stop)

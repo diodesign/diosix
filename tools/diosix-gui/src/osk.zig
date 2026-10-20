@@ -118,6 +118,9 @@ const SYM_ROW1 = "1234567890";
 const SYM_ROW2 = "/:;()$&@\"";
 const SYM_ROW3 = ".,?!'_~";
 
+/// Capacity of the OSK input line. It is a bounded text field: further key
+/// presses are ignored once full, and it is sized to fit the one-line OSK
+/// display label (Icon.text_buf) together with its "Input [layout]: " prefix.
 pub const MAX_OSK_BUFFER_LEN: usize = 128;
 
 pub const OskState = struct {

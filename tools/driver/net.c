@@ -47,7 +47,7 @@ static int diosix_net_stop(struct net_device *dev)
 static netdev_tx_t diosix_net_xmit(struct sk_buff *skb, struct net_device *dev)
 {
     struct diosix_net_priv *priv = netdev_priv(dev);
-    unsigned long dest_cid = 0;
+    unsigned long dest_cid = DIOSIX_CID_PARENT;
     unsigned char dest_mac[ETH_ALEN];
     struct sbiret ret;
     phys_addr_t pa;
@@ -59,14 +59,21 @@ static netdev_tx_t diosix_net_xmit(struct sk_buff *skb, struct net_device *dev)
         return NETDEV_TX_OK;
     }
 
+    /*
+     * Peer VMs use synthetic MAC 02:00:00:00:XX:YY encoding their 16-bit CID.
+     * Broadcast/multicast frames and upstream gateway frames route via
+     * DIOSIX_CID_PARENT (0).
+     */
     if (skb->len >= ETH_HLEN &&
         skb_copy_bits(skb, 0, dest_mac, ETH_ALEN) == 0) {
-        if (dest_mac[0] == DIOSIX_MAC_PREFIX_BYTE0 && dest_mac[1] == 0x00 &&
-            dest_mac[2] == 0x00 && dest_mac[3] == 0x00) {
+        if ((dest_mac[0] & 1) == 0 &&
+            dest_mac[0] == DIOSIX_MAC_PREFIX_BYTE0 &&
+            dest_mac[1] == 0x00 && dest_mac[2] == 0x00 &&
+            dest_mac[3] == 0x00) {
             dest_cid = ((unsigned long)dest_mac[4] << 8) |
                        (unsigned long)dest_mac[5];
-        } else if ((dest_mac[0] & 1) != 0) {
-            dest_cid = 0;
+        } else {
+            dest_cid = DIOSIX_CID_PARENT;
         }
     }
 
@@ -201,8 +208,10 @@ int init_diosix_net(void)
             0
         );
         if (ret.error == 0) {
-            self_cid = (info->assigned_cid > 0) ?
-                info->assigned_cid : DIOSIX_CID_SELF;
+            if (info->assigned_cid > 0)
+                self_cid = info->assigned_cid;
+            else if (info->guest_id > 0)
+                self_cid = info->guest_id;
         }
         kfree(info);
     }

@@ -21,7 +21,7 @@ pub fn init(base: usize) void {
 
 pub fn msip(hart: usize) ?*volatile u32 {
     const base = base_address orelse riscv.clint_base orelse return null;
-    const offset = std.math.mul(usize, 4, hart) catch return null;
+    const offset = std.math.mul(usize, @sizeOf(u32), hart) catch return null;
     const addr = std.math.add(usize, base, offset) catch return null;
     return @ptrFromInt(addr);
 }
@@ -29,7 +29,13 @@ pub fn msip(hart: usize) ?*volatile u32 {
 pub fn setTimer(hartid: usize, stime: u64) void {
     if (builtin.is_test) return;
     const base = base_address orelse riscv.clint_base orelse DEFAULT_BASE;
-    const addr = base + MTIMECMP_BASE_OFFSET + 8 * hartid;
+    const hart_off = std.math.mul(usize, @sizeOf(u64), hartid) catch return;
+    const mtimecmp_base = std.math.add(
+        usize,
+        base,
+        MTIMECMP_BASE_OFFSET,
+    ) catch return;
+    const addr = std.math.add(usize, mtimecmp_base, hart_off) catch return;
     const mtimecmp_ptr = @as(*volatile u64, @ptrFromInt(addr));
     mtimecmp_ptr.* = stime;
 }

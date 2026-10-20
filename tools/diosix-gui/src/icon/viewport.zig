@@ -7,6 +7,7 @@ const std = @import("std");
 const fb = @import("../framebuffer.zig");
 const font = @import("../font.zig");
 const icon_mod = @import("../icon.zig");
+const text_label = @import("../label.zig");
 const Icon = icon_mod.Icon;
 
 pub fn renderVideoViewport(
@@ -43,33 +44,33 @@ pub fn renderVideoViewport(
     const led_box = fb.Box.fromPosSize(sx + 10, sy + 7, 10, 10);
     surface.drawRoundedTranslucentBox(led_box, 5, led_col, 255, fb.Color.WHITE);
 
-    var hdr_buf: [96]u8 = undefined;
+    var hdr_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const name = self.getText();
     const hdr_text = if (self.video_has_signal)
         (if (self.width >= 600)
-            std.fmt.bufPrint(
+            text_label.fmtLabel(
                 &hdr_buf,
                 "VIRTUAL DISPLAY 0: {s} (VirtIO-GPU 2D 1024x768 @ 60Hz)",
                 .{name},
-            ) catch "VIRTUAL DISPLAY (VirtIO-GPU)"
+            )
         else
-            std.fmt.bufPrint(
+            text_label.fmtLabel(
                 &hdr_buf,
                 "DISPLAY: {s} (VirtIO-GPU 60Hz)",
                 .{name},
-            ) catch "DISPLAY (VirtIO-GPU)")
+            ))
     else if (self.width >= 600)
-        std.fmt.bufPrint(
+        text_label.fmtLabel(
             &hdr_buf,
             "VIRTUAL DISPLAY 0: {s} (HEADLESS / SERIAL CONSOLE ONLY)",
             .{name},
-        ) catch "VIRTUAL DISPLAY (HEADLESS)"
+        )
     else
-        std.fmt.bufPrint(
+        text_label.fmtLabel(
             &hdr_buf,
             "DISPLAY: {s} (HEADLESS / SERIAL)",
             .{name},
-        ) catch "DISPLAY (HEADLESS)";
+        );
 
     const hdr_w: u32 = if (self.width > 36) self.width - 36 else 0;
     const hdr_clip = surface.pushClip(
@@ -204,12 +205,12 @@ fn renderActiveViewport(
         surface.fillBox(dot_a, fb.Color.ACCENT_AMBER);
         surface.fillBox(dot_g, fb.Color.ACCENT_GREEN);
 
-        var term_title_buf: [64]u8 = undefined;
-        const ttitle = std.fmt.bufPrint(
+        var term_title_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+        const ttitle = text_label.fmtLabel(
             &term_title_buf,
             "Console: root@{s}:~",
             .{self.getText()},
-        ) catch "Console: root@guest:~";
+        );
         font.drawText(surface, ttitle, term_x + 50, term_y + 3, fb.Color.WHITE);
 
         const l1_y = term_y + 26;
@@ -243,12 +244,12 @@ fn renderActiveViewport(
             );
         }
         if (term_h > 90) {
-            var ps_buf: [64]u8 = undefined;
-            const ps = std.fmt.bufPrint(
+            var ps_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+            const ps = text_label.fmtLabel(
                 &ps_buf,
                 "2    {s:<10} RUNNING  2      256MB  10.0.3.2",
                 .{self.getText()},
-            ) catch "";
+            );
             font.drawText(surface, ps, term_x + 10, l1_y + 48, fb.Color.WHITE);
         }
         if (term_h > 110) {

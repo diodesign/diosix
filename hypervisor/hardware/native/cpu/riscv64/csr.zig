@@ -63,13 +63,6 @@ pub inline fn flushIcache() void {
     asm volatile ("fence.i");
 }
 
-pub inline fn readRA() usize {
-    if (is_test) return 0;
-    return asm volatile ("mv %[ret], ra"
-        : [ret] "=r" (-> usize),
-    );
-}
-
 pub inline fn readMepc() usize {
     if (is_test) return test_mepc;
     return asm volatile ("csrr %[ret], mepc"
@@ -193,7 +186,7 @@ pub fn hasHExtension() bool {
 pub fn getPreviousPrivilege() PrivilegeMode {
     const mstatus = readMstatus();
     const raw_mpp = (mstatus & MSTATUS.MPP_MASK) >> MSTATUS.MPP_SHIFT;
-    return @fromBackingInt(@intCast(raw_mpp));
+    return std.enums.fromInt(PrivilegeMode, raw_mpp) orelse .user;
 }
 
 pub inline fn writeMcounteren(val: usize) void {
@@ -318,6 +311,8 @@ test "M-mode and H-extension mock CSR read/write and privilege decoding" {
     try testing.expect(hasHExtension());
     writeMstatus(@as(usize, 1) << MSTATUS.MPP_SHIFT);
     try testing.expectEqual(PrivilegeMode.supervisor, getPreviousPrivilege());
+    writeMstatus(@as(usize, 2) << MSTATUS.MPP_SHIFT);
+    try testing.expectEqual(PrivilegeMode.user, getPreviousPrivilege());
 
     writeMepc(0x80200000);
     try testing.expectEqual(@as(usize, 0x80200000), readMepc());

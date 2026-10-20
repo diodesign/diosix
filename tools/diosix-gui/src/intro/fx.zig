@@ -45,6 +45,7 @@ pub fn interpolateColor(c1: u32, c2: u32, factor: f32) u32 {
 
 // Draws the luminous horizontal horizon light beam across the screen.
 pub fn drawHorizonBeam(surface: *fb.Surface, t: u32, w: u32, h: u32) void {
+    if (t < 400 or t > 3800 or w == 0 or h == 0) return;
     const center_y: i32 = @intCast(h / 2);
 
     // Intensity profile: rises 500ms -> 2000ms (Peak 1), relaxes -> 3500ms.

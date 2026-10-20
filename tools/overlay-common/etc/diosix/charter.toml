@@ -3,6 +3,9 @@
 # Sealed in the M-mode hypervisor via `dsx charter deploy`
 # (`DIOSIX.SEAL_CHARTER`). Once sealed, any Steward termination, quota
 # reduction, or Charter amendment requires M-of-N Steward quorum ratification.
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
 
 [charter]
 id = "autonomous-mesh-01"

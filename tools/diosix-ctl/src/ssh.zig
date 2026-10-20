@@ -8,11 +8,46 @@ const linux = std.os.linux;
 const api = @import("api.zig");
 const manifest = @import("manifest.zig");
 const common = @import("common.zig");
+const sysconfig = @import("sysconfig.zig");
 const ssh_sync = @import("ssh/sync.zig");
 
 pub const copyFileOverSsh = ssh_sync.copyFileOverSsh;
 pub const ensureGuestDefaultImage = ssh_sync.ensureGuestDefaultImage;
+pub const parseIpv4 = ssh_sync.parseIpv4;
+pub const isSshPortOpen = ssh_sync.isSshPortOpen;
 
+const MAX_SSH_TOKEN_LEN: usize = 64;
+
+/// Validates an SSH username to prevent option injection or shell metacharacter
+/// attacks (`[A-Za-z0-9._-]`, non-empty, not starting with `-`).
+pub fn isValidSshUsername(name: []const u8) bool {
+    if (name.len == 0 or name.len > MAX_SSH_TOKEN_LEN or name[0] == '-') {
+        return false;
+    }
+    for (name) |c| {
+        const ok = std.ascii.isAlphanumeric(c) or
+            c == '.' or c == '_' or c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+/// Validates an SSH host IP literal (`[0-9a-fA-F.:]` or `"localhost"`,
+/// non-empty, not starting with `-`).
+pub fn isValidSshIp(ip: []const u8) bool {
+    if (ip.len == 0 or ip.len > MAX_SSH_TOKEN_LEN or ip[0] == '-') {
+        return false;
+    }
+    if (std.mem.eql(u8, ip, "localhost")) return true;
+    for (ip) |c| {
+        const ok = std.ascii.isHex(c) or c == '.' or c == ':';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+/// Holds the configured private key path; `MAX_PATH_LEN` is the Linux
+/// PATH_MAX, so any path the kernel accepts fits.
 var private_key_buf: [common.MAX_PATH_LEN]u8 = undefined;
 
 pub fn findPrivateKey() ?[]const u8 {
@@ -26,15 +61,21 @@ pub fn findPrivateKey() ?[]const u8 {
         if (common.toPathZ(cfg_key, &z_buf)) |kz| {
             if (common.fileExistsPath(kz.ptr)) return cfg_key;
         }
-    } else |_| {}
+    } else |_| {
+        common.printStr("Warning: Keys directory path too long.\n");
+    }
 
-    const fallback: [:0]const u8 = "/etc/diosix/keys/id_management";
+    const fallback: [:0]const u8 = sysconfig.ETC_MANAGEMENT_PRIVKEY_PATH;
     if (common.fileExistsPath(fallback.ptr)) return fallback;
     return null;
 }
 
 fn redirectStderrToDevNull() void {
-    const devnull_res = linux.open("/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    const devnull_res = linux.open(
+        sysconfig.DEV_NULL_PATH,
+        .{ .ACCMODE = .WRONLY },
+        0,
+    );
     const devnull_signed: isize = @bitCast(devnull_res);
     if (devnull_signed >= 0) {
         const fd: i32 = @intCast(devnull_signed);
@@ -54,21 +95,17 @@ pub fn runSshCommand(
     if (pid_signed < 0) return 255;
     if (pid_signed == 0) {
         if (silence_stderr) redirectStderrToDevNull();
-        const ssh_bins = [_][*:0]const u8{
-            "/usr/bin/ssh",
-            "/usr/bin/dbclient",
-            "/bin/ssh",
-            "/usr/sbin/dropbear",
-        };
         const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
             "TERM=xterm",
             "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
             null,
         };
-        for (ssh_bins) |bin| {
-            var argv_buf: [8:null]?[*:0]const u8 = @splat(null);
+        for (sysconfig.SSH_CLIENT_BINS) |bin| {
+            var z_bin_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            const bin_z = common.toPathZ(bin, &z_bin_buf) orelse continue;
+            var argv_buf: [10:null]?[*:0]const u8 = @splat(null);
             var argc: usize = 0;
-            argv_buf[argc] = bin;
+            argv_buf[argc] = bin_z.ptr;
             argc += 1;
             if (key_str) |ks| {
                 argv_buf[argc] = "-i";
@@ -76,14 +113,15 @@ pub fn runSshCommand(
                 argc += 2;
             }
             argv_buf[argc] = "-y";
-            argv_buf[argc + 1] = dest_str.ptr;
-            argc += 2;
+            argv_buf[argc + 1] = "--";
+            argv_buf[argc + 2] = dest_str.ptr;
+            argc += 3;
             if (cmd_str) |cs| {
                 argv_buf[argc] = cs.ptr;
                 argc += 1;
             }
             argv_buf[argc] = null;
-            _ = linux.execve(bin, &argv_buf, envp);
+            _ = linux.execve(bin_z.ptr, &argv_buf, envp);
         }
         linux.exit(127);
     }
@@ -101,118 +139,34 @@ pub fn runSshCommand(
     return if (status == 0) 0 else 1;
 }
 
-pub fn parseIpv4(s: []const u8) ?u32 {
-    var parts: [4]u8 = undefined;
-    var part_idx: usize = 0;
-    var cur_val: u32 = 0;
-    var has_digits = false;
-
-    for (s) |c| {
-        if (c >= '0' and c <= '9') {
-            cur_val = cur_val * 10 + (c - '0');
-            if (cur_val > 255) return null;
-            has_digits = true;
-        } else if (c == '.') {
-            if (!has_digits or part_idx >= 3) return null;
-            parts[part_idx] = @intCast(cur_val);
-            part_idx += 1;
-            cur_val = 0;
-            has_digits = false;
-        } else {
-            return null;
-        }
-    }
-    if (!has_digits or part_idx != 3) return null;
-    parts[3] = @intCast(cur_val);
-    return @as(u32, parts[0]) |
-        (@as(u32, parts[1]) << 8) |
-        (@as(u32, parts[2]) << 16) |
-        (@as(u32, parts[3]) << 24);
-}
-
-pub fn isSshPortOpen(ip_str: []const u8) bool {
-    const ip_addr = parseIpv4(ip_str) orelse return false;
-    const sock_flags =
-        linux.SOCK.STREAM | linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC;
-    const fd_res = linux.socket(linux.AF.INET, sock_flags, 0);
-    const fd_signed: isize = @bitCast(fd_res);
-    if (fd_signed < 0) return false;
-    const fd: i32 = @intCast(fd_signed);
-    defer _ = linux.close(fd);
-
-    var addr: linux.sockaddr.in = undefined;
-    addr.family = linux.AF.INET;
-    addr.port = std.mem.nativeToBig(u16, 22);
-    addr.addr = ip_addr;
-
-    const connect_res = linux.connect(
-        fd,
-        @ptrCast(&addr),
-        @sizeOf(linux.sockaddr.in),
-    );
-    const connect_signed: isize = @bitCast(connect_res);
-    if (connect_signed == 0) return true;
-
-    const neg_rc: usize = @bitCast(-connect_signed);
-    const err_code: u32 = @truncate(neg_rc);
-    if (err_code == @backingInt(linux.E.INPROGRESS)) {
-        var pfd = [_]linux.pollfd{.{
-            .fd = fd,
-            .events = linux.POLL.OUT,
-            .revents = 0,
-        }};
-        const poll_res = linux.poll(&pfd, 1, 1000);
-        const poll_signed: isize = @bitCast(poll_res);
-        const revents = pfd[0].revents;
-        const ready = (revents & linux.POLL.OUT) != 0 and
-            (revents & (linux.POLL.ERR | linux.POLL.HUP)) == 0;
-        if (poll_signed > 0 and ready) {
-            var so_error: i32 = 0;
-            var optlen: u32 = @sizeOf(i32);
-            _ = linux.getsockopt(
-                fd,
-                linux.SOL.SOCKET,
-                linux.SO.ERROR,
-                @ptrCast(&so_error),
-                &optlen,
-            );
-            return so_error == 0;
-        }
-    }
-    return false;
-}
-
 pub fn execSsh(
     key_path: ?[]const u8,
     username: []const u8,
     ip_addr: []const u8,
     remote_cmd: ?[]const u8,
 ) !void {
-    var key_buf: [128]u8 = undefined;
+    if (!isValidSshUsername(username) or !isValidSshIp(ip_addr)) {
+        return error.InvalidSshTarget;
+    }
+    const allocator = std.heap.page_allocator;
     const key_str: ?[:0]const u8 = if (key_path) |kp|
-        (common.toPathZ(kp, &key_buf) orelse return error.PathTooLong)
+        try allocator.dupeSentinel(u8, kp, 0)
     else
         null;
+    defer if (key_str) |ks| allocator.free(ks);
 
-    var dest_buf: [128]u8 = undefined;
-    const dest_slice = try std.fmt.bufPrint(
-        dest_buf[0 .. dest_buf.len - 1],
+    const dest_str = try allocator.printSentinel(
         "{s}@{s}",
         .{ username, ip_addr },
+        0,
     );
-    dest_buf[dest_slice.len] = 0;
-    const dest_str: [:0]const u8 = dest_buf[0..dest_slice.len :0];
+    defer allocator.free(dest_str);
 
-    var cmd_buf: [512]u8 = undefined;
-    const cmd_str: ?[:0]const u8 = if (remote_cmd) |rc| blk: {
-        const cs = try std.fmt.bufPrint(
-            cmd_buf[0 .. cmd_buf.len - 1],
-            "{s}",
-            .{rc},
-        );
-        cmd_buf[cs.len] = 0;
-        break :blk cmd_buf[0..cs.len :0];
-    } else null;
+    const cmd_str: ?[:0]const u8 = if (remote_cmd) |rc|
+        try allocator.dupeSentinel(u8, rc, 0)
+    else
+        null;
+    defer if (cmd_str) |cs| allocator.free(cs);
 
     const LoopbackHost = enum { @"127.0.0.1", localhost };
     const is_local = std.meta.stringToEnum(LoopbackHost, ip_addr) != null;
@@ -256,19 +210,17 @@ pub fn execSsh(
     _ = runSshCommand(key_str, dest_str, cmd_str, false);
 }
 
-fn joinArgs(slice: []const [*:0]const u8, buf: []u8) []const u8 {
-    var buf_len: usize = 0;
+fn joinArgs(
+    allocator: std.mem.Allocator,
+    slice: []const [*:0]const u8,
+) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
     for (slice) |arg| {
-        const s = std.mem.span(arg);
-        if (buf_len > 0 and buf_len < buf.len) {
-            buf[buf_len] = ' ';
-            buf_len += 1;
-        }
-        const copy_len = @min(s.len, buf.len - buf_len);
-        @memcpy(buf[buf_len .. buf_len + copy_len], s[0..copy_len]);
-        buf_len += copy_len;
+        if (out.items.len > 0) try out.append(allocator, ' ');
+        try out.appendSlice(allocator, std.mem.span(arg));
     }
-    return buf[0..buf_len];
+    return out.toOwnedSlice(allocator);
 }
 
 pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
@@ -276,22 +228,23 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const sys_cfg = common.loadRuntimeSystemConfig();
     _ = client;
     if (args.len == 0) {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf,
+        common.printFmt(
             \\Usage: {s} ssh [user@]<name|cid> [-- [command...]]
             \\       {s} ssh [--user <username>] <name|cid> [-- [command...]]
             \\
-        , .{ exe_name, exe_name }) catch return;
-        common.printStr(msg);
+        , .{ exe_name, exe_name });
         return;
     }
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     const SshOption = enum { @"--user", @"-u", @"--" };
     var target_arg: []const u8 = "";
     var username: []const u8 = "root";
     var remote_cmd: ?[]const u8 = null;
 
-    var cmd_str_buf: [512]u8 = undefined;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const span = std.mem.span(args[i]);
@@ -309,7 +262,7 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 },
                 .@"--" => {
                     if (i + 1 < args.len) {
-                        remote_cmd = joinArgs(args[i + 1 ..], &cmd_str_buf);
+                        remote_cmd = try joinArgs(allocator, args[i + 1 ..]);
                     }
                     break;
                 },
@@ -320,30 +273,24 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             remote_cmd == null and
             !std.mem.startsWith(u8, span, "-"))
         {
-            remote_cmd = joinArgs(args[i..], &cmd_str_buf);
+            remote_cmd = try joinArgs(allocator, args[i..]);
             break;
         } else if (std.mem.startsWith(u8, span, "-")) {
-            var err_buf: [160]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(
-                &err_buf,
+            common.printFmt(
                 "Error: Unknown option '{s}'. " ++
                     "Usage: {s} ssh [user@]<name|cid> [-- [cmd...]]\n",
                 .{ span, exe_name },
-            ) catch "Error: Unknown option.\n";
-            common.printStr(err_msg);
+            );
             return;
         }
     }
 
     if (target_arg.len == 0) {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
+        common.printFmt(
             "Error: No target VM specified. " ++
                 "Usage: {s} ssh [user@]<name|cid>\n",
             .{exe_name},
-        ) catch return;
-        common.printStr(msg);
+        );
         return;
     }
 
@@ -352,13 +299,14 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         username = target_arg[0..at_idx];
         target_str = target_arg[at_idx + 1 ..];
     }
+    if (!isValidSshUsername(username)) {
+        common.printStr("Error: Invalid SSH username.\n");
+        return;
+    }
 
     var resolved_cid: usize = common.parseCid(target_str) catch 0;
     var resolved_name: []const u8 = target_str;
     var resolved_ip: []const u8 = "";
-
-    var ip_storage: [64]u8 = undefined;
-    var name_storage: [64]u8 = undefined;
 
     const SelfAlias = enum { root, self };
     const is_self = std.meta.stringToEnum(SelfAlias, target_str) != null or
@@ -378,8 +326,8 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         while (iter.next()) |e| {
             if (common.matchTarget(target_str, resolved_cid, e.cid, e.name)) {
                 resolved_cid = e.cid;
-                resolved_name = common.copyStr(&name_storage, e.name);
-                resolved_ip = common.copyStr(&ip_storage, e.ip);
+                resolved_name = try allocator.dupe(u8, e.name);
+                resolved_ip = try allocator.dupe(u8, e.ip);
                 break;
             }
         }
@@ -391,16 +339,15 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             common.MAX_MANIFEST_SIZE,
         )) |content| {
             defer common.unmapBinaryFile(content);
-            const allocator = std.heap.page_allocator;
             if (manifest.parseSystemManifest(allocator, content)) |sys_m_val| {
                 var sys_m = sys_m_val;
                 defer sys_m.deinit();
                 if (sys_m.domains.get(target_str)) |dom| {
                     if (dom.ip.len > 0) {
-                        resolved_ip = common.copyStr(&ip_storage, dom.ip);
+                        resolved_ip = try allocator.dupe(u8, dom.ip);
                     }
                     if (dom.name.len > 0) {
-                        resolved_name = common.copyStr(&name_storage, dom.name);
+                        resolved_name = try allocator.dupe(u8, dom.name);
                     }
                 }
             } else |_| {}
@@ -409,55 +356,51 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
     if (resolved_ip.len == 0) {
         if (resolved_cid >= common.CID_FIRST_CHILD) {
-            resolved_ip = std.fmt.bufPrint(
-                &ip_storage,
+            resolved_ip = try allocator.print(
                 "{s}{d}",
                 .{ sys_cfg.subnetPrefix(), resolved_cid },
-            ) catch "10.0.3.2";
+            );
         } else if (is_self) {
             resolved_ip = "127.0.0.1";
         } else {
-            var err_buf: [160]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(
-                &err_buf,
+            common.printFmt(
                 "Error: Guest '{s}' not found. " ++
                     "Use '{s} list' to view running guests.\n",
                 .{ target_str, exe_name },
-            ) catch "Error: Guest not found.\n";
-            common.printStr(err_msg);
+            );
             return;
         }
     }
 
-    const key_file = findPrivateKey();
+    if (!isValidSshIp(resolved_ip)) {
+        common.printStr("Error: Invalid guest IP address for SSH.\n");
+        return;
+    }
 
+    const key_file = findPrivateKey();
     if (remote_cmd) |rc| {
-        var msg_buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &msg_buf,
+        common.printFmt(
             "Connecting to guest '{s}' ({s}) as '{s}': {s}\n",
             .{ resolved_name, resolved_ip, username, rc },
-        ) catch return;
-        common.printStr(msg);
+        );
     } else {
-        var msg_buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &msg_buf,
+        common.printFmt(
             "Connecting to guest '{s}' ({s}) as '{s}' via SSH...\n",
             .{ resolved_name, resolved_ip, username },
-        ) catch return;
-        common.printStr(msg);
+        );
     }
 
     try execSsh(key_file, username, resolved_ip, remote_cmd);
 }
 
-test "ssh: parseIpv4 validates dotted-quad addresses" {
+test "ssh: parseIpv4, isValidSshUsername, and isValidSshIp validate inputs" {
     std.testing.refAllDecls(@This());
     _ = ssh_sync;
     try std.testing.expect(parseIpv4("127.0.0.1") != null);
     try std.testing.expect(parseIpv4("10.0.3.2") != null);
     try std.testing.expect(parseIpv4("256.0.0.1") == null);
-    try std.testing.expect(parseIpv4("10.0.3") == null);
-    try std.testing.expect(parseIpv4("invalid") == null);
+    try std.testing.expect(isValidSshUsername("root"));
+    try std.testing.expect(!isValidSshUsername("-oProxyCommand=evil"));
+    try std.testing.expect(isValidSshIp("10.0.3.2"));
+    try std.testing.expect(!isValidSshIp("-oProxyCommand=evil"));
 }

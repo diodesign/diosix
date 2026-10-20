@@ -40,6 +40,7 @@ pub const sanitizeJsonStr = common.sanitizeJsonStr;
 pub const parseIpv4 = ssh.parseIpv4;
 
 const printStr = common.printStr;
+const printFmt = common.printFmt;
 const parseCid = common.parseCid;
 const getExeName = common.getExeName;
 
@@ -128,14 +129,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
             },
             .resolve => {
                 if (argv.len < 3) {
-                    var buf: [128]u8 = undefined;
-                    const msg = std.fmt.bufPrint(
-                        &buf,
+                    printFmt(
                         "Usage: {s} manifest resolve <service_alias> " ++
                             "[--manifest <file.toml>]\n",
                         .{getExeName()},
-                    ) catch return;
-                    printStr(msg);
+                    );
                     return;
                 }
                 const service_name = std.mem.span(argv[2]);
@@ -166,13 +164,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
                         }
                     }
                     target_cid = parseCid(span) catch {
-                        var err_buf: [128]u8 = undefined;
-                        const err_msg = std.fmt.bufPrint(
-                            &err_buf,
+                        printFmt(
                             "Error: Invalid target CID '{s}'.\n",
                             .{span},
-                        ) catch "Error: Invalid target CID.\n";
-                        printStr(err_msg);
+                        );
                         return;
                     };
                 }
@@ -184,20 +179,29 @@ pub fn main(init: std.process.Init.Minimal) !void {
             .help, .@"--help", .@"-h" => printUsage(),
         }
     } else {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
+        printFmt(
             "Unknown command '{s}'. Use '{s} help' for available commands.\n",
             .{ command_raw, getExeName() },
-        ) catch return;
-        printStr(msg);
+        );
     }
 }
 
 fn printUsage() void {
-    const exe_name = getExeName();
-    var buf: [4096]u8 = undefined;
-    const usage = std.fmt.bufPrint(&buf,
+    const allocator = std.heap.page_allocator;
+    const usage = formatUsage(allocator, getExeName()) catch {
+        printStr("Error: Out of memory while printing help.\n");
+        return;
+    };
+    defer allocator.free(usage);
+    printStr(usage);
+}
+
+/// Formats the help text. The caller owns the returned slice.
+pub fn formatUsage(
+    allocator: std.mem.Allocator,
+    exe_name: []const u8,
+) ![]u8 {
+    return allocator.print(
         \\{s}: Diosix type-1 hypervisor guest management CLI
         \\
         \\Usage:
@@ -284,8 +288,19 @@ fn printUsage() void {
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
-    }) catch return;
-    printStr(usage);
+    });
+}
+
+test "help text is formatted in full and is not truncated" {
+    const usage = try formatUsage(std.testing.allocator, "dsx");
+    defer std.testing.allocator.free(usage);
+
+    // Regression: help text once exceeded a 4096-byte stack buffer, so the
+    // format call failed and the error was silently swallowed.
+    try std.testing.expect(usage.len > 4096);
+    try std.testing.expect(std.mem.startsWith(u8, usage, "dsx: Diosix"));
+    try std.testing.expect(std.mem.indexOf(u8, usage, "dsx help") != null);
+    try std.testing.expect(std.mem.indexOf(u8, usage, "{s}") == null);
 }
 
 test {

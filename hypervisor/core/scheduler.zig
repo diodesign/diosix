@@ -167,7 +167,6 @@ fn canRunOnCpu(
     if ((req & misa) != req) return false;
     if (!builtin.is_test and
         vc.guest.is_root and
-        pcore.fromHartId(vc.id) != null and
         vc.id != pc.hardware_hart_id)
     {
         return false;

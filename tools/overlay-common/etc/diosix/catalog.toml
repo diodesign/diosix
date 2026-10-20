@@ -12,6 +12,9 @@
 # Administrators and operator agents may edit this file to point `url` and
 # `sha256` fields at upstream OS distribution mirrors, local LAN HTTPS/HTTP
 # servers, or `file://` paths without recompiling `dsx`.
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
 
 [[image]]
 id = "steward"

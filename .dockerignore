@@ -1,7 +1,7 @@
-# Ignore local build caches and artifacts to prevent GLIBC version mismatch errors in the container
+# Ignore local build caches and output artifacts in container builds.
 .zig-cache/
 zig-out/
 
-# Ignore debug logs
-*.txt
+# Ignore local debug logs and custom agent files.
 *.log
+.agents

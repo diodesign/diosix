@@ -9,8 +9,10 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const console = @import("console.zig");
+const sysconfig = @import("sysconfig.zig");
 
-pub const INSTALL_RECEIPT_PATH = "/var/lib/diosix/install-receipt.toml";
+pub const INSTALL_RECEIPT_PATH = sysconfig.INSTALL_RECEIPT_PATH;
 pub const DEFAULT_BOOT_PART_MB: usize = 256;
 pub const DEFAULT_STATE_PART_MB: usize = 512;
 
@@ -37,7 +39,7 @@ pub const InstallMode = enum {
 
 pub const InstallPlan = struct {
     mode: InstallMode = .basic,
-    target_disk: []const u8 = "/dev/vda",
+    target_disk: []const u8 = sysconfig.DEFAULT_TARGET_DISK,
     hostname: []const u8 = "diosix-host",
     seat_profile: []const u8 = "desktop-kbd",
     boot_part_mb: usize = DEFAULT_BOOT_PART_MB,
@@ -70,9 +72,9 @@ fn unquoteTomlValue(raw: []const u8) []const u8 {
 /// shell metacharacters).
 pub fn isValidBlockDevicePath(path: []const u8) bool {
     if (path.len < 6 or path.len > 128) return false;
-    if (!std.mem.startsWith(u8, path, "/dev/") and
+    if (!std.mem.startsWith(u8, path, sysconfig.DEV_DIR_PREFIX) and
         !std.mem.startsWith(u8, path, "/tmp/") and
-        !std.mem.startsWith(u8, path, "/var/lib/diosix/"))
+        !std.mem.startsWith(u8, path, sysconfig.VAR_LIB_DIOSIX_PREFIX))
     {
         return false;
     }
@@ -172,10 +174,12 @@ pub fn parseInstallConfigToml(content: []const u8) InstallPlan {
 }
 
 /// Formats the `/var/lib/diosix/install-receipt.toml` manifest for a completed
-/// host installation.
-pub fn formatInstallReceiptToml(buf: []u8, plan: InstallPlan) []const u8 {
-    return std.fmt.bufPrint(
-        buf,
+/// host installation. The caller owns the returned slice.
+pub fn allocInstallReceiptToml(
+    allocator: std.mem.Allocator,
+    plan: InstallPlan,
+) ![]u8 {
+    return allocator.print(
         \\# Diosix Host Installation Receipt
         \\[install]
         \\mode = "{s}"
@@ -202,15 +206,16 @@ pub fn formatInstallReceiptToml(buf: []u8, plan: InstallPlan) []const u8 {
             if (plan.enable_stewards) "true" else "false",
             if (plan.standby_root_vm) "true" else "false",
         },
-    ) catch "";
+    );
 }
 
-/// Formats the human-readable or JSON output for `dsx host install`.
-pub fn formatInstallPlanOutput(
-    buf: []u8,
+/// Formats the human-readable or JSON output for `dsx host install`. The
+/// caller owns the returned slice.
+pub fn allocInstallPlanOutput(
+    allocator: std.mem.Allocator,
     plan: InstallPlan,
     json_mode: bool,
-) []const u8 {
+) ![]u8 {
     const p_sep: []const u8 =
         if (std.mem.indexOf(u8, plan.target_disk, "nvme") != null or
         std.mem.indexOf(u8, plan.target_disk, "mmcblk") != null)
@@ -229,8 +234,7 @@ pub fn formatInstallPlanOutput(
             "{{\"label\":\"DIOSIX_DATA\",\"dev\":\"{s}{s}3\"," ++
             "\"size_mb\":\"remaining\"}}]," ++
             "\"enable_stewards\":{s},\"standby_root_vm\":{s}}}\n";
-        return std.fmt.bufPrint(
-            buf,
+        return allocator.print(
             json_fmt,
             .{
                 if (plan.dry_run) "dry_run" else "installed",
@@ -251,7 +255,7 @@ pub fn formatInstallPlanOutput(
                 if (plan.enable_stewards) "true" else "false",
                 if (plan.standby_root_vm) "true" else "false",
             },
-        ) catch "";
+        );
     }
 
     const steward_str = if (plan.enable_stewards)
@@ -283,8 +287,7 @@ pub fn formatInstallPlanOutput(
         "  Standby Root VM  : {s}\n" ++
         "{s}\n";
 
-    return std.fmt.bufPrint(
-        buf,
+    return allocator.print(
         text_fmt,
         .{
             plan.mode.label(),
@@ -305,7 +308,7 @@ pub fn formatInstallPlanOutput(
             standby_str,
             status_str,
         },
-    ) catch "";
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -345,8 +348,8 @@ test "parseInstallConfigToml and formatInstallPlanOutput support modes" {
     try testing.expect(plan.enable_stewards);
     try testing.expect(plan.standby_root_vm);
 
-    var out_buf: [1024]u8 = undefined;
-    const json_out = formatInstallPlanOutput(&out_buf, plan, true);
+    const json_out = try allocInstallPlanOutput(testing.allocator, plan, true);
+    defer testing.allocator.free(json_out);
     try testing.expect(
         std.mem.indexOf(u8, json_out, "\"dev\":\"/dev/nvme0n1p1\"") != null,
     );
@@ -354,12 +357,19 @@ test "parseInstallConfigToml and formatInstallPlanOutput support modes" {
         std.mem.indexOf(u8, json_out, "\"enable_stewards\":true") != null,
     );
 
-    const text_out = formatInstallPlanOutput(&out_buf, plan, false);
+    const text_out = try allocInstallPlanOutput(testing.allocator, plan, false);
+    defer testing.allocator.free(text_out);
     try testing.expect(
         std.mem.indexOf(
             u8,
             text_out,
             "/dev/nvme0n1p1 (DIOSIX_BOOT, 512 MB",
         ) != null,
+    );
+
+    const receipt = try allocInstallReceiptToml(testing.allocator, plan);
+    defer testing.allocator.free(receipt);
+    try testing.expect(
+        std.mem.indexOf(u8, receipt, "boot_part_mb = 512") != null,
     );
 }

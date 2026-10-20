@@ -11,6 +11,7 @@ const Window = window_mod.Window;
 const host_info = @import("../host.zig");
 const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
+const json = @import("json.zig");
 
 const WIN_HELP_ID = gui_mod.WIN_HELP_ID;
 const WIN_VM_FLEET_ID = gui_mod.WIN_VM_FLEET_ID;
@@ -135,36 +136,42 @@ pub fn handleMouseMove(
     }
 
     if (self.active_drag_win_id) |drag_win_id| {
-        for (self.windows.items) |*win| {
-            if (!win.is_onscreen) continue;
-            if (win.id == drag_win_id) {
-                if (win.handleMouseMove(self, px, py, left_down)) {
-                    self.markDirty(win.getBox());
+        var idx: usize = 0;
+        while (idx < self.windows.items.len) : (idx += 1) {
+            const wid = self.windows.items[idx].id;
+            if (!self.windows.items[idx].is_onscreen) continue;
+            if (wid == drag_win_id) {
+                const moved = self.windows.items[idx].handleMouseMove(
+                    self,
+                    px,
+                    py,
+                    left_down,
+                );
+                if (moved) {
+                    if (self.getWindow(wid)) |w| self.markDirty(w.getBox());
                 }
-            } else if (win.clearHover()) {
-                self.markDirty(win.getBox());
+            } else if (self.windows.items[idx].clearHover()) {
+                self.markDirty(self.windows.items[idx].getBox());
             }
         }
     } else {
-        var top_win_idx: ?usize = null;
-        var i = self.windows.items.len;
-        while (i > 0) : (i -= 1) {
-            const win_idx = i - 1;
-            const win = &self.windows.items[win_idx];
-            if (win.is_onscreen and win.contains(px, py)) {
-                top_win_idx = win_idx;
-                break;
-            }
-        }
-
-        for (self.windows.items, 0..) |*win, idx| {
-            if (!win.is_onscreen) continue;
-            if (top_win_idx != null and top_win_idx.? == idx) {
-                if (win.handleMouseMove(self, px, py, left_down)) {
-                    self.markDirty(win.getBox());
+        const top_win_id = if (findWindowAt(self, px, py)) |w| w.id else null;
+        var idx: usize = 0;
+        while (idx < self.windows.items.len) : (idx += 1) {
+            const wid = self.windows.items[idx].id;
+            if (!self.windows.items[idx].is_onscreen) continue;
+            if (top_win_id != null and top_win_id.? == wid) {
+                const moved = self.windows.items[idx].handleMouseMove(
+                    self,
+                    px,
+                    py,
+                    left_down,
+                );
+                if (moved) {
+                    if (self.getWindow(wid)) |w| self.markDirty(w.getBox());
                 }
-            } else if (win.clearHover()) {
-                self.markDirty(win.getBox());
+            } else if (self.windows.items[idx].clearHover()) {
+                self.markDirty(self.windows.items[idx].getBox());
             }
         }
     }
@@ -183,21 +190,30 @@ pub fn handleMouseClick(self: *DiosixGui, px: i32, py: i32) void {
         const win = &self.windows.items[win_idx];
         if (win.is_onscreen and win.contains(px, py)) {
             hit_any_win = true;
+            const clicked_win_id = win.id;
+            const old_box = win.getBox();
             if (win.hasInteractiveIcons() or win.isScrollable()) {
                 focusWindow(self, win_idx);
             }
-            _ = win.handleMouseClick(self, px, py);
-            if (win.active_drag_icon_idx != null or
-                win.is_dragging_scrollbar)
-            {
-                self.active_drag_win_id = win.id;
+            if (self.getWindow(clicked_win_id)) |target_win| {
+                _ = target_win.handleMouseClick(self, px, py);
+            }
+            if (self.getWindow(clicked_win_id)) |after_win| {
+                if (after_win.active_drag_icon_idx != null or
+                    after_win.is_dragging_scrollbar)
+                {
+                    self.active_drag_win_id = after_win.id;
+                } else {
+                    self.active_drag_win_id = null;
+                }
+                self.markDirty(after_win.getBox());
             } else {
                 self.active_drag_win_id = null;
+                self.markDirty(old_box);
             }
-            self.markDirty(win.getBox());
 
-            for (self.windows.items, 0..) |*other, other_idx| {
-                if (other_idx != win_idx) {
+            for (self.windows.items) |*other| {
+                if (other.id != clicked_win_id) {
                     if (other.handleMouseRelease()) {
                         self.markDirty(other.getBox());
                     }
@@ -306,33 +322,27 @@ pub fn selectVm(self: *DiosixGui, vm_id: u32) void {
 }
 
 pub fn handleVmAction(self: *DiosixGui, action_icon_id: u32) void {
+    const m_create = "Launch Create VM Wizard: Select a manifest or image";
+    const m_stop = "ACPI shutdown signal dispatched to guest";
+    const m_pause = "Guest virtual CPU execution paused";
+    const m_snap = "Snapshot taken: RAM and disk checkpoint saved";
+    const m_con = "Virtual serial console bridge connected";
+    const m_kill = "SIGKILL sent to guest VM container";
+    const m_start = "Guest virtual machine booted";
+    const m_rest = "Snapshot restored to running state";
+    const m_clone = "Cloned snapshot to new VM instance";
+    const m_del = "Item removed and storage reclaimed";
     const msg: ?[]const u8 = switch (action_icon_id) {
-        gui_mod.ICON_VM_CREATE_NEW_ID =>
-        // Create VM wizard help message.
-        "Launch Create VM Wizard: Select a manifest or image",
-        gui_mod.ICON_DRAWER_BTN_STOP_ID =>
-        // ACPI stop help message.
-        "ACPI shutdown signal dispatched to guest",
-        gui_mod.ICON_DRAWER_BTN_PAUSE_ID =>
-        // Pause VM help message.
-        "Guest virtual CPU execution paused",
-        gui_mod.ICON_DRAWER_BTN_SNAP_ID =>
-        // Snapshot help message.
-        "Snapshot taken: RAM and disk checkpoint saved",
-        gui_mod.ICON_DRAWER_BTN_CONSOLE_ID =>
-        // Serial console help message.
-        "Virtual serial console bridge connected",
-        gui_mod.ICON_DRAWER_BTN_KILL_ID => "SIGKILL sent to guest VM container",
-        gui_mod.ICON_DRAWER_BTN_START_ID => "Guest virtual machine booted",
-        gui_mod.ICON_DRAWER_BTN_RESTORE_ID =>
-        // Restore snapshot help message.
-        "Snapshot restored to running state",
-        gui_mod.ICON_DRAWER_BTN_CLONE_ID =>
-        // Clone snapshot help message.
-        "Cloned snapshot to new VM instance",
-        gui_mod.ICON_DRAWER_BTN_DELETE_ID =>
-        // Delete snapshot help message.
-        "Item removed and storage reclaimed",
+        gui_mod.ICON_VM_CREATE_NEW_ID => m_create,
+        gui_mod.ICON_DRAWER_BTN_STOP_ID => m_stop,
+        gui_mod.ICON_DRAWER_BTN_PAUSE_ID => m_pause,
+        gui_mod.ICON_DRAWER_BTN_SNAP_ID => m_snap,
+        gui_mod.ICON_DRAWER_BTN_CONSOLE_ID => m_con,
+        gui_mod.ICON_DRAWER_BTN_KILL_ID => m_kill,
+        gui_mod.ICON_DRAWER_BTN_START_ID => m_start,
+        gui_mod.ICON_DRAWER_BTN_RESTORE_ID => m_rest,
+        gui_mod.ICON_DRAWER_BTN_CLONE_ID => m_clone,
+        gui_mod.ICON_DRAWER_BTN_DELETE_ID => m_del,
         else => null,
     };
     if (msg) |m| {
@@ -428,25 +438,10 @@ pub fn triggerSemanticAction(self: *DiosixGui, action: []const u8) !bool {
     return true;
 }
 
-/// Escape '"' and '\' in an OSK input string for safe JSON emission.
-fn escapeJsonStr(raw: []const u8, out: []u8) []const u8 {
-    var pos: usize = 0;
-    for (raw) |c| {
-        if (c == '"' or c == '\\') {
-            if (pos + 2 > out.len) break;
-            out[pos] = '\\';
-            out[pos + 1] = c;
-            pos += 2;
-        } else if (c >= 0x20 and c <= 0x7e) {
-            if (pos + 1 > out.len) break;
-            out[pos] = c;
-            pos += 1;
-        }
-    }
-    return out[0..pos];
-}
-
-pub fn exportSemanticStateJson(self: *const DiosixGui, buf: []u8) []const u8 {
+pub fn exportSemanticStateJson(
+    self: *const DiosixGui,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error![]u8 {
     const active_pane: []const u8 = if (self.active_menu_id) |mid|
         switch (mid) {
             ICON_MENU_SOFTWARE_ID => "software",
@@ -458,8 +453,11 @@ pub fn exportSemanticStateJson(self: *const DiosixGui, buf: []u8) []const u8 {
     else
         "fleet";
 
-    var esc_buf: [256]u8 = undefined;
-    const esc_osk = escapeJsonStr(self.osk_state.getInputText(), &esc_buf);
+    const esc_osk = try json.escapeStr(
+        allocator,
+        self.osk_state.getInputText(),
+    );
+    defer allocator.free(esc_osk);
     const fmt =
         "{{\"width\":{d},\"height\":{d},\"render_mode\":\"{s}\"," ++
         "\"active_pane\":\"{s}\",\"window_count\":{d}," ++
@@ -467,7 +465,7 @@ pub fn exportSemanticStateJson(self: *const DiosixGui, buf: []u8) []const u8 {
         "\"osk_layout\":\"{s}\",\"osk_input\":\"{s}\"," ++
         "\"welcome_visible\":{s},\"tour_visible\":{s},\"tour_step\":{d}}}\n";
 
-    return std.fmt.bufPrint(buf, fmt, .{
+    return allocator.print(fmt, .{
         self.width,
         self.height,
         if (self.render_mode == .accelerated) "accelerated" else "degraded",
@@ -480,9 +478,10 @@ pub fn exportSemanticStateJson(self: *const DiosixGui, buf: []u8) []const u8 {
         if (self.welcome_state.welcome_visible) "true" else "false",
         if (self.welcome_state.tour_visible) "true" else "false",
         self.welcome_state.current_step + 1,
-    }) catch "";
+    });
 }
 
 test {
     std.testing.refAllDecls(@This());
+    _ = json;
 }

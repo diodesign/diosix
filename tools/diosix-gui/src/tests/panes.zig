@@ -455,8 +455,8 @@ test "diosix-gui: dockable OSK, Welcome modal, Guided Tour, and semantic JSON" {
     try testing.expect(try gui.triggerSemanticAction("tour.next"));
     try testing.expectEqual(@as(usize, 1), gui.welcome_state.current_step);
 
-    var state_buf: [512]u8 = undefined;
-    const state_json = gui.exportSemanticStateJson(&state_buf);
+    const state_json = try gui.exportSemanticStateJson(testing.allocator);
+    defer testing.allocator.free(state_json);
     const has_osk = std.mem.indexOf(u8, state_json, "\"osk_visible\":true");
     const has_inp = std.mem.indexOf(
         u8,
@@ -475,4 +475,22 @@ test "diosix-gui: dockable OSK, Welcome modal, Guided Tour, and semantic JSON" {
     try testing.expect(try gui.triggerSemanticAction("osk.hide"));
     try testing.expect(gui.getWindow(gui_mod.WIN_OSK_ID) == null);
     testing.refAllDecls(@This());
+}
+
+test "diosix-gui: semantic JSON keeps a maximal escaped OSK string" {
+    var gui = try DiosixGui.init(testing.allocator, 1280, 800);
+    defer gui.deinit();
+
+    // Worst case: every OSK byte is a quote that doubles when escaped.
+    const osk_max = gui_mod.osk_mod.MAX_OSK_BUFFER_LEN;
+    for (0..osk_max) |_| {
+        gui.osk_state.applyAction(.{ .char = '"' });
+    }
+    const json = try gui.exportSemanticStateJson(testing.allocator);
+    defer testing.allocator.free(json);
+    const escaped = try testing.allocator.alloc(u8, osk_max * 2);
+    defer testing.allocator.free(escaped);
+    for (0..osk_max) |i| @memcpy(escaped[i * 2 ..][0..2], "\\\"");
+    try testing.expect(std.mem.indexOf(u8, json, escaped) != null);
+    try testing.expect(std.mem.endsWith(u8, json, "}\n"));
 }

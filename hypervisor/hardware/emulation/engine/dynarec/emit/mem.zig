@@ -7,6 +7,8 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const riscv = @import("interface").riscv;
+const softtlb_mod = @import("../../../softtlb.zig");
 const decoder_rv32 = @import("../../decoders/rv32.zig");
 const rv64 = @import("../../emitters/rv64.zig");
 const cache_mod = @import("../cache.zig");
@@ -14,6 +16,7 @@ const block_mod = @import("../block.zig");
 const emit_tlb = @import("tlb.zig");
 
 const TranslationBlock = block_mod.TranslationBlock;
+const PTE = softtlb_mod.PTE;
 const T0 = block_mod.HOST_REG_T0;
 const T1 = block_mod.HOST_REG_T1;
 const S11 = block_mod.HOST_REG_S11;
@@ -33,6 +36,19 @@ inline fn emit(tb: *TranslationBlock, off: *usize, insn: u32) void {
     rv64.emit(tb.host_code, off, insn);
 }
 
+inline fn canUseFastRegion(
+    region: softtlb_mod.SoftTlb.DirectMappingRegion,
+    priv: u8,
+    is_write: bool,
+) bool {
+    if ((@as(u64, region.hpa_start) >> WORD_BITS) != 0) return false;
+    if (region.vaddr_end <= region.vaddr_start) return false;
+    const req_flag: u8 = if (is_write) PTE.W else PTE.R;
+    if ((region.flags & req_flag) == 0) return false;
+    if (priv == riscv.PRIV_USER and (region.flags & PTE.U) == 0) return false;
+    return true;
+}
+
 pub fn emitLoad(
     eng: anytype,
     tb: *TranslationBlock,
@@ -46,10 +62,8 @@ pub fn emitLoad(
     const imm = @as(i12, @truncate(offset));
     const tlb_addr = @intFromPtr(&eng.tlb.entries[0]);
     if (eng.tlb.getDirectMappingRegion(pc)) |region| {
-        tb.is_fast_path = true;
-        if (rs1 == block_mod.GUEST_REG_SP or rs1 == block_mod.GUEST_REG_FP) {
-            emitFastLoad(tb, off, op, rd, rs1, imm, region.delta);
-        } else {
+        if (canUseFastRegion(region, eng.vcpu.privilege_mode, false)) {
+            tb.is_fast_path = true;
             emitFastLoadWithFallback(
                 tlb_addr,
                 tb,
@@ -63,10 +77,10 @@ pub fn emitLoad(
                 region.vaddr_end,
                 region.hpa_start,
             );
+            return;
         }
-    } else {
-        emitSoftTlbLoad(tlb_addr, tb, off, pc, op, rd, rs1, imm);
     }
+    emitSoftTlbLoad(tlb_addr, tb, off, pc, op, rd, rs1, imm);
 }
 
 pub fn emitStore(
@@ -82,10 +96,8 @@ pub fn emitStore(
     const imm = @as(i12, @truncate(offset));
     const tlb_addr = @intFromPtr(&eng.tlb.entries[0]);
     if (eng.tlb.getDirectMappingRegion(pc)) |region| {
-        tb.is_fast_path = true;
-        if (rs1 == block_mod.GUEST_REG_SP or rs1 == block_mod.GUEST_REG_FP) {
-            emitFastStore(tb, off, op, rs1, rs2, imm, region.delta);
-        } else {
+        if (canUseFastRegion(region, eng.vcpu.privilege_mode, true)) {
+            tb.is_fast_path = true;
             emitFastStoreWithFallback(
                 tlb_addr,
                 tb,
@@ -99,10 +111,10 @@ pub fn emitStore(
                 region.vaddr_end,
                 region.hpa_start,
             );
+            return;
         }
-    } else {
-        emitSoftTlbStore(tlb_addr, tb, off, pc, op, rs1, rs2, imm);
     }
+    emitSoftTlbStore(tlb_addr, tb, off, pc, op, rs1, rs2, imm);
 }
 
 pub fn emitAmo(
@@ -136,10 +148,12 @@ pub fn emitFastLoad(
     imm: i12,
     delta: i64,
 ) void {
-    if (rd == 0) return;
+    const is_fp = (op == MemOp.FLW or op == MemOp.FLD);
+    if (!is_fp and rd == 0) return;
 
     const total_offset = @as(i64, @intCast(imm)) + delta;
-    const needs_t1 = (rs1 == T0 or rs1 == S11 or rd == T0 or rd == S11);
+    const needs_t1 = (rs1 == T0 or rs1 == S11 or
+        (!is_fp and (rd == T0 or rd == S11)));
 
     emit(tb, off, rv64.sd(S11, T0, OFF_T0));
     if (needs_t1) emit(tb, off, rv64.sd(S11, T1, OFF_T1));
@@ -162,7 +176,7 @@ pub fn emitFastLoad(
     emit(tb, off, rv64.srli(T0, T0, WORD_BITS));
 
     emit_tlb.emitLoadFromT0(tb, off, op, rd, T1);
-    if (op != MemOp.FLW and op != MemOp.FLD) {
+    if (!is_fp) {
         if (rd == T0) {
             emit(tb, off, rv64.addi(T0, T1, 0));
             emit(tb, off, rv64.sd(S11, T0, OFF_T0));
@@ -171,8 +185,10 @@ pub fn emitFastLoad(
         }
     }
 
-    if (needs_t1 and rd != T1) emit(tb, off, rv64.ld(T1, S11, OFF_T1));
-    if (rd != T0) emit(tb, off, rv64.ld(T0, S11, OFF_T0));
+    if (needs_t1 and (is_fp or rd != T1)) {
+        emit(tb, off, rv64.ld(T1, S11, OFF_T1));
+    }
+    if (is_fp or rd != T0) emit(tb, off, rv64.ld(T0, S11, OFF_T0));
 }
 
 pub fn emitFastStore(
@@ -217,6 +233,7 @@ pub fn emitFastStore(
 fn emitFastRangeCheckAndHpa(
     tb: *TranslationBlock,
     off: *usize,
+    op: u3,
     rs1: u5,
     imm: i12,
     vaddr_start: u32,
@@ -230,7 +247,10 @@ fn emitFastRangeCheckAndHpa(
     emit(tb, off, rv64.addiw(T1, T1, vstart.lower));
     emit(tb, off, rv64.subw(T1, T0, T1));
 
-    const size_sp = rv64.splitImm32(vaddr_end -% vaddr_start);
+    const span = vaddr_end -% vaddr_start;
+    const access_bytes = emit_tlb.memOpBytes(op);
+    const bound = if (span >= access_bytes) span - access_bytes else 0;
+    const size_sp = rv64.splitImm32(bound);
     emit(tb, off, rv64.lui(T0, size_sp.upper));
     emit(tb, off, rv64.addiw(T0, T0, size_sp.lower));
 
@@ -264,7 +284,12 @@ pub fn emitFastLoadWithFallback(
     vaddr_end: u32,
     hpa_start: usize,
 ) void {
-    if (rd == 0) return;
+    const is_fp = (op == MemOp.FLW or op == MemOp.FLD);
+    if (!is_fp and rd == 0) return;
+    if ((@as(u64, hpa_start) >> WORD_BITS) != 0) {
+        emitSoftTlbLoad(tlb_addr, tb, off, current_pc, op, rd, rs1, imm);
+        return;
+    }
 
     emit(tb, off, rv64.sd(S11, T0, OFF_T0));
     emit(tb, off, rv64.sd(S11, T1, OFF_T1));
@@ -272,6 +297,7 @@ pub fn emitFastLoadWithFallback(
     const bgeu_patch_pos = emitFastRangeCheckAndHpa(
         tb,
         off,
+        op,
         rs1,
         imm,
         vaddr_start,
@@ -280,7 +306,7 @@ pub fn emitFastLoadWithFallback(
     );
 
     emit_tlb.emitLoadFromT0(tb, off, op, rd, T1);
-    if (op != MemOp.FLW and op != MemOp.FLD) {
+    if (!is_fp) {
         if (rd == T0) {
             emit(tb, off, rv64.addi(T0, T1, 0));
             emit(tb, off, rv64.sd(S11, T0, OFF_T0));
@@ -289,8 +315,8 @@ pub fn emitFastLoadWithFallback(
         }
     }
 
-    if (rd != T1) emit(tb, off, rv64.ld(T1, S11, OFF_T1));
-    if (rd != T0) emit(tb, off, rv64.ld(T0, S11, OFF_T0));
+    if (is_fp or rd != T1) emit(tb, off, rv64.ld(T1, S11, OFF_T1));
+    if (is_fp or rd != T0) emit(tb, off, rv64.ld(T0, S11, OFF_T0));
 
     const jal_done_pos = off.*;
     emit(tb, off, INSN_PLACEHOLDER);
@@ -338,12 +364,18 @@ pub fn emitFastStoreWithFallback(
     vaddr_end: u32,
     hpa_start: usize,
 ) void {
+    if ((@as(u64, hpa_start) >> WORD_BITS) != 0) {
+        emitSoftTlbStore(tlb_addr, tb, off, current_pc, op, rs1, rs2, imm);
+        return;
+    }
+
     emit(tb, off, rv64.sd(S11, T0, OFF_T0));
     emit(tb, off, rv64.sd(S11, T1, OFF_T1));
 
     const bgeu_patch_pos = emitFastRangeCheckAndHpa(
         tb,
         off,
+        op,
         rs1,
         imm,
         vaddr_start,
@@ -389,6 +421,7 @@ pub fn emitFastStoreWithFallback(
 }
 
 test "emitFastLoad and emitFastStore emit valid sequences" {
+    _ = emit_tlb;
     const cache_inst = try std.testing.allocator.create(cache_mod.Cache);
     defer std.testing.allocator.destroy(cache_inst);
     var raw_pool: [512]u8 align(4096) = undefined;

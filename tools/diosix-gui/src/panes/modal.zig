@@ -11,6 +11,7 @@ const window_mod = @import("../window.zig");
 const Window = window_mod.Window;
 const osk_mod = @import("../osk.zig");
 const welcome_mod = @import("../welcome.zig");
+const text_label = @import("../label.zig");
 const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 
@@ -359,12 +360,12 @@ pub fn showTourModal(self: *DiosixGui) !void {
     s2.setCustomColor(0x00a0b4c8);
     _ = try win.addIcon(s2);
 
-    var hint_buf: [128]u8 = undefined;
-    const hint_str = std.fmt.bufPrint(
+    var hint_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+    const hint_str = text_label.fmtLabel(
         &hint_buf,
         "CLI equivalent: {s}",
         .{step.cli_hint},
-    ) catch step.cli_hint;
+    );
     const th_id = ICON_TOUR_CLI_HINT_ID;
     var s3 = Icon.createReadOnly(th_id, 24, 108, tw, 20, hint_str);
     s3.setCustomColor(fb.Color.ACCENT_GOLD);

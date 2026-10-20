@@ -4,7 +4,6 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const main = @import("../../../../main.zig");
 const builtin = @import("builtin");
 const debug = @import("../../../../core/debug.zig");
 const riscv = @import("mod.zig");
@@ -16,6 +15,13 @@ const config = @import("config");
 pub const csr_emu = @import("xint/csr.zig");
 pub const exception = @import("xint/exception.zig");
 pub const interrupt = @import("xint/interrupt.zig");
+pub const state = @import("xint/state.zig");
+
+pub const parkStoppingCore = state.parkStoppingCore;
+pub const saveGuestStateFromHardware = state.saveGuestStateFromHardware;
+pub const runIdleLoop = state.runIdleLoop;
+pub const checkIdleVCoreWake = state.checkIdleVCoreWake;
+pub const syncGuestStateToHardware = state.syncGuestStateToHardware;
 
 extern fn hw_xint_init() void;
 
@@ -148,7 +154,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
         else => false,
     };
 
-    if (irq.privilege_mode == .machine and
+    if (irq.privilege_mode != .machine and
         !is_ecall and
         !is_interrupt and
         cpu.last_trap_pc == irq.pc and
@@ -199,36 +205,6 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     return irq;
 }
 
-fn parkStoppingCore(pcpu: *riscv.CpuContext) noreturn {
-    if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
-        ptr.* = 0;
-    }
-    riscv.writeMie(0);
-    @atomicStore(bool, &pcpu.is_parked, true, .release);
-    while (true) {
-        riscv.pause();
-    }
-}
-
-fn saveGuestStateFromHardware(
-    vc: *vcore.VirtualCore,
-    context: *riscv.ThreadContext,
-    pc: usize,
-) void {
-    @memcpy(vc.getNativeContext(), context);
-    vc.getNativeMachine().mepc = pc;
-    vc.getNativeMachine().mstatus = riscv.readMstatus();
-
-    if (vc.exec_path == .native) {
-        if (riscv.hasHExtension()) {
-            vc.getNativeMachine().hvip = riscv.readHvip();
-            riscv.saveVsState(vc.getNativeGuestState());
-        } else {
-            riscv.saveSState(vc.getNativeGuestState());
-        }
-    }
-}
-
 /// Centralized high-level entry point for handling exceptions and interrupts.
 pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (builtin.is_test) return;
@@ -242,11 +218,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
     const irq = dispatch(context);
 
-    var is_guest = irq.privilege_mode != .machine;
-    if (pcpu.active_vcore) |vc_raw| {
-        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-        if (vc.exec_path == .emulated) is_guest = true;
-        if (is_guest) {
+    const is_guest = irq.privilege_mode != .machine;
+    if (is_guest) {
+        if (pcpu.active_vcore) |vc_raw| {
+            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
             saveGuestStateFromHardware(vc, context, irq.pc);
         }
     }
@@ -256,6 +231,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     switch (irq.irq_type) {
         .exception => exception.handleException(irq, context),
         .interrupt => interrupt.handleInterrupt(irq, context),
+    }
+
+    if (!is_guest and pcpu.probe_failed) {
+        return;
     }
 
     if (is_guest) {
@@ -290,184 +269,10 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     }
 }
 
-fn runIdleLoop(pcpu: *riscv.CpuContext) void {
-    while (pcpu.active_vcore == null) {
-        if (pcore.host_stopping.load(.acquire)) {
-            parkStoppingCore(pcpu);
-        }
-
-        const now_time = riscv.readTime();
-        const timeslice_limit = now_time +% riscv.TIMESLICE_TICKS;
-        const b_prev = pcpu.blocked_lock.lock();
-        var min_timer: u64 = if (pcpu.blocked_queue.start != null)
-            timeslice_limit
-        else
-            riscv.TIMER_INFINITY;
-        var it = pcpu.blocked_queue.start;
-
-        while (it) |node| {
-            const next_it = node.next;
-            const vc: *vcore.VirtualCore =
-                @ptrCast(@alignCast(node.contents));
-
-            if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
-                pcpu.blocked_queue.remove(node);
-                vc.blocked_on_cpu = null;
-                it = next_it;
-                continue;
-            }
-
-            if (checkIdleVCoreWake(vc, now_time, &min_timer)) {
-                pcpu.blocked_queue.remove(node);
-                vc.blocked_on_cpu = null;
-                @atomicStore(bool, &vc.wfi_blocked, false, .release);
-                vc.state = .ready;
-                scheduler.queue(vc);
-            }
-
-            it = next_it;
-        }
-        pcpu.blocked_lock.unlock(b_prev);
-
-        const msip_pending = (riscv.readMip() & riscv.MIP.MSIP) != 0;
-        scheduler.schedule();
-        if (pcpu.active_vcore != null) break;
-
-        if (!msip_pending) {
-            riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
-            riscv.setTimer(min_timer);
-            riscv.pause();
-        }
-    }
-}
-
-fn checkIdleVCoreWake(
-    vc: *vcore.VirtualCore,
-    now_time: u64,
-    min_timer: *u64,
-) bool {
-    if (@atomicLoad(bool, &vc.pending_ipi, .acquire)) return true;
-
-    if (vc.exec_path == .native) {
-        const blocked_mip = riscv.readMip();
-        if ((blocked_mip & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0) {
-            vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
-            return true;
-        }
-        const virt_mask =
-            riscv.HVIP.VSSIP | riscv.HVIP.VSTIP | riscv.HVIP.VSEIP;
-        if ((vc.getNativeMachine().hvip & virt_mask) != 0) return true;
-
-        const vstc = vc.getNativeGuestState().vstimecmp;
-        if (vstc != 0 and vstc != riscv.TIMER_INFINITY) {
-            if (now_time >= vstc) {
-                vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
-                return true;
-            } else if (vstc < min_timer.*) {
-                min_timer.* = vstc;
-            }
-        }
-        return (now_time -% vc.last_queued_time) >= riscv.TIMESLICE_TICKS;
-    }
-
-    if (vc.exec_path == .emulated) {
-        if (vc.timer_scheduled) {
-            if (now_time >= vc.timer_target) {
-                vc.timer_scheduled = false;
-                if (vc.exec_path.emulated.vcpu) |v| {
-                    v.mip |= riscv.MIP.STIP;
-                }
-                return true;
-            } else if (vc.timer_target < min_timer.*) {
-                min_timer.* = vc.timer_target;
-            }
-        }
-        return (now_time -% vc.last_queued_time) >= riscv.TIMESLICE_TICKS;
-    }
-
-    return false;
-}
-
-/// Synchronize the virtual core's architectural state to physical hardware CSRs
-/// before returning to guest mode via `mret`.
-fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
-    const ms = vc.getNativeMachine();
-    const gs = vc.getNativeGuestState();
-
-    if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
-        ms.hvip |= riscv.HVIP.VSSIP;
-    }
-
-    ms.mstatus |= riscv.MSTATUS.VS_DIRTY |
-        riscv.MSTATUS.FS_DIRTY |
-        riscv.MSTATUS.TW;
-    riscv.writeMepc(ms.mepc);
-    riscv.writeMstatus(ms.mstatus);
-
-    if (riscv.hasHExtension()) {
-        if (vc.guest.space.mode == .h_paging) {
-            ms.hgatp = if (vc.guest.space.paging) |*p|
-                p.hgatp(vc.guest.vmid)
-            else
-                0;
-        }
-        riscv.writeHstatus(ms.hstatus);
-        riscv.writeHgatp(ms.hgatp);
-
-        var hvip_val: usize = ms.hvip;
-        if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
-            hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
-        } else if (gs.vstimecmp != 0 and
-            gs.vstimecmp != riscv.TIMER_INFINITY)
-        {
-            if (riscv.readTime() >= gs.vstimecmp) {
-                hvip_val |= riscv.HVIP.VSTIP;
-            } else {
-                hvip_val &= ~@as(usize, riscv.HVIP.VSTIP);
-            }
-        }
-
-        ms.hvip = hvip_val;
-        riscv.writeHvip(hvip_val);
-
-        interrupt.programHardwareTimerAndMie(vc, &hvip_val);
-
-        riscv.writeHedeleg(ms.hedeleg);
-        riscv.writeHideleg(ms.hideleg);
-        riscv.writeHcounteren(riscv.MCOUNTEREN.DEFAULT_COUNTERS);
-        riscv.restoreVsState(gs);
-        riscv.hfenceGvma();
-    } else {
-        var mip_val = riscv.readMip();
-        if ((ms.hvip & riscv.HVIP.VSTIP) != 0) {
-            mip_val |= riscv.MIP.STIP;
-        } else {
-            mip_val &= ~@as(usize, riscv.MIP.STIP);
-        }
-
-        if ((ms.hvip & riscv.HVIP.VSSIP) != 0) {
-            mip_val |= riscv.MIP.SSIP;
-        } else {
-            mip_val &= ~@as(usize, riscv.MIP.SSIP);
-        }
-
-        if (gs.vstimecmp != 0 and gs.vstimecmp != riscv.TIMER_INFINITY) {
-            if (riscv.readTime() >= gs.vstimecmp) {
-                mip_val |= riscv.MIP.STIP;
-            } else {
-                mip_val &= ~@as(usize, riscv.MIP.STIP);
-            }
-        }
-
-        riscv.writeMip(mip_val);
-        riscv.restoreSState(gs);
-        riscv.sfenceVma();
-    }
-}
-
 test {
     std.testing.refAllDecls(@This());
     _ = csr_emu;
     _ = exception;
     _ = interrupt;
+    _ = state;
 }

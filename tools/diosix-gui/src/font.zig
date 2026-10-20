@@ -169,9 +169,13 @@ pub fn drawTextWithAlpha(
     master_alpha: u8,
 ) void {
     if (master_alpha == 0 or surface.clip.isEmpty()) return;
-    if (y + @as(i32, @intCast(GLYPH_HEIGHT)) <= surface.clip.y0 or
-        y >= surface.clip.y1)
-    {
+    if (surface.width == 0 or surface.height == 0) return;
+    const clip_x0 = @max(0, surface.clip.x0);
+    const clip_y0 = @max(0, surface.clip.y0);
+    const clip_x1 = @min(@as(i32, @intCast(surface.width)), surface.clip.x1);
+    const clip_y1 = @min(@as(i32, @intCast(surface.height)), surface.clip.y1);
+    if (clip_x0 >= clip_x1 or clip_y0 >= clip_y1) return;
+    if (y + @as(i32, @intCast(GLYPH_HEIGHT)) <= clip_y0 or y >= clip_y1) {
         return;
     }
 
@@ -183,10 +187,10 @@ pub fn drawTextWithAlpha(
                 const gx = cur_x + glyph.offset_x;
                 const gy = y + glyph.offset_y;
 
-                if (gx >= surface.clip.x1) break;
+                if (gx >= clip_x1) break;
 
                 const g_right = gx + @as(i32, @intCast(glyph.width));
-                if (g_right <= surface.clip.x0) {
+                if (g_right <= clip_x0) {
                     cur_x += glyph.advance;
                     continue;
                 }
@@ -195,7 +199,7 @@ pub fn drawTextWithAlpha(
                 var row: usize = 0;
                 while (row < glyph.height) : (row += 1) {
                     const py = gy + @as(i32, @intCast(row));
-                    if (py < surface.clip.y0 or py >= surface.clip.y1) continue;
+                    if (py < clip_y0 or py >= clip_y1) continue;
 
                     const row_offset =
                         @as(usize, @intCast(py)) * pixels_per_row;
@@ -205,7 +209,7 @@ pub fn drawTextWithAlpha(
                     var col: usize = 0;
                     while (col < glyph.width) : (col += 1) {
                         const px = gx + @as(i32, @intCast(col));
-                        if (px < surface.clip.x0 or px >= surface.clip.x1) {
+                        if (px < clip_x0 or px >= clip_x1) {
                             continue;
                         }
 
@@ -235,10 +239,10 @@ pub fn drawTextWithAlpha(
             }
             cur_x += glyph.advance;
         } else if (c == ' ') {
-            if (cur_x >= surface.clip.x1) break;
+            if (cur_x >= clip_x1) break;
             cur_x += SPACE_ADVANCE;
         } else if (c == '\t') {
-            if (cur_x >= surface.clip.x1) break;
+            if (cur_x >= clip_x1) break;
             cur_x += TAB_ADVANCE;
         }
     }
@@ -298,16 +302,21 @@ pub fn drawTextScaled(
     scale_den: u32,
 ) void {
     if (surface.clip.isEmpty()) return;
+    if (surface.width == 0 or surface.height == 0) return;
     if (scale_num == 0 or scale_den == 0) return;
     if (scale_num == scale_den) {
         drawText(surface, text, x, y, color);
         return;
     }
 
+    const clip_x0 = @max(0, surface.clip.x0);
+    const clip_y0 = @max(0, surface.clip.y0);
+    const clip_x1 = @min(@as(i32, @intCast(surface.width)), surface.clip.x1);
+    const clip_y1 = @min(@as(i32, @intCast(surface.height)), surface.clip.y1);
+    if (clip_x0 >= clip_x1 or clip_y0 >= clip_y1) return;
+
     const scaled_h = @divTrunc(GLYPH_HEIGHT * scale_num, scale_den);
-    if (y + @as(i32, @intCast(scaled_h)) <= surface.clip.y0 or
-        y >= surface.clip.y1)
-    {
+    if (y + @as(i32, @intCast(scaled_h)) <= clip_y0 or y >= clip_y1) {
         return;
     }
 
@@ -342,10 +351,10 @@ pub fn drawTextScaled(
                 const gx = cur_x + scaled_off_x;
                 const gy = y + scaled_off_y;
 
-                if (gx >= surface.clip.x1) break;
+                if (gx >= clip_x1) break;
 
                 const g_right = gx + @as(i32, @intCast(scaled_gw));
-                if (g_right <= surface.clip.x0) {
+                if (g_right <= clip_x0) {
                     cur_x += scaled_advance;
                     continue;
                 }
@@ -354,7 +363,7 @@ pub fn drawTextScaled(
                 var row: usize = 0;
                 while (row < scaled_gh) : (row += 1) {
                     const py = gy + @as(i32, @intCast(row));
-                    if (py < surface.clip.y0 or py >= surface.clip.y1) continue;
+                    if (py < clip_y0 or py >= clip_y1) continue;
 
                     const src_row = @divTrunc(row * scale_den, scale_num);
                     if (src_row >= glyph.height) continue;
@@ -367,7 +376,7 @@ pub fn drawTextScaled(
                     var col: usize = 0;
                     while (col < scaled_gw) : (col += 1) {
                         const px = gx + @as(i32, @intCast(col));
-                        if (px < surface.clip.x0 or px >= surface.clip.x1) {
+                        if (px < clip_x0 or px >= clip_x1) {
                             continue;
                         }
 
@@ -391,13 +400,13 @@ pub fn drawTextScaled(
             }
             cur_x += scaled_advance;
         } else if (c == ' ') {
-            if (cur_x >= surface.clip.x1) break;
+            if (cur_x >= clip_x1) break;
             cur_x += @divTrunc(
                 @as(i32, @intCast(SPACE_ADVANCE)) * s_num_i,
                 s_den_i,
             );
         } else if (c == '\t') {
-            if (cur_x >= surface.clip.x1) break;
+            if (cur_x >= clip_x1) break;
             cur_x += @divTrunc(
                 @as(i32, @intCast(TAB_ADVANCE)) * s_num_i,
                 s_den_i,

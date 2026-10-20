@@ -4,7 +4,6 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const debug = @import("../../../../../core/debug.zig");
 const riscv = @import("../mod.zig");
 const pcore = @import("../../../../../core/pcore.zig");
 const vcore = @import("../../../../../core/vcore.zig");
@@ -18,9 +17,8 @@ pub const EmulationOutcome = enum {
     handled,
 };
 
-const PARCEL_ALIGN_MASK: usize = 0x2;
-const INSN_32BIT_MASK: u16 = 0b11;
-const INSN_SIZE_BYTES: usize = 4;
+const CSR_PRIV_SHIFT: u4 = 8;
+const CSR_PRIV_MASK: usize = 0x3;
 
 /// Safely fetch an instruction from guest memory, accounting for potential
 /// 2-byte parcel alignment if the guest PC is not 4-byte aligned.
@@ -32,15 +30,17 @@ pub fn fetchGuestInstruction(pc: usize) usize {
 
     var instr: usize = 0;
 
-    if ((pc & PARCEL_ALIGN_MASK) != 0) {
+    if ((pc & riscv.Instr.PARCEL_ALIGN_MASK) != 0) {
         // Misaligned PC: fetch as 16-bit parcels to avoid alignment faults.
         const lower = riscv.hlv_hu(pc);
         if (pcpu.probe_failed) return 0;
         instr = lower;
 
         // Check if it is a 32-bit instruction (lowest 2 bits are 0b11).
-        if ((lower & INSN_32BIT_MASK) == INSN_32BIT_MASK) {
-            const upper = riscv.hlv_hu(pc + PARCEL_ALIGN_MASK);
+        if ((lower & riscv.Instr.INSN_32BIT_MASK) ==
+            riscv.Instr.INSN_32BIT_MASK)
+        {
+            const upper = riscv.hlv_hu(pc + riscv.Instr.PARCEL_ALIGN_MASK);
             if (pcpu.probe_failed) return 0;
             instr |= (@as(usize, upper) << 16);
         }
@@ -99,12 +99,7 @@ fn readEmulatedCsr(vc: *vcore.VirtualCore, csr: usize) usize {
         // (0x80000000) combined with 16 bits of hardware timer entropy.
         const time_now = riscv.readTime();
         const entropy = (time_now ^ (time_now >> 16)) & SEED_ENTROPY_MASK;
-        const old_val = SEED_OPST_ES16 | entropy;
-        debug.printf(
-            "Zkr seed read: time=0x{x} entropy=0x{x} old_val=0x{x}\n",
-            .{ time_now, entropy, old_val },
-        );
-        return old_val;
+        return SEED_OPST_ES16 | entropy;
     }
     if (isSiselectCsr(csr)) return vc.getNativeSiselect().*;
     if (isEnvcfgCsr(csr)) return vc.getNativeGuestState().vsenvcfg;
@@ -162,7 +157,7 @@ pub fn emulateCsrAccess(
         vc.getNativeContext()[rd] = old_val;
     }
 
-    vc.getNativeMachine().mepc += INSN_SIZE_BYTES;
+    vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
     riscv.writeMepc(vc.getNativeMachine().mepc);
     pcore.this().trap_loop_count = 0;
 
@@ -182,7 +177,7 @@ pub fn emulateCsrAccess(
 fn emulateWfi(vc: *vcore.VirtualCore) void {
     const pcpu = pcore.this();
     pcpu.trap_loop_count = 0;
-    vc.getNativeMachine().mepc += INSN_SIZE_BYTES;
+    vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
 
     // If a physical PLIC interrupt is pending on this hart, inject VSEIP.
     const mip_val = riscv.readMip();
@@ -238,11 +233,17 @@ pub fn emulateInstruction(
     vc: *vcore.VirtualCore,
     instr: usize,
     context: *riscv.ThreadContext,
+    privilege_mode: riscv.PrivilegeMode,
 ) EmulationOutcome {
     const opcode = instr & riscv.Instr.OPCODE_MASK;
     const csr = (instr >> riscv.Instr.CSR_SHIFT) & riscv.Instr.CSR_MASK;
 
     if (opcode == riscv.Instr.OPCODE_SYSTEM and isEmulatedCsr(csr)) {
+        if (privilege_mode == .user and
+            ((csr >> CSR_PRIV_SHIFT) & CSR_PRIV_MASK) != 0)
+        {
+            return .not_handled;
+        }
         emulateCsrAccess(vc, instr, context);
         return .handled;
     }
@@ -261,20 +262,21 @@ pub fn emulateInstruction(
             context[rd] = time_now;
             vc.getNativeContext()[rd] = time_now;
         }
-        vc.getNativeMachine().mepc += INSN_SIZE_BYTES;
+        vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
         pcore.this().trap_loop_count = 0;
         return .handled;
     }
 
     // Emulate FENCE.I as a no-op since I-cache coherency is maintained.
     if (instr == riscv.Instr.FENCE_I) {
-        vc.getNativeMachine().mepc += INSN_SIZE_BYTES;
+        vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
         pcore.this().trap_loop_count = 0;
         return .handled;
     }
 
-    // Emulate WFI (Wait For Interrupt).
+    // Emulate WFI (Wait For Interrupt) only for privileged guest modes.
     if (instr == riscv.Instr.WFI) {
+        if (privilege_mode == .user) return .not_handled;
         emulateWfi(vc);
         return .handled;
     }
@@ -284,7 +286,7 @@ pub fn emulateInstruction(
         instr == riscv.Instr.WRS_STO or
         instr == riscv.Instr.PAUSE)
     {
-        vc.getNativeMachine().mepc += INSN_SIZE_BYTES;
+        vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
         riscv.writeMepc(vc.getNativeMachine().mepc);
         pcore.this().trap_loop_count = 0;
         return .handled;
@@ -296,7 +298,7 @@ pub fn emulateInstruction(
     if (opcode == riscv.Instr.OPCODE_MISC_MEM and
         funct3 == riscv.Instr.FUNCT3_FENCE)
     {
-        vc.getNativeMachine().mepc += INSN_SIZE_BYTES;
+        vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
         riscv.writeMepc(vc.getNativeMachine().mepc);
         pcore.this().trap_loop_count = 0;
         return .handled;
@@ -304,7 +306,8 @@ pub fn emulateInstruction(
 
     // Emulate read-only M-mode CSR reads (mhartid, mvendorid, marchid,
     // mimpid, misa) trapped from S-mode/VS-mode.
-    if (opcode == riscv.Instr.OPCODE_SYSTEM and
+    if (privilege_mode != .user and
+        opcode == riscv.Instr.OPCODE_SYSTEM and
         funct3 >= riscv.Instr.FUNCT3_CSRRW and
         funct3 <= riscv.Instr.FUNCT3_CSRRC)
     {
@@ -322,7 +325,7 @@ pub fn emulateInstruction(
             context[rd] = val;
             vc.getNativeContext()[rd] = val;
         }
-        vc.getNativeMachine().mepc += INSN_SIZE_BYTES;
+        vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
         pcore.this().trap_loop_count = 0;
         return .handled;
     }
@@ -366,7 +369,18 @@ test "csr_emu: isEmulatedCsr and emulateInstruction" {
         (riscv.Instr.FUNCT3_CSRRW << riscv.Instr.FUNCT3_SHIFT) |
         (10 << riscv.Instr.RD_SHIFT) |
         riscv.Instr.OPCODE_SYSTEM;
-    const outcome = emulateInstruction(&vc, csrrw_vsiselect, &ctx);
+
+    // Guest U-mode must not be allowed to access privileged CSRs or WFI.
+    try std.testing.expectEqual(
+        EmulationOutcome.not_handled,
+        emulateInstruction(&vc, csrrw_vsiselect, &ctx, .user),
+    );
+    try std.testing.expectEqual(
+        EmulationOutcome.not_handled,
+        emulateInstruction(&vc, riscv.Instr.WFI, &ctx, .user),
+    );
+
+    const outcome = emulateInstruction(&vc, csrrw_vsiselect, &ctx, .supervisor);
     try std.testing.expectEqual(EmulationOutcome.handled, outcome);
     try std.testing.expectEqual(@as(usize, 0x70), vc.getNativeSiselect().*);
     try std.testing.expectEqual(

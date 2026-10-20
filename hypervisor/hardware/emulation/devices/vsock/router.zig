@@ -162,37 +162,38 @@ pub const MemoryAccessor = struct {
     }
 };
 
-pub const MockRam = struct {
-    buffer: [65536]u8 = @splat(0),
-
-    pub fn read(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
-        const self: *MockRam = @ptrCast(@alignCast(ctx));
-        const end = std.math.add(u64, gpa, buf.len) catch return false;
-        if (end > self.buffer.len) return false;
-        @memcpy(buf, self.buffer[@intCast(gpa)..@intCast(end)]);
-        return true;
-    }
-
-    pub fn write(ctx: *anyopaque, gpa: u64, buf: []const u8) bool {
-        const self: *MockRam = @ptrCast(@alignCast(ctx));
-        const end = std.math.add(u64, gpa, buf.len) catch return false;
-        if (end > self.buffer.len) return false;
-        @memcpy(self.buffer[@intCast(gpa)..@intCast(end)], buf);
-        return true;
-    }
-
-    pub fn accessor(self: *MockRam) MemoryAccessor {
-        return .{
-            .ctx = self,
-            .readFn = MockRam.read,
-            .writeFn = MockRam.write,
-        };
-    }
-};
-
 test "VirtIO-vsock router prevents CID spoofing" {
     const testing = std.testing;
     testing.refAllDecls(@This());
+
+    const MOCK_RAM_BYTES: usize = 65536;
+    const MockRam = struct {
+        buffer: [MOCK_RAM_BYTES]u8 = @splat(0),
+
+        fn read(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            const end = std.math.add(u64, gpa, buf.len) catch return false;
+            if (end > self.buffer.len) return false;
+            @memcpy(buf, self.buffer[@intCast(gpa)..@intCast(end)]);
+            return true;
+        }
+
+        fn write(ctx: *anyopaque, gpa: u64, buf: []const u8) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            const end = std.math.add(u64, gpa, buf.len) catch return false;
+            if (end > self.buffer.len) return false;
+            @memcpy(self.buffer[@intCast(gpa)..@intCast(end)], buf);
+            return true;
+        }
+
+        fn accessor(self: *@This()) MemoryAccessor {
+            return .{
+                .ctx = self,
+                .readFn = read,
+                .writeFn = write,
+            };
+        }
+    };
 
     var ram_dest = MockRam{};
     const mem_dest = ram_dest.accessor();
@@ -311,6 +312,7 @@ test "VirtIO-vsock router prevents CID spoofing" {
 
 test "VsockRouter dynamic hash table with 64-bit CIDs and collisions" {
     const testing = std.testing;
+    testing.refAllDecls(@This());
 
     var router = VsockRouter{};
 

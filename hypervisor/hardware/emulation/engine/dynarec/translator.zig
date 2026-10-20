@@ -44,20 +44,21 @@ pub fn translateBlock(
     self: anytype,
     start_pc: u32,
 ) !*TranslationBlock {
-    if (self.cache.lookup(start_pc, self.vcpu.satp)) |existing| {
+    const priv = self.vcpu.privilege_mode;
+    if (self.cache.lookup(start_pc, self.vcpu.satp, priv)) |existing| {
         return existing;
     }
 
     const max_host_bytes: usize =
         MAX_BLOCK_INSNS * HOST_BYTES_PER_GUEST_INSN + HOST_EPILOGUE_PAD_BYTES;
-    const is_global = (self.vcpu.privilege_mode != riscv.PRIV_USER) or
-        (self.tlb.getDirectMappingRegion(start_pc) != null);
+    const is_global = (priv != riscv.PRIV_USER);
     const tb = try self.cache.allocateBlock(
         start_pc,
         self.vcpu.satp,
         is_global,
         max_host_bytes,
     );
+    tb.priv = priv;
 
     var pc = start_pc;
     var host_offset: usize = 0;

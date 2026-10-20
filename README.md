@@ -1,6 +1,11 @@
-[![Diosix continuous integration](https://github.com/diodesign/diosix/actions/workflows/ci.yml/badge.svg)](https://github.com/diodesign/diosix/actions/workflows/ci.yml)
-[![Language: Zig](https://img.shields.io/badge/language-zig-darkorange.svg)](https://ziglang.org/)
-[![Platform: riscv64](https://img.shields.io/badge/platform-riscv64-lightblue.svg)](https://riscv.org/)
+[![Diosix continuous integration][ci-badge]][ci-url]
+[![Language: Zig][zig-badge]](https://ziglang.org/)
+[![Platform: riscv64][rv64-badge]](https://riscv.org/)
+
+[ci-badge]: https://github.com/diodesign/diosix/actions/workflows/ci.yml/badge.svg
+[ci-url]: https://github.com/diodesign/diosix/actions/workflows/ci.yml
+[zig-badge]: https://img.shields.io/badge/language-zig-darkorange.svg
+[rv64-badge]: https://img.shields.io/badge/platform-riscv64-lightblue.svg
 
 # About Diosix
 
@@ -150,7 +155,8 @@ For more information about Diosix, see the following documentation:
 *  **[Develop Diosix](docs/development.md):** View the project's programming
    guidelines, memory ownership rules, unit testing commands, Git branching
    workflows, Calendar Versioning (CalVer) release model, and how to use the
-   official [Diosix agent skills](https://github.com/diodesign/diosix-agent-skills)
+   official
+   [Diosix agent skills](https://github.com/diodesign/diosix-agent-skills)
    with AI coding agents.
 *  **[GUI and system configuration architecture](docs/gui-architecture.md):**
    Explore the monolithic Direct Rendering Manager (DRM) and Kernel Mode

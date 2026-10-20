@@ -8,22 +8,39 @@ const linux = std.os.linux;
 const api = @import("api.zig");
 const catalog = @import("catalog.zig");
 const common = @import("common.zig");
+const sysconfig = @import("sysconfig.zig");
+const disk = @import("storage/disk.zig");
 const image_pull = @import("image/pull.zig");
 const image_import = @import("image/import.zig");
 
-pub const CATALOG_CONFIG_PATH = "/etc/diosix/catalog.toml";
+pub const CATALOG_CONFIG_PATH = sysconfig.DEFAULT_CATALOG_CONFIG_PATH;
 pub const fetchRemoteFile = image_pull.fetchRemoteFile;
 pub const pullRemoteOrStageImage = image_pull.pullRemoteOrStageImage;
 pub const cmdImageImport = image_import.cmdImageImport;
+pub const cmdImageVerify = image_import.cmdImageVerify;
+
+const SYMLINK_PROBE_BYTES: usize = 1;
+
+fn makeDir(path: []const u8) void {
+    var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    if (common.toPathZ(path, &z_buf)) |z| {
+        _ = linux.mkdir(z.ptr, 0o755);
+    }
+}
 
 fn listImagesInDir(
     dir_path: []const u8,
     iso_dir: []const u8,
     only_elf: bool,
     active_catalog: []const catalog.CatalogEntry,
+    json_out: ?*std.ArrayList(u8),
+    first_json: *bool,
 ) usize {
     var dir_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const dir_z = common.toPathZ(dir_path, &dir_z_buf) orelse return 0;
+    const dir_z = common.toPathZ(dir_path, &dir_z_buf) orelse {
+        disk.reportPathTooLong();
+        return 0;
+    };
 
     const dir_res = linux.open(
         dir_z.ptr,
@@ -35,8 +52,9 @@ fn listImagesInDir(
     const dir_fd: i32 = @intCast(dir_signed);
     defer _ = linux.close(dir_fd);
 
+    const allocator = std.heap.page_allocator;
     var count: usize = 0;
-    var dents_buf: [4096]u8 = undefined;
+    var dents_buf: [disk.DIRENT_BUF_BYTES]u8 = undefined;
     while (true) {
         const nread_res = linux.getdents64(
             dir_fd,
@@ -57,43 +75,27 @@ fn listImagesInDir(
             if (std.mem.startsWith(u8, dname, ".")) continue;
             if (only_elf and !std.mem.endsWith(u8, dname, ".elf")) continue;
 
-            var file_path_buf: [common.MAX_PATH_LEN]u8 = undefined;
-            const file_path = std.fmt.bufPrint(
-                &file_path_buf,
-                "{s}/{s}",
-                .{ dir_path, dname },
-            ) catch continue;
             var file_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-            const file_z = common.toPathZ(file_path, &file_z_buf) orelse
+            const file_z = disk.joinPathZ(
+                &file_z_buf,
+                dir_path,
+                dname,
+            ) orelse {
+                common.printFmt("Error: Path too long for '{s}'.\n", .{dname});
                 continue;
+            };
+            const file_path: []const u8 = file_z;
 
-            var link_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            var link_probe: [SYMLINK_PROBE_BYTES]u8 = undefined;
             const link_res = linux.readlink(
                 file_z.ptr,
-                &link_buf,
-                link_buf.len,
+                &link_probe,
+                link_probe.len,
             );
             const link_signed: isize = @bitCast(link_res);
             if (link_signed > 0) continue;
 
-            var size_mb_val: usize = 0;
-            const file_fd_res = linux.open(
-                file_z.ptr,
-                .{ .ACCMODE = .RDONLY },
-                0,
-            );
-            const file_fd_signed: isize = @bitCast(file_fd_res);
-            if (file_fd_signed >= 0) {
-                const file_fd: i32 = @intCast(file_fd_signed);
-                const end_off = linux.lseek(file_fd, 0, linux.SEEK.END);
-                const end_signed: isize = @bitCast(end_off);
-                if (end_signed > 0) {
-                    size_mb_val =
-                        @intCast(@divTrunc(end_signed, 1024 * 1024));
-                }
-                _ = linux.close(file_fd);
-            }
-
+            const size_mb = disk.fileSizeBytes(file_z.ptr) / disk.MIB_BYTES;
             const is_iso = !only_elf and
                 (std.mem.endsWith(u8, dname, ".iso") or
                     std.mem.eql(u8, dir_path, iso_dir));
@@ -103,38 +105,178 @@ fn listImagesInDir(
                 active_catalog,
             );
 
-            var size_str_buf: [32]u8 = undefined;
-            const size_str = if (size_mb_val >= 1024)
-                std.fmt.bufPrint(
-                    &size_str_buf,
-                    "{d} GB",
-                    .{size_mb_val / 1024},
-                ) catch "1 GB"
-            else
-                std.fmt.bufPrint(
-                    &size_str_buf,
-                    "{d} MB",
-                    .{size_mb_val},
-                ) catch "16 MB";
-
-            var line_buf: [256]u8 = undefined;
-            const line = std.fmt.bufPrint(
-                &line_buf,
-                "{s:<28} {s:<9} {s:<16} {s:<8} {s:<10} {s}\n",
-                .{
-                    dname,
-                    meta.tier,
-                    meta.os_family,
-                    meta.format,
-                    size_str,
-                    file_path,
-                },
-            ) catch continue;
-            common.printStr(line);
+            if (json_out) |out| {
+                if (!first_json.*) {
+                    out.append(allocator, ',') catch continue;
+                }
+                first_json.* = false;
+                out.appendSlice(allocator, "{\"name\":\"") catch continue;
+                common.writeJsonEscaped(out, allocator, dname) catch continue;
+                out.appendSlice(allocator, "\",\"tier\":\"") catch continue;
+                common.writeJsonEscaped(out, allocator, meta.tier) catch
+                    continue;
+                out.appendSlice(allocator, "\",\"os_family\":\"") catch
+                    continue;
+                common.writeJsonEscaped(out, allocator, meta.os_family) catch
+                    continue;
+                out.appendSlice(allocator, "\",\"format\":\"") catch continue;
+                common.writeJsonEscaped(out, allocator, meta.format) catch
+                    continue;
+                const sz_part = allocator.print(
+                    "\",\"size_mb\":{d},\"path\":\"",
+                    .{size_mb},
+                ) catch continue;
+                defer allocator.free(sz_part);
+                out.appendSlice(allocator, sz_part) catch continue;
+                common.writeJsonEscaped(out, allocator, file_path) catch
+                    continue;
+                out.appendSlice(allocator, "\"}") catch continue;
+            } else {
+                var size_buf: [disk.SIZE_STR_BYTES]u8 = undefined;
+                const size_str = disk.formatSizeMb(&size_buf, size_mb);
+                common.printFmt(
+                    "{s:<28} {s:<9} {s:<16} {s:<8} {s:<10} {s}\n",
+                    .{
+                        dname,
+                        meta.tier,
+                        meta.os_family,
+                        meta.format,
+                        size_str,
+                        file_path,
+                    },
+                );
+            }
             count += 1;
         }
     }
     return count;
+}
+
+fn printCatalog(
+    active_catalog: []const catalog.CatalogEntry,
+    json_flag: bool,
+) !void {
+    var aw: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer aw.deinit();
+    if (json_flag) {
+        try catalog.writeCatalogJson(&aw.writer, active_catalog);
+    } else {
+        try catalog.writeCatalogTable(&aw.writer, active_catalog);
+    }
+    common.printStr(aw.written());
+}
+
+fn imageList(
+    images_dir: []const u8,
+    iso_dir: []const u8,
+    active_catalog: []const catalog.CatalogEntry,
+    json_flag: bool,
+) void {
+    _ = linux.mkdir(sysconfig.VAR_LIB_DIOSIX_DIR, 0o755);
+    makeDir(images_dir);
+    makeDir(iso_dir);
+
+    var first_json = true;
+    if (json_flag) {
+        const allocator = std.heap.page_allocator;
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(allocator);
+        out.append(allocator, '[') catch return;
+        _ = listImagesInDir(
+            images_dir,
+            iso_dir,
+            false,
+            active_catalog,
+            &out,
+            &first_json,
+        );
+        _ = listImagesInDir(
+            iso_dir,
+            iso_dir,
+            false,
+            active_catalog,
+            &out,
+            &first_json,
+        );
+        out.appendSlice(allocator, "]\n") catch return;
+        common.printStr(out.items);
+        return;
+    }
+
+    common.printStr(
+        "Image / ISO name             Tier      OS family        " ++
+            "Format   Size       Path\n",
+    );
+    common.printStr(
+        "--------------------------------------------------------" ++
+            "---------------------------------------\n",
+    );
+    _ = listImagesInDir(
+        images_dir,
+        iso_dir,
+        false,
+        active_catalog,
+        null,
+        &first_json,
+    );
+    _ = listImagesInDir(
+        iso_dir,
+        iso_dir,
+        false,
+        active_catalog,
+        null,
+        &first_json,
+    );
+}
+
+fn imageDelete(
+    images_dir: []const u8,
+    iso_dir: []const u8,
+    args: []const [*:0]const u8,
+) !void {
+    if (args.len < 2) {
+        common.printStr("Usage: dsx image delete <name>\n");
+        return;
+    }
+    const img_name = std.mem.span(args[1]);
+    if (!common.isSafeIdentifier(img_name) or
+        !catalog.isValidImageName(img_name))
+    {
+        common.printStr("Error: Invalid image name.\n");
+        return;
+    }
+
+    const allocator = std.heap.page_allocator;
+    const is_iso = std.mem.endsWith(u8, img_name, ".iso");
+    const has_ext = is_iso or
+        std.mem.endsWith(u8, img_name, ".elf") or
+        std.mem.endsWith(u8, img_name, ".bin");
+    const base_dir = if (is_iso) iso_dir else images_dir;
+    const exts = if (has_ext)
+        &[_][]const u8{""}
+    else
+        &[_][]const u8{ "", ".elf", ".bin" };
+
+    for (exts) |ext| {
+        const path = try allocator.print("{s}/{s}{s}", .{
+            base_dir,
+            img_name,
+            ext,
+        });
+        defer allocator.free(path);
+        var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+        const z_path = common.toPathZ(path, &z_buf) orelse {
+            disk.reportPathTooLong();
+            return;
+        };
+        const un_res = linux.unlink(z_path.ptr);
+        const un_signed: isize = @bitCast(un_res);
+        if (un_signed == 0) {
+            common.printFmt("✓ Image '{s}' deleted.\n", .{img_name});
+            return;
+        }
+    }
+    common.printFmt("Error: Image '{s}' not found.\n", .{img_name});
 }
 
 pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
@@ -144,8 +286,7 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const iso_dir = sys_cfg.isoDir();
     _ = client;
     if (args.len == 0) {
-        var buf: [1024]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf,
+        common.printFmt(
             \\Usage:
             \\  {s} image list [--remote] [--json]       List images/ISOs
             \\  {s} image catalog [--json]               List official catalog
@@ -153,10 +294,10 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             \\      [--name <name>] [--sha256 <hex>]
             \\      [--allow-unverified] [--offline-stub] [--json]
             \\  {s} image import <file> [--name <name>]  Import local image
+            \\  {s} image verify <name> [--sha256 <hex>] Verify image SHA-256
             \\  {s} image delete <name>                  Delete repository image
             \\
-        , .{ exe_name, exe_name, exe_name, exe_name, exe_name }) catch return;
-        common.printStr(msg);
+        , .{ exe_name, exe_name, exe_name, exe_name, exe_name, exe_name });
         return;
     }
 
@@ -185,18 +326,16 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         fetch,
         import,
         add,
+        verify,
         delete,
         rm,
     };
     const subcmd = std.mem.span(args[0]);
     const parsed_subcmd = std.meta.stringToEnum(ImageSubcmd, subcmd) orelse {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &buf,
+        common.printFmt(
             "Unknown image subcommand '{s}'. Use '{s} image' for usage.\n",
             .{ subcmd, exe_name },
-        ) catch return;
-        common.printStr(msg);
+        );
         return;
     };
 
@@ -214,50 +353,13 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
     const is_list = parsed_subcmd == .list or parsed_subcmd == .ls;
     if (parsed_subcmd == .catalog or (is_list and remote_flag)) {
-        var cat_buf: [4096]u8 = undefined;
-        const out = if (json_flag)
-            catalog.formatCatalogJsonFromSlice(&cat_buf, active_catalog)
-        else
-            catalog.formatCatalogTableFromSlice(&cat_buf, active_catalog);
-        common.printStr(out);
+        try printCatalog(active_catalog, json_flag);
         return;
     }
 
     switch (parsed_subcmd) {
         .catalog => unreachable,
-        .list, .ls => {
-            common.printStr(
-                "Image / ISO name             Tier      OS family        " ++
-                    "Format   Size       Path\n",
-            );
-            common.printStr(
-                "--------------------------------------------------------" ++
-                    "---------------------------------------\n",
-            );
-
-            _ = linux.mkdir("/var/lib/diosix", 0o755);
-            var img_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-            if (common.toPathZ(images_dir, &img_z_buf)) |iz| {
-                _ = linux.mkdir(iz.ptr, 0o755);
-            }
-            var iso_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-            if (common.toPathZ(iso_dir, &iso_z_buf)) |sz| {
-                _ = linux.mkdir(sz.ptr, 0o755);
-            }
-
-            _ = listImagesInDir(
-                images_dir,
-                iso_dir,
-                false,
-                active_catalog,
-            );
-            _ = listImagesInDir(
-                iso_dir,
-                iso_dir,
-                false,
-                active_catalog,
-            );
-        },
+        .list, .ls => imageList(images_dir, iso_dir, active_catalog, json_flag),
         .pull, .fetch => {
             try image_pull.cmdImagePull(
                 exe_name,
@@ -269,63 +371,16 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         .import, .add => {
             try image_import.cmdImageImport(exe_name, args);
         },
-        .delete, .rm => {
-            if (args.len < 2) {
-                common.printStr("Usage: dsx image delete <name>\n");
-                return;
-            }
-            const img_name = std.mem.span(args[1]);
-            const is_abs = std.mem.startsWith(u8, img_name, "/var/lib/diosix/");
-            if ((is_abs and std.mem.indexOf(u8, img_name, "..") != null) or
-                (!is_abs and !catalog.isValidImageName(img_name)))
-            {
-                common.printStr("Error: Invalid image name.\n");
-                return;
-            }
-            var path_buf: [common.MAX_PATH_LEN]u8 = undefined;
-            const path = if (is_abs)
-                img_name
-            else if (std.mem.endsWith(u8, img_name, ".iso"))
-                std.fmt.bufPrint(
-                    &path_buf,
-                    "{s}/{s}",
-                    .{ iso_dir, img_name },
-                ) catch "/var/lib/diosix/iso/image.iso"
-            else if (std.mem.endsWith(u8, img_name, ".elf"))
-                std.fmt.bufPrint(
-                    &path_buf,
-                    "{s}/{s}",
-                    .{ images_dir, img_name },
-                ) catch "/var/lib/diosix/images/image.elf"
-            else
-                std.fmt.bufPrint(
-                    &path_buf,
-                    "{s}/{s}.elf",
-                    .{ images_dir, img_name },
-                ) catch "/var/lib/diosix/images/image.elf";
-
-            var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-            const z_path = common.toPathZ(path, &z_buf) orelse return;
-            const un_res = linux.unlink(z_path.ptr);
-            const un_signed: isize = @bitCast(un_res);
-            if (un_signed < 0) {
-                var err_buf: [128]u8 = undefined;
-                const err_msg = std.fmt.bufPrint(
-                    &err_buf,
-                    "Error: Image '{s}' not found.\n",
-                    .{img_name},
-                ) catch "Error: Image not found.\n";
-                common.printStr(err_msg);
-                return;
-            }
-            var out_buf: [256]u8 = undefined;
-            const out_msg = std.fmt.bufPrint(
-                &out_buf,
-                "✓ Image '{s}' deleted.\n",
-                .{img_name},
-            ) catch return;
-            common.printStr(out_msg);
+        .verify => {
+            try cmdImageVerify(
+                images_dir,
+                iso_dir,
+                args,
+                active_catalog,
+                json_flag,
+            );
         },
+        .delete, .rm => try imageDelete(images_dir, iso_dir, args),
     }
 }
 

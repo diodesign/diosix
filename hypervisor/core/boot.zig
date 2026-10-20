@@ -57,58 +57,11 @@ pub const GUEST_DTB_TAIL_RESERVE_BYTES: usize = 1024 * 1024;
 pub const MAX_HOST_BOOTARGS_LEN: usize = 512;
 pub const MAX_DT_DISCOVERY_DEPTH: usize = 10;
 
-/// Computes Root VM RAM allocation from total host physical RAM.
-pub fn computeRootVmRamBytes(total_host_ram_bytes: usize) usize {
-    if (total_host_ram_bytes == 0) return MIN_ROOT_VM_RAM_SIZE_BYTES;
-    const align_2mb: usize = 2 * 1024 * 1024;
-    if (total_host_ram_bytes < MIN_HOST_RAM_SIZE_BYTES) {
-        const half =
-            std.mem.alignBackward(usize, total_host_ram_bytes / 2, align_2mb);
-        return @max(align_2mb, half);
-    }
-    const scaled = std.mem.alignBackward(
-        usize,
-        total_host_ram_bytes / ROOT_RAM_HOST_DIVISOR,
-        align_2mb,
-    );
-    return std.math.clamp(
-        scaled,
-        MIN_ROOT_VM_RAM_SIZE_BYTES,
-        MAX_ROOT_VM_RAM_SIZE_BYTES,
-    );
-}
-
-/// Computes Root VM virtual CPU count from total discovered host CPUs.
-pub fn computeRootVmVcpuCount(host_cpu_count: usize) usize {
-    if (host_cpu_count == 0) return MAX_ROOT_VM_VCPU_COUNT;
-    return std.math.clamp(
-        host_cpu_count,
-        MIN_ROOT_VM_VCPU_COUNT,
-        MAX_ROOT_VM_VCPU_COUNT,
-    );
-}
-
-/// Sanitizes host-supplied `/chosen/bootargs` by stripping control characters,
-/// collapsing consecutive whitespace, and bounding length to `buf.len`.
-pub fn sanitizeBootargs(buf: []u8, raw: []const u8) []const u8 {
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    var out_len: usize = 0;
-    var prev_space: bool = false;
-    for (trimmed) |ch| {
-        if (out_len >= buf.len) break;
-        const norm: u8 =
-            if (!std.ascii.isControl(ch) and ch != ' ') ch else ' ';
-        if (norm == ' ') {
-            if (prev_space) continue;
-            prev_space = true;
-        } else {
-            prev_space = false;
-        }
-        buf[out_len] = norm;
-        out_len += 1;
-    }
-    return std.mem.trimEnd(u8, buf[0..out_len], " ");
-}
+pub const policy = @import("boot/policy.zig");
+pub const computeRootVmRamBytes = policy.computeRootVmRamBytes;
+pub const computeRootVmVcpuCount = policy.computeRootVmVcpuCount;
+pub const sanitizeBootargs = policy.sanitizeBootargs;
+pub const discoverHostPeripherals = policy.discoverHostPeripherals;
 
 // Global hypervisor state and resources.
 pub const SystemContext = struct {
@@ -120,39 +73,6 @@ pub var system_ctx_locked = atomic.LockPayload(?*SystemContext).init(
     "Global system context",
     null,
 );
-
-fn discoverHostPeripherals(device_tree: *const dt.DeviceTree) !void {
-    var dt_it = device_tree.iter("/", MAX_DT_DISCOVERY_DEPTH);
-    while (dt_it.next()) |path| {
-        const compat_prop = device_tree.getProperty(path, "compatible") catch
-            continue;
-        const compat_text = compat_prop.asText() catch continue;
-
-        if (std.mem.indexOf(u8, compat_text, "clint") != null or
-            std.mem.indexOf(u8, compat_text, "sifive,clint0") != null)
-        {
-            if (try device_tree.readAddress(path)) |addr| {
-                riscv.clint_base = addr;
-            }
-        } else if (std.mem.indexOf(u8, compat_text, "ns16550a") != null or
-            std.mem.indexOf(u8, compat_text, "uart") != null)
-        {
-            if (try device_tree.readAddress(path)) |addr| {
-                riscv.uart_base = addr;
-            }
-        } else if (std.mem.indexOf(u8, compat_text, "sifive,test") != null) {
-            if (try device_tree.readAddress(path)) |addr| {
-                riscv.test_device_base = addr;
-            }
-        } else if (std.mem.indexOf(u8, compat_text, "plic") != null or
-            std.mem.indexOf(u8, compat_text, "sifive,plic") != null)
-        {
-            if (try device_tree.readAddress(path)) |addr| {
-                riscv.plic_base = addr;
-            }
-        }
-    }
-}
 
 /// Core initialization logic for the boot CPU.
 pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
@@ -359,11 +279,11 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         if (is_emulated) {
             try emulation.init(vc);
         }
+    }
 
-        if (i == 0) {
-            vc.state = .ready;
-            scheduler.queue(vc);
-        }
+    if (root_vm.vcores.start) |vc0_node| {
+        vc0_node.contents.state = .ready;
+        scheduler.queue(vc0_node.contents);
     }
 
     main.global_root_vm = root_vm;
@@ -406,6 +326,7 @@ pub var test_rootvm_start: usize = 0;
 pub var test_rootvm_end: usize = 0;
 
 test "boot CPU initialization, bootargs forwarding, and resource scaling" {
+    _ = policy;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
     const allocator = testing.allocator;

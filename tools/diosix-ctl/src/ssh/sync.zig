@@ -6,7 +6,89 @@
 const std = @import("std");
 const linux = std.os.linux;
 const common = @import("../common.zig");
+const sysconfig = @import("../sysconfig.zig");
 const ssh = @import("../ssh.zig");
+
+pub fn parseIpv4(s: []const u8) ?u32 {
+    var parts: [4]u8 = undefined;
+    var part_idx: usize = 0;
+    var cur_val: u32 = 0;
+    var has_digits = false;
+
+    for (s) |c| {
+        if (c >= '0' and c <= '9') {
+            cur_val = cur_val * 10 + (c - '0');
+            if (cur_val > 255) return null;
+            has_digits = true;
+        } else if (c == '.') {
+            if (!has_digits or part_idx >= 3) return null;
+            parts[part_idx] = @intCast(cur_val);
+            part_idx += 1;
+            cur_val = 0;
+            has_digits = false;
+        } else {
+            return null;
+        }
+    }
+    if (!has_digits or part_idx != 3) return null;
+    parts[3] = @intCast(cur_val);
+    return @as(u32, parts[0]) |
+        (@as(u32, parts[1]) << 8) |
+        (@as(u32, parts[2]) << 16) |
+        (@as(u32, parts[3]) << 24);
+}
+
+pub fn isSshPortOpen(ip_str: []const u8) bool {
+    const ip_addr = parseIpv4(ip_str) orelse return false;
+    const sock_flags =
+        linux.SOCK.STREAM | linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC;
+    const fd_res = linux.socket(linux.AF.INET, sock_flags, 0);
+    const fd_signed: isize = @bitCast(fd_res);
+    if (fd_signed < 0) return false;
+    const fd: i32 = @intCast(fd_signed);
+    defer _ = linux.close(fd);
+
+    var addr: linux.sockaddr.in = undefined;
+    addr.family = linux.AF.INET;
+    addr.port = std.mem.nativeToBig(u16, 22);
+    addr.addr = ip_addr;
+
+    const connect_res = linux.connect(
+        fd,
+        @ptrCast(&addr),
+        @sizeOf(linux.sockaddr.in),
+    );
+    const connect_signed: isize = @bitCast(connect_res);
+    if (connect_signed == 0) return true;
+
+    const neg_rc: usize = @bitCast(-connect_signed);
+    const err_code: u32 = @truncate(neg_rc);
+    if (err_code == @backingInt(linux.E.INPROGRESS)) {
+        var pfd = [_]linux.pollfd{.{
+            .fd = fd,
+            .events = linux.POLL.OUT,
+            .revents = 0,
+        }};
+        const poll_res = linux.poll(&pfd, 1, 1000);
+        const poll_signed: isize = @bitCast(poll_res);
+        const revents = pfd[0].revents;
+        const ready = (revents & linux.POLL.OUT) != 0 and
+            (revents & (linux.POLL.ERR | linux.POLL.HUP)) == 0;
+        if (poll_signed > 0 and ready) {
+            var so_error: i32 = 0;
+            var optlen: u32 = @sizeOf(i32);
+            _ = linux.getsockopt(
+                fd,
+                linux.SOL.SOCKET,
+                linux.SO.ERROR,
+                @ptrCast(&so_error),
+                &optlen,
+            );
+            return so_error == 0;
+        }
+    }
+    return false;
+}
 
 pub fn copyFileOverSsh(
     key_str: ?[:0]const u8,
@@ -20,15 +102,16 @@ pub fn copyFileOverSsh(
     const src_fd: i32 = @intCast(src_fd_signed);
     defer _ = linux.close(src_fd);
 
-    var remote_cmd_buf: [common.MAX_PATH_LEN + 32]u8 = undefined;
-    const remote_cmd = std.fmt.bufPrint(
-        &remote_cmd_buf,
+    const allocator = std.heap.page_allocator;
+    const remote_cmd_z = allocator.printSentinel(
         "cat > '{s}'",
         .{remote_dest},
-    ) catch return false;
-    var remote_cmd_z_buf: [common.MAX_PATH_LEN + 32]u8 = undefined;
-    const remote_cmd_z = common.toPathZ(remote_cmd, &remote_cmd_z_buf) orelse
+        0,
+    ) catch {
+        common.printStr(OOM_MESSAGE);
         return false;
+    };
+    defer allocator.free(remote_cmd_z);
 
     const pid_res = linux.fork();
     const pid_signed: isize = @bitCast(pid_res);
@@ -38,7 +121,7 @@ pub fn copyFileOverSsh(
         _ = linux.close(src_fd);
 
         const devnull_res = linux.open(
-            "/dev/null",
+            sysconfig.DEV_NULL_PATH,
             .{ .ACCMODE = .WRONLY },
             0,
         );
@@ -50,19 +133,16 @@ pub fn copyFileOverSsh(
             _ = linux.close(dn_fd);
         }
 
-        const ssh_bins = [_][*:0]const u8{
-            "/usr/bin/ssh",
-            "/usr/bin/dbclient",
-            "/bin/ssh",
-        };
         const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
             "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
             null,
         };
-        for (ssh_bins) |bin| {
-            var argv_buf: [8:null]?[*:0]const u8 = @splat(null);
+        for (sysconfig.SSH_CLIENT_BINS) |bin| {
+            var z_bin_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            const bin_z = common.toPathZ(bin, &z_bin_buf) orelse continue;
+            var argv_buf: [10:null]?[*:0]const u8 = @splat(null);
             var argc: usize = 0;
-            argv_buf[argc] = bin;
+            argv_buf[argc] = bin_z.ptr;
             argc += 1;
             if (key_str) |ks| {
                 argv_buf[argc] = "-i";
@@ -70,10 +150,11 @@ pub fn copyFileOverSsh(
                 argc += 2;
             }
             argv_buf[argc] = "-y";
-            argv_buf[argc + 1] = dest_str.ptr;
-            argv_buf[argc + 2] = remote_cmd_z.ptr;
-            argv_buf[argc + 3] = null;
-            _ = linux.execve(bin, &argv_buf, envp);
+            argv_buf[argc + 1] = "--";
+            argv_buf[argc + 2] = dest_str.ptr;
+            argv_buf[argc + 3] = remote_cmd_z.ptr;
+            argv_buf[argc + 4] = null;
+            _ = linux.execve(bin_z.ptr, &argv_buf, envp);
         }
         linux.exit(127);
     }
@@ -90,22 +171,27 @@ pub fn copyFileOverSsh(
     return status == 0;
 }
 
+const OOM_MESSAGE = "Error: Out of memory preparing SSH command.\n";
+
 pub fn ensureGuestDefaultImage(
     key_str: ?[:0]const u8,
     ip_addr: []const u8,
 ) void {
-    const candidate_sources = [_][]const u8{
-        "/var/lib/diosix/images/linux-guest.elf",
-        "/var/lib/diosix/images/default.elf",
+    if (!ssh.isValidSshIp(ip_addr)) return;
+    const allocator = std.heap.page_allocator;
+    const candidate_sources = [_][:0]const u8{
+        sysconfig.LINUX_GUEST_IMAGE_PATH,
+        sysconfig.DEFAULT_GUEST_IMAGE_PATH,
     };
-    var found_src: ?[]const u8 = null;
+    var found_src: ?[:0]const u8 = null;
     var found_fd: i32 = -1;
     var src_size: usize = 0;
     for (candidate_sources) |src_candidate| {
-        var src_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-        const src_z = common.toPathZ(src_candidate, &src_z_buf) orelse continue;
-
-        const fd_src = linux.open(src_z.ptr, .{ .ACCMODE = .RDONLY }, 0);
+        const fd_src = linux.open(
+            src_candidate.ptr,
+            .{ .ACCMODE = .RDONLY },
+            0,
+        );
         const fd_signed: isize = @bitCast(fd_src);
         if (fd_signed < 0) continue;
         const fd: i32 = @intCast(fd_signed);
@@ -122,34 +208,34 @@ pub fn ensureGuestDefaultImage(
         src_size = @intCast(end_signed);
         break;
     }
-    if (found_src == null or found_fd < 0) return;
+    const src_z = found_src orelse return;
+    if (found_fd < 0) return;
     defer _ = linux.close(found_fd);
-    var src_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const src_z = common.toPathZ(found_src.?, &src_z_buf) orelse return;
 
-    var dest_buf: [128]u8 = undefined;
-    const dest_slice = std.fmt.bufPrint(
-        &dest_buf,
+    const dest_str = allocator.printSentinel(
         "root@{s}",
         .{ip_addr},
-    ) catch return;
-    var dest_z_buf: [128]u8 = undefined;
-    const dest_str = common.toPathZ(dest_slice, &dest_z_buf) orelse return;
+        0,
+    ) catch {
+        common.printStr(OOM_MESSAGE);
+        return;
+    };
+    defer allocator.free(dest_str);
 
     const check_cmd: [:0]const u8 =
-        "test -s /var/lib/diosix/images/default.elf || " ++
-        "test -s /var/lib/diosix/images/linux-guest.elf";
+        "test -s " ++ sysconfig.DEFAULT_GUEST_IMAGE_PATH ++ " || " ++
+        "test -s " ++ sysconfig.LINUX_GUEST_IMAGE_PATH;
     if (ssh.runSshCommand(key_str, dest_str, check_cmd, true) == 0) return;
 
-    var test_cmd_buf: [128]u8 = undefined;
-    const test_cmd = std.fmt.bufPrint(
-        &test_cmd_buf,
-        "[ $(wc -c < /var/lib/diosix/images/default.elf " ++
-            "2>/dev/null || echo 0) -eq {d} ]",
-        .{src_size},
-    ) catch return;
-    var test_cmd_z_buf: [128]u8 = undefined;
-    const test_cmd_z = common.toPathZ(test_cmd, &test_cmd_z_buf) orelse return;
+    const test_cmd_z = allocator.printSentinel(
+        "[ $(wc -c < {s} 2>/dev/null || echo 0) -eq {d} ]",
+        .{ sysconfig.DEFAULT_GUEST_IMAGE_PATH, src_size },
+        0,
+    ) catch {
+        common.printStr(OOM_MESSAGE);
+        return;
+    };
+    defer allocator.free(test_cmd_z);
     if (ssh.runSshCommand(key_str, dest_str, test_cmd_z, true) == 0) return;
 
     common.printStr(
@@ -157,29 +243,28 @@ pub fn ensureGuestDefaultImage(
             "virtualization...\n",
     );
 
-    const mkdir_cmd: [:0]const u8 = "mkdir -p /var/lib/diosix/images";
+    const mkdir_cmd: [:0]const u8 = "mkdir -p " ++ sysconfig.DEFAULT_IMAGES_DIR;
     _ = ssh.runSshCommand(key_str, dest_str, mkdir_cmd, true);
 
-    const remote_tmp: [:0]const u8 = "/var/lib/diosix/images/.default.elf.tmp";
-    const cleanup_cmd: [:0]const u8 =
-        "rm -f /var/lib/diosix/images/.default.elf.tmp";
+    const remote_tmp: [:0]const u8 =
+        sysconfig.DEFAULT_IMAGES_DIR ++ "/.default.bin.tmp";
+    const cleanup_cmd: [:0]const u8 = "rm -f " ++ remote_tmp;
     if (copyFileOverSsh(key_str, dest_str, src_z.ptr, remote_tmp)) {
-        var verify_cmd_buf: [128]u8 = undefined;
-        const verify_cmd = std.fmt.bufPrint(
-            &verify_cmd_buf,
-            "[ $(wc -c < /var/lib/diosix/images/.default.elf.tmp " ++
-                "2>/dev/null || echo 0) -eq {d} ]",
-            .{src_size},
-        ) catch return;
-        var verify_z_buf: [128]u8 = undefined;
-        const verify_z = common.toPathZ(verify_cmd, &verify_z_buf) orelse
+        const verify_z = allocator.printSentinel(
+            "[ $(wc -c < {s} 2>/dev/null || echo 0) -eq {d} ]",
+            .{ remote_tmp, src_size },
+            0,
+        ) catch {
+            common.printStr(OOM_MESSAGE);
             return;
+        };
+        defer allocator.free(verify_z);
 
         if (ssh.runSshCommand(key_str, dest_str, verify_z, true) == 0) {
             const install_cmd: [:0]const u8 =
-                "mv -f /var/lib/diosix/images/.default.elf.tmp " ++
-                "/var/lib/diosix/images/default.elf && " ++
-                "chmod +x /var/lib/diosix/images/default.elf";
+                "mv -f " ++ remote_tmp ++ " " ++
+                sysconfig.DEFAULT_GUEST_IMAGE_PATH ++ " && " ++
+                "chmod +x " ++ sysconfig.DEFAULT_GUEST_IMAGE_PATH;
             _ = ssh.runSshCommand(key_str, dest_str, install_cmd, true);
             common.printStr("✓ Guest image verified and ready on child VM.\n");
         } else {

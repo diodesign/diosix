@@ -2,6 +2,8 @@
 #
 # Starts dropbear sshd for Diosix guests and Root VM.
 #
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
 
 start() {
     printf "Starting dropbear sshd: "
