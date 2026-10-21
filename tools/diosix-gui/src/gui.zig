@@ -28,11 +28,7 @@ pub const WIN_HELP_ID: u32 = 103;
 pub const WIN_STATUS_ID: u32 = 104;
 pub const WIN_ABOUT_ID: u32 = WIN_STATUS_ID;
 pub const WIN_CONFIG_ID: u32 = 105;
-pub const WIN_SOFTWARE_ID: u32 = 106;
-pub const WIN_HARDWARE_ID: u32 = 107;
 
-pub const WIN_VM_FLEET_ID: u32 = 200;
-pub const WIN_VM_DRAWER_ID: u32 = 201;
 pub const WIN_POWER_MODAL_ID: u32 = 202;
 
 pub const WIN_OSK_ID: u32 = 300;
@@ -44,7 +40,6 @@ pub const ICON_TOUR_LAUNCH_ID: u32 = 1401;
 pub const ICON_OSK_KEY_BASE_ID: u32 = 1410;
 pub const ICON_OSK_DISPLAY_ID: u32 = 1450;
 pub const ICON_WELCOME_TOUR_BTN_ID: u32 = 1460;
-pub const ICON_WELCOME_INSTALL_BTN_ID: u32 = 1461;
 pub const ICON_WELCOME_DISMISS_BTN_ID: u32 = 1462;
 pub const ICON_WELCOME_SUBTITLE1_ID: u32 = 1463;
 pub const ICON_WELCOME_SUBTITLE2_ID: u32 = 1464;
@@ -56,67 +51,15 @@ pub const ICON_TOUR_SUMMARY2_ID: u32 = 1474;
 pub const ICON_TOUR_CLI_HINT_ID: u32 = 1475;
 
 // Main Menu IDs.
-pub const ICON_MENU_SOFTWARE_ID: u32 = 1001;
-pub const ICON_MENU_HARDWARE_ID: u32 = 1002;
 pub const ICON_MENU_ABOUT_ID: u32 = 1003;
 pub const ICON_MENU_STATUS_ID: u32 = ICON_MENU_ABOUT_ID;
 pub const ICON_MENU_CONFIG_ID: u32 = 1004;
 pub const ICON_MENU_RESTART_ID: u32 = 1005;
 pub const ICON_MENU_SHUTDOWN_ID: u32 = 1006;
-pub const ICON_MENU_GUESTS_ID: u32 = ICON_MENU_SOFTWARE_ID;
 
 pub const ICON_VERSION_TEXT_ID: u32 = 1011;
 pub const ICON_BACK_BTN_ID: u32 = 1021;
 pub const ICON_HELP_TEXT_ID: u32 = 1031;
-
-// VM Fleet Overview IDs.
-pub const ICON_VM_CREATE_NEW_ID: u32 = 1200;
-pub const ICON_VM_ROOTVM_ID: u32 = 1201;
-pub const ICON_VM_ALPINE_ID: u32 = 1202;
-pub const ICON_VM_DEBIAN_ID: u32 = 1203;
-pub const ICON_VM_FREEBSD_ID: u32 = 1204;
-pub const ICON_VM_SNAP_DEBIAN_ID: u32 = 1205;
-pub const ICON_VM_NETBSD_ID: u32 = 1206;
-
-// VM Action Drawer IDs.
-pub const ICON_DRAWER_TITLE_ID: u32 = 1250;
-pub const ICON_DRAWER_STATE_ID: u32 = 1251;
-pub const ICON_DRAWER_SPEC1_ID: u32 = 1252;
-pub const ICON_DRAWER_SPEC2_ID: u32 = 1253;
-pub const ICON_DRAWER_SPEC3_ID: u32 = 1254;
-pub const ICON_DRAWER_NOTICE1_ID: u32 = 1255;
-pub const ICON_DRAWER_NOTICE2_ID: u32 = 1256;
-pub const ICON_DRAWER_OPS_HDR_ID: u32 = 1259;
-pub const ICON_DRAWER_BTN_START_ID: u32 = 1260;
-pub const ICON_DRAWER_BTN_STOP_ID: u32 = 1261;
-pub const ICON_DRAWER_BTN_PAUSE_ID: u32 = 1262;
-pub const ICON_DRAWER_BTN_SNAP_ID: u32 = 1263;
-pub const ICON_DRAWER_BTN_CONSOLE_ID: u32 = 1264;
-pub const ICON_DRAWER_BTN_KILL_ID: u32 = 1265;
-pub const ICON_DRAWER_BTN_RESTORE_ID: u32 = 1266;
-pub const ICON_DRAWER_BTN_CLONE_ID: u32 = 1267;
-pub const ICON_DRAWER_BTN_DELETE_ID: u32 = 1268;
-
-// Software Pane IDs.
-pub const ICON_SW_FILTER_ALL_ID: u32 = 1301;
-pub const ICON_SW_FILTER_MAN_ID: u32 = 1302;
-pub const ICON_SW_FILTER_DSK_ID: u32 = 1303;
-pub const ICON_SW_FILTER_IMG_ID: u32 = 1304;
-pub const ICON_SW_BTN_IMPORT_ID: u32 = 1305;
-pub const ICON_SW_ITEM_ALPINE_MAN_ID: u32 = 1310;
-pub const ICON_SW_ITEM_DEBIAN_MAN_ID: u32 = 1311;
-pub const ICON_SW_ITEM_ALPINE_RAW_ID: u32 = 1312;
-pub const ICON_SW_ITEM_DATA_QCOW_ID: u32 = 1313;
-pub const ICON_SW_ITEM_ALPINE_ISO_ID: u32 = 1314;
-pub const ICON_SW_ITEM_DEBIAN_QCOW_ID: u32 = 1315;
-
-// Hardware Pane IDs.
-pub const ICON_HW_ITEM_ETH0_ID: u32 = 1350;
-pub const ICON_HW_ITEM_BR0_ID: u32 = 1351;
-pub const ICON_HW_ITEM_TPM_ID: u32 = 1352;
-pub const ICON_HW_ITEM_YUBIKEY_ID: u32 = 1353;
-pub const ICON_HW_ITEM_NVME_ID: u32 = 1354;
-pub const ICON_HW_ITEM_CPU_ID: u32 = 1355;
 
 // Power Modal IDs.
 pub const ICON_POWER_TITLE_ID: u32 = 1380;
@@ -130,7 +73,7 @@ pub const MENU_ITEM_SPACING: u32 = 6;
 pub const MENU_PAD_X: i32 = 16;
 pub const MENU_TOP_PAD: i32 = 12;
 pub const MENU_BOT_PAD: i32 = 12;
-pub const MENU_FULL_H: u32 = 236;
+pub const MENU_FULL_H: u32 = 162;
 pub const MENU_CONTRACTED_H: u32 = 56;
 pub const BACK_PANE_H: u32 = 56;
 pub const BACK_PANE_GAP: i32 = 12;
@@ -158,8 +101,6 @@ pub const DriftDirection = enum(u2) {
 };
 
 pub const SemanticAction = enum {
-    @"menu.software",
-    @"menu.hardware",
     @"menu.about",
     @"menu.status",
     @"menu.config",
@@ -204,14 +145,8 @@ pub const ICON_CONFIG_TRANSPARENCY_LBL_ID: u32 = 1061;
 pub const ICON_CONFIG_TRANSPARENCY_SLIDER_ID: u32 = 1062;
 pub const ICON_CONFIG_BLUR_LBL_ID: u32 = 1063;
 pub const ICON_CONFIG_BLUR_SLIDER_ID: u32 = 1064;
-pub const ICON_CONFIG_THEME_LBL_ID: u32 = 1065;
-pub const ICON_CONFIG_THEME_DAY_ID: u32 = 1066;
-pub const ICON_CONFIG_THEME_MIDNIGHT_ID: u32 = 1067;
-pub const ICON_CONFIG_THEME_SUNSET_ID: u32 = 1068;
-pub const ICON_CONFIG_THEME_EMERALD_ID: u32 = 1069;
 pub const ICON_CONFIG_SPEED_LBL_ID: u32 = 1072;
 pub const ICON_CONFIG_SPEED_SLIDER_ID: u32 = 1073;
-pub const GROUP_CONFIG_THEME: u16 = 1;
 
 pub const DiosixGui = struct {
     allocator: std.mem.Allocator,
@@ -249,8 +184,6 @@ pub const DiosixGui = struct {
     active_menu_id: ?u32 = null,
 
     active_drag_win_id: ?u32 = null,
-    selected_vm_id: u32 = ICON_VM_ALPINE_ID,
-    selected_theme_id: u32 = ICON_CONFIG_THEME_DAY_ID,
 
     power_modal_action: ?PowerAction = null,
     power_action_confirmed: bool = false,
@@ -308,7 +241,6 @@ pub const DiosixGui = struct {
 
         try gui.buildMainMenu();
         try gui.buildBottomPanes();
-        try gui.buildVmFleetOverview();
 
         if (gui.windows.items.len > 0) {
             gui.focusWindow(0);
@@ -368,8 +300,6 @@ pub const DiosixGui = struct {
     pub const focusWindow = gui_input.focusWindow;
     pub const focusWindowById = gui_input.focusWindowById;
     pub const getActiveWindow = gui_input.getActiveWindow;
-    pub const selectVm = gui_input.selectVm;
-    pub const handleVmAction = gui_input.handleVmAction;
     pub const confirmPowerModal = gui_input.confirmPowerModal;
     pub const triggerSemanticAction = gui_input.triggerSemanticAction;
     pub const exportSemanticStateJson = gui_input.exportSemanticStateJson;
@@ -377,19 +307,10 @@ pub const DiosixGui = struct {
     pub const buildStatusPane = panes.buildStatusPane;
     pub const updateStatusPaneData = panes.updateStatusPaneData;
     pub const buildConfigPane = panes.buildConfigPane;
-    pub const buildSoftwarePane = panes.buildSoftwarePane;
-    pub const buildHardwarePane = panes.buildHardwarePane;
-    pub const buildVmFleetOverview = panes.buildVmFleetOverview;
-    pub const buildVmActionDrawer = panes.buildVmActionDrawer;
     pub const showPowerModal = panes.showPowerModal;
     pub const buildOskWindow = panes.buildOskWindow;
     pub const showWelcomeModal = panes.showWelcomeModal;
     pub const showTourModal = panes.showTourModal;
-
-    pub fn teardownVmFleetOverview(self: *DiosixGui) void {
-        _ = self.destroyWindow(WIN_VM_FLEET_ID);
-        _ = self.destroyWindow(WIN_VM_DRAWER_ID);
-    }
 
     pub fn closePowerModal(self: *DiosixGui) void {
         _ = self.destroyWindow(WIN_POWER_MODAL_ID);

@@ -123,7 +123,6 @@ pub const WelcomeState = struct {
     welcome_visible: bool = false,
     tour_visible: bool = false,
     current_step: usize = 0, // 0..4 index into TOUR_STEPS.
-    install_requested: bool = false,
     custom_steps: [TOUR_STEP_COUNT]CustomTourStep = @splat(.{}),
     custom_step_count: usize = 0,
     config_loaded: bool = false,

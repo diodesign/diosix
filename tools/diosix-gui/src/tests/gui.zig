@@ -18,30 +18,24 @@ test "diosix-gui: coordinator init, layout, and host telemetry panes" {
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    // 1. Initial layout has 5 windows: Menu, Help, Version, Fleet, Drawer.
-    try testing.expectEqual(@as(usize, 5), gui.windows.items.len);
+    // 1. Initial layout has 3 windows: Menu, Version, Help.
+    try testing.expectEqual(@as(usize, 3), gui.windows.items.len);
 
     var win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
     try testing.expect(win_menu.is_onscreen);
     try testing.expectEqual(gui_mod.BORDER_GAP, win_menu.x);
     try testing.expectEqual(gui_mod.BORDER_GAP, win_menu.y);
-    try testing.expectEqual(@as(usize, 6), win_menu.icons.items.len);
+    try testing.expectEqual(@as(usize, 4), win_menu.icons.items.len);
 
-    const item_software = &win_menu.icons.items[0];
-    const item_hardware = &win_menu.icons.items[1];
-    const item_status = &win_menu.icons.items[2];
-    const item_config = &win_menu.icons.items[3];
-    const item_restart = &win_menu.icons.items[4];
-    const item_shutdown = &win_menu.icons.items[5];
-    try testing.expectEqualStrings("Software", item_software.getText());
-    try testing.expectEqualStrings("Hardware", item_hardware.getText());
+    const item_status = &win_menu.icons.items[0];
+    const item_config = &win_menu.icons.items[1];
+    const item_restart = &win_menu.icons.items[2];
+    const item_shutdown = &win_menu.icons.items[3];
     try testing.expectEqualStrings("About", item_status.getText());
     try testing.expectEqualStrings("Config", item_config.getText());
     try testing.expectEqualStrings("Restart", item_restart.getText());
     try testing.expectEqualStrings("Shutdown", item_shutdown.getText());
     const menu_t = icon_mod.IconType.menu_item;
-    try testing.expectEqual(menu_t, item_software.icon_type);
-    try testing.expectEqual(menu_t, item_hardware.icon_type);
     try testing.expectEqual(menu_t, item_status.icon_type);
     try testing.expectEqual(menu_t, item_config.icon_type);
     try testing.expectEqual(menu_t, item_restart.icon_type);
@@ -49,28 +43,12 @@ test "diosix-gui: coordinator init, layout, and host telemetry panes" {
 
     // 2. Mouse hover over menu items sets is_hovered.
     gui.handleMouseMove(
-        win_menu.x + item_software.rel_x + 5,
-        win_menu.y + item_software.rel_y + 5,
-        false,
-    );
-    try testing.expect(item_software.is_hovered);
-    try testing.expect(!item_hardware.is_hovered);
-
-    gui.handleMouseMove(
-        win_menu.x + item_hardware.rel_x + 5,
-        win_menu.y + item_hardware.rel_y + 5,
-        false,
-    );
-    try testing.expect(!item_software.is_hovered);
-    try testing.expect(item_hardware.is_hovered);
-
-    gui.handleMouseMove(
         win_menu.x + item_status.rel_x + 5,
         win_menu.y + item_status.rel_y + 5,
         false,
     );
-    try testing.expect(!item_hardware.is_hovered);
     try testing.expect(item_status.is_hovered);
+    try testing.expect(!item_config.is_hovered);
 
     gui.handleMouseMove(
         win_menu.x + item_config.rel_x + 5,
@@ -107,26 +85,6 @@ test "diosix-gui: coordinator init, layout, and host telemetry panes" {
 
     // 5. Active Help dynamic updates.
     gui.handleMouseMove(
-        win_menu.x + item_software.rel_x + 5,
-        win_menu.y + item_software.rel_y + 5,
-        false,
-    );
-    try testing.expectEqualStrings(
-        "Manage VM images, virtual disks, and machine manifests",
-        help_icon.getText(),
-    );
-
-    gui.handleMouseMove(
-        win_menu.x + item_hardware.rel_x + 5,
-        win_menu.y + item_hardware.rel_y + 5,
-        false,
-    );
-    try testing.expectEqualStrings(
-        "Manage peripherals, network bridges, and physical devices",
-        help_icon.getText(),
-    );
-
-    gui.handleMouseMove(
         win_menu.x + item_status.rel_x + 5,
         win_menu.y + item_status.rel_y + 5,
         false,
@@ -142,7 +100,7 @@ test "diosix-gui: coordinator init, layout, and host telemetry panes" {
         false,
     );
     try testing.expectEqualStrings(
-        "Configure window appearance and desktop background themes",
+        "Configure window transparency, glass blur, and background morph",
         help_icon.getText(),
     );
 
@@ -273,7 +231,7 @@ test "diosix-gui: coordinator init, layout, and host telemetry panes" {
     try testing.expect(gui.getWindow(gui_mod.WIN_BACK_ID) == null);
     try testing.expectEqual(gui_mod.MENU_FULL_H, win_menu.height);
     win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
-    try testing.expectEqual(@as(usize, 6), win_menu.icons.items.len);
+    try testing.expectEqual(@as(usize, 4), win_menu.icons.items.len);
 
     gui.handleMouseMove(50, 500, false);
     try testing.expectEqualStrings("Welcome to diosix", help_icon.getText());
@@ -286,14 +244,14 @@ test "diosix-gui: dynamic window lifecycle (create, destroy, destroyAll)" {
 
     const win = try gui.createWindow(501, 100, 100, 300, 200, "Dynamic Pane");
     try testing.expect(win.is_onscreen);
-    try testing.expectEqual(@as(usize, 6), gui.windows.items.len);
+    try testing.expectEqual(@as(usize, 4), gui.windows.items.len);
 
     _ = try win.addIcon(Icon.createButton(5001, 10, 10, 100, 30, "Action"));
     try testing.expect(gui.getWindow(501) != null);
 
     const destroyed = gui.destroyWindow(501);
     try testing.expect(destroyed);
-    try testing.expectEqual(@as(usize, 5), gui.windows.items.len);
+    try testing.expectEqual(@as(usize, 3), gui.windows.items.len);
     try testing.expect(gui.getWindow(501) == null);
 
     gui.destroyAllWindows();

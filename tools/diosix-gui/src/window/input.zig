@@ -71,13 +71,7 @@ pub fn triggerIcon(self: *Window, gui_ctx: *anyopaque, icon: *Icon) void {
         .slider => {},
         .read_only_text => {},
         .progress_bar => {},
-        .video_viewport => {
-            icon.is_active_press = true;
-        },
         .menu_item => {
-            icon.is_active_press = true;
-        },
-        .slate_card => {
             icon.is_active_press = true;
         },
     }

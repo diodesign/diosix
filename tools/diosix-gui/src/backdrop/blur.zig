@@ -118,6 +118,8 @@ pub fn drawBlurredBackdropInBoxDrift(
     const kernel_len = r_blur * 2 + 1;
 
     // Pass 1: Horizontal 1D Gaussian convolution across [y_start, y_end).
+    const is_morph = (top_col == Color.SKY_BASE_TOP);
+    const morph = backdrop.MorphField.init(w, h, dx, dy);
     const grad = RgbGradient.init(top_col, bot_col, h);
     const max_w: i32 = @intCast(if (w > 0) w - 1 else 0);
 
@@ -125,23 +127,37 @@ pub fn drawBlurredBackdropInBoxDrift(
     while (y_iter < y_end) : (y_iter += 1) {
         const cy = std.math.clamp(y_iter, 0, @as(i32, @intCast(h - 1)));
         const row_idx = @as(usize, @intCast(y_iter - y_start)) * width_int;
-        const rgb = grad.rowBase(cy);
-        const ucy = backdrop.mod256(cy, dy);
-        const map_y1 = (ucy & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-        const map_y2 = ((ucy * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
 
-        var si: usize = 0;
-        var sx_iter = x0 - r_int;
-        const sx_end = x1 + r_int;
-        while (sx_iter < sx_end and si < src_row_len) : ({
-            sx_iter += 1;
-            si += 1;
-        }) {
-            const cx_c = std.math.clamp(sx_iter, 0, max_w);
-            const ucx = backdrop.mod256(cx_c, dx);
-            const op = CLOUD_BASE_OPACITY;
-            src_row_buf[si] =
-                backdrop.sampleCloudRowPixel(rgb, map_y1, map_y2, ucx, op);
+        if (is_morph) {
+            var si: usize = 0;
+            var sx_iter = x0 - r_int;
+            const sx_end = x1 + r_int;
+            while (sx_iter < sx_end and si < src_row_len) : ({
+                sx_iter += 1;
+                si += 1;
+            }) {
+                const cx_c = std.math.clamp(sx_iter, 0, max_w);
+                src_row_buf[si] = morph.samplePixel(cx_c, cy);
+            }
+        } else {
+            const rgb = grad.rowBase(cy);
+            const ucy = backdrop.mod256(cy, dy);
+            const map_y1 = (ucy & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+            const map_y2 = ((ucy * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
+
+            var si: usize = 0;
+            var sx_iter = x0 - r_int;
+            const sx_end = x1 + r_int;
+            while (sx_iter < sx_end and si < src_row_len) : ({
+                sx_iter += 1;
+                si += 1;
+            }) {
+                const cx_c = std.math.clamp(sx_iter, 0, max_w);
+                const ucx = backdrop.mod256(cx_c, dx);
+                const op = CLOUD_BASE_OPACITY;
+                src_row_buf[si] =
+                    backdrop.sampleCloudRowPixel(rgb, map_y1, map_y2, ucx, op);
+            }
         }
 
         for (0..width_int) |x_rel| {

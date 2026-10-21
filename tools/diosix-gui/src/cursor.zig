@@ -13,26 +13,26 @@ const K = fb.Color.BLACK;
 const W = fb.Color.WHITE;
 const T = fb.Color.TRANSPARENT;
 
-// Clean all-white mouse pointer arrow with solid black contrast outline.
+// Clean all-white mouse pointer arrow with solid 2px black contrast border.
 pub const POINTER_PIXELS = [_]u32{
-    K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
     K, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
-    K, W, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
-    K, W, W, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
-    K, W, W, W, K, T, T, T, T, T, T, T, T, T, T, T, T, T,
-    K, W, W, W, W, K, T, T, T, T, T, T, T, T, T, T, T, T,
-    K, W, W, W, W, W, K, T, T, T, T, T, T, T, T, T, T, T,
-    K, W, W, W, W, W, W, K, T, T, T, T, T, T, T, T, T, T,
-    K, W, W, W, W, W, W, W, K, T, T, T, T, T, T, T, T, T,
-    K, W, W, W, W, W, W, W, W, K, T, T, T, T, T, T, T, T,
-    K, W, W, W, W, W, K, K, K, K, K, T, T, T, T, T, T, T,
-    K, W, W, K, W, W, K, T, T, T, T, T, T, T, T, T, T, T,
-    K, W, K, T, K, W, W, K, T, T, T, T, T, T, T, T, T, T,
-    K, K, T, T, T, K, W, W, K, T, T, T, T, T, T, T, T, T,
-    K, T, T, T, T, K, W, W, K, T, T, T, T, T, T, T, T, T,
-    T, T, T, T, T, T, K, W, W, K, T, T, T, T, T, T, T, T,
-    T, T, T, T, T, T, K, W, W, K, T, T, T, T, T, T, T, T,
-    T, T, T, T, T, T, T, K, K, T, T, T, T, T, T, T, T, T,
+    K, K, K, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,
+    K, K, W, K, K, T, T, T, T, T, T, T, T, T, T, T, T, T,
+    K, K, W, W, K, K, T, T, T, T, T, T, T, T, T, T, T, T,
+    K, K, W, W, W, K, K, T, T, T, T, T, T, T, T, T, T, T,
+    K, K, W, W, W, W, K, K, T, T, T, T, T, T, T, T, T, T,
+    K, K, W, W, W, W, W, K, K, T, T, T, T, T, T, T, T, T,
+    K, K, W, W, W, W, W, W, K, K, T, T, T, T, T, T, T, T,
+    K, K, W, W, W, W, W, W, W, K, K, T, T, T, T, T, T, T,
+    K, K, W, W, W, W, W, W, W, W, K, K, T, T, T, T, T, T,
+    K, K, W, W, W, W, W, K, K, K, K, K, T, T, T, T, T, T,
+    K, K, W, W, K, W, W, K, K, T, T, T, T, T, T, T, T, T,
+    K, K, W, K, K, K, W, W, K, K, T, T, T, T, T, T, T, T,
+    K, K, K, T, T, K, K, W, W, K, K, T, T, T, T, T, T, T,
+    K, K, T, T, T, T, K, K, W, W, K, K, T, T, T, T, T, T,
+    T, T, T, T, T, T, T, K, K, W, W, K, T, T, T, T, T, T,
+    T, T, T, T, T, T, T, T, K, K, K, K, T, T, T, T, T, T,
+    T, T, T, T, T, T, T, T, T, K, K, T, T, T, T, T, T, T,
 };
 
 pub const Cursor = struct {
@@ -97,6 +97,22 @@ test "cursor: verify pointer sprite dimensions and pure white interior" {
         }
     }
 
+    try std.testing.expect(K != T);
+    try std.testing.expect(W != T);
     try std.testing.expect(white_count > 0);
     try std.testing.expect(black_count > 0);
+
+    var buf: [24 * 24]u32 = undefined;
+    @memset(&buf, 0x00808080);
+    var surf = fb.Surface.init(&buf, 24, 24, 24 * @sizeOf(u32));
+    Cursor.drawSprite(&surf, 2, 2);
+
+    var drawn_black: usize = 0;
+    var drawn_white: usize = 0;
+    for (buf) |px| {
+        if (px == K) drawn_black += 1;
+        if (px == W) drawn_white += 1;
+    }
+    try std.testing.expectEqual(black_count, drawn_black);
+    try std.testing.expectEqual(white_count, drawn_white);
 }

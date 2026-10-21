@@ -158,46 +158,6 @@ test "diosix-gui: config pane controls and dynamic appearance customization" {
     if (speed_slider.callback) |cb| cb(&gui, win_config, speed_slider);
     try testing.expectEqual(@as(u32, 0), gui.bg_animation_speed);
     try testing.expectEqual(@as(i32, 0), speed_slider.slider_val);
-
-    // 5. Test Theme radio button set: Midnight, Sunset, Emerald, Day Sky.
-    const mid_id = gui_mod.ICON_CONFIG_THEME_MIDNIGHT_ID;
-    const day_id = gui_mod.ICON_CONFIG_THEME_DAY_ID;
-    const sun_id = gui_mod.ICON_CONFIG_THEME_SUNSET_ID;
-    const em_id = gui_mod.ICON_CONFIG_THEME_EMERALD_ID;
-    const btn_midnight = win_config.getIconById(mid_id).?;
-    const btn_day = win_config.getIconById(day_id).?;
-    try testing.expect(btn_day.isTicked());
-    try testing.expect(!btn_midnight.isTicked());
-
-    if (btn_midnight.callback) |cb| cb(&gui, win_config, btn_midnight);
-    try testing.expectEqual(fb.Color.rgb(16, 24, 48), gui.bg_top_color);
-    try testing.expectEqual(fb.Color.rgb(4, 6, 16), gui.bg_bot_color);
-    try testing.expect(btn_midnight.isTicked());
-    try testing.expect(!btn_day.isTicked());
-    try testing.expectEqual(mid_id, gui.selected_theme_id);
-
-    const btn_sunset = win_config.getIconById(sun_id).?;
-    if (btn_sunset.callback) |cb| cb(&gui, win_config, btn_sunset);
-    try testing.expectEqual(fb.Color.rgb(180, 70, 60), gui.bg_top_color);
-    try testing.expectEqual(fb.Color.rgb(40, 20, 50), gui.bg_bot_color);
-    try testing.expect(btn_sunset.isTicked());
-    try testing.expect(!btn_midnight.isTicked());
-    try testing.expectEqual(sun_id, gui.selected_theme_id);
-
-    const btn_emerald = win_config.getIconById(em_id).?;
-    if (btn_emerald.callback) |cb| cb(&gui, win_config, btn_emerald);
-    try testing.expectEqual(fb.Color.rgb(32, 120, 90), gui.bg_top_color);
-    try testing.expectEqual(fb.Color.rgb(10, 36, 30), gui.bg_bot_color);
-    try testing.expect(btn_emerald.isTicked());
-    try testing.expect(!btn_sunset.isTicked());
-    try testing.expectEqual(em_id, gui.selected_theme_id);
-
-    if (btn_day.callback) |cb| cb(&gui, win_config, btn_day);
-    try testing.expectEqual(fb.Color.SKY_BASE_TOP, gui.bg_top_color);
-    try testing.expectEqual(fb.Color.GRADIENT_BOT_DEFAULT, gui.bg_bot_color);
-    try testing.expect(btn_day.isTicked());
-    try testing.expect(!btn_emerald.isTicked());
-    try testing.expectEqual(day_id, gui.selected_theme_id);
 }
 
 test "diosix-gui: GPU acceleration detection and degraded fallback mode" {
@@ -284,13 +244,13 @@ test "diosix-gui: render active help and status pane screenshots" {
     var surface = fb.Surface.init(pixel_mem.ptr, 1280, 800, pitch);
 
     const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
-    const guests_item = &win_menu.icons.items[0];
-    const status_item = &win_menu.icons.items[1];
+    const about_item = &win_menu.icons.items[0];
+    const config_item = &win_menu.icons.items[1];
 
-    // 1. Mouse hover over first item: Active Help displays help text.
+    // 1. Mouse hover over first item: Active Help displays About help text.
     gui.handleMouseMove(
-        win_menu.x + guests_item.rel_x + 15,
-        win_menu.y + guests_item.rel_y + 15,
+        win_menu.x + about_item.rel_x + 15,
+        win_menu.y + about_item.rel_y + 15,
         false,
     );
     gui.markFullDirty();
@@ -298,10 +258,10 @@ test "diosix-gui: render active help and status pane screenshots" {
     gui.cursor.draw(&surface);
     try writePpmFile(&surface, "/tmp/diosix_help_guests.ppm");
 
-    // 2. Mouse hover over second item: Active Help displays status help text.
+    // 2. Mouse hover over second item: Active Help displays Config help text.
     gui.handleMouseMove(
-        win_menu.x + status_item.rel_x + 15,
-        win_menu.y + status_item.rel_y + 15,
+        win_menu.x + config_item.rel_x + 15,
+        win_menu.y + config_item.rel_y + 15,
         false,
     );
     gui.markFullDirty();
@@ -309,10 +269,10 @@ test "diosix-gui: render active help and status pane screenshots" {
     gui.cursor.draw(&surface);
     try writePpmFile(&surface, "/tmp/diosix_help_status.ppm");
 
-    // 3. Click to open pane (fallback view renders clean '--' values).
+    // 3. Click About to open status pane (fallback renders clean '--' values).
     gui.handleMouseClick(
-        win_menu.x + status_item.rel_x + 15,
-        win_menu.y + status_item.rel_y + 15,
+        win_menu.x + about_item.rel_x + 15,
+        win_menu.y + about_item.rel_y + 15,
     );
     gui.completeNavAnimation();
     gui.markFullDirty();
@@ -356,7 +316,7 @@ test "diosix-gui: render active help and status pane screenshots" {
     try writePpmFile(&surface, "/tmp/diosix_config_pane.ppm");
 }
 
-test "diosix-gui: render modular slate overview and drawer screenshots" {
+test "diosix-gui: render power modal and config pane screenshots" {
     const allocator = testing.allocator;
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
@@ -366,59 +326,14 @@ test "diosix-gui: render modular slate overview and drawer screenshots" {
     const pitch = 1280 * @sizeOf(u32);
     var surface = fb.Surface.init(pixel_mem.ptr, 1280, 800, pitch);
 
-    // 1. Initial overview with VM fleet and action drawer.
-    gui.markFullDirty();
-    _ = gui.renderDamaged(&surface);
-    gui.cursor.draw(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_fleet_overview.ppm");
-
-    // 2. Select rootvm (Root VM supervisor) and render drawer.
-    gui.selectVm(gui_mod.ICON_VM_ROOTVM_ID);
-    gui.markFullDirty();
-    _ = gui.renderDamaged(&surface);
-    gui.cursor.draw(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_rootvm_drawer.ppm");
-
-    // 3. Open Software pane and render.
-    try gui.activateMenuItem(gui_mod.ICON_MENU_SOFTWARE_ID);
-    gui.completeNavAnimation();
-    gui.markFullDirty();
-    _ = gui.renderDamaged(&surface);
-    gui.cursor.draw(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_software_pane.ppm");
-
-    // 4. Return to root menu, open Hardware pane and render.
-    const win_back = gui.getWindow(gui_mod.WIN_BACK_ID).?;
-    const back_btn = win_back.getIconById(gui_mod.ICON_BACK_BTN_ID).?;
-    gui.handleMouseClick(
-        win_back.x + back_btn.rel_x + 5,
-        win_back.y + back_btn.rel_y + 5,
-    );
-    gui.completeNavAnimation();
-
-    try gui.activateMenuItem(gui_mod.ICON_MENU_HARDWARE_ID);
-    gui.completeNavAnimation();
-    gui.markFullDirty();
-    _ = gui.renderDamaged(&surface);
-    gui.cursor.draw(&surface);
-    try writePpmFile(&surface, "/tmp/diosix_hardware_pane.ppm");
-
-    // 5. Return to root menu, open Restart power modal and render.
-    const win_back2 = gui.getWindow(gui_mod.WIN_BACK_ID).?;
-    const back_btn2 = win_back2.getIconById(gui_mod.ICON_BACK_BTN_ID).?;
-    gui.handleMouseClick(
-        win_back2.x + back_btn2.rel_x + 5,
-        win_back2.y + back_btn2.rel_y + 5,
-    );
-    gui.completeNavAnimation();
-
+    // 1. Open Restart power modal and render.
     try gui.activateMenuItem(gui_mod.ICON_MENU_RESTART_ID);
     gui.markFullDirty();
     _ = gui.renderDamaged(&surface);
     gui.cursor.draw(&surface);
     try writePpmFile(&surface, "/tmp/diosix_restart_modal.ppm");
 
-    // 6. Dismiss modal, open Config pane with theme radio set and render.
+    // 2. Dismiss modal, open Config pane and render.
     gui.closePowerModal();
     try gui.activateMenuItem(gui_mod.ICON_MENU_CONFIG_ID);
     gui.completeNavAnimation();

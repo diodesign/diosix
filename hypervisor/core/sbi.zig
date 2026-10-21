@@ -329,7 +329,6 @@ pub fn terminateOrRestart(g: *guest.Guest, exit_code: usize) void {
     }
     if (g.state != .restarting) {
         const was_root = g.is_root;
-        g.terminateWithCode(exit_code);
         if (was_root) {
             if (exit_code == 0) {
                 debug.printf("Root VM exited 0. Powering off host.\n", .{});
@@ -342,6 +341,7 @@ pub fn terminateOrRestart(g: *guest.Guest, exit_code: usize) void {
                 riscv.reboot();
             }
         }
+        g.terminateWithCode(exit_code);
         if (!builtin.is_test) scheduler.schedule();
     }
 }

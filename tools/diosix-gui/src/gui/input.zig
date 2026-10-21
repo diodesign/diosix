@@ -14,15 +14,11 @@ const DiosixGui = gui_mod.DiosixGui;
 const json = @import("json.zig");
 
 const WIN_HELP_ID = gui_mod.WIN_HELP_ID;
-const WIN_VM_FLEET_ID = gui_mod.WIN_VM_FLEET_ID;
-const WIN_VM_DRAWER_ID = gui_mod.WIN_VM_DRAWER_ID;
 const WIN_POWER_MODAL_ID = gui_mod.WIN_POWER_MODAL_ID;
 const WIN_OSK_ID = gui_mod.WIN_OSK_ID;
 const WIN_WELCOME_ID = gui_mod.WIN_WELCOME_ID;
 const WIN_TOUR_ID = gui_mod.WIN_TOUR_ID;
 
-const ICON_MENU_SOFTWARE_ID = gui_mod.ICON_MENU_SOFTWARE_ID;
-const ICON_MENU_HARDWARE_ID = gui_mod.ICON_MENU_HARDWARE_ID;
 const ICON_MENU_ABOUT_ID = gui_mod.ICON_MENU_ABOUT_ID;
 const ICON_MENU_CONFIG_ID = gui_mod.ICON_MENU_CONFIG_ID;
 const ICON_HELP_TEXT_ID = gui_mod.ICON_HELP_TEXT_ID;
@@ -299,60 +295,6 @@ pub fn getActiveWindow(self: *DiosixGui) ?*Window {
     return null;
 }
 
-pub fn selectVm(self: *DiosixGui, vm_id: u32) void {
-    self.selected_vm_id = vm_id;
-
-    if (self.getWindow(WIN_VM_FLEET_ID)) |win_fleet| {
-        for (win_fleet.icons.items) |*icon| {
-            if (icon.icon_type == .slate_card) {
-                icon.setSelected(icon.id == vm_id);
-            }
-        }
-        self.markDirty(win_fleet.getBox());
-    }
-
-    if (self.getWindow(WIN_VM_DRAWER_ID)) |win_drawer| {
-        const x = win_drawer.x;
-        const y = win_drawer.y;
-        const w = win_drawer.width;
-        const h = win_drawer.height;
-        self.buildVmActionDrawer(x, y, w, h) catch {};
-        self.markWindowDirty(WIN_VM_DRAWER_ID);
-    }
-}
-
-pub fn handleVmAction(self: *DiosixGui, action_icon_id: u32) void {
-    const m_create = "Launch Create VM Wizard: Select a manifest or image";
-    const m_stop = "ACPI shutdown signal dispatched to guest";
-    const m_pause = "Guest virtual CPU execution paused";
-    const m_snap = "Snapshot taken: RAM and disk checkpoint saved";
-    const m_con = "Virtual serial console bridge connected";
-    const m_kill = "SIGKILL sent to guest VM container";
-    const m_start = "Guest virtual machine booted";
-    const m_rest = "Snapshot restored to running state";
-    const m_clone = "Cloned snapshot to new VM instance";
-    const m_del = "Item removed and storage reclaimed";
-    const msg: ?[]const u8 = switch (action_icon_id) {
-        gui_mod.ICON_VM_CREATE_NEW_ID => m_create,
-        gui_mod.ICON_DRAWER_BTN_STOP_ID => m_stop,
-        gui_mod.ICON_DRAWER_BTN_PAUSE_ID => m_pause,
-        gui_mod.ICON_DRAWER_BTN_SNAP_ID => m_snap,
-        gui_mod.ICON_DRAWER_BTN_CONSOLE_ID => m_con,
-        gui_mod.ICON_DRAWER_BTN_KILL_ID => m_kill,
-        gui_mod.ICON_DRAWER_BTN_START_ID => m_start,
-        gui_mod.ICON_DRAWER_BTN_RESTORE_ID => m_rest,
-        gui_mod.ICON_DRAWER_BTN_CLONE_ID => m_clone,
-        gui_mod.ICON_DRAWER_BTN_DELETE_ID => m_del,
-        else => null,
-    };
-    if (msg) |m| {
-        if (self.findIcon(WIN_HELP_ID, ICON_HELP_TEXT_ID)) |h| {
-            h.setText(m);
-            self.markWindowDirty(WIN_HELP_ID);
-        }
-    }
-}
-
 pub fn confirmPowerModal(self: *DiosixGui) void {
     self.power_action_confirmed = true;
     const action = self.power_modal_action orelse return;
@@ -374,14 +316,6 @@ pub fn triggerSemanticAction(self: *DiosixGui, action: []const u8) !bool {
     const SemAct = gui_mod.SemanticAction;
     const act = std.meta.stringToEnum(SemAct, action) orelse return false;
     switch (act) {
-        .@"menu.software" => {
-            try self.activateMenuItem(ICON_MENU_SOFTWARE_ID);
-            self.completeNavAnimation();
-        },
-        .@"menu.hardware" => {
-            try self.activateMenuItem(ICON_MENU_HARDWARE_ID);
-            self.completeNavAnimation();
-        },
         .@"menu.about", .@"menu.status" => {
             try self.activateMenuItem(ICON_MENU_ABOUT_ID);
             self.completeNavAnimation();
@@ -444,14 +378,12 @@ pub fn exportSemanticStateJson(
 ) std.mem.Allocator.Error![]u8 {
     const active_pane: []const u8 = if (self.active_menu_id) |mid|
         switch (mid) {
-            ICON_MENU_SOFTWARE_ID => "software",
-            ICON_MENU_HARDWARE_ID => "hardware",
             ICON_MENU_ABOUT_ID => "about",
             ICON_MENU_CONFIG_ID => "config",
             else => "submenu",
         }
     else
-        "fleet";
+        "main";
 
     const esc_osk = try json.escapeStr(
         allocator,
@@ -461,7 +393,7 @@ pub fn exportSemanticStateJson(
     const fmt =
         "{{\"width\":{d},\"height\":{d},\"render_mode\":\"{s}\"," ++
         "\"active_pane\":\"{s}\",\"window_count\":{d}," ++
-        "\"selected_vm_id\":{d},\"osk_visible\":{s}," ++
+        "\"osk_visible\":{s}," ++
         "\"osk_layout\":\"{s}\",\"osk_input\":\"{s}\"," ++
         "\"welcome_visible\":{s},\"tour_visible\":{s},\"tour_step\":{d}}}\n";
 
@@ -471,7 +403,6 @@ pub fn exportSemanticStateJson(
         if (self.render_mode == .accelerated) "accelerated" else "degraded",
         active_pane,
         self.windows.items.len,
-        self.selected_vm_id,
         if (self.osk_state.visible) "true" else "false",
         self.osk_state.layout.label(),
         esc_osk,

@@ -145,6 +145,15 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     }
 
     const cpu = pcore.this();
+    var active_stopped = false;
+    if (cpu.active_vcore) |vc_raw| {
+        const vc_chk: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+        if (vc_chk.state == .stopped or vc_chk.getGuest().state != .valid) {
+            vc_chk.state = .stopped;
+            active_stopped = true;
+        }
+    }
+
     const is_ecall = switch (irq.cause) {
         .virtual_supervisor_environment_call,
         .supervisor_environment_call,
@@ -155,6 +164,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
     };
 
     if (irq.privilege_mode != .machine and
+        !active_stopped and
         !is_ecall and
         !is_interrupt and
         cpu.last_trap_pc == irq.pc and
@@ -176,7 +186,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
                 const vc_term: *vcore.VirtualCore =
                     @ptrCast(@alignCast(vc_raw));
                 vc_term.getGuest().terminate();
-                cpu.active_vcore = null;
+                vc_term.state = .stopped;
             }
             cpu.trap_loop_count = 0;
         } else if (cpu.trap_loop_count > TRAP_LOOP_WARN_THRESHOLD) {
@@ -228,8 +238,23 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
     _ = interrupt.clearClaimedExternalIrq(pcpu);
 
+    var skip_guest_exception = false;
+    if (is_guest) {
+        if (pcpu.active_vcore) |vc_raw| {
+            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
+            if (vc.state == .stopped or vc.getGuest().state != .valid) {
+                vc.state = .stopped;
+                skip_guest_exception = true;
+            }
+        }
+    }
+
     switch (irq.irq_type) {
-        .exception => exception.handleException(irq, context),
+        .exception => {
+            if (!skip_guest_exception) {
+                exception.handleException(irq, context);
+            }
+        },
         .interrupt => interrupt.handleInterrupt(irq, context),
     }
 
@@ -240,7 +265,8 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (is_guest) {
         if (pcpu.active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-            if (vc.state == .stopped) {
+            if (vc.state == .stopped or vc.getGuest().state != .valid) {
+                vc.state = .stopped;
                 scheduler.schedule();
             }
         }

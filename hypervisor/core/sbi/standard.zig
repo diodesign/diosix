@@ -192,12 +192,18 @@ pub fn handleRFENCE(
         } else {
             for (0..@bitSizeOf(usize)) |bit_pos| {
                 if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
-                    const cpu_id = std.math.add(
+                    const hid = std.math.add(
                         usize,
                         hart_mask_base,
                         bit_pos,
                     ) catch continue;
-                    pcore.sendIpiToCpu(cpu_id);
+                    if (g.findVcore(hid)) |tvc| {
+                        if (tvc.running_on_cpu) |target_cpu| {
+                            pcore.sendIpiToCpu(target_cpu);
+                        } else {
+                            sbi_core.broadcastPhysicalIPI();
+                        }
+                    }
                 }
             }
         }

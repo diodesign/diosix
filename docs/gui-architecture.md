@@ -75,19 +75,16 @@ Located in `tools/diosix-gui/src/`:
 *   **[`icon.zig`](../tools/diosix-gui/src/icon.zig),
     [`render.zig`](../tools/diosix-gui/src/icon/render.zig),
     [`text.zig`](../tools/diosix-gui/src/icon/text.zig),
-    [`viewport.zig`](../tools/diosix-gui/src/icon/viewport.zig),
     [`widgets.zig`](../tools/diosix-gui/src/icon/widgets.zig), and
     [`label.zig`](../tools/diosix-gui/src/label.zig)**: Widget
-    primitives (buttons, badges, sliders, progress bars, RFB/Wayland client
-    viewports, vector action glyphs, and bounded text formatting).
+    primitives (buttons, sliders, checkboxes, progress bars, menu items, and
+    bounded text formatting).
 *   **[`panes.zig`](../tools/diosix-gui/src/panes.zig),
-    [`vm.zig`](../tools/diosix-gui/src/panes/vm.zig),
-    [`catalog.zig`](../tools/diosix-gui/src/panes/catalog.zig),
     [`modal.zig`](../tools/diosix-gui/src/panes/modal.zig), and
     [`osk.zig`](../tools/diosix-gui/src/panes/osk.zig)**: Layout builders
-    for the VM Fleet Overview, slide-out VM Action Drawer, Software and
-    Hardware panes, Power modal, Welcome modal, 5-step Guided Tour, and
-    dockable OSK.
+    for the host and hypervisor status pane (`About`), appearance configuration
+    pane (`Config`), power confirmation modal (`Restart` / `Shutdown`),
+    Welcome modal, 5-step Guided Tour, and dockable OSK.
 *   **[`gui.zig`](../tools/diosix-gui/src/gui.zig),
     [`chrome.zig`](../tools/diosix-gui/src/gui/chrome.zig),
     [`input.zig`](../tools/diosix-gui/src/gui/input.zig),

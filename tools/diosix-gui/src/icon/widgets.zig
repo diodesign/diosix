@@ -19,7 +19,7 @@ inline fn drawShadowText(
     y: i32,
     col: u32,
 ) void {
-    font.drawTextWithShadow(s, txt, x, y, col, fb.Color.BLACK);
+    font.drawText(s, txt, x, y, col);
 }
 
 pub fn renderTextField(
@@ -31,10 +31,7 @@ pub fn renderTextField(
     fg_color: u32,
     is_win_active: bool,
 ) void {
-    const border_col = if (self.is_focused)
-        fb.Color.ACCENT_CYAN
-    else
-        fb.Color.GLASS_BORDER;
+    const border_col = fb.Color.GLASS_BORDER;
     surface.drawGlassPane(
         box,
         4,
@@ -77,8 +74,8 @@ pub fn renderTextField(
             surface.drawRoundedTranslucentBox(
                 sel_box,
                 2,
-                fb.Color.ACCENT_CYAN,
-                140,
+                fb.Color.BTN_PRESS_BG,
+                200,
                 null,
             );
         }
@@ -89,7 +86,7 @@ pub fn renderTextField(
     if (self.is_focused and is_win_active) {
         const cur_x = text_start_x + @as(i32, @intCast(cur_offset));
         const cur_box = boxOf(cur_x, text_y + 1, 2, font.GLYPH_HEIGHT);
-        surface.fillBox(cur_box, fb.Color.ACCENT_CYAN);
+        surface.fillBox(cur_box, fb.Color.INK);
     }
 }
 
@@ -123,7 +120,7 @@ pub fn renderSlider(
     drawShadowText(surface, self.getText(), sx, sy, fg_color);
     surface.popClip(label_clip);
 
-    drawShadowText(surface, val_str, val_x, sy, fb.Color.ACCENT_GOLD);
+    drawShadowText(surface, val_str, val_x, sy, fb.Color.INK_SECONDARY);
 
     const track_y = sy + 24;
     const track_box = boxOf(sx, track_y, self.width, 6);
@@ -150,14 +147,10 @@ pub fn renderSlider(
         span,
     );
     const thumb_box = boxOf(sx + thumb_offset, track_y - 4, 16, 14);
-    const thumb_col = if (self.is_focused)
-        fb.Color.ACCENT_CYAN
-    else
-        fb.Color.THUMB_BG;
     surface.drawRoundedTranslucentBox(
         thumb_box,
         4,
-        thumb_col,
+        fb.Color.THUMB_BG,
         255,
         fb.Color.WHITE,
     );
@@ -179,11 +172,7 @@ pub fn renderTickBox(
     const tick_box = boxOf(sx, box_y, box_size, box_size);
 
     const radius: u32 = if (is_radio) 8 else 3;
-    const border_col: u32 = if (self.is_focused or self.is_hovered or
-        (is_radio and self.is_ticked))
-        fb.Color.ACCENT_CYAN
-    else
-        fb.Color.GLASS_BORDER;
+    const border_col: u32 = fb.Color.GLASS_BORDER;
 
     surface.drawRoundedTranslucentBox(
         tick_box,
@@ -198,7 +187,7 @@ pub fn renderTickBox(
             surface.drawRoundedTranslucentBox(
                 boxOf(sx + 4, box_y + 4, 8, 8),
                 4,
-                fb.Color.ACCENT_CYAN,
+                fb.Color.INK,
                 255,
                 null,
             );
@@ -213,7 +202,7 @@ pub fn renderTickBox(
             surface.drawRoundedTranslucentBox(
                 boxOf(sx + 3, box_y + 3, 10, 10),
                 2,
-                fb.Color.ACCENT_CYAN,
+                fb.Color.INK,
                 255,
                 null,
             );
@@ -234,11 +223,7 @@ pub fn renderTickBox(
     const label_clip = surface.pushClip(
         boxOf(text_x, sy, label_w, self.height),
     );
-    const text_col = if (self.is_ticked and is_radio)
-        fb.Color.ACCENT_CYAN
-    else
-        fg_color;
-    drawShadowText(surface, self.getText(), text_x, text_y, text_col);
+    drawShadowText(surface, self.getText(), text_x, text_y, fg_color);
     surface.popClip(label_clip);
 }
 
@@ -257,11 +242,15 @@ pub fn renderButton(
     else
         fb.Color.BTN_NORMAL_BG;
 
-    const border_col: u32 = if (self.is_hovered)
-        fb.Color.ACCENT_CYAN
-    else
-        fb.Color.GLASS_BTN_BORDER;
-    surface.drawGlassPane(box, 6, btn_bg, 220, border_col, false, false);
+    surface.drawGlassPane(
+        box,
+        6,
+        btn_bg,
+        220,
+        fb.Color.GLASS_BTN_BORDER,
+        false,
+        false,
+    );
 
     const txt = self.getText();
     const text_w = font.measureString(txt);
@@ -308,7 +297,7 @@ pub fn renderProgressBar(
     drawShadowText(surface, self.getText(), sx, text_y, fg_color);
     surface.popClip(label_clip);
 
-    drawShadowText(surface, pct_str, pct_x, text_y, fb.Color.ACCENT_GOLD);
+    drawShadowText(surface, pct_str, pct_x, text_y, fb.Color.INK_SECONDARY);
 
     const track_y = sy + 22;
     surface.drawRoundedTranslucentBox(

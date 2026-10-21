@@ -8,7 +8,6 @@ const fb = @import("../framebuffer.zig");
 const font = @import("../font.zig");
 const icon_mod = @import("../icon.zig");
 const Icon = icon_mod.Icon;
-pub const icon_viewport = @import("viewport.zig");
 pub const icon_widgets = @import("widgets.zig");
 const boxOf = fb.Box.fromPosSize;
 
@@ -43,7 +42,7 @@ inline fn drawShadowText(
     y: i32,
     col: u32,
 ) void {
-    font.drawTextWithShadow(s, txt, x, y, col, fb.Color.BLACK);
+    font.drawText(s, txt, x, y, col);
 }
 
 pub fn drawBackArrow(surface: *fb.Surface, x: i32, y: i32, color: u32) void {
@@ -69,7 +68,7 @@ pub fn drawBackArrowWithShadow(
     fg_color: u32,
     shadow_color: u32,
 ) void {
-    drawBackArrow(surface, x + 1, y + 1, shadow_color);
+    _ = shadow_color;
     drawBackArrow(surface, x, y, fg_color);
 }
 
@@ -93,11 +92,11 @@ pub fn renderIcon(
     const fg_color: u32 = if (!self.is_enabled)
         fb.Color.TEXT_MUTED
     else if (is_highlighted)
-        fb.Color.ACCENT_CYAN
+        fb.Color.INK
     else if (self.custom_color) |c|
-        c
+        (if (c == fb.Color.WHITE) fb.Color.INK else c)
     else
-        fb.Color.WHITE;
+        fb.Color.INK;
 
     switch (self.icon_type) {
         .read_only_text => {
@@ -121,22 +120,7 @@ pub fn renderIcon(
         .tick_box => renderTickBox(self, surface, sx, sy, fg_color),
         .button => renderButton(self, surface, sx, sy, box, fg_color),
         .progress_bar => renderProgressBar(self, surface, sx, sy, fg_color),
-        .video_viewport => icon_viewport.renderVideoViewport(
-            self,
-            surface,
-            sx,
-            sy,
-            box,
-            is_win_active,
-        ),
         .menu_item => renderMenuItem(self, surface, sx, sy),
-        .slate_card => icon_viewport.renderSlateCard(
-            self,
-            surface,
-            sx,
-            sy,
-            box,
-        ),
     }
 }
 
@@ -148,24 +132,27 @@ pub fn renderMenuItem(
 ) void {
     const item_color: u32 = if (!self.is_enabled)
         fb.Color.TEXT_MUTED
-    else if (self.is_hovered or self.is_selected)
-        fb.Color.ACCENT_CYAN
     else
-        fb.Color.WHITE;
+        fb.Color.INK;
 
     const text_y = sy + @divTrunc(
         @as(i32, @intCast(self.height)) -
-            @as(i32, @intCast(font.GLYPH_HEIGHT)),
+            @as(i32, @intCast(font.GLYPH_HEIGHT)) + 2,
         2,
     );
+    const pad_x: i32 = 6;
 
     if (self.has_back_arrow) {
-        drawBackArrowWithShadow(
+        const arrow_y = sy + @divTrunc(
+            @as(i32, @intCast(self.height)) -
+                @as(i32, @intCast(BACK_ARROW_HEIGHT)),
+            2,
+        );
+        drawBackArrow(
             surface,
-            sx,
-            text_y + 4,
+            sx + pad_x,
+            arrow_y,
             item_color,
-            fb.Color.BLACK,
         );
 
         const raw_text = self.getText();
@@ -176,15 +163,15 @@ pub fn renderMenuItem(
         else
             raw_text;
 
-        const label_x = sx + @as(i32, @intCast(BACK_ARROW_WIDTH + 8));
+        const label_x =
+            sx + pad_x + @as(i32, @intCast(BACK_ARROW_WIDTH + 6));
         drawShadowText(surface, display_text, label_x, text_y, item_color);
     } else {
-        drawShadowText(surface, self.getText(), sx, text_y, item_color);
+        drawShadowText(surface, self.getText(), sx + pad_x, text_y, item_color);
     }
 }
 
 test {
-    _ = icon_viewport;
     _ = icon_widgets;
     std.testing.refAllDecls(@This());
 }

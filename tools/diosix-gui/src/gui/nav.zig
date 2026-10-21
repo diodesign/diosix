@@ -13,8 +13,6 @@ const WIN_MENU_ID = gui_mod.WIN_MENU_ID;
 const WIN_BACK_ID = gui_mod.WIN_BACK_ID;
 const WIN_STATUS_ID = gui_mod.WIN_STATUS_ID;
 
-const ICON_MENU_SOFTWARE_ID = gui_mod.ICON_MENU_SOFTWARE_ID;
-const ICON_MENU_HARDWARE_ID = gui_mod.ICON_MENU_HARDWARE_ID;
 const ICON_MENU_ABOUT_ID = gui_mod.ICON_MENU_ABOUT_ID;
 const ICON_MENU_CONFIG_ID = gui_mod.ICON_MENU_CONFIG_ID;
 const ICON_MENU_RESTART_ID = gui_mod.ICON_MENU_RESTART_ID;
@@ -61,15 +59,11 @@ pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
 
     if (self.active_menu_id == menu_item_id) return;
 
-    self.teardownVmFleetOverview();
-
     if (self.active_menu_id != null) {
         teardownChildPanes(self);
     }
 
     switch (menu_item_id) {
-        ICON_MENU_SOFTWARE_ID => try self.buildSoftwarePane(),
-        ICON_MENU_HARDWARE_ID => try self.buildHardwarePane(),
         ICON_MENU_ABOUT_ID => try self.buildStatusPane(),
         ICON_MENU_CONFIG_ID => try self.buildConfigPane(),
         else => {},
@@ -184,7 +178,6 @@ pub fn teardownChildPanes(self: *DiosixGui) void {
     self.active_menu_id = null;
     self.nav_anim_state = .idle;
     self.nav_anim_progress = 0.0;
-    self.buildVmFleetOverview() catch {};
     self.updateActiveHelp();
     self.markFullDirty();
 }

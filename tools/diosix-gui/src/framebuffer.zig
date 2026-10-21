@@ -25,7 +25,7 @@ pub const cornerDistMetric = glass.cornerDistMetric;
 pub const Color = struct {
     pub const BLACK: u32 = 0x00000000;
     pub const WHITE: u32 = 0x00ffffff;
-    pub const TRANSPARENT: u32 = 0x00000000;
+    pub const TRANSPARENT: u32 = 0xff000000;
     pub const GLOVE_SHADING: u32 = 0x00b0b8c8;
     pub const GLOVE_CUFF: u32 = 0x00284060;
     pub const SHIFT_R: u5 = 16;
@@ -49,66 +49,61 @@ pub const Color = struct {
             @as(u32, blue);
     }
 
-    // Translucent Modern Slate Glass Theme (80% opaque, 20% transparent).
-    pub const GLASS_BG: u32 = 0x00141a26;
-    pub const GLASS_OPACITY: u8 = 204;
-    pub const GLASS_BORDER: u32 = 0x0090b0d8;
-    pub const GLASS_BTN_BG: u32 = 0x00243044;
-    pub const GLASS_BTN_BORDER: u32 = 0x00b0d0f0;
+    // Structural Monochrome Ink & Paper Palette.
+    pub const INK: u32 = 0x00111111;
+    pub const INK_SECONDARY: u32 = 0x004a4a48;
+    pub const GLASS_BG: u32 = 0x00f8f7f2;
+    pub const GLASS_OPACITY: u8 = 242;
+    pub const GLASS_BORDER: u32 = 0x00111111;
+    pub const GLASS_BTN_BG: u32 = 0x00f2f0e8;
+    pub const GLASS_BTN_BORDER: u32 = 0x00111111;
 
-    // Sky Base Colors.
-    pub const SKY_BASE_TOP: u32 = 0x004c8be0;
-    pub const SKY_BASE_BOT: u32 = 0x0082bef5;
-
-    // Legacy Palette Constants (Retained for compatibility).
-    pub const FF_LIGHT_BLUE: u32 = 0x001850a8;
-    pub const FF_MID_BLUE: u32 = 0x000a2268;
-    pub const FF_DARK_BLUE: u32 = 0x00061440;
-    pub const FF_BLACK_CORNER: u32 = 0x0000020a;
+    // Archival White & Warm Paper Canvas Colors.
+    pub const SKY_BASE_TOP: u32 = 0x00ffffff;
+    pub const SKY_BASE_BOT: u32 = 0x00f5f4ef;
 
     // Border Bevel Palette.
-    pub const BORDER_OUTER: u32 = 0x00202838;
-    pub const BORDER_HIGHLIGHT: u32 = 0x00f0f4ff;
-    pub const BORDER_SHADOW: u32 = 0x00506078;
-    pub const BORDER_INNER: u32 = 0x00060a14;
+    pub const BORDER_OUTER: u32 = 0x00111111;
+    pub const BORDER_HIGHLIGHT: u32 = 0x00ffffff;
+    pub const BORDER_SHADOW: u32 = 0x004a4a48;
+    pub const BORDER_INNER: u32 = 0x00111111;
 
-    // UI Accent Palette.
-    pub const ACCENT_GOLD: u32 = 0x00f8d040;
-    pub const ACCENT_CYAN: u32 = 0x0038d8e8;
-    pub const ACCENT_GREEN: u32 = 0x0028d060;
-    pub const ACCENT_AMBER: u32 = 0x00e0a020;
-    pub const ACCENT_RED: u32 = 0x00e03838;
-    pub const ACCENT_BLUE: u32 = 0x003080e0;
-    pub const TEXT_MUTED: u32 = 0x008090a8;
-    pub const DESKTOP_BG: u32 = 0x004c8be0;
+    // Monochrome Structural Accents (no color highlights in GUI).
+    pub const ACCENT_GOLD: u32 = 0x00111111;
+    pub const ACCENT_CYAN: u32 = 0x00111111;
+    pub const ACCENT_GREEN: u32 = 0x00111111;
+    pub const ACCENT_AMBER: u32 = 0x004a4a48;
+    pub const ACCENT_RED: u32 = 0x00111111;
+    pub const ACCENT_BLUE: u32 = 0x00111111;
+    pub const ACCENT_VIOLET: u32 = 0x00111111;
+    pub const TEXT_MUTED: u32 = 0x006e6d68;
+    pub const DESKTOP_BG: u32 = 0x00ffffff;
+
+    // Reserved exclusively for the DIOSIX boot logo character interior fill.
+    pub const RAINBOW = [6]u32{
+        0x00e63946, // Vermilion red.
+        0x00f48c06, // Cadmium orange.
+        0x00e9b824, // Golden ochre.
+        0x002a9d8f, // Viridian emerald.
+        0x001d6fd8, // Cobalt blue.
+        0x007209b7, // Ultramarine violet.
+    };
 
     // Window Pane and Widget Elements.
-    pub const GLASS_DIVIDER: u32 = 0x003a4b62;
-    pub const INPUT_BG: u32 = 0x000f1522;
-    pub const TRACK_BG: u32 = 0x000c121d;
-    pub const THUMB_BG: u32 = 0x00d0dcf0;
-    pub const BTN_PRESS_BG: u32 = 0x003a4c68;
-    pub const BTN_HOVER_BG: u32 = 0x002c3b52;
-    pub const BTN_NORMAL_BG: u32 = 0x001c2638;
+    pub const GLASS_DIVIDER: u32 = 0x00111111;
+    pub const INPUT_BG: u32 = 0x00ffffff;
+    pub const TRACK_BG: u32 = 0x00e4e2da;
+    pub const THUMB_BG: u32 = 0x00111111;
+    pub const BTN_PRESS_BG: u32 = 0x00dad8ce;
+    pub const BTN_HOVER_BG: u32 = 0x00e8e6de;
+    pub const BTN_NORMAL_BG: u32 = 0x00f4f3ee;
 
     // Tab Bar Palette.
-    pub const TAB_DIVIDER: u32 = 0x003a4c64;
-    pub const TAB_ACTIVE_BG: u32 = 0x002a3c54;
-    pub const TAB_INACTIVE_BG: u32 = 0x00101824;
-    pub const TAB_INACTIVE_BORDER: u32 = 0x0024344a;
-    pub const GRADIENT_BOT_DEFAULT: u32 = 0x000c1836;
-
-    // Virtual Machine Display Viewport Preview Palette.
-    pub const VIEWPORT_DESKTOP_TOP: u32 = 0x001b3058;
-    pub const VIEWPORT_DESKTOP_BOT: u32 = 0x000a1428;
-    pub const VIEWPORT_BAR: u32 = 0x00101c30;
-    pub const VIEWPORT_BOTTOM_BAR: u32 = 0x000e1624;
-    pub const VIEWPORT_TERM_BG: u32 = 0x000b0f16;
-    pub const VIEWPORT_TERM_BORDER: u32 = 0x00334866;
-    pub const VIEWPORT_TERM_HDR: u32 = 0x00182436;
-    pub const VIEWPORT_TEXT_DIM: u32 = 0x00a0b8d0;
-    pub const VIEWPORT_HEADLESS_BG: u32 = 0x00080c14;
-    pub const VIEWPORT_GRID_LINE: u32 = 0x000e1420;
+    pub const TAB_DIVIDER: u32 = 0x00111111;
+    pub const TAB_ACTIVE_BG: u32 = 0x00e8e6de;
+    pub const TAB_INACTIVE_BG: u32 = 0x00f4f3ee;
+    pub const TAB_INACTIVE_BORDER: u32 = 0x00111111;
+    pub const GRADIENT_BOT_DEFAULT: u32 = 0x00f2f0e8;
 };
 
 pub const Box = struct {

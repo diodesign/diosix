@@ -29,7 +29,6 @@ const ICON_POWER_CONFIRM_ID = gui_mod.ICON_POWER_CONFIRM_ID;
 const ICON_OSK_KEY_BASE_ID = gui_mod.ICON_OSK_KEY_BASE_ID;
 const ICON_OSK_DISPLAY_ID = gui_mod.ICON_OSK_DISPLAY_ID;
 const ICON_WELCOME_TOUR_BTN_ID = gui_mod.ICON_WELCOME_TOUR_BTN_ID;
-const ICON_WELCOME_INSTALL_BTN_ID = gui_mod.ICON_WELCOME_INSTALL_BTN_ID;
 const ICON_WELCOME_DISMISS_BTN_ID = gui_mod.ICON_WELCOME_DISMISS_BTN_ID;
 const ICON_WELCOME_SUBTITLE1_ID = gui_mod.ICON_WELCOME_SUBTITLE1_ID;
 const ICON_WELCOME_SUBTITLE2_ID = gui_mod.ICON_WELCOME_SUBTITLE2_ID;
@@ -123,7 +122,7 @@ pub fn showPowerModal(self: *DiosixGui, action: gui_mod.PowerAction) !void {
         20,
         t1,
     );
-    i_t1.setCustomColor(fb.Color.WHITE);
+    i_t1.setCustomColor(fb.Color.INK);
     _ = try win.addIcon(i_t1);
 
     const t2 = "All running guest virtual machines will be cleanly stopped.";
@@ -135,7 +134,7 @@ pub fn showPowerModal(self: *DiosixGui, action: gui_mod.PowerAction) !void {
         20,
         t2,
     );
-    i_t2.setCustomColor(0x00a0b4c8);
+    i_t2.setCustomColor(fb.Color.INK_SECONDARY);
     _ = try win.addIcon(i_t2);
 
     const btn_w: u32 = 140;
@@ -174,9 +173,7 @@ pub fn showPowerModal(self: *DiosixGui, action: gui_mod.PowerAction) !void {
         else
             "Halt and power down the physical machine",
     );
-    btn_confirm.setCustomColor(
-        if (action == .restart) fb.Color.ACCENT_CYAN else fb.Color.ACCENT_RED,
-    );
+    btn_confirm.setCustomColor(fb.Color.INK);
     btn_confirm.callback = onPowerConfirmClicked;
     _ = try win.addIcon(btn_confirm);
 
@@ -201,12 +198,6 @@ fn onWelcomeActionClicked(
             self.welcome_state.startTour();
             showTourModal(self) catch {};
         },
-        ICON_WELCOME_INSTALL_BTN_ID => {
-            self.welcome_state.install_requested = true;
-            self.welcome_state.closeWelcome();
-            _ = self.destroyWindow(WIN_WELCOME_ID);
-            self.markFullDirty();
-        },
         ICON_WELCOME_DISMISS_BTN_ID => {
             self.welcome_state.closeWelcome();
             _ = self.destroyWindow(WIN_WELCOME_ID);
@@ -220,8 +211,8 @@ pub fn showWelcomeModal(self: *DiosixGui) !void {
     _ = self.destroyWindow(WIN_TOUR_ID);
     self.welcome_state.openWelcome();
 
-    const modal_w: u32 = 580;
-    const modal_h: u32 = 210;
+    const modal_w: u32 = 540;
+    const modal_h: u32 = 200;
     const modal_x: i32 = @divTrunc(
         @as(i32, @intCast(self.width)) - @as(i32, @intCast(modal_w)),
         2,
@@ -239,52 +230,40 @@ pub fn showWelcomeModal(self: *DiosixGui) !void {
         modal_h,
         "Welcome to Diosix",
     );
-    win.setHelpText(
-        "Choose Live Test-Drive, Guided Tour, or Persistent Host Installation",
-    );
+    win.setHelpText("Choose the 5-step Guided Tour or Live Test-Drive");
     win.is_modal = true;
 
     const l1_str = "Diosix Type-1 Partitioning Hypervisor & Root VM Supervisor";
     const s1_id = ICON_WELCOME_SUBTITLE1_ID;
     var l1 = Icon.createReadOnly(s1_id, 24, 48, modal_w - 48, 20, l1_str);
-    l1.setCustomColor(fb.Color.ACCENT_CYAN);
+    l1.setCustomColor(fb.Color.INK);
     _ = try win.addIcon(l1);
 
-    const l2_str = "Explore in Live RAM mode, take the 5-step Guided Tour, " ++
-        "or install to disk.";
+    const l2_str =
+        "Take the 5-step Guided Tour or continue to the live desktop.";
     const s2_id = ICON_WELCOME_SUBTITLE2_ID;
     var l2 = Icon.createReadOnly(s2_id, 24, 76, modal_w - 48, 20, l2_str);
-    l2.setCustomColor(fb.Color.WHITE);
+    l2.setCustomColor(fb.Color.INK_SECONDARY);
     _ = try win.addIcon(l2);
 
     try addModalBtn(
         win,
         ICON_WELCOME_TOUR_BTN_ID,
         24,
-        146,
-        165,
+        140,
+        180,
         34,
         "Start guided tour",
         onWelcomeActionClicked,
     );
     try addModalBtn(
         win,
-        ICON_WELCOME_INSTALL_BTN_ID,
-        205,
-        146,
-        170,
-        34,
-        "Install to host disk",
-        onWelcomeActionClicked,
-    );
-    try addModalBtn(
-        win,
         ICON_WELCOME_DISMISS_BTN_ID,
-        390,
-        146,
-        165,
+        @as(i32, @intCast(modal_w)) - 204,
+        140,
+        180,
         34,
-        "Live test-drive",
+        "Close",
         onWelcomeActionClicked,
     );
 
@@ -352,12 +331,12 @@ pub fn showTourModal(self: *DiosixGui) !void {
     const tw = modal_w - 48;
     const ts1_id = ICON_TOUR_SUMMARY1_ID;
     var s1 = Icon.createReadOnly(ts1_id, 24, 50, tw, 20, step.summary_line1);
-    s1.setCustomColor(fb.Color.WHITE);
+    s1.setCustomColor(fb.Color.INK);
     _ = try win.addIcon(s1);
 
     const ts2_id = ICON_TOUR_SUMMARY2_ID;
     var s2 = Icon.createReadOnly(ts2_id, 24, 74, tw, 20, step.summary_line2);
-    s2.setCustomColor(0x00a0b4c8);
+    s2.setCustomColor(fb.Color.INK_SECONDARY);
     _ = try win.addIcon(s2);
 
     var hint_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
@@ -368,7 +347,7 @@ pub fn showTourModal(self: *DiosixGui) !void {
     );
     const th_id = ICON_TOUR_CLI_HINT_ID;
     var s3 = Icon.createReadOnly(th_id, 24, 108, tw, 20, hint_str);
-    s3.setCustomColor(fb.Color.ACCENT_GOLD);
+    s3.setCustomColor(fb.Color.INK_SECONDARY);
     _ = try win.addIcon(s3);
 
     try addModalBtn(

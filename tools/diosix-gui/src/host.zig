@@ -70,7 +70,15 @@ pub fn executePowerAction(action: PowerAction) void {
         return;
     }
 
-    // 1. Terminate Root VM via /dev/diosix hypervisor interface (CID_SELF = 1).
+    // 1. Linux sys_reboot syscall (cleanly stops devices/SMP and invokes SRST).
+    _ = linux.reboot(
+        .MAGIC1,
+        .MAGIC2,
+        if (action == .restart) .RESTART else .POWER_OFF,
+        null,
+    );
+
+    // 2. Terminate Root VM via /dev/diosix hypervisor interface (CID_SELF = 1).
     const fd_rc = linux.open(paths.DEV_DIOSIX_PATH, .{ .ACCMODE = .RDWR }, 0);
     const signed_fd: isize = @bitCast(fd_rc);
     if (signed_fd >= 0) {
@@ -85,14 +93,6 @@ pub fn executePowerAction(action: PowerAction) void {
         };
         _ = linux.ioctl(fd, IOCTL_TERMINATE, @intFromPtr(&args));
     }
-
-    // 2. Linux sys_reboot syscall.
-    _ = linux.reboot(
-        .MAGIC1,
-        .MAGIC2,
-        if (action == .restart) .RESTART else .POWER_OFF,
-        null,
-    );
 
     // 3. Exec fallback.
     const prog: [*:0]const u8 = if (action == .restart)

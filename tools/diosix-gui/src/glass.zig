@@ -165,7 +165,7 @@ pub fn drawGlassPane(
                     br_span,
                     is_border,
                     is_inner,
-                    0x00e4f0ff,
+                    Color.WHITE,
                     35,
                     14,
                     20,
@@ -174,7 +174,11 @@ pub fn drawGlassPane(
             }
 
             if (border_color) |b_col| {
-                if (is_border) pix = blendPixel(bg, b_col, 140);
+                if (is_border) {
+                    pix = blendPixel(bg, b_col, 245);
+                } else if (is_inner and b_col == Color.GLASS_BORDER) {
+                    pix = blendPixel(pix, b_col, 55);
+                }
             }
             self.pixels[col_idx] = pix;
         }

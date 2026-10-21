@@ -56,6 +56,10 @@ pub fn initCpu() void {
 pub fn queue(vc: *vcore.VirtualCore) void {
     if (@atomicLoad(bool, &vc.wfi_blocked, .acquire)) return;
     if (vc.state != .ready and vc.state != .running) return;
+    if (vc.guest.state != .valid) {
+        vc.state = .stopped;
+        return;
+    }
 
     // Do not queue if actively running on a physical CPU.
     if (vc.running_on_cpu != null) return;
@@ -195,7 +199,8 @@ pub fn pickNext() ?*vcore.VirtualCore {
     while (it) |node| {
         const next_it = node.next;
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
-        if (vc.state == .stopped) {
+        if (vc.state == .stopped or vc.guest.state != .valid) {
+            vc.state = .stopped;
             pc.run_queue.remove(node);
             if (pc.run_queue_count > 0) pc.run_queue_count -= 1;
             @atomicStore(bool, &vc.is_queued, false, .release);
@@ -217,7 +222,8 @@ pub fn pickNext() ?*vcore.VirtualCore {
     while (g_it) |node| {
         const next_git = node.next;
         const vc: *vcore.VirtualCore = node.contents;
-        if (vc.state == .stopped) {
+        if (vc.state == .stopped or vc.guest.state != .valid) {
+            vc.state = .stopped;
             state.run_queue.remove(node);
             @atomicStore(bool, &vc.is_queued, false, .release);
             g_it = next_git;

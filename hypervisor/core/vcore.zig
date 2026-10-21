@@ -276,10 +276,12 @@ pub const VirtualCore = struct {
                 pcore.sendIpiToCpu(home_cpu);
                 std.atomic.spinLoopHint();
             }
+            const my_cpu = riscv.getCPUContext().cpu_core_id;
             spins = 0;
             while ((@as(*volatile ?usize, &self.running_on_cpu)).* != null and
                 spins < MAX_DEINIT_SPINS) : (spins += 1)
             {
+                if (self.running_on_cpu == my_cpu) break;
                 std.atomic.spinLoopHint();
             }
             spins = 0;
@@ -354,6 +356,10 @@ pub const VirtualCore = struct {
                 } else {
                     self.blocked_on_cpu = null;
                 }
+            }
+            if (self.guest.state != .valid) {
+                self.state = .stopped;
+                return false;
             }
             self.state = .ready;
             if (self.exec_path == .emulated) {

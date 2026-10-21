@@ -25,10 +25,6 @@ const Str = []const u8;
 pub const TEXT_CAP: usize = text_label.TEXT_CAP;
 // Capacity of Icon.slider_suffix: a short unit such as "%", "px" or "ms".
 pub const SLIDER_SUFFIX_CAP: usize = 16;
-// Capacity of Icon.card_subtitle: the single subtitle line of a slate card.
-pub const CARD_SUBTITLE_CAP: usize = 128;
-// Capacity of Icon.card_badge: a short status word shown on a slate card.
-pub const CARD_BADGE_CAP: usize = 32;
 // Default limit on characters typed into a read-write text field.
 pub const DEFAULT_MAX_INPUT_LEN: usize = 64;
 
@@ -39,9 +35,7 @@ pub const IconType = enum {
     tick_box,
     button,
     progress_bar,
-    video_viewport,
     menu_item,
-    slate_card,
 };
 
 pub const GroupMode = enum {
@@ -86,13 +80,9 @@ pub const Icon = struct {
     slider_suffix: [SLIDER_SUFFIX_CAP]u8 = @splat(0),
     slider_suffix_len: usize = 0,
 
-    // Progress bar & viewport state.
+    // Progress bar state.
     progress_val: u32 = 0,
-    progress_color: u32 = fb.Color.ACCENT_CYAN,
-    video_has_signal: bool = true,
-    video_width: u32 = 1024,
-    video_height: u32 = 768,
-    video_anim_tick: u32 = 0,
+    progress_color: u32 = fb.Color.INK,
 
     // Tick box, grouping & callback state.
     is_ticked: bool = false,
@@ -109,14 +99,6 @@ pub const Icon = struct {
     is_selected: bool = false,
     is_active_press: bool = false,
     is_dragging_slider: bool = false,
-
-    // Slate card state.
-    card_subtitle: [CARD_SUBTITLE_CAP]u8 = @splat(0),
-    card_sub_len: usize = 0,
-    card_badge: [CARD_BADGE_CAP]u8 = @splat(0),
-    card_badge_len: usize = 0,
-    card_badge_color: u32 = fb.Color.ACCENT_GREEN,
-    card_is_supervisor: bool = false,
 
     pub fn setSelected(self: *Icon, selected: bool) void {
         self.is_selected = selected;
@@ -243,20 +225,6 @@ pub const Icon = struct {
         self.progress_val = std.math.clamp(val, 0, 100);
     }
 
-    pub fn createVideoViewport(
-        id: u32,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        vm_name: Str,
-        has_signal: bool,
-    ) Icon {
-        var icon = base(id, .video_viewport, x, y, w, h, vm_name);
-        icon.video_has_signal = has_signal;
-        return icon;
-    }
-
     pub fn createMenuItem(i: u32, x: i32, y: i32, w: u32, h: u32, t: Str) Icon {
         return base(i, .menu_item, x, y, w, h, t);
     }
@@ -274,56 +242,12 @@ pub const Icon = struct {
         return icon;
     }
 
-    pub fn createSlateCard(
-        id: u32,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        title: []const u8,
-        subtitle: []const u8,
-        badge: []const u8,
-        badge_color: u32,
-    ) Icon {
-        var icon = base(id, .slate_card, x, y, w, h, title);
-        icon.card_badge_color = badge_color;
-        icon.setCardSubtitle(subtitle);
-        icon.setCardBadge(badge);
-        return icon;
-    }
-
-    pub fn setCardSubtitle(self: *Icon, sub: []const u8) void {
-        const copy_len = @min(sub.len, self.card_subtitle.len - 1);
-        @memcpy(self.card_subtitle[0..copy_len], sub[0..copy_len]);
-        self.card_subtitle[copy_len] = 0;
-        self.card_sub_len = copy_len;
-    }
-
-    pub fn getCardSubtitle(self: *const Icon) []const u8 {
-        return self.card_subtitle[0..self.card_sub_len];
-    }
-
-    pub fn setCardBadge(self: *Icon, badge: []const u8) void {
-        const copy_len = @min(badge.len, self.card_badge.len - 1);
-        @memcpy(self.card_badge[0..copy_len], badge[0..copy_len]);
-        self.card_badge[copy_len] = 0;
-        self.card_badge_len = copy_len;
-    }
-
-    pub fn getCardBadge(self: *const Icon) []const u8 {
-        return self.card_badge[0..self.card_badge_len];
-    }
-
     pub fn isTicked(self: *const Icon) bool {
         return self.is_ticked;
     }
 
     pub fn setTicked(self: *Icon, ticked: bool) void {
         self.is_ticked = ticked;
-    }
-
-    pub fn setVideoSignal(self: *Icon, has_signal: bool) void {
-        self.video_has_signal = has_signal;
     }
 
     pub fn setText(self: *Icon, text: []const u8) void {

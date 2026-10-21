@@ -100,7 +100,7 @@ pub fn buildOskWindow(self: *DiosixGui) !void {
         22,
         disp_str,
     );
-    disp_icon.setCustomColor(fb.Color.ACCENT_CYAN);
+    disp_icon.setCustomColor(fb.Color.INK);
     _ = try win.addIcon(disp_icon);
 
     const key_unit_w: u32 = 58;

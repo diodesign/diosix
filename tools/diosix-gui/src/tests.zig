@@ -466,14 +466,11 @@ test {
     _ = @import("gui/render.zig");
     _ = @import("icon/render.zig");
     _ = @import("icon/text.zig");
-    _ = @import("icon/viewport.zig");
     _ = @import("icon/widgets.zig");
     _ = @import("intro/fx.zig");
     _ = @import("panes.zig");
-    _ = @import("panes/catalog.zig");
     _ = @import("panes/modal.zig");
     _ = @import("panes/osk.zig");
-    _ = @import("panes/vm.zig");
     _ = @import("window/input.zig");
     _ = @import("tests/gui.zig");
     _ = @import("tests/nav.zig");

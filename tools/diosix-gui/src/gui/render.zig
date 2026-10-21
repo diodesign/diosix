@@ -157,7 +157,7 @@ fn renderWindowOnSurface(
     dy: i32,
 ) void {
     const win_box = win.getBox();
-    if (!win.is_modal and is_accel and blur_radius > 0) {
+    if (is_accel and blur_radius > 0) {
         surface.drawBlurredBackdropInBoxDrift(
             win_box,
             win_box,

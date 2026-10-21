@@ -65,7 +65,7 @@ test "diosix-gui: linked list pane architecture and switching between panes" {
     try testing.expect(gui.getWindow(gui_mod.WIN_BACK_ID) == null);
     try testing.expect(win_menu.child_window_id == null);
     try testing.expectEqual(gui_mod.MENU_FULL_H, win_menu.height);
-    try testing.expectEqual(@as(usize, 6), win_menu.icons.items.len);
+    try testing.expectEqual(@as(usize, 4), win_menu.icons.items.len);
 }
 
 test "diosix-gui: 3-tier active help priority system" {
@@ -76,16 +76,16 @@ test "diosix-gui: 3-tier active help priority system" {
     const win_help = gui.getWindow(gui_mod.WIN_HELP_ID).?;
     const help_icon = win_help.getIconById(gui_mod.ICON_HELP_TEXT_ID).?;
     const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
-    const item_software = &win_menu.icons.items[0];
+    const item_about = &win_menu.icons.items[0];
 
     // Priority 1: Cursor over icon with help text displays icon help text.
     gui.handleMouseMove(
-        win_menu.x + item_software.rel_x + 5,
-        win_menu.y + item_software.rel_y + 5,
+        win_menu.x + item_about.rel_x + 5,
+        win_menu.y + item_about.rel_y + 5,
         false,
     );
     try testing.expectEqualStrings(
-        "Manage VM images, virtual disks, and machine manifests",
+        "View hypervisor footprint, host telemetry, and build information",
         help_icon.getText(),
     );
 
@@ -201,7 +201,7 @@ test "diosix-gui: menu roll-up animation, pane slide-in, and repopulation" {
     try testing.expectEqual(gui_mod.MENU_FULL_H, win_menu_repop.height);
     try testing.expect(gui.getWindow(gui_mod.WIN_BACK_ID) == null);
     try testing.expect(gui.getWindow(gui_mod.WIN_STATUS_ID) == null);
-    try testing.expectEqual(@as(usize, 6), win_menu_repop.icons.items.len);
+    try testing.expectEqual(@as(usize, 4), win_menu_repop.icons.items.len);
 }
 
 test "diosix-gui: back menu item undecorated styling, arrow, and navigation" {
@@ -437,7 +437,7 @@ test "diosix-gui: tapping contracted menu item does not trigger back nav" {
     try testing.expect(gui.getWindow(gui_mod.WIN_BACK_ID) == null);
     const win_menu_repop = gui.getWindow(gui_mod.WIN_MENU_ID).?;
     try testing.expectEqual(gui_mod.MENU_FULL_H, win_menu_repop.height);
-    try testing.expectEqual(@as(usize, 6), win_menu_repop.icons.items.len);
+    try testing.expectEqual(@as(usize, 4), win_menu_repop.icons.items.len);
     try testing.expect(gui.active_menu_id == null);
     testing.refAllDecls(@This());
 }

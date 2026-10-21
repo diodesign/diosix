@@ -14,7 +14,8 @@ const sbi = @import("interface").sbi;
 pub const max_vmids: u16 = 4096;
 pub const BITS_PER_WORD: usize = @bitSizeOf(u64);
 pub const VMID_BITMAP_WORDS: usize = max_vmids / BITS_PER_WORD;
-pub const MAX_STOP_SPINS: usize = 100_000;
+pub const MAX_STOP_SPINS: usize = 10_000_000;
+pub const STOP_IPI_RETRY_SPINS: usize = 1024;
 
 pub const QuotaSet = struct {
     max_ram_pages: usize = std.math.maxInt(usize),
@@ -293,10 +294,11 @@ pub fn stop(self: *guest_mod.Guest) void {
     const my_cpu = if (builtin.is_test)
         0
     else
-        riscv.getCPUContext().hardware_hart_id;
+        riscv.getCPUContext().cpu_core_id;
     var it = self.vcores.start;
     while (it) |node| : (it = node.next) {
         const vc = node.contents;
+        vc.state = .stopped;
         if (@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
             _ = vc.tryWake();
         }
@@ -304,7 +306,7 @@ pub fn stop(self: *guest_mod.Guest) void {
         @atomicStore(bool, &vc.wfi_blocked, false, .release);
         scheduler.dequeue(vc);
         if (!builtin.is_test) {
-            if (vc.running_on_cpu) |home_cpu| {
+            if ((@as(*volatile ?usize, &vc.running_on_cpu)).*) |home_cpu| {
                 if (home_cpu != my_cpu) pcore.sendIpiToCpu(home_cpu);
             }
         }
@@ -318,7 +320,12 @@ pub fn stop(self: *guest_mod.Guest) void {
             while ((@as(*volatile ?usize, &vc.running_on_cpu)).* != null and
                 spins < MAX_STOP_SPINS) : (spins += 1)
             {
-                if (vc.running_on_cpu == my_cpu) break;
+                const cur_cpu =
+                    (@as(*volatile ?usize, &vc.running_on_cpu)).* orelse break;
+                if (cur_cpu == my_cpu) break;
+                if (spins % STOP_IPI_RETRY_SPINS == 0) {
+                    pcore.sendIpiToCpu(cur_cpu);
+                }
                 std.atomic.spinLoopHint();
             }
         }

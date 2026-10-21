@@ -19,8 +19,6 @@ const WIN_VERSION_ID = gui_mod.WIN_VERSION_ID;
 const WIN_BACK_ID = gui_mod.WIN_BACK_ID;
 const WIN_HELP_ID = gui_mod.WIN_HELP_ID;
 
-const ICON_MENU_SOFTWARE_ID = gui_mod.ICON_MENU_SOFTWARE_ID;
-const ICON_MENU_HARDWARE_ID = gui_mod.ICON_MENU_HARDWARE_ID;
 const ICON_MENU_ABOUT_ID = gui_mod.ICON_MENU_ABOUT_ID;
 const ICON_MENU_CONFIG_ID = gui_mod.ICON_MENU_CONFIG_ID;
 const ICON_MENU_RESTART_ID = gui_mod.ICON_MENU_RESTART_ID;
@@ -40,18 +38,6 @@ pub const MenuItemSpec = struct {
 
 pub const MENU_ITEMS = [_]MenuItemSpec{
     .{
-        .id = ICON_MENU_SOFTWARE_ID,
-        .label = "Software",
-        .help = "Manage VM images, virtual disks, and machine manifests",
-        .gap_after = 6,
-    },
-    .{
-        .id = ICON_MENU_HARDWARE_ID,
-        .label = "Hardware",
-        .help = "Manage peripherals, network bridges, and physical devices",
-        .gap_after = 14,
-    },
-    .{
         .id = ICON_MENU_ABOUT_ID,
         .label = "About",
         .help = "View hypervisor footprint, host telemetry, " ++
@@ -61,7 +47,8 @@ pub const MENU_ITEMS = [_]MenuItemSpec{
     .{
         .id = ICON_MENU_CONFIG_ID,
         .label = "Config",
-        .help = "Configure window appearance and desktop background themes",
+        .help = "Configure window transparency, glass blur, " ++
+            "and background morph",
         .gap_after = 14,
     },
     .{
@@ -186,10 +173,15 @@ pub fn contractMainMenu(self: *DiosixGui, selected_menu_id: u32) !void {
 
     const pad_2x = @as(u32, @intCast(MENU_PAD_X * 2));
     const item_w = if (win.width > pad_2x) win.width - pad_2x else 80;
+    const single_y: i32 = @divTrunc(
+        @as(i32, @intCast(gui_mod.MENU_CONTRACTED_H)) -
+            @as(i32, @intCast(MENU_ITEM_HEIGHT)),
+        2,
+    );
     var icon = Icon.createMenuItem(
         selected_menu_id,
         MENU_PAD_X,
-        MENU_TOP_PAD,
+        single_y,
         item_w,
         MENU_ITEM_HEIGHT,
         name,
@@ -219,10 +211,15 @@ pub fn buildBackPane(self: *DiosixGui) !void {
 
     const pad_2x = @as(u32, @intCast(MENU_PAD_X * 2));
     const item_w: u32 = if (back_w > pad_2x) back_w - pad_2x else 80;
+    const back_item_y: i32 = @divTrunc(
+        @as(i32, @intCast(gui_mod.BACK_PANE_H)) -
+            @as(i32, @intCast(MENU_ITEM_HEIGHT)),
+        2,
+    );
     var back_item = Icon.createBackMenuItem(
         gui_mod.ICON_BACK_BTN_ID,
         MENU_PAD_X,
-        MENU_TOP_PAD,
+        back_item_y,
         item_w,
         MENU_ITEM_HEIGHT,
         "Back",
@@ -290,7 +287,7 @@ pub fn buildBottomPanes(self: *DiosixGui) !void {
         24,
         DiosixGui.FALLBACK_HELP_TEXT,
     );
-    help_icon.setCustomColor(fb.Color.WHITE);
+    help_icon.setCustomColor(fb.Color.INK);
     _ = try win_help.addIcon(help_icon);
 }
 

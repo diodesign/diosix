@@ -324,46 +324,43 @@ pub const Window = struct {
 
         const box = self.getBox();
 
-        // 1. Draw neutral glass pane with dynamic opacity, subtle optical lens
-        // highlights, and subtle superellipse corner curvature.
-        const border_col: ?u32 =
-            if (self.is_modal) fb.Color.GLASS_BORDER else null;
-        const pane_alpha =
-            if (self.is_modal) @max(opacity_alpha, 235) else opacity_alpha;
+        // 1. Draw minimalist Utopian Scholastic paper pane with solid black
+        // structural border and crisp superellipse curvature.
         surface.drawGlassPane(
             box,
             CORNER_RADIUS,
             fb.Color.GLASS_BG,
-            pane_alpha,
-            border_col,
+            opacity_alpha,
+            fb.Color.GLASS_BORDER,
             true,
             true,
         );
 
-        // 2. Optional Title Banner (clipped to window width).
+        // 2. Optional Title Banner & Structural Divider Rule.
         if (self.title) |t| {
-            const title_w: u32 = if (self.width > 36) self.width - 36 else 0;
+            const title_w: u32 = if (self.width > 32) self.width - 32 else 0;
             const title_clip = surface.pushClip(
-                fb.Box.fromPosSize(self.x + 18, self.y, title_w, 34),
+                fb.Box.fromPosSize(self.x + 16, self.y, title_w, 34),
             );
-            font.drawTextWithShadow(
+            font.drawText(
                 surface,
                 t,
-                self.x + 18,
-                self.y + 12,
-                fb.Color.ACCENT_GOLD,
-                fb.Color.BLACK,
+                self.x + 16,
+                self.y + 11,
+                fb.Color.INK,
             );
             surface.popClip(title_clip);
 
-            // Thin translucent divider line under title.
-            const div_box = fb.Box.fromPosSize(
-                self.x + 16,
-                self.y + 34,
-                self.width - 32,
-                1,
-            );
-            surface.fillBox(div_box, fb.Color.GLASS_DIVIDER);
+            // Solid black structural rule under title across the pane.
+            if (self.width > 4) {
+                const div_box = fb.Box.fromPosSize(
+                    self.x + 2,
+                    self.y + 34,
+                    self.width - 4,
+                    1,
+                );
+                surface.fillBox(div_box, fb.Color.GLASS_DIVIDER);
+            }
         }
 
         // 3. Render icons strictly clipped within the content viewport.
@@ -404,25 +401,20 @@ pub const Window = struct {
                 3,
                 fb.Color.GLASS_BG,
                 track_alpha,
-                fb.Color.TRANSPARENT,
+                null,
             );
 
-            // Thumb is sleek rounded pill.
-            // If dragging, glow cyan; otherwise clean slate highlight.
+            // Thumb is a monochrome structural pill.
             const thumb_bg = if (self.is_dragging_scrollbar)
-                fb.Color.ACCENT_CYAN
+                fb.Color.THUMB_BG
             else
                 fb.Color.GLASS_BTN_BG;
-            const thumb_border = if (self.is_dragging_scrollbar)
-                fb.Color.ACCENT_CYAN
-            else
-                fb.Color.GLASS_BTN_BORDER;
             surface.drawRoundedTranslucentBox(
                 thumb,
                 3,
                 thumb_bg,
                 self.scrollbar_alpha,
-                thumb_border,
+                fb.Color.GLASS_BTN_BORDER,
             );
         }
     }

@@ -13,14 +13,8 @@ const host_info = @import("host.zig");
 const text_label = @import("label.zig");
 const gui_mod = @import("gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
-const panes_catalog = @import("panes/catalog.zig");
-const panes_vm = @import("panes/vm.zig");
 const panes_modal = @import("panes/modal.zig");
 
-pub const buildSoftwarePane = panes_catalog.buildSoftwarePane;
-pub const buildHardwarePane = panes_catalog.buildHardwarePane;
-pub const buildVmFleetOverview = panes_vm.buildVmFleetOverview;
-pub const buildVmActionDrawer = panes_vm.buildVmActionDrawer;
 pub const showPowerModal = panes_modal.showPowerModal;
 pub const buildOskWindow = panes_modal.buildOskWindow;
 pub const handleOskAction = panes_modal.handleOskAction;
@@ -31,7 +25,7 @@ const BORDER_GAP = gui_mod.BORDER_GAP;
 const WIN_MENU_ID = gui_mod.WIN_MENU_ID;
 const WIN_STATUS_ID = gui_mod.WIN_STATUS_ID;
 const WIN_CONFIG_ID = gui_mod.WIN_CONFIG_ID;
-const LABEL_COLOR: u32 = 0x00a0b4c8;
+const LABEL_COLOR: u32 = fb.Color.INK_SECONDARY;
 
 fn addRightAlignedLabel(
     win: *Window,
@@ -94,7 +88,7 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
 
     const hdr_id = gui_mod.ICON_STATUS_HOST_HDR_ID;
     var host_hdr = Icon.createReadOnly(hdr_id, pad_x, 14, 200, 20, "Host");
-    host_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
+    host_hdr.setCustomColor(fb.Color.INK);
     _ = try win.addIcon(host_hdr);
 
     // Icons copy each label at once, so one scratch buffer is reused.
@@ -141,7 +135,7 @@ pub fn buildStatusPane(self: *DiosixGui) !void {
 
     const hv_id = gui_mod.ICON_STATUS_HV_HDR_ID;
     var hv_hdr = Icon.createReadOnly(hv_id, pad_x, 120, 200, 20, "Hypervisor");
-    hv_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
+    hv_hdr.setCustomColor(fb.Color.INK);
     _ = try win.addIcon(hv_hdr);
 
     var b1_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
@@ -254,45 +248,6 @@ fn onBgSpeedSliderChanged(
     self.setBgAnimationSpeed(@intCast(icon.slider_val));
 }
 
-fn onThemeButtonClicked(
-    gui_ctx: *anyopaque,
-    win_ctx: *anyopaque,
-    icon: *Icon,
-) void {
-    const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
-    const win: *Window = @ptrCast(@alignCast(win_ctx));
-    if (icon.group_id) |gid| {
-        for (win.icons.items) |*other| {
-            if (other.group_id == gid and other.group_mode == .exclusive) {
-                other.is_ticked = (other.id == icon.id);
-            }
-        }
-    }
-    icon.is_ticked = true;
-    self.selected_theme_id = icon.id;
-
-    switch (icon.id) {
-        gui_mod.ICON_CONFIG_THEME_DAY_ID => {
-            self.setBackdropTopColor(fb.Color.SKY_BASE_TOP);
-            self.setBackdropBotColor(fb.Color.GRADIENT_BOT_DEFAULT);
-        },
-        gui_mod.ICON_CONFIG_THEME_MIDNIGHT_ID => {
-            self.setBackdropTopColor(fb.Color.rgb(16, 24, 48));
-            self.setBackdropBotColor(fb.Color.rgb(4, 6, 16));
-        },
-        gui_mod.ICON_CONFIG_THEME_SUNSET_ID => {
-            self.setBackdropTopColor(fb.Color.rgb(180, 70, 60));
-            self.setBackdropBotColor(fb.Color.rgb(40, 20, 50));
-        },
-        gui_mod.ICON_CONFIG_THEME_EMERALD_ID => {
-            self.setBackdropTopColor(fb.Color.rgb(32, 120, 90));
-            self.setBackdropBotColor(fb.Color.rgb(10, 36, 30));
-        },
-        else => {},
-    }
-    self.markFullDirty();
-}
-
 pub fn buildConfigPane(self: *DiosixGui) !void {
     const menu_win = self.getWindow(WIN_MENU_ID);
     const config_x: i32 = if (menu_win) |mw|
@@ -302,7 +257,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
     const config_y: i32 = BORDER_GAP;
     const max_w = @as(i32, @intCast(self.width)) - BORDER_GAP - config_x;
     const config_w: u32 = if (max_w > 0) @intCast(max_w) else 780;
-    const config_h: u32 = 216;
+    const config_h: u32 = 176;
 
     const win = try self.createWindow(
         WIN_CONFIG_ID,
@@ -321,8 +276,8 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
     self.setMenuItemSelected(gui_mod.ICON_MENU_CONFIG_ID, true);
 
     const pad_x: i32 = 20;
-    const col1_right: i32 = 205;
-    const col2_x: i32 = 225;
+    const col1_right: i32 = 216;
+    const col2_x: i32 = 236;
 
     const hdr_id = gui_mod.ICON_CONFIG_HDR_ID;
     var app_hdr = Icon.createReadOnly(
@@ -333,7 +288,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         20,
         "Appearance",
     );
-    app_hdr.setCustomColor(fb.Color.ACCENT_CYAN);
+    app_hdr.setCustomColor(fb.Color.INK);
     _ = try win.addIcon(app_hdr);
 
     const h_trans =
@@ -343,7 +298,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         "Adjust Gaussian glass blur radius on background " ++
         "under window panes";
     const h_speed =
-        "Adjust background drift animation speed " ++
+        "Adjust background color morphing speed " ++
         "(0% static to 100% full speed)";
 
     const sliders = [_]struct {
@@ -382,7 +337,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
             .y = 122,
             .max = 100,
             .val = @intCast(self.bg_animation_speed),
-            .label = "Background drift speed",
+            .label = "Background morph speed",
             .help = h_speed,
             .cb = onBgSpeedSliderChanged,
         },
@@ -404,66 +359,6 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         s.setHelpText(sl.help);
         s.callback = sl.cb;
         _ = try win.addIcon(s);
-    }
-
-    try addRightAlignedLabel(
-        win,
-        gui_mod.ICON_CONFIG_THEME_LBL_ID,
-        col1_right,
-        168,
-        "Color theme",
-    );
-
-    const themes = [_]struct {
-        id: u32,
-        w: u32,
-        label: []const u8,
-        help: []const u8,
-    }{
-        .{
-            .id = gui_mod.ICON_CONFIG_THEME_DAY_ID,
-            .w = 95,
-            .label = "Day sky",
-            .help = "Classic light blue daytime sky gradient",
-        },
-        .{
-            .id = gui_mod.ICON_CONFIG_THEME_MIDNIGHT_ID,
-            .w = 95,
-            .label = "Midnight",
-            .help = "Deep dark navy night sky gradient",
-        },
-        .{
-            .id = gui_mod.ICON_CONFIG_THEME_SUNSET_ID,
-            .w = 90,
-            .label = "Sunset",
-            .help = "Warm crimson dusk sunset gradient",
-        },
-        .{
-            .id = gui_mod.ICON_CONFIG_THEME_EMERALD_ID,
-            .w = 95,
-            .label = "Emerald",
-            .help = "Forest aurora green gradient",
-        },
-    };
-
-    var radio_x: i32 = col2_x;
-    for (themes) |th| {
-        const is_sel = (self.selected_theme_id == th.id);
-        var r = Icon.createTickBox(
-            th.id,
-            radio_x,
-            166,
-            th.w,
-            24,
-            th.label,
-            is_sel,
-            gui_mod.GROUP_CONFIG_THEME,
-            .exclusive,
-        );
-        r.setHelpText(th.help);
-        r.callback = onThemeButtonClicked;
-        _ = try win.addIcon(r);
-        radio_x += @as(i32, @intCast(th.w)) + 14;
     }
 }
 

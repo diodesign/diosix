@@ -147,9 +147,13 @@ fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) void {
         const next_it = node.next;
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
 
-        if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
+        if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire) or
+            vc.state == .stopped or
+            vc.getGuest().state != .valid)
+        {
             pcpu.blocked_queue.remove(node);
             vc.blocked_on_cpu = null;
+            if (vc.getGuest().state != .valid) vc.state = .stopped;
             it = next_it;
             continue;
         }
@@ -232,9 +236,13 @@ fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
         const next_it = node.next;
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
 
-        if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
+        if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire) or
+            vc.state == .stopped or
+            vc.getGuest().state != .valid)
+        {
             pcpu.blocked_queue.remove(node);
             vc.blocked_on_cpu = null;
+            if (vc.getGuest().state != .valid) vc.state = .stopped;
             it = next_it;
             continue;
         }
