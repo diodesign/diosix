@@ -76,9 +76,6 @@ pub fn destroyWindow(self: *DiosixGui, id: u32) bool {
 
 pub fn destroyAllWindows(self: *DiosixGui) void {
     for (self.windows.items) |*win| {
-        if (win.linked_menu_item_id) |mid| {
-            setMenuItemSelected(self, mid, false);
-        }
         win.deinit();
     }
     self.windows.clearRetainingCapacity();
@@ -151,24 +148,10 @@ fn renderWindowOnSurface(
     surface: *fb.Surface,
     win: *Window,
     win_alpha: u8,
-    blur_radius: u32,
-    is_accel: bool,
-    dx: i32,
-    dy: i32,
 ) void {
-    const win_box = win.getBox();
-    if (is_accel and blur_radius > 0) {
-        surface.drawBlurredBackdropInBoxDrift(
-            win_box,
-            win_box,
-            self.bg_top_color,
-            self.bg_bot_color,
-            blur_radius,
-            Window.CORNER_RADIUS,
-            self.blur_scratch,
-            dx,
-            dy,
-        );
+    if (win.id == gui_mod.WIN_SCHEME_DROPDOWN_ID) {
+        win.render(surface, getPopupOpacityAlpha(self));
+        return;
     }
     win.render(surface, win_alpha);
 }
@@ -184,7 +167,6 @@ pub fn renderDamaged(self: *DiosixGui, clean_surface: *fb.Surface) fb.Box {
     if (damage.isEmpty()) return empty;
 
     const win_alpha = self.getWindowOpacityAlpha();
-    const blur_radius = self.getBlurRadius();
 
     const is_full_screen = (damage.x0 == 0 and damage.y0 == 0 and
         damage.x1 == @as(i32, @intCast(self.width)) and
@@ -208,10 +190,6 @@ pub fn renderDamaged(self: *DiosixGui, clean_surface: *fb.Surface) fb.Box {
                     clean_surface,
                     win,
                     win_alpha,
-                    blur_radius,
-                    is_accel,
-                    dx,
-                    dy,
                 );
             }
         }
@@ -230,10 +208,6 @@ pub fn renderDamaged(self: *DiosixGui, clean_surface: *fb.Surface) fb.Box {
                     clean_surface,
                     win,
                     win_alpha,
-                    blur_radius,
-                    is_accel,
-                    dx,
-                    dy,
                 );
             }
         }
@@ -258,10 +232,6 @@ pub fn drawWindowsWithAlpha(
     const base_f = @as(f32, @floatFromInt(getWindowOpacityAlpha(self)));
     const win_alpha: u8 =
         @intFromFloat(base_f * std.math.clamp(alpha_factor, 0.0, 1.0));
-    const blur_radius = getBlurRadius(self);
-    const is_accel = (self.render_mode == .accelerated);
-    const dx = if (is_accel) self.drift_x else 0;
-    const dy = if (is_accel) self.drift_y else 0;
     for (self.windows.items) |*win| {
         if (win.is_onscreen) {
             renderWindowOnSurface(
@@ -269,10 +239,6 @@ pub fn drawWindowsWithAlpha(
                 surface,
                 win,
                 win_alpha,
-                blur_radius,
-                is_accel,
-                dx,
-                dy,
             );
         }
     }
@@ -294,25 +260,20 @@ pub fn getWindowOpacityAlpha(self: *const DiosixGui) u8 {
     return @intCast((opacity_pct * 255) / 100);
 }
 
-pub fn setBlurStrength(self: *DiosixGui, pct: u32) void {
-    const clamped = std.math.clamp(pct, 0, 100);
-    if (self.blur_strength != clamped) {
-        self.blur_strength = clamped;
-        self.markFullDirty();
-    }
-}
-
-pub fn getBlurStrength(self: *const DiosixGui) u32 {
-    return self.blur_strength;
-}
-
-pub fn getBlurRadius(self: *const DiosixGui) u32 {
-    return @divTrunc(self.blur_strength * 10, 100);
+/// Returns the opacity alpha for context/dropdown popup menus, which are
+/// 20% as transparent as normal window panes (`window_transparency / 5`).
+pub fn getPopupOpacityAlpha(self: *const DiosixGui) u8 {
+    const popup_trans = @min(@as(u32, 100), self.window_transparency / 5);
+    const opacity_pct: u32 = 100 - popup_trans;
+    return @intCast((opacity_pct * 255) / 100);
 }
 
 pub fn setBackdropTopColor(self: *DiosixGui, col: u32) void {
     if (self.bg_top_color != col) {
         self.bg_top_color = col;
+        if (fb.BackdropScheme.fromTopColor(col)) |s| {
+            self.bg_scheme = s;
+        }
         self.markFullDirty();
     }
 }
@@ -322,6 +283,103 @@ pub fn setBackdropBotColor(self: *DiosixGui, col: u32) void {
         self.bg_bot_color = col;
         self.markFullDirty();
     }
+}
+
+pub fn setBackdropScheme(self: *DiosixGui, scheme: fb.BackdropScheme) void {
+    self.bg_scheme = scheme;
+    self.bg_top_color = scheme.topColor();
+    if (findIcon(
+        self,
+        gui_mod.WIN_CONFIG_ID,
+        gui_mod.ICON_CONFIG_SCHEME_DROPDOWN_ID,
+    )) |ic| {
+        ic.setText(scheme.label());
+    }
+    self.markFullDirty();
+}
+
+pub fn getBackdropScheme(self: *const DiosixGui) fb.BackdropScheme {
+    return self.bg_scheme;
+}
+
+pub fn setPhysicalDimensions(
+    self: *DiosixGui,
+    mm_w: u32,
+    mm_h: u32,
+) !void {
+    self.mm_width = mm_w;
+    self.mm_height = mm_h;
+    if (self.ui_scale_mode == .auto) {
+        try relayoutAllWindows(self);
+    }
+}
+
+pub fn setResolutionPreset(
+    self: *DiosixGui,
+    preset: gui_mod.ResolutionPreset,
+) !void {
+    const new_w = preset.width();
+    const new_h = preset.height();
+
+    self.resolution_preset = preset;
+    self.width = new_w;
+    self.height = new_h;
+    self.cursor.x = std.math.clamp(
+        self.cursor.x,
+        0,
+        @as(i32, @intCast(new_w -| 1)),
+    );
+    self.cursor.y = std.math.clamp(
+        self.cursor.y,
+        0,
+        @as(i32, @intCast(new_h -| 1)),
+    );
+    self.display_reconfig_pending = true;
+    try relayoutAllWindows(self);
+}
+
+pub fn setColorDepth(self: *DiosixGui, depth: gui_mod.ColorDepth) void {
+    self.color_depth = depth;
+    self.display_reconfig_pending = true;
+    if (findIcon(
+        self,
+        gui_mod.WIN_CONFIG_ID,
+        gui_mod.ICON_CONFIG_DEPTH_DROPDOWN_ID,
+    )) |ic| {
+        ic.setText(depth.label());
+    }
+    self.markFullDirty();
+}
+
+pub fn setUiScaleMode(self: *DiosixGui, mode: gui_mod.UiScaleMode) !void {
+    self.ui_scale_mode = mode;
+    try relayoutAllWindows(self);
+}
+
+pub fn relayoutAllWindows(self: *DiosixGui) !void {
+    self.syncVectorScaleState();
+    const saved_menu = self.active_menu_id;
+    const saved_power = self.power_modal_action;
+    const saved_welcome = self.welcome_state.welcome_visible;
+    const saved_tour = self.welcome_state.tour_visible;
+    const saved_osk = self.osk_state.visible;
+    destroyAllWindows(self);
+    self.active_menu_id = null;
+    self.nav_anim_state = .idle;
+    self.nav_anim_progress = 0.0;
+
+    try self.buildMainMenu();
+    try self.buildBottomPanes();
+    if (saved_menu) |mid| {
+        try self.activateMenuItem(mid);
+        self.completeNavAnimation();
+    }
+    if (saved_power) |act| try self.showPowerModal(act);
+    if (saved_welcome) try self.showWelcomeModal();
+    if (saved_tour) try self.showTourModal();
+    if (saved_osk) try self.buildOskWindow();
+    self.updateActiveHelp();
+    self.markFullDirty();
 }
 
 test {

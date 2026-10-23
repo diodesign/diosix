@@ -1,4 +1,4 @@
-// Animated Perlin Cloud Backdrop & 2-Pass Separable Blur for Diosix GUI.
+// Computed Morphing 2D Color Backdrop Engine for Diosix GUI.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -8,42 +8,6 @@ const fb = @import("framebuffer.zig");
 const Box = fb.Box;
 const Color = fb.Color;
 const Surface = fb.Surface;
-
-pub const CLOUD_MAP: []const u8 = @embedFile("cloud_map.bin");
-pub const CLOUD_MAP_DIMENSION: usize = 256;
-pub const CLOUD_MAP_MASK: usize = CLOUD_MAP_DIMENSION - 1;
-// Subtle static cloud coverage (~35%).
-pub const CLOUD_BASE_OPACITY: u32 = 90;
-// Subtle animated cloud coverage (~43%).
-pub const CLOUD_ANIMATED_OPACITY: u32 = 110;
-
-pub const MAX_BLUR_RADIUS: u32 = 16;
-pub const MAX_KERNEL_LEN: usize = MAX_BLUR_RADIUS * 2 + 1;
-// 65536 in 16.16 fixed point.
-pub const FP_ONE: u32 = 1 << 16;
-
-// Blend dual cloud noise samples over base RGB colors with fixed-point math.
-pub inline fn blendCloudPixel(
-    r_base: u32,
-    g_base: u32,
-    b_base: u32,
-    c1: u32,
-    c2: u32,
-    max_opacity: u32,
-) u32 {
-    const cd = (c1 * 3 + c2 * 2) / 5;
-    const cloud_alpha = (cd * max_opacity) >> 8;
-    const inv_alpha = 255 - cloud_alpha;
-    const r: u8 = @intCast((r_base * inv_alpha + 255 * cloud_alpha) >> 8);
-    const g: u8 = @intCast((g_base * inv_alpha + 255 * cloud_alpha) >> 8);
-    const b: u8 = @intCast((b_base * inv_alpha + 255 * cloud_alpha) >> 8);
-    return Color.rgb(r, g, b);
-}
-
-pub const blur = @import("backdrop/blur.zig");
-pub const computeGaussianKernel = blur.computeGaussianKernel;
-pub const drawBlurredBackdropInBoxDrift = blur.drawBlurredBackdropInBoxDrift;
-pub const drawBlurredBackdropInBox = blur.drawBlurredBackdropInBox;
 
 pub const RgbGradient = struct {
     top_r: i32,
@@ -76,6 +40,15 @@ pub const RgbGradient = struct {
             @intCast(std.math.clamp(self.top_b + db, 0, 255)),
         };
     }
+
+    pub inline fn rowColor(self: RgbGradient, y: i32) u32 {
+        const rgb = self.rowBase(y);
+        return Color.rgb(
+            @intCast(rgb[0]),
+            @intCast(rgb[1]),
+            @intCast(rgb[2]),
+        );
+    }
 };
 
 pub const SIN_LUT: [256]i32 = blk: {
@@ -89,6 +62,45 @@ pub const SIN_LUT: [256]i32 = blk: {
     break :blk table;
 };
 
+pub const BackdropScheme = enum(u8) {
+    spring = 0,
+    summer = 1,
+    autumn = 2,
+    winter = 3,
+    rainbow = 4,
+
+    pub fn label(self: BackdropScheme) []const u8 {
+        return switch (self) {
+            .spring => "Spring",
+            .summer => "Summer",
+            .autumn => "Autumn",
+            .winter => "Winter",
+            .rainbow => "Rainbow",
+        };
+    }
+
+    pub fn topColor(self: BackdropScheme) u32 {
+        return switch (self) {
+            .spring => Color.SCHEME_SPRING_TOP,
+            .summer => Color.SCHEME_SUMMER_TOP,
+            .autumn => Color.SCHEME_AUTUMN_TOP,
+            .winter => Color.SCHEME_WINTER_TOP,
+            .rainbow => Color.SKY_BASE_TOP,
+        };
+    }
+
+    pub fn fromTopColor(top_color: u32) ?BackdropScheme {
+        return switch (top_color) {
+            Color.SKY_BASE_TOP => .rainbow,
+            Color.SCHEME_SPRING_TOP => .spring,
+            Color.SCHEME_SUMMER_TOP => .summer,
+            Color.SCHEME_AUTUMN_TOP => .autumn,
+            Color.SCHEME_WINTER_TOP => .winter,
+            else => null,
+        };
+    }
+};
+
 pub const MorphField = struct {
     den_x: i32,
     den_y: i32,
@@ -96,12 +108,23 @@ pub const MorphField = struct {
     sin_t: i32,
     shift_u: i32,
     shift_v: i32,
+    scheme: BackdropScheme = .rainbow,
 
     pub fn init(
         width: u32,
         height: u32,
         drift_x: i32,
         drift_y: i32,
+    ) MorphField {
+        return initScheme(width, height, drift_x, drift_y, .rainbow);
+    }
+
+    pub fn initScheme(
+        width: u32,
+        height: u32,
+        drift_x: i32,
+        drift_y: i32,
+        scheme: BackdropScheme,
     ) MorphField {
         const phase = mod256(drift_x, drift_y);
         const cos_t = SIN_LUT[(phase + 64) & 255];
@@ -115,7 +138,29 @@ pub const MorphField = struct {
             .sin_t = sin_t,
             .shift_u = shift_u,
             .shift_v = shift_v,
+            .scheme = scheme,
         };
+    }
+
+    inline fn lerpCh(c0: u32, c1: u32, t: u32) u32 {
+        return (c0 * (255 - t) + c1 * t) / 255;
+    }
+
+    inline fn blendTriad(
+        c0: [3]u32,
+        c1: [3]u32,
+        c2: [3]u32,
+        u: u32,
+        v: u32,
+    ) u32 {
+        const mr = lerpCh(c0[0], c1[0], u);
+        const mg = lerpCh(c0[1], c1[1], u);
+        const mb = lerpCh(c0[2], c1[2], u);
+        const vw = (v * 3) >> 2;
+        const r: u8 = @intCast(lerpCh(mr, c2[0], vw));
+        const g: u8 = @intCast(lerpCh(mg, c2[1], vw));
+        const b: u8 = @intCast(lerpCh(mb, c2[2], vw));
+        return Color.rgb(r, g, b);
     }
 
     pub inline fn samplePixel(self: MorphField, cx: i32, cy: i32) u32 {
@@ -129,29 +174,46 @@ pub const MorphField = struct {
             128 + ((du * self.sin_t + dv * self.cos_t) >> 8) + self.shift_v;
         const u: u32 = @intCast(std.math.clamp(u_raw, 0, 255));
         const v: u32 = @intCast(std.math.clamp(v_raw, 0, 255));
-        const r: u8 = @intCast(u);
-        const g: u8 = @intCast(v);
-        const b: u8 = @intCast(255 - ((u + v) >> 1));
-        return Color.rgb(r, g, b);
+        return switch (self.scheme) {
+            .spring => blendTriad(
+                .{ 206, 245, 212 },
+                .{ 126, 214, 146 },
+                .{ 236, 248, 198 },
+                u,
+                v,
+            ),
+            .summer => blendTriad(
+                .{ 255, 232, 132 },
+                .{ 244, 118, 114 },
+                .{ 252, 194, 136 },
+                u,
+                v,
+            ),
+            .autumn => blendTriad(
+                .{ 208, 92, 24 },
+                .{ 230, 0, 0 },
+                .{ 52, 22, 12 },
+                u,
+                v,
+            ),
+            .winter => blendTriad(
+                .{ 28, 68, 124 },
+                .{ 12, 26, 52 },
+                .{ 54, 102, 152 },
+                u,
+                v,
+            ),
+            .rainbow => Color.rgb(
+                @intCast(u),
+                @intCast(v),
+                @intCast(255 - ((u + v) >> 1)),
+            ),
+        };
     }
 };
 
 pub inline fn mod256(a: i32, b: i32) usize {
     return @intCast(@mod(@as(i64, a) + @as(i64, b), 256));
-}
-
-pub inline fn sampleCloudRowPixel(
-    rgb: [3]u32,
-    map_y1: usize,
-    map_y2: usize,
-    ucx: usize,
-    opacity: u32,
-) u32 {
-    const map_x1 = ucx & CLOUD_MAP_MASK;
-    const map_x2 = (ucx * 2) & CLOUD_MAP_MASK;
-    const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
-    const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
-    return blendCloudPixel(rgb[0], rgb[1], rgb[2], c1, c2, opacity);
 }
 
 // Evaluates the deterministic background pixel at (x, y) on the screen with
@@ -171,20 +233,19 @@ pub fn getBackdropPixelDrift(
     const cx = std.math.clamp(x, 0, max_x);
     const cy = std.math.clamp(y, 0, max_y);
 
-    if (top_color == Color.SKY_BASE_TOP) {
-        const morph = MorphField.init(width, height, drift_x, drift_y);
+    if (BackdropScheme.fromTopColor(top_color)) |scheme| {
+        const morph = MorphField.initScheme(
+            width,
+            height,
+            drift_x,
+            drift_y,
+            scheme,
+        );
         return morph.samplePixel(cx, cy);
     }
 
     const grad = RgbGradient.init(top_color, bot_color, height);
-    const rgb = grad.rowBase(cy);
-
-    const ucy = mod256(cy, drift_y);
-    const ucx = mod256(cx, drift_x);
-    const map_y1 = (ucy & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-    const map_y2 = ((ucy * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-
-    return sampleCloudRowPixel(rgb, map_y1, map_y2, ucx, CLOUD_BASE_OPACITY);
+    return grad.rowColor(cy);
 }
 
 pub fn getBackdropPixel(
@@ -221,8 +282,8 @@ pub fn drawGraduatedBackgroundInBoxDrift(
     const y0: usize = @intCast(@max(0, clipped.y0));
     const y1: usize = @intCast(@max(0, clipped.y1));
 
-    if (top_color == Color.SKY_BASE_TOP) {
-        const morph = MorphField.init(w, h, drift_x, drift_y);
+    if (BackdropScheme.fromTopColor(top_color)) |scheme| {
+        const morph = MorphField.initScheme(w, h, drift_x, drift_y, scheme);
         var y: usize = y0;
         while (y < y1) : (y += 1) {
             const vy: i32 = @intCast(y);
@@ -239,24 +300,9 @@ pub fn drawGraduatedBackgroundInBoxDrift(
     const grad = RgbGradient.init(top_color, bot_color, h);
     var y: usize = y0;
     while (y < y1) : (y += 1) {
-        const vy: i32 = @intCast(y);
-        const rgb = grad.rowBase(vy);
-        const vy_drift = mod256(vy, drift_y);
-        const map_y1 = (vy_drift & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-        const map_y2 = ((vy_drift * 2) & CLOUD_MAP_MASK) * CLOUD_MAP_DIMENSION;
-
+        const row_col = grad.rowColor(@intCast(y));
         const row_offset = y * pixels_per_row;
-        var x: usize = x0;
-        while (x < x1) : (x += 1) {
-            const vx_drift = mod256(@intCast(x), drift_x);
-            self.pixels[row_offset + x] = sampleCloudRowPixel(
-                rgb,
-                map_y1,
-                map_y2,
-                vx_drift,
-                CLOUD_BASE_OPACITY,
-            );
-        }
+        @memset(self.pixels[row_offset + x0 .. row_offset + x1], row_col);
     }
 }
 
@@ -282,66 +328,6 @@ pub fn drawGraduatedBackgroundDrift(
 
 pub fn drawGraduatedBackground(self: *Surface, top: u32, bot: u32) void {
     drawGraduatedBackgroundDrift(self, top, bot, 0, 0);
-}
-
-// Render animated subtle white clouds on a light blue base using Perlin map.
-pub fn drawAnimatedClouds(
-    self: *Surface,
-    d1x: i32,
-    d1y: i32,
-    d2x: i32,
-    d2y: i32,
-) void {
-    const pixels_per_row = self.stridePixels();
-    const h = self.height;
-    const w = self.width;
-    if (h == 0 or w == 0) return;
-
-    const grad = RgbGradient.init(Color.SKY_BASE_TOP, Color.SKY_BASE_BOT, h);
-    const dim: i32 = @intCast(CLOUD_MAP_DIMENSION);
-
-    var y: u32 = 0;
-    while (y < h) : (y += 1) {
-        const y_int: i32 = @intCast(y);
-        const rgb = grad.rowBase(y_int);
-        const row_offset = @as(usize, @intCast(y)) * pixels_per_row;
-        const my1: usize = @intCast(@mod(y_int + d1y, dim));
-        const my2: usize = @intCast(@mod(y_int * 2 + d2y, dim));
-        const map_y1 = my1 * CLOUD_MAP_DIMENSION;
-        const map_y2 = my2 * CLOUD_MAP_DIMENSION;
-
-        var x: u32 = 0;
-        while (x < w) : (x += 1) {
-            const x_int: i32 = @intCast(x);
-            const map_x1: usize = @intCast(@mod(x_int + d1x, dim));
-            const map_x2: usize = @intCast(@mod(x_int * 2 + d2x, dim));
-            const c1 = @as(u32, CLOUD_MAP[map_y1 + map_x1]);
-            const c2 = @as(u32, CLOUD_MAP[map_y2 + map_x2]);
-            const op = CLOUD_ANIMATED_OPACITY;
-            self.pixels[row_offset + x] =
-                blendCloudPixel(rgb[0], rgb[1], rgb[2], c1, c2, op);
-        }
-    }
-}
-
-test "backdrop: cloud map tessellation and periodic continuity" {
-    try std.testing.expectEqual(@as(usize, 65536), CLOUD_MAP.len);
-    var max_seam_x: u32 = 0;
-    var max_seam_y: u32 = 0;
-    for (0..256) |y| {
-        const left = @as(i32, CLOUD_MAP[y * 256 + 0]);
-        const right = @as(i32, CLOUD_MAP[y * 256 + 255]);
-        const d: u32 = @intCast(@abs(left - right));
-        if (d > max_seam_x) max_seam_x = d;
-    }
-    for (0..256) |x| {
-        const top = @as(i32, CLOUD_MAP[0 * 256 + x]);
-        const bot = @as(i32, CLOUD_MAP[255 * 256 + x]);
-        const d: u32 = @intCast(@abs(top - bot));
-        if (d > max_seam_y) max_seam_y = d;
-    }
-    try std.testing.expect(max_seam_x <= 20);
-    try std.testing.expect(max_seam_y <= 20);
 }
 
 test "backdrop: morphing 2D gradient corners and phase evolution" {
@@ -375,6 +361,5 @@ test "backdrop: morphing 2D gradient corners and phase evolution" {
 }
 
 test {
-    _ = blur;
     std.testing.refAllDecls(@This());
 }

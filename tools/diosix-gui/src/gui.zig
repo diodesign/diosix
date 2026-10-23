@@ -1,10 +1,11 @@
-// Final Fantasy 7/8 Themed Dynamic GUI Coordinator for Diosix.
+// Scalable Vector Dynamic GUI Coordinator for Diosix.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
 const fb = @import("framebuffer.zig");
+const font = @import("font.zig");
 const cursor_mod = @import("cursor.zig");
 const window_mod = @import("window.zig");
 const Window = window_mod.Window;
@@ -12,12 +13,14 @@ const host_info = @import("host.zig");
 pub const osk_mod = @import("osk.zig");
 pub const welcome_mod = @import("welcome.zig");
 pub const panes = @import("panes.zig");
+pub const scale_mod = @import("scale.zig");
+pub const dither_mod = @import("dither.zig");
+pub const vector_mod = @import("vector.zig");
 const gui_nav = @import("gui/nav.zig");
 const gui_input = @import("gui/input.zig");
 const gui_render = @import("gui/render.zig");
 const linux = std.os.linux;
 
-pub const TAB_BAR_HEIGHT: u32 = 0;
 pub const BORDER_GAP: i32 = 16;
 
 // Standard Window & Icon IDs.
@@ -28,6 +31,7 @@ pub const WIN_HELP_ID: u32 = 103;
 pub const WIN_STATUS_ID: u32 = 104;
 pub const WIN_ABOUT_ID: u32 = WIN_STATUS_ID;
 pub const WIN_CONFIG_ID: u32 = 105;
+pub const WIN_SCHEME_DROPDOWN_ID: u32 = 106;
 
 pub const WIN_POWER_MODAL_ID: u32 = 202;
 
@@ -81,6 +85,9 @@ pub const BACK_PANE_Y: i32 =
     BORDER_GAP + @as(i32, @intCast(MENU_CONTRACTED_H)) + BACK_PANE_GAP;
 
 pub const PowerAction = host_info.PowerAction;
+pub const ResolutionPreset = scale_mod.ResolutionPreset;
+pub const UiScaleMode = scale_mod.UiScaleMode;
+pub const ColorDepth = dither_mod.ColorDepth;
 
 pub const RenderMode = enum {
     accelerated,
@@ -143,15 +150,36 @@ pub const ICON_STATUS_HV_FOOTPRINT_ID: u32 = 1054;
 pub const ICON_CONFIG_HDR_ID: u32 = 1060;
 pub const ICON_CONFIG_TRANSPARENCY_LBL_ID: u32 = 1061;
 pub const ICON_CONFIG_TRANSPARENCY_SLIDER_ID: u32 = 1062;
-pub const ICON_CONFIG_BLUR_LBL_ID: u32 = 1063;
-pub const ICON_CONFIG_BLUR_SLIDER_ID: u32 = 1064;
 pub const ICON_CONFIG_SPEED_LBL_ID: u32 = 1072;
 pub const ICON_CONFIG_SPEED_SLIDER_ID: u32 = 1073;
+pub const ICON_CONFIG_SCHEME_LBL_ID: u32 = 1074;
+pub const ICON_CONFIG_SCHEME_DROPDOWN_ID: u32 = 1075;
+pub const ICON_SCHEME_OPT_BASE_ID: u32 = 1080;
+
+pub const ICON_CONFIG_DISPLAY_HDR_ID: u32 = 1090;
+pub const ICON_CONFIG_RES_LBL_ID: u32 = 1091;
+pub const ICON_CONFIG_RES_DROPDOWN_ID: u32 = 1092;
+pub const ICON_CONFIG_DEPTH_LBL_ID: u32 = 1093;
+pub const ICON_CONFIG_DEPTH_DROPDOWN_ID: u32 = 1094;
+pub const ICON_CONFIG_SCALE_LBL_ID: u32 = 1095;
+pub const ICON_CONFIG_SCALE_DROPDOWN_ID: u32 = 1096;
+pub const ICON_RES_OPT_BASE_ID: u32 = 1100;
+pub const ICON_DEPTH_OPT_BASE_ID: u32 = 1110;
+pub const ICON_SCALE_OPT_BASE_ID: u32 = 1120;
+
+pub const BackdropScheme = fb.BackdropScheme;
 
 pub const DiosixGui = struct {
     allocator: std.mem.Allocator,
     width: u32,
     height: u32,
+    mm_width: u32 = 0,
+    mm_height: u32 = 0,
+
+    resolution_preset: ResolutionPreset = .r1280x800,
+    color_depth: ColorDepth = .bpp32,
+    ui_scale_mode: UiScaleMode = .auto,
+    display_reconfig_pending: bool = false,
 
     windows: std.ArrayList(Window),
     active_win_idx: ?usize = null,
@@ -160,10 +188,10 @@ pub const DiosixGui = struct {
     mouse_left_down: bool = false,
 
     window_transparency: u32 = 30,
-    blur_strength: u32 = 50,
 
     bg_top_color: u32 = fb.Color.SKY_BASE_TOP,
     bg_bot_color: u32 = fb.Color.GRADIENT_BOT_DEFAULT,
+    bg_scheme: BackdropScheme = .rainbow,
 
     drift_dir: DriftDirection = .right,
     drift_x: i32 = 0,
@@ -173,7 +201,6 @@ pub const DiosixGui = struct {
 
     render_mode: RenderMode = .accelerated,
     dirty_box: fb.Box = fb.Box{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 },
-    blur_scratch: []u32,
 
     uptime_accum_ms: u32 = 0,
     last_uptime_sec: u64 = 0,
@@ -198,17 +225,7 @@ pub const DiosixGui = struct {
         width: u32,
         height: u32,
     ) !DiosixGui {
-        const total_h = std.math.add(
-            usize,
-            height,
-            64,
-        ) catch return error.InvalidDimensions;
-        const scratch_len = std.math.mul(
-            usize,
-            width,
-            total_h,
-        ) catch return error.InvalidDimensions;
-        const scratch_mem = try allocator.alloc(u32, scratch_len);
+        if (width == 0 or height == 0) return error.InvalidDimensions;
 
         var ts: linux.timespec = undefined;
         const clk_rc = linux.clock_gettime(linux.CLOCK.REALTIME, &ts);
@@ -226,6 +243,7 @@ pub const DiosixGui = struct {
             .allocator = allocator,
             .width = width,
             .height = height,
+            .resolution_preset = ResolutionPreset.fromDimensions(width, height),
             .windows = .empty,
             .cursor = cursor_mod.Cursor{
                 .x = @as(i32, @intCast(width / 2)),
@@ -233,12 +251,12 @@ pub const DiosixGui = struct {
                 .visible = false,
             },
             .window_transparency = 30,
-            .blur_scratch = scratch_mem,
             .drift_dir = chosen_dir,
             .bg_animation_speed = 50,
         };
         errdefer gui.deinit();
 
+        gui.syncVectorScaleState();
         try gui.buildMainMenu();
         try gui.buildBottomPanes();
 
@@ -253,14 +271,41 @@ pub const DiosixGui = struct {
     }
 
     pub fn deinit(self: *DiosixGui) void {
+        font.setActiveLineHeight(font.GLYPH_HEIGHT);
+        cursor_mod.setScalePercent(100);
         for (self.windows.items) |*win| {
             win.deinit();
         }
         self.windows.deinit(self.allocator);
-        self.allocator.free(self.blur_scratch);
     }
 
-    // --- Delegated Window Lifecycle, Navigation, Input, & Render Methods ---
+    pub fn getEffectiveScalePercent(self: *const DiosixGui) u32 {
+        return scale_mod.resolveEffectiveScalePercent(
+            self.ui_scale_mode,
+            self.width,
+            self.height,
+            self.mm_width,
+            self.mm_height,
+        );
+    }
+
+    pub fn scalePx(self: *const DiosixGui, base_px: u32) u32 {
+        return scale_mod.scaleDim(base_px, self.getEffectiveScalePercent());
+    }
+
+    pub fn syncVectorScaleState(self: *const DiosixGui) void {
+        const eff_pct = self.getEffectiveScalePercent();
+        font.setActiveLineHeight(
+            scale_mod.scaleDim(font.GLYPH_HEIGHT, eff_pct),
+        );
+        cursor_mod.setScalePercent(eff_pct);
+    }
+
+    pub const setPhysicalDimensions = gui_render.setPhysicalDimensions;
+    pub const setResolutionPreset = gui_render.setResolutionPreset;
+    pub const setColorDepth = gui_render.setColorDepth;
+    pub const setUiScaleMode = gui_render.setUiScaleMode;
+    pub const relayoutAllWindows = gui_render.relayoutAllWindows;
 
     pub const createWindow = gui_render.createWindow;
     pub const destroyWindow = gui_render.destroyWindow;
@@ -307,6 +352,11 @@ pub const DiosixGui = struct {
     pub const buildStatusPane = panes.buildStatusPane;
     pub const updateStatusPaneData = panes.updateStatusPaneData;
     pub const buildConfigPane = panes.buildConfigPane;
+    pub const toggleSchemeDropdown = panes.toggleSchemeDropdown;
+    pub const toggleResolutionDropdown = panes.toggleResolutionDropdown;
+    pub const toggleDepthDropdown = panes.toggleDepthDropdown;
+    pub const toggleScaleDropdown = panes.toggleScaleDropdown;
+    pub const closeSchemeDropdown = panes.closeSchemeDropdown;
     pub const showPowerModal = panes.showPowerModal;
     pub const buildOskWindow = panes.buildOskWindow;
     pub const showWelcomeModal = panes.showWelcomeModal;
@@ -385,14 +435,17 @@ pub const DiosixGui = struct {
 
     pub const setWindowTransparency = gui_render.setWindowTransparency;
     pub const getWindowOpacityAlpha = gui_render.getWindowOpacityAlpha;
-    pub const setBlurStrength = gui_render.setBlurStrength;
-    pub const getBlurStrength = gui_render.getBlurStrength;
-    pub const getBlurRadius = gui_render.getBlurRadius;
+    pub const getPopupOpacityAlpha = gui_render.getPopupOpacityAlpha;
     pub const setBackdropTopColor = gui_render.setBackdropTopColor;
     pub const setBackdropBotColor = gui_render.setBackdropBotColor;
+    pub const setBackdropScheme = gui_render.setBackdropScheme;
+    pub const getBackdropScheme = gui_render.getBackdropScheme;
     pub const handleOskAction = panes.handleOskAction;
 };
 
 test {
+    _ = scale_mod;
+    _ = dither_mod;
+    _ = vector_mod;
     std.testing.refAllDecls(@This());
 }

@@ -6,18 +6,8 @@
 const std = @import("std");
 const linux = std.os.linux;
 const fb = @import("framebuffer.zig");
-
-const IOC_INOUT: u32 = 3;
-const IOC_DIRSHIFT: u5 = 30;
-const IOC_SIZESHIFT: u5 = 16;
-const IOC_TYPESHIFT: u5 = 8;
-const DRM_IOCTL_BASE: u32 = 'd';
-
-fn DRM_IOWR(nr: u32, comptime T: type) u32 {
-    return (IOC_INOUT << IOC_DIRSHIFT) |
-        (@as(u32, @sizeOf(T)) << IOC_SIZESHIFT) |
-        (DRM_IOCTL_BASE << IOC_TYPESHIFT) | nr;
-}
+const dither = @import("dither.zig");
+pub const abi = @import("drm/abi.zig");
 
 pub const PREFERRED_WIDTH: u16 = 1280;
 pub const PREFERRED_HEIGHT: u16 = 800;
@@ -25,163 +15,37 @@ pub const DEFAULT_BPP: u32 = 32;
 pub const DEFAULT_DEPTH: u32 = 24;
 pub const HW_CURSOR_WIDTH: u32 = 64;
 pub const HW_CURSOR_HEIGHT: u32 = 64;
-
-/// Capacity of the NUL-terminated copy of a DRM card path such as
-/// "/dev/dri/card0". Real paths are under 20 bytes; longer ones are rejected
-/// with error.PathTooLong rather than truncated.
 pub const DRM_CARD_PATH_BUF_BYTES: usize = 64;
+pub const MAX_CONNECTOR_MODES: usize = 128;
 
-/// Size of drm_mode_modeinfo.name: the kernel's DRM_DISPLAY_MODE_LEN. This is
-/// part of the kernel ABI struct layout, so it cannot be resized.
-const DRM_DISPLAY_MODE_LEN: usize = 32;
+pub const drm_version = abi.drm_version;
+pub const drm_mode_card_res = abi.drm_mode_card_res;
+pub const drm_mode_modeinfo = abi.drm_mode_modeinfo;
+pub const drm_mode_crtc = abi.drm_mode_crtc;
+pub const drm_mode_get_connector = abi.drm_mode_get_connector;
+pub const drm_mode_fb_cmd = abi.drm_mode_fb_cmd;
+pub const drm_clip_rect = abi.drm_clip_rect;
+pub const drm_mode_fb_dirty_cmd = abi.drm_mode_fb_dirty_cmd;
+pub const drm_mode_create_dumb = abi.drm_mode_create_dumb;
+pub const drm_mode_map_dumb = abi.drm_mode_map_dumb;
+pub const drm_mode_destroy_dumb = abi.drm_mode_destroy_dumb;
+pub const drm_mode_cursor = abi.drm_mode_cursor;
 
-pub const drm_version = extern struct {
-    version_major: i32 = 0,
-    version_minor: i32 = 0,
-    version_patchlevel: i32 = 0,
-    name_len: u64 = 0,
-    name: ?[*]u8 = null,
-    date_len: u64 = 0,
-    date: ?[*]u8 = null,
-    desc_len: u64 = 0,
-    desc: ?[*]u8 = null,
-};
-
-pub const drm_mode_card_res = extern struct {
-    fb_id_ptr: u64 = 0,
-    crtc_id_ptr: u64 = 0,
-    connector_id_ptr: u64 = 0,
-    encoder_id_ptr: u64 = 0,
-    count_fbs: u32 = 0,
-    count_crtcs: u32 = 0,
-    count_connectors: u32 = 0,
-    count_encoders: u32 = 0,
-    min_width: u32 = 0,
-    max_width: u32 = 0,
-    min_height: u32 = 0,
-    max_height: u32 = 0,
-};
-
-pub const drm_mode_modeinfo = extern struct {
-    clock: u32 = 0,
-    hdisplay: u16 = 0,
-    hsync_start: u16 = 0,
-    hsync_end: u16 = 0,
-    htotal: u16 = 0,
-    hskew: u16 = 0,
-    vdisplay: u16 = 0,
-    vsync_start: u16 = 0,
-    vsync_end: u16 = 0,
-    vtotal: u16 = 0,
-    vscan: u16 = 0,
-    vrefresh: u32 = 0,
-    flags: u32 = 0,
-    type: u32 = 0,
-    name: [DRM_DISPLAY_MODE_LEN]u8 = @splat(0),
-};
-
-pub const drm_mode_crtc = extern struct {
-    set_connectors_ptr: u64 = 0,
-    count_connectors: u32 = 0,
-    crtc_id: u32 = 0,
-    fb_id: u32 = 0,
-    x: u32 = 0,
-    y: u32 = 0,
-    gamma_size: u32 = 0,
-    mode_valid: u32 = 0,
-    mode: drm_mode_modeinfo = .{},
-};
-
-pub const drm_mode_get_connector = extern struct {
-    encoders_ptr: u64 = 0,
-    modes_ptr: u64 = 0,
-    props_ptr: u64 = 0,
-    prop_values_ptr: u64 = 0,
-    count_modes: u32 = 0,
-    count_props: u32 = 0,
-    count_encoders: u32 = 0,
-    encoder_id: u32 = 0,
-    connector_id: u32 = 0,
-    connector_type: u32 = 0,
-    connector_type_id: u32 = 0,
-    connection: u32 = 0,
-    mm_width: u32 = 0,
-    mm_height: u32 = 0,
-    subpixel: u32 = 0,
-    pad: u32 = 0,
-};
-
-pub const drm_mode_fb_cmd = extern struct {
-    fb_id: u32 = 0,
-    width: u32 = 0,
-    height: u32 = 0,
-    pitch: u32 = 0,
-    bpp: u32 = 0,
-    depth: u32 = 0,
-    handle: u32 = 0,
-};
-
-pub const drm_clip_rect = extern struct {
-    x1: u16 = 0,
-    y1: u16 = 0,
-    x2: u16 = 0,
-    y2: u16 = 0,
-};
-
-pub const drm_mode_fb_dirty_cmd = extern struct {
-    fb_id: u32 = 0,
-    flags: u32 = 0,
-    color: u32 = 0,
-    num_clips: u32 = 0,
-    clips_ptr: u64 = 0,
-};
-
-pub const drm_mode_create_dumb = extern struct {
-    height: u32 = 0,
-    width: u32 = 0,
-    bpp: u32 = 0,
-    flags: u32 = 0,
-    handle: u32 = 0,
-    pitch: u32 = 0,
-    size: u64 = 0,
-};
-
-pub const drm_mode_map_dumb = extern struct {
-    handle: u32 = 0,
-    pad: u32 = 0,
-    offset: u64 = 0,
-};
-
-pub const drm_mode_destroy_dumb = extern struct {
-    handle: u32 = 0,
-};
-
-pub const drm_mode_cursor = extern struct {
-    flags: u32 = 0,
-    crtc_id: u32 = 0,
-    x: i32 = 0,
-    y: i32 = 0,
-    width: u32 = 0,
-    height: u32 = 0,
-    handle: u32 = 0,
-};
-
-pub const DRM_IOCTL_VERSION = DRM_IOWR(0x00, drm_version);
-pub const DRM_IOCTL_MODE_GETRESOURCES = DRM_IOWR(0xa0, drm_mode_card_res);
-pub const DRM_IOCTL_MODE_GETCRTC = DRM_IOWR(0xa1, drm_mode_crtc);
-pub const DRM_IOCTL_MODE_SETCRTC = DRM_IOWR(0xa2, drm_mode_crtc);
-pub const DRM_IOCTL_MODE_CURSOR = DRM_IOWR(0xa3, drm_mode_cursor);
-pub const DRM_IOCTL_MODE_GETCONNECTOR = DRM_IOWR(0xa7, drm_mode_get_connector);
-pub const DRM_IOCTL_MODE_ADDFB = DRM_IOWR(0xae, drm_mode_fb_cmd);
-pub const DRM_IOCTL_MODE_RMFB = DRM_IOWR(0xaf, u32);
-pub const DRM_IOCTL_MODE_DIRTYFB = DRM_IOWR(0xb1, drm_mode_fb_dirty_cmd);
-pub const DRM_IOCTL_MODE_CREATE_DUMB = DRM_IOWR(0xb2, drm_mode_create_dumb);
-pub const DRM_IOCTL_MODE_MAP_DUMB = DRM_IOWR(0xb3, drm_mode_map_dumb);
-pub const DRM_IOCTL_MODE_DESTROY_DUMB = DRM_IOWR(0xb4, drm_mode_destroy_dumb);
-
-pub const DRM_MODE_CURSOR_BO = 0x01;
-pub const DRM_MODE_CURSOR_MOVE = 0x02;
-pub const DRM_MODE_CONNECTED = 1;
+pub const DRM_IOCTL_VERSION = abi.DRM_IOCTL_VERSION;
+pub const DRM_IOCTL_MODE_GETRESOURCES = abi.DRM_IOCTL_MODE_GETRESOURCES;
+pub const DRM_IOCTL_MODE_GETCRTC = abi.DRM_IOCTL_MODE_GETCRTC;
+pub const DRM_IOCTL_MODE_SETCRTC = abi.DRM_IOCTL_MODE_SETCRTC;
+pub const DRM_IOCTL_MODE_CURSOR = abi.DRM_IOCTL_MODE_CURSOR;
+pub const DRM_IOCTL_MODE_GETCONNECTOR = abi.DRM_IOCTL_MODE_GETCONNECTOR;
+pub const DRM_IOCTL_MODE_ADDFB = abi.DRM_IOCTL_MODE_ADDFB;
+pub const DRM_IOCTL_MODE_RMFB = abi.DRM_IOCTL_MODE_RMFB;
+pub const DRM_IOCTL_MODE_DIRTYFB = abi.DRM_IOCTL_MODE_DIRTYFB;
+pub const DRM_IOCTL_MODE_CREATE_DUMB = abi.DRM_IOCTL_MODE_CREATE_DUMB;
+pub const DRM_IOCTL_MODE_MAP_DUMB = abi.DRM_IOCTL_MODE_MAP_DUMB;
+pub const DRM_IOCTL_MODE_DESTROY_DUMB = abi.DRM_IOCTL_MODE_DESTROY_DUMB;
+pub const DRM_MODE_CURSOR_BO = abi.DRM_MODE_CURSOR_BO;
+pub const DRM_MODE_CURSOR_MOVE = abi.DRM_MODE_CURSOR_MOVE;
+pub const DRM_MODE_CONNECTED = abi.DRM_MODE_CONNECTED;
 
 pub const DrmDevice = struct {
     fd: i32,
@@ -194,6 +58,12 @@ pub const DrmDevice = struct {
     width: u32,
     height: u32,
     pitch: u32,
+    hw_bpp: u32 = DEFAULT_BPP,
+    mm_width: u32 = 0,
+    mm_height: u32 = 0,
+    active_mode: drm_mode_modeinfo = .{},
+    modes: [MAX_CONNECTOR_MODES]drm_mode_modeinfo = @splat(.{}),
+    mode_count: usize = 0,
     screen_surface: fb.Surface,
 
     pub fn init(card_path: []const u8) !DrmDevice {
@@ -217,7 +87,6 @@ pub const DrmDevice = struct {
         const fd: i32 = @intCast(signed_fd);
         errdefer _ = linux.close(fd);
 
-        // 1. Probe resources.
         var res = drm_mode_card_res{};
         var crtc_ids: [16]u32 = @splat(0);
         var conn_ids: [16]u32 = @splat(0);
@@ -246,13 +115,19 @@ pub const DrmDevice = struct {
         const crtc_id = crtc_ids[0];
         var chosen_conn: ?u32 = null;
         var chosen_mode: ?drm_mode_modeinfo = null;
+        var conn_mm_w: u32 = 0;
+        var conn_mm_h: u32 = 0;
+        var saved_modes: [MAX_CONNECTOR_MODES]drm_mode_modeinfo = @splat(.{});
+        var saved_mode_count: usize = 0;
 
-        // 2. Find connected connector and mode.
         var c_idx: usize = 0;
-        const total_conns = @min(res.count_connectors, conn_ids.len);
+        const total_conns: usize = @min(
+            @as(usize, res.count_connectors),
+            conn_ids.len,
+        );
         while (c_idx < total_conns) : (c_idx += 1) {
             const cid = conn_ids[c_idx];
-            var modes: [32]drm_mode_modeinfo = @splat(.{});
+            var modes: [MAX_CONNECTOR_MODES]drm_mode_modeinfo = @splat(.{});
             var conn = drm_mode_get_connector{
                 .connector_id = cid,
                 .modes_ptr = @intFromPtr(&modes),
@@ -268,15 +143,20 @@ pub const DrmDevice = struct {
                 conn.count_modes > 0)
             {
                 chosen_conn = cid;
-                // Look for 1280x800 first, or take preferred/first mode.
-                var m_idx: usize = 0;
-                const total_modes = @min(conn.count_modes, modes.len);
+                conn_mm_w = conn.mm_width;
+                conn_mm_h = conn.mm_height;
+                const total_modes: usize = @min(
+                    @as(usize, conn.count_modes),
+                    modes.len,
+                );
+                saved_mode_count = total_modes;
+                @memcpy(saved_modes[0..total_modes], modes[0..total_modes]);
                 chosen_mode = modes[0];
-                while (m_idx < total_modes) : (m_idx += 1) {
-                    if (modes[m_idx].hdisplay == PREFERRED_WIDTH and
-                        modes[m_idx].vdisplay == PREFERRED_HEIGHT)
+                for (modes[0..total_modes]) |m| {
+                    if (m.hdisplay == PREFERRED_WIDTH and
+                        m.vdisplay == PREFERRED_HEIGHT)
                     {
-                        chosen_mode = modes[m_idx];
+                        chosen_mode = m;
                         break;
                     }
                 }
@@ -290,14 +170,65 @@ pub const DrmDevice = struct {
 
         const conn_id = chosen_conn.?;
         const mode = chosen_mode.?;
+        const alloc = try createAndSetScanoutBuffer(
+            fd,
+            crtc_id,
+            conn_id,
+            mode,
+            DEFAULT_BPP,
+            DEFAULT_DEPTH,
+        );
+
+        return DrmDevice{
+            .fd = fd,
+            .crtc_id = crtc_id,
+            .conn_id = conn_id,
+            .fb_id = alloc.fb_id,
+            .fb_handle = alloc.fb_handle,
+            .fb_size = alloc.fb_size,
+            .fb_pixels = alloc.fb_pixels,
+            .width = mode.hdisplay,
+            .height = mode.vdisplay,
+            .pitch = alloc.pitch,
+            .hw_bpp = alloc.bpp,
+            .mm_width = conn_mm_w,
+            .mm_height = conn_mm_h,
+            .active_mode = mode,
+            .modes = saved_modes,
+            .mode_count = saved_mode_count,
+            .screen_surface = fb.Surface.init(
+                alloc.fb_pixels,
+                mode.hdisplay,
+                mode.vdisplay,
+                alloc.pitch,
+            ),
+        };
+    }
+
+    const ScanoutAlloc = struct {
+        fb_id: u32,
+        fb_handle: u32,
+        fb_size: u64,
+        fb_pixels: [*]u32,
+        pitch: u32,
+        bpp: u32,
+    };
+
+    fn createAndSetScanoutBuffer(
+        fd: i32,
+        crtc_id: u32,
+        conn_id: u32,
+        mode: drm_mode_modeinfo,
+        req_bpp: u32,
+        req_depth: u32,
+    ) !ScanoutAlloc {
         const w: u32 = mode.hdisplay;
         const h: u32 = mode.vdisplay;
 
-        // 3. Create scanout dumb buffer.
         var create_dumb = drm_mode_create_dumb{
             .width = w,
             .height = h,
-            .bpp = DEFAULT_BPP,
+            .bpp = req_bpp,
         };
         var ioctl_rc = linux.ioctl(
             fd,
@@ -317,13 +248,12 @@ pub const DrmDevice = struct {
             );
         }
 
-        // 4. Register framebuffer.
         var fb_cmd = drm_mode_fb_cmd{
             .width = w,
             .height = h,
             .pitch = pitch,
-            .bpp = DEFAULT_BPP,
-            .depth = DEFAULT_DEPTH,
+            .bpp = req_bpp,
+            .depth = req_depth,
             .handle = fb_handle,
         };
         ioctl_rc = linux.ioctl(fd, DRM_IOCTL_MODE_ADDFB, @intFromPtr(&fb_cmd));
@@ -334,7 +264,6 @@ pub const DrmDevice = struct {
             _ = linux.ioctl(fd, DRM_IOCTL_MODE_RMFB, @intFromPtr(&rm_id));
         }
 
-        // 5. Map dumb buffer (standard shared RAM - no page faults!).
         var map_dumb = drm_mode_map_dumb{ .handle = fb_handle };
         ioctl_rc = linux.ioctl(
             fd,
@@ -351,15 +280,13 @@ pub const DrmDevice = struct {
             fd,
             @as(i64, @bitCast(map_dumb.offset)),
         );
-        const signed_map: isize = @bitCast(map_res);
-        if (signed_map < 0) return error.MmapFailed;
+        if (@as(isize, @bitCast(map_res)) < 0) return error.MmapFailed;
 
         const fb_pixels: [*]u32 = @ptrFromInt(map_res);
         errdefer if (fb_size > 0) {
             _ = linux.munmap(@ptrCast(fb_pixels), fb_size);
         };
 
-        // 6. Set CRTC mode.
         var conn_id_copy = conn_id;
         var set_crtc = drm_mode_crtc{
             .crtc_id = crtc_id,
@@ -378,24 +305,100 @@ pub const DrmDevice = struct {
         );
         if (@as(isize, @bitCast(ioctl_rc)) < 0) return error.SetCrtcFailed;
 
-        const dev = DrmDevice{
-            .fd = fd,
-            .crtc_id = crtc_id,
-            .conn_id = conn_id,
+        return .{
             .fb_id = fb_id,
             .fb_handle = fb_handle,
             .fb_size = fb_size,
             .fb_pixels = fb_pixels,
-            .width = w,
-            .height = h,
             .pitch = pitch,
-            .screen_surface = fb.Surface.init(fb_pixels, w, h, pitch),
+            .bpp = req_bpp,
         };
-
-        return dev;
     }
 
-    // Immediately flush dirty rect to VirtIO-GPU without 50ms deferred IO.
+    /// Attempts to switch hardware CRTC mode and/or dumb buffer color depth.
+    /// Falls back gracefully to the active CRTC mode and 32bpp dumb buffer if
+    /// the driver rejects a non-native mode or bit depth.
+    pub fn trySetModeAndDepth(
+        self: *DrmDevice,
+        req_w: u32,
+        req_h: u32,
+        depth: dither.ColorDepth,
+    ) void {
+        var target_mode = abi.synthesizeModeInfo(
+            req_w,
+            req_h,
+            self.active_mode,
+        );
+        for (self.modes[0..self.mode_count]) |m| {
+            if (m.hdisplay == req_w and m.vdisplay == req_h) {
+                target_mode = m;
+                break;
+            }
+        }
+
+        const req_bpp = depth.bitsPerPixel();
+        const req_drm_depth = depth.drmDepth();
+
+        const new_alloc = createAndSetScanoutBuffer(
+            self.fd,
+            self.crtc_id,
+            self.conn_id,
+            target_mode,
+            req_bpp,
+            req_drm_depth,
+        ) catch createAndSetScanoutBuffer(
+            self.fd,
+            self.crtc_id,
+            self.conn_id,
+            target_mode,
+            DEFAULT_BPP,
+            DEFAULT_DEPTH,
+        ) catch blk: {
+            target_mode = self.active_mode;
+            break :blk createAndSetScanoutBuffer(
+                self.fd,
+                self.crtc_id,
+                self.conn_id,
+                target_mode,
+                DEFAULT_BPP,
+                DEFAULT_DEPTH,
+            ) catch return;
+        };
+
+        // Release old scanout buffer after new CRTC mode is active.
+        if (self.fb_pixels) |fp| {
+            if (self.fb_size > 0) _ = linux.munmap(@ptrCast(fp), self.fb_size);
+        }
+        if (self.fb_id != 0) {
+            var rm_id = self.fb_id;
+            _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_RMFB, @intFromPtr(&rm_id));
+        }
+        if (self.fb_handle != 0) {
+            var destroy = drm_mode_destroy_dumb{ .handle = self.fb_handle };
+            _ = linux.ioctl(
+                self.fd,
+                DRM_IOCTL_MODE_DESTROY_DUMB,
+                @intFromPtr(&destroy),
+            );
+        }
+
+        self.fb_id = new_alloc.fb_id;
+        self.fb_handle = new_alloc.fb_handle;
+        self.fb_size = new_alloc.fb_size;
+        self.fb_pixels = new_alloc.fb_pixels;
+        self.width = target_mode.hdisplay;
+        self.height = target_mode.vdisplay;
+        self.pitch = new_alloc.pitch;
+        self.hw_bpp = new_alloc.bpp;
+        self.active_mode = target_mode;
+        self.screen_surface = fb.Surface.init(
+            new_alloc.fb_pixels,
+            self.width,
+            self.height,
+            self.pitch,
+        );
+    }
+
     pub fn dirtyFb(self: *DrmDevice, box: fb.Box) void {
         const max_dim: i32 = std.math.maxInt(u16);
         const max_w = @min(@as(i32, @intCast(self.width)), max_dim);
@@ -420,10 +423,6 @@ pub const DrmDevice = struct {
         _ = linux.ioctl(self.fd, DRM_IOCTL_MODE_DIRTYFB, @intFromPtr(&dirty));
     }
 
-    // Query the DRM driver name via DRM_IOCTL_VERSION. The kernel writes the
-    // name straight into `buf` (no NUL) and reports its full length, so a
-    // name longer than `buf` is deliberately truncated to the largest prefix
-    // that fits; it is only ever shown in a log line.
     pub fn getDriverName(self: *DrmDevice, buf: []u8) []const u8 {
         var v = drm_version{
             .name_len = buf.len,
@@ -439,8 +438,6 @@ pub const DrmDevice = struct {
         return "unknown";
     }
 
-    // Determine if the display device has an accelerated hardware GPU 3D
-    // rendering pipeline. Note: DRM dumb buffers provide scanout memory only.
     pub fn hasHardwareAcceleration(self: *DrmDevice) bool {
         _ = self;
         return false;
@@ -480,6 +477,7 @@ test "drm: over-long card path is rejected, not truncated" {
 }
 
 test "drm: types and ioctls" {
+    _ = abi;
     const testing = std.testing;
     std.testing.refAllDecls(@This());
     try testing.expectEqual(@as(usize, 64), @sizeOf(drm_mode_card_res));

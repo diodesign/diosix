@@ -1,4 +1,4 @@
-// Widget & Icon Rendering Engine for Diosix GUI.
+// Scalable Vector Widget & Icon Rendering Engine for Diosix GUI.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -6,6 +6,7 @@
 const std = @import("std");
 const fb = @import("../framebuffer.zig");
 const font = @import("../font.zig");
+const vector = @import("../vector.zig");
 const icon_mod = @import("../icon.zig");
 const Icon = icon_mod.Icon;
 pub const icon_widgets = @import("widgets.zig");
@@ -16,24 +17,54 @@ pub const renderReadWriteText = icon_widgets.renderReadWriteText;
 pub const renderSlider = icon_widgets.renderSlider;
 pub const renderTickBox = icon_widgets.renderTickBox;
 pub const renderButton = icon_widgets.renderButton;
-pub const renderProgressBar = icon_widgets.renderProgressBar;
-pub const renderScrollbar = icon_widgets.renderScrollbar;
+pub const renderDropdown = icon_widgets.renderDropdown;
 
-// Antialiased Back Arrow Bitmap (14x10) - elegant back-pointing arrow.
 pub const BACK_ARROW_WIDTH: u32 = 14;
 pub const BACK_ARROW_HEIGHT: u32 = 10;
-pub const BACK_ARROW_BITMAP = [BACK_ARROW_WIDTH * BACK_ARROW_HEIGHT]u8{
-    0,   0,   0,   41,  183, 253, 244, 66,  0,   0,   0,   0,   0,   0,
-    0,   0,   52,  198, 254, 252, 167, 21,  0,   0,   0,   0,   0,   0,
-    1,   67,  210, 255, 248, 150, 21,  0,   0,   0,   0,   0,   0,   0,
-    86,  222, 255, 245, 170, 101, 91,  91,  91,  91,  91,  91,  91,  69,
-    237, 255, 255, 253, 253, 253, 253, 253, 253, 253, 253, 253, 253, 237,
-    237, 255, 255, 253, 253, 253, 253, 253, 253, 253, 253, 253, 253, 237,
-    86,  222, 255, 245, 170, 101, 91,  91,  91,  91,  91,  91,  91,  69,
-    1,   67,  210, 255, 248, 150, 21,  0,   0,   0,   0,   0,   0,   0,
-    0,   0,   52,  198, 254, 252, 167, 21,  0,   0,   0,   0,   0,   0,
-    0,   0,   0,   41,  183, 253, 244, 66,  0,   0,   0,   0,   0,   0,
-};
+
+var cached_arrow_line_h: u32 = 0;
+var cached_arrow_w: u32 = BACK_ARROW_WIDTH;
+var cached_arrow_h: u32 = BACK_ARROW_HEIGHT;
+var cached_arrow_mask: [48 * 36]u8 = undefined;
+
+fn ensureBackArrowMask() struct { w: u32, h: u32, mask: []const u8 } {
+    const line_h = font.getActiveLineHeight();
+    if (cached_arrow_line_h != line_h) {
+        cached_arrow_line_h = line_h;
+        const scale = @as(f32, @floatFromInt(line_h)) /
+            @as(f32, @floatFromInt(font.GLYPH_HEIGHT));
+        const aw: u32 = std.math.clamp(
+            @as(u32, @intFromFloat(@round(14.0 * scale))),
+            10,
+            48,
+        );
+        const ah: u32 = std.math.clamp(
+            @as(u32, @intFromFloat(@round(10.0 * scale))),
+            7,
+            36,
+        );
+        cached_arrow_w = aw;
+        cached_arrow_h = ah;
+        const path = vector.buildBackArrowPath();
+        const total = @as(usize, aw) * @as(usize, ah);
+        path.rasterizeToMask(
+            @as(f32, @floatFromInt(aw)) / 14.0,
+            @as(f32, @floatFromInt(ah)) / 10.0,
+            0.0,
+            0.0,
+            cached_arrow_mask[0..total],
+            aw,
+            ah,
+            .non_zero,
+        );
+    }
+    const total = @as(usize, cached_arrow_w) * @as(usize, cached_arrow_h);
+    return .{
+        .w = cached_arrow_w,
+        .h = cached_arrow_h,
+        .mask = cached_arrow_mask[0..total],
+    };
+}
 
 inline fn drawShadowText(
     s: *fb.Surface,
@@ -46,30 +77,8 @@ inline fn drawShadowText(
 }
 
 pub fn drawBackArrow(surface: *fb.Surface, x: i32, y: i32, color: u32) void {
-    var r: usize = 0;
-    while (r < BACK_ARROW_HEIGHT) : (r += 1) {
-        const py = y + @as(i32, @intCast(r));
-        var c: usize = 0;
-        while (c < BACK_ARROW_WIDTH) : (c += 1) {
-            const px = x + @as(i32, @intCast(c));
-            const alpha = BACK_ARROW_BITMAP[r * BACK_ARROW_WIDTH + c];
-            if (alpha > 0) {
-                const bg = surface.getPixel(px, py);
-                surface.setPixel(px, py, fb.blendPixel(bg, color, alpha));
-            }
-        }
-    }
-}
-
-pub fn drawBackArrowWithShadow(
-    surface: *fb.Surface,
-    x: i32,
-    y: i32,
-    fg_color: u32,
-    shadow_color: u32,
-) void {
-    _ = shadow_color;
-    drawBackArrow(surface, x, y, fg_color);
+    const a = ensureBackArrowMask();
+    vector.blendMaskOnSurface(surface, a.mask, a.w, a.h, x, y, color, 255);
 }
 
 pub fn renderIcon(
@@ -98,14 +107,39 @@ pub fn renderIcon(
     else
         fb.Color.INK;
 
+    const line_h: i32 = @intCast(font.getActiveLineHeight());
+
     switch (self.icon_type) {
         .read_only_text => {
-            const text_y = sy + @divTrunc(
-                @as(i32, @intCast(self.height)) -
-                    @as(i32, @intCast(font.GLYPH_HEIGHT)),
-                2,
-            );
-            drawShadowText(surface, self.getText(), sx, text_y, fg_color);
+            const txt = self.getText();
+            if (self.wrap_text or
+                (self.height >= @as(u32, @intCast(line_h * 2)) and
+                    font.measureString(txt) > self.width))
+            {
+                const wm = font.measureWrappedText(txt, self.width);
+                const text_y = sy + @max(
+                    0,
+                    @divTrunc(
+                        @as(i32, @intCast(self.height)) -
+                            @as(i32, @intCast(wm.height)),
+                        2,
+                    ),
+                );
+                _ = font.drawTextWrapped(
+                    surface,
+                    txt,
+                    sx,
+                    text_y,
+                    self.width,
+                    fg_color,
+                );
+            } else {
+                const text_y = sy + @divTrunc(
+                    @as(i32, @intCast(self.height)) - line_h,
+                    2,
+                );
+                drawShadowText(surface, txt, sx, text_y, fg_color);
+            }
         },
         .read_write_text => renderTextField(
             self,
@@ -119,7 +153,7 @@ pub fn renderIcon(
         .slider => renderSlider(self, surface, sx, sy, fg_color),
         .tick_box => renderTickBox(self, surface, sx, sy, fg_color),
         .button => renderButton(self, surface, sx, sy, box, fg_color),
-        .progress_bar => renderProgressBar(self, surface, sx, sy, fg_color),
+        .dropdown => renderDropdown(self, surface, sx, sy, box, fg_color),
         .menu_item => renderMenuItem(self, surface, sx, sy),
     }
 }
@@ -135,17 +169,17 @@ pub fn renderMenuItem(
     else
         fb.Color.INK;
 
+    const line_h: i32 = @intCast(font.getActiveLineHeight());
     const text_y = sy + @divTrunc(
-        @as(i32, @intCast(self.height)) -
-            @as(i32, @intCast(font.GLYPH_HEIGHT)) + 2,
+        @as(i32, @intCast(self.height)) - line_h + 2,
         2,
     );
     const pad_x: i32 = 6;
 
     if (self.has_back_arrow) {
+        const a = ensureBackArrowMask();
         const arrow_y = sy + @divTrunc(
-            @as(i32, @intCast(self.height)) -
-                @as(i32, @intCast(BACK_ARROW_HEIGHT)),
+            @as(i32, @intCast(self.height)) - @as(i32, @intCast(a.h)),
             2,
         );
         drawBackArrow(
@@ -164,7 +198,7 @@ pub fn renderMenuItem(
             raw_text;
 
         const label_x =
-            sx + pad_x + @as(i32, @intCast(BACK_ARROW_WIDTH + 6));
+            sx + pad_x + @as(i32, @intCast(a.w + 6));
         drawShadowText(surface, display_text, label_x, text_y, item_color);
     } else {
         drawShadowText(surface, self.getText(), sx + pad_x, text_y, item_color);

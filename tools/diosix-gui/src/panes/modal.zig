@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const fb = @import("../framebuffer.zig");
+const font = @import("../font.zig");
 const icon_mod = @import("../icon.zig");
 const Icon = icon_mod.Icon;
 const window_mod = @import("../window.zig");
@@ -17,27 +18,8 @@ const DiosixGui = gui_mod.DiosixGui;
 
 const BORDER_GAP = gui_mod.BORDER_GAP;
 const WIN_POWER_MODAL_ID = gui_mod.WIN_POWER_MODAL_ID;
-const WIN_OSK_ID = gui_mod.WIN_OSK_ID;
 const WIN_WELCOME_ID = gui_mod.WIN_WELCOME_ID;
 const WIN_TOUR_ID = gui_mod.WIN_TOUR_ID;
-
-const ICON_POWER_MSG1_ID = gui_mod.ICON_POWER_MSG1_ID;
-const ICON_POWER_MSG2_ID = gui_mod.ICON_POWER_MSG2_ID;
-const ICON_POWER_CANCEL_ID = gui_mod.ICON_POWER_CANCEL_ID;
-const ICON_POWER_CONFIRM_ID = gui_mod.ICON_POWER_CONFIRM_ID;
-
-const ICON_OSK_KEY_BASE_ID = gui_mod.ICON_OSK_KEY_BASE_ID;
-const ICON_OSK_DISPLAY_ID = gui_mod.ICON_OSK_DISPLAY_ID;
-const ICON_WELCOME_TOUR_BTN_ID = gui_mod.ICON_WELCOME_TOUR_BTN_ID;
-const ICON_WELCOME_DISMISS_BTN_ID = gui_mod.ICON_WELCOME_DISMISS_BTN_ID;
-const ICON_WELCOME_SUBTITLE1_ID = gui_mod.ICON_WELCOME_SUBTITLE1_ID;
-const ICON_WELCOME_SUBTITLE2_ID = gui_mod.ICON_WELCOME_SUBTITLE2_ID;
-const ICON_TOUR_PREV_BTN_ID = gui_mod.ICON_TOUR_PREV_BTN_ID;
-const ICON_TOUR_NEXT_BTN_ID = gui_mod.ICON_TOUR_NEXT_BTN_ID;
-const ICON_TOUR_CLOSE_BTN_ID = gui_mod.ICON_TOUR_CLOSE_BTN_ID;
-const ICON_TOUR_SUMMARY1_ID = gui_mod.ICON_TOUR_SUMMARY1_ID;
-const ICON_TOUR_SUMMARY2_ID = gui_mod.ICON_TOUR_SUMMARY2_ID;
-const ICON_TOUR_CLI_HINT_ID = gui_mod.ICON_TOUR_CLI_HINT_ID;
 
 fn addModalBtn(
     win: *Window,
@@ -54,26 +36,65 @@ fn addModalBtn(
     _ = try win.addIcon(btn);
 }
 
-fn onPowerCancelClicked(
-    gui_ctx: *anyopaque,
-    win_ctx: *anyopaque,
-    icon: *Icon,
-) void {
-    _ = win_ctx;
-    _ = icon;
-    const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+fn onPowerCancelClicked(g: *anyopaque, _: *anyopaque, _: *Icon) void {
+    const self: *DiosixGui = @ptrCast(@alignCast(g));
     self.closePowerModal();
 }
 
-fn onPowerConfirmClicked(
-    gui_ctx: *anyopaque,
-    win_ctx: *anyopaque,
-    icon: *Icon,
-) void {
-    _ = win_ctx;
-    _ = icon;
-    const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+fn onPowerConfirmClicked(g: *anyopaque, _: *anyopaque, _: *Icon) void {
+    const self: *DiosixGui = @ptrCast(@alignCast(g));
     self.confirmPowerModal();
+}
+
+fn addWrappedLabel(
+    win: *Window,
+    id: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    text: []const u8,
+    color: u32,
+) !u32 {
+    const wm = font.measureWrappedText(text, w);
+    const h = wm.height + 4;
+    var ic = Icon.createReadOnly(id, x, y, w, h, text);
+    ic.wrap_text = true;
+    ic.setCustomColor(color);
+    _ = try win.addIcon(ic);
+    return h;
+}
+
+fn clampModalWidth(
+    self: *const DiosixGui,
+    min_w: u32,
+    natural_w: u32,
+) u32 {
+    const border_4x: u32 = @intCast(BORDER_GAP * 4);
+    const max_avail =
+        if (self.width > border_4x) self.width - border_4x else self.width;
+    return @min(max_avail, @max(min_w, natural_w));
+}
+
+fn createCenteredModal(
+    self: *DiosixGui,
+    id: u32,
+    modal_w: u32,
+    modal_h: u32,
+    title: []const u8,
+    help: []const u8,
+) !*Window {
+    const mx: i32 = @divTrunc(
+        @as(i32, @intCast(self.width)) - @as(i32, @intCast(modal_w)),
+        2,
+    );
+    const my: i32 = @divTrunc(
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(modal_h)),
+        2,
+    );
+    const win = try self.createWindow(id, mx, my, modal_w, modal_h, title);
+    win.setHelpText(help);
+    win.is_modal = true;
+    return win;
 }
 
 pub fn showPowerModal(self: *DiosixGui, action: gui_mod.PowerAction) !void {
@@ -81,68 +102,80 @@ pub fn showPowerModal(self: *DiosixGui, action: gui_mod.PowerAction) !void {
 
     self.power_modal_action = action;
     self.power_action_confirmed = false;
-    const modal_w: u32 = 520;
-    const modal_h: u32 = 170;
-    const modal_x: i32 = @divTrunc(
-        @as(i32, @intCast(self.width)) - @as(i32, @intCast(modal_w)),
-        2,
-    );
-    const modal_y: i32 = @divTrunc(
-        @as(i32, @intCast(self.height)) - @as(i32, @intCast(modal_h)),
-        2,
-    );
 
     const title = if (action == .restart)
         "Restart host system"
     else
         "Shut down host system";
-    const win = try self.createWindow(
-        WIN_POWER_MODAL_ID,
-        modal_x,
-        modal_y,
-        modal_w,
-        modal_h,
-        title,
-    );
-    win.setHelpText("Confirmation dialog for host power management");
-    win.is_modal = true;
-
-    const pad_x: i32 = 24;
-    const text_w: u32 = if (modal_w > 48) modal_w - 48 else 200;
-
     const t1 = if (action == .restart)
         "Are you sure you want to restart the physical host?"
     else
         "Are you sure you want to shut down the physical host?";
-    var i_t1 = Icon.createReadOnly(
-        ICON_POWER_MSG1_ID,
-        pad_x,
-        48,
-        text_w,
-        20,
-        t1,
-    );
-    i_t1.setCustomColor(fb.Color.INK);
-    _ = try win.addIcon(i_t1);
-
     const t2 = "All running guest virtual machines will be cleanly stopped.";
-    var i_t2 = Icon.createReadOnly(
-        ICON_POWER_MSG2_ID,
-        pad_x,
-        74,
-        text_w,
-        20,
-        t2,
-    );
-    i_t2.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(i_t2);
+    const confirm_label =
+        if (action == .restart) "Restart now" else "Power off";
 
-    const btn_w: u32 = 140;
-    const btn_h: u32 = 32;
-    const btn_y: i32 = 114;
+    const pad_u = self.scalePx(24);
+    const pad_x: i32 = @intCast(pad_u);
+    const line_h = font.getActiveLineHeight();
+    const btn_w: u32 = @max(
+        self.scalePx(140),
+        @max(font.measureString("Cancel"), font.measureString(confirm_label)) +
+            self.scalePx(36),
+    );
+    const btn_h: u32 = @max(self.scalePx(32), line_h + self.scalePx(14));
+
+    const max_line_w = @max(
+        font.measureString(title),
+        @max(font.measureString(t1), font.measureString(t2)),
+    );
+    const modal_w = clampModalWidth(
+        self,
+        @max(self.scalePx(420), btn_w * 2 + pad_u * 3),
+        max_line_w + pad_u * 2 + self.scalePx(12),
+    );
+    const text_w: u32 =
+        if (modal_w > pad_u * 2) modal_w - pad_u * 2 else 200;
+
+    const m1 = font.measureWrappedText(t1, text_w);
+    const m2 = font.measureWrappedText(t2, text_w);
+    const hdr_h: u32 = @max(36, line_h + 18);
+    const y1: i32 = @intCast(hdr_h + self.scalePx(14));
+    const y2: i32 = y1 + @as(i32, @intCast(m1.height + 4 + self.scalePx(8)));
+    const btn_y: i32 =
+        y2 + @as(i32, @intCast(m2.height + 4 + self.scalePx(20)));
+    const modal_h: u32 = @as(u32, @intCast(btn_y)) + btn_h + self.scalePx(20);
+
+    const win = try createCenteredModal(
+        self,
+        WIN_POWER_MODAL_ID,
+        modal_w,
+        modal_h,
+        title,
+        "Confirmation dialog for host power management",
+    );
+
+    _ = try addWrappedLabel(
+        win,
+        gui_mod.ICON_POWER_MSG1_ID,
+        pad_x,
+        y1,
+        text_w,
+        t1,
+        fb.Color.INK,
+    );
+    _ = try addWrappedLabel(
+        win,
+        gui_mod.ICON_POWER_MSG2_ID,
+        pad_x,
+        y2,
+        text_w,
+        t2,
+        fb.Color.INK_SECONDARY,
+    );
 
     var btn_cancel = Icon.createButton(
-        ICON_POWER_CANCEL_ID,
+        gui_mod.ICON_POWER_CANCEL_ID,
         pad_x,
         btn_y,
         btn_w,
@@ -155,12 +188,10 @@ pub fn showPowerModal(self: *DiosixGui, action: gui_mod.PowerAction) !void {
     btn_cancel.callback = onPowerCancelClicked;
     _ = try win.addIcon(btn_cancel);
 
-    const confirm_label =
-        if (action == .restart) "Restart now" else "Power off";
     const confirm_x =
         @as(i32, @intCast(modal_w)) - @as(i32, @intCast(btn_w)) - pad_x;
     var btn_confirm = Icon.createButton(
-        ICON_POWER_CONFIRM_ID,
+        gui_mod.ICON_POWER_CONFIRM_ID,
         confirm_x,
         btn_y,
         btn_w,
@@ -185,20 +216,15 @@ pub const handleOskAction = panes_osk.handleOskAction;
 pub const onOskKeyClicked = panes_osk.onOskKeyClicked;
 pub const buildOskWindow = panes_osk.buildOskWindow;
 
-fn onWelcomeActionClicked(
-    gui_ctx: *anyopaque,
-    win_ctx: *anyopaque,
-    icon: *Icon,
-) void {
-    _ = win_ctx;
-    const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+fn onWelcomeActionClicked(g: *anyopaque, _: *anyopaque, icon: *Icon) void {
+    const self: *DiosixGui = @ptrCast(@alignCast(g));
     switch (icon.id) {
-        ICON_WELCOME_TOUR_BTN_ID => {
+        gui_mod.ICON_WELCOME_TOUR_BTN_ID => {
             _ = self.destroyWindow(WIN_WELCOME_ID);
             self.welcome_state.startTour();
             showTourModal(self) catch {};
         },
-        ICON_WELCOME_DISMISS_BTN_ID => {
+        gui_mod.ICON_WELCOME_DISMISS_BTN_ID => {
             self.welcome_state.closeWelcome();
             _ = self.destroyWindow(WIN_WELCOME_ID);
             self.markFullDirty();
@@ -209,60 +235,84 @@ fn onWelcomeActionClicked(
 
 pub fn showWelcomeModal(self: *DiosixGui) !void {
     _ = self.destroyWindow(WIN_TOUR_ID);
+    _ = self.destroyWindow(WIN_WELCOME_ID);
     self.welcome_state.openWelcome();
 
-    const modal_w: u32 = 540;
-    const modal_h: u32 = 200;
-    const modal_x: i32 = @divTrunc(
-        @as(i32, @intCast(self.width)) - @as(i32, @intCast(modal_w)),
-        2,
+    const l1_str = "Diosix Type-1 Partitioning Hypervisor & Root VM Supervisor";
+    const l2_str =
+        "Take the 5-step Guided Tour or continue to the live desktop.";
+    const pad_u = self.scalePx(24);
+    const pad_x: i32 = @intCast(pad_u);
+    const line_h = font.getActiveLineHeight();
+    const btn_w = @max(
+        self.scalePx(180),
+        font.measureString("Start guided tour") + self.scalePx(36),
     );
-    const modal_y: i32 = @divTrunc(
-        @as(i32, @intCast(self.height)) - @as(i32, @intCast(modal_h)),
-        2,
-    );
+    const btn_h = @max(self.scalePx(34), line_h + self.scalePx(14));
 
-    const win = try self.createWindow(
+    const modal_w = clampModalWidth(
+        self,
+        @max(self.scalePx(540), btn_w * 2 + pad_u * 3),
+        @max(font.measureString(l1_str), font.measureString(l2_str)) +
+            pad_u * 2 + self.scalePx(12),
+    );
+    const text_w: u32 =
+        if (modal_w > pad_u * 2) modal_w - pad_u * 2 else 200;
+
+    const m1 = font.measureWrappedText(l1_str, text_w);
+    const m2 = font.measureWrappedText(l2_str, text_w);
+    const hdr_h: u32 = @max(36, line_h + 18);
+    const y1: i32 = @intCast(hdr_h + self.scalePx(14));
+    const y2: i32 = y1 + @as(i32, @intCast(m1.height + 4 + self.scalePx(8)));
+    const btn_y: i32 =
+        y2 + @as(i32, @intCast(m2.height + 4 + self.scalePx(22)));
+    const modal_h: u32 = @as(u32, @intCast(btn_y)) + btn_h + self.scalePx(20);
+
+    const win = try createCenteredModal(
+        self,
         WIN_WELCOME_ID,
-        modal_x,
-        modal_y,
         modal_w,
         modal_h,
         "Welcome to Diosix",
+        "Choose the 5-step Guided Tour or Live Test-Drive",
     );
-    win.setHelpText("Choose the 5-step Guided Tour or Live Test-Drive");
-    win.is_modal = true;
 
-    const l1_str = "Diosix Type-1 Partitioning Hypervisor & Root VM Supervisor";
-    const s1_id = ICON_WELCOME_SUBTITLE1_ID;
-    var l1 = Icon.createReadOnly(s1_id, 24, 48, modal_w - 48, 20, l1_str);
-    l1.setCustomColor(fb.Color.INK);
-    _ = try win.addIcon(l1);
-
-    const l2_str =
-        "Take the 5-step Guided Tour or continue to the live desktop.";
-    const s2_id = ICON_WELCOME_SUBTITLE2_ID;
-    var l2 = Icon.createReadOnly(s2_id, 24, 76, modal_w - 48, 20, l2_str);
-    l2.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(l2);
+    _ = try addWrappedLabel(
+        win,
+        gui_mod.ICON_WELCOME_SUBTITLE1_ID,
+        pad_x,
+        y1,
+        text_w,
+        l1_str,
+        fb.Color.INK,
+    );
+    _ = try addWrappedLabel(
+        win,
+        gui_mod.ICON_WELCOME_SUBTITLE2_ID,
+        pad_x,
+        y2,
+        text_w,
+        l2_str,
+        fb.Color.INK_SECONDARY,
+    );
 
     try addModalBtn(
         win,
-        ICON_WELCOME_TOUR_BTN_ID,
-        24,
-        140,
-        180,
-        34,
+        gui_mod.ICON_WELCOME_TOUR_BTN_ID,
+        pad_x,
+        btn_y,
+        btn_w,
+        btn_h,
         "Start guided tour",
         onWelcomeActionClicked,
     );
     try addModalBtn(
         win,
-        ICON_WELCOME_DISMISS_BTN_ID,
-        @as(i32, @intCast(modal_w)) - 204,
-        140,
-        180,
-        34,
+        gui_mod.ICON_WELCOME_DISMISS_BTN_ID,
+        @as(i32, @intCast(modal_w)) - @as(i32, @intCast(btn_w)) - pad_x,
+        btn_y,
+        btn_w,
+        btn_h,
         "Close",
         onWelcomeActionClicked,
     );
@@ -270,19 +320,14 @@ pub fn showWelcomeModal(self: *DiosixGui) !void {
     self.markFullDirty();
 }
 
-fn onTourActionClicked(
-    gui_ctx: *anyopaque,
-    win_ctx: *anyopaque,
-    icon: *Icon,
-) void {
-    _ = win_ctx;
-    const self: *DiosixGui = @ptrCast(@alignCast(gui_ctx));
+fn onTourActionClicked(g: *anyopaque, _: *anyopaque, icon: *Icon) void {
+    const self: *DiosixGui = @ptrCast(@alignCast(g));
     switch (icon.id) {
-        ICON_TOUR_PREV_BTN_ID => {
+        gui_mod.ICON_TOUR_PREV_BTN_ID => {
             self.welcome_state.prevStep();
             showTourModal(self) catch {};
         },
-        ICON_TOUR_NEXT_BTN_ID => {
+        gui_mod.ICON_TOUR_NEXT_BTN_ID => {
             self.welcome_state.nextStep();
             if (self.welcome_state.tour_visible) {
                 showTourModal(self) catch {};
@@ -291,7 +336,7 @@ fn onTourActionClicked(
                 self.markFullDirty();
             }
         },
-        ICON_TOUR_CLOSE_BTN_ID => {
+        gui_mod.ICON_TOUR_CLOSE_BTN_ID => {
             self.welcome_state.closeTour();
             _ = self.destroyWindow(WIN_TOUR_ID);
             self.markFullDirty();
@@ -306,57 +351,94 @@ pub fn showTourModal(self: *DiosixGui) !void {
     self.welcome_state.tour_visible = true;
 
     const step = self.welcome_state.activeTourStep();
-    const modal_w: u32 = 640;
-    const modal_h: u32 = 220;
-    const modal_x: i32 = @divTrunc(
-        @as(i32, @intCast(self.width)) - @as(i32, @intCast(modal_w)),
-        2,
-    );
-    const modal_y: i32 = @divTrunc(
-        @as(i32, @intCast(self.height)) - @as(i32, @intCast(modal_h)),
-        2,
-    );
-
-    const win = try self.createWindow(
-        WIN_TOUR_ID,
-        modal_x,
-        modal_y,
-        modal_w,
-        modal_h,
-        step.title,
-    );
-    win.setHelpText("Interactive 5-step Diosix architectural guided tour");
-    win.is_modal = true;
-
-    const tw = modal_w - 48;
-    const ts1_id = ICON_TOUR_SUMMARY1_ID;
-    var s1 = Icon.createReadOnly(ts1_id, 24, 50, tw, 20, step.summary_line1);
-    s1.setCustomColor(fb.Color.INK);
-    _ = try win.addIcon(s1);
-
-    const ts2_id = ICON_TOUR_SUMMARY2_ID;
-    var s2 = Icon.createReadOnly(ts2_id, 24, 74, tw, 20, step.summary_line2);
-    s2.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(s2);
-
     var hint_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const hint_str = text_label.fmtLabel(
         &hint_buf,
         "CLI equivalent: {s}",
         .{step.cli_hint},
     );
-    const th_id = ICON_TOUR_CLI_HINT_ID;
-    var s3 = Icon.createReadOnly(th_id, 24, 108, tw, 20, hint_str);
-    s3.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(s3);
+
+    const pad_u = self.scalePx(24);
+    const pad_x: i32 = @intCast(pad_u);
+    const line_h = font.getActiveLineHeight();
+    const btn_w = @max(
+        self.scalePx(130),
+        font.measureString("Close tour") + self.scalePx(32),
+    );
+    const btn_h = @max(self.scalePx(32), line_h + self.scalePx(14));
+
+    const max_line = @max(
+        font.measureString(step.title),
+        @max(
+            font.measureString(step.summary_line1),
+            @max(
+                font.measureString(step.summary_line2),
+                font.measureString(hint_str),
+            ),
+        ),
+    );
+    const modal_w = clampModalWidth(
+        self,
+        @max(self.scalePx(640), btn_w * 3 + pad_u * 4),
+        max_line + pad_u * 2 + self.scalePx(12),
+    );
+    const tw: u32 = if (modal_w > pad_u * 2) modal_w - pad_u * 2 else 200;
+
+    const m1 = font.measureWrappedText(step.summary_line1, tw);
+    const m2 = font.measureWrappedText(step.summary_line2, tw);
+    const m3 = font.measureWrappedText(hint_str, tw);
+    const hdr_h: u32 = @max(36, line_h + 18);
+    const y1: i32 = @intCast(hdr_h + self.scalePx(14));
+    const y2: i32 = y1 + @as(i32, @intCast(m1.height + 4 + self.scalePx(6)));
+    const y3: i32 = y2 + @as(i32, @intCast(m2.height + 4 + self.scalePx(12)));
+    const btn_y: i32 =
+        y3 + @as(i32, @intCast(m3.height + 4 + self.scalePx(20)));
+    const modal_h: u32 = @as(u32, @intCast(btn_y)) + btn_h + self.scalePx(20);
+
+    const win = try createCenteredModal(
+        self,
+        WIN_TOUR_ID,
+        modal_w,
+        modal_h,
+        step.title,
+        "Interactive 5-step Diosix architectural guided tour",
+    );
+
+    _ = try addWrappedLabel(
+        win,
+        gui_mod.ICON_TOUR_SUMMARY1_ID,
+        pad_x,
+        y1,
+        tw,
+        step.summary_line1,
+        fb.Color.INK,
+    );
+    _ = try addWrappedLabel(
+        win,
+        gui_mod.ICON_TOUR_SUMMARY2_ID,
+        pad_x,
+        y2,
+        tw,
+        step.summary_line2,
+        fb.Color.INK_SECONDARY,
+    );
+    _ = try addWrappedLabel(
+        win,
+        gui_mod.ICON_TOUR_CLI_HINT_ID,
+        pad_x,
+        y3,
+        tw,
+        hint_str,
+        fb.Color.INK_SECONDARY,
+    );
 
     try addModalBtn(
         win,
-        ICON_TOUR_PREV_BTN_ID,
-        24,
-        160,
-        130,
-        32,
+        gui_mod.ICON_TOUR_PREV_BTN_ID,
+        pad_x,
+        btn_y,
+        btn_w,
+        btn_h,
         "Previous",
         onTourActionClicked,
     );
@@ -366,22 +448,22 @@ pub fn showTourModal(self: *DiosixGui) !void {
     const next_lbl = if (is_last) "Finish" else "Next";
     try addModalBtn(
         win,
-        ICON_TOUR_NEXT_BTN_ID,
-        170,
-        160,
-        130,
-        32,
+        gui_mod.ICON_TOUR_NEXT_BTN_ID,
+        pad_x + @as(i32, @intCast(btn_w + self.scalePx(16))),
+        btn_y,
+        btn_w,
+        btn_h,
         next_lbl,
         onTourActionClicked,
     );
 
     try addModalBtn(
         win,
-        ICON_TOUR_CLOSE_BTN_ID,
-        @as(i32, @intCast(modal_w)) - 154,
-        160,
-        130,
-        32,
+        gui_mod.ICON_TOUR_CLOSE_BTN_ID,
+        @as(i32, @intCast(modal_w)) - @as(i32, @intCast(btn_w)) - pad_x,
+        btn_y,
+        btn_w,
+        btn_h,
         "Close tour",
         onTourActionClicked,
     );

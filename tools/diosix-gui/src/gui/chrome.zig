@@ -47,8 +47,8 @@ pub const MENU_ITEMS = [_]MenuItemSpec{
     .{
         .id = ICON_MENU_CONFIG_ID,
         .label = "Config",
-        .help = "Configure window transparency, glass blur, " ++
-            "and background morph",
+        .help = "Configure window transparency, color scheme, " ++
+            "and display settings",
         .gap_after = 14,
     },
     .{
@@ -104,12 +104,13 @@ fn onMenuItemActivated(
 }
 
 pub fn buildMainMenu(self: *DiosixGui) !void {
-    const item_w = maxMenuLabelWidth() + 16;
-    const menu_w = @as(u32, @intCast(MENU_PAD_X * 2)) + item_w;
+    const pad_x = self.scalePx(@intCast(MENU_PAD_X));
+    const item_w = maxMenuLabelWidth() + self.scalePx(16);
+    const menu_w = pad_x * 2 + item_w;
     const border_2x = @as(u32, @intCast(BORDER_GAP * 2));
     const max_avail_h =
         if (self.height > border_2x) self.height - border_2x else self.height;
-    const win_h = @min(MENU_FULL_H, max_avail_h);
+    const win_h = @min(self.scalePx(MENU_FULL_H), max_avail_h);
 
     const win = try self.createWindow(
         WIN_MENU_ID,
@@ -127,40 +128,53 @@ pub fn buildMainMenu(self: *DiosixGui) !void {
 pub fn repopulateMainMenu(self: *DiosixGui) !void {
     const win = self.getWindow(WIN_MENU_ID) orelse return;
     win.icons.clearRetainingCapacity();
+    win.scroll_y = 0;
+    win.scrollbar_alpha = 0;
+    win.focused_icon_idx = null;
+    win.active_drag_icon_idx = null;
+
+    const pad_x = self.scalePx(@intCast(MENU_PAD_X));
+    const item_w_calc = maxMenuLabelWidth() + self.scalePx(16);
+    win.width = pad_x * 2 + item_w_calc;
+
     const border_2x = @as(u32, @intCast(BORDER_GAP * 2));
     const max_avail_h =
         if (self.height > border_2x) self.height - border_2x else self.height;
-    win.height = @min(MENU_FULL_H, max_avail_h);
+    win.height = @min(self.scalePx(MENU_FULL_H), max_avail_h);
     win.setHelpText("Main menu");
 
-    const pad_2x = @as(u32, @intCast(MENU_PAD_X * 2));
+    const pad_2x = pad_x * 2;
     const item_w = if (win.width > pad_2x)
         win.width - pad_2x
     else
-        maxMenuLabelWidth() + 16;
+        item_w_calc;
+    const item_h = self.scalePx(MENU_ITEM_HEIGHT);
 
-    var cur_y: i32 = MENU_TOP_PAD;
+    var cur_y: i32 = @intCast(self.scalePx(@intCast(MENU_TOP_PAD)));
     for (MENU_ITEMS) |spec| {
         var icon = Icon.createMenuItem(
             spec.id,
-            MENU_PAD_X,
+            @intCast(pad_x),
             cur_y,
             item_w,
-            MENU_ITEM_HEIGHT,
+            item_h,
             spec.label,
         );
         icon.setHelpText(spec.help);
         icon.callback = onMenuItemActivated;
         _ = try win.addIcon(icon);
-        cur_y += @as(i32, @intCast(MENU_ITEM_HEIGHT)) + spec.gap_after;
+        const gap: i32 = @intCast(self.scalePx(@intCast(spec.gap_after)));
+        cur_y += @as(i32, @intCast(item_h)) + gap;
     }
 }
-
-pub const repopulateTitleBar = contractMainMenu;
 
 pub fn contractMainMenu(self: *DiosixGui, selected_menu_id: u32) !void {
     const win = self.getWindow(WIN_MENU_ID) orelse return;
     win.icons.clearRetainingCapacity();
+    win.scroll_y = 0;
+    win.scrollbar_alpha = 0;
+    win.focused_icon_idx = null;
+    win.active_drag_icon_idx = null;
 
     const name = getContextTitle(selected_menu_id);
     var help: []const u8 = "Selected menu item";
@@ -171,19 +185,21 @@ pub fn contractMainMenu(self: *DiosixGui, selected_menu_id: u32) !void {
         }
     }
 
-    const pad_2x = @as(u32, @intCast(MENU_PAD_X * 2));
+    const pad_x = self.scalePx(@intCast(MENU_PAD_X));
+    const pad_2x = pad_x * 2;
     const item_w = if (win.width > pad_2x) win.width - pad_2x else 80;
+    const item_h = self.scalePx(MENU_ITEM_HEIGHT);
+    const contracted_h = self.scalePx(gui_mod.MENU_CONTRACTED_H);
     const single_y: i32 = @divTrunc(
-        @as(i32, @intCast(gui_mod.MENU_CONTRACTED_H)) -
-            @as(i32, @intCast(MENU_ITEM_HEIGHT)),
+        @as(i32, @intCast(contracted_h)) - @as(i32, @intCast(item_h)),
         2,
     );
     var icon = Icon.createMenuItem(
         selected_menu_id,
-        MENU_PAD_X,
+        @intCast(pad_x),
         single_y,
         item_w,
-        MENU_ITEM_HEIGHT,
+        item_h,
         name,
     );
     icon.setHelpText(help);
@@ -196,32 +212,37 @@ pub fn contractMainMenu(self: *DiosixGui, selected_menu_id: u32) !void {
 pub fn buildBackPane(self: *DiosixGui) !void {
     if (self.getWindow(WIN_BACK_ID) != null) return;
     const menu_win = self.getWindow(WIN_MENU_ID);
-    const back_w: u32 = if (menu_win) |mw| mw.width else 112;
+    const back_w: u32 = if (menu_win) |mw| mw.width else self.scalePx(112);
+    const contracted_h = self.scalePx(gui_mod.MENU_CONTRACTED_H);
+    const back_y: i32 = BORDER_GAP +
+        @as(i32, @intCast(contracted_h)) + gui_mod.BACK_PANE_GAP;
+    const back_h = self.scalePx(gui_mod.BACK_PANE_H);
 
     const win = try self.createWindow(
         WIN_BACK_ID,
         BORDER_GAP,
-        gui_mod.BACK_PANE_Y,
+        back_y,
         back_w,
-        gui_mod.BACK_PANE_H,
+        back_h,
         null,
     );
     win.setHelpText("Return to the main menu");
     win.parent_window_id = WIN_MENU_ID;
 
-    const pad_2x = @as(u32, @intCast(MENU_PAD_X * 2));
+    const pad_x = self.scalePx(@intCast(MENU_PAD_X));
+    const pad_2x = pad_x * 2;
     const item_w: u32 = if (back_w > pad_2x) back_w - pad_2x else 80;
+    const item_h = self.scalePx(MENU_ITEM_HEIGHT);
     const back_item_y: i32 = @divTrunc(
-        @as(i32, @intCast(gui_mod.BACK_PANE_H)) -
-            @as(i32, @intCast(MENU_ITEM_HEIGHT)),
+        @as(i32, @intCast(back_h)) - @as(i32, @intCast(item_h)),
         2,
     );
     var back_item = Icon.createBackMenuItem(
         gui_mod.ICON_BACK_BTN_ID,
-        MENU_PAD_X,
+        @intCast(pad_x),
         back_item_y,
         item_w,
-        MENU_ITEM_HEIGHT,
+        item_h,
         "Back",
     );
     back_item.setHelpText("Return to the main menu");
@@ -234,8 +255,8 @@ pub fn buildBottomPanes(self: *DiosixGui) !void {
     const ver_str = host_info.getVersionString(&ver_buf);
     const ver_text_w = font.measureString(ver_str);
 
-    const ver_h: u32 = 40;
-    const ver_pad_h: u32 = 14;
+    const ver_h: u32 = self.scalePx(40);
+    const ver_pad_h: u32 = self.scalePx(14);
     const ver_w = ver_text_w + ver_pad_h * 2;
     const ver_x =
         @as(i32, @intCast(self.width)) - @as(i32, @intCast(ver_w)) - BORDER_GAP;
@@ -251,12 +272,17 @@ pub fn buildBottomPanes(self: *DiosixGui) !void {
         null,
     );
     win_ver.setHelpText("Hypervisor build and version information");
+    const icon_h = self.scalePx(24);
+    const icon_y: i32 = @divTrunc(
+        @as(i32, @intCast(ver_h)) - @as(i32, @intCast(icon_h)),
+        2,
+    );
     var ver_icon = Icon.createReadOnly(
         gui_mod.ICON_VERSION_TEXT_ID,
         @intCast(ver_pad_h),
-        8,
+        icon_y,
         ver_text_w + 4,
-        24,
+        icon_h,
         ver_str,
     );
     ver_icon.setHelpText(
@@ -276,22 +302,20 @@ pub fn buildBottomPanes(self: *DiosixGui) !void {
         ver_h,
         null,
     );
-    const help_pad_h: u32 = 14;
+    const help_pad_h: u32 = self.scalePx(14);
     const help_text_w: u32 =
         if (help_w > help_pad_h * 2) help_w - help_pad_h * 2 else 0;
     var help_icon = Icon.createReadOnly(
         gui_mod.ICON_HELP_TEXT_ID,
         @intCast(help_pad_h),
-        8,
+        icon_y,
         help_text_w,
-        24,
+        icon_h,
         DiosixGui.FALLBACK_HELP_TEXT,
     );
     help_icon.setCustomColor(fb.Color.INK);
     _ = try win_help.addIcon(help_icon);
 }
-
-pub const repopulateFooter = buildBottomPanes;
 
 test {
     std.testing.refAllDecls(@This());

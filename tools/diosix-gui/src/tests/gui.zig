@@ -100,7 +100,7 @@ test "diosix-gui: coordinator init, layout, and host telemetry panes" {
         false,
     );
     try testing.expectEqualStrings(
-        "Configure window transparency, glass blur, and background morph",
+        "Configure window transparency, color scheme, and display settings",
         help_icon.getText(),
     );
 
@@ -283,13 +283,6 @@ test "diosix-gui: real-time window transparency and backdrop controls" {
     gui.setWindowTransparency(80);
     try testing.expectEqual(@as(u32, 80), gui.window_transparency);
     try testing.expectEqual(@as(u8, 51), gui.getWindowOpacityAlpha());
-
-    try testing.expectEqual(@as(u32, 50), gui.getBlurStrength());
-    try testing.expectEqual(@as(u32, 5), gui.getBlurRadius());
-
-    gui.setBlurStrength(100);
-    try testing.expectEqual(@as(u32, 100), gui.getBlurStrength());
-    try testing.expectEqual(@as(u32, 10), gui.getBlurRadius());
 
     gui.setBackdropTopColor(0x00c86840);
     try testing.expectEqual(@as(u32, 0x00c86840), gui.bg_top_color);

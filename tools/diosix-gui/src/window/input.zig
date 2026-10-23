@@ -5,8 +5,10 @@
 
 const std = @import("std");
 const fb = @import("../framebuffer.zig");
+const font = @import("../font.zig");
 const icon_mod = @import("../icon.zig");
 const Icon = icon_mod.Icon;
+const widgets = @import("../icon/widgets.zig");
 const window_mod = @import("../window.zig");
 const Window = window_mod.Window;
 
@@ -70,8 +72,7 @@ pub fn triggerIcon(self: *Window, gui_ctx: *anyopaque, icon: *Icon) void {
         .read_write_text => {},
         .slider => {},
         .read_only_text => {},
-        .progress_bar => {},
-        .menu_item => {
+        .menu_item, .dropdown => {
             icon.is_active_press = true;
         },
     }
@@ -90,9 +91,13 @@ pub fn updateSliderFromMouseX(
     px: i32,
 ) bool {
     const sx = self.x + icon.rel_x;
-    const track_w = if (icon.width > 16) icon.width - 16 else 1;
+    const line_h = font.getActiveLineHeight();
+    const thumb_w = widgets.sliderThumbWidth(line_h);
+    const bar_w = widgets.sliderBarWidth(icon, line_h);
+    const track_w = if (bar_w > thumb_w) bar_w - thumb_w else 1;
+    const half_thumb: i32 = @intCast(thumb_w / 2);
     const click_offset = std.math.clamp(
-        px - sx - 8,
+        px - sx - half_thumb,
         0,
         @as(i32, @intCast(track_w)),
     );

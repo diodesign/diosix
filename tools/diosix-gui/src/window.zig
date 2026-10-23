@@ -36,6 +36,7 @@ pub const Window = struct {
 
     // Scrollable pane state.
     scroll_y: i32 = 0,
+    content_bottom_pad: u32 = 6,
     is_dragging_scrollbar: bool = false,
     scrollbar_drag_start_y: i32 = 0,
     scrollbar_drag_start_scroll_y: i32 = 0,
@@ -147,7 +148,9 @@ pub const Window = struct {
     // --- Scrollable Viewport & Geometry ---
 
     pub fn getHeaderHeight(self: *const Window) i32 {
-        return if (self.title != null) 36 else 6;
+        if (self.title == null) return 6;
+        const lh: i32 = @intCast(font.getActiveLineHeight());
+        return @max(36, lh + 18);
     }
 
     pub fn getContentTop(self: *const Window) i32 {
@@ -170,7 +173,9 @@ pub const Window = struct {
             const bottom = icon.rel_y + @as(i32, @intCast(icon.height));
             if (bottom > max_bottom) max_bottom = bottom;
         }
-        const pad: i32 = if (self.title != null) 10 else 6;
+        const min_pad: i32 = if (self.title != null) 10 else 6;
+        const bot_pad: i32 = @intCast(self.content_bottom_pad);
+        const pad: i32 = @max(min_pad, bot_pad);
         const span = max_bottom + pad;
         return @max(@as(i32, @intCast(self.height)), span);
     }
@@ -322,6 +327,7 @@ pub const Window = struct {
     pub fn render(self: *Window, surface: *fb.Surface, opacity_alpha: u8) void {
         if (!self.is_onscreen) return;
 
+        self.scroll_y = std.math.clamp(self.scroll_y, 0, self.getMaxScroll());
         const box = self.getBox();
 
         // 1. Draw minimalist Utopian Scholastic paper pane with solid black
@@ -338,15 +344,19 @@ pub const Window = struct {
 
         // 2. Optional Title Banner & Structural Divider Rule.
         if (self.title) |t| {
+            const hdr_h = self.getHeaderHeight();
+            const lh: i32 = @intCast(font.getActiveLineHeight());
+            const title_y = self.y + @max(4, @divTrunc(hdr_h - lh, 2));
             const title_w: u32 = if (self.width > 32) self.width - 32 else 0;
+            const clip_h: u32 = @intCast(@max(1, hdr_h - 2));
             const title_clip = surface.pushClip(
-                fb.Box.fromPosSize(self.x + 16, self.y, title_w, 34),
+                fb.Box.fromPosSize(self.x + 16, self.y, title_w, clip_h),
             );
             font.drawText(
                 surface,
                 t,
                 self.x + 16,
-                self.y + 11,
+                title_y,
                 fb.Color.INK,
             );
             surface.popClip(title_clip);
@@ -355,7 +365,7 @@ pub const Window = struct {
             if (self.width > 4) {
                 const div_box = fb.Box.fromPosSize(
                     self.x + 2,
-                    self.y + 34,
+                    self.y + hdr_h - 2,
                     self.width - 4,
                     1,
                 );

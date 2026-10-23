@@ -12,9 +12,7 @@ const text_label = @import("label.zig");
 
 pub const BACK_ARROW_WIDTH = icon_render.BACK_ARROW_WIDTH;
 pub const BACK_ARROW_HEIGHT = icon_render.BACK_ARROW_HEIGHT;
-pub const BACK_ARROW_BITMAP = icon_render.BACK_ARROW_BITMAP;
 pub const drawBackArrow = icon_render.drawBackArrow;
-pub const drawBackArrowWithShadow = icon_render.drawBackArrowWithShadow;
 pub const ASCII_PRINTABLE_MIN: u8 = font.ASCII_PRINTABLE_MIN;
 pub const ASCII_PRINTABLE_MAX: u8 = font.ASCII_PRINTABLE_MAX;
 const Str = []const u8;
@@ -34,8 +32,8 @@ pub const IconType = enum {
     slider,
     tick_box,
     button,
-    progress_bar,
     menu_item,
+    dropdown,
 };
 
 pub const GroupMode = enum {
@@ -64,6 +62,7 @@ pub const Icon = struct {
     custom_color: ?u32 = null,
     help_text: ?[]const u8 = null,
     has_back_arrow: bool = false,
+    wrap_text: bool = false,
 
     // Read-write text field state.
     cursor_pos: usize = 0,
@@ -79,10 +78,6 @@ pub const Icon = struct {
     slider_step: i32 = 1,
     slider_suffix: [SLIDER_SUFFIX_CAP]u8 = @splat(0),
     slider_suffix_len: usize = 0,
-
-    // Progress bar state.
-    progress_val: u32 = 0,
-    progress_color: u32 = fb.Color.INK,
 
     // Tick box, grouping & callback state.
     is_ticked: bool = false,
@@ -205,24 +200,8 @@ pub const Icon = struct {
         return base(id, .button, x, y, w, h, t);
     }
 
-    pub fn createProgressBar(
-        id: u32,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        label: Str,
-        initial_pct: u32,
-        color: u32,
-    ) Icon {
-        var icon = base(id, .progress_bar, x, y, w, h, label);
-        icon.progress_val = std.math.clamp(initial_pct, 0, 100);
-        icon.progress_color = color;
-        return icon;
-    }
-
-    pub fn setProgress(self: *Icon, val: u32) void {
-        self.progress_val = std.math.clamp(val, 0, 100);
+    pub fn createDropdown(i: u32, x: i32, y: i32, w: u32, h: u32, t: Str) Icon {
+        return base(i, .dropdown, x, y, w, h, t);
     }
 
     pub fn createMenuItem(i: u32, x: i32, y: i32, w: u32, h: u32, t: Str) Icon {

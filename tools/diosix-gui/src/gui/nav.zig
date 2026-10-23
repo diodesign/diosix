@@ -26,11 +26,9 @@ pub const MENU_ITEMS = chrome.MENU_ITEMS;
 pub const getContextTitle = chrome.getContextTitle;
 pub const buildMainMenu = chrome.buildMainMenu;
 pub const repopulateMainMenu = chrome.repopulateMainMenu;
-pub const repopulateTitleBar = chrome.repopulateTitleBar;
 pub const contractMainMenu = chrome.contractMainMenu;
 pub const buildBackPane = chrome.buildBackPane;
 pub const buildBottomPanes = chrome.buildBottomPanes;
-pub const repopulateFooter = chrome.repopulateFooter;
 
 pub fn getChildTargetX(self: *DiosixGui) i32 {
     const menu_win = self.getWindow(WIN_MENU_ID);
@@ -55,6 +53,10 @@ pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
     if (menu_item_id == ICON_MENU_SHUTDOWN_ID) {
         try self.showPowerModal(.shutdown);
         return;
+    }
+
+    if (self.nav_anim_state == .closing) {
+        finishClosing(self);
     }
 
     if (self.active_menu_id == menu_item_id) return;
@@ -114,9 +116,19 @@ pub fn applyNavAnimation(self: *DiosixGui) void {
 
     if (self.getWindow(WIN_MENU_ID)) |win_menu| {
         const old_box = win_menu.getBox();
-        const span = @as(f32, @floatFromInt(MENU_FULL_H - MENU_CONTRACTED_H));
-        const full_f = @as(f32, @floatFromInt(MENU_FULL_H));
-        win_menu.height = @intFromFloat(full_f - span * factor);
+        const full_h = self.scalePx(MENU_FULL_H);
+        const contracted_h = self.scalePx(MENU_CONTRACTED_H);
+        const span = @as(f32, @floatFromInt(full_h -| contracted_h));
+        const full_f = @as(f32, @floatFromInt(full_h));
+        const border_2x = @as(u32, @intCast(BORDER_GAP * 2));
+        const max_avail_h = if (self.height > border_2x)
+            self.height - border_2x
+        else
+            self.height;
+        const raw_h: u32 = @intFromFloat(full_f - span * factor);
+        win_menu.height = @min(raw_h, max_avail_h);
+        win_menu.scroll_y = 0;
+        win_menu.scrollbar_alpha = 0;
         const new_box = win_menu.getBox();
         self.markDirty(old_box.merge(new_box));
     }
@@ -164,6 +176,11 @@ pub fn teardownChildPanes(self: *DiosixGui) void {
         _ = self.destroyWindow(cid);
     }
 
+    if (self.getWindow(gui_mod.WIN_SCHEME_DROPDOWN_ID)) |wd| {
+        self.markDirty(wd.getBox());
+        _ = self.destroyWindow(gui_mod.WIN_SCHEME_DROPDOWN_ID);
+    }
+
     if (self.getWindow(WIN_BACK_ID)) |wb| {
         self.markDirty(wb.getBox());
         _ = self.destroyWindow(WIN_BACK_ID);
@@ -171,7 +188,7 @@ pub fn teardownChildPanes(self: *DiosixGui) void {
 
     if (self.getWindow(WIN_MENU_ID)) |head| {
         head.child_window_id = null;
-        head.height = MENU_FULL_H;
+        head.height = self.scalePx(MENU_FULL_H);
     }
 
     repopulateMainMenu(self) catch {};

@@ -1,5 +1,5 @@
-// Display Scanout and Evdev Input Handling for Diosix Monolithic GUI.
-// Final Fantasy 7 & 8 Inspired BIOS/UEFI Menu Environment.
+// Display Scanout, Dynamic Resolution/Depth Management & Evdev Input Handling
+// for Diosix Monolithic GUI.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -8,17 +8,41 @@ const std = @import("std");
 const linux = std.os.linux;
 const fb = @import("framebuffer.zig");
 const drm = @import("drm.zig");
-const gui_mod = @import("gui.zig");
-const DiosixGui = gui_mod.DiosixGui;
-const intro_mod = @import("intro.zig");
+const dither = @import("dither.zig");
 const paths = @import("paths.zig");
+pub const input = @import("display/input.zig");
 
 pub const MS_PER_SEC: i64 = 1000;
 pub const NS_PER_MS: i64 = 1_000_000;
 pub const TARGET_FPS: i64 = 60;
-pub const FRAME_INTERVAL_MS: i64 = MS_PER_SEC / TARGET_FPS; // 16 ms (~60 FPS).
+pub const FRAME_INTERVAL_MS: i64 = MS_PER_SEC / TARGET_FPS;
 pub const POLL_TIMEOUT_MS: i32 = @intCast(FRAME_INTERVAL_MS);
-pub const MAX_INPUT_DEVICES: usize = 32;
+
+pub const MAX_INPUT_DEVICES = input.MAX_INPUT_DEVICES;
+pub const InputEvent = input.InputEvent;
+pub const EV_KEY = input.EV_KEY;
+pub const EV_REL = input.EV_REL;
+pub const EV_ABS = input.EV_ABS;
+pub const REL_X = input.REL_X;
+pub const REL_Y = input.REL_Y;
+pub const REL_WHEEL = input.REL_WHEEL;
+pub const ABS_X = input.ABS_X;
+pub const ABS_Y = input.ABS_Y;
+pub const ABS_MT_POSITION_X = input.ABS_MT_POSITION_X;
+pub const ABS_MT_POSITION_Y = input.ABS_MT_POSITION_Y;
+pub const EVDEV_ABS_MAX = input.EVDEV_ABS_MAX;
+pub const BTN_LEFT = input.BTN_LEFT;
+pub const BTN_RIGHT = input.BTN_RIGHT;
+pub const BTN_MIDDLE = input.BTN_MIDDLE;
+pub const BTN_TOUCH = input.BTN_TOUCH;
+pub const input_absinfo = input.input_absinfo;
+pub const EVIOCGABS = input.EVIOCGABS;
+pub const InputDeviceInfo = input.InputDeviceInfo;
+pub const openInputDevices = input.openInputDevices;
+pub const closeInputDevices = input.closeInputDevices;
+pub const fillPollFds = input.fillPollFds;
+pub const applyMotionEvent = input.applyMotionEvent;
+pub const pollIntroInput = input.pollIntroInput;
 
 pub fn getMilliTimestamp() i64 {
     var ts: linux.timespec = undefined;
@@ -32,6 +56,13 @@ pub const Display = struct {
     width: u32,
     height: u32,
     stride: usize,
+    hw_w: u32,
+    hw_h: u32,
+    hw_stride: usize,
+    hw_bpp: u32 = 32,
+    mm_width: u32 = 0,
+    mm_height: u32 = 0,
+    color_depth: dither.ColorDepth = .bpp32,
     fb_ptr: [*]u32,
     drm_dev: ?drm.DrmDevice,
     fb_fd: i32,
@@ -46,29 +77,35 @@ pub const Display = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Display {
         var had_access_denied = false;
-        // Try DRM/KMS first (e.g. VirtIO-GPU).
         for (paths.DRI_CARD_PATHS) |card_path| {
             if (drm.DrmDevice.init(card_path)) |init_dev| {
                 var dev = init_dev;
                 errdefer dev.deinit();
-                const stride_pixels = dev.pitch / @sizeOf(u32);
-                const buffer_pixels = stride_pixels * dev.height;
+                const w = dev.width;
+                const h = dev.height;
+                const log_stride: usize = @as(usize, w) * @sizeOf(u32);
+                const buffer_pixels: usize = @as(usize, w) * @as(usize, h);
                 const bb_mem = try allocator.alloc(u32, buffer_pixels);
                 errdefer allocator.free(bb_mem);
                 const cb_mem = try allocator.alloc(u32, buffer_pixels);
-                const w = dev.width;
-                const h = dev.height;
-                const pitch = dev.pitch;
+                const st_u32: u32 = @intCast(log_stride);
                 return Display{
                     .width = w,
                     .height = h,
-                    .stride = pitch,
+                    .stride = log_stride,
+                    .hw_w = w,
+                    .hw_h = h,
+                    .hw_stride = dev.pitch,
+                    .hw_bpp = dev.hw_bpp,
+                    .mm_width = dev.mm_width,
+                    .mm_height = dev.mm_height,
+                    .color_depth = dither.ColorDepth.fromBpp(dev.hw_bpp),
                     .fb_ptr = dev.screen_surface.pixels,
                     .drm_dev = dev,
                     .fb_fd = -1,
-                    .backbuffer = fb.Surface.init(bb_mem.ptr, w, h, pitch),
+                    .backbuffer = fb.Surface.init(bb_mem.ptr, w, h, st_u32),
                     .backbuffer_mem = bb_mem,
-                    .clean_buffer = fb.Surface.init(cb_mem.ptr, w, h, pitch),
+                    .clean_buffer = fb.Surface.init(cb_mem.ptr, w, h, st_u32),
                     .clean_buffer_mem = cb_mem,
                 };
             } else |err| {
@@ -76,7 +113,6 @@ pub const Display = struct {
             }
         }
 
-        // Fallback to legacy /dev/fb0.
         const fb_path = paths.FB0_DEVICE_PATH;
         const fd_rc = linux.open(fb_path, .{ .ACCMODE = .RDWR }, 0);
         const signed_fd: isize = @bitCast(fd_rc);
@@ -85,7 +121,7 @@ pub const Display = struct {
             errdefer _ = linux.close(fd);
             const w: u32 = drm.PREFERRED_WIDTH;
             const h: u32 = drm.PREFERRED_HEIGHT;
-            const stride: usize = w * @sizeOf(u32);
+            const stride: usize = @as(usize, w) * @sizeOf(u32);
             const map_size = stride * h;
 
             const prot = linux.PROT{ .READ = true, .WRITE = true };
@@ -103,6 +139,13 @@ pub const Display = struct {
                     .width = w,
                     .height = h,
                     .stride = stride,
+                    .hw_w = w,
+                    .hw_h = h,
+                    .hw_stride = stride,
+                    .hw_bpp = 32,
+                    .mm_width = 0,
+                    .mm_height = 0,
+                    .color_depth = .bpp32,
                     .fb_ptr = pixels,
                     .drm_dev = null,
                     .fb_fd = fd,
@@ -127,7 +170,7 @@ pub const Display = struct {
         allocator.free(self.clean_buffer_mem);
         if (self.drm_dev) |*d| d.deinit();
         if (self.fb_fd >= 0) {
-            const map_size = self.stride * self.height;
+            const map_size = self.hw_stride * self.hw_h;
             if (map_size > 0) {
                 _ = linux.munmap(@ptrCast(self.fb_ptr), map_size);
             }
@@ -136,12 +179,59 @@ pub const Display = struct {
         }
     }
 
+    /// Reconfigures the display resolution and color depth at runtime.
+    pub fn reconfigure(
+        self: *Display,
+        allocator: std.mem.Allocator,
+        req_w: u32,
+        req_h: u32,
+        depth: dither.ColorDepth,
+    ) !void {
+        if (req_w == 0 or req_h == 0) return;
+        self.color_depth = depth;
+
+        if (self.drm_dev) |*d| {
+            d.trySetModeAndDepth(req_w, req_h, depth);
+            self.hw_w = d.width;
+            self.hw_h = d.height;
+            self.hw_stride = d.pitch;
+            self.hw_bpp = d.hw_bpp;
+            self.fb_ptr = d.screen_surface.pixels;
+        }
+
+        if (self.width != req_w or self.height != req_h) {
+            const new_px = @as(usize, req_w) * @as(usize, req_h);
+            const new_bb = try allocator.alloc(u32, new_px);
+            errdefer allocator.free(new_bb);
+            const new_cb = try allocator.alloc(u32, new_px);
+
+            allocator.free(self.backbuffer_mem);
+            allocator.free(self.clean_buffer_mem);
+
+            const new_stride: usize = @as(usize, req_w) * @sizeOf(u32);
+            const st_u32: u32 = @intCast(new_stride);
+            self.width = req_w;
+            self.height = req_h;
+            self.stride = new_stride;
+            self.backbuffer_mem = new_bb;
+            self.clean_buffer_mem = new_cb;
+            self.backbuffer = fb.Surface.init(new_bb.ptr, req_w, req_h, st_u32);
+            self.clean_buffer = fb.Surface.init(
+                new_cb.ptr,
+                req_w,
+                req_h,
+                st_u32,
+            );
+            self.cursor_drawn = false;
+        }
+    }
+
     pub fn screenSurface(self: *Display) fb.Surface {
         return fb.Surface.init(
             self.fb_ptr,
-            self.width,
-            self.height,
-            @intCast(self.stride),
+            self.hw_w,
+            self.hw_h,
+            @intCast(self.hw_stride),
         );
     }
 
@@ -152,28 +242,88 @@ pub const Display = struct {
         const y1 = @min(@as(i32, @intCast(self.height)), damage.y1);
         if (x0 >= x1 or y0 >= y1) return;
 
-        const w: usize = @intCast(x1 - x0);
-        const stride_pixels = self.stride / @sizeOf(u32);
-        const ux0: usize = @intCast(x0);
+        const dst_bytes_len = self.hw_stride * @as(usize, self.hw_h);
+        const dst_ptr: [*]u8 = @ptrCast(self.fb_ptr);
+        const dst_bytes: []u8 = dst_ptr[0..dst_bytes_len];
 
-        var y: usize = @intCast(y0);
-        const end_y: usize = @intCast(y1);
-        const max_fb = (self.stride * self.height) / @sizeOf(u32);
-        const max_len = @min(self.backbuffer_mem.len, max_fb);
-
-        while (y < end_y) : (y += 1) {
-            const row_start = std.math.mul(usize, y, stride_pixels) catch break;
-            const row_offset = std.math.add(usize, row_start, ux0) catch break;
-            const row_end = std.math.add(usize, row_offset, w) catch break;
-            if (row_end > max_len) break;
-            @memcpy(
-                self.fb_ptr[row_offset..row_end],
-                self.backbuffer_mem[row_offset..row_end],
+        if (self.width == self.hw_w and self.height == self.hw_h) {
+            dither.flushRectWithDepth(
+                self.backbuffer_mem,
+                self.width,
+                dst_bytes,
+                self.hw_stride,
+                self.hw_bpp,
+                self.color_depth,
+                @intCast(x0),
+                @intCast(y0),
+                @intCast(x1),
+                @intCast(y1),
             );
+            if (self.drm_dev) |*d| d.dirtyFb(damage);
+            return;
+        }
+
+        // Resample logical compositor resolution `(width, height)` into
+        // hardware scanout buffer `(hw_w, hw_h)` with color depth dithering.
+        const hx0: usize = (@as(usize, @intCast(x0)) * self.hw_w) / self.width;
+        const hy0: usize = (@as(usize, @intCast(y0)) * self.hw_h) / self.height;
+        const hx1: usize = @min(
+            @as(usize, self.hw_w),
+            ((@as(usize, @intCast(x1)) * self.hw_w) + self.width - 1) /
+                self.width + 1,
+        );
+        const hy1: usize = @min(
+            @as(usize, self.hw_h),
+            ((@as(usize, @intCast(y1)) * self.hw_h) + self.height - 1) /
+                self.height + 1,
+        );
+
+        const dst_u32: [*]u32 = @ptrCast(@alignCast(dst_bytes.ptr));
+        const hw_stride_u32 = self.hw_stride / @sizeOf(u32);
+        const max_sx: usize = self.width -| 1;
+        const max_sy: usize = self.height -| 1;
+
+        var hy: usize = hy0;
+        while (hy < hy1) : (hy += 1) {
+            const fy_fp = (hy * @as(usize, self.height) * 256) / self.hw_h;
+            const sy0 = @min(max_sy, fy_fp >> 8);
+            const sy1 = @min(max_sy, sy0 + 1);
+            const wy: u32 = @intCast(fy_fp & 0xff);
+            const row0 = sy0 * @as(usize, self.width);
+            const row1 = sy1 * @as(usize, self.width);
+            const dst_row = hy * hw_stride_u32;
+
+            var hx: usize = hx0;
+            while (hx < hx1) : (hx += 1) {
+                const fx_fp = (hx * @as(usize, self.width) * 256) / self.hw_w;
+                const sx0 = @min(max_sx, fx_fp >> 8);
+                const sx1 = @min(max_sx, sx0 + 1);
+                const wx: u32 = @intCast(fx_fp & 0xff);
+
+                const p00 = self.backbuffer_mem[row0 + sx0];
+                const p10 = self.backbuffer_mem[row0 + sx1];
+                const p01 = self.backbuffer_mem[row1 + sx0];
+                const p11 = self.backbuffer_mem[row1 + sx1];
+                const top_c = fb.blendPixel(p00, p10, @intCast(wx));
+                const bot_c = fb.blendPixel(p01, p11, @intCast(wx));
+                const raw = fb.blendPixel(top_c, bot_c, @intCast(wy));
+
+                dst_u32[dst_row + hx] = dither.quantizeAndDitherXrgb(
+                    raw,
+                    @intCast(hx),
+                    @intCast(hy),
+                    self.color_depth,
+                );
+            }
         }
 
         if (self.drm_dev) |*d| {
-            d.dirtyFb(damage);
+            d.dirtyFb(fb.Box{
+                .x0 = @intCast(hx0),
+                .y0 = @intCast(hy0),
+                .x1 = @intCast(hx1),
+                .y1 = @intCast(hy1),
+            });
         }
     }
 
@@ -182,290 +332,7 @@ pub const Display = struct {
     }
 };
 
-pub const InputEvent = extern struct {
-    sec: i64,
-    usec: i64,
-    type: u16,
-    code: u16,
-    value: i32,
-};
-
-pub const EV_KEY: u16 = 0x01;
-pub const EV_REL: u16 = 0x02;
-pub const EV_ABS: u16 = 0x03;
-
-pub const REL_X: u16 = 0x00;
-pub const REL_Y: u16 = 0x01;
-pub const REL_WHEEL: u16 = 0x08;
-pub const ABS_X: u16 = 0x00;
-pub const ABS_Y: u16 = 0x01;
-pub const ABS_MT_POSITION_X: u16 = 0x35;
-pub const ABS_MT_POSITION_Y: u16 = 0x36;
-pub const EVDEV_ABS_MAX: i64 = 32767;
-
-pub const BTN_LEFT: u16 = 0x110;
-pub const BTN_RIGHT: u16 = 0x111;
-pub const BTN_MIDDLE: u16 = 0x112;
-pub const BTN_TOUCH: u16 = 0x14a;
-
-pub const input_absinfo = extern struct {
-    value: i32 = 0,
-    minimum: i32 = 0,
-    maximum: i32 = 0,
-    fuzz: i32 = 0,
-    flat: i32 = 0,
-    resolution: i32 = 0,
-};
-
-const IOC_READ: u32 = 2;
-const IOC_DIRSHIFT: u5 = 30;
-const IOC_SIZESHIFT: u5 = 16;
-const IOC_TYPESHIFT: u5 = 8;
-const EV_IOC_TYPE: u32 = 'E';
-const EVIOCGABS_BASE: u32 = 0x40;
-
-pub fn EVIOCGABS(abs: u32) u32 {
-    const size: u32 = @sizeOf(input_absinfo);
-    return (IOC_READ << IOC_DIRSHIFT) |
-        (size << IOC_SIZESHIFT) |
-        (EV_IOC_TYPE << IOC_TYPESHIFT) |
-        (EVIOCGABS_BASE + abs);
-}
-
-pub const InputDeviceInfo = struct {
-    fd: i32,
-    min_x: i32 = 0,
-    max_x: i32 = EVDEV_ABS_MAX,
-    min_y: i32 = 0,
-    max_y: i32 = EVDEV_ABS_MAX,
-    has_abs: bool = false,
-
-    pub fn scaleX(self: *const InputDeviceInfo, raw_x: i32, screen_w: u32) i32 {
-        if (screen_w == 0) return 0;
-        const span: i64 = @as(i64, self.max_x) - @as(i64, self.min_x);
-        if (span <= 0) return 0;
-        const clamped_raw = std.math.clamp(raw_x, self.min_x, self.max_x);
-        const rel: i64 = @as(i64, clamped_raw) - @as(i64, self.min_x);
-        const w_i64: i64 = @intCast(screen_w);
-        const res = @divTrunc(rel * w_i64, span);
-        const max_coord: i32 = @intCast(screen_w - 1);
-        return std.math.clamp(@as(i32, @intCast(res)), 0, max_coord);
-    }
-
-    pub fn scaleY(self: *const InputDeviceInfo, raw_y: i32, screen_h: u32) i32 {
-        if (screen_h == 0) return 0;
-        const span: i64 = @as(i64, self.max_y) - @as(i64, self.min_y);
-        if (span <= 0) return 0;
-        const clamped_raw = std.math.clamp(raw_y, self.min_y, self.max_y);
-        const rel: i64 = @as(i64, clamped_raw) - @as(i64, self.min_y);
-        const h_i64: i64 = @intCast(screen_h);
-        const res = @divTrunc(rel * h_i64, span);
-        const max_coord: i32 = @intCast(screen_h - 1);
-        return std.math.clamp(@as(i32, @intCast(res)), 0, max_coord);
-    }
-};
-
-fn queryAxis(ifd: i32, a: u32, b: u32, min_p: *i32, max_p: *i32) bool {
-    var info = input_absinfo{};
-    const ptr = @intFromPtr(&info);
-    if (@as(isize, @bitCast(linux.ioctl(ifd, EVIOCGABS(a), ptr))) >= 0 and
-        info.maximum > info.minimum)
-    {
-        min_p.* = info.minimum;
-        max_p.* = info.maximum;
-        return true;
-    }
-    if (@as(isize, @bitCast(linux.ioctl(ifd, EVIOCGABS(b), ptr))) >= 0 and
-        info.maximum > info.minimum)
-    {
-        min_p.* = info.minimum;
-        max_p.* = info.maximum;
-        return true;
-    }
-    return false;
-}
-
-const INPUT_EVENT_PATH_PREFIX = paths.INPUT_EVENT_PATH_PREFIX;
-
-/// Most decimal digits of a device index (dev_idx is a u8, at most "255").
-const MAX_EVENT_INDEX_DIGITS: usize = std.math.log10_int(
-    @as(u8, std.math.maxInt(u8)),
-) + 1;
-
-/// Capacity for "/dev/input/event<N>" plus its NUL terminator, derived from
-/// the longest possible path so formatting into it can never fail.
-const INPUT_EVENT_PATH_BUF_BYTES: usize =
-    INPUT_EVENT_PATH_PREFIX.len + MAX_EVENT_INDEX_DIGITS + 1;
-
-pub fn openInputDevices(
-    input_devs: *[MAX_INPUT_DEVICES]InputDeviceInfo,
-    had_eacces: *bool,
-) usize {
-    var input_count: usize = 0;
-    var dev_idx: u8 = 0;
-    had_eacces.* = false;
-
-    while (dev_idx < MAX_INPUT_DEVICES) : (dev_idx += 1) {
-        var path_buf: [INPUT_EVENT_PATH_BUF_BYTES]u8 = undefined;
-        // Cannot fail: the buffer holds the longest possible path plus NUL.
-        const p_slice = std.fmt.bufPrint(
-            &path_buf,
-            "{s}{d}",
-            .{ INPUT_EVENT_PATH_PREFIX, dev_idx },
-        ) catch unreachable;
-        path_buf[p_slice.len] = 0;
-        const dev_z: [*:0]const u8 = @ptrCast(path_buf[0..p_slice.len :0]);
-        const flags = linux.O{ .ACCMODE = .RDONLY, .NONBLOCK = true };
-        const rc = linux.open(dev_z, flags, 0);
-        const signed_rc: isize = @bitCast(rc);
-        if (signed_rc >= 0) {
-            const ifd: i32 = @intCast(signed_rc);
-            var d = InputDeviceInfo{ .fd = ifd };
-            if (queryAxis(ifd, ABS_X, ABS_MT_POSITION_X, &d.min_x, &d.max_x)) {
-                d.has_abs = true;
-            }
-            if (queryAxis(ifd, ABS_Y, ABS_MT_POSITION_Y, &d.min_y, &d.max_y)) {
-                d.has_abs = true;
-            }
-            input_devs[input_count] = d;
-            input_count += 1;
-        } else {
-            const eacces = -@as(isize, @backingInt(linux.E.ACCES));
-            if (signed_rc == eacces) had_eacces.* = true;
-        }
-    }
-    return input_count;
-}
-
-pub fn closeInputDevices(devs: []const InputDeviceInfo) void {
-    for (devs) |d| {
-        if (d.fd >= 0) _ = linux.close(d.fd);
-    }
-}
-
-pub fn fillPollFds(
-    devs: []const InputDeviceInfo,
-    pfds: *[MAX_INPUT_DEVICES]linux.pollfd,
-) void {
-    for (devs, 0..) |idev, i| {
-        pfds[i] = linux.pollfd{
-            .fd = idev.fd,
-            .events = linux.POLL.IN,
-            .revents = 0,
-        };
-    }
-}
-
-pub fn applyMotionEvent(
-    ev: InputEvent,
-    dev_info: *const InputDeviceInfo,
-    screen_w: u32,
-    screen_h: u32,
-    pending_x: *i32,
-    pending_y: *i32,
-    coords_changed: *bool,
-) void {
-    const max_x: i32 = @intCast(screen_w -| 1);
-    const max_y: i32 = @intCast(screen_h -| 1);
-    switch (ev.type) {
-        EV_REL => {
-            if (ev.code == REL_X) {
-                pending_x.* = std.math.clamp(pending_x.* +| ev.value, 0, max_x);
-                coords_changed.* = true;
-            } else if (ev.code == REL_Y) {
-                pending_y.* = std.math.clamp(pending_y.* +| ev.value, 0, max_y);
-                coords_changed.* = true;
-            }
-        },
-        EV_ABS => {
-            if (ev.code == ABS_X or ev.code == ABS_MT_POSITION_X) {
-                pending_x.* = dev_info.scaleX(ev.value, screen_w);
-                coords_changed.* = true;
-            } else if (ev.code == ABS_Y or ev.code == ABS_MT_POSITION_Y) {
-                pending_y.* = dev_info.scaleY(ev.value, screen_h);
-                coords_changed.* = true;
-            }
-        },
-        else => {},
-    }
-}
-
-pub fn pollIntroInput(
-    devs: []const InputDeviceInfo,
-    display: *Display,
-    gui: *DiosixGui,
-    intro_state: *intro_mod.IntroState,
-) void {
-    var pfds: [MAX_INPUT_DEVICES]linux.pollfd = undefined;
-    fillPollFds(devs, &pfds);
-    const poll_res = linux.poll(&pfds, devs.len, 0);
-    const signed_poll: isize = @bitCast(poll_res);
-    if (signed_poll <= 0) return;
-
-    for (devs, 0..) |*dev_info, i| {
-        if ((pfds[i].revents & linux.POLL.IN) != 0) {
-            var ev_buf: [32]InputEvent = undefined;
-            const rd = linux.read(
-                pfds[i].fd,
-                @ptrCast(&ev_buf),
-                @sizeOf(@TypeOf(ev_buf)),
-            );
-            const signed_rd: isize = @bitCast(rd);
-            if (signed_rd > 0) {
-                const n_bytes: usize = @intCast(signed_rd);
-                const count = n_bytes / @sizeOf(InputEvent);
-                var pending_x = gui.cursor.x;
-                var pending_y = gui.cursor.y;
-                var coords_changed = false;
-                var touch_skip = false;
-
-                for (ev_buf[0..count]) |ev| {
-                    applyMotionEvent(
-                        ev,
-                        dev_info,
-                        display.width,
-                        display.height,
-                        &pending_x,
-                        &pending_y,
-                        &coords_changed,
-                    );
-                    if (ev.type == EV_KEY and ev.value != 0 and
-                        (ev.code == BTN_LEFT or ev.code == BTN_TOUCH))
-                    {
-                        touch_skip = true;
-                    }
-                }
-
-                if (coords_changed) {
-                    const down = gui.mouse_left_down;
-                    gui.handleMouseMove(pending_x, pending_y, down);
-                }
-                if (touch_skip) {
-                    intro_state.skip();
-                    gui.handleMouseClick(pending_x, pending_y);
-                    gui.mouse_left_down = true;
-                    break;
-                }
-            }
-        }
-        if (!intro_state.is_active) break;
-    }
-}
-
-test "display: event path buffer fits every device index" {
-    var path_buf: [INPUT_EVENT_PATH_BUF_BYTES]u8 = undefined;
-    for (0..std.math.maxInt(u8) + 1) |idx| {
-        const dev_idx: u8 = @intCast(idx);
-        _ = try std.fmt.bufPrint(
-            &path_buf,
-            "{s}{d}",
-            .{ INPUT_EVENT_PATH_PREFIX, dev_idx },
-        );
-    }
-    const longest = "/dev/input/event255";
-    try std.testing.expectEqual(longest.len + 1, INPUT_EVENT_PATH_BUF_BYTES);
-}
-
 test {
+    _ = input;
     std.testing.refAllDecls(@This());
 }

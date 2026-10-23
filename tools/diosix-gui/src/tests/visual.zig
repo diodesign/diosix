@@ -131,19 +131,7 @@ test "diosix-gui: config pane controls and dynamic appearance customization" {
     try testing.expectEqual(@as(u32, 40), gui.window_transparency);
     try testing.expectEqual(@as(i32, 40), trans_slider.slider_val);
 
-    // 3. Adjust Blur strength slider.
-    const bl_id = gui_mod.ICON_CONFIG_BLUR_SLIDER_ID;
-    const blur_slider = win_config.getIconById(bl_id).?;
-    try testing.expectEqual(@as(u32, 50), gui.blur_strength);
-    try testing.expectEqual(@as(i32, 50), blur_slider.slider_val);
-
-    blur_slider.adjustSlider(-20);
-    if (blur_slider.callback) |cb| cb(&gui, win_config, blur_slider);
-    try testing.expectEqual(@as(u32, 30), gui.blur_strength);
-    try testing.expectEqual(@as(i32, 30), blur_slider.slider_val);
-    try testing.expectEqual(@as(u32, 3), gui.getBlurRadius());
-
-    // 4. Adjust Background Animation Speed slider.
+    // 3. Adjust Background Animation Speed slider.
     const sp_id = gui_mod.ICON_CONFIG_SPEED_SLIDER_ID;
     const speed_slider = win_config.getIconById(sp_id).?;
     try testing.expectEqual(@as(u32, 50), gui.bg_animation_speed);

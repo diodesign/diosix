@@ -253,40 +253,40 @@ test "diosix-gui: slider drag exclusivity prevents simultaneous slider moves" {
 
     const win_config = gui.getWindow(gui_mod.WIN_CONFIG_ID).?;
     const tr_id = gui_mod.ICON_CONFIG_TRANSPARENCY_SLIDER_ID;
-    const bl_id = gui_mod.ICON_CONFIG_BLUR_SLIDER_ID;
+    const sp_id = gui_mod.ICON_CONFIG_SPEED_SLIDER_ID;
     const trans_slider = win_config.getIconById(tr_id).?;
-    const blur_slider = win_config.getIconById(bl_id).?;
+    const speed_slider = win_config.getIconById(sp_id).?;
 
-    // Initial state: transparency slider at 30%, blur slider at 50%.
+    // Initial state: transparency slider at 30%, speed slider at 50%.
     try testing.expectEqual(@as(i32, 30), trans_slider.slider_val);
-    try testing.expectEqual(@as(i32, 50), blur_slider.slider_val);
+    try testing.expectEqual(@as(i32, 50), speed_slider.slider_val);
 
-    // 2. Click on the Blur slider track.
-    const blur_click_x = win_config.x + blur_slider.rel_x + 180;
-    const blur_click_y = win_config.y + blur_slider.rel_y + 14;
-    gui.handleMouseClick(blur_click_x, blur_click_y);
+    // 2. Click on the Background Morph Speed slider track.
+    const speed_click_x = win_config.x + speed_slider.rel_x + 150;
+    const speed_click_y = win_config.y + speed_slider.rel_y + 14;
+    gui.handleMouseClick(speed_click_x, speed_click_y);
 
-    // Blur slider updated, but Transparency slider remains unchanged at 30.
-    const blur_val_after_click = blur_slider.slider_val;
-    try testing.expect(blur_val_after_click != 50);
+    // Speed slider updated, but Transparency slider remains unchanged at 30.
+    const speed_val_after_click = speed_slider.slider_val;
+    try testing.expect(speed_val_after_click != 50);
     try testing.expectEqual(@as(i32, 30), trans_slider.slider_val);
-    try testing.expect(blur_slider.is_dragging_slider);
+    try testing.expect(speed_slider.is_dragging_slider);
     try testing.expect(!trans_slider.is_dragging_slider);
 
     // 3. Drag mouse vertically UP into Transparency slider coordinates.
     const trans_y = win_config.y + trans_slider.rel_y + 14;
-    const drag_x = win_config.x + blur_slider.rel_x + 50;
+    const drag_x = win_config.x + speed_slider.rel_x + 40;
     gui.handleMouseMove(drag_x, trans_y, true);
 
-    // ONLY Blur slider should update; Transparency slider MUST NOT MOVE!
-    try testing.expect(blur_slider.slider_val < blur_val_after_click);
+    // ONLY Speed slider should update; Transparency slider MUST NOT MOVE!
+    try testing.expect(speed_slider.slider_val < speed_val_after_click);
     try testing.expectEqual(@as(i32, 30), trans_slider.slider_val);
-    try testing.expect(blur_slider.is_hovered);
+    try testing.expect(speed_slider.is_hovered);
     try testing.expect(!trans_slider.is_hovered);
 
     // 4. Release mouse button: ends drag.
     gui.handleMouseRelease();
-    try testing.expect(!blur_slider.is_dragging_slider);
+    try testing.expect(!speed_slider.is_dragging_slider);
     try testing.expectEqual(@as(?usize, null), win_config.active_drag_icon_idx);
     try testing.expectEqual(@as(?u32, null), gui.active_drag_win_id);
     try testing.expectEqual(@as(i32, 30), trans_slider.slider_val);
@@ -318,25 +318,25 @@ test "diosix-gui: touch-first single-icon and single-window hit exclusivity" {
 
     const win_config = gui.getWindow(gui_mod.WIN_CONFIG_ID).?;
     const tr_id = gui_mod.ICON_CONFIG_TRANSPARENCY_SLIDER_ID;
-    const bl_id = gui_mod.ICON_CONFIG_BLUR_SLIDER_ID;
+    const sp_id = gui_mod.ICON_CONFIG_SPEED_SLIDER_ID;
     const trans_slider = win_config.getIconById(tr_id).?;
-    const blur_slider = win_config.getIconById(bl_id).?;
+    const speed_slider = win_config.getIconById(sp_id).?;
 
     // Touch on transparency slider.
     const trans_touch_x = win_config.x + trans_slider.rel_x + 100;
     const trans_touch_y = win_config.y + trans_slider.rel_y + 14;
     gui.handleMouseClick(trans_touch_x, trans_touch_y);
 
-    // Only transparency slider is captured; blur slider is untouched.
+    // Only transparency slider is captured; speed slider is untouched.
     try testing.expect(trans_slider.is_dragging_slider);
-    try testing.expect(!blur_slider.is_dragging_slider);
+    try testing.expect(!speed_slider.is_dragging_slider);
     try testing.expect(win_config.active_drag_icon_idx != null);
     const drag_idx = win_config.active_drag_icon_idx.?;
     try testing.expectEqual(tr_id, win_config.icons.items[drag_idx].id);
 
     gui.handleMouseRelease();
     try testing.expect(!trans_slider.is_dragging_slider);
-    try testing.expect(!blur_slider.is_dragging_slider);
+    try testing.expect(!speed_slider.is_dragging_slider);
     try testing.expectEqual(@as(?usize, null), win_config.active_drag_icon_idx);
 }
 
@@ -439,5 +439,60 @@ test "diosix-gui: tapping contracted menu item does not trigger back nav" {
     try testing.expectEqual(gui_mod.MENU_FULL_H, win_menu_repop.height);
     try testing.expectEqual(@as(usize, 4), win_menu_repop.icons.items.len);
     try testing.expect(gui.active_menu_id == null);
+}
+
+test "diosix-gui: config backdrop scheme dropdown and menu scroll reset" {
+    const allocator = testing.allocator;
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    try testing.expectEqual(gui_mod.BackdropScheme.rainbow, gui.bg_scheme);
+    try gui.activateMenuItem(gui_mod.ICON_MENU_CONFIG_ID);
+    gui.completeNavAnimation();
+
+    const win_cfg = gui.getWindow(gui_mod.WIN_CONFIG_ID).?;
+    const drop_id = gui_mod.ICON_CONFIG_SCHEME_DROPDOWN_ID;
+    const drop_icon = win_cfg.getIconById(drop_id).?;
+    try testing.expectEqualStrings("Rainbow", drop_icon.getText());
+
+    gui.handleMouseClick(
+        win_cfg.x + drop_icon.rel_x + 10,
+        win_cfg.y + drop_icon.rel_y + 10,
+    );
+    gui.handleMouseRelease();
+
+    const win_drop = gui.getWindow(gui_mod.WIN_SCHEME_DROPDOWN_ID).?;
+    try testing.expectEqual(@as(usize, 5), win_drop.icons.items.len);
+    const expected_labels = [_][]const u8{
+        "Spring", "Summer", "Autumn", "Winter", "Rainbow",
+    };
+    for (expected_labels, 0..) |lbl, i| {
+        try testing.expectEqualStrings(lbl, win_drop.icons.items[i].getText());
+    }
+
+    const autumn_opt = &win_drop.icons.items[2];
+    gui.handleMouseClick(
+        win_drop.x + autumn_opt.rel_x + 10,
+        win_drop.y + autumn_opt.rel_y + 10,
+    );
+    gui.handleMouseRelease();
+
+    try testing.expect(gui.getWindow(gui_mod.WIN_SCHEME_DROPDOWN_ID) == null);
+    try testing.expectEqual(gui_mod.BackdropScheme.autumn, gui.bg_scheme);
+    const updated_drop =
+        gui.getWindow(gui_mod.WIN_CONFIG_ID).?.getIconById(drop_id).?;
+    try testing.expectEqualStrings("Autumn", updated_drop.getText());
+
+    try gui.navigateBack();
+    gui.tick(50);
+    try testing.expectEqual(
+        @as(i32, 0),
+        gui.getWindow(gui_mod.WIN_MENU_ID).?.scroll_y,
+    );
+    gui.completeNavAnimation();
+    try testing.expectEqual(
+        @as(i32, 0),
+        gui.getWindow(gui_mod.WIN_MENU_ID).?.scroll_y,
+    );
     testing.refAllDecls(@This());
 }

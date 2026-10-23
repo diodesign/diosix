@@ -14,7 +14,6 @@ const audio_mod = @import("audio.zig");
 const ipc = @import("ipc.zig");
 const paths = @import("paths.zig");
 pub const display_mod = @import("display.zig");
-pub const noise_mod = @import("noise.zig");
 pub const banner_font_mod = @import("font/banner.zig");
 pub const host_info = @import("host.zig");
 pub const cursor_mod = @import("cursor.zig");
@@ -226,6 +225,8 @@ pub fn main() !void {
     // 2. Initialize Diosix GUI Coordinator.
     var gui = try DiosixGui.init(allocator, display.width, display.height);
     defer gui.deinit();
+    gui.color_depth = display.color_depth;
+    try gui.setPhysicalDimensions(display.mm_width, display.mm_height);
 
     // Detect hardware GPU acceleration (VirtIO-GPU, PowerVR, Panfrost, etc.).
     const is_accel = if (display.drm_dev) |*d|
@@ -240,7 +241,7 @@ pub fn main() !void {
             "unknown";
         std.debug.print(
             "diosix-gui: GPU acceleration detected ({s}). " ++
-                "Full backdrop blur and dynamic drift enabled.\n",
+                "Dynamic backdrop morphing enabled.\n",
             .{drv_name},
         );
         gui.setRenderMode(.accelerated);
@@ -383,6 +384,17 @@ pub fn main() !void {
         }
 
         ipc.checkSemanticIpcCommand(&gui);
+
+        if (gui.display_reconfig_pending) {
+            gui.display_reconfig_pending = false;
+            display.reconfigure(
+                allocator,
+                gui.width,
+                gui.height,
+                gui.color_depth,
+            ) catch {};
+            gui.markFullDirty();
+        }
 
         const cursor_should_show = gui.cursor.visible;
         const dx_ne = gui.cursor.x != display.prev_cursor_x;

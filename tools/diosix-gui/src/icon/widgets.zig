@@ -1,5 +1,5 @@
-// Control Widget Renderers (TextField, Slider, TickBox, Button, ProgressBar)
-// for Diosix GUI.
+// Scalable Vector Control Widget Renderers (TextField, Slider, TickBox,
+// Button, Dropdown, ProgressBar) for Diosix GUI.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -7,6 +7,7 @@
 const std = @import("std");
 const fb = @import("../framebuffer.zig");
 const font = @import("../font.zig");
+const vector = @import("../vector.zig");
 const icon_mod = @import("../icon.zig");
 const text_label = @import("../label.zig");
 const Icon = icon_mod.Icon;
@@ -42,9 +43,9 @@ pub fn renderTextField(
         false,
     );
 
+    const line_h = font.getActiveLineHeight();
     const text_y = sy + @divTrunc(
-        @as(i32, @intCast(self.height)) -
-            @as(i32, @intCast(font.GLYPH_HEIGHT)),
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(line_h)),
         2,
     );
     const txt = self.getText();
@@ -70,7 +71,7 @@ pub fn renderTextField(
             @as(i32, @intCast(font.measureString(txt[0..b.min])));
         const sel_w = font.measureString(txt[b.min..b.max]);
         if (sel_w > 0) {
-            const sel_box = boxOf(sel_x, text_y, sel_w, font.GLYPH_HEIGHT);
+            const sel_box = boxOf(sel_x, text_y, sel_w, line_h);
             surface.drawRoundedTranslucentBox(
                 sel_box,
                 2,
@@ -85,12 +86,32 @@ pub fn renderTextField(
 
     if (self.is_focused and is_win_active) {
         const cur_x = text_start_x + @as(i32, @intCast(cur_offset));
-        const cur_box = boxOf(cur_x, text_y + 1, 2, font.GLYPH_HEIGHT);
+        const cur_box = boxOf(cur_x, text_y + 1, 2, line_h);
         surface.fillBox(cur_box, fb.Color.INK);
     }
 }
 
 pub const renderReadWriteText = renderTextField;
+
+pub fn sliderThumbWidth(line_h: u32) u32 {
+    return @max(12, (line_h * 16 + 9) / 18);
+}
+
+pub fn sliderBarWidth(self: *const Icon, line_h: u32) u32 {
+    var max_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+    const max_str = if (self.slider_suffix_len > 0)
+        text_label.fmtLabel(
+            &max_buf,
+            "{d}{s}",
+            .{ self.slider_max, self.slider_suffix[0..self.slider_suffix_len] },
+        )
+    else
+        text_label.fmtLabel(&max_buf, "{d}", .{self.slider_max});
+    const max_val_w = font.measureString(max_str);
+    const gap: u32 = @max(8, (line_h * 10 + 9) / 18);
+    const reserve = max_val_w + gap;
+    return if (self.width > reserve + 32) self.width - reserve else self.width;
+}
 
 pub fn renderSlider(
     self: *const Icon,
@@ -99,6 +120,7 @@ pub fn renderSlider(
     sy: i32,
     fg_color: u32,
 ) void {
+    _ = fg_color;
     var val_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const val_str = if (self.slider_suffix_len > 0)
         text_label.fmtLabel(
@@ -109,24 +131,32 @@ pub fn renderSlider(
     else
         text_label.fmtLabel(&val_buf, "{d}", .{self.slider_val});
 
+    const line_h = font.getActiveLineHeight();
     const val_w = font.measureString(val_str);
     const val_x = sx + @as(i32, @intCast(self.width)) -
         @as(i32, @intCast(val_w));
-
-    const label_w: u32 = if (val_x > sx + 8) @intCast(val_x - sx - 8) else 0;
-    const label_clip = surface.pushClip(
-        boxOf(sx, sy, label_w, font.GLYPH_HEIGHT + 4),
+    const text_y = sy + @divTrunc(
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(line_h)),
+        2,
     );
-    drawShadowText(surface, self.getText(), sx, sy, fg_color);
-    surface.popClip(label_clip);
+    drawShadowText(surface, val_str, val_x, text_y, fb.Color.INK_SECONDARY);
 
-    drawShadowText(surface, val_str, val_x, sy, fb.Color.INK_SECONDARY);
-
-    const track_y = sy + 24;
-    const track_box = boxOf(sx, track_y, self.width, 6);
+    const bar_w = sliderBarWidth(self, line_h);
+    const track_h: u32 = @max(4, (line_h * 6 + 9) / 18);
+    const thumb_w: u32 = sliderThumbWidth(line_h);
+    const thumb_h: u32 = @max(10, (line_h * 14 + 9) / 18);
+    const track_y = sy + @divTrunc(
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(track_h)),
+        2,
+    );
+    const thumb_y = sy + @divTrunc(
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(thumb_h)),
+        2,
+    );
+    const track_box = boxOf(sx, track_y, bar_w, track_h);
     surface.drawRoundedTranslucentBox(
         track_box,
-        3,
+        @intCast(track_h / 2),
         fb.Color.TRACK_BG,
         240,
         fb.Color.GLASS_BORDER,
@@ -141,15 +171,20 @@ pub fn renderSlider(
         0,
         span,
     );
-    const track_w = if (self.width > 16) self.width - 16 else 1;
+    const track_w = if (bar_w > thumb_w) bar_w - thumb_w else 1;
     const thumb_offset = @divTrunc(
         progress * @as(i32, @intCast(track_w)),
         span,
     );
-    const thumb_box = boxOf(sx + thumb_offset, track_y - 4, 16, 14);
+    const thumb_box = boxOf(
+        sx + thumb_offset,
+        thumb_y,
+        thumb_w,
+        thumb_h,
+    );
     surface.drawRoundedTranslucentBox(
         thumb_box,
-        4,
+        @intCast(@max(3, thumb_h / 3)),
         fb.Color.THUMB_BG,
         255,
         fb.Color.WHITE,
@@ -164,14 +199,15 @@ pub fn renderTickBox(
     fg_color: u32,
 ) void {
     const is_radio = (self.group_mode == .exclusive);
-    const box_size: u32 = 16;
+    const line_h = font.getActiveLineHeight();
+    const box_size: u32 = @max(12, (line_h * 16 + 9) / 18);
     const box_y = sy + @divTrunc(
         @as(i32, @intCast(self.height)) - @as(i32, @intCast(box_size)),
         2,
     );
     const tick_box = boxOf(sx, box_y, box_size, box_size);
 
-    const radius: u32 = if (is_radio) 8 else 3;
+    const radius: u32 = if (is_radio) box_size / 2 else @max(2, box_size / 5);
     const border_col: u32 = fb.Color.GLASS_BORDER;
 
     surface.drawRoundedTranslucentBox(
@@ -183,41 +219,37 @@ pub fn renderTickBox(
     );
 
     if (self.is_ticked) {
+        const inset: u32 = @max(3, box_size / 4);
+        const dot_sz: u32 = box_size -| (inset * 2);
+        const ins_i: i32 = @intCast(inset);
         if (is_radio) {
             surface.drawRoundedTranslucentBox(
-                boxOf(sx + 4, box_y + 4, 8, 8),
-                4,
+                boxOf(sx + ins_i, box_y + ins_i, dot_sz, dot_sz),
+                dot_sz / 2,
                 fb.Color.INK,
-                255,
-                null,
-            );
-            surface.drawRoundedTranslucentBox(
-                boxOf(sx + 6, box_y + 6, 4, 4),
-                2,
-                fb.Color.WHITE,
                 255,
                 null,
             );
         } else {
             surface.drawRoundedTranslucentBox(
-                boxOf(sx + 3, box_y + 3, 10, 10),
+                boxOf(sx + ins_i, box_y + ins_i, dot_sz, dot_sz),
                 2,
                 fb.Color.INK,
                 255,
                 null,
             );
-            surface.fillBox(boxOf(sx + 5, box_y + 5, 6, 6), fb.Color.WHITE);
         }
     }
 
-    const text_x = sx + @as(i32, @intCast(box_size)) + 10;
+    const gap: i32 = @intCast(@max(8, (line_h * 10 + 9) / 18));
+    const text_x = sx + @as(i32, @intCast(box_size)) + gap;
     const text_y = sy + @divTrunc(
-        @as(i32, @intCast(self.height)) -
-            @as(i32, @intCast(font.GLYPH_HEIGHT)),
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(line_h)),
         2,
     );
-    const label_w: u32 = if (self.width > box_size + 12)
-        self.width - (box_size + 12)
+    const reserve: u32 = box_size + @as(u32, @intCast(gap + 2));
+    const label_w: u32 = if (self.width > reserve)
+        self.width - reserve
     else
         0;
     const label_clip = surface.pushClip(
@@ -252,6 +284,7 @@ pub fn renderButton(
         false,
     );
 
+    const line_h = font.getActiveLineHeight();
     const txt = self.getText();
     const text_w = font.measureString(txt);
     const pad_x: i32 = 12;
@@ -263,8 +296,7 @@ pub fn renderButton(
             2,
         );
     const text_y = sy + @divTrunc(
-        @as(i32, @intCast(self.height)) -
-            @as(i32, @intCast(font.GLYPH_HEIGHT)),
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(line_h)),
         2,
     );
 
@@ -276,63 +308,83 @@ pub fn renderButton(
     surface.popClip(btn_text_clip);
 }
 
-pub fn renderProgressBar(
+pub fn renderDropdown(
     self: *const Icon,
     surface: *fb.Surface,
     sx: i32,
     sy: i32,
+    box: fb.Box,
     fg_color: u32,
 ) void {
-    const text_y = sy + 2;
-    var pct_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
-    const pct_str = text_label.fmtLabel(&pct_buf, "{d}%", .{self.progress_val});
-    const pct_w = font.measureString(pct_str);
-    const pct_x = sx + @as(i32, @intCast(self.width)) -
-        @as(i32, @intCast(pct_w));
+    const bg_col: u32 = if (self.is_active_press or self.is_selected)
+        fb.Color.BTN_PRESS_BG
+    else if (self.is_hovered)
+        fb.Color.BTN_HOVER_BG
+    else
+        fb.Color.INPUT_BG;
 
-    const label_w: u32 = if (pct_x > sx + 8) @intCast(pct_x - sx - 8) else 0;
-    const label_clip = surface.pushClip(
-        boxOf(sx, sy, label_w, font.GLYPH_HEIGHT + 4),
-    );
-    drawShadowText(surface, self.getText(), sx, text_y, fg_color);
-    surface.popClip(label_clip);
-
-    drawShadowText(surface, pct_str, pct_x, text_y, fb.Color.INK_SECONDARY);
-
-    const track_y = sy + 22;
-    surface.drawRoundedTranslucentBox(
-        boxOf(sx, track_y, self.width, 8),
-        3,
-        fb.Color.TRACK_BG,
-        240,
+    surface.drawGlassPane(
+        box,
+        6,
+        bg_col,
+        235,
         fb.Color.GLASS_BORDER,
+        false,
+        false,
     );
 
-    const clamped_pct = std.math.clamp(self.progress_val, 0, 100);
-    if (clamped_pct > 0) {
-        const bar_w = @divTrunc(
-            @as(i32, @intCast(self.width)) * @as(i32, @intCast(clamped_pct)),
-            100,
-        );
-        if (bar_w > 0) {
-            const bar_box = boxOf(
-                sx + 1,
-                track_y + 1,
-                @intCast(@max(1, bar_w - 2)),
-                6,
-            );
-            surface.drawRoundedTranslucentBox(
-                bar_box,
-                2,
-                self.progress_color,
-                255,
-                null,
-            );
-        }
-    }
-}
+    const line_h = font.getActiveLineHeight();
+    const cw: u32 = std.math.clamp((line_h * 10 + 9) / 18, 10, 28);
+    const ch: u32 = std.math.clamp((line_h * 6 + 9) / 18, 6, 18);
+    const pad_x: i32 = @intCast(@max(10, (line_h * 12) / 18));
+    const right_reserve: u32 = cw + @as(u32, @intCast(pad_x * 2));
+    const text_y = sy + @divTrunc(
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(line_h)),
+        2,
+    );
+    const inner_w: u32 = if (self.width > right_reserve)
+        self.width - right_reserve
+    else
+        0;
+    const text_clip = surface.pushClip(
+        boxOf(sx + pad_x, sy, inner_w, self.height),
+    );
+    drawShadowText(surface, self.getText(), sx + pad_x, text_y, fg_color);
+    surface.popClip(text_clip);
 
-pub const renderScrollbar = renderProgressBar;
+    // Rasterize antialiased scalable vector chevron indicator at UI scale.
+    var chevron_mask: [28 * 18]u8 = undefined;
+    const path = vector.buildChevronPath(self.is_selected);
+    const sx_f = @as(f32, @floatFromInt(cw)) / 10.0;
+    const sy_f = @as(f32, @floatFromInt(ch)) / 6.0;
+    const total_px = @as(usize, cw) * @as(usize, ch);
+    path.rasterizeToMask(
+        sx_f,
+        sy_f,
+        0.0,
+        0.0,
+        chevron_mask[0..total_px],
+        cw,
+        ch,
+        .non_zero,
+    );
+    const cx = sx + @as(i32, @intCast(self.width)) -
+        @as(i32, @intCast(cw)) - pad_x;
+    const cy = sy + @divTrunc(
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(ch)),
+        2,
+    );
+    vector.blendMaskOnSurface(
+        surface,
+        chevron_mask[0..total_px],
+        cw,
+        ch,
+        cx,
+        cy,
+        fg_color,
+        255,
+    );
+}
 
 test {
     std.testing.refAllDecls(@This());

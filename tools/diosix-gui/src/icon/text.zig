@@ -144,15 +144,7 @@ pub fn getCharIndexAtX(self: *const Icon, win_x: i32, px: i32) usize {
     const rel_px = px - text_start_x;
     var cur_x: i32 = 0;
     for (txt, 0..) |c, i| {
-        const char_w: i32 = if (c >= ASCII_PRINTABLE_MIN and
-            c <= ASCII_PRINTABLE_MAX)
-            @intCast(font.GLYPHS[c - ASCII_PRINTABLE_MIN].advance)
-        else if (c == ' ')
-            @as(i32, font.SPACE_ADVANCE)
-        else if (c == '\t')
-            @as(i32, font.TAB_ADVANCE)
-        else
-            @as(i32, font.FALLBACK_ADVANCE);
+        const char_w: i32 = @intCast(font.getCharAdvance(c));
 
         if (rel_px < cur_x + @divTrunc(char_w, 2)) return i;
         cur_x += char_w;

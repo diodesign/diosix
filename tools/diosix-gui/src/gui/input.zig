@@ -179,6 +179,33 @@ pub fn handleMouseClick(self: *DiosixGui, px: i32, py: i32) void {
     self.cursor.visible = true;
     self.cursor.x = px;
     self.cursor.y = py;
+
+    if (self.getWindow(gui_mod.WIN_SCHEME_DROPDOWN_ID)) |drop_win| {
+        if (!drop_win.contains(px, py)) {
+            var hit_trigger = false;
+            if (self.getWindow(gui_mod.WIN_CONFIG_ID)) |cfg_win| {
+                const wy = cfg_win.y - cfg_win.scroll_y;
+                const drop_ids = [_]u32{
+                    gui_mod.ICON_CONFIG_SCHEME_DROPDOWN_ID,
+                    gui_mod.ICON_CONFIG_RES_DROPDOWN_ID,
+                    gui_mod.ICON_CONFIG_DEPTH_DROPDOWN_ID,
+                    gui_mod.ICON_CONFIG_SCALE_DROPDOWN_ID,
+                };
+                for (drop_ids) |did| {
+                    if (cfg_win.getIconById(did)) |ic| {
+                        if (ic.hitTest(cfg_win.x, wy, px, py)) {
+                            hit_trigger = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!hit_trigger) {
+                self.closeSchemeDropdown();
+            }
+        }
+    }
+
     var hit_any_win = false;
     var i = self.windows.items.len;
     while (i > 0) : (i -= 1) {

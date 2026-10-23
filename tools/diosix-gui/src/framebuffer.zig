@@ -4,30 +4,18 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-pub const noise = @import("noise.zig");
 pub const backdrop = @import("backdrop.zig");
 pub const glass = @import("glass.zig");
 
-pub const CLOUD_MAP = backdrop.CLOUD_MAP;
-pub const CLOUD_MAP_DIMENSION = backdrop.CLOUD_MAP_DIMENSION;
-pub const CLOUD_MAP_MASK = backdrop.CLOUD_MAP_MASK;
-pub const CLOUD_BASE_OPACITY = backdrop.CLOUD_BASE_OPACITY;
-pub const CLOUD_ANIMATED_OPACITY = backdrop.CLOUD_ANIMATED_OPACITY;
-pub const MAX_BLUR_RADIUS = backdrop.MAX_BLUR_RADIUS;
-pub const MAX_KERNEL_LEN = backdrop.MAX_KERNEL_LEN;
-pub const FP_ONE = backdrop.FP_ONE;
-pub const blendCloudPixel = backdrop.blendCloudPixel;
 pub const getBackdropPixelDrift = backdrop.getBackdropPixelDrift;
 pub const getBackdropPixel = backdrop.getBackdropPixel;
-pub const computeGaussianKernel = backdrop.computeGaussianKernel;
+pub const BackdropScheme = backdrop.BackdropScheme;
 pub const cornerDistMetric = glass.cornerDistMetric;
 
 pub const Color = struct {
     pub const BLACK: u32 = 0x00000000;
     pub const WHITE: u32 = 0x00ffffff;
     pub const TRANSPARENT: u32 = 0xff000000;
-    pub const GLOVE_SHADING: u32 = 0x00b0b8c8;
-    pub const GLOVE_CUFF: u32 = 0x00284060;
     pub const SHIFT_R: u5 = 16;
     pub const SHIFT_G: u5 = 8;
 
@@ -61,6 +49,10 @@ pub const Color = struct {
     // Archival White & Warm Paper Canvas Colors.
     pub const SKY_BASE_TOP: u32 = 0x00ffffff;
     pub const SKY_BASE_BOT: u32 = 0x00f5f4ef;
+    pub const SCHEME_SPRING_TOP: u32 = 0x01cef5d4;
+    pub const SCHEME_SUMMER_TOP: u32 = 0x01ffe884;
+    pub const SCHEME_AUTUMN_TOP: u32 = 0x01d05c18;
+    pub const SCHEME_WINTER_TOP: u32 = 0x011c447c;
 
     // Border Bevel Palette.
     pub const BORDER_OUTER: u32 = 0x00111111;
@@ -97,12 +89,6 @@ pub const Color = struct {
     pub const BTN_PRESS_BG: u32 = 0x00dad8ce;
     pub const BTN_HOVER_BG: u32 = 0x00e8e6de;
     pub const BTN_NORMAL_BG: u32 = 0x00f4f3ee;
-
-    // Tab Bar Palette.
-    pub const TAB_DIVIDER: u32 = 0x00111111;
-    pub const TAB_ACTIVE_BG: u32 = 0x00e8e6de;
-    pub const TAB_INACTIVE_BG: u32 = 0x00f4f3ee;
-    pub const TAB_INACTIVE_BORDER: u32 = 0x00111111;
     pub const GRADIENT_BOT_DEFAULT: u32 = 0x00f2f0e8;
 };
 
@@ -330,13 +316,9 @@ pub const Surface = struct {
         backdrop.drawGraduatedBackgroundInBoxDrift;
     pub const drawGraduatedBackgroundInBox =
         backdrop.drawGraduatedBackgroundInBox;
-    pub const drawBlurredBackdropInBoxDrift =
-        backdrop.drawBlurredBackdropInBoxDrift;
-    pub const drawBlurredBackdropInBox = backdrop.drawBlurredBackdropInBox;
     pub const drawGraduatedBackgroundDrift =
         backdrop.drawGraduatedBackgroundDrift;
     pub const drawGraduatedBackground = backdrop.drawGraduatedBackground;
-    pub const drawAnimatedClouds = backdrop.drawAnimatedClouds;
     pub const drawGlassPane = glass.drawGlassPane;
     pub const drawRoundedTranslucentBox = glass.drawRoundedTranslucentBox;
     pub const drawWindowPane = glass.drawWindowPane;
@@ -398,54 +380,4 @@ test "framebuffer: blendPixel and box geometry" {
     try testing.expectEqual(@as(u32, 50), b1.height());
     try testing.expect(b1.contains(50, 30));
     try testing.expect(!b1.contains(5, 5));
-}
-
-test "framebuffer: deterministic backdrop blur between full box and sub-box" {
-    const testing = std.testing;
-    const width: u32 = 200;
-    const height: u32 = 150;
-    const mem1 = try testing.allocator.alloc(u32, width * height);
-    defer testing.allocator.free(mem1);
-    const mem2 = try testing.allocator.alloc(u32, width * height);
-    defer testing.allocator.free(mem2);
-    const scratch = try testing.allocator.alloc(u32, width * (height + 64));
-    defer testing.allocator.free(scratch);
-
-    var surf1 = Surface.init(mem1.ptr, width, height, width * 4);
-    var surf2 = Surface.init(mem2.ptr, width, height, width * 4);
-
-    const top_col: u32 = 0x004c8be0;
-    const bot_col: u32 = 0x000c1836;
-    const win_box = Box.fromPosSize(20, 20, 160, 110);
-    const sub_box = Box.fromPosSize(50, 50, 60, 40);
-
-    surf1.drawBlurredBackdropInBox(
-        win_box,
-        win_box,
-        top_col,
-        bot_col,
-        5,
-        10,
-        scratch,
-    );
-    surf2.drawBlurredBackdropInBox(
-        sub_box,
-        win_box,
-        top_col,
-        bot_col,
-        5,
-        10,
-        scratch,
-    );
-
-    var y: i32 = sub_box.y0;
-    while (y < sub_box.y1) : (y += 1) {
-        var x: i32 = sub_box.x0;
-        while (x < sub_box.x1) : (x += 1) {
-            const uy: usize = @intCast(y);
-            const ux: usize = @intCast(x);
-            const idx = uy * width + ux;
-            try testing.expectEqual(mem1[idx], mem2[idx]);
-        }
-    }
 }
