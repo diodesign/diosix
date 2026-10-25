@@ -19,6 +19,7 @@ const WIN_OSK_ID = gui_mod.WIN_OSK_ID;
 const WIN_WELCOME_ID = gui_mod.WIN_WELCOME_ID;
 const WIN_TOUR_ID = gui_mod.WIN_TOUR_ID;
 
+const ICON_MENU_CREATE_VM_ID = gui_mod.ICON_MENU_CREATE_VM_ID;
 const ICON_MENU_ABOUT_ID = gui_mod.ICON_MENU_ABOUT_ID;
 const ICON_MENU_CONFIG_ID = gui_mod.ICON_MENU_CONFIG_ID;
 const ICON_HELP_TEXT_ID = gui_mod.ICON_HELP_TEXT_ID;
@@ -343,6 +344,10 @@ pub fn triggerSemanticAction(self: *DiosixGui, action: []const u8) !bool {
     const SemAct = gui_mod.SemanticAction;
     const act = std.meta.stringToEnum(SemAct, action) orelse return false;
     switch (act) {
+        .@"menu.create_vm" => {
+            try self.activateMenuItem(ICON_MENU_CREATE_VM_ID);
+            self.completeNavAnimation();
+        },
         .@"menu.about", .@"menu.status" => {
             try self.activateMenuItem(ICON_MENU_ABOUT_ID);
             self.completeNavAnimation();
@@ -405,6 +410,7 @@ pub fn exportSemanticStateJson(
 ) std.mem.Allocator.Error![]u8 {
     const active_pane: []const u8 = if (self.active_menu_id) |mid|
         switch (mid) {
+            ICON_MENU_CREATE_VM_ID => "create_vm",
             ICON_MENU_ABOUT_ID => "about",
             ICON_MENU_CONFIG_ID => "config",
             else => "submenu",

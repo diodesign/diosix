@@ -167,9 +167,18 @@ pub fn createChild(
     vcpu_count: usize,
 ) !*guest_mod.Guest {
     const num_vcpus = if (vcpu_count > 0) vcpu_count else 1;
-    if (!self.checkQuota(0, num_vcpus, self.quotas.current_depth + 1)) {
+    if (self.quotas.delegated_pcpu_pct >= quota_mod.MAX_CHILD_PCPU_QUOTA_PCT or
+        !self.checkQuota(0, 0, self.quotas.current_depth + 1))
+    {
         return error.QuotaExceeded;
     }
+
+    const avail_pcpu =
+        quota_mod.MAX_CHILD_PCPU_QUOTA_PCT -| self.quotas.delegated_pcpu_pct;
+    const init_pcpu_pct: u32 = @max(
+        @as(u32, 1),
+        @min(quota_mod.DEFAULT_CHILD_PCPU_QUOTA_PCT, avail_pcpu),
+    );
 
     const child_base_gpa: usize = switch (target_arch) {
         .riscv64, .riscv32 => guest_mod.CHILD_RV_BASE_GPA,
@@ -205,13 +214,18 @@ pub fn createChild(
     child.quotas = .{
         .max_ram_pages = self.quotas.max_ram_pages,
         .used_ram_pages = 0,
+        .committed_ram_pages = 0,
+        .delegated_ram_pages = 0,
         .max_vcpus = self.quotas.max_vcpus,
         .used_vcpus = 0,
+        .pcpu_quota_pct = init_pcpu_pct,
+        .delegated_pcpu_pct = 0,
         .max_child_depth = self.quotas.max_child_depth -| 1,
         .current_depth = self.quotas.current_depth + 1,
         .max_descendants = self.quotas.max_descendants -| 1,
         .used_descendants = 0,
     };
+    self.quotas.delegated_pcpu_pct += init_pcpu_pct;
 
     for (0..num_vcpus) |vc_id| {
         const vc = try child.addVcore(@intCast(vc_id), 0, 0, .normal, null);
@@ -254,6 +268,10 @@ pub fn terminateWithCode(self: *guest_mod.Guest, exit_code: usize) void {
     pcore.broadcastIpi();
 
     if (self.parent) |p| {
+        p.quotas.delegated_pcpu_pct -|= self.quotas.pcpu_quota_pct;
+        p.quotas.delegated_ram_pages -|= self.quotas.committed_ram_pages;
+        self.quotas.pcpu_quota_pct = 0;
+        self.quotas.committed_ram_pages = 0;
         p.events.push(.{
             .cid = self.local_cid,
             .event_type = @backingInt(sbi.EventType.child_terminated),

@@ -33,11 +33,15 @@ const saveGuestRegistry = common.saveGuestRegistry;
 
 const RunOption = enum {
     @"--name",
+    @"-n",
     @"--domain",
     @"--manifest",
     @"-m",
     @"--vcpus",
     @"--ram",
+    @"--pcpu",
+    @"--pcpu-quota",
+    @"--ram-quota",
     @"--disk",
     @"-d",
     @"--cdrom",
@@ -74,7 +78,8 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     if (args.len == 0) {
         common.printFmt(
             \\Usage: {s} run <image|name> [--name <name>] [--vcpus <N>]
-            \\       [--ram <size>] [--disk <disk>] [--cdrom <iso>] [--ip <ip>]
+            \\       [--ram <size>] [--pcpu <1-90>] [--ram-quota <size>]
+            \\       [--disk <disk>] [--cdrom <iso>] [--ip <ip>]
             \\       [--manifest <path>] [--domain <domain>] [--trusted]
             \\       [--arch <arch>]
             \\
@@ -89,6 +94,8 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     var manifest_path: ?[]const u8 = null;
     var vcpus: usize = sys_cfg.default_vcpus;
     var ram_str: []const u8 = sys_cfg.defaultRam();
+    var pcpu_pct: usize = 0;
+    var ram_quota_str: ?[]const u8 = null;
     var disk_str: ?[]const u8 = null;
     var cdrom_str: ?[]const u8 = null;
     var ip_str: []const u8 = "";
@@ -104,27 +111,21 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         const span = std.mem.span(args[i]);
         if (std.meta.stringToEnum(RunOption, span)) |opt| {
             switch (opt) {
-                .@"--name" => {
-                    vm_name = takeOptValue(
-                        args,
-                        &i,
-                        "Error: Option '--name' requires a VM name.\n",
-                    ) orelse return;
-                },
-                .@"--domain" => {
-                    domain_name = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--domain' requires a domain name.\n",
-                    ) orelse return;
-                },
-                .@"--manifest", .@"-m" => {
-                    manifest_path = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--manifest' requires a file path.\n",
-                    ) orelse return;
-                },
+                .@"--name", .@"-n" => vm_name = takeOptValue(
+                    args,
+                    &i,
+                    "Error: Option '--name' requires a VM name.\n",
+                ) orelse return,
+                .@"--domain" => domain_name = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--domain' requires a domain name.\n",
+                ) orelse return,
+                .@"--manifest", .@"-m" => manifest_path = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--manifest' requires a file path.\n",
+                ) orelse return,
                 .@"--vcpus" => {
                     const v_str = takeOptValue(
                         args,
@@ -140,53 +141,66 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                         return;
                     }
                 },
-                .@"--ram" => {
-                    ram_str = takeOptValue(
+                .@"--ram" => ram_str = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--ram' requires a size.\n",
+                ) orelse return,
+                .@"--pcpu", .@"--pcpu-quota" => {
+                    const p_str = takeOptValue(
                         args,
                         &i,
-                        "Error: '--ram' requires a size.\n",
+                        "Error: '--pcpu' requires a percentage (1-90).\n",
                     ) orelse return;
+                    const trimmed = std.mem.trimEnd(u8, p_str, "%");
+                    pcpu_pct = std.fmt.parseInt(usize, trimmed, 10) catch {
+                        printStr("Error: Invalid '--pcpu' value.\n");
+                        return;
+                    };
+                    if (pcpu_pct == 0 or
+                        pcpu_pct > api.MAX_CHILD_PCPU_QUOTA_PCT)
+                    {
+                        printStr(
+                            "Error: '--pcpu' must be between 1 and 90%.\n",
+                        );
+                        return;
+                    }
                 },
-                .@"--disk", .@"-d" => {
-                    disk_str = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--disk' requires a disk or size.\n",
-                    ) orelse return;
-                },
-                .@"--cdrom", .@"--iso", .@"--media" => {
-                    cdrom_str = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--cdrom' requires a media path.\n",
-                    ) orelse return;
-                },
-                .@"--ip" => {
-                    ip_str = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--ip' requires an IP address.\n",
-                    ) orelse return;
-                },
+                .@"--ram-quota" => ram_quota_str = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--ram-quota' requires a size.\n",
+                ) orelse return,
+                .@"--disk", .@"-d" => disk_str = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--disk' requires a disk or size.\n",
+                ) orelse return,
+                .@"--cdrom", .@"--iso", .@"--media" => cdrom_str = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--cdrom' requires a media path.\n",
+                ) orelse return,
+                .@"--ip" => ip_str = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--ip' requires an IP address.\n",
+                ) orelse return,
                 .@"--trusted" => trusted = true,
                 .@"--untrusted" => trusted = false,
                 .@"--steward" => is_steward = true,
                 .@"--standby-root" => is_standby_root = true,
                 .@"--confidential" => is_confidential = true,
-                .@"--dtb" => {
-                    dtb_path = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--dtb' requires a DTB path.\n",
-                    ) orelse return;
-                },
-                .@"--arch", .@"-a" => {
-                    arch_str = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--arch' requires an arch name.\n",
-                    ) orelse return;
-                },
+                .@"--dtb" => dtb_path = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--dtb' requires a DTB path.\n",
+                ) orelse return,
+                .@"--arch", .@"-a" => arch_str = takeOptValue(
+                    args,
+                    &i,
+                    "Error: '--arch' requires an arch name.\n",
+                ) orelse return,
                 .@"--user" => {
                     printStr(
                         "Error: Unrecognized option '--user'. " ++
@@ -272,6 +286,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             ep;
     }
 
+    common.printFmt("[10%] Resolving guest image '{s}'...\n", .{elf_path.?});
     const elf_found = vm_stage.resolveElfImage(elf_path.?) catch {
         printStr(OOM_MSG);
         return;
@@ -337,6 +352,21 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const arch_enum =
         std.meta.stringToEnum(api.TargetArch, arch_str) orelse .riscv64;
     const ram_mb = parseMemorySizeMb(ram_str);
+    const ram_quota_mb = if (ram_quota_str) |rq|
+        parseMemorySizeMb(rq)
+    else
+        ram_mb;
+    const eff_pcpu = vm_stage.checkChildResourceQuota(
+        client,
+        vm_name.?,
+        vcpus,
+        ram_mb,
+        pcpu_pct,
+        ram_quota_mb,
+    ) orelse {
+        if (!@import("builtin").is_test) std.process.exit(1);
+        return;
+    };
     const final_ram_str = allocator.print("{d} MB", .{ram_mb}) catch {
         printStr(OOM_MSG);
         return;
@@ -354,11 +384,26 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         run_flags,
     ) catch |err| {
         printApiError("Create child VM", err);
+        if (!@import("builtin").is_test) std.process.exit(1);
         return;
     };
 
     const ram_pages = (ram_mb * KB_PER_MB) / PAGE_SIZE_KB;
-    _ = client.setQuota(child_cid, ram_pages, 0, 0, 0) catch {};
+    const ram_quota_pages = (ram_quota_mb * KB_PER_MB) / PAGE_SIZE_KB;
+    client.setQuotaWithPcpu(
+        child_cid,
+        ram_quota_pages,
+        vcpus,
+        0,
+        0,
+        eff_pcpu,
+        ram_pages,
+    ) catch |err| {
+        printApiError("Configure child VM quota", err);
+        _ = client.terminate(child_cid, 1) catch {};
+        if (!@import("builtin").is_test) std.process.exit(1);
+        return;
+    };
 
     vm_stage.stageChildVmManifest(
         allocator,
@@ -386,6 +431,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     ) catch |err| {
         printApiError("Load guest ELF", err);
         _ = client.terminate(child_cid, 1) catch {};
+        if (!@import("builtin").is_test) std.process.exit(1);
         return;
     };
 
@@ -403,9 +449,16 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     defer if (default_ip) |ip| allocator.free(ip);
     const final_ip: []const u8 = default_ip orelse ip_str;
 
+    const raw_img = elf_path.?;
+    const img_name = if (std.mem.lastIndexOfScalar(u8, raw_img, '/')) |slash|
+        raw_img[slash + 1 ..]
+    else
+        raw_img;
+
     saveGuestRegistry(
         child_cid,
         vm_name.?,
+        img_name,
         vcpus,
         final_ram_str,
         final_disk,

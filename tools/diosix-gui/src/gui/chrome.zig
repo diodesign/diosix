@@ -19,6 +19,7 @@ const WIN_VERSION_ID = gui_mod.WIN_VERSION_ID;
 const WIN_BACK_ID = gui_mod.WIN_BACK_ID;
 const WIN_HELP_ID = gui_mod.WIN_HELP_ID;
 
+const ICON_MENU_CREATE_VM_ID = gui_mod.ICON_MENU_CREATE_VM_ID;
 const ICON_MENU_ABOUT_ID = gui_mod.ICON_MENU_ABOUT_ID;
 const ICON_MENU_CONFIG_ID = gui_mod.ICON_MENU_CONFIG_ID;
 const ICON_MENU_RESTART_ID = gui_mod.ICON_MENU_RESTART_ID;
@@ -37,6 +38,12 @@ pub const MenuItemSpec = struct {
 };
 
 pub const MENU_ITEMS = [_]MenuItemSpec{
+    .{
+        .id = ICON_MENU_CREATE_VM_ID,
+        .label = "Create VM",
+        .help = "Select an available VM image and configure a new guest VM",
+        .gap_after = 14,
+    },
     .{
         .id = ICON_MENU_ABOUT_ID,
         .label = "About",

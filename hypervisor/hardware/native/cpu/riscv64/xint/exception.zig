@@ -151,13 +151,37 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     }
 
     const g = vc.getGuest();
+    const is_anon_dram = (g.space.base_hpa == 0 and
+        gpa >= g.space.base_gpa and
+        (gpa - g.space.base_gpa) < g.space.range_size);
+    const was_unmapped = is_anon_dram and
+        ((g.space.translateGPA(gpa) catch null) == null);
+    if (was_unmapped and !g.checkRamQuota(1)) {
+        debug.printf("Fault: GPA 0x{x} exceeded guest RAM quota\n", .{gpa});
+        g.onMemoryPoolExhausted();
+        if (!g.is_root) {
+            scheduler.schedule();
+            return;
+        }
+        fatalException(irq, context);
+        return;
+    }
     g.space.handleFault(vc, gpa, @backingInt(irq.cause)) catch |err| {
+        if (was_unmapped and err == error.OutOfMemory) {
+            g.onMemoryPoolExhausted();
+            if (!g.is_root) {
+                scheduler.schedule();
+                return;
+            }
+        }
         debug.printf(
             "Fault: GPA 0x{x} resolution failed: {s}\n",
             .{ gpa, @errorName(err) },
         );
         fatalException(irq, context);
+        return;
     };
+    if (was_unmapped) g.consumeQuota(1, 0);
     pcpu.gstage_dirty = true;
 }
 

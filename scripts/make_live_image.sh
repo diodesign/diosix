@@ -111,9 +111,9 @@ if [ -f "$KERNEL_ELF" ]; then
         STRIP_TOOL="$BR_STRIP"
     fi
     "$STRIP_TOOL" -s "$KERNEL_ELF" \
-        -o "$STAGING_DIR/images/linux-guest.elf" 2>/dev/null || \
-        cp "$KERNEL_ELF" "$STAGING_DIR/images/linux-guest.elf"
-    ln -sf "linux-guest.elf" "$STAGING_DIR/images/default.elf"
+        -o "$STAGING_DIR/images/diosix-linux.elf" 2>/dev/null || \
+        cp "$KERNEL_ELF" "$STAGING_DIR/images/diosix-linux.elf"
+    ln -sf "diosix-linux.elf" "$STAGING_DIR/images/default.elf"
 fi
 
 if [ -f "tools/overlay-common/etc/diosix/system.toml" ]; then
@@ -128,7 +128,7 @@ the Diosix hypervisor and Root VM (trusted host supervisor), mounted canonically
 at /var/lib/diosix.
 
 Directory structure:
-  /var/lib/diosix/images/    - Base guest OS images (linux-guest.elf, steward)
+  /var/lib/diosix/images/    - Base guest OS images (diosix-linux.elf, steward)
   /var/lib/diosix/manifests/ - Declarative domain manifests (system.toml)
   /var/lib/diosix/keys/      - Enrolled FIDO2/TPM passkeys and management keys
   /var/lib/diosix/disks/     - Persistent guest VM storage disks

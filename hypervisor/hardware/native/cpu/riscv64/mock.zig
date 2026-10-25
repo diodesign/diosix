@@ -17,6 +17,8 @@ pub const MOCK_RAM_ALIGN: usize = 4096;
 
 pub var test_cpu_ctx: riscv.CpuContext = undefined;
 pub var test_heap: [MOCK_RAM_SIZE]u8 align(MOCK_RAM_ALIGN) = undefined;
+pub var mock_hw_fp_state: riscv.FpState = .{};
+pub var mock_hw_vec_state: riscv.VectorState = .{};
 
 fn hw_pause_mock() callconv(.c) void {}
 fn hw_pmp_init_mock() callconv(.c) void {}
@@ -104,6 +106,8 @@ pub fn initMockHardware() void {
     csr.resetMockCsrs();
     guest_csr.mock_vsstatus = 0;
     guest_csr.mock_sstatus = 0;
+    mock_hw_fp_state = .{};
+    mock_hw_vec_state = .{};
     @memset(&test_heap, 0);
 }
 

@@ -30,6 +30,7 @@ const matchTarget = common.matchTarget;
 /// A guest's registry fields, kept after the registry file is unmapped.
 const SavedGuest = struct {
     name: []const u8,
+    image: []const u8 = "",
     vcpus: usize,
     ram: []const u8,
     disk: []const u8 = "",
@@ -51,6 +52,7 @@ fn captureGuest(
 ) !SavedGuest {
     return .{
         .name = try strings.dupe(entry.name),
+        .image = try strings.dupe(entry.image),
         .vcpus = entry.vcpus,
         .ram = try strings.dupe(entry.ram),
         .disk = try strings.dupe(entry.disk),
@@ -108,11 +110,16 @@ pub fn cmdRestart(
     if (!stopped) return;
     printStr("Restarting guest VM...\n");
 
-    const img_str: [*:0]const u8 =
-        if (saved.disk.len > 0 or saved.cdrom.len > 0)
-            "guest-shim"
-        else
-            "default";
+    const img_str: [*:0]const u8 = if (saved.image.len > 0) blk: {
+        const z_img = strings.dupe(saved.image) catch {
+            printStr(OOM_MSG);
+            return;
+        };
+        break :blk z_img.ptr;
+    } else if (saved.disk.len > 0 or saved.cdrom.len > 0)
+        "guest-shim"
+    else
+        "default";
 
     const z_name = strings.dupe(saved.name) catch {
         printStr(OOM_MSG);

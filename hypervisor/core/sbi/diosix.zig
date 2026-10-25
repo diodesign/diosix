@@ -245,7 +245,9 @@ fn handleSetQuota(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
                 qargs.max_ram_pages < child.quotas.max_ram_pages;
             const red_vcpu = qargs.max_vcpus > 0 and
                 qargs.max_vcpus < child.quotas.max_vcpus;
-            if (child.is_steward and (red_ram or red_vcpu) and
+            const red_pcpu = qargs.pcpu_quota_pct > 0 and
+                qargs.pcpu_quota_pct < child.quotas.pcpu_quota_pct;
+            if (child.is_steward and (red_ram or red_vcpu or red_pcpu) and
                 !charter.checkAndConsumeQuorum(t_cid))
             {
                 reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
@@ -289,10 +291,17 @@ fn handleStart(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     }
     child.stop();
     if (riscv.hasHExtension()) riscv.hfenceGvma() else riscv.sfenceVma();
-    child.resetForRun(@intCast(sargs.entry_point), @intCast(sargs.dtb_ptr));
+    const entry: usize = if (sargs.entry_point != 0)
+        @intCast(sargs.entry_point)
+    else
+        child.initial_entry_point;
+    const dtb: usize = if (sargs.dtb_ptr != 0 or sargs.entry_point != 0)
+        @intCast(sargs.dtb_ptr)
+    else
+        child.initial_dtb_ptr;
+    child.resetForRun(entry, dtb);
     if (child.vcores.start) |vc_node| {
         scheduler.queue(vc_node.contents);
-        sbi_core.broadcastPhysicalIPI();
     }
     reply(vc, ctx, sbi_core.SBI_SUCCESS, child.local_cid);
 }

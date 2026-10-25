@@ -13,6 +13,7 @@ const WIN_MENU_ID = gui_mod.WIN_MENU_ID;
 const WIN_BACK_ID = gui_mod.WIN_BACK_ID;
 const WIN_STATUS_ID = gui_mod.WIN_STATUS_ID;
 
+const ICON_MENU_CREATE_VM_ID = gui_mod.ICON_MENU_CREATE_VM_ID;
 const ICON_MENU_ABOUT_ID = gui_mod.ICON_MENU_ABOUT_ID;
 const ICON_MENU_CONFIG_ID = gui_mod.ICON_MENU_CONFIG_ID;
 const ICON_MENU_RESTART_ID = gui_mod.ICON_MENU_RESTART_ID;
@@ -65,13 +66,21 @@ pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
         teardownChildPanes(self);
     }
 
+    const had_guests = self.getWindow(gui_mod.WIN_GUESTS_ID) != null;
+    _ = self.destroyWindow(gui_mod.WIN_GUEST_DETAIL_ID);
+    _ = self.destroyWindow(gui_mod.WIN_GUESTS_ID);
+
     switch (menu_item_id) {
+        ICON_MENU_CREATE_VM_ID => try self.buildCreateVmPane(),
         ICON_MENU_ABOUT_ID => try self.buildStatusPane(),
         ICON_MENU_CONFIG_ID => try self.buildConfigPane(),
         else => {},
     }
 
     try buildBackPane(self);
+    if (had_guests) {
+        try self.buildGuestsPane();
+    }
     try contractMainMenu(self, menu_item_id);
     self.active_menu_id = menu_item_id;
 
@@ -86,6 +95,9 @@ pub fn navigateBack(self: *DiosixGui) !void {
     if (self.active_menu_id == null and self.nav_anim_state == .idle) return;
 
     try repopulateMainMenu(self);
+    if (self.getWindow(gui_mod.WIN_GUESTS_ID) == null) {
+        try self.buildGuestsPane();
+    }
 
     self.nav_anim_state = .closing;
     self.nav_anim_progress = 1.0;
@@ -93,8 +105,17 @@ pub fn navigateBack(self: *DiosixGui) !void {
     self.updateActiveHelp();
 }
 
+pub fn finishOpening(self: *DiosixGui) void {
+    _ = self.destroyWindow(gui_mod.WIN_GUEST_DETAIL_ID);
+    _ = self.destroyWindow(gui_mod.WIN_GUESTS_ID);
+    self.nav_anim_state = .idle;
+}
+
 pub fn finishClosing(self: *DiosixGui) void {
     teardownChildPanes(self);
+    if (self.getWindow(gui_mod.WIN_GUESTS_ID) == null) {
+        self.buildGuestsPane() catch {};
+    }
 }
 
 pub fn completeNavAnimation(self: *DiosixGui) void {
@@ -102,7 +123,7 @@ pub fn completeNavAnimation(self: *DiosixGui) void {
     if (self.nav_anim_state == .opening) {
         self.nav_anim_progress = 1.0;
         applyNavAnimation(self);
-        self.nav_anim_state = .idle;
+        finishOpening(self);
     } else if (self.nav_anim_state == .closing) {
         self.nav_anim_progress = 0.0;
         applyNavAnimation(self);
@@ -161,6 +182,35 @@ pub fn applyNavAnimation(self: *DiosixGui) void {
             self.markDirty(old_box.merge(new_box));
         }
     }
+
+    const geom = gui_mod.panes.computeGuestPaneGeometry(self);
+    if (self.getWindow(gui_mod.WIN_CREATE_VM_DETAIL_ID)) |cdwin| {
+        const old_box = cdwin.getBox();
+        const offset: f32 = 80.0 * (1.0 - factor);
+        const cur_x: i32 = @intFromFloat(
+            @as(f32, @floatFromInt(geom.detail_x)) + offset,
+        );
+        cdwin.x = cur_x;
+        cdwin.onscreen_x = cur_x;
+        self.markDirty(old_box.merge(cdwin.getBox()));
+    }
+    const slide_out: i32 = @intFromFloat(
+        @as(f32, @floatFromInt(self.width)) * factor,
+    );
+    if (self.getWindow(gui_mod.WIN_GUESTS_ID)) |gwin| {
+        const old_box = gwin.getBox();
+        const cur_x = geom.guests_x + slide_out;
+        gwin.x = cur_x;
+        gwin.onscreen_x = cur_x;
+        self.markDirty(old_box.merge(gwin.getBox()));
+    }
+    if (self.getWindow(gui_mod.WIN_GUEST_DETAIL_ID)) |dwin| {
+        const old_box = dwin.getBox();
+        const cur_x = geom.detail_x + slide_out;
+        dwin.x = cur_x;
+        dwin.onscreen_x = cur_x;
+        self.markDirty(old_box.merge(dwin.getBox()));
+    }
 }
 
 pub fn teardownChildPanes(self: *DiosixGui) void {
@@ -175,6 +225,12 @@ pub fn teardownChildPanes(self: *DiosixGui) void {
         }
         _ = self.destroyWindow(cid);
     }
+
+    if (self.getWindow(gui_mod.WIN_CREATE_VM_DETAIL_ID)) |cdw| {
+        self.markDirty(cdw.getBox());
+        _ = self.destroyWindow(gui_mod.WIN_CREATE_VM_DETAIL_ID);
+    }
+    self.selected_create_image_idx = null;
 
     if (self.getWindow(gui_mod.WIN_SCHEME_DROPDOWN_ID)) |wd| {
         self.markDirty(wd.getBox());
@@ -195,11 +251,13 @@ pub fn teardownChildPanes(self: *DiosixGui) void {
     self.active_menu_id = null;
     self.nav_anim_state = .idle;
     self.nav_anim_progress = 0.0;
+    self.syncTaskPanes();
     self.updateActiveHelp();
     self.markFullDirty();
 }
 
 pub fn tick(self: *DiosixGui, dt_ms: u32) void {
+    self.pollBackgroundTasks();
     if (self.nav_anim_state != .idle) {
         const step =
             @as(f32, @floatFromInt(dt_ms)) / self.nav_anim_duration_ms;
@@ -208,7 +266,7 @@ pub fn tick(self: *DiosixGui, dt_ms: u32) void {
             if (self.nav_anim_progress >= 1.0) {
                 self.nav_anim_progress = 1.0;
                 applyNavAnimation(self);
-                self.nav_anim_state = .idle;
+                finishOpening(self);
             } else {
                 applyNavAnimation(self);
             }
@@ -233,6 +291,12 @@ pub fn tick(self: *DiosixGui, dt_ms: u32) void {
                 break;
             }
         }
+    }
+
+    self.guest_update_accum_ms += dt_ms;
+    if (self.guest_update_accum_ms >= self.guest_update_interval_ms) {
+        self.guest_update_accum_ms = 0;
+        self.updateGuestsPaneData();
     }
 
     if (self.render_mode == .accelerated and self.bg_animation_speed > 0) {

@@ -467,6 +467,7 @@ test {
     _ = @import("intro/fx.zig");
     _ = @import("panes.zig");
     _ = @import("panes/config.zig");
+    _ = @import("panes/create_vm.zig");
     _ = @import("panes/modal.zig");
     _ = @import("panes/osk.zig");
     _ = @import("scale.zig");
@@ -478,6 +479,7 @@ test {
     _ = @import("drm/abi.zig");
     _ = @import("display/input.zig");
     _ = @import("window/input.zig");
+    _ = @import("tests/create_vm.zig");
     _ = @import("tests/gui.zig");
     _ = @import("tests/nav.zig");
     _ = @import("tests/panes.zig");

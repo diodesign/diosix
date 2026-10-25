@@ -34,10 +34,142 @@ fn addOskBtn(
     _ = try win.addIcon(btn);
 }
 
+pub const KeyCommand = enum {
+    backspace,
+    delete,
+    left,
+    right,
+    home,
+    end,
+};
+
+var shift_held: bool = false;
+
+fn findFocusedInput(
+    self: *DiosixGui,
+) ?struct { win_id: u32, icon: *Icon } {
+    if (self.active_win_idx) |widx| {
+        if (widx < self.windows.items.len) {
+            const win = &self.windows.items[widx];
+            if (win.is_onscreen) {
+                if (win.getFocusedIcon()) |ic| {
+                    if (ic.icon_type == .read_write_text) {
+                        return .{ .win_id = win.id, .icon = ic };
+                    }
+                }
+            }
+        }
+    }
+    var i = self.windows.items.len;
+    while (i > 0) : (i -= 1) {
+        const win = &self.windows.items[i - 1];
+        if (!win.is_onscreen) continue;
+        if (win.getFocusedIcon()) |ic| {
+            if (ic.icon_type == .read_write_text) {
+                return .{ .win_id = win.id, .icon = ic };
+            }
+        }
+    }
+    return null;
+}
+
+fn syncInputField(self: *DiosixGui, win_id: u32, ic: *Icon) void {
+    if (ic.id == gui_mod.ICON_CREATE_VM_NAME_INPUT_ID) {
+        self.setCreateVmName(ic.getText());
+    }
+    self.markWindowDirty(win_id);
+}
+
+pub fn handleKeyChar(self: *DiosixGui, ch: u8) void {
+    if (findFocusedInput(self)) |target| {
+        _ = target.icon.deleteSelection();
+        target.icon.insertChar(ch);
+        syncInputField(self, target.win_id, target.icon);
+    }
+}
+
+pub fn handleKeySpecial(self: *DiosixGui, cmd: KeyCommand) void {
+    if (findFocusedInput(self)) |target| {
+        const ic = target.icon;
+        switch (cmd) {
+            .backspace => {
+                if (!ic.deleteSelection()) ic.deleteBackward();
+            },
+            .delete => {
+                if (!ic.deleteSelection()) ic.deleteForward();
+            },
+            .left => {
+                ic.clearSelection();
+                if (ic.cursor_pos > 0) ic.cursor_pos -= 1;
+            },
+            .right => {
+                ic.clearSelection();
+                if (ic.cursor_pos < ic.text_len) ic.cursor_pos += 1;
+            },
+            .home => {
+                ic.clearSelection();
+                ic.cursor_pos = 0;
+            },
+            .end => {
+                ic.clearSelection();
+                ic.cursor_pos = ic.text_len;
+            },
+        }
+        syncInputField(self, target.win_id, ic);
+    }
+}
+
+pub fn handleEvdevKey(self: *DiosixGui, code: u16, value: i32) void {
+    if (code == 42 or code == 54) {
+        shift_held = (value != 0);
+        return;
+    }
+    if (value == 0) return;
+
+    switch (code) {
+        14 => handleKeySpecial(self, .backspace),
+        111 => handleKeySpecial(self, .delete),
+        105 => handleKeySpecial(self, .left),
+        106 => handleKeySpecial(self, .right),
+        102 => handleKeySpecial(self, .home),
+        107 => handleKeySpecial(self, .end),
+        57 => handleKeyChar(self, '-'),
+        12 => handleKeyChar(self, if (shift_held) '_' else '-'),
+        52 => handleKeyChar(self, '.'),
+        2...11 => {
+            const digits = "1234567890";
+            handleKeyChar(self, digits[code - 2]);
+        },
+        16...25 => {
+            const row1 = "qwertyuiop";
+            const ch = row1[code - 16];
+            handleKeyChar(self, if (shift_held) std.ascii.toUpper(ch) else ch);
+        },
+        30...38 => {
+            const row2 = "asdfghjkl";
+            const ch = row2[code - 30];
+            handleKeyChar(self, if (shift_held) std.ascii.toUpper(ch) else ch);
+        },
+        44...50 => {
+            const row3 = "zxcvbnm";
+            const ch = row3[code - 44];
+            handleKeyChar(self, if (shift_held) std.ascii.toUpper(ch) else ch);
+        },
+        else => {},
+    }
+}
+
 pub fn handleOskAction(self: *DiosixGui, icon_id: u32) void {
     if (icon_id >= ICON_OSK_KEY_BASE_ID) {
         const offset = icon_id - ICON_OSK_KEY_BASE_ID;
+        const prev_len = self.osk_state.input_len;
         _ = self.osk_state.applyKeyOffset(offset);
+        if (self.osk_state.input_len > prev_len) {
+            const ch = self.osk_state.input_buf[self.osk_state.input_len - 1];
+            handleKeyChar(self, ch);
+        } else if (offset == 27) {
+            handleKeySpecial(self, .backspace);
+        }
         if (!self.osk_state.visible) {
             _ = self.destroyWindow(WIN_OSK_ID);
             self.markFullDirty();

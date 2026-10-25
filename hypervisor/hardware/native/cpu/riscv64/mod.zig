@@ -230,6 +230,24 @@ pub const GuestState = extern struct {
     vsenvcfg: u64,
 };
 
+pub const NUM_FP_REGS: usize = 32;
+pub const NUM_VEC_REGS: usize = 32;
+pub const MAX_VLEN_BYTES: usize = 32;
+pub const VTYPE_VILL_BIT: u64 = @as(u64, 1) << 63;
+
+pub const FpState = extern struct {
+    fregs: [NUM_FP_REGS]u64 = @splat(0),
+    fcsr: u64 = 0,
+};
+
+pub const VectorState = extern struct {
+    vregs: [NUM_VEC_REGS * MAX_VLEN_BYTES]u8 align(16) = @splat(0),
+    vl: u64 = 0,
+    vtype: u64 = VTYPE_VILL_BIT,
+    vcsr: u64 = 0,
+    vstart: u64 = 0,
+};
+
 comptime {
     const assert = std.debug.assert;
     assert(@sizeOf(ThreadContext) == 32 * @sizeOf(u64));
@@ -248,6 +266,13 @@ comptime {
     assert(@offsetOf(GuestState, "vsepc") == 32);
     assert(@offsetOf(GuestState, "vscause") == 40);
     assert(@offsetOf(GuestState, "vstval") == 48);
+    assert(@offsetOf(FpState, "fregs") == 0);
+    assert(@offsetOf(FpState, "fcsr") == 256);
+    assert(@offsetOf(VectorState, "vregs") == 0);
+    assert(@offsetOf(VectorState, "vl") == 1024);
+    assert(@offsetOf(VectorState, "vtype") == 1032);
+    assert(@offsetOf(VectorState, "vcsr") == 1040);
+    assert(@offsetOf(VectorState, "vstart") == 1048);
     assert(@offsetOf(GuestState, "vsatp") == 56);
     assert(@offsetOf(GuestState, "vstimecmp") == 64);
     assert(@offsetOf(GuestState, "vsenvcfg") == 72);

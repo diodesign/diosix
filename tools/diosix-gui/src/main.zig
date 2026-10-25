@@ -103,6 +103,12 @@ fn pollMainInput(
                                     gui.mouse_left_down = false;
                                     gui.handleMouseRelease();
                                 }
+                            } else {
+                                gui_mod.panes.handleEvdevKey(
+                                    gui,
+                                    code,
+                                    ev.value,
+                                );
                             }
                         },
                         EV_REL => {
@@ -373,11 +379,13 @@ pub fn main() !void {
         const signed_poll: isize = @bitCast(poll_res);
 
         const now = getMilliTimestamp();
-        const dt_ms: u32 = @intCast(@max(1, now - last_time));
-        last_time = now;
-
-        // Preemptive Multitasking: Deliver CPU time to sub-programs.
-        gui.tick(dt_ms);
+        const raw_dt = now - last_time;
+        const dt_ms: u32 = if (raw_dt > 0) @intCast(raw_dt) else 0;
+        if (dt_ms > 0) {
+            last_time = now;
+            // Preemptive Multitasking: Deliver CPU time to sub-programs.
+            gui.tick(dt_ms);
+        }
 
         if (signed_poll > 0) {
             pollMainInput(input_devs[0..input_count], &pfds, &display, &gui);
@@ -448,6 +456,8 @@ pub fn main() !void {
                     display.flushDamage(flush_box);
                 }
             }
+        } else if (time_due) {
+            last_render_time = now;
         }
     }
 }

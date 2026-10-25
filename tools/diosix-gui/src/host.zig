@@ -9,7 +9,34 @@ const sbi = @import("interface").sbi;
 const label = @import("label.zig");
 const mem_size = @import("host/mem.zig");
 const time = @import("host/time.zig");
+pub const proc = @import("host/proc.zig");
+pub const guests = @import("host/guests.zig");
+pub const images = @import("host/images.zig");
 const paths = @import("paths.zig");
+
+pub const MAX_RUNNING_GUESTS = guests.MAX_RUNNING_GUESTS;
+pub const MAX_GUEST_STORAGE = guests.MAX_GUEST_STORAGE;
+pub const STORAGE_LABEL_BYTES = guests.STORAGE_LABEL_BYTES;
+pub const GUEST_NAME_BYTES = guests.GUEST_NAME_BYTES;
+pub const PCPU_HISTORY_LEN = guests.PCPU_HISTORY_LEN;
+pub const RunningGuest = guests.RunningGuest;
+pub const GuestActionKind = guests.GuestActionKind;
+pub const GuestActionRecord = guests.GuestActionRecord;
+pub const resetGuestTelemetryCache = guests.resetGuestTelemetryCache;
+pub const sampleRunningGuests = guests.sampleRunningGuests;
+pub const queryRunningGuests = guests.queryRunningGuests;
+pub const restartGuestVm = guests.restartGuestVm;
+pub const shutdownGuestVm = guests.shutdownGuestVm;
+pub const setGuestQuota = guests.setGuestQuota;
+
+pub const MAX_VM_IMAGES = images.MAX_VM_IMAGES;
+pub const MAX_STORAGE_OPTIONS = images.MAX_STORAGE_OPTIONS;
+pub const VmImageEntry = images.VmImageEntry;
+pub const StorageOption = images.StorageOption;
+pub const CreatedVmRecord = images.CreatedVmRecord;
+pub const queryAvailableImages = images.queryAvailableImages;
+pub const queryAvailableStorageOptions = images.queryAvailableStorageOptions;
+pub const createGuestVm = images.createGuestVm;
 
 pub const fmtLabel = label.fmtLabel;
 pub const LABEL_BUF_BYTES = label.LABEL_BUF_BYTES;
@@ -211,7 +238,7 @@ pub fn getHostCpuString(buffer: []u8) []const u8 {
     return "--";
 }
 
-// Format Host RAM value: "X free of Y total (N% in use)" or "--" on failure.
+// Format Host RAM value: "X free of Y total (N% free)" or "--" on failure.
 // Never falls back to Root VM /proc/meminfo or hardcoded values.
 pub fn getHostRamString(buffer: []u8) []const u8 {
     if (getHypervisorInfo()) |info| {
@@ -224,12 +251,11 @@ pub fn getHostRamString(buffer: []u8) []const u8 {
             var total_buf: [MEM_SIZE_STR_BYTES]u8 = undefined;
             const total_str = formatMemorySize(&total_buf, total_bytes);
 
-            const used_bytes = total_bytes - free_bytes;
-            const pct: u64 = (used_bytes * 100) / total_bytes;
+            const pct: u64 = (free_bytes * 100) / total_bytes;
 
             return label.fmtLabel(
                 buffer,
-                "{s} free of {s} total ({d}% in use)",
+                "{s} free of {s} total ({d}% free)",
                 .{ free_str, total_str, pct },
             );
         }
@@ -293,7 +319,7 @@ pub fn getHvFootprintString(buffer: []u8) []const u8 {
 test "HypervisorInfo ABI layout and version formatting in diosix-gui" {
     const testing = std.testing;
     testing.refAllDecls(@This());
-    _ = .{ label, mem_size, time, paths };
+    _ = .{ label, mem_size, time, proc, guests, images, paths };
     defer mock_hypervisor_info = null;
 
     try testing.expectEqual(@as(usize, 304), @sizeOf(HypervisorInfo));
@@ -328,7 +354,7 @@ test "HypervisorInfo ABI layout and version formatting in diosix-gui" {
     );
     try testing.expectEqualStrings("4 x RV64GC", getHostCpuString(&buf));
     try testing.expectEqualStrings(
-        "1.5 GB free of 2 GB total (25% in use)",
+        "1.5 GB free of 2 GB total (75% free)",
         getHostRamString(&buf),
     );
     try testing.expectEqualStrings(

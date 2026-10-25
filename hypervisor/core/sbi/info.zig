@@ -80,6 +80,24 @@ pub fn handleGetInfo(
         break :blk tg.children.count();
     };
     const vcpus = tg.vcores.count();
+    const now = if (builtin.is_test) 0 else riscv.readTime();
+    var active_ticks: u64 = 0;
+    var vc_it = tg.vcores.start;
+    while (vc_it) |node| : (vc_it = node.next) {
+        const tvc = node.contents;
+        active_ticks +|= @atomicLoad(u64, &tvc.active_ticks, .monotonic);
+        const last_disp = @atomicLoad(
+            u64,
+            &tvc.last_dispatched_time,
+            .monotonic,
+        );
+        if (tvc.running_on_cpu != null and
+            !@atomicLoad(bool, &tvc.wfi_blocked, .acquire) and
+            last_disp > 0 and now > last_disp)
+        {
+            active_ticks +|= now -| last_disp;
+        }
+    }
     const info = interface.GuestInfo{
         .guest_id = if (tg == g) guest.CID_SELF else target_cid,
         .parent_id = if (tg == g)
@@ -93,6 +111,7 @@ pub fn handleGetInfo(
             guest.CID_SELF
         else
             @truncate(tg.local_cid),
+        .cpu_khz_ticks = @truncate(active_ticks / 1_000),
         .vcpus = vcpus,
         .self_ram_pages = eff_ram,
         .used_vcpus = if (tg.quotas.used_vcpus > 0)
@@ -106,13 +125,21 @@ pub fn handleGetInfo(
         .used_ram_pages = if (tg.quotas.used_ram_pages > 0 and
             tg.quotas.used_ram_pages != max_u)
             tg.quotas.used_ram_pages
-        else
-            eff_ram,
-        .max_ram_pages = if (tg.quotas.max_ram_pages == max_u)
+        else if (!tg.is_root and tg.space.mode == .pmp_fallback)
             eff_ram
+        else
+            0,
+        .max_ram_pages = if (tg.quotas.max_ram_pages == max_u)
+            (if (physmem.getFreeRamBytes() > 0)
+                physmem.getFreeRamBytes() / physmem.PageSize
+            else
+                eff_ram)
         else
             tg.quotas.max_ram_pages,
         .child_count = child_count,
+        .pcpu_quota_pct = tg.quotas.pcpu_quota_pct,
+        .delegated_pcpu_pct = tg.quotas.delegated_pcpu_pct,
+        .delegated_ram_pages = tg.quotas.delegated_ram_pages,
     };
 
     g.space.writeGuestStruct(interface.GuestInfo, info_gpa, info) catch {

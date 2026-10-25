@@ -92,6 +92,7 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     });
     create_storage_cmd.addFileInput(b.path(layout.qemu.storage_script));
     create_storage_cmd.step.dependOn(&cfg.run_buildroot.step);
+    b.getInstallStep().dependOn(&create_storage_cmd.step);
 
     try qemu_args.appendSlice(b.allocator, &.{
         layout.qemu.system_bin,          "-nographic",

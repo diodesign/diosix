@@ -56,8 +56,17 @@ case "$1" in
     touch "$AUTH_KEYS" 2>/dev/null || true
     chmod 600 "$AUTH_KEYS" 2>/dev/null || true
 
-    # Set up standard loopback networking.
+    # Set up standard loopback networking and local subnet host resolution.
     ifconfig lo 127.0.0.1 up 2>/dev/null || true
+    {
+        echo "127.0.0.1 localhost"
+        echo "10.0.3.1 diosix-rootvm parent"
+        HOST_IDX=2
+        while [ "$HOST_IDX" -le 32 ]; do
+            echo "10.0.3.${HOST_IDX} guest-${HOST_IDX}"
+            HOST_IDX=$((HOST_IDX + 1))
+        done
+    } > /etc/hosts 2>/dev/null || true
 
     # Bring up diosix0 virtual network interface with 10.0.3.<cid>.
     if ip link show diosix0 >/dev/null 2>&1; then
@@ -166,9 +175,9 @@ case "$1" in
         if [ ! -s /etc/resolv.conf ] || \
            grep -q "127.0.0.1" /etc/resolv.conf 2>/dev/null; then
             {
+                echo "options timeout:1 attempts:1"
                 echo "nameserver 1.1.1.1"
                 echo "nameserver 8.8.8.8"
-                echo "nameserver ${CHILD_GW}"
             } > /etc/resolv.conf
         fi
     fi
@@ -193,17 +202,9 @@ case "$1" in
     done
 
     mkdir -p "${STATE_DIR}/images" "${STATE_DIR}/iso"
-    if [ -f "${SHARE_IMAGES_DIR}/micro-guest.elf" ] && \
-       [ ! -e "${STATE_DIR}/images/micro-guest.elf" ]; then
-        ln -sf "${SHARE_IMAGES_DIR}/micro-guest.elf" \
-            "${STATE_DIR}/images/micro-guest.elf" 2>/dev/null || true
-    fi
-    if [ -f "${SHARE_IMAGES_DIR}/micro-guest.iso" ] && \
-       [ ! -e "${STATE_DIR}/iso/micro-guest.iso" ]; then
-        ln -sf "${SHARE_IMAGES_DIR}/micro-guest.iso" \
-            "${STATE_DIR}/iso/micro-guest.iso" 2>/dev/null || true
-    fi
-    GUEST_ELF="${STATE_DIR}/images/linux-guest.elf"
+    rm -f "${STATE_DIR}/images/micro-guest."* \
+        "${STATE_DIR}/iso/micro-guest."* 2>/dev/null || true
+    GUEST_ELF="${STATE_DIR}/images/diosix-linux.elf"
     if [ -f "$GUEST_ELF" ]; then
         ln -sf "$GUEST_ELF" \
             "${STATE_DIR}/images/default.elf" 2>/dev/null || true

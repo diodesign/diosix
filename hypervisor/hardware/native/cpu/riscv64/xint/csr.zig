@@ -179,14 +179,19 @@ fn emulateWfi(vc: *vcore.VirtualCore) void {
     pcpu.trap_loop_count = 0;
     vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
 
-    // If a physical PLIC interrupt is pending on this hart, inject VSEIP.
+    // Route physical PLIC interrupts pending on this hart to Root VSEIP.
     const mip_val = riscv.readMip();
-    const ext_pending = (mip_val & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0;
-    if (ext_pending) {
-        vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
-        const mask = ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
-        riscv.writeMie(riscv.MIE.ALL_PHYSICAL & mask);
-    } else {
+    const raw_ext = (mip_val & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0;
+    const ext_pending = raw_ext and vc.guest.is_root;
+    if (raw_ext) {
+        if (vc.guest.is_root) {
+            vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
+            const mask = ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
+            riscv.writeMie(riscv.MIE.ALL_PHYSICAL & mask);
+        } else {
+            _ = @import("interrupt.zig").deliverRootExternalIrq(pcpu);
+        }
+    } else if (vc.guest.is_root) {
         vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSEIP);
         riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
     }
@@ -219,7 +224,26 @@ fn emulateWfi(vc: *vcore.VirtualCore) void {
     }
 
     // Block this vCore on the current physical CPU's blocked queue.
+    // Deschedule from this physical CPU before publishing wfi_blocked = true
+    // so a concurrent tryWake() + scheduler.queue() on another core never
+    // sees running_on_cpu != null.
+    scheduler.accountRuntime(vc);
+    vc.running_on_cpu = null;
+    pcpu.active_vcore = null;
+    vc.last_queued_time = riscv.readTime();
     const b_wfi_prev = pcpu.blocked_lock.lock();
+    if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
+        pcpu.blocked_lock.unlock(b_wfi_prev);
+        vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
+        if (riscv.hasHExtension()) {
+            riscv.writeHvip(vc.getNativeMachine().hvip);
+        }
+        riscv.writeMepc(vc.getNativeMachine().mepc);
+        vc.state = .ready;
+        scheduler.queue(vc);
+        scheduler.schedule();
+        return;
+    }
     vc.blocked_node.contents = vc;
     pcpu.blocked_queue.pushStart(&vc.blocked_node);
     vc.blocked_on_cpu = pcpu.cpu_core_id;

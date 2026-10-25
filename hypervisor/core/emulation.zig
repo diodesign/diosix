@@ -360,7 +360,9 @@ pub fn run(vc: *vcore.VirtualCore) bool {
     switch (exit_reason) {
         .yield, .normal => return false,
         .wfi => {
+            _ = @import("scheduler.zig").recordActiveRuntime(vc);
             vc.state = .blocked;
+            vc.last_queued_time = riscv.readTime();
             const pcpu = pcore.this();
             const b_wfi_emu_prev = pcpu.blocked_lock.lock();
             vc.blocked_node.contents = vc;

@@ -227,6 +227,8 @@ pub extern fn hw_run_vcore(
 pub const current = this;
 pub const sendIpiToCpu = dispatch.sendIpiToCpu;
 pub const broadcastIpi = dispatch.broadcastIpi;
+pub const hasIdleOtherCore = dispatch.hasIdleOtherCore;
+pub const wakeIdleCores = dispatch.wakeIdleCores;
 pub const parkOtherCores = dispatch.parkOtherCores;
 pub const contextSwitch = dispatch.contextSwitch;
 

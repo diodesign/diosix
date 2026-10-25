@@ -50,16 +50,15 @@
         .embedded_asm_name = "rootvm.s",
         .input_files = .{
             "scripts/build_rootvm.sh",
-            "scripts/build_micro_iso.py",
         },
         .input_dirs = .{
             "tools/alsa-init",
             "tools/diosix-config/src",
             "tools/diosix-ctl/src",
+            "tools/diosix-gui/assets",
             "tools/diosix-gui/src",
             "tools/driver",
             "tools/guest-shim",
-            "tools/micro-guest",
             "tools/overlay-common",
         },
     },

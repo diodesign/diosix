@@ -159,11 +159,24 @@ direct child VM.
     is too small, or `SBI_ERR_INVALID_ADDRESS` if the GPA pointer is invalid.
 
 #### `SET_QUOTA` (`FID 6`)
-Applies resource ceilings to a target VM.
+Applies or updates resource quotas on a target VM.
 *   `a0`: GPA pointer to a `struct quota_args` (`QuotaArgs`).
-*   **Permissions**: A VM may set quotas on direct children (`CID >= 2`) up
-    to its own ceiling, or lower its own quotas (`CID 1`) to sandbox itself.
-    Calls targeting `CID 0` (parent) return `SBI_ERR_DENIED`.
+*   **Permissions and physical vs. logical separation**:
+    *   A parent VM may set or re-dial physical quotas (`pcpu_quota_pct` and
+        `max_ram_pages`) on direct children (`CID >= 2`) at any time, or lower
+        its own quotas (`CID 1`) to sandbox itself. Calls targeting `CID 0`
+        (parent) return `SBI_ERR_DENIED`.
+    *   A parent VM can allocate up to **90% total**
+        (`MAX_CHILD_PCPU_QUOTA_PCT`) of its own pCPU quota across all of its
+        direct children combined, retaining at least 10% (plus any unallocated
+        share) for itself.
+    *   For H-extension guests (`Sv39x4`), physical RAM is demand-paged from the
+        quota pool; if faulted-in pages exceed `max_ram_pages` or if a parent
+        dials `max_ram_pages` below the child's currently in-use pages, the
+        hypervisor queues `child_memory_pressure` (`4`) and terminates the
+        child. For Physical Memory Protection (PMP) guests, in-use memory is
+        fixed at logical RAM size (`logical_ram_pages`), and exceeding available
+        RAM quota at creation fails immediately with `SBI_ERR_DENIED`.
 
 #### `POLL_EVENT` (`FID 9`)
 Pops the oldest pending event from the VM's event queue.
@@ -288,20 +301,23 @@ C ABI alignment with explicit fixed-width `uint64_t` (`u64`) fields.
 ### `GuestInfo`
 ```c
 struct guest_info {
-    uint64_t guest_id;       /* Context ID (1 for caller, or child CID) */
-    uint64_t parent_id;      /* Parent Context ID (0 for caller's parent) */
-    uint8_t  is_trusted;     /* 1 if trusted for MMIO, 0 otherwise */
-    uint8_t  is_root;        /* 1 if Root VM, 0 otherwise */
-    uint8_t  target_arch;    /* 0=rv64, 1=rv32, 2=aarch64, 3=x86_64 */
-    uint8_t  assigned_cid;   /* Handle assigned to this VM by its parent */
-    uint8_t  _pad[4];        /* Explicit 8-byte alignment padding */
-    uint64_t vcpus;          /* VM's own active Virtual CPUs */
-    uint64_t self_ram_pages; /* VM's own allocated 4 KB RAM pages */
-    uint64_t used_vcpus;     /* Total subtree VCPUs consumed */
-    uint64_t max_vcpus;      /* Maximum VCPUs quota ceiling */
-    uint64_t used_ram_pages; /* Total subtree 4 KB RAM pages consumed */
-    uint64_t max_ram_pages;  /* Maximum 4 KB RAM page quota ceiling */
-    uint64_t child_count;    /* Number of active child VMs */
+    uint64_t guest_id;            /* Context ID (1 for caller, or child CID) */
+    uint64_t parent_id;           /* Parent Context ID (0 for caller parent) */
+    uint8_t  is_trusted;          /* 1 if trusted for MMIO, 0 otherwise */
+    uint8_t  is_root;             /* 1 if Root VM, 0 otherwise */
+    uint8_t  target_arch;         /* 0=rv64, 1=rv32, 2=aarch64, 3=x86_64 */
+    uint8_t  assigned_cid;        /* Handle assigned to VM by its parent */
+    uint8_t  _pad[4];             /* Explicit 8-byte alignment padding */
+    uint64_t vcpus;               /* VM's own logical Virtual CPUs */
+    uint64_t self_ram_pages;      /* VM's own logical 4 KB RAM pages */
+    uint64_t used_vcpus;          /* Total subtree VCPUs consumed */
+    uint64_t max_vcpus;           /* Maximum VCPUs quota ceiling */
+    uint64_t used_ram_pages;      /* Total subtree 4 KB RAM pages faulted in */
+    uint64_t max_ram_pages;       /* Physical 4 KB RAM page quota pool */
+    uint64_t child_count;         /* Number of active child VMs */
+    uint32_t pcpu_quota_pct;      /* Granted physical CPU time % (1..100) */
+    uint32_t delegated_pcpu_pct;  /* Total pCPU % delegated to children */
+    uint64_t delegated_ram_pages; /* Total 4 KB RAM pages granted to children */
 };
 ```
 
@@ -360,8 +376,8 @@ struct terminate_args {
 
 struct diosix_event {
     uint64_t cid;        /* Source child CID */
-    uint32_t event_type; /* 0=none, 1=terminated, 2=stopped, 3=started */
-    uint32_t exit_code;  /* Exit code reported by the child VM */
+    uint32_t event_type; /* 0=none, 1=terminated, 2=stopped, 3=started, 4=oom */
+    uint32_t exit_code;  /* Exit code or in-use page count on memory pressure */
     uint64_t _reserved;
 };
 
@@ -372,11 +388,13 @@ struct wait_event_args {
 };
 
 struct quota_args {
-    uint64_t target_cid;      /* 1 for self, >= 2 for child */
-    uint64_t max_ram_pages;   /* RAM ceiling in 4 KB pages (0 = unchanged) */
-    uint64_t max_vcpus;       /* VCPU limit (0 = unchanged) */
-    uint64_t max_child_depth; /* Maximum nesting depth (0 = unchanged) */
-    uint64_t max_descendants; /* Total descendant limit (0 = unchanged) */
+    uint64_t target_cid;        /* 1 for self, >= 2 for child */
+    uint64_t max_ram_pages;     /* Physical RAM quota in 4 KB pages */
+    uint64_t max_vcpus;         /* Logical VCPU count (0 = unchanged) */
+    uint64_t max_child_depth;   /* Maximum nesting depth (0 = unchanged) */
+    uint64_t max_descendants;   /* Total descendant limit (0 = unchanged) */
+    uint64_t pcpu_quota_pct;    /* Physical CPU time % (1..90, 0 = unchanged) */
+    uint64_t logical_ram_pages; /* Logical DTB RAM in 4 KB pages (0 = quota) */
 };
 
 struct manifest_args {

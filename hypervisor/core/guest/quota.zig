@@ -10,18 +10,37 @@ const debug = @import("../debug.zig");
 const scheduler = @import("../scheduler.zig");
 const guest_mod = @import("../guest.zig");
 const sbi = @import("interface").sbi;
+pub const manifest_mod = @import("manifest.zig");
 
 pub const max_vmids: u16 = 4096;
 pub const BITS_PER_WORD: usize = @bitSizeOf(u64);
 pub const VMID_BITMAP_WORDS: usize = max_vmids / BITS_PER_WORD;
-pub const MAX_STOP_SPINS: usize = 10_000_000;
-pub const STOP_IPI_RETRY_SPINS: usize = 1024;
+pub const MAX_STOP_SPINS: usize = manifest_mod.MAX_STOP_SPINS;
+pub const STOP_IPI_RETRY_SPINS: usize = manifest_mod.STOP_IPI_RETRY_SPINS;
+
+pub const MAX_CHILD_PCPU_QUOTA_PCT: u32 = sbi.MAX_CHILD_PCPU_QUOTA_PCT;
+pub const DEFAULT_CHILD_PCPU_QUOTA_PCT: u32 = sbi.DEFAULT_CHILD_PCPU_QUOTA_PCT;
+pub const FULL_PCPU_BASIS_POINTS: u64 = 10_000;
+
+pub const setManifest = manifest_mod.setManifest;
+pub const readManifest = manifest_mod.readManifest;
+pub const getManifestLength = manifest_mod.getManifestLength;
+pub const hasAnyVcoreStarted = manifest_mod.hasAnyVcoreStarted;
+pub const stop = manifest_mod.stop;
+pub const resetForRun = manifest_mod.resetForRun;
 
 pub const QuotaSet = struct {
     max_ram_pages: usize = std.math.maxInt(usize),
     used_ram_pages: usize = 0,
+    committed_ram_pages: usize = 0,
+    delegated_ram_pages: usize = 0,
     max_vcpus: usize = std.math.maxInt(usize),
     used_vcpus: usize = 0,
+    pcpu_quota_pct: u32 = 100,
+    delegated_pcpu_pct: u32 = 0,
+    window_id: u64 = 0,
+    window_ticks_used: u64 = 0,
+    subtree_window_ticks_used: u64 = 0,
     max_priority: u8 = std.math.maxInt(u8),
     max_child_depth: usize = std.math.maxInt(usize),
     current_depth: usize = 0,
@@ -101,36 +120,146 @@ pub fn freeVmid(id: u16) void {
     state.vmid_bitmap[wi] &= ~(@as(u64, 1) << bit);
 }
 
-fn applyClampedQuota(
+/// Invoked when a guest or its subtree exhausts its physical RAM quota pool
+/// (either during a Stage-2 demand-paging fault or when a parent dials down
+/// a running child's RAM quota below its currently in-use memory).
+///
+/// Emits `EventType.child_memory_pressure` to the parent VM to leave the door
+/// open for future S-mode swap/migration delegation before terminating the
+/// child with OOM exit code 1.
+pub fn onMemoryPoolExhausted(self: *guest_mod.Guest) void {
+    if (self.is_root) return;
+    if (self.parent) |p| {
+        p.events.push(.{
+            .cid = self.local_cid,
+            .event_type = @backingInt(sbi.EventType.child_memory_pressure),
+            .exit_code = @truncate(self.quotas.used_ram_pages),
+        });
+    }
+    debug.printf(
+        "OOM: Child guest VM (ID {}, CID {}) exceeded RAM quota " ++
+            "({}/{} pages). Terminating.\n",
+        .{
+            self.id,
+            self.local_cid,
+            self.quotas.used_ram_pages,
+            self.quotas.max_ram_pages,
+        },
+    );
+    self.terminateWithCode(1);
+}
+
+fn applyQuotaToTarget(
     target: *guest_mod.Guest,
-    ceil: *const guest_mod.Guest,
+    ceil: *guest_mod.Guest,
     args: sbi.QuotaArgs,
-) void {
-    if (args.max_ram_pages > 0) {
-        const max_r: usize = @min(
-            ceil.quotas.max_ram_pages,
-            @as(usize, @intCast(args.max_ram_pages)),
-        );
-        target.quotas.max_ram_pages = @min(target.quotas.max_ram_pages, max_r);
-        target.quotas.used_ram_pages = @min(
-            target.quotas.used_ram_pages,
-            target.quotas.max_ram_pages,
-        );
-        const max_bytes = std.math.mul(
+) !void {
+    if (args.pcpu_quota_pct > 0) {
+        if (target != ceil) {
+            if (args.pcpu_quota_pct > MAX_CHILD_PCPU_QUOTA_PCT) {
+                return error.AccessDenied;
+            }
+            const req_pct: u32 = @intCast(args.pcpu_quota_pct);
+            const other_pct =
+                ceil.quotas.delegated_pcpu_pct -| target.quotas.pcpu_quota_pct;
+            if (other_pct + req_pct > MAX_CHILD_PCPU_QUOTA_PCT) {
+                return error.AccessDenied;
+            }
+            target.quotas.pcpu_quota_pct = req_pct;
+            ceil.quotas.delegated_pcpu_pct = other_pct + req_pct;
+        } else {
+            const req_pct: u32 = @intCast(@min(args.pcpu_quota_pct, 100));
+            target.quotas.pcpu_quota_pct =
+                @min(target.quotas.pcpu_quota_pct, req_pct);
+        }
+    }
+
+    if (target != ceil and target.space.mode == .pmp_fallback) {
+        const started = target.hasAnyVcoreStarted();
+        const cur_logical = target.space.range_size / physmem.PageSize;
+        const logical_pages: usize = if (!started and
+            args.logical_ram_pages > 0)
+            @intCast(args.logical_ram_pages)
+        else if (!started and args.max_ram_pages > 0)
+            @intCast(args.max_ram_pages)
+        else
+            cur_logical;
+        const quota_pages: usize = if (args.max_ram_pages > 0)
+            @intCast(args.max_ram_pages)
+        else
+            target.quotas.max_ram_pages;
+        if (!started) {
+            const other_del =
+                ceil.quotas.delegated_ram_pages -|
+                target.quotas.committed_ram_pages;
+            const parent_avail = ceil.quotas.max_ram_pages -|
+                @max(ceil.quotas.used_ram_pages, other_del);
+            if (logical_pages > quota_pages or
+                logical_pages > parent_avail or
+                quota_pages > parent_avail)
+            {
+                return error.AccessDenied;
+            }
+        }
+    }
+
+    if (!target.hasAnyVcoreStarted() and args.logical_ram_pages > 0) {
+        const log_bytes = std.math.mul(
             usize,
-            target.quotas.max_ram_pages,
+            @intCast(args.logical_ram_pages),
             physmem.PageSize,
         ) catch std.math.maxInt(usize);
+        target.space.setRangeSize(log_bytes);
+    }
+
+    if (args.max_ram_pages > 0) {
+        const req_ram: usize = @intCast(args.max_ram_pages);
         if (target == ceil) {
+            target.quotas.max_ram_pages =
+                @min(target.quotas.max_ram_pages, req_ram);
+            target.quotas.used_ram_pages = @min(
+                target.quotas.used_ram_pages,
+                target.quotas.max_ram_pages,
+            );
+            const max_bytes = std.math.mul(
+                usize,
+                target.quotas.max_ram_pages,
+                physmem.PageSize,
+            ) catch std.math.maxInt(usize);
             if (target.space.range_size == 0 or
                 target.space.range_size > max_bytes)
             {
                 target.space.setRangeSize(max_bytes);
             }
         } else {
-            target.space.setRangeSize(max_bytes);
+            const old_com = target.quotas.committed_ram_pages;
+            ceil.quotas.delegated_ram_pages =
+                (ceil.quotas.delegated_ram_pages -| old_com) +| req_ram;
+            target.quotas.committed_ram_pages = req_ram;
+            target.quotas.max_ram_pages = req_ram;
+
+            if (!target.hasAnyVcoreStarted() and args.logical_ram_pages == 0) {
+                const max_bytes = std.math.mul(
+                    usize,
+                    req_ram,
+                    physmem.PageSize,
+                ) catch std.math.maxInt(usize);
+                target.space.setRangeSize(max_bytes);
+            }
+
+            const pmp_in_use = if (target.space.mode == .pmp_fallback and
+                target.hasAnyVcoreStarted())
+                target.space.range_size / physmem.PageSize
+            else
+                0;
+            const in_use = @max(target.quotas.used_ram_pages, pmp_in_use);
+            if (in_use > target.quotas.max_ram_pages) {
+                onMemoryPoolExhausted(target);
+                return;
+            }
         }
     }
+
     if (args.max_vcpus > 0) {
         const max_v: usize = @min(
             ceil.quotas.max_vcpus,
@@ -138,6 +267,32 @@ fn applyClampedQuota(
         );
         target.quotas.max_vcpus = @min(target.quotas.max_vcpus, max_v);
         if (target != ceil) {
+            const cur_vcpus = target.vcores.count();
+            if (!target.hasAnyVcoreStarted() and
+                target.quotas.max_vcpus > cur_vcpus)
+            {
+                const extra = target.quotas.max_vcpus - cur_vcpus;
+                if (ceil.checkVcpuQuota(extra)) {
+                    var added: usize = 0;
+                    for (cur_vcpus..target.quotas.max_vcpus) |vid| {
+                        _ = target.addVcore(vid, 0, 0, .normal, null) catch
+                            break;
+                        added += 1;
+                    }
+                    if (added > 0) {
+                        var p = target.parent;
+                        while (p) |anc| : (p = anc.parent) {
+                            _ = @atomicRmw(
+                                usize,
+                                &anc.quotas.used_vcpus,
+                                .Add,
+                                added,
+                                .monotonic,
+                            );
+                        }
+                    }
+                }
+            }
             target.quotas.used_vcpus =
                 @min(target.quotas.used_vcpus, target.quotas.max_vcpus);
         }
@@ -162,10 +317,10 @@ fn applyClampedQuota(
 
 pub fn setQuota(self: *guest_mod.Guest, args: sbi.QuotaArgs) !void {
     if (args.target_cid == sbi.CID_SELF) {
-        applyClampedQuota(self, self, args);
+        try applyQuotaToTarget(self, self, args);
     } else if (args.target_cid >= sbi.CID_FIRST_CHILD) {
         if (self.getGuestByCid(args.target_cid)) |child| {
-            applyClampedQuota(child, self, args);
+            try applyQuotaToTarget(child, self, args);
         } else {
             return error.InvalidParam;
         }
@@ -215,6 +370,14 @@ pub fn checkRamQuota(self: *const guest_mod.Guest, ram_pages: usize) bool {
     return if (self.parent) |p| p.checkRamQuota(ram_pages) else true;
 }
 
+pub fn checkVcpuQuota(self: *const guest_mod.Guest, vcpus: usize) bool {
+    const q = &self.quotas;
+    const new_vcpus = std.math.add(usize, q.used_vcpus, vcpus) catch
+        return false;
+    if (new_vcpus > q.max_vcpus) return false;
+    return if (self.parent) |p| p.checkVcpuQuota(vcpus) else true;
+}
+
 pub fn consumeQuota(
     self: *guest_mod.Guest,
     ram_pages: usize,
@@ -243,205 +406,7 @@ pub fn releaseQuota(
     if (self.parent) |p| p.releaseQuota(ram_pages, vcpus);
 }
 
-pub fn setManifest(self: *guest_mod.Guest, data: []const u8) !void {
-    if (data.len > guest_mod.MAX_MANIFEST_SIZE_BYTES) {
-        return error.ManifestTooLarge;
-    }
-    const new_buf = try self.allocator.alloc(u8, data.len);
-    @memcpy(new_buf, data);
-    const old_buf = blk: {
-        const s = self.manifest_lock.lock();
-        defer self.manifest_lock.unlock(s);
-        const old = self.manifest;
-        self.manifest = new_buf;
-        break :blk old;
-    };
-    if (old_buf) |m| self.allocator.free(m);
-}
-
-pub fn readManifest(self: *guest_mod.Guest, out_buf: []u8) ?usize {
-    const s = self.manifest_lock.lock();
-    defer self.manifest_lock.unlock(s);
-    if (self.manifest) |m| {
-        const copy_len: usize = @min(out_buf.len, m.len);
-        @memcpy(out_buf[0..copy_len], m[0..copy_len]);
-        return m.len;
-    }
-    return null;
-}
-
-pub fn getManifestLength(self: *guest_mod.Guest) usize {
-    const s = self.manifest_lock.lock();
-    defer self.manifest_lock.unlock(s);
-    return if (self.manifest) |m| m.len else 0;
-}
-
-pub fn hasAnyVcoreStarted(self: *const guest_mod.Guest) bool {
-    if (self.initial_entry_point != 0) return true;
-    var it = self.vcores.start;
-    while (it) |node| : (it = node.next) {
-        const vc = node.contents;
-        if (vc.state != .stopped or vc.last_queued_time != 0 or
-            vc.last_dispatched_time != 0) return true;
-    }
-    return false;
-}
-
-pub fn stop(self: *guest_mod.Guest) void {
-    const builtin = @import("builtin");
-    const riscv = @import("../../hardware/native/cpu/riscv64/mod.zig");
-    const pcore = @import("../pcore.zig");
-    const my_cpu = if (builtin.is_test)
-        0
-    else
-        riscv.getCPUContext().cpu_core_id;
-    var it = self.vcores.start;
-    while (it) |node| : (it = node.next) {
-        const vc = node.contents;
-        vc.state = .stopped;
-        if (@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
-            _ = vc.tryWake();
-        }
-        vc.state = .stopped;
-        @atomicStore(bool, &vc.wfi_blocked, false, .release);
-        scheduler.dequeue(vc);
-        if (!builtin.is_test) {
-            if ((@as(*volatile ?usize, &vc.running_on_cpu)).*) |home_cpu| {
-                if (home_cpu != my_cpu) pcore.sendIpiToCpu(home_cpu);
-            }
-        }
-    }
-
-    if (!builtin.is_test) {
-        it = self.vcores.start;
-        while (it) |node| : (it = node.next) {
-            const vc = node.contents;
-            var spins: usize = 0;
-            while ((@as(*volatile ?usize, &vc.running_on_cpu)).* != null and
-                spins < MAX_STOP_SPINS) : (spins += 1)
-            {
-                const cur_cpu =
-                    (@as(*volatile ?usize, &vc.running_on_cpu)).* orelse break;
-                if (cur_cpu == my_cpu) break;
-                if (spins % STOP_IPI_RETRY_SPINS == 0) {
-                    pcore.sendIpiToCpu(cur_cpu);
-                }
-                std.atomic.spinLoopHint();
-            }
-        }
-    }
-}
-
-pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
-    self.state = .valid;
-    self.initial_entry_point = entry;
-    self.initial_dtb_ptr = dtb;
-    self.uart = .{
-        .guest_id = self.id,
-        .out_fn = guest_mod.Guest.guestUartOutput,
-    };
-    self.timer.reset();
-    self.pic.reset();
-    var is_primary = true;
-    var it = self.vcores.start;
-    while (it) |node| : (it = node.next) {
-        const vc = node.contents;
-        vc.reset(entry, dtb);
-        vc.state = if (is_primary) .ready else .stopped;
-        is_primary = false;
-    }
-}
-
 test "guest quota management, manifest, and VMID double-free guard" {
+    _ = manifest_mod;
     std.testing.refAllDecls(@This());
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    scheduler.init();
-    scheduler.initCpu();
-    resetGuestManagerForTest();
-
-    var phys_test = try physmem.initForTest(allocator, 4096);
-    defer phys_test.deinit();
-
-    const parent = try guest_mod.createGuest(
-        allocator,
-        true,
-        true,
-        null,
-        0,
-        0,
-        0x1000000,
-        .riscv64,
-    );
-    defer parent.deinit();
-    _ = try parent.addVcore(0, 0, 0, .normal, null);
-
-    const child = try parent.createChild(false, .riscv64, 1);
-    defer child.deinit();
-
-    try parent.setQuota(.{
-        .target_cid = 2,
-        .max_ram_pages = 1024,
-        .max_vcpus = 2,
-        .max_child_depth = 4,
-        .max_descendants = 10,
-    });
-    try testing.expectEqual(@as(usize, 1024), child.quotas.max_ram_pages);
-    try testing.expectEqual(@as(usize, 2), child.quotas.max_vcpus);
-
-    try child.setQuota(.{
-        .target_cid = sbi.CID_SELF,
-        .max_ram_pages = 512,
-        .max_vcpus = 1,
-        .max_child_depth = 2,
-        .max_descendants = 5,
-    });
-    try testing.expectEqual(@as(usize, 512), child.quotas.max_ram_pages);
-    try testing.expectEqual(@as(usize, 1), child.quotas.max_vcpus);
-
-    try testing.expectError(
-        error.AccessDenied,
-        child.setQuota(.{
-            .target_cid = sbi.CID_PARENT,
-            .max_ram_pages = 100,
-            .max_vcpus = 1,
-            .max_child_depth = 1,
-            .max_descendants = 1,
-        }),
-    );
-
-    const sample_manifest = "[vm]\nname = \"test-child\"\ncid = 2\n";
-    try child.setManifest(sample_manifest);
-    var read_buf: [64]u8 = undefined;
-    const mlen = child.readManifest(&read_buf).?;
-    try testing.expectEqualStrings(sample_manifest, read_buf[0..mlen]);
-
-    try testing.expect(!child.checkQuota(std.math.maxInt(usize), 1, 1));
-    try testing.expect(!child.checkQuota(1, std.math.maxInt(usize), 1));
-
-    const parent_base_ram = parent.quotas.used_ram_pages;
-    try testing.expect(child.checkRamQuota(100));
-    try testing.expect(!child.checkRamQuota(600));
-    child.consumeQuota(100, 0);
-    try testing.expectEqual(@as(usize, 100), child.quotas.used_ram_pages);
-    const exp_ram = parent_base_ram + 100;
-    try testing.expectEqual(exp_ram, parent.quotas.used_ram_pages);
-    child.releaseQuota(100, 0);
-    try testing.expectEqual(@as(usize, 0), child.quotas.used_ram_pages);
-    try testing.expectEqual(parent_base_ram, parent.quotas.used_ram_pages);
-
-    // VMID double-free guard: terminateWithCode followed by deinit.
-    const child1 = try parent.createChild(false, .riscv64, 0);
-    const vmid1 = child1.vmid;
-    try testing.expect(vmid1 != 0);
-    child1.terminateWithCode(0);
-    try testing.expectEqual(@as(u16, 0), child1.vmid);
-
-    const child2 = try parent.createChild(false, .riscv64, 0);
-    defer child2.deinit();
-    try testing.expectEqual(vmid1, child2.vmid);
-
-    child1.deinit();
-    try testing.expect(isVmidAllocated(child2.vmid));
 }

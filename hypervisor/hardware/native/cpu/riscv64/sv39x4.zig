@@ -243,9 +243,26 @@ pub const PageTable = struct {
     pub fn resolveFault(self: *PageTable, gpa: usize, is_trusted: bool) !void {
         const gpa_page = std.mem.alignBackward(usize, gpa, physmem.PageSize);
 
+        if (self.walk(gpa, false)) |pte_ptr| {
+            if ((pte_ptr.* & PTEFlags.valid) != 0) return;
+        } else |_| {}
+
+        const dram_limit = if (self.root_range_size > 0)
+            self.root_range_size
+        else
+            DEFAULT_GUEST_DRAM_LIMIT;
+
+        const in_guest_dram = (self.root_base_gpa > 0 and
+            gpa >= self.root_base_gpa and
+            (gpa - self.root_base_gpa) < dram_limit) or
+            (self.root_base_gpa == 0 and
+                physmem.isRam(gpa, physmem.PageSize) and
+                gpa < dram_limit);
+
         // Identity-map standard MMIO/peripheral regions (below RAM or PCIe).
-        if (gpa < physmem.getRamBase() or
-            physmem.isMmio(gpa, physmem.PageSize))
+        if (!in_guest_dram and
+            (gpa < physmem.getRamBase() or
+                physmem.isMmio(gpa, physmem.PageSize)))
         {
             if (!is_trusted) return error.AccessDenied;
             try self.mapPage(
@@ -257,20 +274,8 @@ pub const PageTable = struct {
             return;
         }
 
-        if (self.walk(gpa, false)) |pte_ptr| {
-            if ((pte_ptr.* & PTEFlags.valid) != 0) return;
-        } else |_| {}
-
-        const dram_limit = if (self.root_range_size > 0)
-            self.root_range_size
-        else
-            DEFAULT_GUEST_DRAM_LIMIT;
-
         // Root VM pre-allocated DRAM mapping.
-        if (self.root_base_hpa > 0 and
-            gpa >= self.root_base_gpa and
-            (gpa - self.root_base_gpa) < dram_limit)
-        {
+        if (self.root_base_hpa > 0 and in_guest_dram) {
             const offset = gpa - self.root_base_gpa;
             const hpa = std.math.add(usize, self.root_base_hpa, offset) catch
                 return error.UnhandledFault;
@@ -292,9 +297,7 @@ pub const PageTable = struct {
         }
 
         // On-demand anonymous page allocation for guest DRAM.
-        if (gpa >= self.root_base_gpa and
-            (gpa - self.root_base_gpa) < dram_limit)
-        {
+        if (in_guest_dram) {
             const new_hpa = try physmem.allocPage();
             errdefer physmem.freePage(new_hpa);
             @memset(

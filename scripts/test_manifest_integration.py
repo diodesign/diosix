@@ -261,7 +261,7 @@ def run_integration_test():
         # 14. Image Repository & Dual Storage (CD-ROM + Target Disk).
         print("\n==> [14/19] Testing `dsx image` & `--disk` + `--cdrom`...")
         run(
-            "dsx image import /var/lib/diosix/images/linux-guest.elf "
+            "dsx image import /var/lib/diosix/images/diosix-linux.elf "
             "--name test-installer.elf",
             r"Image 'test-installer\.elf' successfully imported into "
             r"/var/lib/diosix/images/test-installer\.elf\.",
@@ -270,18 +270,18 @@ def run_integration_test():
         run(
             "dsx run test-installer --name installer-job "
             "--disk install-target "
-            "--cdrom /var/lib/diosix/images/linux-guest.elf "
+            "--cdrom /var/lib/diosix/images/diosix-linux.elf "
             "--vcpus 1 --ram 128M",
             r"Child VM 'installer-job' \(CID \d+, 1 vCPUs, 128 MB RAM, "
             r"Disk: /var/lib/diosix/disks/install-target\.img, "
-            r"CD-ROM: /var/lib/diosix/images/linux-guest\.elf, "
+            r"CD-ROM: /var/lib/diosix/images/diosix-linux\.elf, "
             r"IP: 10\.0\.3\.\d+\) started in background\.",
             timeout=25,
         )
         run(
             "dsx info installer-job",
             r"Storage disk\s+:\s+/var/lib/diosix/disks/install-target\.img",
-            r"CD-ROM media\s+:\s+/var/lib/diosix/images/linux-guest\.elf",
+            r"CD-ROM media\s+:\s+/var/lib/diosix/images/diosix-linux\.elf",
         )
         run(
             "dsx stop installer-job",

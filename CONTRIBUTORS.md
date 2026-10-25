@@ -1,20 +1,35 @@
 # Diosix project contributors
 
-The Diosix project is built by a community of contributors. Under the terms of
-the MIT License, each contributor retains the copyright to their respective
-project source code contributions. All Diosix source code and compiled binaries
-are distributed under the MIT License.
+Unless otherwise stated, all Diosix source code and provided binaries are
+distributed under the MIT License. Each contributor retains the copyright
+of their respective project contributions.
 
-## Diosix source code copyright holders
+## Copyright holders
 
-Copyright &copy; 2024-2026 Chris Williams.
+Hypervisor, tooling, build infrastructure, website, documentation:
+*  Copyright &copy; 2024-2026 Chris Williams
+
+Questrial typeface (SIL Open Font License):
+*  Copyright 2011 The Questrial Project Authors
 
 ## Future contributors
 
 New contributors are invited to add their names to this list when submitting
-their first contribution. By submitting a contribution to the Diosix project,
-you agree to license your source code contributions under the
-[MIT License](LICENSE.md).
+their first contribution. Except as expressly agreed otherwise in writing
+prior to submission, any contribution submitted by you to this project shall
+be licensed under the [MIT License](LICENSE,md). You represent that you have
+the authority to license the contribution under these terms.
+
+## Additional credits
+
+The diosix.org website illustration is a combination of artwork provided by
+[Katerina Limpitsouni](https://undraw.co/license) and
+[RISC-V International](https://riscv.org/about/brand-guidelines/), and is
+used as permitted.
+
+The Diosix boot jingle was created by
+[Juan Martinez](https://www.youtube.com/@jmartimusic) and used under
+[license](https://creativecommons.org/publicdomain/zero/1.0/).
 
 ## Stewardship
 

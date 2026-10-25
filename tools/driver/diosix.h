@@ -184,6 +184,8 @@ struct quota_args {
     uint64_t max_vcpus;
     uint64_t max_child_depth;
     uint64_t max_descendants;
+    uint64_t pcpu_quota_pct;
+    uint64_t logical_ram_pages;
 };
 
 struct manifest_args {
@@ -215,7 +217,7 @@ struct guest_info {
     uint8_t  is_root;
     uint8_t  target_arch;
     uint8_t  assigned_cid;
-    uint8_t  _pad[4];
+    uint32_t cpu_khz_ticks;
     uint64_t vcpus;
     uint64_t self_ram_pages;
     uint64_t used_vcpus;
@@ -223,6 +225,9 @@ struct guest_info {
     uint64_t used_ram_pages;
     uint64_t max_ram_pages;
     uint64_t child_count;
+    uint32_t pcpu_quota_pct;
+    uint32_t delegated_pcpu_pct;
+    uint64_t delegated_ram_pages;
 };
 
 _Static_assert(sizeof(struct charter_args) == 64, "charter_args ABI size");
@@ -244,11 +249,11 @@ _Static_assert(
     sizeof(struct wait_event_args) == 40,
     "wait_event_args ABI size"
 );
-_Static_assert(sizeof(struct quota_args) == 40, "quota_args ABI size");
+_Static_assert(sizeof(struct quota_args) == 56, "quota_args ABI size");
 _Static_assert(sizeof(struct manifest_args) == 32, "manifest_args ABI size");
 _Static_assert(sizeof(struct run_args) == 56, "run_args ABI size");
 _Static_assert(sizeof(struct terminate_args) == 16, "terminate_args ABI size");
-_Static_assert(sizeof(struct guest_info) == 80, "guest_info ABI size");
+_Static_assert(sizeof(struct guest_info) == 96, "guest_info ABI size");
 
 void diosix_child_mem_lock(void);
 void diosix_child_mem_unlock(void);

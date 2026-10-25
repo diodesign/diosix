@@ -36,6 +36,22 @@ pub const MAX_CATALOG_ENTRIES: usize = 32;
 
 pub const OFFICIAL_CATALOG = [_]CatalogEntry{
     .{
+        .id = "diosix-linux",
+        .alias = "base-linux",
+        .title = "Diosix Base Linux",
+        .tier = "leaf",
+        .os_family = "linux",
+        .format = "elf",
+        .arch = "riscv64",
+        .default_vcpus = 2,
+        .default_ram_mb = 512,
+        .default_disk_mb = 1024,
+        .filename = "diosix-linux.elf",
+        .url = "https://images.diosix.org/26.2/riscv64/diosix-linux.elf",
+        .sha256 = "5123456789abcdef0123456789abcdef" ++
+            "0123456789abcdef0123456789abcdef",
+    },
+    .{
         .id = "steward",
         .alias = "steward-riscv64",
         .title = "Diosix tier-1 autonomic steward VM (whisper collective node)",
@@ -304,7 +320,6 @@ pub fn inferImageMetadata(
         .{ .id = "alpine", .tier = "leaf", .os_family = "linux" },
         .{ .id = "linux", .tier = "leaf", .os_family = "linux" },
         .{ .id = "vmlinux", .tier = "leaf", .os_family = "linux" },
-        .{ .id = "micro-guest", .tier = "leaf", .os_family = "diosix" },
     };
     for (table) |item| {
         if (std.mem.indexOf(u8, filename, item.id) != null) {

@@ -30,6 +30,7 @@ const HOST_FDT_PREFIXES = [_][]const u8{
     "virtio_mmio@",  "pci@",  "pcie@",  "serial@",
     "uart@",         "rtc@",  "flash@", "fw-cfg@",
     "platform-bus@", "plic@", "clint@", "aliases",
+    "cpu-map",
 };
 
 fn readBeU32(buf: []const u8, off: usize) u32 {
@@ -174,7 +175,11 @@ pub fn patchChildDtb(
                     {}
                     const prop_name = str_slice[0..str_len];
 
-                    const DtbProperty = enum { reg, @"stdout-path" };
+                    const DtbProperty = enum {
+                        reg,
+                        @"stdout-path",
+                        bootargs,
+                    };
                     if (std.meta.stringToEnum(DtbProperty, prop_name)) |prop| {
                         switch (prop) {
                             .reg => if (in_memory_node) {
@@ -201,6 +206,23 @@ pub fn patchChildDtb(
                                     FDT_ALIGN,
                                 );
                                 nopFdtRange(dtb, node_tag_offset, end_aligned);
+                            },
+                            .bootargs => {
+                                const child_args =
+                                    "console=hvc0 earlycon=sbi " ++
+                                    "rootfstype=ramfs cma=0M no4lvl " ++
+                                    "lpj=50000 " ++
+                                    "rcupdate.rcu_cpu_stall_suppress=1 " ++
+                                    "unaligned_scalar_speed=fast";
+                                if (prop_len > child_args.len) {
+                                    const prop_slice =
+                                        dtb[offset .. offset + prop_len];
+                                    @memset(prop_slice, 0);
+                                    @memcpy(
+                                        prop_slice[0..child_args.len],
+                                        child_args,
+                                    );
+                                }
                             },
                         }
                     }

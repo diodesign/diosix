@@ -22,7 +22,7 @@ start() {
     fi
 
     start-stop-daemon -S -q -p /var/run/dropbear.pid \
-        --exec /usr/sbin/dropbear -- -R -s -g -p 22
+        --exec /usr/sbin/dropbear -- -r "$HOST_KEY" -s -g -p 22
     [ $? = 0 ] && echo "OK" || echo "FAIL"
 }
 

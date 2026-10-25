@@ -37,7 +37,7 @@ test "manifest: TOML parsing and capability attenuation roundtrip" {
         \\
         \\[domains.user]
         \\name = "user-domain"
-        \\image = "/var/lib/diosix/images/linux-guest.elf"
+        \\image = "/var/lib/diosix/images/diosix-linux.elf"
         \\vcpus = 4
         \\ram = "14GiB"
         \\can_require = ["net.*", "gui.*", "fs.*"]
@@ -127,7 +127,7 @@ test "manifest: private IP address parsing and attenuation propagation" {
         \\
         \\[domains.user]
         \\name = "user-domain"
-        \\image = "/var/lib/diosix/images/linux-guest.elf"
+        \\image = "/var/lib/diosix/images/diosix-linux.elf"
         \\vcpus = 2
         \\ram = "256MB"
         \\ip = "10.0.3.3"
@@ -168,7 +168,7 @@ test "manifest: domain storage and disk attenuation propagation" {
         \\
         \\[domains.user]
         \\name = "user-domain"
-        \\image = "/var/lib/diosix/images/linux-guest.elf"
+        \\image = "/var/lib/diosix/images/diosix-linux.elf"
         \\vcpus = 2
         \\ram = "512MB"
         \\disk = "/var/lib/diosix/disks/user.img"

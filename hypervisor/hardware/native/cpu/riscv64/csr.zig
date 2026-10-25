@@ -23,7 +23,8 @@ pub var test_mepc: usize = 0;
 pub var test_mtval: usize = 0;
 pub var test_mie: usize = 0;
 pub var test_mip: usize = 0;
-pub var test_misa: usize = MISA_MXL_64 | IsaExtension.h | IsaExtension.gc;
+pub var test_misa: usize =
+    MISA_MXL_64 | IsaExtension.h | IsaExtension.gc | IsaExtension.v;
 pub var test_hstatus: usize = 0;
 pub var test_hgatp: usize = 0;
 pub var test_menvcfg: usize = 0;
@@ -37,7 +38,7 @@ pub fn resetMockCsrs() void {
     test_mtval = 0;
     test_mie = 0;
     test_mip = 0;
-    test_misa = MISA_MXL_64 | IsaExtension.h | IsaExtension.gc;
+    test_misa = MISA_MXL_64 | IsaExtension.h | IsaExtension.gc | IsaExtension.v;
     test_hstatus = 0;
     test_hgatp = 0;
     test_menvcfg = 0;

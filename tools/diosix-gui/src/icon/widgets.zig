@@ -386,6 +386,65 @@ pub fn renderDropdown(
     );
 }
 
+pub fn renderProgressBar(
+    self: *const Icon,
+    surface: *fb.Surface,
+    sx: i32,
+    sy: i32,
+    fg_color: u32,
+) void {
+    const line_h = font.getActiveLineHeight();
+    const pct: u8 = @intCast(std.math.clamp(self.slider_val, 0, 100));
+    var pct_buf: [16]u8 = undefined;
+    const pct_str = std.fmt.bufPrint(&pct_buf, "{d}%", .{pct}) catch "0%";
+    const max_pct_w = font.measureString("100%");
+    const gap: u32 = @max(6, (line_h * 6) / 18);
+    const label_reserve: u32 = max_pct_w + gap;
+
+    const bar_w: u32 = if (self.width > label_reserve + 16)
+        self.width - label_reserve
+    else
+        @max(12, self.width);
+    const bar_h: u32 = @max(8, (line_h * 10 + 9) / 18);
+    const bar_y = sy + @divTrunc(
+        @as(i32, @intCast(self.height)) - @as(i32, @intCast(bar_h)),
+        2,
+    );
+    const radius: u32 = @max(3, bar_h / 2);
+
+    surface.drawRoundedTranslucentBox(
+        boxOf(sx, bar_y, bar_w, bar_h),
+        radius,
+        fb.Color.TRACK_BG,
+        240,
+        fb.Color.GLASS_BORDER,
+    );
+
+    if (pct > 0) {
+        const fill_w: u32 = @max(
+            radius * 2,
+            (bar_w * @as(u32, pct)) / 100,
+        );
+        const clamped_fill: u32 = @min(bar_w, fill_w);
+        surface.drawRoundedTranslucentBox(
+            boxOf(sx, bar_y, clamped_fill, bar_h),
+            radius,
+            fb.Color.THUMB_BG,
+            255,
+            null,
+        );
+    }
+
+    if (self.width > label_reserve + 16) {
+        const text_x = sx + @as(i32, @intCast(bar_w + gap));
+        const text_y = sy + @divTrunc(
+            @as(i32, @intCast(self.height)) - @as(i32, @intCast(line_h)),
+            2,
+        );
+        drawShadowText(surface, pct_str, text_x, text_y, fg_color);
+    }
+}
+
 test {
     std.testing.refAllDecls(@This());
 }

@@ -16,10 +16,38 @@ const gui_mod = @import("gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 pub const panes_modal = @import("panes/modal.zig");
 pub const panes_config = @import("panes/config.zig");
+pub const panes_guests = @import("panes/guests.zig");
+pub const panes_create_vm = @import("panes/create_vm.zig");
+pub const panes_tasks = @import("panes/tasks.zig");
+pub const panes_quota = @import("panes/quota_controls.zig");
+
+pub const ICON_GUEST_QUOTA_HDR_ID = panes_quota.ICON_GUEST_QUOTA_HDR_ID;
+pub const ICON_GUEST_PCPU_QUOTA_LBL_ID =
+    panes_quota.ICON_GUEST_PCPU_QUOTA_LBL_ID;
+pub const ICON_GUEST_PCPU_QUOTA_SLIDER_ID =
+    panes_quota.ICON_GUEST_PCPU_QUOTA_SLIDER_ID;
+pub const ICON_GUEST_RAM_QUOTA_LBL_ID = panes_quota.ICON_GUEST_RAM_QUOTA_LBL_ID;
+pub const ICON_GUEST_RAM_QUOTA_SLIDER_ID =
+    panes_quota.ICON_GUEST_RAM_QUOTA_SLIDER_ID;
+pub const ICON_CREATE_VM_QUOTA_INFO_ID =
+    panes_quota.ICON_CREATE_VM_QUOTA_INFO_ID;
+pub const ICON_CREATE_VM_PCPU_LBL_ID = panes_quota.ICON_CREATE_VM_PCPU_LBL_ID;
+pub const ICON_CREATE_VM_PCPU_SLIDER_ID =
+    panes_quota.ICON_CREATE_VM_PCPU_SLIDER_ID;
+pub const ICON_CREATE_VM_RAM_QUOTA_LBL_ID =
+    panes_quota.ICON_CREATE_VM_RAM_QUOTA_LBL_ID;
+pub const ICON_CREATE_VM_RAM_QUOTA_SLIDER_ID =
+    panes_quota.ICON_CREATE_VM_RAM_QUOTA_SLIDER_ID;
+pub const ICON_CREATE_VM_NAME_LBL_ID = panes_quota.ICON_CREATE_VM_NAME_LBL_ID;
+pub const ICON_CREATE_VM_NAME_INPUT_ID =
+    panes_quota.ICON_CREATE_VM_NAME_INPUT_ID;
 
 pub const showPowerModal = panes_modal.showPowerModal;
 pub const buildOskWindow = panes_modal.buildOskWindow;
 pub const handleOskAction = panes_modal.handleOskAction;
+pub const handleKeyChar = panes_modal.panes_osk.handleKeyChar;
+pub const handleKeySpecial = panes_modal.panes_osk.handleKeySpecial;
+pub const handleEvdevKey = panes_modal.panes_osk.handleEvdevKey;
 pub const showWelcomeModal = panes_modal.showWelcomeModal;
 pub const showTourModal = panes_modal.showTourModal;
 
@@ -29,6 +57,29 @@ pub const toggleResolutionDropdown = panes_config.toggleResolutionDropdown;
 pub const toggleDepthDropdown = panes_config.toggleDepthDropdown;
 pub const toggleScaleDropdown = panes_config.toggleScaleDropdown;
 pub const closeSchemeDropdown = panes_config.closeSchemeDropdown;
+
+pub const buildGuestsPane = panes_guests.buildGuestsPane;
+pub const buildGuestDetailPane = panes_guests.buildGuestDetailPane;
+pub const updateGuestsPaneData = panes_guests.updateGuestsPaneData;
+pub const selectRunningGuest = panes_guests.selectRunningGuest;
+pub const computeGuestPaneGeometry = panes_guests.computeGuestPaneGeometry;
+
+pub const buildCreateVmPane = panes_create_vm.buildCreateVmPane;
+pub const buildCreateVmDetailPane = panes_create_vm.buildCreateVmDetailPane;
+pub const selectCreateVmImage = panes_create_vm.selectCreateVmImage;
+
+pub const WIN_TASK_BASE_ID = panes_tasks.WIN_TASK_BASE_ID;
+pub const ICON_TASK_LABEL_ID = panes_tasks.ICON_TASK_LABEL_ID;
+pub const ICON_TASK_PROGRESS_ID = panes_tasks.ICON_TASK_PROGRESS_ID;
+pub const ICON_TASK_DISMISS_ID = panes_tasks.ICON_TASK_DISMISS_ID;
+pub const isTaskWindowId = panes_tasks.isTaskWindowId;
+pub const getBaseMaxPaneHeight = panes_tasks.getBaseMaxPaneHeight;
+pub const getFooterReserveHeight = panes_tasks.getFooterReserveHeight;
+pub const getMaxPaneHeight = panes_tasks.getMaxPaneHeight;
+pub const clampWindowToTaskStack = panes_tasks.clampWindowToTaskStack;
+pub const syncTaskPanes = panes_tasks.syncTaskPanes;
+pub const spawnBackgroundTask = panes_tasks.spawnBackgroundTask;
+pub const pollBackgroundTasks = panes_tasks.pollBackgroundTasks;
 
 const BORDER_GAP = gui_mod.BORDER_GAP;
 const WIN_MENU_ID = gui_mod.WIN_MENU_ID;
@@ -169,14 +220,12 @@ pub fn layoutStatusPane(self: *DiosixGui) void {
 
     const bot_pad = self.scalePx(20);
     win.content_bottom_pad = bot_pad;
-    const footer_reserve =
-        self.scalePx(40) + @as(u32, @intCast(BORDER_GAP * 3));
-    const max_h = if (self.height > footer_reserve)
-        self.height - footer_reserve
-    else
-        self.height;
     const needed_h: u32 = @as(u32, @intCast(@max(0, cur_y))) + bot_pad;
-    win.height = @min(@max(self.scalePx(224), needed_h), max_h);
+    win.natural_height = @min(
+        @max(self.scalePx(224), needed_h),
+        getBaseMaxPaneHeight(self),
+    );
+    win.height = @min(win.natural_height, getMaxPaneHeight(self));
 }
 
 pub fn buildStatusPane(self: *DiosixGui) !void {
@@ -367,5 +416,9 @@ pub fn updateStatusPaneData(self: *DiosixGui) void {
 test {
     _ = panes_modal;
     _ = panes_config;
+    _ = panes_guests;
+    _ = panes_create_vm;
+    _ = panes_tasks;
+    _ = panes_quota;
     std.testing.refAllDecls(@This());
 }

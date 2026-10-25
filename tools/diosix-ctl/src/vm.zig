@@ -38,6 +38,8 @@ const printGuestLine = common.printGuestLine;
 
 const QuotaOption = enum {
     @"--ram",
+    @"--pcpu",
+    @"--pcpu-quota",
     @"--vcpus",
     @"--depth",
     @"--descendants",
@@ -51,6 +53,7 @@ pub fn cmdQuota(
     argv: []const [*:0]const u8,
 ) !void {
     var ram_pages: usize = 0;
+    var pcpu_pct: usize = 0;
     var vcpus: usize = 0;
     var depth: usize = 0;
     var descendants: usize = 0;
@@ -77,15 +80,47 @@ pub fn cmdQuota(
                         return;
                     }
                     i += 1;
-                    const mb = std.fmt.parseInt(
-                        usize,
-                        std.mem.span(argv[i]),
-                        10,
-                    ) catch {
-                        printStr("Error: Invalid numeric value for '--ram'.\n");
-                        return;
+                    const raw_val = std.mem.span(argv[i]);
+                    const mb = std.fmt.parseInt(usize, raw_val, 10) catch blk: {
+                        const parsed = parseMemorySizeMb(raw_val);
+                        if (parsed == 0) {
+                            printStr(
+                                "Error: Invalid numeric value for '--ram'.\n",
+                            );
+                            return;
+                        }
+                        break :blk parsed;
                     };
                     ram_pages = (mb * KB_PER_MB) / PAGE_SIZE_KB;
+                    has_update = true;
+                },
+                .@"--pcpu", .@"--pcpu-quota" => {
+                    if (i + 1 >= argv.len) {
+                        printStr(
+                            "Error: '--pcpu' requires a percentage (1-90).\n",
+                        );
+                        return;
+                    }
+                    i += 1;
+                    const raw_pct = std.mem.trimEnd(
+                        u8,
+                        std.mem.span(argv[i]),
+                        "%",
+                    );
+                    pcpu_pct = std.fmt.parseInt(usize, raw_pct, 10) catch {
+                        printStr(
+                            "Error: Invalid numeric value for '--pcpu'.\n",
+                        );
+                        return;
+                    };
+                    if (pcpu_pct == 0 or
+                        pcpu_pct > api.MAX_CHILD_PCPU_QUOTA_PCT)
+                    {
+                        printStr(
+                            "Error: '--pcpu' must be between 1 and 90%.\n",
+                        );
+                        return;
+                    }
                     has_update = true;
                 },
                 .@"--vcpus" => {
@@ -148,8 +183,8 @@ pub fn cmdQuota(
             }
         } else if (std.mem.startsWith(u8, flag, "-")) {
             common.printFmt(
-                "Error: Unknown option '{s}'. Available: --ram, --vcpus, " ++
-                    "--depth, --descendants.\n",
+                "Error: Unknown option '{s}'. Available: --pcpu, --ram, " ++
+                    "--vcpus, --depth, --descendants.\n",
                 .{flag},
             );
             return;
@@ -166,57 +201,41 @@ pub fn cmdQuota(
                 (info.max_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
             const self_ram_mb =
                 (info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
+            const del_ram_mb =
+                (info.delegated_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
+            const avail_ram_mb = max_ram_mb -| @max(del_ram_mb, used_ram_mb);
             const self_vcpus = if (info.vcpus > 0) info.vcpus else 4;
-            const child_vcpus = if (info.used_vcpus >= self_vcpus)
-                info.used_vcpus - self_vcpus
+            const pcpu_q: u32 = if (info.pcpu_quota_pct > 0)
+                info.pcpu_quota_pct
             else
-                0;
-            const child_ram_mb = if (used_ram_mb >= self_ram_mb)
-                used_ram_mb - self_ram_mb
-            else
-                0;
+                100;
+            const del_pcpu: u32 = @min(
+                info.delegated_pcpu_pct,
+                api.MAX_CHILD_PCPU_QUOTA_PCT,
+            );
+            const ret_pcpu: u32 = 100 -| del_pcpu;
 
-            const has_caps =
-                max_ram_mb > 0 and info.max_vcpus < std.math.maxInt(usize);
-            const cap_fmt =
+            const q_fmt =
                 "Resource Quotas (CID {d}):\n" ++
-                "  Virtual CPUs : {d} used / {d} max " ++
-                "({d} self, {d} allocated to children)\n" ++
-                "  RAM Capacity : {d} MB used / {d} MB max " ++
-                "({d} MB self, {d} MB allocated to children)\n" ++
-                "  Child VMs    : {d} active\n";
-            const uncap_fmt =
-                "Resource Quotas (CID {d}):\n" ++
-                "  Virtual CPUs : {d} used " ++
-                "({d} self, {d} allocated to children)\n" ++
-                "  RAM Capacity : {d} MB used " ++
-                "({d} MB self, {d} MB allocated to children)\n" ++
-                "  Child VMs    : {d} active\n";
-            if (has_caps) {
-                common.printFmt(cap_fmt, .{
-                    target_cid,
-                    info.used_vcpus,
-                    info.max_vcpus,
-                    self_vcpus,
-                    child_vcpus,
-                    used_ram_mb,
-                    max_ram_mb,
-                    self_ram_mb,
-                    child_ram_mb,
-                    info.child_count,
-                });
-            } else {
-                common.printFmt(uncap_fmt, .{
-                    target_cid,
-                    info.used_vcpus,
-                    self_vcpus,
-                    child_vcpus,
-                    used_ram_mb,
-                    self_ram_mb,
-                    child_ram_mb,
-                    info.child_count,
-                });
-            }
+                "  Logical Config : {d} vCPUs, {d} MB RAM\n" ++
+                "  pCPU Quota     : {d}% ({d}% delegated to children, " ++
+                "{d}% retained)\n" ++
+                "  RAM Quota Pool : {d} MB in use / {d} MB max " ++
+                "({d} MB delegated, {d} MB available)\n" ++
+                "  Child VMs      : {d} active\n";
+            common.printFmt(q_fmt, .{
+                target_cid,
+                self_vcpus,
+                self_ram_mb,
+                pcpu_q,
+                del_pcpu,
+                ret_pcpu,
+                used_ram_mb,
+                max_ram_mb,
+                del_ram_mb,
+                avail_ram_mb,
+                info.child_count,
+            });
             return;
         } else |err| {
             printApiError("Query quotas", err);
@@ -224,12 +243,14 @@ pub fn cmdQuota(
         }
     }
 
-    client.setQuota(
+    client.setQuotaWithPcpu(
         target_cid,
         ram_pages,
         vcpus,
         depth,
         descendants,
+        pcpu_pct,
+        0,
     ) catch |err| {
         printApiError("Set quota", err);
         return;

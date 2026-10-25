@@ -73,6 +73,10 @@ pub fn promoteStandbyRoot(
     standby.quotas.current_depth = 0;
     standby.quotas.max_ram_pages = old_root.quotas.max_ram_pages;
     standby.quotas.max_vcpus = old_root.quotas.max_vcpus;
+    standby.quotas.pcpu_quota_pct = 100;
+    standby.quotas.delegated_pcpu_pct = 0;
+    standby.quotas.committed_ram_pages = 0;
+    standby.quotas.delegated_ram_pages = 0;
     standby.quotas.max_child_depth = old_root.quotas.max_child_depth;
     standby.quotas.max_descendants = old_root.quotas.max_descendants;
 
@@ -130,6 +134,13 @@ pub fn promoteStandbyRoot(
             standby.quotas.used_ram_pages,
             child.quotas.used_ram_pages,
         ) catch standby.quotas.max_ram_pages;
+        standby.quotas.delegated_pcpu_pct = @min(
+            quota_mod.MAX_CHILD_PCPU_QUOTA_PCT,
+            standby.quotas.delegated_pcpu_pct +| child.quotas.pcpu_quota_pct,
+        );
+        standby.quotas.delegated_ram_pages =
+            standby.quotas.delegated_ram_pages +|
+            child.quotas.committed_ram_pages;
     }
 
     const main = @import("../../main.zig");

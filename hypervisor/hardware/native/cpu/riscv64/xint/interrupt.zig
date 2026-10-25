@@ -60,24 +60,10 @@ pub fn handleInterrupt(irq: xint.IRQ, context: *riscv.ThreadContext) void {
 fn handleTimerInterrupt(pcpu: *riscv.CpuContext) void {
     riscv.setTimer(riscv.TIMER_INFINITY);
     var next_timer: u64 = riscv.TIMER_INFINITY;
+    var woke_any = false;
 
     if (!clearClaimedExternalIrq(pcpu)) {
-        // Physical external interrupt is still pending on this hart.
-        if (pcpu.active_vcore) |opaque_vc| {
-            const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-            vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
-            if (riscv.hasHExtension()) {
-                riscv.writeHvip(riscv.readHvip() | riscv.HVIP.VSEIP);
-            }
-        } else if (main.global_root_vm) |g| {
-            if (g.findVcore(pcpu.hardware_hart_id)) |vc| {
-                vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
-                if (vc.tryWake()) {
-                    vc.blocked_on_cpu = null;
-                    scheduler.queue(vc);
-                }
-            }
-        }
+        if (deliverRootExternalIrq(pcpu)) woke_any = true;
         const ext_poll = riscv.readTime() + riscv.EXT_IRQ_POLL_TICKS;
         if (ext_poll < next_timer) next_timer = ext_poll;
     }
@@ -89,18 +75,23 @@ fn handleTimerInterrupt(pcpu: *riscv.CpuContext) void {
     }
 
     // 2. Deliver to any blocked vCores whose timers expired.
-    wakeExpiredBlockedVCores(pcpu, &next_timer);
+    if (wakeExpiredBlockedVCores(pcpu, &next_timer)) woke_any = true;
 
     riscv.setTimer(next_timer);
 
-    // Signal preemption to emulated vCPU or reschedule on timeslice expiry.
+    // Signal preemption to emulated vCPU or reschedule on timeslice/wake.
     if (pcpu.active_vcore) |opaque_vc| {
         const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
         if (active_vc.exec_path == .emulated) {
             active_vc.exec_path.emulated.preempt_pending = true;
         }
         const elapsed = riscv.readTime() -% active_vc.last_dispatched_time;
-        if (elapsed >= riscv.TIMESLICE_TICKS) {
+        const local_waiting = pcpu.run_queue_count > 0 and
+            !active_vc.guest.is_root;
+        if (local_waiting or
+            (woke_any and pcpu.run_queue_count > 0) or
+            elapsed >= riscv.TIMESLICE_TICKS)
+        {
             scheduler.schedule();
         }
     } else {
@@ -136,12 +127,11 @@ fn updateActiveVCoreTimer(vc: *vcore.VirtualCore, next_timer: *u64) void {
     }
 }
 
-const SSTC_WFI_POLL_TICKS: u64 = 5_000;
-
-fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) void {
+fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) bool {
     const b_timer_prev = pcpu.blocked_lock.lock();
     defer pcpu.blocked_lock.unlock(b_timer_prev);
 
+    var woke_any = false;
     var it = pcpu.blocked_queue.start;
     while (it) |node| {
         const next_it = node.next;
@@ -196,12 +186,6 @@ fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) void {
                 (now -% vc.last_queued_time >= riscv.TIMESLICE_TICKS))
             {
                 wake = true;
-            } else if (!wake and
-                !config.legacy_cpu and
-                riscv.riscv_supports_sstc)
-            {
-                const poll_target = now + SSTC_WFI_POLL_TICKS;
-                if (poll_target < next_timer.*) next_timer.* = poll_target;
             }
         } else if (!wake and vc.exec_path == .emulated) {
             if (now -% vc.last_queued_time >= riscv.TIMESLICE_TICKS) {
@@ -215,10 +199,12 @@ fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) void {
             @atomicStore(bool, &vc.wfi_blocked, false, .release);
             vc.state = .ready;
             scheduler.queue(vc);
+            woke_any = true;
         }
 
         it = next_it;
     }
+    return woke_any;
 }
 
 fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
@@ -230,6 +216,7 @@ fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
     }
     pcpu.gstage_dirty = true;
 
+    var woke_blocked = false;
     const b_swi_prev = pcpu.blocked_lock.lock();
     var it = pcpu.blocked_queue.start;
     while (it) |node| {
@@ -253,6 +240,7 @@ fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
             @atomicStore(bool, &vc.wfi_blocked, false, .release);
             vc.state = .ready;
             scheduler.queue(vc);
+            woke_blocked = true;
         }
         it = next_it;
     }
@@ -260,6 +248,13 @@ fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
 
     if (pcpu.active_vcore) |opaque_vc| {
         const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+        if (active_vc.state == .stopped or
+            active_vc.getGuest().state != .valid)
+        {
+            scheduler.schedule();
+            return;
+        }
+        var got_guest_ipi = false;
         if (active_vc.exec_path == .emulated) {
             active_vc.exec_path.emulated.preempt_pending = true;
         } else {
@@ -271,6 +266,7 @@ fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
                 .acq_rel,
             )) {
                 active_vc.getNativeMachine().hvip |= riscv.HVIP.VSSIP;
+                got_guest_ipi = true;
             }
             if (riscv.hasHExtension()) {
                 riscv.writeHvip(active_vc.getNativeMachine().hvip);
@@ -284,17 +280,31 @@ fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
                 riscv.writeMip(riscv.readMip() | ssip_bit);
             }
         }
+        const now = riscv.readTime();
+        const elapsed = now -% active_vc.last_dispatched_time;
+        const local_waiting = pcpu.run_queue_count > 0 and
+            !active_vc.guest.is_root;
+        if (woke_blocked or
+            local_waiting or
+            elapsed >= riscv.TIMESLICE_TICKS or
+            (!got_guest_ipi and
+                !scheduler.isWithinPcpuQuota(active_vc.guest, now)))
+        {
+            scheduler.schedule();
+        }
+    } else {
+        scheduler.schedule();
     }
-
-    scheduler.schedule();
 }
 
-fn handleExternalInterrupt(pcpu: *riscv.CpuContext) void {
+pub fn deliverRootExternalIrq(pcpu: *riscv.CpuContext) bool {
+    var woke = false;
     var target_vcore: ?*vcore.VirtualCore = null;
-    if (pcpu.active_vcore) |opaque_vc| {
-        target_vcore = @ptrCast(@alignCast(opaque_vc));
-    } else if (main.global_root_vm) |g| {
+    if (main.global_root_vm) |g| {
         target_vcore = g.findVcore(pcpu.hardware_hart_id);
+    } else if (pcpu.active_vcore) |opaque_vc| {
+        const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+        if (vc.guest.is_root) target_vcore = vc;
     }
 
     if (target_vcore) |tvc| {
@@ -302,6 +312,7 @@ fn handleExternalInterrupt(pcpu: *riscv.CpuContext) void {
         if (tvc.tryWake()) {
             tvc.blocked_on_cpu = null;
             scheduler.queue(tvc);
+            woke = true;
         }
 
         if (pcpu.active_vcore) |opaque_vc| {
@@ -326,9 +337,19 @@ fn handleExternalInterrupt(pcpu: *riscv.CpuContext) void {
     // Mask MEIE and SEIE in M-mode until the guest claims the PLIC interrupt.
     const ext_mask = ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
     riscv.writeMie(riscv.readMie() & ext_mask);
+    return woke;
+}
+
+fn handleExternalInterrupt(pcpu: *riscv.CpuContext) void {
+    const woke = deliverRootExternalIrq(pcpu);
     riscv.setTimer(riscv.readTime() + riscv.EXT_IRQ_POLL_TICKS);
 
-    if (pcpu.active_vcore == null) {
+    if (pcpu.active_vcore) |opaque_vc| {
+        const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
+        if (woke and !active_vc.guest.is_root) {
+            scheduler.schedule();
+        }
+    } else {
         scheduler.schedule();
     }
 }
@@ -368,31 +389,7 @@ pub fn programHardwareTimerAndMie(
         }
     }
 
-    const b_scan_prev = pcore.this().blocked_lock.lock();
-    var it = pcore.this().blocked_queue.start;
-    while (it) |node| {
-        const b_vc: *vcore.VirtualCore =
-            @ptrCast(@alignCast(node.contents));
-        if (b_vc.timer_scheduled and b_vc.timer_target < next_timer) {
-            next_timer = b_vc.timer_target;
-        }
-        if (b_vc.exec_path == .native) {
-            const b_gs = b_vc.getNativeGuestState();
-            if (b_gs.vstimecmp != 0 and
-                b_gs.vstimecmp != riscv.TIMER_INFINITY)
-            {
-                if (now >= b_gs.vstimecmp) {
-                    if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
-                        b_vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
-                    }
-                } else if (b_gs.vstimecmp < next_timer) {
-                    next_timer = b_gs.vstimecmp;
-                }
-            }
-        }
-        it = node.next;
-    }
-    pcore.this().blocked_lock.unlock(b_scan_prev);
+    _ = wakeExpiredBlockedVCores(pcore.this(), &next_timer);
 
     if (ext_irq_pending or (hvip_val.* & riscv.HVIP.VSEIP) != 0) {
         const ext_poll_target = riscv.readTime() + riscv.EXT_IRQ_POLL_TICKS;

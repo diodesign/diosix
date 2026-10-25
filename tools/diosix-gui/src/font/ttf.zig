@@ -10,7 +10,7 @@
 const std = @import("std");
 const vector = @import("../vector.zig");
 
-pub const QUESTRIAL_TTF: []const u8 = @embedFile("Questrial-Regular.ttf");
+pub const QUESTRIAL_TTF: []const u8 = @embedFile("questrial_ttf");
 
 const ON_CURVE_POINT: u8 = 0x01;
 const X_SHORT_VECTOR: u8 = 0x02;

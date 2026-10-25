@@ -38,6 +38,8 @@ const ImageAlias = enum {
     default,
     @"default.elf",
     @"default.bin",
+    @"diosix-linux",
+    @"diosix-linux.elf",
 };
 
 /// Reads `<dir>/<name><ext>` as a mapped file, or returns null when it cannot
@@ -82,7 +84,12 @@ pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
                     } else |_| {}
                 }
             },
-            .default, .@"default.elf", .@"default.bin" => {
+            .default,
+            .@"default.elf",
+            .@"default.bin",
+            .@"diosix-linux",
+            .@"diosix-linux.elf",
+            => {
                 for (default_paths) |cand| {
                     if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
                         return data;
@@ -316,6 +323,50 @@ pub fn resolveRunDisk(
         sys_cfg.default_disk_mb,
         final_disk_buf,
     ) orelse try copyPath(final_disk_buf, test_path);
+}
+
+pub fn checkChildResourceQuota(
+    client: *api.DiosixClient,
+    vm_name: []const u8,
+    vcpus: usize,
+    ram_mb: usize,
+    req_pcpu_pct: usize,
+    ram_quota_mb: usize,
+) ?usize {
+    const default_pcpu: usize = api.DEFAULT_CHILD_PCPU_QUOTA_PCT;
+    const max_pcpu: usize = api.MAX_CHILD_PCPU_QUOTA_PCT;
+    const info = client.getInfo(CID_SELF) catch {
+        const eff_pcpu = if (req_pcpu_pct > 0) req_pcpu_pct else default_pcpu;
+        common.printFmt(
+            "[25%] Allocating child VM '{s}' ({d} vCPUs, {d} MB RAM, " ++
+                "{d}% pCPU, {d} MB RAM quota)...\n",
+            .{ vm_name, vcpus, ram_mb, eff_pcpu, ram_quota_mb },
+        );
+        return eff_pcpu;
+    };
+
+    const del_pcpu: usize = @min(@as(usize, info.delegated_pcpu_pct), max_pcpu);
+    const avail_pcpu: usize = max_pcpu -| del_pcpu;
+    const eff_pcpu: usize = if (req_pcpu_pct > 0)
+        req_pcpu_pct
+    else
+        @min(default_pcpu, avail_pcpu);
+
+    if (avail_pcpu == 0 or eff_pcpu == 0 or eff_pcpu > avail_pcpu) {
+        common.printFmt(
+            "Error: Create child VM failed: pCPU quota exhausted " ++
+                "({d}%/{d}% delegated, {d}% requested).\n",
+            .{ del_pcpu, max_pcpu, if (req_pcpu_pct > 0) req_pcpu_pct else 1 },
+        );
+        return null;
+    }
+
+    common.printFmt(
+        "[25%] Allocating child VM '{s}' ({d} vCPUs, {d} MB RAM, " ++
+            "{d}% pCPU, {d} MB RAM quota)...\n",
+        .{ vm_name, vcpus, ram_mb, eff_pcpu, ram_quota_mb },
+    );
+    return eff_pcpu;
 }
 
 pub fn printRunSuccess(

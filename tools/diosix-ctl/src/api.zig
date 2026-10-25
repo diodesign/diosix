@@ -14,6 +14,9 @@ pub const EXT_DIOSIX: usize = interface.EXT.DIOSIX;
 pub const CID_PARENT: usize = interface.CID_PARENT;
 pub const CID_SELF: usize = interface.CID_SELF;
 pub const CID_FIRST_CHILD: usize = interface.CID_FIRST_CHILD;
+pub const MAX_CHILD_PCPU_QUOTA_PCT: u32 = interface.MAX_CHILD_PCPU_QUOTA_PCT;
+pub const DEFAULT_CHILD_PCPU_QUOTA_PCT: u32 =
+    interface.DEFAULT_CHILD_PCPU_QUOTA_PCT;
 
 pub const TargetArch = interface.TargetArch;
 pub const DIOSIX_FUNC = interface.DIOSIX;
@@ -210,6 +213,27 @@ pub const DiosixClient = struct {
         depth: usize,
         descendants: usize,
     ) !void {
+        return self.setQuotaWithPcpu(
+            target_cid,
+            ram_pages,
+            vcpus,
+            depth,
+            descendants,
+            0,
+            0,
+        );
+    }
+
+    pub fn setQuotaWithPcpu(
+        self: *DiosixClient,
+        target_cid: usize,
+        ram_pages: usize,
+        vcpus: usize,
+        depth: usize,
+        descendants: usize,
+        pcpu_quota_pct: usize,
+        logical_ram_pages: usize,
+    ) !void {
         const fd = try self.getFd();
         var args = QuotaArgs{
             .target_cid = target_cid,
@@ -217,6 +241,8 @@ pub const DiosixClient = struct {
             .max_vcpus = vcpus,
             .max_child_depth = depth,
             .max_descendants = descendants,
+            .pcpu_quota_pct = pcpu_quota_pct,
+            .logical_ram_pages = logical_ram_pages,
         };
         _ = try checkIoctlRc(
             linux.ioctl(fd, IOCTL_SET_QUOTA, @intFromPtr(&args)),

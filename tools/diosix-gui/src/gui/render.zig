@@ -29,6 +29,7 @@ pub fn createWindow(
 
     var win = Window.init(self.allocator, id, x, y, width, height, title);
     win.setOnScreen(true);
+    gui_mod.panes.clampWindowToTaskStack(self, &win);
     try self.windows.append(self.allocator, win);
     const idx = self.windows.items.len - 1;
     self.markDirty(self.windows.items[idx].getBox());
@@ -370,6 +371,7 @@ pub fn relayoutAllWindows(self: *DiosixGui) !void {
 
     try self.buildMainMenu();
     try self.buildBottomPanes();
+    try self.buildGuestsPane();
     if (saved_menu) |mid| {
         try self.activateMenuItem(mid);
         self.completeNavAnimation();
@@ -378,6 +380,7 @@ pub fn relayoutAllWindows(self: *DiosixGui) !void {
     if (saved_welcome) try self.showWelcomeModal();
     if (saved_tour) try self.showTourModal();
     if (saved_osk) try self.buildOskWindow();
+    self.syncTaskPanes();
     self.updateActiveHelp();
     self.markFullDirty();
 }

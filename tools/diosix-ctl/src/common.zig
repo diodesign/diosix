@@ -174,6 +174,21 @@ pub fn readBinaryFile(path: []const u8, max_size: usize) ![]u8 {
         DEV_MEM_PAGE_SIZE,
     );
 
+    if (end_signed > 0) {
+        const file_map_res = linux.mmap(
+            null,
+            alloc_size,
+            .{ .READ = true, .WRITE = true },
+            .{ .TYPE = .PRIVATE },
+            fd,
+            0,
+        );
+        if (@as(isize, @bitCast(file_map_res)) >= 0) {
+            const mapped: [*]u8 = @ptrFromInt(file_map_res);
+            return mapped[0..file_size];
+        }
+    }
+
     const anon_res = linux.mmap(
         null,
         alloc_size,

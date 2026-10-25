@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const api = @import("api.zig");
+const console = @import("console.zig");
 const sysconfig = @import("sysconfig.zig");
 const fdt_patch = @import("vm/fdt_patch.zig");
 const pe = @import("loader/pe.zig");
@@ -127,31 +128,32 @@ pub fn loadElfViaForeignMapping(
     if (ph_table_end > elf_data.len) return error.SegmentOutOfBounds;
 
     var min_vaddr: u64 = std.math.maxInt(u64);
+    var load_seg_total: usize = 0;
     var i: usize = 0;
     while (i < ph_num) : (i += 1) {
         const ph = elf_data[ph_off + (i * ph_size) ..];
         const p_type = readLeU32(ph, 0);
         const p_vaddr = readPhdrU64(ph, class, ELF32_P_VADDR, ELF64_P_VADDR);
-        if (p_type == PT_LOAD and p_vaddr < min_vaddr) min_vaddr = p_vaddr;
+        if (p_type == PT_LOAD) {
+            load_seg_total += 1;
+            if (p_vaddr < min_vaddr) min_vaddr = p_vaddr;
+        }
     }
     if (min_vaddr == std.math.maxInt(u64)) min_vaddr = 0;
     if (entry_point < min_vaddr) return error.InvalidElfHeader;
 
-    const map_size: usize = @min(ram_bytes, MAX_FOREIGN_MAP_BYTES);
     const parent_gpa: usize = DEFAULT_PARENT_MAP_GPA;
-    const child_ram = try client.mapChildMemory(
-        child_cid,
-        base_gpa,
-        parent_gpa,
-        map_size,
-        MAP_CHILD_RW_FLAGS,
-    );
-    defer client.unmapChildMemory(child_ram, parent_gpa) catch {};
+    const dtb_offset = if (ram_bytes > 4 * 1024 * 1024)
+        ram_bytes - (3 * 1024 * 1024)
+    else
+        0;
 
+    var seg_idx: usize = 0;
     i = 0;
     while (i < ph_num) : (i += 1) {
         const ph = elf_data[ph_off + (i * ph_size) ..];
         if (readLeU32(ph, 0) != PT_LOAD) continue;
+        seg_idx += 1;
 
         const p_offset_u64 =
             readPhdrU64(ph, class, ELF32_P_OFFSET, ELF64_P_OFFSET);
@@ -171,6 +173,7 @@ pub fn loadElfViaForeignMapping(
             return error.SegmentOutOfBounds;
         const p_memsz = std.math.cast(usize, p_memsz_u64) orelse
             return error.SegmentOutOfBounds;
+        if (p_memsz == 0) continue;
         const seg_offset = std.math.cast(usize, p_vaddr - min_vaddr) orelse
             return error.SegmentOutOfBounds;
 
@@ -178,45 +181,89 @@ pub fn loadElfViaForeignMapping(
             return error.SegmentOutOfBounds;
         if (src_end > elf_data.len) return error.SegmentOutOfBounds;
 
-        const file_end = std.math.add(usize, seg_offset, p_filesz) catch
-            return error.SegmentOutOfBounds;
         const seg_end = std.math.add(usize, seg_offset, p_memsz) catch
             return error.SegmentOutOfBounds;
-        if (seg_end > child_ram.len) return error.SegmentOutOfBounds;
+        if (seg_end > ram_bytes) return error.SegmentOutOfBounds;
 
+        const aligned_start = std.mem.alignBackward(usize, seg_offset, 4096);
+        const aligned_end = std.mem.alignForward(usize, seg_end, 4096);
+        const seg_map_sz = aligned_end - aligned_start;
+        if (seg_map_sz > MAX_FOREIGN_MAP_BYTES) return error.SegmentOutOfBounds;
+
+        const pct = 30 + (seg_idx * 55) / @max(@as(usize, 1), load_seg_total);
+        console.printFmt(
+            "[{d}%] Loading guest ELF segment {d}/{d} ({d} KB)...\n",
+            .{ pct, seg_idx, load_seg_total, p_memsz / 1024 },
+        );
+
+        const seg_ram = try client.mapChildMemory(
+            child_cid,
+            base_gpa + aligned_start,
+            parent_gpa,
+            seg_map_sz,
+            MAP_CHILD_RW_FLAGS,
+        );
+        defer client.unmapChildMemory(seg_ram, parent_gpa) catch {};
+
+        const rel_start = seg_offset - aligned_start;
+        const rel_file_end = rel_start + p_filesz;
+        const rel_seg_end = rel_start + p_memsz;
         if (p_filesz > 0) {
             @memcpy(
-                child_ram[seg_offset..file_end],
+                seg_ram[rel_start..rel_file_end],
                 elf_data[p_offset..src_end],
             );
         }
         if (p_memsz > p_filesz) {
-            @memset(child_ram[file_end..seg_end], 0);
+            @memset(seg_ram[rel_file_end..rel_seg_end], 0);
         }
     }
 
     const entry_off = std.math.cast(usize, entry_point - min_vaddr) orelse
         return error.InvalidElfHeader;
-    if (entry_off >= child_ram.len) return error.SegmentOutOfBounds;
+    if (entry_off >= ram_bytes) return error.SegmentOutOfBounds;
     const entry_gpa = std.math.add(usize, base_gpa, entry_off) catch
         return error.SegmentOutOfBounds;
-    const dtb_offset = if (child_ram.len > 4 * 1024 * 1024)
-        child_ram.len - (3 * 1024 * 1024)
-    else
-        0;
+
     var dtb_gpa: usize = 0;
     if (dtb_data.len > 0) {
         const dtb_end = std.math.add(usize, dtb_offset, dtb_data.len) catch
             return error.SegmentOutOfBounds;
-        if (dtb_end > child_ram.len) return error.SegmentOutOfBounds;
+        if (dtb_end > ram_bytes) return error.SegmentOutOfBounds;
         patchChildDtb(dtb_data, base_gpa, @intCast(ram_bytes), vcpus);
         dtb_gpa = std.math.add(usize, base_gpa, dtb_offset) catch
             return error.SegmentOutOfBounds;
-        @memcpy(child_ram[dtb_offset..dtb_end], dtb_data);
+        const dtb_aligned = std.mem.alignBackward(usize, dtb_offset, 4096);
+        const dtb_end_aligned = std.mem.alignForward(usize, dtb_end, 4096);
+        const dtb_map_sz = dtb_end_aligned - dtb_aligned;
+        const dtb_ram = try client.mapChildMemory(
+            child_cid,
+            base_gpa + dtb_aligned,
+            parent_gpa,
+            dtb_map_sz,
+            MAP_CHILD_RW_FLAGS,
+        );
+        defer client.unmapChildMemory(dtb_ram, parent_gpa) catch {};
+        const rel_dtb = dtb_offset - dtb_aligned;
+        @memcpy(dtb_ram[rel_dtb .. rel_dtb + dtb_data.len], dtb_data);
     }
 
-    try pe.stageShimPayload(child_ram, shim_payload, dtb_offset);
+    if (shim_payload.len > 0) {
+        const map_size: usize = @min(ram_bytes, MAX_FOREIGN_MAP_BYTES);
+        const child_ram = try client.mapChildMemory(
+            child_cid,
+            base_gpa,
+            parent_gpa,
+            map_size,
+            MAP_CHILD_RW_FLAGS,
+        );
+        defer client.unmapChildMemory(child_ram, parent_gpa) catch {};
+        try pe.stageShimPayload(child_ram, shim_payload, dtb_offset);
+    }
 
+    console.printStr(
+        "[95%] Configuring device tree and starting guest vCPUs...\n",
+    );
     _ = try client.startGuest(child_cid, entry_gpa, dtb_gpa);
     return entry_gpa;
 }

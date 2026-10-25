@@ -176,13 +176,10 @@ following external documentation:
 
 ## Legal stuff
 
-Diosix source code and binaries are distributed under the terms of the MIT
-License. See [LICENSE.md](LICENSE.md) for the full text and
-[CONTRIBUTORS.md](CONTRIBUTORS.md) for the list of copyright holders.
-
-The diosix.org website illustration is a combination of artwork provided by
-[Katerina Limpitsouni](https://undraw.co/license) and
-[RISC-V International](https://riscv.org/about/risc-v-branding-guidelines/).
+Unless otherwise stated, Diosix source code and provided binaries are
+distributed under the terms of the MIT License. See [LICENSE.md](LICENSE.md)
+for the full text and [CONTRIBUTORS.md](CONTRIBUTORS.md) for the list of
+copyright holders.
 
 All product names, logos, brands, trademarks, and registered trademarks are
 property of their respective owners. All company, product, and service names

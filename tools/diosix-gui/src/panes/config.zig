@@ -47,6 +47,11 @@ fn onBgSpeedSliderChanged(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
     self.setBgAnimationSpeed(@intCast(ic.slider_val));
 }
 
+fn onGuestRateSliderChanged(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
+    const self: *DiosixGui = @ptrCast(@alignCast(g));
+    self.setGuestUpdateIntervalSeconds(@intCast(ic.slider_val));
+}
+
 fn onSchemeDropdownClicked(g: *anyopaque, _: *anyopaque, _: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
     self.toggleSchemeDropdown() catch {};
@@ -284,14 +289,9 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
     const config_y: i32 = BORDER_GAP;
     const max_w = @as(i32, @intCast(self.width)) - BORDER_GAP - config_x;
     const config_w: u32 = if (max_w > 0) @intCast(max_w) else 600;
-    const footer_reserve =
-        self.scalePx(40) + @as(u32, @intCast(BORDER_GAP * 3));
-    const max_h = if (self.height > footer_reserve)
-        self.height - footer_reserve
-    else
-        self.height;
     const bottom_pad = self.scalePx(32);
-    const config_h: u32 = @min(self.scalePx(284) + bottom_pad, max_h);
+    const base_h = self.scalePx(320) + bottom_pad;
+    const config_h: u32 = @min(base_h, gui_mod.panes.getMaxPaneHeight(self));
 
     const win = try self.createWindow(
         WIN_CONFIG_ID,
@@ -301,6 +301,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         config_h,
         null,
     );
+    win.natural_height = @min(base_h, gui_mod.panes.getBaseMaxPaneHeight(self));
     win.content_bottom_pad = bottom_pad;
     win.setHelpText("System configuration, display resolution, and appearance");
     win.parent_window_id = WIN_MENU_ID;
@@ -334,8 +335,10 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         lbl_id: u32,
         sld_id: u32,
         y_base: u32,
+        min: i32 = 0,
         max: i32,
         val: i32,
+        suffix: []const u8 = "%",
         label: []const u8,
         help: []const u8,
         cb: icon_mod.IconCallback,
@@ -360,6 +363,18 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
             .help = "Adjust background color morphing speed (0% to 100%)",
             .cb = onBgSpeedSliderChanged,
         },
+        .{
+            .lbl_id = gui_mod.ICON_CONFIG_GUEST_RATE_LBL_ID,
+            .sld_id = gui_mod.ICON_CONFIG_GUEST_RATE_SLIDER_ID,
+            .y_base = 150,
+            .min = 1,
+            .max = 10,
+            .val = @intCast(self.getGuestUpdateIntervalSeconds()),
+            .suffix = "s",
+            .label = "Guest update rate",
+            .help = "Adjust running guest VM refresh rate (1s to 10s)",
+            .cb = onGuestRateSliderChanged,
+        },
     };
 
     for (sliders) |sl| {
@@ -378,10 +393,10 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
             y_px,
             ctrl_w,
             ctrl_h,
-            0,
+            sl.min,
             sl.max,
             sl.val,
-            "%",
+            sl.suffix,
         );
         s.setHelpText(sl.help);
         s.callback = sl.cb;
@@ -391,7 +406,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
     var disp_hdr = Icon.createReadOnly(
         gui_mod.ICON_CONFIG_DISPLAY_HDR_ID,
         pad_x,
-        @intCast(self.scalePx(156)),
+        @intCast(self.scalePx(192)),
         self.scalePx(200),
         row_h,
         "Display",
@@ -420,7 +435,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         .{
             .lbl_id = gui_mod.ICON_CONFIG_RES_LBL_ID,
             .drop_id = gui_mod.ICON_CONFIG_RES_DROPDOWN_ID,
-            .y_base = 184,
+            .y_base = 220,
             .lbl_str = "Resolution",
             .val_str = self.resolution_preset.label(),
             .help = "Select screen resolution from 800x600 up to 4K 3840x2160",
@@ -429,7 +444,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         .{
             .lbl_id = gui_mod.ICON_CONFIG_DEPTH_LBL_ID,
             .drop_id = gui_mod.ICON_CONFIG_DEPTH_DROPDOWN_ID,
-            .y_base = 220,
+            .y_base = 256,
             .lbl_str = "Color depth",
             .val_str = self.color_depth.label(),
             .help = "Select display color depth from 8-bit to 32-bit TrueColor",
@@ -438,7 +453,7 @@ pub fn buildConfigPane(self: *DiosixGui) !void {
         .{
             .lbl_id = gui_mod.ICON_CONFIG_SCALE_LBL_ID,
             .drop_id = gui_mod.ICON_CONFIG_SCALE_DROPDOWN_ID,
-            .y_base = 256,
+            .y_base = 292,
             .lbl_str = "UI scale",
             .val_str = self.ui_scale_mode.label(),
             .help = "Select UI vector scale override or Auto EDID detection",

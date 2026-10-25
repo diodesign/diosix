@@ -128,6 +128,16 @@ fn addHostTestStep(
     if (with_interface) {
         mod.addImport("interface", iface);
     }
+    if (std.mem.eql(u8, name, "diosix-gui-unit-tests")) {
+        mod.addAnonymousImport("questrial_ttf", .{
+            .root_source_file = b.path(
+                "tools/diosix-gui/assets/Questrial-Regular.ttf",
+            ),
+        });
+        mod.addAnonymousImport("intro_wav", .{
+            .root_source_file = b.path("tools/diosix-gui/assets/intro.wav"),
+        });
+    }
     return b.addRunArtifact(b.addTest(.{ .root_module = mod, .name = name }));
 }
 

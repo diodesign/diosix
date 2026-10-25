@@ -150,10 +150,9 @@ pub fn copyFileOverSsh(
                 argc += 2;
             }
             argv_buf[argc] = "-y";
-            argv_buf[argc + 1] = "--";
-            argv_buf[argc + 2] = dest_str.ptr;
-            argv_buf[argc + 3] = remote_cmd_z.ptr;
-            argv_buf[argc + 4] = null;
+            argv_buf[argc + 1] = dest_str.ptr;
+            argv_buf[argc + 2] = remote_cmd_z.ptr;
+            argv_buf[argc + 3] = null;
             _ = linux.execve(bin_z.ptr, &argv_buf, envp);
         }
         linux.exit(127);

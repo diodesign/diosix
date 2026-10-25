@@ -69,7 +69,7 @@ pub fn handleLegacySendIpi(
                 if (target_vc.running_on_cpu) |target_cpu| {
                     pcore.sendIpiToCpu(target_cpu);
                 } else {
-                    sbi_core.broadcastPhysicalIPI();
+                    pcore.wakeIdleCores();
                 }
             }
         }
@@ -101,7 +101,7 @@ fn sendIpiToTargetVcore(target_vc: *vcore.VirtualCore, broadcast: bool) void {
             ipi_sent = true;
         }
     }
-    if (!ipi_sent) sbi_core.broadcastPhysicalIPI();
+    if (!ipi_sent) pcore.wakeIdleCores();
 }
 
 pub fn handleIPI(
@@ -188,7 +188,13 @@ pub fn handleRFENCE(
         if (riscv.hasHExtension()) riscv.hfenceGvma() else riscv.sfenceVma();
         riscv.getCPUContext().gstage_dirty = false;
         if (hart_mask_base == std.math.maxInt(usize)) {
-            sbi_core.broadcastPhysicalIPI();
+            var it = g.vcores.start;
+            while (it) |node| : (it = node.next) {
+                if (node.contents == vc) continue;
+                if (node.contents.running_on_cpu) |target_cpu| {
+                    pcore.sendIpiToCpu(target_cpu);
+                }
+            }
         } else {
             for (0..@bitSizeOf(usize)) |bit_pos| {
                 if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
@@ -200,8 +206,6 @@ pub fn handleRFENCE(
                     if (g.findVcore(hid)) |tvc| {
                         if (tvc.running_on_cpu) |target_cpu| {
                             pcore.sendIpiToCpu(target_cpu);
-                        } else {
-                            sbi_core.broadcastPhysicalIPI();
                         }
                     }
                 }
@@ -278,7 +282,7 @@ pub fn handleHSM(
             }
             target_vc.state = .ready;
             scheduler.queue(target_vc);
-            sbi_core.broadcastPhysicalIPI();
+            pcore.wakeIdleCores();
             sbi_core.setResult(vc, context, interface.SUCCESS, 0);
         },
         interface.HSM.HART_STOP, interface.HSM.HART_SUSPEND => {
@@ -316,21 +320,8 @@ pub fn handleDebugConsole(
     a1: usize,
     a2: usize,
 ) void {
-    if (!vc.guest.is_root) {
-        switch (function) {
-            interface.DBCN.CONSOLE_WRITE => {
-                sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, a0);
-            },
-            interface.DBCN.CONSOLE_READ,
-            interface.DBCN.CONSOLE_WRITE_BYTE,
-            => sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0),
-            else => sbi_core.setResult(
-                vc,
-                context,
-                sbi_core.SBI_ERR_NOT_SUPPORTED,
-                0,
-            ),
-        }
+    if (!vc.guest.is_root and function == interface.DBCN.CONSOLE_READ) {
+        sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
         return;
     }
     const g = vc.getGuest();
@@ -367,7 +358,9 @@ pub fn handleDebugConsole(
                     );
                     return;
                 };
-                debug.write(buf[0..chunk]);
+                if (vc.guest.is_root) {
+                    debug.write(buf[0..chunk]);
+                }
                 written += chunk;
             }
             sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, written);
@@ -401,7 +394,7 @@ pub fn handleDebugConsole(
             sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, read);
         },
         interface.DBCN.CONSOLE_WRITE_BYTE => {
-            debug.putchar(@truncate(a0));
+            if (vc.guest.is_root) debug.putchar(@truncate(a0));
             sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
         },
         else => sbi_core.setResult(

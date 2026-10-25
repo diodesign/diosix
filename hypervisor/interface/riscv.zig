@@ -63,6 +63,7 @@ pub const IsaExtension = struct {
     pub const m: usize = 1 << 12;
     pub const s: usize = 1 << 18;
     pub const u: usize = 1 << 20;
+    pub const v: usize = 1 << 21;
     pub const h: usize = 1 << 7;
 
     pub const g: usize = i | m | a | f | d; // G = IMAFD.

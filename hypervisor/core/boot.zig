@@ -281,6 +281,14 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         }
     }
 
+    const free_pool_pages = physmem.getFreeRamBytes() / physmem.PageSize;
+    if (free_pool_pages > 0) {
+        root_vm.quotas.max_ram_pages = free_pool_pages;
+    }
+    root_vm.quotas.used_ram_pages = 0;
+    root_vm.quotas.pcpu_quota_pct = 100;
+    root_vm.quotas.delegated_pcpu_pct = 0;
+
     if (root_vm.vcores.start) |vc0_node| {
         vc0_node.contents.state = .ready;
         scheduler.queue(vc0_node.contents);

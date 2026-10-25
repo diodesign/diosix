@@ -84,6 +84,9 @@ pub const CID_PARENT: u64 = 0;
 pub const CID_SELF: u64 = 1;
 pub const CID_FIRST_CHILD: u64 = 2;
 
+pub const MAX_CHILD_PCPU_QUOTA_PCT: u32 = 90;
+pub const DEFAULT_CHILD_PCPU_QUOTA_PCT: u32 = 20;
+
 pub const DEFAULT_VERSION_MAJOR: u16 = 26;
 pub const DEFAULT_VERSION_MINOR: u16 = 1;
 pub const DEFAULT_VERSION_PATCH: u16 = 0;
@@ -137,6 +140,7 @@ pub const GuestInfo = extern struct {
     is_root: u8,
     target_arch: u8, // TargetArch enum value.
     assigned_cid: u8 = 0,
+    cpu_khz_ticks: u32 = 0,
     vcpus: u64,
     self_ram_pages: u64,
     used_vcpus: u64,
@@ -144,6 +148,9 @@ pub const GuestInfo = extern struct {
     used_ram_pages: u64,
     max_ram_pages: u64,
     child_count: u64,
+    pcpu_quota_pct: u32 = 100,
+    delegated_pcpu_pct: u32 = 0,
+    delegated_ram_pages: u64 = 0,
 };
 
 pub const EventType = enum(u32) {
@@ -151,6 +158,7 @@ pub const EventType = enum(u32) {
     child_terminated = 1,
     child_stopped = 2,
     child_started = 3,
+    child_memory_pressure = 4,
 };
 
 pub const Event = extern struct {
@@ -205,11 +213,13 @@ pub const WaitEventArgs = extern struct {
 };
 
 pub const QuotaArgs = extern struct {
-    target_cid: u64,
-    max_ram_pages: u64,
-    max_vcpus: u64,
-    max_child_depth: u64,
-    max_descendants: u64,
+    target_cid: u64 = 0,
+    max_ram_pages: u64 = 0,
+    max_vcpus: u64 = 0,
+    max_child_depth: u64 = 0,
+    max_descendants: u64 = 0,
+    pcpu_quota_pct: u64 = 0,
+    logical_ram_pages: u64 = 0,
 };
 
 pub const ManifestArgs = extern struct {
@@ -276,13 +286,13 @@ pub const Result = struct {
 
 comptime {
     std.debug.assert(@sizeOf(HypervisorInfo) == 304);
-    std.debug.assert(@sizeOf(GuestInfo) == 80);
+    std.debug.assert(@sizeOf(GuestInfo) == 96);
     std.debug.assert(@sizeOf(Event) == 24);
     std.debug.assert(@sizeOf(CharterArgs) == 64);
     std.debug.assert(@sizeOf(RunArgs) == 56);
     std.debug.assert(@sizeOf(TerminateArgs) == 16);
     std.debug.assert(@sizeOf(WaitEventArgs) == 40);
-    std.debug.assert(@sizeOf(QuotaArgs) == 40);
+    std.debug.assert(@sizeOf(QuotaArgs) == 56);
     std.debug.assert(@sizeOf(ManifestArgs) == 32);
     std.debug.assert(@sizeOf(MapChildMemArgs) == 40);
     std.debug.assert(@sizeOf(UnmapChildMemArgs) == 16);
@@ -294,7 +304,7 @@ test "SBI interface structures and extension IDs" {
     const testing = std.testing;
 
     // Verify cross-ABI struct sizes.
-    try testing.expectEqual(@as(usize, 80), @sizeOf(GuestInfo));
+    try testing.expectEqual(@as(usize, 96), @sizeOf(GuestInfo));
     try testing.expectEqual(@as(usize, 304), @sizeOf(HypervisorInfo));
     try testing.expectEqual(
         @as(usize, 10),
@@ -305,7 +315,7 @@ test "SBI interface structures and extension IDs" {
     try testing.expectEqual(@as(usize, 56), @sizeOf(RunArgs));
     try testing.expectEqual(@as(usize, 16), @sizeOf(TerminateArgs));
     try testing.expectEqual(@as(usize, 40), @sizeOf(WaitEventArgs));
-    try testing.expectEqual(@as(usize, 40), @sizeOf(QuotaArgs));
+    try testing.expectEqual(@as(usize, 56), @sizeOf(QuotaArgs));
     try testing.expectEqual(@as(usize, 32), @sizeOf(ManifestArgs));
     try testing.expectEqual(@as(usize, 40), @sizeOf(MapChildMemArgs));
     try testing.expectEqual(@as(usize, 16), @sizeOf(UnmapChildMemArgs));

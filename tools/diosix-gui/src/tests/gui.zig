@@ -18,24 +18,27 @@ test "diosix-gui: coordinator init, layout, and host telemetry panes" {
     var gui = try DiosixGui.init(allocator, 1280, 800);
     defer gui.deinit();
 
-    // 1. Initial layout has 3 windows: Menu, Version, Help.
-    try testing.expectEqual(@as(usize, 3), gui.windows.items.len);
+    // 1. Initial layout has 4 windows: Menu, Running Guests, Version, Help.
+    try testing.expectEqual(@as(usize, 4), gui.windows.items.len);
 
     var win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
     try testing.expect(win_menu.is_onscreen);
     try testing.expectEqual(gui_mod.BORDER_GAP, win_menu.x);
     try testing.expectEqual(gui_mod.BORDER_GAP, win_menu.y);
-    try testing.expectEqual(@as(usize, 4), win_menu.icons.items.len);
+    try testing.expectEqual(@as(usize, 5), win_menu.icons.items.len);
 
-    const item_status = &win_menu.icons.items[0];
-    const item_config = &win_menu.icons.items[1];
-    const item_restart = &win_menu.icons.items[2];
-    const item_shutdown = &win_menu.icons.items[3];
+    const item_create = &win_menu.icons.items[0];
+    const item_status = &win_menu.icons.items[1];
+    const item_config = &win_menu.icons.items[2];
+    const item_restart = &win_menu.icons.items[3];
+    const item_shutdown = &win_menu.icons.items[4];
+    try testing.expectEqualStrings("Create VM", item_create.getText());
     try testing.expectEqualStrings("About", item_status.getText());
     try testing.expectEqualStrings("Config", item_config.getText());
     try testing.expectEqualStrings("Restart", item_restart.getText());
     try testing.expectEqualStrings("Shutdown", item_shutdown.getText());
     const menu_t = icon_mod.IconType.menu_item;
+    try testing.expectEqual(menu_t, item_create.icon_type);
     try testing.expectEqual(menu_t, item_status.icon_type);
     try testing.expectEqual(menu_t, item_config.icon_type);
     try testing.expectEqual(menu_t, item_restart.icon_type);
@@ -231,7 +234,7 @@ test "diosix-gui: coordinator init, layout, and host telemetry panes" {
     try testing.expect(gui.getWindow(gui_mod.WIN_BACK_ID) == null);
     try testing.expectEqual(gui_mod.MENU_FULL_H, win_menu.height);
     win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
-    try testing.expectEqual(@as(usize, 4), win_menu.icons.items.len);
+    try testing.expectEqual(@as(usize, 5), win_menu.icons.items.len);
 
     gui.handleMouseMove(50, 500, false);
     try testing.expectEqualStrings("Welcome to diosix", help_icon.getText());
@@ -244,14 +247,14 @@ test "diosix-gui: dynamic window lifecycle (create, destroy, destroyAll)" {
 
     const win = try gui.createWindow(501, 100, 100, 300, 200, "Dynamic Pane");
     try testing.expect(win.is_onscreen);
-    try testing.expectEqual(@as(usize, 4), gui.windows.items.len);
+    try testing.expectEqual(@as(usize, 5), gui.windows.items.len);
 
     _ = try win.addIcon(Icon.createButton(5001, 10, 10, 100, 30, "Action"));
     try testing.expect(gui.getWindow(501) != null);
 
     const destroyed = gui.destroyWindow(501);
     try testing.expect(destroyed);
-    try testing.expectEqual(@as(usize, 3), gui.windows.items.len);
+    try testing.expectEqual(@as(usize, 4), gui.windows.items.len);
     try testing.expect(gui.getWindow(501) == null);
 
     gui.destroyAllWindows();

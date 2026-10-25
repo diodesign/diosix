@@ -25,6 +25,8 @@ pub const TEXT_CAP: usize = text_label.TEXT_CAP;
 pub const SLIDER_SUFFIX_CAP: usize = 16;
 // Default limit on characters typed into a read-write text field.
 pub const DEFAULT_MAX_INPUT_LEN: usize = 64;
+// Number of time-unit samples stored in a line graph widget.
+pub const GRAPH_HISTORY_CAP: usize = 60;
 
 pub const IconType = enum {
     read_only_text,
@@ -34,6 +36,8 @@ pub const IconType = enum {
     button,
     menu_item,
     dropdown,
+    line_graph,
+    progress_bar,
 };
 
 pub const GroupMode = enum {
@@ -78,6 +82,10 @@ pub const Icon = struct {
     slider_step: i32 = 1,
     slider_suffix: [SLIDER_SUFFIX_CAP]u8 = @splat(0),
     slider_suffix_len: usize = 0,
+
+    // Line graph state (past 60 update time units, 0..100%).
+    graph_samples: [GRAPH_HISTORY_CAP]u8 = @splat(0),
+    graph_sample_count: u8 = 0,
 
     // Tick box, grouping & callback state.
     is_ticked: bool = false,
@@ -219,6 +227,51 @@ pub const Icon = struct {
         var icon = base(id, .menu_item, x, y, w, h, t);
         icon.has_back_arrow = true;
         return icon;
+    }
+
+    pub fn createLineGraph(
+        id: u32,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        samples: []const u8,
+    ) Icon {
+        var icon = base(id, .line_graph, x, y, w, h, "");
+        icon.is_selectable = false;
+        icon.setGraphSamples(samples);
+        return icon;
+    }
+
+    pub fn createProgressBar(
+        id: u32,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        percent: u8,
+    ) Icon {
+        var icon = base(id, .progress_bar, x, y, w, h, "");
+        icon.is_selectable = false;
+        icon.slider_min = 0;
+        icon.slider_max = 100;
+        icon.slider_val = @min(@as(i32, 100), @as(i32, percent));
+        return icon;
+    }
+
+    pub fn setGraphSamples(self: *Icon, samples: []const u8) void {
+        const n = @min(samples.len, GRAPH_HISTORY_CAP);
+        const start = samples.len - n;
+        @memcpy(self.graph_samples[0..n], samples[start .. start + n]);
+        if (n < GRAPH_HISTORY_CAP) {
+            @memset(self.graph_samples[n..GRAPH_HISTORY_CAP], 0);
+        }
+        self.graph_sample_count = @intCast(n);
+    }
+
+    pub fn getGraphSamples(self: *const Icon) []const u8 {
+        const n = @min(@as(usize, self.graph_sample_count), GRAPH_HISTORY_CAP);
+        return self.graph_samples[0..n];
     }
 
     pub fn isTicked(self: *const Icon) bool {

@@ -50,6 +50,51 @@ pub fn broadcastIpi() void {
     }
 }
 
+pub fn hasIdleOtherCore() bool {
+    if (builtin.is_test) return false;
+    const my_hart = pcore.this().hardware_hart_id;
+    for (&pcore.core_table) |*row| {
+        if (row.static_ptr) |ctx| {
+            if (ctx.hardware_hart_id != my_hart and
+                (@as(*volatile ?*anyopaque, &ctx.active_vcore)).* == null)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+pub fn wakeIdleCores() void {
+    if (builtin.is_test) return;
+    const my_hart = pcore.this().hardware_hart_id;
+
+    for (&pcore.core_table) |*row| {
+        if (row.static_ptr) |ctx| {
+            if (ctx.hardware_hart_id != my_hart and
+                (@as(*volatile ?*anyopaque, &ctx.active_vcore)).* == null)
+            {
+                if (riscv.CLINT.msip(ctx.hardware_hart_id)) |ptr| ptr.* = 1;
+            }
+        }
+    }
+
+    const flags = pcore.table_lock.lock();
+    defer pcore.table_lock.unlock(flags);
+
+    for (&pcore.core_table) |*row| {
+        var cur = row.dynamic_head;
+        while (cur) |node| : (cur = node.next) {
+            if (node.hart_id != my_hart and
+                (@as(*volatile ?*anyopaque, &node.context.active_vcore)).* ==
+                    null)
+            {
+                if (riscv.CLINT.msip(node.hart_id)) |ptr| ptr.* = 1;
+            }
+        }
+    }
+}
+
 pub fn parkOtherCores() void {
     pcore.host_stopping.store(true, .release);
     broadcastIpi();
@@ -97,10 +142,24 @@ pub fn parkOtherCores() void {
 
 pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     const cpu = pcore.this();
+    const disp_time = if (builtin.is_test) 0 else riscv.readTime();
     if (cpu.active_vcore) |active| {
         if (@intFromPtr(active) == @intFromPtr(to_vcore) and
             to_vcore.running_on_cpu == cpu.cpu_core_id)
         {
+            to_vcore.state = .running;
+            if (@atomicLoad(
+                u64,
+                &to_vcore.last_dispatched_time,
+                .monotonic,
+            ) == 0) {
+                @atomicStore(
+                    u64,
+                    &to_vcore.last_dispatched_time,
+                    disp_time,
+                    .monotonic,
+                );
+            }
             return;
         }
     }
@@ -113,8 +172,7 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     cpu.active_vcore = to_vcore;
     to_vcore.running_on_cpu = cpu.cpu_core_id;
     to_vcore.state = .running;
-    to_vcore.last_dispatched_time =
-        if (builtin.is_test) 0 else riscv.readTime();
+    @atomicStore(u64, &to_vcore.last_dispatched_time, disp_time, .monotonic);
 
     pmp.PMPConfig.clearAllPmp();
     const hv_reg = physmem.getHvRegion();

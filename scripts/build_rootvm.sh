@@ -68,7 +68,8 @@ CURRENT_HASH=$(
             | sort | xargs cat | sha256sum
         sha256sum "$CONFIG_FILE" "$0" "$(dirname "$CONFIG_FILE")"/*.fragment \
             tools/guest-shim/linker.ld \
-            tools/driver/* tools/alsa-init/* tools/micro-guest/* 2>/dev/null
+            tools/diosix-gui/assets/* \
+            tools/driver/* tools/alsa-init/* 2>/dev/null
     ) | awk '{print $1}' | sort | sha256sum | cut -d' ' -f1
 )
 
@@ -146,11 +147,17 @@ fi
 if [ -d "tools/diosix-gui" ]; then
     log_info "Compiling diosix-gui for ${BOLD}${ZIG_TARGET}${RESET}..."
     if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast \
-        --dep interface -Mroot=tools/diosix-gui/src/main.zig \
+        --dep interface --dep questrial_ttf --dep intro_wav \
+        -Mroot=tools/diosix-gui/src/main.zig \
         -Minterface=hypervisor/interface/lib.zig \
+        -Mquestrial_ttf=tools/diosix-gui/assets/Questrial-Regular.ttf \
+        -Mintro_wav=tools/diosix-gui/assets/intro.wav \
         --name diosix-gui \
         -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-gui"; then
         ln -sf diosix-gui "$DYNAMIC_OVERLAY/usr/bin/diosix-wm"
+        mkdir -p "$DYNAMIC_OVERLAY/usr/share/licenses/diosix"
+        cp -f LICENSE.md \
+            "$DYNAMIC_OVERLAY/usr/share/licenses/diosix/LICENSE.md"
         log_ok "Installed diosix-gui and 'diosix-wm' symlink in overlay."
     else
         log_err "Failed to cross-compile diosix-gui for ${ZIG_TARGET}."
@@ -182,41 +189,14 @@ if [ -f "tools/alsa-init/main.c" ]; then
     fi
 fi
 
-# Compile and install lightweight guest payload for nested testing.
-if [ -f "tools/micro-guest/guest.s" ]; then
-    SHARE_IMAGES_DIR="$DYNAMIC_OVERLAY/usr/share/diosix/images"
-    mkdir -p "$SHARE_IMAGES_DIR" \
-        "$DYNAMIC_OVERLAY/var/lib/diosix/images" \
-        "$DYNAMIC_OVERLAY/var/lib/diosix/iso"
-    CC_GUEST="riscv64-linux-gnu-gcc"
-    BR_GCC="$BUILDROOT_DIR/output/host/bin/riscv64-buildroot-linux-gnu-gcc"
-    if [ -x "$BR_GCC" ]; then
-        CC_GUEST="$BR_GCC"
-    fi
-    MICRO_ELF="${SHARE_IMAGES_DIR}/micro-guest.elf"
-    MICRO_ISO="${SHARE_IMAGES_DIR}/micro-guest.iso"
-    LD_FLAGS="-Wl,-Ttext=0x80000000,-N,--build-id=none"
-    if command -v "$CC_GUEST" >/dev/null 2>&1; then
-        "$CC_GUEST" -nostdlib -static "$LD_FLAGS" \
-            tools/micro-guest/guest.s -o "$MICRO_ELF" 2>/dev/null || true
-    else
-        zig cc -target riscv64-freestanding-none -nostdlib "$LD_FLAGS" \
-            tools/micro-guest/guest.s -o "$MICRO_ELF" 2>/dev/null || true
-    fi
-    if [ -f "$MICRO_ELF" ]; then
-        ln -sf /usr/share/diosix/images/micro-guest.elf \
-            "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest.elf" \
-            2>/dev/null || true
-        if [ -f "scripts/build_micro_iso.py" ]; then
-            python3 scripts/build_micro_iso.py "$MICRO_ELF" \
-                "$MICRO_ISO" 2>/dev/null || true
-            ln -sf /usr/share/diosix/images/micro-guest.iso \
-                "$DYNAMIC_OVERLAY/var/lib/diosix/iso/micro-guest.iso" \
-                2>/dev/null || true
-        fi
-        log_ok "Installed micro-guest ELF and ISO payloads in overlay."
-    fi
-fi
+# Clean any legacy micro-guest artifacts from dynamic overlay and target rootfs.
+rm -f "$DYNAMIC_OVERLAY/usr/share/diosix/images/micro-guest."* \
+    "$DYNAMIC_OVERLAY/var/lib/diosix/images/micro-guest."* \
+    "$DYNAMIC_OVERLAY/var/lib/diosix/iso/micro-guest."* \
+    "$BUILDROOT_DIR/output/target/usr/share/diosix/images/micro-guest."* \
+    "$BUILDROOT_DIR/output/target/var/lib/diosix/images/micro-guest."* \
+    "$BUILDROOT_DIR/output/target/var/lib/diosix/iso/micro-guest."* \
+    2>/dev/null || true
 
 # Clean lingering private keys from previous target builds and set permissions.
 if [ -d "$BUILDROOT_DIR/output/target/etc/diosix/keys" ]; then

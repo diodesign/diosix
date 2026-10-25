@@ -28,11 +28,11 @@ forbid_volume_export = true
 
 [[units]]
 id = "unit-alpha"
-artifact = "micro-guest.elf"
+artifact = "diosix-linux.elf"
 min_instances = 1
 target_instances = 2
 max_instances = 4
-vcpus = 1
-ram = "64MiB"
+vcpus = 2
+ram = "256MiB"
 affinity = "anti-colocate-steward"
 health_probe = "vsock-heartbeat"

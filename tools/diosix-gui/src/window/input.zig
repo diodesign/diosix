@@ -71,7 +71,7 @@ pub fn triggerIcon(self: *Window, gui_ctx: *anyopaque, icon: *Icon) void {
         },
         .read_write_text => {},
         .slider => {},
-        .read_only_text => {},
+        .read_only_text, .line_graph, .progress_bar => {},
         .menu_item, .dropdown => {
             icon.is_active_press = true;
         },

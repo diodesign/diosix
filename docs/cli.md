@@ -67,9 +67,11 @@ Assigned CID   : 1
 Architecture   : riscv64
 Root VM        : yes
 Hardware trust : yes
-RAM allocation : 256 MB (65536 pages)
-Virtual CPUs   : 4
-Child VMs      : 2
+Logical RAM    : 256 MB (65536 pages)
+RAM quota pool : 1536 MB total / 512 MB delegated / 1024 MB available
+Logical vCPUs  : 4
+pCPU quota     : 100% granted / 50% delegated / 50% retained
+Child VMs      : 1
 ```
 
 Example output for child VM (`dsx info user`):
@@ -176,10 +178,18 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
     binary (or `.iso` installer image). If a bare name is provided (such as
     `linux-guest`), `dsx` automatically searches the current working directory
     and `/var/lib/diosix/images/`.
-*   `--name <name>` *(optional)*: Friendly name for the VM (defaults to the
-    domain name or image name).
-*   `--vcpus <N>` *(optional)*: Number of virtual CPU cores (default: 1).
-*   `--ram <size>` *(optional)*: RAM allocation ceiling (e.g. `256M`, `2GiB`).
+*   `--name <name>` / `-n <name>` *(optional)*: Friendly name for the VM
+    (defaults to the domain name or image name).
+*   `--vcpus <N>` *(optional)*: Logical virtual CPU cores exposed in the child's
+    Device Tree (default: 1).
+*   `--ram <size>` *(optional)*: Logical RAM size exposed in the child's Device
+    Tree (e.g. `256M`, `2GiB`).
+*   `--pcpu <1-90>` / `--pcpu-quota <1-90>` *(optional)*: Physical CPU time
+    percentage granted to the child VM and its subtree (`1% .. 90%`; total
+    across all direct children cannot exceed `90%`).
+*   `--ram-quota <size>` *(optional)*: Physical RAM quota pool granted to the
+    child VM and its subtree (defaults to `--ram`). H-extension guests are
+    demand-paged from this pool and may be overprovisioned relative to `--ram`.
 *   `--disk <name|size>` / `-d <name|size>` *(optional)*: Attaches an existing
     virtual disk by name (e.g. `--disk user-data`), or auto-provisions and
     formats an ext4 virtual disk of the specified size (e.g. `--disk 1G`).
@@ -327,19 +337,24 @@ dsx restart user
 ---
 
 ### `dsx quota`
-Inspects or lowers resource ceilings on the calling VM or its direct children.
-When invoked without resource modification flags, displays the current subtree
-quota allocation.
+Inspects or updates physical resource quotas (`--pcpu` percentage and `--ram`
+pool) on a direct child VM or lowers quotas on the calling VM (`self`). When
+invoked without modification flags, displays the current physical RAM quota
+pool, pCPU time percentages, and logical resource configuration.
 
 ```bash
-dsx quota [cid|self] [--ram <MB>] [--vcpus <N>] [--depth <N>] \
-    [--descendants <N>]
+dsx quota [cid|self] [--pcpu <1-90>] [--ram <MB>] [--vcpus <N>] \
+    [--depth <N>] [--descendants <N>]
 ```
 
 *   `cid|self` *(optional)*: Target VM to inspect or configure
     (default: `self`).
-*   `--ram <MB>` *(optional)*: Sets maximum physical RAM ceiling in megabytes.
-*   `--vcpus <N>` *(optional)*: Sets maximum vCPU count.
+*   `--pcpu <1-90>` *(optional)*: Adjusts physical CPU time percentage granted
+    to a direct child VM (`1% .. 90%`, subject to the 90% total child cap).
+*   `--ram <MB>` *(optional)*: Adjusts the physical RAM quota pool in megabytes.
+    Dialing a running child VM's RAM quota below its currently in-use physical
+    memory triggers an Out-Of-Memory (OOM) termination of that child.
+*   `--vcpus <N>` *(optional)*: Sets maximum logical vCPU ceiling.
 *   `--depth <N>` *(optional)*: Sets maximum child nesting depth.
 *   `--descendants <N>` *(optional)*: Sets maximum descendant VM count.
 
@@ -348,13 +363,13 @@ lower its own resource quotas and capabilities before running untrusted code.
 
 Examples:
 ```bash
-# Query active resource quotas and child allocations
+# Query active resource quotas, available RAM pool, and pCPU delegation
 dsx quota
 
-# Limit child VM 2 to 128 MB RAM and 1 vCPU
-dsx quota 2 --ram 128 --vcpus 1
+# Grant child VM 2 50% of parent pCPU time and a 512 MB physical RAM quota
+dsx quota 2 --pcpu 50 --ram 512
 
-# Self-sandbox calling VM to 256 MB RAM
+# Self-sandbox calling VM to 256 MB physical RAM quota
 dsx quota self --ram 256
 ```
 

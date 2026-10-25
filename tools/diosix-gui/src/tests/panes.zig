@@ -9,6 +9,8 @@ const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 const host_info = @import("../host.zig");
 const font = @import("../font.zig");
+const fb = @import("../framebuffer.zig");
+const icon_mod = @import("../icon.zig");
 
 test "diosix-gui: Restart and Shutdown power confirmation modals" {
     const allocator = testing.allocator;
@@ -313,4 +315,167 @@ test "diosix-gui: config bottom gap, about build wrap, and 75% sliders" {
     try testing.expect(b1.height > gui.scalePx(20));
     try testing.expect(b2.rel_y >= b1.rel_y + @as(i32, @intCast(b1.height)));
     try testing.expect(fp.rel_y >= b2.rel_y + @as(i32, @intCast(b2.height)));
+}
+
+test "diosix-gui: running guest VMs pane, detail menu, and update interval" {
+    const allocator = testing.allocator;
+
+    var mock_guests: [2]host_info.RunningGuest = .{
+        .{
+            .cid = 1,
+            .is_root = true,
+            .vcpus = 4,
+            .pcpu_percent = 3,
+            .ram_bytes = 256 * 1024 * 1024,
+        },
+        .{
+            .cid = 2,
+            .is_root = false,
+            .vcpus = 2,
+            .pcpu_percent = 18,
+            .ram_bytes = 512 * 1024 * 1024,
+        },
+    };
+    mock_guests[0].setInstanceName("root");
+    mock_guests[0].setImageName("rootvm");
+    mock_guests[0].addStorageItem("/dev/vda1 (/)");
+
+    mock_guests[1].setInstanceName("worker-db");
+    mock_guests[1].setImageName("postgres.elf");
+    mock_guests[1].addStorageItem("disk: /var/lib/diosix/disks/db.raw");
+
+    host_info.guests.mock_running_guests = mock_guests[0..];
+    host_info.guests.mock_last_guest_action = null;
+    defer {
+        host_info.guests.mock_running_guests = null;
+        host_info.guests.mock_last_guest_action = null;
+    }
+
+    var gui = try DiosixGui.init(allocator, 1280, 800);
+    defer gui.deinit();
+
+    // 1. Running guests pane is displayed alongside main menu and takes half
+    // the available horizontal space next to WIN_MENU_ID.
+    const win_menu = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    const win_guests = gui.getWindow(gui_mod.WIN_GUESTS_ID).?;
+    try testing.expect(win_guests.is_onscreen);
+    const avail_w: u32 = @intCast(
+        @as(i32, @intCast(gui.width)) - gui_mod.BORDER_GAP - win_guests.x,
+    );
+    const gap_u: u32 = @intCast(gui_mod.BORDER_GAP);
+    const expected_half_w = (avail_w - gap_u) / 2;
+    try testing.expectEqual(
+        win_menu.x + @as(i32, @intCast(win_menu.width)) + gui_mod.BORDER_GAP,
+        win_guests.x,
+    );
+    try testing.expectEqual(expected_half_w, win_guests.width);
+
+    const hdr = win_guests.getIconById(gui_mod.ICON_GUESTS_HDR_ID).?;
+    try testing.expectEqualStrings("Running guest VMs", hdr.getText());
+
+    const g0 = win_guests.getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID).?;
+    const g1 = win_guests.getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID + 1).?;
+    try testing.expectEqualStrings(
+        "root (rootvm)\n4 vCPUs, 3% pCPU usage, 256 MB RAM",
+        g0.getText(),
+    );
+    try testing.expectEqualStrings(
+        "worker-db (postgres.elf)\n2 vCPUs, 18% pCPU usage, 512 MB RAM",
+        g1.getText(),
+    );
+
+    // 2. Selecting Root VM opens detail pane to the right WITHOUT Restart or
+    // Shutdown options, and lists attached storage.
+    gui.handleMouseClick(
+        win_guests.x + g0.rel_x + 10,
+        win_guests.y + g0.rel_y + 10,
+    );
+    gui.handleMouseRelease();
+    var win_detail = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
+    try testing.expect(win_detail.x > win_guests.x);
+    const root_rst = win_detail.getIconById(gui_mod.ICON_GUEST_RESTART_ID);
+    const root_shd = win_detail.getIconById(gui_mod.ICON_GUEST_SHUTDOWN_ID);
+    try testing.expect(root_rst == null);
+    try testing.expect(root_shd == null);
+    const pcpu_hdr = win_detail.getIconById(gui_mod.ICON_GUEST_PCPU_HDR_ID).?;
+    const pcpu_gr = win_detail.getIconById(gui_mod.ICON_GUEST_PCPU_GRAPH_ID).?;
+    try testing.expectEqualStrings("pCPU usage", pcpu_hdr.getText());
+    try testing.expectEqual(icon_mod.IconType.line_graph, pcpu_gr.icon_type);
+    try testing.expectEqualSlices(u8, &[_]u8{3}, pcpu_gr.getGraphSamples());
+    const st0 = win_detail.getIconById(gui_mod.ICON_GUEST_STORAGE_BASE_ID).?;
+    try testing.expectEqualStrings("/dev/vda1 (/)", st0.getText());
+
+    // 3. Selecting child VM shows Restart and Shutdown options and storage.
+    gui.handleMouseClick(
+        win_guests.x + g1.rel_x + 10,
+        win_guests.y + g1.rel_y + 10,
+    );
+    gui.handleMouseRelease();
+    win_detail = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
+    const restart_ic = win_detail.getIconById(gui_mod.ICON_GUEST_RESTART_ID).?;
+    const shd_id = gui_mod.ICON_GUEST_SHUTDOWN_ID;
+    const shutdown_ic = win_detail.getIconById(shd_id).?;
+    const st1 = win_detail.getIconById(gui_mod.ICON_GUEST_STORAGE_BASE_ID).?;
+    try testing.expectEqualStrings("Restart", restart_ic.getText());
+    try testing.expectEqualStrings("Shutdown", shutdown_ic.getText());
+    try testing.expectEqualStrings(
+        "disk: /var/lib/diosix/disks/db.raw",
+        st1.getText(),
+    );
+
+    // Click Restart on child VM.
+    gui.handleMouseClick(
+        win_detail.x + restart_ic.rel_x + 10,
+        win_detail.y + restart_ic.rel_y + 10,
+    );
+    gui.handleMouseRelease();
+    try testing.expectEqual(
+        @as(u64, 2),
+        host_info.guests.mock_last_guest_action.?.cid,
+    );
+    try testing.expectEqual(
+        host_info.GuestActionKind.restart,
+        host_info.guests.mock_last_guest_action.?.action,
+    );
+
+    // 4. Selecting a main menu item slides the guest pane away, and Back brings
+    // it back. Auto-update defaults to 2s and is configurable in Config.
+    try testing.expectEqual(@as(u32, 2000), gui.guest_update_interval_ms);
+    try gui.activateMenuItem(gui_mod.ICON_MENU_CONFIG_ID);
+    gui.completeNavAnimation();
+    try testing.expect(gui.getWindow(gui_mod.WIN_GUESTS_ID) == null);
+    try testing.expect(gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID) == null);
+
+    const win_cfg = gui.getWindow(gui_mod.WIN_CONFIG_ID).?;
+    const rate_sld =
+        win_cfg.getIconById(gui_mod.ICON_CONFIG_GUEST_RATE_SLIDER_ID).?;
+    try testing.expectEqual(@as(i32, 2), rate_sld.slider_val);
+    rate_sld.setSliderValue(5);
+    if (rate_sld.callback) |cb| cb(&gui, win_cfg, rate_sld);
+    try testing.expectEqual(@as(u32, 5000), gui.guest_update_interval_ms);
+
+    try gui.navigateBack();
+    gui.completeNavAnimation();
+    try testing.expect(gui.getWindow(gui_mod.WIN_GUESTS_ID) != null);
+
+    // 5. After 5000ms tick, live telemetry changes are reflected in the UI
+    // and appended to the 60-unit pCPU usage line graph.
+    mock_guests[1].pcpu_percent = 42;
+    gui.tick(5000);
+    const updated_g1 = gui.getWindow(gui_mod.WIN_GUESTS_ID).?
+        .getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID + 1).?;
+    try testing.expectEqualStrings(
+        "worker-db (postgres.elf)\n2 vCPUs, 42% pCPU usage, 512 MB RAM",
+        updated_g1.getText(),
+    );
+    const updated_gr = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?
+        .getIconById(gui_mod.ICON_GUEST_PCPU_GRAPH_ID).?;
+    try testing.expectEqualSlices(
+        u8,
+        &[_]u8{ 18, 18, 42 },
+        updated_gr.getGraphSamples(),
+    );
+    var px_buf: [320 * 120]u32 = @splat(fb.Color.GLASS_BG);
+    var surf = fb.Surface.init(&px_buf, 320, 120, 320 * @sizeOf(u32));
+    updated_gr.render(&surf, 0, 0, true);
 }

@@ -16,6 +16,7 @@ pub const Window = struct {
     y: i32,
     width: u32,
     height: u32,
+    natural_height: u32 = 0,
 
     // Coordinates for moving on/off screen.
     onscreen_x: i32,
@@ -86,6 +87,7 @@ pub const Window = struct {
             .y = off_y,
             .width = width,
             .height = height,
+            .natural_height = height,
             .onscreen_x = onscreen_x,
             .onscreen_y = onscreen_y,
             .offscreen_x = off_x,

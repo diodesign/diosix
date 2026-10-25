@@ -9,7 +9,7 @@ const linux = std.os.linux;
 const display_mod = @import("display.zig");
 const paths = @import("paths.zig");
 
-pub const INTRO_WAV_BYTES: []const u8 = @embedFile("intro.wav");
+pub const INTRO_WAV_BYTES: []const u8 = @embedFile("intro_wav");
 
 pub const WavInfo = struct {
     channels: u16,

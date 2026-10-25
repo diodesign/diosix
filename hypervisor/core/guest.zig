@@ -52,11 +52,7 @@ pub const STATIC_VCORES: usize = lineage_mod.STATIC_VCORES;
 pub const VCORE_HASH_BUCKETS: usize = lineage_mod.VCORE_HASH_BUCKETS;
 pub const max_vmids: u16 = quota_mod.max_vmids;
 
-pub const DEFAULT_ROOT_MAX_VCPUS: usize =
-    if (@hasDecl(config, "root_vcpus_max"))
-        @max(1, @as(usize, config.root_vcpus_max))
-    else
-        16;
+pub const DEFAULT_ROOT_MAX_VCPUS: usize = max_vcores;
 pub const MAX_MANIFEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const IOAPIC_PAGE_SIZE: usize = physmem.PageSize;
 pub const X86_EARLY_PGT_GPA_OFFSET: usize = 0x70000;
@@ -132,6 +128,7 @@ pub const Guest = struct {
     pub const promoteStandbyRoot = lineage_mod.promoteStandbyRoot;
     pub const setQuota = quota_mod.setQuota;
     pub const reduceQuota = quota_mod.reduceQuota;
+    pub const onMemoryPoolExhausted = quota_mod.onMemoryPoolExhausted;
     pub const checkQuota = quota_mod.checkQuota;
     pub const checkRamQuota = quota_mod.checkRamQuota;
     pub const consumeQuota = quota_mod.consumeQuota;
@@ -142,6 +139,7 @@ pub const Guest = struct {
     pub const stop = quota_mod.stop;
     pub const resetForRun = quota_mod.resetForRun;
     pub const hasAnyVcoreStarted = quota_mod.hasAnyVcoreStarted;
+    pub const checkVcpuQuota = quota_mod.checkVcpuQuota;
 
     fn guestReadMemory(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
         const g: *Guest = @ptrCast(@alignCast(ctx));
@@ -187,7 +185,6 @@ pub const Guest = struct {
         const self = try allocator.create(Guest);
         errdefer allocator.destroy(self);
 
-        const ram_pages = range_size / physmem.PageSize;
         self.* = .{
             .id = id,
             .state = .valid,
@@ -196,9 +193,11 @@ pub const Guest = struct {
             .target_arch = target_arch,
             .quotas = if (parent) |p| p.quotas else .{
                 .max_ram_pages = std.math.maxInt(usize),
-                .used_ram_pages = ram_pages,
-                .max_vcpus = DEFAULT_ROOT_MAX_VCPUS,
+                .used_ram_pages = 0,
+                .max_vcpus = std.math.maxInt(usize),
                 .used_vcpus = 0,
+                .pcpu_quota_pct = 100,
+                .delegated_pcpu_pct = 0,
             },
             .parent = parent,
             .children = .{ .start = null, .end = null },
@@ -303,6 +302,8 @@ pub const Guest = struct {
             it_child = next;
         }
         if (self.parent) |p| {
+            p.quotas.delegated_pcpu_pct -|= self.quotas.pcpu_quota_pct;
+            p.quotas.delegated_ram_pages -|= self.quotas.committed_ram_pages;
             p.freeChildHandle(self);
             if (self.child_node) |node| {
                 const s = p.tree_lock.lock();

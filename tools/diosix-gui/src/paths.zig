@@ -18,11 +18,33 @@ pub const PROC_UPTIME_PATH: [*:0]const u8 = "/proc/uptime";
 /// Kernel command-line procfs node.
 pub const PROC_CMDLINE_PATH: [*:0]const u8 = "/proc/cmdline";
 
+/// Kernel CPU statistics procfs node.
+pub const PROC_STAT_PATH: [*:0]const u8 = "/proc/stat";
+
+/// Kernel memory statistics procfs node.
+pub const PROC_MEMINFO_PATH: [*:0]const u8 = "/proc/meminfo";
+
+/// Kernel mounted filesystems procfs node.
+pub const PROC_MOUNTS_PATH: [*:0]const u8 = "/proc/mounts";
+
+/// Kernel block partitions procfs node.
+pub const PROC_PARTITIONS_PATH: [*:0]const u8 = "/proc/partitions";
+
+/// Kernel hostname procfs node.
+pub const PROC_HOSTNAME_PATH: [*:0]const u8 = "/proc/sys/kernel/hostname";
+
 /// System reboot binary fallback path.
 pub const REBOOT_BIN_PATH: [*:0]const u8 = "/sbin/reboot";
 
 /// System poweroff binary fallback path.
 pub const POWEROFF_BIN_PATH: [*:0]const u8 = "/sbin/poweroff";
+
+/// Candidate dsx CLI binary paths for child guest lifecycle management.
+pub const DSX_BIN_PATHS = [_][*:0]const u8{
+    "/usr/bin/dsx",
+    "/bin/dsx",
+    "/usr/sbin/dsx",
+};
 
 /// ALSA/OSS mixer initialization helper binary path.
 pub const ALSA_INIT_BIN_PATH: [*:0]const u8 = "/usr/sbin/diosix-alsa-init";
@@ -48,6 +70,15 @@ pub const INPUT_EVENT_PATH_PREFIX: []const u8 = "/dev/input/event";
 
 /// Root-owned runtime directory for Diosix IPC, locks, and boot sentinels.
 pub const RUN_DIOSIX_DIR: [*:0]const u8 = "/run/diosix";
+
+/// Runtime guest registry TOML path written by dsx.
+pub const GUEST_REGISTRY_PATH: [*:0]const u8 = "/run/diosix/guests.toml";
+
+/// Persistent and shared guest VM image and storage directories.
+pub const VAR_IMAGES_DIR: [*:0]const u8 = "/var/lib/diosix/images";
+pub const SHARE_IMAGES_DIR: [*:0]const u8 = "/usr/share/diosix/images";
+pub const VAR_DISKS_DIR: [*:0]const u8 = "/var/lib/diosix/disks";
+pub const VAR_ISO_DIR: [*:0]const u8 = "/var/lib/diosix/iso";
 
 /// Singleton flock path preventing concurrent diosix-gui instances.
 pub const GUI_LOCK_PATH: [*:0]const u8 = "/run/diosix/diosix-gui.lock";

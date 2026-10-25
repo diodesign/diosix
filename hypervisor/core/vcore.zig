@@ -75,6 +75,8 @@ pub const VirtualCore = struct {
         native: struct {
             required_extensions: usize,
             siselect: usize,
+            fp_state: riscv.FpState = .{},
+            vec_state: riscv.VectorState = .{},
         },
         emulated: struct {
             vcpu: ?*native_emu.VCpu = null,
@@ -131,6 +133,7 @@ pub const VirtualCore = struct {
     weight: u32,
     last_queued_time: u64 = 0,
     last_dispatched_time: u64 = 0,
+    active_ticks: u64 = 0,
 
     scheduler_node: SchedulerList.Node = undefined,
     blocked_node: dsa.LinkedList(*anyopaque).Node = undefined,
@@ -176,6 +179,10 @@ pub const VirtualCore = struct {
             riscv.ENVCFG.STCE | riscv.ENVCFG.CACHE_OPS_ALL;
         self.context[@backingInt(riscv.Register.a0)] = self.id;
         self.context[@backingInt(riscv.Register.a1)] = arg1;
+        if (self.exec_path == .native) {
+            self.exec_path.native.fp_state = .{};
+            self.exec_path.native.vec_state = .{};
+        }
     }
 
     fn configureEmulatedCpuContext(self: *VirtualCore) void {
@@ -206,11 +213,11 @@ pub const VirtualCore = struct {
         };
 
         if (parent.target_arch == .riscv64) {
-            vc.configureNativeState(entry, dtb);
             vc.exec_path = .{ .native = .{
                 .siselect = 0,
                 .required_extensions = riscv.IsaExtension.i,
             } };
+            vc.configureNativeState(entry, dtb);
         } else {
             vc.configureEmulatedCpuContext();
             vc.exec_path = .{ .emulated = .{
@@ -246,6 +253,7 @@ pub const VirtualCore = struct {
         self.wfi_blocked = false;
         self.is_queued = false;
         self.running_on_cpu = null;
+        self.active_ticks = 0;
         self.context = @splat(0);
 
         if (self.exec_path == .native) {

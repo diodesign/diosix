@@ -14,6 +14,7 @@ pub const GUEST_REGISTRY_PATH = sysconfig.GUEST_REGISTRY_PATH;
 pub const GuestRegistryKey = enum {
     cid,
     name,
+    image,
     vcpus,
     ram,
     disk,
@@ -26,6 +27,7 @@ pub const GuestRegistryKey = enum {
 pub const GuestRegistryEntry = struct {
     cid: usize = 0,
     name: []const u8 = "",
+    image: []const u8 = "",
     vcpus: usize = 1,
     ram: []const u8 = "256 MB",
     disk: []const u8 = "",
@@ -69,6 +71,7 @@ pub const GuestRegistryIter = struct {
                                 std.fmt.parseInt(usize, val, 10) catch 0;
                         },
                         .name => entry.name = val,
+                        .image => entry.image = val,
                         .vcpus => {
                             entry.vcpus =
                                 std.fmt.parseInt(usize, val, 10) catch 1;
@@ -133,6 +136,7 @@ const REGISTRY_ENTRY_FMT =
     \\[[guest]]
     \\cid = {d}
     \\name = "{s}"
+    \\image = "{s}"
     \\vcpus = {d}
     \\ram = "{s}"
     \\disk = "{s}"
@@ -163,6 +167,7 @@ pub fn removeGuestFromRegistry(target_cid: usize) void {
                 .{
                     e.cid,
                     e.name,
+                    e.image,
                     e.vcpus,
                     e.ram,
                     e.disk,
@@ -192,6 +197,7 @@ pub fn removeGuestFromRegistry(target_cid: usize) void {
 pub fn saveGuestRegistry(
     cid: usize,
     name: []const u8,
+    image: []const u8,
     vcpus: usize,
     ram: []const u8,
     disk: []const u8,
@@ -205,7 +211,7 @@ pub fn saveGuestRegistry(
 
     const allocator = std.heap.page_allocator;
     const entry = allocator.print(REGISTRY_ENTRY_FMT, .{
-        cid, name, vcpus, ram, disk, cdrom, ip, trust, status,
+        cid, name, image, vcpus, ram, disk, cdrom, ip, trust, status,
     }) catch {
         common.printStr(OOM_REGISTRY_MSG);
         return;

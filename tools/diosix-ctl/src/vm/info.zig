@@ -53,7 +53,9 @@ const GUEST_TEXT_FMT =
 const SELF_JSON_FMT =
     "{{\"assigned_cid\":{d},\"architecture\":\"{s}\"," ++
     "\"root_vm\":{s},\"hardware_trust\":{s},\"ram_mb\":{d}," ++
-    "\"ram_pages\":{d},\"vcpus\":{d},\"child_vms\":{d}}}\n";
+    "\"ram_pages\":{d},\"vcpus\":{d},\"pcpu_quota_pct\":{d}," ++
+    "\"delegated_pcpu_pct\":{d},\"ram_quota_mb\":{d}," ++
+    "\"available_ram_quota_mb\":{d},\"child_vms\":{d}}}\n";
 
 const SELF_TEXT_FMT =
     \\Assigned CID   : {d}
@@ -62,6 +64,8 @@ const SELF_TEXT_FMT =
     \\Hardware trust : {s}
     \\RAM allocation : {d} MB ({d} pages)
     \\Virtual CPUs   : {d}
+    \\pCPU quota     : {d}% ({d}% delegated, {d}% retained)
+    \\RAM quota pool : {d} MB ({d} MB available for children)
     \\Child VMs      : {d}
     \\
 ;
@@ -236,6 +240,20 @@ fn allocSelfInfo(
         info.self_ram_pages
     else
         (ram_mb * 1024 / 4);
+    const pcpu_pct: u32 = if (info.pcpu_quota_pct > 0)
+        info.pcpu_quota_pct
+    else
+        100;
+    const del_pcpu_pct: u32 = @min(info.delegated_pcpu_pct, 90);
+    const ret_pcpu_pct: u32 = 100 -| del_pcpu_pct;
+    const max_ram_mb = if (info.max_ram_pages > 0 and
+        info.max_ram_pages < std.math.maxInt(usize))
+        (info.max_ram_pages * PAGE_SIZE_KB) / KB_PER_MB
+    else
+        ram_mb;
+    const del_ram_mb = (info.delegated_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
+    const used_ram_mb = (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
+    const avail_ram_mb = max_ram_mb -| @max(del_ram_mb, used_ram_mb);
 
     if (json_mode) {
         return allocator.print(SELF_JSON_FMT, .{
@@ -246,6 +264,10 @@ fn allocSelfInfo(
             ram_mb,
             self_ram_pages,
             vcpus,
+            pcpu_pct,
+            del_pcpu_pct,
+            max_ram_mb,
+            avail_ram_mb,
             info.child_count,
         });
     }
@@ -258,6 +280,11 @@ fn allocSelfInfo(
         ram_mb,
         self_ram_pages,
         vcpus,
+        pcpu_pct,
+        del_pcpu_pct,
+        ret_pcpu_pct,
+        max_ram_mb,
+        avail_ram_mb,
         info.child_count,
     });
 }

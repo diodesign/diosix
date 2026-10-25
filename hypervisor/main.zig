@@ -181,6 +181,7 @@ pub export fn main(cpu_core_id: usize, fdt_paddr: usize) void {
                     if (riscv.CLINT.msip(pcore.this().hardware_hart_id)) |ptr| {
                         ptr.* = 0;
                     }
+                    xint.state.restoreFpAndVectorState(vc);
                     pcore.this().in_m_mode = false;
                     pcore.hw_run_vcore(
                         vc.getNativeContext(),

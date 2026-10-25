@@ -34,6 +34,7 @@ pub fn saveGuestStateFromHardware(
     vc.getNativeMachine().mstatus = riscv.readMstatus();
 
     if (vc.exec_path == .native) {
+        saveFpAndVectorState(vc);
         if (riscv.hasHExtension()) {
             vc.getNativeMachine().hstatus = riscv.readHstatus();
             vc.getNativeMachine().hvip = riscv.readHvip();
@@ -44,10 +45,177 @@ pub fn saveGuestStateFromHardware(
     }
 }
 
+pub fn saveFpAndVectorState(vc: *vcore.VirtualCore) void {
+    if (vc.exec_path != .native) return;
+
+    const misa = riscv.readMisa();
+    const mstatus_enable = riscv.MSTATUS.FS_DIRTY | riscv.MSTATUS.VS_DIRTY;
+    riscv.writeMstatus(riscv.readMstatus() | mstatus_enable);
+
+    if (comptime @import("builtin").is_test) {
+        if ((misa & riscv.IsaExtension.d) != 0) {
+            vc.exec_path.native.fp_state = riscv.mock.mock_hw_fp_state;
+        }
+        if ((misa & riscv.IsaExtension.v) != 0) {
+            vc.exec_path.native.vec_state = riscv.mock.mock_hw_vec_state;
+        }
+        return;
+    }
+
+    if ((misa & riscv.IsaExtension.d) != 0) {
+        const fp = &vc.exec_path.native.fp_state;
+        asm volatile (
+            \\.option push
+            \\.option arch, +f, +d
+            \\fsd f0, 0(a0); fsd f1, 8(a0)
+            \\fsd f2, 16(a0); fsd f3, 24(a0)
+            \\fsd f4, 32(a0); fsd f5, 40(a0)
+            \\fsd f6, 48(a0); fsd f7, 56(a0)
+            \\fsd f8, 64(a0); fsd f9, 72(a0)
+            \\fsd f10, 80(a0); fsd f11, 88(a0)
+            \\fsd f12, 96(a0); fsd f13, 104(a0)
+            \\fsd f14, 112(a0); fsd f15, 120(a0)
+            \\fsd f16, 128(a0); fsd f17, 136(a0)
+            \\fsd f18, 144(a0); fsd f19, 152(a0)
+            \\fsd f20, 160(a0); fsd f21, 168(a0)
+            \\fsd f22, 176(a0); fsd f23, 184(a0)
+            \\fsd f24, 192(a0); fsd f25, 200(a0)
+            \\fsd f26, 208(a0); fsd f27, 216(a0)
+            \\fsd f28, 224(a0); fsd f29, 232(a0)
+            \\fsd f30, 240(a0); fsd f31, 248(a0)
+            \\frcsr t0
+            \\sd t0, 256(a0)
+            \\.option pop
+            :
+            : [fp] "{a0}" (fp),
+            : .{ .x5 = true, .memory = true });
+    }
+
+    if ((misa & riscv.IsaExtension.v) != 0) {
+        const vec = &vc.exec_path.native.vec_state;
+        asm volatile (
+            \\.option push
+            \\.option arch, +v
+            \\csrr t0, vl
+            \\sd t0, 1024(a0)
+            \\csrr t0, vtype
+            \\sd t0, 1032(a0)
+            \\csrr t0, vcsr
+            \\sd t0, 1040(a0)
+            \\csrr t0, vstart
+            \\sd t0, 1048(a0)
+            \\csrr t1, vlenb
+            \\slli t1, t1, 3
+            \\mv t0, a0
+            \\vs8r.v v0, (t0)
+            \\add t0, t0, t1
+            \\vs8r.v v8, (t0)
+            \\add t0, t0, t1
+            \\vs8r.v v16, (t0)
+            \\add t0, t0, t1
+            \\vs8r.v v24, (t0)
+            \\.option pop
+            :
+            : [vec] "{a0}" (vec),
+            : .{ .x5 = true, .x6 = true, .memory = true });
+    }
+}
+
+pub fn restoreFpAndVectorState(vc: *const vcore.VirtualCore) void {
+    if (vc.exec_path != .native) return;
+
+    const misa = riscv.readMisa();
+    const mstatus_enable = riscv.MSTATUS.FS_DIRTY | riscv.MSTATUS.VS_DIRTY;
+    riscv.writeMstatus(riscv.readMstatus() | mstatus_enable);
+
+    if (comptime @import("builtin").is_test) {
+        if ((misa & riscv.IsaExtension.d) != 0) {
+            riscv.mock.mock_hw_fp_state = vc.exec_path.native.fp_state;
+        }
+        if ((misa & riscv.IsaExtension.v) != 0) {
+            riscv.mock.mock_hw_vec_state = vc.exec_path.native.vec_state;
+        }
+        return;
+    }
+
+    if ((misa & riscv.IsaExtension.d) != 0) {
+        const fp = &vc.exec_path.native.fp_state;
+        asm volatile (
+            \\.option push
+            \\.option arch, +f, +d
+            \\fld f0, 0(a0); fld f1, 8(a0)
+            \\fld f2, 16(a0); fld f3, 24(a0)
+            \\fld f4, 32(a0); fld f5, 40(a0)
+            \\fld f6, 48(a0); fld f7, 56(a0)
+            \\fld f8, 64(a0); fld f9, 72(a0)
+            \\fld f10, 80(a0); fld f11, 88(a0)
+            \\fld f12, 96(a0); fld f13, 104(a0)
+            \\fld f14, 112(a0); fld f15, 120(a0)
+            \\fld f16, 128(a0); fld f17, 136(a0)
+            \\fld f18, 144(a0); fld f19, 152(a0)
+            \\fld f20, 160(a0); fld f21, 168(a0)
+            \\fld f22, 176(a0); fld f23, 184(a0)
+            \\fld f24, 192(a0); fld f25, 200(a0)
+            \\fld f26, 208(a0); fld f27, 216(a0)
+            \\fld f28, 224(a0); fld f29, 232(a0)
+            \\fld f30, 240(a0); fld f31, 248(a0)
+            \\ld t0, 256(a0)
+            \\fscsr t0
+            \\.option pop
+            :
+            : [fp] "{a0}" (fp),
+            : .{ .x5 = true, .memory = true });
+    }
+
+    if ((misa & riscv.IsaExtension.v) != 0) {
+        const vec = &vc.exec_path.native.vec_state;
+        asm volatile (
+            \\.option push
+            \\.option arch, +v
+            \\csrr t1, vlenb
+            \\slli t1, t1, 3
+            \\mv t0, a0
+            \\vl8r.v v0, (t0)
+            \\add t0, t0, t1
+            \\vl8r.v v8, (t0)
+            \\add t0, t0, t1
+            \\vl8r.v v16, (t0)
+            \\add t0, t0, t1
+            \\vl8r.v v24, (t0)
+            \\ld t0, 1024(a0)
+            \\ld t1, 1032(a0)
+            \\vsetvl zero, t0, t1
+            \\ld t0, 1040(a0)
+            \\csrw vcsr, t0
+            \\ld t0, 1048(a0)
+            \\csrw vstart, t0
+            \\.option pop
+            :
+            : [vec] "{a0}" (vec),
+            : .{ .x5 = true, .x6 = true, .memory = true });
+    }
+}
+
 pub fn runIdleLoop(pcpu: *riscv.CpuContext) void {
     while (pcpu.active_vcore == null) {
         if (pcore.host_stopping.load(.acquire)) {
             parkStoppingCore(pcpu);
+        }
+
+        const mip_now = riscv.readMip();
+        if ((mip_now & riscv.MIP.MSIP) != 0) {
+            if (riscv.CLINT.msip(pcpu.hardware_hart_id)) |ptr| {
+                ptr.* = 0;
+            }
+            if (riscv.hasHExtension()) {
+                riscv.hfenceGvma();
+            }
+            pcpu.gstage_dirty = true;
+        }
+        const ext_pending =
+            (mip_now & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0;
+        if (ext_pending) {
+            _ = interrupt.deliverRootExternalIrq(pcpu);
         }
 
         const now_time = riscv.readTime();
@@ -87,12 +255,18 @@ pub fn runIdleLoop(pcpu: *riscv.CpuContext) void {
         }
         pcpu.blocked_lock.unlock(b_prev);
 
-        const msip_pending = (riscv.readMip() & riscv.MIP.MSIP) != 0;
         scheduler.schedule();
         if (pcpu.active_vcore != null) break;
 
-        if (!msip_pending) {
-            riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
+        if ((riscv.readMip() & riscv.MIP.MSIP) == 0) {
+            if (ext_pending) {
+                const ext_mask = ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
+                riscv.writeMie(riscv.MIE.ALL_PHYSICAL & ext_mask);
+                const ext_poll = now_time + riscv.EXT_IRQ_POLL_TICKS;
+                if (ext_poll < min_timer) min_timer = ext_poll;
+            } else {
+                riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
+            }
             riscv.setTimer(min_timer);
             riscv.pause();
         }
@@ -107,10 +281,12 @@ pub fn checkIdleVCoreWake(
     if (@atomicLoad(bool, &vc.pending_ipi, .acquire)) return true;
 
     if (vc.exec_path == .native) {
-        const blocked_mip = riscv.readMip();
-        if ((blocked_mip & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0) {
-            vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
-            return true;
+        if (vc.guest.is_root) {
+            const blocked_mip = riscv.readMip();
+            if ((blocked_mip & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0) {
+                vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
+                return true;
+            }
         }
         const virt_mask =
             riscv.HVIP.VSSIP | riscv.HVIP.VSTIP | riscv.HVIP.VSEIP;
@@ -161,6 +337,7 @@ pub fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.MSTATUS.TW;
     riscv.writeMepc(ms.mepc);
     riscv.writeMstatus(ms.mstatus);
+    restoreFpAndVectorState(vc);
 
     if (riscv.hasHExtension()) {
         if (vc.guest.space.mode == .h_paging) {
@@ -169,6 +346,7 @@ pub fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
             else
                 0;
         }
+        const old_hgatp = riscv.readHgatp();
         riscv.writeHstatus(ms.hstatus);
         riscv.writeHgatp(ms.hgatp);
 
@@ -194,7 +372,11 @@ pub fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
         riscv.writeHideleg(ms.hideleg);
         riscv.writeHcounteren(riscv.MCOUNTEREN.DEFAULT_COUNTERS);
         riscv.restoreVsState(gs);
-        riscv.hfenceGvma();
+        const pcpu = pcore.this();
+        if (ms.hgatp != old_hgatp or pcpu.gstage_dirty) {
+            riscv.hfenceGvma();
+            pcpu.gstage_dirty = false;
+        }
     } else {
         var mip_val = riscv.readMip();
         if ((ms.hvip & riscv.HVIP.VSTIP) != 0) {
@@ -223,15 +405,16 @@ pub fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
     }
 }
 
-test "state: saveGuestStateFromHardware captures hstatus" {
+test "state: save and restore hstatus, FP, and Vector registers per vCore" {
     std.testing.refAllDecls(@This());
+    const testing = std.testing;
     riscv.initMockHardware();
     const physmem = @import("../../../../../core/physmem.zig");
-    var phys_test = try physmem.initForTest(std.testing.allocator, 2048);
+    var phys_test = try physmem.initForTest(testing.allocator, 2048);
     defer phys_test.deinit();
     const guest_mod = @import("../../../../../core/guest.zig");
     const g = try guest_mod.createGuest(
-        std.testing.allocator,
+        testing.allocator,
         false,
         false,
         null,
@@ -242,13 +425,61 @@ test "state: saveGuestStateFromHardware captures hstatus" {
     );
     defer g.deinit();
 
-    var vc = vcore.VirtualCore.init(0, g, 0x80000000, 0x80001000, .normal);
+    var vc0 = vcore.VirtualCore.init(0, g, 0x80000000, 0x80001000, .normal);
+    var vc1 = vcore.VirtualCore.init(1, g, 0x80000000, 0x80001000, .normal);
     var ctx = std.mem.zeroes(riscv.ThreadContext);
     riscv.writeHstatus(riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP);
 
-    saveGuestStateFromHardware(&vc, &ctx, 0x80002000);
-    try std.testing.expectEqual(
+    // Populate hardware FP and Vector state while vc0 is active, then save.
+    riscv.mock.mock_hw_fp_state.fregs[0] = 0x3ff0000000000000;
+    riscv.mock.mock_hw_fp_state.fregs[31] = 0x400921fb54442d18;
+    riscv.mock.mock_hw_fp_state.fcsr = 0x1f;
+    riscv.mock.mock_hw_vec_state.vregs[0] = 0xa5;
+    riscv.mock.mock_hw_vec_state.vregs[1023] = 0x5a;
+    riscv.mock.mock_hw_vec_state.vl = 64;
+    riscv.mock.mock_hw_vec_state.vtype = 0xd3; // e32, m8, ta, ma (vill=0)
+    riscv.mock.mock_hw_vec_state.vcsr = 0x3;
+    riscv.mock.mock_hw_vec_state.vstart = 4;
+
+    saveGuestStateFromHardware(&vc0, &ctx, 0x80002000);
+    try testing.expectEqual(
         @as(u64, riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP),
-        vc.getNativeMachine().hstatus,
+        vc0.getNativeMachine().hstatus,
     );
+
+    // Context-switch to vc1: hardware FP/Vector state must reset to vc1's
+    // initial state (vtype = VTYPE_VILL_BIT) and not leak vc0's registers.
+    syncGuestStateToHardware(&vc1);
+    try testing.expectEqual(@as(u64, 0), riscv.mock.mock_hw_fp_state.fregs[0]);
+    try testing.expectEqual(
+        riscv.VTYPE_VILL_BIT,
+        riscv.mock.mock_hw_vec_state.vtype,
+    );
+
+    // Mutate vc1's hardware FP/Vector state and save vc1.
+    riscv.mock.mock_hw_fp_state.fregs[0] = 0xdeadbeefcafebabe;
+    riscv.mock.mock_hw_vec_state.vl = 16;
+    riscv.mock.mock_hw_vec_state.vtype = 0xc8;
+    saveGuestStateFromHardware(&vc1, &ctx, 0x80003000);
+
+    // Context-switch back to vc0 and verify vc0's FP/Vector state is intact.
+    syncGuestStateToHardware(&vc0);
+    try testing.expectEqual(
+        @as(u64, 0x3ff0000000000000),
+        riscv.mock.mock_hw_fp_state.fregs[0],
+    );
+    try testing.expectEqual(
+        @as(u64, 0x400921fb54442d18),
+        riscv.mock.mock_hw_fp_state.fregs[31],
+    );
+    try testing.expectEqual(@as(u64, 0x1f), riscv.mock.mock_hw_fp_state.fcsr);
+    try testing.expectEqual(@as(u8, 0xa5), riscv.mock.mock_hw_vec_state.vregs[0]);
+    try testing.expectEqual(
+        @as(u8, 0x5a),
+        riscv.mock.mock_hw_vec_state.vregs[1023],
+    );
+    try testing.expectEqual(@as(u64, 64), riscv.mock.mock_hw_vec_state.vl);
+    try testing.expectEqual(@as(u64, 0xd3), riscv.mock.mock_hw_vec_state.vtype);
+    try testing.expectEqual(@as(u64, 0x3), riscv.mock.mock_hw_vec_state.vcsr);
+    try testing.expectEqual(@as(u64, 4), riscv.mock.mock_hw_vec_state.vstart);
 }

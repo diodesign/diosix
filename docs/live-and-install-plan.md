@@ -201,7 +201,7 @@ verification:
 
 ```mermaid
 flowchart LR
-    A["Bundled Minimal Guest (linux-guest.elf)"]
+    A["Diosix Base Linux (diosix-linux.elf)"]
     B["Remote Distro Repos (Debian, Alpine, Fedora)"]
     POOL["Local Storage Pool (/var/lib/diosix/images/)"]
     CRYPTO["Signature & SHA-256 Verification"]

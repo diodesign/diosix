@@ -113,9 +113,8 @@ pub fn runSshCommand(
                 argc += 2;
             }
             argv_buf[argc] = "-y";
-            argv_buf[argc + 1] = "--";
-            argv_buf[argc + 2] = dest_str.ptr;
-            argc += 3;
+            argv_buf[argc + 1] = dest_str.ptr;
+            argc += 2;
             if (cmd_str) |cs| {
                 argv_buf[argc] = cs.ptr;
                 argc += 1;
@@ -197,13 +196,9 @@ pub fn execSsh(
             );
             common.printStr(
                 "Note: If the guest is running a minimal payload without " ++
-                    "an SSH daemon (such as micro-guest), SSH connections " ++
-                    "are not supported.\n",
+                    "an SSH daemon, SSH connections are not supported.\n",
             );
             return;
-        }
-        if (cmd_str == null) {
-            ensureGuestDefaultImage(key_str, ip_addr);
         }
     }
 

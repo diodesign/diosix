@@ -18,11 +18,11 @@ if [ -z "$KERNEL_ELF" ] || [ -z "$OUT_IMG" ]; then
     exit 1
 fi
 
-mkdir -p "$(dirname "$OUT_IMG")"
-STAGING_DIR="$(dirname "$OUT_IMG")/storage-staging"
+mkdir -p "$(dirname "$OUT_IMG")" .zig-cache
+STAGING_DIR=".zig-cache/storage-staging"
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/images" "$STAGING_DIR/manifests" \
-    "$STAGING_DIR/keys" .zig-cache
+    "$STAGING_DIR/keys"
 chmod 700 "$STAGING_DIR/keys"
 MGT_KEY="$STAGING_DIR/keys/id_management"
 if command -v dropbearkey >/dev/null 2>&1; then
@@ -67,9 +67,9 @@ if [ -f "$KERNEL_ELF" ]; then
         STRIP_TOOL="$BR_STRIP"
     fi
     "$STRIP_TOOL" -s "$KERNEL_ELF" \
-        -o "$STAGING_DIR/images/linux-guest.elf" 2>/dev/null || \
-        cp "$KERNEL_ELF" "$STAGING_DIR/images/linux-guest.elf"
-    ln -sf linux-guest.elf "$STAGING_DIR/images/default.elf"
+        -o "$STAGING_DIR/images/diosix-linux.elf" 2>/dev/null || \
+        cp "$KERNEL_ELF" "$STAGING_DIR/images/diosix-linux.elf"
+    ln -sf diosix-linux.elf "$STAGING_DIR/images/default.elf"
 fi
 
 # Copy system manifest to storage disk.
@@ -85,7 +85,7 @@ the Diosix hypervisor and Root VM (trusted host supervisor), mounted canonically
 at /var/lib/diosix.
 
 Directory structure:
-  /var/lib/diosix/images/    - Base guest OS images (linux-guest.elf, steward)
+  /var/lib/diosix/images/    - Base guest OS images (diosix-linux.elf, steward)
   /var/lib/diosix/manifests/ - Declarative domain manifests (system.toml)
   /var/lib/diosix/keys/      - Enrolled FIDO2/TPM passkeys and management keys
   /var/lib/diosix/disks/     - Persistent guest VM storage disks

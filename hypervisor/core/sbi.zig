@@ -305,7 +305,7 @@ pub fn deliverToQueue(
         while (it) |node| : (it = node.next) {
             if (node.contents.tryWake()) {
                 scheduler.queue(node.contents);
-                broadcastPhysicalIPI();
+                pcore.wakeIdleCores();
             }
         }
     }
