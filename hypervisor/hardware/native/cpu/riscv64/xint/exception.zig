@@ -166,7 +166,11 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
         fatalException(irq, context);
         return;
     }
-    g.space.handleFault(vc, gpa, @backingInt(irq.cause)) catch |err| {
+    const mapped_new = g.space.handleFault(
+        vc,
+        gpa,
+        @backingInt(irq.cause),
+    ) catch |err| {
         if (was_unmapped and err == error.OutOfMemory) {
             g.onMemoryPoolExhausted();
             if (!g.is_root) {
@@ -181,7 +185,7 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
         fatalException(irq, context);
         return;
     };
-    if (was_unmapped) g.consumeQuota(1, 0);
+    if (was_unmapped and mapped_new) g.consumeQuota(1, 0);
     pcpu.gstage_dirty = true;
 }
 

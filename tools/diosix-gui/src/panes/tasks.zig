@@ -84,16 +84,87 @@ fn onDismissTaskClick(
     }
 }
 
-pub fn syncTaskPanes(self: *DiosixGui) void {
-    for (0..tasks_mod.MAX_TASKS) |i| {
-        _ = self.destroyWindow(WIN_TASK_BASE_ID + @as(u32, @intCast(i)));
+fn tryUpdateTaskPanesInPlace(
+    self: *DiosixGui,
+    bar_w: u32,
+    bar_h: u32,
+) bool {
+    var active_slots: u32 = 0;
+    for (&self.task_mgr.entries) |*entry| {
+        if (!entry.active) continue;
+        const win_id = WIN_TASK_BASE_ID + active_slots;
+        const row_from_bottom: u32 = active_slots + 1;
+        const bar_y: i32 = @as(i32, @intCast(self.height)) -
+            @as(
+                i32,
+                @intCast(
+                    BORDER_GAP_U32 +
+                        (row_from_bottom + 1) * bar_h +
+                        row_from_bottom * BORDER_GAP_U32,
+                ),
+            );
+        const win = self.getWindow(win_id) orelse return false;
+        if (win.onscreen_x != gui_mod.BORDER_GAP or
+            win.onscreen_y != bar_y or
+            win.width != bar_w or
+            win.height != bar_h)
+        {
+            return false;
+        }
+        const has_prog = self.findIcon(win_id, ICON_TASK_PROGRESS_ID) != null;
+        if ((entry.state != .failed) != has_prog) return false;
+        if (self.findIcon(win_id, ICON_TASK_LABEL_ID) == null or
+            self.findIcon(win_id, ICON_TASK_DISMISS_ID) == null)
+        {
+            return false;
+        }
+        active_slots += 1;
+    }
+    if (active_slots == 0) return false;
+    var extra: u32 = active_slots;
+    while (extra < @as(u32, @intCast(tasks_mod.MAX_TASKS))) : (extra += 1) {
+        if (self.getWindow(WIN_TASK_BASE_ID + extra) != null) return false;
     }
 
+    var slot_idx: u32 = 0;
+    for (&self.task_mgr.entries) |*entry| {
+        if (!entry.active) continue;
+        const win_id = WIN_TASK_BASE_ID + slot_idx;
+        const win = self.getWindow(win_id).?;
+        var label_buf: [224]u8 = undefined;
+        const label_txt = entry.formatDisplayLabel(&label_buf);
+        if (self.findIcon(win_id, ICON_TASK_LABEL_ID)) |lbl_ic| {
+            lbl_ic.setText(label_txt);
+        }
+        if (self.findIcon(win_id, ICON_TASK_PROGRESS_ID)) |prog_ic| {
+            prog_ic.setSliderValue(@intCast(entry.progress_pct));
+            if (entry.state == .completed) {
+                prog_ic.setCustomColor(fb.Color.PROGRESS_SUCCESS_GREEN);
+            } else {
+                prog_ic.custom_color = null;
+            }
+        }
+        if (self.findIcon(win_id, ICON_TASK_DISMISS_ID)) |btn_ic| {
+            btn_ic.user_tag = entry.id;
+        }
+        self.markDirty(win.getBox());
+        slot_idx += 1;
+    }
+    return true;
+}
+
+pub fn syncTaskPanes(self: *DiosixGui) void {
     const bar_h = self.scalePx(40);
     const bar_w = if (self.width > BORDER_GAP_U32 * 2)
         self.width - (BORDER_GAP_U32 * 2)
     else
         self.width;
+
+    if (tryUpdateTaskPanesInPlace(self, bar_w, bar_h)) return;
+
+    for (0..tasks_mod.MAX_TASKS) |i| {
+        _ = self.destroyWindow(WIN_TASK_BASE_ID + @as(u32, @intCast(i)));
+    }
     const pad_x: i32 = @intCast(self.scalePx(12));
     const btn_w = self.scalePx(96);
     const btn_h = self.scalePx(28);

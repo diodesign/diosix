@@ -265,8 +265,18 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
     if (is_guest) {
         if (pcpu.active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
-            if (vc.state == .stopped or vc.getGuest().state != .valid) {
-                vc.state = .stopped;
+            var next_timer: u64 = riscv.TIMER_INFINITY;
+            const woke_blocked =
+                interrupt.wakeExpiredBlockedVCores(pcpu, &next_timer);
+            const is_stopped =
+                vc.state == .stopped or vc.getGuest().state != .valid;
+            if (is_stopped) vc.state = .stopped;
+            const local_waiting = pcpu.run_queue_count > 0 and
+                !vc.guest.is_root;
+            const slice_expired = (riscv.readTime() -%
+                @atomicLoad(u64, &vc.last_dispatched_time, .monotonic)) >=
+                riscv.TIMESLICE_TICKS;
+            if (is_stopped or woke_blocked or local_waiting or slice_expired) {
                 scheduler.schedule();
             }
         }

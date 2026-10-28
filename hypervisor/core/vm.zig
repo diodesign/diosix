@@ -8,6 +8,8 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const atomic = @import("atomic.zig");
+const pcore = @import("pcore.zig");
 const physmem = @import("physmem.zig");
 const sv39x4 = @import("../hardware/native/cpu/riscv64/sv39x4.zig");
 const pmp = @import("../hardware/native/cpu/riscv64/pmp.zig");
@@ -20,6 +22,7 @@ pub const GuestSpace = struct {
     mode: enum { h_paging, pmp_fallback },
     paging: ?sv39x4.PageTable,
     pmp_config: ?pmp.PMPConfig,
+    lock: atomic.SpinLock = atomic.SpinLock.init(),
     is_trusted: bool,
     base_gpa: usize,
     base_hpa: usize,
@@ -144,10 +147,13 @@ pub const GuestSpace = struct {
             return error.InvalidAddress;
         }
 
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+
         if (self.mode == .h_paging) {
             if (self.paging) |*pt| {
                 var offset: usize = 0;
-                errdefer self.unmap(gpa, offset);
+                errdefer self.unmapLocked(gpa, offset);
                 while (offset < size) : (offset += physmem.PageSize) {
                     try pt.mapPage(
                         gpa + offset,
@@ -170,8 +176,7 @@ pub const GuestSpace = struct {
         }
     }
 
-    /// Unmaps physical memory from the guest address space.
-    pub fn unmap(self: *GuestSpace, gpa: usize, size: usize) void {
+    fn unmapLocked(self: *GuestSpace, gpa: usize, size: usize) void {
         if (size == 0) return;
         const gpa_end = std.math.add(usize, gpa, size) catch return;
         if (self.mode == .h_paging and gpa_end > sv39x4.MAX_GPA) return;
@@ -182,12 +187,26 @@ pub const GuestSpace = struct {
                 while (offset < size) : (offset += physmem.PageSize) {
                     pt.unmapPage(gpa + offset);
                 }
+                for (&pcore.core_table) |*row| {
+                    if (row.static_ptr) |ctx| {
+                        @atomicStore(bool, &ctx.gstage_dirty, true, .release);
+                    }
+                }
             }
         }
     }
 
+    /// Unmaps physical memory from the guest address space.
+    pub fn unmap(self: *GuestSpace, gpa: usize, size: usize) void {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        self.unmapLocked(gpa, size);
+    }
+
     /// Updates the guest range size and underlying page table limits.
     pub fn setRangeSize(self: *GuestSpace, new_size: usize) void {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
         self.range_size = new_size;
         if (self.paging) |*pt| {
             pt.root_range_size = new_size;
@@ -195,17 +214,27 @@ pub const GuestSpace = struct {
     }
 
     /// Handles a guest physical page fault (dynamic paging, MMIO, or error).
+    /// Returns true if a new Stage-2 mapping was installed, or false if
+    /// another core already resolved the fault concurrently.
     pub fn handleFault(
         self: *GuestSpace,
         vc: *anyopaque,
         gpa: usize,
         cause: usize,
-    ) !void {
+    ) !bool {
         _ = vc;
         _ = cause;
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
         if (self.mode == .h_paging) {
             if (self.paging) |*pt| {
+                const already_mapped = if (pt.walk(gpa, false)) |pte_ptr|
+                    (pte_ptr.* & sv39x4.PTEFlags.valid) != 0
+                else |_|
+                    false;
+                if (already_mapped) return false;
                 try pt.resolveFault(gpa, self.is_trusted);
+                return true;
             } else {
                 return error.NotSupported;
             }

@@ -127,7 +127,10 @@ fn updateActiveVCoreTimer(vc: *vcore.VirtualCore, next_timer: *u64) void {
     }
 }
 
-fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) bool {
+pub fn wakeExpiredBlockedVCores(
+    pcpu: *riscv.CpuContext,
+    next_timer: *u64,
+) bool {
     const b_timer_prev = pcpu.blocked_lock.lock();
     defer pcpu.blocked_lock.unlock(b_timer_prev);
 
@@ -181,10 +184,7 @@ fn wakeExpiredBlockedVCores(pcpu: *riscv.CpuContext, next_timer: *u64) bool {
                 } else if (gs.vstimecmp < next_timer.*) {
                     next_timer.* = gs.vstimecmp;
                 }
-            }
-            if (!wake and
-                (now -% vc.last_queued_time >= riscv.TIMESLICE_TICKS))
-            {
+            } else if (now -% vc.last_queued_time >= riscv.TIMESLICE_TICKS) {
                 wake = true;
             }
         } else if (!wake and vc.exec_path == .emulated) {
@@ -392,11 +392,15 @@ pub fn programHardwareTimerAndMie(
     _ = wakeExpiredBlockedVCores(pcore.this(), &next_timer);
 
     if (ext_irq_pending or (hvip_val.* & riscv.HVIP.VSEIP) != 0) {
-        const ext_poll_target = riscv.readTime() + riscv.EXT_IRQ_POLL_TICKS;
+        const ext_poll_target = now + riscv.EXT_IRQ_POLL_TICKS;
         if (ext_poll_target < next_timer) next_timer = ext_poll_target;
     }
 
-    const timeslice_target = riscv.readTime() +% riscv.TIMESLICE_TICKS;
+    const disp = @atomicLoad(u64, &vc.last_dispatched_time, .monotonic);
+    const slice_base = if (disp > 0 and disp <= now) disp else now;
+    const raw_slice_target = slice_base +% riscv.TIMESLICE_TICKS;
+    const timeslice_target =
+        if (raw_slice_target > now) raw_slice_target else now +| 1;
     if (next_timer == riscv.TIMER_INFINITY or next_timer > timeslice_target) {
         next_timer = timeslice_target;
     }

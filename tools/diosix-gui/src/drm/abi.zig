@@ -191,16 +191,29 @@ pub fn synthesizeModeInfo(
     m.hsync_start = w16 +| (hblank / 4);
     m.hsync_end = w16 +| (hblank / 2);
     m.htotal = htotal;
+    m.hskew = 0;
     m.vdisplay = h16;
     m.vsync_start = h16 +| 3;
     m.vsync_end = h16 +| 9;
     m.vtotal = vtotal;
+    m.vscan = 0;
     m.vrefresh = 60;
+    m.flags = 0;
+    m.type = 0;
     @memset(&m.name, 0);
     _ = std.fmt.bufPrint(&m.name, "{d}x{d}", .{ w16, h16 }) catch {};
     return m;
 }
 
-test {
+test "abi: synthesizeModeInfo clears DRM_MODE_TYPE_PREFERRED for virtio-gpu" {
     std.testing.refAllDecls(@This());
+    var base = drm_mode_modeinfo{};
+    base.hdisplay = 1280;
+    base.vdisplay = 800;
+    base.type = 0x48; // DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED
+    const synth = synthesizeModeInfo(1600, 900, base);
+    try std.testing.expectEqual(@as(u16, 1600), synth.hdisplay);
+    try std.testing.expectEqual(@as(u16, 900), synth.vdisplay);
+    try std.testing.expectEqual(@as(u32, 0), synth.type);
+    try std.testing.expectEqual(@as(u32, 60), synth.vrefresh);
 }

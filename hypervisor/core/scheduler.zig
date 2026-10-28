@@ -322,7 +322,7 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const best_global_node = if (has_uq) uq_global_node else any_global_node;
     const best_global_vr = if (has_uq) uq_global_vr else any_global_vr;
     const prefer_local = best_local_node != null and
-        (idle_other or best_local_vr <= best_global_vr);
+        (uq_local_node != null or idle_other or best_local_vr <= best_global_vr);
 
     if (best_global_node != null and !prefer_local) {
         const node = best_global_node.?;

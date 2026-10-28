@@ -300,6 +300,7 @@ pub fn checkIdleVCoreWake(
             } else if (vstc < min_timer.*) {
                 min_timer.* = vstc;
             }
+            return false;
         }
         return (now_time -% vc.last_queued_time) >= riscv.TIMESLICE_TICKS;
     }
