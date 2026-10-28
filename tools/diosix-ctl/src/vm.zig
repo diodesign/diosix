@@ -10,6 +10,7 @@ const vm_info = @import("vm/info.zig");
 const vm_run = @import("vm/run.zig");
 const vm_install = @import("vm/install.zig");
 const vm_restart = @import("vm/restart.zig");
+const vm_console = @import("vm/console.zig");
 
 pub const formatGuestDetail = vm_info.formatGuestDetail;
 pub const formatSelfInfo = vm_info.formatSelfInfo;
@@ -17,6 +18,7 @@ pub const cmdInfo = vm_info.cmdInfo;
 pub const cmdRun = vm_run.cmdRun;
 pub const cmdInstallGuest = vm_install.cmdInstallGuest;
 pub const cmdRestart = vm_restart.cmdRestart;
+pub const cmdConsole = vm_console.cmdConsole;
 
 const CID_PARENT = common.CID_PARENT;
 const CID_SELF = common.CID_SELF;
@@ -435,6 +437,7 @@ test "vm: QuotaOption enum parses expected CLI flags" {
     _ = vm_run;
     _ = vm_install;
     _ = vm_restart;
+    _ = vm_console;
     try std.testing.expectEqual(
         QuotaOption.@"--ram",
         std.meta.stringToEnum(QuotaOption, "--ram").?,

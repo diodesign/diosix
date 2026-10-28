@@ -73,6 +73,10 @@ pub const MAX_PACKET_LEN: usize = queues_mod.MAX_PACKET_LEN;
 pub const MAX_NET_PACKETS: usize = queues_mod.MAX_NET_PACKETS;
 pub const Packet = queues_mod.Packet;
 pub const PacketQueue = queues_mod.PacketQueue;
+pub const CONSOLE_TX_CAPACITY = queues_mod.CONSOLE_TX_CAPACITY;
+pub const CONSOLE_RX_CAPACITY = queues_mod.CONSOLE_RX_CAPACITY;
+pub const ConsoleTxRing = queues_mod.ConsoleTxRing;
+pub const ConsoleRxRing = queues_mod.ConsoleRxRing;
 
 pub const Guest = struct {
     id: GuestID,
@@ -95,6 +99,8 @@ pub const Guest = struct {
     events: EventQueue = .{},
     net_rx: PacketQueue = .{},
     whisper_rx: PacketQueue = .{},
+    console_tx: ConsoleTxRing = .{},
+    console_rx: ConsoleRxRing = .{},
     initial_entry_point: usize = 0,
     initial_dtb_ptr: usize = 0,
     steward_reset_count: usize = 0,

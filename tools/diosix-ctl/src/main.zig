@@ -112,9 +112,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
             .run, .create => try vm.cmdRun(&client, argv[2..]),
             .@"install-guest" => try vm.cmdInstallGuest(&client, argv[2..]),
             .list, .ps, .ls => try vm.cmdList(&client),
-            .ssh, .login, .console, .exec => {
+            .ssh, .login, .exec => {
                 try ssh.cmdSsh(&client, argv[2..]);
             },
+            .console => try vm.cmdConsole(&client, argv[2..]),
             .stop, .kill, .terminate => _ = try vm.cmdStop(&client, argv[2..]),
             .restart => try vm.cmdRestart(&client, argv[2..]),
             .disk, .storage => try storage.cmdDisk(&client, argv[2..]),
@@ -222,6 +223,7 @@ pub fn formatUsage(
         \\      [--vcpus <N>] [--ram <size>]     Override vCPU and RAM limits
         \\  {s} list / {s} ps                    List active VMs & endpoints
         \\  {s} ssh [user@]<name|cid> [-- [cmd]] Open interactive SSH shell
+        \\  {s} console <name|cid> [--dump]      Attach to guest serial console
         \\  {s} stop <name|cid|self>             Stop and terminate guest VM
         \\  {s} kill <name|cid|self>             Alias for stop
         \\  {s} restart <name|cid>               Restart a running guest VM
@@ -288,6 +290,7 @@ pub fn formatUsage(
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
+        exe_name,
     });
 }
 

@@ -74,15 +74,17 @@ pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
         ICON_MENU_CREATE_VM_ID => try self.buildCreateVmPane(),
         ICON_MENU_ABOUT_ID => try self.buildStatusPane(),
         ICON_MENU_CONFIG_ID => try self.buildConfigPane(),
+        gui_mod.ICON_MENU_TERMINAL_ID => try self.buildTerminalWindow(),
         else => {},
     }
 
     try buildBackPane(self);
-    if (had_guests) {
-        try self.buildGuestsPane();
-    }
     try contractMainMenu(self, menu_item_id);
     self.active_menu_id = menu_item_id;
+
+    if (had_guests and menu_item_id == gui_mod.ICON_MENU_TERMINAL_ID) {
+        try self.buildGuestsPane();
+    }
 
     self.nav_anim_state = .opening;
     self.nav_anim_progress = 0.0;
@@ -93,6 +95,10 @@ pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
 pub fn navigateBack(self: *DiosixGui) !void {
     if (self.nav_anim_state == .closing) return;
     if (self.active_menu_id == null and self.nav_anim_state == .idle) return;
+
+    if (self.active_menu_id == gui_mod.ICON_MENU_TERMINAL_ID) {
+        gui_mod.panes.onTerminalNavigateBack(self);
+    }
 
     try repopulateMainMenu(self);
     if (self.getWindow(gui_mod.WIN_GUESTS_ID) == null) {
@@ -148,6 +154,7 @@ pub fn applyNavAnimation(self: *DiosixGui) void {
             self.height;
         const raw_h: u32 = @intFromFloat(full_f - span * factor);
         win_menu.height = @min(raw_h, max_avail_h);
+        win_menu.natural_height = win_menu.height;
         win_menu.scroll_y = 0;
         win_menu.scrollbar_alpha = 0;
         const new_box = win_menu.getBox();
@@ -214,6 +221,9 @@ pub fn applyNavAnimation(self: *DiosixGui) void {
 }
 
 pub fn teardownChildPanes(self: *DiosixGui) void {
+    if (self.active_menu_id == gui_mod.ICON_MENU_TERMINAL_ID) {
+        gui_mod.panes.onTerminalNavigateBack(self);
+    }
     var child_id: ?u32 = null;
     if (self.getWindow(WIN_MENU_ID)) |head| {
         child_id = head.child_window_id;
@@ -258,6 +268,7 @@ pub fn teardownChildPanes(self: *DiosixGui) void {
 
 pub fn tick(self: *DiosixGui, dt_ms: u32) void {
     self.pollBackgroundTasks();
+    self.pollTerminal();
     if (self.nav_anim_state != .idle) {
         const step =
             @as(f32, @floatFromInt(dt_ms)) / self.nav_anim_duration_ms;
@@ -314,6 +325,57 @@ pub fn tick(self: *DiosixGui, dt_ms: u32) void {
             self.markFullDirty();
         }
     }
+}
+
+pub fn closePowerModal(self: *DiosixGui) void {
+    _ = self.destroyWindow(gui_mod.WIN_POWER_MODAL_ID);
+    self.power_modal_action = null;
+    self.markFullDirty();
+}
+
+pub fn toggleStatusPane(self: *DiosixGui) !void {
+    try self.activateMenuItem(gui_mod.ICON_MENU_STATUS_ID);
+}
+
+pub fn toggleConfigPane(self: *DiosixGui) !void {
+    try self.activateMenuItem(ICON_MENU_CONFIG_ID);
+}
+
+pub fn toggleOsk(self: *DiosixGui) !void {
+    self.osk_state.toggle();
+    try self.buildOskWindow();
+}
+
+pub fn hasActiveAnimation(self: *const DiosixGui) bool {
+    return self.nav_anim_state != .idle;
+}
+
+pub fn setBgAnimationSpeed(self: *DiosixGui, speed: u32) void {
+    const clamped = std.math.clamp(speed, 0, 100);
+    if (clamped == 0) self.drift_accum_ms = 0;
+    self.bg_animation_speed = clamped;
+}
+
+pub fn getBgAnimationSpeed(self: *const DiosixGui) u32 {
+    return self.bg_animation_speed;
+}
+
+pub fn setGuestUpdateIntervalSeconds(self: *DiosixGui, secs: u32) void {
+    const clamped = std.math.clamp(secs, 1, 10);
+    self.guest_update_interval_ms = clamped * 1000;
+    self.guest_update_accum_ms = 0;
+}
+
+pub fn getGuestUpdateIntervalSeconds(self: *const DiosixGui) u32 {
+    return @max(1, self.guest_update_interval_ms / 1000);
+}
+
+pub fn setDriftDirection(self: *DiosixGui, dir: gui_mod.DriftDirection) void {
+    self.drift_dir = dir;
+}
+
+pub fn getDriftDirection(self: *const DiosixGui) gui_mod.DriftDirection {
+    return self.drift_dir;
 }
 
 test {

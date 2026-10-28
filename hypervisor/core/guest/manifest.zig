@@ -110,6 +110,7 @@ pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
         .guest_id = self.id,
         .out_fn = guest_mod.Guest.guestUartOutput,
     };
+    self.console_rx.clear();
     self.timer.reset();
     self.pic.reset();
     var is_primary = true;

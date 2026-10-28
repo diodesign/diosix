@@ -51,6 +51,69 @@ pub fn getCharAdvance(c: u8) u32 {
     return getCharAdvanceAtHeight(c, active_line_height);
 }
 
+/// Returns the fixed cell advance width in pixels for `DMMono-Regular.ttf`
+/// at pixel line height `line_height_px`.
+pub fn getMonoCharAdvanceAtHeight(line_height_px: u32) u32 {
+    const entry = cache.getMonoGlyph('M', line_height_px);
+    return @max(4, @as(u32, entry.glyph.advance));
+}
+
+/// Renders antialiased fixed-width `DMMono-Regular.ttf` text at `height_px`.
+pub fn drawMonoTextAtHeight(
+    surface: *fb.Surface,
+    text: []const u8,
+    x: i32,
+    y: i32,
+    color: u32,
+    height_px: u32,
+) void {
+    if (surface.clip.isEmpty() or surface.width == 0 or surface.height == 0) {
+        return;
+    }
+    const clip_x0 = @max(0, surface.clip.x0);
+    const clip_y0 = @max(0, surface.clip.y0);
+    const clip_x1 = @min(@as(i32, @intCast(surface.width)), surface.clip.x1);
+    const clip_y1 = @min(@as(i32, @intCast(surface.height)), surface.clip.y1);
+    if (clip_x0 >= clip_x1 or clip_y0 >= clip_y1) return;
+
+    const line_h = std.math.clamp(
+        height_px,
+        cache.MIN_LINE_HEIGHT_PX,
+        cache.MAX_LINE_HEIGHT_PX,
+    );
+    if (y + @as(i32, @intCast(line_h + 6)) <= clip_y0 or y - 4 >= clip_y1) {
+        return;
+    }
+
+    const cell_adv: i32 = @intCast(getMonoCharAdvanceAtHeight(line_h));
+    var cur_x = x;
+    for (text) |c| {
+        if (cur_x >= clip_x1) break;
+        if (c > ' ' and c <= ASCII_PRINTABLE_MAX) {
+            const view = cache.getMonoGlyph(c, line_h);
+            const g = view.glyph;
+            if (g.width > 0 and g.height > 0) {
+                const gx = cur_x + @as(i32, g.offset_x);
+                const gy = y + @as(i32, g.offset_y);
+                const g_right = gx + @as(i32, @intCast(g.width));
+                if (g_right > clip_x0 and gx < clip_x1) {
+                    vector.blendMaskOnSurface(
+                        surface,
+                        view.mask,
+                        g.width,
+                        g.height,
+                        gx,
+                        gy,
+                        color,
+                        255,
+                    );
+                }
+            }
+        }
+        cur_x += cell_adv;
+    }
+}
+
 /// Renders antialiased Questrial text at the active line height.
 pub fn drawText(
     surface: *fb.Surface,

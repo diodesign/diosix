@@ -258,7 +258,7 @@ CID   Name             vCPUs   RAM       Status    Trust       IP / Endpoint
 
 ---
 
-### `dsx ssh` (aliases: `dsx login`, `dsx console`, `dsx exec`)
+### `dsx ssh` (aliases: `dsx login`, `dsx exec`)
 Opens an interactive login shell or runs a remote command in a child VM over
 private point-to-point network channels using the cluster management Ed25519
 keypair (with only the public key provisioned in the child VM's authorized
@@ -289,6 +289,34 @@ dsx ssh debian@user -- uname -a
 
 # Access child VM 2 directly by numeric Context ID
 dsx ssh root@2 -- cat /etc/os-release
+```
+
+---
+
+### `dsx console`
+Attaches to a child VM's hypervisor serial console (`hvc0` / SBI `DBCN`),
+streaming buffered kernel boot messages and providing bidirectional raw console
+I/O even when a guest has no network stack or SSH daemon.
+
+```bash
+dsx console <name|cid> [--dump|-d]
+```
+
+*   `<name|cid>`: Friendly name or numeric Context ID (`>= 2`) of a direct
+    child VM.
+*   `--dump` / `-d` *(optional)*: Drains and prints all currently buffered
+    output from the child VM's `8 KiB` M-mode TX ring buffer and exits
+    immediately without entering interactive mode.
+*   **Detach key**: In interactive mode, press `Ctrl+]` (`0x1d`) to detach and
+    return to the parent shell without terminating the child VM.
+
+Examples:
+```bash
+# Attach interactively to child VM 'new-guest' (press Ctrl+] to detach)
+dsx console new-guest
+
+# Dump buffered kernel boot logs from child CID 2 and exit
+dsx console 2 --dump
 ```
 
 ---

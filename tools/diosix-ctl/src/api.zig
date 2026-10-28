@@ -37,6 +37,8 @@ pub const RunArgs = interface.RunArgs;
 pub const TerminateArgs = interface.TerminateArgs;
 pub const QuotaArgs = interface.QuotaArgs;
 pub const ManifestArgs = interface.ManifestArgs;
+pub const ConsoleArgs = interface.ConsoleArgs;
+pub const MAX_CONSOLE_IO_BYTES = interface.MAX_CONSOLE_IO_BYTES;
 pub const MapChildMemArgs = interface.MapChildMemArgs;
 pub const UnmapChildMemArgs = interface.UnmapChildMemArgs;
 pub const StartArgs = interface.StartArgs;
@@ -65,6 +67,8 @@ pub const IOCTL_GET_CHARTER: u32 = IOCTL_BASE + 18;
 pub const IOCTL_RATIFY_CHARTER: u32 = IOCTL_BASE + 19;
 pub const IOCTL_RESET_STEWARD: u32 = IOCTL_BASE + 20;
 pub const IOCTL_REQUEST_ROOT_FAILOVER: u32 = IOCTL_BASE + 21;
+pub const IOCTL_CONSOLE_WRITE: u32 = IOCTL_BASE + 22;
+pub const IOCTL_CONSOLE_READ: u32 = IOCTL_BASE + 23;
 
 const EPERM_NEG: isize = -@as(isize, @backingInt(linux.E.PERM));
 const EACCES_NEG: isize = -@as(isize, @backingInt(linux.E.ACCES));
@@ -422,6 +426,45 @@ pub const DiosixClient = struct {
             linux.ioctl(fd, IOCTL_REQUEST_ROOT_FAILOVER, standby_cid),
         );
         return @intCast(signed_rc);
+    }
+
+    pub fn consoleRead(
+        self: *DiosixClient,
+        target_cid: usize,
+        buffer: []u8,
+    ) !usize {
+        const fd = try self.getFd();
+        const req_len: usize = @min(buffer.len, MAX_CONSOLE_IO_BYTES);
+        var args = ConsoleArgs{
+            .target_cid = target_cid,
+            .data_ptr = if (req_len > 0) @intFromPtr(buffer.ptr) else 0,
+            .max_len = req_len,
+            .actual_len = 0,
+        };
+        _ = try checkIoctlRc(
+            linux.ioctl(fd, IOCTL_CONSOLE_READ, @intFromPtr(&args)),
+        );
+        return @min(@as(usize, @intCast(args.actual_len)), req_len);
+    }
+
+    pub fn consoleWrite(
+        self: *DiosixClient,
+        target_cid: usize,
+        data: []const u8,
+    ) !usize {
+        if (data.len == 0) return 0;
+        const fd = try self.getFd();
+        const req_len: usize = @min(data.len, MAX_CONSOLE_IO_BYTES);
+        var args = ConsoleArgs{
+            .target_cid = target_cid,
+            .data_ptr = @intFromPtr(data.ptr),
+            .max_len = req_len,
+            .actual_len = 0,
+        };
+        _ = try checkIoctlRc(
+            linux.ioctl(fd, IOCTL_CONSOLE_WRITE, @intFromPtr(&args)),
+        );
+        return @min(@as(usize, @intCast(args.actual_len)), req_len);
     }
 };
 

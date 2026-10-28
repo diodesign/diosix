@@ -320,10 +320,6 @@ pub fn handleDebugConsole(
     a1: usize,
     a2: usize,
 ) void {
-    if (!vc.guest.is_root and function == interface.DBCN.CONSOLE_READ) {
-        sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
-        return;
-    }
     const g = vc.getGuest();
     const gpa: usize = if (vc.exec_path == .emulated or
         (a2 != 0 and a2 != std.math.maxInt(usize)))
@@ -358,7 +354,8 @@ pub fn handleDebugConsole(
                     );
                     return;
                 };
-                if (vc.guest.is_root) {
+                _ = g.console_tx.pushSlice(buf[0..chunk]);
+                if (g.is_root) {
                     debug.write(buf[0..chunk]);
                 }
                 written += chunk;
@@ -378,9 +375,14 @@ pub fn handleDebugConsole(
             };
             var read: usize = 0;
             while (read < num_bytes) : (read += 1) {
-                const c = debug.getchar();
-                if (c < 0) break;
-                const char_byte: [1]u8 = .{@truncate(@as(u16, @bitCast(c)))};
+                const next_byte: ?u8 = g.console_rx.popByte() orelse
+                    if (g.is_root) blk: {
+                        const c = debug.getchar();
+                        if (c < 0) break :blk null;
+                        break :blk @truncate(@as(u16, @bitCast(c)));
+                    } else null;
+                const b = next_byte orelse break;
+                const char_byte: [1]u8 = .{b};
                 g.space.copyToGuest(gpa + read, &char_byte) catch {
                     sbi_core.setResult(
                         vc,
@@ -394,7 +396,9 @@ pub fn handleDebugConsole(
             sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, read);
         },
         interface.DBCN.CONSOLE_WRITE_BYTE => {
-            if (vc.guest.is_root) debug.putchar(@truncate(a0));
+            const b: u8 = @truncate(a0);
+            g.console_tx.pushByte(b);
+            if (g.is_root) debug.putchar(b);
             sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
         },
         else => sbi_core.setResult(

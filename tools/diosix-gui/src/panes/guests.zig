@@ -21,6 +21,7 @@ const text_label = @import("../label.zig");
 const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 const quota_controls = @import("quota_controls.zig");
+const panes_terminal = @import("terminal.zig");
 
 const BORDER_GAP = gui_mod.BORDER_GAP;
 const WIN_MENU_ID = gui_mod.WIN_MENU_ID;
@@ -70,10 +71,12 @@ fn formatGuestItemLabel(
     const vcpu_word = if (guest.vcpus == 1) "vCPU" else "vCPUs";
     return text_label.fmtLabel(
         out_buf,
-        "{s} ({s})\n{d} {s}, {d}% pCPU usage, {s} RAM",
+        "{s} ({s}, {s} {s})\n{d} {s}, {d}% pCPU usage, {s} RAM",
         .{
             guest.getInstanceName(),
             guest.getImageName(),
+            guest.getArchLabel(),
+            guest.getVirtModeLabel(),
             guest.vcpus,
             vcpu_word,
             guest.pcpu_percent,
@@ -118,6 +121,7 @@ fn onGuestShutdownClicked(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
     const cid: u64 = @intCast(ic.user_tag);
     if (host_info.shutdownGuestVm(cid)) {
+        panes_terminal.discardGuestSshSession(self, cid);
         self.selected_guest_cid = null;
         _ = self.destroyWindow(WIN_GUEST_DETAIL_ID);
         self.updateGuestsPaneData();
@@ -254,8 +258,13 @@ pub fn populateGuestDetailWindow(
     var title_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const title_str = text_label.fmtLabel(
         &title_buf,
-        "{s} ({s})",
-        .{ guest.getInstanceName(), guest.getImageName() },
+        "{s} ({s}, {s} {s})",
+        .{
+            guest.getInstanceName(),
+            guest.getImageName(),
+            guest.getArchLabel(),
+            guest.getVirtModeLabel(),
+        },
     );
     var hdr = Icon.createReadOnly(
         gui_mod.ICON_GUEST_DETAIL_HDR_ID,
@@ -269,13 +278,23 @@ pub fn populateGuestDetailWindow(
     _ = try win.addIcon(hdr);
     cur_y += @intCast(row_h + self.scalePx(6));
 
-    if (!guest.is_root) {
-        const item_x: i32 = @intCast(self.scalePx(10));
-        const menu_w: u32 = if (win.width > @as(u32, @intCast(item_x * 2)))
-            win.width - @as(u32, @intCast(item_x * 2))
-        else
-            inner_w;
+    const item_x: i32 = @intCast(self.scalePx(10));
+    const menu_w: u32 = if (win.width > @as(u32, @intCast(item_x * 2)))
+        win.width - @as(u32, @intCast(item_x * 2))
+    else
+        inner_w;
 
+    try panes_terminal.addGuestDetailTerminalButtons(
+        self,
+        win,
+        guest,
+        item_x,
+        menu_w,
+        item_h,
+        &cur_y,
+    );
+
+    if (!guest.is_root) {
         var restart_item = Icon.createMenuItem(
             gui_mod.ICON_GUEST_RESTART_ID,
             item_x,
@@ -305,6 +324,8 @@ pub fn populateGuestDetailWindow(
         shutdown_item.callback = onGuestShutdownClicked;
         _ = try win.addIcon(shutdown_item);
         cur_y += @intCast(item_h + self.scalePx(10));
+    } else {
+        cur_y += @intCast(self.scalePx(6));
     }
 
     var pcpu_hdr = Icon.createReadOnly(

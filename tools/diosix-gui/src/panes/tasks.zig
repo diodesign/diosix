@@ -10,6 +10,7 @@ const win_mod = @import("../window.zig");
 const Window = win_mod.Window;
 const icon_mod = @import("../icon.zig");
 const Icon = icon_mod.Icon;
+const fb = @import("../framebuffer.zig");
 const tasks_mod = @import("../tasks.zig");
 const host_info = @import("../host.zig");
 
@@ -46,7 +47,9 @@ pub fn getMaxPaneHeight(self: *const DiosixGui) u32 {
 }
 
 pub fn clampWindowToTaskStack(self: *DiosixGui, win: *Window) void {
-    if (win.id == WIN_HELP_ID or
+    if (win.id == gui_mod.WIN_MENU_ID or
+        win.id == gui_mod.WIN_BACK_ID or
+        win.id == WIN_HELP_ID or
         win.id == WIN_VERSION_ID or
         isTaskWindowId(win.id))
     {
@@ -148,16 +151,18 @@ pub fn syncTaskPanes(self: *DiosixGui) void {
                     label_txt,
                 ),
             ) catch {};
-            _ = win.addIcon(
-                Icon.createProgressBar(
-                    ICON_TASK_PROGRESS_ID,
-                    prog_x,
-                    0,
-                    prog_w,
-                    bar_h,
-                    entry.progress_pct,
-                ),
-            ) catch {};
+            var prog_ic = Icon.createProgressBar(
+                ICON_TASK_PROGRESS_ID,
+                prog_x,
+                0,
+                prog_w,
+                bar_h,
+                entry.progress_pct,
+            );
+            if (entry.state == .completed) {
+                prog_ic.setCustomColor(fb.Color.PROGRESS_SUCCESS_GREEN);
+            }
+            _ = win.addIcon(prog_ic) catch {};
         } else {
             const label_w: u32 = @intCast(@max(40, btn_x - pad_x * 2));
             _ = win.addIcon(

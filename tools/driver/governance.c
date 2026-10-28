@@ -355,6 +355,67 @@ static long handle_charter(unsigned int cmd, unsigned long arg)
     return ret.value;
 }
 
+static long handle_console_io(unsigned int cmd, unsigned long arg)
+{
+    struct console_args args, *sbi_cargs;
+    char *kbuf = NULL;
+    bool is_write = (cmd == IOCTL_CONSOLE_WRITE);
+    unsigned long fid = is_write ?
+        DIOSIX_FUNC_CONSOLE_WRITE : DIOSIX_FUNC_CONSOLE_READ;
+    struct sbiret ret;
+    long rc = 0;
+
+    if (!capable(CAP_SYS_ADMIN))
+        return -EPERM;
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+    if (args.max_len > DIOSIX_MAX_CONSOLE_IO_SIZE ||
+        (is_write && args.max_len == 0) ||
+        (args.max_len > 0 && !args.data_ptr))
+        return -EINVAL;
+
+    sbi_cargs = kzalloc(sizeof(*sbi_cargs), GFP_KERNEL);
+    if (!sbi_cargs)
+        return -ENOMEM;
+    if (args.max_len > 0) {
+        kbuf = kzalloc(args.max_len, GFP_KERNEL);
+        if (!kbuf) {
+            kfree(sbi_cargs);
+            return -ENOMEM;
+        }
+        if (is_write &&
+            copy_from_user(kbuf, (void __user *)args.data_ptr, args.max_len)) {
+            kfree(kbuf);
+            kfree(sbi_cargs);
+            return -EFAULT;
+        }
+    }
+    sbi_cargs->target_cid = args.target_cid;
+    sbi_cargs->data_ptr = kbuf ? (uint64_t)virt_to_phys(kbuf) : 0;
+    sbi_cargs->max_len = args.max_len;
+    ret = sbi_ecall(
+        EXT_DIOSIX, fid, (unsigned long)virt_to_phys(sbi_cargs), 0, 0, 0, 0, 0
+    );
+    if (ret.error) {
+        rc = diosix_sbi_to_errno(ret.error);
+        goto out;
+    }
+    args.actual_len = sbi_cargs->actual_len;
+    if (!is_write && args.actual_len > 0 && args.data_ptr && kbuf) {
+        unsigned long n = min(args.max_len, args.actual_len);
+        if (copy_to_user((void __user *)args.data_ptr, kbuf, n)) {
+            rc = -EFAULT;
+            goto out;
+        }
+    }
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        rc = -EFAULT;
+out:
+    kfree(kbuf);
+    kfree(sbi_cargs);
+    return rc;
+}
+
 long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
 {
     struct sbiret ret;
@@ -379,56 +440,30 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
     case IOCTL_GET_CHARTER:
         return handle_charter(cmd, arg);
 
+    case IOCTL_CONSOLE_WRITE:
+    case IOCTL_CONSOLE_READ:
+        return handle_console_io(cmd, arg);
+
     case IOCTL_RATIFY_CHARTER:
         if (!capable(CAP_SYS_ADMIN))
             return -EPERM;
-        ret = sbi_ecall(
-            EXT_DIOSIX,
-            DIOSIX_FUNC_RATIFY_CHARTER,
-            arg,
-            0,
-            0,
-            0,
-            0,
-            0
-        );
-        if (ret.error)
-            return diosix_sbi_to_errno(ret.error);
-        return ret.value;
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_RATIFY_CHARTER,
+                        arg, 0, 0, 0, 0, 0);
+        return ret.error ? diosix_sbi_to_errno(ret.error) : ret.value;
 
     case IOCTL_RESET_STEWARD:
         if (!capable(CAP_SYS_ADMIN))
             return -EPERM;
-        ret = sbi_ecall(
-            EXT_DIOSIX,
-            DIOSIX_FUNC_RESET_STEWARD,
-            arg,
-            0,
-            0,
-            0,
-            0,
-            0
-        );
-        if (ret.error)
-            return diosix_sbi_to_errno(ret.error);
-        return ret.value;
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_RESET_STEWARD,
+                        arg, 0, 0, 0, 0, 0);
+        return ret.error ? diosix_sbi_to_errno(ret.error) : ret.value;
 
     case IOCTL_REQUEST_ROOT_FAILOVER:
         if (!capable(CAP_SYS_ADMIN))
             return -EPERM;
-        ret = sbi_ecall(
-            EXT_DIOSIX,
-            DIOSIX_FUNC_REQUEST_ROOT_FAILOVER,
-            arg,
-            0,
-            0,
-            0,
-            0,
-            0
-        );
-        if (ret.error)
-            return diosix_sbi_to_errno(ret.error);
-        return ret.value;
+        ret = sbi_ecall(EXT_DIOSIX, DIOSIX_FUNC_REQUEST_ROOT_FAILOVER,
+                        arg, 0, 0, 0, 0, 0);
+        return ret.error ? diosix_sbi_to_errno(ret.error) : ret.value;
 
     default:
         return -ENOTTY;

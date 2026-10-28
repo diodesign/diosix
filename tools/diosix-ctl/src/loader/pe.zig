@@ -12,36 +12,40 @@ pub const SHIM_HEADER_OFFSET: usize = 0x0010_0000;
 pub const SHIM_HEADER_MAGIC: u64 = 0x4d49_4853_5853_4f44; // "DOSXSHIM".
 pub const PAGE_ALIGN: usize = 0x1000;
 
-/// Stages a guest-shim payload (e.g. an ISO9660 or raw kernel image) into the
-/// upper half of child RAM and writes the `DOSXSHIM` header at offset 1 MiB.
-pub fn stageShimPayload(
-    child_ram: []u8,
-    shim_payload: []const u8,
+/// Computes the target GPA offset in child RAM for staging a `guest-shim`
+/// payload, returning `null` when no payload staging is required.
+pub fn computeShimPayloadOffset(
+    ram_bytes: usize,
     dtb_offset: usize,
-) !void {
-    if (shim_payload.len == 0 or
+    payload_len: usize,
+) !?usize {
+    if (payload_len == 0 or
         dtb_offset <= 0x0080_0000 or
-        SHIM_HEADER_OFFSET + 24 > child_ram.len)
+        SHIM_HEADER_OFFSET + 24 > ram_bytes)
     {
-        return;
+        return null;
     }
-
     const payload_offset = @max(
         @as(usize, 0x0040_0000),
         std.mem.alignBackward(usize, dtb_offset / 2, PAGE_ALIGN),
     );
-    if (payload_offset >= dtb_offset) return error.SegmentOutOfBounds;
-    const max_stage = dtb_offset - payload_offset;
-    if (shim_payload.len > max_stage) return error.SegmentOutOfBounds;
-    const copy_len = shim_payload.len;
-    @memcpy(
-        child_ram[payload_offset .. payload_offset + copy_len],
-        shim_payload[0..copy_len],
-    );
-    const hdr = child_ram[SHIM_HEADER_OFFSET .. SHIM_HEADER_OFFSET + 24];
-    std.mem.writeInt(u64, hdr[0..8], SHIM_HEADER_MAGIC, .little);
-    std.mem.writeInt(u64, hdr[8..16], payload_offset, .little);
-    std.mem.writeInt(u64, hdr[16..24], copy_len, .little);
+    if (payload_offset >= dtb_offset or
+        payload_len > dtb_offset - payload_offset)
+    {
+        return error.SegmentOutOfBounds;
+    }
+    return payload_offset;
+}
+
+/// Writes the 24-byte `DOSXSHIM` header into the mapped header page.
+pub fn writeShimHeader(
+    hdr_page: []u8,
+    payload_offset: usize,
+    payload_len: usize,
+) void {
+    std.mem.writeInt(u64, hdr_page[0..8], SHIM_HEADER_MAGIC, .little);
+    std.mem.writeInt(u64, hdr_page[8..16], payload_offset, .little);
+    std.mem.writeInt(u64, hdr_page[16..24], payload_len, .little);
 }
 
 /// Copies a pre-built guest ELF or ISO9660 image from `/var/lib/diosix` or
@@ -73,15 +77,16 @@ pub fn seedOfflineCatalogFallback(
     return false;
 }
 
-test "loader/pe: stageShimPayload writes DOSXSHIM header when space permits" {
+test "loader/pe: computeShimPayloadOffset and writeShimHeader" {
     std.testing.refAllDecls(@This());
-    var ram: [0x0100_0000]u8 = @splat(0);
+    var hdr_page: [PAGE_ALIGN]u8 = @splat(0);
     const payload = "test-payload";
-    try stageShimPayload(&ram, payload, 0x00c0_0000);
-    const magic = std.mem.readInt(
-        u64,
-        ram[SHIM_HEADER_OFFSET..][0..8],
-        .little,
-    );
+    const off = (try computeShimPayloadOffset(
+        0x0100_0000,
+        0x00c0_0000,
+        payload.len,
+    )).?;
+    writeShimHeader(&hdr_page, off, payload.len);
+    const magic = std.mem.readInt(u64, hdr_page[0..8], .little);
     try std.testing.expectEqual(SHIM_HEADER_MAGIC, magic);
 }

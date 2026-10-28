@@ -86,6 +86,7 @@ pub const Color = struct {
     pub const INPUT_BG: u32 = 0x00ffffff;
     pub const TRACK_BG: u32 = 0x00e4e2da;
     pub const THUMB_BG: u32 = 0x00111111;
+    pub const PROGRESS_SUCCESS_GREEN: u32 = 0x00229954;
     pub const BTN_PRESS_BG: u32 = 0x00dad8ce;
     pub const BTN_HOVER_BG: u32 = 0x00e8e6de;
     pub const BTN_NORMAL_BG: u32 = 0x00f4f3ee;

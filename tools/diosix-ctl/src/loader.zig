@@ -30,6 +30,8 @@ pub const FdtToken = fdt_patch.FdtToken;
 pub const patchChildDtb = fdt_patch.patchChildDtb;
 
 pub const MAX_FOREIGN_MAP_BYTES: usize = 256 * 1024 * 1024;
+pub const LOAD_CHUNK_BYTES: usize = 2 * 1024 * 1024;
+pub const PROGRESS_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 pub const DEFAULT_PARENT_MAP_GPA: usize = 0x2_0000_0000;
 pub const MAP_CHILD_RW_FLAGS: usize = 3;
 
@@ -190,32 +192,53 @@ pub fn loadElfViaForeignMapping(
         const seg_map_sz = aligned_end - aligned_start;
         if (seg_map_sz > MAX_FOREIGN_MAP_BYTES) return error.SegmentOutOfBounds;
 
-        const pct = 30 + (seg_idx * 55) / @max(@as(usize, 1), load_seg_total);
-        console.printFmt(
-            "[{d}%] Loading guest ELF segment {d}/{d} ({d} KB)...\n",
-            .{ pct, seg_idx, load_seg_total, p_memsz / 1024 },
-        );
-
-        const seg_ram = try client.mapChildMemory(
-            child_cid,
-            base_gpa + aligned_start,
-            parent_gpa,
-            seg_map_sz,
-            MAP_CHILD_RW_FLAGS,
-        );
-        defer client.unmapChildMemory(seg_ram, parent_gpa) catch {};
-
         const rel_start = seg_offset - aligned_start;
         const rel_file_end = rel_start + p_filesz;
         const rel_seg_end = rel_start + p_memsz;
-        if (p_filesz > 0) {
-            @memcpy(
-                seg_ram[rel_start..rel_file_end],
-                elf_data[p_offset..src_end],
+        const seg_base_pct = 30 +
+            ((seg_idx - 1) * 55) / @max(@as(usize, 1), load_seg_total);
+        const seg_span_pct = 55 / @max(@as(usize, 1), load_seg_total);
+
+        var chunk_off: usize = 0;
+        while (chunk_off < seg_map_sz) : (chunk_off += LOAD_CHUNK_BYTES) {
+            const chunk_sz = @min(LOAD_CHUNK_BYTES, seg_map_sz - chunk_off);
+            const chunk_end = chunk_off + chunk_sz;
+            if (chunk_off == 0 or (chunk_off % PROGRESS_CHUNK_BYTES) == 0) {
+                const denom = @max(@as(usize, 1), seg_map_sz);
+                const pct = seg_base_pct + (chunk_off * seg_span_pct) / denom;
+                console.printFmt(
+                    "[{d}%] Loading guest ELF segment {d}/{d} ({d} KB)...\n",
+                    .{ pct, seg_idx, load_seg_total, p_memsz / 1024 },
+                );
+            }
+            const seg_ram = try client.mapChildMemory(
+                child_cid,
+                base_gpa + aligned_start + chunk_off,
+                parent_gpa,
+                chunk_sz,
+                MAP_CHILD_RW_FLAGS,
             );
-        }
-        if (p_memsz > p_filesz) {
-            @memset(seg_ram[rel_file_end..rel_seg_end], 0);
+            defer client.unmapChildMemory(seg_ram, parent_gpa) catch {};
+
+            const copy_start = @max(chunk_off, rel_start);
+            const copy_end = @min(chunk_end, rel_file_end);
+            if (copy_end > copy_start) {
+                const dst_off = copy_start - chunk_off;
+                const src_off = p_offset + (copy_start - rel_start);
+                const len = copy_end - copy_start;
+                @memcpy(
+                    seg_ram[dst_off .. dst_off + len],
+                    elf_data[src_off .. src_off + len],
+                );
+            }
+            const bss_start = @max(chunk_off, rel_file_end);
+            const bss_end = @min(chunk_end, rel_seg_end);
+            if (bss_end > bss_start) {
+                @memset(
+                    seg_ram[(bss_start - chunk_off)..(bss_end - chunk_off)],
+                    0,
+                );
+            }
         }
     }
 
@@ -248,17 +271,34 @@ pub fn loadElfViaForeignMapping(
         @memcpy(dtb_ram[rel_dtb .. rel_dtb + dtb_data.len], dtb_data);
     }
 
-    if (shim_payload.len > 0) {
-        const map_size: usize = @min(ram_bytes, MAX_FOREIGN_MAP_BYTES);
-        const child_ram = try client.mapChildMemory(
+    if (try pe.computeShimPayloadOffset(
+        ram_bytes,
+        dtb_offset,
+        shim_payload.len,
+    )) |payload_offset| {
+        var off: usize = 0;
+        while (off < shim_payload.len) : (off += LOAD_CHUNK_BYTES) {
+            const copy_sz = @min(LOAD_CHUNK_BYTES, shim_payload.len - off);
+            const map_sz = std.mem.alignForward(usize, copy_sz, PAGE_ALIGN);
+            const chunk_ram = try client.mapChildMemory(
+                child_cid,
+                base_gpa + payload_offset + off,
+                parent_gpa,
+                map_sz,
+                MAP_CHILD_RW_FLAGS,
+            );
+            defer client.unmapChildMemory(chunk_ram, parent_gpa) catch {};
+            @memcpy(chunk_ram[0..copy_sz], shim_payload[off .. off + copy_sz]);
+        }
+        const hdr_ram = try client.mapChildMemory(
             child_cid,
-            base_gpa,
+            base_gpa + SHIM_HEADER_OFFSET,
             parent_gpa,
-            map_size,
+            PAGE_ALIGN,
             MAP_CHILD_RW_FLAGS,
         );
-        defer client.unmapChildMemory(child_ram, parent_gpa) catch {};
-        try pe.stageShimPayload(child_ram, shim_payload, dtb_offset);
+        defer client.unmapChildMemory(hdr_ram, parent_gpa) catch {};
+        pe.writeShimHeader(hdr_ram, payload_offset, shim_payload.len);
     }
 
     console.printStr(

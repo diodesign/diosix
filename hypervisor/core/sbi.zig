@@ -99,10 +99,17 @@ pub fn handle(
         E.IPI => standard.handleIPI(vc, context, a0, a1),
         E.RFENCE => standard.handleRFENCE(vc, context, function, a0, a1),
         E.LEGACY_CONSOLE_PUTCHAR => {
-            if (vc.guest.is_root) debug.putchar(@truncate(a0));
+            const b: u8 = @truncate(a0);
+            vc.getGuest().console_tx.pushByte(b);
+            if (vc.guest.is_root) debug.putchar(b);
         },
         E.LEGACY_CONSOLE_GETCHAR => {
-            const ch: isize = if (vc.guest.is_root) debug.getchar() else -1;
+            const ch: isize = if (vc.getGuest().console_rx.popByte()) |b|
+                @as(isize, b)
+            else if (vc.guest.is_root)
+                debug.getchar()
+            else
+                -1;
             const raw: usize = @bitCast(ch);
             context[A0_REG] = raw;
             if (vc.exec_path == .native) {
@@ -380,6 +387,7 @@ test "parseVersionString and SBI Base extension dispatch" {
     _ = diosix_sbi;
     _ = standard;
     _ = @import("sbi/ipc.zig");
+    _ = @import("sbi/console.zig");
     _ = @import("sbi/info.zig");
     const testing = std.testing;
     try testing.expectEqual(

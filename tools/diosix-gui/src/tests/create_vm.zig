@@ -9,6 +9,7 @@ const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 const host_info = @import("../host.zig");
 const panes = @import("../panes.zig");
+const fb = @import("../framebuffer.zig");
 
 test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     const allocator = testing.allocator;
@@ -276,6 +277,10 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     const bar1_done = gui.getWindow(gui_mod.WIN_TASK_BASE_ID).?;
     const bar1_prog = bar1_done.getIconById(gui_mod.ICON_TASK_PROGRESS_ID).?;
     try testing.expectEqual(@as(i32, 100), bar1_prog.slider_val);
+    try testing.expectEqual(
+        @as(?u32, fb.Color.PROGRESS_SUCCESS_GREEN),
+        bar1_prog.custom_color,
+    );
 
     const bar2_err = gui.getWindow(gui_mod.WIN_TASK_BASE_ID + 1).?;
     try testing.expect(
@@ -335,7 +340,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     );
     gui.handleMouseRelease();
 
-    const gdetail = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
+    var gdetail = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
     const gpcpu = gdetail.getIconById(
         gui_mod.ICON_GUEST_PCPU_QUOTA_SLIDER_ID,
     ).?;
@@ -357,6 +362,87 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     try testing.expectEqual(@as(u64, 2), act.cid);
     try testing.expectEqual(@as(u32, 50), act.pcpu_quota_pct);
     try testing.expectEqual(@as(u32, 512), act.ram_quota_mb);
+
+    // 8. Verify terminal state machine:
+    // "Open new SSH terminal" -> create terminal (shifts panes out, full width,
+    // no Close icon) -> Back hides terminal -> "Reopen SSH terminal" -> Reopen
+    // -> session exits -> Back discards session -> "Open new SSH terminal".
+    var ssh_btn = gdetail.getIconById(gui_mod.ICON_GUEST_SSH_ID).?;
+    const con_btn = gdetail.getIconById(gui_mod.ICON_GUEST_CONSOLE_ID).?;
+    try testing.expectEqualStrings("Open new SSH terminal", ssh_btn.getText());
+    try testing.expectEqualStrings("Open serial console", con_btn.getText());
+
+    gui.handleMouseClick(
+        gdetail.x + ssh_btn.rel_x + 10,
+        gdetail.y - gdetail.scroll_y + ssh_btn.rel_y + 10,
+    );
+    gui.handleMouseRelease();
+    gui.completeNavAnimation();
+
+    // Other panes slid out; only contracted menu, Back pane, and full-width
+    // terminal remain onscreen. No Close button on terminal pane.
+    try testing.expect(gui.getWindow(gui_mod.WIN_GUESTS_ID) == null);
+    try testing.expect(gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID) == null);
+    try testing.expect(gui.getWindow(gui_mod.WIN_BACK_ID).?.is_onscreen);
+
+    var win_term = gui.getWindow(gui_mod.WIN_TERMINAL_ID).?;
+    try testing.expect(win_term.is_onscreen);
+    try testing.expectEqual(@as(usize, 5), win_term.icons.items.len);
+    try testing.expect(gui.terminal.active);
+    try testing.expect(gui.terminal.cols > 80);
+    try testing.expectEqual(@as(u64, 2), gui.terminal.target_cid);
+    try testing.expectEqual(
+        gui_mod.terminal_mod.TerminalMode.ssh,
+        gui.terminal.mode,
+    );
+
+    // Invert button toggles terminal color inversion.
+    const inv_btn = win_term.getIconById(gui_mod.ICON_TERM_INVERT_BTN_ID).?;
+    try testing.expect(!gui.terminal.inverted);
+    gui.handleMouseClick(
+        win_term.x + inv_btn.rel_x + 10,
+        win_term.y + inv_btn.rel_y + 10,
+    );
+    gui.handleMouseRelease();
+    try testing.expect(gui.terminal.inverted);
+
+    // Type command into terminal and verify it reaches the session buffer.
+    for ("ls -la\n") |ch| gui.handleKeyChar(ch);
+    try testing.expectEqualStrings("ls -la\n", gui.terminal.getMockSentBytes());
+    try testing.expectEqualStrings("# ls -la", gui.terminal.getRowTrimmed(1));
+
+    // Clicking Back hides the terminal while keeping the SSH session alive;
+    // button now reads "Reopen SSH terminal".
+    try gui.navigateBack();
+    gui.completeNavAnimation();
+    try testing.expect(!gui.terminal.active);
+    try testing.expect(gui.hasLiveSshSession(2));
+    try testing.expect(gui.getWindow(gui_mod.WIN_TERMINAL_ID) == null);
+
+    gdetail = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
+    ssh_btn = gdetail.getIconById(gui_mod.ICON_GUEST_SSH_ID).?;
+    try testing.expectEqualStrings("Reopen SSH terminal", ssh_btn.getText());
+
+    // Clicking "Reopen SSH terminal" reopens the preserved session.
+    gui.handleMouseClick(
+        gdetail.x + ssh_btn.rel_x + 10,
+        gdetail.y - gdetail.scroll_y + ssh_btn.rel_y + 10,
+    );
+    gui.handleMouseRelease();
+    gui.completeNavAnimation();
+    win_term = gui.getWindow(gui_mod.WIN_TERMINAL_ID).?;
+    try testing.expect(gui.terminal.active);
+    try testing.expectEqualStrings("# ls -la", gui.terminal.getRowTrimmed(1));
+
+    // When the session exits and Back is clicked, the session is discarded
+    // and the button reverts to "Open new SSH terminal".
+    gui.terminal.exited = true;
+    try gui.navigateBack();
+    gui.completeNavAnimation();
+    try testing.expect(!gui.hasLiveSshSession(2));
+    gdetail = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
+    ssh_btn = gdetail.getIconById(gui_mod.ICON_GUEST_SSH_ID).?;
+    try testing.expectEqualStrings("Open new SSH terminal", ssh_btn.getText());
 
     testing.refAllDecls(@This());
 }

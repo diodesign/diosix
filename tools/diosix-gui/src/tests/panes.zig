@@ -376,11 +376,12 @@ test "diosix-gui: running guest VMs pane, detail menu, and update interval" {
     const g0 = win_guests.getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID).?;
     const g1 = win_guests.getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID + 1).?;
     try testing.expectEqualStrings(
-        "root (rootvm)\n4 vCPUs, 3% pCPU usage, 256 MB RAM",
+        "root (rootvm, RV64 H-mode)\n4 vCPUs, 3% pCPU usage, 256 MB RAM",
         g0.getText(),
     );
     try testing.expectEqualStrings(
-        "worker-db (postgres.elf)\n2 vCPUs, 18% pCPU usage, 512 MB RAM",
+        "worker-db (postgres.elf, RV64 H-mode)\n" ++
+            "2 vCPUs, 18% pCPU usage, 512 MB RAM",
         g1.getText(),
     );
 
@@ -454,6 +455,21 @@ test "diosix-gui: running guest VMs pane, detail menu, and update interval" {
     if (rate_sld.callback) |cb| cb(&gui, win_cfg, rate_sld);
     try testing.expectEqual(@as(u32, 5000), gui.guest_update_interval_ms);
 
+    // At 125% UI scale in Config, verify contracted WIN_MENU_ID stays
+    // contracted and does not stretch over WIN_BACK_ID.
+    try gui.setUiScaleMode(.pct_125);
+    const win_menu_125 = gui.getWindow(gui_mod.WIN_MENU_ID).?;
+    const win_back_125 = gui.getWindow(gui_mod.WIN_BACK_ID).?;
+    try testing.expectEqual(
+        gui.scalePx(gui_mod.MENU_CONTRACTED_H),
+        win_menu_125.height,
+    );
+    try testing.expect(
+        win_menu_125.y + @as(i32, @intCast(win_menu_125.height)) <=
+            win_back_125.y,
+    );
+    try gui.setUiScaleMode(.pct_100);
+
     try gui.navigateBack();
     gui.completeNavAnimation();
     try testing.expect(gui.getWindow(gui_mod.WIN_GUESTS_ID) != null);
@@ -465,7 +481,8 @@ test "diosix-gui: running guest VMs pane, detail menu, and update interval" {
     const updated_g1 = gui.getWindow(gui_mod.WIN_GUESTS_ID).?
         .getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID + 1).?;
     try testing.expectEqualStrings(
-        "worker-db (postgres.elf)\n2 vCPUs, 42% pCPU usage, 512 MB RAM",
+        "worker-db (postgres.elf, RV64 H-mode)\n" ++
+            "2 vCPUs, 42% pCPU usage, 512 MB RAM",
         updated_g1.getText(),
     );
     const updated_gr = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?

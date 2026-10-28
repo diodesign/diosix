@@ -177,7 +177,7 @@ pub fn renderMenuItem(
         @as(i32, @intCast(self.height)) - line_h + 2,
         2,
     );
-    const pad_x: i32 = 6;
+    const pad_x: i32 = @max(6, @divTrunc(line_h * 6, 18));
 
     if (self.has_back_arrow) {
         const a = ensureBackArrowMask();

@@ -161,7 +161,7 @@ pub const CPU_SLAB_SIZE = 1 << CPU_SLAB_SHIFT;
 
 // Timer configuration constants (10 MHz standard RISC-V timer clock).
 pub const TIMER_INFINITY: u64 = 0xffffffffffffffff;
-pub const TIMESLICE_TICKS: u64 = 100_000; // 10 ms
+pub const TIMESLICE_TICKS: u64 = 25_000; // 2.5 ms
 pub const EXT_IRQ_POLL_TICKS: u64 = 1_000; // 100 us
 pub const WATCHDOG_TICKS: u64 = 100_000_000; // 10 s
 

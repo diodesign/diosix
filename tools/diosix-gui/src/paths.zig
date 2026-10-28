@@ -98,6 +98,15 @@ pub const INTRO_FLAG_PATH: [*:0]const u8 = "/run/diosix/intro_played";
 /// Default system configuration TOML path.
 pub const DEFAULT_SYSCONFIG_PATH: [*:0]const u8 = "/etc/diosix/diosix.toml";
 
+/// Pseudo-terminal master multiplexer device node.
+pub const DEV_PTMX_PATH: [*:0]const u8 = "/dev/ptmx";
+
+/// Pseudo-terminal slave path format string.
+pub const DEV_PTS_FMT: []const u8 = "/dev/pts/{d}";
+
+/// Local Root VM shell binary path.
+pub const SHELL_BIN_PATH: [*:0]const u8 = "/bin/sh";
+
 test "paths: canonical paths are non-empty and rooted" {
     std.testing.refAllDecls(@This());
     try std.testing.expectEqual('/', std.mem.span(DEV_DIOSIX_PATH)[0]);

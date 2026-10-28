@@ -17,6 +17,7 @@ pub const scale_mod = @import("scale.zig");
 pub const dither_mod = @import("dither.zig");
 pub const vector_mod = @import("vector.zig");
 pub const tasks_mod = @import("tasks.zig");
+pub const terminal_mod = @import("terminal.zig");
 const gui_nav = @import("gui/nav.zig");
 const gui_input = @import("gui/input.zig");
 const gui_render = @import("gui/render.zig");
@@ -42,6 +43,7 @@ pub const ICON_TASK_LABEL_ID: u32 = panes.ICON_TASK_LABEL_ID;
 pub const ICON_TASK_PROGRESS_ID: u32 = panes.ICON_TASK_PROGRESS_ID;
 pub const ICON_TASK_DISMISS_ID: u32 = panes.ICON_TASK_DISMISS_ID;
 pub const WIN_POWER_MODAL_ID: u32 = 202;
+pub const WIN_TERMINAL_ID: u32 = panes.WIN_TERMINAL_ID;
 pub const WIN_OSK_ID: u32 = 300;
 pub const WIN_WELCOME_ID: u32 = 301;
 pub const WIN_TOUR_ID: u32 = 302;
@@ -68,6 +70,7 @@ pub const ICON_MENU_STATUS_ID: u32 = ICON_MENU_ABOUT_ID;
 pub const ICON_MENU_CONFIG_ID: u32 = 1004;
 pub const ICON_MENU_RESTART_ID: u32 = 1005;
 pub const ICON_MENU_SHUTDOWN_ID: u32 = 1006;
+pub const ICON_MENU_TERMINAL_ID: u32 = 1007;
 
 pub const ICON_VERSION_TEXT_ID: u32 = 1011;
 pub const ICON_BACK_BTN_ID: u32 = 1021;
@@ -166,6 +169,8 @@ pub const ICON_SCALE_OPT_BASE_ID: u32 = 1120;
 
 pub const ICON_GUESTS_HDR_ID: u32 = 1200;
 pub const ICON_GUESTS_ITEM_BASE_ID: u32 = 1210;
+pub const ICON_GUEST_SSH_ID: u32 = panes.ICON_GUEST_SSH_ID;
+pub const ICON_GUEST_CONSOLE_ID: u32 = panes.ICON_GUEST_CONSOLE_ID;
 pub const ICON_GUEST_DETAIL_HDR_ID: u32 = 1250;
 pub const ICON_GUEST_RESTART_ID: u32 = 1251;
 pub const ICON_GUEST_SHUTDOWN_ID: u32 = 1252;
@@ -179,6 +184,11 @@ pub const ICON_GUEST_PCPU_QUOTA_SLIDER_ID =
 pub const ICON_GUEST_RAM_QUOTA_LBL_ID = panes.ICON_GUEST_RAM_QUOTA_LBL_ID;
 pub const ICON_GUEST_RAM_QUOTA_SLIDER_ID = panes.ICON_GUEST_RAM_QUOTA_SLIDER_ID;
 pub const ICON_GUEST_STORAGE_BASE_ID: u32 = 1260;
+pub const ICON_TERM_STATUS_ID: u32 = panes.ICON_TERM_STATUS_ID;
+pub const ICON_TERM_MODE_BTN_ID: u32 = panes.ICON_TERM_MODE_BTN_ID;
+pub const ICON_TERM_OSK_BTN_ID: u32 = panes.ICON_TERM_OSK_BTN_ID;
+pub const ICON_TERM_CLEAR_BTN_ID: u32 = panes.ICON_TERM_CLEAR_BTN_ID;
+pub const ICON_TERM_INVERT_BTN_ID: u32 = panes.ICON_TERM_INVERT_BTN_ID;
 
 pub const ICON_CREATE_VM_HDR_ID: u32 = 1300;
 pub const ICON_CREATE_VM_ITEM_BASE_ID: u32 = 1310;
@@ -251,6 +261,10 @@ pub const DiosixGui = struct {
     osk_state: osk_mod.OskState = .{},
     welcome_state: welcome_mod.WelcomeState = .{},
     task_mgr: tasks_mod.TaskManager = .{},
+    terminal: terminal_mod.TerminalSession = .{},
+    bg_ssh_sessions: [
+        terminal_mod.MAX_BG_SSH_SESSIONS
+    ]terminal_mod.TerminalSession = @splat(.{}),
 
     pub const FALLBACK_HELP_TEXT = "Welcome to diosix";
 
@@ -303,6 +317,8 @@ pub const DiosixGui = struct {
     pub fn deinit(self: *DiosixGui) void {
         font.setActiveLineHeight(font.GLYPH_HEIGHT);
         cursor_mod.setScalePercent(100);
+        self.terminal.closeSession();
+        for (&self.bg_ssh_sessions) |*s| s.closeSession();
         for (&self.task_mgr.entries) |*e| e.closePipe();
         for (self.windows.items) |*win| win.deinit();
         self.windows.deinit(self.allocator);
@@ -400,12 +416,27 @@ pub const DiosixGui = struct {
     pub const buildOskWindow = panes.buildOskWindow;
     pub const showWelcomeModal = panes.showWelcomeModal;
     pub const showTourModal = panes.showTourModal;
+    pub const openGuestTerminal = panes.openGuestTerminal;
+    pub const closeTerminalWindow = panes.closeTerminalWindow;
+    pub const hasLiveSshSession = panes.hasLiveSshSession;
+    pub const onTerminalNavigateBack = panes.onTerminalNavigateBack;
+    pub const discardGuestSshSession = panes.discardGuestSshSession;
+    pub const pollTerminal = panes.pollTerminal;
+    pub const buildTerminalWindow = panes.buildTerminalWindow;
+    pub const closePowerModal = gui_nav.closePowerModal;
+    pub const toggleStatusPane = gui_nav.toggleStatusPane;
+    pub const toggleConfigPane = gui_nav.toggleConfigPane;
+    pub const toggleOsk = gui_nav.toggleOsk;
+    pub const hasActiveAnimation = gui_nav.hasActiveAnimation;
+    pub const setBgAnimationSpeed = gui_nav.setBgAnimationSpeed;
+    pub const getBgAnimationSpeed = gui_nav.getBgAnimationSpeed;
+    pub const setGuestUpdateIntervalSeconds =
+        gui_nav.setGuestUpdateIntervalSeconds;
+    pub const getGuestUpdateIntervalSeconds =
+        gui_nav.getGuestUpdateIntervalSeconds;
+    pub const setDriftDirection = gui_nav.setDriftDirection;
+    pub const getDriftDirection = gui_nav.getDriftDirection;
 
-    pub fn closePowerModal(self: *DiosixGui) void {
-        _ = self.destroyWindow(WIN_POWER_MODAL_ID);
-        self.power_modal_action = null;
-        self.markFullDirty();
-    }
     pub fn getCreateVmName(self: *const DiosixGui) []const u8 {
         return self.create_vm_name_buf[0..self.create_vm_name_len];
     }
@@ -415,48 +446,12 @@ pub const DiosixGui = struct {
         self.create_vm_name_buf[n] = 0;
         self.create_vm_name_len = n;
     }
-    pub fn toggleStatusPane(self: *DiosixGui) !void {
-        try self.activateMenuItem(ICON_MENU_STATUS_ID);
-    }
-    pub fn toggleConfigPane(self: *DiosixGui) !void {
-        try self.activateMenuItem(ICON_MENU_CONFIG_ID);
-    }
-    pub fn toggleOsk(self: *DiosixGui) !void {
-        self.osk_state.toggle();
-        try self.buildOskWindow();
-    }
-
-    pub fn hasActiveAnimation(self: *const DiosixGui) bool {
-        return self.nav_anim_state != .idle;
-    }
     pub fn setRenderMode(self: *DiosixGui, mode: RenderMode) void {
         self.render_mode = mode;
         self.markFullDirty();
     }
     pub fn getRenderMode(self: *const DiosixGui) RenderMode {
         return self.render_mode;
-    }
-    pub fn setBgAnimationSpeed(self: *DiosixGui, speed: u32) void {
-        const clamped = std.math.clamp(speed, 0, 100);
-        if (clamped == 0) self.drift_accum_ms = 0;
-        self.bg_animation_speed = clamped;
-    }
-    pub fn getBgAnimationSpeed(self: *const DiosixGui) u32 {
-        return self.bg_animation_speed;
-    }
-    pub fn setGuestUpdateIntervalSeconds(self: *DiosixGui, secs: u32) void {
-        const clamped = std.math.clamp(secs, 1, 10);
-        self.guest_update_interval_ms = clamped * 1000;
-        self.guest_update_accum_ms = 0;
-    }
-    pub fn getGuestUpdateIntervalSeconds(self: *const DiosixGui) u32 {
-        return @max(1, self.guest_update_interval_ms / 1000);
-    }
-    pub fn setDriftDirection(self: *DiosixGui, dir: DriftDirection) void {
-        self.drift_dir = dir;
-    }
-    pub fn getDriftDirection(self: *const DiosixGui) DriftDirection {
-        return self.drift_dir;
     }
     pub fn markDirty(self: *DiosixGui, box: fb.Box) void {
         self.dirty_box = self.dirty_box.merge(box);
@@ -493,5 +488,6 @@ test {
     _ = dither_mod;
     _ = vector_mod;
     _ = tasks_mod;
+    _ = terminal_mod;
     std.testing.refAllDecls(@This());
 }

@@ -12,6 +12,9 @@ Hypervisor, tooling, build infrastructure, website, documentation:
 Questrial typeface (SIL Open Font License):
 *  Copyright 2011 The Questrial Project Authors
 
+DM Mono typeface (SIL Open Font License):
+*  Copyright 2020 The DM Mono Project Authors
+
 ## Future contributors
 
 New contributors are invited to add their names to this list when submitting

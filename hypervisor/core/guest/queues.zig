@@ -12,6 +12,8 @@ const sbi = @import("interface").sbi;
 pub const max_events: usize = 32;
 pub const MAX_PACKET_LEN: usize = 1536;
 pub const MAX_NET_PACKETS: usize = 64;
+pub const CONSOLE_TX_CAPACITY: usize = 8192;
+pub const CONSOLE_RX_CAPACITY: usize = 512;
 
 pub const PIT_NUM_CHANNELS: usize = 3;
 pub const PIT_BYTE_LSB: u2 = 1;
@@ -208,6 +210,81 @@ pub const PacketQueue = struct {
     }
 };
 
+pub fn ConsoleRing(comptime capacity: usize) type {
+    return struct {
+        const Self = @This();
+        data: [capacity]u8 = @splat(0),
+        head: usize = 0,
+        tail: usize = 0,
+        count: usize = 0,
+        lock: atomic.SpinLock = atomic.SpinLock.init(),
+
+        fn pushByteLocked(self: *Self, byte: u8) void {
+            if (self.count >= capacity) {
+                self.tail = (self.tail + 1) % capacity;
+                self.count -= 1;
+            }
+            self.data[self.head] = byte;
+            self.head = (self.head + 1) % capacity;
+            self.count += 1;
+        }
+
+        pub fn pushByte(self: *Self, byte: u8) void {
+            const s = self.lock.lock();
+            defer self.lock.unlock(s);
+            self.pushByteLocked(byte);
+        }
+
+        pub fn pushSlice(self: *Self, bytes: []const u8) usize {
+            if (bytes.len == 0) return 0;
+            const s = self.lock.lock();
+            defer self.lock.unlock(s);
+            for (bytes) |b| self.pushByteLocked(b);
+            return bytes.len;
+        }
+
+        pub fn popByte(self: *Self) ?u8 {
+            const s = self.lock.lock();
+            defer self.lock.unlock(s);
+            if (self.count == 0) return null;
+            const b = self.data[self.tail];
+            self.tail = (self.tail + 1) % capacity;
+            self.count -= 1;
+            return b;
+        }
+
+        pub fn popSlice(self: *Self, out: []u8) usize {
+            if (out.len == 0) return 0;
+            const s = self.lock.lock();
+            defer self.lock.unlock(s);
+            const n: usize = @min(out.len, self.count);
+            for (0..n) |i| {
+                out[i] = self.data[self.tail];
+                self.tail = (self.tail + 1) % capacity;
+            }
+            self.count -= n;
+            return n;
+        }
+
+        pub fn clear(self: *Self) void {
+            const s = self.lock.lock();
+            defer self.lock.unlock(s);
+            self.head = 0;
+            self.tail = 0;
+            self.count = 0;
+        }
+
+        pub fn getCount(self: *Self) usize {
+            const s = self.lock.lock();
+            defer self.lock.unlock(s);
+            return self.count;
+        }
+    };
+}
+
+pub const ConsoleTxRing = ConsoleRing(CONSOLE_TX_CAPACITY);
+pub const ConsoleRxRing = ConsoleRing(CONSOLE_RX_CAPACITY);
+
 test "EventQueue filtered polling by CID and PacketQueue FIFO semantics" {
     std.testing.refAllDecls(@This());
     const testing = std.testing;
@@ -244,4 +321,11 @@ test "EventQueue filtered polling by CID and PacketQueue FIFO semantics" {
     const n = pq.pop(&out).?;
     try testing.expectEqualStrings("hello", out[0..n]);
     try testing.expectEqual(@as(usize, 0), pq.getCount());
+
+    var cr = ConsoleRing(8){};
+    _ = cr.pushSlice("abcdefghij");
+    try testing.expectEqual(@as(usize, 8), cr.getCount());
+    const popped = cr.popSlice(&out);
+    try testing.expectEqualStrings("cdefghij", out[0..popped]);
+    try testing.expectEqual(@as(usize, 0), cr.getCount());
 }

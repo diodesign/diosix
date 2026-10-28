@@ -50,8 +50,9 @@ pub fn renderTextField(
     );
     const txt = self.getText();
 
-    const pad_x: i32 = 8;
-    const inner_w: u32 = if (self.width > 16) self.width - 16 else 0;
+    const pad_u: u32 = @max(6, (line_h * 8) / 18);
+    const pad_x: i32 = @intCast(pad_u);
+    const inner_w: u32 = self.width -| (pad_u * 2);
     const inner_h: u32 = if (self.height > 4) self.height - 4 else 0;
     const inner_clip = surface.pushClip(
         boxOf(sx + pad_x, sy + 2, inner_w, inner_h),
@@ -86,7 +87,8 @@ pub fn renderTextField(
 
     if (self.is_focused and is_win_active) {
         const cur_x = text_start_x + @as(i32, @intCast(cur_offset));
-        const cur_box = boxOf(cur_x, text_y + 1, 2, line_h);
+        const cur_w: u32 = @max(2, line_h / 9);
+        const cur_box = boxOf(cur_x, text_y + 1, cur_w, line_h);
         surface.fillBox(cur_box, fb.Color.INK);
     }
 }
@@ -287,8 +289,9 @@ pub fn renderButton(
     const line_h = font.getActiveLineHeight();
     const txt = self.getText();
     const text_w = font.measureString(txt);
-    const pad_x: i32 = 12;
-    const text_x = if (text_w + 24 >= self.width)
+    const pad_u: u32 = @max(8, (line_h * 10) / 18);
+    const pad_x: i32 = @intCast(pad_u);
+    const text_x = if (text_w + pad_u * 2 >= self.width)
         sx + pad_x
     else
         sx + @divTrunc(
@@ -300,7 +303,7 @@ pub fn renderButton(
         2,
     );
 
-    const inner_w: u32 = if (self.width > 24) self.width - 24 else 0;
+    const inner_w: u32 = self.width -| (pad_u * 2);
     const btn_text_clip = surface.pushClip(
         boxOf(sx + pad_x, sy, inner_w, self.height),
     );
@@ -426,10 +429,11 @@ pub fn renderProgressBar(
             (bar_w * @as(u32, pct)) / 100,
         );
         const clamped_fill: u32 = @min(bar_w, fill_w);
+        const fill_col: u32 = self.custom_color orelse fb.Color.THUMB_BG;
         surface.drawRoundedTranslucentBox(
             boxOf(sx, bar_y, clamped_fill, bar_h),
             radius,
-            fb.Color.THUMB_BG,
+            fill_col,
             255,
             null,
         );

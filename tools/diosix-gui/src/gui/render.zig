@@ -155,6 +155,9 @@ fn renderWindowOnSurface(
         return;
     }
     win.render(surface, win_alpha);
+    if (win.id == gui_mod.WIN_TERMINAL_ID) {
+        gui_mod.panes.renderTerminalOverlay(self, surface, win);
+    }
 }
 
 pub fn renderDamaged(self: *DiosixGui, clean_surface: *fb.Surface) fb.Box {
@@ -195,6 +198,8 @@ pub fn renderDamaged(self: *DiosixGui, clean_surface: *fb.Surface) fb.Box {
             }
         }
     } else {
+        const prev_clip = clean_surface.pushClip(damage);
+        defer clean_surface.popClip(prev_clip);
         clean_surface.drawGraduatedBackgroundInBoxDrift(
             damage,
             self.bg_top_color,

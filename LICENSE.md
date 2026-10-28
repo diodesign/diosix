@@ -27,14 +27,15 @@ SOFTWARE.
 
 ---
 
-## Questrial Font (SIL Open Font License 1.1)
+## Questrial and DM Mono Fonts (SIL Open Font License 1.1)
 
 The Questrial typeface (`tools/diosix-gui/assets/Questrial-Regular.ttf`)
-bundled in `diosix-gui` is licensed under the SIL Open Font License,
+and the DM Mono typeface (`tools/diosix-gui/assets/DMMono-Regular.ttf`)
+bundled in `diosix-gui` are licensed under the SIL Open Font License,
 Version 1.1:
 
-Copyright 2011 The Questrial Project Authors (https://github.com/googlefonts/questrial)
-Questrial is a trademark of Admix Designs (www.admixdesigns.com)
+* Questrial: Copyright 2011 The Questrial Project Authors (https://github.com/googlefonts/questrial). Questrial is a trademark of Admix Designs (www.admixdesigns.com).
+* DM Mono: Copyright 2020 The DM Mono Project Authors (https://www.github.com/googlefonts/dm-mono).
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

@@ -106,6 +106,8 @@ Charter governance.
 | `WHISPER_RECV` | `22` | Receive Steward Whisper frame from M-mode ring |
 | `RESET_STEWARD` | `23` | Reset compromised Steward VM after M-of-N vote |
 | `REQUEST_ROOT_FAILOVER` | `24` | Promote Standby Root VM after M-of-N vote |
+| `CONSOLE_WRITE` | `25` | Push input bytes into a child VM's console RX ring |
+| `CONSOLE_READ` | `26` | Drain output bytes from a VM's console TX ring |
 
 ---
 
@@ -291,6 +293,24 @@ Transmit and receive uncensorable Steward Whisper consensus messages (up to
     *   **Returns**: `SBI_SUCCESS` (`0`) in `a0` and the incremented
         `failover_epoch` in `a1`.
 
+#### `CONSOLE_WRITE` (`FID 25`) and `CONSOLE_READ` (`FID 26`)
+Stream interactive serial console (`hvc0` / SBI `DBCN`) I/O between a parent VM
+and its direct child VMs via per-guest M-mode ring buffers (`8 KiB` TX ring,
+`512 B` RX ring). Denied with `SBI_ERR_DENIED` if the target child is marked
+`CONFIDENTIAL` or is a Steward VM under a sealed Charter.
+*   `CONSOLE_WRITE`: Pushes up to `4096` bytes from the caller's GPA buffer
+    into the target VM's `console_rx` ring for consumption by guest
+    `DBCN.CONSOLE_READ` or `LEGACY_CONSOLE_GETCHAR`.
+    *   `a0`: GPA pointer to `struct console_args` (`ConsoleArgs`).
+    *   **Returns**: `SBI_SUCCESS` (`0`) in `a0` and the number of bytes queued
+        in `a1` (also written to `ConsoleArgs.actual_len`).
+*   `CONSOLE_READ`: Drains up to `4096` bytes from the target VM's `console_tx`
+    ring (populated by guest `DBCN.CONSOLE_WRITE`, `DBCN.CONSOLE_WRITE_BYTE`,
+    and `LEGACY_CONSOLE_PUTCHAR`) into the caller's GPA buffer.
+    *   `a0`: GPA pointer to `struct console_args` (`ConsoleArgs`).
+    *   **Returns**: `SBI_SUCCESS` (`0`) in `a0` and the number of bytes read
+        in `a1` (also written to `ConsoleArgs.actual_len`).
+
 ---
 
 ## Data structure layouts
@@ -434,6 +454,13 @@ struct charter_args {
     uint64_t approved_target_cid; /* Output: Target CID of latest vote */
     uint64_t failover_epoch;      /* Output: Standby Root failover epoch */
 };
+
+struct console_args {
+    uint64_t target_cid; /* 1 for self, >= 2 for direct child */
+    uint64_t data_ptr;   /* GPA pointer to console I/O buffer */
+    uint64_t max_len;    /* Bytes to write or buffer capacity (<= 4096) */
+    uint64_t actual_len; /* Output: Bytes actually read or written */
+};
 ```
 
 ---
@@ -464,3 +491,5 @@ Control (`ioctl`) command numbers:
 | `IOCTL_RATIFY_CHARTER` | `0x1013` | Casts Steward ratification vote in M-mode |
 | `IOCTL_RESET_STEWARD` | `0x1014` | Resets compromised Steward VM |
 | `IOCTL_REQUEST_ROOT_FAILOVER` | `0x1015` | Promotes Standby Root VM on failover |
+| `IOCTL_CONSOLE_WRITE` | `0x1016` | Writes input bytes to child console RX ring |
+| `IOCTL_CONSOLE_READ` | `0x1017` | Reads output bytes from VM console TX ring |

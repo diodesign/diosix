@@ -83,6 +83,7 @@ pub fn maxMenuLabelWidth() u32 {
 
 pub fn getContextTitle(selected_menu_id: ?u32) []const u8 {
     const mid = selected_menu_id orelse return "Menu";
+    if (mid == gui_mod.ICON_MENU_TERMINAL_ID) return "Terminal";
     for (MENU_ITEMS) |spec| {
         if (spec.id == mid) return spec.label;
     }
@@ -148,6 +149,7 @@ pub fn repopulateMainMenu(self: *DiosixGui) !void {
     const max_avail_h =
         if (self.height > border_2x) self.height - border_2x else self.height;
     win.height = @min(self.scalePx(MENU_FULL_H), max_avail_h);
+    win.natural_height = win.height;
     win.setHelpText("Main menu");
 
     const pad_2x = pad_x * 2;
@@ -184,7 +186,11 @@ pub fn contractMainMenu(self: *DiosixGui, selected_menu_id: u32) !void {
     win.active_drag_icon_idx = null;
 
     const name = getContextTitle(selected_menu_id);
-    var help: []const u8 = "Selected menu item";
+    const is_term = (selected_menu_id == gui_mod.ICON_MENU_TERMINAL_ID);
+    var help: []const u8 = if (is_term)
+        "Interactive guest VM terminal session"
+    else
+        "Selected menu item";
     for (MENU_ITEMS) |spec| {
         if (spec.id == selected_menu_id) {
             help = spec.help;
@@ -197,6 +203,8 @@ pub fn contractMainMenu(self: *DiosixGui, selected_menu_id: u32) !void {
     const item_w = if (win.width > pad_2x) win.width - pad_2x else 80;
     const item_h = self.scalePx(MENU_ITEM_HEIGHT);
     const contracted_h = self.scalePx(gui_mod.MENU_CONTRACTED_H);
+    win.height = contracted_h;
+    win.natural_height = contracted_h;
     const single_y: i32 = @divTrunc(
         @as(i32, @intCast(contracted_h)) - @as(i32, @intCast(item_h)),
         2,
@@ -221,8 +229,11 @@ pub fn buildBackPane(self: *DiosixGui) !void {
     const menu_win = self.getWindow(WIN_MENU_ID);
     const back_w: u32 = if (menu_win) |mw| mw.width else self.scalePx(112);
     const contracted_h = self.scalePx(gui_mod.MENU_CONTRACTED_H);
+    const back_gap: i32 = @intCast(
+        self.scalePx(@intCast(gui_mod.BACK_PANE_GAP)),
+    );
     const back_y: i32 = BORDER_GAP +
-        @as(i32, @intCast(contracted_h)) + gui_mod.BACK_PANE_GAP;
+        @as(i32, @intCast(contracted_h)) + back_gap;
     const back_h = self.scalePx(gui_mod.BACK_PANE_H);
 
     const win = try self.createWindow(

@@ -147,10 +147,11 @@ fi
 if [ -d "tools/diosix-gui" ]; then
     log_info "Compiling diosix-gui for ${BOLD}${ZIG_TARGET}${RESET}..."
     if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast \
-        --dep interface --dep questrial_ttf --dep intro_wav \
+        --dep interface --dep questrial_ttf --dep dm_mono_ttf --dep intro_wav \
         -Mroot=tools/diosix-gui/src/main.zig \
         -Minterface=hypervisor/interface/lib.zig \
         -Mquestrial_ttf=tools/diosix-gui/assets/Questrial-Regular.ttf \
+        -Mdm_mono_ttf=tools/diosix-gui/assets/DMMono-Regular.ttf \
         -Mintro_wav=tools/diosix-gui/assets/intro.wav \
         --name diosix-gui \
         -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-gui"; then

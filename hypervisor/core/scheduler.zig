@@ -30,7 +30,7 @@ const MAX_LOCAL_VCORES = 8;
 
 pub const NICE_0_WEIGHT: u64 = vcore.WEIGHT_NORMAL;
 pub const MIN_RUNTIME_DELTA: u64 = 1;
-pub const PCPU_WINDOW_TICKS: u64 = 1_000_000; // 100 ms at 10 MHz.
+pub const PCPU_WINDOW_TICKS: u64 = 200_000; // 20 ms at 10 MHz.
 pub const FULL_SHARE_BP: u64 = 10_000; // 100.00% in basis points.
 pub const MIN_SHARE_BP: u64 = 100; // 1.00% floor in basis points.
 
@@ -173,16 +173,13 @@ fn enqueue(vc: *vcore.VirtualCore, notify_idle: bool) void {
     if (notify_idle) pcore.wakeIdleCores();
 }
 
-fn dequeueFromCore(
-    target_pc: *riscv.CpuContext,
-    vc: *vcore.VirtualCore,
-) bool {
+fn dequeueFromCore(target_pc: *riscv.CpuContext, vc: *vcore.VirtualCore) bool {
     const run_lock = pcore.getRunLock(target_pc);
     const run_flags = run_lock.lock();
     defer run_lock.unlock(run_flags);
 
     var it_local = target_pc.run_queue.start;
-    while (it_local) |node| {
+    while (it_local) |node| : (it_local = node.next) {
         const local_vc: *vcore.VirtualCore =
             @ptrCast(@alignCast(node.contents));
         if (local_vc == vc) {
@@ -191,7 +188,6 @@ fn dequeueFromCore(
             @atomicStore(bool, &vc.is_queued, false, .release);
             return true;
         }
-        it_local = node.next;
     }
     return false;
 }
@@ -200,28 +196,24 @@ fn dequeueFromCore(
 pub fn dequeue(vc: *vcore.VirtualCore) void {
     const pc = pcore.this();
     if (dequeueFromCore(pc, vc)) return;
-
     if (pcore.fromHartId(vc.id)) |hart_pc| {
         if (hart_pc != pc and dequeueFromCore(hart_pc, vc)) return;
     }
-
     for (&pcore.core_table) |*row| {
         if (row.static_ptr) |other_pc| {
             if (other_pc != pc and dequeueFromCore(other_pc, vc)) return;
         }
     }
-
     const guard = global_scheduler.acquire();
     defer guard.release();
     const state = guard.get();
     var it = state.run_queue.start;
-    while (it) |node| {
+    while (it) |node| : (it = node.next) {
         if (node.contents == vc) {
             state.run_queue.remove(node);
             @atomicStore(bool, &vc.is_queued, false, .release);
             break;
         }
-        it = node.next;
     }
 }
 
@@ -233,11 +225,8 @@ fn canRunOnCpu(
     if (vc.running_on_cpu != null) return false;
     const req = vc.requiredExtensions();
     if ((req & misa) != req) return false;
-    if (!builtin.is_test and
-        vc.guest.is_root and
-        vc.id != pc.hardware_hart_id)
-    {
-        return false;
+    if (!builtin.is_test and vc.guest.is_root) {
+        return vc.id == pc.hardware_hart_id;
     }
     return true;
 }
@@ -323,12 +312,17 @@ pub fn pickNext() ?*vcore.VirtualCore {
     }
 
     const has_uq = (uq_local_node != null or uq_global_node != null);
-    const best_local_node = if (has_uq) uq_local_node else any_local_node;
-    const best_local_vr = if (has_uq) uq_local_vr else any_local_vr;
+    const idle_other = pcore.hasIdleOtherCore();
+    const best_local_node = if (has_uq and !idle_other)
+        uq_local_node
+    else
+        (uq_local_node orelse any_local_node);
+    const best_local_vr =
+        if (best_local_node == uq_local_node) uq_local_vr else any_local_vr;
     const best_global_node = if (has_uq) uq_global_node else any_global_node;
     const best_global_vr = if (has_uq) uq_global_vr else any_global_vr;
     const prefer_local = best_local_node != null and
-        (pcore.hasIdleOtherCore() or best_local_vr <= best_global_vr);
+        (idle_other or best_local_vr <= best_global_vr);
 
     if (best_global_node != null and !prefer_local) {
         const node = best_global_node.?;
@@ -384,6 +378,9 @@ pub fn accountRuntime(vc: *vcore.VirtualCore) void {
         (base_weight * share_bp) / (FULL_SHARE_BP * vcore_cnt),
     );
     vc.vruntime +|= (actual_time *| NICE_0_WEIGHT) / eff_weight;
+    const max_lead = global_min_vruntime.load(.monotonic) +|
+        (riscv.TIMESLICE_TICKS * 4);
+    if (vc.vruntime > max_lead) vc.vruntime = max_lead;
 }
 
 fn accountAndRequeue(vc: *vcore.VirtualCore) void {
@@ -450,10 +447,8 @@ test "scheduler queuing, multiplicative pCPU shares, and work-conserving" {
 
     var phys_test = try physmem.initForTest(testing.allocator, 128);
     defer phys_test.deinit();
-
-    const alloc = testing.allocator;
     const root = try guest.createGuest(
-        alloc,
+        testing.allocator,
         true,
         true,
         null,

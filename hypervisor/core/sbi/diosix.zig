@@ -14,6 +14,7 @@ const loader = @import("../loader.zig");
 const sbi_core = @import("../sbi.zig");
 const charter = @import("charter.zig");
 const ipc = @import("ipc.zig");
+const console = @import("console.zig");
 const info = @import("info.zig");
 const interface = @import("interface").sbi;
 const arch = @import("interface").riscv;
@@ -91,6 +92,8 @@ pub fn handleDiosix(
         D.REQUEST_ROOT_FAILOVER => {
             charter.handleRequestRootFailover(vc, ctx, a0);
         },
+        D.CONSOLE_WRITE => console.handleConsoleWrite(vc, ctx, g, a0),
+        D.CONSOLE_READ => console.handleConsoleRead(vc, ctx, g, a0),
         else => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),
     }
 }

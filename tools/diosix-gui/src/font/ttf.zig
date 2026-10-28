@@ -11,6 +11,7 @@ const std = @import("std");
 const vector = @import("../vector.zig");
 
 pub const QUESTRIAL_TTF: []const u8 = @embedFile("questrial_ttf");
+pub const DM_MONO_TTF: []const u8 = @embedFile("dm_mono_ttf");
 
 const ON_CURVE_POINT: u8 = 0x01;
 const X_SHORT_VECTOR: u8 = 0x02;
@@ -491,4 +492,9 @@ test "ttf parser: parse Questrial-Regular.ttf and extract glyph outlines" {
     var path = vector.VectorPath.init();
     ttf.appendGlyphPath(gid_a, 0, 0, &path, 0);
     try std.testing.expect(path.len > 4);
+
+    const mono = try TrueTypeFont.parse(DM_MONO_TTF);
+    try std.testing.expectEqual(@as(u16, 1000), mono.units_per_em);
+    const mono_a = mono.getGlyphMetrics(gid_a).advance_width;
+    try std.testing.expectEqual(@as(u16, 600), mono_a);
 }

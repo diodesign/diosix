@@ -134,6 +134,11 @@ fn addHostTestStep(
                 "tools/diosix-gui/assets/Questrial-Regular.ttf",
             ),
         });
+        mod.addAnonymousImport("dm_mono_ttf", .{
+            .root_source_file = b.path(
+                "tools/diosix-gui/assets/DMMono-Regular.ttf",
+            ),
+        });
         mod.addAnonymousImport("intro_wav", .{
             .root_source_file = b.path("tools/diosix-gui/assets/intro.wav"),
         });

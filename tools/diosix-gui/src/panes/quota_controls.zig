@@ -11,6 +11,7 @@
 const std = @import("std");
 const sbi = @import("interface").sbi;
 const fb = @import("../framebuffer.zig");
+const font = @import("../font.zig");
 const icon_mod = @import("../icon.zig");
 const Icon = icon_mod.Icon;
 const window_mod = @import("../window.zig");
@@ -34,6 +35,14 @@ pub const ICON_CREATE_VM_RAM_QUOTA_LBL_ID: u32 = 1370;
 pub const ICON_CREATE_VM_RAM_QUOTA_SLIDER_ID: u32 = 1371;
 pub const ICON_CREATE_VM_NAME_LBL_ID: u32 = 1372;
 pub const ICON_CREATE_VM_NAME_INPUT_ID: u32 = 1373;
+
+pub fn computeControlLabelWidth(self: *const DiosixGui) u32 {
+    const w_ram = font.measureString("RAM pool");
+    const w_pcpu = font.measureString("pCPU %");
+    const w_vcpu = font.measureString("vCPUs");
+    const max_txt = @max(w_ram, @max(w_pcpu, w_vcpu));
+    return @max(self.scalePx(76), max_txt + self.scalePx(12));
+}
 
 pub fn defaultVmNameForImage(
     entry: *const host_info.VmImageEntry,
@@ -249,7 +258,7 @@ pub fn addCreateVmQuotaControls(
         cur_y.*,
         lbl_w,
         row_h,
-        "RAM Pool",
+        "RAM pool",
     );
     rq_lbl.setCustomColor(fb.Color.INK_SECONDARY);
     _ = try win.addIcon(rq_lbl);
@@ -375,7 +384,7 @@ pub fn addGuestDetailQuotaControls(
     _ = try win.addIcon(q_hdr);
     cur_y.* += @intCast(row_h + self.scalePx(4));
 
-    const lbl_w = self.scalePx(64);
+    const lbl_w = computeControlLabelWidth(self);
     const sld_x: i32 = pad_x + @as(i32, @intCast(lbl_w));
     const sld_w: u32 = if (inner_w > lbl_w + 8) inner_w - lbl_w - 8 else 100;
 
@@ -430,7 +439,7 @@ pub fn addGuestDetailQuotaControls(
         cur_y.*,
         lbl_w,
         row_h,
-        "RAM Pool",
+        "RAM pool",
     );
     rq_lbl.setCustomColor(fb.Color.INK_SECONDARY);
     _ = try win.addIcon(rq_lbl);

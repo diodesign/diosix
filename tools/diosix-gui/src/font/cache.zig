@@ -18,6 +18,7 @@ pub const ASCII_COUNT: usize = ASCII_MAX - ASCII_MIN + 1;
 pub const MIN_LINE_HEIGHT_PX: u32 = 8;
 pub const MAX_LINE_HEIGHT_PX: u32 = 240;
 pub const MAX_SIZE_SLOTS: usize = 8;
+pub const MAX_MONO_SIZE_SLOTS: usize = 4;
 pub const SLOT_MASK_CAPACITY: usize = 131072;
 
 pub const CachedGlyph = struct {
@@ -51,7 +52,9 @@ const SizeSlot = struct {
 };
 
 var parsed_font: ?ttf.TrueTypeFont = null;
+var parsed_mono_font: ?ttf.TrueTypeFont = null;
 var slots: [MAX_SIZE_SLOTS]SizeSlot = @splat(.{});
+var mono_slots: [MAX_MONO_SIZE_SLOTS]SizeSlot = @splat(.{});
 var access_tick: u64 = 1;
 
 fn getFont() *const ttf.TrueTypeFont {
@@ -62,17 +65,25 @@ fn getFont() *const ttf.TrueTypeFont {
     return &parsed_font.?;
 }
 
-fn acquireSlot(line_height_px: u16) *SizeSlot {
+fn getMonoFont() *const ttf.TrueTypeFont {
+    if (parsed_mono_font == null) {
+        parsed_mono_font = ttf.TrueTypeFont.parse(ttf.DM_MONO_TTF) catch
+            unreachable;
+    }
+    return &parsed_mono_font.?;
+}
+
+fn acquireSlotFromPool(pool: []SizeSlot, line_height_px: u16) *SizeSlot {
     access_tick +%= 1;
-    for (&slots) |*s| {
+    for (pool) |*s| {
         if (s.line_height_px == line_height_px) {
             s.last_used_tick = access_tick;
             return s;
         }
     }
     var victim_idx: usize = 0;
-    var oldest_tick: u64 = slots[0].last_used_tick;
-    for (&slots, 0..) |*s, idx| {
+    var oldest_tick: u64 = pool[0].last_used_tick;
+    for (pool, 0..) |*s, idx| {
         if (s.line_height_px == 0) {
             victim_idx = idx;
             break;
@@ -82,15 +93,18 @@ fn acquireSlot(line_height_px: u16) *SizeSlot {
             victim_idx = idx;
         }
     }
-    slots[victim_idx].reset(line_height_px, access_tick);
-    return &slots[victim_idx];
+    pool[victim_idx].reset(line_height_px, access_tick);
+    return &pool[victim_idx];
 }
 
-fn populateGlyph(slot: *SizeSlot, char: u8) void {
+fn populateGlyph(
+    slot: *SizeSlot,
+    f: *const ttf.TrueTypeFont,
+    char: u8,
+) void {
     const idx = char - ASCII_MIN;
     slot.populated[idx] = true;
 
-    const f = getFont();
     const h_f: f32 = @floatFromInt(slot.line_height_px);
     const em_px = h_f * (15.0 / 18.0);
     const baseline_y = @round(h_f * (14.2 / 18.0));
@@ -169,9 +183,32 @@ pub fn getGlyph(char: u8, line_height_px: u32) GlyphView {
     else
         '?';
     const idx = safe_c - ASCII_MIN;
-    const slot = acquireSlot(clamped_h);
+    const slot = acquireSlotFromPool(&slots, clamped_h);
     if (!slot.populated[idx]) {
-        populateGlyph(slot, safe_c);
+        populateGlyph(slot, getFont(), safe_c);
+    }
+    const g = slot.glyphs[idx];
+    const len = @as(usize, g.width) * @as(usize, g.height);
+    return .{
+        .glyph = g,
+        .mask = slot.mask_buf[g.mask_offset .. g.mask_offset + len],
+    };
+}
+
+/// Retrieves the cached antialiased monospace (`DMMono-Regular.ttf`) glyph
+/// metrics and coverage mask for `char` at `line_height_px`.
+pub fn getMonoGlyph(char: u8, line_height_px: u32) GlyphView {
+    const clamped_h: u16 = @intCast(
+        std.math.clamp(line_height_px, MIN_LINE_HEIGHT_PX, MAX_LINE_HEIGHT_PX),
+    );
+    const safe_c = if (char >= ASCII_MIN and char <= ASCII_MAX)
+        char
+    else
+        '?';
+    const idx = safe_c - ASCII_MIN;
+    const slot = acquireSlotFromPool(&mono_slots, clamped_h);
+    if (!slot.populated[idx]) {
+        populateGlyph(slot, getMonoFont(), safe_c);
     }
     const g = slot.glyphs[idx];
     const len = @as(usize, g.width) * @as(usize, g.height);

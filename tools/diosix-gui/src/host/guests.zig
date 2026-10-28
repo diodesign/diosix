@@ -50,6 +50,8 @@ pub const GuestActionRecord = struct {
 pub const RunningGuest = struct {
     cid: u64 = 0,
     is_root: bool = false,
+    target_arch: u8 = @backingInt(sbi.TargetArch.riscv64),
+    is_h_mode: bool = true,
     instance_name: [GUEST_NAME_BYTES]u8 = @splat(0),
     instance_len: usize = 0,
     image_name: [GUEST_NAME_BYTES]u8 = @splat(0),
@@ -68,6 +70,23 @@ pub const RunningGuest = struct {
         @splat(@splat(0)),
     storage_lens: [MAX_GUEST_STORAGE]usize = @splat(0),
     storage_count: usize = 0,
+
+    pub fn getArchLabel(self: *const RunningGuest) []const u8 {
+        return switch (self.target_arch) {
+            @backingInt(sbi.TargetArch.riscv32) => "RV32",
+            @backingInt(sbi.TargetArch.aarch64) => "Aarch64",
+            @backingInt(sbi.TargetArch.x86_64) => "x86_64",
+            else => "RV64",
+        };
+    }
+
+    pub fn getVirtModeLabel(self: *const RunningGuest) []const u8 {
+        const rv64 = @backingInt(sbi.TargetArch.riscv64);
+        return if (self.is_h_mode and self.target_arch == rv64)
+            "H-mode"
+        else
+            "PMP";
+    }
 
     pub fn getPcpuHistory(self: *const RunningGuest) []const u8 {
         const len: usize = @min(self.pcpu_history_len, PCPU_HISTORY_LEN);
@@ -91,11 +110,10 @@ pub const RunningGuest = struct {
         const s = label.fmtLabel(&self.instance_name, "{s}", .{name});
         self.instance_len = s.len;
     }
-
     pub fn setImageName(self: *RunningGuest, name: []const u8) void {
-        self.image_len = label.fmtLabel(&self.image_name, "{s}", .{name}).len;
+        const s = label.fmtLabel(&self.image_name, "{s}", .{name});
+        self.image_len = s.len;
     }
-
     pub fn addStorageItem(self: *RunningGuest, item: []const u8) void {
         if (item.len == 0 or self.storage_count >= MAX_GUEST_STORAGE) return;
         const idx = self.storage_count;
@@ -127,19 +145,25 @@ fn queryGuestInfoIoctl(fd: i32, target_cid: u64) ?sbi.GuestInfo {
     return info;
 }
 
-fn queryHostPhysicalCores(fd: i32) ?u32 {
+fn queryHvCaps(fd: i32, pcpus_out: *u32, hw_virt_out: *bool) void {
     var hv = std.mem.zeroes(sbi.HypervisorInfo);
     const rc = linux.ioctl(fd, IOCTL_GET_HV_INFO, @intFromPtr(&hv));
-    const signed_rc: isize = @bitCast(rc);
-    if (signed_rc < 0 or hv.host_physical_cores == 0) return null;
-    return hv.host_physical_cores;
+    if (@as(isize, @bitCast(rc)) >= 0) {
+        if (hv.host_physical_cores > 0) pcpus_out.* = hv.host_physical_cores;
+        const hw_bit = sbi.HypervisorFeature.HARDWARE_VIRT;
+        hw_virt_out.* = (hv.features & hw_bit) != 0;
+    }
 }
 
 fn applyGuestInfo(
     g: *RunningGuest,
     info: sbi.GuestInfo,
     host_pcpus: u32,
+    hw_virt: bool,
 ) void {
+    g.target_arch = info.target_arch;
+    g.is_h_mode = hw_virt and
+        (info.target_arch == @backingInt(sbi.TargetArch.riscv64));
     if (info.vcpus > 0) g.vcpus = @intCast(info.vcpus);
     if (info.self_ram_pages > 0) {
         g.ram_bytes = info.self_ram_pages * PAGE_SIZE_BYTES;
@@ -153,17 +177,15 @@ fn applyGuestInfo(
     }
     g.delegated_ram_bytes = info.delegated_ram_pages *| PAGE_SIZE_BYTES;
     g.used_ram_bytes = info.used_ram_pages *| PAGE_SIZE_BYTES;
-    g.pcpu_percent = proc.computeHvCpuPercent(
-        g.cid,
-        info.cpu_khz_ticks,
-        @max(host_pcpus, g.vcpus),
-    );
+    const denom = @max(host_pcpus, g.vcpus);
+    g.pcpu_percent = proc.computeHvCpuPercent(g.cid, info.cpu_khz_ticks, denom);
 }
 
 fn flushRegistryEntry(
     entry: proc.RegistryEntry,
     dev_fd: ?i32,
     host_pcpus: u32,
+    hw_virt: bool,
     out: *[MAX_RUNNING_GUESTS]RunningGuest,
     count: *usize,
 ) void {
@@ -173,20 +195,18 @@ fn flushRegistryEntry(
     if (entry.status.len > 0 and !std.mem.eql(u8, entry.status, "running")) {
         return;
     }
-    for (0..count.*) |i| {
-        if (out[i].cid == entry.cid) return;
-    }
+    for (0..count.*) |i| if (out[i].cid == entry.cid) return;
 
     var g = RunningGuest{
         .cid = entry.cid,
         .is_root = false,
+        .is_h_mode = hw_virt,
         .vcpus = @max(@as(u32, 1), entry.vcpus),
         .ram_bytes = proc.parseRamStringBytes(entry.ram),
     };
-
     if (dev_fd) |fd| {
         const info = queryGuestInfoIoctl(fd, entry.cid) orelse return;
-        applyGuestInfo(&g, info, host_pcpus);
+        applyGuestInfo(&g, info, host_pcpus, hw_virt);
     }
     if (g.ram_bytes == 0) g.ram_bytes = DEFAULT_ROOT_RAM_BYTES;
     if (g.ram_quota_bytes == 0) g.ram_quota_bytes = g.ram_bytes;
@@ -195,11 +215,8 @@ fn flushRegistryEntry(
         g.setInstanceName(entry.name);
     } else {
         var name_buf: [GUEST_NAME_BYTES]u8 = undefined;
-        g.setInstanceName(
-            label.fmtLabel(&name_buf, "guest-{d}", .{entry.cid}),
-        );
+        g.setInstanceName(label.fmtLabel(&name_buf, "guest-{d}", .{entry.cid}));
     }
-
     if (entry.image.len > 0) {
         g.setImageName(proc.friendlyImageName(entry.image));
     } else if (entry.cdrom.len > 0) {
@@ -209,16 +226,13 @@ fn flushRegistryEntry(
     } else {
         g.setImageName("Diosix Base Linux");
     }
-
+    var sbuf: [STORAGE_LABEL_BYTES]u8 = undefined;
     if (entry.disk.len > 0) {
-        var sbuf: [STORAGE_LABEL_BYTES]u8 = undefined;
         g.addStorageItem(label.fmtLabel(&sbuf, "disk: {s}", .{entry.disk}));
     }
     if (entry.cdrom.len > 0) {
-        var sbuf: [STORAGE_LABEL_BYTES]u8 = undefined;
         g.addStorageItem(label.fmtLabel(&sbuf, "cdrom: {s}", .{entry.cdrom}));
     }
-
     out[count.*] = g;
     count.* += 1;
 }
@@ -227,19 +241,20 @@ fn parseRegistryGuests(
     content: []const u8,
     dev_fd: ?i32,
     host_pcpus: u32,
+    hw_virt: bool,
     out: *[MAX_RUNNING_GUESTS]RunningGuest,
     count: *usize,
 ) void {
     var current = proc.RegistryEntry{};
     var in_guest = false;
-
     var line_it = std.mem.tokenizeAny(u8, content, "\r\n");
     while (line_it.next()) |raw_line| {
         const line = std.mem.trim(u8, raw_line, " \t");
         if (line.len == 0 or line[0] == '#') continue;
         if (std.mem.eql(u8, line, "[[guest]]")) {
             if (in_guest) {
-                flushRegistryEntry(current, dev_fd, host_pcpus, out, count);
+                const f = dev_fd;
+                flushRegistryEntry(current, f, host_pcpus, hw_virt, out, count);
             }
             current = .{};
             in_guest = true;
@@ -248,10 +263,11 @@ fn parseRegistryGuests(
         if (!in_guest) continue;
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const key = std.mem.trim(u8, line[0..eq], " \t");
-        const val = proc.trimTomlValue(line[eq + 1 ..]);
-        current.applyKeyVal(key, val);
+        current.applyKeyVal(key, proc.trimTomlValue(line[eq + 1 ..]));
     }
-    if (in_guest) flushRegistryEntry(current, dev_fd, host_pcpus, out, count);
+    if (in_guest) {
+        flushRegistryEntry(current, dev_fd, host_pcpus, hw_virt, out, count);
+    }
 }
 
 fn finalizeSampledGuests(
@@ -261,10 +277,8 @@ fn finalizeSampledGuests(
     for (0..count) |i| {
         if (out[i].pcpu_history_len == 0) {
             proc.pushPcpuHistorySample(out[i].cid, out[i].pcpu_percent);
-            out[i].pcpu_history_len = proc.copyPcpuHistory(
-                out[i].cid,
-                &out[i].pcpu_history,
-            );
+            out[i].pcpu_history_len =
+                proc.copyPcpuHistory(out[i].cid, &out[i].pcpu_history);
         }
         cached_guests[i] = out[i];
     }
@@ -285,9 +299,7 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
             .cid = sbi.CID_SELF,
             .is_root = true,
             .vcpus = DEFAULT_ROOT_VCPUS,
-            .pcpu_percent = 0,
             .pcpu_quota_pct = 100,
-            .delegated_pcpu_pct = 0,
             .ram_bytes = DEFAULT_ROOT_RAM_BYTES,
             .ram_quota_bytes = DEFAULT_ROOT_QUOTA_BYTES,
         };
@@ -297,40 +309,36 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
         out[0] = root_vm;
         return finalizeSampledGuests(out, 1);
     }
-
     const fd_rc = linux.open(paths.DEV_DIOSIX_PATH, .{ .ACCMODE = .RDWR }, 0);
     const signed_fd: isize = @bitCast(fd_rc);
     const dev_fd: ?i32 = if (signed_fd >= 0) @intCast(signed_fd) else null;
     defer if (dev_fd) |fd| {
         _ = linux.close(fd);
     };
-
     var count: usize = 0;
+    const root_ram = proc.queryRootMemTotalBytes() orelse
+        DEFAULT_ROOT_RAM_BYTES;
     var root_vm = RunningGuest{
         .cid = sbi.CID_SELF,
         .is_root = true,
         .vcpus = DEFAULT_ROOT_VCPUS,
         .pcpu_quota_pct = 100,
-        .ram_bytes = proc.queryRootMemTotalBytes() orelse
-            DEFAULT_ROOT_RAM_BYTES,
+        .ram_bytes = root_ram,
         .ram_quota_bytes = DEFAULT_ROOT_QUOTA_BYTES,
     };
     root_vm.setInstanceName("root");
     root_vm.setImageName("rootvm");
-
     var host_pcpus: u32 = DEFAULT_ROOT_VCPUS;
+    var hw_virt: bool = true;
     var expected_children: usize = 0;
     if (dev_fd) |fd| {
-        if (queryHostPhysicalCores(fd)) |pcpus| host_pcpus = pcpus;
+        queryHvCaps(fd, &host_pcpus, &hw_virt);
+        root_vm.is_h_mode = hw_virt;
         if (queryGuestInfoIoctl(fd, sbi.CID_SELF)) |info| {
-            applyGuestInfo(&root_vm, info, host_pcpus);
+            applyGuestInfo(&root_vm, info, host_pcpus, hw_virt);
             expected_children = @intCast(info.child_count);
-        } else {
-            root_vm.pcpu_percent = proc.sampleRootProcCpuPercent();
-        }
-    } else {
-        root_vm.pcpu_percent = proc.sampleRootProcCpuPercent();
-    }
+        } else root_vm.pcpu_percent = proc.sampleRootProcCpuPercent();
+    } else root_vm.pcpu_percent = proc.sampleRootProcCpuPercent();
     root_vm.storage_count = proc.collectRootStorage(
         &root_vm.storage_items,
         &root_vm.storage_lens,
@@ -339,12 +347,9 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
     count = 1;
 
     var reg_buf: [proc.MAX_FILE_READ_BYTES]u8 = undefined;
-    const reg_content = proc.readSmallFile(
-        paths.GUEST_REGISTRY_PATH,
-        &reg_buf,
-    );
-    if (reg_content.len > 0) {
-        parseRegistryGuests(reg_content, dev_fd, host_pcpus, out, &count);
+    const reg = proc.readSmallFile(paths.GUEST_REGISTRY_PATH, &reg_buf);
+    if (reg.len > 0) {
+        parseRegistryGuests(reg, dev_fd, host_pcpus, hw_virt, out, &count);
     }
 
     if (dev_fd) |fd| {
@@ -353,14 +358,12 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
             count < MAX_RUNNING_GUESTS and
             cid < sbi.CID_FIRST_CHILD + MAX_RUNNING_GUESTS) : (cid += 1)
         {
-            var already_present = false;
-            for (1..count) |i| {
-                if (out[i].cid == cid) {
-                    already_present = true;
-                    break;
-                }
-            }
-            if (already_present) continue;
+            var present = false;
+            for (1..count) |i| if (out[i].cid == cid) {
+                present = true;
+                break;
+            };
+            if (present) continue;
             if (queryGuestInfoIoctl(fd, cid)) |cinfo| {
                 var cg = RunningGuest{
                     .cid = cid,
@@ -368,19 +371,16 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
                     .vcpus = 1,
                     .ram_bytes = DEFAULT_ROOT_RAM_BYTES,
                 };
-                applyGuestInfo(&cg, cinfo, host_pcpus);
+                applyGuestInfo(&cg, cinfo, host_pcpus, hw_virt);
                 if (cg.ram_quota_bytes == 0) cg.ram_quota_bytes = cg.ram_bytes;
                 var nbuf: [GUEST_NAME_BYTES]u8 = undefined;
-                cg.setInstanceName(
-                    label.fmtLabel(&nbuf, "guest-{d}", .{cid}),
-                );
+                cg.setInstanceName(label.fmtLabel(&nbuf, "guest-{d}", .{cid}));
                 cg.setImageName("Diosix Base Linux");
                 out[count] = cg;
                 count += 1;
             }
         }
     }
-
     return finalizeSampledGuests(out, count);
 }
 
@@ -473,18 +473,18 @@ test "guests: parseRegistryGuests and lifecycle protections" {
 
     var list: [MAX_RUNNING_GUESTS]RunningGuest = undefined;
     var count: usize = 0;
-    parseRegistryGuests(sample_toml, null, 4, &list, &count);
+    parseRegistryGuests(sample_toml, null, 4, true, &list, &count);
     const expectEq = std.testing.expectEqual;
     const expectStr = std.testing.expectEqualStrings;
     try expectEq(@as(usize, 1), count);
     try expectEq(@as(u64, 2), list[0].cid);
     try expectStr("worker-alpha", list[0].getInstanceName());
     try expectStr("Diosix Base Linux", list[0].getImageName());
+    try expectStr("RV64", list[0].getArchLabel());
+    try expectStr("H-mode", list[0].getVirtModeLabel());
     try expectEq(@as(u32, 2), list[0].vcpus);
     try expectEq(@as(u64, 512 * mem_size.MIB), list[0].ram_bytes);
     try expectEq(@as(usize, 2), list[0].storage_count);
-
-    // Root VM (CID 1) cannot be restarted or shut down via guest controls.
     try std.testing.expect(!restartGuestVm(1));
     try std.testing.expect(!shutdownGuestVm(1));
     try std.testing.expect(!setGuestQuota(1, 50, 512));

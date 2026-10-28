@@ -272,7 +272,10 @@ pub fn populateCreateVmDetailWindow(
         win.width - @as(u32, @intCast(pad_x * 2))
     else
         140;
-    const row_h = self.scalePx(24);
+    const row_h = @max(
+        self.scalePx(24),
+        font.getActiveLineHeight() + self.scalePx(6),
+    );
     var cur_y: i32 = @intCast(self.scalePx(12));
 
     var hdr = Icon.createReadOnly(
@@ -287,7 +290,7 @@ pub fn populateCreateVmDetailWindow(
     _ = try win.addIcon(hdr);
     cur_y += @intCast(row_h + self.scalePx(10));
 
-    const lbl_w = self.scalePx(64);
+    const lbl_w = quota_controls.computeControlLabelWidth(self);
     const sld_x: i32 = pad_x + @as(i32, @intCast(lbl_w));
     const sld_w: u32 = if (inner_w > lbl_w + 8) inner_w - lbl_w - 8 else 100;
 
@@ -422,8 +425,14 @@ pub fn populateCreateVmDetailWindow(
     }
 
     cur_y += @intCast(self.scalePx(8));
-    const btn_w = self.scalePx(110);
-    const btn_h = self.scalePx(32);
+    const btn_w = @max(
+        self.scalePx(110),
+        font.measureString("Create") + self.scalePx(32),
+    );
+    const btn_h = @max(
+        self.scalePx(32),
+        font.getActiveLineHeight() + self.scalePx(12),
+    );
     var create_btn = Icon.createButton(
         gui_mod.ICON_CREATE_VM_BTN_ID,
         pad_x,

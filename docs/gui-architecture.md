@@ -80,11 +80,26 @@ Located in `tools/diosix-gui/src/`:
     primitives (buttons, sliders, checkboxes, progress bars, menu items, and
     bounded text formatting).
 *   **[`panes.zig`](../tools/diosix-gui/src/panes.zig),
+    [`guests.zig`](../tools/diosix-gui/src/panes/guests.zig),
+    [`terminal.zig`](../tools/diosix-gui/src/panes/terminal.zig),
+    [`terminal_state.zig`](../tools/diosix-gui/src/panes/terminal_state.zig),
     [`modal.zig`](../tools/diosix-gui/src/panes/modal.zig), and
     [`osk.zig`](../tools/diosix-gui/src/panes/osk.zig)**: Layout builders
     for the host and hypervisor status pane (`About`), appearance configuration
-    pane (`Config`), power confirmation modal (`Restart` / `Shutdown`),
-    Welcome modal, 5-step Guided Tour, and dockable OSK.
+    pane (`Config`), running guest VMs and detail panes (showing VM
+    architecture and `H-mode` / `PMP` isolation mode, plus `Open new local
+    terminal` / `Reopen local terminal`, `Open new SSH terminal` / `Reopen SSH
+    terminal`, and `Open serial console`), full-width VT100/ANSI terminal
+    window with color inversion (`Invert`), power confirmation modal
+    (`Restart` / `Shutdown`), Welcome modal, 5-step Guided Tour, and dockable
+    OSK.
+*   **[`terminal.zig`](../tools/diosix-gui/src/terminal.zig) and
+    [`io.zig`](../tools/diosix-gui/src/terminal/io.zig)**: Dynamically sized
+    (up to `200x60`) fixed-width (`DMMono-Regular.ttf`) VT100/ANSI terminal
+    emulator supporting persistent per-VM Linux pseudo-terminal (`/dev/ptmx` +
+    `dsx ssh <cid>`) sessions across `<- Back` navigation and direct hypervisor
+    serial console (`hvc0` via `/dev/diosix` `IOCTL_CONSOLE_READ` /
+    `IOCTL_CONSOLE_WRITE`) streaming.
 *   **[`gui.zig`](../tools/diosix-gui/src/gui.zig),
     [`chrome.zig`](../tools/diosix-gui/src/gui/chrome.zig),
     [`input.zig`](../tools/diosix-gui/src/gui/input.zig),

@@ -47,6 +47,8 @@
 #define DIOSIX_FUNC_WHISPER_RECV          22
 #define DIOSIX_FUNC_RESET_STEWARD         23
 #define DIOSIX_FUNC_REQUEST_ROOT_FAILOVER 24
+#define DIOSIX_FUNC_CONSOLE_WRITE         25
+#define DIOSIX_FUNC_CONSOLE_READ          26
 
 #define IOCTL_DROP_TRUST            0x1002
 #define IOCTL_RUN                   0x1003
@@ -69,6 +71,8 @@
 #define IOCTL_RATIFY_CHARTER        0x1013
 #define IOCTL_RESET_STEWARD         0x1014
 #define IOCTL_REQUEST_ROOT_FAILOVER 0x1015
+#define IOCTL_CONSOLE_WRITE         0x1016
+#define IOCTL_CONSOLE_READ          0x1017
 
 #define DIOSIX_CHILD_MEM_BASE       0x200000000UL
 #define DIOSIX_CHILD_MEM_MAX_SIZE   (256UL * 1024 * 1024)
@@ -76,6 +80,7 @@
 #define DIOSIX_MAX_EXACT_ALLOC_SIZE (2UL * 1024 * 1024)
 #define DIOSIX_MAX_DTB_SIZE         DIOSIX_MAX_EXACT_ALLOC_SIZE
 #define DIOSIX_MAX_MANIFEST_SIZE    (1024UL * 1024)
+#define DIOSIX_MAX_CONSOLE_IO_SIZE  4096UL
 #define DIOSIX_NET_MAX_FRAME_SIZE   1536UL
 
 #define DIOSIX_CID_PARENT           0UL
@@ -195,6 +200,13 @@ struct manifest_args {
     uint64_t actual_len;
 };
 
+struct console_args {
+    uint64_t target_cid;
+    uint64_t data_ptr;
+    uint64_t max_len;
+    uint64_t actual_len;
+};
+
 struct run_args {
     uint64_t child_id;
     uint64_t elf_ptr;
@@ -251,6 +263,7 @@ _Static_assert(
 );
 _Static_assert(sizeof(struct quota_args) == 56, "quota_args ABI size");
 _Static_assert(sizeof(struct manifest_args) == 32, "manifest_args ABI size");
+_Static_assert(sizeof(struct console_args) == 32, "console_args ABI size");
 _Static_assert(sizeof(struct run_args) == 56, "run_args ABI size");
 _Static_assert(sizeof(struct terminate_args) == 16, "terminate_args ABI size");
 _Static_assert(sizeof(struct guest_info) == 96, "guest_info ABI size");

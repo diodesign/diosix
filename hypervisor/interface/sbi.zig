@@ -78,6 +78,8 @@ pub const DIOSIX = struct {
     pub const WHISPER_RECV = 22;
     pub const RESET_STEWARD = 23;
     pub const REQUEST_ROOT_FAILOVER = 24;
+    pub const CONSOLE_WRITE = 25;
+    pub const CONSOLE_READ = 26;
 };
 
 pub const CID_PARENT: u64 = 0;
@@ -229,6 +231,15 @@ pub const ManifestArgs = extern struct {
     actual_len: u64 = 0,
 };
 
+pub const MAX_CONSOLE_IO_BYTES: usize = 4096;
+
+pub const ConsoleArgs = extern struct {
+    target_cid: u64,
+    data_ptr: u64,
+    max_len: u64,
+    actual_len: u64 = 0,
+};
+
 pub const MapChildMemArgs = extern struct {
     child_id: u64,
     child_gpa: u64,
@@ -294,6 +305,7 @@ comptime {
     std.debug.assert(@sizeOf(WaitEventArgs) == 40);
     std.debug.assert(@sizeOf(QuotaArgs) == 56);
     std.debug.assert(@sizeOf(ManifestArgs) == 32);
+    std.debug.assert(@sizeOf(ConsoleArgs) == 32);
     std.debug.assert(@sizeOf(MapChildMemArgs) == 40);
     std.debug.assert(@sizeOf(UnmapChildMemArgs) == 16);
     std.debug.assert(@sizeOf(StartArgs) == 24);
@@ -317,6 +329,7 @@ test "SBI interface structures and extension IDs" {
     try testing.expectEqual(@as(usize, 40), @sizeOf(WaitEventArgs));
     try testing.expectEqual(@as(usize, 56), @sizeOf(QuotaArgs));
     try testing.expectEqual(@as(usize, 32), @sizeOf(ManifestArgs));
+    try testing.expectEqual(@as(usize, 32), @sizeOf(ConsoleArgs));
     try testing.expectEqual(@as(usize, 40), @sizeOf(MapChildMemArgs));
     try testing.expectEqual(@as(usize, 16), @sizeOf(UnmapChildMemArgs));
     try testing.expectEqual(@as(usize, 24), @sizeOf(StartArgs));

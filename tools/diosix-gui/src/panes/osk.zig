@@ -13,6 +13,7 @@ const osk_mod = @import("../osk.zig");
 const text_label = @import("../label.zig");
 const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
+const panes_terminal = @import("terminal.zig");
 
 const BORDER_GAP = gui_mod.BORDER_GAP;
 const WIN_OSK_ID = gui_mod.WIN_OSK_ID;
@@ -44,6 +45,7 @@ pub const KeyCommand = enum {
 };
 
 var shift_held: bool = false;
+var ctrl_held: bool = false;
 
 fn findFocusedInput(
     self: *DiosixGui,
@@ -85,6 +87,12 @@ pub fn handleKeyChar(self: *DiosixGui, ch: u8) void {
         _ = target.icon.deleteSelection();
         target.icon.insertChar(ch);
         syncInputField(self, target.win_id, target.icon);
+        return;
+    }
+    if (panes_terminal.isTerminalWindowOpen(self)) {
+        const buf = [1]u8{ch};
+        self.terminal.sendBytes(&buf);
+        self.markWindowDirty(panes_terminal.WIN_TERMINAL_ID);
     }
 }
 
@@ -116,6 +124,19 @@ pub fn handleKeySpecial(self: *DiosixGui, cmd: KeyCommand) void {
             },
         }
         syncInputField(self, target.win_id, ic);
+        return;
+    }
+    if (panes_terminal.isTerminalWindowOpen(self)) {
+        const seq: []const u8 = switch (cmd) {
+            .backspace => "\x7f",
+            .delete => "\x1b[3~",
+            .left => "\x1b[D",
+            .right => "\x1b[C",
+            .home => "\x1b[H",
+            .end => "\x1b[F",
+        };
+        self.terminal.sendBytes(seq);
+        self.markWindowDirty(panes_terminal.WIN_TERMINAL_ID);
     }
 }
 
@@ -124,18 +145,51 @@ pub fn handleEvdevKey(self: *DiosixGui, code: u16, value: i32) void {
         shift_held = (value != 0);
         return;
     }
+    if (code == 29 or code == 97) {
+        ctrl_held = (value != 0);
+        return;
+    }
     if (value == 0) return;
+
+    const term_focused = findFocusedInput(self) == null and
+        panes_terminal.isTerminalWindowOpen(self);
+
+    if (ctrl_held and term_focused) {
+        if (code == 46) {
+            self.terminal.sendBytes("\x03");
+            self.markWindowDirty(panes_terminal.WIN_TERMINAL_ID);
+            return;
+        }
+        if (code == 32) {
+            self.terminal.sendBytes("\x04");
+            self.markWindowDirty(panes_terminal.WIN_TERMINAL_ID);
+            return;
+        }
+    }
 
     switch (code) {
         14 => handleKeySpecial(self, .backspace),
+        15 => if (term_focused) handleKeyChar(self, '\t'),
+        28 => if (term_focused) handleKeyChar(self, '\n'),
         111 => handleKeySpecial(self, .delete),
+        103 => if (term_focused) {
+            self.terminal.sendBytes("\x1b[A");
+            self.markWindowDirty(panes_terminal.WIN_TERMINAL_ID);
+        },
+        108 => if (term_focused) {
+            self.terminal.sendBytes("\x1b[B");
+            self.markWindowDirty(panes_terminal.WIN_TERMINAL_ID);
+        },
         105 => handleKeySpecial(self, .left),
         106 => handleKeySpecial(self, .right),
         102 => handleKeySpecial(self, .home),
         107 => handleKeySpecial(self, .end),
-        57 => handleKeyChar(self, '-'),
+        57 => handleKeyChar(self, if (term_focused) ' ' else '-'),
         12 => handleKeyChar(self, if (shift_held) '_' else '-'),
+        13 => handleKeyChar(self, if (shift_held) '+' else '='),
+        39 => handleKeyChar(self, if (shift_held) ':' else ';'),
         52 => handleKeyChar(self, '.'),
+        53 => handleKeyChar(self, if (shift_held) '?' else '/'),
         2...11 => {
             const digits = "1234567890";
             handleKeyChar(self, digits[code - 2]);
@@ -162,6 +216,14 @@ pub fn handleEvdevKey(self: *DiosixGui, code: u16, value: i32) void {
 pub fn handleOskAction(self: *DiosixGui, icon_id: u32) void {
     if (icon_id >= ICON_OSK_KEY_BASE_ID) {
         const offset = icon_id - ICON_OSK_KEY_BASE_ID;
+        const term_focused = findFocusedInput(self) == null and
+            panes_terminal.isTerminalWindowOpen(self);
+        if (offset == 32 and term_focused) {
+            handleKeyChar(self, '\n');
+            self.osk_state.clearInput();
+            buildOskWindow(self) catch {};
+            return;
+        }
         const prev_len = self.osk_state.input_len;
         _ = self.osk_state.applyKeyOffset(offset);
         if (self.osk_state.input_len > prev_len) {
