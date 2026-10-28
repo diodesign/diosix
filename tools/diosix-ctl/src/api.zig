@@ -15,8 +15,10 @@ pub const CID_PARENT: usize = interface.CID_PARENT;
 pub const CID_SELF: usize = interface.CID_SELF;
 pub const CID_FIRST_CHILD: usize = interface.CID_FIRST_CHILD;
 pub const MAX_CHILD_PCPU_QUOTA_PCT: u32 = interface.MAX_CHILD_PCPU_QUOTA_PCT;
+pub const DEFAULT_RETAINED_PCPU_PCT: u32 = interface.DEFAULT_RETAINED_PCPU_PCT;
 pub const DEFAULT_CHILD_PCPU_QUOTA_PCT: u32 =
     interface.DEFAULT_CHILD_PCPU_QUOTA_PCT;
+pub const MAX_GUEST_VCPUS: u32 = interface.MAX_GUEST_VCPUS;
 
 pub const TargetArch = interface.TargetArch;
 pub const DIOSIX_FUNC = interface.DIOSIX;

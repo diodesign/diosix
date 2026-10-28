@@ -164,20 +164,8 @@ pub fn renderSlider(
         fb.Color.GLASS_BORDER,
     );
 
-    const span = if (self.slider_max > self.slider_min)
-        self.slider_max - self.slider_min
-    else
-        1;
-    const progress: i32 = std.math.clamp(
-        self.slider_val - self.slider_min,
-        0,
-        span,
-    );
     const track_w = if (bar_w > thumb_w) bar_w - thumb_w else 1;
-    const thumb_offset = @divTrunc(
-        progress * @as(i32, @intCast(track_w)),
-        span,
-    );
+    const thumb_offset = self.sliderThumbOffset(track_w);
     const thumb_box = boxOf(
         sx + thumb_offset,
         thumb_y,

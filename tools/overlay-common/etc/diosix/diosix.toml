@@ -15,6 +15,7 @@ default_disk_mb = 1024
 install_default_disk_mb = 4096
 default_arch = "riscv64"
 subnet_prefix = "10.0.3."
+root_retained_pcpu_pct = 10
 
 [paths]
 images_dir = "/var/lib/diosix/images"

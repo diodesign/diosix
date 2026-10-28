@@ -250,10 +250,17 @@ pub fn loadElfViaForeignMapping(
 
     var dtb_gpa: usize = 0;
     if (dtb_data.len > 0) {
-        const dtb_end = std.math.add(usize, dtb_offset, dtb_data.len) catch
+        const expanded = fdt_patch.expandChildDtbCpuNodes(
+            std.heap.page_allocator,
+            dtb_data,
+            vcpus,
+        );
+        defer if (expanded) |exp| std.heap.page_allocator.free(exp);
+        const eff_dtb = expanded orelse dtb_data;
+        const dtb_end = std.math.add(usize, dtb_offset, eff_dtb.len) catch
             return error.SegmentOutOfBounds;
         if (dtb_end > ram_bytes) return error.SegmentOutOfBounds;
-        patchChildDtb(dtb_data, base_gpa, @intCast(ram_bytes), vcpus);
+        patchChildDtb(eff_dtb, base_gpa, @intCast(ram_bytes), vcpus);
         dtb_gpa = std.math.add(usize, base_gpa, dtb_offset) catch
             return error.SegmentOutOfBounds;
         const dtb_aligned = std.mem.alignBackward(usize, dtb_offset, 4096);
@@ -268,7 +275,7 @@ pub fn loadElfViaForeignMapping(
         );
         defer client.unmapChildMemory(dtb_ram, parent_gpa) catch {};
         const rel_dtb = dtb_offset - dtb_aligned;
-        @memcpy(dtb_ram[rel_dtb .. rel_dtb + dtb_data.len], dtb_data);
+        @memcpy(dtb_ram[rel_dtb .. rel_dtb + eff_dtb.len], eff_dtb);
     }
 
     if (try pe.computeShimPayloadOffset(

@@ -36,8 +36,8 @@ pub const MAX_CATALOG_ENTRIES: usize = 32;
 
 pub const OFFICIAL_CATALOG = [_]CatalogEntry{
     .{
-        .id = "diosix-linux",
-        .alias = "base-linux",
+        .id = "diosix-base-linux",
+        .alias = "diosix-linux",
         .title = "Diosix Base Linux",
         .tier = "leaf",
         .os_family = "linux",
@@ -46,8 +46,8 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_vcpus = 2,
         .default_ram_mb = 512,
         .default_disk_mb = 1024,
-        .filename = "diosix-linux.elf",
-        .url = "https://images.diosix.org/26.2/riscv64/diosix-linux.elf",
+        .filename = "diosix-base-linux.elf",
+        .url = "https://images.diosix.org/26.2/riscv64/diosix-base-linux.elf",
         .sha256 = "5123456789abcdef0123456789abcdef" ++
             "0123456789abcdef0123456789abcdef",
     },

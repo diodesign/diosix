@@ -14,6 +14,13 @@ const scheduler = @import("../../../../../core/scheduler.zig");
 const config = @import("config");
 
 const EXT_IRQ_MIP_MASK: usize = riscv.MIP.SEIP | riscv.MIP.MEIP;
+const GUEST_STIE_MASK: u64 = riscv.MIP.STIP | riscv.HVIP.VSTIP;
+
+pub inline fn isGuestTimerArmed(gs: *const riscv.GuestState) bool {
+    return (gs.vsie & GUEST_STIE_MASK) != 0 and
+        gs.vstimecmp != 0 and
+        gs.vstimecmp != riscv.TIMER_INFINITY;
+}
 
 /// Check if a physical PLIC external interrupt has been claimed and deasserted,
 /// clearing `VSEIP` and re-enabling physical external interrupts if so.
@@ -114,10 +121,7 @@ fn updateActiveVCoreTimer(vc: *vcore.VirtualCore, next_timer: *u64) void {
 
     if (vc.exec_path == .native) {
         const gs = vc.getNativeGuestState();
-        if (!riscv.riscv_supports_sstc and
-            gs.vstimecmp != 0 and
-            gs.vstimecmp != riscv.TIMER_INFINITY)
-        {
+        if (!riscv.riscv_supports_sstc and isGuestTimerArmed(gs)) {
             if (now >= gs.vstimecmp) {
                 vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
             } else if (gs.vstimecmp < next_timer.*) {
@@ -173,9 +177,7 @@ pub fn wakeExpiredBlockedVCores(
 
         if (!wake and vc.exec_path == .native) {
             const gs = vc.getNativeGuestState();
-            if (gs.vstimecmp != 0 and
-                gs.vstimecmp != riscv.TIMER_INFINITY)
-            {
+            if (isGuestTimerArmed(gs)) {
                 if (now >= gs.vstimecmp) {
                     if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
                         vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
@@ -184,12 +186,6 @@ pub fn wakeExpiredBlockedVCores(
                 } else if (gs.vstimecmp < next_timer.*) {
                     next_timer.* = gs.vstimecmp;
                 }
-            } else if (now -% vc.last_queued_time >= riscv.TIMESLICE_TICKS) {
-                wake = true;
-            }
-        } else if (!wake and vc.exec_path == .emulated) {
-            if (now -% vc.last_queued_time >= riscv.TIMESLICE_TICKS) {
-                wake = true;
             }
         }
 
@@ -377,15 +373,15 @@ pub fn programHardwareTimerAndMie(
 
     var next_timer: u64 = riscv.TIMER_INFINITY;
     const now = riscv.readTime();
-    const vstc = vc.getNativeGuestState().vstimecmp;
-    if (vstc != 0 and vstc != riscv.TIMER_INFINITY) {
-        if (now >= vstc) {
+    const gs = vc.getNativeGuestState();
+    if (isGuestTimerArmed(gs)) {
+        if (now >= gs.vstimecmp) {
             if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
                 hvip_val.* |= riscv.HVIP.VSTIP;
                 riscv.writeHvip(hvip_val.*);
             }
         } else if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
-            if (vstc < next_timer) next_timer = vstc;
+            if (gs.vstimecmp < next_timer) next_timer = gs.vstimecmp;
         }
     }
 

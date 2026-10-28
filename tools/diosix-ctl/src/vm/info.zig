@@ -244,8 +244,15 @@ fn allocSelfInfo(
         info.pcpu_quota_pct
     else
         100;
-    const del_pcpu_pct: u32 = @min(info.delegated_pcpu_pct, 90);
-    const ret_pcpu_pct: u32 = 100 -| del_pcpu_pct;
+    const max_del_pcpu: u32 = if (is_root and pcpu_pct < 100)
+        pcpu_pct
+    else
+        api.MAX_CHILD_PCPU_QUOTA_PCT;
+    const del_pcpu_pct: u32 = @min(info.delegated_pcpu_pct, max_del_pcpu);
+    const ret_pcpu_pct: u32 = if (is_root)
+        100 -| max_del_pcpu
+    else
+        100 -| del_pcpu_pct;
     const max_ram_mb = if (info.max_ram_pages > 0 and
         info.max_ram_pages < std.math.maxInt(usize))
         (info.max_ram_pages * PAGE_SIZE_KB) / KB_PER_MB
@@ -253,7 +260,10 @@ fn allocSelfInfo(
         ram_mb;
     const del_ram_mb = (info.delegated_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
     const used_ram_mb = (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
-    const avail_ram_mb = max_ram_mb -| @max(del_ram_mb, used_ram_mb);
+    const avail_ram_mb = if (is_root)
+        max_ram_mb -| @max(del_ram_mb, used_ram_mb)
+    else
+        max_ram_mb -| @max(ram_mb +| del_ram_mb, used_ram_mb);
 
     if (json_mode) {
         return allocator.print(SELF_JSON_FMT, .{
@@ -366,11 +376,28 @@ pub fn cmdInfo(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             while (iter.next()) |entry| {
                 if (matchTarget(t_str, target_cid, entry.cid, entry.name)) {
                     found = true;
+                    var vcpus = entry.vcpus;
+                    var ram_buf: [32]u8 = undefined;
+                    var ram_s = entry.ram;
+                    if (entry.cid >= 2) {
+                        if (client.getInfo(entry.cid)) |info| {
+                            if (info.vcpus > 0) vcpus = info.vcpus;
+                            if (info.self_ram_pages > 0) {
+                                const mb = (info.self_ram_pages *
+                                    PAGE_SIZE_KB) / KB_PER_MB;
+                                ram_s = std.fmt.bufPrint(
+                                    &ram_buf,
+                                    "{d} MB",
+                                    .{mb},
+                                ) catch entry.ram;
+                            }
+                        } else |_| {}
+                    }
                     printGuestDetail(
                         entry.cid,
                         entry.name,
-                        entry.vcpus,
-                        entry.ram,
+                        vcpus,
+                        ram_s,
                         entry.ip,
                         entry.trust,
                         entry.status,

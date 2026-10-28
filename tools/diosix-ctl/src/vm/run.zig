@@ -136,8 +136,10 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                         printStr("Error: Invalid '--vcpus' value.\n");
                         return;
                     };
-                    if (vcpus == 0) {
-                        printStr("Error: '--vcpus' must be at least 1.\n");
+                    if (vcpus == 0 or vcpus > api.MAX_GUEST_VCPUS) {
+                        printStr(
+                            "Error: '--vcpus' must be between 1 and 4096.\n",
+                        );
                         return;
                     }
                 },
@@ -352,10 +354,11 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const arch_enum =
         std.meta.stringToEnum(api.TargetArch, arch_str) orelse .riscv64;
     const ram_mb = parseMemorySizeMb(ram_str);
-    const ram_quota_mb = if (ram_quota_str) |rq|
+    const raw_quota_mb = if (ram_quota_str) |rq|
         parseMemorySizeMb(rq)
     else
         ram_mb;
+    const ram_quota_mb = @max(ram_mb, raw_quota_mb);
     const eff_pcpu = vm_stage.checkChildResourceQuota(
         client,
         vm_name.?,

@@ -34,12 +34,7 @@ const DEFAULT_ROOT_RAM_BYTES: u64 = 256 * mem_size.MIB;
 const DEFAULT_ROOT_QUOTA_BYTES: u64 = 1536 * mem_size.MIB;
 const DEFAULT_ROOT_VCPUS: u32 = 4;
 
-pub const GuestActionKind = enum {
-    restart,
-    shutdown,
-    set_quota,
-};
-
+pub const GuestActionKind = enum { restart, shutdown, set_quota };
 pub const GuestActionRecord = struct {
     cid: u64,
     action: GuestActionKind,
@@ -82,30 +77,23 @@ pub const RunningGuest = struct {
 
     pub fn getVirtModeLabel(self: *const RunningGuest) []const u8 {
         const rv64 = @backingInt(sbi.TargetArch.riscv64);
-        return if (self.is_h_mode and self.target_arch == rv64)
-            "H-mode"
-        else
-            "PMP";
+        const is_h = self.is_h_mode and self.target_arch == rv64;
+        return if (is_h) "H-mode" else "PMP";
     }
-
     pub fn getPcpuHistory(self: *const RunningGuest) []const u8 {
-        const len: usize = @min(self.pcpu_history_len, PCPU_HISTORY_LEN);
-        return self.pcpu_history[0..len];
+        const n: usize = @min(self.pcpu_history_len, PCPU_HISTORY_LEN);
+        return self.pcpu_history[0..n];
     }
-
     pub fn getInstanceName(self: *const RunningGuest) []const u8 {
         return self.instance_name[0..self.instance_len];
     }
-
     pub fn getImageName(self: *const RunningGuest) []const u8 {
         return self.image_name[0..self.image_len];
     }
-
     pub fn getStorageItem(self: *const RunningGuest, idx: usize) []const u8 {
         if (idx >= self.storage_count) return "";
         return self.storage_items[idx][0..self.storage_lens[idx]];
     }
-
     pub fn setInstanceName(self: *RunningGuest, name: []const u8) void {
         const s = label.fmtLabel(&self.instance_name, "{s}", .{name});
         self.instance_len = s.len;
@@ -117,8 +105,8 @@ pub const RunningGuest = struct {
     pub fn addStorageItem(self: *RunningGuest, item: []const u8) void {
         if (item.len == 0 or self.storage_count >= MAX_GUEST_STORAGE) return;
         const idx = self.storage_count;
-        const s = label.fmtLabel(&self.storage_items[idx], "{s}", .{item});
-        self.storage_lens[idx] = s.len;
+        self.storage_lens[idx] =
+            label.fmtLabel(&self.storage_items[idx], "{s}", .{item}).len;
         self.storage_count += 1;
     }
 };
@@ -384,6 +372,21 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
     return finalizeSampledGuests(out, count);
 }
 
+pub fn hasCachedGuests() bool {
+    return has_cached_guests;
+}
+
+pub fn evictCachedGuest(cid: u64) void {
+    var dst: usize = 0;
+    for (0..cached_guests_count) |i| {
+        if (cached_guests[i].cid != cid) {
+            cached_guests[dst] = cached_guests[i];
+            dst += 1;
+        }
+    }
+    cached_guests_count = dst;
+}
+
 pub fn queryRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
     if (!has_cached_guests) return sampleRunningGuests(out);
     for (0..cached_guests_count) |i| out[i] = cached_guests[i];
@@ -407,27 +410,25 @@ pub fn restartGuestVm(cid: u64) bool {
         return true;
     }
     if (proc.invokeDsxSubcommand("restart", cid)) return true;
-    var sargs = sbi.StartArgs{
-        .child_id = cid,
-        .entry_point = 0,
-        .dtb_ptr = 0,
-    };
+    var sargs = sbi.StartArgs{ .child_id = cid, .entry_point = 0 };
     return invokeDevIoctl(IOCTL_START, @intFromPtr(&sargs));
 }
 
 pub fn shutdownGuestVm(cid: u64) bool {
     if (cid < sbi.CID_FIRST_CHILD) return false;
+    evictCachedGuest(cid);
     if (builtin.is_test or mock_running_guests != null) {
         mock_last_guest_action = .{ .cid = cid, .action = .shutdown };
         return true;
     }
+    proc.resetGuestCpuSample(cid);
     if (proc.invokeDsxSubcommand("stop", cid)) return true;
     var targs = sbi.TerminateArgs{ .target_id = cid, .exit_code = 0 };
     return invokeDevIoctl(IOCTL_TERMINATE, @intFromPtr(&targs));
 }
 
 pub fn setGuestQuota(cid: u64, pcpu_pct: u32, ram_quota_mb: u32) bool {
-    if (cid < sbi.CID_FIRST_CHILD) return false;
+    if (cid == 0 or (cid == sbi.CID_SELF and ram_quota_mb > 0)) return false;
     if (builtin.is_test or mock_running_guests != null) {
         mock_last_guest_action = .{
             .cid = cid,
@@ -436,12 +437,16 @@ pub fn setGuestQuota(cid: u64, pcpu_pct: u32, ram_quota_mb: u32) bool {
             .ram_quota_mb = ram_quota_mb,
         };
         for (0..cached_guests_count) |i| {
-            if (cached_guests[i].cid == cid) {
-                if (pcpu_pct > 0) cached_guests[i].pcpu_quota_pct = pcpu_pct;
-                if (ram_quota_mb > 0) {
-                    cached_guests[i].ram_quota_bytes =
-                        @as(u64, ram_quota_mb) * mem_size.MIB;
-                }
+            const cg = &cached_guests[i];
+            if (cg.cid != cid) continue;
+            if (pcpu_pct > 0) {
+                cg.pcpu_quota_pct = if (cid == sbi.CID_SELF)
+                    100 -| @min(@as(u32, 99), pcpu_pct)
+                else
+                    pcpu_pct;
+            }
+            if (ram_quota_mb > 0) {
+                cg.ram_quota_bytes = @as(u64, ram_quota_mb) * mem_size.MIB;
             }
         }
         return true;
@@ -458,19 +463,17 @@ test "guests: parseRegistryGuests and lifecycle protections" {
     std.testing.refAllDecls(@This());
     defer mock_running_guests = null;
     defer mock_last_guest_action = null;
-
     const sample_toml =
         \\[[guest]]
         \\cid = 2
         \\name = "worker-alpha"
-        \\image = "diosix-linux.elf"
+        \\image = "diosix-base-linux.elf"
         \\vcpus = 2
         \\ram = "512 MB"
         \\disk = "/var/lib/diosix/disks/worker-alpha.raw"
         \\cdrom = "/var/lib/diosix/isos/debian.iso"
         \\status = "running"
     ;
-
     var list: [MAX_RUNNING_GUESTS]RunningGuest = undefined;
     var count: usize = 0;
     parseRegistryGuests(sample_toml, null, 4, true, &list, &count);

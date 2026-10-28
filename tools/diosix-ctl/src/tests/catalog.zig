@@ -109,7 +109,7 @@ test "parseCatalogToml and inferImageMetadata align image types" {
     try testing.expect(findEntryInSlice(parsed[0..count], "cbsd") != null);
 
     const meta1 = inferImageMetadata(
-        "diosix-linux.elf",
+        "diosix-base-linux.elf",
         false,
         &OFFICIAL_CATALOG,
     );

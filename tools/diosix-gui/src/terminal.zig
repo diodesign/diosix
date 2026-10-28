@@ -19,7 +19,7 @@ pub const DEFAULT_TERM_COLS: usize = 120;
 pub const DEFAULT_TERM_ROWS: usize = 28;
 pub const TERM_COLS: usize = DEFAULT_TERM_COLS;
 pub const TERM_ROWS: usize = DEFAULT_TERM_ROWS;
-pub const MAX_BG_SSH_SESSIONS: usize = 6;
+pub const MAX_BG_SSH_SESSIONS: usize = 16;
 pub const GUEST_TITLE_CAP: usize = 64;
 pub const MOCK_TX_CAP: usize = 256;
 
@@ -304,20 +304,25 @@ pub const TerminalSession = struct {
         self.guest_name_len = n_len;
 
         var banner_buf: [128]u8 = undefined;
+        const is_mock = builtin.is_test or
+            host_info.guests.mock_running_guests != null or
+            host_info.mock_hypervisor_info != null;
         if (mode == .console) {
-            const banner = std.fmt.bufPrint(
-                &banner_buf,
-                "[Attached to '{s}' (CID {d}) hvc0 serial console]\n",
-                .{ self.getGuestName(), cid },
-            ) catch "[Attached to serial console]\n";
-            _ = self.feedBytes(banner);
-            _ = io_mod.pollConsoleIo(self);
+            if (is_mock) {
+                const banner = std.fmt.bufPrint(
+                    &banner_buf,
+                    "[Attached to '{s}' (CID {d}) hvc0 serial console]\n",
+                    .{ self.getGuestName(), cid },
+                ) catch "[Attached to serial console]\n";
+                _ = self.feedBytes(banner);
+            } else if (!io_mod.pollConsoleIo(self)) {
+                io_mod.sendConsoleOrPtyBytes(self, "\r");
+                _ = io_mod.pollConsoleIo(self);
+            }
             return;
         }
 
-        if (builtin.is_test or host_info.guests.mock_running_guests != null or
-            host_info.mock_hypervisor_info != null)
-        {
+        if (is_mock) {
             const banner = std.fmt.bufPrint(
                 &banner_buf,
                 "[Connected to '{s}' (CID {d}) via {s}]\n# ",

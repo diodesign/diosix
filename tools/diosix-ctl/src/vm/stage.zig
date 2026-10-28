@@ -38,6 +38,9 @@ const ImageAlias = enum {
     default,
     @"default.elf",
     @"default.bin",
+    @"diosix-base-linux",
+    @"diosix-base-linux.elf",
+    @"base-linux",
     @"diosix-linux",
     @"diosix-linux.elf",
 };
@@ -65,6 +68,7 @@ pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
     if (std.meta.stringToEnum(ImageAlias, elf_path)) |alias| {
         const default_paths = [_][]const u8{
             loader.DEFAULT_GUEST_IMAGE_PATH,
+            "/var/lib/diosix/images/diosix-linux.elf",
             loader.FALLBACK_GUEST_IMAGE_PATH,
         };
         switch (alias) {
@@ -87,6 +91,9 @@ pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
             .default,
             .@"default.elf",
             .@"default.bin",
+            .@"diosix-base-linux",
+            .@"diosix-base-linux.elf",
+            .@"base-linux",
             .@"diosix-linux",
             .@"diosix-linux.elf",
             => {
@@ -213,18 +220,29 @@ pub fn stageChildVmManifest(
     }
 
     if (!wrote_domain_manifest) {
+        var vcpus: usize = 1;
+        var ram_mb: usize = 256;
+        var pool_mb: usize = 256;
+        var pcpu_pct: u32 = api.DEFAULT_CHILD_PCPU_QUOTA_PCT;
+        if (client.getInfo(child_cid)) |ci| {
+            if (ci.vcpus > 0) vcpus = ci.vcpus;
+            if (ci.self_ram_pages > 0) ram_mb = ci.self_ram_pages / 256;
+            pool_mb = if (ci.max_ram_pages > 0 and
+                ci.max_ram_pages < std.math.maxInt(usize) / 2)
+                ci.max_ram_pages / 256
+            else
+                ram_mb;
+            if (ci.pcpu_quota_pct > 0) pcpu_pct = ci.pcpu_quota_pct;
+        } else |_| {}
         const fallback_m = allocator.print(
-            "[vm]\nname = \"{s}\"\ncid = {d}\nparent_cid = 0\n",
-            .{ vm_name, child_cid },
-        ) catch {
-            printStr(OOM_MSG);
-            return;
-        };
+            "[vm]\nname = \"{s}\"\ncid = {d}\nparent_cid = 0\n" ++
+                "vcpus = {d}\nram = \"{d} MB\"\nram_pool = \"{d} MB\"\n" ++
+                "pcpu_pool_pct = {d}\n",
+            .{ vm_name, child_cid, vcpus, ram_mb, pool_mb, pcpu_pct },
+        ) catch return printStr(OOM_MSG);
         defer allocator.free(fallback_m);
-        staged.appendSlice(allocator, fallback_m) catch {
-            printStr(OOM_MSG);
-            return;
-        };
+        staged.appendSlice(allocator, fallback_m) catch
+            return printStr(OOM_MSG);
     }
 
     if (staged.items.len > 0) {
@@ -334,7 +352,6 @@ pub fn checkChildResourceQuota(
     ram_quota_mb: usize,
 ) ?usize {
     const default_pcpu: usize = api.DEFAULT_CHILD_PCPU_QUOTA_PCT;
-    const max_pcpu: usize = api.MAX_CHILD_PCPU_QUOTA_PCT;
     const info = client.getInfo(CID_SELF) catch {
         const eff_pcpu = if (req_pcpu_pct > 0) req_pcpu_pct else default_pcpu;
         common.printFmt(
@@ -345,6 +362,11 @@ pub fn checkChildResourceQuota(
         return eff_pcpu;
     };
 
+    const max_pcpu: usize = if (info.is_root != 0 and
+        info.pcpu_quota_pct > 0 and info.pcpu_quota_pct < 100)
+        info.pcpu_quota_pct
+    else
+        api.MAX_CHILD_PCPU_QUOTA_PCT;
     const del_pcpu: usize = @min(@as(usize, info.delegated_pcpu_pct), max_pcpu);
     const avail_pcpu: usize = max_pcpu -| del_pcpu;
     const eff_pcpu: usize = if (req_pcpu_pct > 0)
@@ -359,6 +381,24 @@ pub fn checkChildResourceQuota(
             .{ del_pcpu, max_pcpu, if (req_pcpu_pct > 0) req_pcpu_pct else 1 },
         );
         return null;
+    }
+
+    const max_ram_mb = (info.max_ram_pages * common.PAGE_SIZE_KB) /
+        common.KB_PER_MB;
+    const del_ram_mb = (info.delegated_ram_pages * common.PAGE_SIZE_KB) /
+        common.KB_PER_MB;
+    const used_ram_mb = (info.used_ram_pages * common.PAGE_SIZE_KB) /
+        common.KB_PER_MB;
+    if (max_ram_mb > 0 and max_ram_mb < std.math.maxInt(usize) / 2) {
+        const avail_ram_mb = max_ram_mb -| @max(del_ram_mb, used_ram_mb);
+        if (ram_quota_mb > avail_ram_mb) {
+            common.printFmt(
+                "Error: Create child VM failed: RAM quota exhausted " ++
+                    "({d} MB available, {d} MB requested).\n",
+                .{ avail_ram_mb, ram_quota_mb },
+            );
+            return null;
+        }
     }
 
     common.printFmt(

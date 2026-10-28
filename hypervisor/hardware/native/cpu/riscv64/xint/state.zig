@@ -288,21 +288,34 @@ pub fn checkIdleVCoreWake(
                 return true;
             }
         }
-        const virt_mask =
-            riscv.HVIP.VSSIP | riscv.HVIP.VSTIP | riscv.HVIP.VSEIP;
+        const gs = vc.getNativeGuestState();
+        const timer_armed = interrupt.isGuestTimerArmed(gs);
+        const virt_mask: usize = riscv.HVIP.VSSIP | riscv.HVIP.VSEIP |
+            (if (timer_armed) riscv.HVIP.VSTIP else 0);
         if ((vc.getNativeMachine().hvip & virt_mask) != 0) return true;
 
-        const vstc = vc.getNativeGuestState().vstimecmp;
-        if (vstc != 0 and vstc != riscv.TIMER_INFINITY) {
-            if (now_time >= vstc) {
-                vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
+        if (vc.timer_scheduled) {
+            if (now_time >= vc.timer_target) {
+                vc.timer_scheduled = false;
+                if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
+                    vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
+                }
                 return true;
-            } else if (vstc < min_timer.*) {
-                min_timer.* = vstc;
+            } else if (vc.timer_target < min_timer.*) {
+                min_timer.* = vc.timer_target;
             }
-            return false;
         }
-        return (now_time -% vc.last_queued_time) >= riscv.TIMESLICE_TICKS;
+        if (timer_armed) {
+            if (now_time >= gs.vstimecmp) {
+                if (config.legacy_cpu or !riscv.riscv_supports_sstc) {
+                    vc.getNativeMachine().hvip |= riscv.HVIP.VSTIP;
+                }
+                return true;
+            } else if (gs.vstimecmp < min_timer.*) {
+                min_timer.* = gs.vstimecmp;
+            }
+        }
+        return false;
     }
 
     if (vc.exec_path == .emulated) {
@@ -317,7 +330,7 @@ pub fn checkIdleVCoreWake(
                 min_timer.* = vc.timer_target;
             }
         }
-        return (now_time -% vc.last_queued_time) >= riscv.TIMESLICE_TICKS;
+        return false;
     }
 
     return false;
@@ -474,11 +487,9 @@ test "state: save and restore hstatus, FP, and Vector registers per vCore" {
         riscv.mock.mock_hw_fp_state.fregs[31],
     );
     try testing.expectEqual(@as(u64, 0x1f), riscv.mock.mock_hw_fp_state.fcsr);
-    try testing.expectEqual(@as(u8, 0xa5), riscv.mock.mock_hw_vec_state.vregs[0]);
-    try testing.expectEqual(
-        @as(u8, 0x5a),
-        riscv.mock.mock_hw_vec_state.vregs[1023],
-    );
+    const vregs = &riscv.mock.mock_hw_vec_state.vregs;
+    try testing.expectEqual(@as(u8, 0xa5), vregs[0]);
+    try testing.expectEqual(@as(u8, 0x5a), vregs[1023]);
     try testing.expectEqual(@as(u64, 64), riscv.mock.mock_hw_vec_state.vl);
     try testing.expectEqual(@as(u64, 0xd3), riscv.mock.mock_hw_vec_state.vtype);
     try testing.expectEqual(@as(u64, 0x3), riscv.mock.mock_hw_vec_state.vcsr);

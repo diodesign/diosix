@@ -111,9 +111,9 @@ if [ -f "$KERNEL_ELF" ]; then
         STRIP_TOOL="$BR_STRIP"
     fi
     "$STRIP_TOOL" -s "$KERNEL_ELF" \
-        -o "$STAGING_DIR/images/diosix-linux.elf" 2>/dev/null || \
-        cp "$KERNEL_ELF" "$STAGING_DIR/images/diosix-linux.elf"
-    ln -sf "diosix-linux.elf" "$STAGING_DIR/images/default.elf"
+        -o "$STAGING_DIR/images/diosix-base-linux.elf" 2>/dev/null || \
+        cp "$KERNEL_ELF" "$STAGING_DIR/images/diosix-base-linux.elf"
+    ln -sf "diosix-base-linux.elf" "$STAGING_DIR/images/default.elf"
 fi
 
 if [ -f "tools/overlay-common/etc/diosix/system.toml" ]; then

@@ -178,6 +178,22 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
                 return;
             }
         }
+        if (!g.is_root) {
+            debug.printf(
+                "Fault: Guest VM (ID {}, CID {}) accessed GPA 0x{x} beyond " ++
+                    "its RAM limit (0x{x}..0x{x}). Terminating.\n",
+                .{
+                    g.id,
+                    g.local_cid,
+                    gpa,
+                    g.space.base_gpa,
+                    g.space.base_gpa +| g.space.range_size,
+                },
+            );
+            g.terminateWithCode(1);
+            scheduler.schedule();
+            return;
+        }
         debug.printf(
             "Fault: GPA 0x{x} resolution failed: {s}\n",
             .{ gpa, @errorName(err) },

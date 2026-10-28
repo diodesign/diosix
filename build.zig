@@ -377,6 +377,7 @@ pub fn build(b: *std.Build) !void {
     try build_qemu.registerQemuSteps(b, .{
         .vmdiosix = vmdiosix,
         .run_buildroot = run_buildroot,
+        .rootvm_s_file = rootvm_s_file,
         .rootvm_elf_path = rootvm_elf_path,
         .legacy_cpu = legacy_cpu,
         .pmp_fallback = pmp_fallback,

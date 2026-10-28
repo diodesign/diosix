@@ -367,15 +367,34 @@ pub fn main() !void {
     while (true) {
         const cur_time = getMilliTimestamp();
         const elapsed_since_render = cur_time - last_render_time;
-        const poll_timeout: i32 = if (elapsed_since_render >= FRAME_INTERVAL_MS)
+        const poll_timeout: i32 = if (gui.isDirty())
             0
+        else if (gui.hasActiveAnimation())
+            @intCast(if (elapsed_since_render >= FRAME_INTERVAL_MS)
+                1
+            else
+                FRAME_INTERVAL_MS - elapsed_since_render)
+        else if (gui.terminal.active or gui.task_mgr.activeCount() > 0)
+            32
         else
-            @intCast(FRAME_INTERVAL_MS - elapsed_since_render);
+            100;
 
-        var pfds: [MAX_INPUT_DEVICES]linux.pollfd = undefined;
-        display_mod.fillPollFds(input_devs[0..input_count], &pfds);
+        var pfds: [MAX_INPUT_DEVICES + 1]linux.pollfd = undefined;
+        display_mod.fillPollFds(
+            input_devs[0..input_count],
+            pfds[0..MAX_INPUT_DEVICES],
+        );
+        var pfd_count = input_count;
+        if (gui.terminal.active and gui.terminal.pty_master_fd >= 0) {
+            pfds[pfd_count] = .{
+                .fd = gui.terminal.pty_master_fd,
+                .events = linux.POLL.IN,
+                .revents = 0,
+            };
+            pfd_count += 1;
+        }
 
-        const poll_res = linux.poll(&pfds, input_count, poll_timeout);
+        const poll_res = linux.poll(&pfds, pfd_count, poll_timeout);
         const signed_poll: isize = @bitCast(poll_res);
 
         const now = getMilliTimestamp();

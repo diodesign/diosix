@@ -64,6 +64,9 @@ pub const ROW1_LOWER = [_]KeyCap{
     .{ .id_offset = 7, .label = "i", .action = .{ .char = 'i' } },
     .{ .id_offset = 8, .label = "o", .action = .{ .char = 'o' } },
     .{ .id_offset = 9, .label = "p", .action = .{ .char = 'p' } },
+    .{ .id_offset = 34, .label = "`", .action = .{ .char = '`' } },
+    .{ .id_offset = 35, .label = "|", .action = .{ .char = '|' } },
+    .{ .id_offset = 36, .label = "/", .action = .{ .char = '/' } },
 };
 
 pub const ROW2_LOWER = [_]KeyCap{
@@ -76,6 +79,10 @@ pub const ROW2_LOWER = [_]KeyCap{
     .{ .id_offset = 16, .label = "j", .action = .{ .char = 'j' } },
     .{ .id_offset = 17, .label = "k", .action = .{ .char = 'k' } },
     .{ .id_offset = 18, .label = "l", .action = .{ .char = 'l' } },
+    .{ .id_offset = 37, .label = "[", .action = .{ .char = '[' } },
+    .{ .id_offset = 38, .label = "]", .action = .{ .char = ']' } },
+    .{ .id_offset = 39, .label = "{", .action = .{ .char = '{' } },
+    .{ .id_offset = 40, .label = "}", .action = .{ .char = '}' } },
 };
 
 pub const ROW3_LOWER = [_]KeyCap{
@@ -92,6 +99,8 @@ pub const ROW3_LOWER = [_]KeyCap{
     .{ .id_offset = 24, .label = "b", .action = .{ .char = 'b' } },
     .{ .id_offset = 25, .label = "n", .action = .{ .char = 'n' } },
     .{ .id_offset = 26, .label = "m", .action = .{ .char = 'm' } },
+    .{ .id_offset = 41, .label = "<", .action = .{ .char = '<' } },
+    .{ .id_offset = 42, .label = ">", .action = .{ .char = '>' } },
     .{
         .id_offset = 27,
         .label = "Bksp",
@@ -108,8 +117,10 @@ pub const ROW4_COMMON = [_]KeyCap{
         .width_units = 2,
     },
     .{ .id_offset = 29, .label = "-", .action = .{ .char = '-' } },
-    .{ .id_offset = 30, .label = "Space", .action = .space, .width_units = 4 },
+    .{ .id_offset = 43, .label = "=", .action = .{ .char = '=' } },
+    .{ .id_offset = 30, .label = "Space", .action = .space, .width_units = 3 },
     .{ .id_offset = 31, .label = ".", .action = .{ .char = '.' } },
+    .{ .id_offset = 44, .label = "#", .action = .{ .char = '#' } },
     .{ .id_offset = 32, .label = "Enter", .action = .enter, .width_units = 2 },
     .{ .id_offset = 33, .label = "Hide", .action = .hide, .width_units = 2 },
 };
@@ -183,7 +194,7 @@ pub const OskState = struct {
                 self.layout = switch (self.layout) {
                     .qwerty_lower => .qwerty_upper,
                     .qwerty_upper => .qwerty_lower,
-                    .symbols => .qwerty_lower,
+                    .symbols => .symbols,
                 };
             },
             .toggle_symbols => {
@@ -226,15 +237,32 @@ pub const OskState = struct {
                     const idx = k.id_offset - 20;
                     return SYM_ROW3[idx .. idx + 1];
                 }
+                if (k.id_offset == 36) return "\\";
+                if (k.id_offset == 43) return "+";
+                if (k.id_offset == 31) return "*";
+                if (k.id_offset == 44) return "%";
                 return k.label;
             },
         }
     }
 
     pub fn applyKeyOffset(self: *OskState, id_offset: u32) bool {
+        if (self.layout == .symbols) {
+            const sym_override: ?u8 = switch (id_offset) {
+                36 => '\\',
+                43 => '+',
+                31 => '*',
+                44 => '%',
+                else => null,
+            };
+            if (sym_override) |ch| {
+                self.applyAction(.{ .char = ch });
+                return true;
+            }
+        }
         for (ROW1_LOWER, 0..) |k, idx| {
             if (k.id_offset == id_offset) {
-                if (self.layout == .symbols) {
+                if (self.layout == .symbols and idx < SYM_ROW1.len) {
                     self.applyAction(.{ .char = SYM_ROW1[idx] });
                 } else {
                     self.applyAction(k.action);
@@ -244,7 +272,7 @@ pub const OskState = struct {
         }
         for (ROW2_LOWER, 0..) |k, idx| {
             if (k.id_offset == id_offset) {
-                if (self.layout == .symbols) {
+                if (self.layout == .symbols and idx < SYM_ROW2.len) {
                     self.applyAction(.{ .char = SYM_ROW2[idx] });
                 } else {
                     self.applyAction(k.action);
@@ -302,12 +330,18 @@ test "OskState auto-shows on touch_tablet seat and handles keystrokes" {
     _ = osk.applyKeyOffset(27);
     try testing.expectEqualStrings("dsx ", osk.getInputText());
 
-    // Symbols row 1 and row 2.
+    // Symbols row 1, row 2, shell characters (` | / \ [ ] { } < > + * %), and
+    // verify Shift (offset 19) is a no-op in symbols mode.
     _ = osk.applyKeyOffset(28); // Toggle symbols.
+    try testing.expectEqual(OskLayout.symbols, osk.layout);
+    _ = osk.applyKeyOffset(19); // Shift in symbols mode must be a no-op!
     try testing.expectEqual(OskLayout.symbols, osk.layout);
     _ = osk.applyKeyOffset(0); // '1'.
     _ = osk.applyKeyOffset(10); // '/'.
-    try testing.expectEqualStrings("dsx 1/", osk.getInputText());
+    _ = osk.applyKeyOffset(34); // '`'.
+    _ = osk.applyKeyOffset(35); // '|'.
+    _ = osk.applyKeyOffset(36); // '\'.
+    try testing.expectEqualStrings("dsx 1/`|\\", osk.getInputText());
 
     // Hide.
     _ = osk.applyKeyOffset(33);

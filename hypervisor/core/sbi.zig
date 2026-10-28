@@ -255,9 +255,13 @@ fn handleTimer(
         if (vc.timer_scheduled) riscv.setTimer(stime +% vcore.time_offset);
     } else {
         vc.getNativeGuestState().vstimecmp = stime;
+        vc.timer_target = stime;
+        vc.timer_scheduled = (stime != 0 and stime != riscv.TIMER_INFINITY);
+        vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
         if (!config.legacy_cpu and riscv.riscv_supports_sstc) {
             riscv.writeVstimecmp(stime);
-            vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSTIP);
+            riscv.writeHvip(vc.getNativeMachine().hvip);
+        } else if (riscv.hasHExtension()) {
             riscv.writeHvip(vc.getNativeMachine().hvip);
         }
         if (stime != 0 and stime != riscv.TIMER_INFINITY) riscv.setTimer(stime);

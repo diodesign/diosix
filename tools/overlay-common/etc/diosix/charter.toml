@@ -28,7 +28,7 @@ forbid_volume_export = true
 
 [[units]]
 id = "unit-alpha"
-artifact = "diosix-linux.elf"
+artifact = "diosix-base-linux.elf"
 min_instances = 1
 target_instances = 2
 max_instances = 4

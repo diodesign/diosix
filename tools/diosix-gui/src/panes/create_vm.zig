@@ -9,6 +9,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const sbi = @import("interface").sbi;
 const fb = @import("../framebuffer.zig");
 const font = @import("../font.zig");
 const icon_mod = @import("../icon.zig");
@@ -42,19 +43,18 @@ fn formatImageItemLabel(
 }
 
 fn resolveMaxVcpus() i32 {
-    if (host_info.getHypervisorInfo()) |info| {
-        if (info.host_physical_cores > 0) {
-            return @intCast(@min(@as(u32, 16), info.host_physical_cores));
-        }
-    }
-    return 4;
+    return @intCast(sbi.MAX_GUEST_VCPUS);
 }
 
 fn resolveMaxRamMb() i32 {
+    const summary = quota_controls.queryParentQuotaSummary();
+    if (summary.avail_ram_mb >= 128) {
+        const aligned: u32 = (summary.avail_ram_mb / 64) * 64;
+        return @intCast(std.math.clamp(aligned, 128, 8192));
+    }
     if (host_info.getHypervisorInfo()) |info| {
         if (info.host_free_ram_kb >= 128 * 1024) {
-            const free_mb: u64 = info.host_free_ram_kb / 1024;
-            const aligned_mb: u64 = (free_mb / 64) * 64;
+            const aligned_mb: u64 = ((info.host_free_ram_kb / 1024) / 64) * 64;
             return @intCast(std.math.clamp(aligned_mb, 128, 8192));
         }
     }
@@ -68,15 +68,26 @@ fn onImageItemClicked(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
 
 fn onVcpusSliderChanged(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
+    ic.setSliderValue(ic.slider_val);
     self.create_vm_vcpus = @intCast(@max(1, ic.slider_val));
 }
 
 fn onRamSliderChanged(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
-    const raw = @max(128, ic.slider_val);
-    const snapped = @divTrunc(raw + 32, 64) * 64;
+    const snapped = @divTrunc(@max(128, ic.slider_val) + 32, 64) * 64;
     ic.setSliderValue(snapped);
-    self.create_vm_ram_mb = @intCast(@max(128, ic.slider_val));
+    const new_ram: u32 = @intCast(@max(128, ic.slider_val));
+    self.create_vm_ram_mb = new_ram;
+    if (new_ram > self.create_vm_ram_quota_mb) {
+        self.create_vm_ram_quota_mb = new_ram;
+        const rq_id = gui_mod.ICON_CREATE_VM_RAM_QUOTA_SLIDER_ID;
+        if (self.findIcon(WIN_CREATE_VM_DETAIL_ID, rq_id)) |rq_ic| {
+            rq_ic.setSliderValue(@intCast(new_ram));
+            if (self.getWindow(WIN_CREATE_VM_DETAIL_ID)) |dw| {
+                self.markDirty(dw.getBox());
+            }
+        }
+    }
 }
 
 fn onStorageOptionClicked(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
@@ -87,11 +98,8 @@ fn onStorageOptionClicked(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
 fn onCreateVmButtonClicked(g: *anyopaque, _: *anyopaque, _: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
     const img_idx = self.selected_create_image_idx orelse return;
-
     var imgs: [host_info.MAX_VM_IMAGES]host_info.VmImageEntry = undefined;
-    const img_count = host_info.queryAvailableImages(&imgs);
-    if (img_idx >= img_count) return;
-
+    if (img_idx >= host_info.queryAvailableImages(&imgs)) return;
     var st_opts: [host_info.MAX_STORAGE_OPTIONS]host_info.StorageOption =
         undefined;
     const st_count = host_info.queryAvailableStorageOptions(&st_opts);
@@ -99,7 +107,6 @@ fn onCreateVmButtonClicked(g: *anyopaque, _: *anyopaque, _: *Icon) void {
         st_opts[self.create_vm_storage_idx].getPath()
     else
         "";
-
     const img_path = imgs[img_idx].getPath();
     if (img_path.len == 0) return;
 
@@ -127,7 +134,6 @@ fn onCreateVmButtonClicked(g: *anyopaque, _: *anyopaque, _: *Icon) void {
     );
     const tasks = gui_mod.panes.panes_tasks;
     tasks.spawnCreateVmTask(self, name_s, img_path, st_path);
-
     self.selected_create_image_idx = null;
     _ = self.destroyWindow(WIN_CREATE_VM_DETAIL_ID);
     self.navigateBack() catch {};
@@ -135,8 +141,7 @@ fn onCreateVmButtonClicked(g: *anyopaque, _: *anyopaque, _: *Icon) void {
 
 pub fn selectCreateVmImage(self: *DiosixGui, idx: usize) !void {
     var imgs: [host_info.MAX_VM_IMAGES]host_info.VmImageEntry = undefined;
-    const count = host_info.queryAvailableImages(&imgs);
-    if (idx >= count) return;
+    if (idx >= host_info.queryAvailableImages(&imgs)) return;
 
     self.selected_create_image_idx = idx;
     self.setCreateVmName(quota_controls.defaultVmNameForImage(&imgs[idx]));
@@ -278,16 +283,16 @@ pub fn populateCreateVmDetailWindow(
     );
     var cur_y: i32 = @intCast(self.scalePx(12));
 
-    var hdr = Icon.createReadOnly(
+    try quota_controls.addLabel(
+        win,
         gui_mod.ICON_CREATE_VM_DETAIL_HDR_ID,
         pad_x,
         cur_y,
         inner_w,
         row_h,
         img.getTitle(),
+        fb.Color.INK,
     );
-    hdr.setCustomColor(fb.Color.INK);
-    _ = try win.addIcon(hdr);
     cur_y += @intCast(row_h + self.scalePx(10));
 
     const lbl_w = quota_controls.computeControlLabelWidth(self);
@@ -305,16 +310,16 @@ pub fn populateCreateVmDetailWindow(
         &cur_y,
     );
 
-    var vcpu_lbl = Icon.createReadOnly(
+    try quota_controls.addLabel(
+        win,
         gui_mod.ICON_CREATE_VM_VCPUS_LBL_ID,
         pad_x,
         cur_y,
         lbl_w,
         row_h,
         "vCPUs",
+        fb.Color.INK_SECONDARY,
     );
-    vcpu_lbl.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(vcpu_lbl);
 
     const max_vcpus = resolveMaxVcpus();
     const cur_vcpus = std.math.clamp(
@@ -322,9 +327,9 @@ pub fn populateCreateVmDetailWindow(
         1,
         max_vcpus,
     );
-    self.create_vm_vcpus = @intCast(cur_vcpus);
+    const vcpu_sid = gui_mod.ICON_CREATE_VM_VCPUS_SLIDER_ID;
     var vcpu_sld = Icon.createSlider(
-        gui_mod.ICON_CREATE_VM_VCPUS_SLIDER_ID,
+        vcpu_sid,
         sld_x,
         cur_y,
         sld_w,
@@ -334,21 +339,24 @@ pub fn populateCreateVmDetailWindow(
         cur_vcpus,
         "",
     );
+    vcpu_sld.slider_exponential = true;
+    vcpu_sld.setSliderValue(cur_vcpus);
+    self.create_vm_vcpus = @intCast(vcpu_sld.slider_val);
     vcpu_sld.setHelpText("Number of virtual CPU cores to assign to this VM");
     vcpu_sld.callback = onVcpusSliderChanged;
     _ = try win.addIcon(vcpu_sld);
     cur_y += @intCast(row_h + self.scalePx(10));
 
-    var ram_lbl = Icon.createReadOnly(
+    try quota_controls.addLabel(
+        win,
         gui_mod.ICON_CREATE_VM_RAM_LBL_ID,
         pad_x,
         cur_y,
         lbl_w,
         row_h,
-        "RAM",
+        "VM RAM",
+        fb.Color.INK_SECONDARY,
     );
-    ram_lbl.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(ram_lbl);
 
     const max_ram = resolveMaxRamMb();
     const cur_ram = std.math.clamp(
@@ -369,7 +377,9 @@ pub fn populateCreateVmDetailWindow(
         " MB",
     );
     ram_sld.slider_step = 64;
-    ram_sld.setHelpText("Amount of guest logical RAM to assign to this VM");
+    ram_sld.setHelpText(
+        "RAM assigned to this VM's own kernel (subset of its RAM pool)",
+    );
     ram_sld.callback = onRamSliderChanged;
     _ = try win.addIcon(ram_sld);
     cur_y += @intCast(row_h + self.scalePx(10));
@@ -386,16 +396,16 @@ pub fn populateCreateVmDetailWindow(
         &cur_y,
     );
 
-    var st_hdr = Icon.createReadOnly(
+    try quota_controls.addLabel(
+        win,
         gui_mod.ICON_CREATE_VM_STORAGE_HDR_ID,
         pad_x,
         cur_y,
         inner_w,
         row_h,
         "Storage",
+        fb.Color.INK,
     );
-    st_hdr.setCustomColor(fb.Color.INK);
-    _ = try win.addIcon(st_hdr);
     cur_y += @intCast(row_h + self.scalePx(4));
 
     var st_opts: [host_info.MAX_STORAGE_OPTIONS]host_info.StorageOption =

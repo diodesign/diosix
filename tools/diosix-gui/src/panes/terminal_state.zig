@@ -4,8 +4,12 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
+const linux = std.os.linux;
+const sbi = @import("interface").sbi;
 const font = @import("../font.zig");
 const host_info = @import("../host.zig");
+const paths = @import("../paths.zig");
 const text_label = @import("../label.zig");
 const terminal_mod = @import("../terminal.zig");
 const gui_mod = @import("../gui.zig");
@@ -13,6 +17,7 @@ const DiosixGui = gui_mod.DiosixGui;
 
 const BORDER_GAP = gui_mod.BORDER_GAP;
 pub const WIN_TERMINAL_ID: u32 = 205;
+const IOCTL_WAIT_EVENT: u32 = 0x1008;
 
 pub fn findGuestNameByCid(
     cid: u64,
@@ -31,25 +36,37 @@ pub fn findGuestNameByCid(
     return text_label.fmtLabel(name_buf, "guest-{d}", .{cid});
 }
 
-pub fn hasLiveSshSession(self: *const DiosixGui, cid: u64) bool {
-    if (self.terminal.active and self.terminal.mode == .ssh and
+pub fn hasLiveSession(
+    self: *const DiosixGui,
+    cid: u64,
+    mode: terminal_mod.TerminalMode,
+) bool {
+    if (self.terminal.active and self.terminal.mode == mode and
         !self.terminal.exited and self.terminal.target_cid == cid)
     {
         return true;
     }
     for (&self.bg_ssh_sessions) |*s| {
-        if (s.active and s.mode == .ssh and !s.exited and s.target_cid == cid) {
+        if (s.active and s.mode == mode and
+            !s.exited and s.target_cid == cid)
+        {
             return true;
         }
     }
     return false;
 }
 
+pub fn hasLiveSshSession(self: *const DiosixGui, cid: u64) bool {
+    return hasLiveSession(self, cid, .ssh);
+}
+
+pub fn hasLiveConsoleSession(self: *const DiosixGui, cid: u64) bool {
+    return hasLiveSession(self, cid, .console);
+}
+
 pub fn discardGuestSshSession(self: *DiosixGui, cid: u64) void {
     const prev_inv = self.terminal.inverted;
-    if (self.terminal.active and self.terminal.mode == .ssh and
-        self.terminal.target_cid == cid)
-    {
+    if (self.terminal.active and self.terminal.target_cid == cid) {
         self.terminal.closeSession();
         self.terminal.inverted = prev_inv;
     }
@@ -61,7 +78,7 @@ pub fn discardGuestSshSession(self: *DiosixGui, cid: u64) void {
 pub fn onTerminalNavigateBack(self: *DiosixGui) void {
     if (!self.terminal.active) return;
     const prev_inv = self.terminal.inverted;
-    if (self.terminal.mode == .console or self.terminal.exited) {
+    if (self.terminal.exited) {
         self.terminal.closeSession();
         self.terminal.inverted = prev_inv;
         return;
@@ -70,7 +87,9 @@ pub fn onTerminalNavigateBack(self: *DiosixGui) void {
     var target_slot: usize = 0;
     var found_slot = false;
     for (&self.bg_ssh_sessions, 0..) |*s, idx| {
-        if (s.active and s.target_cid == self.terminal.target_cid) {
+        if (s.active and s.target_cid == self.terminal.target_cid and
+            s.mode == self.terminal.mode)
+        {
             target_slot = idx;
             found_slot = true;
             break;
@@ -95,10 +114,14 @@ pub fn onTerminalNavigateBack(self: *DiosixGui) void {
     self.terminal = .{ .inverted = prev_inv };
 }
 
-pub fn restoreBgSshSession(self: *DiosixGui, cid: u64) bool {
+pub fn restoreBgSession(
+    self: *DiosixGui,
+    cid: u64,
+    mode: terminal_mod.TerminalMode,
+) bool {
     for (&self.bg_ssh_sessions) |*s| {
-        if (s.active and s.target_cid == cid) {
-            if (s.exited or s.mode != .ssh) {
+        if (s.active and s.target_cid == cid and s.mode == mode) {
+            if (s.exited) {
                 s.closeSession();
                 return false;
             }
@@ -110,6 +133,10 @@ pub fn restoreBgSshSession(self: *DiosixGui, cid: u64) bool {
         }
     }
     return false;
+}
+
+pub fn restoreBgSshSession(self: *DiosixGui, cid: u64) bool {
+    return restoreBgSession(self, cid, .ssh);
 }
 
 pub fn computeTermRect(
@@ -176,6 +203,98 @@ pub fn isTerminalWindowOpen(self: *DiosixGui) bool {
     if (!self.terminal.active) return false;
     const win = self.getWindow(WIN_TERMINAL_ID) orelse return false;
     return win.is_onscreen;
+}
+
+pub fn reconcileRunningGuests(
+    self: *DiosixGui,
+    prev_guests: []const host_info.RunningGuest,
+    cur_guests: []const host_info.RunningGuest,
+) void {
+    var oom_cid: u64 = 0;
+    var term_cid: u64 = 0;
+    var term_exit: u32 = 0;
+    if (!builtin.is_test and host_info.guests.mock_running_guests == null) {
+        const fd_rc = linux.open(
+            paths.DEV_DIOSIX_PATH,
+            .{ .ACCMODE = .RDWR },
+            0,
+        );
+        const signed_fd: isize = @bitCast(fd_rc);
+        if (signed_fd >= 0) {
+            const fd: i32 = @intCast(signed_fd);
+            defer _ = linux.close(fd);
+            var polls: usize = 0;
+            while (polls < 8) : (polls += 1) {
+                var wargs = sbi.WaitEventArgs{
+                    .target_cid = 0,
+                    .flags = sbi.WAIT_EVENT_FLAG_NOHANG,
+                    .event = std.mem.zeroes(sbi.Event),
+                };
+                const rc = linux.ioctl(
+                    fd,
+                    IOCTL_WAIT_EVENT,
+                    @intFromPtr(&wargs),
+                );
+                if (@as(isize, @bitCast(rc)) < 0) break;
+                const ev = wargs.event;
+                if (ev.event_type ==
+                    @backingInt(sbi.EventType.child_memory_pressure))
+                {
+                    oom_cid = ev.cid;
+                } else if (ev.event_type ==
+                    @backingInt(sbi.EventType.child_terminated))
+                {
+                    term_cid = ev.cid;
+                    term_exit = ev.exit_code;
+                }
+            }
+        }
+    }
+
+    var notified = false;
+    for (prev_guests) |*prev| {
+        if (prev.cid < sbi.CID_FIRST_CHILD) continue;
+        var still_alive = false;
+        for (cur_guests) |*cur| {
+            if (cur.cid == prev.cid) {
+                still_alive = true;
+                break;
+            }
+        }
+        if (still_alive) continue;
+
+        discardGuestSshSession(self, prev.cid);
+        if (self.active_menu_id == gui_mod.ICON_MENU_TERMINAL_ID and
+            !self.terminal.active)
+        {
+            self.navigateBack() catch {};
+        }
+
+        var msg_buf: [160]u8 = undefined;
+        const msg = if (oom_cid == prev.cid)
+            std.fmt.bufPrint(
+                &msg_buf,
+                "VM '{s}' (CID {d}) died: exceeded RAM quota",
+                .{ prev.getInstanceName(), prev.cid },
+            ) catch "Guest VM died: exceeded RAM quota"
+        else if (term_cid == prev.cid and term_exit != 0)
+            std.fmt.bufPrint(
+                &msg_buf,
+                "VM '{s}' (CID {d}) crashed (exit code {d})",
+                .{ prev.getInstanceName(), prev.cid, term_exit },
+            ) catch "Guest VM crashed"
+        else
+            std.fmt.bufPrint(
+                &msg_buf,
+                "VM '{s}' (CID {d}) terminated unexpectedly",
+                .{ prev.getInstanceName(), prev.cid },
+            ) catch "Guest VM terminated unexpectedly";
+
+        const tid = self.task_mgr.startTask("VM terminated", msg, 0);
+        _ = self.task_mgr.failTask(tid, msg);
+        notified = true;
+    }
+    if (notified) self.syncTaskPanes();
 }
 
 test {

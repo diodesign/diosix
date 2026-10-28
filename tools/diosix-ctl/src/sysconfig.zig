@@ -72,7 +72,8 @@ pub const STEWARD_DEFAULT_KERNELS = [_][]const u8{
     "/var/lib/diosix/images/steward-kernel.bin",
     "/boot/Image",
 };
-pub const DEFAULT_GUEST_IMAGE_PATH = "/var/lib/diosix/images/diosix-linux.elf";
+pub const DEFAULT_GUEST_IMAGE_PATH =
+    "/var/lib/diosix/images/diosix-base-linux.elf";
 pub const LINUX_GUEST_IMAGE_PATH = "/var/lib/diosix/images/Image";
 pub const FALLBACK_GUEST_IMAGE_PATH = "/boot/guest-default.bin";
 pub const FALLBACK_GUEST_ISO_PATH = "/boot/guest-default.iso";

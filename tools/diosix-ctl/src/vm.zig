@@ -115,11 +115,9 @@ pub fn cmdQuota(
                         );
                         return;
                     };
-                    if (pcpu_pct == 0 or
-                        pcpu_pct > api.MAX_CHILD_PCPU_QUOTA_PCT)
-                    {
+                    if (pcpu_pct == 0 or pcpu_pct > 99) {
                         printStr(
-                            "Error: '--pcpu' must be between 1 and 90%.\n",
+                            "Error: '--pcpu' must be between 1 and 99%.\n",
                         );
                         return;
                     }

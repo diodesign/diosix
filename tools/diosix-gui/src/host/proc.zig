@@ -64,7 +64,10 @@ pub fn basenameSlice(path: []const u8) []const u8 {
 
 pub fn friendlyImageName(raw_path: []const u8) []const u8 {
     const base = basenameSlice(raw_path);
-    if (std.mem.eql(u8, base, "diosix-linux.elf") or
+    if (std.mem.eql(u8, base, "diosix-base-linux.elf") or
+        std.mem.eql(u8, base, "diosix-base-linux") or
+        std.mem.eql(u8, base, "base-linux") or
+        std.mem.eql(u8, base, "diosix-linux.elf") or
         std.mem.eql(u8, base, "diosix-linux") or
         std.mem.eql(u8, base, "default.elf") or
         std.mem.eql(u8, base, "default"))
@@ -97,6 +100,12 @@ pub fn resetCpuSamples() void {
     prev_proc_total = 0;
     prev_proc_idle = 0;
     last_proc_pct = 0;
+}
+
+pub fn resetGuestCpuSample(cid: u64) void {
+    if (cid < MAX_TRACKED_CIDS) {
+        hv_cpu_samples[@intCast(cid)] = .{};
+    }
 }
 
 pub fn readSmallFile(path: [*:0]const u8, buf: []u8) []const u8 {
@@ -138,7 +147,12 @@ pub fn computeHvCpuPercent(cid: u64, khz_ticks: u32, vcpus: u32) u32 {
     const dt_ns: u64 = @intCast(now_ns - sample.prev_ns);
     if (dt_ns < MIN_SAMPLE_INTERVAL_NS) return sample.last_pct;
 
-    const delta_ticks: u64 = khz_ticks -% sample.prev_khz_ticks;
+    const delta_ticks: u64 = if (khz_ticks >= sample.prev_khz_ticks)
+        khz_ticks - sample.prev_khz_ticks
+    else if (sample.prev_khz_ticks - khz_ticks < 0x8000_0000)
+        khz_ticks
+    else
+        khz_ticks -% sample.prev_khz_ticks;
     sample.prev_khz_ticks = khz_ticks;
     sample.prev_ns = now_ns;
 

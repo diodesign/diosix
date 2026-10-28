@@ -96,21 +96,10 @@ pub fn updateSliderFromMouseX(
     const bar_w = widgets.sliderBarWidth(icon, line_h);
     const track_w = if (bar_w > thumb_w) bar_w - thumb_w else 1;
     const half_thumb: i32 = @intCast(thumb_w / 2);
-    const click_offset = std.math.clamp(
+    const changed = icon.setSliderFromTrackOffset(
         px - sx - half_thumb,
-        0,
-        @as(i32, @intCast(track_w)),
+        track_w,
     );
-    const span = if (icon.slider_max > icon.slider_min)
-        icon.slider_max - icon.slider_min
-    else
-        1;
-    const new_val = icon.slider_min + @divTrunc(
-        click_offset * span,
-        @as(i32, @intCast(track_w)),
-    );
-    const changed = (icon.slider_val != new_val);
-    icon.setSliderValue(new_val);
     if (icon.callback) |cb| cb(gui_ctx, @ptrCast(self), icon);
     return changed;
 }

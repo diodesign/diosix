@@ -1,9 +1,9 @@
 // Physical Quota Discovery & Interactive Slider Controls for Diosix GUI.
 //
-// Provides physical quota summary headers and interactive pCPU% / RAM quota
+// Provides resource pool summary headers and interactive pCPU% / RAM pool
 // sliders for both the Create VM detail pane and the Running Guest VMs detail
-// pane, enforcing the 90% child pCPU delegation limit and supporting H-mode
-// RAM quota dialing.
+// pane, enforcing tunable Root VM retained pCPU% and hierarchical RAM pool
+// subset bounds.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -37,16 +37,14 @@ pub const ICON_CREATE_VM_NAME_LBL_ID: u32 = 1372;
 pub const ICON_CREATE_VM_NAME_INPUT_ID: u32 = 1373;
 
 pub fn computeControlLabelWidth(self: *const DiosixGui) u32 {
+    const w_ret = font.measureString("Retained %");
+    const w_pcpu = font.measureString("pCPU pool");
     const w_ram = font.measureString("RAM pool");
-    const w_pcpu = font.measureString("pCPU %");
-    const w_vcpu = font.measureString("vCPUs");
-    const max_txt = @max(w_ram, @max(w_pcpu, w_vcpu));
+    const max_txt = @max(w_ret, @max(w_pcpu, w_ram));
     return @max(self.scalePx(76), max_txt + self.scalePx(12));
 }
 
-pub fn defaultVmNameForImage(
-    entry: *const host_info.VmImageEntry,
-) []const u8 {
+pub fn defaultVmNameForImage(entry: *const host_info.VmImageEntry) []const u8 {
     const fname = entry.getFilename();
     if (fname.len > 0) {
         if (std.mem.lastIndexOfScalar(u8, fname, '.')) |dot| {
@@ -78,29 +76,21 @@ pub fn addCreateVmNameControl(
     row_h: u32,
     cur_y: *i32,
 ) !void {
-    var name_lbl = Icon.createReadOnly(
+    try addLabel(
+        win,
         ICON_CREATE_VM_NAME_LBL_ID,
         pad_x,
         cur_y.*,
         lbl_w,
         row_h,
         "Name",
+        fb.Color.INK_SECONDARY,
     );
-    name_lbl.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(name_lbl);
-
-    var name_in = Icon.createReadWrite(
-        ICON_CREATE_VM_NAME_INPUT_ID,
-        sld_x,
-        cur_y.*,
-        sld_w,
-        row_h,
-        self.getCreateVmName(),
-    );
+    const id = ICON_CREATE_VM_NAME_INPUT_ID;
+    const nm = self.getCreateVmName();
+    var name_in = Icon.createReadWrite(id, sld_x, cur_y.*, sld_w, row_h, nm);
     name_in.max_input_len = 32;
-    name_in.setHelpText(
-        "Custom name for this guest VM (click and type to customize)",
-    );
+    name_in.setHelpText("Custom name for this guest VM");
     name_in.callback = onCreateVmNameClicked;
     _ = try win.addIcon(name_in);
     cur_y.* += @intCast(row_h + self.scalePx(10));
@@ -109,6 +99,8 @@ pub fn addCreateVmNameControl(
 pub const ParentQuotaSummary = struct {
     pool_ram_mb: u32,
     avail_ram_mb: u32,
+    retained_pcpu_pct: u32 = sbi.DEFAULT_RETAINED_PCPU_PCT,
+    max_del_pcpu_pct: u32 = sbi.MAX_CHILD_PCPU_QUOTA_PCT,
     delegated_pcpu_pct: u32,
     avail_pcpu_pct: u32,
 };
@@ -117,6 +109,7 @@ pub fn queryParentQuotaSummary() ParentQuotaSummary {
     var guests_buf: [host_info.MAX_RUNNING_GUESTS]host_info.RunningGuest =
         undefined;
     const count = host_info.queryRunningGuests(&guests_buf);
+    var root_max_del_pcpu: u32 = sbi.MAX_CHILD_PCPU_QUOTA_PCT;
     var root_del_pcpu: u32 = 0;
     var sum_child_pcpu: u32 = 0;
     var root_pool_bytes: u64 = 0;
@@ -126,6 +119,9 @@ pub fn queryParentQuotaSummary() ParentQuotaSummary {
     for (0..count) |i| {
         const g = &guests_buf[i];
         if (g.is_root) {
+            if (g.pcpu_quota_pct > 0 and g.pcpu_quota_pct < 100) {
+                root_max_del_pcpu = g.pcpu_quota_pct;
+            }
             root_del_pcpu = g.delegated_pcpu_pct;
             root_pool_bytes = g.ram_quota_bytes;
             root_del_bytes = @max(g.delegated_ram_bytes, g.used_ram_bytes);
@@ -148,23 +144,22 @@ pub fn queryParentQuotaSummary() ParentQuotaSummary {
     if (root_pool_bytes == 0) root_pool_bytes = 1536 * mem_size.MIB;
 
     const eff_del_pcpu: u32 = @min(
-        sbi.MAX_CHILD_PCPU_QUOTA_PCT,
+        root_max_del_pcpu,
         @max(root_del_pcpu, sum_child_pcpu),
     );
-    const avail_pcpu: u32 = sbi.MAX_CHILD_PCPU_QUOTA_PCT -| eff_del_pcpu;
+    const avail_pcpu: u32 = root_max_del_pcpu -| eff_del_pcpu;
     const eff_del_bytes: u64 = @max(root_del_bytes, sum_child_ram_bytes);
     const avail_bytes: u64 = root_pool_bytes -| eff_del_bytes;
 
-    const pool_mb: u32 = @intCast(
-        std.math.clamp(root_pool_bytes / mem_size.MIB, 128, 8192),
-    );
-    const avail_mb: u32 = @intCast(
-        std.math.clamp(avail_bytes / mem_size.MIB, 0, 8192),
-    );
-
     return .{
-        .pool_ram_mb = pool_mb,
-        .avail_ram_mb = avail_mb,
+        .pool_ram_mb = @intCast(
+            std.math.clamp(root_pool_bytes / mem_size.MIB, 128, 8192),
+        ),
+        .avail_ram_mb = @intCast(
+            std.math.clamp(avail_bytes / mem_size.MIB, 0, 8192),
+        ),
+        .retained_pcpu_pct = 100 -| root_max_del_pcpu,
+        .max_del_pcpu_pct = root_max_del_pcpu,
         .delegated_pcpu_pct = eff_del_pcpu,
         .avail_pcpu_pct = avail_pcpu,
     };
@@ -172,17 +167,84 @@ pub fn queryParentQuotaSummary() ParentQuotaSummary {
 
 fn onCreatePcpuSliderChanged(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
-    self.create_vm_pcpu_pct = @intCast(
-        std.math.clamp(ic.slider_val, 1, sbi.MAX_CHILD_PCPU_QUOTA_PCT),
-    );
+    self.create_vm_pcpu_pct = @intCast(std.math.clamp(ic.slider_val, 1, 99));
 }
 
 fn onCreateRamQuotaSliderChanged(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
-    const raw = @max(64, ic.slider_val);
-    const snapped = @divTrunc(raw + 32, 64) * 64;
+    const snapped = @divTrunc(@max(128, ic.slider_val) + 32, 64) * 64;
     ic.setSliderValue(snapped);
-    self.create_vm_ram_quota_mb = @intCast(@max(64, ic.slider_val));
+    const new_rq: u32 = @intCast(@max(128, ic.slider_val));
+    self.create_vm_ram_quota_mb = new_rq;
+    if (new_rq < self.create_vm_ram_mb) {
+        self.create_vm_ram_mb = new_rq;
+        const ram_id = gui_mod.ICON_CREATE_VM_RAM_SLIDER_ID;
+        if (self.findIcon(gui_mod.WIN_CREATE_VM_DETAIL_ID, ram_id)) |ram_ic| {
+            ram_ic.setSliderValue(@intCast(new_rq));
+            if (self.getWindow(gui_mod.WIN_CREATE_VM_DETAIL_ID)) |dwin| {
+                self.markDirty(dwin.getBox());
+            }
+        }
+    }
+}
+
+pub fn addLabel(
+    win: *Window,
+    id: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    txt: []const u8,
+    color: u32,
+) !void {
+    var ic = Icon.createReadOnly(id, x, y, w, h, txt);
+    ic.setCustomColor(color);
+    _ = try win.addIcon(ic);
+}
+
+const SliderRowSpec = struct {
+    lbl_id: u32,
+    sld_id: u32,
+    lbl_txt: []const u8,
+    min_val: i32,
+    max_val: i32,
+    cur_val: i32,
+    step: i32 = 1,
+    unit: []const u8,
+    help: []const u8,
+    user_tag: usize = 0,
+    cb: icon_mod.IconCallback,
+};
+
+fn addSliderRow(
+    win: *Window,
+    pad_x: i32,
+    lbl_w: u32,
+    sld_x: i32,
+    sld_w: u32,
+    row_h: u32,
+    y: i32,
+    spec: SliderRowSpec,
+) !void {
+    const clr = fb.Color.INK_SECONDARY;
+    try addLabel(win, spec.lbl_id, pad_x, y, lbl_w, row_h, spec.lbl_txt, clr);
+    var sld = Icon.createSlider(
+        spec.sld_id,
+        sld_x,
+        y,
+        sld_w,
+        row_h,
+        spec.min_val,
+        spec.max_val,
+        spec.cur_val,
+        spec.unit,
+    );
+    sld.slider_step = spec.step;
+    sld.user_tag = spec.user_tag;
+    sld.setHelpText(spec.help);
+    sld.callback = spec.cb;
+    _ = try win.addIcon(sld);
 }
 
 pub fn addCreateVmQuotaControls(
@@ -197,35 +259,16 @@ pub fn addCreateVmQuotaControls(
     cur_y: *i32,
 ) !void {
     const summary = queryParentQuotaSummary();
-
     var info_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
     const info_str = text_label.fmtLabel(
         &info_buf,
-        "Available quota: {d} MB RAM, {d}% pCPU",
+        "Pool for VM + children ({d} MB RAM, {d}% pCPU free)",
         .{ summary.avail_ram_mb, summary.avail_pcpu_pct },
     );
-    var q_info = Icon.createReadOnly(
-        ICON_CREATE_VM_QUOTA_INFO_ID,
-        pad_x,
-        cur_y.*,
-        inner_w,
-        row_h,
-        info_str,
-    );
-    q_info.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(q_info);
+    const hdr_id = ICON_CREATE_VM_QUOTA_INFO_ID;
+    const ink = fb.Color.INK;
+    try addLabel(win, hdr_id, pad_x, cur_y.*, inner_w, row_h, info_str, ink);
     cur_y.* += @intCast(row_h + self.scalePx(6));
-
-    var pcpu_lbl = Icon.createReadOnly(
-        ICON_CREATE_VM_PCPU_LBL_ID,
-        pad_x,
-        cur_y.*,
-        lbl_w,
-        row_h,
-        "pCPU %",
-    );
-    pcpu_lbl.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(pcpu_lbl);
 
     const max_pcpu: i32 = @intCast(@max(@as(u32, 1), summary.avail_pcpu_pct));
     const cur_pcpu: i32 = std.math.clamp(
@@ -234,74 +277,67 @@ pub fn addCreateVmQuotaControls(
         max_pcpu,
     );
     self.create_vm_pcpu_pct = @intCast(cur_pcpu);
-    var pcpu_sld = Icon.createSlider(
-        ICON_CREATE_VM_PCPU_SLIDER_ID,
-        sld_x,
-        cur_y.*,
-        sld_w,
-        row_h,
-        1,
-        max_pcpu,
-        cur_pcpu,
-        "%",
-    );
-    pcpu_sld.setHelpText(
-        "Physical CPU core time % allocated to this child VM (max 90%)",
-    );
-    pcpu_sld.callback = onCreatePcpuSliderChanged;
-    _ = try win.addIcon(pcpu_sld);
+    try addSliderRow(win, pad_x, lbl_w, sld_x, sld_w, row_h, cur_y.*, .{
+        .lbl_id = ICON_CREATE_VM_PCPU_LBL_ID,
+        .sld_id = ICON_CREATE_VM_PCPU_SLIDER_ID,
+        .lbl_txt = "pCPU pool",
+        .min_val = 1,
+        .max_val = max_pcpu,
+        .cur_val = cur_pcpu,
+        .unit = "%",
+        .help = "Physical CPU share for this VM and its children",
+        .cb = onCreatePcpuSliderChanged,
+    });
     cur_y.* += @intCast(row_h + self.scalePx(10));
 
-    var rq_lbl = Icon.createReadOnly(
-        ICON_CREATE_VM_RAM_QUOTA_LBL_ID,
-        pad_x,
-        cur_y.*,
-        lbl_w,
-        row_h,
-        "RAM pool",
-    );
-    rq_lbl.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(rq_lbl);
-
-    const max_rq: i32 = @intCast(@max(@as(u32, 128), summary.pool_ram_mb));
+    const avail_aligned: u32 = (summary.avail_ram_mb / 64) * 64;
+    const max_rq: i32 = @intCast(@max(@as(u32, 128), avail_aligned));
     const cur_rq: i32 = std.math.clamp(
         @as(i32, @intCast(self.create_vm_ram_quota_mb)),
-        64,
+        128,
         max_rq,
     );
     self.create_vm_ram_quota_mb = @intCast(cur_rq);
-    var rq_sld = Icon.createSlider(
-        ICON_CREATE_VM_RAM_QUOTA_SLIDER_ID,
-        sld_x,
-        cur_y.*,
-        sld_w,
-        row_h,
-        64,
-        max_rq,
-        cur_rq,
-        " MB",
-    );
-    rq_sld.slider_step = 64;
-    rq_sld.setHelpText(
-        "Physical RAM quota pool granted to this child VM and its subtree",
-    );
-    rq_sld.callback = onCreateRamQuotaSliderChanged;
-    _ = try win.addIcon(rq_sld);
+    try addSliderRow(win, pad_x, lbl_w, sld_x, sld_w, row_h, cur_y.*, .{
+        .lbl_id = ICON_CREATE_VM_RAM_QUOTA_LBL_ID,
+        .sld_id = ICON_CREATE_VM_RAM_QUOTA_SLIDER_ID,
+        .lbl_txt = "RAM pool",
+        .min_val = 128,
+        .max_val = max_rq,
+        .cur_val = cur_rq,
+        .step = 64,
+        .unit = " MB",
+        .help = "Total physical RAM pool for this VM + children",
+        .cb = onCreateRamQuotaSliderChanged,
+    });
     cur_y.* += @intCast(row_h + self.scalePx(12));
 }
 
 fn onGuestPcpuQuotaSliderChanged(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
     const cid: u64 = @intCast(ic.user_tag);
+    if (cid == sbi.CID_SELF) {
+        const ret_pct: u32 = @intCast(std.math.clamp(ic.slider_val, 1, 99));
+        _ = host_info.setGuestQuota(sbi.CID_SELF, ret_pct, 0);
+        const s = queryParentQuotaSummary();
+        const avail_pct = (100 -| ret_pct) -| s.delegated_pcpu_pct;
+        const win_id = gui_mod.WIN_GUEST_DETAIL_ID;
+        if (self.findIcon(win_id, ICON_GUEST_PCPU_QUOTA_LBL_ID)) |lbl| {
+            var buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+            lbl.setText(text_label.fmtLabel(
+                &buf,
+                "{d}% pCPU retained, {d}% available ({d} MB RAM free)",
+                .{ ret_pct, avail_pct, s.avail_ram_mb },
+            ));
+            if (self.getWindow(win_id)) |dwin| self.markDirty(dwin.getBox());
+        }
+        return;
+    }
     if (cid < sbi.CID_FIRST_CHILD) return;
-    const pct: u32 = @intCast(
-        std.math.clamp(ic.slider_val, 1, sbi.MAX_CHILD_PCPU_QUOTA_PCT),
-    );
+    const pct: u32 = @intCast(std.math.clamp(ic.slider_val, 1, 99));
     var cur_ram_mb: u32 = 256;
-    if (self.findIcon(
-        gui_mod.WIN_GUEST_DETAIL_ID,
-        ICON_GUEST_RAM_QUOTA_SLIDER_ID,
-    )) |ric| {
+    const win_id = gui_mod.WIN_GUEST_DETAIL_ID;
+    if (self.findIcon(win_id, ICON_GUEST_RAM_QUOTA_SLIDER_ID)) |ric| {
         cur_ram_mb = @intCast(@max(64, ric.slider_val));
     }
     _ = host_info.setGuestQuota(cid, pct, cur_ram_mb);
@@ -311,18 +347,13 @@ fn onGuestRamQuotaSliderChanged(g: *anyopaque, _: *anyopaque, ic: *Icon) void {
     const self: *DiosixGui = @ptrCast(@alignCast(g));
     const cid: u64 = @intCast(ic.user_tag);
     if (cid < sbi.CID_FIRST_CHILD) return;
-    const raw = @max(64, ic.slider_val);
-    const snapped = @divTrunc(raw + 32, 64) * 64;
+    const snapped = @divTrunc(@max(64, ic.slider_val) + 32, 64) * 64;
     ic.setSliderValue(snapped);
     const ram_mb: u32 = @intCast(@max(64, ic.slider_val));
     var cur_pcpu: u32 = sbi.DEFAULT_CHILD_PCPU_QUOTA_PCT;
-    if (self.findIcon(
-        gui_mod.WIN_GUEST_DETAIL_ID,
-        ICON_GUEST_PCPU_QUOTA_SLIDER_ID,
-    )) |pic| {
-        cur_pcpu = @intCast(
-            std.math.clamp(pic.slider_val, 1, sbi.MAX_CHILD_PCPU_QUOTA_PCT),
-        );
+    const win_id = gui_mod.WIN_GUEST_DETAIL_ID;
+    if (self.findIcon(win_id, ICON_GUEST_PCPU_QUOTA_SLIDER_ID)) |pic| {
+        cur_pcpu = @intCast(std.math.clamp(pic.slider_val, 1, 99));
     }
     _ = host_info.setGuestQuota(cid, cur_pcpu, ram_mb);
 }
@@ -337,144 +368,111 @@ pub fn addGuestDetailQuotaControls(
     cur_y: *i32,
 ) !void {
     const summary = queryParentQuotaSummary();
+    const lbl_w = computeControlLabelWidth(self);
+    const sld_x: i32 = pad_x + @as(i32, @intCast(lbl_w));
+    const sld_w: u32 = if (inner_w > lbl_w + 8) inner_w - lbl_w - 8 else 100;
+    const hdr_id = ICON_GUEST_QUOTA_HDR_ID;
+    const ink = fb.Color.INK;
 
     if (guest.is_root) {
-        var q_hdr = Icon.createReadOnly(
-            ICON_GUEST_QUOTA_HDR_ID,
-            pad_x,
-            cur_y.*,
-            inner_w,
-            row_h,
-            "Physical quota pool",
-        );
-        q_hdr.setCustomColor(fb.Color.INK);
-        _ = try win.addIcon(q_hdr);
+        const hdr = "Host resource pool";
+        try addLabel(win, hdr_id, pad_x, cur_y.*, inner_w, row_h, hdr, ink);
         cur_y.* += @intCast(row_h + self.scalePx(2));
 
-        const ret_pcpu: u32 = 100 -| summary.delegated_pcpu_pct;
         var summary_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+        const ret_p = summary.retained_pcpu_pct;
+        const avl_p = summary.avail_pcpu_pct;
         const summary_str = text_label.fmtLabel(
             &summary_buf,
-            "{d} MB RAM free ({d}% pCPU retained)",
-            .{ summary.avail_ram_mb, ret_pcpu },
+            "{d}% pCPU retained, {d}% available ({d} MB RAM free)",
+            .{ ret_p, avl_p, summary.avail_ram_mb },
         );
-        var q_lbl = Icon.createReadOnly(
-            ICON_GUEST_PCPU_QUOTA_LBL_ID,
-            pad_x,
-            cur_y.*,
-            inner_w,
-            row_h,
-            summary_str,
+        const sub_id = ICON_GUEST_PCPU_QUOTA_LBL_ID;
+        const sec = fb.Color.INK_SECONDARY;
+        const y0 = cur_y.*;
+        try addLabel(win, sub_id, pad_x, y0, inner_w, row_h, summary_str, sec);
+        cur_y.* += @intCast(row_h + self.scalePx(4));
+
+        const avail_ret: u32 = @min(99, 100 -| summary.delegated_pcpu_pct);
+        const max_ret: i32 = @intCast(@max(@as(u32, 1), avail_ret));
+        const cur_ret: i32 = std.math.clamp(
+            @as(i32, @intCast(summary.retained_pcpu_pct)),
+            1,
+            max_ret,
         );
-        q_lbl.setCustomColor(fb.Color.INK_SECONDARY);
-        _ = try win.addIcon(q_lbl);
+        try addSliderRow(win, pad_x, lbl_w, sld_x, sld_w, row_h, cur_y.*, .{
+            .lbl_id = ICON_GUEST_RAM_QUOTA_LBL_ID,
+            .sld_id = ICON_GUEST_PCPU_QUOTA_SLIDER_ID,
+            .lbl_txt = "Retained %",
+            .min_val = 1,
+            .max_val = max_ret,
+            .cur_val = cur_ret,
+            .unit = "%",
+            .help = "Minimum host pCPU % retained for the Root VM",
+            .user_tag = @intCast(sbi.CID_SELF),
+            .cb = onGuestPcpuQuotaSliderChanged,
+        });
         cur_y.* += @intCast(row_h + self.scalePx(8));
         return;
     }
 
-    var q_hdr = Icon.createReadOnly(
-        ICON_GUEST_QUOTA_HDR_ID,
-        pad_x,
-        cur_y.*,
-        inner_w,
-        row_h,
-        "Physical quota",
-    );
-    q_hdr.setCustomColor(fb.Color.INK);
-    _ = try win.addIcon(q_hdr);
+    const ch_hdr = "Resource pool (VM + children)";
+    try addLabel(win, hdr_id, pad_x, cur_y.*, inner_w, row_h, ch_hdr, ink);
     cur_y.* += @intCast(row_h + self.scalePx(4));
-
-    const lbl_w = computeControlLabelWidth(self);
-    const sld_x: i32 = pad_x + @as(i32, @intCast(lbl_w));
-    const sld_w: u32 = if (inner_w > lbl_w + 8) inner_w - lbl_w - 8 else 100;
-
-    var pcpu_lbl = Icon.createReadOnly(
-        ICON_GUEST_PCPU_QUOTA_LBL_ID,
-        pad_x,
-        cur_y.*,
-        lbl_w,
-        row_h,
-        "pCPU %",
-    );
-    pcpu_lbl.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(pcpu_lbl);
 
     const cur_child_pct: u32 = if (guest.pcpu_quota_pct > 0)
         guest.pcpu_quota_pct
     else
         sbi.DEFAULT_CHILD_PCPU_QUOTA_PCT;
-    const max_child_pct: i32 = @intCast(
-        @min(
-            sbi.MAX_CHILD_PCPU_QUOTA_PCT,
-            @max(@as(u32, 1), summary.avail_pcpu_pct +| cur_child_pct),
-        ),
-    );
+    const avail_sum = summary.avail_pcpu_pct +| cur_child_pct;
+    const avail_plus_cur = @max(@as(u32, 1), avail_sum);
+    const max_del = summary.max_del_pcpu_pct;
+    const max_child_pct: i32 = @intCast(@min(max_del, avail_plus_cur));
     const clamped_pct: i32 = std.math.clamp(
         @as(i32, @intCast(cur_child_pct)),
         1,
         max_child_pct,
     );
-    var pcpu_sld = Icon.createSlider(
-        ICON_GUEST_PCPU_QUOTA_SLIDER_ID,
-        sld_x,
-        cur_y.*,
-        sld_w,
-        row_h,
-        1,
-        max_child_pct,
-        clamped_pct,
-        "%",
-    );
-    pcpu_sld.user_tag = @intCast(guest.cid);
-    pcpu_sld.setHelpText(
-        "Dial physical CPU time percentage for this child VM (up to 90% total)",
-    );
-    pcpu_sld.callback = onGuestPcpuQuotaSliderChanged;
-    _ = try win.addIcon(pcpu_sld);
+    try addSliderRow(win, pad_x, lbl_w, sld_x, sld_w, row_h, cur_y.*, .{
+        .lbl_id = ICON_GUEST_PCPU_QUOTA_LBL_ID,
+        .sld_id = ICON_GUEST_PCPU_QUOTA_SLIDER_ID,
+        .lbl_txt = "pCPU pool",
+        .min_val = 1,
+        .max_val = max_child_pct,
+        .cur_val = clamped_pct,
+        .unit = "%",
+        .help = "Physical CPU share for this VM and any child VMs it creates",
+        .user_tag = @intCast(guest.cid),
+        .cb = onGuestPcpuQuotaSliderChanged,
+    });
     cur_y.* += @intCast(row_h + self.scalePx(6));
 
-    var rq_lbl = Icon.createReadOnly(
-        ICON_GUEST_RAM_QUOTA_LBL_ID,
-        pad_x,
-        cur_y.*,
-        lbl_w,
-        row_h,
-        "RAM pool",
+    const self_mb_u32: u32 = @intCast(
+        std.math.clamp(guest.ram_bytes / mem_size.MIB, 64, 8192),
     );
-    rq_lbl.setCustomColor(fb.Color.INK_SECONDARY);
-    _ = try win.addIcon(rq_lbl);
-
     const eff_ram_bytes = if (guest.ram_quota_bytes > 0)
         guest.ram_quota_bytes
     else
         guest.ram_bytes;
-    const cur_ram_mb: i32 = @intCast(
-        std.math.clamp(eff_ram_bytes / mem_size.MIB, 64, 8192),
+    const cur_mb_u32: u32 = @intCast(
+        std.math.clamp(eff_ram_bytes / mem_size.MIB, self_mb_u32, 8192),
     );
     const max_ram_mb: i32 = @intCast(
-        @max(
-            @as(u32, @intCast(cur_ram_mb)),
-            @max(@as(u32, 128), summary.pool_ram_mb),
-        ),
+        @max(cur_mb_u32, @max(@as(u32, 128), summary.pool_ram_mb)),
     );
-    var rq_sld = Icon.createSlider(
-        ICON_GUEST_RAM_QUOTA_SLIDER_ID,
-        sld_x,
-        cur_y.*,
-        sld_w,
-        row_h,
-        64,
-        max_ram_mb,
-        cur_ram_mb,
-        " MB",
-    );
-    rq_sld.user_tag = @intCast(guest.cid);
-    rq_sld.slider_step = 64;
-    rq_sld.setHelpText(
-        "Dial physical RAM quota for this child VM (below in-use triggers OOM)",
-    );
-    rq_sld.callback = onGuestRamQuotaSliderChanged;
-    _ = try win.addIcon(rq_sld);
+    try addSliderRow(win, pad_x, lbl_w, sld_x, sld_w, row_h, cur_y.*, .{
+        .lbl_id = ICON_GUEST_RAM_QUOTA_LBL_ID,
+        .sld_id = ICON_GUEST_RAM_QUOTA_SLIDER_ID,
+        .lbl_txt = "RAM pool",
+        .min_val = @intCast(self_mb_u32),
+        .max_val = max_ram_mb,
+        .cur_val = @intCast(cur_mb_u32),
+        .step = 64,
+        .unit = " MB",
+        .help = "Total physical RAM pool for this VM + children",
+        .user_tag = @intCast(guest.cid),
+        .cb = onGuestRamQuotaSliderChanged,
+    });
     cur_y.* += @intCast(row_h + self.scalePx(10));
 }
 

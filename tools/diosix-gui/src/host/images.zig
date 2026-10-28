@@ -228,8 +228,8 @@ pub fn queryAvailableImages(out: *[MAX_VM_IMAGES]VmImageEntry) usize {
             .default_ram_mb = 256,
         };
         base.setTitle("Diosix Base Linux");
-        base.setFilename("diosix-linux.elf");
-        base.setPath("/var/lib/diosix/images/diosix-linux.elf");
+        base.setFilename("diosix-base-linux.elf");
+        base.setPath("/var/lib/diosix/images/diosix-base-linux.elf");
         out[0] = base;
         return 1;
     }
@@ -251,8 +251,8 @@ pub fn queryAvailableImages(out: *[MAX_VM_IMAGES]VmImageEntry) usize {
             .default_ram_mb = 256,
         };
         fallback.setTitle("Diosix Base Linux");
-        fallback.setFilename("diosix-linux.elf");
-        fallback.setPath("/var/lib/diosix/images/diosix-linux.elf");
+        fallback.setFilename("diosix-base-linux.elf");
+        fallback.setPath("/var/lib/diosix/images/diosix-base-linux.elf");
         out[0] = fallback;
         count = 1;
     }

@@ -25,8 +25,8 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
 
     var mock_imgs: [1]host_info.VmImageEntry = .{.{}};
     mock_imgs[0].setTitle("Diosix Base Linux");
-    mock_imgs[0].setFilename("diosix-linux.elf");
-    mock_imgs[0].setPath("/var/lib/diosix/images/diosix-linux.elf");
+    mock_imgs[0].setFilename("diosix-base-linux.elf");
+    mock_imgs[0].setPath("/var/lib/diosix/images/diosix-base-linux.elf");
     mock_imgs[0].size_bytes = 28 * 1024 * 1024;
     mock_imgs[0].default_vcpus = 2;
     mock_imgs[0].default_ram_mb = 512;
@@ -120,7 +120,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
         gui_mod.ICON_CREATE_VM_BTN_ID,
     ).?;
 
-    try testing.expectEqualStrings("diosix-linux", name_in.getText());
+    try testing.expectEqualStrings("diosix-base-linux", name_in.getText());
     try testing.expectEqual(@as(i32, 2), vcpus_sld.slider_val);
     try testing.expectEqual(@as(i32, 512), ram_sld.slider_val);
     try testing.expectEqual(@as(i32, 20), pcpu_sld.slider_val);
@@ -130,7 +130,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     );
 
     // 4. Focus the Name input field, type a custom name ("web-node-1"), dial
-    // vCPUs to 4, RAM to 768 MB, pCPU quota to 40%, RAM quota to 512 MB,
+    // vCPUs to 4, RAM to 768 MB, pCPU quota to 40%, RAM quota to 768 MB,
     // select storage option 1, and click Create.
     gui.handleMouseClick(
         win_detail.x + name_in.rel_x + 10,
@@ -141,13 +141,22 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     for ("web-node-1") |ch| gui.handleKeyChar(ch);
     try testing.expectEqualStrings("web-node-1", name_in.getText());
 
-    vcpus_sld.adjustSlider(2);
+    const exp_stops = [_]i32{
+        1,   2,   4,   8,   16,  32,   48,   64,   96,   128,
+        192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096,
+    };
+    vcpus_sld.setSliderValue(1);
+    for (exp_stops, 0..) |ev, s_idx| {
+        if (s_idx > 0) vcpus_sld.adjustSlider(1);
+        try testing.expectEqual(ev, vcpus_sld.slider_val);
+    }
+    vcpus_sld.setSliderValue(4);
     if (vcpus_sld.callback) |cb| cb(&gui, win_detail, vcpus_sld);
     ram_sld.adjustSlider(4);
     if (ram_sld.callback) |cb| cb(&gui, win_detail, ram_sld);
     pcpu_sld.adjustSlider(20);
     if (pcpu_sld.callback) |cb| cb(&gui, win_detail, pcpu_sld);
-    ram_q_sld.setSliderValue(512);
+    ram_q_sld.setSliderValue(768);
     if (ram_q_sld.callback) |cb| cb(&gui, win_detail, ram_q_sld);
 
     gui.handleMouseClick(
@@ -168,13 +177,13 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     const created = host_info.images.mock_last_created_vm.?;
     try testing.expectEqualStrings("web-node-1", created.getName());
     try testing.expectEqualStrings(
-        "/var/lib/diosix/images/diosix-linux.elf",
+        "/var/lib/diosix/images/diosix-base-linux.elf",
         created.getImagePath(),
     );
     try testing.expectEqual(@as(u32, 4), created.vcpus);
     try testing.expectEqual(@as(u32, 768), created.ram_mb);
     try testing.expectEqual(@as(u32, 40), created.pcpu_quota_pct);
-    try testing.expectEqual(@as(u32, 512), created.ram_quota_mb);
+    try testing.expectEqual(@as(u32, 768), created.ram_quota_mb);
     try testing.expectEqualStrings(
         "/var/lib/diosix/disks/data.raw",
         created.getStoragePath(),
@@ -443,6 +452,43 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     gdetail = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
     ssh_btn = gdetail.getIconById(gui_mod.ICON_GUEST_SSH_ID).?;
     try testing.expectEqualStrings("Open new SSH terminal", ssh_btn.getText());
+    const qhdr = gdetail.getIconById(gui_mod.ICON_GUEST_QUOTA_HDR_ID).?;
+    try testing.expectEqualStrings(
+        "Resource pool (VM + children)",
+        qhdr.getText(),
+    );
+
+    // 9. Per-guest console terminal preservation and unexpected crash alert.
+    gui.setWindowTransparency(50);
+    // 50% / 4 = 12% transparency -> 88% opacity (224/255).
+    try testing.expectEqual(@as(u8, 224), gui.getAttentionOpacityAlpha());
+
+    try gui.openGuestTerminal(2, .console);
+    gui.completeNavAnimation();
+    for ("dmesg\n") |ch| gui.handleKeyChar(ch);
+    try gui.openGuestTerminal(1, .console);
+    gui.completeNavAnimation();
+    try gui.openGuestTerminal(2, .console);
+    gui.completeNavAnimation();
+    try testing.expectEqualStrings("dmesg", gui.terminal.getRowTrimmed(1));
+    try gui.navigateBack();
+    gui.completeNavAnimation();
+    gdetail = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
+    const con_btn_after = gdetail.getIconById(gui_mod.ICON_GUEST_CONSOLE_ID).?;
+    try testing.expectEqualStrings(
+        "Reopen serial console",
+        con_btn_after.getText(),
+    );
+
+    // Simulate child-1 (CID 2) crashing unexpectedly; verify terminal is
+    // released and bottom crash notification bar is displayed.
+    host_info.guests.mock_running_guests = two_guests[0..1];
+    gui.updateGuestsPaneData();
+    const crash_bar = gui.getWindow(gui_mod.WIN_TASK_BASE_ID).?;
+    const crash_lbl = crash_bar.getIconById(gui_mod.ICON_TASK_LABEL_ID).?;
+    try testing.expect(
+        std.mem.indexOf(u8, crash_lbl.getText(), "child-1") != null,
+    );
 
     testing.refAllDecls(@This());
 }

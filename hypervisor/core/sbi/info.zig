@@ -119,7 +119,7 @@ pub fn handleGetInfo(
         else
             vcpus,
         .max_vcpus = if (tg.quotas.max_vcpus == max_u)
-            vcpus
+            guest.DEFAULT_ROOT_MAX_VCPUS
         else
             tg.quotas.max_vcpus,
         .used_ram_pages = if (tg.quotas.used_ram_pages > 0 and
@@ -137,7 +137,10 @@ pub fn handleGetInfo(
         else
             tg.quotas.max_ram_pages,
         .child_count = child_count,
-        .pcpu_quota_pct = tg.quotas.pcpu_quota_pct,
+        .pcpu_quota_pct = if (tg.is_root)
+            guest.quota_mod.maxChildPcpuPct(tg)
+        else
+            tg.quotas.pcpu_quota_pct,
         .delegated_pcpu_pct = tg.quotas.delegated_pcpu_pct,
         .delegated_ram_pages = tg.quotas.delegated_ram_pages,
     };

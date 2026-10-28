@@ -72,10 +72,8 @@ pub fn effectiveSubtreeShareBp(g: *const guest.Guest) u64 {
 /// subtracting the percentage delegated to `g`'s direct children.
 pub fn effectiveSelfShareBp(g: *const guest.Guest) u64 {
     const subtree_bp = effectiveSubtreeShareBp(g);
-    const del_pct: u64 = @min(
-        @as(u64, g.quotas.delegated_pcpu_pct),
-        guest.quota_mod.MAX_CHILD_PCPU_QUOTA_PCT,
-    );
+    const max_del: u64 = guest.quota_mod.maxChildPcpuPct(g);
+    const del_pct: u64 = @min(@as(u64, g.quotas.delegated_pcpu_pct), max_del);
     const retained_pct: u64 = 100 -| del_pct;
     return @max(MIN_SHARE_BP, (subtree_bp * retained_pct) / 100);
 }
@@ -322,7 +320,8 @@ pub fn pickNext() ?*vcore.VirtualCore {
     const best_global_node = if (has_uq) uq_global_node else any_global_node;
     const best_global_vr = if (has_uq) uq_global_vr else any_global_vr;
     const prefer_local = best_local_node != null and
-        (uq_local_node != null or idle_other or best_local_vr <= best_global_vr);
+        (uq_local_node != null or idle_other or
+            best_local_vr <= best_global_vr);
 
     if (best_global_node != null and !prefer_local) {
         const node = best_global_node.?;
@@ -401,6 +400,7 @@ pub fn schedule() void {
         vc.running_on_cpu = null;
         pc.active_vcore = null;
         if (!was_wfi) accountAndRequeue(vc) else accountRuntime(vc);
+        @atomicStore(u64, &vc.last_dispatched_time, 0, .monotonic);
     }
 
     if (pickNext()) |next_vc| {
@@ -429,6 +429,7 @@ pub fn yield(vc: *vcore.VirtualCore) void {
         vc.running_on_cpu = null;
         pc.active_vcore = null;
         accountAndRequeue(vc);
+        @atomicStore(u64, &vc.last_dispatched_time, 0, .monotonic);
     }
     if (pickNext()) |next_vc| {
         if (prev_ptr == @as(?*anyopaque, next_vc)) pc.active_vcore = next_vc;

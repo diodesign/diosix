@@ -95,6 +95,7 @@ pub const Guest = struct {
     child_static_handles: [STATIC_CHILD_HANDLES]?*Guest = @splat(null),
     child_dynamic_buckets: [DYNAMIC_CHILD_BUCKETS]?*Guest = @splat(null),
     child_handle_next: ?*Guest = null,
+    next_static_handle: usize = 0,
     next_dynamic_handle: usize = STATIC_CHILD_HANDLES,
     events: EventQueue = .{},
     net_rx: PacketQueue = .{},

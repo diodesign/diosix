@@ -17,8 +17,8 @@
 # SPDX-License-Identifier: MIT
 
 [[image]]
-id = "diosix-linux"
-alias = "base-linux"
+id = "diosix-base-linux"
+alias = "diosix-linux"
 title = "Diosix Base Linux"
 tier = "leaf"
 os_family = "linux"
@@ -27,8 +27,8 @@ arch = "riscv64"
 default_vcpus = 2
 default_ram_mb = 512
 default_disk_mb = 1024
-filename = "diosix-linux.elf"
-url = "https://images.diosix.org/26.2/riscv64/diosix-linux.elf"
+filename = "diosix-base-linux.elf"
+url = "https://images.diosix.org/26.2/riscv64/diosix-base-linux.elf"
 sha256 = "5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [[image]]

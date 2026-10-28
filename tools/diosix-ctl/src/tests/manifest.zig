@@ -37,7 +37,7 @@ test "manifest: TOML parsing and capability attenuation roundtrip" {
         \\
         \\[domains.user]
         \\name = "user-domain"
-        \\image = "/var/lib/diosix/images/diosix-linux.elf"
+        \\image = "/var/lib/diosix/images/diosix-base-linux.elf"
         \\vcpus = 4
         \\ram = "14GiB"
         \\can_require = ["net.*", "gui.*", "fs.*"]

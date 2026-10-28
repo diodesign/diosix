@@ -25,12 +25,15 @@ pub fn allocChildHandle(
     const s = self.tree_lock.lock();
     defer self.tree_lock.unlock(s);
 
-    // Column 1: static array for handles 0..31 (CIDs 2..33).
-    for (&self.child_static_handles, 0..) |*slot, i| {
-        if (slot.* == null) {
-            slot.* = child;
+    // Column 1: static ring for handles 0..31 (CIDs 2..33), advancing
+    // monotonically via next_static_handle to avoid immediate CID reuse.
+    for (0..STATIC_CHILD_HANDLES) |_| {
+        const idx = self.next_static_handle;
+        self.next_static_handle = (idx + 1) % STATIC_CHILD_HANDLES;
+        if (self.child_static_handles[idx] == null) {
+            self.child_static_handles[idx] = child;
             child.child_handle_next = null;
-            const cid = i + sbi.CID_FIRST_CHILD;
+            const cid = idx + sbi.CID_FIRST_CHILD;
             child.local_cid = cid;
             return cid;
         }
@@ -167,14 +170,14 @@ pub fn createChild(
     vcpu_count: usize,
 ) !*guest_mod.Guest {
     const num_vcpus = if (vcpu_count > 0) vcpu_count else 1;
-    if (self.quotas.delegated_pcpu_pct >= quota_mod.MAX_CHILD_PCPU_QUOTA_PCT or
+    const max_del_pcpu = quota_mod.maxChildPcpuPct(self);
+    if (self.quotas.delegated_pcpu_pct >= max_del_pcpu or
         !self.checkQuota(0, 0, self.quotas.current_depth + 1))
     {
         return error.QuotaExceeded;
     }
 
-    const avail_pcpu =
-        quota_mod.MAX_CHILD_PCPU_QUOTA_PCT -| self.quotas.delegated_pcpu_pct;
+    const avail_pcpu = max_del_pcpu -| self.quotas.delegated_pcpu_pct;
     const init_pcpu_pct: u32 = @max(
         @as(u32, 1),
         @min(quota_mod.DEFAULT_CHILD_PCPU_QUOTA_PCT, avail_pcpu),
@@ -388,14 +391,25 @@ test "Two-column virtual core and child handle lookup tables" {
 
     parent.freeChildHandle(&dummy_children[5]);
     try testing.expect(parent.getGuestByCid(allocated_cids[5]) == null);
+    parent.freeChildHandle(&dummy_children[6]);
+    try testing.expect(parent.getGuestByCid(allocated_cids[6]) == null);
     parent.freeChildHandle(&dummy_children[45]);
     try testing.expect(parent.getGuestByCid(allocated_cids[45]) == null);
 
+    // Setting next_static_handle = 6 must allocate slot 6 first (monotonic
+    // progression) rather than jumping back to slot 5.
+    parent.next_static_handle = 6;
     var new_child_static: guest_mod.Guest = undefined;
     new_child_static.local_cid = 0;
     new_child_static.child_handle_next = null;
-    const reused_cid = try parent.allocChildHandle(&new_child_static);
-    try testing.expectEqual(allocated_cids[5], reused_cid);
+    const next_cid = try parent.allocChildHandle(&new_child_static);
+    try testing.expectEqual(allocated_cids[6], next_cid);
+
+    var wrapped_child_static: guest_mod.Guest = undefined;
+    wrapped_child_static.local_cid = 0;
+    wrapped_child_static.child_handle_next = null;
+    const wrapped_cid = try parent.allocChildHandle(&wrapped_child_static);
+    try testing.expectEqual(allocated_cids[5], wrapped_cid);
 
     parent.next_dynamic_handle = 45;
     var reused_child: guest_mod.Guest = undefined;

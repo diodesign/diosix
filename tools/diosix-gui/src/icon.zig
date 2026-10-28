@@ -27,6 +27,8 @@ pub const SLIDER_SUFFIX_CAP: usize = 16;
 pub const DEFAULT_MAX_INPUT_LEN: usize = 64;
 // Number of time-unit samples stored in a line graph widget.
 pub const GRAPH_HISTORY_CAP: usize = 60;
+// Maximum number of discrete stops on an exponential slider.
+pub const MAX_EXP_STOPS: usize = 64;
 
 pub const IconType = enum {
     read_only_text,
@@ -80,6 +82,7 @@ pub const Icon = struct {
     slider_max: i32 = 100,
     slider_val: i32 = 50,
     slider_step: i32 = 1,
+    slider_exponential: bool = false,
     slider_suffix: [SLIDER_SUFFIX_CAP]u8 = @splat(0),
     slider_suffix_len: usize = 0,
 
@@ -304,12 +307,123 @@ pub const Icon = struct {
         return self.text_buf[0..self.text_len];
     }
 
+    fn expStepForValue(v: i32) i32 {
+        if (v <= 1) return 1;
+        const u: u32 = @intCast(v);
+        const msb: u5 = @intCast(31 - @clz(u));
+        const pow2: i32 = @as(i32, 1) << msb;
+        return if (pow2 < 32) pow2 else @max(1, @divTrunc(pow2, 2));
+    }
+
+    pub fn fillExpStops(self: *const Icon, buf: *[MAX_EXP_STOPS]i32) usize {
+        const min_v = @max(1, self.slider_min);
+        const max_v = @max(min_v, self.slider_max);
+        var count: usize = 0;
+        var v: i32 = min_v;
+        while (v < max_v and count + 1 < MAX_EXP_STOPS) {
+            buf[count] = v;
+            count += 1;
+            v +|= expStepForValue(v);
+        }
+        buf[count] = max_v;
+        return count + 1;
+    }
+
+    pub fn nearestExpStopIndex(stops: []const i32, val: i32) usize {
+        if (stops.len <= 1) return 0;
+        var best_idx: usize = 0;
+        var best_dist: u32 = @abs(val - stops[0]);
+        for (stops[1..], 1..) |s, idx| {
+            const dist: u32 = @abs(val - s);
+            if (dist <= best_dist) {
+                best_dist = dist;
+                best_idx = idx;
+            }
+        }
+        return best_idx;
+    }
+
     pub fn setSliderValue(self: *Icon, val: i32) void {
-        self.slider_val = std.math.clamp(val, self.slider_min, self.slider_max);
+        const clamped = std.math.clamp(val, self.slider_min, self.slider_max);
+        if (self.slider_exponential) {
+            var stops: [MAX_EXP_STOPS]i32 = undefined;
+            const count = self.fillExpStops(&stops);
+            const idx = nearestExpStopIndex(stops[0..count], clamped);
+            self.slider_val = stops[idx];
+        } else {
+            self.slider_val = clamped;
+        }
     }
 
     pub fn adjustSlider(self: *Icon, delta: i32) void {
-        self.setSliderValue(self.slider_val + delta * self.slider_step);
+        if (self.slider_exponential) {
+            var stops: [MAX_EXP_STOPS]i32 = undefined;
+            const count = self.fillExpStops(&stops);
+            const cur_idx: i32 = @intCast(
+                nearestExpStopIndex(stops[0..count], self.slider_val),
+            );
+            const max_idx: i32 = @intCast(count - 1);
+            const next_idx: usize = @intCast(
+                std.math.clamp(cur_idx + delta, 0, max_idx),
+            );
+            self.slider_val = stops[next_idx];
+        } else {
+            self.setSliderValue(self.slider_val + delta * self.slider_step);
+        }
+    }
+
+    pub fn sliderThumbOffset(self: *const Icon, track_w: u32) i32 {
+        const tw: i32 = @intCast(@max(1, track_w));
+        if (self.slider_exponential) {
+            var stops: [MAX_EXP_STOPS]i32 = undefined;
+            const count = self.fillExpStops(&stops);
+            if (count <= 1) return 0;
+            const idx: i32 = @intCast(
+                nearestExpStopIndex(stops[0..count], self.slider_val),
+            );
+            return @divTrunc(idx * tw, @as(i32, @intCast(count - 1)));
+        }
+        const span = if (self.slider_max > self.slider_min)
+            self.slider_max - self.slider_min
+        else
+            1;
+        const progress = std.math.clamp(
+            self.slider_val - self.slider_min,
+            0,
+            span,
+        );
+        return @divTrunc(progress * tw, span);
+    }
+
+    pub fn setSliderFromTrackOffset(
+        self: *Icon,
+        click_offset: i32,
+        track_w: u32,
+    ) bool {
+        const tw: i32 = @intCast(@max(1, track_w));
+        const clamped_off = std.math.clamp(click_offset, 0, tw);
+        const old_val = self.slider_val;
+        if (self.slider_exponential) {
+            var stops: [MAX_EXP_STOPS]i32 = undefined;
+            const count = self.fillExpStops(&stops);
+            const last: i32 = @intCast(@max(1, count - 1));
+            const idx: usize = @intCast(
+                std.math.clamp(
+                    @divTrunc(clamped_off * last + @divTrunc(tw, 2), tw),
+                    0,
+                    last,
+                ),
+            );
+            self.slider_val = stops[idx];
+        } else {
+            const span = if (self.slider_max > self.slider_min)
+                self.slider_max - self.slider_min
+            else
+                1;
+            const new_val = self.slider_min + @divTrunc(clamped_off * span, tw);
+            self.setSliderValue(new_val);
+        }
+        return self.slider_val != old_val;
     }
 
     pub const SelectionBounds = icon_text.SelectionBounds;

@@ -28,9 +28,12 @@ fn addOskBtn(
     w: u32,
     h: u32,
     label: []const u8,
+    enabled: bool,
     cb: icon_mod.IconCallback,
 ) !void {
     var btn = Icon.createButton(id, x, y, w, h, label);
+    btn.is_enabled = enabled;
+    if (!enabled) btn.setSelectable(false);
     btn.callback = cb;
     _ = try win.addIcon(btn);
 }
@@ -187,11 +190,17 @@ pub fn handleEvdevKey(self: *DiosixGui, code: u16, value: i32) void {
         57 => handleKeyChar(self, if (term_focused) ' ' else '-'),
         12 => handleKeyChar(self, if (shift_held) '_' else '-'),
         13 => handleKeyChar(self, if (shift_held) '+' else '='),
+        26 => handleKeyChar(self, if (shift_held) '{' else '['),
+        27 => handleKeyChar(self, if (shift_held) '}' else ']'),
         39 => handleKeyChar(self, if (shift_held) ':' else ';'),
-        52 => handleKeyChar(self, '.'),
+        40 => handleKeyChar(self, if (shift_held) '"' else '\''),
+        41 => handleKeyChar(self, if (shift_held) '~' else '`'),
+        43 => handleKeyChar(self, if (shift_held) '|' else '\\'),
+        51 => handleKeyChar(self, if (shift_held) '<' else ','),
+        52 => handleKeyChar(self, if (shift_held) '>' else '.'),
         53 => handleKeyChar(self, if (shift_held) '?' else '/'),
         2...11 => {
-            const digits = "1234567890";
+            const digits = if (shift_held) "!@#$%^&*()" else "1234567890";
             handleKeyChar(self, digits[code - 2]);
         },
         16...25 => {
@@ -297,26 +306,38 @@ pub fn buildOskWindow(self: *DiosixGui) !void {
     disp_icon.setCustomColor(fb.Color.INK);
     _ = try win.addIcon(disp_icon);
 
-    const key_unit_w: u32 = 58;
-    const key_h: u32 = 30;
     const gap_x: i32 = 6;
+    const gap_u: u32 = @intCast(gap_x);
+    const total_units: u32 = 13;
+    const total_gaps: u32 = (total_units - 1) * gap_u;
+    const key_unit_w: u32 = @max(
+        32,
+        (osk_w -| 32 -| total_gaps) / total_units,
+    );
+    const row_w: u32 = key_unit_w * total_units + total_gaps;
+    const rem_w: i32 = @intCast(osk_w -| row_w);
+    const start_x: i32 = @max(8, @divTrunc(rem_w, 2));
+    const key_h: u32 = 30;
     var row_y: i32 = 64;
 
-    const rows = [_]struct { start_x: i32, keys: []const osk_mod.KeyCap }{
-        .{ .start_x = 16, .keys = &osk_mod.ROW1_LOWER },
-        .{ .start_x = 34, .keys = &osk_mod.ROW2_LOWER },
-        .{ .start_x = 16, .keys = &osk_mod.ROW3_LOWER },
-        .{ .start_x = 16, .keys = &osk_mod.ROW4_COMMON },
+    const rows = [_][]const osk_mod.KeyCap{
+        &osk_mod.ROW1_LOWER,
+        &osk_mod.ROW2_LOWER,
+        &osk_mod.ROW3_LOWER,
+        &osk_mod.ROW4_COMMON,
     };
 
-    for (rows) |row| {
-        var rx: i32 = row.start_x;
-        for (row.keys) |k| {
-            const kw = key_unit_w * k.width_units;
+    for (rows) |row_keys| {
+        var rx: i32 = start_x;
+        for (row_keys) |k| {
+            const extra_gaps: u32 = (k.width_units - 1) * gap_u;
+            const kw = key_unit_w * k.width_units + extra_gaps;
             const lbl = self.osk_state.keyLabel(k);
             const btn_id = ICON_OSK_KEY_BASE_ID + k.id_offset;
+            const is_shift = (k.action == .toggle_shift);
+            const enabled = !(is_shift and self.osk_state.layout == .symbols);
             const cb = onOskKeyClicked;
-            try addOskBtn(win, btn_id, rx, row_y, kw, key_h, lbl, cb);
+            try addOskBtn(win, btn_id, rx, row_y, kw, key_h, lbl, enabled, cb);
             rx += @as(i32, @intCast(kw)) + gap_x;
         }
         row_y += @as(i32, @intCast(key_h)) + 6;

@@ -57,6 +57,7 @@ const QemuRunner = struct {
 pub const QemuConfig = struct {
     vmdiosix: *std.Build.Step.Compile,
     run_buildroot: *std.Build.Step.Run,
+    rootvm_s_file: std.Build.LazyPath,
     rootvm_elf_path: []const u8,
     legacy_cpu: bool,
     pmp_fallback: bool,
@@ -91,6 +92,7 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         layout.qemu.storage_size,
     });
     create_storage_cmd.addFileInput(b.path(layout.qemu.storage_script));
+    create_storage_cmd.addFileInput(cfg.rootvm_s_file);
     create_storage_cmd.step.dependOn(&cfg.run_buildroot.step);
     b.getInstallStep().dependOn(&create_storage_cmd.step);
 
@@ -135,6 +137,7 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     const create_live_cmd =
         b.addSystemCommand(&.{ "bash", layout.qemu.live_script });
     create_live_cmd.addFileInput(b.path(layout.qemu.live_script));
+    create_live_cmd.addFileInput(cfg.rootvm_s_file);
     create_live_cmd.addFileArg(cfg.vmdiosix.getEmittedBin());
     create_live_cmd.addArgs(&.{
         cfg.rootvm_elf_path,

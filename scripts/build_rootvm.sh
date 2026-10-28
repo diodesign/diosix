@@ -117,7 +117,7 @@ mkdir -p "$DYNAMIC_OVERLAY/usr/sbin" "$DYNAMIC_OVERLAY/usr/bin"
 
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
-zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall \
+zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall -fstrip \
     --dep interface -Mroot=tools/diosix-ctl/src/main.zig \
     -Minterface=hypervisor/interface/lib.zig \
     --name diosix-ctl \
@@ -131,7 +131,7 @@ if [ -d "tools/guest-shim" ]; then
     SHIM_DIR="$DYNAMIC_OVERLAY/usr/share/diosix/shim"
     SHIM_ELF="guest-shim-riscv64.elf"
     mkdir -p "$SHIM_DIR"
-    if zig build-exe -target riscv64-freestanding-none -O ReleaseSmall \
+    if zig build-exe -target riscv64-freestanding-none -O ReleaseSmall -fstrip \
         -mcmodel=medium --script tools/guest-shim/linker.ld \
         --dep interface -Mroot=tools/guest-shim/src/main.zig \
         -Minterface=hypervisor/interface/lib.zig --name "$SHIM_ELF" \
@@ -146,7 +146,7 @@ fi
 
 if [ -d "tools/diosix-gui" ]; then
     log_info "Compiling diosix-gui for ${BOLD}${ZIG_TARGET}${RESET}..."
-    if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast \
+    if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast -fstrip \
         --dep interface --dep questrial_ttf --dep dm_mono_ttf --dep intro_wav \
         -Mroot=tools/diosix-gui/src/main.zig \
         -Minterface=hypervisor/interface/lib.zig \
@@ -168,7 +168,7 @@ fi
 
 if [ -d "tools/diosix-config" ]; then
     log_info "Compiling diosix-config for ${BOLD}${ZIG_TARGET}${RESET}..."
-    if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast \
+    if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast -fstrip \
         --dep interface -Mroot=tools/diosix-config/src/main.zig \
         -Minterface=hypervisor/interface/lib.zig \
         --name diosix-config \
@@ -197,6 +197,8 @@ rm -f "$DYNAMIC_OVERLAY/usr/share/diosix/images/micro-guest."* \
     "$BUILDROOT_DIR/output/target/usr/share/diosix/images/micro-guest."* \
     "$BUILDROOT_DIR/output/target/var/lib/diosix/images/micro-guest."* \
     "$BUILDROOT_DIR/output/target/var/lib/diosix/iso/micro-guest."* \
+    "$BUILDROOT_DIR/output/target/usr/share/diosix/intro.wav" \
+    "$BUILDROOT_DIR/output/target/usr/sbin/inspect_alsa" \
     2>/dev/null || true
 
 # Clean lingering private keys from previous target builds and set permissions.
@@ -286,6 +288,13 @@ for linux_dir in "$BUILDROOT_DIR"/output/build/linux-*; do
         rm -f "$linux_dir/drivers/char/diosix.c" \
             "$linux_dir/drivers/char/diosix.o"
         sed -i '/obj-y += diosix\.o/d' "$linux_dir/drivers/char/Makefile"
+        DRIVER_CHANGED=0
+        for drv_src in diosix.h diosix.c governance.c net.c; do
+            if ! cmp -s "tools/driver/$drv_src" \
+                "$linux_dir/drivers/char/diosix/$drv_src" 2>/dev/null; then
+                DRIVER_CHANGED=1
+            fi
+        done
         cp tools/driver/diosix.h tools/driver/diosix.c \
             tools/driver/governance.c tools/driver/net.c \
             "$linux_dir/drivers/char/diosix/"
@@ -293,6 +302,16 @@ for linux_dir in "$BUILDROOT_DIR"/output/build/linux-*; do
             > "$linux_dir/drivers/char/diosix/Makefile"
         if ! grep -q "diosix/" "$linux_dir/drivers/char/Makefile"; then
             echo "obj-y += diosix/" >> "$linux_dir/drivers/char/Makefile"
+            DRIVER_CHANGED=1
+        fi
+        if [ "$DRIVER_CHANGED" -eq 1 ] || \
+           [ "$linux_dir/drivers/char/diosix/diosix.c" -nt \
+             "$linux_dir/.stamp_images_installed" ] || \
+           [ "$linux_dir/drivers/char/diosix/diosix.h" -nt \
+             "$linux_dir/.stamp_images_installed" ]; then
+            rm -f "$linux_dir/.stamp_built" \
+                "$linux_dir/.stamp_target_installed" \
+                "$linux_dir/.stamp_images_installed"
         fi
         INJECTED=1
         log_ok "Installed /dev/diosix driver in $(basename "$linux_dir")."

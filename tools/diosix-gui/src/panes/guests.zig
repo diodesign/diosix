@@ -1,11 +1,5 @@
 // Running Guest VMs Pane & Right-Hand Guest Detail/Action Pane for Diosix GUI.
 //
-// Displays all running guest VMs alongside the main menu, occupying half the
-// available horizontal space next to the main menu, with live vCPU, pCPU%, and
-// RAM telemetry updated every 2 seconds (configurable in the Config pane).
-// Selecting a guest opens a detail/action pane to the right with Restart and
-// Shutdown controls (omitted for the Root VM) and attached storage inventory.
-//
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
@@ -50,15 +44,12 @@ pub fn computeGuestPaneGeometry(self: *DiosixGui) GuestPaneGeometry {
         avail_w - guests_w - gap_u
     else
         guests_w;
-
-    const max_h = gui_mod.panes.getMaxPaneHeight(self);
-
     return .{
         .guests_x = guests_x,
         .guests_w = guests_w,
         .detail_x = detail_x,
         .detail_w = detail_w,
-        .max_h = max_h,
+        .max_h = gui_mod.panes.getMaxPaneHeight(self),
     };
 }
 
@@ -278,28 +269,22 @@ pub fn populateGuestDetailWindow(
     _ = try win.addIcon(hdr);
     cur_y += @intCast(row_h + self.scalePx(6));
 
-    const item_x: i32 = @intCast(self.scalePx(10));
-    const menu_w: u32 = if (win.width > @as(u32, @intCast(item_x * 2)))
-        win.width - @as(u32, @intCast(item_x * 2))
-    else
-        inner_w;
-
     try panes_terminal.addGuestDetailTerminalButtons(
         self,
         win,
         guest,
-        item_x,
-        menu_w,
+        pad_x,
+        inner_w,
         item_h,
         &cur_y,
     );
 
     if (!guest.is_root) {
-        var restart_item = Icon.createMenuItem(
+        var restart_item = Icon.createButton(
             gui_mod.ICON_GUEST_RESTART_ID,
-            item_x,
+            pad_x,
             cur_y,
-            menu_w,
+            inner_w,
             item_h,
             "Restart",
         );
@@ -307,13 +292,13 @@ pub fn populateGuestDetailWindow(
         restart_item.setHelpText("Restart the selected guest VM");
         restart_item.callback = onGuestRestartClicked;
         _ = try win.addIcon(restart_item);
-        cur_y += @intCast(item_h + self.scalePx(4));
+        cur_y += @intCast(item_h + self.scalePx(6));
 
-        var shutdown_item = Icon.createMenuItem(
+        var shutdown_item = Icon.createButton(
             gui_mod.ICON_GUEST_SHUTDOWN_ID,
-            item_x,
+            pad_x,
             cur_y,
-            menu_w,
+            inner_w,
             item_h,
             "Shutdown",
         );
@@ -325,7 +310,7 @@ pub fn populateGuestDetailWindow(
         _ = try win.addIcon(shutdown_item);
         cur_y += @intCast(item_h + self.scalePx(10));
     } else {
-        cur_y += @intCast(self.scalePx(6));
+        cur_y += @intCast(self.scalePx(4));
     }
 
     var pcpu_hdr = Icon.createReadOnly(
@@ -458,9 +443,22 @@ pub fn buildGuestDetailPane(self: *DiosixGui) !void {
 }
 
 pub fn updateGuestsPaneData(self: *DiosixGui) void {
+    var prev_buf: [host_info.MAX_RUNNING_GUESTS]host_info.RunningGuest =
+        undefined;
+    const prev_count = if (host_info.guests.hasCachedGuests())
+        host_info.queryRunningGuests(&prev_buf)
+    else
+        0;
     var guests_buf: [host_info.MAX_RUNNING_GUESTS]host_info.RunningGuest =
         undefined;
     const count = host_info.sampleRunningGuests(&guests_buf);
+    if (prev_count > 0) {
+        panes_terminal.reconcileRunningGuests(
+            self,
+            prev_buf[0..prev_count],
+            guests_buf[0..count],
+        );
+    }
 
     const gwin = self.getWindow(WIN_GUESTS_ID) orelse return;
     const old_box = gwin.getBox();

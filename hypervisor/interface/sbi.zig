@@ -87,7 +87,9 @@ pub const CID_SELF: u64 = 1;
 pub const CID_FIRST_CHILD: u64 = 2;
 
 pub const MAX_CHILD_PCPU_QUOTA_PCT: u32 = 90;
+pub const DEFAULT_RETAINED_PCPU_PCT: u32 = 10;
 pub const DEFAULT_CHILD_PCPU_QUOTA_PCT: u32 = 20;
+pub const MAX_GUEST_VCPUS: u32 = 4096;
 
 pub const DEFAULT_VERSION_MAJOR: u16 = 26;
 pub const DEFAULT_VERSION_MINOR: u16 = 1;

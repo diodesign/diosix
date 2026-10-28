@@ -19,6 +19,7 @@ pub const MAX_STOP_SPINS: usize = manifest_mod.MAX_STOP_SPINS;
 pub const STOP_IPI_RETRY_SPINS: usize = manifest_mod.STOP_IPI_RETRY_SPINS;
 
 pub const MAX_CHILD_PCPU_QUOTA_PCT: u32 = sbi.MAX_CHILD_PCPU_QUOTA_PCT;
+pub const DEFAULT_RETAINED_PCPU_PCT: u32 = sbi.DEFAULT_RETAINED_PCPU_PCT;
 pub const DEFAULT_CHILD_PCPU_QUOTA_PCT: u32 = sbi.DEFAULT_CHILD_PCPU_QUOTA_PCT;
 pub const FULL_PCPU_BASIS_POINTS: u64 = 10_000;
 
@@ -37,6 +38,7 @@ pub const QuotaSet = struct {
     max_vcpus: usize = std.math.maxInt(usize),
     used_vcpus: usize = 0,
     pcpu_quota_pct: u32 = 100,
+    retained_pcpu_pct: u32 = DEFAULT_RETAINED_PCPU_PCT,
     delegated_pcpu_pct: u32 = 0,
     window_id: u64 = 0,
     window_ticks_used: u64 = 0,
@@ -47,6 +49,11 @@ pub const QuotaSet = struct {
     max_descendants: usize = std.math.maxInt(usize),
     used_descendants: usize = 0,
 };
+
+pub fn maxChildPcpuPct(self: *const guest_mod.Guest) u32 {
+    const ret = std.math.clamp(self.quotas.retained_pcpu_pct, 1, 99);
+    return 100 -| ret;
+}
 
 // Global guest manager state to encapsulate VMIDs and guest ID counters.
 const GuestManagerState = struct {
@@ -156,17 +163,25 @@ fn applyQuotaToTarget(
 ) !void {
     if (args.pcpu_quota_pct > 0) {
         if (target != ceil) {
-            if (args.pcpu_quota_pct > MAX_CHILD_PCPU_QUOTA_PCT) {
+            const max_child_pct = maxChildPcpuPct(ceil);
+            if (args.pcpu_quota_pct > max_child_pct) {
                 return error.AccessDenied;
             }
             const req_pct: u32 = @intCast(args.pcpu_quota_pct);
             const other_pct =
                 ceil.quotas.delegated_pcpu_pct -| target.quotas.pcpu_quota_pct;
-            if (other_pct + req_pct > MAX_CHILD_PCPU_QUOTA_PCT) {
+            if (other_pct + req_pct > max_child_pct) {
                 return error.AccessDenied;
             }
             target.quotas.pcpu_quota_pct = req_pct;
             ceil.quotas.delegated_pcpu_pct = other_pct + req_pct;
+        } else if (target.is_root) {
+            if (args.pcpu_quota_pct > 99) return error.InvalidParam;
+            const req_ret: u32 = @intCast(args.pcpu_quota_pct);
+            if (req_ret + target.quotas.delegated_pcpu_pct > 100) {
+                return error.AccessDenied;
+            }
+            target.quotas.retained_pcpu_pct = req_ret;
         } else {
             const req_pct: u32 = @intCast(@min(args.pcpu_quota_pct, 100));
             target.quotas.pcpu_quota_pct =
@@ -261,35 +276,55 @@ fn applyQuotaToTarget(
     }
 
     if (args.max_vcpus > 0) {
+        if (args.max_vcpus > guest_mod.max_vcores) return error.InvalidParam;
         const max_v: usize = @min(
             ceil.quotas.max_vcpus,
             @as(usize, @intCast(args.max_vcpus)),
         );
-        target.quotas.max_vcpus = @min(target.quotas.max_vcpus, max_v);
+        target.quotas.max_vcpus = max_v;
         if (target != ceil) {
             const cur_vcpus = target.vcores.count();
             if (!target.hasAnyVcoreStarted() and
                 target.quotas.max_vcpus > cur_vcpus)
             {
                 const extra = target.quotas.max_vcpus - cur_vcpus;
-                if (ceil.checkVcpuQuota(extra)) {
-                    var added: usize = 0;
-                    for (cur_vcpus..target.quotas.max_vcpus) |vid| {
-                        _ = target.addVcore(vid, 0, 0, .normal, null) catch
-                            break;
-                        added += 1;
+                if (!ceil.checkVcpuQuota(extra)) return error.AccessDenied;
+                var added: usize = 0;
+                errdefer if (added > 0) {
+                    target.quotas.used_vcpus += added;
+                    var p = target.parent;
+                    while (p) |anc| : (p = anc.parent) {
+                        _ = @atomicRmw(
+                            usize,
+                            &anc.quotas.used_vcpus,
+                            .Add,
+                            added,
+                            .monotonic,
+                        );
                     }
-                    if (added > 0) {
-                        var p = target.parent;
-                        while (p) |anc| : (p = anc.parent) {
-                            _ = @atomicRmw(
-                                usize,
-                                &anc.quotas.used_vcpus,
-                                .Add,
-                                added,
-                                .monotonic,
-                            );
-                        }
+                };
+                for (cur_vcpus..target.quotas.max_vcpus) |vid| {
+                    const vc = target.addVcore(
+                        vid,
+                        0,
+                        0,
+                        .normal,
+                        null,
+                    ) catch return error.OutOfMemory;
+                    vc.state = .stopped;
+                    added += 1;
+                }
+                if (added > 0) {
+                    target.quotas.used_vcpus += added;
+                    var p = target.parent;
+                    while (p) |anc| : (p = anc.parent) {
+                        _ = @atomicRmw(
+                            usize,
+                            &anc.quotas.used_vcpus,
+                            .Add,
+                            added,
+                            .monotonic,
+                        );
                     }
                 }
             }
@@ -383,16 +418,24 @@ pub fn consumeQuota(
     ram_pages: usize,
     vcpus: usize,
 ) void {
-    self.quotas.used_ram_pages = std.math.add(
-        usize,
-        self.quotas.used_ram_pages,
-        ram_pages,
-    ) catch self.quotas.max_ram_pages;
-    self.quotas.used_vcpus = std.math.add(
-        usize,
-        self.quotas.used_vcpus,
-        vcpus,
-    ) catch self.quotas.max_vcpus;
+    if (ram_pages > 0) {
+        _ = @atomicRmw(
+            usize,
+            &self.quotas.used_ram_pages,
+            .Add,
+            ram_pages,
+            .monotonic,
+        );
+    }
+    if (vcpus > 0) {
+        _ = @atomicRmw(
+            usize,
+            &self.quotas.used_vcpus,
+            .Add,
+            vcpus,
+            .monotonic,
+        );
+    }
     if (self.parent) |p| p.consumeQuota(ram_pages, vcpus);
 }
 
@@ -401,8 +444,24 @@ pub fn releaseQuota(
     ram_pages: usize,
     vcpus: usize,
 ) void {
-    self.quotas.used_ram_pages -|= ram_pages;
-    self.quotas.used_vcpus -|= vcpus;
+    if (ram_pages > 0) {
+        _ = @atomicRmw(
+            usize,
+            &self.quotas.used_ram_pages,
+            .Sub,
+            @min(ram_pages, self.quotas.used_ram_pages),
+            .monotonic,
+        );
+    }
+    if (vcpus > 0) {
+        _ = @atomicRmw(
+            usize,
+            &self.quotas.used_vcpus,
+            .Sub,
+            @min(vcpus, self.quotas.used_vcpus),
+            .monotonic,
+        );
+    }
     if (self.parent) |p| p.releaseQuota(ram_pages, vcpus);
 }
 

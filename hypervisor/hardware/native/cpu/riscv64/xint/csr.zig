@@ -198,11 +198,10 @@ fn emulateWfi(vc: *vcore.VirtualCore) void {
 
     // Do not block if virtual or physical interrupts are already pending.
     const gs = vc.getNativeGuestState();
-    const timer_expired = (gs.vstimecmp != 0 and
-        gs.vstimecmp != riscv.TIMER_INFINITY and
-        riscv.readTime() >= gs.vstimecmp);
-    const virt_mask =
-        riscv.HVIP.VSSIP | riscv.HVIP.VSTIP | riscv.HVIP.VSEIP;
+    const timer_armed = @import("interrupt.zig").isGuestTimerArmed(gs);
+    const timer_expired = timer_armed and (riscv.readTime() >= gs.vstimecmp);
+    const virt_mask: usize = riscv.HVIP.VSSIP | riscv.HVIP.VSEIP |
+        (if (timer_armed) riscv.HVIP.VSTIP else 0);
     const has_ipi = @atomicLoad(bool, &vc.pending_ipi, .acquire);
     const ipi_bit: usize = if (has_ipi) riscv.HVIP.VSSIP else 0;
     const pending_virt =
@@ -229,6 +228,7 @@ fn emulateWfi(vc: *vcore.VirtualCore) void {
     // sees running_on_cpu != null.
     scheduler.accountRuntime(vc);
     vc.running_on_cpu = null;
+    @atomicStore(u64, &vc.last_dispatched_time, 0, .monotonic);
     pcpu.active_vcore = null;
     vc.last_queued_time = riscv.readTime();
     const b_wfi_prev = pcpu.blocked_lock.lock();

@@ -35,6 +35,7 @@ pub const discardGuestSshSession = state_mod.discardGuestSshSession;
 pub const onTerminalNavigateBack = state_mod.onTerminalNavigateBack;
 pub const pollTerminal = state_mod.pollTerminal;
 pub const isTerminalWindowOpen = state_mod.isTerminalWindowOpen;
+pub const reconcileRunningGuests = state_mod.reconcileRunningGuests;
 
 const BORDER_GAP = gui_mod.BORDER_GAP;
 
@@ -90,7 +91,7 @@ pub fn addGuestDetailTerminalButtons(
     else
         (if (has_live) "Reopen SSH terminal" else "Open new SSH terminal");
 
-    var ssh_item = Icon.createMenuItem(
+    var ssh_item = Icon.createButton(
         ICON_GUEST_SSH_ID,
         item_x,
         cur_y.*,
@@ -104,16 +105,21 @@ pub fn addGuestDetailTerminalButtons(
     );
     ssh_item.callback = onOpenSshClicked;
     _ = try win.addIcon(ssh_item);
-    cur_y.* += @intCast(item_h + self.scalePx(4));
+    cur_y.* += @intCast(item_h + self.scalePx(6));
 
     if (!guest.is_root) {
-        var con_item = Icon.createMenuItem(
+        const has_con = state_mod.hasLiveConsoleSession(self, guest.cid);
+        const con_label = if (has_con)
+            "Reopen serial console"
+        else
+            "Open serial console";
+        var con_item = Icon.createButton(
             ICON_GUEST_CONSOLE_ID,
             item_x,
             cur_y.*,
             menu_w,
             item_h,
-            "Open serial console",
+            con_label,
         );
         con_item.user_tag = @intCast(guest.cid);
         con_item.setHelpText(
@@ -121,7 +127,7 @@ pub fn addGuestDetailTerminalButtons(
         );
         con_item.callback = onOpenConsoleClicked;
         _ = try win.addIcon(con_item);
-        cur_y.* += @intCast(item_h + self.scalePx(4));
+        cur_y.* += @intCast(item_h + self.scalePx(6));
     }
 }
 
@@ -132,7 +138,7 @@ pub fn openGuestTerminal(
 ) !void {
     const grid_sz = state_mod.computeViewportGrid(self);
     if (self.terminal.active) {
-        if (mode == .ssh and self.terminal.mode == .ssh and
+        if (self.terminal.mode == mode and
             !self.terminal.exited and self.terminal.target_cid == cid)
         {
             self.terminal.resizeGrid(grid_sz.cols, grid_sz.rows);
@@ -142,10 +148,9 @@ pub fn openGuestTerminal(
     }
 
     if (!self.terminal.active) {
-        if (mode == .ssh and state_mod.restoreBgSshSession(self, cid)) {
+        if (state_mod.restoreBgSession(self, cid, mode)) {
             self.terminal.resizeGrid(grid_sz.cols, grid_sz.rows);
         } else {
-            if (mode == .ssh) discardGuestSshSession(self, cid);
             var name_buf: [host_info.GUEST_NAME_BYTES]u8 = undefined;
             const guest_name = state_mod.findGuestNameByCid(cid, &name_buf);
             self.terminal.cols = grid_sz.cols;

@@ -154,6 +154,13 @@ fn renderWindowOnSurface(
         win.render(surface, getPopupOpacityAlpha(self));
         return;
     }
+    if (win.id == gui_mod.WIN_POWER_MODAL_ID or
+        win.is_modal or
+        gui_mod.panes.isTaskWindowId(win.id))
+    {
+        win.render(surface, getAttentionOpacityAlpha(self));
+        return;
+    }
     win.render(surface, win_alpha);
     if (win.id == gui_mod.WIN_TERMINAL_ID) {
         gui_mod.panes.renderTerminalOverlay(self, surface, win);
@@ -271,6 +278,15 @@ pub fn getWindowOpacityAlpha(self: *const DiosixGui) u8 {
 pub fn getPopupOpacityAlpha(self: *const DiosixGui) u8 {
     const popup_trans = @min(@as(u32, 100), self.window_transparency / 5);
     const opacity_pct: u32 = 100 - popup_trans;
+    return @intCast((opacity_pct * 255) / 100);
+}
+
+/// Returns the opacity alpha for attention panes (restart/shutdown confirmation
+/// modals and task/crash notifications), using a quarter of the configured
+/// transparency rounded down to 0 (`window_transparency / 4`).
+pub fn getAttentionOpacityAlpha(self: *const DiosixGui) u8 {
+    const attn_trans = @min(@as(u32, 100), self.window_transparency / 4);
+    const opacity_pct: u32 = 100 - attn_trans;
     return @intCast((opacity_pct * 255) / 100);
 }
 

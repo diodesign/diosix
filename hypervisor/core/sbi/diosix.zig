@@ -262,6 +262,7 @@ fn handleSetQuota(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         const code = switch (err) {
             error.AccessDenied => sbi_core.SBI_ERR_DENIED,
             error.InvalidParam => sbi_core.SBI_ERR_INVALID_PARAM,
+            error.OutOfMemory => sbi_core.SBI_ERR_FAILED,
         };
         reply(vc, ctx, code, 0);
         return;

@@ -474,6 +474,7 @@ pub const DiosixGui = struct {
     pub const setWindowTransparency = gui_render.setWindowTransparency;
     pub const getWindowOpacityAlpha = gui_render.getWindowOpacityAlpha;
     pub const getPopupOpacityAlpha = gui_render.getPopupOpacityAlpha;
+    pub const getAttentionOpacityAlpha = gui_render.getAttentionOpacityAlpha;
     pub const setBackdropTopColor = gui_render.setBackdropTopColor;
     pub const setBackdropBotColor = gui_render.setBackdropBotColor;
     pub const setBackdropScheme = gui_render.setBackdropScheme;

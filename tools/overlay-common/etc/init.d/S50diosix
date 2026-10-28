@@ -165,8 +165,22 @@ case "$1" in
                 --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
         fi
     else
-        echo "Diosix guest VM (CID ${SELF_CID})" \
+        echo "Diosix Base Linux (CID ${SELF_CID})" \
             > /etc/issue 2>/dev/null || true
+        GUEST_HOST="diosix-base-linux"
+        MANIFEST_NAME=""
+        if [ -n "$DSX_BIN" ]; then
+            MANIFEST_NAME=$("$DSX_BIN" manifest show --cid 1 --hv 2>/dev/null | \
+                sed -n 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | \
+                head -n 1 | tr -cd 'A-Za-z0-9-')
+        fi
+        echo "$GUEST_HOST" > /etc/hostname 2>/dev/null || true
+        hostname "$GUEST_HOST" 2>/dev/null || true
+        if [ -n "$MANIFEST_NAME" ] && [ "$MANIFEST_NAME" != "$GUEST_HOST" ]; then
+            echo "127.0.1.1 $GUEST_HOST $MANIFEST_NAME" >> /etc/hosts 2>/dev/null || true
+        else
+            echo "127.0.1.1 $GUEST_HOST" >> /etc/hosts 2>/dev/null || true
+        fi
         # Child VM: Route through parent VM (10.0.3.1).
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
         ip route add default via "$CHILD_GW" dev diosix0 2>/dev/null || \
@@ -204,7 +218,11 @@ case "$1" in
     mkdir -p "${STATE_DIR}/images" "${STATE_DIR}/iso"
     rm -f "${STATE_DIR}/images/micro-guest."* \
         "${STATE_DIR}/iso/micro-guest."* 2>/dev/null || true
-    GUEST_ELF="${STATE_DIR}/images/diosix-linux.elf"
+    OLD_GUEST_ELF="${STATE_DIR}/images/diosix-linux.elf"
+    GUEST_ELF="${STATE_DIR}/images/diosix-base-linux.elf"
+    if [ -f "$OLD_GUEST_ELF" ] && [ ! -f "$GUEST_ELF" ]; then
+        mv "$OLD_GUEST_ELF" "$GUEST_ELF" 2>/dev/null || true
+    fi
     if [ -f "$GUEST_ELF" ]; then
         ln -sf "$GUEST_ELF" \
             "${STATE_DIR}/images/default.elf" 2>/dev/null || true
