@@ -28,8 +28,6 @@ const unmapBinaryFile = common.unmapBinaryFile;
 /// public key line is a few hundred bytes, so one page is ample.
 const MAX_PUBKEY_FILE_SIZE: usize = 4096;
 
-pub const FALLBACK_GUEST_ISO_PATH = sysconfig.FALLBACK_GUEST_ISO_PATH;
-
 const ImageAlias = enum {
     @"guest-shim",
     @"guest-shim.elf",
@@ -55,11 +53,7 @@ fn readCandidate(
 ) error{OutOfMemory}!?[]u8 {
     const path = try allocator.print("{s}/{s}{s}", .{ dir, name, ext });
     defer allocator.free(path);
-    if (readBinaryFile(path, MAX_ELF_FILE_SIZE)) |data| {
-        return data;
-    } else |_| {
-        return null;
-    }
+    return readBinaryFile(path, MAX_ELF_FILE_SIZE) catch null;
 }
 
 pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
@@ -68,7 +62,7 @@ pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
     if (std.meta.stringToEnum(ImageAlias, elf_path)) |alias| {
         const default_paths = [_][]const u8{
             loader.DEFAULT_GUEST_IMAGE_PATH,
-            "/var/lib/diosix/images/diosix-linux.elf",
+            sysconfig.LEGACY_GUEST_IMAGE_PATH,
             loader.FALLBACK_GUEST_IMAGE_PATH,
         };
         switch (alias) {
@@ -82,27 +76,13 @@ pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
                         return data;
                     } else |_| {}
                 }
-                for (default_paths) |cand| {
-                    if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
-                        return data;
-                    } else |_| {}
-                }
             },
-            .default,
-            .@"default.elf",
-            .@"default.bin",
-            .@"diosix-base-linux",
-            .@"diosix-base-linux.elf",
-            .@"base-linux",
-            .@"diosix-linux",
-            .@"diosix-linux.elf",
-            => {
-                for (default_paths) |cand| {
-                    if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
-                        return data;
-                    } else |_| {}
-                }
-            },
+            else => {},
+        }
+        for (default_paths) |cand| {
+            if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
+                return data;
+            } else |_| {}
         }
     }
 
@@ -131,8 +111,6 @@ pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
     }
     return null;
 }
-
-pub const stageGuestConfig = stageChildVmManifest;
 
 pub fn stageChildVmManifest(
     allocator: std.mem.Allocator,
@@ -383,6 +361,8 @@ pub fn checkChildResourceQuota(
         return null;
     }
 
+    const self_ram_mb = (info.self_ram_pages * common.PAGE_SIZE_KB) /
+        common.KB_PER_MB;
     const max_ram_mb = (info.max_ram_pages * common.PAGE_SIZE_KB) /
         common.KB_PER_MB;
     const del_ram_mb = (info.delegated_ram_pages * common.PAGE_SIZE_KB) /
@@ -390,7 +370,10 @@ pub fn checkChildResourceQuota(
     const used_ram_mb = (info.used_ram_pages * common.PAGE_SIZE_KB) /
         common.KB_PER_MB;
     if (max_ram_mb > 0 and max_ram_mb < std.math.maxInt(usize) / 2) {
-        const avail_ram_mb = max_ram_mb -| @max(del_ram_mb, used_ram_mb);
+        const avail_ram_mb = if (info.is_root != 0)
+            max_ram_mb -| @max(del_ram_mb, used_ram_mb)
+        else
+            max_ram_mb -| @max(self_ram_mb +| del_ram_mb, used_ram_mb);
         if (ram_quota_mb > avail_ram_mb) {
             common.printFmt(
                 "Error: Create child VM failed: RAM quota exhausted " ++

@@ -181,15 +181,15 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
 *   `--name <name>` / `-n <name>` *(optional)*: Friendly name for the VM
     (defaults to the domain name or image name).
 *   `--vcpus <N>` *(optional)*: Logical virtual CPU cores exposed in the child's
-    Device Tree (default: 1).
+    Device Tree (`1 .. 4096`; default: 1).
 *   `--ram <size>` *(optional)*: Logical RAM size exposed in the child's Device
-    Tree (e.g. `256M`, `2GiB`).
-*   `--pcpu <1-90>` / `--pcpu-quota <1-90>` *(optional)*: Physical CPU time
-    percentage granted to the child VM and its subtree (`1% .. 90%`; total
-    across all direct children cannot exceed `90%`).
+    Tree (e.g. `256M`, `2GiB`; must be a subset of `--ram-quota`).
+*   `--pcpu <1-99>` / `--pcpu-quota <1-99>` *(optional)*: Physical CPU time
+    pool percentage granted to the child VM and its subtree (`1% .. 99%`,
+    bounded by the parent's available pCPU pool).
 *   `--ram-quota <size>` *(optional)*: Physical RAM quota pool granted to the
-    child VM and its subtree (defaults to `--ram`). H-extension guests are
-    demand-paged from this pool and may be overprovisioned relative to `--ram`.
+    child VM and its subtree (defaults to `--ram`, and is clamped to at least
+    `--ram` so the VM's own RAM is always a subset of its RAM pool).
 *   `--disk <name|size>` / `-d <name|size>` *(optional)*: Attaches an existing
     virtual disk by name (e.g. `--disk user-data`), or auto-provisions and
     formats an ext4 virtual disk of the specified size (e.g. `--disk 1G`).
@@ -371,18 +371,22 @@ invoked without modification flags, displays the current physical RAM quota
 pool, pCPU time percentages, and logical resource configuration.
 
 ```bash
-dsx quota [cid|self] [--pcpu <1-90>] [--ram <MB>] [--vcpus <N>] \
-    [--depth <N>] [--descendants <N>]
+dsx quota [cid|self] [--pcpu <1-99>] [--retained-pcpu <1-99>] [--ram <MB>] \
+    [--vcpus <N>] [--depth <N>] [--descendants <N>]
 ```
 
 *   `cid|self` *(optional)*: Target VM to inspect or configure
     (default: `self`).
-*   `--pcpu <1-90>` *(optional)*: Adjusts physical CPU time percentage granted
-    to a direct child VM (`1% .. 90%`, subject to the 90% total child cap).
+*   `--pcpu <1-99>` *(optional)*: Adjusts physical CPU time pool percentage
+    granted to a direct child VM (`1% .. 99%`, bounded by the parent's
+    available pCPU pool).
+*   `--retained-pcpu <1-99>` *(optional)*: On the Root VM (`self`), adjusts the
+    physical CPU time percentage retained for the Root VM (`1% .. 99%`, default:
+    `10%`), leaving `100% - retained` in the child delegation pool.
 *   `--ram <MB>` *(optional)*: Adjusts the physical RAM quota pool in megabytes.
     Dialing a running child VM's RAM quota below its currently in-use physical
     memory triggers an Out-Of-Memory (OOM) termination of that child.
-*   `--vcpus <N>` *(optional)*: Sets maximum logical vCPU ceiling.
+*   `--vcpus <N>` *(optional)*: Sets maximum logical vCPU ceiling (`1 .. 4096`).
 *   `--depth <N>` *(optional)*: Sets maximum child nesting depth.
 *   `--descendants <N>` *(optional)*: Sets maximum descendant VM count.
 

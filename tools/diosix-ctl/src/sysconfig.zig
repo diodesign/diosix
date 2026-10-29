@@ -55,6 +55,7 @@ pub const AUTHORIZED_PASSKEYS_PATH =
     "/var/lib/diosix/keys/authorized_passkeys";
 pub const DEV_AUTHORIZED_KEYS_PATH = "/var/lib/diosix/keys/authorized_keys";
 pub const DEFAULT_SCREENSHOT_PATH = "/var/lib/diosix/screenshot.bmp";
+pub const DEFAULT_RAW_SCREENSHOT_PATH = "/tmp/diosix-screen.raw";
 
 // Root SSH key paths.
 pub const ROOT_SSH_DIR = "/root/.ssh";
@@ -74,6 +75,8 @@ pub const STEWARD_DEFAULT_KERNELS = [_][]const u8{
 };
 pub const DEFAULT_GUEST_IMAGE_PATH =
     "/var/lib/diosix/images/diosix-base-linux.elf";
+pub const LEGACY_GUEST_IMAGE_PATH =
+    "/var/lib/diosix/images/diosix-linux.elf";
 pub const LINUX_GUEST_IMAGE_PATH = "/var/lib/diosix/images/Image";
 pub const FALLBACK_GUEST_IMAGE_PATH = "/boot/guest-default.bin";
 pub const FALLBACK_GUEST_ISO_PATH = "/boot/guest-default.iso";
@@ -110,6 +113,7 @@ pub const CANDIDATE_HOST_DISKS = [_][]const u8{
     "/dev/sda",
 };
 pub const TMP_DIR_PREFIX = "/tmp";
+pub const TMP_SLASH_PREFIX = "/tmp/";
 pub const DEV_DIR_PREFIX = "/dev/";
 
 // System utility binary search paths and canonical tool paths.

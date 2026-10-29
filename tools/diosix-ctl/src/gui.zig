@@ -123,7 +123,7 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             }
         },
         .screenshot => {
-            var out_path: []const u8 = "/tmp/diosix-screen.raw";
+            var out_path: []const u8 = sysconfig.DEFAULT_RAW_SCREENSHOT_PATH;
             if (args.len >= 2 and
                 !std.mem.startsWith(u8, std.mem.span(args[1]), "-"))
             {

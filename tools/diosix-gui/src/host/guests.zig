@@ -344,7 +344,7 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
         var cid: u64 = sbi.CID_FIRST_CHILD;
         while (count - 1 < expected_children and
             count < MAX_RUNNING_GUESTS and
-            cid < sbi.CID_FIRST_CHILD + MAX_RUNNING_GUESTS) : (cid += 1)
+            cid < sbi.CID_FIRST_CHILD + proc.MAX_TRACKED_CIDS) : (cid += 1)
         {
             var present = false;
             for (1..count) |i| if (out[i].cid == cid) {

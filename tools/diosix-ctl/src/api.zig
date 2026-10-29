@@ -159,17 +159,6 @@ pub const DiosixClient = struct {
             @intCast(signed_rc);
     }
 
-    pub fn spawn(
-        self: *DiosixClient,
-        child_id: usize,
-        elf_data: []const u8,
-        dtb_data: []const u8,
-        arch: usize,
-        flags: usize,
-    ) !usize {
-        return self.run(child_id, elf_data, dtb_data, arch, flags);
-    }
-
     pub fn terminate(
         self: *DiosixClient,
         target_id: usize,
@@ -187,47 +176,6 @@ pub const DiosixClient = struct {
 
     pub fn exit(self: *DiosixClient, code: usize) void {
         _ = self.terminate(0, code) catch {};
-    }
-
-    pub fn waitEvent(
-        self: *DiosixClient,
-        target_cid: usize,
-        nohang: bool,
-    ) !?Event {
-        const fd = try self.getFd();
-        var args = WaitEventArgs{
-            .target_cid = target_cid,
-            .flags = if (nohang) 1 else 0,
-            .event = std.mem.zeroes(Event),
-        };
-        const rc = linux.ioctl(fd, IOCTL_WAIT_EVENT, @intFromPtr(&args));
-        const signed_rc: isize = @bitCast(rc);
-        if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) {
-            return error.PermissionDenied;
-        }
-        // -EAGAIN on non-blocking check.
-        if (signed_rc == EAGAIN_NEG) return null;
-        if (signed_rc < 0) return error.HypercallFailed;
-        return args.event;
-    }
-
-    pub fn setQuota(
-        self: *DiosixClient,
-        target_cid: usize,
-        ram_pages: usize,
-        vcpus: usize,
-        depth: usize,
-        descendants: usize,
-    ) !void {
-        return self.setQuotaWithPcpu(
-            target_cid,
-            ram_pages,
-            vcpus,
-            depth,
-            descendants,
-            0,
-            0,
-        );
     }
 
     pub fn setQuotaWithPcpu(

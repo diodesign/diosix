@@ -10,7 +10,7 @@ const label = @import("../label.zig");
 const mem_size = @import("mem.zig");
 
 pub const MAX_FILE_READ_BYTES: usize = 16384;
-pub const MAX_TRACKED_CIDS: usize = 64;
+pub const MAX_TRACKED_CIDS: usize = 128;
 pub const STORAGE_LABEL_BYTES: usize = 64;
 pub const MAX_GUEST_STORAGE: usize = 6;
 pub const GUEST_NAME_BYTES: usize = 48;
@@ -102,10 +102,13 @@ pub fn resetCpuSamples() void {
     last_proc_pct = 0;
 }
 
+fn getSampleSlotIndex(cid: u64) usize {
+    if (cid < MAX_TRACKED_CIDS) return @intCast(cid);
+    return @intCast(32 + (cid % (MAX_TRACKED_CIDS - 32)));
+}
+
 pub fn resetGuestCpuSample(cid: u64) void {
-    if (cid < MAX_TRACKED_CIDS) {
-        hv_cpu_samples[@intCast(cid)] = .{};
-    }
+    hv_cpu_samples[getSampleSlotIndex(cid)] = .{};
 }
 
 pub fn readSmallFile(path: [*:0]const u8, buf: []u8) []const u8 {
@@ -134,7 +137,7 @@ fn monotonicNowNs() i128 {
 }
 
 pub fn computeHvCpuPercent(cid: u64, khz_ticks: u32, vcpus: u32) u32 {
-    const slot: usize = if (cid < MAX_TRACKED_CIDS) @intCast(cid) else 0;
+    const slot = getSampleSlotIndex(cid);
     const now_ns = monotonicNowNs();
     var sample = &hv_cpu_samples[slot];
     if (!sample.has_sample or now_ns <= sample.prev_ns) {
@@ -170,7 +173,7 @@ pub fn computeHvCpuPercent(cid: u64, khz_ticks: u32, vcpus: u32) u32 {
 }
 
 pub fn pushPcpuHistorySample(cid: u64, pct: u32) void {
-    const slot: usize = if (cid < MAX_TRACKED_CIDS) @intCast(cid) else 0;
+    const slot = getSampleSlotIndex(cid);
     var sample = &hv_cpu_samples[slot];
     const clamped: u8 = @intCast(@min(@as(u32, 100), pct));
     if (sample.history_len < PCPU_HISTORY_LEN) {
@@ -187,7 +190,7 @@ pub fn pushPcpuHistorySample(cid: u64, pct: u32) void {
 }
 
 pub fn copyPcpuHistory(cid: u64, out: *[PCPU_HISTORY_LEN]u8) u8 {
-    const slot: usize = if (cid < MAX_TRACKED_CIDS) @intCast(cid) else 0;
+    const slot = getSampleSlotIndex(cid);
     const sample = &hv_cpu_samples[slot];
     const len: usize = @min(@as(usize, sample.history_len), PCPU_HISTORY_LEN);
     @memcpy(out[0..len], sample.history[0..len]);
@@ -293,10 +296,10 @@ pub fn collectRootStorage(
             const mnt = tok_it.next() orelse continue;
             const fstype = tok_it.next() orelse "";
 
-            if (std.mem.startsWith(u8, dev, "/dev/") and
-                !std.mem.startsWith(u8, dev, "/dev/pts") and
-                !std.mem.startsWith(u8, dev, "/dev/shm") and
-                !std.mem.startsWith(u8, dev, "/dev/loop"))
+            if (std.mem.startsWith(u8, dev, paths.DEV_DIR_PREFIX) and
+                !std.mem.startsWith(u8, dev, paths.DEV_PTS_PREFIX) and
+                !std.mem.startsWith(u8, dev, paths.DEV_SHM_PREFIX) and
+                !std.mem.startsWith(u8, dev, paths.DEV_LOOP_PREFIX))
             {
                 if (std.mem.eql(u8, mnt, "/")) has_root_mount = true;
                 const s = label.fmtLabel(&out_bufs[count], "{s} ({s})", .{
@@ -333,7 +336,11 @@ pub fn collectRootStorage(
             }
 
             var dev_buf: [48]u8 = undefined;
-            const dev_path = label.fmtLabel(&dev_buf, "/dev/{s}", .{name});
+            const dev_path = label.fmtLabel(
+                &dev_buf,
+                paths.DEV_NODE_FMT,
+                .{name},
+            );
             var already_listed = false;
             for (0..count) |i| {
                 const existing = out_bufs[i][0..out_lens[i]];

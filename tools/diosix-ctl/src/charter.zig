@@ -95,10 +95,6 @@ pub const ParsedCharter = struct {
         return self.id_buf[0..self.id_len];
     }
 
-    pub fn principalPubkey(self: *const ParsedCharter) []const u8 {
-        return self.principal_pubkey_buf[0..self.principal_pubkey_len];
-    }
-
     pub fn findUnit(
         self: *const ParsedCharter,
         unit_id: []const u8,

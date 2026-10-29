@@ -153,13 +153,6 @@ pub const Box = struct {
     }
 };
 
-pub const Rect = struct {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-};
-
 // Fast ARGB pixel alpha blend.
 pub fn blendPixel(bg: u32, fg: u32, alpha: u8) u32 {
     if (alpha == 255) return fg;
@@ -202,15 +195,6 @@ pub const Surface = struct {
         return self.stride / @sizeOf(u32);
     }
 
-    pub fn setClip(self: *Surface, box: Box) void {
-        const screen_box = Box.fromPosSize(0, 0, self.width, self.height);
-        self.clip = box.intersect(screen_box);
-    }
-
-    pub fn resetClip(self: *Surface) void {
-        self.clip = Box.fromPosSize(0, 0, self.width, self.height);
-    }
-
     pub fn pushClip(self: *Surface, box: Box) Box {
         const prev = self.clip;
         self.clip = prev.intersect(box);
@@ -248,55 +232,6 @@ pub const Surface = struct {
             const row_offset = @as(usize, @intCast(y)) * pixels_per_row +
                 @as(usize, @intCast(active.x0));
             @memset(self.pixels[row_offset .. row_offset + fill_len], color);
-        }
-    }
-
-    pub fn fillRect(self: *Surface, rect: Rect, color: u32) void {
-        const box = Box.fromPosSize(rect.x, rect.y, rect.width, rect.height);
-        self.fillBox(box, color);
-    }
-
-    pub fn drawBoxOutline(
-        self: *Surface,
-        box: Box,
-        thick: u32,
-        color: u32,
-    ) void {
-        const t = @as(i32, @intCast(thick));
-        if (t <= 0) return;
-        const x0 = box.x0;
-        const x1 = box.x1;
-        const top = Box{ .x0 = x0, .y0 = box.y0, .x1 = x1, .y1 = box.y0 + t };
-        const bot = Box{ .x0 = x0, .y0 = box.y1 - t, .x1 = x1, .y1 = box.y1 };
-        self.fillBox(top, color);
-        self.fillBox(bot, color);
-        const y0 = box.y0 + t;
-        const y1 = box.y1 - t;
-        const left = Box{ .x0 = x0, .y0 = y0, .x1 = x0 + t, .y1 = y1 };
-        const right = Box{ .x0 = x1 - t, .y0 = y0, .x1 = x1, .y1 = y1 };
-        self.fillBox(left, color);
-        self.fillBox(right, color);
-    }
-
-    pub fn drawFilledCircle(
-        self: *Surface,
-        cx: i32,
-        cy: i32,
-        r: i32,
-        color: u32,
-    ) void {
-        if (r <= 0) {
-            self.setPixel(cx, cy, color);
-            return;
-        }
-        var dy = -r;
-        while (dy <= r) : (dy += 1) {
-            var dx = -r;
-            while (dx <= r) : (dx += 1) {
-                if (dx * dx + dy * dy <= r * r) {
-                    self.setPixel(cx + dx, cy + dy, color);
-                }
-            }
         }
     }
 

@@ -73,7 +73,7 @@ fn unquoteTomlValue(raw: []const u8) []const u8 {
 pub fn isValidBlockDevicePath(path: []const u8) bool {
     if (path.len < 6 or path.len > 128) return false;
     if (!std.mem.startsWith(u8, path, sysconfig.DEV_DIR_PREFIX) and
-        !std.mem.startsWith(u8, path, "/tmp/") and
+        !std.mem.startsWith(u8, path, sysconfig.TMP_SLASH_PREFIX) and
         !std.mem.startsWith(u8, path, sysconfig.VAR_LIB_DIOSIX_PREFIX))
     {
         return false;

@@ -125,19 +125,6 @@ pub fn drawText(
     drawTextWithAlpha(surface, text, x, y, color, 255);
 }
 
-/// Draws antialiased Questrial text with 1px drop shadow.
-pub fn drawTextWithShadow(
-    surface: *fb.Surface,
-    text: []const u8,
-    x: i32,
-    y: i32,
-    fg_color: u32,
-    shadow_color: u32,
-) void {
-    drawText(surface, text, x + 1, y + 1, shadow_color);
-    drawText(surface, text, x, y, fg_color);
-}
-
 /// Renders antialiased Questrial text at explicit pixel line height `height_px`
 /// modulated by `master_alpha` (0 - 255).
 pub fn drawTextAtHeightWithAlpha(
@@ -218,21 +205,6 @@ pub fn drawTextWithAlpha(
     );
 }
 
-/// Draws antialiased Questrial text with 1px drop shadow modulated by alpha.
-pub fn drawTextWithShadowAlpha(
-    surface: *fb.Surface,
-    text: []const u8,
-    x: i32,
-    y: i32,
-    fg_color: u32,
-    shadow_color: u32,
-    master_alpha: u8,
-) void {
-    if (master_alpha == 0) return;
-    drawTextWithAlpha(surface, text, x + 1, y + 1, shadow_color, master_alpha);
-    drawTextWithAlpha(surface, text, x, y, fg_color, master_alpha);
-}
-
 /// Measures exact rendered pixel width of `text` at `height_px`.
 pub fn measureStringAtHeight(text: []const u8, height_px: u32) u32 {
     var cur_w: u32 = 0;
@@ -279,29 +251,6 @@ pub fn drawTextScaled(
         @divTrunc(active_line_height * scale_num + (scale_den / 2), scale_den),
     );
     drawTextAtHeightWithAlpha(surface, text, x, y, color, 255, target_h);
-}
-
-/// Draws antialiased scaled Questrial text with 1px drop shadow.
-pub fn drawTextScaledWithShadow(
-    surface: *fb.Surface,
-    text: []const u8,
-    x: i32,
-    y: i32,
-    fg_color: u32,
-    shadow_color: u32,
-    scale_num: u32,
-    scale_den: u32,
-) void {
-    drawTextScaled(
-        surface,
-        text,
-        x + 1,
-        y + 1,
-        shadow_color,
-        scale_num,
-        scale_den,
-    );
-    drawTextScaled(surface, text, x, y, fg_color, scale_num, scale_den);
 }
 
 pub const MAX_WRAPPED_LINES: usize = 16;

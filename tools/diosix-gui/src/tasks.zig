@@ -177,13 +177,6 @@ pub const TaskManager = struct {
         return count;
     }
 
-    pub fn hasRunningTasks(self: *const TaskManager) bool {
-        for (&self.entries) |*e| {
-            if (e.active and e.state == .running) return true;
-        }
-        return false;
-    }
-
     pub fn findById(self: *TaskManager, task_id: u32) ?*TaskEntry {
         for (&self.entries) |*e| {
             if (e.active and e.id == task_id) return e;

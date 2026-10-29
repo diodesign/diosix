@@ -229,7 +229,7 @@ pub fn queryAvailableImages(out: *[MAX_VM_IMAGES]VmImageEntry) usize {
         };
         base.setTitle("Diosix Base Linux");
         base.setFilename("diosix-base-linux.elf");
-        base.setPath("/var/lib/diosix/images/diosix-base-linux.elf");
+        base.setPath(paths.DEFAULT_BASE_LINUX_IMAGE_PATH);
         out[0] = base;
         return 1;
     }
@@ -252,7 +252,7 @@ pub fn queryAvailableImages(out: *[MAX_VM_IMAGES]VmImageEntry) usize {
         };
         fallback.setTitle("Diosix Base Linux");
         fallback.setFilename("diosix-base-linux.elf");
-        fallback.setPath("/var/lib/diosix/images/diosix-base-linux.elf");
+        fallback.setPath(paths.DEFAULT_BASE_LINUX_IMAGE_PATH);
         out[0] = fallback;
         count = 1;
     }

@@ -9,7 +9,6 @@
 
 const std = @import("std");
 const linux = std.os.linux;
-const json = @import("gui/json.zig");
 const paths = @import("paths.zig");
 
 pub const DEFAULT_SYSCONFIG_PATH: [*:0]const u8 = paths.DEFAULT_SYSCONFIG_PATH;
@@ -291,53 +290,6 @@ pub const WelcomeState = struct {
     }
 };
 
-/// Render a tour step as CLI text or JSON. The caller owns the result and
-/// must free it with `allocator`.
-pub fn formatTourStepCli(
-    allocator: std.mem.Allocator,
-    step_idx: usize,
-    json_mode: bool,
-) std.mem.Allocator.Error![]u8 {
-    var ws = WelcomeState{};
-    ws.ensureConfigLoaded();
-    ws.current_step = step_idx;
-    const s = ws.activeTourStep();
-    if (json_mode) {
-        const esc_title = try json.escapeStr(allocator, s.title);
-        defer allocator.free(esc_title);
-        const esc_s1 = try json.escapeStr(allocator, s.summary_line1);
-        defer allocator.free(esc_s1);
-        const esc_s2 = try json.escapeStr(allocator, s.summary_line2);
-        defer allocator.free(esc_s2);
-        const esc_hint = try json.escapeStr(allocator, s.cli_hint);
-        defer allocator.free(esc_hint);
-        return allocator.print(
-            "{{\"step\":{d},\"total_steps\":{d},\"title\":\"{s}\"," ++
-                "\"summary\":\"{s} {s}\",\"cli_hint\":\"{s}\"}}\n",
-            .{
-                s.step_num,
-                ws.stepCount(),
-                esc_title,
-                esc_s1,
-                esc_s2,
-                esc_hint,
-            },
-        );
-    }
-    return allocator.print(
-        \\=== {s} ===
-        \\  {s}
-        \\  {s}
-        \\  Try command : {s}
-        \\
-    , .{
-        s.title,
-        s.summary_line1,
-        s.summary_line2,
-        s.cli_hint,
-    });
-}
-
 // -----------------------------------------------------------------------------
 // Unit Tests.
 // -----------------------------------------------------------------------------
@@ -383,18 +335,6 @@ test "WelcomeState loadTourToml parses [[tour]] blocks from diosix.toml" {
     try testing.expectEqualStrings("Custom Step 1", step.title);
     try testing.expectEqualStrings("Custom summary line", step.summary_line1);
     try testing.expectEqualStrings("dsx host info", step.cli_hint);
-}
-
-test "formatTourStepCli produces valid text and JSON" {
-    const txt = try formatTourStepCli(testing.allocator, 0, false);
-    defer testing.allocator.free(txt);
-    const expected = "Step 1/5: Root VM & Hardware Isolation";
-    try testing.expect(std.mem.indexOf(u8, txt, expected) != null);
-
-    const js = try formatTourStepCli(testing.allocator, 3, true);
-    defer testing.allocator.free(js);
-    try testing.expect(std.mem.indexOf(u8, js, "\"step\":4") != null);
-    try testing.expect(std.mem.indexOf(u8, js, "dsx charter status") != null);
 }
 
 test "setBuf reports truncation and keeps the largest prefix" {

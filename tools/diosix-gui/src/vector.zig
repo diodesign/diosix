@@ -32,14 +32,6 @@ pub const PathCmd = union(enum) {
         x: f32,
         y: f32,
     },
-    cubic_to: struct {
-        c1x: f32,
-        c1y: f32,
-        c2x: f32,
-        c2y: f32,
-        x: f32,
-        y: f32,
-    },
     close: void,
 };
 
@@ -79,30 +71,6 @@ pub const VectorPath = struct {
         if (self.len < self.cmds.len) {
             self.cmds[self.len] = .{
                 .quad_to = .{ .cx = cx, .cy = cy, .x = x, .y = y },
-            };
-            self.len += 1;
-        }
-    }
-
-    pub fn cubicTo(
-        self: *VectorPath,
-        c1x: f32,
-        c1y: f32,
-        c2x: f32,
-        c2y: f32,
-        x: f32,
-        y: f32,
-    ) void {
-        if (self.len < self.cmds.len) {
-            self.cmds[self.len] = .{
-                .cubic_to = .{
-                    .c1x = c1x,
-                    .c1y = c1y,
-                    .c2x = c2x,
-                    .c2y = c2y,
-                    .x = x,
-                    .y = y,
-                },
             };
             self.len += 1;
         }
@@ -171,47 +139,6 @@ pub const VectorPath = struct {
         flattenQuad(edges_out, edge_count, mid, q1, p1, depth + 1);
     }
 
-    fn flattenCubic(
-        edges_out: []Edge,
-        edge_count: *usize,
-        p0: Point,
-        c1: Point,
-        c2: Point,
-        p1: Point,
-        depth: u8,
-    ) void {
-        const ux = 3.0 * c1.x - 2.0 * p0.x - p1.x;
-        const uy = 3.0 * c1.y - 2.0 * p0.y - p1.y;
-        const vx = 3.0 * c2.x - 2.0 * p1.x - p0.x;
-        const vy = 3.0 * c2.y - 2.0 * p1.y - p0.y;
-        const err_x = @max(ux * ux, vx * vx);
-        const err_y = @max(uy * uy, vy * vy);
-        if (depth >= MAX_SUBDIV_DEPTH or
-            (err_x + err_y) <= 16.0 *
-                BEZIER_FLATNESS_TOLERANCE * BEZIER_FLATNESS_TOLERANCE)
-        {
-            emitEdge(edges_out, edge_count, p0, p1);
-            return;
-        }
-        const m01 = Point{ .x = (p0.x + c1.x) * 0.5, .y = (p0.y + c1.y) * 0.5 };
-        const m12 = Point{ .x = (c1.x + c2.x) * 0.5, .y = (c1.y + c2.y) * 0.5 };
-        const m23 = Point{ .x = (c2.x + p1.x) * 0.5, .y = (c2.y + p1.y) * 0.5 };
-        const m012 = Point{
-            .x = (m01.x + m12.x) * 0.5,
-            .y = (m01.y + m12.y) * 0.5,
-        };
-        const m123 = Point{
-            .x = (m12.x + m23.x) * 0.5,
-            .y = (m12.y + m23.y) * 0.5,
-        };
-        const mid = Point{
-            .x = (m012.x + m123.x) * 0.5,
-            .y = (m012.y + m123.y) * 0.5,
-        };
-        flattenCubic(edges_out, edge_count, p0, m01, m012, mid, depth + 1);
-        flattenCubic(edges_out, edge_count, mid, m123, m23, p1, depth + 1);
-    }
-
     pub fn flatten(
         self: *const VectorPath,
         scale_x: f32,
@@ -251,22 +178,6 @@ pub const VectorPath = struct {
                         .y = q.y * scale_y + offset_y,
                     };
                     flattenQuad(edges_out, &count, cur_pt, ctrl, next_pt, 0);
-                    cur_pt = next_pt;
-                },
-                .cubic_to => |c| {
-                    const c1 = Point{
-                        .x = c.c1x * scale_x + offset_x,
-                        .y = c.c1y * scale_y + offset_y,
-                    };
-                    const c2 = Point{
-                        .x = c.c2x * scale_x + offset_x,
-                        .y = c.c2y * scale_y + offset_y,
-                    };
-                    const next_pt = Point{
-                        .x = c.x * scale_x + offset_x,
-                        .y = c.y * scale_y + offset_y,
-                    };
-                    flattenCubic(edges_out, &count, cur_pt, c1, c2, next_pt, 0);
                     cur_pt = next_pt;
                 },
                 .close => {

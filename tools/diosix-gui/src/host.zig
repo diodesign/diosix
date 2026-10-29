@@ -130,16 +130,6 @@ pub fn executePowerAction(action: PowerAction) void {
     _ = linux.execve(prog, &argv, &[_:null]?[*:0]const u8{null});
 }
 
-// Check if running as privileged root console on Root VM (/dev/diosix).
-pub fn isRootConsole() bool {
-    if (mock_hypervisor_info != null) return true;
-    const fd_rc = linux.open(paths.DEV_DIOSIX_PATH, .{ .ACCMODE = .RDWR }, 0);
-    const signed_fd: isize = @bitCast(fd_rc);
-    if (signed_fd < 0) return false;
-    _ = linux.close(@intCast(signed_fd));
-    return true;
-}
-
 // Query the live hypervisor over /dev/diosix.
 pub fn getHypervisorInfo() ?HypervisorInfo {
     if (mock_hypervisor_info) |mock| return mock;

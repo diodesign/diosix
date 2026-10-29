@@ -277,14 +277,6 @@ pub const Icon = struct {
         return self.graph_samples[0..n];
     }
 
-    pub fn isTicked(self: *const Icon) bool {
-        return self.is_ticked;
-    }
-
-    pub fn setTicked(self: *Icon, ticked: bool) void {
-        self.is_ticked = ticked;
-    }
-
     pub fn setText(self: *Icon, text: []const u8) void {
         const max_limit = if (self.icon_type == .read_write_text)
             (if (self.text_buf.len > 1)

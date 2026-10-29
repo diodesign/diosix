@@ -226,15 +226,6 @@ pub const Display = struct {
         }
     }
 
-    pub fn screenSurface(self: *Display) fb.Surface {
-        return fb.Surface.init(
-            self.fb_ptr,
-            self.hw_w,
-            self.hw_h,
-            @intCast(self.hw_stride),
-        );
-    }
-
     pub fn flushDamage(self: *Display, damage: fb.Box) void {
         const x0 = @max(0, damage.x0);
         const y0 = @max(0, damage.y0);
@@ -325,10 +316,6 @@ pub const Display = struct {
                 .y1 = @intCast(hy1),
             });
         }
-    }
-
-    pub fn flush(self: *Display) void {
-        self.flushDamage(fb.Box.fromPosSize(0, 0, self.width, self.height));
     }
 };
 

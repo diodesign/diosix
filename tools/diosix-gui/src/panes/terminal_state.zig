@@ -135,10 +135,6 @@ pub fn restoreBgSession(
     return false;
 }
 
-pub fn restoreBgSshSession(self: *DiosixGui, cid: u64) bool {
-    return restoreBgSession(self, cid, .ssh);
-}
-
 pub fn computeTermRect(
     self: *DiosixGui,
 ) struct { x: i32, w: u32, h: u32 } {

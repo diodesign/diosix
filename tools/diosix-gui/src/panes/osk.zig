@@ -50,16 +50,17 @@ pub const KeyCommand = enum {
 var shift_held: bool = false;
 var ctrl_held: bool = false;
 
-fn findFocusedInput(
+fn findFocusedByType(
     self: *DiosixGui,
-) ?struct { win_id: u32, icon: *Icon } {
+    want_type: icon_mod.IconType,
+) ?struct { win: *Window, icon: *Icon } {
     if (self.active_win_idx) |widx| {
         if (widx < self.windows.items.len) {
             const win = &self.windows.items[widx];
             if (win.is_onscreen) {
                 if (win.getFocusedIcon()) |ic| {
-                    if (ic.icon_type == .read_write_text) {
-                        return .{ .win_id = win.id, .icon = ic };
+                    if (ic.icon_type == want_type) {
+                        return .{ .win = win, .icon = ic };
                     }
                 }
             }
@@ -70,12 +71,19 @@ fn findFocusedInput(
         const win = &self.windows.items[i - 1];
         if (!win.is_onscreen) continue;
         if (win.getFocusedIcon()) |ic| {
-            if (ic.icon_type == .read_write_text) {
-                return .{ .win_id = win.id, .icon = ic };
+            if (ic.icon_type == want_type) {
+                return .{ .win = win, .icon = ic };
             }
         }
     }
     return null;
+}
+
+fn findFocusedInput(
+    self: *DiosixGui,
+) ?struct { win_id: u32, icon: *Icon } {
+    const hit = findFocusedByType(self, .read_write_text) orelse return null;
+    return .{ .win_id = hit.win.id, .icon = hit.icon };
 }
 
 fn syncInputField(self: *DiosixGui, win_id: u32, ic: *Icon) void {
@@ -128,6 +136,24 @@ pub fn handleKeySpecial(self: *DiosixGui, cmd: KeyCommand) void {
         }
         syncInputField(self, target.win_id, ic);
         return;
+    }
+    if (cmd == .left or cmd == .right) {
+        if (findFocusedByType(self, .slider)) |target| {
+            const win_id = target.win.id;
+            const icon_id = target.icon.id;
+            target.icon.adjustSlider(if (cmd == .left) -1 else 1);
+            if (target.icon.callback) |cb| {
+                cb(@ptrCast(self), @ptrCast(target.win), target.icon);
+            }
+            if (self.getWindow(win_id)) |w| {
+                for (w.icons.items, 0..) |*ic, idx| {
+                    ic.setSelected(ic.id == icon_id);
+                    if (ic.id == icon_id) w.focused_icon_idx = idx;
+                }
+            }
+            self.markWindowDirty(win_id);
+            return;
+        }
     }
     if (panes_terminal.isTerminalWindowOpen(self)) {
         const seq: []const u8 = switch (cmd) {

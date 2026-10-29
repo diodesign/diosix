@@ -490,5 +490,6 @@ test {
     _ = vector_mod;
     _ = tasks_mod;
     _ = terminal_mod;
+    _ = window_mod;
     std.testing.refAllDecls(@This());
 }

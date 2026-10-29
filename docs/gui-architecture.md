@@ -89,10 +89,10 @@ Located in `tools/diosix-gui/src/`:
     pane (`Config`), running guest VMs and detail panes (showing VM
     architecture and `H-mode` / `PMP` isolation mode, plus `Open new local
     terminal` / `Reopen local terminal`, `Open new SSH terminal` / `Reopen SSH
-    terminal`, and `Open serial console`), full-width VT100/ANSI terminal
-    window with color inversion (`Invert`), power confirmation modal
-    (`Restart` / `Shutdown`), Welcome modal, 5-step Guided Tour, and dockable
-    OSK.
+    terminal`, and `Open serial console` / `Reopen serial console`), full-width
+    VT100/ANSI terminal window with color inversion (`Invert`), power
+    confirmation modal (`Restart` / `Shutdown`), Welcome modal, 5-step Guided
+    Tour, and dockable OSK.
 *   **[`terminal.zig`](../tools/diosix-gui/src/terminal.zig) and
     [`io.zig`](../tools/diosix-gui/src/terminal/io.zig)**: Dynamically sized
     (up to `200x60`) fixed-width (`DMMono-Regular.ttf`) VT100/ANSI terminal

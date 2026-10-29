@@ -38,18 +38,17 @@ test "diosix-gui: surface drawing and translucent window pane" {
     try testing.expectEqual(@as(u32, 0x004c8be0), outside_corner);
 }
 
-test "diosix-gui: text rendering with drop shadow" {
+test "diosix-gui: antialiased text rendering and string measurement" {
     var pixel_buffer: [200 * 50]u32 = undefined;
     @memset(&pixel_buffer, 0);
     var surface = fb.Surface.init(&pixel_buffer, 200, 50, 800);
 
-    font.drawTextWithShadow(
+    font.drawText(
         &surface,
         "DIOSIX",
         10,
         10,
         fb.Color.WHITE,
-        fb.Color.BLACK,
     );
 
     // Verify string width measurement.

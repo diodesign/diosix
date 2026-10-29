@@ -79,6 +79,15 @@ pub const VAR_IMAGES_DIR: [*:0]const u8 = "/var/lib/diosix/images";
 pub const SHARE_IMAGES_DIR: [*:0]const u8 = "/usr/share/diosix/images";
 pub const VAR_DISKS_DIR: [*:0]const u8 = "/var/lib/diosix/disks";
 pub const VAR_ISO_DIR: [*:0]const u8 = "/var/lib/diosix/iso";
+pub const DEFAULT_BASE_LINUX_IMAGE_PATH: []const u8 =
+    "/var/lib/diosix/images/diosix-base-linux.elf";
+
+/// Standard /dev prefix constants for block/mount discovery.
+pub const DEV_DIR_PREFIX: []const u8 = "/dev/";
+pub const DEV_PTS_PREFIX: []const u8 = "/dev/pts";
+pub const DEV_SHM_PREFIX: []const u8 = "/dev/shm";
+pub const DEV_LOOP_PREFIX: []const u8 = "/dev/loop";
+pub const DEV_NODE_FMT: []const u8 = "/dev/{s}";
 
 /// Singleton flock path preventing concurrent diosix-gui instances.
 pub const GUI_LOCK_PATH: [*:0]const u8 = "/run/diosix/diosix-gui.lock";
