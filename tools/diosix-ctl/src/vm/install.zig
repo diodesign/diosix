@@ -8,7 +8,6 @@ const linux = std.os.linux;
 const api = @import("../api.zig");
 const catalog = @import("../catalog.zig");
 const common = @import("../common.zig");
-const loader = @import("../loader.zig");
 const storage = @import("../storage.zig");
 const sysconfig = @import("../sysconfig.zig");
 const vm_run = @import("run.zig");
@@ -44,7 +43,6 @@ const InstallGuestOption = enum {
     @"-s",
     @"--vcpus",
     @"--ram",
-    @"--offline-stub",
 };
 
 pub fn cmdInstallGuest(
@@ -58,7 +56,7 @@ pub fn cmdInstallGuest(
         common.printFmt(
             \\Usage: {s} install-guest <os-name|iso> [--name <vm>]
             \\       [--disk <disk>] [--size <size>] [--vcpus <N>]
-            \\       [--ram <size>] [--offline-stub]
+            \\       [--ram <size>]
             \\Examples:
             \\  {s} install-guest debian-riscv64 --disk debian-root --size 4GiB
             \\  {s} install-guest freebsd-riscv64 --name bsd-db --disk bsd-data
@@ -90,7 +88,6 @@ pub fn cmdInstallGuest(
     var size_str: ?[]const u8 = null;
     var vcpus_opt: ?usize = null;
     var ram_opt: ?[]const u8 = null;
-    var offline_stub = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -156,7 +153,6 @@ pub fn cmdInstallGuest(
                     i += 1;
                     ram_opt = std.mem.span(args[i]);
                 },
-                .@"--offline-stub" => offline_stub = true,
             }
         } else if (std.mem.startsWith(u8, span, "-")) {
             common.printFmt(
@@ -264,30 +260,12 @@ pub fn cmdInstallGuest(
                     );
                     return;
                 }
-                if (offline_stub) {
-                    common.printFmt(
-                        "==> Staging offline test stub ISO for '{s}' " ++
-                            "(--offline-stub)...\n",
-                        .{entry.id},
-                    );
-                    if (!loader.seedOfflineCatalogFallback(
-                        entry,
-                        full_iso_path,
-                    )) {
-                        printStr(
-                            "Error: Failed to stage offline test stub ISO.\n",
-                        );
-                        return;
-                    }
-                } else {
-                    common.printFmt(
-                        "Error: Failed to download installer ISO from " ++
-                            "'{s}'. Pull or import the ISO first, or pass " ++
-                            "'--offline-stub' for offline testing.\n",
-                        .{entry.url},
-                    );
-                    return;
-                }
+                common.printFmt(
+                    "Error: Failed to download installer ISO from " ++
+                        "'{s}'. Pull or import the ISO first.\n",
+                    .{entry.url},
+                );
+                return;
             };
         } else {
             common.printFmt(
@@ -373,7 +351,7 @@ test "vm_install: InstallGuestOption enum parses CLI flags" {
     std.testing.refAllDecls(@This());
     _ = restart;
     try std.testing.expectEqual(
-        InstallGuestOption.@"--offline-stub",
-        std.meta.stringToEnum(InstallGuestOption, "--offline-stub").?,
+        InstallGuestOption.@"--disk",
+        std.meta.stringToEnum(InstallGuestOption, "--disk").?,
     );
 }

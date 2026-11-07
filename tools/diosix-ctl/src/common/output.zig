@@ -55,6 +55,11 @@ pub fn printApiError(action: []const u8, err: anyerror) void {
             "Error: {s} failed: out of memory.\n",
             .{action},
         ),
+        error.NotSupported => printFmt(
+            "Error: {s} failed: requested guest architecture or feature " ++
+                "is recognized but not yet supported.\n",
+            .{action},
+        ),
         else => printFmt(
             "Error: {s} failed ({s}).\n",
             .{ action, @errorName(err) },

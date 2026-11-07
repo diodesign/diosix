@@ -75,11 +75,15 @@ pub const IOCTL_CONSOLE_READ: u32 = IOCTL_BASE + 23;
 const EPERM_NEG: isize = -@as(isize, @backingInt(linux.E.PERM));
 const EACCES_NEG: isize = -@as(isize, @backingInt(linux.E.ACCES));
 const EAGAIN_NEG: isize = -@as(isize, @backingInt(linux.E.AGAIN));
+const EOPNOTSUPP_NEG: isize = -@as(isize, @backingInt(linux.E.OPNOTSUPP));
 
 fn checkIoctlRc(rc: usize) !isize {
     const signed_rc: isize = @bitCast(rc);
     if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) {
         return error.PermissionDenied;
+    }
+    if (signed_rc == EOPNOTSUPP_NEG) {
+        return error.NotSupported;
     }
     if (signed_rc < 0) return error.HypercallFailed;
     return signed_rc;

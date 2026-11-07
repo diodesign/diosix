@@ -41,6 +41,8 @@ const ImageAlias = enum {
     @"base-linux",
     @"diosix-linux",
     @"diosix-linux.elf",
+    @"linux-guest",
+    @"linux-guest.elf",
 };
 
 /// Reads `<dir>/<name><ext>` as a mapped file, or returns null when it cannot

@@ -34,6 +34,13 @@ pub const ED25519_WIRE_BLOB_LEN: usize = 4 + 11 + 4 + ED25519_PUBKEY_LEN;
 /// Base64 length of `ED25519_WIRE_BLOB_LEN` bytes: ceil(51 / 3) * 4.
 pub const ED25519_WIRE_B64_LEN: usize = 68;
 
+/// OpenSSH wire blob for an `sk-ssh-ed25519@openssh.com` key:
+/// u32(26) + "sk-ssh-ed25519@openssh.com" + u32(32) + pubkey + u32(4) + "ssh:".
+pub const SK_ED25519_WIRE_BLOB_LEN: usize =
+    4 + 26 + 4 + ED25519_PUBKEY_LEN + 4 + 4;
+pub const SK_ED25519_WIRE_B64_LEN: usize =
+    std.base64.standard.Encoder.calcSize(SK_ED25519_WIRE_BLOB_LEN);
+
 /// Largest decoded wire blob accepted from an authorized_passkeys line. The
 /// biggest supported type (sk-ecdsa-sha2-nistp256@openssh.com) is about 200
 /// bytes, so this leaves ample headroom while bounding stack use.
@@ -137,6 +144,23 @@ pub fn encodeOpenSshEd25519BlobBase64(
     @memcpy(wire[4..15], "ssh-ed25519");
     std.mem.writeInt(u32, wire[15..19], 32, .big);
     @memcpy(wire[19..51], &pubkey);
+    return std.base64.standard.Encoder.encode(out_b64, &wire);
+}
+
+/// Encodes a raw 32-byte Ed25519 public key into a standard OpenSSH FIDO2
+/// `sk-ssh-ed25519@openssh.com` wire-format blob (74 bytes total) and
+/// Base64-encodes it.
+pub fn encodeOpenSshSkEd25519BlobBase64(
+    pubkey: [ED25519_PUBKEY_LEN]u8,
+    out_b64: *[SK_ED25519_WIRE_B64_LEN]u8,
+) []const u8 {
+    var wire: [SK_ED25519_WIRE_BLOB_LEN]u8 = undefined;
+    std.mem.writeInt(u32, wire[0..4], 26, .big);
+    @memcpy(wire[4..30], "sk-ssh-ed25519@openssh.com");
+    std.mem.writeInt(u32, wire[30..34], 32, .big);
+    @memcpy(wire[34..66], &pubkey);
+    std.mem.writeInt(u32, wire[66..70], 4, .big);
+    @memcpy(wire[70..74], "ssh:");
     return std.base64.standard.Encoder.encode(out_b64, &wire);
 }
 

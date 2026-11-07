@@ -107,6 +107,12 @@ pub const PageTable = struct {
         self.destroyTable(self.root_phys, 2);
     }
 
+    fn isStaticRootHpa(self: *const PageTable, hpa: usize) bool {
+        if (self.root_base_hpa == 0 or self.root_range_size == 0) return false;
+        return hpa >= self.root_base_hpa and
+            (hpa - self.root_base_hpa) < self.root_range_size;
+    }
+
     fn destroyTable(self: *PageTable, addr: usize, level: u8) void {
         if (addr == 0) return;
         const ptes = @as([*]PTE, @ptrFromInt(addr));
@@ -120,7 +126,8 @@ pub const PageTable = struct {
                     self.destroyTable(next_addr, level - 1);
                 } else {
                     const hpa = pteToHpa(pte);
-                    if (physmem.isRam(hpa, physmem.PageSize) and
+                    if (!self.isStaticRootHpa(hpa) and
+                        physmem.isRam(hpa, physmem.PageSize) and
                         physmem.isManaged(hpa))
                     {
                         physmem.decrementPageRef(hpa);
@@ -186,7 +193,10 @@ pub const PageTable = struct {
 
         ptes[index] = hpaToPte(hpa) | flags |
             PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty;
-        if (physmem.isRam(hpa, physmem.PageSize) and physmem.isManaged(hpa)) {
+        if (!self.isStaticRootHpa(hpa) and
+            physmem.isRam(hpa, physmem.PageSize) and
+            physmem.isManaged(hpa))
+        {
             physmem.incrementPageRef(hpa);
         }
     }
@@ -199,7 +209,8 @@ pub const PageTable = struct {
             if ((pte & PTEFlags.valid) != 0) {
                 const hpa = pteToHpa(pte);
                 pte_ptr.* = 0;
-                if (physmem.isRam(hpa, physmem.PageSize) and
+                if (!self.isStaticRootHpa(hpa) and
+                    physmem.isRam(hpa, physmem.PageSize) and
                     physmem.isManaged(hpa))
                 {
                     physmem.decrementPageRef(hpa);

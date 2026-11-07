@@ -9,6 +9,7 @@ const api = @import("api.zig");
 const common = @import("common.zig");
 const sysconfig = @import("sysconfig.zig");
 const disk = @import("storage/disk.zig");
+const snap_mem = @import("snapshot/memory.zig");
 
 const SNAP_EXT = ".snap";
 
@@ -121,7 +122,11 @@ fn parseTargetAndSnapArgs(
     return .{ .vm_target = null, .snap_id = first };
 }
 
-fn snapSave(snaps_dir: []const u8, args: []const [*:0]const u8) !void {
+fn snapSave(
+    client: *api.DiosixClient,
+    snaps_dir: []const u8,
+    args: []const [*:0]const u8,
+) !void {
     if (args.len < 2) {
         common.printStr("Usage: dsx snapshot save <name|cid> [id]\n");
         return;
@@ -153,19 +158,42 @@ fn snapSave(snaps_dir: []const u8, args: []const [*:0]const u8) !void {
         .{ snaps_dir, target_name, snap_id },
     );
     defer allocator.free(snap_path);
-    if (snap_path.len >= common.MAX_PATH_LEN) {
+    const mem_path = try allocator.print("{s}.mem", .{snap_path});
+    defer allocator.free(mem_path);
+    if (mem_path.len >= common.MAX_PATH_LEN) {
         disk.reportPathTooLong();
         return;
     }
+
+    var meta = snap_mem.queryTargetVmMeta(client, target_name);
+    meta.saved_pages = snap_mem.dumpChildRamPages(
+        client,
+        meta.cid,
+        meta.ram_mb,
+        mem_path,
+    );
 
     const snap_header = try allocator.print(
         \\[snapshot]
         \\version = "1.0"
         \\target = "{s}"
+        \\cid = {d}
         \\snap_id = "{s}"
+        \\vcpus = {d}
+        \\ram_mb = {d}
+        \\pcpu_quota_pct = {d}
+        \\saved_pages = {d}
         \\status = "saved"
         \\
-    , .{ target_name, snap_id });
+    , .{
+        target_name,
+        meta.cid,
+        snap_id,
+        meta.vcpus,
+        meta.ram_mb,
+        meta.pcpu_quota_pct,
+        meta.saved_pages,
+    });
     defer allocator.free(snap_header);
 
     _ = common.writeFile(snap_path, snap_header) catch {
@@ -174,8 +202,8 @@ fn snapSave(snaps_dir: []const u8, args: []const [*:0]const u8) !void {
     };
 
     common.printFmt(
-        "✓ Snapshot '{s}' for VM '{s}' saved at {s}.\n",
-        .{ snap_id, target_name, snap_path },
+        "✓ Snapshot '{s}' for VM '{s}' saved at {s} ({d} RAM pages).\n",
+        .{ snap_id, target_name, snap_path, meta.saved_pages },
     );
 }
 
@@ -234,7 +262,8 @@ fn snapList(snaps_dir: []const u8, json_mode: bool) void {
                 const dname_ptr: [*:0]const u8 = @ptrCast(&dent.d_name);
                 const dname = std.mem.span(dname_ptr);
                 if (std.mem.eql(u8, dname, ".") or
-                    std.mem.eql(u8, dname, "..")) continue;
+                    std.mem.eql(u8, dname, "..") or
+                    !std.mem.endsWith(u8, dname, SNAP_EXT)) continue;
 
                 var target_vm: []const u8 = "guest";
                 if (std.mem.indexOfScalar(u8, dname, '_')) |und| {
@@ -286,7 +315,11 @@ fn snapList(snaps_dir: []const u8, json_mode: bool) void {
     }
 }
 
-fn snapRestore(snaps_dir: []const u8, args: []const [*:0]const u8) void {
+fn snapRestore(
+    client: *api.DiosixClient,
+    snaps_dir: []const u8,
+    args: []const [*:0]const u8,
+) void {
     if (args.len < 2) {
         common.printStr("Usage: dsx snapshot restore [vm] <snap_id>\n");
         return;
@@ -300,21 +333,47 @@ fn snapRestore(snaps_dir: []const u8, args: []const [*:0]const u8) void {
         return;
     }
     var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    if (findMatchingSnapshotPathZ(
+    const snap_z = findMatchingSnapshotPathZ(
         snaps_dir,
         parsed.vm_target,
         parsed.snap_id,
         &z_buf,
-    ) == null) {
+    ) orelse {
         common.printFmt(
             "Error: Snapshot '{s}' not found.\n",
             .{parsed.snap_id},
         );
         return;
-    }
+    };
+
+    var restored_pages: usize = 0;
+    if (common.readBinaryFile(snap_z, common.MAX_MANIFEST_SIZE)) |content| {
+        defer common.unmapBinaryFile(content);
+        const meta = snap_mem.parseSnapMetadata(content);
+        if (meta.cid >= common.CID_FIRST_CHILD and client.dev_fd != null) {
+            client.setQuotaWithPcpu(
+                meta.cid,
+                (meta.ram_mb * 1024) / 4,
+                meta.vcpus,
+                0,
+                0,
+                meta.pcpu_quota_pct,
+                0,
+            ) catch {};
+            var mem_buf: [common.MAX_PATH_LEN]u8 = undefined;
+            if (std.fmt.bufPrint(&mem_buf, "{s}.mem", .{snap_z})) |mem_path| {
+                restored_pages = snap_mem.restoreChildRamPages(
+                    client,
+                    meta.cid,
+                    mem_path,
+                );
+            } else |_| {}
+        }
+    } else |_| {}
+
     common.printFmt(
-        "✓ VM state restored from snapshot '{s}'.\n",
-        .{parsed.snap_id},
+        "✓ VM state restored from snapshot '{s}' ({d} RAM pages).\n",
+        .{ parsed.snap_id, restored_pages },
     );
 }
 
@@ -351,6 +410,10 @@ fn snapDelete(snaps_dir: []const u8, args: []const [*:0]const u8) void {
         );
         return;
     }
+    var mem_z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    if (std.mem.printSentinel(&mem_z_buf, "{s}.mem", .{z_path}, 0)) |mz| {
+        _ = linux.unlink(mz.ptr);
+    } else |_| {}
     common.printFmt("✓ Snapshot '{s}' deleted.\n", .{parsed.snap_id});
 }
 
@@ -361,7 +424,6 @@ pub fn cmdSnapshot(
     const exe_name = common.getExeName();
     const sys_cfg = common.loadRuntimeSystemConfig();
     const snaps_dir = sys_cfg.snapshotsDir();
-    _ = client;
     if (args.len == 0) {
         common.printFmt(
             \\Usage:
@@ -391,15 +453,16 @@ pub fn cmdSnapshot(
     }
 
     switch (parsed_subcmd) {
-        .save, .create => try snapSave(snaps_dir, args),
+        .save, .create => try snapSave(client, snaps_dir, args),
         .list, .ls => snapList(snaps_dir, json_mode),
-        .restore => snapRestore(snaps_dir, args),
+        .restore => snapRestore(client, snaps_dir, args),
         .delete, .rm => snapDelete(snaps_dir, args),
     }
 }
 
 test "snapshot: resolveSnapshotPath rejects traversal and resolves names" {
     std.testing.refAllDecls(@This());
+    _ = snap_mem;
     var buf: [common.MAX_PATH_LEN]u8 = undefined;
     try std.testing.expectEqualStrings(
         "/var/lib/diosix/snapshots/vm_snap1.snap",

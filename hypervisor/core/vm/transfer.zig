@@ -25,7 +25,10 @@ pub fn copyToGuest(
         const cur_hpa = try self.translateGPA(cur_gpa);
         const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
         const chunk: usize = @min(src.len - check_off, page_rem);
-        if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+        if (physmem.isHypervisorMemory(cur_hpa, chunk) or
+            (physmem.phys_mem_state.region_count > 0 and
+                !physmem.isRam(cur_hpa, chunk)))
+        {
             return error.AccessDenied;
         }
         check_off += chunk;
@@ -38,7 +41,10 @@ pub fn copyToGuest(
         const cur_hpa = try self.translateGPA(cur_gpa);
         const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
         const chunk: usize = @min(src.len - transferred, page_rem);
-        if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+        if (physmem.isHypervisorMemory(cur_hpa, chunk) or
+            (physmem.phys_mem_state.region_count > 0 and
+                !physmem.isRam(cur_hpa, chunk)))
+        {
             return error.AccessDenied;
         }
         @memcpy(
@@ -67,7 +73,10 @@ pub fn copyFromGuest(
         const cur_hpa = try self.translateGPA(cur_gpa);
         const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
         const chunk: usize = @min(dst.len - check_off, page_rem);
-        if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+        if (physmem.isHypervisorMemory(cur_hpa, chunk) or
+            (physmem.phys_mem_state.region_count > 0 and
+                !physmem.isRam(cur_hpa, chunk)))
+        {
             return error.AccessDenied;
         }
         check_off += chunk;
@@ -80,7 +89,10 @@ pub fn copyFromGuest(
         const cur_hpa = try self.translateGPA(cur_gpa);
         const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
         const chunk: usize = @min(dst.len - transferred, page_rem);
-        if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+        if (physmem.isHypervisorMemory(cur_hpa, chunk) or
+            (physmem.phys_mem_state.region_count > 0 and
+                !physmem.isRam(cur_hpa, chunk)))
+        {
             return error.AccessDenied;
         }
         @memcpy(

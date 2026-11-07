@@ -292,7 +292,7 @@ pub fn cmdImage(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             \\  {s} image catalog [--json]               List official catalog
             \\  {s} image pull <id|url> [options]        Pull & verify SHA-256
             \\      [--name <name>] [--sha256 <hex>]
-            \\      [--allow-unverified] [--offline-stub] [--json]
+            \\      [--allow-unverified] [--json]
             \\  {s} image import <file> [--name <name>]  Import local image
             \\  {s} image verify <name> [--sha256 <hex>] Verify image SHA-256
             \\  {s} image delete <name>                  Delete repository image

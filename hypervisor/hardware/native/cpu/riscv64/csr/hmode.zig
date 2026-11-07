@@ -179,6 +179,30 @@ pub inline fn hlv_hu(ptr: usize) u16 {
     return val;
 }
 
+pub inline fn hlvx_hu(ptr: usize) u16 {
+    if (comptime is_test) return 0;
+    var val: u16 = 0;
+    asm volatile (
+        \\ .attribute arch, "rv64gc_zicsr_h"
+        \\ hlvx.hu %[val], (%[ptr])
+        : [val] "=r" (val),
+        : [ptr] "r" (ptr),
+    );
+    return val;
+}
+
+pub inline fn hlvx_wu(ptr: usize) u32 {
+    if (comptime is_test) return 0;
+    var val: u32 = 0;
+    asm volatile (
+        \\ .attribute arch, "rv64gc_zicsr_h"
+        \\ hlvx.wu %[val], (%[ptr])
+        : [val] "=r" (val),
+        : [ptr] "r" (ptr),
+    );
+    return val;
+}
+
 pub inline fn hlv_bu(ptr: usize) u8 {
     if (comptime is_test) return 0;
     var val: u8 = 0;

@@ -57,14 +57,18 @@ identify its target instruction set architecture:
 *   64-bit RISC-V (`riscv64`) guest VMs run directly on the host physical CPU
     at native speeds using the host processor's hardware virtualization
     extension or the Physical Memory Protection (PMP) fallback mode.
-*   32-bit RISC-V, 64-bit Arm, and 64-bit x86 (`riscv32`, `aarch64`, `x86_64`)
-    guest VMs run transparently using software just-in-time (JIT) emulation.
+*   32-bit RISC-V (`riscv32`) guest VMs run transparently using software
+    just-in-time (JIT) emulation via the freestanding dynamic recompiler.
+*   64-bit Arm (`aarch64`) and 64-bit x86 (`x86_64`) ELF binaries and VM
+    profiles are recognized by the loader and Supervisor Binary Interface (SBI)
+    layer, returning a not-yet-supported error (`SBI_ERR_NOT_SUPPORTED`) until
+    full cross-architecture system emulation is enabled.
 
 ### Native freestanding Zig dynamic recompiler (`dynarec`)
 
 The non-native emulation layer is powered by a native, freestanding Zig dynamic
-binary recompiler (`dynarec`). It translates non-native guest instructions
-(`rv32`, `aarch64`, and `x86_64`) directly into RISC-V 64-bit (`rv64`) host
+binary recompiler (`dynarec`). It translates non-native 32-bit RISC-V (`rv32`)
+guest instructions directly into RISC-V 64-bit (`rv64`) host
 machine code without an intermediate representation (IR) pass or standard
 library OS dependencies.
 
@@ -130,14 +134,14 @@ guest VM from hogging a physical core, the hypervisor handles preemption:
 The differences between native and emulated execution paths in Diosix are
 summarized in the following table:
 
-| Feature | Native guest (`riscv64`) | Emulated guest (`riscv32`, `aarch64`, `x86_64`) |
+| Feature | Native guest (`riscv64`) | Emulated guest (`riscv32`) |
 | :--- | :--- | :--- |
 | CPU execution mode | Runs directly on the host physical CPU at full hardware speed. | Runs in software via native freestanding Zig dynamic recompiler (`dynarec`). |
 | CPU execution privilege | Runs in Virtual Supervisor (VS) and Virtual User (VU) modes (or host S/U modes under PMP fallback). | Runs JIT translator in host S-mode. Guest code executes as translated RV64 instructions in JIT space. |
 | Host virtualization hardware | Uses the RISC-V H-extension (or PMP fallback) for isolated guest execution. | Isolated via host S-mode and PMP sandboxing without requiring hardware H-extension. |
 | Memory allocation | Dynamic using G-stage page tables and Copy-on-Write (CoW) support (contiguous in PMP fallback). | Pre-allocated contiguous block translated via `SoftTLB`. |
 | Context switching | Handled via assembly register swap routines during M-mode entry/exit traps. | Handled via scheduler context switch and supervisor `ecall` yield loops. |
-| System call interception | Traps directly from guest VS-mode (or S-mode under PMP fallback) to hypervisor M-mode via `ecall`. | Intercepted by `dynarec` decoder and handled via native Supervisor Binary Interface (SBI) / system call dispatcher. |
+| System call interception | Traps directly from guest VS-mode (or S-mode under PMP fallback) to hypervisor M-mode via `ecall`. | Intercepted by `dynarec` decoder and handled via native SBI / system call dispatcher. |
 
 ---
 

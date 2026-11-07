@@ -18,7 +18,6 @@ pub const FALLBACK_GUEST_ISO_PATH = sysconfig.FALLBACK_GUEST_ISO_PATH;
 pub const SHIM_HEADER_OFFSET: usize = pe.SHIM_HEADER_OFFSET;
 pub const SHIM_HEADER_MAGIC: u64 = pe.SHIM_HEADER_MAGIC;
 pub const PAGE_ALIGN: usize = pe.PAGE_ALIGN;
-pub const seedOfflineCatalogFallback = pe.seedOfflineCatalogFallback;
 
 pub const FDT_MAGIC_BE: u32 = fdt_patch.FDT_MAGIC_BE;
 pub const FDT_OFF_DT_STRUCT: usize = fdt_patch.FDT_OFF_DT_STRUCT;
@@ -37,8 +36,12 @@ pub const MAP_CHILD_RW_FLAGS: usize = 3;
 
 pub const ELF_MAGIC = "\x7fELF";
 pub const ELF_EI_CLASS_OFFSET: usize = 4;
+pub const ELF_E_MACHINE_OFFSET: usize = 18;
 pub const ELFCLASS32: u8 = 1;
 pub const ELFCLASS64: u8 = 2;
+pub const EM_X86_64: u16 = 62;
+pub const EM_AARCH64: u16 = 183;
+pub const EM_RISCV: u16 = 243;
 pub const PT_LOAD: u32 = 1;
 pub const ELF32_EHDR_SIZE: usize = 52;
 pub const ELF64_EHDR_SIZE: usize = 64;
@@ -80,6 +83,48 @@ fn readPhdrU64(elf: []const u8, class: u8, off32: usize, off64: usize) u64 {
         @as(u64, readLeU32(elf, off32))
     else
         readLeU64(elf, off64);
+}
+
+/// Detects the target architecture (`riscv64`, `riscv32`, `aarch64`, `x86_64`)
+/// from an ELF header.
+pub fn detectElfArch(elf_data: []const u8) ?api.TargetArch {
+    if (elf_data.len < ELF32_EHDR_SIZE) return null;
+    if (!std.mem.eql(u8, elf_data[0..4], ELF_MAGIC)) return null;
+    const class = elf_data[ELF_EI_CLASS_OFFSET];
+    const machine = readLeU16(elf_data, ELF_E_MACHINE_OFFSET);
+    return switch (machine) {
+        EM_RISCV => if (class == ELFCLASS32) .riscv32 else .riscv64,
+        EM_AARCH64 => .aarch64,
+        EM_X86_64 => .x86_64,
+        else => null,
+    };
+}
+
+/// Resolves the effective guest architecture from `elf_data` and `req_arch`.
+/// Recognizes `aarch64` and `x86_64` VMs and reports a descriptive error that
+/// those architectures are not yet supported.
+pub fn checkGuestArch(
+    elf_data: []const u8,
+    req_arch: api.TargetArch,
+) ?api.TargetArch {
+    const eff_arch = detectElfArch(elf_data) orelse req_arch;
+    if (eff_arch == .aarch64 or req_arch == .aarch64) {
+        console.printStr(
+            "Error: Guest VM architecture 'aarch64' is recognized, " ++
+                "but AArch64 emulation is not yet supported " ++
+                "(supported: riscv64, riscv32).\n",
+        );
+        return null;
+    }
+    if (eff_arch == .x86_64 or req_arch == .x86_64) {
+        console.printStr(
+            "Error: Guest VM architecture 'x86_64' is recognized, " ++
+                "but x86_64 emulation is not yet supported " ++
+                "(supported: riscv64, riscv32).\n",
+        );
+        return null;
+    }
+    return eff_arch;
 }
 
 pub fn loadElfViaForeignMapping(
@@ -334,4 +379,35 @@ test "loader: patchChildDtb handles malformed FDT headers safely" {
     );
     std.mem.writeInt(u32, bad_dtb[36..40], 0xffff_ffff, .big);
     patchChildDtb(&bad_dtb, 0x8000_0000, 0x1000_0000, 1);
+
+    var elf_hdr: [ELF64_EHDR_SIZE]u8 = @splat(0);
+    @memcpy(elf_hdr[0..4], ELF_MAGIC);
+    elf_hdr[ELF_EI_CLASS_OFFSET] = ELFCLASS64;
+    std.mem.writeInt(
+        u16,
+        elf_hdr[ELF_E_MACHINE_OFFSET..][0..2],
+        EM_AARCH64,
+        .little,
+    );
+    try std.testing.expectEqual(
+        api.TargetArch.aarch64,
+        detectElfArch(&elf_hdr).?,
+    );
+    try std.testing.expect(
+        checkGuestArch(&elf_hdr, .riscv64) == null,
+    );
+
+    std.mem.writeInt(
+        u16,
+        elf_hdr[ELF_E_MACHINE_OFFSET..][0..2],
+        EM_X86_64,
+        .little,
+    );
+    try std.testing.expectEqual(
+        api.TargetArch.x86_64,
+        detectElfArch(&elf_hdr).?,
+    );
+    try std.testing.expect(
+        checkGuestArch(&elf_hdr, .riscv64) == null,
+    );
 }

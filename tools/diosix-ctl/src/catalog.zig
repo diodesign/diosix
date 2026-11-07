@@ -47,9 +47,9 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_ram_mb = 512,
         .default_disk_mb = 1024,
         .filename = "diosix-base-linux.elf",
-        .url = "https://images.diosix.org/26.2/riscv64/diosix-base-linux.elf",
-        .sha256 = "5123456789abcdef0123456789abcdef" ++
-            "0123456789abcdef0123456789abcdef",
+        .url = "file:///var/lib/diosix/images/diosix-base-linux.elf",
+        .sha256 = "c148274a95f695b19b5500f895b6deb0" ++
+            "03016003332cd2aa3700ecc5657f1ae6",
     },
     .{
         .id = "steward",
@@ -63,14 +63,14 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_ram_mb = 512,
         .default_disk_mb = 1024,
         .filename = "steward.elf",
-        .url = "https://images.diosix.org/26.2/riscv64/steward.elf",
-        .sha256 = "e3b0c44298fc1c149afbf4c8996fb924" ++
-            "27ae41e4649b934ca495991b7852b855",
+        .url = "file:///var/lib/diosix/images/diosix-base-linux.elf",
+        .sha256 = "c148274a95f695b19b5500f895b6deb0" ++
+            "03016003332cd2aa3700ecc5657f1ae6",
     },
     .{
         .id = "debian-riscv64",
         .alias = "debian",
-        .title = "Debian 12 (Bookworm) RISC-V 64-bit netinst installer",
+        .title = "Debian 13 (Trixie) RISC-V 64-bit netinst installer",
         .tier = "leaf",
         .os_family = "linux",
         .format = "iso9660",
@@ -78,16 +78,16 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_vcpus = 2,
         .default_ram_mb = 1024,
         .default_disk_mb = 4096,
-        .filename = "debian-12-riscv64-netinst.iso",
-        .url = "https://images.diosix.org/catalog/riscv64/" ++
-            "debian-12-riscv64-netinst.iso",
-        .sha256 = "0123456789abcdef0123456789abcdef" ++
-            "0123456789abcdef0123456789abcdef",
+        .filename = "debian-13.7.0-riscv64-netinst.iso",
+        .url = "https://cdimage.debian.org/debian-cd/current/riscv64/" ++
+            "iso-cd/debian-13.7.0-riscv64-netinst.iso",
+        .sha256 = "162b1236c64a902052493d8b3ab41e2b" ++
+            "36c52975d967eedac4a2e2b2c0158c35",
     },
     .{
         .id = "alpine-riscv64",
         .alias = "alpine",
-        .title = "Alpine Linux 3.21 standard RISC-V 64-bit installer",
+        .title = "Alpine Linux 3.24 standard RISC-V 64-bit installer",
         .tier = "leaf",
         .os_family = "linux",
         .format = "iso9660",
@@ -95,16 +95,16 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_vcpus = 1,
         .default_ram_mb = 512,
         .default_disk_mb = 2048,
-        .filename = "alpine-standard-3.21-riscv64.iso",
-        .url = "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/" ++
-            "riscv64/alpine-standard-3.21.0-riscv64.iso",
-        .sha256 = "1123456789abcdef0123456789abcdef" ++
-            "0123456789abcdef0123456789abcdef",
+        .filename = "alpine-standard-3.24.3-riscv64.iso",
+        .url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/" ++
+            "riscv64/alpine-standard-3.24.3-riscv64.iso",
+        .sha256 = "0a98ca04017494e1a19f206d4934f743" ++
+            "b13be863aa0ec155ec47b7ab06930025",
     },
     .{
         .id = "freebsd-riscv64",
         .alias = "freebsd",
-        .title = "FreeBSD 14.2-RELEASE RISC-V 64-bit disc1 installer",
+        .title = "FreeBSD 14.5-RELEASE RISC-V 64-bit disc1 installer",
         .tier = "leaf",
         .os_family = "freebsd",
         .format = "iso9660",
@@ -112,16 +112,16 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_vcpus = 2,
         .default_ram_mb = 1024,
         .default_disk_mb = 4096,
-        .filename = "FreeBSD-14.2-RELEASE-riscv64-disc1.iso",
+        .filename = "FreeBSD-14.5-RELEASE-riscv64-disc1.iso",
         .url = "https://download.freebsd.org/releases/riscv/riscv64/" ++
-            "ISO-IMAGES/14.2/FreeBSD-14.2-RELEASE-riscv-riscv64-disc1.iso",
-        .sha256 = "2123456789abcdef0123456789abcdef" ++
-            "0123456789abcdef0123456789abcdef",
+            "ISO-IMAGES/14.5/FreeBSD-14.5-RELEASE-riscv-riscv64-disc1.iso",
+        .sha256 = "17e8b3d3435238853f39f9587f3b6bd7" ++
+            "90c4f21b8e241d5f324e972e974d7a58",
     },
     .{
         .id = "openbsd-riscv64",
         .alias = "openbsd",
-        .title = "OpenBSD 7.6 RISC-V 64-bit official installer",
+        .title = "OpenBSD 7.9 RISC-V 64-bit official installer",
         .tier = "leaf",
         .os_family = "openbsd",
         .format = "iso9660",
@@ -129,15 +129,15 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_vcpus = 2,
         .default_ram_mb = 1024,
         .default_disk_mb = 4096,
-        .filename = "install76-riscv64.iso",
-        .url = "https://cdn.openbsd.org/pub/OpenBSD/7.6/riscv64/install76.iso",
-        .sha256 = "3123456789abcdef0123456789abcdef" ++
-            "0123456789abcdef0123456789abcdef",
+        .filename = "install79-riscv64.iso",
+        .url = "https://cdn.openbsd.org/pub/OpenBSD/7.9/riscv64/install79.img",
+        .sha256 = "3bfa301468f6ec8087cf35cdf8760390" ++
+            "a5eb7c2f83faceee8d97328adb4e025d",
     },
     .{
         .id = "netbsd-riscv64",
         .alias = "netbsd",
-        .title = "NetBSD 10.1 RISC-V 64-bit official installer",
+        .title = "NetBSD 10 RISC-V 64-bit UEFI bootloader",
         .tier = "leaf",
         .os_family = "netbsd",
         .format = "iso9660",
@@ -145,11 +145,11 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_vcpus = 2,
         .default_ram_mb = 1024,
         .default_disk_mb = 4096,
-        .filename = "NetBSD-10.1-riscv64.iso",
-        .url = "https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/images/" ++
-            "NetBSD-10.1-riscv64.iso",
-        .sha256 = "4123456789abcdef0123456789abcdef" ++
-            "0123456789abcdef0123456789abcdef",
+        .filename = "NetBSD-10-bootriscv64.efi",
+        .url = "https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/latest/" ++
+            "riscv-riscv64/installation/misc/bootriscv64.efi",
+        .sha256 = "ff6e1ee13b7594c8b8feeef2121c45f1" ++
+            "697373942d96b6c926ca4cfdff610f39",
     },
 };
 

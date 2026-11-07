@@ -49,13 +49,27 @@ hw_xint_init:
 .align 8
 # Entry point for machine-level handler of interrupts and exceptions (xint).
 # Interrupts are automatically disabled on entry.
-# Right now, xints are non-reentrant: if an xint handler is interrupted, the
-# previous frame will be overwritten. Do not enable M-mode interrupts inside it.
+# Supports nested synchronous M-mode traps (such as safe CSR/HLV probing)
+# by preserving the active M-mode stack pointer when mstatus.MPP == M-mode.
 xint_machine_entry_handler:
-    # Get xint stack from mscratch by swapping it for interrupted code's sp.
+    # Swap sp with mscratch (mscratch holds top of xint stack == &CpuContext).
     csrrw   sp, mscratch, sp
-    # Now: sp = top of xint stack, mscratch = interrupted code's sp.
 
+    # Stash t0 and t1 in reserved scratch slots in CPU_PRIVATE_VARS.
+    sd      t0, CPU_SCRATCH_T0_OFFSET(sp)
+    sd      t1, CPU_SCRATCH_T1_OFFSET(sp)
+    mv      t1, sp
+
+    # If the trap originated in M-mode (mstatus.MPP == 3), keep using the
+    # interrupted M-mode stack pointer (in mscratch) so we do not clobber
+    # the outer guest trap frame on the xint stack.
+    csrr    t0, mstatus
+    srli    t0, t0, MSTATUS_MPP_SHIFT
+    andi    t0, t0, MSTATUS_MPP_MASK_BITS
+    addi    t0, t0, -MSTATUS_MPP_MACHINE
+    bnez    t0, 1f
+    csrr    sp, mscratch
+1:
     # Reserve space to preserve all 32 general-purpose CPU registers.
     addi    sp, sp, -(XINT_REGISTER_FRAME_SIZE)
     # Skip x0 (zero) and x2 (sp), stack all other registers.
@@ -66,17 +80,19 @@ xint_machine_entry_handler:
       .set reg, reg + 1
     .endr
 
+    # Write the true pre-trap t0 (x5) and t1 (x6) into the register frame.
+    ld      t0, CPU_SCRATCH_T0_OFFSET(t1)
+    sd      t0, (5 * 8)(sp)
+    ld      t0, CPU_SCRATCH_T1_OFFSET(t1)
+    sd      t0, (6 * 8)(sp)
+
     # Stack the interrupted code's sp as x2 (sp) in register block.
     csrr    t0, mscratch
     sd      t0, (2 * 8)(sp)
 
-    # Restore mscratch to top of xint stack so hypervisor functions relying on
-    # mscratch continue to work.
-    addi    t0, sp, XINT_REGISTER_FRAME_SIZE
-    csrw    mscratch, t0
-
-    # Ensure tp points to this CPU's host CpuContext.
-    mv      tp, t0
+    # Restore mscratch and tp to top of xint stack (&CpuContext, in t1).
+    csrw    mscratch, t1
+    mv      tp, t1
 
     # Pass current sp to exception/hw handler as a pointer in a0 so higher-level
     # hypervisor code can read and modify any of the stacked registers.

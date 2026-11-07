@@ -58,6 +58,9 @@ pub const SystemHardwareInfo = struct {
     ram_base: u64 = DEFAULT_RAM_BASE,
     ram_size: u64 = DEFAULT_RAM_SIZE,
     uart_base: ?usize = null,
+    uart_reg_shift: u3 = 0,
+    uart_reg_io_width: u8 = 1,
+    uart_is_sifive: bool = false,
     clint_base: ?usize = null,
     plic_base: ?usize = null,
 };
@@ -67,6 +70,8 @@ const PropName = enum {
     @"#size-cells",
     reg,
     compatible,
+    @"reg-shift",
+    @"reg-io-width",
 };
 
 /// Read 32-bit big-endian integer from unaligned memory.
@@ -290,10 +295,25 @@ pub fn parseHardwareInfo(dtb_ptr: [*]const u8) FdtError!SystemHardwareInfo {
                         },
                         .compatible => {
                             const compat_val = val_ptr[0..prop_len];
-                            if (containsString(compat_val, "ns16550a") or
-                                containsString(compat_val, "sifive,uart0") or
-                                containsString(compat_val, "snps,dw-apb-uart"))
-                            {
+                            if (containsString(compat_val, "sifive,uart0")) {
+                                info.uart_is_sifive = true;
+                                if (info.uart_base == null) {
+                                    info.uart_base = DEFAULT_UART_BASE;
+                                }
+                            } else if (containsString(
+                                compat_val,
+                                "snps,dw-apb-uart",
+                            )) {
+                                if (info.uart_reg_shift == 0) {
+                                    info.uart_reg_shift = 2;
+                                }
+                                if (info.uart_reg_io_width == 1) {
+                                    info.uart_reg_io_width = 4;
+                                }
+                                if (info.uart_base == null) {
+                                    info.uart_base = DEFAULT_UART_BASE;
+                                }
+                            } else if (containsString(compat_val, "ns16550a")) {
                                 if (info.uart_base == null) {
                                     info.uart_base = DEFAULT_UART_BASE;
                                 }
@@ -314,6 +334,28 @@ pub fn parseHardwareInfo(dtb_ptr: [*]const u8) FdtError!SystemHardwareInfo {
                             {
                                 if (info.plic_base == null) {
                                     info.plic_base = DEFAULT_PLIC_BASE;
+                                }
+                            }
+                        },
+                        .@"reg-shift" => {
+                            if (prop_len >= 4 and
+                                (containsString(node_name, "uart") or
+                                    containsString(node_name, "serial")))
+                            {
+                                const shift = readU32Be(val_ptr);
+                                if (shift <= 4) {
+                                    info.uart_reg_shift = @intCast(shift);
+                                }
+                            }
+                        },
+                        .@"reg-io-width" => {
+                            if (prop_len >= 4 and
+                                (containsString(node_name, "uart") or
+                                    containsString(node_name, "serial")))
+                            {
+                                const width = readU32Be(val_ptr);
+                                if (width == 1 or width == 4) {
+                                    info.uart_reg_io_width = @intCast(width);
                                 }
                             }
                         },

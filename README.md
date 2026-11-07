@@ -13,8 +13,10 @@ Diosix is a type-1 bare-metal hypervisor written in the Zig programming
 language for multi-core 64-bit RISC-V systems. It allows machines large and
 small to run multiple hardware-isolated guest operating systems simultaneously.
 
-The hypervisor seamlessly supports 64-bit Arm and x86 guests, as well as 32-bit
-and 64-bit RISC-V guests.
+The hypervisor supports 64-bit RISC-V (`riscv64`) native guests and 32-bit
+RISC-V (`riscv32`) guests via its freestanding dynamic binary recompiler
+(`dynarec`), with 64-bit Arm (`aarch64`) and 64-bit x86 (`x86_64`) architecture
+recognition for future cross-architecture emulation.
 
 This project is an ongoing work-in-progress. By using Zig, we aim to innovate
 and iterate quickly while maintaining a strict focus on safety, security, and
@@ -90,10 +92,15 @@ follow these steps:
    cd diosix
    ```
 
-3. Use the build wrapper script to compile and run Diosix:
+3. Use the build wrapper script to compile and run Diosix in headless serial
+   mode or graphical desktop mode:
 
    ```bash
+   # Headless serial console
    ./scripts/build.sh run
+
+   # Graphical desktop (VirtIO-GPU + diosix-gui)
+   ./scripts/build.sh run-gui
    ```
 
 </details>
@@ -106,14 +113,77 @@ hypervisor in managing the host hardware and running other guests.
 Once the build completes, QEMU boots the hypervisor, which then automatically
 boots and runs the included Root VM.
 
-The hypervisor outputs debug and diagnostic information to the terminal, and
-you can interact with the running Root VM via the terminal, too.
-
 In local developer emulation (`diosix.mode=dev`), log in to the Root VM serial
 console using `root` (with developer SSH keys auto-enrolled). On live and
 installed systems, password logins are disabled in favor of cryptographic
 passkeys (`dsx auth`). If the Root VM is powered off, the hypervisor shuts down
 or restarts the host cleanly.
+
+### Explore hypervisor features
+
+Once logged into the Root VM, expand the sections below to test Diosix's core
+virtualization features, or follow the full
+[interactive hypervisor tour](docs/run.md#interactive-hypervisor-tour):
+
+<p>
+<details markdown="1">
+<summary><strong>Manage VMs, quotas, and snapshots with dsx</strong></summary>
+
+Use the `dsx` (`diosix-ctl`) command-line utility inside the Root VM to inspect
+hardware isolation, spawn child VMs, adjust live quotas, and capture snapshots:
+
+```bash
+# 1. Inspect M-mode hypervisor capabilities and Root VM status
+dsx host info
+dsx info
+
+# 2. Spawn a trusted service VM and an untrusted (sandboxed) user VM
+dsx run linux-guest --name sys-domain --trusted --vcpus 1 --ram 128M
+dsx run linux-guest --name user-domain --vcpus 2 --ram 256M
+dsx list
+
+# 3. Adjust resource quotas and reserve 25% of physical CPU capacity
+dsx quota self --ram 1024 --vcpus 4 --retained-pcpu 25
+
+# 4. Save and list a live child VM memory + disk checkpoint
+dsx snapshot save sys-domain clean-boot
+dsx snapshot list
+
+# 5. Browse SHA-256 verified guest OS images in the built-in catalog
+dsx image catalog
+```
+
+</details>
+</p>
+
+<p>
+<details markdown="1">
+<summary><strong>Boot the live image and installer</strong></summary>
+
+Build and boot the 512 MiB hybrid GUID Partition Table (GPT) release image in
+headless serial mode (or with the experimental `diosix-gui` desktop):
+
+```bash
+# Build and boot the hybrid GPT live image in serial mode
+./scripts/build.sh run-live
+
+# Or boot the live image with the experimental graphical desktop
+./scripts/build.sh run-live-gui
+```
+
+From the Root VM shell, you can also walk through the interactive system tour
+and preview bare-metal host installation:
+
+```bash
+# View the 5-step interactive system tour
+dsx tour
+
+# Preview a guided bare-metal disk installation plan
+dsx host install --mode basic --dry-run
+```
+
+</details>
+</p>
 
 To control the emulator process from your terminal:
 
@@ -121,8 +191,10 @@ To control the emulator process from your terminal:
 *  Enter the QEMU monitor shell by pressing `Ctrl-a` followed by `c`. Press
    `Ctrl-a` and `c` again to return to the hypervisor console.
 
-The following is a recording of a user building and running Diosix, and then
-logging into and interacting with the Root VM running on the hypervisor.
+The following is a verbatim recording
+([`docs/diosix-demo.cast`](docs/diosix-demo.cast), playable locally with
+`asciinema play docs/diosix-demo.cast`) of booting Diosix and managing guest
+VMs, quotas, and snapshots from the Root VM shell:
 
 [![asciicast of Diosix running](https://asciinema.org/a/1214657.svg)](https://asciinema.org/a/1214657)
 

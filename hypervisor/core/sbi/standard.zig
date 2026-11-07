@@ -25,26 +25,47 @@ pub fn handleLegacySendIpi(
     } else if (vc.exec_path == .emulated) {
         if (vc.exec_path.emulated.engine) |eng| {
             const res = eng.tlb.readU32(@truncate(mask_ptr), eng.bus);
-            if (res.trap == null) hart_mask = res.val;
+            if (res.trap != null) {
+                sbi_core.setResult(
+                    vc,
+                    context,
+                    interface.ERR_INVALID_ADDRESS,
+                    0,
+                );
+                return;
+            }
+            hart_mask = res.val;
         }
     } else if (riscv.hasHExtension()) {
         const pcpu = pcore.this();
+        const old_mstatus = riscv.readMstatus();
         pcpu.probing_active = true;
         pcpu.probe_failed = false;
-        defer pcpu.probing_active = false;
+        defer {
+            pcpu.probing_active = false;
+            riscv.writeMstatus(old_mstatus);
+        }
         var val: usize = 0;
         for (0..@sizeOf(usize)) |i| {
             const b = riscv.hlv_bu(mask_ptr +% i);
             if (pcpu.probe_failed) {
-                val = 0;
-                break;
+                sbi_core.setResult(
+                    vc,
+                    context,
+                    interface.ERR_INVALID_ADDRESS,
+                    0,
+                );
+                return;
             }
             val |= @as(usize, b) << @intCast(i * 8);
         }
         hart_mask = val;
     } else {
         const g_space = &vc.getGuest().space;
-        hart_mask = g_space.readGuestStruct(usize, mask_ptr) catch 0;
+        hart_mask = g_space.readGuestStruct(usize, mask_ptr) catch {
+            sbi_core.setResult(vc, context, interface.ERR_INVALID_ADDRESS, 0);
+            return;
+        };
     }
     const g = vc.getGuest();
     for (0..@bitSizeOf(usize)) |vid| {

@@ -42,6 +42,7 @@ const QuotaOption = enum {
     @"--ram",
     @"--pcpu",
     @"--pcpu-quota",
+    @"--retained-pcpu",
     @"--vcpus",
     @"--depth",
     @"--descendants",
@@ -56,6 +57,7 @@ pub fn cmdQuota(
 ) !void {
     var ram_pages: usize = 0;
     var pcpu_pct: usize = 0;
+    var retained_pcpu_pct: usize = 0;
     var vcpus: usize = 0;
     var depth: usize = 0;
     var descendants: usize = 0;
@@ -123,6 +125,40 @@ pub fn cmdQuota(
                     }
                     has_update = true;
                 },
+                .@"--retained-pcpu" => {
+                    if (i + 1 >= argv.len) {
+                        printStr(
+                            "Error: '--retained-pcpu' requires a percentage " ++
+                                "(1-99).\n",
+                        );
+                        return;
+                    }
+                    i += 1;
+                    const raw_ret = std.mem.trimEnd(
+                        u8,
+                        std.mem.span(argv[i]),
+                        "%",
+                    );
+                    retained_pcpu_pct = std.fmt.parseInt(
+                        usize,
+                        raw_ret,
+                        10,
+                    ) catch {
+                        printStr(
+                            "Error: Invalid numeric value for " ++
+                                "'--retained-pcpu'.\n",
+                        );
+                        return;
+                    };
+                    if (retained_pcpu_pct == 0 or retained_pcpu_pct > 99) {
+                        printStr(
+                            "Error: '--retained-pcpu' must be between 1 " ++
+                                "and 99%.\n",
+                        );
+                        return;
+                    }
+                    has_update = true;
+                },
                 .@"--vcpus" => {
                     if (i + 1 >= argv.len) {
                         printStr("Error: Option '--vcpus' requires a value.\n");
@@ -183,8 +219,9 @@ pub fn cmdQuota(
             }
         } else if (std.mem.startsWith(u8, flag, "-")) {
             common.printFmt(
-                "Error: Unknown option '{s}'. Available: --pcpu, --ram, " ++
-                    "--vcpus, --depth, --descendants.\n",
+                "Error: Unknown option '{s}'. Available: --pcpu, " ++
+                    "--retained-pcpu, --ram, --vcpus, --depth, " ++
+                    "--descendants.\n",
                 .{flag},
             );
             return;
@@ -193,6 +230,7 @@ pub fn cmdQuota(
 
     if (!has_update) {
         if (client.getInfo(target_cid)) |info| {
+            const is_root = info.is_root != 0;
             const used_ram_mb =
                 (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
             const max_ram_mb = if (info.max_ram_pages == std.math.maxInt(usize))
@@ -209,11 +247,15 @@ pub fn cmdQuota(
                 info.pcpu_quota_pct
             else
                 100;
-            const del_pcpu: u32 = @min(
-                info.delegated_pcpu_pct,
-                api.MAX_CHILD_PCPU_QUOTA_PCT,
-            );
-            const ret_pcpu: u32 = 100 -| del_pcpu;
+            const max_del: u32 = if (is_root and pcpu_q < 100)
+                pcpu_q
+            else
+                api.MAX_CHILD_PCPU_QUOTA_PCT;
+            const del_pcpu: u32 = @min(info.delegated_pcpu_pct, max_del);
+            const ret_pcpu: u32 = if (is_root and pcpu_q < 100)
+                100 - pcpu_q
+            else
+                100 -| del_pcpu;
 
             const q_fmt =
                 "Resource Quotas (CID {d}):\n" ++
@@ -243,13 +285,15 @@ pub fn cmdQuota(
         }
     }
 
+    const eff_pcpu_arg =
+        if (retained_pcpu_pct > 0) retained_pcpu_pct else pcpu_pct;
     client.setQuotaWithPcpu(
         target_cid,
         ram_pages,
         vcpus,
         depth,
         descendants,
-        pcpu_pct,
+        eff_pcpu_arg,
         0,
     ) catch |err| {
         printApiError("Set quota", err);
@@ -439,5 +483,9 @@ test "vm: QuotaOption enum parses expected CLI flags" {
     try std.testing.expectEqual(
         QuotaOption.@"--ram",
         std.meta.stringToEnum(QuotaOption, "--ram").?,
+    );
+    try std.testing.expectEqual(
+        QuotaOption.@"--retained-pcpu",
+        std.meta.stringToEnum(QuotaOption, "--retained-pcpu").?,
     );
 }

@@ -19,6 +19,7 @@ pub const VCpu = emulation_native.VCpu;
 pub const SoftTlb = emulation_native.SoftTlb;
 pub const Engine = emulation_native.Engine;
 const rv32_arch = @import("../hardware/emulation/arch/riscv32/mod.zig");
+const aarch64_psci = @import("../hardware/emulation/arch/aarch64/psci.zig");
 const sbi = @import("sbi.zig");
 const config = @import("config");
 
@@ -87,6 +88,9 @@ fn uartOutputCallback(char: u8) void {
 pub fn init(vc: *vcore.VirtualCore) !void {
     if (vc.exec_path != .emulated) return error.InvalidExecPath;
     const em = &vc.exec_path.emulated;
+    if (em.target_arch == .aarch64 or em.target_arch == .x86_64) {
+        return error.UnsupportedGuestArchitecture;
+    }
     if (em.vcpu != null and em.engine != null) return;
 
     const lock_state = emulated_slots_lock.lock();
@@ -123,6 +127,7 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 
     @memset(@as([*]u8, @ptrCast(vcpu_ptr))[0..@sizeOf(VCpu)], 0);
     vcpu_ptr.id = vc.id;
+    vcpu_ptr.guest_arch = @backingInt(em.target_arch);
     vcpu_ptr.privilege_mode = riscv.PrivilegeMode.PRIV_SUPERVISOR;
     vcpu_ptr.medeleg = DELEGATE_ALL_MASK;
     vcpu_ptr.mideleg = DELEGATE_ALL_MASK;
@@ -387,6 +392,21 @@ pub fn run(vc: *vcore.VirtualCore) bool {
             return true;
         },
         .ecall => {
+            if (em.target_arch == .aarch64) {
+                const func_id: u32 = @truncate(vcpu_ptr.regs[31]);
+                if ((func_id & 0xbfff_0000) == 0x8400_0000) {
+                    const res = aarch64_psci.handlePSCI(
+                        vc,
+                        vc.id,
+                        func_id,
+                        vcpu_ptr.regs[1],
+                        vcpu_ptr.regs[2],
+                        vcpu_ptr.regs[3],
+                    );
+                    vcpu_ptr.setReg(31, @as(u32, @bitCast(res)));
+                    return vc.guest.state != .valid;
+                }
+            }
             var context: riscv.ThreadContext = undefined;
             inline for (0..32) |i| context[i] = @truncate(vcpu_ptr.regs[i]);
             sbi.handle(vc, 0, &context);
@@ -441,4 +461,18 @@ test "Emulated VCore dynamic slot allocation, isolation, and reclaim" {
     try testing.expectEqual(s1, vc4.exec_path.emulated.slot_idx.?);
 
     for ([_]*vcore.VirtualCore{ vcs[0], vcs[2], vcs[3], vc4 }) |vc| deinit(vc);
+
+    const g_arm = try guest.createGuest(
+        allocator,
+        false,
+        false,
+        null,
+        0x40000000,
+        0x40000000,
+        0x100000,
+        .aarch64,
+    );
+    defer g_arm.deinit();
+    const vc_arm = try g_arm.addVcore(0, 0x40080000, 0x44000000, .normal, null);
+    try testing.expectError(error.UnsupportedGuestArchitecture, init(vc_arm));
 }

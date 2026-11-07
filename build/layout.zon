@@ -53,7 +53,6 @@
         },
         .input_dirs = .{
             "tools/alsa-init",
-            "tools/diosix-config/src",
             "tools/diosix-ctl/src",
             "tools/diosix-gui/assets",
             "tools/diosix-gui/src",
@@ -103,11 +102,6 @@
             .{
                 .name = "diosix-gui-unit-tests",
                 .root = "tools/diosix-gui/src/main.zig",
-                .with_interface = true,
-            },
-            .{
-                .name = "diosix-config-unit-tests",
-                .root = "tools/diosix-config/src/main.zig",
                 .with_interface = true,
             },
             .{

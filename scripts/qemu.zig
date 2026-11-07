@@ -255,6 +255,25 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         qemu_gui_args.items,
     );
 
+    var qemu_live_gui_args = ArrayList([]const u8).empty;
+    defer qemu_live_gui_args.deinit(b.allocator);
+    for (qemu_gui_args.items) |arg| {
+        const replaced = if (std.mem.eql(u8, arg, storage_drive_arg))
+            "file=" ++ live_img_path ++ ",if=none,format=raw,id=hd0"
+        else if (std.mem.eql(u8, arg, dev_append_str))
+            "diosix.mode=live"
+        else
+            arg;
+        try qemu_live_gui_args.append(b.allocator, replaced);
+    }
+    qemu.add(
+        &create_live_cmd.step,
+        opt_tpm_step,
+        "run-live-gui",
+        "Run the hypervisor GUI with the live GPT disk image",
+        qemu_live_gui_args.items,
+    );
+
     var qemu_tpm_args = ArrayList([]const u8).empty;
     defer qemu_tpm_args.deinit(b.allocator);
     for (qemu_gui_args.items) |arg| {

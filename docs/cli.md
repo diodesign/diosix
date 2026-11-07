@@ -218,8 +218,9 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
     (`RunFlags.CONFIDENTIAL`). Once the Constitutional Charter is sealed in
     M-mode, `MAP_CHILD_MEM` on a confidential VM is strictly rejected by the
     hypervisor even from the Root VM.
-*   `--arch <arch>` / `-a <arch>` *(optional)*: Target architecture (`riscv64`,
-    `riscv32`, `aarch64`, `x86_64`).
+*   `--arch <arch>` / `-a <arch>` *(optional)*: Target architecture (`riscv64`
+    or `riscv32`; `aarch64` and `x86_64` are recognized and report that
+    cross-architecture emulation is not yet supported).
 
 Examples:
 ```bash
@@ -540,7 +541,7 @@ Subcommands:
     custom or private mirror entries directly in `/etc/diosix/catalog.toml`.
     Pass `--json` (`-j`) for machine-readable output.
 *   `pull <catalog-id|url> [--name <name>] [--sha256 <hex>]`
-    `[--allow-unverified] [--offline-stub] [--json]` (or `fetch`): Downloads an
+    `[--allow-unverified] [--json]` (or `fetch`): Downloads an
     image by its `Catalog ID` (or short alias) from `/etc/diosix/catalog.toml`,
     or directly from any `https://`, `http://`, or `file://` URL pointing to an
     S-mode ELF64 kernel (`.elf`) or bootable ISO9660 image (`.iso`).
@@ -550,10 +551,6 @@ Subcommands:
         fails closed on mismatch. Pulling a raw ad-hoc URL requires
         `--sha256 <hex>` (or `--allow-unverified` to explicitly bypass integrity
         verification).
-    *   **Offline testing (`--offline-stub`)**: If a remote mirror is
-        unreachable, `dsx image pull` fails closed by default. Pass
-        `--offline-stub` only when synthesizing a local test stub in airgapped
-        continuous integration (CI) environments.
 *   `import <file> [--name <name>]` (or `add`): Imports a local ISO or ELF
     kernel into the repository.
 *   `delete <name>` (or `rm`): Deletes an image or ISO from the repository.
@@ -593,7 +590,7 @@ Bootloader Shim (`guest-shim-riscv64.elf`).
 
 ```bash
 dsx install-guest <os-name|iso> [--name <vm>] [--disk <disk>] \
-    [--size <size>] [--vcpus <N>] [--ram <size>] [--offline-stub]
+    [--size <size>] [--vcpus <N>] [--ram <size>]
 ```
 
 *   `os-name|iso`: Official catalog ID/alias (such as `debian-riscv64` or
@@ -606,8 +603,6 @@ dsx install-guest <os-name|iso> [--name <vm>] [--disk <disk>] \
 *   `--vcpus <N>` *(optional)*: vCPU count (default: catalog spec or `2`).
 *   `--ram <size>` *(optional)*: RAM allocation ceiling (default: catalog spec
     or `1024M`).
-*   `--offline-stub` *(optional)*: Synthesize a minimal bootable ISO9660 test
-    stub if the remote mirror is unreachable in offline test environments.
 
 When installation completes and `dsx restart <vm>` is invoked, `dsx`
 automatically detaches the `--cdrom` installer media and boots the VM directly

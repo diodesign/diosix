@@ -10,7 +10,6 @@ const common = @import("common.zig");
 const sysconfig = @import("sysconfig.zig");
 const gui_cmd = @import("gui.zig");
 const host_info = @import("host/info.zig");
-const linux = std.os.linux;
 
 pub const cmdGui = gui_cmd.cmdGui;
 pub const cmdTour = gui_cmd.cmdTour;
@@ -26,7 +25,6 @@ const printStr = common.printStr;
 const printApiError = common.printApiError;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
-const writeFile = common.writeFile;
 const fileExistsPath = common.fileExistsPath;
 const detectSeatProfile = common.detectSeatProfile;
 const loadRuntimeSystemConfig = common.loadRuntimeSystemConfig;
@@ -295,12 +293,9 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
     }
 
     if (!plan.dry_run) {
-        _ = linux.mkdir(sysconfig.VAR_LIB_DIOSIX_DIR, 0o755);
         const rec_toml = try installer.allocInstallReceiptToml(allocator, plan);
         defer allocator.free(rec_toml);
-        if (rec_toml.len > 0) {
-            try writeFile(installer.INSTALL_RECEIPT_PATH, rec_toml);
-        }
+        try installer.applyInstallPlan(allocator, plan, rec_toml);
     }
 
     const out = try installer.allocInstallPlanOutput(

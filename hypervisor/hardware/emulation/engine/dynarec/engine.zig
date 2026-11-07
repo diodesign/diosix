@@ -241,7 +241,10 @@ pub const Engine = struct {
                 self.trap(cause, ret_pc, ret_pc);
                 return null;
             }
-            const dec_step = decoder_rv32.decode(fetch_step.val);
+            const dec_step = decoder_rv32.decodeForArch(
+                self.vcpu.guest_arch,
+                fetch_step.val,
+            );
             if (dec_step.insn != .ecall and
                 dec_step.insn != .wfi and
                 dec_step.insn != .pause)
@@ -340,7 +343,10 @@ pub const Engine = struct {
                 continue;
             }
 
-            const decoded = decoder_rv32.decode(fetch_res.val);
+            const decoded = decoder_rv32.decodeForArch(
+                self.vcpu.guest_arch,
+                fetch_res.val,
+            );
             if (decoded.insn == .ecall) {
                 if (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR) {
                     self.vcpu.pc = pc_before + decoded.len;

@@ -51,6 +51,7 @@ pub const readMtval = csr.readMtval;
 pub const readMstatus = csr.readMstatus;
 pub const writeMstatus = csr.writeMstatus;
 pub const readMhartid = csr.readMhartid;
+pub const writeMscratch = csr.writeMscratch;
 pub const readMie = csr.readMie;
 pub const writeMie = csr.writeMie;
 pub const readMip = csr.readMip;
@@ -89,6 +90,8 @@ pub const writeHstateen0 = csr.writeHstateen0;
 pub const hlv_w = csr.hlv_w;
 pub const hlv_wu = csr.hlv_wu;
 pub const hlv_hu = csr.hlv_hu;
+pub const hlvx_hu = csr.hlvx_hu;
+pub const hlvx_wu = csr.hlvx_wu;
 pub const hlv_bu = csr.hlv_bu;
 pub const hlv_d = csr.hlv_d;
 
@@ -251,7 +254,7 @@ pub const VectorState = extern struct {
 comptime {
     const assert = std.debug.assert;
     assert(@sizeOf(ThreadContext) == 32 * @sizeOf(u64));
-    assert(@sizeOf(CpuContext) <= 4096);
+    assert(@sizeOf(CpuContext) <= 0x7f0);
     assert(@offsetOf(MachineState, "mepc") == 0);
     assert(@offsetOf(MachineState, "mstatus") == 8);
     assert(@offsetOf(MachineState, "hstatus") == 16);

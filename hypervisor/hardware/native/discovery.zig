@@ -14,6 +14,9 @@ pub const HostHardware = struct {
     ram_base: u64,
     ram_size: u64,
     uart_base: ?usize,
+    uart_reg_shift: u3 = 0,
+    uart_reg_io_width: u8 = 1,
+    uart_is_sifive: bool = false,
     clint_base: ?usize,
     plic_base: ?usize,
 };
@@ -47,12 +50,22 @@ pub fn probe(fdt_paddr: usize) HostHardware {
             .ram_base = info.ram_base,
             .ram_size = info.ram_size,
             .uart_base = info.uart_base,
+            .uart_reg_shift = info.uart_reg_shift,
+            .uart_reg_io_width = info.uart_reg_io_width,
+            .uart_is_sifive = info.uart_is_sifive,
             .clint_base = info.clint_base,
             .plic_base = info.plic_base,
         };
     };
 
-    if (hw.uart_base) |u| uart.init(u);
+    if (hw.uart_base) |u| {
+        uart.initConfig(
+            u,
+            hw.uart_reg_shift,
+            hw.uart_reg_io_width,
+            if (hw.uart_is_sifive) .sifive else .ns16550,
+        );
+    }
     if (hw.clint_base) |c| clint.init(c);
     if (hw.plic_base) |p| plic.init(p);
 

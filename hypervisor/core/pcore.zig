@@ -11,17 +11,26 @@ const atomic = @import("atomic.zig");
 
 pub const TABLE_ROWS: usize = 32;
 pub const MAX_SYSTEM_CORES: usize = 4096;
+pub const DYNAMIC_CORE_STACK_SIZE: usize = 16 * 1024;
 pub const DYNAMIC_CORE_HEAP_SIZE: usize = 128 * 1024;
 pub const TP_REQUIRED_ALIGNMENT: usize = 16;
 
 pub const DynamicCoreNode = struct {
+    xint_stack: [DYNAMIC_CORE_STACK_SIZE / @sizeOf(u64)]u64 = undefined,
+    context: riscv.CpuContext,
     id: usize,
     hart_id: usize,
-    context: riscv.CpuContext,
     run_lock: atomic.SpinLock = atomic.SpinLock.init(),
     heap_mem: []u8,
     next: ?*DynamicCoreNode = null,
 };
+
+comptime {
+    std.debug.assert(
+        @offsetOf(DynamicCoreNode, "context") ==
+            @offsetOf(DynamicCoreNode, "xint_stack") + DYNAMIC_CORE_STACK_SIZE,
+    );
+}
 
 pub const TableRow = struct {
     static_ptr: ?*riscv.CpuContext = null,

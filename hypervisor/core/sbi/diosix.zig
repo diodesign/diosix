@@ -156,6 +156,13 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         };
     }
 
+    const req_arch = std.enums.fromInt(
+        guest.TargetArch,
+        args.target_arch,
+    ) orelse {
+        reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
+        return;
+    };
     const detected_arch: ?guest.TargetArch = if (elf_sz > 0)
         loader.Loader.detectArchFromGuest(&g.space, elf_ptr, elf_sz) catch |e| {
             const code = if (e == loader.LoaderError.TranslationFailed)
@@ -168,11 +175,17 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     else
         null;
 
+    const eff_arch = detected_arch orelse req_arch;
+    if (eff_arch == .aarch64 or eff_arch == .x86_64) {
+        reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0);
+        return;
+    }
+
     const created_new = (args.child_id == 0);
     const child = (if (args.child_id >= guest.CID_FIRST_CHILD)
         g.getGuestByCid(args.child_id)
     else if (created_new)
-        g.createChild(want_trusted, detected_arch orelse .riscv64, 1) catch null
+        g.createChild(want_trusted, eff_arch, 1) catch null
     else
         null) orelse {
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
@@ -285,6 +298,10 @@ fn handleStart(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     };
     if (!g.is_trusted and !g.is_root and child.parent != g) {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+        return;
+    }
+    if (child.target_arch == .aarch64 or child.target_arch == .x86_64) {
+        reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0);
         return;
     }
     if ((child.is_steward and charter.isCharterSealed()) or

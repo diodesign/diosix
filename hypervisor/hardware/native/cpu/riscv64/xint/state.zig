@@ -36,7 +36,14 @@ pub fn saveGuestStateFromHardware(
     if (vc.exec_path == .native) {
         saveFpAndVectorState(vc);
         if (riscv.hasHExtension()) {
-            vc.getNativeMachine().hstatus = riscv.readHstatus();
+            var hstatus = riscv.readHstatus() | riscv.HSTATUS.SPV;
+            if (riscv.getPreviousPrivilege() == .supervisor) {
+                hstatus |= riscv.HSTATUS.SPVP;
+            } else {
+                hstatus &= ~@as(usize, riscv.HSTATUS.SPVP);
+            }
+            riscv.writeHstatus(hstatus);
+            vc.getNativeMachine().hstatus = hstatus;
             vc.getNativeMachine().hvip = riscv.readHvip();
             riscv.saveVsState(vc.getNativeGuestState());
         } else {
@@ -442,56 +449,42 @@ test "state: save and restore hstatus, FP, and Vector registers per vCore" {
     var vc0 = vcore.VirtualCore.init(0, g, 0x80000000, 0x80001000, .normal);
     var vc1 = vcore.VirtualCore.init(1, g, 0x80000000, 0x80001000, .normal);
     var ctx = std.mem.zeroes(riscv.ThreadContext);
-    riscv.writeHstatus(riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP);
+    riscv.writeMstatus(riscv.MSTATUS.MPP_SUPERVISOR);
+    riscv.writeHstatus(riscv.HSTATUS.SPV);
 
-    // Populate hardware FP and Vector state while vc0 is active, then save.
-    riscv.mock.mock_hw_fp_state.fregs[0] = 0x3ff0000000000000;
-    riscv.mock.mock_hw_fp_state.fregs[31] = 0x400921fb54442d18;
-    riscv.mock.mock_hw_fp_state.fcsr = 0x1f;
-    riscv.mock.mock_hw_vec_state.vregs[0] = 0xa5;
-    riscv.mock.mock_hw_vec_state.vregs[1023] = 0x5a;
-    riscv.mock.mock_hw_vec_state.vl = 64;
-    riscv.mock.mock_hw_vec_state.vtype = 0xd3; // e32, m8, ta, ma (vill=0)
-    riscv.mock.mock_hw_vec_state.vcsr = 0x3;
-    riscv.mock.mock_hw_vec_state.vstart = 4;
+    const hw_fp = &riscv.mock.mock_hw_fp_state;
+    const hw_vec = &riscv.mock.mock_hw_vec_state;
+    hw_fp.fregs[0] = 0x3ff0000000000000;
+    hw_fp.fregs[31] = 0x400921fb54442d18;
+    hw_fp.fcsr = 0x1f;
+    hw_vec.vregs[0] = 0xa5;
+    hw_vec.vregs[1023] = 0x5a;
+    hw_vec.vl = 64;
+    hw_vec.vtype = 0xd3; // e32, m8, ta, ma (vill=0)
+    hw_vec.vcsr = 0x3;
+    hw_vec.vstart = 4;
 
     saveGuestStateFromHardware(&vc0, &ctx, 0x80002000);
-    try testing.expectEqual(
-        @as(u64, riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP),
-        vc0.getNativeMachine().hstatus,
-    );
+    const exp_hstatus: u64 = riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
+    try testing.expectEqual(exp_hstatus, vc0.getNativeMachine().hstatus);
 
-    // Context-switch to vc1: hardware FP/Vector state must reset to vc1's
-    // initial state (vtype = VTYPE_VILL_BIT) and not leak vc0's registers.
     syncGuestStateToHardware(&vc1);
-    try testing.expectEqual(@as(u64, 0), riscv.mock.mock_hw_fp_state.fregs[0]);
-    try testing.expectEqual(
-        riscv.VTYPE_VILL_BIT,
-        riscv.mock.mock_hw_vec_state.vtype,
-    );
+    try testing.expectEqual(@as(u64, 0), hw_fp.fregs[0]);
+    try testing.expectEqual(riscv.VTYPE_VILL_BIT, hw_vec.vtype);
 
-    // Mutate vc1's hardware FP/Vector state and save vc1.
-    riscv.mock.mock_hw_fp_state.fregs[0] = 0xdeadbeefcafebabe;
-    riscv.mock.mock_hw_vec_state.vl = 16;
-    riscv.mock.mock_hw_vec_state.vtype = 0xc8;
+    hw_fp.fregs[0] = 0xdeadbeefcafebabe;
+    hw_vec.vl = 16;
+    hw_vec.vtype = 0xc8;
     saveGuestStateFromHardware(&vc1, &ctx, 0x80003000);
 
-    // Context-switch back to vc0 and verify vc0's FP/Vector state is intact.
     syncGuestStateToHardware(&vc0);
-    try testing.expectEqual(
-        @as(u64, 0x3ff0000000000000),
-        riscv.mock.mock_hw_fp_state.fregs[0],
-    );
-    try testing.expectEqual(
-        @as(u64, 0x400921fb54442d18),
-        riscv.mock.mock_hw_fp_state.fregs[31],
-    );
-    try testing.expectEqual(@as(u64, 0x1f), riscv.mock.mock_hw_fp_state.fcsr);
-    const vregs = &riscv.mock.mock_hw_vec_state.vregs;
-    try testing.expectEqual(@as(u8, 0xa5), vregs[0]);
-    try testing.expectEqual(@as(u8, 0x5a), vregs[1023]);
-    try testing.expectEqual(@as(u64, 64), riscv.mock.mock_hw_vec_state.vl);
-    try testing.expectEqual(@as(u64, 0xd3), riscv.mock.mock_hw_vec_state.vtype);
-    try testing.expectEqual(@as(u64, 0x3), riscv.mock.mock_hw_vec_state.vcsr);
-    try testing.expectEqual(@as(u64, 4), riscv.mock.mock_hw_vec_state.vstart);
+    try testing.expectEqual(@as(u64, 0x3ff0000000000000), hw_fp.fregs[0]);
+    try testing.expectEqual(@as(u64, 0x400921fb54442d18), hw_fp.fregs[31]);
+    try testing.expectEqual(@as(u64, 0x1f), hw_fp.fcsr);
+    try testing.expectEqual(@as(u8, 0xa5), hw_vec.vregs[0]);
+    try testing.expectEqual(@as(u8, 0x5a), hw_vec.vregs[1023]);
+    try testing.expectEqual(@as(u64, 64), hw_vec.vl);
+    try testing.expectEqual(@as(u64, 0xd3), hw_vec.vtype);
+    try testing.expectEqual(@as(u64, 0x3), hw_vec.vcsr);
+    try testing.expectEqual(@as(u64, 4), hw_vec.vstart);
 }

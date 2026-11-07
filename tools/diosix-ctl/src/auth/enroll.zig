@@ -6,6 +6,7 @@
 const std = @import("std");
 const passkey = @import("../passkey.zig");
 const common = @import("../common.zig");
+const hardware = @import("hardware.zig");
 
 const printStr = common.printStr;
 const sanitizeJsonStr = common.sanitizeJsonStr;
@@ -14,8 +15,6 @@ const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
 const appendFileLine = common.appendFileLine;
 const generateEntropyBytes = common.generateEntropyBytes;
-
-const Ed25519 = std.crypto.sign.Ed25519;
 
 /// Largest public key file accepted by `--file`: one OpenSSH key line, far
 /// below a page.
@@ -134,24 +133,15 @@ pub fn cmdAuthEnroll(
             return;
         }
     } else if (line_to_enroll == null and (tpm_mode or fido2_mode)) {
-        var seed: [Ed25519.KeyPair.seed_length]u8 = undefined;
-        try generateEntropyBytes(&seed);
-        defer std.crypto.secureZero(u8, &seed);
-        var kp = Ed25519.KeyPair.generateDeterministic(seed) catch {
-            printStr("Error: Could not generate passkey key pair.\n");
+        synth_line = hardware.enrollHardwarePasskey(
+            allocator,
+            sys_cfg.keysDir(),
+            tpm_mode,
+            label_arg,
+        ) catch {
+            printStr("Error: Could not enroll hardware passkey.\n");
             return;
         };
-        defer std.crypto.secureZero(u8, &kp.secret_key.bytes);
-        var b64_buf: [passkey.ED25519_WIRE_B64_LEN]u8 = undefined;
-        const b64_str = passkey.encodeOpenSshEd25519BlobBase64(
-            kp.public_key.toBytes(),
-            &b64_buf,
-        );
-        const prefix_comment = if (tpm_mode) "tpm2:" else "fido2:";
-        synth_line = try allocator.print(
-            "ssh-ed25519 {s} {s}{s}",
-            .{ b64_str, prefix_comment, label_arg },
-        );
         line_to_enroll = synth_line;
     }
 
@@ -203,6 +193,7 @@ pub fn cmdAuthEnroll(
 
 test "auth/enroll: option enum parses enrollment flags" {
     std.testing.refAllDecls(@This());
+    _ = hardware;
     try std.testing.expectEqual(
         AuthEnrollOption.@"--tpm",
         std.meta.stringToEnum(AuthEnrollOption, "--tpm").?,

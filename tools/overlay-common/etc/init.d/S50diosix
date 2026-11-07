@@ -196,24 +196,47 @@ case "$1" in
         fi
     fi
 
-    # Automount host storage disk at /var/lib/diosix.
+    # Mount or stage /var/lib/diosix depending on boot mode.
     mkdir -p "$STATE_DIR" "$ETC_DIR"
-    for dev in /dev/vda2 /dev/vda1 /dev/vda /dev/sda2 /dev/sda1 /dev/sda \
-        /dev/nvme0n1p2 /dev/nvme0n1p1 /dev/nvme0n1 \
-        /dev/mmcblk0p2 /dev/mmcblk0p1 /dev/mmcblk0; do
-        if [ -b "$dev" ]; then
-            if mount -o rw "$dev" "$STATE_DIR" 2>/dev/null || \
-               mount "$dev" "$STATE_DIR" 2>/dev/null; then
-                echo "Mounted persistent storage $dev on $STATE_DIR."
-                SYS_TOML="${STATE_DIR}/manifests/system.toml"
-                if [ -f "$SYS_TOML" ] && [ ! -f "${ETC_DIR}/system.toml" ]; then
-                    ln -sf "$SYS_TOML" "${ETC_DIR}/system.toml" \
-                        2>/dev/null || true
-                fi
+    CAND_DEVS="/dev/vda3 /dev/vda2 /dev/vda /dev/sda3 /dev/sda2 /dev/sda \
+        /dev/nvme0n1p3 /dev/nvme0n1p2 /dev/nvme0n1 \
+        /dev/mmcblk0p3 /dev/mmcblk0p2 /dev/mmcblk0"
+    if grep -qE "diosix\.mode=(live|ephemeral|install)" /proc/cmdline \
+       2>/dev/null; then
+        mount -t tmpfs -o size=256M tmpfs "$STATE_DIR" 2>/dev/null || true
+        LIVE_MNT="/run/diosix-live"
+        mkdir -p "$LIVE_MNT"
+        for dev in $CAND_DEVS; do
+            if [ -b "$dev" ] && mount -t ext4 -o ro "$dev" "$LIVE_MNT" \
+               2>/dev/null; then
+                cp -a "$LIVE_MNT"/* "$STATE_DIR"/ 2>/dev/null || true
+                umount "$LIVE_MNT" 2>/dev/null || true
+                echo "Staged ephemeral live storage from $dev into RAM."
                 break
             fi
+        done
+        rmdir "$LIVE_MNT" 2>/dev/null || true
+    else
+        for dev in $CAND_DEVS; do
+            if [ -b "$dev" ] && \
+               mount -t ext4 -o rw "$dev" "$STATE_DIR" 2>/dev/null; then
+                echo "Mounted persistent storage $dev on $STATE_DIR."
+                break
+            fi
+        done
+    fi
+    SYS_TOML="${STATE_DIR}/manifests/system.toml"
+    if [ -f "$SYS_TOML" ] && [ ! -f "${ETC_DIR}/system.toml" ]; then
+        ln -sf "$SYS_TOML" "${ETC_DIR}/system.toml" 2>/dev/null || true
+    fi
+    if [ "$SELF_CID" = "1" ] && [ -s "${STATE_DIR}/state/hostname" ]; then
+        INST_HOST=$(head -n 1 "${STATE_DIR}/state/hostname" | \
+            tr -cd 'A-Za-z0-9.-')
+        if [ -n "$INST_HOST" ]; then
+            echo "$INST_HOST" > /etc/hostname 2>/dev/null || true
+            hostname "$INST_HOST" 2>/dev/null || true
         fi
-    done
+    fi
 
     mkdir -p "${STATE_DIR}/images" "${STATE_DIR}/iso"
     rm -f "${STATE_DIR}/images/micro-guest."* \

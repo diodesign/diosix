@@ -628,7 +628,7 @@ phases:
 - Develop `libdiosix-ui`, providing the native `wimp_poll` client API and
   structured icon definitions.
 - Implement `!Pinboard` as a standalone desktop background manager.
-- Port `diosix-config` into a native `!SysConfig` iconbar application.
+- Implement `!SysConfig` as a native iconbar configuration application.
 - Implement `!VMMgr` with drag-and-drop ISO/manifest VM launching.
 
 ### Phase 5: Foreign VM Wayland integration

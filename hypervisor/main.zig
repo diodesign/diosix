@@ -90,6 +90,7 @@ pub export fn main(cpu_core_id: usize, fdt_paddr: usize) void {
             return;
         };
         riscv.setTp(@intFromPtr(cpu_ctx));
+        riscv.writeMscratch(@intFromPtr(cpu_ctx));
         @atomicStore(u32, &dyn_boot_lock, 0, .release);
     }
 

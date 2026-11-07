@@ -81,8 +81,8 @@ This compiles the codebase to produce a platform-agnostic, universal hypervisor
 binary. While the hypervisor target architecture is always 64-bit RISC-V, the
 build process places the output Executable and Linkable Format (ELF) executable
 in a directory based on the architecture of the guest Root VM (for example,
-`./zig-out/guest-riscv64/bin/vmdiosix`, `./zig-out/guest-riscv32/bin/vmdiosix`,
-or `./zig-out/guest-aarch64/bin/vmdiosix`). The target is position-independent
+`./zig-out/guest-riscv64/bin/vmdiosix` or
+`./zig-out/guest-riscv32/bin/vmdiosix`). The target is position-independent
 and runs on any standard 64-bit RISC-V platform. The generated executable
 contains both the hypervisor and the Root VM image, ready to be booted.
 
@@ -116,7 +116,17 @@ persistent guest storage datastore, run:
 ./scripts/build.sh live-image
 ```
 
-The output image is saved to `zig-out/diosix-live-riscv64.img`.
+The live image build produces the following release artifacts in `zig-out/`:
+
+*   `zig-out/diosix-live-riscv64.img`: Hybrid 512 MiB GPT disk image
+    (`DIOSIX_BOOT` FAT32 EFI System Partition + `DIOSIX_LIVE` ext4 datastore).
+*   `zig-out/guest-riscv64/bin/vmdiosix.bin`: Flattened M-mode hypervisor +
+    Root VM binary for physical bootloaders.
+*   `zig-out/vmdiosix.its` (and `zig-out/u-boot.itb` when `mkimage` is
+    installed): Flattened Image Tree (FIT) description and image for U-Boot
+    Secondary Program Loader (SPL) M-mode boot on physical RISC-V boards.
+*   `zig-out/run-qemu.sh`: Standalone launcher script to boot the release image
+    in QEMU (`./zig-out/run-qemu.sh [--gui] [--smp <N>] [--mem <size>]`).
 
 To list all available build targets, configuration parameters, and help
 options, run:
@@ -232,8 +242,10 @@ by the bootloader in register `a1`.
 Based on discovered peripherals and CPU extensions, the hypervisor registers
 and binds drivers at runtime:
 
-*   Binds to the NS16550 Universal Asynchronous Receiver-Transmitter (UART)
-    driver for console I/O if a compatible UART MMIO base is discovered.
+*   Binds to the NS16550 / DesignWare Universal Asynchronous
+    Receiver-Transmitter (UART) driver (supporting 8-bit and 32-bit
+    `reg-shift` / `reg-io-width` strides) or the SiFive UART0 (`sifive,uart0`)
+    driver if a compatible UART MMIO base is discovered in the FDT.
 *   Uses the RISC-V `Sstc` supervisor timer extension if supported by the CPU,
     or dynamically programs Core Local Interruptor (CLINT) timer MMIO registers
     based on the discovered CLINT address.

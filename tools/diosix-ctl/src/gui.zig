@@ -6,7 +6,6 @@
 const std = @import("std");
 const linux = std.os.linux;
 const api = @import("api.zig");
-const installer = @import("installer.zig");
 const common = @import("common.zig");
 const sysconfig = @import("sysconfig.zig");
 
@@ -108,7 +107,7 @@ pub fn cmdGui(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 return;
             }
             const action = std.mem.span(args[1]);
-            if (!installer.isValidHostname(action)) {
+            if (!common.isSafeIdentifier(action)) {
                 printStr("Error: Invalid GUI action identifier.\n");
                 return;
             }

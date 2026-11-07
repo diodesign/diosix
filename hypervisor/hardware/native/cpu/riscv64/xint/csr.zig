@@ -17,40 +17,39 @@ pub const EmulationOutcome = enum {
     handled,
 };
 
-const CSR_PRIV_SHIFT: u4 = 8;
-const CSR_PRIV_MASK: usize = 0x3;
-
-/// Safely fetch an instruction from guest memory, accounting for potential
+/// Safely fetch an instruction from guest memory using the RISC-V H-extension
+/// `hlvx.hu` / `hlvx.wu` execute-permission load instructions, accounting for
 /// 2-byte parcel alignment if the guest PC is not 4-byte aligned.
 pub fn fetchGuestInstruction(pc: usize) usize {
     const pcpu = pcore.this();
+    const old_mstatus = riscv.readMstatus();
     pcpu.probing_active = true;
     pcpu.probe_failed = false;
-    defer pcpu.probing_active = false;
-
-    var instr: usize = 0;
+    defer {
+        pcpu.probing_active = false;
+        riscv.writeMstatus(old_mstatus);
+    }
 
     if ((pc & riscv.Instr.PARCEL_ALIGN_MASK) != 0) {
         // Misaligned PC: fetch as 16-bit parcels to avoid alignment faults.
-        const lower = riscv.hlv_hu(pc);
+        const lower = riscv.hlvx_hu(pc);
         if (pcpu.probe_failed) return 0;
-        instr = lower;
+        var instr: usize = lower;
 
         // Check if it is a 32-bit instruction (lowest 2 bits are 0b11).
         if ((lower & riscv.Instr.INSN_32BIT_MASK) ==
             riscv.Instr.INSN_32BIT_MASK)
         {
-            const upper = riscv.hlv_hu(pc + riscv.Instr.PARCEL_ALIGN_MASK);
+            const upper = riscv.hlvx_hu(pc + riscv.Instr.PARCEL_ALIGN_MASK);
             if (pcpu.probe_failed) return 0;
             instr |= (@as(usize, upper) << 16);
         }
-    } else {
-        // Aligned PC: safe to fetch 32-bit word directly.
-        instr = riscv.hlv_wu(pc);
-        if (pcpu.probe_failed) return 0;
+        return instr;
     }
 
-    return instr;
+    // Aligned PC: safe to fetch 32-bit word directly.
+    const instr = riscv.hlvx_wu(pc);
+    return if (pcpu.probe_failed) 0 else instr;
 }
 
 fn isSiselectCsr(csr: usize) bool {
@@ -263,11 +262,7 @@ pub fn emulateInstruction(
     const csr = (instr >> riscv.Instr.CSR_SHIFT) & riscv.Instr.CSR_MASK;
 
     if (opcode == riscv.Instr.OPCODE_SYSTEM and isEmulatedCsr(csr)) {
-        if (privilege_mode == .user and
-            ((csr >> CSR_PRIV_SHIFT) & CSR_PRIV_MASK) != 0)
-        {
-            return .not_handled;
-        }
+        if (privilege_mode == .user) return .not_handled;
         emulateCsrAccess(vc, instr, context);
         return .handled;
     }
@@ -287,6 +282,7 @@ pub fn emulateInstruction(
             vc.getNativeContext()[rd] = time_now;
         }
         vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
+        riscv.writeMepc(vc.getNativeMachine().mepc);
         pcore.this().trap_loop_count = 0;
         return .handled;
     }
@@ -294,6 +290,7 @@ pub fn emulateInstruction(
     // Emulate FENCE.I as a no-op since I-cache coherency is maintained.
     if (instr == riscv.Instr.FENCE_I) {
         vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
+        riscv.writeMepc(vc.getNativeMachine().mepc);
         pcore.this().trap_loop_count = 0;
         return .handled;
     }
@@ -350,6 +347,7 @@ pub fn emulateInstruction(
             vc.getNativeContext()[rd] = val;
         }
         vc.getNativeMachine().mepc += riscv.Instr.INSN_SIZE_BYTES;
+        riscv.writeMepc(vc.getNativeMachine().mepc);
         pcore.this().trap_loop_count = 0;
         return .handled;
     }

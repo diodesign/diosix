@@ -54,6 +54,7 @@ pub fn writeAll(fd: i32, str: []const u8) void {
 }
 
 pub fn printStr(str: []const u8) void {
+    if (@import("builtin").is_test) return;
     writeAll(linux.STDOUT_FILENO, str);
 }
 

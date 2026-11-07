@@ -33,6 +33,8 @@
 .equ CPU_STACK_SIZE,         (512 * 1024)
 .equ CPU_PRIVATE_VARS_BASE,  (CPU_STACK_BASE + CPU_STACK_SIZE)
 .equ CPU_PRIVATE_VARS_SIZE,  (PAGE_SIZE)
+.equ CPU_SCRATCH_T0_OFFSET,  0x7f0
+.equ CPU_SCRATCH_T1_OFFSET,  0x7f8
 .equ CPU_HEAP_BASE,          (CPU_PRIVATE_VARS_BASE + CPU_PRIVATE_VARS_SIZE)
 .equ CPU_HEAP_AREA_SIZE,     (CPU_SLAB_SIZE - CPU_HEAP_BASE)
 
@@ -70,6 +72,9 @@
 
 # mstatus bits.
 .equ MSTATUS_VS_DIRTY,       (3 << 9)   # Vector extension dirty state
+.equ MSTATUS_MPP_SHIFT,      11         # Previous privilege mode shift
+.equ MSTATUS_MPP_MASK_BITS,  3          # Previous privilege mode mask
+.equ MSTATUS_MPP_MACHINE,    3          # Machine mode value in MPP
 .equ MSTATUS_FS_DIRTY,       (3 << 13)  # Floating-point extension dirty state
 .equ MSTATUS_TW,             (1 << 21)  # Timeout Wait (trap WFI in VS-mode)
 

@@ -135,6 +135,14 @@ pub inline fn readMhartid() usize {
     );
 }
 
+pub inline fn writeMscratch(val: usize) void {
+    if (is_test) return;
+    asm volatile ("csrw mscratch, %[val]"
+        :
+        : [val] "r" (val),
+    );
+}
+
 pub inline fn readMie() usize {
     if (is_test) return test_mie;
     return asm volatile ("csrr %[ret], mie"
@@ -299,6 +307,8 @@ pub const writeHstateen0 = hmode.writeHstateen0;
 pub const hlv_w = hmode.hlv_w;
 pub const hlv_wu = hmode.hlv_wu;
 pub const hlv_hu = hmode.hlv_hu;
+pub const hlvx_hu = hmode.hlvx_hu;
+pub const hlvx_wu = hmode.hlvx_wu;
 pub const hlv_bu = hmode.hlv_bu;
 pub const hlv_d = hmode.hlv_d;
 

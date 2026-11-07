@@ -244,17 +244,36 @@ pub fn freePage(addr: usize) void {
 }
 
 pub fn getPageRef(addr: usize) u32 {
+    if (!isManaged(addr)) return 0;
     return @atomicLoad(u32, &getPageDescriptor(addr).refcount, .seq_cst);
 }
 
 pub fn incrementPageRef(addr: usize) void {
+    if (!isManaged(addr)) return;
     _ = @atomicRmw(u32, &getPageDescriptor(addr).refcount, .Add, 1, .seq_cst);
 }
 
 pub fn decrementPageRef(addr: usize) void {
+    if (!isManaged(addr)) return;
     const desc = getPageDescriptor(addr);
-    const old = @atomicRmw(u32, &desc.refcount, .Sub, 1, .seq_cst);
-    if (old == 0) @panic("Physical memory reference count underflow");
+    var old = @atomicLoad(u32, &desc.refcount, .acquire);
+    while (true) {
+        if (old == 0) {
+            debug.printf(
+                "WARN: Refcount underflow avoided for HPA 0x{x}\n",
+                .{addr},
+            );
+            return;
+        }
+        old = @cmpxchgWeak(
+            u32,
+            &desc.refcount,
+            old,
+            old - 1,
+            .seq_cst,
+            .acquire,
+        ) orelse break;
+    }
     if (old == 1) {
         const block_bytes = (@as(usize, 1) << @intCast(desc.order)) * PageSize;
         @memset(@as([*]u8, @ptrFromInt(addr))[0..block_bytes], 0);

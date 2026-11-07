@@ -64,7 +64,7 @@ CURRENT_HASH=$(
         find tools/overlay-common -type f \
             -exec sha256sum {} + 2>/dev/null
         find tools/diosix-ctl/src tools/diosix-gui/src \
-            tools/diosix-config/src tools/guest-shim -name '*.zig' \
+            tools/guest-shim -name '*.zig' \
             | sort | xargs cat | sha256sum
         sha256sum "$CONFIG_FILE" "$0" "$(dirname "$CONFIG_FILE")"/*.fragment \
             tools/guest-shim/linker.ld \
@@ -162,20 +162,6 @@ if [ -d "tools/diosix-gui" ]; then
         log_ok "Installed diosix-gui and 'diosix-wm' symlink in overlay."
     else
         log_err "Failed to cross-compile diosix-gui for ${ZIG_TARGET}."
-        exit 1
-    fi
-fi
-
-if [ -d "tools/diosix-config" ]; then
-    log_info "Compiling diosix-config for ${BOLD}${ZIG_TARGET}${RESET}..."
-    if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast -fstrip \
-        --dep interface -Mroot=tools/diosix-config/src/main.zig \
-        -Minterface=hypervisor/interface/lib.zig \
-        --name diosix-config \
-        -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-config"; then
-        log_ok "Installed diosix-config in overlay (/usr/bin/)."
-    else
-        log_err "Failed to cross-compile diosix-config for ${ZIG_TARGET}."
         exit 1
     fi
 fi

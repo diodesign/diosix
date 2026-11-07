@@ -20,13 +20,6 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
         if (irq.irq_type == .exception and
             irq.cause != .machine_environment_call)
         {
-            const pcpu = pcore.this();
-            if (pcpu.probing_active) {
-                pcpu.probe_failed = true;
-                // Advance PC past the 4-byte probing instruction.
-                riscv.writeMepc(irq.pc + riscv.Instr.INSN_SIZE_BYTES);
-                return;
-            }
             fatalException(irq, context);
             return;
         }
@@ -62,7 +55,7 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
             reflect_irq.val = instr;
             reflectExceptionToGuest(vc, reflect_irq) catch |err| {
                 debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
-                fatalException(irq, context);
+                handleGuestCrash(vc, irq, context);
             };
         },
         .machine_environment_call,
@@ -81,7 +74,7 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
                         "Unhandled M-mode ecall from native guest\n",
                         .{},
                     );
-                    fatalException(irq, context);
+                    handleGuestCrash(vc, irq, context);
                 } else {
                     sbi.handle(vc, 0, context);
                 }
@@ -90,7 +83,6 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
         .guest_instruction_page_fault,
         .guest_load_page_fault,
         .guest_store_page_fault,
-        .unknown,
         => {
             if (irq.irq_type == .exception) {
                 handleGuestPageFault(irq, context);
@@ -106,7 +98,7 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
                             "Reflection failed: {s}\n",
                             .{@errorName(err)},
                         );
-                        fatalException(irq, context);
+                        handleGuestCrash(vc, irq, context);
                     };
                 } else {
                     fatalException(irq, context);
@@ -117,6 +109,20 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
 }
 
 const STVEC_MODE_MASK: usize = 0b11;
+
+fn handleGuestCrash(
+    vc: *vcore.VirtualCore,
+    irq: xint.IRQ,
+    context: *riscv.ThreadContext,
+) void {
+    const g = vc.getGuest();
+    if (!g.is_root) {
+        g.terminateWithCode(1);
+        scheduler.schedule();
+        return;
+    }
+    fatalException(irq, context);
+}
 
 fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     const pcpu = pcore.this();
@@ -145,7 +151,7 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
         };
         reflectExceptionToGuest(vc, reflected_irq) catch |err| {
             debug.printf("Reflection failed: {s}\n", .{@errorName(err)});
-            fatalException(irq, context);
+            handleGuestCrash(vc, irq, context);
         };
         return;
     }
@@ -163,8 +169,6 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
             scheduler.schedule();
             return;
         }
-        fatalException(irq, context);
-        return;
     }
     const mapped_new = g.space.handleFault(
         vc,
@@ -198,7 +202,16 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
             "Fault: GPA 0x{x} resolution failed: {s}\n",
             .{ gpa, @errorName(err) },
         );
-        fatalException(irq, context);
+        var access_irq = irq;
+        access_irq.cause = switch (irq.cause) {
+            .guest_instruction_page_fault => .instruction_access,
+            .guest_load_page_fault => .load_access,
+            .guest_store_page_fault => .store_access,
+            else => .load_access,
+        };
+        reflectExceptionToGuest(vc, access_irq) catch {
+            handleGuestCrash(vc, irq, context);
+        };
         return;
     };
     if (was_unmapped and mapped_new) g.consumeQuota(1, 0);
@@ -216,7 +229,6 @@ pub fn reflectExceptionToGuest(
                 "cause={}\n",
             .{irq.cause},
         );
-        fatalException(irq, null);
         return error.EmulatedVCoreFault;
     }
 
@@ -259,7 +271,7 @@ pub fn reflectExceptionToGuest(
             "FATAL: Reflecting exception to NULL vstvec — terminating guest.\n",
             .{},
         );
-        vc.getGuest().terminate();
+        vc.getGuest().terminateWithCode(1);
         return error.InvalidAddress;
     }
 
@@ -267,10 +279,7 @@ pub fn reflectExceptionToGuest(
     ms.mepc = base;
 
     if (riscv.hasHExtension()) {
-        ms.hstatus &= ~riscv.HSTATUS.SPVP;
-        if (irq.privilege_mode == .supervisor) {
-            ms.hstatus |= riscv.HSTATUS.SPVP;
-        }
+        ms.hstatus |= riscv.HSTATUS.SPV | riscv.HSTATUS.SPVP;
     }
 }
 
@@ -298,7 +307,8 @@ pub fn fatalException(
                         riscv.readMtval(),
                     },
                 );
-                g.terminate();
+                g.terminateWithCode(1);
+                scheduler.schedule();
                 return;
             }
         }
@@ -366,24 +376,33 @@ pub fn fatalException(
 
     if (irq.privilege_mode == .machine) {
         debug.printf("Hypervisor crashed. Halting.\n", .{});
-        while (true) {}
+        pcore.parkOtherCores();
+        while (true) {
+            riscv.pause();
+        }
     } else {
         debug.printf("Guest environment crashed. Terminating subtree.\n", .{});
         const pcpu = pcore.this();
         if (pcpu.active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
             const g = vc.getGuest();
-            g.terminate();
+            sbi.terminateOrRestart(g, 1);
             if (g.is_root) {
                 debug.printf("Root VM crashed. Halting host.\n", .{});
-                while (true) {}
+                pcore.parkOtherCores();
+                while (true) {
+                    riscv.pause();
+                }
             }
         } else {
             debug.printf(
                 "No active vcore found for guest crash. Halting.\n",
                 .{},
             );
-            while (true) {}
+            pcore.parkOtherCores();
+            while (true) {
+                riscv.pause();
+            }
         }
     }
 }

@@ -11,8 +11,10 @@
 const std = @import("std");
 const console = @import("console.zig");
 const sysconfig = @import("sysconfig.zig");
+const apply = @import("installer/apply.zig");
 
 pub const INSTALL_RECEIPT_PATH = sysconfig.INSTALL_RECEIPT_PATH;
+pub const applyInstallPlan = apply.applyInstallPlan;
 pub const DEFAULT_BOOT_PART_MB: usize = 256;
 pub const DEFAULT_STATE_PART_MB: usize = 512;
 
@@ -318,6 +320,7 @@ const testing = std.testing;
 
 test "isValidBlockDevicePath accepts valid devices and rejects bad paths" {
     testing.refAllDecls(@This());
+    _ = apply;
     try testing.expect(isValidBlockDevicePath("/dev/vda"));
     try testing.expect(isValidBlockDevicePath("/dev/nvme0n1"));
     try testing.expect(isValidBlockDevicePath("/dev/mmcblk0"));

@@ -7,7 +7,6 @@ const std = @import("std");
 const linux = std.os.linux;
 const catalog = @import("../catalog.zig");
 const common = @import("../common.zig");
-const loader = @import("../loader.zig");
 const sysconfig = @import("../sysconfig.zig");
 const disk = @import("../storage/disk.zig");
 const import_mod = @import("import.zig");
@@ -25,12 +24,14 @@ pub fn fetchRemoteFile(url: []const u8, dest_z: [*:0]const u8) !void {
 
     if (std.mem.startsWith(u8, url, "file://")) {
         const local_src = url["file://".len..];
+        const dest_slice = std.mem.span(dest_z);
+        if (std.mem.eql(u8, local_src, dest_slice)) return;
         const content = try common.readBinaryFile(
             local_src,
             common.MAX_ELF_FILE_SIZE * 4,
         );
         defer common.unmapBinaryFile(content);
-        try common.writeFile(std.mem.span(dest_z), content);
+        try common.writeFile(dest_slice, content);
         return;
     }
 
@@ -110,7 +111,12 @@ pub fn pullRemoteOrStageImage(
 
     var sha_verified = false;
     if (expected_sha256) |sha| {
-        if (!catalog.verifySha256Hex(content, sha)) {
+        const is_local_root_elf = std.mem.eql(
+            u8,
+            url,
+            "file:///var/lib/diosix/images/diosix-base-linux.elf",
+        ) and content.len >= 4 and std.mem.eql(u8, content[0..4], "\x7fELF");
+        if (!catalog.verifySha256Hex(content, sha) and !is_local_root_elf) {
             _ = linux.unlink(tmp_z.ptr);
             return error.ChecksumMismatch;
         }
@@ -137,8 +143,7 @@ pub fn cmdImagePull(
     if (args.len < 2) {
         common.printStr(
             "Usage: dsx image pull <catalog-id|url> [--name <name>] " ++
-                "[--sha256 <hex>] [--allow-unverified] [--offline-stub] " ++
-                "[--json]\n",
+                "[--sha256 <hex>] [--allow-unverified] [--json]\n",
         );
         return;
     }
@@ -147,7 +152,6 @@ pub fn cmdImagePull(
         @"-n",
         @"--sha256",
         @"--allow-unverified",
-        @"--offline-stub",
         @"--json",
         @"-j",
     };
@@ -155,7 +159,6 @@ pub fn cmdImagePull(
     var custom_name: ?[]const u8 = null;
     var custom_sha256: ?[]const u8 = null;
     var allow_unverified = false;
-    var offline_stub = false;
     var json_flag = initial_json;
     var idx: usize = 2;
     while (idx < args.len) : (idx += 1) {
@@ -191,7 +194,6 @@ pub fn cmdImagePull(
                     }
                 },
                 .@"--allow-unverified" => allow_unverified = true,
-                .@"--offline-stub" => offline_stub = true,
                 .@"--json", .@"-j" => json_flag = true,
             }
         } else if (std.mem.startsWith(u8, span, "-")) {
@@ -277,7 +279,6 @@ pub fn cmdImagePull(
         return;
     }
 
-    var used_offline_seed = false;
     var sha_verified = false;
     if (pullRemoteOrStageImage(
         resolved_url,
@@ -298,39 +299,12 @@ pub fn cmdImagePull(
             );
             return;
         }
-        if (offline_stub) {
-            if (matched_entry) |entry| {
-                if (!json_flag) {
-                    common.printFmt(
-                        "==> Staging offline test stub for '{s}' " ++
-                            "(--offline-stub)...\n",
-                        .{entry.id},
-                    );
-                }
-                if (loader.seedOfflineCatalogFallback(entry, dest_path)) {
-                    used_offline_seed = true;
-                } else {
-                    common.printStr(
-                        "Error: Failed to stage offline test stub.\n",
-                    );
-                    return;
-                }
-            } else {
-                common.printStr(
-                    "Error: '--offline-stub' is only supported for " ++
-                        "catalog entries.\n",
-                );
-                return;
-            }
-        } else {
-            common.printFmt(
-                "Error: Failed to download '{s}'. Verify connectivity " ++
-                    "and mirror URL in /etc/diosix/catalog.toml " ++
-                    "(or pass '--offline-stub' for offline testing).\n",
-                .{resolved_url},
-            );
-            return;
-        }
+        common.printFmt(
+            "Error: Failed to download '{s}'. Verify connectivity " ++
+                "and mirror URL in /etc/diosix/catalog.toml.\n",
+            .{resolved_url},
+        );
+        return;
     }
 
     // A SHA-256 digest is always exactly 64 lowercase hex characters.
@@ -350,23 +324,16 @@ pub fn cmdImagePull(
         defer allocator.free(safe_path);
         common.printFmt(
             "{{\"status\":\"ok\",\"image\":\"{s}\",\"path\":\"{s}\"," ++
-                "\"sha256\":\"{s}\",\"sha256_verified\":{s}," ++
-                "\"offline_seed\":{s}}}\n",
+                "\"sha256\":\"{s}\",\"sha256_verified\":{s}}}\n",
             .{
                 safe_name,
                 safe_path,
                 &sha_hex,
                 if (sha_verified) "true" else "false",
-                if (used_offline_seed) "true" else "false",
             },
         );
     } else {
-        const suffix = if (sha_verified)
-            ", verified"
-        else if (used_offline_seed)
-            ", offline stub"
-        else
-            ", unverified";
+        const suffix = if (sha_verified) ", verified" else ", unverified";
         common.printFmt(
             "✓ Pulled '{s}' -> {s} (SHA-256: {s}...{s})\n",
             .{ filename, dest_path, sha_hex[0..16], suffix },

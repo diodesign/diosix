@@ -33,6 +33,18 @@ SECTIONS
     *(.data*)
   }
 
+  /* Place .note.gnu.build-id and embedded Root VM image before NOBITS .bss
+     so objcopy -O binary does not materialize 160+ MiB of zeroed BSS pages. */
+  .note.gnu.build-id : { *(.note.gnu.build-id) }
+
+  /* Embedded Root VM image. */
+  .rootvm : ALIGN(0x1000)
+  {
+    __rootvm_start = .;
+    KEEP(*(.rootvm))
+    __rootvm_end = .;
+  }
+
   /* Zeroed during early boot by CPU 0 in entry.s. */
   __bss_start = ALIGN(0x8);
   .bss : ALIGN(0x8)
@@ -42,23 +54,12 @@ SECTIONS
   }
   __bss_end = ALIGN(0x8);
 
-  /* Place .note.gnu.build-id after BSS. */
-  .note.gnu.build-id : { *(.note.gnu.build-id) }
-
   /* Required for Spike simulator: writes and reads to these 64-bit addresses
      are trapped and treated specially by Spike. On non-Spike targets, NOP. */
   . = ALIGN(0x8);
   tohost = .;
   . += 8;
   fromhost = .;
-
-  /* Embedded Root VM image. */
-  .rootvm : ALIGN(0x1000)
-  {
-    __rootvm_start = .;
-    KEEP(*(.rootvm))
-    __rootvm_end = .;
-  }
 
   /* Aligned end of the hypervisor footprint, rounded up to page boundary. */
   __hypervisor_end = ALIGN(0x1000);

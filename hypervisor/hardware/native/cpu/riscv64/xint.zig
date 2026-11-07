@@ -185,8 +185,10 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
             if (cpu.active_vcore) |vc_raw| {
                 const vc_term: *vcore.VirtualCore =
                     @ptrCast(@alignCast(vc_raw));
-                vc_term.getGuest().terminate();
-                vc_term.state = .stopped;
+                if (!vc_term.getGuest().is_root) {
+                    vc_term.getGuest().terminate();
+                    vc_term.state = .stopped;
+                }
             }
             cpu.trap_loop_count = 0;
         } else if (cpu.trap_loop_count > TRAP_LOOP_WARN_THRESHOLD) {
@@ -221,6 +223,24 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
 
     const pcpu = pcore.this();
     pcpu.in_m_mode = true;
+
+    if (pcpu.probing_active and riscv.getPreviousPrivilege() == .machine) {
+        const mcause = riscv.readMcause();
+        if ((mcause & Cause.INTERRUPT_BIT) == 0 and
+            riscv.toCause(mcause) != .machine_environment_call)
+        {
+            pcpu.probe_failed = true;
+            const mepc = riscv.readMepc();
+            const parcel = @as(*align(2) const u16, @ptrFromInt(mepc)).*;
+            const step: usize = if ((parcel & riscv.Instr.INSN_32BIT_MASK) ==
+                riscv.Instr.INSN_32BIT_MASK)
+                riscv.Instr.INSN_SIZE_BYTES
+            else
+                riscv.Instr.PARCEL_ALIGN_MASK;
+            riscv.writeMepc(mepc + step);
+            return;
+        }
+    }
 
     if (pcore.host_stopping.load(.acquire)) {
         parkStoppingCore(pcpu);

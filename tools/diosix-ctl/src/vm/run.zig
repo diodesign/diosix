@@ -344,15 +344,20 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     }
 
     var shim_payload_data: []u8 = &[_]u8{};
-    if (final_cdrom.len > 0) {
-        if (readBinaryFile(final_cdrom, MAX_ELF_FILE_SIZE)) |cd_data| {
+    const payload_path = if (final_cdrom.len > 0) final_cdrom else final_disk;
+    if (payload_path.len > 0) {
+        if (readBinaryFile(payload_path, MAX_ELF_FILE_SIZE)) |cd_data| {
             shim_payload_data = cd_data;
         } else |_| {}
     }
     defer unmapBinaryFile(shim_payload_data);
 
-    const arch_enum =
+    const req_arch =
         std.meta.stringToEnum(api.TargetArch, arch_str) orelse .riscv64;
+    const arch_enum = loader.checkGuestArch(elf_data, req_arch) orelse {
+        if (!@import("builtin").is_test) std.process.exit(1);
+        return;
+    };
     const ram_mb = parseMemorySizeMb(ram_str);
     const raw_quota_mb = if (ram_quota_str) |rq|
         parseMemorySizeMb(rq)

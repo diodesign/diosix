@@ -87,7 +87,10 @@ pub fn translateBlock(
             break;
         }
 
-        const decoded = decoder_rv32.decode(fetch_res.val);
+        const decoded = decoder_rv32.decodeForArch(
+            self.vcpu.guest_arch,
+            fetch_res.val,
+        );
 
         switch (decoded.insn) {
             .add => |d| rType(tb, off, rv64.addw, d.rd, d.rs1, d.rs2),
@@ -127,7 +130,10 @@ pub fn translateBlock(
                 {
                     const nf = self.tlb.fetchU32(next_pc, self.bus);
                     if (nf.trap == null) {
-                        const nd = decoder_rv32.decode(nf.val);
+                        const nd = decoder_rv32.decodeForArch(
+                            self.vcpu.guest_arch,
+                            nf.val,
+                        );
                         if (nd.insn == .add and nd.insn.add.rd == d.rd and
                             (nd.insn.add.rs1 == d.rd or
                                 nd.insn.add.rs2 == d.rd))
@@ -178,7 +184,10 @@ pub fn translateBlock(
                     if ((next_pc - start_pc) < (MAX_BLOCK_INSNS * 4)) {
                         const nf = self.tlb.fetchU32(next_pc, self.bus);
                         if (nf.trap == null) {
-                            const nd = decoder_rv32.decode(nf.val);
+                            const nd = decoder_rv32.decodeForArch(
+                                self.vcpu.guest_arch,
+                                nf.val,
+                            );
                             if (nd.insn == .addi and
                                 nd.insn.addi.rd == d.rd and
                                 nd.insn.addi.rs1 == d.rd)

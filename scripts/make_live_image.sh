@@ -66,7 +66,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 ESP_IMG="$TMP_DIR/esp.img"
 DATA_IMG="$TMP_DIR/data.img"
-ESP_SIZE_MB=128
+ESP_SIZE_MB=240
 DATA_SIZE_MB=256
 
 # 2. Build Partition 1: ESP / Boot (FAT32).
@@ -76,7 +76,7 @@ mkfs.vfat -F 32 -n "ESP_BOOT" "$ESP_IMG" >/dev/null
 
 mmd -i "$ESP_IMG" "::/extlinux" "::/boot" "::/EFI" "::/EFI/BOOT"
 
-# Create standard extlinux.conf.
+# Create standard extlinux.conf with Live, Installer, and Persistent entries.
 EXTLINUX_CONF="$TMP_DIR/extlinux.conf"
 cat <<'EOF' > "$EXTLINUX_CONF"
 menu title Diosix Hypervisor Boot Menu
@@ -84,7 +84,17 @@ timeout 30
 default diosix-live
 
 label diosix-live
-    menu label Diosix Bare-Metal Hypervisor (Live System)
+    menu label Diosix Bare-Metal Hypervisor (Ephemeral Live System)
+    kernel /boot/vmdiosix.elf
+    append diosix.mode=live console=ttyS0,115200 earlycon
+
+label diosix-install
+    menu label Diosix System Installer (Guided / Declarative)
+    kernel /boot/vmdiosix.elf
+    append diosix.mode=install console=ttyS0,115200 earlycon
+
+label diosix-persistent
+    menu label Diosix Persistent Host Supervisor
     kernel /boot/vmdiosix.elf
     append console=ttyS0,115200 earlycon
 EOF
@@ -92,7 +102,74 @@ EOF
 mcopy -i "$ESP_IMG" "$EXTLINUX_CONF" "::/extlinux/extlinux.conf"
 mcopy -i "$ESP_IMG" "$HYPERVISOR_BIN" "::/boot/vmdiosix.elf"
 mcopy -i "$ESP_IMG" "$HYPERVISOR_BIN" "::/EFI/BOOT/BOOTRISCV64.EFI"
-log_ok "ESP partition populated (extlinux.conf, vmdiosix.elf, BOOTRISCV64.EFI)."
+
+# Extract flat M-mode binary (vmdiosix.bin) and U-Boot SPL FIT descriptor
+# (vmdiosix.its / u-boot.itb) so U-Boot SPL on physical RISC-V boards
+# (VisionFive 2, Unmatched, SpacemiT K1) boots vmdiosix directly in M-mode.
+OBJCOPY_TOOL=""
+for cand in llvm-objcopy riscv64-unknown-elf-objcopy \
+    riscv64-linux-gnu-objcopy objcopy; do
+    if command -v "$cand" >/dev/null 2>&1; then
+        OBJCOPY_TOOL="$cand"
+        break
+    fi
+done
+
+VMDIOSIX_FLAT="$TMP_DIR/vmdiosix.bin"
+if [ -n "$OBJCOPY_TOOL" ] && \
+   "$OBJCOPY_TOOL" -O binary "$HYPERVISOR_BIN" "$VMDIOSIX_FLAT" \
+   2>/dev/null; then
+    mcopy -i "$ESP_IMG" "$VMDIOSIX_FLAT" "::/boot/vmdiosix.bin"
+else
+    cp "$HYPERVISOR_BIN" "$VMDIOSIX_FLAT"
+    mcopy -i "$ESP_IMG" "$VMDIOSIX_FLAT" "::/boot/vmdiosix.bin"
+fi
+
+FIT_ITS="$TMP_DIR/vmdiosix.its"
+cat <<'EOF' > "$FIT_ITS"
+/dts-v1/;
+
+/ {
+    description = "Diosix M-Mode Bare-Metal Hypervisor FIT Image";
+    #address-cells = <2>;
+
+    images {
+        opensbi {
+            description = "Diosix M-Mode Hypervisor (vmdiosix.bin)";
+            data = /incbin/("vmdiosix.bin");
+            type = "firmware";
+            os = "opensbi";
+            arch = "riscv";
+            compression = "none";
+            load = <0x0 0x80000000>;
+            entry = <0x0 0x80000000>;
+        };
+    };
+
+    configurations {
+        default = "config-1";
+        config-1 {
+            description = "Diosix M-Mode Boot Configuration";
+            firmware = "opensbi";
+        };
+    };
+};
+EOF
+mcopy -i "$ESP_IMG" "$FIT_ITS" "::/boot/vmdiosix.its"
+OUT_DIR="$(dirname "$OUT_IMG")"
+cp "$VMDIOSIX_FLAT" "$OUT_DIR/guest-riscv64/bin/vmdiosix.bin" \
+    2>/dev/null || true
+cp "$FIT_ITS" "$OUT_DIR/vmdiosix.its"
+
+if command -v mkimage >/dev/null 2>&1; then
+    if (cd "$TMP_DIR" && \
+        mkimage -f vmdiosix.its u-boot.itb >/dev/null 2>&1); then
+        mcopy -i "$ESP_IMG" "$TMP_DIR/u-boot.itb" "::/u-boot.itb"
+        cp "$TMP_DIR/u-boot.itb" "$OUT_DIR/u-boot.itb"
+    fi
+fi
+
+log_ok "ESP partition populated (vmdiosix.elf, vmdiosix.bin, vmdiosix.its)."
 
 # 3. Build Partition 2: Persistent Storage Pool (ext4).
 log_step "[2/4] Generating Persistent Storage (ext4, ${DATA_SIZE_MB}MB)..."
@@ -175,6 +252,54 @@ dd if="$ESP_IMG" of="$OUT_IMG" bs=512 seek="$ESP_START" \
 dd if="$DATA_IMG" of="$OUT_IMG" bs=512 seek="$DATA_START" \
     conv=notrunc status=none
 log_ok "Partitions successfully written to $OUT_IMG."
+
+RUN_QEMU_SH="$(dirname "$OUT_IMG")/run-qemu.sh"
+cat <<'EOF' > "$RUN_QEMU_SH"
+#!/usr/bin/env bash
+set -eo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+KERNEL="${DIR}/guest-riscv64/bin/vmdiosix"
+[ ! -f "$KERNEL" ] && KERNEL="${DIR}/vmdiosix"
+IMG="${DIR}/diosix-live-riscv64.img"
+
+SMP=4
+MEM="2G"
+MODE="live"
+GUI=0
+EXTRA=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --gui) GUI=1; shift ;;
+        --smp) SMP="$2"; shift 2 ;;
+        --mem) MEM="$2"; shift 2 ;;
+        --mode) MODE="$2"; shift 2 ;;
+        *) EXTRA+=("$1"); shift ;;
+    esac
+done
+
+QEMU_ARGS=(
+    -M virt -cpu rv64,h=true,smstateen=true,sstc=true,v=true
+    -smp "$SMP" -m "$MEM" -bios none -kernel "$KERNEL"
+    -append "diosix.mode=${MODE}"
+    -drive "file=${IMG},format=raw,id=hd0,if=none"
+    -device virtio-blk-device,drive=hd0
+    -netdev user,id=net0 -device virtio-net-device,netdev=net0
+)
+
+if [ "$GUI" -eq 1 ]; then
+    QEMU_ARGS+=(
+        -device virtio-gpu-pci,xres=1600,yres=900
+        -device virtio-keyboard-pci -device virtio-tablet-pci
+        -serial mon:stdio
+    )
+else
+    QEMU_ARGS+=(-nographic)
+fi
+
+exec qemu-system-riscv64 "${QEMU_ARGS[@]}" "${EXTRA[@]}"
+EOF
+chmod +x "$RUN_QEMU_SH"
 
 echo ""
 echo -e "${BOLD}${GREEN}✓ Live & Installer disk image built!${RESET}"

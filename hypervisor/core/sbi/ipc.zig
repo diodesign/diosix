@@ -207,9 +207,7 @@ pub fn handleMapChildMem(
     }
     const ap_end = sbi_core.DIOSIX_CHILD_MEM_BASE +
         sbi_core.DIOSIX_CHILD_MEM_MAX_SIZE;
-    if (!g.is_root and
-        (p_gpa < sbi_core.DIOSIX_CHILD_MEM_BASE or p_end > ap_end))
-    {
+    if (p_gpa < sbi_core.DIOSIX_CHILD_MEM_BASE or p_end > ap_end) {
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;
     }
@@ -223,10 +221,12 @@ pub fn handleMapChildMem(
         const cur_p = p_gpa + offset;
         const child_hpa = child.space.translateGPA(cur_c) catch blk: {
             if (!child.checkRamQuota(1)) {
+                if (offset > 0) g.space.unmap(p_gpa, offset);
                 sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
                 return;
             }
             const new_page = physmem.allocPage() catch {
+                if (offset > 0) g.space.unmap(p_gpa, offset);
                 sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
                 return;
             };
@@ -238,6 +238,7 @@ pub fn handleMapChildMem(
                 child_rwx,
             ) catch {
                 physmem.freePage(new_page);
+                if (offset > 0) g.space.unmap(p_gpa, offset);
                 sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
                 return;
             };
@@ -246,10 +247,12 @@ pub fn handleMapChildMem(
             break :blk new_page;
         };
         if (physmem.isHypervisorMemory(child_hpa, physmem.PageSize)) {
+            if (offset > 0) g.space.unmap(p_gpa, offset);
             sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
             return;
         }
         g.space.map(cur_p, child_hpa, physmem.PageSize, parent_rwx) catch {
+            if (offset > 0) g.space.unmap(p_gpa, offset);
             sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
             return;
         };
@@ -287,8 +290,7 @@ pub fn handleUnmapChildMem(
     const ap_end = sbi_core.DIOSIX_CHILD_MEM_BASE +
         sbi_core.DIOSIX_CHILD_MEM_MAX_SIZE;
     if (p_end > sv39x4.MAX_GPA or overlapsOwnRam(g, p_gpa, p_end) or
-        (!g.is_root and
-            (p_gpa < sbi_core.DIOSIX_CHILD_MEM_BASE or p_end > ap_end)))
+        p_gpa < sbi_core.DIOSIX_CHILD_MEM_BASE or p_end > ap_end)
     {
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;

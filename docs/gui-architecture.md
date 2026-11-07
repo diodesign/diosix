@@ -43,8 +43,8 @@ rules:
 1. **Decoupled privileges**: `sys.gui` owns display hardware and pointer,
    keyboard, and touchscreen inputs, while delegating VM lifecycle and
    storage management to the hypervisor control plane.
-2. **Untrusted presentation**: `sys.config` runs the native GUI configuration
-   tool (`diosix-config`) without direct access to display or input hardware.
+2. **Untrusted presentation**: `sys.config` runs the configuration panes
+   without direct access to display or input hardware.
 3. **Visual provenance (trusted window frames)**: `diosix-gui` renders
    tamper-proof window frames with domain-specific accents:
    - **Green border**: `[sys.config]` (trusted admin domain)
@@ -128,21 +128,7 @@ Located in `tools/diosix-gui/src/`:
 
 ---
 
-## 3. Configuration GUI component (`diosix-config`)
-
-Located in `tools/diosix-config/src/`:
-
-*   **[`ui.zig`](../tools/diosix-config/src/ui.zig)**: Widget library providing
-    VM cards, navigation sidebars, memory and Virtual CPU (vCPU) sliders, and
-    action buttons.
-*   **[`main.zig`](../tools/diosix-config/src/main.zig)**: Application
-    lifecycle, tab controller (Dashboard, Virtual Machines, Storage Disks,
-    Network Matrix), and hypervisor Application Programming Interface (API)
-    bridge.
-
----
-
-## 4. System manifest specification (`system.toml`)
+## 3. System manifest specification (`system.toml`)
 
 ```toml
 [system]
@@ -182,7 +168,7 @@ routes = [
 
 ---
 
-## 5. Detailed desktop implementation plan
+## 4. Detailed desktop implementation plan
 
 For the historical design roadmap, window manager primitive specifications,
 RISC OS-inspired Wimp event contracts, iconbar design, and rendering
