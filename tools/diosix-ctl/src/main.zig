@@ -16,6 +16,7 @@ pub const loader = @import("loader.zig");
 pub const ssh = @import("ssh.zig");
 pub const storage = @import("storage.zig");
 pub const vm = @import("vm.zig");
+pub const net = @import("net.zig");
 pub const host = @import("host.zig");
 pub const governance = @import("governance.zig");
 const main_tests = @import("tests/main.zig");
@@ -67,6 +68,8 @@ pub const Command = enum {
     iso,
     snapshot,
     manifest,
+    net,
+    network,
     auth,
     passkey,
     gui,
@@ -122,6 +125,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             .image, .iso => try storage.cmdImage(&client, argv[2..]),
             .snapshot => try storage.cmdSnapshot(&client, argv[2..]),
             .manifest => try governance.cmdManifest(&client, argv[2..]),
+            .net, .network => try net.cmdNet(&client, argv[2..]),
             .auth, .passkey => try governance.cmdAuth(&client, argv[2..]),
             .gui => try host.cmdGui(&client, argv[2..]),
             .tour => try host.cmdTour(argv[2..]),
@@ -213,6 +217,8 @@ pub fn formatUsage(
         \\      [--disk <name|size>]             Attach or create virtual disk
         \\      [--cdrom <iso|path>]             Attach installer ISO (RO)
         \\      [--ip <addr>]                    Assign private IP address
+        \\      [--net <none|local|wan|router>]  Network access policy
+        \\      [--net-via <vm|cid>]             Route via router VM
         \\      [--manifest <file.toml>]         Stage attenuated manifest
         \\      [--domain <name>]                Extract domain from manifest
         \\      [--trusted]                      Grant hardware trust
@@ -228,6 +234,7 @@ pub fn formatUsage(
         \\  {s} kill <name|cid|self>             Alias for stop
         \\  {s} restart <name|cid>               Restart a running guest VM
         \\  {s} info [name|cid|self] [--json]    Display guest VM status
+        \\  {s} net <status|grant|revoke|route>  Manage VM network routing
         \\  {s} quota <cid|self> [options]       Set VM resource quotas
         \\
         \\  {s} disk <subcmd> [options]          Manage persistent VM disks
@@ -290,7 +297,7 @@ pub fn formatUsage(
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
-        exe_name,
+        exe_name, exe_name,
     });
 }
 

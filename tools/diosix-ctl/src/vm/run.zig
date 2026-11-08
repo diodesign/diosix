@@ -8,6 +8,7 @@ const api = @import("../api.zig");
 const manifest = @import("../manifest.zig");
 const common = @import("../common.zig");
 const loader = @import("../loader.zig");
+const net = @import("../net.zig");
 const vm_stage = @import("stage.zig");
 const fdt_patch = @import("fdt_patch.zig");
 const owned = @import("owned.zig");
@@ -56,16 +57,18 @@ const RunOption = enum {
     @"--dtb",
     @"--arch",
     @"-a",
+    @"--net",
+    @"--net-via",
     @"--user",
 };
 
-fn takeOptValue(
+fn takeOpt(
     args: []const [*:0]const u8,
     idx: *usize,
-    err_msg: []const u8,
+    flag: []const u8,
 ) ?[]const u8 {
     if (idx.* + 1 >= args.len) {
-        printStr(err_msg);
+        common.printFmt("Error: Option '{s}' requires a value.\n", .{flag});
         return null;
     }
     idx.* += 1;
@@ -80,6 +83,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             \\Usage: {s} run <image|name> [--name <name>] [--vcpus <N>]
             \\       [--ram <size>] [--pcpu <1-90>] [--ram-quota <size>]
             \\       [--disk <disk>] [--cdrom <iso>] [--ip <ip>]
+            \\       [--net <none|local|wan|router>] [--net-via <vm|cid>]
             \\       [--manifest <path>] [--domain <domain>] [--trusted]
             \\       [--arch <arch>]
             \\
@@ -105,120 +109,96 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     var is_confidential: bool = false;
     var arch_str: []const u8 = sys_cfg.defaultArch();
     var dtb_path: ?[]const u8 = null;
+    var net_mode: ?net.NetMode = null;
+    var net_via_str: ?[]const u8 = null;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const span = std.mem.span(args[i]);
         if (std.meta.stringToEnum(RunOption, span)) |opt| {
             switch (opt) {
-                .@"--name", .@"-n" => vm_name = takeOptValue(
-                    args,
-                    &i,
-                    "Error: Option '--name' requires a VM name.\n",
-                ) orelse return,
-                .@"--domain" => domain_name = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--domain' requires a domain name.\n",
-                ) orelse return,
-                .@"--manifest", .@"-m" => manifest_path = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--manifest' requires a file path.\n",
-                ) orelse return,
+                .@"--name", .@"-n" => {
+                    vm_name = takeOpt(args, &i, "--name") orelse return;
+                },
+                .@"--domain" => {
+                    domain_name = takeOpt(args, &i, "--domain") orelse return;
+                },
+                .@"--manifest", .@"-m" => {
+                    manifest_path =
+                        takeOpt(args, &i, "--manifest") orelse return;
+                },
                 .@"--vcpus" => {
-                    const v_str = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--vcpus' requires a count.\n",
-                    ) orelse return;
+                    const v_str = takeOpt(args, &i, "--vcpus") orelse return;
                     vcpus = std.fmt.parseInt(usize, v_str, 10) catch {
-                        printStr("Error: Invalid '--vcpus' value.\n");
-                        return;
+                        return printStr("Error: Invalid '--vcpus' value.\n");
                     };
                     if (vcpus == 0 or vcpus > api.MAX_GUEST_VCPUS) {
-                        printStr(
+                        return printStr(
                             "Error: '--vcpus' must be between 1 and 4096.\n",
                         );
-                        return;
                     }
                 },
-                .@"--ram" => ram_str = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--ram' requires a size.\n",
-                ) orelse return,
+                .@"--ram" => ram_str = takeOpt(args, &i, "--ram") orelse return,
                 .@"--pcpu", .@"--pcpu-quota" => {
-                    const p_str = takeOptValue(
-                        args,
-                        &i,
-                        "Error: '--pcpu' requires a percentage (1-90).\n",
-                    ) orelse return;
+                    const p_str = takeOpt(args, &i, "--pcpu") orelse return;
                     const trimmed = std.mem.trimEnd(u8, p_str, "%");
                     pcpu_pct = std.fmt.parseInt(usize, trimmed, 10) catch {
-                        printStr("Error: Invalid '--pcpu' value.\n");
-                        return;
+                        return printStr("Error: Invalid '--pcpu' value.\n");
                     };
                     if (pcpu_pct == 0 or
                         pcpu_pct > api.MAX_CHILD_PCPU_QUOTA_PCT)
                     {
-                        printStr(
+                        return printStr(
                             "Error: '--pcpu' must be between 1 and 90%.\n",
                         );
-                        return;
                     }
                 },
-                .@"--ram-quota" => ram_quota_str = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--ram-quota' requires a size.\n",
-                ) orelse return,
-                .@"--disk", .@"-d" => disk_str = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--disk' requires a disk or size.\n",
-                ) orelse return,
-                .@"--cdrom", .@"--iso", .@"--media" => cdrom_str = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--cdrom' requires a media path.\n",
-                ) orelse return,
-                .@"--ip" => ip_str = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--ip' requires an IP address.\n",
-                ) orelse return,
+                .@"--ram-quota" => {
+                    ram_quota_str =
+                        takeOpt(args, &i, "--ram-quota") orelse return;
+                },
+                .@"--disk", .@"-d" => {
+                    disk_str = takeOpt(args, &i, "--disk") orelse return;
+                },
+                .@"--cdrom", .@"--iso", .@"--media" => {
+                    cdrom_str = takeOpt(args, &i, "--cdrom") orelse return;
+                },
+                .@"--ip" => ip_str = takeOpt(args, &i, "--ip") orelse return,
                 .@"--trusted" => trusted = true,
                 .@"--untrusted" => trusted = false,
                 .@"--steward" => is_steward = true,
                 .@"--standby-root" => is_standby_root = true,
                 .@"--confidential" => is_confidential = true,
-                .@"--dtb" => dtb_path = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--dtb' requires a DTB path.\n",
-                ) orelse return,
-                .@"--arch", .@"-a" => arch_str = takeOptValue(
-                    args,
-                    &i,
-                    "Error: '--arch' requires an arch name.\n",
-                ) orelse return,
-                .@"--user" => {
-                    printStr(
-                        "Error: Unrecognized option '--user'. " ++
-                            "To specify a VM name, use '--name <name>'.\n",
-                    );
-                    return;
+                .@"--dtb" => {
+                    dtb_path = takeOpt(args, &i, "--dtb") orelse return;
                 },
+                .@"--arch", .@"-a" => {
+                    arch_str = takeOpt(args, &i, "--arch") orelse return;
+                },
+                .@"--net" => {
+                    const m_str = takeOpt(args, &i, "--net") orelse return;
+                    net_mode = net.parseNetMode(m_str) orelse {
+                        return common.printFmt(
+                            "Error: Invalid '--net' mode '{s}'.\n",
+                            .{m_str},
+                        );
+                    };
+                },
+                .@"--net-via" => {
+                    net_via_str = takeOpt(args, &i, "--net-via") orelse return;
+                },
+                .@"--user" => return printStr(
+                    "Error: Unrecognized option '--user'. " ++
+                        "To specify a VM name, use '--name <name>'.\n",
+                ),
             }
         } else if (isArch(span)) {
             arch_str = span;
         } else if (std.mem.startsWith(u8, span, "-")) {
-            common.printFmt(
+            return common.printFmt(
                 "Error: Unknown option '{s}'. Use '{s} run' for usage.\n",
                 .{ span, exe_name },
             );
-            return;
         } else if (elf_path == null) {
             elf_path = span;
         }
@@ -245,11 +225,11 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                         &disk_str,
                         &cdrom_str,
                         &ip_str,
-                    ) catch {
-                        printStr(OOM_MSG);
-                        return;
-                    };
+                    ) catch return printStr(OOM_MSG);
                     if (dom.vcpus > 0 and vcpus == 1) vcpus = dom.vcpus;
+                    if (net_mode == null) {
+                        net_mode = net.inferDomainNetMode(dom);
+                    }
                 }
             } else |_| {}
         } else |_| {}
@@ -272,14 +252,12 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     }
 
     if (elf_path == null) {
-        common.printFmt(
+        return common.printFmt(
             "Error: No ELF binary specified. Use '{s} run <image>' " ++
                 "or specify --manifest and --domain.\n",
             .{exe_name},
         );
-        return;
     }
-
     if (vm_name == null) {
         const ep = elf_path.?;
         vm_name = if (std.mem.lastIndexOfScalar(u8, ep, '/')) |slash|
@@ -290,16 +268,14 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
     common.printFmt("[10%] Resolving guest image '{s}'...\n", .{elf_path.?});
     const elf_found = vm_stage.resolveElfImage(elf_path.?) catch {
-        printStr(OOM_MSG);
-        return;
+        return printStr(OOM_MSG);
     };
     const elf_data = elf_found orelse {
-        common.printFmt(
+        return common.printFmt(
             "Error: Guest ELF binary '{s}' not found (checked current dir, " ++
                 "{s}/).\n",
             .{ elf_path.?, sys_cfg.imagesDir() },
         );
-        return;
     };
     defer unmapBinaryFile(elf_data);
 
@@ -380,10 +356,27 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         return;
     };
     defer allocator.free(final_ram_str);
+    const eff_net_mode = net_mode orelse .local;
+    const upstream_cid: usize = if (net_via_str) |vs|
+        net.resolveUpstreamCid(vs) orelse {
+            common.printFmt(
+                "Error: Unknown upstream router VM '{s}'.\n",
+                .{vs},
+            );
+            return;
+        }
+    else
+        0;
+
     var run_flags: usize = if (trusted) api.RunFlags.TRUSTED else 0;
     if (is_steward) run_flags |= api.RunFlags.STEWARD;
     if (is_standby_root) run_flags |= api.RunFlags.STANDBY_ROOT;
     if (is_confidential) run_flags |= api.RunFlags.CONFIDENTIAL;
+    if (eff_net_mode == .none) run_flags |= api.RunFlags.NET_ISOLATED;
+    if (upstream_cid > 0) {
+        run_flags |= (upstream_cid & api.RunFlags.NET_UPSTREAM_MASK) <<
+            api.RunFlags.NET_UPSTREAM_SHIFT;
+    }
     const child_cid = client.run(
         0,
         &[_]u8{},
@@ -413,6 +406,20 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         return;
     };
 
+    const default_ip: ?[]u8 = if (ip_str.len > 0)
+        null
+    else
+        allocator.print(
+            "{s}{d}",
+            .{ sys_cfg.subnetPrefix(), child_cid },
+        ) catch {
+            printStr(OOM_MSG);
+            _ = client.terminate(child_cid, 1) catch {};
+            return;
+        };
+    defer if (default_ip) |ip| allocator.free(ip);
+    const final_ip: []const u8 = default_ip orelse ip_str;
+
     vm_stage.stageChildVmManifest(
         allocator,
         client,
@@ -420,6 +427,14 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         vm_name.?,
         domain_name,
         manifest_path,
+    );
+    net.applyVmNetConfig(
+        allocator,
+        client,
+        child_cid,
+        final_ip,
+        eff_net_mode,
+        upstream_cid,
     );
 
     const base_gpa: usize = switch (arch_enum) {
@@ -442,20 +457,6 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         if (!@import("builtin").is_test) std.process.exit(1);
         return;
     };
-
-    const default_ip: ?[]u8 = if (ip_str.len > 0)
-        null
-    else
-        allocator.print(
-            "{s}{d}",
-            .{ sys_cfg.subnetPrefix(), child_cid },
-        ) catch {
-            printStr(OOM_MSG);
-            _ = client.terminate(child_cid, 1) catch {};
-            return;
-        };
-    defer if (default_ip) |ip| allocator.free(ip);
-    const final_ip: []const u8 = default_ip orelse ip_str;
 
     const raw_img = elf_path.?;
     const img_name = if (std.mem.lastIndexOfScalar(u8, raw_img, '/')) |slash|

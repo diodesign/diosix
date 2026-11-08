@@ -11,6 +11,8 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/io.h>
+#include <linux/uaccess.h>
+#include <linux/capability.h>
 #include <linux/gfp.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -288,4 +290,28 @@ void cleanup_diosix_net(void)
         free_netdev(diosix_netdev);
         diosix_netdev = NULL;
     }
+}
+
+long diosix_ioctl_net_policy(unsigned long arg)
+{
+    struct net_policy_args args;
+    struct sbiret ret;
+
+    if (!capable(CAP_SYS_ADMIN))
+        return -EPERM;
+
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    ret = sbi_ecall(
+        EXT_DIOSIX,
+        DIOSIX_FUNC_SET_NET_POLICY,
+        args.target_cid,
+        args.flags,
+        args.upstream_cid,
+        0,
+        0,
+        0
+    );
+    return ret.error ? diosix_sbi_to_errno(ret.error) : 0;
 }

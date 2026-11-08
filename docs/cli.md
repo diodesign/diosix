@@ -200,6 +200,27 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
 *   `--cdrom <iso|path>` (or `--iso <path>` / `--media <path>`) *(optional)*:
     Attach a read-only installer ISO or live media.
 *   `--ip <address>` *(optional)*: Static private IP (default: `10.0.3.<cid>`).
+*   `--net <none|local|wan|router>` *(optional)*: Network access policy for the
+    child VM (default: `local`, or inferred from `--domain` capabilities in
+    `system.toml`):
+    *   `none`: Air-gaps the VM in M-mode (`RunFlags.NET_ISOLATED`); all
+        `DIOSIX_NET_SEND` hypercalls return `SBI_ERR_DENIED` and `diosix0` is
+        kept down.
+    *   `local` *(default)*: Host-only management networking (`10.0.3.1 <->
+        10.0.3.<cid>` for `dsx ssh` and port `8484` Wayland display bridge).
+        Outbound Wide Area Network (WAN) / internet forwarding and lateral
+        sibling traffic are blocked.
+    *   `wan`: Explicitly grants outbound WAN / internet NAT forwarding through
+        the parent router (`iptables FORWARD ACCEPT`).
+    *   `router`: Configures the VM as an L3 routing, filtering, and logging
+        middlebox (`ip_forward=1`, `MASQUERADE`, and WAN forwarding) that
+        downstream sibling VMs can chain through via `--net-via` or
+        `dsx net route`.
+*   `--net-via <vm|cid>` *(optional)*: Chains all network traffic from this
+    child VM through a designated sibling router/firewall/logging VM (`<vm>` or
+    `<cid>`). M-mode (`DIOSIX_SET_NET_POLICY`) permits L2 frames between the
+    VM and its designated router VM while blocking direct WAN bypass and
+    unrelated sibling traffic.
 *   `--domain <name>` *(optional)*: Extracts configuration and policies for the
     domain from `/etc/diosix/system.toml`.
 *   `--manifest <path>` / `-m <path>` *(optional)*: System manifest path.
@@ -236,6 +257,33 @@ dsx run linux-guest --name sys-domain --trusted --vcpus 1 --ram 128M
 # Launch using a declarative domain manifest
 dsx run --manifest /etc/diosix/system.toml --domain user
 ```
+
+---
+
+### `dsx net` (alias: `dsx network`)
+Inspects and dynamically updates per-VM network access policies, M-mode air-gap
+isolation, and service-VM middlebox routing (`DIOSIX_SET_NET_POLICY`).
+
+```bash
+dsx net status
+dsx net grant <vm|cid> [none|local|wan|router]
+dsx net revoke <vm|cid>
+dsx net isolate <vm|cid>
+dsx net route <vm|cid> --via <router-vm|cid|root>
+```
+
+*   `status` (or `list`): Displays each active child VM's CID, name, IP, network
+    mode (`none`, `local`, `wan`, `router`), upstream gateway, and WAN egress
+    posture.
+*   `grant <vm|cid> [wan|router|local]`: Grants outbound WAN access (`wan`,
+    default) or middlebox router role (`router`) to a running child VM.
+*   `revoke <vm|cid>`: Revokes outbound WAN access from `<vm|cid>`, reverting it
+    to `local` (host-only management SSH).
+*   `isolate <vm|cid>`: Immediately air-gaps `<vm|cid>` in M-mode
+    (`NetPolicyFlags.ISOLATED`), denying all packet transmission and reception.
+*   `route <vm|cid> --via <router-vm|cid|root>`: Dynamically chains `<vm|cid>`'s
+    network traffic through `<router-vm>` (for routing, packet filtering, or
+    logging) or restores direct parent routing (`--via root`).
 
 ---
 

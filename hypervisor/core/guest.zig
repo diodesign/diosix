@@ -86,6 +86,8 @@ pub const Guest = struct {
     is_steward: bool = false,
     is_standby_root: bool = false,
     is_confidential: bool = false,
+    net_isolated: bool = false,
+    net_upstream_cid: usize = 0,
     target_arch: TargetArch,
     quotas: QuotaSet,
     parent: ?*Guest,

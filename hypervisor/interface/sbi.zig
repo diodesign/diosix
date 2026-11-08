@@ -80,6 +80,7 @@ pub const DIOSIX = struct {
     pub const REQUEST_ROOT_FAILOVER = 24;
     pub const CONSOLE_WRITE = 25;
     pub const CONSOLE_READ = 26;
+    pub const SET_NET_POLICY = 27;
 };
 
 pub const CID_PARENT: u64 = 0;
@@ -177,6 +178,19 @@ pub const RunFlags = struct {
     pub const STEWARD: u64 = 1 << 1;
     pub const STANDBY_ROOT: u64 = 1 << 2;
     pub const CONFIDENTIAL: u64 = 1 << 3;
+    pub const NET_ISOLATED: u64 = 1 << 4;
+    pub const NET_UPSTREAM_SHIFT: u6 = 16;
+    pub const NET_UPSTREAM_MASK: u64 = 0xffff;
+};
+
+pub const NetPolicyFlags = struct {
+    pub const ISOLATED: u64 = 1 << 0;
+};
+
+pub const NetPolicyArgs = extern struct {
+    target_cid: u64,
+    flags: u64 = 0,
+    upstream_cid: u64 = 0,
 };
 
 pub const CHARTER_HASH_LEN: usize = 32;
@@ -311,6 +325,7 @@ comptime {
     std.debug.assert(@sizeOf(MapChildMemArgs) == 40);
     std.debug.assert(@sizeOf(UnmapChildMemArgs) == 16);
     std.debug.assert(@sizeOf(StartArgs) == 24);
+    std.debug.assert(@sizeOf(NetPolicyArgs) == 24);
 }
 
 test "SBI interface structures and extension IDs" {
@@ -335,6 +350,7 @@ test "SBI interface structures and extension IDs" {
     try testing.expectEqual(@as(usize, 40), @sizeOf(MapChildMemArgs));
     try testing.expectEqual(@as(usize, 16), @sizeOf(UnmapChildMemArgs));
     try testing.expectEqual(@as(usize, 24), @sizeOf(StartArgs));
+    try testing.expectEqual(@as(usize, 24), @sizeOf(NetPolicyArgs));
 
     // Verify Extension IDs and Function IDs.
     try testing.expectEqual(@as(usize, 0x10), EXT.BASE);

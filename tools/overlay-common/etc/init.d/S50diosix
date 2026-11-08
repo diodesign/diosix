@@ -128,7 +128,11 @@ case "$1" in
             iptables-restore < /etc/iptables.conf 2>/dev/null || true
         fi
         if command -v iptables >/dev/null 2>&1; then
-            # 1. Outbound NAT masquerade from child subnet to WAN.
+            # Default-deny forwarding: child VMs cannot reach WAN or siblings
+            # unless explicitly granted via 'dsx run --net wan' or 'dsx net'.
+            iptables -P FORWARD DROP 2>/dev/null || true
+
+            # 1. Outbound NAT masquerade for authorized child traffic to WAN.
             iptables -t nat -C POSTROUTING -s "$CHILD_SUBNET" \
                 ! -d "$CHILD_SUBNET" -j MASQUERADE 2>/dev/null || \
             iptables -t nat -A POSTROUTING -s "$CHILD_SUBNET" \
@@ -156,9 +160,7 @@ case "$1" in
             iptables -A FORWARD -s "$CHILD_SUBNET" -d "$CHILD_SUBNET" \
                 -j DROP 2>/dev/null || true
 
-            # 5. Allow outbound WAN traffic and stateful return responses.
-            iptables -C FORWARD -s "$CHILD_SUBNET" -j ACCEPT 2>/dev/null || \
-            iptables -A FORWARD -s "$CHILD_SUBNET" -j ACCEPT 2>/dev/null || true
+            # 5. Allow stateful return traffic for explicitly granted VMs.
             iptables -C FORWARD -d "$CHILD_SUBNET" -m state \
                 --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
             iptables -A FORWARD -d "$CHILD_SUBNET" -m state \
@@ -169,10 +171,25 @@ case "$1" in
             > /etc/issue 2>/dev/null || true
         GUEST_HOST="diosix-base-linux"
         MANIFEST_NAME=""
+        NET_MODE="local"
+        NET_GW="$CHILD_GW"
         if [ -n "$DSX_BIN" ]; then
-            MANIFEST_NAME=$("$DSX_BIN" manifest show --cid 1 --hv 2>/dev/null | \
+            MANIFEST_RAW=$("$DSX_BIN" manifest show --cid 1 --hv 2>/dev/null)
+            MANIFEST_NAME=$(printf "%s\n" "$MANIFEST_RAW" | \
                 sed -n 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | \
                 head -n 1 | tr -cd 'A-Za-z0-9-')
+            M_NET_MODE=$(printf "%s\n" "$MANIFEST_RAW" | \
+                sed -n 's/^# diosix-net-mode: \([a-z]*\).*/\1/p' | \
+                head -n 1)
+            M_NET_GW=$(printf "%s\n" "$MANIFEST_RAW" | \
+                sed -n 's/^# diosix-net-gateway: \([0-9.]*\).*/\1/p' | \
+                head -n 1)
+            if [ -n "$M_NET_MODE" ]; then
+                NET_MODE="$M_NET_MODE"
+            fi
+            if [ -n "$M_NET_GW" ]; then
+                NET_GW="$M_NET_GW"
+            fi
         fi
         echo "$GUEST_HOST" > /etc/hostname 2>/dev/null || true
         hostname "$GUEST_HOST" 2>/dev/null || true
@@ -181,10 +198,34 @@ case "$1" in
         else
             echo "127.0.1.1 $GUEST_HOST" >> /etc/hosts 2>/dev/null || true
         fi
-        # Child VM: Route through parent VM (10.0.3.1).
-        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-        ip route add default via "$CHILD_GW" dev diosix0 2>/dev/null || \
-            route add default gw "$CHILD_GW" diosix0 2>/dev/null || true
+        sysctl -w net.ipv4.conf.all.accept_redirects=0 \
+            net.ipv4.conf.diosix0.accept_redirects=0 >/dev/null 2>&1 || true
+        if [ "$NET_MODE" = "none" ]; then
+            sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1 || true
+            ip addr flush dev diosix0 2>/dev/null || true
+            ip link set diosix0 down 2>/dev/null || true
+        else
+            if [ "$NET_MODE" = "router" ]; then
+                sysctl -w net.ipv4.ip_forward=1 \
+                    net.ipv4.conf.all.send_redirects=0 \
+                    net.ipv4.conf.diosix0.send_redirects=0 \
+                    >/dev/null 2>&1 || true
+                if command -v iptables >/dev/null 2>&1; then
+                    iptables -P FORWARD ACCEPT 2>/dev/null || true
+                    iptables -t nat -C POSTROUTING -s "$CHILD_SUBNET" \
+                        ! -d "$CHILD_SUBNET" -j MASQUERADE \
+                        2>/dev/null || \
+                    iptables -t nat -A POSTROUTING -s "$CHILD_SUBNET" \
+                        ! -d "$CHILD_SUBNET" -j MASQUERADE \
+                        2>/dev/null || true
+                fi
+            else
+                sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1 || true
+            fi
+            ip route del default 2>/dev/null || true
+            ip route add default via "$NET_GW" dev diosix0 2>/dev/null || \
+                route add default gw "$NET_GW" diosix0 2>/dev/null || true
+        fi
         # Configure DNS fallback.
         if [ ! -s /etc/resolv.conf ] || \
            grep -q "127.0.0.1" /etc/resolv.conf 2>/dev/null; then

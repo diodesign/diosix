@@ -87,11 +87,34 @@ two-tier unidirectional downward hierarchy:
     sessions flow strictly downward from parent to child (`Parent -> Child`).
     Child VMs cannot open administrative SSH sessions to their parent VM.
 
-## Network firewall and boundary containment
+## Network firewall, M-mode L2 containment, and service-VM chaining
 
-Network traffic traversing the virtual network device (`diosix0`) is filtered
-by stateful iptables firewall rules configured on the Root VM router:
+Network traffic traversing the virtual network device (`diosix0`) is governed
+at two independent privilege layers — Machine mode (`M-mode` in
+`hypervisor/core/sbi/ipc.zig`) and the parent router's stateful `iptables`
+firewall (`S50diosix` and `dsx net`):
 
+*   **M-mode L2 sibling isolation and MAC anti-spoofing**: In `M-mode`,
+    `handleNetSend` stamps every non-root child VM's canonical source Media
+    Access Control (MAC) address (`02:00:00:00:XX:YY` matching its assigned
+    `local_cid`) and rejects direct sibling-to-sibling frame injection with
+    `SBI_ERR_DENIED` unless one VM is the explicitly designated upstream router
+    (`net_upstream_cid`) of the other. Air-gapped VMs (`RunFlags.NET_ISOLATED` /
+    `--net none`) are blocked from transmitting or receiving any frames in
+    `M-mode`.
+*   **Default-deny WAN egress (`--net local` by default)**: Child VMs spawned
+    with `dsx run` default to `--net local` (host-only management SSH between
+    `10.0.3.1` and `10.0.3.<cid>` plus the port `8484` Wayland bridge). The Root
+    VM's `FORWARD` chain policy is `DROP`; child VMs cannot ping or reach the
+    outside internet unless explicitly granted via `dsx run --net wan`,
+    `dsx net grant <vm> wan`, or a domain manifest declaring `net.wan`.
+*   **Service-VM routing, filtering, and logging (`--net router` and
+    `--net-via`)**: Operators can spawn dedicated routing/firewall/IDS VMs with
+    `dsx run <image> --name fw --net router` and chain downstream workload VMs
+    through them via `dsx run <image> --name app --net-via fw` (or dynamically
+    at runtime via `dsx net route app --via fw`). `M-mode` (`SET_NET_POLICY`,
+    Function ID `27`) restricts `app`'s upstream L2 path to `fw`, while the Root
+    VM blocks `app` from bypassing `fw` to the WAN.
 *   **Parent inbound denial**: The parent router installs packet-filter rules
     dropping all new connection attempts originating from child VMs
     (`-A INPUT -i diosix0 -m conntrack --ctstate NEW -j DROP` and
@@ -102,8 +125,7 @@ by stateful iptables firewall rules configured on the Root VM router:
     Sibling guest VMs cannot probe, port scan, or communicate laterally with
     one another across the virtual network.
 *   **Stateful return traffic**: Established and related responses to
-    parent-initiated connections (`--ctstate ESTABLISHED,RELATED`) are
-    permitted, allowing downward management commands to complete reliably.
+    authorized connections (`--ctstate ESTABLISHED,RELATED`) are permitted.
 
 ## Declarative manifests and air-gapped domains
 

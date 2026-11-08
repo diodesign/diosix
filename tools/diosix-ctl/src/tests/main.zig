@@ -70,6 +70,7 @@ test {
         @import("../manifest/cmd.zig"),
         @import("../manifest/lexer.zig"),
         @import("../manifest/policy.zig"),
+        @import("../net.zig"),
         @import("../registry.zig"),
         @import("../snapshot.zig"),
         @import("../ssh/sync.zig"),

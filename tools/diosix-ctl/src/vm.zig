@@ -6,6 +6,7 @@
 const std = @import("std");
 const api = @import("api.zig");
 const common = @import("common.zig");
+const net = @import("net.zig");
 const vm_info = @import("vm/info.zig");
 const vm_run = @import("vm/run.zig");
 const vm_install = @import("vm/install.zig");
@@ -464,6 +465,7 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
         printApiError("Stop VM", err);
         return false;
     };
+    net.applyHostFirewall(target_cid, "", .none, 0);
     removeGuestFromRegistry(target_cid);
 
     common.printFmt(

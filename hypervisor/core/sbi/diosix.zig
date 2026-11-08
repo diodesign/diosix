@@ -94,6 +94,7 @@ pub fn handleDiosix(
         },
         D.CONSOLE_WRITE => console.handleConsoleWrite(vc, ctx, g, a0),
         D.CONSOLE_READ => console.handleConsoleRead(vc, ctx, g, a0),
+        D.SET_NET_POLICY => ipc.handleSetNetPolicy(vc, ctx, g, a0, a1, a2),
         else => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),
     }
 }
@@ -216,6 +217,17 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         ((args.flags & interface.RunFlags.STANDBY_ROOT) != 0 and g.is_root);
     child.is_confidential = child.is_confidential or child.is_steward or
         ((args.flags & interface.RunFlags.CONFIDENTIAL) != 0);
+    if (created_new or (args.flags & interface.RunFlags.NET_ISOLATED) != 0) {
+        child.net_isolated =
+            (args.flags & interface.RunFlags.NET_ISOLATED) != 0;
+    }
+    const req_upstream: usize = @intCast(
+        (args.flags >> interface.RunFlags.NET_UPSTREAM_SHIFT) &
+            interface.RunFlags.NET_UPSTREAM_MASK,
+    );
+    if (created_new or req_upstream != 0) {
+        child.net_upstream_cid = req_upstream;
+    }
 
     child.stop();
     if (riscv.hasHExtension()) riscv.hfenceGvma() else riscv.sfenceVma();

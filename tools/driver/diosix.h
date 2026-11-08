@@ -49,6 +49,7 @@
 #define DIOSIX_FUNC_REQUEST_ROOT_FAILOVER 24
 #define DIOSIX_FUNC_CONSOLE_WRITE         25
 #define DIOSIX_FUNC_CONSOLE_READ          26
+#define DIOSIX_FUNC_SET_NET_POLICY        27
 
 #define IOCTL_DROP_TRUST            0x1002
 #define IOCTL_RUN                   0x1003
@@ -73,6 +74,7 @@
 #define IOCTL_REQUEST_ROOT_FAILOVER 0x1015
 #define IOCTL_CONSOLE_WRITE         0x1016
 #define IOCTL_CONSOLE_READ          0x1017
+#define IOCTL_SET_NET_POLICY        0x1018
 
 #define DIOSIX_CHILD_MEM_BASE       0x200000000UL
 #define DIOSIX_CHILD_MEM_MAX_SIZE   (256UL * 1024 * 1024)
@@ -148,6 +150,12 @@ struct start_args {
     uint64_t child_id;
     uint64_t entry_point;
     uint64_t dtb_ptr;
+};
+
+struct net_policy_args {
+    uint64_t target_cid;
+    uint64_t flags;
+    uint64_t upstream_cid;
 };
 
 struct hypervisor_info {
@@ -253,6 +261,10 @@ _Static_assert(
 );
 _Static_assert(sizeof(struct start_args) == 24, "start_args ABI size");
 _Static_assert(
+    sizeof(struct net_policy_args) == 24,
+    "net_policy_args ABI size"
+);
+_Static_assert(
     sizeof(struct hypervisor_info) == 304,
     "hypervisor_info ABI size"
 );
@@ -271,6 +283,7 @@ _Static_assert(sizeof(struct guest_info) == 96, "guest_info ABI size");
 void diosix_child_mem_lock(void);
 void diosix_child_mem_unlock(void);
 long diosix_ioctl_governance(unsigned int cmd, unsigned long arg);
+long diosix_ioctl_net_policy(unsigned long arg);
 int init_diosix_net(void);
 void cleanup_diosix_net(void);
 

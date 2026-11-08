@@ -444,6 +444,9 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
     case IOCTL_CONSOLE_READ:
         return handle_console_io(cmd, arg);
 
+    case IOCTL_SET_NET_POLICY:
+        return diosix_ioctl_net_policy(arg);
+
     case IOCTL_RATIFY_CHARTER:
         if (!capable(CAP_SYS_ADMIN))
             return -EPERM;

@@ -45,6 +45,8 @@ pub const MapChildMemArgs = interface.MapChildMemArgs;
 pub const UnmapChildMemArgs = interface.UnmapChildMemArgs;
 pub const StartArgs = interface.StartArgs;
 pub const CharterArgs = interface.CharterArgs;
+pub const NetPolicyFlags = interface.NetPolicyFlags;
+pub const NetPolicyArgs = interface.NetPolicyArgs;
 
 // IOCTL command definitions for /dev/diosix.
 pub const IOCTL_BASE: u32 = 0x1000;
@@ -71,6 +73,7 @@ pub const IOCTL_RESET_STEWARD: u32 = IOCTL_BASE + 20;
 pub const IOCTL_REQUEST_ROOT_FAILOVER: u32 = IOCTL_BASE + 21;
 pub const IOCTL_CONSOLE_WRITE: u32 = IOCTL_BASE + 22;
 pub const IOCTL_CONSOLE_READ: u32 = IOCTL_BASE + 23;
+pub const IOCTL_SET_NET_POLICY: u32 = IOCTL_BASE + 24;
 
 const EPERM_NEG: isize = -@as(isize, @backingInt(linux.E.PERM));
 const EACCES_NEG: isize = -@as(isize, @backingInt(linux.E.ACCES));
@@ -419,6 +422,23 @@ pub const DiosixClient = struct {
             linux.ioctl(fd, IOCTL_CONSOLE_WRITE, @intFromPtr(&args)),
         );
         return @min(@as(usize, @intCast(args.actual_len)), req_len);
+    }
+
+    pub fn setNetPolicy(
+        self: *DiosixClient,
+        target_cid: usize,
+        flags: u64,
+        upstream_cid: usize,
+    ) !void {
+        const fd = try self.getFd();
+        var args = NetPolicyArgs{
+            .target_cid = target_cid,
+            .flags = flags,
+            .upstream_cid = upstream_cid,
+        };
+        _ = try checkIoctlRc(
+            linux.ioctl(fd, IOCTL_SET_NET_POLICY, @intFromPtr(&args)),
+        );
     }
 };
 
