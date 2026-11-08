@@ -15,6 +15,7 @@ const common = @import("../common.zig");
 const loader = @import("../loader.zig");
 
 pub const SNAP_MEM_MAGIC = "DSXMEM01";
+pub const SNAP_RECORD_HDR_LEN: usize = 12;
 pub const PAGE_BYTES: usize = 4096;
 pub const CHUNK_BYTES: usize = 2 * 1024 * 1024;
 pub const GUEST_BASE_GPA: usize = 0xe000_0000;
@@ -178,7 +179,7 @@ pub fn dumpChildRamPages(
         while (page_off + PAGE_BYTES <= chunk_sz) : (page_off += PAGE_BYTES) {
             const page = mapped[page_off .. page_off + PAGE_BYTES];
             if (!isPageAllZero(page)) {
-                var rec_hdr: [12]u8 = undefined;
+                var rec_hdr: [SNAP_RECORD_HDR_LEN]u8 = undefined;
                 std.mem.writeInt(
                     u64,
                     rec_hdr[0..8],
@@ -228,32 +229,35 @@ pub fn restoreChildRamPages(
     var pos: usize = SNAP_MEM_MAGIC.len;
     var restored_pages: usize = 0;
 
-    while (pos + 12 <= data.len) {
+    while (pos + SNAP_RECORD_HDR_LEN <= data.len) {
         const gpa_off: usize = @intCast(
             std.mem.readInt(u64, data[pos..][0..8], .little),
         );
         const page_len: usize = @intCast(
             std.mem.readInt(u32, data[pos + 8 ..][0..4], .little),
         );
-        pos += 12;
-        if (page_len != PAGE_BYTES or pos + page_len > data.len) break;
+        pos += SNAP_RECORD_HDR_LEN;
+        const next_pos = std.math.add(usize, pos, page_len) catch break;
+        if (page_len != PAGE_BYTES or next_pos > data.len) break;
         if ((gpa_off & (PAGE_BYTES - 1)) != 0) {
-            pos += page_len;
+            pos = next_pos;
             continue;
         }
+        const target_gpa = std.math.add(usize, GUEST_BASE_GPA, gpa_off) catch
+            break;
 
         if (client.mapChildMemory(
             cid,
-            GUEST_BASE_GPA + gpa_off,
+            target_gpa,
             parent_gpa,
             PAGE_BYTES,
             loader.MAP_CHILD_RW_FLAGS,
         )) |mapped| {
             defer client.unmapChildMemory(mapped, parent_gpa) catch {};
-            @memcpy(mapped[0..PAGE_BYTES], data[pos .. pos + PAGE_BYTES]);
+            @memcpy(mapped[0..PAGE_BYTES], data[pos..next_pos]);
             restored_pages += 1;
         } else |_| {}
-        pos += page_len;
+        pos = next_pos;
     }
     return restored_pages;
 }

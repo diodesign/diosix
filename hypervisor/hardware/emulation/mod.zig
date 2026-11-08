@@ -22,6 +22,7 @@ pub const VirtualUart = @import("devices/vuart.zig").VirtualUart;
 pub const VirtualTimer = @import("devices/vtimer.zig").VirtualTimer;
 pub const VirtualPlic = @import("devices/vpic.zig").VirtualPlic;
 pub const VirtioVsock = @import("devices/vsock.zig").VirtioVsock;
+pub const VirtioVsockHdr = @import("devices/vsock.zig").VirtioVsockHdr;
 pub const VirtioGpu = @import("devices/vgpu.zig").VirtioGpu;
 pub const VirtioInput = @import("devices/vinput.zig").VirtioInput;
 pub const VsockRouter = @import("devices/vsock.zig").VsockRouter;

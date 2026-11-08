@@ -75,6 +75,8 @@
 #define IOCTL_CONSOLE_WRITE         0x1016
 #define IOCTL_CONSOLE_READ          0x1017
 #define IOCTL_SET_NET_POLICY        0x1018
+#define IOCTL_WHISPER_SEND          0x1019
+#define IOCTL_WHISPER_RECV          0x101a
 
 #define DIOSIX_CHILD_MEM_BASE       0x200000000UL
 #define DIOSIX_CHILD_MEM_MAX_SIZE   (256UL * 1024 * 1024)
@@ -282,8 +284,15 @@ _Static_assert(sizeof(struct guest_info) == 96, "guest_info ABI size");
 
 void diosix_child_mem_lock(void);
 void diosix_child_mem_unlock(void);
-long diosix_ioctl_governance(unsigned int cmd, unsigned long arg);
+bool diosix_child_mem_can_use(struct file *file);
+void diosix_child_mem_set_owner(struct file *file);
+long diosix_ioctl_governance(
+    struct file *file,
+    unsigned int cmd,
+    unsigned long arg
+);
 long diosix_ioctl_net_policy(unsigned long arg);
+long diosix_ioctl_whisper(unsigned int cmd, unsigned long arg);
 int init_diosix_net(void);
 void cleanup_diosix_net(void);
 

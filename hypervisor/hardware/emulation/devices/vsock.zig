@@ -57,6 +57,11 @@ pub const VirtioVsock = struct {
     queues: [NUM_QUEUES]VirtQueue = @splat(.{}),
     mem: ?MemoryAccessor = null,
     router: ?*VsockRouter = &router_mod.global_vsock_router,
+    route_fn: ?*const fn (
+        src_dev: *VirtioVsock,
+        hdr: *const VirtioVsockHdr,
+        payload: []const u8,
+    ) bool = null,
     router_next: ?*VirtioVsock = null,
     rx_lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     tx_lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),

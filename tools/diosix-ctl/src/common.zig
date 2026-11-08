@@ -234,7 +234,11 @@ pub fn unmapBinaryFile(slice: []const u8) void {
     }
 }
 
-pub fn writeFile(path: []const u8, content: []const u8) !void {
+pub fn writeFileWithMode(
+    path: []const u8,
+    content: []const u8,
+    mode: usize,
+) !void {
     var path_buf: [MAX_PATH_LEN]u8 = undefined;
     if (path.len >= path_buf.len) return error.PathTooLong;
     @memcpy(path_buf[0..path.len], path);
@@ -246,11 +250,12 @@ pub fn writeFile(path: []const u8, content: []const u8) !void {
         .TRUNC = true,
     };
     const zpath: [*:0]const u8 = @ptrCast(path_buf[0..path.len :0]);
-    const fd_res = linux.open(zpath, flags, DEFAULT_FILE_MODE);
+    const fd_res = linux.open(zpath, flags, @intCast(mode));
     const fd_signed: isize = @bitCast(fd_res);
     if (fd_signed < 0) return error.CannotOpenFile;
     const fd: i32 = @intCast(fd_signed);
     defer _ = linux.close(fd);
+    _ = linux.fchmod(fd, @intCast(mode));
 
     var written: usize = 0;
     while (written < content.len) {
@@ -260,6 +265,14 @@ pub fn writeFile(path: []const u8, content: []const u8) !void {
         if (signed_rc <= 0) return error.WriteFailed;
         written += @intCast(signed_rc);
     }
+}
+
+pub fn writeFile(path: []const u8, content: []const u8) !void {
+    return writeFileWithMode(path, content, DEFAULT_FILE_MODE);
+}
+
+pub fn writePrivateFile(path: []const u8, content: []const u8) !void {
+    return writeFileWithMode(path, content, PRIVATE_FILE_MODE);
 }
 
 pub fn fileExistsPath(path: [*:0]const u8) bool {
@@ -360,6 +373,9 @@ pub fn detectBootMode() []const u8 {
         }
         if (std.mem.indexOf(u8, cmdline, "diosix.mode=live") != null) {
             return "live";
+        }
+        if (std.mem.indexOf(u8, cmdline, "diosix.mode=install") != null) {
+            return "install";
         }
     } else |_| {}
     return "installed";

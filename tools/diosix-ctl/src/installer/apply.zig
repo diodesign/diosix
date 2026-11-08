@@ -14,7 +14,6 @@ const common = @import("../common.zig");
 const installer = @import("../installer.zig");
 const sysconfig = @import("../sysconfig.zig");
 
-const PROC_MOUNTS_PATH = "/proc/mounts";
 const MAX_MOUNTS_BYTES: usize = 64 * 1024;
 const MIB_BYTES: u64 = 1024 * 1024;
 const DEFAULT_DATA_PART_MB: usize = 512;
@@ -29,7 +28,7 @@ fn makeDirPath(path: []const u8, mode: usize) void {
 /// Checks whether `disk_path` is currently mounted according to `/proc/mounts`.
 pub fn isDiskMounted(disk_path: []const u8) bool {
     const content = common.readBinaryFile(
-        PROC_MOUNTS_PATH,
+        sysconfig.PROC_MOUNTS_PATH,
         MAX_MOUNTS_BYTES,
     ) catch return false;
     defer common.unmapBinaryFile(content);
@@ -115,13 +114,55 @@ fn runSubprocessWithStdinFile(
         @as(u32, @intCast(status & common.WAIT_SIGNAL_MASK));
 }
 
-fn copyFileIfPresent(src_path: []const u8, dst_path: []const u8) void {
+fn copyFileIfPresentWithMode(
+    src_path: []const u8,
+    dst_path: []const u8,
+    mode: usize,
+) void {
     const data = common.readBinaryFile(
         src_path,
         common.MAX_ELF_FILE_SIZE * 2,
     ) catch return;
     defer common.unmapBinaryFile(data);
-    common.writeFile(dst_path, data) catch {};
+    common.writeFileWithMode(dst_path, data, mode) catch {};
+}
+
+fn copyFileIfPresent(src_path: []const u8, dst_path: []const u8) void {
+    copyFileIfPresentWithMode(src_path, dst_path, common.DEFAULT_FILE_MODE);
+}
+
+fn seedKeyFiles(
+    allocator: std.mem.Allocator,
+    root_dir: []const u8,
+) !void {
+    const KeySeed = struct {
+        name: []const u8,
+        mode: usize,
+    };
+    const key_files = [_]KeySeed{
+        .{ .name = "authorized_passkeys", .mode = common.PRIVATE_FILE_MODE },
+        .{ .name = "id_management", .mode = common.PRIVATE_FILE_MODE },
+        .{ .name = "id_management.pub", .mode = common.DEFAULT_FILE_MODE },
+        .{
+            .name = "dropbear_ed25519_host_key",
+            .mode = common.PRIVATE_FILE_MODE,
+        },
+    };
+    for (key_files) |kf| {
+        const src = try allocator.print(
+            "{s}/{s}",
+            .{ sysconfig.DEFAULT_KEYS_DIR, kf.name },
+        );
+        defer allocator.free(src);
+        const dst = try allocator.print(
+            "{s}/keys/{s}",
+            .{ root_dir, kf.name },
+        );
+        defer allocator.free(dst);
+        if (!std.mem.eql(u8, src, dst)) {
+            copyFileIfPresentWithMode(src, dst, kf.mode);
+        }
+    }
 }
 
 fn seedTargetRoot(
@@ -179,6 +220,7 @@ fn seedTargetRoot(
     );
     defer allocator.free(slot_a_elf);
     copyFileIfPresent(sysconfig.DEFAULT_GUEST_IMAGE_PATH, slot_a_elf);
+    try seedKeyFiles(allocator, root_dir);
 }
 
 /// Applies `plan` to `plan.target_disk`, partitioning and formatting unmounted

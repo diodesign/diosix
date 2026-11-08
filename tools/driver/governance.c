@@ -152,7 +152,7 @@ static long handle_set_manifest(unsigned long arg)
     return 0;
 }
 
-static long handle_map_child_mem(unsigned long arg)
+static long handle_map_child_mem(struct file *file, unsigned long arg)
 {
     struct map_child_mem_args args;
     struct map_child_mem_args *sbi_margs;
@@ -192,6 +192,11 @@ static long handle_map_child_mem(unsigned long arg)
     memcpy(sbi_margs, &args, sizeof(args));
     margs_pa = virt_to_phys(sbi_margs);
     diosix_child_mem_lock();
+    if (!diosix_child_mem_can_use(file)) {
+        diosix_child_mem_unlock();
+        kfree(sbi_margs);
+        return -EBUSY;
+    }
     ret = sbi_ecall(
         EXT_DIOSIX,
         DIOSIX_FUNC_MAP_CHILD_MEM,
@@ -202,6 +207,8 @@ static long handle_map_child_mem(unsigned long arg)
         0,
         0
     );
+    if (!ret.error)
+        diosix_child_mem_set_owner(file);
     diosix_child_mem_unlock();
     kfree(sbi_margs);
 
@@ -214,7 +221,7 @@ static long handle_map_child_mem(unsigned long arg)
     return 0;
 }
 
-static long handle_unmap_child_mem(unsigned long arg)
+static long handle_unmap_child_mem(struct file *file, unsigned long arg)
 {
     struct unmap_child_mem_args args;
     struct unmap_child_mem_args *sbi_uargs;
@@ -250,6 +257,11 @@ static long handle_unmap_child_mem(unsigned long arg)
     memcpy(sbi_uargs, &args, sizeof(args));
     uargs_pa = virt_to_phys(sbi_uargs);
     diosix_child_mem_lock();
+    if (!diosix_child_mem_can_use(file)) {
+        diosix_child_mem_unlock();
+        kfree(sbi_uargs);
+        return -EBUSY;
+    }
     ret = sbi_ecall(
         EXT_DIOSIX,
         DIOSIX_FUNC_UNMAP_CHILD_MEM,
@@ -260,6 +272,8 @@ static long handle_unmap_child_mem(unsigned long arg)
         0,
         0
     );
+    if (!ret.error)
+        diosix_child_mem_set_owner(NULL);
     diosix_child_mem_unlock();
     kfree(sbi_uargs);
 
@@ -416,7 +430,11 @@ out:
     return rc;
 }
 
-long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
+long diosix_ioctl_governance(
+    struct file *file,
+    unsigned int cmd,
+    unsigned long arg
+)
 {
     struct sbiret ret;
 
@@ -428,10 +446,10 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
         return handle_set_manifest(arg);
 
     case IOCTL_MAP_CHILD_MEM:
-        return handle_map_child_mem(arg);
+        return handle_map_child_mem(file, arg);
 
     case IOCTL_UNMAP_CHILD_MEM:
-        return handle_unmap_child_mem(arg);
+        return handle_unmap_child_mem(file, arg);
 
     case IOCTL_START:
         return handle_start_guest(arg);
@@ -446,6 +464,10 @@ long diosix_ioctl_governance(unsigned int cmd, unsigned long arg)
 
     case IOCTL_SET_NET_POLICY:
         return diosix_ioctl_net_policy(arg);
+
+    case IOCTL_WHISPER_SEND:
+    case IOCTL_WHISPER_RECV:
+        return diosix_ioctl_whisper(cmd, arg);
 
     case IOCTL_RATIFY_CHARTER:
         if (!capable(CAP_SYS_ADMIN))

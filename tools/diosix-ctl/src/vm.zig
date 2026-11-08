@@ -72,27 +72,23 @@ pub fn cmdQuota(
     var i: usize = 2;
     while (i < argv.len) : (i += 1) {
         const flag = std.mem.span(argv[i]);
-        if (i == 2 and !std.mem.startsWith(u8, flag, "-")) {
-            continue;
-        }
+        if (i == 2 and !std.mem.startsWith(u8, flag, "-")) continue;
         if (std.meta.stringToEnum(QuotaOption, flag)) |opt| {
             switch (opt) {
                 .@"--ram" => {
                     if (i + 1 >= argv.len) {
-                        printStr(
+                        return printStr(
                             "Error: Option '--ram' requires a value in MB.\n",
                         );
-                        return;
                     }
                     i += 1;
                     const raw_val = std.mem.span(argv[i]);
                     const mb = std.fmt.parseInt(usize, raw_val, 10) catch blk: {
                         const parsed = parseMemorySizeMb(raw_val);
                         if (parsed == 0) {
-                            printStr(
+                            return printStr(
                                 "Error: Invalid numeric value for '--ram'.\n",
                             );
-                            return;
                         }
                         break :blk parsed;
                     };
@@ -101,10 +97,9 @@ pub fn cmdQuota(
                 },
                 .@"--pcpu", .@"--pcpu-quota" => {
                     if (i + 1 >= argv.len) {
-                        printStr(
+                        return printStr(
                             "Error: '--pcpu' requires a percentage (1-90).\n",
                         );
-                        return;
                     }
                     i += 1;
                     const raw_pct = std.mem.trimEnd(
@@ -113,16 +108,14 @@ pub fn cmdQuota(
                         "%",
                     );
                     pcpu_pct = std.fmt.parseInt(usize, raw_pct, 10) catch {
-                        printStr(
+                        return printStr(
                             "Error: Invalid numeric value for '--pcpu'.\n",
                         );
-                        return;
                     };
                     if (pcpu_pct == 0 or pcpu_pct > 99) {
-                        printStr(
+                        return printStr(
                             "Error: '--pcpu' must be between 1 and 99%.\n",
                         );
-                        return;
                     }
                     has_update = true;
                 },
@@ -346,24 +339,29 @@ pub fn cmdList(client: *api.DiosixClient) !void {
     };
     defer allocator.free(self_ram_str);
     const self_name = if (is_root) "root (self)" else "self";
+    const trust_str = if (is_trusted) "trusted" else "untrusted";
     printGuestLine(
         1,
         self_name,
         self_vcpus,
         self_ram_str,
         "running",
-        if (is_trusted) "trusted" else "untrusted",
+        trust_str,
         "local",
     );
 
     var guest_count: usize = 0;
-    if (readBinaryFile(
-        GUEST_REGISTRY_PATH,
-        MAX_MANIFEST_SIZE,
-    )) |content| {
+    if (readBinaryFile(GUEST_REGISTRY_PATH, MAX_MANIFEST_SIZE)) |content| {
         defer unmapBinaryFile(content);
         var iter = common.GuestRegistryIter.init(content);
         while (iter.next()) |entry| {
+            if (client.dev_fd != null and
+                (client.getInfo(entry.cid) catch null) == null)
+            {
+                net.applyHostFirewall(entry.cid, entry.ip, .none, 0);
+                removeGuestFromRegistry(entry.cid);
+                continue;
+            }
             const c_mb = parseMemorySizeMb(entry.ram);
             const child_ram_str = allocator.print("{d} MB", .{c_mb}) catch {
                 printStr("Error: Out of memory formatting VM list.\n");
@@ -462,6 +460,12 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
     }
 
     client.terminate(target_cid, 0) catch |err| {
+        if (client.dev_fd != null and
+            (client.getInfo(target_cid) catch null) == null)
+        {
+            net.applyHostFirewall(target_cid, "", .none, 0);
+            removeGuestFromRegistry(target_cid);
+        }
         printApiError("Stop VM", err);
         return false;
     };

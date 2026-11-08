@@ -691,9 +691,13 @@ Subcommands:
     `/var/lib/diosix/keys/authorized_passkeys` and
     `/root/.ssh/authorized_keys`, or generates a WebAuthn QR pairing URI
     (`--qr`).
+*   `revoke <id|fingerprint|label> [--json]` (aliases: `remove`, `rm`):
+    Revokes an enrolled passkey by 1-based index, SHA-256 fingerprint prefix,
+    or label from `/var/lib/diosix/keys/authorized_passkeys` and immediately
+    removes it from `/root/.ssh/authorized_keys`.
 *   `challenge [--json]`: Generates a 256-bit cryptographic one-time challenge
-    nonce (`diosix-challenge:<64-hex>`) in `/run/diosix/auth_challenge` for
-    headless UART serial authentication.
+    nonce (`diosix-challenge:<64-hex>`) in `/run/diosix/auth_challenge.state`
+    for headless UART serial authentication.
 *   `verify <signature-hex> [--challenge <str>] [--json]`: Verifies a 64-byte
     (128-hex-char) Ed25519 signature over the active challenge against all
     enrolled passkeys and immediately consumes the stored challenge nonce to

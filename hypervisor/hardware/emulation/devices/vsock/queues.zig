@@ -122,7 +122,9 @@ pub fn processTx(self: *VirtioVsock) void {
                     }
                 }
 
-                if (self.router) |r| {
+                if (self.route_fn) |rf| {
+                    _ = rf(self, &hdr, payload_slice);
+                } else if (self.router) |r| {
                     _ = r.routePacket(self, &hdr, payload_slice);
                 }
             }

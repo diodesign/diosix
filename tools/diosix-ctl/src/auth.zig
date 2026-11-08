@@ -20,7 +20,7 @@ const sanitizeJsonStr = common.sanitizeJsonStr;
 const trimWhitespace = common.trimWhitespace;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
-const writeFile = common.writeFile;
+const writePrivateFile = common.writePrivateFile;
 const fileExistsPath = common.fileExistsPath;
 const detectSeatProfile = common.detectSeatProfile;
 const detectBootMode = common.detectBootMode;
@@ -32,6 +32,9 @@ const AuthSubcommand = enum {
     ls,
     challenge,
     enroll,
+    revoke,
+    remove,
+    rm,
     verify,
 };
 
@@ -82,6 +85,28 @@ fn passkeyListJson(
     return out.toOwnedSlice(allocator);
 }
 
+/// Removes lines containing `blob` from `path` if the file exists.
+fn removeBlobFromKeyFile(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    blob: []const u8,
+) void {
+    const content = readBinaryFile(path, MAX_AUTHORIZED_PASSKEYS_BYTES) catch
+        return;
+    defer unmapBinaryFile(content);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    var line_it = std.mem.splitScalar(u8, content, '\n');
+    while (line_it.next()) |raw_line| {
+        const line = trimWhitespace(raw_line);
+        if (line.len == 0) continue;
+        if (std.mem.indexOf(u8, line, blob) != null) continue;
+        out.appendSlice(allocator, line) catch return;
+        out.append(allocator, '\n') catch return;
+    }
+    writePrivateFile(path, out.items) catch {};
+}
+
 pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     const exe_name = common.getExeName();
     const sys_cfg = common.loadRuntimeSystemConfig();
@@ -95,11 +120,12 @@ pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             \\  {s} auth enroll [options] [--json]  Enroll passkey or token
             \\      [--key <pubkey>|--file <path>|--tpm|--fido2|--qr]
             \\      [--label <name>]
+            \\  {s} auth revoke <id|fp|label>       Revoke enrolled passkey
             \\  {s} auth challenge [--json]         Generate 256-bit nonce
             \\  {s} auth verify <sig-hex> [options] Verify Ed25519 signature
             \\      [--challenge <str>] [--json]
             \\
-        , .{ exe_name, exe_name, exe_name, exe_name, exe_name });
+        , .{ exe_name, exe_name, exe_name, exe_name, exe_name, exe_name });
         return;
     }
 
@@ -244,7 +270,7 @@ pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
                 .{nonce_hex},
             );
             defer allocator.free(chal_str);
-            try writeFile(passkey.CHALLENGE_STATE_PATH, chal_str);
+            try writePrivateFile(passkey.CHALLENGE_STATE_PATH, chal_str);
 
             if (json_mode) {
                 printFmt(
@@ -256,6 +282,60 @@ pub fn cmdAuth(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             }
         },
         .enroll => try cmdAuthEnroll(args, seat_profile, json_mode),
+        .revoke, .remove, .rm => {
+            if (args.len < 2) {
+                printFmt(
+                    "Usage: {s} auth revoke <id|fingerprint|label> [--json]\n",
+                    .{exe_name},
+                );
+                return;
+            }
+            const target = std.mem.span(args[1]);
+            const target_id = std.fmt.parseInt(usize, target, 10) catch 0;
+            var match_idx: ?usize = null;
+            for (entries[0..entry_count], 0..) |entry, idx| {
+                const fp_match = target.len >= 4 and
+                    std.mem.startsWith(u8, &entry.fingerprint_hex, target);
+                const cmt_match = entry.comment.len > 0 and
+                    std.mem.eql(u8, entry.comment, target);
+                if ((target_id > 0 and target_id == idx + 1) or
+                    fp_match or
+                    cmt_match)
+                {
+                    match_idx = idx;
+                    break;
+                }
+            }
+            const rev_idx = match_idx orelse {
+                printFmt(
+                    "Error: Enrolled passkey '{s}' not found.\n",
+                    .{target},
+                );
+                return;
+            };
+            const revoked = entries[rev_idx];
+            removeBlobFromKeyFile(
+                allocator,
+                auth_pk_path,
+                revoked.base64_blob,
+            );
+            removeBlobFromKeyFile(
+                allocator,
+                passkey.ROOT_AUTHORIZED_KEYS_PATH,
+                revoked.base64_blob,
+            );
+            if (json_mode) {
+                printFmt(
+                    "{{\"status\":\"revoked\",\"fingerprint\":\"{s}\"}}\n",
+                    .{&revoked.fingerprint_hex},
+                );
+            } else {
+                printFmt(
+                    "✓ Revoked passkey ({s}, fingerprint {s})\n",
+                    .{ revoked.kind.label(), &revoked.fingerprint_hex },
+                );
+            }
+        },
         .verify => {
             if (args.len < 2) {
                 printStr(

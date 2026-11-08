@@ -22,6 +22,12 @@ inline fn reply(
     sbi_core.setResult(vc, ctx, err, val);
 }
 
+fn isChildConfidentialLocked(child: *const guest.Guest) bool {
+    const sealed = charter.isCharterSealed();
+    return (child.is_steward and sealed) or
+        (child.is_confidential and (sealed or child.hasAnyVcoreStarted()));
+}
+
 pub fn handleGetManifest(
     vc: *vcore.VirtualCore,
     context: *riscv.ThreadContext,
@@ -29,52 +35,49 @@ pub fn handleGetManifest(
     a0: usize,
 ) void {
     var margs = g.space.readGuestStruct(interface.ManifestArgs, a0) catch {
-        reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
     };
     const target = g.getGuestByCid(@intCast(margs.target_cid)) orelse {
-        reply(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
     };
+    if (target != g and
+        (target.parent != g or isChildConfidentialLocked(target)))
+    {
+        return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
+    }
     const max_len: usize = @intCast(margs.max_len);
     const data_ptr: usize = @intCast(margs.data_ptr);
     const actual_len = target.getManifestLength();
     const alloc_len: usize = @min(max_len, actual_len);
     if (max_len > 0 and data_ptr != 0) {
         _ = std.math.add(usize, data_ptr, max_len) catch {
-            reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-            return;
+            return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
         };
     }
     if (alloc_len > 0 and data_ptr != 0) {
         const kbuf = target.allocator.alloc(u8, alloc_len) catch {
-            reply(vc, context, sbi_core.SBI_ERR_FAILED, 0);
-            return;
+            return reply(vc, context, sbi_core.SBI_ERR_FAILED, 0);
         };
         defer target.allocator.free(kbuf);
 
         var copy_len: usize = 0;
         if (target.readManifest(kbuf)) |read_len| {
-            const cl: usize = @min(alloc_len, read_len);
-            copy_len = cl;
+            copy_len = @min(alloc_len, read_len);
             g.space.copyToGuest(data_ptr, kbuf[0..copy_len]) catch {
-                reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-                return;
+                return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
             };
             margs.actual_len = read_len;
         } else {
             margs.actual_len = 0;
         }
         g.space.writeGuestStruct(interface.ManifestArgs, a0, margs) catch {
-            reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-            return;
+            return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
         };
         reply(vc, context, sbi_core.SBI_SUCCESS, copy_len);
     } else {
         margs.actual_len = actual_len;
         g.space.writeGuestStruct(interface.ManifestArgs, a0, margs) catch {
-            reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-            return;
+            return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
         };
         reply(vc, context, sbi_core.SBI_SUCCESS, 0);
     }
@@ -87,42 +90,38 @@ pub fn handleSetManifest(
     a0: usize,
 ) void {
     const margs = g.space.readGuestStruct(interface.ManifestArgs, a0) catch {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
     };
     const target = g.getGuestByCid(@intCast(margs.target_cid)) orelse {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
     };
-    if (!g.is_trusted and !g.is_root and target.parent != g) {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_DENIED, 0);
-        return;
+    const can_set = if (target == g)
+        (g.is_trusted or g.is_root)
+    else
+        (target.parent == g and !isChildConfidentialLocked(target));
+    if (!can_set) {
+        return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
     }
     const max_len: usize = @intCast(margs.max_len);
     const data_ptr: usize = @intCast(margs.data_ptr);
     if (max_len == 0 or max_len > sbi_core.MAX_MANIFEST_SIZE_BYTES) {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
     }
     _ = std.math.add(usize, data_ptr, max_len) catch {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
     };
     const buf = target.allocator.alloc(u8, max_len) catch {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_FAILED, 0);
     };
     defer target.allocator.free(buf);
 
     g.space.copyFromGuest(buf, data_ptr) catch {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
     };
     target.setManifest(buf) catch {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_FAILED, 0);
     };
-    sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
+    reply(vc, context, sbi_core.SBI_SUCCESS, 0);
 }
 
 fn overlapsOwnRam(
@@ -157,17 +156,11 @@ pub fn handleMapChildMem(
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;
     };
-    if (child == g or (child.parent != g and !g.is_root)) {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_DENIED, 0);
-        return;
-    }
-    const child_started = child.hasAnyVcoreStarted();
-    if ((child.is_steward and charter.isCharterSealed()) or
-        (child.is_confidential and
-            (charter.isCharterSealed() or child_started)))
+    if (margs.child_id < guest.CID_FIRST_CHILD or
+        child.parent != g or
+        isChildConfidentialLocked(child))
     {
-        sbi_core.setResult(vc, context, sbi_core.SBI_ERR_DENIED, 0);
-        return;
+        return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
     }
     const sz: usize = @intCast(margs.size);
     const c_gpa: usize = @intCast(margs.child_gpa);
@@ -315,10 +308,15 @@ pub fn handleSetNetPolicy(
     {
         return reply(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
     }
-    child.net_isolated = (flags & interface.NetPolicyFlags.ISOLATED) != 0;
-    child.net_upstream_cid = norm_upstream;
+    child.setNetIsolated((flags & interface.NetPolicyFlags.ISOLATED) != 0);
+    child.setNetUpstreamCid(norm_upstream);
     reply(vc, context, sbi_core.SBI_SUCCESS, 0);
 }
+
+const ETH_HEADER_LEN: usize = 14;
+const ETH_SRC_MAC_OFFSET: usize = 6;
+const LOCAL_ADMIN_MAC_PREFIX: u8 = 0x02;
+const BYTE_MASK: usize = 0xff;
 
 pub fn handleNetSend(
     vc: *vcore.VirtualCore,
@@ -328,7 +326,7 @@ pub fn handleNetSend(
     a1: usize,
     dest_cid: usize,
 ) void {
-    if (g.net_isolated) {
+    if (g.isNetIsolated()) {
         return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
     }
     if (a1 == 0 or a1 > guest.MAX_PACKET_LEN) {
@@ -346,41 +344,39 @@ pub fn handleNetSend(
     g.space.copyFromGuest(pkt_buf, a0) catch {
         return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
     };
-    if (!g.is_root and pkt_buf.len >= 14) {
-        pkt_buf[6] = 0x02;
-        pkt_buf[7] = 0x00;
-        pkt_buf[8] = 0x00;
-        pkt_buf[9] = 0x00;
-        pkt_buf[10] = @intCast((g.local_cid >> 8) & 0xff);
-        pkt_buf[11] = @intCast(g.local_cid & 0xff);
+    if (!g.is_root and pkt_buf.len >= ETH_HEADER_LEN) {
+        pkt_buf[ETH_SRC_MAC_OFFSET] = LOCAL_ADMIN_MAC_PREFIX;
+        pkt_buf[ETH_SRC_MAC_OFFSET + 1] = 0;
+        pkt_buf[ETH_SRC_MAC_OFFSET + 2] = 0;
+        pkt_buf[ETH_SRC_MAC_OFFSET + 3] = 0;
+        pkt_buf[ETH_SRC_MAC_OFFSET + 4] =
+            @intCast((g.local_cid >> 8) & BYTE_MASK);
+        pkt_buf[ETH_SRC_MAC_OFFSET + 5] = @intCast(g.local_cid & BYTE_MASK);
     }
-
+    const self_upstream = g.getNetUpstreamCid();
     if (dest_cid == 0) {
         {
             const s = g.tree_lock.lock();
             var it = g.children.start;
             while (it) |node| : (it = node.next) {
-                if (!node.contents.net_isolated) {
-                    sbi_core.deliverToQueue(
-                        node.contents,
-                        &node.contents.net_rx,
-                        pkt_buf,
-                    );
+                const ch = node.contents;
+                if (!ch.isNetIsolated() and ch.getNetUpstreamCid() == 0) {
+                    sbi_core.deliverToQueue(ch, &ch.net_rx, pkt_buf);
                 }
             }
             g.tree_lock.unlock(s);
         }
         if (g.parent) |p| {
-            if (!p.net_isolated) {
+            if (self_upstream == 0 and !p.isNetIsolated()) {
                 sbi_core.deliverToQueue(p, &p.net_rx, pkt_buf);
             }
             const ps = p.tree_lock.lock();
             var pit = p.children.start;
             while (pit) |node| : (pit = node.next) {
                 const sib = node.contents;
-                if (sib != g and !sib.net_isolated and
-                    (sib.local_cid == g.net_upstream_cid or
-                        sib.net_upstream_cid == g.local_cid))
+                if (sib != g and !sib.isNetIsolated() and
+                    (sib.local_cid == self_upstream or
+                        sib.getNetUpstreamCid() == g.local_cid))
                 {
                     sbi_core.deliverToQueue(sib, &sib.net_rx, pkt_buf);
                 }
@@ -388,32 +384,33 @@ pub fn handleNetSend(
             p.tree_lock.unlock(ps);
         }
     } else if (dest_cid == guest.CID_SELF and !g.is_root) {
+        if (self_upstream != 0) {
+            return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
+        }
         if (g.parent) |p| {
-            if (!p.net_isolated) {
+            if (!p.isNetIsolated()) {
                 sbi_core.deliverToQueue(p, &p.net_rx, pkt_buf);
             }
         }
     } else if (dest_cid >= guest.CID_FIRST_CHILD) {
         if (g.getGuestByCid(dest_cid)) |target| {
-            if (target.net_isolated) {
-                sbi_core.setResult(vc, context, sbi_core.SBI_ERR_DENIED, 0);
-                return;
+            if (target.isNetIsolated() or target.getNetUpstreamCid() != 0) {
+                return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
             }
             sbi_core.deliverToQueue(target, &target.net_rx, pkt_buf);
         } else if (g.parent) |p| {
             if (p.getGuestByCid(dest_cid)) |target| {
-                const allowed = target != g and !target.net_isolated and
-                    (dest_cid == g.net_upstream_cid or
-                        target.net_upstream_cid == g.local_cid);
+                const allowed = target != g and !target.isNetIsolated() and
+                    (dest_cid == self_upstream or
+                        target.getNetUpstreamCid() == g.local_cid);
                 if (!allowed) {
-                    sbi_core.setResult(vc, context, sbi_core.SBI_ERR_DENIED, 0);
-                    return;
+                    return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
                 }
                 sbi_core.deliverToQueue(target, &target.net_rx, pkt_buf);
             }
         }
     }
-    sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
+    reply(vc, context, sbi_core.SBI_SUCCESS, 0);
 }
 
 test "SBI IPC manifest and network handlers" {
@@ -488,6 +485,8 @@ test "SBI IPC manifest and network handlers" {
     // is permitted while traffic to unrelated c_peer remains denied.
     handleSetNetPolicy(&vc, &ctx, g, c_app.local_cid, 0, c_router.local_cid);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
+    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 5, guest.CID_SELF);
+    try testing.expectEqual(denied, ctx[@backingInt(arch.Register.a0)]);
     handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 5, c_router.local_cid);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
     try testing.expectEqual(@as(usize, 1), c_router.net_rx.getCount());

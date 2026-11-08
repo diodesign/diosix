@@ -121,33 +121,36 @@ pub fn stageChildVmManifest(
     vm_name: []const u8,
     domain_name: ?[]const u8,
     manifest_path: ?[]const u8,
+    inject_parent_key: bool,
 ) void {
     const sys_cfg = common.loadRuntimeSystemConfig();
     var pubkey_line: []const u8 = "";
     var pk_mapped: ?[]u8 = null;
     defer if (pk_mapped) |m| unmapBinaryFile(m);
-    const cfg_pk = allocator.print(
-        "{s}/id_management.pub",
-        .{sys_cfg.keysDir()},
-    ) catch {
-        printStr(OOM_MSG);
-        return;
-    };
-    defer allocator.free(cfg_pk);
-    const pubkey_candidates = [_][]const u8{
-        cfg_pk,
-        sysconfig.ETC_MANAGEMENT_PUBKEY_PATH,
-    };
-    for (pubkey_candidates) |cand| {
-        if (readBinaryFile(cand, MAX_PUBKEY_FILE_SIZE)) |pk_bytes| {
-            const trimmed = trimWhitespace(pk_bytes);
-            if (trimmed.len > 0) {
-                pk_mapped = pk_bytes;
-                pubkey_line = trimmed;
-                break;
-            }
-            unmapBinaryFile(pk_bytes);
-        } else |_| {}
+    if (inject_parent_key) {
+        const cfg_pk = allocator.print(
+            "{s}/id_management.pub",
+            .{sys_cfg.keysDir()},
+        ) catch {
+            printStr(OOM_MSG);
+            return;
+        };
+        defer allocator.free(cfg_pk);
+        const pubkey_candidates = [_][]const u8{
+            cfg_pk,
+            sysconfig.ETC_MANAGEMENT_PUBKEY_PATH,
+        };
+        for (pubkey_candidates) |cand| {
+            if (readBinaryFile(cand, MAX_PUBKEY_FILE_SIZE)) |pk_bytes| {
+                const trimmed = trimWhitespace(pk_bytes);
+                if (trimmed.len > 0) {
+                    pk_mapped = pk_bytes;
+                    pubkey_line = trimmed;
+                    break;
+                }
+                unmapBinaryFile(pk_bytes);
+            } else |_| {}
+        }
     }
 
     var staged = std.ArrayList(u8).empty;

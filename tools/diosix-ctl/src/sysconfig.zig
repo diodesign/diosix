@@ -53,13 +53,15 @@ pub const WHISPER_SPOOL_PATH = "/var/lib/diosix/charter/whispers.log";
 pub const INSTALL_RECEIPT_PATH = "/var/lib/diosix/install.receipt";
 pub const AUTHORIZED_PASSKEYS_PATH =
     "/var/lib/diosix/keys/authorized_passkeys";
-pub const DEV_AUTHORIZED_KEYS_PATH = "/var/lib/diosix/keys/authorized_keys";
+pub const DEV_AUTHORIZED_KEYS_PATH =
+    "/var/lib/diosix/keys/dev_authorized_keys";
 pub const DEFAULT_SCREENSHOT_PATH = "/var/lib/diosix/screenshot.bmp";
 pub const DEFAULT_RAW_SCREENSHOT_PATH = "/tmp/diosix-screen.raw";
 
 // Root SSH key paths.
 pub const ROOT_SSH_DIR = "/root/.ssh";
 pub const ROOT_AUTHORIZED_KEYS_PATH = "/root/.ssh/authorized_keys";
+pub const ROOT_KNOWN_HOSTS_PATH = "/root/.ssh/known_hosts";
 
 // Boot, shim, and default guest image paths.
 pub const GUEST_SHIM_DIR = "/usr/share/diosix";
@@ -96,6 +98,7 @@ pub const BOOT_SCRIPT_PATHS = [_][]const u8{
 // Kernel, procfs, sysfs, and device nodes.
 pub const SYS_FIRMWARE_FDT_PATH = "/sys/firmware/fdt";
 pub const PROC_CMDLINE_PATH = "/proc/cmdline";
+pub const PROC_MOUNTS_PATH = "/proc/mounts";
 pub const DEV_NULL_PATH = "/dev/null";
 pub const DEV_URANDOM_PATH = "/dev/urandom";
 pub const DEV_DRI_CARD0_PATH = "/dev/dri/card0";
@@ -133,8 +136,12 @@ pub const MOUNT_BIN = "/bin/mount";
 pub const UMOUNT_BIN = "/bin/umount";
 pub const CP_BIN = "/bin/cp";
 pub const IP_BIN = "/sbin/ip";
+pub const IP_FALLBACK_BIN = "/bin/ip";
+pub const IPTABLES_BIN = "/usr/sbin/iptables";
+pub const IPTABLES_SBIN = "/sbin/iptables";
 pub const BRCTL_BIN = "/usr/sbin/brctl";
 pub const SSH_BIN = "/usr/bin/ssh";
+pub const SSH_KEYGEN_BIN = "/usr/bin/ssh-keygen";
 pub const SSH_CLIENT_BINS = [_][]const u8{
     "/usr/bin/ssh",
     "/usr/bin/dbclient",
@@ -143,6 +150,8 @@ pub const SSH_CLIENT_BINS = [_][]const u8{
 pub const NC_BIN = "/usr/bin/nc";
 pub const WGET_BIN = "/usr/bin/wget";
 pub const CURL_BIN = "/usr/bin/curl";
+pub const DEFAULT_SUBNET_CIDR = "10.0.3.0/24";
+pub const DEFAULT_GATEWAY_IP = "10.0.3.1";
 
 pub const MAX_TOUR_STEPS = tour.MAX_TOUR_STEPS;
 pub const TourStep = tour.TourStep;

@@ -108,6 +108,7 @@ Charter governance.
 | `REQUEST_ROOT_FAILOVER` | `24` | Promote Standby Root VM after M-of-N vote |
 | `CONSOLE_WRITE` | `25` | Push input bytes into a child VM's console RX ring |
 | `CONSOLE_READ` | `26` | Drain output bytes from a VM's console TX ring |
+| `SET_NET_POLICY` | `27` | Set child VM M-mode L2 isolation and router CID |
 
 ---
 
@@ -121,14 +122,12 @@ Terminates a target VM and recursively tears down all of its descendants.
     `SBI_SUCCESS` upon terminating a child (or `SBI_ERR_DENIED` if targeting a
     protected Steward VM when the Charter is sealed without M-of-N quorum).
 
-#### `YIELD` (`FID 1`)
-Relinquishes the current VCPU's time slice to allow other ready VCPUs to run.
-*   **Returns**: `SBI_SUCCESS` (`0`).
-
-#### `DROP_TRUST` (`FID 3`)
-Irrevocably revokes hardware trust for the calling VM, unmapping host physical
-MMIO and blocking direct interrupt routing.
-*   **Returns**: `SBI_SUCCESS` (`0`).
+#### `YIELD` (`FID 1`) and `DROP_TRUST` (`FID 3`)
+*   `YIELD`: Relinquishes the current VCPU's time slice to allow other ready
+    VCPUs to run. Returns `SBI_SUCCESS` (`0`).
+*   `DROP_TRUST`: Irrevocably revokes hardware trust for the calling VM,
+    unmapping host physical MMIO and blocking direct interrupt routing. Returns
+    `SBI_SUCCESS` (`0`).
 
 #### `RUN` (`FID 4`)
 Loads an ELF binary and an optional DTB into a child VM's address space,
@@ -145,7 +144,12 @@ resetting its primary VCPU to the entry point.
     *   `RUN_FLAG_STANDBY_ROOT` (`1 << 2`): Marks the child VM as a warm
         Standby Root replica eligible for M-mode failover promotion.
     *   `RUN_FLAG_CONFIDENTIAL` (`1 << 3`): Protects the child VM's RAM from
-        parent `MAP_CHILD_MEM` inspection once the Charter is sealed.
+        parent `MAP_CHILD_MEM` inspection once the Charter is sealed or booted.
+    *   `RUN_FLAG_NET_ISOLATED` (`1 << 4`): Air-gaps the child VM in M-mode;
+        all `NET_SEND` and `VirtIO-vsock` packets are rejected.
+    *   `RUN_FLAG_NET_UPSTREAM_SHIFT` (`16`, mask `0xffff`): Encodes an optional
+        sibling router CID (`>= 2`) through which the child VM's L2 network and
+        vsock traffic is chained.
 *   **Returns**: `SBI_SUCCESS` (`0`) in `a0` on success with the child CID in
     `a1`, or an error code on failure.
 
@@ -293,23 +297,18 @@ Transmit and receive uncensorable Steward Whisper consensus messages (up to
     *   **Returns**: `SBI_SUCCESS` (`0`) in `a0` and the incremented
         `failover_epoch` in `a1`.
 
-#### `CONSOLE_WRITE` (`FID 25`) and `CONSOLE_READ` (`FID 26`)
-Stream interactive serial console (`hvc0` / SBI `DBCN`) I/O between a parent VM
-and its direct child VMs via per-guest M-mode ring buffers (`8 KiB` TX ring,
-`512 B` RX ring). Denied with `SBI_ERR_DENIED` if the target child is marked
-`CONFIDENTIAL` or is a Steward VM under a sealed Charter.
-*   `CONSOLE_WRITE`: Pushes up to `4096` bytes from the caller's GPA buffer
-    into the target VM's `console_rx` ring for consumption by guest
-    `DBCN.CONSOLE_READ` or `LEGACY_CONSOLE_GETCHAR`.
-    *   `a0`: GPA pointer to `struct console_args` (`ConsoleArgs`).
-    *   **Returns**: `SBI_SUCCESS` (`0`) in `a0` and the number of bytes queued
-        in `a1` (also written to `ConsoleArgs.actual_len`).
-*   `CONSOLE_READ`: Drains up to `4096` bytes from the target VM's `console_tx`
-    ring (populated by guest `DBCN.CONSOLE_WRITE`, `DBCN.CONSOLE_WRITE_BYTE`,
-    and `LEGACY_CONSOLE_PUTCHAR`) into the caller's GPA buffer.
-    *   `a0`: GPA pointer to `struct console_args` (`ConsoleArgs`).
-    *   **Returns**: `SBI_SUCCESS` (`0`) in `a0` and the number of bytes read
-        in `a1` (also written to `ConsoleArgs.actual_len`).
+#### `CONSOLE_WRITE` (`FID 25`), `CONSOLE_READ` (`FID 26`), and `SET_NET_POLICY`
+*   `CONSOLE_WRITE` and `CONSOLE_READ`: Stream interactive serial console
+    (`hvc0` / SBI `DBCN`) I/O between a parent VM and its direct child VMs via
+    per-guest M-mode ring buffers (`8 KiB` TX ring, `512 B` RX ring). Denied
+    with `SBI_ERR_DENIED` if the target child is marked `CONFIDENTIAL` or is a
+    Steward VM under a sealed Charter. `a0` points to `struct console_args`
+    (`ConsoleArgs`); returns byte count in `a1`.
+*   `SET_NET_POLICY` (`FID 27`): Configures M-mode L2 network isolation and
+    service-VM gateway chaining for a direct child VM (`a0` = target child CID
+    `>= 2`, `a1` = `NetPolicyFlags` bitmask where `1 << 0` isolates the VM,
+    `a2` = upstream sibling router CID or `0` for direct parent routing).
+    Returns `SBI_SUCCESS` (`0`) on success.
 
 ---
 
@@ -461,6 +460,12 @@ struct console_args {
     uint64_t max_len;    /* Bytes to write or buffer capacity (<= 4096) */
     uint64_t actual_len; /* Output: Bytes actually read or written */
 };
+
+struct net_policy_args {
+    uint64_t target_cid;   /* Target child CID (>= 2) */
+    uint64_t flags;        /* Bit 0: NetPolicyFlags.ISOLATED */
+    uint64_t upstream_cid; /* Sibling router CID (>= 2) or 0 for parent */
+};
 ```
 
 ---
@@ -493,3 +498,6 @@ Control (`ioctl`) command numbers:
 | `IOCTL_REQUEST_ROOT_FAILOVER` | `0x1015` | Promotes Standby Root VM on failover |
 | `IOCTL_CONSOLE_WRITE` | `0x1016` | Writes input bytes to child console RX ring |
 | `IOCTL_CONSOLE_READ` | `0x1017` | Reads output bytes from VM console TX ring |
+| `IOCTL_SET_NET_POLICY` | `0x1018` | Updates child VM M-mode L2 network policy |
+| `IOCTL_WHISPER_SEND` | `0x1019` | Sends Steward Whisper frame via M-mode |
+| `IOCTL_WHISPER_RECV` | `0x101a` | Receives Steward Whisper frame from M-mode |

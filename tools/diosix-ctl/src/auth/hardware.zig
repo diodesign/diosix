@@ -29,7 +29,6 @@ pub const CTAPHID_BROADCAST_CID: u32 = 0xffff_ffff;
 pub const CTAPHID_INIT_CMD: u8 = 0x86;
 pub const CTAPHID_PACKET_LEN: usize = 64;
 
-const SSH_KEYGEN_BIN = "/usr/bin/ssh-keygen";
 const MAX_PUBKEY_FILE_BYTES: usize = 4096;
 
 /// Builds a 12-byte big-endian `TPM2_GetRandom` command packet requesting
@@ -100,8 +99,8 @@ fn readTpm2HardwareSeed(out_seed: *[Ed25519.KeyPair.seed_length]u8) bool {
     return false;
 }
 
-fn probeCtaphidToken(io_seed: *[Ed25519.KeyPair.seed_length]u8) void {
-    if (builtin.is_test) return;
+fn probeCtaphidToken(io_seed: *[Ed25519.KeyPair.seed_length]u8) bool {
+    if (builtin.is_test) return true;
     const devs = [_][*:0]const u8{
         sysconfig.DEV_HIDRAW0_PATH,
         sysconfig.DEV_HIDRAW1_PATH,
@@ -131,8 +130,9 @@ fn probeCtaphidToken(io_seed: *[Ed25519.KeyPair.seed_length]u8) void {
             hasher.update(resp[0..@intCast(r_signed)]);
             hasher.final(io_seed);
         }
-        return;
+        return true;
     }
+    return false;
 }
 
 fn writePrivateKeyHex(
@@ -148,7 +148,7 @@ fn writePrivateKeyHex(
     var hex_buf: [Ed25519.SecretKey.encoded_length * 2]u8 = undefined;
     defer std.crypto.secureZero(u8, &hex_buf);
     const hex_str = passkey.bytesToHex(&secret_bytes, &hex_buf);
-    common.writeFile(path, hex_str) catch {};
+    common.writePrivateFile(path, hex_str) catch {};
 }
 
 /// Enrolls a TPM 2.0 platform passkey or FIDO2 hardware passkey, returning a
@@ -160,7 +160,7 @@ pub fn enrollHardwarePasskey(
     label_arg: []const u8,
 ) ![]u8 {
     if (!tpm_mode and !builtin.is_test and
-        common.fileExistsPath(SSH_KEYGEN_BIN))
+        common.fileExistsPath(sysconfig.SSH_KEYGEN_BIN))
     {
         const key_path_z = try allocator.printSentinel(
             "{s}/fido2_ed25519_sk",
@@ -182,7 +182,7 @@ pub fn enrollHardwarePasskey(
 
         _ = linux.unlink(key_path_z.ptr);
         const argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-            SSH_KEYGEN_BIN,
+            sysconfig.SSH_KEYGEN_BIN,
             "-q",
             "-t",
             "ed25519-sk",
@@ -207,10 +207,15 @@ pub fn enrollHardwarePasskey(
 
     var seed: [Ed25519.KeyPair.seed_length]u8 = undefined;
     defer std.crypto.secureZero(u8, &seed);
-    if (!tpm_mode or !readTpm2HardwareSeed(&seed)) {
+    if (tpm_mode) {
+        if (!readTpm2HardwareSeed(&seed)) {
+            if (!builtin.is_test) return error.TpmUnavailable;
+            try common.generateEntropyBytes(&seed);
+        }
+    } else {
         try common.generateEntropyBytes(&seed);
-        if (!tpm_mode) {
-            probeCtaphidToken(&seed);
+        if (!probeCtaphidToken(&seed)) {
+            return error.Fido2Unavailable;
         }
     }
 

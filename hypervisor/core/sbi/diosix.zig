@@ -218,15 +218,16 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     child.is_confidential = child.is_confidential or child.is_steward or
         ((args.flags & interface.RunFlags.CONFIDENTIAL) != 0);
     if (created_new or (args.flags & interface.RunFlags.NET_ISOLATED) != 0) {
-        child.net_isolated =
-            (args.flags & interface.RunFlags.NET_ISOLATED) != 0;
+        child.setNetIsolated(
+            (args.flags & interface.RunFlags.NET_ISOLATED) != 0,
+        );
     }
     const req_upstream: usize = @intCast(
         (args.flags >> interface.RunFlags.NET_UPSTREAM_SHIFT) &
             interface.RunFlags.NET_UPSTREAM_MASK,
     );
     if (created_new or req_upstream != 0) {
-        child.net_upstream_cid = req_upstream;
+        child.setNetUpstreamCid(req_upstream);
     }
 
     child.stop();
@@ -308,7 +309,7 @@ fn handleStart(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;
     };
-    if (!g.is_trusted and !g.is_root and child.parent != g) {
+    if (sargs.child_id < guest.CID_FIRST_CHILD or child.parent != g) {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }

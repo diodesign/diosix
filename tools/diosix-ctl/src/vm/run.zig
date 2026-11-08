@@ -420,6 +420,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     defer if (default_ip) |ip| allocator.free(ip);
     const final_ip: []const u8 = default_ip orelse ip_str;
 
+    const inject_key = !is_confidential and !is_steward;
     vm_stage.stageChildVmManifest(
         allocator,
         client,
@@ -427,6 +428,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         vm_name.?,
         domain_name,
         manifest_path,
+        inject_key,
     );
     net.applyVmNetConfig(
         allocator,
@@ -463,7 +465,6 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         raw_img[slash + 1 ..]
     else
         raw_img;
-
     saveGuestRegistry(
         child_cid,
         vm_name.?,
@@ -476,7 +477,6 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         if (trusted) "trusted" else "untrusted",
         "running",
     );
-
     vm_stage.printRunSuccess(
         vm_name.?,
         child_cid,
@@ -490,9 +490,6 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
 test "vm_run: RunOption enum parses expected CLI flags" {
     std.testing.refAllDecls(@This());
-    _ = vm_stage;
-    _ = fdt_patch;
-    _ = owned;
     try std.testing.expectEqual(
         RunOption.@"--domain",
         std.meta.stringToEnum(RunOption, "--domain").?,

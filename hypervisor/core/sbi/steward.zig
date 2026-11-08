@@ -53,6 +53,22 @@ pub fn handleWhisperSend(
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
         return;
     };
+    if (std.mem.startsWith(u8, msg_buf, "whisper:v1:")) {
+        var it = std.mem.splitScalar(u8, msg_buf["whisper:v1:".len..], ':');
+        _ = it.next();
+        const sender_str = it.next() orelse {
+            reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
+            return;
+        };
+        const claimed_cid = std.fmt.parseInt(usize, sender_str, 10) catch {
+            reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
+            return;
+        };
+        if (claimed_cid != g.local_cid) {
+            reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+            return;
+        }
+    }
     const dest_cid = a2;
     const root_parent: ?*guest.Guest = if (g.is_root) g else g.parent;
 
@@ -131,6 +147,7 @@ pub fn handleResetSteward(vc: *VCore, ctx: *Ctx, a0: usize, a1: usize) void {
             reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
             return;
         }
+        charter.clearStewardVote(target_cid);
         target.resetSteward(override_entry);
         if (target.vcores.start) |vc_node| {
             scheduler.queue(vc_node.contents);

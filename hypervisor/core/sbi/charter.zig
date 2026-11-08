@@ -65,6 +65,15 @@ pub fn incrementFailoverEpoch() usize {
     return @intCast(st.failover_epoch);
 }
 
+pub fn clearStewardVote(cid: usize) void {
+    if (cid < guest.CID_FIRST_CHILD or cid >= MAX_STEWARD_CID_EXCL) return;
+    const guard = charter_manager.acquire();
+    defer guard.release();
+    const st = guard.get();
+    st.ratified_mask &= ~(@as(u64, 1) << @intCast(cid));
+    st.vote_target_cids[cid] = 0;
+}
+
 fn countVotesForTarget(st: *const CharterState, target_cid: u64) usize {
     var count: usize = 0;
     for (guest.CID_FIRST_CHILD..MAX_STEWARD_CID_EXCL) |cid| {
@@ -184,8 +193,11 @@ pub fn handleRatifyCharter(vc: *VCore, ctx: *Ctx, a0: usize) void {
         const st = guard.get();
         st.vote_target_cids[g.local_cid] = target_cid;
         st.ratified_mask |= (@as(u64, 1) << @intCast(g.local_cid));
-        st.approved_target_cid = target_cid;
-        break :blk countVotesForTarget(st, target_cid);
+        const votes = countVotesForTarget(st, target_cid);
+        if (votes >= st.quorum_required) {
+            st.approved_target_cid = target_cid;
+        }
+        break :blk votes;
     };
     reply(vc, ctx, sbi_core.SBI_SUCCESS, vote_count);
 }

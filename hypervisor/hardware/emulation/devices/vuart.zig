@@ -35,6 +35,8 @@ pub const VirtualUart = struct {
     dll: u8 = 1,
     dlm: u8 = 0,
     guest_id: usize = 0,
+    out_ctx: ?*anyopaque = null,
+    out_ctx_fn: ?*const fn (?*anyopaque, u8) void = null,
     out_fn: ?*const fn (u8) void = null,
 
     pub fn write(self: *VirtualUart, offset: u8, val: u8) void {
@@ -42,8 +44,10 @@ pub const VirtualUart = struct {
             UART_REG_RBR_THR_DLL => {
                 if ((self.lcr & LCR_DLAB) != 0) {
                     self.dll = val;
-                } else {
-                    if (self.out_fn) |f| f(val);
+                } else if (self.out_ctx_fn) |f| {
+                    f(self.out_ctx, val);
+                } else if (self.out_fn) |f| {
+                    f(val);
                 }
             },
             UART_REG_IER_DLM => {

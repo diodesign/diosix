@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const api = @import("../api.zig");
 const common = @import("../common.zig");
 
 const WhisperOp = enum { send, recv };
@@ -54,6 +55,9 @@ pub const WhisperMessageType = enum {
 /// Maximum Whisper payload carried in a frame. This is a fixed field width of
 /// the Whisper wire format, so longer payloads are truncated when parsed.
 pub const WHISPER_PAYLOAD_MAX: usize = 128;
+pub const MAX_WHISPER_FRAME_BYTES: usize = 1536;
+const ASCII_PRINTABLE_MIN: u8 = 0x20;
+const ASCII_DEL: u8 = 0x7f;
 
 pub const WhisperFrame = struct {
     msg_type: WhisperMessageType,
@@ -78,7 +82,9 @@ pub fn formatWhisperFrame(
     payload_str: []const u8,
 ) ![]u8 {
     for (payload_str) |c| {
-        if (c < 0x20 or c == 0x7f) return error.InvalidWhisperPayload;
+        if (c < ASCII_PRINTABLE_MIN or c == ASCII_DEL) {
+            return error.InvalidWhisperPayload;
+        }
     }
     return allocator.print("whisper:v1:{s}:{d}:{d}:{s}", .{
         msg_type.toStr(),
@@ -132,7 +138,12 @@ pub fn cmdCharterWhisper(
     }
     switch (w_op) {
         .send => {
-            var sender_cid: usize = 2;
+            var client = api.DiosixClient.init();
+            defer client.deinit();
+            var sender_cid: usize = if (client.getInfo(1)) |info|
+                (if (info.assigned_cid >= 2) info.assigned_cid else 2)
+            else |_|
+                2;
             var target_cid: usize = 3;
             var msg_type: WhisperMessageType = .heartbeat;
             var payload: []const u8 = "ok";
@@ -178,7 +189,13 @@ pub fn cmdCharterWhisper(
                 }
                 return;
             };
-            defer allocator.free(frame);
+            defer {
+                std.crypto.secureZero(u8, frame);
+                allocator.free(frame);
+            }
+            if (client.dev_fd != null) {
+                _ = client.whisperSend(target_cid, frame) catch {};
+            }
             if (json_mode) {
                 // Sanitizing only drops bytes, so the frame length bounds it.
                 const safe_buf = allocator.alloc(u8, frame.len) catch |err| {
@@ -196,6 +213,16 @@ pub fn cmdCharterWhisper(
             }
         },
         .recv => {
+            var client = api.DiosixClient.init();
+            defer client.deinit();
+            const rx_buf = allocator.alloc(u8, MAX_WHISPER_FRAME_BYTES) catch {
+                common.printStr("Error: Out of memory receiving Whisper.\n");
+                return;
+            };
+            defer {
+                std.crypto.secureZero(u8, rx_buf);
+                allocator.free(rx_buf);
+            }
             var raw_frame: []const u8 = "";
             var i: usize = arg_start + 1;
             while (i < args.len) : (i += 1) {
@@ -206,6 +233,10 @@ pub fn cmdCharterWhisper(
                     i += 1;
                     raw_frame = std.mem.span(args[i]);
                 }
+            }
+            if (raw_frame.len == 0 and client.dev_fd != null) {
+                const n = client.whisperRecv(rx_buf) catch 0;
+                if (n > 0) raw_frame = rx_buf[0..n];
             }
             if (raw_frame.len == 0) {
                 if (json_mode) {

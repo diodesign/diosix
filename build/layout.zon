@@ -41,6 +41,12 @@
         .linker_script = "tools/guest-shim/linker.ld",
     },
 
+    .gui_assets = .{
+        .questrial_ttf = "tools/diosix-gui/assets/Questrial-Regular.ttf",
+        .dm_mono_ttf = "tools/diosix-gui/assets/DMMono-Regular.ttf",
+        .intro_wav = "tools/diosix-gui/assets/intro.wav",
+    },
+
     .rootvm = .{
         .build_script = "scripts/build_rootvm.sh",
         .config_fmt = "boot/{s}-linux-{s}.config",

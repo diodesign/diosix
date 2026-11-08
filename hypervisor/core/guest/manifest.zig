@@ -108,7 +108,8 @@ pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
     self.initial_dtb_ptr = dtb;
     self.uart = .{
         .guest_id = self.id,
-        .out_fn = guest_mod.Guest.guestUartOutput,
+        .out_ctx = self,
+        .out_ctx_fn = guest_mod.Guest.guestUartOutputCtx,
     };
     self.console_rx.clear();
     self.timer.reset();

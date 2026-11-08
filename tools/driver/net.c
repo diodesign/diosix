@@ -315,3 +315,73 @@ long diosix_ioctl_net_policy(unsigned long arg)
     );
     return ret.error ? diosix_sbi_to_errno(ret.error) : 0;
 }
+
+long diosix_ioctl_whisper(unsigned int cmd, unsigned long arg)
+{
+    struct console_args args;
+    char *kbuf;
+    bool is_send = (cmd == IOCTL_WHISPER_SEND);
+    struct sbiret ret;
+    long rc = 0;
+
+    if (!capable(CAP_SYS_ADMIN))
+        return -EPERM;
+
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (args.max_len == 0 || args.max_len > DIOSIX_NET_MAX_FRAME_SIZE ||
+        !args.data_ptr)
+        return -EINVAL;
+
+    kbuf = kzalloc(args.max_len, GFP_KERNEL);
+    if (!kbuf)
+        return -ENOMEM;
+
+    if (is_send) {
+        if (copy_from_user(kbuf, (void __user *)args.data_ptr, args.max_len)) {
+            kfree(kbuf);
+            return -EFAULT;
+        }
+        ret = sbi_ecall(
+            EXT_DIOSIX,
+            DIOSIX_FUNC_WHISPER_SEND,
+            (unsigned long)virt_to_phys(kbuf),
+            args.max_len,
+            args.target_cid,
+            0,
+            0,
+            0
+        );
+    } else {
+        ret = sbi_ecall(
+            EXT_DIOSIX,
+            DIOSIX_FUNC_WHISPER_RECV,
+            (unsigned long)virt_to_phys(kbuf),
+            args.max_len,
+            0,
+            0,
+            0,
+            0
+        );
+    }
+
+    if (ret.error) {
+        rc = diosix_sbi_to_errno(ret.error);
+        goto out;
+    }
+
+    args.actual_len = ret.value;
+    if (!is_send && args.actual_len > 0) {
+        unsigned long n = min(args.max_len, args.actual_len);
+        if (copy_to_user((void __user *)args.data_ptr, kbuf, n)) {
+            rc = -EFAULT;
+            goto out;
+        }
+    }
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        rc = -EFAULT;
+out:
+    kfree_sensitive(kbuf);
+    return rc;
+}

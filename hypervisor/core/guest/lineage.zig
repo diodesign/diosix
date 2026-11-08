@@ -10,7 +10,47 @@ const physmem = @import("../physmem.zig");
 const pcore = @import("../pcore.zig");
 const guest_mod = @import("../guest.zig");
 const quota_mod = @import("quota.zig");
+const emulation = @import("emulation");
 const sbi = @import("interface").sbi;
+
+pub fn routeVsockPacket(
+    src_dev: *emulation.VirtioVsock,
+    hdr: *const emulation.VirtioVsockHdr,
+    payload: []const u8,
+) bool {
+    const mem = src_dev.mem orelse return false;
+    const g: *guest_mod.Guest = @ptrCast(@alignCast(mem.ctx));
+    if (g.isNetIsolated()) return false;
+    const self_upstream = g.getNetUpstreamCid();
+    const dst: usize = std.math.cast(usize, hdr.dst_cid) orelse return false;
+    var target: ?*guest_mod.Guest = null;
+    var auth_src_cid: u64 = g.local_cid;
+    if (dst == sbi.CID_PARENT or (dst == sbi.CID_SELF and !g.is_root)) {
+        if (self_upstream != 0) return false;
+        target = g.parent;
+    } else if (dst >= sbi.CID_FIRST_CHILD) {
+        if (g.getGuestByCid(dst)) |child| {
+            if (child.getNetUpstreamCid() != 0) return false;
+            target = child;
+            auth_src_cid = sbi.CID_SELF;
+        } else if (g.parent) |p| {
+            if (p.getGuestByCid(dst)) |sib| {
+                if (sib != g and
+                    (dst == self_upstream or
+                        sib.getNetUpstreamCid() == g.local_cid))
+                {
+                    target = sib;
+                }
+            }
+        }
+    }
+    const tgt = target orelse return false;
+    if (tgt.isNetIsolated()) return false;
+    var authentic_hdr = hdr.*;
+    authentic_hdr.src_cid = auth_src_cid;
+    authentic_hdr.len = @truncate(payload.len);
+    return tgt.vsock.deliverRxPacket(&authentic_hdr, payload);
+}
 
 pub const STATIC_CHILD_HANDLES: usize = 32;
 pub const DYNAMIC_CHILD_BUCKETS: usize = 32;

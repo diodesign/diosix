@@ -143,7 +143,9 @@ pub fn init(vc: *vcore.VirtualCore) !void {
         vcpu_ptr.setReg(@backingInt(riscv.Register.a0), @truncate(vc.id));
         vcpu_ptr.setReg(@backingInt(riscv.Register.a1), @truncate(em.dtb));
         vcpu_ptr.running = true;
-        if (vc.guest.uart.out_fn == null) {
+        if (vc.guest.uart.out_ctx_fn == null and
+            vc.guest.uart.out_fn == null)
+        {
             vc.guest.uart.out_fn = uartOutputCallback;
         }
         vc.guest.uart.guest_id = vc.guest_id;

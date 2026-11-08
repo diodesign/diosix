@@ -24,16 +24,9 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/images" "$STAGING_DIR/manifests" \
     "$STAGING_DIR/keys"
 chmod 700 "$STAGING_DIR/keys"
-MGT_KEY="$STAGING_DIR/keys/id_management"
-if command -v dropbearkey >/dev/null 2>&1; then
-    dropbearkey -t ed25519 -f "$MGT_KEY" >/dev/null 2>&1 || true
-    chmod 600 "$MGT_KEY" 2>/dev/null || true
-    dropbearkey -y -f "$MGT_KEY" 2>/dev/null | \
-        grep "^ssh-" > "${MGT_KEY}.pub" || true
-    chmod 644 "${MGT_KEY}.pub" 2>/dev/null || true
-fi
 
-# Zero-toil developer passkey auto-enrollment for diosix.mode=dev.
+# Zero-toil developer passkey staging for diosix.mode=dev (never written into
+# production authorized_passkeys at build time).
 DEV_KEY=".zig-cache/dev_id_ed25519"
 if [ ! -f "$DEV_KEY" ] && command -v ssh-keygen >/dev/null 2>&1; then
     ssh-keygen -t ed25519 -N "" -f "$DEV_KEY" \
@@ -49,11 +42,9 @@ for pubkey in "${DEV_KEY}.pub" \
     "$HOME/.ssh/id_ed25519.pub"; do
     if [ -f "$pubkey" ] && [ -r "$pubkey" ]; then
         cat "$pubkey" >> "$DEV_AUTH" 2>/dev/null || true
-        cat "$pubkey" >> "$PASS_AUTH" 2>/dev/null || true
     fi
 done
 sort -u "$DEV_AUTH" -o "$DEV_AUTH" 2>/dev/null || true
-sort -u "$PASS_AUTH" -o "$PASS_AUTH" 2>/dev/null || true
 chmod 600 "$DEV_AUTH" "$PASS_AUTH" 2>/dev/null || true
 
 # Copy kernel image to standard locations on the storage disk.
@@ -81,11 +72,11 @@ fi
 cat <<'TXT' > "$STAGING_DIR/README.txt"
 === Diosix Persistent Storage Datastore ===
 This filesystem provides persistent guest image storage and state volumes for
-the Diosix hypervisor and Root VM (trusted host supervisor), mounted canonically
-at /var/lib/diosix.
+the Diosix hypervisor and Root VM (trusted host supervisor), mounted at
+/var/lib/diosix.
 
 Directory structure:
-  /var/lib/diosix/images/    - Base guest OS images (diosix-base-linux.elf, steward)
+  /var/lib/diosix/images/    - Base guest OS images (diosix-base-linux.elf)
   /var/lib/diosix/manifests/ - Declarative domain manifests (system.toml)
   /var/lib/diosix/keys/      - Enrolled FIDO2/TPM passkeys and management keys
   /var/lib/diosix/disks/     - Persistent guest VM storage disks

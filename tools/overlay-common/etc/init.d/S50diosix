@@ -175,9 +175,9 @@ case "$1" in
         NET_GW="$CHILD_GW"
         if [ -n "$DSX_BIN" ]; then
             MANIFEST_RAW=$("$DSX_BIN" manifest show --cid 1 --hv 2>/dev/null)
+            NAME_SED='s/^[ \t]*name[ \t]*=[ \t]*"\([^"]*\)".*/\1/p'
             MANIFEST_NAME=$(printf "%s\n" "$MANIFEST_RAW" | \
-                sed -n 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | \
-                head -n 1 | tr -cd 'A-Za-z0-9-')
+                sed -n "$NAME_SED" | head -n 1 | tr -cd 'A-Za-z0-9-')
             M_NET_MODE=$(printf "%s\n" "$MANIFEST_RAW" | \
                 sed -n 's/^# diosix-net-mode: \([a-z]*\).*/\1/p' | \
                 head -n 1)
@@ -193,8 +193,10 @@ case "$1" in
         fi
         echo "$GUEST_HOST" > /etc/hostname 2>/dev/null || true
         hostname "$GUEST_HOST" 2>/dev/null || true
-        if [ -n "$MANIFEST_NAME" ] && [ "$MANIFEST_NAME" != "$GUEST_HOST" ]; then
-            echo "127.0.1.1 $GUEST_HOST $MANIFEST_NAME" >> /etc/hosts 2>/dev/null || true
+        if [ -n "$MANIFEST_NAME" ] && \
+           [ "$MANIFEST_NAME" != "$GUEST_HOST" ]; then
+            echo "127.0.1.1 $GUEST_HOST $MANIFEST_NAME" \
+                >> /etc/hosts 2>/dev/null || true
         else
             echo "127.0.1.1 $GUEST_HOST" >> /etc/hosts 2>/dev/null || true
         fi
@@ -221,6 +223,12 @@ case "$1" in
                 fi
             else
                 sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1 || true
+            fi
+            if [ "$NET_GW" != "$CHILD_GW" ]; then
+                ip route add "$NET_GW" dev diosix0 2>/dev/null || true
+                ip route del "$CHILD_SUBNET" dev diosix0 2>/dev/null || true
+                ip route add "$CHILD_SUBNET" via "$NET_GW" \
+                    dev diosix0 2>/dev/null || true
             fi
             ip route del default 2>/dev/null || true
             ip route add default via "$NET_GW" dev diosix0 2>/dev/null || \
@@ -296,47 +304,60 @@ case "$1" in
     mkdir -p "$KEY_DIR" "${ETC_DIR}/keys" "$RUN_DIR"
     chmod 700 "$KEY_DIR" "${ETC_DIR}/keys" 2>/dev/null || true
 
-    if [ ! -f "$MGT_KEY" ] && command -v dropbearkey >/dev/null 2>&1; then
-        dropbearkey -t ed25519 -f "$MGT_KEY" >/dev/null 2>&1 || true
-        chmod 600 "$MGT_KEY" 2>/dev/null || true
+    IS_TRUSTED=0
+    if [ "$SELF_CID" -eq 1 ]; then
+        IS_TRUSTED=1
+    elif [ -n "$DSX_BIN" ] && \
+         "$DSX_BIN" info 2>/dev/null | grep -qi "^Trusted *: *yes"; then
+        IS_TRUSTED=1
     fi
-    if [ -f "$MGT_KEY" ]; then
-        if [ ! -s "${MGT_KEY}.pub" ] && \
-           command -v dropbearkey >/dev/null 2>&1; then
-            dropbearkey -y -f "$MGT_KEY" 2>/dev/null | \
-                grep "^ssh-" > "${MGT_KEY}.pub" || true
-            chmod 644 "${MGT_KEY}.pub" 2>/dev/null || true
+
+    if [ "$IS_TRUSTED" -eq 1 ]; then
+        if [ ! -f "$MGT_KEY" ] && command -v dropbearkey >/dev/null 2>&1; then
+            dropbearkey -t ed25519 -f "$MGT_KEY" >/dev/null 2>&1 || true
+            chmod 600 "$MGT_KEY" 2>/dev/null || true
         fi
-        ln -sf "$MGT_KEY" "${ETC_DIR}/keys/id_management" 2>/dev/null || true
-        if [ -s "${MGT_KEY}.pub" ]; then
-            ln -sf "${MGT_KEY}.pub" \
-                "${ETC_DIR}/keys/id_management.pub" 2>/dev/null || true
+        if [ -f "$MGT_KEY" ]; then
+            if [ ! -s "${MGT_KEY}.pub" ] && \
+               command -v dropbearkey >/dev/null 2>&1; then
+                dropbearkey -y -f "$MGT_KEY" 2>/dev/null | \
+                    grep "^ssh-" > "${MGT_KEY}.pub" || true
+                chmod 644 "${MGT_KEY}.pub" 2>/dev/null || true
+            fi
+            ln -sf "$MGT_KEY" \
+                "${ETC_DIR}/keys/id_management" 2>/dev/null || true
+            if [ -s "${MGT_KEY}.pub" ]; then
+                ln -sf "${MGT_KEY}.pub" \
+                    "${ETC_DIR}/keys/id_management.pub" 2>/dev/null || true
+            fi
         fi
     fi
+
+    : > "$AUTH_KEYS" 2>/dev/null || true
+    chmod 600 "$AUTH_KEYS" 2>/dev/null || true
 
     if [ "$SELF_CID" -eq 1 ]; then
         touch "$PASSKEYS" 2>/dev/null || true
         chmod 600 "$PASSKEYS" 2>/dev/null || true
 
-        # In diosix.mode=dev, auto-enroll injected developer keys.
-        if grep -q "diosix.mode=dev" /proc/cmdline 2>/dev/null; then
-            if [ -s "$DEV_KEYS" ]; then
-                cat "$DEV_KEYS" >> "$PASSKEYS" 2>/dev/null || true
-            fi
-            if [ -s "${MGT_KEY}.pub" ]; then
-                cat "${MGT_KEY}.pub" >> "$PASSKEYS" 2>/dev/null || true
-            fi
-            sort -u "$PASSKEYS" -o "$PASSKEYS" 2>/dev/null || true
-        fi
-
         if [ -s "$PASSKEYS" ]; then
             cat "$PASSKEYS" >> "$AUTH_KEYS" 2>/dev/null || true
+        fi
+        if [ -s "${MGT_KEY}.pub" ]; then
+            cat "${MGT_KEY}.pub" >> "$AUTH_KEYS" 2>/dev/null || true
+        fi
+        # In diosix.mode=dev, allow developer keys for this boot without
+        # polluting persistent authorized_passkeys.
+        if grep -q "diosix.mode=dev" /proc/cmdline 2>/dev/null && \
+           [ -s "$DEV_KEYS" ]; then
+            cat "$DEV_KEYS" >> "$AUTH_KEYS" 2>/dev/null || true
         fi
     else
         # Child VM: Extract parent management public key staged in manifest.
         if [ -n "$DSX_BIN" ]; then
             "$DSX_BIN" manifest show --cid 1 --hv 2>/dev/null | \
-                sed -n 's/^# diosix-authorized-key: //p' \
+                sed -n 's/^# diosix-authorized-key: //p' | \
+                grep -E '^(ssh-|sk-|ecdsa-)' \
                 >> "$AUTH_KEYS" 2>/dev/null || true
         fi
         if [ -s "$PASSKEYS" ]; then

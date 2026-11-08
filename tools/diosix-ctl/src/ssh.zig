@@ -15,8 +15,42 @@ pub const copyFileOverSsh = ssh_sync.copyFileOverSsh;
 pub const ensureGuestDefaultImage = ssh_sync.ensureGuestDefaultImage;
 pub const parseIpv4 = ssh_sync.parseIpv4;
 pub const isSshPortOpen = ssh_sync.isSshPortOpen;
+pub const isValidRemotePath = ssh_sync.isValidRemotePath;
 
 const MAX_SSH_TOKEN_LEN: usize = 64;
+const MAX_KNOWN_HOSTS_BYTES: usize = 64 * 1024;
+
+/// Removes any cached host key entry for `ip_addr` from
+/// `/root/.ssh/known_hosts` when a child VM at `ip_addr` is reprovisioned.
+pub fn pruneKnownHost(ip_addr: []const u8) void {
+    if (@import("builtin").is_test or !isValidSshIp(ip_addr)) return;
+    const content = common.readBinaryFile(
+        sysconfig.ROOT_KNOWN_HOSTS_PATH,
+        MAX_KNOWN_HOSTS_BYTES,
+    ) catch return;
+    defer common.unmapBinaryFile(content);
+
+    const allocator = std.heap.page_allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    var line_it = std.mem.splitScalar(u8, content, '\n');
+    while (line_it.next()) |raw_line| {
+        const line = common.trimWhitespace(raw_line);
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, ip_addr) and
+            line.len > ip_addr.len and
+            (line[ip_addr.len] == ' ' or line[ip_addr.len] == '\t'))
+        {
+            continue;
+        }
+        out.appendSlice(allocator, line) catch return;
+        out.append(allocator, '\n') catch return;
+    }
+    common.writePrivateFile(
+        sysconfig.ROOT_KNOWN_HOSTS_PATH,
+        out.items,
+    ) catch {};
+}
 
 /// Validates an SSH username to prevent option injection or shell metacharacter
 /// attacks (`[A-Za-z0-9._-]`, non-empty, not starting with `-`).
@@ -103,7 +137,7 @@ pub fn runSshCommand(
         for (sysconfig.SSH_CLIENT_BINS) |bin| {
             var z_bin_buf: [common.MAX_PATH_LEN]u8 = undefined;
             const bin_z = common.toPathZ(bin, &z_bin_buf) orelse continue;
-            var argv_buf: [10:null]?[*:0]const u8 = @splat(null);
+            var argv_buf: [12:null]?[*:0]const u8 = @splat(null);
             var argc: usize = 0;
             argv_buf[argc] = bin_z.ptr;
             argc += 1;
@@ -112,9 +146,10 @@ pub fn runSshCommand(
                 argv_buf[argc + 1] = ks.ptr;
                 argc += 2;
             }
-            argv_buf[argc] = "-y";
-            argv_buf[argc + 1] = dest_str.ptr;
-            argc += 2;
+            argv_buf[argc] = "-o";
+            argv_buf[argc + 1] = "StrictHostKeyChecking=accept-new";
+            argv_buf[argc + 2] = dest_str.ptr;
+            argc += 3;
             if (cmd_str) |cs| {
                 argv_buf[argc] = cs.ptr;
                 argc += 1;
@@ -212,8 +247,14 @@ fn joinArgs(
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     for (slice) |arg| {
+        const span = std.mem.span(arg);
         if (out.items.len > 0) try out.append(allocator, ' ');
-        try out.appendSlice(allocator, std.mem.span(arg));
+        const needs_quote = slice.len > 1 and
+            (std.mem.indexOfAny(u8, span, " \t") != null) and
+            (std.mem.indexOfScalar(u8, span, '\'') == null);
+        if (needs_quote) try out.append(allocator, '\'');
+        try out.appendSlice(allocator, span);
+        if (needs_quote) try out.append(allocator, '\'');
     }
     return out.toOwnedSlice(allocator);
 }
@@ -398,4 +439,7 @@ test "ssh: parseIpv4, isValidSshUsername, and isValidSshIp validate inputs" {
     try std.testing.expect(!isValidSshUsername("-oProxyCommand=evil"));
     try std.testing.expect(isValidSshIp("10.0.3.2"));
     try std.testing.expect(!isValidSshIp("-oProxyCommand=evil"));
+    try std.testing.expect(isValidRemotePath("/var/lib/diosix/images/a.elf"));
+    try std.testing.expect(!isValidRemotePath("/tmp/a'; reboot; '"));
+    try std.testing.expect(!isValidRemotePath("/tmp/../etc/passwd"));
 }

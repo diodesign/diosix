@@ -53,27 +53,35 @@ two-tier unidirectional downward hierarchy:
 
 *   **Zero-password passkey operator ingress (Host -> Root VM)**: Password and
     blank-password logins are disabled across all VMs
-    (`dropbear -R -s -g -p 22`). Principals authenticate to the Root VM
+    (`dropbear -r <key> -s -g -p 22`). Principals authenticate to the Root VM
     exclusively via cryptographic passkeys enrolled in
     `/var/lib/diosix/keys/authorized_passkeys` (`sk-ssh-ed25519@openssh.com`
     and `sk-ecdsa-sha2-nistp256@openssh.com` Fast Identity Online 2 (FIDO2)
     hardware tokens, Trusted Platform Module (TPM) 2.0 platform-bound passkeys,
     Quick Response (QR) WebAuthn pairing, or single-use Ed25519 Universal
     Asynchronous Receiver-Transmitter (UART) challenge-response via
-    `dsx auth challenge` / `dsx auth verify`). In developer builds
-    (`diosix.mode=dev`), `scripts/create_storage_disk.sh` automatically injects
-    the developer's host public key into
-    `/var/lib/diosix/keys/dev_authorized_keys` for zero-toil testing.
-*   **Dynamic cluster management keys**: Each parent VM generates an internal
-    Dropbear management keypair on first boot
-    (`/var/lib/diosix/keys/id_management`) and stages only its public key
-    (`# diosix-authorized-key:`) in the hypervisor manifest when spawning
-    direct child VMs. Management private keys are never committed to source
-    control or baked into release binaries.
-*   **Ephemeral and unique host keys**: SSH host keys are generated uniquely
-    per machine instance upon boot or installation. Base images and rootfs
-    templates contain no pre-baked private host keys, preventing cross-guest
-    key reuse or spoofing.
+    `dsx auth challenge` / `dsx auth verify`). Enrolled passkeys can be revoked
+    at any time with `dsx auth revoke` and are preserved across bare-metal disk
+    installations (`dsx host install`). In developer builds (`diosix.mode=dev`),
+    `scripts/create_storage_disk.sh` stages the build machine's public keys in
+    `/var/lib/diosix/keys/dev_authorized_keys`, which `S50diosix` merges into
+    `/root/.ssh/authorized_keys` in RAM only when `diosix.mode=dev` is present
+    on `/proc/cmdline` without polluting `authorized_passkeys`.
+*   **Dynamic cluster management keys and Confidential/Steward exclusion**:
+    Each trusted supervisor VM generates an internal Dropbear management
+    keypair on first boot (`/var/lib/diosix/keys/id_management`) and stages
+    only its public key (`# diosix-authorized-key:`) in the hypervisor manifest
+    when spawning standard direct child VMs. When spawning `--confidential` or
+    `--steward` VMs, `dsx run` omits parent key injection so the parent VM
+    cannot open a `root` SSH session into confidential or Steward guests.
+    Management private keys are never committed to source control or baked into
+    release binaries.
+*   **Persistent per-instance host keys and TOFU pinning**: Dropbear server
+    Ed25519 host keys are generated uniquely per VM on first boot, persisted on
+    `/var/lib/diosix/keys/dropbear_ed25519_host_key` (`0600`) across Root VM
+    reboots, and pinned on first connection in `/root/.ssh/known_hosts` via
+    `-o StrictHostKeyChecking=accept-new`. When a child VM IP is reprovisioned,
+    its prior `known_hosts` entry is pruned automatically.
 *   **True child key exclusion**: Guest VM images contain only their parent's
     public key in `/root/.ssh/authorized_keys`. Management private keys are
     never written to child disk images or mapped into child address spaces,

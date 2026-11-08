@@ -12,8 +12,35 @@ start() {
         /root/.ssh 2>/dev/null || true
 
     HOST_KEY="/etc/dropbear/dropbear_ed25519_host_key"
-    if [ ! -f "$HOST_KEY" ] && [ -x /usr/bin/dropbearkey ]; then
+    PERSIST_KEY="/var/lib/diosix/keys/dropbear_ed25519_host_key"
+    if [ -s "$PERSIST_KEY" ] && [ ! -s "$HOST_KEY" ]; then
+        cp "$PERSIST_KEY" "$HOST_KEY" 2>/dev/null || true
+        chmod 600 "$HOST_KEY" 2>/dev/null || true
+    fi
+    if [ ! -s "$HOST_KEY" ] && [ -x /usr/bin/dropbearkey ]; then
         /usr/bin/dropbearkey -t ed25519 -f "$HOST_KEY" >/dev/null 2>&1 || true
+        chmod 600 "$HOST_KEY" 2>/dev/null || true
+    fi
+    if [ -s "$HOST_KEY" ] && [ -d /var/lib/diosix/keys ] && \
+       [ ! -s "$PERSIST_KEY" ]; then
+        cp "$HOST_KEY" "$PERSIST_KEY" 2>/dev/null || true
+        chmod 600 "$PERSIST_KEY" 2>/dev/null || true
+    fi
+    if [ -s "$HOST_KEY" ] && [ -x /usr/bin/dropbearkey ]; then
+        HOST_PUB=$(/usr/bin/dropbearkey -y -f "$HOST_KEY" 2>/dev/null | \
+            grep "^ssh-" | awk '{print $1 " " $2}')
+        if [ -n "$HOST_PUB" ]; then
+            echo "$HOST_PUB" > "${HOST_KEY}.pub" 2>/dev/null || true
+            chmod 644 "${HOST_KEY}.pub" 2>/dev/null || true
+            KNOWN_HOSTS="/root/.ssh/known_hosts"
+            touch "$KNOWN_HOSTS" 2>/dev/null || true
+            grep -vE '^(127\.0\.0\.1|localhost) ' "$KNOWN_HOSTS" \
+                > "${KNOWN_HOSTS}.tmp" 2>/dev/null || true
+            printf "127.0.0.1 %s\nlocalhost %s\n" "$HOST_PUB" "$HOST_PUB" \
+                >> "${KNOWN_HOSTS}.tmp" 2>/dev/null || true
+            mv -f "${KNOWN_HOSTS}.tmp" "$KNOWN_HOSTS" 2>/dev/null || true
+            chmod 600 "$KNOWN_HOSTS" 2>/dev/null || true
+        fi
     fi
 
     if pgrep dropbear >/dev/null 2>&1; then

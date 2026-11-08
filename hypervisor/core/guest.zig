@@ -150,6 +150,22 @@ pub const Guest = struct {
     pub const hasAnyVcoreStarted = quota_mod.hasAnyVcoreStarted;
     pub const checkVcpuQuota = quota_mod.checkVcpuQuota;
 
+    pub inline fn isNetIsolated(self: *const Guest) bool {
+        return @atomicLoad(bool, &self.net_isolated, .acquire);
+    }
+
+    pub inline fn setNetIsolated(self: *Guest, isolated: bool) void {
+        @atomicStore(bool, &self.net_isolated, isolated, .release);
+    }
+
+    pub inline fn getNetUpstreamCid(self: *const Guest) usize {
+        return @atomicLoad(usize, &self.net_upstream_cid, .acquire);
+    }
+
+    pub inline fn setNetUpstreamCid(self: *Guest, cid: usize) void {
+        @atomicStore(usize, &self.net_upstream_cid, cid, .release);
+    }
+
     fn guestReadMemory(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
         const g: *Guest = @ptrCast(@alignCast(ctx));
         const addr: usize = std.math.cast(usize, gpa) orelse return false;
@@ -164,7 +180,13 @@ pub const Guest = struct {
         return true;
     }
 
-    pub fn guestUartOutput(char: u8) void {
+    pub fn guestUartOutputCtx(ctx: ?*anyopaque, char: u8) void {
+        if (ctx) |ptr| {
+            const g: *Guest = @ptrCast(@alignCast(ptr));
+            g.console_tx.pushByte(char);
+            if (g.is_root) debug.putchar(char);
+            return;
+        }
         debug.putchar(char);
     }
 
@@ -219,7 +241,11 @@ pub const Guest = struct {
                 0,
             .pit = .{},
             .ioapic_mem = @splat(0),
-            .uart = .{ .guest_id = id, .out_fn = guestUartOutput },
+            .uart = .{
+                .guest_id = id,
+                .out_ctx = self,
+                .out_ctx_fn = guestUartOutputCtx,
+            },
             .allocator = allocator,
         };
         self.children.init();
@@ -252,8 +278,11 @@ pub const Guest = struct {
                 .writeFn = guestWriteMemory,
             },
             .router = emulation.global_vsock_router,
+            .route_fn = lineage_mod.routeVsockPacket,
         };
-        emulation.global_vsock_router.register(&self.vsock);
+        if (parent == null or parent.?.is_root) {
+            emulation.global_vsock_router.register(&self.vsock);
+        }
         return self;
     }
 
@@ -278,7 +307,10 @@ pub const Guest = struct {
 
         const main = @import("../main.zig");
         if (main.global_root_vm == self) main.global_root_vm = null;
-        emulation.global_vsock_router.unregister(self.local_cid);
+        if (self.is_steward) {
+            @import("sbi/charter.zig").clearStewardVote(self.local_cid);
+        }
+        emulation.global_vsock_router.unregisterDevice(&self.vsock);
         if (self.vmid != 0) {
             quota_mod.freeVmid(self.vmid);
             self.vmid = 0;

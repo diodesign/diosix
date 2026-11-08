@@ -130,17 +130,13 @@ fn addHostTestStep(
     }
     if (std.mem.eql(u8, name, "diosix-gui-unit-tests")) {
         mod.addAnonymousImport("questrial_ttf", .{
-            .root_source_file = b.path(
-                "tools/diosix-gui/assets/Questrial-Regular.ttf",
-            ),
+            .root_source_file = b.path(layout.gui_assets.questrial_ttf),
         });
         mod.addAnonymousImport("dm_mono_ttf", .{
-            .root_source_file = b.path(
-                "tools/diosix-gui/assets/DMMono-Regular.ttf",
-            ),
+            .root_source_file = b.path(layout.gui_assets.dm_mono_ttf),
         });
         mod.addAnonymousImport("intro_wav", .{
-            .root_source_file = b.path("tools/diosix-gui/assets/intro.wav"),
+            .root_source_file = b.path(layout.gui_assets.intro_wav),
         });
     }
     return b.addRunArtifact(b.addTest(.{ .root_module = mod, .name = name }));

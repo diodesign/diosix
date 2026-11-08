@@ -70,7 +70,8 @@ pub const VsockRouter = struct {
     pub fn register(self: *VsockRouter, dev: *VirtioVsock) void {
         const cid = dev.guest_cid;
         if (cid < TABLE_BUCKETS) {
-            self.static_slots[@as(usize, @truncate(cid))] = dev;
+            const idx: usize = @truncate(cid);
+            @atomicStore(?*VirtioVsock, &self.static_slots[idx], dev, .release);
             return;
         }
 
@@ -86,9 +87,18 @@ pub const VsockRouter = struct {
         self.dynamic_buckets[bucket] = dev;
     }
 
-    pub fn unregister(self: *VsockRouter, cid: u64) void {
+    pub fn unregisterDevice(self: *VsockRouter, dev: *VirtioVsock) void {
+        const cid = dev.guest_cid;
         if (cid < TABLE_BUCKETS) {
-            self.static_slots[@as(usize, @truncate(cid))] = null;
+            const idx: usize = @truncate(cid);
+            _ = @cmpxchgStrong(
+                ?*VirtioVsock,
+                &self.static_slots[idx],
+                dev,
+                null,
+                .acq_rel,
+                .monotonic,
+            );
             return;
         }
 
@@ -97,12 +107,32 @@ pub const VsockRouter = struct {
         }
         defer self.lock.store(false, .release);
 
-        self.unregisterLocked(cid);
+        const bucket: usize = @truncate(cid % TABLE_BUCKETS);
+        var curr = self.dynamic_buckets[bucket];
+        var prev: ?*VirtioVsock = null;
+        while (curr) |d| {
+            if (d == dev) {
+                if (prev) |p| {
+                    p.router_next = d.router_next;
+                } else {
+                    self.dynamic_buckets[bucket] = d.router_next;
+                }
+                d.router_next = null;
+                return;
+            }
+            prev = curr;
+            curr = d.router_next;
+        }
     }
 
     pub fn getDevice(self: *VsockRouter, cid: u64) ?*VirtioVsock {
         if (cid < TABLE_BUCKETS) {
-            return self.static_slots[@as(usize, @truncate(cid))];
+            const idx: usize = @truncate(cid);
+            return @atomicLoad(
+                ?*VirtioVsock,
+                &self.static_slots[idx],
+                .acquire,
+            );
         }
 
         while (self.lock.swap(true, .acquire)) {
@@ -354,11 +384,16 @@ test "VsockRouter dynamic hash table with 64-bit CIDs and collisions" {
     try testing.expect(router.getDevice(0xffff_ffff_ffff_ffff) == null);
     try testing.expect(router.getDevice(99999) == null);
 
-    // 5. Unregistration cleanly unlinks from dynamic bucket chain.
-    router.unregister(38);
+    // 5. Unregistration cleanly unlinks matching device without clobbering
+    //    other devices that share the same CID across VM trees.
+    var stale_dev2 = VirtioVsock{ .guest_cid = 2 };
+    router.unregisterDevice(&stale_dev2);
+    try testing.expectEqual(&dev2, router.getDevice(2));
+
+    router.unregisterDevice(&dev38);
     try testing.expect(router.getDevice(38) == null);
     try testing.expectEqual(&dev70, router.getDevice(70));
 
-    router.unregister(70);
+    router.unregisterDevice(&dev70);
     try testing.expect(router.getDevice(70) == null);
 }

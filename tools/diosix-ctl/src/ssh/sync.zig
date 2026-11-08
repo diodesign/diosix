@@ -90,12 +90,33 @@ pub fn isSshPortOpen(ip_str: []const u8) bool {
     return false;
 }
 
+const ASCII_PRINTABLE_MIN: u8 = 0x20;
+const ASCII_DEL: u8 = 0x7f;
+
+/// Validates a remote destination file path before passing it over SSH to
+/// prevent remote command injection via single quotes or shell metacharacters.
+pub fn isValidRemotePath(path: []const u8) bool {
+    if (path.len == 0 or path.len >= common.MAX_PATH_LEN) return false;
+    if (std.mem.indexOf(u8, path, "..") != null) return false;
+    for (path) |c| {
+        if (c < ASCII_PRINTABLE_MIN or c >= ASCII_DEL) return false;
+        switch (c) {
+            '\'', '"', ';', '|', '&', '`', '$', '<', '>', '\\', '(', ')' => {
+                return false;
+            },
+            else => {},
+        }
+    }
+    return true;
+}
+
 pub fn copyFileOverSsh(
     key_str: ?[:0]const u8,
     dest_str: [:0]const u8,
     src_path_z: [*:0]const u8,
     remote_dest: [:0]const u8,
 ) bool {
+    if (!isValidRemotePath(remote_dest)) return false;
     const src_fd_res = linux.open(src_path_z, .{ .ACCMODE = .RDONLY }, 0);
     const src_fd_signed: isize = @bitCast(src_fd_res);
     if (src_fd_signed < 0) return false;
@@ -140,7 +161,7 @@ pub fn copyFileOverSsh(
         for (sysconfig.SSH_CLIENT_BINS) |bin| {
             var z_bin_buf: [common.MAX_PATH_LEN]u8 = undefined;
             const bin_z = common.toPathZ(bin, &z_bin_buf) orelse continue;
-            var argv_buf: [10:null]?[*:0]const u8 = @splat(null);
+            var argv_buf: [12:null]?[*:0]const u8 = @splat(null);
             var argc: usize = 0;
             argv_buf[argc] = bin_z.ptr;
             argc += 1;
@@ -149,10 +170,11 @@ pub fn copyFileOverSsh(
                 argv_buf[argc + 1] = ks.ptr;
                 argc += 2;
             }
-            argv_buf[argc] = "-y";
-            argv_buf[argc + 1] = dest_str.ptr;
-            argv_buf[argc + 2] = remote_cmd_z.ptr;
-            argv_buf[argc + 3] = null;
+            argv_buf[argc] = "-o";
+            argv_buf[argc + 1] = "StrictHostKeyChecking=accept-new";
+            argv_buf[argc + 2] = dest_str.ptr;
+            argv_buf[argc + 3] = remote_cmd_z.ptr;
+            argv_buf[argc + 4] = null;
             _ = linux.execve(bin_z.ptr, &argv_buf, envp);
         }
         linux.exit(127);
