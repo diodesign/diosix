@@ -22,11 +22,10 @@ const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
 const formatSelfInfo = vm.formatSelfInfo;
 const formatVersionChannel = host.formatVersionChannel;
-const formatHostInfo = host.formatHostInfo;
+const allocHostInfo = host.allocHostInfo;
 
 const TEST_SHORT_BUF_LEN: usize = 32;
 const TEST_SELF_BUF_LEN: usize = 512;
-const TEST_HOST_BUF_LEN: usize = 1024;
 const TEST_TOML_MAX_SIZE: usize = 65536;
 
 test "formatVersionChannel CalVer formatting" {
@@ -48,9 +47,9 @@ test "formatVersionChannel CalVer formatting" {
 test "formatSelfInfo omits context and parent IDs and supports JSON" {
     const info = api.GuestInfo{
         .guest_id = 1,
-        .parent_id = 0,
+        .parent_id = 0xffff_ffff_ffff_ffff,
         .is_trusted = 1,
-        .is_root = 1,
+        .has_parent = 0,
         .target_arch = 1,
         .assigned_cid = 1,
         .vcpus = 4,
@@ -67,7 +66,7 @@ test "formatSelfInfo omits context and parent IDs and supports JSON" {
     try testing.expect(std.mem.indexOf(u8, text_out, "Context ID") == null);
     try testing.expect(std.mem.indexOf(u8, text_out, "Parent CID") == null);
     try testing.expect(
-        std.mem.indexOf(u8, text_out, "Root VM        : yes") != null,
+        std.mem.indexOf(u8, text_out, "Parent         : hypervisor") != null,
     );
     try testing.expect(
         std.mem.indexOf(
@@ -80,14 +79,26 @@ test "formatSelfInfo omits context and parent IDs and supports JSON" {
     var json_buf: [TEST_SELF_BUF_LEN]u8 = undefined;
     const json_out = formatSelfInfo(&json_buf, info, true);
     try testing.expect(
-        std.mem.indexOf(u8, json_out, "\"root_vm\":true") != null,
+        std.mem.indexOf(u8, json_out, "\"has_parent\":false") != null,
     );
     try testing.expect(
         std.mem.indexOf(u8, json_out, "\"ram_mb\":256") != null,
     );
+
+    var child_info = info;
+    child_info.has_parent = 1;
+    child_info.parent_id = 0;
+    const child_txt = formatSelfInfo(&text_buf, child_info, false);
+    try testing.expect(
+        std.mem.indexOf(u8, child_txt, "Parent         : CID 0") != null,
+    );
+    const child_json = formatSelfInfo(&json_buf, child_info, true);
+    try testing.expect(
+        std.mem.indexOf(u8, child_json, "\"has_parent\":true") != null,
+    );
 }
 
-test "formatHostInfo text and JSON output with injection sanitization" {
+test "allocHostInfo text and JSON output with injection sanitization" {
     var info = api.HypervisorInfo{
         .version_major = 26,
         .version_minor = 2,
@@ -109,8 +120,8 @@ test "formatHostInfo text and JSON output with injection sanitization" {
         "chris@violet (Zig 0.17.0 riscv64)";
     @memcpy(info.build_desc[0..desc.len], desc);
 
-    var text_buf: [TEST_HOST_BUF_LEN]u8 = undefined;
-    const text_out = formatHostInfo(&text_buf, info, false);
+    const text_out = try allocHostInfo(testing.allocator, info, false);
+    defer testing.allocator.free(text_out);
     try testing.expect(std.mem.indexOf(u8, text_out, "Diosix version") == null);
     try testing.expect(
         std.mem.indexOf(
@@ -141,8 +152,8 @@ test "formatHostInfo text and JSON output with injection sanitization" {
         ) != null,
     );
 
-    var json_buf: [TEST_HOST_BUF_LEN]u8 = undefined;
-    const json_out = formatHostInfo(&json_buf, info, true);
+    const json_out = try allocHostInfo(testing.allocator, info, true);
+    defer testing.allocator.free(json_out);
     try testing.expect(
         std.mem.indexOf(u8, json_out, "\"version\":\"26.2.1\"") != null,
     );

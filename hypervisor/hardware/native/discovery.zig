@@ -5,9 +5,7 @@
 
 const std = @import("std");
 const fdt = @import("fdt.zig");
-const uart = @import("drivers/uart.zig");
 const clint = @import("drivers/clint.zig");
-const plic = @import("drivers/plic.zig");
 const riscv = @import("cpu/riscv64/mod.zig");
 
 pub const HostHardware = struct {
@@ -58,16 +56,7 @@ pub fn probe(fdt_paddr: usize) HostHardware {
         };
     };
 
-    if (hw.uart_base) |u| {
-        uart.initConfig(
-            u,
-            hw.uart_reg_shift,
-            hw.uart_reg_io_width,
-            if (hw.uart_is_sifive) .sifive else .ns16550,
-        );
-    }
     if (hw.clint_base) |c| clint.init(c);
-    if (hw.plic_base) |p| plic.init(p);
 
     riscv.uart_base = hw.uart_base;
     riscv.clint_base = hw.clint_base;
@@ -78,16 +67,12 @@ pub fn probe(fdt_paddr: usize) HostHardware {
 test "discovery probe fallback on null FDT address" {
     std.testing.refAllDecls(@This());
     _ = fdt;
-    _ = uart;
     _ = clint;
-    _ = plic;
     defer {
         riscv.uart_base = null;
         riscv.clint_base = null;
         riscv.plic_base = null;
-        uart.base_address = null;
         clint.base_address = null;
-        plic.base_address = null;
     }
     const hw = probe(0);
     try std.testing.expectEqual(DEFAULT_RAM_BASE, hw.ram_base);
@@ -96,15 +81,7 @@ test "discovery probe fallback on null FDT address" {
     try std.testing.expectEqual(@as(?usize, DEFAULT_CLINT_BASE), hw.clint_base);
     try std.testing.expectEqual(@as(?usize, DEFAULT_PLIC_BASE), hw.plic_base);
     try std.testing.expectEqual(
-        @as(?usize, DEFAULT_UART_BASE),
-        uart.base_address,
-    );
-    try std.testing.expectEqual(
         @as(?usize, DEFAULT_CLINT_BASE),
         clint.base_address,
-    );
-    try std.testing.expectEqual(
-        @as(?usize, DEFAULT_PLIC_BASE),
-        plic.base_address,
     );
 }

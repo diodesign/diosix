@@ -11,6 +11,7 @@ const sysconfig = @import("sysconfig.zig");
 const image = @import("image.zig");
 const snapshot = @import("snapshot.zig");
 const disk = @import("storage/disk.zig");
+const seed = @import("storage/seed.zig");
 
 pub const CATALOG_CONFIG_PATH = image.CATALOG_CONFIG_PATH;
 pub const EXT4_SUPERBLOCK_OFFSET = disk.EXT4_SUPERBLOCK_OFFSET;
@@ -352,16 +353,28 @@ pub fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         common.printFmt(
             \\Usage:
             \\  {s} disk create <name> [--size <size>]  Create virtual disk
+            \\  {s} disk seed <name> [--ip <ip>]        Seed SSH & cloud-init
             \\  {s} disk list [--json]                  List virtual disks
             \\  {s} disk info <name>                    Show disk details
             \\  {s} disk delete <name>                  Delete virtual disk
             \\  {s} disk resize <name> --size <size>    Resize virtual disk
             \\
-        , .{ exe_name, exe_name, exe_name, exe_name, exe_name });
+        , .{ exe_name, exe_name, exe_name, exe_name, exe_name, exe_name });
         return;
     }
 
-    const DiskSubcmd = enum { create, add, list, ls, info, delete, rm, resize };
+    const DiskSubcmd = enum {
+        create,
+        add,
+        seed,
+        provision,
+        list,
+        ls,
+        info,
+        delete,
+        rm,
+        resize,
+    };
     const subcmd = std.mem.span(args[0]);
     const parsed_subcmd = std.meta.stringToEnum(DiskSubcmd, subcmd) orelse {
         common.printFmt(
@@ -378,6 +391,7 @@ pub fn cmdDisk(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
     switch (parsed_subcmd) {
         .create, .add => diskCreate(exe_name, args),
+        .seed, .provision => seed.cmdDiskSeed(exe_name, args),
         .list, .ls => listVirtualDisks(json_mode),
         .info => diskInfo(args),
         .delete, .rm => diskDelete(args),
@@ -390,6 +404,7 @@ test "storage: resolveDiskPath validates names and rejects traversal" {
     _ = image;
     _ = snapshot;
     _ = disk;
+    _ = seed;
     var buf: [common.MAX_PATH_LEN]u8 = undefined;
     try std.testing.expectEqualStrings(
         "/var/lib/diosix/disks/data.img",

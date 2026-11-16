@@ -12,3 +12,15 @@ fi
 if [ -t 0 ] && command -v stty >/dev/null 2>&1; then
     stty cols 120 rows 35 2>/dev/null || true
 fi
+
+# Auto-attach to headless demo guest VM on first interactive console login.
+if [ -t 0 ] && [ -f /run/diosix/cli_demo_autostart ]; then
+    DEMO_VM=$(tr -cd 'A-Za-z0-9-' < /run/diosix/cli_demo_autostart 2>/dev/null)
+    rm -f /run/diosix/cli_demo_autostart 2>/dev/null || true
+    if [ -n "$DEMO_VM" ] && command -v dsx >/dev/null 2>&1; then
+        echo ""
+        echo "==> Attaching to guest VM '${DEMO_VM}' (log in as 'root';" \
+            "press Ctrl+] to return to parent VM)..."
+        dsx console "$DEMO_VM" || true
+    fi
+fi

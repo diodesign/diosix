@@ -1,0 +1,179 @@
+// Build, QEMU, test infrastructure, and unintegrated audit feature nodes.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+.{
+    .{
+        .id = "build-zig-pipeline",
+        .name = "Zig build graph, layout manifest, and build wrapper",
+        .layer = .build_infra,
+        .status = .active,
+        .files = .{
+            "build.zig",
+            "build/layout.zon",
+            "scripts/build.sh",
+        },
+        .summary =
+        \\Top-level Zig build graph, declarative path and module manifest,
+        \\and metadata-injecting build wrapper script.
+        ,
+        .activated_by = .{},
+        .docs = .{
+            "docs/build.md#build-process-and-dependencies",
+            "docs/build.md#declarative-build-configuration",
+            "README.md#quickstart",
+            "docs/run.md#system-requirements",
+        },
+    },
+    .{
+        .id = "buildroot-packaging",
+        .name = "Buildroot root VM and guest kernel packaging",
+        .layer = .build_infra,
+        .status = .active,
+        .files = .{
+            "scripts/build_rootvm.sh",
+            "scripts/lib/buildroot_common.sh",
+            "boot/riscv64-linux-rootvm.config",
+            "boot/riscv64-linux-cli.config",
+            "boot/riscv64-linux-desktop.config",
+            "boot/riscv64-linux-usable.config",
+            "boot/riscv32-linux-minimal.config",
+            "boot/linux-rootvm-hardware.fragment",
+            "boot/linux-cli.fragment",
+            "boot/linux-desktop.fragment",
+            "boot/linux-minimal.fragment",
+            "boot/linux-riscv32.fragment",
+            "boot/linux-sbi-console.fragment",
+        },
+        .summary =
+        \\Buildroot packaging scripts and kernel defconfigs that stage
+        \\cross-compiled userland tools, build the hypervisor kernel driver,
+        \\and link the root VM, base Linux, CLI, and Wayland desktop images.
+        ,
+        .activated_by = .{
+            "build-zig-pipeline",
+        },
+        .docs = .{
+            "docs/build.md#metadata-injection-and-multi-tier-caching",
+        },
+    },
+    .{
+        .id = "qemu-live-media",
+        .name = "QEMU runners, live-image builder, and release packager",
+        .layer = .build_infra,
+        .status = .active,
+        .files = .{
+            "scripts/qemu.zig",
+            "scripts/create_storage_disk.sh",
+            "scripts/make_live_image.sh",
+            "scripts/package_release.sh",
+            "scripts/setup_swtpm.sh",
+        },
+        .summary =
+        \\QEMU runner step builder for serial, graphical, desktop/CLI demo,
+        \\live, and TPM sessions, ext4 developer disk creator, hybrid GPT
+        \\live-image builder, and standalone release tarball packager.
+        ,
+        .activated_by = .{
+            "build-zig-pipeline",
+        },
+        .docs = .{
+            "docs/build.md#build-wrapper-targets",
+            "docs/run.md#booting-diosix-in-qemu",
+            "docs/development.md#live-media-builds-and-testing",
+        },
+    },
+    .{
+        .id = "feature-graph-audit",
+        .name = "Feature-graph, Markdown link, and support-matrix verifier",
+        .layer = .build_infra,
+        .status = .active,
+        .files = .{
+            "build/features.zon",
+            "build/features/hypervisor.zon",
+            "build/features/emulation.zon",
+            "build/features/userland.zon",
+            "build/features/infra.zon",
+            "scripts/features.zig",
+            "scripts/features/model.zig",
+            "scripts/features/verify.zig",
+            "scripts/features/links.zig",
+            "scripts/features/links/parse.zig",
+            "scripts/features/matrix.zig",
+            "scripts/features/steps.zig",
+        },
+        .summary =
+        \\Declarative feature graph, reachability and file-coverage checker,
+        \\offline Markdown link and section-anchor verifier, and
+        \\deterministic support-matrix generator enforced during testing.
+        ,
+        .activated_by = .{
+            "build-zig-pipeline",
+        },
+        .docs = .{
+            "docs/build.md#declarative-build-configuration",
+            "docs/development.md#unit-testing",
+        },
+    },
+    .{
+        .id = "test-suites-harness",
+        .name = "Dedicated unit and visual test suites and QEMU integration",
+        .layer = .build_infra,
+        .status = .active,
+        .files = .{
+            "hypervisor/hardware/emulation/engine/dynarec/tests/instruction.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/tests/privilege.zig",
+            "hypervisor/hardware/native/fdt/tests.zig",
+            "tools/diosix-ctl/src/tests/catalog.zig",
+            "tools/diosix-ctl/src/tests/cli.zig",
+            "tools/diosix-ctl/src/tests/main.zig",
+            "tools/diosix-ctl/src/tests/manifest.zig",
+            "tools/diosix-gui/src/tests.zig",
+            "tools/diosix-gui/src/tests/create_vm.zig",
+            "tools/diosix-gui/src/tests/desktop.zig",
+            "tools/diosix-gui/src/tests/gui.zig",
+            "tools/diosix-gui/src/tests/nav.zig",
+            "tools/diosix-gui/src/tests/panes.zig",
+            "tools/diosix-gui/src/tests/visual.zig",
+            "tools/guest-shim/src/tests/loader.zig",
+            "scripts/test_manifest_integration.py",
+            "scripts/demo_external_guests.py",
+        },
+        .summary =
+        \\Dedicated multi-component host test suites covering dynamic
+        \\recompilation, FDT parsing, CLI commands, GUI rendering, and the
+        \\guest shim alongside the live QEMU integration harness.
+        ,
+        .activated_by = .{
+            "build-zig-pipeline",
+        },
+        .docs = .{
+            "docs/development.md#testing-and-verification",
+            "docs/development.md#integration-testing",
+        },
+    },
+    .{
+        .id = "ci-and-containers",
+        .name = "Continuous integration, release workflow, and containers",
+        .layer = .build_infra,
+        .status = .active,
+        .files = .{
+            ".github/workflows/ci.yml",
+            ".github/workflows/release.yml",
+            "dockerfiles/ubuntu-26.04.Dockerfile",
+            "dockerfiles/fedora-44.Dockerfile",
+        },
+        .summary =
+        \\GitHub Actions continuous integration and release-packaging
+        \\pipelines alongside reproducible Ubuntu 26.04 LTS and Fedora 44
+        \\container environments with SHA-256-verified Zig 0.17.0 toolchains.
+        ,
+        .activated_by = .{
+            "build-zig-pipeline",
+        },
+        .docs = .{
+            "docs/build.md#containerized-builds-with-docker",
+            "docs/development.md#branching-workflow",
+        },
+    },
+}

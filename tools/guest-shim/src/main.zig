@@ -112,6 +112,52 @@ fn sbiPrintReloc(ram_base: usize, msg: []const u8) void {
     sbiPrint(relocateSlice(ram_base, msg));
 }
 
+fn stageIsoInitrdIntoDtb(
+    ram_base: usize,
+    dtb_addr: usize,
+    payload_slice: []const u8,
+    vol: boot_loader.IsoVolumeInfo,
+    dest_slice: []u8,
+    kernel_end_off: usize,
+) void {
+    // Align initrd past the guest kernel's 2 MiB PMD hugepage reservation so
+    // Linux setup_bootmem never treats the initrd start as overlapping _end.
+    const pmd_pad: usize = (SHIM_RAM_ALIGN_MASK + 1) + SHIM_RAM_ALIGN_MASK;
+    const aligned_off = (kernel_end_off + pmd_pad) & ~SHIM_RAM_ALIGN_MASK;
+    inline for (boot_loader.ISO_INITRD_CANDIDATES) |ipath_lit| {
+        const ipath = relocateSlice(ram_base, ipath_lit);
+        if (boot_loader.findIso9660Path(payload_slice, vol, ipath)) |ext| {
+            const f_off = std.math.mul(
+                usize,
+                ext.extent_lba,
+                boot_loader.ISO_SECTOR_SIZE,
+            ) catch 0;
+            const f_end = if (f_off > 0 or ext.extent_lba == 0)
+                (std.math.add(usize, f_off, ext.data_length) catch 0)
+            else
+                0;
+            if (f_end > f_off and f_end <= payload_slice.len) {
+                const initrd_bytes = payload_slice[f_off..f_end];
+                var start_gpa: u64 = @intFromPtr(initrd_bytes.ptr);
+                if (aligned_off + initrd_bytes.len <= dest_slice.len) {
+                    const dst = dest_slice[aligned_off .. aligned_off +
+                        initrd_bytes.len];
+                    @memcpy(dst, initrd_bytes);
+                    start_gpa = @intFromPtr(dst.ptr);
+                }
+                const end_gpa: u64 = start_gpa + initrd_bytes.len;
+                const dtb_ptr: [*]u8 = @ptrFromInt(dtb_addr);
+                _ = boot_loader.fdt.patchChosenInitrdInPlace(
+                    dtb_ptr[0..0x10_0000],
+                    start_gpa,
+                    end_gpa,
+                );
+                return;
+            }
+        } else |_| {}
+    }
+}
+
 export fn shimMain(hart_id: usize, dtb_addr: usize) callconv(.c) noreturn {
     const pc = if (is_riscv_freestanding)
         asm ("auipc %[ret], 0"
@@ -220,6 +266,14 @@ export fn shimMain(hart_id: usize, dtb_addr: usize) callconv(.c) noreturn {
                                         img_slice,
                                         dest_slice,
                                     )) |loaded| {
+                                        stageIsoInitrdIntoDtb(
+                                            ram_base,
+                                            dtb_addr,
+                                            payload_slice,
+                                            vol,
+                                            dest_slice,
+                                            loaded.loaded_end_offset,
+                                        );
                                         sbiPrintReloc(
                                             ram_base,
                                             "[diosix-shim] Booting kernel " ++
@@ -236,6 +290,27 @@ export fn shimMain(hart_id: usize, dtb_addr: usize) callconv(.c) noreturn {
                             } else |_| {}
                         }
                     } else |_| {}
+                } else if (fmt != .unknown) {
+                    if (boot_loader.fs.findBootKernelInDisk(
+                        payload_slice,
+                    )) |img_slice| {
+                        if (boot_loader.loadKernelAuto(
+                            img_slice,
+                            dest_slice,
+                        )) |loaded| {
+                            sbiPrintReloc(
+                                ram_base,
+                                "[diosix-shim] Booting kernel from " ++
+                                    "attached virtual disk...\r\n",
+                            );
+                            handoffLoadedKernel(
+                                hart_id,
+                                dtb_addr,
+                                @intFromPtr(dest_ptr),
+                                loaded,
+                            );
+                        } else |_| {}
+                    }
                 }
 
                 // 2. Check if a kernel image (ELF, flat RISC-V Image, or PE32+

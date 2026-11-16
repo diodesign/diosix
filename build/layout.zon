@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 .{
-    .min_zig_version = "0.17.0-dev",
+    .min_zig_version = "0.17.0",
     .default_arch = "riscv64",
     .default_profile = "rootvm",
 
@@ -56,8 +56,33 @@
         .embedded_asm_name = "rootvm.s",
         .input_files = .{
             "scripts/build_rootvm.sh",
+            "scripts/lib/buildroot_common.sh",
         },
         .input_dirs = .{
+            "tools/alsa-init",
+            "tools/diosix-ctl/src",
+            "tools/diosix-gui/assets",
+            "tools/diosix-gui/src",
+            "tools/driver",
+            "tools/guest-shim",
+            "tools/overlay-common",
+        },
+    },
+
+    .guests = .{
+        .cli = .{
+            .profile = "cli",
+            .elf_out_fmt = "zig-out/guest-{s}/bin/linux-cli.elf",
+            .buildroot_dir_fmt = "zig-out/buildroot-cli-{s}",
+            .overlay_dir = "tools/overlay-cli",
+        },
+        .desktop = .{
+            .profile = "desktop",
+            .elf_out_fmt = "zig-out/guest-{s}/bin/linux-desktop.elf",
+            .buildroot_dir_fmt = "zig-out/buildroot-desktop-{s}",
+            .overlay_dir = "tools/overlay-desktop",
+        },
+        .common_input_dirs = .{
             "tools/alsa-init",
             "tools/diosix-ctl/src",
             "tools/diosix-gui/assets",
@@ -72,10 +97,12 @@
         .system_bin = "qemu-system-riscv64",
         .storage_script = "scripts/create_storage_disk.sh",
         .storage_img = "zig-out/storage.img",
-        .storage_size = "256M",
+        .storage_size = "1024M",
+        .iso_cache_dir = "zig-out/dl",
         .live_script = "scripts/make_live_image.sh",
         .live_img = "zig-out/diosix-live-riscv64.img",
-        .live_size_mb = "512",
+        .live_size_mb = "640",
+        .release_script = "scripts/package_release.sh",
         .swtpm_script = "scripts/setup_swtpm.sh",
         .swtpm_socket = "/tmp/diosix-tpm/swtpm-sock",
         .default_smp = 4,
@@ -83,6 +110,12 @@
         .default_audio = "auto",
         .display_width = 1280,
         .display_height = 800,
+    },
+
+    .features = .{
+        .name = "diosix-features",
+        .tool_root = "scripts/features.zig",
+        .zon_path = "build/features.zon",
     },
 
     .tests = .{
@@ -114,6 +147,11 @@
                 .name = "diosix-guest-shim-unit-tests",
                 .root = "tools/guest-shim/src/main.zig",
                 .with_interface = true,
+            },
+            .{
+                .name = "diosix-features-unit-tests",
+                .root = "scripts/features.zig",
+                .with_interface = false,
             },
         },
     },

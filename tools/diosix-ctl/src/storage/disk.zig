@@ -9,6 +9,7 @@ const common = @import("../common.zig");
 const console = @import("../console.zig");
 const loader = @import("../loader.zig");
 const sysconfig = @import("../sysconfig.zig");
+const seed = @import("seed.zig");
 
 pub const EXT4_SUPERBLOCK_OFFSET: usize = 1024;
 pub const EXT4_MAGIC_OFFSET: usize = EXT4_SUPERBLOCK_OFFSET + 56;
@@ -199,6 +200,13 @@ pub fn formatAndSeedDisk(
             }
         }
 
+        const pk_owned = seed.resolveManagementPubkey(allocator, null);
+        defer if (pk_owned) |pk| allocator.free(pk);
+        seed.seedMountedRootfs(allocator, mnt_dir, .{
+            .hostname = disk_label,
+            .pubkey_line = pk_owned orelse "",
+        });
+
         const umount_argv: [*:null]const ?[*:0]const u8 =
             &[_:null]?[*:0]const u8{ sysconfig.UMOUNT_BIN, mnt_dir.ptr, null };
         _ = common.runSubprocess(umount_argv);
@@ -277,6 +285,7 @@ pub fn provisionVirtualDisk(
 
 test "storage/disk: resolveDiskPath validates names and rejects traversal" {
     std.testing.refAllDecls(@This());
+    _ = seed;
     var buf: [common.MAX_PATH_LEN]u8 = undefined;
     try std.testing.expectEqualStrings(
         "/var/lib/diosix/disks/data.img",

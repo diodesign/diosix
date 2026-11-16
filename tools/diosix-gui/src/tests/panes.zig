@@ -323,14 +323,14 @@ test "diosix-gui: running guest VMs pane, detail menu, and update interval" {
     var mock_guests: [2]host_info.RunningGuest = .{
         .{
             .cid = 1,
-            .is_root = true,
+            .is_self = true,
             .vcpus = 4,
             .pcpu_percent = 3,
             .ram_bytes = 256 * 1024 * 1024,
         },
         .{
             .cid = 2,
-            .is_root = false,
+            .is_self = false,
             .vcpus = 2,
             .pcpu_percent = 18,
             .ram_bytes = 512 * 1024 * 1024,
@@ -371,7 +371,10 @@ test "diosix-gui: running guest VMs pane, detail menu, and update interval" {
     try testing.expectEqual(expected_half_w, win_guests.width);
 
     const hdr = win_guests.getIconById(gui_mod.ICON_GUESTS_HDR_ID).?;
-    try testing.expectEqualStrings("Running guest VMs", hdr.getText());
+    try testing.expectEqualStrings(
+        "Local VM tree (parent: hypervisor)",
+        hdr.getText(),
+    );
 
     const g0 = win_guests.getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID).?;
     const g1 = win_guests.getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID + 1).?;
@@ -380,7 +383,7 @@ test "diosix-gui: running guest VMs pane, detail menu, and update interval" {
         g0.getText(),
     );
     try testing.expectEqualStrings(
-        "worker-db (postgres.elf, RV64 H-mode)\n" ++
+        "└─ worker-db (postgres.elf, RV64 H-mode)\n" ++
             "2 vCPUs, 18% pCPU usage, 512 MB RAM",
         g1.getText(),
     );
@@ -474,24 +477,21 @@ test "diosix-gui: running guest VMs pane, detail menu, and update interval" {
     gui.completeNavAnimation();
     try testing.expect(gui.getWindow(gui_mod.WIN_GUESTS_ID) != null);
 
-    // 5. After 5000ms tick, live telemetry changes are reflected in the UI
-    // and appended to the 60-unit pCPU usage line graph.
+    // 5. After 5000ms tick, live telemetry updates pCPU graph and label.
     mock_guests[1].pcpu_percent = 42;
     gui.tick(5000);
-    const updated_g1 = gui.getWindow(gui_mod.WIN_GUESTS_ID).?
-        .getIconById(gui_mod.ICON_GUESTS_ITEM_BASE_ID + 1).?;
+    const g1_win = gui.getWindow(gui_mod.WIN_GUESTS_ID).?;
+    const item1_id = gui_mod.ICON_GUESTS_ITEM_BASE_ID + 1;
+    const updated_g1 = g1_win.getIconById(item1_id).?;
     try testing.expectEqualStrings(
-        "worker-db (postgres.elf, RV64 H-mode)\n" ++
+        "└─ worker-db (postgres.elf, RV64 H-mode)\n" ++
             "2 vCPUs, 42% pCPU usage, 512 MB RAM",
         updated_g1.getText(),
     );
-    const updated_gr = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?
-        .getIconById(gui_mod.ICON_GUEST_PCPU_GRAPH_ID).?;
-    try testing.expectEqualSlices(
-        u8,
-        &[_]u8{ 18, 18, 42 },
-        updated_gr.getGraphSamples(),
-    );
+    const det_win = gui.getWindow(gui_mod.WIN_GUEST_DETAIL_ID).?;
+    const updated_gr = det_win.getIconById(gui_mod.ICON_GUEST_PCPU_GRAPH_ID).?;
+    const exp = [_]u8{ 18, 18, 42 };
+    try testing.expectEqualSlices(u8, &exp, updated_gr.getGraphSamples());
     var px_buf: [320 * 120]u32 = @splat(fb.Color.GLASS_BG);
     var surf = fb.Surface.init(&px_buf, 320, 120, 320 * @sizeOf(u32));
     updated_gr.render(&surf, 0, 0, true);

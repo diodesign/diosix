@@ -157,20 +157,26 @@ fn resolveGuestTarget(
             if (matchTarget(target_str, parsed_cid, entry.cid, entry.name)) {
                 const n = allocator.dupe(u8, entry.name) catch return null;
                 errdefer allocator.free(n);
+                const sys_cfg = common.loadRuntimeSystemConfig();
                 const ip = if (entry.ip.len > 0)
                     allocator.dupe(u8, entry.ip) catch return null
                 else
-                    allocator.print("10.0.3.{d}", .{entry.cid}) catch
-                        return null;
+                    allocator.print(
+                        "{s}{d}",
+                        .{ sys_cfg.subnetPrefix(), entry.cid },
+                    ) catch return null;
                 return .{ .cid = entry.cid, .name = n, .ip = ip };
             }
         }
     } else |_| {}
     if (parsed_cid >= CID_FIRST_CHILD) {
+        const sys_cfg = common.loadRuntimeSystemConfig();
         const n = allocator.dupe(u8, target_str) catch return null;
         errdefer allocator.free(n);
-        const ip = allocator.print("10.0.3.{d}", .{parsed_cid}) catch
-            return null;
+        const ip = allocator.print(
+            "{s}{d}",
+            .{ sys_cfg.subnetPrefix(), parsed_cid },
+        ) catch return null;
         return .{ .cid = parsed_cid, .name = n, .ip = ip };
     }
     return null;
@@ -221,6 +227,8 @@ fn cmdNetStatus(client: *api.DiosixClient) void {
             "--------------------------------\n",
     );
 
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const prefix = sys_cfg.subnetPrefix();
     var count: usize = 0;
     if (readBinaryFile(GUEST_REGISTRY_PATH, MAX_MANIFEST_SIZE)) |content| {
         defer unmapBinaryFile(content);
@@ -235,11 +243,15 @@ fn cmdNetStatus(client: *api.DiosixClient) void {
                 "-"
             else if (via_rtr) blk: {
                 gw_owned = allocator.print(
-                    "CID {d} (10.0.3.{d})",
-                    .{ pol.upstream_cid, pol.upstream_cid },
+                    "CID {d} ({s}{d})",
+                    .{ pol.upstream_cid, prefix, pol.upstream_cid },
                 ) catch null;
                 break :blk gw_owned orelse "router";
-            } else "root (10.0.3.1)";
+            } else blk: {
+                gw_owned = allocator.print("parent ({s}1)", .{prefix}) catch
+                    null;
+                break :blk gw_owned orelse "parent";
+            };
             const wan_str: []const u8 = switch (pol.mode) {
                 .none => "denied (air-gap)",
                 .local => if (via_rtr) "via router" else "denied (local)",
@@ -312,20 +324,23 @@ pub fn cmdNet(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             allocator,
             client,
             guest.cid,
+            guest.ip,
             eff_mode,
             up_cid,
         );
         applyHostFirewall(guest.cid, guest.ip, eff_mode, up_cid);
         updateLiveGuestRoute(allocator, guest.ip, up_cid);
+        const sys_cfg = common.loadRuntimeSystemConfig();
+        const prefix = sys_cfg.subnetPrefix();
         if (up_cid == 0) {
             printFmt(
-                "✓ Routed '{s}' (CID {d}) via parent (10.0.3.1).\n",
-                .{ guest.name, guest.cid },
+                "✓ Routed '{s}' (CID {d}) via parent ({s}1).\n",
+                .{ guest.name, guest.cid, prefix },
             );
         } else {
             printFmt(
-                "✓ Routed '{s}' (CID {d}) via CID {d} (10.0.3.{d}).\n",
-                .{ guest.name, guest.cid, up_cid, up_cid },
+                "✓ Routed '{s}' (CID {d}) via CID {d} ({s}{d}).\n",
+                .{ guest.name, guest.cid, up_cid, prefix, up_cid },
             );
         }
         return;
@@ -346,7 +361,14 @@ pub fn cmdNet(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     client.setNetPolicy(guest.cid, flags, up_cid) catch |e| {
         return printApiError("Set VM network policy", e);
     };
-    updateManifestNetHeaders(allocator, client, guest.cid, mode, up_cid);
+    updateManifestNetHeaders(
+        allocator,
+        client,
+        guest.cid,
+        guest.ip,
+        mode,
+        up_cid,
+    );
     applyHostFirewall(guest.cid, guest.ip, mode, up_cid);
     printFmt(
         "✓ Network policy for '{s}' (CID {d}, {s}) set to '{s}'.\n",

@@ -11,8 +11,8 @@ const SHA256_HEX_LEN = catalog.SHA256_HEX_LEN;
 const CatalogEntry = catalog.CatalogEntry;
 const OFFICIAL_CATALOG = catalog.OFFICIAL_CATALOG;
 const TEST_PARSED_CAP: usize = 4;
-const TEST_TABLE_BUF_LEN: usize = 2048;
-const TEST_JSON_BUF_LEN: usize = 4096;
+const TEST_TABLE_BUF_LEN: usize = 4096;
+const TEST_JSON_BUF_LEN: usize = 8192;
 const findEntry = catalog.findEntry;
 const findEntryInSlice = catalog.findEntryInSlice;
 const isValidImageName = catalog.isValidImageName;
@@ -30,6 +30,14 @@ test "findEntry resolves Steward and S/U-mode Guest OS catalog entries" {
     try testing.expectEqualStrings("steward", steward.tier);
     try testing.expectEqualStrings("elf", steward.format);
     try testing.expectEqualStrings("steward.elf", steward.filename);
+
+    const cli_vm = findEntry("cli").?;
+    try testing.expectEqualStrings("linux-cli", cli_vm.id);
+    try testing.expectEqualStrings("linux-cli.elf", cli_vm.filename);
+
+    const desktop_vm = findEntry("desktop").?;
+    try testing.expectEqualStrings("linux-desktop", desktop_vm.id);
+    try testing.expectEqualStrings("linux-desktop.elf", desktop_vm.filename);
 
     const debian = findEntry("debian").?;
     try testing.expectEqualStrings("debian-riscv64", debian.id);

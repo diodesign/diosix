@@ -81,53 +81,6 @@ pub fn queryTargetVmMeta(
     return meta;
 }
 
-/// Flushes any modified guest-shim disk payload at `SHIM_PAYLOAD_GPA_OFFSET`
-/// back to `disk_path` if the child VM has a persistent virtual disk attached.
-pub fn syncChildDiskPayload(
-    client: *api.DiosixClient,
-    cid: usize,
-    disk_path: []const u8,
-) void {
-    if (builtin.is_test or client.dev_fd == null or
-        cid < common.CID_FIRST_CHILD or disk_path.len == 0)
-    {
-        return;
-    }
-    var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const z_path = common.toPathZ(disk_path, &z_buf) orelse return;
-    const fd_res = linux.open(
-        z_path.ptr,
-        .{ .ACCMODE = .WRONLY },
-        common.PRIVATE_FILE_MODE,
-    );
-    const fd_signed: isize = @bitCast(fd_res);
-    if (fd_signed < 0) return;
-    const fd: i32 = @intCast(fd_signed);
-    defer _ = linux.close(fd);
-
-    var st: linux.Stat = undefined;
-    if (@as(isize, @bitCast(linux.fstat(fd, &st))) < 0 or st.size <= 0) return;
-    const sync_bytes: usize = @min(
-        @as(usize, @intCast(st.size)),
-        CHUNK_BYTES * 8,
-    );
-    const parent_gpa = loader.DEFAULT_PARENT_MAP_GPA;
-    const payload_gpa = GUEST_BASE_GPA + loader.SHIM_PAYLOAD_GPA_OFFSET;
-    var off: usize = 0;
-    while (off < sync_bytes) : (off += CHUNK_BYTES) {
-        const chunk_sz: usize = @min(CHUNK_BYTES, sync_bytes - off);
-        const mapped = client.mapChildMemory(
-            cid,
-            payload_gpa + off,
-            parent_gpa,
-            chunk_sz,
-            loader.MAP_CHILD_RW_FLAGS,
-        ) catch break;
-        defer client.unmapChildMemory(mapped, parent_gpa) catch {};
-        _ = linux.write(fd, mapped.ptr, chunk_sz);
-    }
-}
-
 /// Dumps non-zero 4 KiB pages of child `cid` into `mem_path`, returning the
 /// count of saved pages. Safe no-op when `client.fd < 0` or in unit tests.
 pub fn dumpChildRamPages(

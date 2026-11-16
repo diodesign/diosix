@@ -218,7 +218,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     // 5. Verify Running guest VMs pane sizes vertically to the number of items
     // up until its vertical limit (geom.max_h) and then becomes scrollable.
     var one_guest: [1]host_info.RunningGuest = .{
-        .{ .cid = 1, .is_root = true },
+        .{ .cid = 1, .is_self = true },
     };
     host_info.guests.mock_running_guests = &one_guest;
     defer host_info.guests.mock_running_guests = null;
@@ -315,7 +315,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     var two_guests: [2]host_info.RunningGuest = .{
         .{
             .cid = 1,
-            .is_root = true,
+            .is_self = true,
             .vcpus = 4,
             .ram_bytes = 256 * mb,
             .ram_quota_bytes = 1536 * mb,
@@ -325,7 +325,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
         },
         .{
             .cid = 2,
-            .is_root = false,
+            .is_self = false,
             .vcpus = 2,
             .ram_bytes = 512 * mb,
             .ram_quota_bytes = 512 * mb,

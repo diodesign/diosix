@@ -30,6 +30,7 @@ pub const DISK_STAGING_PREFIX = "/run/diosix/staging";
 // System configuration paths (/etc/diosix & /etc).
 pub const AUTH_ENROLLED_PATH = "/etc/diosix/auth.enrolled";
 pub const NETWORK_INTERFACES_PATH = "/etc/network/interfaces";
+pub const RESOLV_CONF_PATH = "/etc/resolv.conf";
 pub const DEFAULT_SYSTEM_MANIFEST_PATH = "/etc/diosix/system.toml";
 pub const DEFAULT_LOCAL_MANIFEST_PATH = "/etc/diosix/manifest.toml";
 pub const DEFAULT_CATALOG_CONFIG_PATH = "/etc/diosix/catalog.toml";
@@ -77,6 +78,10 @@ pub const STEWARD_DEFAULT_KERNELS = [_][]const u8{
 };
 pub const DEFAULT_GUEST_IMAGE_PATH =
     "/var/lib/diosix/images/diosix-base-linux.elf";
+pub const DEFAULT_CLI_IMAGE_PATH =
+    "/var/lib/diosix/images/linux-cli.elf";
+pub const DEFAULT_DESKTOP_IMAGE_PATH =
+    "/var/lib/diosix/images/linux-desktop.elf";
 pub const LEGACY_GUEST_IMAGE_PATH =
     "/var/lib/diosix/images/diosix-linux.elf";
 pub const LINUX_GUEST_IMAGE_PATH = "/var/lib/diosix/images/Image";

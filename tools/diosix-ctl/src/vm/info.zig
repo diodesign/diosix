@@ -52,7 +52,8 @@ const GUEST_TEXT_FMT =
 
 const SELF_JSON_FMT =
     "{{\"assigned_cid\":{d},\"architecture\":\"{s}\"," ++
-    "\"root_vm\":{s},\"hardware_trust\":{s},\"ram_mb\":{d}," ++
+    "\"has_parent\":{s},\"parent\":\"{s}\"," ++
+    "\"hardware_trust\":{s},\"ram_mb\":{d}," ++
     "\"ram_pages\":{d},\"vcpus\":{d},\"pcpu_quota_pct\":{d}," ++
     "\"delegated_pcpu_pct\":{d},\"ram_quota_mb\":{d}," ++
     "\"available_ram_quota_mb\":{d},\"child_vms\":{d}}}\n";
@@ -60,7 +61,7 @@ const SELF_JSON_FMT =
 const SELF_TEXT_FMT =
     \\Assigned CID   : {d}
     \\Architecture   : {s}
-    \\Root VM        : {s}
+    \\Parent         : {s}
     \\Hardware trust : {s}
     \\RAM allocation : {d} MB ({d} pages)
     \\Virtual CPUs   : {d}
@@ -226,10 +227,10 @@ fn allocSelfInfo(
         .x86_64 => "x86_64",
     };
 
-    const is_root = info.is_root != 0;
+    const has_parent = info.has_parent != 0;
     const is_trusted = info.is_trusted != 0;
     const assigned_cid = if (info.assigned_cid > 0) info.assigned_cid else 1;
-    const default_vcpus: usize = if (is_root) 4 else 1;
+    const default_vcpus: usize = 1;
     const vcpus = if (info.vcpus > 0) info.vcpus else default_vcpus;
     const default_ram_mb: usize = 256;
     const ram_mb = if (info.self_ram_pages > 0)
@@ -244,15 +245,10 @@ fn allocSelfInfo(
         info.pcpu_quota_pct
     else
         100;
-    const max_del_pcpu: u32 = if (is_root and pcpu_pct < 100)
-        pcpu_pct
-    else
-        api.MAX_CHILD_PCPU_QUOTA_PCT;
+    const min_ret: u32 = @min(pcpu_pct -| 1, api.DEFAULT_RETAINED_PCPU_PCT);
+    const max_del_pcpu: u32 = pcpu_pct -| min_ret;
     const del_pcpu_pct: u32 = @min(info.delegated_pcpu_pct, max_del_pcpu);
-    const ret_pcpu_pct: u32 = if (is_root)
-        100 -| max_del_pcpu
-    else
-        100 -| del_pcpu_pct;
+    const ret_pcpu_pct: u32 = pcpu_pct -| del_pcpu_pct;
     const max_ram_mb = if (info.max_ram_pages > 0 and
         info.max_ram_pages < std.math.maxInt(usize))
         (info.max_ram_pages * PAGE_SIZE_KB) / KB_PER_MB
@@ -260,16 +256,14 @@ fn allocSelfInfo(
         ram_mb;
     const del_ram_mb = (info.delegated_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
     const used_ram_mb = (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
-    const avail_ram_mb = if (is_root)
-        max_ram_mb -| @max(del_ram_mb, used_ram_mb)
-    else
-        max_ram_mb -| @max(ram_mb +| del_ram_mb, used_ram_mb);
+    const avail_ram_mb = max_ram_mb -| @max(ram_mb +| del_ram_mb, used_ram_mb);
 
     if (json_mode) {
         return allocator.print(SELF_JSON_FMT, .{
             assigned_cid,
             arch_name,
-            if (is_root) "true" else "false",
+            if (has_parent) "true" else "false",
+            if (has_parent) "cid0" else "hypervisor",
             if (is_trusted) "true" else "false",
             ram_mb,
             self_ram_pages,
@@ -285,7 +279,7 @@ fn allocSelfInfo(
     return allocator.print(SELF_TEXT_FMT, .{
         assigned_cid,
         arch_name,
-        if (is_root) "yes" else "no",
+        if (has_parent) "CID 0" else "hypervisor",
         if (is_trusted) "yes" else "no",
         ram_mb,
         self_ram_pages,

@@ -12,6 +12,7 @@ const time = @import("host/time.zig");
 pub const proc = @import("host/proc.zig");
 pub const guests = @import("host/guests.zig");
 pub const images = @import("host/images.zig");
+pub const desktop = @import("host/desktop.zig");
 const paths = @import("paths.zig");
 
 pub const MAX_RUNNING_GUESTS = guests.MAX_RUNNING_GUESTS;
@@ -25,7 +26,6 @@ pub const GuestActionRecord = guests.GuestActionRecord;
 pub const resetGuestTelemetryCache = guests.resetGuestTelemetryCache;
 pub const sampleRunningGuests = guests.sampleRunningGuests;
 pub const queryRunningGuests = guests.queryRunningGuests;
-pub const restartGuestVm = guests.restartGuestVm;
 pub const shutdownGuestVm = guests.shutdownGuestVm;
 pub const setGuestQuota = guests.setGuestQuota;
 
@@ -36,7 +36,6 @@ pub const StorageOption = images.StorageOption;
 pub const CreatedVmRecord = images.CreatedVmRecord;
 pub const queryAvailableImages = images.queryAvailableImages;
 pub const queryAvailableStorageOptions = images.queryAvailableStorageOptions;
-pub const createGuestVm = images.createGuestVm;
 
 pub const fmtLabel = label.fmtLabel;
 pub const LABEL_BUF_BYTES = label.LABEL_BUF_BYTES;
@@ -309,7 +308,7 @@ pub fn getHvFootprintString(buffer: []u8) []const u8 {
 test "HypervisorInfo ABI layout and version formatting in diosix-gui" {
     const testing = std.testing;
     testing.refAllDecls(@This());
-    _ = .{ label, mem_size, time, proc, guests, images, paths };
+    _ = .{ label, mem_size, time, proc, guests, images, desktop, paths };
     defer mock_hypervisor_info = null;
 
     try testing.expectEqual(@as(usize, 304), @sizeOf(HypervisorInfo));

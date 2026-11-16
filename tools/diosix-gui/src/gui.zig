@@ -12,6 +12,7 @@ const Window = window_mod.Window;
 const host_info = @import("host.zig");
 pub const osk_mod = @import("osk.zig");
 pub const welcome_mod = @import("welcome.zig");
+pub const demo_mod = @import("demo.zig");
 pub const panes = @import("panes.zig");
 pub const scale_mod = @import("scale.zig");
 pub const dither_mod = @import("dither.zig");
@@ -43,6 +44,7 @@ pub const ICON_TASK_LABEL_ID: u32 = panes.ICON_TASK_LABEL_ID;
 pub const ICON_TASK_PROGRESS_ID: u32 = panes.ICON_TASK_PROGRESS_ID;
 pub const ICON_TASK_DISMISS_ID: u32 = panes.ICON_TASK_DISMISS_ID;
 pub const WIN_POWER_MODAL_ID: u32 = 202;
+pub const WIN_GUEST_DISPLAY_ID: u32 = panes.WIN_GUEST_DISPLAY_ID;
 pub const WIN_TERMINAL_ID: u32 = panes.WIN_TERMINAL_ID;
 pub const WIN_OSK_ID: u32 = 300;
 pub const WIN_WELCOME_ID: u32 = 301;
@@ -52,16 +54,6 @@ pub const ICON_OSK_TOGGLE_ID: u32 = 1400;
 pub const ICON_TOUR_LAUNCH_ID: u32 = 1401;
 pub const ICON_OSK_KEY_BASE_ID: u32 = 1410;
 pub const ICON_OSK_DISPLAY_ID: u32 = 1450;
-pub const ICON_WELCOME_TOUR_BTN_ID: u32 = 1460;
-pub const ICON_WELCOME_DISMISS_BTN_ID: u32 = 1462;
-pub const ICON_WELCOME_SUBTITLE1_ID: u32 = 1463;
-pub const ICON_WELCOME_SUBTITLE2_ID: u32 = 1464;
-pub const ICON_TOUR_PREV_BTN_ID: u32 = 1470;
-pub const ICON_TOUR_NEXT_BTN_ID: u32 = 1471;
-pub const ICON_TOUR_CLOSE_BTN_ID: u32 = 1472;
-pub const ICON_TOUR_SUMMARY1_ID: u32 = 1473;
-pub const ICON_TOUR_SUMMARY2_ID: u32 = 1474;
-pub const ICON_TOUR_CLI_HINT_ID: u32 = 1475;
 
 // Main Menu IDs.
 pub const ICON_MENU_CREATE_VM_ID: u32 = 1002;
@@ -71,6 +63,7 @@ pub const ICON_MENU_CONFIG_ID: u32 = 1004;
 pub const ICON_MENU_RESTART_ID: u32 = 1005;
 pub const ICON_MENU_SHUTDOWN_ID: u32 = 1006;
 pub const ICON_MENU_TERMINAL_ID: u32 = 1007;
+pub const ICON_MENU_DISPLAY_ID: u32 = 1008;
 
 pub const ICON_VERSION_TEXT_ID: u32 = 1011;
 pub const ICON_BACK_BTN_ID: u32 = 1021;
@@ -115,6 +108,8 @@ pub const SemanticAction = enum {
     @"osk.hide",
     @"welcome.open",
     @"welcome.close",
+    @"welcome.try_desktop",
+    @"welcome.try_cli",
     @"tour.start",
     @"tour.next",
     @"tour.prev",
@@ -168,7 +163,9 @@ pub const ICON_DEPTH_OPT_BASE_ID: u32 = 1110;
 pub const ICON_SCALE_OPT_BASE_ID: u32 = 1120;
 
 pub const ICON_GUESTS_HDR_ID: u32 = 1200;
+pub const ICON_GUESTS_TREE_NOTE_ID: u32 = 1201;
 pub const ICON_GUESTS_ITEM_BASE_ID: u32 = 1210;
+pub const ICON_GUEST_DISPLAY_ID: u32 = panes.ICON_GUEST_DISPLAY_ID;
 pub const ICON_GUEST_SSH_ID: u32 = panes.ICON_GUEST_SSH_ID;
 pub const ICON_GUEST_CONSOLE_ID: u32 = panes.ICON_GUEST_CONSOLE_ID;
 pub const ICON_GUEST_DETAIL_HDR_ID: u32 = 1250;
@@ -177,6 +174,7 @@ pub const ICON_GUEST_SHUTDOWN_ID: u32 = 1252;
 pub const ICON_GUEST_STORAGE_HDR_ID: u32 = 1253;
 pub const ICON_GUEST_PCPU_HDR_ID: u32 = 1254;
 pub const ICON_GUEST_PCPU_GRAPH_ID: u32 = 1255;
+pub const ICON_GUEST_SUBTREE_NOTE_ID: u32 = 1246;
 pub const ICON_GUEST_QUOTA_HDR_ID: u32 = panes.ICON_GUEST_QUOTA_HDR_ID;
 pub const ICON_GUEST_PCPU_QUOTA_LBL_ID = panes.ICON_GUEST_PCPU_QUOTA_LBL_ID;
 pub const ICON_GUEST_PCPU_QUOTA_SLIDER_ID =
@@ -189,6 +187,10 @@ pub const ICON_TERM_MODE_BTN_ID: u32 = panes.ICON_TERM_MODE_BTN_ID;
 pub const ICON_TERM_OSK_BTN_ID: u32 = panes.ICON_TERM_OSK_BTN_ID;
 pub const ICON_TERM_CLEAR_BTN_ID: u32 = panes.ICON_TERM_CLEAR_BTN_ID;
 pub const ICON_TERM_INVERT_BTN_ID: u32 = panes.ICON_TERM_INVERT_BTN_ID;
+pub const ICON_DISP_STATUS_ID: u32 = panes.ICON_DISP_STATUS_ID;
+pub const ICON_DISP_SSH_BTN_ID: u32 = panes.ICON_DISP_SSH_BTN_ID;
+pub const ICON_DISP_CON_BTN_ID: u32 = panes.ICON_DISP_CON_BTN_ID;
+pub const ICON_DISP_OSK_BTN_ID: u32 = panes.ICON_DISP_OSK_BTN_ID;
 
 pub const ICON_CREATE_VM_HDR_ID: u32 = 1300;
 pub const ICON_CREATE_VM_ITEM_BASE_ID: u32 = 1310;
@@ -260,7 +262,9 @@ pub const DiosixGui = struct {
     power_action_confirmed: bool = false,
     osk_state: osk_mod.OskState = .{},
     welcome_state: welcome_mod.WelcomeState = .{},
+    demo_state: demo_mod.DemoState = .{},
     task_mgr: tasks_mod.TaskManager = .{},
+    desktop: panes.DesktopSession = .{},
     terminal: terminal_mod.TerminalSession = .{},
     bg_ssh_sessions: [
         terminal_mod.MAX_BG_SSH_SESSIONS
@@ -317,6 +321,8 @@ pub const DiosixGui = struct {
     pub fn deinit(self: *DiosixGui) void {
         font.setActiveLineHeight(font.GLYPH_HEIGHT);
         cursor_mod.setScalePercent(100);
+        self.desktop.close(self.allocator);
+        host_info.desktop.closeDevDiosixFd();
         self.terminal.closeSession();
         for (&self.bg_ssh_sessions) |*s| s.closeSession();
         for (&self.task_mgr.entries) |*e| e.closePipe();
@@ -386,6 +392,7 @@ pub const DiosixGui = struct {
     pub const handleMouseRelease = gui_input.handleMouseRelease;
     pub const handleMouseMove = gui_input.handleMouseMove;
     pub const handleMouseClick = gui_input.handleMouseClick;
+    pub const handleAuxMouseButton = gui_input.handleAuxMouseButton;
     pub const handleMouseScroll = gui_input.handleMouseScroll;
     pub const focusWindow = gui_input.focusWindow;
     pub const focusWindowById = gui_input.focusWindowById;
@@ -416,8 +423,11 @@ pub const DiosixGui = struct {
     pub const buildOskWindow = panes.buildOskWindow;
     pub const showWelcomeModal = panes.showWelcomeModal;
     pub const showTourModal = panes.showTourModal;
+    pub const openGuestDesktop = panes.openGuestDesktop;
+    pub const onDesktopNavigateBack = panes.onDesktopNavigateBack;
+    pub const pollDesktop = panes.pollDesktop;
+    pub const buildDesktopWindow = panes.buildDesktopWindow;
     pub const openGuestTerminal = panes.openGuestTerminal;
-    pub const closeTerminalWindow = panes.closeTerminalWindow;
     pub const hasLiveSshSession = panes.hasLiveSshSession;
     pub const onTerminalNavigateBack = panes.onTerminalNavigateBack;
     pub const discardGuestSshSession = panes.discardGuestSshSession;
@@ -446,30 +456,12 @@ pub const DiosixGui = struct {
         self.create_vm_name_buf[n] = 0;
         self.create_vm_name_len = n;
     }
-    pub fn setRenderMode(self: *DiosixGui, mode: RenderMode) void {
-        self.render_mode = mode;
-        self.markFullDirty();
-    }
-    pub fn getRenderMode(self: *const DiosixGui) RenderMode {
-        return self.render_mode;
-    }
-    pub fn markDirty(self: *DiosixGui, box: fb.Box) void {
-        self.dirty_box = self.dirty_box.merge(box);
-    }
-    pub fn markFullDirty(self: *DiosixGui) void {
-        self.dirty_box = fb.Box.fromPosSize(0, 0, self.width, self.height);
-    }
-    pub fn markWindowDirty(self: *DiosixGui, win_id: u32) void {
-        for (self.windows.items) |*win| {
-            if (win.id == win_id and win.is_onscreen) {
-                self.markDirty(win.getBox());
-                break;
-            }
-        }
-    }
-    pub fn isDirty(self: *const DiosixGui) bool {
-        return !self.dirty_box.isEmpty();
-    }
+    pub const setRenderMode = gui_render.setRenderMode;
+    pub const getRenderMode = gui_render.getRenderMode;
+    pub const markDirty = gui_render.markDirty;
+    pub const markFullDirty = gui_render.markFullDirty;
+    pub const markWindowDirty = gui_render.markWindowDirty;
+    pub const isDirty = gui_render.isDirty;
 
     pub const setWindowTransparency = gui_render.setWindowTransparency;
     pub const getWindowOpacityAlpha = gui_render.getWindowOpacityAlpha;
@@ -491,5 +483,6 @@ test {
     _ = tasks_mod;
     _ = terminal_mod;
     _ = window_mod;
+    _ = demo_mod;
     std.testing.refAllDecls(@This());
 }

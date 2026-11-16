@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# S95diosix-demo: Auto-spawn CLI guest VM in headless diosix.demo=cli boots.
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+case "$1" in
+  start)
+    if ! grep -qw "diosix.demo=cli" /proc/cmdline 2>/dev/null; then
+        exit 0
+    fi
+
+    # When diosix-gui is running, the graphical demo coordinator handles launch.
+    if pidof diosix-gui >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    DSX_BIN=""
+    for cand in /usr/sbin/dsx /usr/bin/dsx /usr/sbin/diosix-ctl; do
+        if [ -x "$cand" ]; then
+            DSX_BIN="$cand"
+            break
+        fi
+    done
+    [ -z "$DSX_BIN" ] && exit 0
+
+    "$DSX_BIN" info --json 2>/dev/null | grep -q '"has_parent":false' || exit 0
+
+    CLI_IMG="/var/lib/diosix/images/linux-cli.elf"
+    [ ! -f "$CLI_IMG" ] && exit 0
+
+    mkdir -p /run/diosix
+    echo "Launching Diosix CLI demo guest VM ('cli-demo')..."
+    if "$DSX_BIN" run "$CLI_IMG" --name cli-demo --vcpus 2 --ram 256M \
+        --pcpu 30 --ram-quota 256M >/dev/null 2>&1; then
+        printf "cli-demo\n" > /run/diosix/cli_demo_autostart
+        chmod 600 /run/diosix/cli_demo_autostart 2>/dev/null || true
+        echo "================================================================"
+        echo " Diosix CLI Demo VM ('cli-demo') is running."
+        echo " Log in as 'root' below to attach directly (Ctrl+] detaches)."
+        echo "================================================================"
+    fi
+    ;;
+  stop|restart)
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+
+exit 0

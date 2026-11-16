@@ -18,7 +18,6 @@ pub const MAX_VERSION_STR_LEN = host_info.MAX_VERSION_STR_LEN;
 pub const formatVersionChannel = host_info.formatVersionChannel;
 pub const extractBuildBranch = host_info.extractBuildBranch;
 pub const allocHostInfo = host_info.allocHostInfo;
-pub const formatHostInfo = host_info.formatHostInfo;
 
 const CID_SELF = common.CID_SELF;
 const printStr = common.printStr;
@@ -91,8 +90,11 @@ pub fn cmdHost(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 
 pub fn cmdPoweroff(client: *api.DiosixClient) !void {
     if (client.getInfo(1)) |info| {
-        if (info.is_root == 0) {
-            printStr("Command 'poweroff' is only available on the Root VM.\n");
+        if (info.has_parent != 0) {
+            printStr(
+                "Command 'poweroff' is only available on a top-level " ++
+                    "host VM (use 'dsx stop self').\n",
+            );
             return;
         }
     } else |err| {
@@ -108,8 +110,11 @@ pub fn cmdPoweroff(client: *api.DiosixClient) !void {
 
 pub fn cmdReboot(client: *api.DiosixClient) !void {
     if (client.getInfo(1)) |info| {
-        if (info.is_root == 0) {
-            printStr("Command 'reboot' is only available on the Root VM.\n");
+        if (info.has_parent != 0) {
+            printStr(
+                "Command 'reboot' is only available on a top-level " ++
+                    "host VM (use 'dsx stop self').\n",
+            );
             return;
         }
     } else |err| {

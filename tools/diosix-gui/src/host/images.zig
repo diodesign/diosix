@@ -200,10 +200,12 @@ fn scanImagesInDir(
             ) catch continue;
             full_z[full_slice.len] = 0;
 
+            const is_iso = std.mem.endsWith(u8, dname, ".iso");
+            const is_desktop = std.mem.eql(u8, dname, "linux-desktop.elf");
             var entry = VmImageEntry{
                 .size_bytes = queryFileSizeBytes(@ptrCast(&full_z)),
                 .default_vcpus = 2,
-                .default_ram_mb = 256,
+                .default_ram_mb = if (is_iso or is_desktop) 512 else 256,
             };
             entry.setTitle(proc.friendlyImageName(dname));
             entry.setFilename(dname);
@@ -357,23 +359,6 @@ pub fn queryAvailableStorageOptions(
     return count;
 }
 
-pub fn recordCreatedVm(
-    image_path: []const u8,
-    vcpus: u32,
-    ram_mb: u32,
-    storage_path: []const u8,
-) void {
-    recordCreatedVmWithQuota(
-        "",
-        image_path,
-        vcpus,
-        ram_mb,
-        20,
-        ram_mb,
-        storage_path,
-    );
-}
-
 pub fn recordCreatedVmWithQuota(
     vm_name: []const u8,
     image_path: []const u8,
@@ -409,76 +394,7 @@ pub fn resolveDsxBinarySlice() []const u8 {
     return std.mem.span(paths.DSX_BIN_PATHS[0]);
 }
 
-pub fn createGuestVm(
-    image_path: []const u8,
-    vcpus: u32,
-    ram_mb: u32,
-    storage_path: []const u8,
-) bool {
-    if (image_path.len == 0) return false;
-    recordCreatedVm(image_path, vcpus, ram_mb, storage_path);
-    if (builtin.is_test or mock_available_images != null) {
-        return true;
-    }
-
-    var img_z: [IMAGE_PATH_BYTES]u8 = @splat(0);
-    _ = std.fmt.bufPrint(img_z[0 .. img_z.len - 1], "{s}", .{image_path}) catch
-        return false;
-    var vcpu_z: [16]u8 = @splat(0);
-    _ = std.fmt.bufPrint(vcpu_z[0..15], "{d}", .{@max(1, vcpus)}) catch
-        return false;
-    var ram_z: [24]u8 = @splat(0);
-    _ = std.fmt.bufPrint(ram_z[0..23], "{d}M", .{@max(64, ram_mb)}) catch
-        return false;
-    var st_z: [IMAGE_PATH_BYTES]u8 = @splat(0);
-    if (storage_path.len > 0) {
-        const dst = st_z[0 .. st_z.len - 1];
-        _ = std.fmt.bufPrint(dst, "{s}", .{storage_path}) catch return false;
-    }
-
-    const is_iso = std.mem.endsWith(u8, storage_path, ".iso");
-    const st_flag: [*:0]const u8 = if (is_iso) "--cdrom" else "--disk";
-
-    for (paths.DSX_BIN_PATHS) |dsx_bin| {
-        const st_fd = linux.open(dsx_bin, .{ .ACCMODE = .RDONLY }, 0);
-        if (@as(isize, @bitCast(st_fd)) < 0) continue;
-        _ = linux.close(@intCast(@as(isize, @bitCast(st_fd))));
-
-        const pid_rc = linux.fork();
-        const signed_pid: isize = @bitCast(pid_rc);
-        if (signed_pid < 0) return false;
-        if (signed_pid == 0) {
-            const img_arg: [*:0]const u8 = @ptrCast(&img_z);
-            const vcpu_arg: [*:0]const u8 = @ptrCast(&vcpu_z);
-            const ram_arg: [*:0]const u8 = @ptrCast(&ram_z);
-            const st_arg: ?[*:0]const u8 = if (storage_path.len > 0)
-                @ptrCast(&st_z)
-            else
-                null;
-            var argv = [_:null]?[*:0]const u8{
-                dsx_bin,
-                "run",
-                img_arg,
-                "--vcpus",
-                vcpu_arg,
-                "--ram",
-                ram_arg,
-                if (st_arg != null) st_flag else null,
-                st_arg,
-                null,
-            };
-            var envp = [_:null]?[*:0]const u8{null};
-            _ = linux.execve(dsx_bin, &argv, &envp);
-            linux.exit(127);
-        }
-        var status: u32 = 0;
-        _ = linux.waitpid(@intCast(signed_pid), @ptrCast(&status), 0);
-        return (status & 0xff00) == 0;
-    }
-    return false;
-}
-
-test "images: queryAvailableImages and createGuestVm" {
+test "images: queryAvailableImages and recordCreatedVmWithQuota" {
     std.testing.refAllDecls(@This());
     defer mock_available_images = null;
     defer mock_available_storage = null;
@@ -488,9 +404,16 @@ test "images: queryAvailableImages and createGuestVm" {
     try std.testing.expect(count >= 1);
     const expectStr = std.testing.expectEqualStrings;
     try expectStr("Diosix Base Linux", imgs[0].getTitle());
-    try std.testing.expect(
-        createGuestVm(imgs[0].getPath(), 2, 512, "/var/lib/diosix/disks/d.img"),
+    recordCreatedVmWithQuota(
+        "test-vm",
+        imgs[0].getPath(),
+        2,
+        512,
+        20,
+        512,
+        "/var/lib/diosix/disks/d.img",
     );
     try std.testing.expectEqual(@as(u32, 2), mock_last_created_vm.?.vcpus);
     try std.testing.expectEqual(@as(u32, 512), mock_last_created_vm.?.ram_mb);
+    try expectStr("test-vm", mock_last_created_vm.?.getName());
 }

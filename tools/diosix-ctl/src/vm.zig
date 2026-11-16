@@ -12,6 +12,7 @@ const vm_run = @import("vm/run.zig");
 const vm_install = @import("vm/install.zig");
 const vm_restart = @import("vm/restart.zig");
 const vm_console = @import("vm/console.zig");
+const vm_quota = @import("vm/quota.zig");
 
 pub const formatGuestDetail = vm_info.formatGuestDetail;
 pub const formatSelfInfo = vm_info.formatSelfInfo;
@@ -20,6 +21,7 @@ pub const cmdRun = vm_run.cmdRun;
 pub const cmdInstallGuest = vm_install.cmdInstallGuest;
 pub const cmdRestart = vm_restart.cmdRestart;
 pub const cmdConsole = vm_console.cmdConsole;
+pub const cmdQuota = vm_quota.cmdQuota;
 
 const CID_PARENT = common.CID_PARENT;
 const CID_SELF = common.CID_SELF;
@@ -32,268 +34,25 @@ const KB_PER_MB = common.KB_PER_MB;
 const printStr = common.printStr;
 const parseCid = common.parseCid;
 const printApiError = common.printApiError;
-const parseMemorySizeMb = common.parseMemorySizeMb;
 const readBinaryFile = common.readBinaryFile;
 const unmapBinaryFile = common.unmapBinaryFile;
 const matchTarget = common.matchTarget;
 const removeGuestFromRegistry = common.removeGuestFromRegistry;
 const printGuestLine = common.printGuestLine;
 
-const QuotaOption = enum {
-    @"--ram",
-    @"--pcpu",
-    @"--pcpu-quota",
-    @"--retained-pcpu",
-    @"--vcpus",
-    @"--depth",
-    @"--descendants",
-};
-
 const TargetAlias = common.TargetAlias;
 
-pub fn cmdQuota(
-    client: *api.DiosixClient,
-    target_cid: usize,
-    argv: []const [*:0]const u8,
-) !void {
-    var ram_pages: usize = 0;
-    var pcpu_pct: usize = 0;
-    var retained_pcpu_pct: usize = 0;
-    var vcpus: usize = 0;
-    var depth: usize = 0;
-    var descendants: usize = 0;
-    var has_update = false;
+fn parseMemorySizeMb(s: []const u8) usize {
+    return common.parseMemorySizeMb(s);
+}
 
-    if (target_cid == CID_PARENT) {
-        printStr("Error: Cannot query or set quotas on parent VM (CID 0).\n");
-        return;
-    }
-
-    var i: usize = 2;
-    while (i < argv.len) : (i += 1) {
-        const flag = std.mem.span(argv[i]);
-        if (i == 2 and !std.mem.startsWith(u8, flag, "-")) continue;
-        if (std.meta.stringToEnum(QuotaOption, flag)) |opt| {
-            switch (opt) {
-                .@"--ram" => {
-                    if (i + 1 >= argv.len) {
-                        return printStr(
-                            "Error: Option '--ram' requires a value in MB.\n",
-                        );
-                    }
-                    i += 1;
-                    const raw_val = std.mem.span(argv[i]);
-                    const mb = std.fmt.parseInt(usize, raw_val, 10) catch blk: {
-                        const parsed = parseMemorySizeMb(raw_val);
-                        if (parsed == 0) {
-                            return printStr(
-                                "Error: Invalid numeric value for '--ram'.\n",
-                            );
-                        }
-                        break :blk parsed;
-                    };
-                    ram_pages = (mb * KB_PER_MB) / PAGE_SIZE_KB;
-                    has_update = true;
-                },
-                .@"--pcpu", .@"--pcpu-quota" => {
-                    if (i + 1 >= argv.len) {
-                        return printStr(
-                            "Error: '--pcpu' requires a percentage (1-90).\n",
-                        );
-                    }
-                    i += 1;
-                    const raw_pct = std.mem.trimEnd(
-                        u8,
-                        std.mem.span(argv[i]),
-                        "%",
-                    );
-                    pcpu_pct = std.fmt.parseInt(usize, raw_pct, 10) catch {
-                        return printStr(
-                            "Error: Invalid numeric value for '--pcpu'.\n",
-                        );
-                    };
-                    if (pcpu_pct == 0 or pcpu_pct > 99) {
-                        return printStr(
-                            "Error: '--pcpu' must be between 1 and 99%.\n",
-                        );
-                    }
-                    has_update = true;
-                },
-                .@"--retained-pcpu" => {
-                    if (i + 1 >= argv.len) {
-                        printStr(
-                            "Error: '--retained-pcpu' requires a percentage " ++
-                                "(1-99).\n",
-                        );
-                        return;
-                    }
-                    i += 1;
-                    const raw_ret = std.mem.trimEnd(
-                        u8,
-                        std.mem.span(argv[i]),
-                        "%",
-                    );
-                    retained_pcpu_pct = std.fmt.parseInt(
-                        usize,
-                        raw_ret,
-                        10,
-                    ) catch {
-                        printStr(
-                            "Error: Invalid numeric value for " ++
-                                "'--retained-pcpu'.\n",
-                        );
-                        return;
-                    };
-                    if (retained_pcpu_pct == 0 or retained_pcpu_pct > 99) {
-                        printStr(
-                            "Error: '--retained-pcpu' must be between 1 " ++
-                                "and 99%.\n",
-                        );
-                        return;
-                    }
-                    has_update = true;
-                },
-                .@"--vcpus" => {
-                    if (i + 1 >= argv.len) {
-                        printStr("Error: Option '--vcpus' requires a value.\n");
-                        return;
-                    }
-                    i += 1;
-                    vcpus = std.fmt.parseInt(
-                        usize,
-                        std.mem.span(argv[i]),
-                        10,
-                    ) catch {
-                        printStr(
-                            "Error: Invalid numeric value for '--vcpus'.\n",
-                        );
-                        return;
-                    };
-                    has_update = true;
-                },
-                .@"--depth" => {
-                    if (i + 1 >= argv.len) {
-                        printStr("Error: Option '--depth' requires a value.\n");
-                        return;
-                    }
-                    i += 1;
-                    depth = std.fmt.parseInt(
-                        usize,
-                        std.mem.span(argv[i]),
-                        10,
-                    ) catch {
-                        printStr(
-                            "Error: Invalid numeric value for '--depth'.\n",
-                        );
-                        return;
-                    };
-                    has_update = true;
-                },
-                .@"--descendants" => {
-                    if (i + 1 >= argv.len) {
-                        printStr(
-                            "Error: Option '--descendants' requires a value.\n",
-                        );
-                        return;
-                    }
-                    i += 1;
-                    descendants = std.fmt.parseInt(
-                        usize,
-                        std.mem.span(argv[i]),
-                        10,
-                    ) catch {
-                        printStr(
-                            "Error: Invalid numeric value for " ++
-                                "'--descendants'.\n",
-                        );
-                        return;
-                    };
-                    has_update = true;
-                },
-            }
-        } else if (std.mem.startsWith(u8, flag, "-")) {
-            common.printFmt(
-                "Error: Unknown option '{s}'. Available: --pcpu, " ++
-                    "--retained-pcpu, --ram, --vcpus, --depth, " ++
-                    "--descendants.\n",
-                .{flag},
-            );
-            return;
-        }
-    }
-
-    if (!has_update) {
-        if (client.getInfo(target_cid)) |info| {
-            const is_root = info.is_root != 0;
-            const used_ram_mb =
-                (info.used_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
-            const max_ram_mb = if (info.max_ram_pages == std.math.maxInt(usize))
-                0
-            else
-                (info.max_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
-            const self_ram_mb =
-                (info.self_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
-            const del_ram_mb =
-                (info.delegated_ram_pages * PAGE_SIZE_KB) / KB_PER_MB;
-            const avail_ram_mb = max_ram_mb -| @max(del_ram_mb, used_ram_mb);
-            const self_vcpus = if (info.vcpus > 0) info.vcpus else 4;
-            const pcpu_q: u32 = if (info.pcpu_quota_pct > 0)
-                info.pcpu_quota_pct
-            else
-                100;
-            const max_del: u32 = if (is_root and pcpu_q < 100)
-                pcpu_q
-            else
-                api.MAX_CHILD_PCPU_QUOTA_PCT;
-            const del_pcpu: u32 = @min(info.delegated_pcpu_pct, max_del);
-            const ret_pcpu: u32 = if (is_root and pcpu_q < 100)
-                100 - pcpu_q
-            else
-                100 -| del_pcpu;
-
-            const q_fmt =
-                "Resource Quotas (CID {d}):\n" ++
-                "  Logical Config : {d} vCPUs, {d} MB RAM\n" ++
-                "  pCPU Quota     : {d}% ({d}% delegated to children, " ++
-                "{d}% retained)\n" ++
-                "  RAM Quota Pool : {d} MB in use / {d} MB max " ++
-                "({d} MB delegated, {d} MB available)\n" ++
-                "  Child VMs      : {d} active\n";
-            common.printFmt(q_fmt, .{
-                target_cid,
-                self_vcpus,
-                self_ram_mb,
-                pcpu_q,
-                del_pcpu,
-                ret_pcpu,
-                used_ram_mb,
-                max_ram_mb,
-                del_ram_mb,
-                avail_ram_mb,
-                info.child_count,
-            });
-            return;
-        } else |err| {
-            printApiError("Query quotas", err);
-            return;
-        }
-    }
-
-    const eff_pcpu_arg =
-        if (retained_pcpu_pct > 0) retained_pcpu_pct else pcpu_pct;
-    client.setQuotaWithPcpu(
-        target_cid,
-        ram_pages,
-        vcpus,
-        depth,
-        descendants,
-        eff_pcpu_arg,
-        0,
-    ) catch |err| {
-        printApiError("Set quota", err);
-        return;
-    };
-    printStr("Quotas updated successfully.\n");
+fn readSelfHostname(buf: *[64]u8) []const u8 {
+    if (readBinaryFile("/etc/hostname", 256)) |content| {
+        defer unmapBinaryFile(content);
+        const trimmed = common.trimWhitespace(content);
+        if (trimmed.len > 0) return common.copyStr(buf, trimmed);
+    } else |_| {}
+    return "self";
 }
 
 pub fn cmdDropTrust(client: *api.DiosixClient) !void {
@@ -306,14 +65,13 @@ pub fn cmdDropTrust(client: *api.DiosixClient) !void {
 }
 
 pub fn cmdList(client: *api.DiosixClient) !void {
-    const info_res = client.getInfo(1) catch null;
-    const is_root = if (info_res) |info| info.is_root != 0 else true;
+    const info_res = client.getInfo(CID_SELF) catch null;
     const is_trusted = if (info_res) |info| info.is_trusted != 0 else true;
-    const default_self_vcpus: usize = if (is_root) 4 else 1;
+    const default_self_vcpus: usize = 1;
     const self_vcpus = if (info_res) |info|
         (if (info.vcpus > 0) info.vcpus else default_self_vcpus)
     else
-        4;
+        1;
     const default_ram: usize = 256;
     const ram_mb = if (info_res) |info|
         (if (info.self_ram_pages > 0)
@@ -325,7 +83,7 @@ pub fn cmdList(client: *api.DiosixClient) !void {
     const child_count = if (info_res) |info| info.child_count else 0;
 
     printStr(
-        "CID   Name             vCPUs   RAM       Status    Trust       " ++
+        "CID  Name                 vCPUs  RAM      Status   Trust     " ++
             "IP / Endpoint\n",
     );
 
@@ -338,8 +96,22 @@ pub fn cmdList(client: *api.DiosixClient) !void {
         return;
     };
     defer allocator.free(self_ram_str);
-    const self_name = if (is_root) "root (self)" else "self";
+
+    var host_buf: [64]u8 = undefined;
+    var self_lbl_buf: [80]u8 = undefined;
+    const self_name = std.fmt.bufPrint(
+        &self_lbl_buf,
+        "{s} (self)",
+        .{readSelfHostname(&host_buf)},
+    ) catch "self";
     const trust_str = if (is_trusted) "trusted" else "untrusted";
+    const parent_lbl = if (info_res) |info|
+        (if (info.has_parent != 0)
+            "local (parent:CID0)"
+        else
+            "local (hypervisor)")
+    else
+        "local";
     printGuestLine(
         1,
         self_name,
@@ -347,14 +119,14 @@ pub fn cmdList(client: *api.DiosixClient) !void {
         self_ram_str,
         "running",
         trust_str,
-        "local",
+        parent_lbl,
     );
 
-    var guest_count: usize = 0;
+    var total_active: usize = 0;
     if (readBinaryFile(GUEST_REGISTRY_PATH, MAX_MANIFEST_SIZE)) |content| {
         defer unmapBinaryFile(content);
-        var iter = common.GuestRegistryIter.init(content);
-        while (iter.next()) |entry| {
+        var c_iter = common.GuestRegistryIter.init(content);
+        while (c_iter.next()) |entry| {
             if (client.dev_fd != null and
                 (client.getInfo(entry.cid) catch null) == null)
             {
@@ -362,27 +134,54 @@ pub fn cmdList(client: *api.DiosixClient) !void {
                 removeGuestFromRegistry(entry.cid);
                 continue;
             }
-            const c_mb = parseMemorySizeMb(entry.ram);
-            const child_ram_str = allocator.print("{d} MB", .{c_mb}) catch {
-                printStr("Error: Out of memory formatting VM list.\n");
-                return;
-            };
-            defer allocator.free(child_ram_str);
-            printGuestLine(
-                entry.cid,
-                entry.name,
-                entry.vcpus,
-                child_ram_str,
-                entry.status,
-                entry.trust,
-                entry.ip,
-            );
-            guest_count += 1;
+            total_active += 1;
         }
     } else |_| {}
 
+    var guest_count: usize = 0;
+    if (total_active > 0) {
+        if (readBinaryFile(GUEST_REGISTRY_PATH, MAX_MANIFEST_SIZE)) |content| {
+            defer unmapBinaryFile(content);
+            var iter = common.GuestRegistryIter.init(content);
+            while (iter.next()) |entry| {
+                const c_mb = parseMemorySizeMb(entry.ram);
+                const child_ram_str = allocator.print(
+                    "{d} MB",
+                    .{c_mb},
+                ) catch {
+                    printStr("Error: Out of memory formatting VM list.\n");
+                    return;
+                };
+                defer allocator.free(child_ram_str);
+                guest_count += 1;
+                const branch = if (guest_count == total_active)
+                    "└─ "
+                else
+                    "├─ ";
+                var tree_name_buf: [96]u8 = undefined;
+                const tree_name = std.fmt.bufPrint(
+                    &tree_name_buf,
+                    "{s}{s}",
+                    .{ branch, entry.name },
+                ) catch entry.name;
+                printGuestLine(
+                    entry.cid,
+                    tree_name,
+                    entry.vcpus,
+                    child_ram_str,
+                    entry.status,
+                    entry.trust,
+                    entry.ip,
+                );
+            }
+        } else |_| {}
+    }
+
     if (guest_count == 0 and child_count == 0) {
-        printStr("\nNo child VMs running.\n");
+        printStr("\nNo direct child VMs running.\n");
+    } else {
+        printStr("\nNote: child subtrees are opaque; only direct children " ++
+            "are visible.\n");
     }
 }
 
@@ -400,11 +199,12 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
                 return false;
             },
             .self, .current => {
-                if (client.getInfo(1)) |info| {
-                    if (info.is_root != 0) {
+                if (client.getInfo(CID_SELF)) |info| {
+                    if (info.has_parent == 0) {
                         common.printFmt(
-                            "Root VM cannot be stopped directly. Use " ++
-                                "'{s} host poweroff' or '{s} host reboot'.\n",
+                            "Top-level VM cannot be stopped with " ++
+                                "'stop self'. Use '{s} host poweroff' or " ++
+                                "'{s} host reboot'.\n",
                             .{ exe_name, exe_name },
                         );
                         return false;
@@ -479,19 +279,14 @@ pub fn cmdStop(client: *api.DiosixClient, args: []const [*:0]const u8) !bool {
     return true;
 }
 
-test "vm: QuotaOption enum parses expected CLI flags" {
+test "vm: submodules compile cleanly and self hostname reads non-empty" {
     std.testing.refAllDecls(@This());
     _ = vm_info;
     _ = vm_run;
     _ = vm_install;
     _ = vm_restart;
     _ = vm_console;
-    try std.testing.expectEqual(
-        QuotaOption.@"--ram",
-        std.meta.stringToEnum(QuotaOption, "--ram").?,
-    );
-    try std.testing.expectEqual(
-        QuotaOption.@"--retained-pcpu",
-        std.meta.stringToEnum(QuotaOption, "--retained-pcpu").?,
-    );
+    _ = vm_quota;
+    var buf: [64]u8 = undefined;
+    try std.testing.expect(readSelfHostname(&buf).len > 0);
 }

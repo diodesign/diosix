@@ -75,6 +75,7 @@ pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
         ICON_MENU_ABOUT_ID => try self.buildStatusPane(),
         ICON_MENU_CONFIG_ID => try self.buildConfigPane(),
         gui_mod.ICON_MENU_TERMINAL_ID => try self.buildTerminalWindow(),
+        gui_mod.ICON_MENU_DISPLAY_ID => try self.buildDesktopWindow(),
         else => {},
     }
 
@@ -82,7 +83,9 @@ pub fn activateMenuItem(self: *DiosixGui, menu_item_id: u32) !void {
     try contractMainMenu(self, menu_item_id);
     self.active_menu_id = menu_item_id;
 
-    if (had_guests and menu_item_id == gui_mod.ICON_MENU_TERMINAL_ID) {
+    if (had_guests and (menu_item_id == gui_mod.ICON_MENU_TERMINAL_ID or
+        menu_item_id == gui_mod.ICON_MENU_DISPLAY_ID))
+    {
         try self.buildGuestsPane();
     }
 
@@ -98,6 +101,8 @@ pub fn navigateBack(self: *DiosixGui) !void {
 
     if (self.active_menu_id == gui_mod.ICON_MENU_TERMINAL_ID) {
         gui_mod.panes.onTerminalNavigateBack(self);
+    } else if (self.active_menu_id == gui_mod.ICON_MENU_DISPLAY_ID) {
+        gui_mod.panes.onDesktopNavigateBack(self);
     }
 
     try repopulateMainMenu(self);
@@ -223,6 +228,8 @@ pub fn applyNavAnimation(self: *DiosixGui) void {
 pub fn teardownChildPanes(self: *DiosixGui) void {
     if (self.active_menu_id == gui_mod.ICON_MENU_TERMINAL_ID) {
         gui_mod.panes.onTerminalNavigateBack(self);
+    } else if (self.active_menu_id == gui_mod.ICON_MENU_DISPLAY_ID) {
+        gui_mod.panes.onDesktopNavigateBack(self);
     }
     var child_id: ?u32 = null;
     if (self.getWindow(WIN_MENU_ID)) |head| {
@@ -268,7 +275,9 @@ pub fn teardownChildPanes(self: *DiosixGui) void {
 
 pub fn tick(self: *DiosixGui, dt_ms: u32) void {
     self.pollBackgroundTasks();
+    gui_mod.demo_mod.poll(self);
     self.pollTerminal();
+    self.pollDesktop();
     if (self.nav_anim_state != .idle) {
         const step =
             @as(f32, @floatFromInt(dt_ms)) / self.nav_anim_duration_ms;
@@ -310,7 +319,12 @@ pub fn tick(self: *DiosixGui, dt_ms: u32) void {
         self.updateGuestsPaneData();
     }
 
-    if (self.render_mode == .accelerated and self.bg_animation_speed > 0) {
+    const interactive_pane_open = gui_mod.panes.isDesktopWindowOpen(self) or
+        gui_mod.panes.isTerminalWindowOpen(self);
+    if (self.render_mode == .accelerated and
+        self.bg_animation_speed > 0 and
+        !interactive_pane_open)
+    {
         self.drift_accum_ms += dt_ms * self.bg_animation_speed;
         const threshold = gui_mod.DRIFT_INTERVAL_MS * 100;
         if (self.drift_accum_ms >= threshold) {

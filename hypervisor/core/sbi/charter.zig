@@ -144,7 +144,7 @@ pub fn handleSealCharter(vc: *VCore, ctx: *Ctx, a0: usize, a1: usize) void {
         return;
     }
 
-    if (!g.is_root and !g.is_steward) {
+    if (g.hasParent() and !g.is_steward) {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
@@ -154,7 +154,7 @@ pub fn handleSealCharter(vc: *VCore, ctx: *Ctx, a0: usize, a1: usize) void {
         defer guard.release();
         const st = guard.get();
         if (!st.sealed) {
-            if (!g.is_root) {
+            if (g.hasParent()) {
                 reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
                 return;
             }
@@ -210,13 +210,13 @@ pub const handleRequestRootFailover = steward.handleRequestRootFailover;
 
 fn spawnTestGuest(
     alloc: std.mem.Allocator,
-    is_root: bool,
+    is_trusted: bool,
     parent: ?*guest.Guest,
 ) !*guest.Guest {
     return guest.createGuest(
         alloc,
-        is_root,
-        is_root,
+        is_trusted,
+        is_trusted and parent == null,
         parent,
         0,
         0,
@@ -286,14 +286,14 @@ test "SBI Diosix Phase 5: Charter sealing, Steward quorum guard, and failover" {
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.SEAL_CHARTER;
     ctx[@backingInt(arch.Register.a0)] = 0x80000000;
     ctx[@backingInt(arch.Register.a1)] = 1;
-    sbi_core.handle(&root_vc, 0, &ctx);
+    sbi_core.handle(&root_vc, &ctx);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
     try testing.expect(isCharterSealed());
 
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.TERMINATE;
     ctx[@backingInt(arch.Register.a0)] = steward1.local_cid;
     ctx[@backingInt(arch.Register.a1)] = 1;
-    sbi_core.handle(&root_vc, 0, &ctx);
+    sbi_core.handle(&root_vc, &ctx);
     const denied: usize = @bitCast(sbi_core.SBI_ERR_DENIED);
     try testing.expectEqual(denied, ctx[@backingInt(arch.Register.a0)]);
 
@@ -303,13 +303,13 @@ test "SBI Diosix Phase 5: Charter sealing, Steward quorum guard, and failover" {
     ctx[@backingInt(arch.Register.a0)] = 0x80000000;
     ctx[@backingInt(arch.Register.a1)] = whisper_msg.len;
     ctx[@backingInt(arch.Register.a2)] = 0;
-    sbi_core.handle(&s1_vc, 0, &ctx);
+    sbi_core.handle(&s1_vc, &ctx);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
 
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.WHISPER_RECV;
     ctx[@backingInt(arch.Register.a0)] = 0x80000200;
     ctx[@backingInt(arch.Register.a1)] = 64;
-    sbi_core.handle(&s2_vc, 0, &ctx);
+    sbi_core.handle(&s2_vc, &ctx);
     const a1_idx = @backingInt(arch.Register.a1);
     try testing.expectEqual(whisper_msg.len, ctx[a1_idx]);
 
@@ -317,32 +317,33 @@ test "SBI Diosix Phase 5: Charter sealing, Steward quorum guard, and failover" {
     // attempts to vote for a conflicting target_cid!
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.RATIFY_CHARTER;
     ctx[@backingInt(arch.Register.a0)] = steward1.local_cid;
-    sbi_core.handle(&s1_vc, 0, &ctx);
+    sbi_core.handle(&s1_vc, &ctx);
     ctx[@backingInt(arch.Register.a0)] = 99;
-    sbi_core.handle(&s3_vc, 0, &ctx);
+    sbi_core.handle(&s3_vc, &ctx);
     ctx[@backingInt(arch.Register.a0)] = steward1.local_cid;
-    sbi_core.handle(&s2_vc, 0, &ctx);
+    sbi_core.handle(&s2_vc, &ctx);
     try testing.expectEqual(@as(usize, 2), ctx[a1_idx]);
 
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.RESET_STEWARD;
     ctx[@backingInt(arch.Register.a0)] = steward1.local_cid;
     ctx[@backingInt(arch.Register.a1)] = 0;
-    sbi_core.handle(&s2_vc, 0, &ctx);
+    sbi_core.handle(&s2_vc, &ctx);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
     try testing.expectEqual(@as(usize, 1), steward1.steward_reset_count);
     try testing.expectEqual(guest.GuestState.valid, leaf_vm.state);
 
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.RATIFY_CHARTER;
     ctx[@backingInt(arch.Register.a0)] = guest.CID_SELF;
-    sbi_core.handle(&s1_vc, 0, &ctx);
+    sbi_core.handle(&s1_vc, &ctx);
     ctx[@backingInt(arch.Register.a0)] = guest.CID_SELF;
-    sbi_core.handle(&s2_vc, 0, &ctx);
+    sbi_core.handle(&s2_vc, &ctx);
 
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.REQUEST_ROOT_FAILOVER;
     ctx[@backingInt(arch.Register.a0)] = 0;
-    sbi_core.handle(&s1_vc, 0, &ctx);
+    sbi_core.handle(&s1_vc, &ctx);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
-    try testing.expect(standby_root.is_root);
+    try testing.expect(!standby_root.hasParent());
+    try testing.expect(!root_vm.has_host_passthrough);
     try testing.expectEqual(standby_root, steward1.parent.?);
 
     standby_root.terminate();

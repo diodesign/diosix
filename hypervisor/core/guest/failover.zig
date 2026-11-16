@@ -42,13 +42,13 @@ pub fn findStandbyRoot(self: *guest_mod.Guest) ?*guest_mod.Guest {
 }
 
 /// Promote a designated Standby Root VM (`standby`) to replace `old_root` as
-/// the active Root VM (`CID 1`, `is_root = true`, `is_trusted = true`) and
-/// non-destructively re-parent all surviving Steward and Leaf subtrees.
+/// the active top-of-tree VM (`CID 1`, `parent = null`, `is_trusted = true`)
+/// and non-destructively re-parent all surviving Steward and Leaf subtrees.
 pub fn promoteStandbyRoot(
     old_root: *guest_mod.Guest,
     standby: *guest_mod.Guest,
 ) !void {
-    if (!old_root.is_root or
+    if (old_root.hasParent() or
         !standby.is_standby_root or
         standby.parent != old_root)
     {
@@ -65,7 +65,6 @@ pub fn promoteStandbyRoot(
     }
 
     standby.parent = null;
-    standby.is_root = true;
     standby.is_standby_root = false;
     standby.is_trusted = true;
     standby.space.is_trusted = true;
@@ -147,7 +146,7 @@ pub fn promoteStandbyRoot(
     if (main.global_root_vm == old_root) main.global_root_vm = standby;
 
     old_root.dropTrust();
-    old_root.is_root = false;
+    old_root.has_host_passthrough = false;
 }
 
 test "Steward reset and Standby Root failover promotion" {
@@ -195,8 +194,10 @@ test "Steward reset and Standby Root failover promotion" {
     try testing.expectEqual(standby, findStandbyRoot(root));
     try promoteStandbyRoot(root, standby);
 
-    try testing.expect(standby.is_root);
-    try testing.expect(!root.is_root);
+    try testing.expect(!standby.hasParent());
+    try testing.expect(!root.has_host_passthrough);
+    try testing.expect(standby.is_trusted);
+    try testing.expect(!root.is_trusted);
     try testing.expectEqual(standby, main.global_root_vm);
     try testing.expectEqual(standby, steward.parent);
 }

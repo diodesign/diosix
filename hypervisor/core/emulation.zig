@@ -19,7 +19,6 @@ pub const VCpu = emulation_native.VCpu;
 pub const SoftTlb = emulation_native.SoftTlb;
 pub const Engine = emulation_native.Engine;
 const rv32_arch = @import("../hardware/emulation/arch/riscv32/mod.zig");
-const aarch64_psci = @import("../hardware/emulation/arch/aarch64/psci.zig");
 const sbi = @import("sbi.zig");
 const config = @import("config");
 
@@ -127,7 +126,6 @@ pub fn init(vc: *vcore.VirtualCore) !void {
 
     @memset(@as([*]u8, @ptrCast(vcpu_ptr))[0..@sizeOf(VCpu)], 0);
     vcpu_ptr.id = vc.id;
-    vcpu_ptr.guest_arch = @backingInt(em.target_arch);
     vcpu_ptr.privilege_mode = riscv.PrivilegeMode.PRIV_SUPERVISOR;
     vcpu_ptr.medeleg = DELEGATE_ALL_MASK;
     vcpu_ptr.mideleg = DELEGATE_ALL_MASK;
@@ -162,6 +160,10 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     bus_ptr.timer = &vc.guest.timer;
     bus_ptr.pic = &vc.guest.pic;
     bus_ptr.vsock = &vc.guest.vsock;
+    bus_ptr.gpu = &vc.guest.gpu;
+    bus_ptr.input = &vc.guest.input;
+    bus_ptr.blk = &vc.guest.blk;
+    bus_ptr.net = &vc.guest.net_dev;
     engine_ptr.initOnPtr(
         &jit_buffer_pools[vcore_idx],
         vcpu_ptr,
@@ -213,9 +215,17 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                 pcore.contextSwitch(vc);
                 return;
             }
-            if (vc.state == .blocked or vc.state == .stopped) {
-                vc.running_on_cpu = null;
+            const cur_state =
+                @atomicLoad(vcore.VirtualCoreState, &vc.state, .acquire);
+            if (cur_state == .blocked or cur_state == .stopped) {
                 pcore.this().active_vcore = null;
+                vc.setRunningCpu(null);
+                if (!@atomicLoad(bool, &vc.wfi_blocked, .seq_cst) and
+                    @atomicLoad(vcore.VirtualCoreState, &vc.state, .seq_cst) ==
+                        .ready)
+                {
+                    scheduler.queue(vc);
+                }
                 current_vc = scheduler.pickNext();
                 if (current_vc) |next_vc| pcore.contextSwitch(next_vc);
                 continue;
@@ -226,8 +236,11 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                 &vc.exec_path.emulated
             else
                 null;
-            const should_yield = force_yield or (vc.state == .blocked) or
-                (vc.state == .stopped) or (em != null and em.?.preempt_pending);
+            const post_state =
+                @atomicLoad(vcore.VirtualCoreState, &vc.state, .acquire);
+            const preempt = (em != null and em.?.preempt_pending);
+            const should_yield = force_yield or (post_state == .blocked) or
+                (post_state == .stopped) or preempt;
             if (should_yield) {
                 if (em) |e| e.preempt_pending = false;
                 scheduler.yield(vc);
@@ -250,7 +263,7 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                     @ptrCast(@alignCast(node.contents));
                 if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
                     pcpu.blocked_queue.remove(node);
-                    vc.blocked_on_cpu = null;
+                    vc.setBlockedCpu(null);
                     it = next_it;
                     continue;
                 }
@@ -293,9 +306,14 @@ pub fn emulatedRunnerSMode(initial_vc: *vcore.VirtualCore) callconv(.c) void {
                 }
                 if (wake) {
                     pcpu.blocked_queue.remove(node);
-                    vc.blocked_on_cpu = null;
-                    @atomicStore(bool, &vc.wfi_blocked, false, .release);
-                    vc.state = .ready;
+                    vc.setBlockedCpu(null);
+                    @atomicStore(bool, &vc.wfi_blocked, false, .seq_cst);
+                    @atomicStore(
+                        vcore.VirtualCoreState,
+                        &vc.state,
+                        .ready,
+                        .seq_cst,
+                    );
                     if (current_vc == null) {
                         pcore.contextSwitch(vc);
                         current_vc = vc;
@@ -368,14 +386,14 @@ pub fn run(vc: *vcore.VirtualCore) bool {
         .yield, .normal => return false,
         .wfi => {
             _ = @import("scheduler.zig").recordActiveRuntime(vc);
-            vc.state = .blocked;
+            @atomicStore(vcore.VirtualCoreState, &vc.state, .blocked, .seq_cst);
             vc.last_queued_time = riscv.readTime();
             const pcpu = pcore.this();
             const b_wfi_emu_prev = pcpu.blocked_lock.lock();
             vc.blocked_node.contents = vc;
             pcpu.blocked_queue.pushStart(&vc.blocked_node);
-            vc.blocked_on_cpu = pcpu.cpu_core_id;
-            @atomicStore(bool, &vc.wfi_blocked, true, .release);
+            vc.setBlockedCpu(pcpu.cpu_core_id);
+            @atomicStore(bool, &vc.wfi_blocked, true, .seq_cst);
             pcpu.blocked_lock.unlock(b_wfi_emu_prev);
             return true;
         },
@@ -394,24 +412,9 @@ pub fn run(vc: *vcore.VirtualCore) bool {
             return true;
         },
         .ecall => {
-            if (em.target_arch == .aarch64) {
-                const func_id: u32 = @truncate(vcpu_ptr.regs[31]);
-                if ((func_id & 0xbfff_0000) == 0x8400_0000) {
-                    const res = aarch64_psci.handlePSCI(
-                        vc,
-                        vc.id,
-                        func_id,
-                        vcpu_ptr.regs[1],
-                        vcpu_ptr.regs[2],
-                        vcpu_ptr.regs[3],
-                    );
-                    vcpu_ptr.setReg(31, @as(u32, @bitCast(res)));
-                    return vc.guest.state != .valid;
-                }
-            }
             var context: riscv.ThreadContext = undefined;
             inline for (0..32) |i| context[i] = @truncate(vcpu_ptr.regs[i]);
-            sbi.handle(vc, 0, &context);
+            sbi.handle(vc, &context);
             inline for (0..32) |i| vcpu_ptr.regs[i] = context[i];
             return vc.guest.state != .valid;
         },

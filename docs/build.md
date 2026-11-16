@@ -1,262 +1,239 @@
-# Build Diosix
+# Build system, porting, and debugging
 
-The Diosix build pipeline uses the Zig build system to compile the hypervisor
-and generate reproducible guest operating system images. This process
-coordinates the build graph, target architecture configurations, declarative
-hardware ports, and build machine metadata injection.
+The Diosix build pipeline pairs the Zig build system with a cached Buildroot
+workspace to compile the machine-mode (M-mode) hypervisor, userland management
+and desktop tools, the guest bootloader shim, and the embedded Linux root
+virtual machine (VM) from source.
+
+This reference covers host dependencies, build-time configuration files,
+incremental caching, physical board deployment, and remote GNU debugger (GDB)
+debugging.
 
 ---
 
-## Build process
+## Build process and dependencies
 
-This section details the dependencies needed to compile the hypervisor and a
-guest OS, and the steps to clone the project repository and build the complete
-system.
+### Host build machine dependencies
 
-### Hypervisor build dependencies
+To build Diosix on a Linux build machine, install Zig 0.17.0 or later, Git 2.54
+or later, QEMU 10.0 or later (for emulated runs), and standard Buildroot host
+packages.
 
-To compile the hypervisor, you must have the following installed:
-
-*   Zig version 0.17.0 or later.
-*   Git version 2.54 or later.
-*   For Docker-based builds, Docker version 29.5.2 or later.
-
-### Guest operating system build dependencies
-
-The build system automatically downloads and compiles from source a 64-bit
-RISC-V guest Root Virtual Machine (VM) using Buildroot. The Root VM helps
-the hypervisor manage the host hardware and other VMs.
-
-Building this guest requires standard compilation utilities on the build
-machine. On minimal or server-oriented installations, such as a fresh Ubuntu
-22.04 environment, you must manually install these dependencies before you can
-use Buildroot.
-
-To install the required tools on Debian or Ubuntu systems, run:
+On Debian or Ubuntu (such as Ubuntu 26.04 LTS):
 
 ```bash
 sudo apt update
 sudo apt install -y \
-    build-essential git rsync cpio unzip file bc findutils \
-    wget xz-utils python3
+    bc bison build-essential cpio dosfstools e2fsprogs fdisk file \
+    findutils flex gawk git libelf-dev libssl-dev mtools openssh-client \
+    procps python3 python3-pexpect qemu-system-gui qemu-system-riscv \
+    rsync u-boot-tools unzip util-linux wget xz-utils
 ```
 
-On Fedora systems, run:
+On Fedora (such as Fedora 44):
 
 ```bash
-sudo dnf groupinstall "Development Tools"
+sudo dnf group install -y development-tools
 sudo dnf install -y \
-    gcc-c++ \
-    perl-English perl-ExtUtils-MakeMaker perl-Thread-Queue \
-    perl-FindBin perl-IPC-Cmd perl-open \
-    python3-passlib \
-    git rsync cpio unzip bc wget xz python3 which
+    bc bison cpio dosfstools e2fsprogs elfutils-libelf-devel file \
+    findutils flex gawk gcc-c++ git mtools openssh-clients openssl-devel \
+    perl-English perl-ExtUtils-MakeMaker perl-FindBin perl-IPC-Cmd \
+    perl-Thread-Queue perl-open procps-ng python3 python3-passlib \
+    python3-pexpect qemu-system-riscv rsync uboot-tools unzip util-linux \
+    wget which xz
 ```
 
-### Fetch the source repository
+### Containerized builds with Docker
 
-To clone the Diosix source code and enter its directory, run:
-
-```bash
-git clone https://github.com/diodesign/diosix.git
-cd diosix
-```
-
-### Use the build wrapper
-
-Use the build wrapper script (`scripts/build.sh`) to compile and test the
-hypervisor. It supports several commands and options to control the build
-process.
-
-#### Build the default target
-
-To compile the hypervisor and generate the Root VM payload, run the build
-wrapper script:
+If you want a self-contained build environment without installing packages on
+your build machine, use the Dockerfiles in `dockerfiles/`:
 
 ```bash
-./scripts/build.sh
-```
-
-This compiles the codebase to produce a platform-agnostic, universal hypervisor
-binary. While the hypervisor target architecture is always 64-bit RISC-V, the
-build process places the output Executable and Linkable Format (ELF) executable
-in a directory based on the architecture of the guest Root VM (for example,
-`./zig-out/guest-riscv64/bin/vmdiosix` or
-`./zig-out/guest-riscv32/bin/vmdiosix`). The target is position-independent
-and runs on any standard 64-bit RISC-V platform. The generated executable
-contains both the hypervisor and the Root VM image, ready to be booted.
-
-For more information on booting the built hypervisor, see [Run Diosix](run.md).
-
-#### Customize compilation options
-
-You can pass standard Zig build options and Diosix-specific build options to
-the wrapper script. For example, to override the hardware target platform from
-the default, compile an optimized build, or build for a legacy processor or
-emulator lacking newer RISC-V extensions, use the following commands:
-
-```bash
-# Target Physical Memory Protection (PMP) fallback mode (disable H-extension)
-./scripts/build.sh -Dpmp=true
-
-# Build with optimizations for release
-./scripts/build.sh -Doptimize=ReleaseSafe
-
-# Target a legacy CPU/emulator lacking modern RISC-V extensions (QEMU 6.x)
-./scripts/build.sh -Dlegacy-cpu=true
-```
-
-#### Build the live media and installer disk image
-
-To generate a bootable GUID Partition Table (GPT) disk image containing the
-Extensible Firmware Interface (EFI) System Partition, hypervisor, Root VM, and
-persistent guest storage datastore, run:
-
-```bash
-./scripts/build.sh live-image
-```
-
-The live image build produces the following release artifacts in `zig-out/`:
-
-*   `zig-out/diosix-live-riscv64.img`: Hybrid 512 MiB GPT disk image
-    (`DIOSIX_BOOT` FAT32 EFI System Partition + `DIOSIX_LIVE` ext4 datastore).
-*   `zig-out/guest-riscv64/bin/vmdiosix.bin`: Flattened M-mode hypervisor +
-    Root VM binary for physical bootloaders.
-*   `zig-out/vmdiosix.its` (and `zig-out/u-boot.itb` when `mkimage` is
-    installed): Flattened Image Tree (FIT) description and image for U-Boot
-    Secondary Program Loader (SPL) M-mode boot on physical RISC-V boards.
-*   `zig-out/run-qemu.sh`: Standalone launcher script to boot the release image
-    in QEMU (`./zig-out/run-qemu.sh [--gui] [--smp <N>] [--mem <size>]`).
-
-To list all available build targets, configuration parameters, and help
-options, run:
-
-```bash
-./scripts/build.sh -h
-```
-
----
-
-## Incremental build caching
-
-To ensure responsive development cycles, the build system leverages multi-tier
-caching:
-
-*   **Hypervisor core**: Zig caches compiled objects in `.zig-cache/`.
-    Recompiling hypervisor source changes takes ~1 second.
-*   **Guest userland utilities (`diosix-ctl` and `diosix-gui`)**: The `dsx` and
-    `diosix-gui` binaries are compiled via `zig build-exe` against the shared
-    `hypervisor/interface/` module and staged into the dynamic build overlay
-    (`zig-out/buildroot-<arch>/overlay-dynamic/`).
-*   **Buildroot workspace**: Buildroot stores toolchains, source tarballs, and
-    intermediate build objects under `zig-out/buildroot-<arch>/`. Once the
-    initial Linux kernel and packages are built, subsequent invocations reuse
-    the cached toolchain and objects, rebuilding only updated overlay files and
-    packaging the final `rootvm.elf` in ~10–20 seconds.
-
----
-
-## Containerized build process using Docker
-
-For a reproducible and isolated build environment that automatically manages
-all tools, including the required Zig compiler version and Buildroot packages,
-you can use the provided Dockerfiles in `dockerfiles/`:
-
-*   `dockerfiles/ubuntu-22.04.Dockerfile`: Builds Diosix on Ubuntu 22.04.
-*   `dockerfiles/fedora-44.Dockerfile`: Builds Diosix on Fedora 44.
-
-We recommend you use Docker version 29.5.2 or later.
-
-### Build a container image
-
-To build a container image, navigate to the Diosix project root and build the
-image for your preferred distribution:
-
-```bash
-# For Ubuntu 22.04
-docker build -f dockerfiles/ubuntu-22.04.Dockerfile -t diosix-ubuntu .
-
-# For Fedora 44
+# Build the Ubuntu 26.04 LTS or Fedora 44 container image
+docker build -f dockerfiles/ubuntu-26.04.Dockerfile -t diosix-ubuntu .
 docker build -f dockerfiles/fedora-44.Dockerfile -t diosix-fedora .
-```
 
-### Run compilation inside the container
-
-To compile the codebase using the Docker environment, run the build wrapper
-command inside the container:
-
-```bash
-# Build the default target inside the Ubuntu environment
+# Compile the hypervisor and root VM inside the container
 docker run -it --rm diosix-ubuntu ./scripts/build.sh
 
-# Build the default target inside the Fedora environment
-docker run -it --rm diosix-fedora ./scripts/build.sh
+# Run the unit test suite inside the container
+docker run -it --rm diosix-ubuntu ./scripts/build.sh test --summary all
 ```
 
-For more information on booting and running the built hypervisor, see
-[Run Diosix](run.md).
+### Build wrapper targets
+
+Run builds through `./scripts/build.sh` so Git commit metadata, calendar
+versioning (CalVer) numbers, and hardware sizing defaults are passed cleanly to
+Zig:
+
+| Command | Description |
+| :--- | :--- |
+| `./scripts/build.sh` | Compiles userland tools, the guest shim, the Linux root VM, the built-in CLI and Wayland desktop guest images, and the M-mode hypervisor binary. |
+| `./scripts/build.sh test --summary all` | Runs all host-native unit test suites and verifies the feature graph, Markdown links, and support matrix. |
+| `./scripts/build.sh features` | Verifies the feature graph and Markdown links and regenerates `docs/support-matrix.md`. |
+| `./scripts/build.sh test-integration` | Builds the system and runs the live 4-hart QEMU integration suite. |
+| `./scripts/build.sh run` | Builds and boots Diosix in QEMU headless serial mode. |
+| `./scripts/build.sh run-gui` | Builds and boots Diosix in QEMU with the graphical desktop. |
+| `./scripts/build.sh run-desktop` | Builds and boots straight into the built-in Weston Wayland desktop RISC-V guest VM. |
+| `./scripts/build.sh run-cli` | Builds and boots straight into an interactive CLI RISC-V guest VM over the serial console. |
+| `./scripts/build.sh run-tpm` | Builds and boots the graphical desktop in QEMU with an emulated trusted platform module (TPM) 2.0. |
+| `./scripts/build.sh live-image` | Builds the 640 MiB hybrid GPT live disk image, flat M-mode binary, U-Boot image source, and `zig-out/run-qemu.sh`. |
+| `./scripts/build.sh run-live` / `run-live-gui` | Builds and boots the hybrid GPT live image in QEMU (serial or graphical). |
+| `./scripts/build.sh release` | Packages `zig-out/release/diosix-26.1-riscv64.tar.xz` with `vmdiosix`, the hybrid GPT live image, `run-diosix.sh`, quickstart notes, and `SHA256SUMS`. |
+| `./scripts/build.sh -h` | Lists all build targets and build-time `-D` options. |
+
+### Build-time configuration options
+
+Pass Zig build flags directly to `./scripts/build.sh`:
+
+```bash
+# Test physical memory protection (PMP) fallback (disable H-extension)
+./scripts/build.sh run -Dpmp=true
+
+# Target CPUs or emulators without Sstc or Smstateen extensions
+./scripts/build.sh run -Dlegacy-cpu=true
+
+# Build with ReleaseSafe optimizations
+./scripts/build.sh -Doptimize=ReleaseSafe
+
+# Change QEMU symmetric multiprocessing (SMP) core count and host RAM
+./scripts/build.sh run -Dsmp=8 -Dmem=4G
+```
 
 ---
 
-## Metadata injection and the wrapper script
+## Build architecture and configuration files
 
-The entry point of the build process is the shell-based build wrapper, which
-invokes `build.zig` to carry out the compilation work and reads Machine-mode
-(M-mode) sizing defaults from `boot/hypervisor.conf`.
+### Declarative build configuration
 
-To accelerate build cycles, Zig serializes and caches the build configuration
-graph generated by `build.zig`. If `build.zig` remains unmodified and its
-command-line parameters are identical, Zig bypasses executing `build.zig`
-entirely. Executing subprocesses to query the build machine, such as `git` or
-the system date, directly inside `build.zig` would therefore result in stale or
-missing metadata.
+Diosix keeps repository layout, feature-to-documentation mappings, and hardware
+sizing defaults in declarative files outside the build logic:
 
-The wrapper script solves this by capturing Git and temporal metadata from the
-host build machine before compiling. These values are passed to `zig build` as
-explicit build options using `-D` parameters, ensuring that any change in the
-build machine environment invalidates the build configuration cache.
+| File | Permissions | Purpose |
+| :--- | :--- | :--- |
+| [`build/layout.zon`](../build/layout.zon) | `0644` | Module roots, assembly source paths, and unit test suite definitions read by `build.zig`. |
+| [`build/features.zon`](../build/features.zon) | `0644` | Directed feature graph mapping every tracked file from the M-mode entry point and build graph to its callers and documentation headings. |
+| [`boot/hypervisor.conf`](../boot/hypervisor.conf) | `0644` | M-mode hypervisor hardware and emulation sizing defaults (root VM RAM bounds, vCPU ceiling, and emulation batch limits). |
+
+### Metadata injection and multi-tier caching
+
+* Zig caches the build graph across invocations, so running Git commands inside
+  the build script itself would leave stale commit hashes when the build script
+  has not changed. Instead, the wrapper script queries Git and the hypervisor
+  configuration file up front and passes them as build options, recompiling
+  only a small metadata object when the commit changes.
+* Hypervisor source edits rebuild in seconds inside the Zig cache without
+  recompiling Linux or userland packages.
+* Cross-compiled userland tools are staged into a generated overlay directory
+  under the build output folder rather than writing build artifacts into the
+  tracked source tree.
+* The Buildroot workspace retains the compiled Linux kernel, hypervisor
+  character driver, and root filesystem packages across builds, repacking the
+  root VM image only when staged overlay binaries change.
 
 ---
 
-## Platform-agnostic compilation and position independence
+## Platform-agnostic M-mode bootstrap and hardware porting
 
-To support diverse hardware platforms, the build system compiles the hypervisor
-as a single, platform-agnostic universal binary. Rather than linking separate
-target configurations at compile time, all bootstrap, context-switching, and
-trap-management assembly code resides in the core RISC-V 64-bit architecture
-directory (`hypervisor/hardware/native/cpu/riscv64/`) and is compiled into the
-binary.
+Diosix compiles to a single position-independent M-mode binary that boots on
+64-bit RISC-V system-on-chip (SoC) boards and emulators without board-specific
+rebuilds.
 
-The entry point and early boot code are position-independent, relying on
-PC-relative addressing (`auipc`, `la`) to resolve structures dynamically.
+### Early assembly bootstrap
 
-### Dynamic runtime device drivers
+* All early assembly uses program-counter-relative addressing so the hypervisor
+  can execute from any 2 MiB-aligned DRAM base address.
+* Rather than assuming hardware hart 0 is the boot processor—which fails on
+  SoCs where hart 0 is a small monitor core and application cores start at hart
+  1—the reset vector runs an atomic fetch-and-add lottery so the first hart
+  claiming slot 0 initializes the system while secondary harts park until SMP
+  startup completes.
 
-Platform-specific Memory-Mapped Input/Output (MMIO) differences are handled by
-the hardware discovery and device driver subsystem
-(`hypervisor/hardware/native/discovery.zig` and
-`hypervisor/hardware/native/drivers/`). Early during the hypervisor boot
-process, the bootstrap CPU core parses the Host Device Tree Blob (DTB) passed
-by the bootloader in register `a1`.
+### Runtime FDT hardware discovery
 
-Based on discovered peripherals and CPU extensions, the hypervisor registers
-and binds drivers at runtime:
+During early boot, the bootstrap hart parses the host device tree blob (DTB)
+passed by firmware to locate memory-mapped input/output (MMIO) devices at
+runtime:
 
-*   Binds to the NS16550 / DesignWare Universal Asynchronous
-    Receiver-Transmitter (UART) driver (supporting 8-bit and 32-bit
-    `reg-shift` / `reg-io-width` strides) or the SiFive UART0 (`sifive,uart0`)
-    driver if a compatible UART MMIO base is discovered in the FDT.
-*   Uses the RISC-V `Sstc` supervisor timer extension if supported by the CPU,
-    or dynamically programs Core Local Interruptor (CLINT) timer MMIO registers
-    based on the discovered CLINT address.
-*   Configures shutdown and reboot pathways via the discovered SiFive Test
-    poweroff device.
+* It discovers the host 16550-compatible or SiFive universal asynchronous
+  receiver-transmitter (UART) base address for the M-mode debug console.
+* It enables hardware timer comparator registers when advertised in the
+  flattened device tree (FDT) instruction set architecture (ISA) string, or
+  falls back to core-local interruptor (CLINT) MMIO timer registers.
+* It reads the boot command line from the host DTB and forwards hypervisor and
+  root VM boot parameters into the generated root VM DTB.
 
-### Compilation and cached dependency tracking
+### Booting on physical RISC-V boards
 
-The build script compiles the generic assembly files (`entry.s`, `xint.s`,
-`util.s`) from the architecture directory. Statically included configuration
-parameters (such as `consts.s`) are registered as explicit dependencies of the
-compilation step. Modifying any of these dependent assembly header files
-invalidates the build cache and triggers a fresh compilation of the assembly
-sources.
+Run `./scripts/build.sh live-image` to produce physical boot artifacts under
+`zig-out/`:
+
+1. Flash the hybrid GPT live image to an SD card, eMMC module, or USB drive:
+
+   ```bash
+   sudo dd if=zig-out/diosix-live-riscv64.img of=/dev/sdX \
+       bs=4M status=progress conv=fsync
+   ```
+
+   Alternatively, copy `zig-out/guest-riscv64/bin/vmdiosix.bin` (or the U-Boot
+   flattened image tree (FIT) image `zig-out/u-boot.itb`) onto your board's
+   boot partition.
+2. Configure the board's M-mode loader (such as U-Boot secondary program loader
+   (SPL)) to load `vmdiosix.bin` at `0x80000000` and jump to its entry point in
+   M-mode.
+3. Pass the physical hart ID in register `a0` and the board's DTB host physical
+   address (HPA) in register `a1`.
+
+---
+
+## Remote debugging with GDB
+
+Diosix supports both QEMU's built-in GDB TCP server and an optional
+freestanding GDB remote serial protocol (RSP) stub compiled into M-mode.
+
+### Debugging in QEMU over TCP
+
+Pass `--debug` to `./scripts/build.sh run` to compile with debug symbols and
+wait for a GDB connection on `localhost:1234`:
+
+```bash
+# Start QEMU with unoptimized symbols and GDB listening on localhost:1234
+./scripts/build.sh run --debug
+
+# Or combine with PMP fallback or a minimal 32-bit guest profile
+./scripts/build.sh run -Dpmp=true --debug
+./scripts/build.sh run -Dguest-arch=riscv32 -Dguest-profile=minimal --debug
+```
+
+In a second terminal, attach `gdb` using `vmdiosix` for M-mode hypervisor
+symbols or `rootvm.elf` for Linux root VM symbols:
+
+```bash
+gdb zig-out/guest-riscv64/bin/vmdiosix -ex "target remote localhost:1234"
+```
+
+### Debugging over serial RSP
+
+When compiled with `-Dgdb=true`, the M-mode serial stub frames debug output as
+RSP packets and polls the physical UART for incoming debugger commands:
+
+```bash
+gdb zig-out/guest-riscv64/bin/vmdiosix -ex "target remote /dev/ttyUSB0"
+```
+
+### Common GDB commands
+
+| Task | Command |
+| :--- | :--- |
+| Inspect call stack | `bt` |
+| Inspect CPU registers | `info registers` |
+| Set breakpoint | `break start_kernel` or `break *0x80000000` |
+| Single-step instruction | `stepi` or `nexti` |
+
+To dump registers and a backtrace non-interactively:
+
+```bash
+gdb -batch -ex "target remote localhost:1234" \
+    -ex "bt" -ex "info registers" \
+    zig-out/guest-riscv64/bin/rootvm.elf
+```

@@ -1,4 +1,4 @@
-// Asynchronous event, network packet, and PIT timer state for Guest VMs.
+// Asynchronous event, network packet, and console ring buffers for Guest VMs.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -14,34 +14,6 @@ pub const MAX_PACKET_LEN: usize = 1536;
 pub const MAX_NET_PACKETS: usize = 64;
 pub const CONSOLE_TX_CAPACITY: usize = 8192;
 pub const CONSOLE_RX_CAPACITY: usize = 512;
-
-pub const PIT_NUM_CHANNELS: usize = 3;
-pub const PIT_BYTE_LSB: u2 = 1;
-pub const PIT_BYTE_MSB: u2 = 2;
-pub const PIT_ACCESS_LSB_MSB: u8 = 3;
-pub const PIT_PORT61_GATE2_ENABLED: u8 = 0x01;
-pub const PIC_ALL_IRQS_MASKED: u8 = 0xff;
-
-pub const PitChannel = struct {
-    latch: u16 = 0,
-    count_latched: bool = false,
-    latched_val: u16 = 0,
-    // 0 = LSB, 1 = MSB.
-    read_state: u8 = 0,
-    write_state: u8 = 0,
-    mode: u8 = 0,
-    access: u8 = PIT_ACCESS_LSB_MSB,
-    start_time: u64 = 0,
-    period_ticks: u64 = 0,
-    gate: u8 = 1,
-};
-
-pub const PitState = struct {
-    channels: [PIT_NUM_CHANNELS]PitChannel = [_]PitChannel{ .{}, .{}, .{} },
-    port_61: u8 = PIT_PORT61_GATE2_ENABLED,
-    pic_master_imr: u8 = PIC_ALL_IRQS_MASKED,
-    pic_slave_imr: u8 = PIC_ALL_IRQS_MASKED,
-};
 
 pub const EventQueue = struct {
     events: [max_events]sbi.Event = std.mem.zeroes([max_events]sbi.Event),

@@ -36,7 +36,6 @@ pub const KB_PER_MB = common.KB_PER_MB;
 pub const formatGuestDetail = vm.formatGuestDetail;
 pub const formatSelfInfo = vm.formatSelfInfo;
 pub const formatVersionChannel = host.formatVersionChannel;
-pub const formatHostInfo = host.formatHostInfo;
 pub const sanitizeJsonStr = common.sanitizeJsonStr;
 pub const parseIpv4 = ssh.parseIpv4;
 

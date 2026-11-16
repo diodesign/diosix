@@ -9,6 +9,7 @@ const interface = @import("interface").riscv;
 const riscv = @import("../mod.zig");
 const xint = @import("../xint.zig");
 const csr_emu = @import("csr.zig");
+const mmio_emu = @import("mmio.zig");
 const pcore = @import("../../../../../core/pcore.zig");
 const vcore = @import("../../../../../core/vcore.zig");
 const sbi = @import("../../../../../core/sbi.zig");
@@ -76,7 +77,7 @@ pub fn handleException(irq: xint.IRQ, context: *riscv.ThreadContext) void {
                     );
                     handleGuestCrash(vc, irq, context);
                 } else {
-                    sbi.handle(vc, 0, context);
+                    sbi.handle(vc, context);
                 }
             }
         },
@@ -116,7 +117,7 @@ fn handleGuestCrash(
     context: *riscv.ThreadContext,
 ) void {
     const g = vc.getGuest();
-    if (!g.is_root) {
+    if (!g.has_host_passthrough) {
         g.terminateWithCode(1);
         scheduler.schedule();
         return;
@@ -157,6 +158,11 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     }
 
     const g = vc.getGuest();
+    if (!g.has_host_passthrough and
+        mmio_emu.emulateStage2MmioFault(vc, irq, gpa, context, 0))
+    {
+        return;
+    }
     const is_anon_dram = (g.space.base_hpa == 0 and
         gpa >= g.space.base_gpa and
         (gpa - g.space.base_gpa) < g.space.range_size);
@@ -165,7 +171,7 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     if (was_unmapped and !g.checkRamQuota(1)) {
         debug.printf("Fault: GPA 0x{x} exceeded guest RAM quota\n", .{gpa});
         g.onMemoryPoolExhausted();
-        if (!g.is_root) {
+        if (!g.has_host_passthrough) {
             scheduler.schedule();
             return;
         }
@@ -177,12 +183,12 @@ fn handleGuestPageFault(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     ) catch |err| {
         if (was_unmapped and err == error.OutOfMemory) {
             g.onMemoryPoolExhausted();
-            if (!g.is_root) {
+            if (!g.has_host_passthrough) {
                 scheduler.schedule();
                 return;
             }
         }
-        if (!g.is_root) {
+        if (!g.has_host_passthrough) {
             debug.printf(
                 "Fault: Guest VM (ID {}, CID {}) accessed GPA 0x{x} beyond " ++
                     "its RAM limit (0x{x}..0x{x}). Terminating.\n",
@@ -296,7 +302,7 @@ pub fn fatalException(
         if (pcpu.active_vcore) |vc_raw| {
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
             const g = vc.getGuest();
-            if (!g.is_root) {
+            if (!g.has_host_passthrough) {
                 debug.printf(
                     "\nChild guest VM (ID {}) crashed at PC 0x{x} " ++
                         "(cause: {s}, MTVAL: 0x{x}). Terminating subtree.\n",
@@ -387,7 +393,7 @@ pub fn fatalException(
             const vc: *vcore.VirtualCore = @ptrCast(@alignCast(vc_raw));
             const g = vc.getGuest();
             sbi.terminateOrRestart(g, 1);
-            if (g.is_root) {
+            if (g.has_host_passthrough) {
                 debug.printf("Root VM crashed. Halting host.\n", .{});
                 pcore.parkOtherCores();
                 while (true) {
@@ -409,6 +415,7 @@ pub fn fatalException(
 
 test "exception: reflectExceptionToGuest maps virtual_instruction" {
     std.testing.refAllDecls(@This());
+    _ = mmio_emu;
     riscv.initMockHardware();
     const physmem = @import("../../../../../core/physmem.zig");
     var phys_test = try physmem.initForTest(std.testing.allocator, 2048);

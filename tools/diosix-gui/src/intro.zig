@@ -34,24 +34,30 @@ var intro_played_in_process: bool = false;
 const CmdlineToken = enum {
     @"diosix.intro=skip",
     @"diosix.welcome=force",
+    @"diosix.demo=desktop",
+    @"diosix.demo=cli",
 };
 
-// Inspect a kernel command-line string for explicit intro-skip mode.
-// Returns true when diosix.intro=skip is present unless diosix.welcome=force
-// is also passed.
+// Inspect a kernel command-line string for explicit intro-skip or demo mode.
+// Returns true when diosix.demo=desktop|cli is set, or when diosix.intro=skip
+// is present unless diosix.welcome=force is also passed.
 pub fn shouldSkipIntroFromCmdline(cmdline: []const u8) bool {
     var skip_intro = false;
     var force_welcome = false;
+    var has_demo = false;
     var it = std.mem.tokenizeAny(u8, cmdline, " \t\r\n");
     while (it.next()) |tok| {
         if (std.meta.stringToEnum(CmdlineToken, tok)) |flag| {
             switch (flag) {
                 .@"diosix.intro=skip" => skip_intro = true,
                 .@"diosix.welcome=force" => force_welcome = true,
+                .@"diosix.demo=desktop",
+                .@"diosix.demo=cli",
+                => has_demo = true,
             }
         }
     }
-    return skip_intro and !force_welcome;
+    return has_demo or (skip_intro and !force_welcome);
 }
 
 /// Capacity for reading /proc/cmdline: the longest kernel command line Linux
@@ -281,6 +287,14 @@ test "intro: dev fast-boot cmdline detection" {
     try std.testing.expectEqual(
         false,
         shouldSkipIntroFromCmdline("console=hvc0 earlycon=sbi\n"),
+    );
+    try std.testing.expectEqual(
+        true,
+        shouldSkipIntroFromCmdline("console=hvc0 diosix.demo=desktop\n"),
+    );
+    try std.testing.expectEqual(
+        true,
+        shouldSkipIntroFromCmdline("console=hvc0 diosix.demo=cli\n"),
     );
 }
 

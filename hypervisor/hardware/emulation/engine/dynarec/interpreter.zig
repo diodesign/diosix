@@ -64,10 +64,7 @@ pub fn step(self: anytype) bool {
         return true;
     }
 
-    const decoded = decoder_rv32.decodeForArch(
-        self.vcpu.guest_arch,
-        fetch_res.val,
-    );
+    const decoded = decoder_rv32.decode(fetch_res.val);
     return executeDecoded(self, decoded, fetch_res.val, pc_before);
 }
 

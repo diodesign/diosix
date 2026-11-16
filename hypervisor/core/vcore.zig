@@ -12,9 +12,10 @@ const pcore = @import("pcore.zig");
 const physmem = @import("physmem.zig");
 const native_emu = @import("emulation");
 const glue = @import("emulation.zig");
-pub const state_mod = @import("vcore/state.zig");
 
 pub const VirtualCoreID = usize;
+pub const NO_CPU: usize = std.math.maxInt(usize);
+pub const MAX_DEINIT_SPINS: usize = 100_000;
 pub var time_offset: u64 = 0;
 
 pub const Priority = enum { high, normal };
@@ -26,40 +27,34 @@ pub const VirtualCoreState = enum {
 
     pub const uninitialized = VirtualCoreState.stopped;
 };
-pub const SchedulerList = dsa.LinkedList(*VirtualCore);
 pub const VirtualCoreType = enum { native, emulated };
 
 pub const WEIGHT_HIGH: u32 = 2048;
 pub const WEIGHT_NORMAL: u32 = 1024;
 
-pub const IOAPIC_NUM_REDIR_ENTRIES = state_mod.IOAPIC_NUM_REDIR_ENTRIES;
-pub const IOAPIC_REDIR_MASKED = state_mod.IOAPIC_REDIR_MASKED;
-pub const LAPIC_PAGE_SIZE = state_mod.LAPIC_PAGE_SIZE;
-pub const LAPIC_LVT_MASKED = state_mod.LAPIC_LVT_MASKED;
-pub const LAPIC_REG_ID = state_mod.LAPIC_REG_ID;
-pub const LAPIC_REG_VERSION = state_mod.LAPIC_REG_VERSION;
-pub const LAPIC_REG_SPURIOUS = state_mod.LAPIC_REG_SPURIOUS;
-pub const LAPIC_VERSION_INTEGRATED = state_mod.LAPIC_VERSION_INTEGRATED;
-pub const LAPIC_SPURIOUS_ALL_MASKED = state_mod.LAPIC_SPURIOUS_ALL_MASKED;
-pub const LAPIC_ID_SHIFT = state_mod.LAPIC_ID_SHIFT;
-pub const EMULATOR_STACK_SIZE_BYTES = state_mod.EMULATOR_STACK_SIZE_BYTES;
-pub const EMULATOR_STACK_PAGE_ORDER = state_mod.EMULATOR_STACK_PAGE_ORDER;
-pub const EMULATOR_TLS_SIZE_BYTES = state_mod.EMULATOR_TLS_SIZE_BYTES;
-pub const EMULATOR_TLS_PAGE_ORDER = state_mod.EMULATOR_TLS_PAGE_ORDER;
-pub const EMULATOR_TLS_TP_OFFSET = state_mod.EMULATOR_TLS_TP_OFFSET;
-pub const PIT_BASE_FREQUENCY_HZ = state_mod.PIT_BASE_FREQUENCY_HZ;
-pub const PIT_DEFAULT_LATCH_100HZ = state_mod.PIT_DEFAULT_LATCH_100HZ;
-pub const PIT_TIMER_ACCESS_LSB_MSB = state_mod.PIT_TIMER_ACCESS_LSB_MSB;
-pub const PIT_TIMER_MODE_SQUARE_WAVE = state_mod.PIT_TIMER_MODE_SQUARE_WAVE;
-pub const max_sub_vcores = state_mod.max_sub_vcores;
-pub const emulation_timeslice_instructions =
-    state_mod.emulation_timeslice_instructions;
-pub const MAX_DEINIT_SPINS = state_mod.MAX_DEINIT_SPINS;
-pub const LapicTimerState = state_mod.LapicTimerState;
-pub const SubVcoreState = state_mod.SubVcoreState;
-
 pub const HEDELEG_GUEST_DELEGATE: usize = riscv.HEDELEG_DELEGATED;
 pub const HIDELEG_VS_INTERRUPTS: usize = riscv.HIDELEG_DELEGATED;
+
+pub fn compareSchedulerVcores(a: *VirtualCore, b: *VirtualCore) i8 {
+    if (a == b) return 0;
+    const va = @atomicLoad(u64, &a.vruntime, .monotonic);
+    const vb = @atomicLoad(u64, &b.vruntime, .monotonic);
+    if (va != vb) {
+        return if (va < vb) -1 else 1;
+    }
+    if (a.guest_id != b.guest_id) {
+        return if (a.guest_id < b.guest_id) -1 else 1;
+    }
+    if (a.id != b.id) {
+        return if (a.id < b.id) -1 else 1;
+    }
+    return if (@intFromPtr(a) < @intFromPtr(b)) -1 else 1;
+}
+
+pub const SchedulerTree = dsa.RedBlackTree(
+    *VirtualCore,
+    compareSchedulerVcores,
+);
 
 // Represents a virtual CPU core's context and state.
 pub const VirtualCore = struct {
@@ -85,48 +80,21 @@ pub const VirtualCore = struct {
             target_arch: guest.TargetArch,
             entry: usize,
             dtb: usize,
-            stack: []u8 = &.{},
-            stack_phys: usize = 0,
-            tls_phys: usize = 0,
-            emu_running: bool = false,
-            tls_pointer: usize = 0,
-            virtual_smode_time: u64 = 0,
-            pit_calibration_active: bool = false,
-            pit_calibration_ticks: u32 = 0,
-            delay_bypass_count: u32 = 0,
-            last_mapped_user_page: u64 = 0,
             exit_count: u64 = 0,
-            text_poke_happened: bool = false,
-            trace_instructions_count: u32 = 0,
-            trace_hook: ?*anyopaque = null,
-            sub_vcores: [max_sub_vcores]SubVcoreState =
-                std.mem.zeroes([max_sub_vcores]SubVcoreState),
-            sub_vcore_count: usize = 1,
-            active_sub_vcore: usize = 0,
-            last_run_sub_vcore: ?usize = null,
             preempt_pending: bool = false,
-            exception_cause: u32 = 0,
-            hsm_started: bool = false,
-            lapic_mem: [LAPIC_PAGE_SIZE]u8 = @splat(0),
-            sc_hook_addr: u64 = 0,
-            idle_hook_addr: u64 = 0,
-            icr_dest: u32 = 0,
-            ioapic_reg_sel: u8 = 0,
-            ioapic_written: bool = false,
-            ioapic_redtbl: [IOAPIC_NUM_REDIR_ENTRIES]u64 =
-                state_mod.initIoapicRedtbl(),
         },
     } = undefined,
 
     timer_scheduled: bool = false,
     timer_target: u64 = 0,
     virtual_time: u64 = 0,
-    timer_skip_blocks: u32 = 0,
-    running_on_cpu: ?usize = null,
+    running_cpu_id: usize = NO_CPU,
     wfi_blocked: bool = false,
     pending_ipi: bool = false,
     is_queued: bool = false,
-    blocked_on_cpu: ?usize = null,
+    in_run_tree: bool = false,
+    queued_cpu_id: usize = NO_CPU,
+    blocked_cpu_id: usize = NO_CPU,
 
     priority: Priority,
     vruntime: u64 = 0,
@@ -135,7 +103,7 @@ pub const VirtualCore = struct {
     last_dispatched_time: u64 = 0,
     active_ticks: u64 = 0,
 
-    scheduler_node: SchedulerList.Node = undefined,
+    scheduler_node: SchedulerTree.Node = undefined,
     blocked_node: dsa.LinkedList(*anyopaque).Node = undefined,
     lookup_next: ?*VirtualCore = null,
 
@@ -229,11 +197,7 @@ pub const VirtualCore = struct {
             } };
         }
 
-        if (parent.target_arch == .x86_64) {
-            state_mod.initX86PeripheralState(&vc, parent, id);
-        }
-
-        vc.scheduler_node.contents = undefined;
+        vc.scheduler_node = .{ .contents = undefined };
         return vc;
     }
 
@@ -248,12 +212,52 @@ pub const VirtualCore = struct {
             @panic("Failed to initialize VirtualCore");
     }
 
+    pub inline fn getState(self: *const VirtualCore) VirtualCoreState {
+        return @atomicLoad(VirtualCoreState, &self.state, .seq_cst);
+    }
+
+    pub inline fn setState(self: *VirtualCore, st: VirtualCoreState) void {
+        @atomicStore(VirtualCoreState, &self.state, st, .seq_cst);
+    }
+
+    pub inline fn getRunningCpu(self: *const VirtualCore) ?usize {
+        const cpu = @atomicLoad(usize, &self.running_cpu_id, .seq_cst);
+        return if (cpu == NO_CPU) null else cpu;
+    }
+
+    pub inline fn setRunningCpu(self: *VirtualCore, cpu: ?usize) void {
+        const val: usize = cpu orelse NO_CPU;
+        @atomicStore(usize, &self.running_cpu_id, val, .seq_cst);
+    }
+
+    pub inline fn getBlockedCpu(self: *const VirtualCore) ?usize {
+        const cpu = @atomicLoad(usize, &self.blocked_cpu_id, .acquire);
+        return if (cpu == NO_CPU) null else cpu;
+    }
+
+    pub inline fn setBlockedCpu(self: *VirtualCore, cpu: ?usize) void {
+        const val: usize = cpu orelse NO_CPU;
+        @atomicStore(usize, &self.blocked_cpu_id, val, .release);
+    }
+
+    pub inline fn isInRunTree(self: *const VirtualCore) bool {
+        return @atomicLoad(bool, &self.in_run_tree, .acquire);
+    }
+
+    pub inline fn setInRunTree(self: *VirtualCore, in_tree: bool) void {
+        @atomicStore(bool, &self.in_run_tree, in_tree, .release);
+    }
+
     pub fn reset(self: *VirtualCore, entry: usize, dtb: usize) void {
-        self.state = .stopped;
-        self.wfi_blocked = false;
-        self.is_queued = false;
-        self.running_on_cpu = null;
-        self.active_ticks = 0;
+        @atomicStore(VirtualCoreState, &self.state, .stopped, .seq_cst);
+        @atomicStore(bool, &self.wfi_blocked, false, .seq_cst);
+        @atomicStore(bool, &self.is_queued, false, .release);
+        self.setInRunTree(false);
+        @atomicStore(usize, &self.queued_cpu_id, NO_CPU, .release);
+        self.setRunningCpu(null);
+        self.setBlockedCpu(null);
+        @atomicStore(u64, &self.active_ticks, 0, .monotonic);
+        @atomicStore(u64, &self.last_dispatched_time, 0, .monotonic);
         self.context = @splat(0);
 
         if (self.exec_path == .native) {
@@ -263,22 +267,17 @@ pub const VirtualCore = struct {
             e.entry = entry;
             e.dtb = dtb;
             if (e.engine) |eng| eng.tlb.flush();
-            e.sub_vcores = std.mem.zeroes([max_sub_vcores]SubVcoreState);
-            e.sub_vcore_count = 1;
-            e.active_sub_vcore = 0;
-            e.last_run_sub_vcore = null;
             e.preempt_pending = false;
-            e.hsm_started = false;
             self.configureEmulatedCpuContext();
         }
     }
 
     pub fn deinit(self: *VirtualCore) void {
-        _ = @atomicRmw(bool, &self.wfi_blocked, .Xchg, false, .acq_rel);
+        _ = @atomicRmw(bool, &self.wfi_blocked, .Xchg, false, .seq_cst);
 
         if (!builtin.is_test) {
             var spins: usize = 0;
-            while ((@as(*volatile ?usize, &self.blocked_on_cpu)).*) |home_cpu| {
+            while (self.getBlockedCpu()) |home_cpu| {
                 if (spins >= MAX_DEINIT_SPINS) break;
                 spins += 1;
                 pcore.sendIpiToCpu(home_cpu);
@@ -286,10 +285,9 @@ pub const VirtualCore = struct {
             }
             const my_cpu = riscv.getCPUContext().cpu_core_id;
             spins = 0;
-            while ((@as(*volatile ?usize, &self.running_on_cpu)).* != null and
-                spins < MAX_DEINIT_SPINS) : (spins += 1)
-            {
-                if (self.running_on_cpu == my_cpu) break;
+            while (self.getRunningCpu()) |run_cpu| {
+                if (run_cpu == my_cpu or spins >= MAX_DEINIT_SPINS) break;
+                spins += 1;
                 std.atomic.spinLoopHint();
             }
             spins = 0;
@@ -306,22 +304,11 @@ pub const VirtualCore = struct {
                 e.vcpu = null;
                 e.engine = null;
                 e.slot_idx = null;
-                if (e.stack_phys != 0) {
-                    physmem.freePage(e.stack_phys);
-                    e.stack_phys = 0;
-                }
-                if (e.tls_phys != 0) {
-                    physmem.freePage(e.tls_phys);
-                    e.tls_phys = 0;
-                }
             },
             else => {},
         }
     }
 
-    pub fn runEmulated(self: *VirtualCore) void {
-        _ = glue.run(self);
-    }
     pub fn requiredExtensions(self: *const VirtualCore) usize {
         return if (self.exec_path == .native)
             self.exec_path.native.required_extensions
@@ -349,31 +336,39 @@ pub const VirtualCore = struct {
             &self.wfi_blocked,
             true,
             false,
-            .acq_rel,
-            .monotonic,
+            .seq_cst,
+            .seq_cst,
         );
         if (old == null) {
-            if (self.blocked_on_cpu) |home_cpu| {
+            if (self.getBlockedCpu()) |home_cpu| {
                 if (pcore.fromId(home_cpu)) |home_pcpu| {
                     const prev = home_pcpu.blocked_lock.lock();
-                    if (self.blocked_on_cpu == home_cpu) {
+                    if (self.getBlockedCpu() == home_cpu) {
                         home_pcpu.blocked_queue.remove(&self.blocked_node);
-                        self.blocked_on_cpu = null;
+                        self.setBlockedCpu(null);
                     }
                     home_pcpu.blocked_lock.unlock(prev);
                 } else {
-                    self.blocked_on_cpu = null;
+                    self.setBlockedCpu(null);
                 }
             }
-            if (self.guest.state != .valid) {
-                self.state = .stopped;
+            if (@atomicLoad(guest.GuestState, &self.guest.state, .acquire) !=
+                .valid)
+            {
+                @atomicStore(VirtualCoreState, &self.state, .stopped, .seq_cst);
                 return false;
             }
-            self.state = .ready;
+            @atomicStore(VirtualCoreState, &self.state, .ready, .seq_cst);
             if (self.exec_path == .emulated) {
                 const host_time = riscv.readTime();
-                if (host_time > self.virtual_time) {
-                    self.virtual_time = host_time;
+                const cur_vt = @atomicLoad(u64, &self.virtual_time, .monotonic);
+                if (host_time > cur_vt) {
+                    @atomicStore(
+                        u64,
+                        &self.virtual_time,
+                        host_time,
+                        .monotonic,
+                    );
                 }
             }
             return true;
@@ -386,7 +381,6 @@ pub const VirtualCore = struct {
 };
 
 test "virtual core initialization and emulated state cleanup" {
-    _ = state_mod;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
     const alloc = testing.allocator;

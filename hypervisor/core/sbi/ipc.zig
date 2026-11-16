@@ -96,7 +96,7 @@ pub fn handleSetManifest(
         return reply(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
     };
     const can_set = if (target == g)
-        (g.is_trusted or g.is_root)
+        (g.is_trusted or !g.hasParent())
     else
         (target.parent == g and !isChildConfidentialLocked(target));
     if (!can_set) {
@@ -124,7 +124,7 @@ pub fn handleSetManifest(
     reply(vc, context, sbi_core.SBI_SUCCESS, 0);
 }
 
-fn overlapsOwnRam(
+pub fn overlapsOwnRam(
     g: *const guest.Guest,
     gpa_start: usize,
     gpa_end: usize,
@@ -296,7 +296,7 @@ pub fn handleSetNetPolicy(
     const child = g.getGuestByCid(target_cid) orelse {
         return reply(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
     };
-    if (child.parent != g and !g.is_root) {
+    if (child.parent != g) {
         return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
     }
     const norm_upstream: usize = if (upstream_cid == guest.CID_SELF)
@@ -313,11 +313,6 @@ pub fn handleSetNetPolicy(
     reply(vc, context, sbi_core.SBI_SUCCESS, 0);
 }
 
-const ETH_HEADER_LEN: usize = 14;
-const ETH_SRC_MAC_OFFSET: usize = 6;
-const LOCAL_ADMIN_MAC_PREFIX: u8 = 0x02;
-const BYTE_MASK: usize = 0xff;
-
 pub fn handleNetSend(
     vc: *vcore.VirtualCore,
     context: *riscv.ThreadContext,
@@ -332,11 +327,10 @@ pub fn handleNetSend(
     if (a1 == 0 or a1 > guest.MAX_PACKET_LEN) {
         return reply(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
     }
-    const pkt_len = a1;
-    _ = std.math.add(usize, a0, pkt_len) catch {
+    _ = std.math.add(usize, a0, a1) catch {
         return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
     };
-    const pkt_buf = g.allocator.alloc(u8, pkt_len) catch {
+    const pkt_buf = g.allocator.alloc(u8, a1) catch {
         return reply(vc, context, sbi_core.SBI_ERR_FAILED, 0);
     };
     defer g.allocator.free(pkt_buf);
@@ -344,71 +338,8 @@ pub fn handleNetSend(
     g.space.copyFromGuest(pkt_buf, a0) catch {
         return reply(vc, context, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
     };
-    if (!g.is_root and pkt_buf.len >= ETH_HEADER_LEN) {
-        pkt_buf[ETH_SRC_MAC_OFFSET] = LOCAL_ADMIN_MAC_PREFIX;
-        pkt_buf[ETH_SRC_MAC_OFFSET + 1] = 0;
-        pkt_buf[ETH_SRC_MAC_OFFSET + 2] = 0;
-        pkt_buf[ETH_SRC_MAC_OFFSET + 3] = 0;
-        pkt_buf[ETH_SRC_MAC_OFFSET + 4] =
-            @intCast((g.local_cid >> 8) & BYTE_MASK);
-        pkt_buf[ETH_SRC_MAC_OFFSET + 5] = @intCast(g.local_cid & BYTE_MASK);
-    }
-    const self_upstream = g.getNetUpstreamCid();
-    if (dest_cid == 0) {
-        {
-            const s = g.tree_lock.lock();
-            var it = g.children.start;
-            while (it) |node| : (it = node.next) {
-                const ch = node.contents;
-                if (!ch.isNetIsolated() and ch.getNetUpstreamCid() == 0) {
-                    sbi_core.deliverToQueue(ch, &ch.net_rx, pkt_buf);
-                }
-            }
-            g.tree_lock.unlock(s);
-        }
-        if (g.parent) |p| {
-            if (self_upstream == 0 and !p.isNetIsolated()) {
-                sbi_core.deliverToQueue(p, &p.net_rx, pkt_buf);
-            }
-            const ps = p.tree_lock.lock();
-            var pit = p.children.start;
-            while (pit) |node| : (pit = node.next) {
-                const sib = node.contents;
-                if (sib != g and !sib.isNetIsolated() and
-                    (sib.local_cid == self_upstream or
-                        sib.getNetUpstreamCid() == g.local_cid))
-                {
-                    sbi_core.deliverToQueue(sib, &sib.net_rx, pkt_buf);
-                }
-            }
-            p.tree_lock.unlock(ps);
-        }
-    } else if (dest_cid == guest.CID_SELF and !g.is_root) {
-        if (self_upstream != 0) {
-            return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
-        }
-        if (g.parent) |p| {
-            if (!p.isNetIsolated()) {
-                sbi_core.deliverToQueue(p, &p.net_rx, pkt_buf);
-            }
-        }
-    } else if (dest_cid >= guest.CID_FIRST_CHILD) {
-        if (g.getGuestByCid(dest_cid)) |target| {
-            if (target.isNetIsolated() or target.getNetUpstreamCid() != 0) {
-                return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
-            }
-            sbi_core.deliverToQueue(target, &target.net_rx, pkt_buf);
-        } else if (g.parent) |p| {
-            if (p.getGuestByCid(dest_cid)) |target| {
-                const allowed = target != g and !target.isNetIsolated() and
-                    (dest_cid == self_upstream or
-                        target.getNetUpstreamCid() == g.local_cid);
-                if (!allowed) {
-                    return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
-                }
-                sbi_core.deliverToQueue(target, &target.net_rx, pkt_buf);
-            }
-        }
+    if (!guest.manifest_mod.routeEthernetFrame(g, pkt_buf, dest_cid)) {
+        return reply(vc, context, sbi_core.SBI_ERR_DENIED, 0);
     }
     reply(vc, context, sbi_core.SBI_SUCCESS, 0);
 }

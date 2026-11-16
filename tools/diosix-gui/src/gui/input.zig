@@ -15,17 +15,16 @@ const json = @import("json.zig");
 
 const WIN_HELP_ID = gui_mod.WIN_HELP_ID;
 const WIN_POWER_MODAL_ID = gui_mod.WIN_POWER_MODAL_ID;
-const WIN_OSK_ID = gui_mod.WIN_OSK_ID;
-const WIN_WELCOME_ID = gui_mod.WIN_WELCOME_ID;
-const WIN_TOUR_ID = gui_mod.WIN_TOUR_ID;
+const WIN_GUEST_DISPLAY_ID = gui_mod.WIN_GUEST_DISPLAY_ID;
 
-const ICON_MENU_CREATE_VM_ID = gui_mod.ICON_MENU_CREATE_VM_ID;
-const ICON_MENU_ABOUT_ID = gui_mod.ICON_MENU_ABOUT_ID;
-const ICON_MENU_CONFIG_ID = gui_mod.ICON_MENU_CONFIG_ID;
+const BTN_LEFT: u16 = 0x110;
 const ICON_HELP_TEXT_ID = gui_mod.ICON_HELP_TEXT_ID;
 const ICON_POWER_MSG1_ID = gui_mod.ICON_POWER_MSG1_ID;
 const ICON_POWER_MSG2_ID = gui_mod.ICON_POWER_MSG2_ID;
 const FALLBACK_HELP_TEXT = gui_mod.DiosixGui.FALLBACK_HELP_TEXT;
+
+pub const triggerSemanticAction = json.triggerSemanticAction;
+pub const exportSemanticStateJson = json.exportSemanticStateJson;
 
 pub fn findIconAt(self: *DiosixGui, px: i32, py: i32) ?*Icon {
     var i = self.windows.items.len;
@@ -108,6 +107,7 @@ pub fn clearMouseHover(self: *DiosixGui) void {
 pub fn handleMouseRelease(self: *DiosixGui) void {
     self.mouse_left_down = false;
     self.active_drag_win_id = null;
+    _ = gui_mod.panes.handleDesktopMouseRelease(self, BTN_LEFT);
     for (self.windows.items) |*win| {
         if (win.is_onscreen) {
             if (win.handleMouseRelease()) {
@@ -171,6 +171,11 @@ pub fn handleMouseMove(
                 self.markDirty(self.windows.items[idx].getBox());
             }
         }
+        if (top_win_id == WIN_GUEST_DISPLAY_ID or
+            self.desktop.pointer_buttons != 0)
+        {
+            gui_mod.panes.handleDesktopPointerMove(self, px, py);
+        }
     }
 
     updateActiveHelp(self);
@@ -204,6 +209,36 @@ pub fn handleMouseClick(self: *DiosixGui, px: i32, py: i32) void {
             if (!hit_trigger) {
                 self.closeSchemeDropdown();
             }
+        }
+    }
+
+    if (findWindowAt(self, px, py)) |top_win| {
+        if (top_win.id == WIN_GUEST_DISPLAY_ID and
+            top_win.findIconAt(px, py) == null and
+            gui_mod.panes.handleDesktopMouseButton(
+                self,
+                px,
+                py,
+                BTN_LEFT,
+                true,
+            ))
+        {
+            focusWindowById(self, WIN_GUEST_DISPLAY_ID);
+            if (self.getWindow(WIN_GUEST_DISPLAY_ID)) |dw| {
+                dw.setFocusedIndex(null);
+            }
+            for (self.windows.items) |*other| {
+                if (other.id != WIN_GUEST_DISPLAY_ID) {
+                    if (other.handleMouseRelease()) {
+                        self.markDirty(other.getBox());
+                    }
+                    if (other.clearHover()) {
+                        self.markDirty(other.getBox());
+                    }
+                }
+            }
+            updateActiveHelp(self);
+            return;
         }
     }
 
@@ -264,6 +299,37 @@ pub fn handleMouseClick(self: *DiosixGui, px: i32, py: i32) void {
     updateActiveHelp(self);
 }
 
+pub fn handleAuxMouseButton(
+    self: *DiosixGui,
+    px: i32,
+    py: i32,
+    btn_code: u16,
+    pressed: bool,
+) void {
+    self.cursor.visible = true;
+    self.cursor.x = px;
+    self.cursor.y = py;
+    if (!pressed) {
+        _ = gui_mod.panes.handleDesktopMouseRelease(self, btn_code);
+        return;
+    }
+    if (findWindowAt(self, px, py)) |top_win| {
+        if (top_win.id == WIN_GUEST_DISPLAY_ID and
+            top_win.findIconAt(px, py) == null)
+        {
+            if (gui_mod.panes.handleDesktopMouseButton(
+                self,
+                px,
+                py,
+                btn_code,
+                true,
+            )) {
+                focusWindowById(self, WIN_GUEST_DISPLAY_ID);
+            }
+        }
+    }
+}
+
 pub fn handleMouseScroll(
     self: *DiosixGui,
     px: i32,
@@ -273,6 +339,13 @@ pub fn handleMouseScroll(
     self.cursor.visible = true;
     self.cursor.x = px;
     self.cursor.y = py;
+    if (findWindowAt(self, px, py)) |top_win| {
+        if (top_win.id == WIN_GUEST_DISPLAY_ID and
+            gui_mod.panes.handleDesktopScroll(self, px, py, delta))
+        {
+            return;
+        }
+    }
     var i = self.windows.items.len;
     while (i > 0) : (i -= 1) {
         const win = &self.windows.items[i - 1];
@@ -338,111 +411,6 @@ pub fn confirmPowerModal(self: *DiosixGui) void {
     }
     self.markWindowDirty(WIN_POWER_MODAL_ID);
     host_info.executePowerAction(action);
-}
-
-pub fn triggerSemanticAction(self: *DiosixGui, action: []const u8) !bool {
-    const SemAct = gui_mod.SemanticAction;
-    const act = std.meta.stringToEnum(SemAct, action) orelse return false;
-    switch (act) {
-        .@"menu.create_vm" => {
-            try self.activateMenuItem(ICON_MENU_CREATE_VM_ID);
-            self.completeNavAnimation();
-        },
-        .@"menu.about", .@"menu.status" => {
-            try self.activateMenuItem(ICON_MENU_ABOUT_ID);
-            self.completeNavAnimation();
-        },
-        .@"menu.config" => {
-            try self.activateMenuItem(ICON_MENU_CONFIG_ID);
-            self.completeNavAnimation();
-        },
-        .@"menu.back" => {
-            try self.navigateBack();
-            self.completeNavAnimation();
-        },
-        .@"osk.toggle" => try self.toggleOsk(),
-        .@"osk.show" => {
-            self.osk_state.visible = true;
-            try self.buildOskWindow();
-        },
-        .@"osk.hide" => {
-            self.osk_state.visible = false;
-            _ = self.destroyWindow(WIN_OSK_ID);
-            self.markFullDirty();
-        },
-        .@"welcome.open" => try self.showWelcomeModal(),
-        .@"welcome.close" => {
-            self.welcome_state.closeWelcome();
-            _ = self.destroyWindow(WIN_WELCOME_ID);
-            self.markFullDirty();
-        },
-        .@"tour.start" => {
-            self.welcome_state.startTour();
-            try self.showTourModal();
-        },
-        .@"tour.next" => {
-            self.welcome_state.nextStep();
-            if (self.welcome_state.tour_visible) {
-                try self.showTourModal();
-            } else {
-                _ = self.destroyWindow(WIN_TOUR_ID);
-                self.markFullDirty();
-            }
-        },
-        .@"tour.prev" => {
-            self.welcome_state.prevStep();
-            if (self.welcome_state.tour_visible) {
-                try self.showTourModal();
-            }
-        },
-        .@"tour.close" => {
-            self.welcome_state.closeTour();
-            _ = self.destroyWindow(WIN_TOUR_ID);
-            self.markFullDirty();
-        },
-    }
-    return true;
-}
-
-pub fn exportSemanticStateJson(
-    self: *const DiosixGui,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error![]u8 {
-    const active_pane: []const u8 = if (self.active_menu_id) |mid|
-        switch (mid) {
-            ICON_MENU_CREATE_VM_ID => "create_vm",
-            ICON_MENU_ABOUT_ID => "about",
-            ICON_MENU_CONFIG_ID => "config",
-            else => "submenu",
-        }
-    else
-        "main";
-
-    const esc_osk = try json.escapeStr(
-        allocator,
-        self.osk_state.getInputText(),
-    );
-    defer allocator.free(esc_osk);
-    const fmt =
-        "{{\"width\":{d},\"height\":{d},\"render_mode\":\"{s}\"," ++
-        "\"active_pane\":\"{s}\",\"window_count\":{d}," ++
-        "\"osk_visible\":{s}," ++
-        "\"osk_layout\":\"{s}\",\"osk_input\":\"{s}\"," ++
-        "\"welcome_visible\":{s},\"tour_visible\":{s},\"tour_step\":{d}}}\n";
-
-    return allocator.print(fmt, .{
-        self.width,
-        self.height,
-        if (self.render_mode == .accelerated) "accelerated" else "degraded",
-        active_pane,
-        self.windows.items.len,
-        if (self.osk_state.visible) "true" else "false",
-        self.osk_state.layout.label(),
-        esc_osk,
-        if (self.welcome_state.welcome_visible) "true" else "false",
-        if (self.welcome_state.tour_visible) "true" else "false",
-        self.welcome_state.current_step + 1,
-    });
 }
 
 test {

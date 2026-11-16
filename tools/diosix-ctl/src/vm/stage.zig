@@ -33,6 +33,8 @@ const ImageAlias = enum {
     @"guest-shim.elf",
     @"guest-shim.bin",
     @"diosix-guest-shim.elf",
+    cli,
+    desktop,
     default,
     @"default.elf",
     @"default.bin",
@@ -61,13 +63,11 @@ fn readCandidate(
 pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
     const allocator = std.heap.page_allocator;
     const sys_cfg = common.loadRuntimeSystemConfig();
+    var query = elf_path;
     if (std.meta.stringToEnum(ImageAlias, elf_path)) |alias| {
-        const default_paths = [_][]const u8{
-            loader.DEFAULT_GUEST_IMAGE_PATH,
-            sysconfig.LEGACY_GUEST_IMAGE_PATH,
-            loader.FALLBACK_GUEST_IMAGE_PATH,
-        };
         switch (alias) {
+            .cli => query = "linux-cli.elf",
+            .desktop => query = "linux-desktop.elf",
             .@"guest-shim",
             .@"guest-shim.elf",
             .@"guest-shim.bin",
@@ -79,16 +79,22 @@ pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
                     } else |_| {}
                 }
             },
-            else => {},
-        }
-        for (default_paths) |cand| {
-            if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
-                return data;
-            } else |_| {}
+            else => {
+                const default_paths = [_][]const u8{
+                    loader.DEFAULT_GUEST_IMAGE_PATH,
+                    sysconfig.LEGACY_GUEST_IMAGE_PATH,
+                    loader.FALLBACK_GUEST_IMAGE_PATH,
+                };
+                for (default_paths) |cand| {
+                    if (readBinaryFile(cand, MAX_ELF_FILE_SIZE)) |data| {
+                        return data;
+                    } else |_| {}
+                }
+            },
         }
     }
 
-    if (readBinaryFile(elf_path, MAX_ELF_FILE_SIZE)) |data| {
+    if (readBinaryFile(query, MAX_ELF_FILE_SIZE)) |data| {
         return data;
     } else |_| {}
 
@@ -96,17 +102,17 @@ pub fn resolveElfImage(elf_path: []const u8) error{OutOfMemory}!?[]u8 {
         sys_cfg.imagesDir(),
         sysconfig.GUEST_SHIM_DIR,
     };
-    const has_elf_ext = std.mem.endsWith(u8, elf_path, ".elf") or
-        std.mem.endsWith(u8, elf_path, ".bin");
+    const has_elf_ext = std.mem.endsWith(u8, query, ".elf") or
+        std.mem.endsWith(u8, query, ".bin");
     for (search_dirs) |dir| {
-        if (try readCandidate(allocator, dir, elf_path, "")) |data| {
+        if (try readCandidate(allocator, dir, query, "")) |data| {
             return data;
         }
         if (!has_elf_ext) {
-            if (try readCandidate(allocator, dir, elf_path, ".elf")) |data| {
+            if (try readCandidate(allocator, dir, query, ".elf")) |data| {
                 return data;
             }
-            if (try readCandidate(allocator, dir, elf_path, ".bin")) |data| {
+            if (try readCandidate(allocator, dir, query, ".bin")) |data| {
                 return data;
             }
         }
@@ -345,11 +351,15 @@ pub fn checkChildResourceQuota(
         return eff_pcpu;
     };
 
-    const max_pcpu: usize = if (info.is_root != 0 and
-        info.pcpu_quota_pct > 0 and info.pcpu_quota_pct < 100)
+    const pcpu_q: usize = if (info.pcpu_quota_pct > 0)
         info.pcpu_quota_pct
     else
-        api.MAX_CHILD_PCPU_QUOTA_PCT;
+        100;
+    const min_ret: usize = @min(
+        pcpu_q -| 1,
+        api.DEFAULT_RETAINED_PCPU_PCT,
+    );
+    const max_pcpu: usize = pcpu_q -| min_ret;
     const del_pcpu: usize = @min(@as(usize, info.delegated_pcpu_pct), max_pcpu);
     const avail_pcpu: usize = max_pcpu -| del_pcpu;
     const eff_pcpu: usize = if (req_pcpu_pct > 0)
@@ -375,9 +385,7 @@ pub fn checkChildResourceQuota(
     const used_ram_mb = (info.used_ram_pages * common.PAGE_SIZE_KB) /
         common.KB_PER_MB;
     if (max_ram_mb > 0 and max_ram_mb < std.math.maxInt(usize) / 2) {
-        const avail_ram_mb = if (info.is_root != 0)
-            max_ram_mb -| @max(del_ram_mb, used_ram_mb)
-        else
+        const avail_ram_mb =
             max_ram_mb -| @max(self_ram_mb +| del_ram_mb, used_ram_mb);
         if (ram_quota_mb > avail_ram_mb) {
             common.printFmt(

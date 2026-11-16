@@ -1,0 +1,19 @@
+# Diosix Linux CLI Guest Kernel Fragment
+# Layered on top of linux-sbi-console.fragment and linux-minimal.fragment.
+# Re-enables VirtIO block storage + ext4 and uses gzip initramfs compression.
+
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_TMPFS=y
+CONFIG_ETHERNET=y
+
+# VirtIO Block Storage & ext4 for persistent guest volumes (--disk)
+CONFIG_BLOCK=y
+CONFIG_BLK_DEV=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_EXT4_FS=y
+
+# Gzip initramfs support for compact guest ELF distribution
+CONFIG_RD_GZIP=y
+# CONFIG_INITRAMFS_COMPRESSION_NONE is not set
+CONFIG_INITRAMFS_COMPRESSION_GZIP=y

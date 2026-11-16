@@ -1,0 +1,3 @@
+Welcome to Diosix Linux CLI VM (RISC-V 64-bit guest domain).
+  * Inspect domain identity : dsx info
+  * Detach serial console   : Ctrl+]

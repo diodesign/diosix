@@ -1,0 +1,65 @@
+// Directed feature graph mapping every tracked file in Diosix from M-mode
+// hardware reset (`_start` in `entry.s`) and `build.zig` to its callers and
+// documentation anchors.
+//
+// Verified by `scripts/features.zig` during `./scripts/build.sh test` and
+// rendered to `docs/support-matrix.md` via `./scripts/build.sh features`.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+.{
+    .roots = .{
+        "mmode-asm-entry",
+        "build-zig-pipeline",
+    },
+
+    .tracked_dirs = .{
+        ".github/workflows",
+        "boot",
+        "build",
+        "dockerfiles",
+        "hypervisor",
+        "scripts",
+        "tools",
+    },
+
+    .tracked_files = .{
+        "build.zig",
+    },
+
+    .matrix_path = "docs/support-matrix.md",
+
+    .checked_docs = .{
+        "docs/architecture.md",
+        "docs/interface.md",
+        "docs/gui-architecture.md",
+        "docs/build.md",
+        "docs/run.md",
+        "docs/guests.md",
+        "docs/security.md",
+        "docs/cli.md",
+    },
+
+    .meta_doc_sections = .{
+        "docs/run.md#next-steps",
+        "docs/security.md#reporting-security-issues",
+    },
+
+    .markdown_dirs = .{
+        "docs",
+    },
+
+    .markdown_files = .{
+        "README.md",
+        "CONTRIBUTORS.md",
+        "LICENSE.md",
+        "tools/overlay-common/etc/diosix/constitution.md",
+    },
+
+    .feature_files = .{
+        "build/features/hypervisor.zon",
+        "build/features/emulation.zon",
+        "build/features/userland.zon",
+        "build/features/infra.zon",
+    },
+}

@@ -341,7 +341,30 @@ fn matchIsoIdentifier(raw_ident: []const u8, target_name: []const u8) bool {
     while (clean_len > 0 and raw_ident[clean_len - 1] == '.') {
         clean_len -= 1;
     }
-    return std.ascii.eqlIgnoreCase(raw_ident[0..clean_len], target_name);
+    const clean = raw_ident[0..clean_len];
+    if (clean.len != target_name.len) return false;
+    for (clean, target_name) |a, b| {
+        if (std.ascii.toLower(a) == std.ascii.toLower(b)) continue;
+        if ((a == '-' or a == '_') and (b == '-' or b == '_')) continue;
+        return false;
+    }
+    return true;
+}
+
+fn extractRockRidgeName(rec: []const u8, name_len: u8) ?[]const u8 {
+    const pad: usize = if ((name_len & 1) == 0) 1 else 0;
+    var pos: usize = ISO_DIR_NAME_OFFSET + @as(usize, name_len) + pad;
+    while (pos + 4 <= rec.len) {
+        const elen: usize = rec[pos + 2];
+        if (elen < 4 or pos + elen > rec.len) break;
+        if (rec[pos] == 'N' and rec[pos + 1] == 'M' and
+            elen > 5 and rec[pos + 4] == 0)
+        {
+            return rec[pos + 5 .. pos + elen];
+        }
+        pos += elen;
+    }
+    return null;
 }
 
 fn findIso9660EntryInDir(
@@ -388,8 +411,12 @@ fn findIso9660EntryInDir(
             // Skip '.' (0x00) and '..' (0x01) directory entries.
             if (!(name_len == 1 and (ident[0] == 0 or ident[0] == 1))) {
                 const is_dir = (flags & ISO_DIR_FLAG_DIRECTORY) != 0;
+                const rr_match = if (extractRockRidgeName(rec, name_len)) |rr|
+                    std.ascii.eqlIgnoreCase(rr, entry_name)
+                else
+                    false;
                 if (is_dir == expect_dir and
-                    matchIsoIdentifier(ident, entry_name))
+                    (rr_match or matchIsoIdentifier(ident, entry_name)))
                 {
                     return IsoFileExtent{
                         .extent_lba = extent_lba,

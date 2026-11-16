@@ -84,10 +84,10 @@ pub fn handleLegacySendIpi(
                     .acq_rel,
                 );
                 if (target_vc.tryWake()) {
-                    target_vc.blocked_on_cpu = null;
+                    target_vc.setBlockedCpu(null);
                     scheduler.queue(target_vc);
                 }
-                if (target_vc.running_on_cpu) |target_cpu| {
+                if (target_vc.getRunningCpu()) |target_cpu| {
                     pcore.sendIpiToCpu(target_cpu);
                 } else {
                     pcore.wakeIdleCores();
@@ -111,7 +111,7 @@ fn sendIpiToTargetVcore(target_vc: *vcore.VirtualCore, broadcast: bool) void {
         scheduler.queue(target_vc);
         ipi_sent = true;
     }
-    if (target_vc.running_on_cpu) |target_cpu| {
+    if (target_vc.getRunningCpu()) |target_cpu| {
         if (target_cpu != pcore.this().cpu_core_id) {
             pcore.sendIpiToCpu(target_cpu);
             ipi_sent = true;
@@ -169,7 +169,7 @@ fn flushEmulatedVcoreTlb(
         if (target_vc.exec_path.emulated.engine) |eng| eng.tlb.flush();
     } else if (target_vc.exec_path == .emulated) {
         if (target_vc.exec_path.emulated.vcpu) |v| v.setNeedsTlbFlush();
-        if (target_vc.running_on_cpu) |target_cpu| {
+        if (target_vc.getRunningCpu()) |target_cpu| {
             if (target_cpu != pcore.this().cpu_core_id) {
                 pcore.sendIpiToCpu(target_cpu);
             }
@@ -212,20 +212,21 @@ pub fn handleRFENCE(
             var it = g.vcores.start;
             while (it) |node| : (it = node.next) {
                 if (node.contents == vc) continue;
-                if (node.contents.running_on_cpu) |target_cpu| {
+                if (node.contents.getRunningCpu()) |target_cpu| {
                     pcore.sendIpiToCpu(target_cpu);
                 }
             }
         } else {
             for (0..@bitSizeOf(usize)) |bit_pos| {
-                if ((hart_mask & (@as(usize, 1) << @intCast(bit_pos))) != 0) {
+                const bit = @as(usize, 1) << @intCast(bit_pos);
+                if ((hart_mask & bit) != 0) {
                     const hid = std.math.add(
                         usize,
                         hart_mask_base,
                         bit_pos,
                     ) catch continue;
                     if (g.findVcore(hid)) |tvc| {
-                        if (tvc.running_on_cpu) |target_cpu| {
+                        if (tvc.getRunningCpu()) |target_cpu| {
                             pcore.sendIpiToCpu(target_cpu);
                         }
                     }
@@ -238,7 +239,6 @@ pub fn handleRFENCE(
 
 pub fn handleHSM(
     vc: *vcore.VirtualCore,
-    _: usize,
     context: *riscv.ThreadContext,
     function: usize,
     a0: usize,
@@ -376,7 +376,7 @@ pub fn handleDebugConsole(
                     return;
                 };
                 _ = g.console_tx.pushSlice(buf[0..chunk]);
-                if (g.is_root) {
+                if (!g.hasParent()) {
                     debug.write(buf[0..chunk]);
                 }
                 written += chunk;
@@ -397,7 +397,7 @@ pub fn handleDebugConsole(
             var read: usize = 0;
             while (read < num_bytes) : (read += 1) {
                 const next_byte: ?u8 = g.console_rx.popByte() orelse
-                    if (g.is_root) blk: {
+                    if (!g.hasParent()) blk: {
                         const c = debug.getchar();
                         if (c < 0) break :blk null;
                         break :blk @truncate(@as(u16, @bitCast(c)));
@@ -419,7 +419,7 @@ pub fn handleDebugConsole(
         interface.DBCN.CONSOLE_WRITE_BYTE => {
             const b: u8 = @truncate(a0);
             g.console_tx.pushByte(b);
-            if (g.is_root) debug.putchar(b);
+            if (!g.hasParent()) debug.putchar(b);
             sbi_core.setResult(vc, context, sbi_core.SBI_SUCCESS, 0);
         },
         else => sbi_core.setResult(
@@ -445,7 +445,7 @@ test "SBI Standard HSM status query" {
     const vc = try g.addVcore(0, 0x80000000, 0, .normal, null);
     var ctx: riscv.ThreadContext = @splat(0);
 
-    handleHSM(vc, 0, &ctx, interface.HSM.HART_GET_STATUS, 0, 0, 0);
+    handleHSM(vc, &ctx, interface.HSM.HART_GET_STATUS, 0, 0, 0);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
     try testing.expectEqual(
         interface.HSM.STATUS_STOPPED,
@@ -453,7 +453,7 @@ test "SBI Standard HSM status query" {
     );
 
     vc.state = .ready;
-    handleHSM(vc, 0, &ctx, interface.HSM.HART_GET_STATUS, 0, 0, 0);
+    handleHSM(vc, &ctx, interface.HSM.HART_GET_STATUS, 0, 0, 0);
     try testing.expectEqual(
         interface.HSM.STATUS_STARTED,
         ctx[@backingInt(arch.Register.a1)],

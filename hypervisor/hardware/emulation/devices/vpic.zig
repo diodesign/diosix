@@ -110,8 +110,48 @@ pub const VirtualPlic = struct {
     }
 
     pub fn getClaimedIrq(self: *VirtualPlic, ctx: usize) u32 {
-        if (self.getContextConst(ctx)) |c| return c.claimed_irq;
+        if (self.getContextConst(ctx)) |c| {
+            return @atomicLoad(u32, &c.claimed_irq, .acquire);
+        }
         return 0;
+    }
+
+    pub fn hasDeliverableIrqInContext(
+        self: *VirtualPlic,
+        ctx_idx: usize,
+    ) bool {
+        const c = self.getContextConst(ctx_idx) orelse return false;
+        const thresh = @atomicLoad(u32, &c.threshold, .acquire);
+        for (0..PENDING_WORDS) |w| {
+            const pend = @atomicLoad(u32, &self.pending[w], .acquire);
+            const en = @atomicLoad(u32, &c.enable[w], .acquire);
+            var active = pend & en;
+            if (w == 0) active &= ~@as(u32, 1);
+            while (active != 0) {
+                const bit: u5 = @intCast(@ctz(active));
+                const irq: usize = w * BITS_PER_WORD + bit;
+                const prio = @atomicLoad(u32, &self.priority[irq], .acquire);
+                if (prio > thresh) return true;
+                active &= active - 1;
+            }
+        }
+        return false;
+    }
+
+    pub fn hasDeliverableIrqForHart(
+        self: *VirtualPlic,
+        hart_id: usize,
+    ) bool {
+        const base_ctx = hart_id *| 2;
+        return self.hasDeliverableIrqInContext(base_ctx) or
+            self.hasDeliverableIrqInContext(base_ctx +| 1);
+    }
+
+    pub fn hasDeliverableIrq(self: *VirtualPlic) bool {
+        for (0..STATIC_CONTEXTS) |ctx_idx| {
+            if (self.hasDeliverableIrqInContext(ctx_idx)) return true;
+        }
+        return false;
     }
 
     pub fn setPending(self: *VirtualPlic, irq: u32) void {
@@ -151,7 +191,7 @@ pub const VirtualPlic = struct {
         if (offset < (MAX_IRQS * BYTES_PER_WORD)) {
             const irq = offset / BYTES_PER_WORD;
             if (irq == 0) return 0; // IRQ 0 priority is hardwired to 0.
-            return self.priority[irq];
+            return @atomicLoad(u32, &self.priority[irq], .acquire);
         }
 
         // Pending Bits: 0x1000 .. 0x100c (4 words = 128 IRQs).
@@ -169,7 +209,7 @@ pub const VirtualPlic = struct {
             const word_idx = (rel % PLIC_ENABLE_CTX_STRIDE) / BYTES_PER_WORD;
             if (word_idx < PENDING_WORDS) {
                 if (self.getContext(ctx, false)) |c| {
-                    return c.enable[word_idx];
+                    return @atomicLoad(u32, &c.enable[word_idx], .acquire);
                 }
             }
             return 0;
@@ -182,17 +222,23 @@ pub const VirtualPlic = struct {
             const reg = rel & PLIC_CONTEXT_OFFSET_MASK;
             if (self.getContext(ctx, false)) |c| {
                 if (reg == PLIC_REG_THRESHOLD) {
-                    return c.threshold;
+                    return @atomicLoad(u32, &c.threshold, .acquire);
                 } else if (reg == PLIC_REG_CLAIM_COMPLETE) {
                     var best_irq: u32 = 0;
-                    var best_prio: u32 = c.threshold;
+                    var best_prio: u32 =
+                        @atomicLoad(u32, &c.threshold, .acquire);
 
                     for (1..MAX_IRQS) |irq_usize| {
                         const irq: u32 = @truncate(irq_usize);
                         const word_idx = irq / BITS_PER_WORD;
                         const bit_idx: u5 = @truncate(irq % BITS_PER_WORD);
                         const mask = @as(u32, 1) << bit_idx;
-                        const is_en = (c.enable[word_idx] & mask) != 0;
+                        const en_word = @atomicLoad(
+                            u32,
+                            &c.enable[word_idx],
+                            .acquire,
+                        );
+                        const is_en = (en_word & mask) != 0;
                         const pend_word = @atomicLoad(
                             u32,
                             &self.pending[word_idx],
@@ -200,7 +246,11 @@ pub const VirtualPlic = struct {
                         );
                         const is_pend = (pend_word & mask) != 0;
                         if (is_en and is_pend) {
-                            const prio = self.priority[irq];
+                            const prio = @atomicLoad(
+                                u32,
+                                &self.priority[irq],
+                                .acquire,
+                            );
                             if (prio > best_prio) {
                                 best_prio = prio;
                                 best_irq = irq;
@@ -210,7 +260,12 @@ pub const VirtualPlic = struct {
 
                     if (best_irq != 0) {
                         if (self.testAndClearPending(best_irq)) {
-                            c.claimed_irq = best_irq;
+                            @atomicStore(
+                                u32,
+                                &c.claimed_irq,
+                                best_irq,
+                                .release,
+                            );
                             return best_irq;
                         }
                     }
@@ -227,7 +282,7 @@ pub const VirtualPlic = struct {
         if (offset < (MAX_IRQS * BYTES_PER_WORD)) {
             const irq = offset / BYTES_PER_WORD;
             if (irq == 0) return; // IRQ 0 priority is read-only 0.
-            self.priority[irq] = val;
+            @atomicStore(u32, &self.priority[irq], val, .release);
         } else if (offset >= PLIC_ENABLE_BASE and offset < PLIC_CONTEXT_BASE) {
             const rel = offset - PLIC_ENABLE_BASE;
             const ctx = rel / PLIC_ENABLE_CTX_STRIDE;
@@ -236,7 +291,12 @@ pub const VirtualPlic = struct {
                 if (self.getContext(ctx, true)) |c| {
                     const effective_val =
                         if (word_idx == 0) val & ~@as(u32, 1) else val;
-                    c.enable[word_idx] = effective_val;
+                    @atomicStore(
+                        u32,
+                        &c.enable[word_idx],
+                        effective_val,
+                        .release,
+                    );
                 }
             }
         } else if (offset >= PLIC_CONTEXT_BASE) {
@@ -245,10 +305,11 @@ pub const VirtualPlic = struct {
             const reg = rel & PLIC_CONTEXT_OFFSET_MASK;
             if (self.getContext(ctx, true)) |c| {
                 if (reg == PLIC_REG_THRESHOLD) {
-                    c.threshold = val;
+                    @atomicStore(u32, &c.threshold, val, .release);
                 } else if (reg == PLIC_REG_CLAIM_COMPLETE) {
-                    if (val != 0 and val == c.claimed_irq) {
-                        c.claimed_irq = 0;
+                    const claimed = @atomicLoad(u32, &c.claimed_irq, .acquire);
+                    if (val != 0 and val == claimed) {
+                        @atomicStore(u32, &c.claimed_irq, 0, .release);
                     }
                 }
             }
@@ -283,12 +344,17 @@ test "PLIC interrupt priority, enable, pending, claim and complete" {
 
     // 4. Assert IRQ 10 only -> claim returns 0 because prio 5 <= threshold 6.
     plic.setPending(10);
+    try testing.expect(!plic.hasDeliverableIrq());
+    try testing.expect(!plic.hasDeliverableIrqForHart(0));
     const ctx0_claim_addr =
         PLIC_CONTEXT_BASE + (0 * PLIC_CONTEXT_STRIDE) + PLIC_REG_CLAIM_COMPLETE;
     try testing.expectEqual(@as(u32, 0), plic.read(ctx0_claim_addr));
 
-    // 5. Assert IRQ 11 -> claim returns 11 and auto-clears pending.
+    // 5. Assert IRQ 11 -> deliverable on hart 0 (not hart 1) and claimable.
     plic.setPending(11);
+    try testing.expect(plic.hasDeliverableIrq());
+    try testing.expect(plic.hasDeliverableIrqForHart(0));
+    try testing.expect(!plic.hasDeliverableIrqForHart(1));
     try testing.expectEqual(@as(u32, 11), plic.read(ctx0_claim_addr));
     try testing.expectEqual(@as(u32, 11), plic.getClaimedIrq(0));
 

@@ -260,6 +260,12 @@ pub fn reconcileRunningGuests(
         if (still_alive) continue;
 
         discardGuestSshSession(self, prev.cid);
+        if (self.desktop.active and self.desktop.target_cid == prev.cid) {
+            gui_mod.panes.onDesktopNavigateBack(self);
+            if (self.active_menu_id == gui_mod.ICON_MENU_DISPLAY_ID) {
+                self.navigateBack() catch {};
+            }
+        }
         if (self.active_menu_id == gui_mod.ICON_MENU_TERMINAL_ID and
             !self.terminal.active)
         {

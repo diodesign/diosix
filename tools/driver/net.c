@@ -189,34 +189,9 @@ int init_diosix_net(void)
 {
     struct net_device *dev;
     struct diosix_net_priv *priv;
-    struct sbiret ret;
-    struct guest_info *info;
     unsigned long self_cid = DIOSIX_CID_SELF;
-    phys_addr_t info_pa;
     u8 mac_addr[ETH_ALEN];
     int err;
-
-    info = kzalloc(sizeof(*info), GFP_KERNEL);
-    if (info) {
-        info_pa = virt_to_phys(info);
-        ret = sbi_ecall(
-            EXT_DIOSIX,
-            DIOSIX_FUNC_GET_INFO,
-            DIOSIX_CID_SELF,
-            (unsigned long)info_pa,
-            sizeof(*info),
-            0,
-            0,
-            0
-        );
-        if (ret.error == 0) {
-            if (info->assigned_cid > 0)
-                self_cid = info->assigned_cid;
-            else if (info->guest_id > 0)
-                self_cid = info->guest_id;
-        }
-        kfree(info);
-    }
 
     dev = alloc_etherdev(sizeof(struct diosix_net_priv));
     if (!dev)

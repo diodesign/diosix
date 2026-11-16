@@ -196,13 +196,6 @@ pub fn drawRoundedTranslucentBox(
     drawGlassPane(self, box, r, fill, alpha, bdr, false, false);
 }
 
-pub fn drawWindowPane(self: *Surface, box: Box) void {
-    const bg = Color.GLASS_BG;
-    const op = Color.GLASS_OPACITY;
-    const bdr = Color.GLASS_BORDER;
-    drawGlassPane(self, box, 12, bg, op, bdr, true, true);
-}
-
 test {
     std.testing.refAllDecls(@This());
 }

@@ -1,151 +1,185 @@
 # Diosix style guide
 
-This guide defines the standards for contributing to the Diosix project,
-ensuring consistency across both documentation and the codebase. All
-contributors must follow these guidelines to maintain the project's high
-standard of quality.
+This guide sets the writing and coding standards for the Diosix repository so
+documentation and source code stay clear, accurate, and easy to read.
 
 ## Technical documentation style
 
-Diosix documentation is written for two distinct audiences:
+Diosix documentation is split into two tracks for two distinct audiences:
 
-*   **Users (beginners and experts)**: Operators booting Diosix, exploring the
-    guided tour, launching Virtual Machines (VMs) with `dsx`, or configuring
-    declarative system and charter manifests.
-*   **Developers and maintainers**: Engineers building, testing, debugging, and
-    maintaining the Machine-mode (M-mode) hypervisor, Supervisor-mode (S-mode)
-    emulation layer, and User-mode (U-mode) system utilities.
+* User guides serve beginners and operators booting Diosix, exploring the
+  guided tour, running virtual machines (VMs), and configuring system or
+  charter policies. They focus on low-friction workflows, explaining both how
+  to use a feature and why it works that way.
+* Technical references serve developers and maintainers building, testing,
+  debugging, and extending the machine-mode (M-mode) hypervisor,
+  supervisor-mode (S-mode) emulation layer, and user-mode (U-mode) tools. They
+  focus on internal mechanics, invariants, and design decisions.
 
-All documentation must prioritize clarity, precision, and professional prose,
-remaining comprehensive while as concise as possible.
+### Voice, tone, and plain English
 
-### Voice and tone
+Write documentation and code comments in American English with sound grammar
+and verified spelling. Keep the tone neutral yet casually friendly: write
+directly to the reader, avoid stiff bureaucracy or marketing hype, and do not
+over-promise or make grandiose claims. At the same time, do not downplay what
+Diosix does—describe supported capabilities plainly and matter-of-factly.
 
-Write all documentation and code comments in American English with verified
-spelling and clear, correct grammar. Maintain a professional and direct tone
-that avoids marketing hype, jargon, and unnecessary waffle. Every sentence
-should provide tangible value to the reader without losing clarity through
-over-compression. Use the active voice and present tense whenever possible,
-such as "The hypervisor handles the request" rather than "The request is
-being handled." Strive for conciseness and be as detailed as necessary to
-explain complex designs.
+Prefer plain English over academic or systems jargon in introductions,
+overviews, and user guides. For example, telling a new reader that Diosix has a
+"small trusted computing base" means nothing unless they already speak formal
+security jargon; say instead that device drivers, filesystems, and network
+stacks run outside the highest CPU privilege level so a driver bug cannot
+compromise the whole machine. Reserve specialist terms such as trusted
+computing base (TCB) for deep architectural sections where they are explained
+in context.
 
-### Abbreviations and terminology
+Use the active voice and present tense whenever natural (for example, "The
+hypervisor validates the request" rather than "The request will be validated
+by the hypervisor"). Keep sentences concise and direct without compressing them
+to the point where technical meaning becomes ambiguous.
 
-Spell out every abbreviation on its first use within a given page, followed
-by the abbreviation in brackets. For example, use "Virtual Machine (VM)" or
-"Supervisor Binary Interface (SBI)" for the first mention. For all
-subsequent mentions on that same page, use only the abbreviation.
+### Inline code and technical references
 
-Industry-wide terms, such as YAML, CPU, and RAM, do not need to be
-spelled out. Familiar names of software and other products, such as QEMU,
-do not need to be spelled out.
+Format text as inline code only when you expect or require the reader to type
+it in—such as a command, CLI flag, file path, or configuration key inside a
+procedural step or reference entry—or when defining literal application binary
+interface (ABI) symbols in a dedicated technical reference.
 
-To avoid confusion between the compilation environment, the virtualization
-environment, and physical hardware, adhere to the following terminology
-definitions:
+Do not scatter inline code, daemon flags, source filenames, internal symbol
+names, numeric quantities, or acronyms across introductions, high-level
+overviews, headings, or conceptual explanations. When explaining concepts or
+summarizing features, describe how the system behaves in plain English rather
+than interrupting sentences with parenthetical command syntax or code objects
+the reader is not about to run.
 
-*   **Host build machine** (or **build machine**): The physical computer
-    or development system where the source code is compiled and the
-    executable binaries (the hypervisor and guest payloads) are built.
-*   **Host hardware** (or **host system**): The physical machine, board,
-    or System-on-Chip (SoC) that runs the compiled hypervisor.
-*   **Target platform** (or **target system**): The board, CPU architecture
-    configuration, or emulator machine designed to execute the compiled
-    hypervisor.
-*   **Guest VM**: A virtual machine running on the hypervisor.
-*   **Host Physical Address (HPA)**: A physical memory address of the
-    host hardware.
-*   **Guest Physical Address (GPA)**: A physical memory address from
-    the guest VM's perspective.
+Avoid writing prose like this in overviews:
 
-For more information on HPA and GPA, see [Diosix architecture](architecture.md).
+```markdown
+* **Key-only SSH and default network isolation**: SSH password logins are
+  disabled (`dropbear -s -g`) in favor of enrolled keys (`dsx auth`).
+```
 
-### Structure and formatting
+Write direct, plain sentences instead:
 
-Use bulleted lists only for non-sequential items and numbered lists strictly
-for multi-step procedures. Use sentence case for all headings. To maintain
-readability in terminal-based environments, wrap all prose and code at a
-maximum of 80 characters per line.
+```markdown
+* SSH password logins are disabled in favor of enrolled public keys, and new
+  child VMs start isolated from sibling VMs and the outside internet until you
+  grant access.
+```
+
+### Lists, headings, and line wrapping
+
+Formatting should clarify structure rather than pad weak prose:
+
+* Write bulleted list items as concise, complete sentences that go straight to
+  the point. Do not start bullet items with bolded lead-in labels followed by a
+  colon and a paragraph of explanation. Use Markdown tables when pairing short
+  names or commands with descriptions, and reserve leading identifiers in lists
+  strictly for CLI option or ABI field reference entries.
+* Use numbered lists (`1.`, `2.`) only for sequential, step-by-step procedures
+  or ordered lifecycle stages. Use bulleted lists (`*`) for unordered points.
+* Use sentence case across headings, prose, and table cells, capitalizing only
+  the first word and genuine proper nouns or acronyms (such as Diosix, RISC-V,
+  Linux, Zig, or QEMU). Do not turn project concepts or roles—such as root VM,
+  steward VM, standby root VM, charter, or guided tour—into mid-sentence proper
+  nouns, and keep headings in plain English rather than appending parenthetical
+  filenames or command flags.
+* Wrap prose, list items, and code blocks at 80 characters or fewer per line
+  (excluding Markdown table rows and long URLs) so files read cleanly in
+  terminal splits and diffs.
+
+### Abbreviations and canonical terminology
+
+Spell out every non-universal abbreviation on its first use within a page,
+followed by the abbreviation in parentheses. Keep the spelled-out words in
+normal lowercase rather than capitalizing each word to match the acronym: write
+"virtual machine (VM)" and "supervisor binary interface (SBI)," never "Virtual
+Machine (VM)" or "Supervisor Binary Interface (SBI)." On all later mentions on
+that same page, use only the abbreviation.
+
+Universal computing terms—such as CPU, RAM, ROM, DRAM, OS, GUI, CLI, API, SSH,
+ELF, ISO, SHA-256, USB, NVMe, SATA, FAT32, JSON, TOML, YAML, QEMU, GPT, UEFI,
+BIOS, QR, and AI—do not need to be spelled out and should be written as plain
+text rather than inline code.
+
+Use these canonical terms consistently so build environments, physical
+hardware, and guests are never conflated:
+
+| Term | Meaning |
+| :--- | :--- |
+| Host build machine (or build machine) | The computer where source code is compiled and hypervisor or guest images are built. |
+| Host hardware (or host system) | The physical machine, board, or system-on-chip (SoC) running the compiled hypervisor. |
+| Target platform (or target system) | The board, CPU architecture, or emulator targeted by the build. |
+| Guest VM | Any virtual machine running on the hypervisor. |
+| Root VM | The initial VM booted by the hypervisor at startup with inherited hardware trust and system quotas (structurally identical to child VMs; written lowercase as "root VM" mid-sentence). |
+| Host physical address (HPA) | A physical memory or device address on the host hardware. |
+| Guest physical address (GPA) | A physical memory address from a guest VM's perspective. |
+| Guest virtual address (GVA) | A virtual address translated by a guest OS kernel's page tables. |
+
+For details on address translation, see
+[Hypervisor architecture](architecture.md).
+
+---
 
 ## Coding style
 
-Diosix follows idiomatic Zig 0.17 conventions to ensure the codebase remains
-safe, secure, accessible, and maintainable.
+Diosix follows idiomatic Zig 0.17 conventions to keep the codebase safe,
+readable, and maintainable.
 
 ### File organization and naming conventions
 
-Keep source files focused on a single responsibility and under 500 lines
-unless there is a compelling architectural reason. When decomposing a file
-that exceeds 500 lines, place its submodules in a dedicated subdirectory
-(for example, `vm/run.zig`, `panes/modal.zig`, or `tests/gui.zig`) rather than
-creating flat `prefix_subname.zig` files in the parent directory. Never
-truncate functionality or unit tests when splitting files, and reference each
-submodule in the parent file's `test` block (`_ = @import("vm/run.zig");`) so
-`zig build test` executes all co-located unit tests. Wrap all lines of code
-and comments at 80 characters or fewer.
+Keep source files focused on a single responsibility and at 500 lines or fewer
+unless there is a clear architectural reason. When splitting a file that grows
+past 500 lines, place its submodules in a cohesive subdirectory rather than
+creating flat prefix-underscore files in the parent directory. Never drop live
+features or unit tests when splitting files, and import each submodule in the
+parent's test block so the test runner executes every co-located unit test.
+Wrap all code and comments at 80 characters or fewer.
 
-All source files must use concise `snake_case` filenames without redundant
-project, directory, or sibling prefixes. For example, name the Application
-Programming Interface (API) module inside a Diosix tool `api.zig` rather than
-`diosix_api.zig`, and name a VM submodule inside `vm/` `info.zig` rather than
-`vm_info.zig`. Never duplicate shared primitives (such as `Spinlock`,
-page-alignment math, or path validators) across files; import them from
-`hypervisor/interface/`, `hypervisor/core/atomic.zig`, or `common.zig`.
+Use concise snake-case filenames without redundant project or directory
+prefixes (for example, name an API module inside a tool `api.zig` rather than
+`diosix_api.zig`). Share common primitives such as spinlocks, alignment
+helpers, and path validators from shared modules instead of duplicating them
+across files.
 
-For functions and methods, use `camelCase`. Types, structs, unions, and enums
-must use `PascalCase`. Local variables and struct fields must use `snake_case`,
-and constants should use `SCREAMING_SNAKE_CASE` or `snake_case` depending on
-their scope. Append units and qualifiers in descending order of significance
-(for example, `ram_bytes_max` or `timeout_ms`).
+Follow standard Zig identifier casing: camelCase for functions and methods,
+PascalCase for types, structs, unions, and enums, snake-case for variables and
+fields, and screaming snake-case for module-level constants. Append units and
+qualifiers in descending order of significance (such as `ram_bytes_max` or
+`timeout_ms`).
 
-### Comments and documentation
+### Comments
 
-All comments must follow standard sentence structure, beginning with a
-capital letter and ending with a period. The code should be largely
-self-documenting; use comments to explain the "why" behind a design
-decision rather than the "what," unless the logic is particularly
-intricate. Maintain a professional tone and avoid technical jargon where
-a simpler explanation suffices.
+Write code comments as complete sentences starting with a capital letter and
+ending with a period. Prefer self-explanatory code, and use comments to explain
+why a design choice or invariant exists rather than restating what the next
+line does.
 
 ### Idiomatic Zig usage and memory safety
 
-Use Zig's type system and comptime features rather than repetitive control
-flow. Parse commands, CLI flags, and configuration keys into type-safe `enum`
-values using `std.meta.stringToEnum` and dispatch with `switch` rather than
-chaining `if` and `else if` string comparisons. Write all hexadecimal literals
-in lowercase (`0xfff`, `0x8000_0000`, `0xffff_ffff`, never `0xFFF` or
-`0xFFFFFFFF`). Avoid magic numbers and unnamed bitmasks in expressions: if a
-literal requires an inline comment to explain its meaning (such as
-`return 15; // Store page fault.`) or pre-computes a derived mask (such as
-`(vaddr & 0xfff) > 0xffc` or `(pte & 0xe) == 0`), replace it with a named
-constant, `enum` tag, or self-documenting inline helper (`PAGE_OFFSET_MASK`,
-`crossesPageBoundary(vaddr, @sizeOf(u32))`, `PTE.isPointer(pte)`). Use explicit
-fixed-width integer types (`u64`, `u32`, `u16`, `u8`) in Application Binary
-Interface (ABI) structs (`extern struct`, `packed struct`) and 64-bit guest
-register state rather than `usize`, and explicitly annotate local variables
-initialized from `@min` or `@max` with a comptime literal
-(`const row_w: usize = @min(width, 1280);`).
+Use Zig's type system and compile-time checks instead of repetitive control
+flow:
 
-Separate mechanism from policy: implement behavior in code and store tunable
-parameters, build layouts, and file paths outside the implementation in
-declarative configuration files (`build/layout.zon`, `boot/hypervisor.conf`,
-and `/etc/diosix/*.toml` with least-privilege file permissions) or dedicated
-path modules (`sysconfig.zig`, `paths.zig`). Never scatter hardcoded file paths
-or hand-maintained source file arrays across build scripts or source files.
-Avoid accumulating multi-path fallback arrays for internal files or symbols
-that ship together in the repository; update all in-tree producers, consumers,
-and tests atomically to reference a single canonical path.
+* Parse CLI commands, flags, and configuration keys into enums with
+  `std.meta.stringToEnum` and dispatch with `switch` rather than chained string
+  comparisons.
+* Write hexadecimal literals in lowercase (`0xfff`, never `0xFFF`), and replace
+  magic numbers or unnamed bitmasks with named constants, enum tags, or inline
+  helpers.
+* Use explicit fixed-width integer types (`u64`, `u32`, `u16`, `u8`) in ABI
+  structs and 64-bit guest register state rather than `usize`. Annotate local
+  variables initialized from `@min` or `@max` with a literal so Zig does not
+  infer a narrow integer type.
+* Keep mechanism in Zig code and store repository paths, hardware sizing
+  defaults, and runtime policy in declarative configuration files or dedicated
+  path modules. Update co-versioned internal paths atomically across the
+  repository rather than keeping multi-path fallback lists.
 
-Be explicit about memory management, buffer capacities, and formatting. During
-early M-mode boot before a heap allocator is initialized, static pre-allocated
-buffers are appropriate for safety. As soon as an allocator is available —
-whether the per-core heap allocator in M-mode or dynamic allocators in U-mode
-utilities — allocate and grow buffers dynamically rather than guessing fixed
-stack buffer sizes. When a bounded fixed-capacity buffer is required by an ABI
-or zero-allocation hot path, size it with a named constant that documents its
-invariants, and never swallow `std.fmt.bufPrint` errors with `catch ""`; use a
-centralized truncation helper that logs a diagnostic warning on overflow.
-Consistently pair allocations with `defer` and `errdefer` to guarantee resource
-cleanup on all control-flow paths, and never discard error return values. All
-code must be formatted using `zig fmt` before it is submitted for review.
+Manage memory and buffers explicitly. Static pre-allocated structures are
+appropriate during early M-mode boot before a heap allocator is initialized.
+Once an allocator is available, allocate and grow buffers dynamically instead
+of guessing fixed stack sizes. Where a fixed-size buffer is required by an ABI
+or lock-held hot path, size it with a named constant and use a truncation
+helper rather than swallowing formatting errors. Pair every allocation with
+`defer` and `errdefer`, never ignore error unions, and format code with
+`zig fmt` before submitting changes.

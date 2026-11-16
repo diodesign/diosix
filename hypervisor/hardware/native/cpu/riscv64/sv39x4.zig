@@ -33,6 +33,7 @@ pub const PTEFlags = struct {
     pub const demand: u64 = 1 << 9;
 
     pub const rwx: u64 = read | write | execute;
+    pub const leaf_ro_user: u64 = read | valid | accessed | user;
     pub const leaf_rw_user: u64 =
         read | write | valid | accessed | dirty | user;
     pub const leaf_rwx_user: u64 =
@@ -191,8 +192,10 @@ pub const PageTable = struct {
             return SV39x4Error.MappingOverlap;
         }
 
+        const dirty_flag: u64 =
+            if ((flags & PTEFlags.write) != 0) PTEFlags.dirty else 0;
         ptes[index] = hpaToPte(hpa) | flags |
-            PTEFlags.valid | PTEFlags.accessed | PTEFlags.dirty;
+            PTEFlags.valid | PTEFlags.accessed | dirty_flag;
         if (!self.isStaticRootHpa(hpa) and
             physmem.isRam(hpa, physmem.PageSize) and
             physmem.isManaged(hpa))
@@ -377,4 +380,26 @@ test "stage-2 paging and shielding" {
         error.AccessDenied,
         pt.resolveFault(mmio_hpa, false),
     );
+
+    // Read-only Stage-2 user mapping (Tier 1 scanout) sets R|V|A|U with W=X=D=0
+    // and reference-counts the mapped RAM page symmetrically on map/unmap.
+    const ro_hpa = try physmem.allocPage();
+    defer physmem.decrementPageRef(ro_hpa);
+    try testing.expectEqual(@as(u32, 1), physmem.getPageRef(ro_hpa));
+    const ro_gpa = gpa + 0x2000;
+    try pt.mapPage(ro_gpa, ro_hpa, PTEFlags.leaf_ro_user, false);
+    try testing.expectEqual(@as(u32, 2), physmem.getPageRef(ro_hpa));
+    const ro_pte = (try pt.walk(ro_gpa, false)).*;
+    try testing.expect((ro_pte & PTEFlags.valid) != 0);
+    try testing.expect((ro_pte & PTEFlags.read) != 0);
+    try testing.expect((ro_pte & PTEFlags.accessed) != 0);
+    try testing.expect((ro_pte & PTEFlags.user) != 0);
+    try testing.expectEqual(@as(u64, 0), ro_pte & PTEFlags.write);
+    try testing.expectEqual(@as(u64, 0), ro_pte & PTEFlags.execute);
+    try testing.expectEqual(@as(u64, 0), ro_pte & PTEFlags.dirty);
+
+    pt.unmapPage(ro_gpa);
+    try testing.expectEqual(@as(u32, 1), physmem.getPageRef(ro_hpa));
+    const unmapped_pte = (try pt.walk(ro_gpa, false)).*;
+    try testing.expectEqual(@as(u64, 0), unmapped_pte & PTEFlags.valid);
 }

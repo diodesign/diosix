@@ -24,11 +24,19 @@ pub fn applyHostFirewall(
 ) void {
     if (@import("builtin").is_test) return;
     const allocator = std.heap.page_allocator;
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const prefix = sys_cfg.subnetPrefix();
     const z_ip = if (ip_str.len > 0)
         allocator.printSentinel("{s}", .{ip_str}, 0) catch return
     else
-        allocator.printSentinel("10.0.3.{d}", .{cid}, 0) catch return;
+        allocator.printSentinel("{s}{d}", .{ prefix, cid }, 0) catch return;
     defer allocator.free(z_ip);
+    const z_subnet = allocator.printSentinel(
+        "{s}0/24",
+        .{prefix},
+        0,
+    ) catch return;
+    defer allocator.free(z_subnet);
 
     const ipt_bin: [*:0]const u8 =
         if (common.fileExistsPath(sysconfig.IPTABLES_BIN))
@@ -37,10 +45,9 @@ pub fn applyHostFirewall(
             sysconfig.IPTABLES_SBIN;
 
     const del_argv = [_:null]?[*:0]const u8{
-        ipt_bin,  "-D",                          "FORWARD",
-        "-s",     z_ip.ptr,                      "!",
-        "-d",     sysconfig.DEFAULT_SUBNET_CIDR, "-j",
-        "ACCEPT", null,
+        ipt_bin, "-D", "FORWARD",    "-s", z_ip.ptr,
+        "!",     "-d", z_subnet.ptr, "-j", "ACCEPT",
+        null,
     };
     var tries: usize = 0;
     while (tries < MAX_IPTABLES_FLUSH_TRIES) : (tries += 1) {
@@ -48,10 +55,8 @@ pub fn applyHostFirewall(
     }
     if ((mode == .wan or mode == .router) and upstream_cid == 0) {
         const ins_argv = [_:null]?[*:0]const u8{
-            ipt_bin, "-I",     "FORWARD",
-            "1",     "-s",     z_ip.ptr,
-            "!",     "-d",     sysconfig.DEFAULT_SUBNET_CIDR,
-            "-j",    "ACCEPT", null,
+            ipt_bin, "-I", "FORWARD",    "1",  "-s",     z_ip.ptr,
+            "!",     "-d", z_subnet.ptr, "-j", "ACCEPT", null,
         };
         _ = common.runSubprocess(&ins_argv);
     }
@@ -66,8 +71,8 @@ pub fn applyHostFirewall(
     _ = common.runSubprocess(&rt_del);
     if (mode != .none and upstream_cid >= CID_FIRST_CHILD) {
         const z_gw = allocator.printSentinel(
-            "10.0.3.{d}",
-            .{upstream_cid},
+            "{s}{d}",
+            .{ prefix, upstream_cid },
             0,
         ) catch return;
         defer allocator.free(z_gw);
@@ -83,9 +88,12 @@ pub fn updateManifestNetHeaders(
     allocator: std.mem.Allocator,
     client: *api.DiosixClient,
     cid: usize,
+    ip_str: []const u8,
     mode: NetMode,
     upstream_cid: usize,
 ) void {
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const prefix = sys_cfg.subnetPrefix();
     const raw_buf = allocator.alloc(u8, MAX_MANIFEST_SIZE) catch return;
     defer allocator.free(raw_buf);
     const len = client.getManifest(cid, raw_buf) catch 0;
@@ -94,11 +102,18 @@ pub fn updateManifestNetHeaders(
     defer out.deinit(allocator);
     const gw_cid: usize =
         if (upstream_cid >= CID_FIRST_CHILD) upstream_cid else 1;
+    const fallback_ip = if (ip_str.len == 0)
+        allocator.print("{s}{d}", .{ prefix, cid }) catch return
+    else
+        null;
+    defer if (fallback_ip) |fip| allocator.free(fip);
+    const eff_ip = if (ip_str.len > 0) ip_str else fallback_ip.?;
     const hdr = allocator.print(
         "# diosix-net-mode: {s}\n" ++
-            "# diosix-net-gateway: 10.0.3.{d}\n" ++
+            "# diosix-net-ip: {s}\n" ++
+            "# diosix-net-gateway: {s}{d}\n" ++
             "# diosix-net-upstream-cid: {d}\n",
-        .{ mode.asStr(), gw_cid, upstream_cid },
+        .{ mode.asStr(), eff_ip, prefix, gw_cid, upstream_cid },
     ) catch return;
     defer allocator.free(hdr);
     out.appendSlice(allocator, hdr) catch return;
@@ -106,6 +121,7 @@ pub fn updateManifestNetHeaders(
     while (lines.next()) |line| {
         const trimmed = common.trimWhitespace(line);
         if (std.mem.startsWith(u8, trimmed, "# diosix-net-mode:") or
+            std.mem.startsWith(u8, trimmed, "# diosix-net-ip:") or
             std.mem.startsWith(u8, trimmed, "# diosix-net-gateway:") or
             std.mem.startsWith(u8, trimmed, "# diosix-net-upstream-cid:"))
         {
@@ -124,18 +140,32 @@ pub fn updateLiveGuestRoute(
     upstream_cid: usize,
 ) void {
     if (@import("builtin").is_test or ip_str.len == 0) return;
-    var owned_cmd: ?[]u8 = null;
-    defer if (owned_cmd) |c| allocator.free(c);
-    const cmd_str: []const u8 = if (upstream_cid >= CID_FIRST_CHILD) blk: {
-        owned_cmd = allocator.print(
-            "ip route add 10.0.3.{d} dev diosix0 2>/dev/null; " ++
-                "ip route replace 10.0.3.0/24 via 10.0.3.{d} dev diosix0; " ++
-                "ip route replace default via 10.0.3.{d} dev diosix0",
-            .{ upstream_cid, upstream_cid, upstream_cid },
+    const sys_cfg = common.loadRuntimeSystemConfig();
+    const prefix = sys_cfg.subnetPrefix();
+    const cmd_str = if (upstream_cid >= CID_FIRST_CHILD)
+        allocator.print(
+            "IF=eth0; ip link show eth0 >/dev/null 2>&1 || IF=diosix0; " ++
+                "ip route add {s}{d} dev $IF 2>/dev/null; " ++
+                "ip route replace {s}0/24 via {s}{d} dev $IF; " ++
+                "ip route replace default via {s}{d} dev $IF",
+            .{
+                prefix,
+                upstream_cid,
+                prefix,
+                prefix,
+                upstream_cid,
+                prefix,
+                upstream_cid,
+            },
+        ) catch return
+    else
+        allocator.print(
+            "IF=eth0; ip link show eth0 >/dev/null 2>&1 || IF=diosix0; " ++
+                "ip route replace {s}0/24 dev $IF 2>/dev/null; " ++
+                "ip route replace default via {s}1 dev $IF",
+            .{ prefix, prefix },
         ) catch return;
-        break :blk owned_cmd.?;
-    } else "ip route replace 10.0.3.0/24 dev diosix0 2>/dev/null; " ++
-        "ip route replace default via 10.0.3.1 dev diosix0";
+    defer allocator.free(cmd_str);
     ssh.execSsh(ssh.findPrivateKey(), "root", ip_str, cmd_str) catch {};
 }
 
@@ -149,7 +179,14 @@ pub fn applyVmNetConfig(
 ) void {
     const flags: u64 = if (mode == .none) api.NetPolicyFlags.ISOLATED else 0;
     _ = client.setNetPolicy(cid, flags, upstream_cid) catch {};
-    updateManifestNetHeaders(allocator, client, cid, mode, upstream_cid);
+    updateManifestNetHeaders(
+        allocator,
+        client,
+        cid,
+        ip_str,
+        mode,
+        upstream_cid,
+    );
     ssh.pruneKnownHost(ip_str);
     applyHostFirewall(cid, ip_str, mode, upstream_cid);
 }

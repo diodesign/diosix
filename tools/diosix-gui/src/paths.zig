@@ -81,6 +81,10 @@ pub const VAR_DISKS_DIR: [*:0]const u8 = "/var/lib/diosix/disks";
 pub const VAR_ISO_DIR: [*:0]const u8 = "/var/lib/diosix/iso";
 pub const DEFAULT_BASE_LINUX_IMAGE_PATH: []const u8 =
     "/var/lib/diosix/images/diosix-base-linux.elf";
+pub const DEFAULT_CLI_IMAGE_PATH: []const u8 =
+    "/var/lib/diosix/images/linux-cli.elf";
+pub const DEFAULT_DESKTOP_IMAGE_PATH: []const u8 =
+    "/var/lib/diosix/images/linux-desktop.elf";
 
 /// Standard /dev prefix constants for block/mount discovery.
 pub const DEV_DIR_PREFIX: []const u8 = "/dev/";
@@ -104,6 +108,9 @@ pub const GUI_STATE_TMP_PATH: [*:0]const u8 = "/run/diosix/gui_state.json.tmp";
 /// Sentinel file recording that the once-per-boot intro animation has played.
 pub const INTRO_FLAG_PATH: [*:0]const u8 = "/run/diosix/intro_played";
 
+/// Sentinel file recording that the once-per-boot welcome policy has run.
+pub const WELCOME_FLAG_PATH: [*:0]const u8 = "/run/diosix/welcome_shown";
+
 /// Default system configuration TOML path.
 pub const DEFAULT_SYSCONFIG_PATH: [*:0]const u8 = "/etc/diosix/diosix.toml";
 
@@ -121,6 +128,9 @@ test "paths: canonical paths are non-empty and rooted" {
     try std.testing.expectEqual('/', std.mem.span(DEV_DIOSIX_PATH)[0]);
     try std.testing.expectEqual('/', std.mem.span(RUN_DIOSIX_DIR)[0]);
     try std.testing.expectEqual('/', std.mem.span(GUI_STATE_PATH)[0]);
+    try std.testing.expectEqual('/', std.mem.span(WELCOME_FLAG_PATH)[0]);
+    try std.testing.expectEqual('/', DEFAULT_CLI_IMAGE_PATH[0]);
+    try std.testing.expectEqual('/', DEFAULT_DESKTOP_IMAGE_PATH[0]);
     try std.testing.expect(DRI_CARD_PATHS.len >= 1);
     try std.testing.expect(DSP_DEVICE_PATHS.len >= 1);
 }

@@ -21,6 +21,25 @@ pub const panes_create_vm = @import("panes/create_vm.zig");
 pub const panes_tasks = @import("panes/tasks.zig");
 pub const panes_quota = @import("panes/quota_controls.zig");
 pub const panes_terminal = @import("panes/terminal.zig");
+pub const panes_desktop = @import("panes/desktop.zig");
+
+pub const DesktopSession = panes_desktop.DesktopSession;
+pub const WIN_GUEST_DISPLAY_ID = panes_desktop.WIN_GUEST_DISPLAY_ID;
+pub const ICON_GUEST_DISPLAY_ID = panes_desktop.ICON_GUEST_DISPLAY_ID;
+pub const ICON_DISP_STATUS_ID = panes_desktop.ICON_DISP_STATUS_ID;
+pub const ICON_DISP_SSH_BTN_ID = panes_desktop.ICON_DISP_SSH_BTN_ID;
+pub const ICON_DISP_CON_BTN_ID = panes_desktop.ICON_DISP_CON_BTN_ID;
+pub const ICON_DISP_OSK_BTN_ID = panes_desktop.ICON_DISP_OSK_BTN_ID;
+pub const openGuestDesktop = panes_desktop.openGuestDesktop;
+pub const onDesktopNavigateBack = panes_desktop.onDesktopNavigateBack;
+pub const isDesktopWindowOpen = panes_desktop.isDesktopWindowOpen;
+pub const pollDesktop = panes_desktop.pollDesktop;
+pub const buildDesktopWindow = panes_desktop.buildDesktopWindow;
+pub const renderDesktopOverlay = panes_desktop.renderDesktopOverlay;
+pub const handleDesktopPointerMove = panes_desktop.handleDesktopPointerMove;
+pub const handleDesktopMouseButton = panes_desktop.handleDesktopMouseButton;
+pub const handleDesktopMouseRelease = panes_desktop.handleDesktopMouseRelease;
+pub const handleDesktopScroll = panes_desktop.handleDesktopScroll;
 
 pub const WIN_TERMINAL_ID = panes_terminal.WIN_TERMINAL_ID;
 pub const ICON_GUEST_SSH_ID = panes_terminal.ICON_GUEST_SSH_ID;
@@ -31,7 +50,6 @@ pub const ICON_TERM_OSK_BTN_ID = panes_terminal.ICON_TERM_OSK_BTN_ID;
 pub const ICON_TERM_CLEAR_BTN_ID = panes_terminal.ICON_TERM_CLEAR_BTN_ID;
 pub const ICON_TERM_INVERT_BTN_ID = panes_terminal.ICON_TERM_INVERT_BTN_ID;
 pub const openGuestTerminal = panes_terminal.openGuestTerminal;
-pub const closeTerminalWindow = panes_terminal.closeTerminalWindow;
 pub const onTerminalNavigateBack = panes_terminal.onTerminalNavigateBack;
 pub const hasLiveSshSession = panes_terminal.hasLiveSshSession;
 pub const pollTerminal = panes_terminal.pollTerminal;
@@ -439,5 +457,6 @@ test {
     _ = panes_tasks;
     _ = panes_quota;
     _ = panes_terminal;
+    _ = panes_desktop;
     std.testing.refAllDecls(@This());
 }

@@ -43,6 +43,7 @@ pub const closeInputDevices = input.closeInputDevices;
 pub const fillPollFds = input.fillPollFds;
 pub const applyMotionEvent = input.applyMotionEvent;
 pub const pollIntroInput = input.pollIntroInput;
+pub const pollMainInput = input.pollMainInput;
 
 pub fn getMilliTimestamp() i64 {
     var ts: linux.timespec = undefined;

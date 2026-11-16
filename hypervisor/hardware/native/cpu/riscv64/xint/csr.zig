@@ -181,16 +181,16 @@ fn emulateWfi(vc: *vcore.VirtualCore) void {
     // Route physical PLIC interrupts pending on this hart to Root VSEIP.
     const mip_val = riscv.readMip();
     const raw_ext = (mip_val & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0;
-    const ext_pending = raw_ext and vc.guest.is_root;
+    const ext_pending = raw_ext and vc.guest.has_host_passthrough;
     if (raw_ext) {
-        if (vc.guest.is_root) {
+        if (vc.guest.has_host_passthrough) {
             vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
             const mask = ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
             riscv.writeMie(riscv.MIE.ALL_PHYSICAL & mask);
         } else {
             _ = @import("interrupt.zig").deliverRootExternalIrq(pcpu);
         }
-    } else if (vc.guest.is_root) {
+    } else if (vc.guest.has_host_passthrough) {
         vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSEIP);
         riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
     }
@@ -224,11 +224,11 @@ fn emulateWfi(vc: *vcore.VirtualCore) void {
     // Block this vCore on the current physical CPU's blocked queue.
     // Deschedule from this physical CPU before publishing wfi_blocked = true
     // so a concurrent tryWake() + scheduler.queue() on another core never
-    // sees running_on_cpu != null.
+    // sees getRunningCpu() != null.
     scheduler.accountRuntime(vc);
-    vc.running_on_cpu = null;
     @atomicStore(u64, &vc.last_dispatched_time, 0, .monotonic);
     pcpu.active_vcore = null;
+    vc.setRunningCpu(null);
     vc.last_queued_time = riscv.readTime();
     const b_wfi_prev = pcpu.blocked_lock.lock();
     if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
@@ -238,15 +238,15 @@ fn emulateWfi(vc: *vcore.VirtualCore) void {
             riscv.writeHvip(vc.getNativeMachine().hvip);
         }
         riscv.writeMepc(vc.getNativeMachine().mepc);
-        vc.state = .ready;
+        @atomicStore(vcore.VirtualCoreState, &vc.state, .ready, .seq_cst);
         scheduler.queue(vc);
         scheduler.schedule();
         return;
     }
     vc.blocked_node.contents = vc;
     pcpu.blocked_queue.pushStart(&vc.blocked_node);
-    vc.blocked_on_cpu = pcpu.cpu_core_id;
-    @atomicStore(bool, &vc.wfi_blocked, true, .release);
+    vc.setBlockedCpu(pcpu.cpu_core_id);
+    @atomicStore(bool, &vc.wfi_blocked, true, .seq_cst);
     pcpu.blocked_lock.unlock(b_wfi_prev);
     scheduler.schedule();
 }

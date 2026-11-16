@@ -1,0 +1,313 @@
+// Machine-mode hypervisor and shared ABI feature nodes.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+.{
+    .{
+        .id = "mmode-asm-entry",
+        .name = "M-mode assembly bootstrap",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/hardware/native/cpu/riscv64/entry.s",
+            "hypervisor/hardware/native/cpu/riscv64/consts.s",
+            "hypervisor/hardware/native/cpu/riscv64/linker.ld",
+            "hypervisor/hardware/native/cpu/riscv64/util.s",
+        },
+        .summary =
+        \\Position-independent 64-bit RISC-V M-mode reset vector, atomic
+        \\hart lottery, BSS zeroing, DTB relocation, per-hart slab setup,
+        \\and low-level CPU utility routines.
+        ,
+        .activated_by = .{},
+        .docs = .{
+            "docs/build.md#early-assembly-bootstrap",
+            "docs/architecture.md#core-design-philosophy-and-rationale",
+        },
+    },
+    .{
+        .id = "mmode-main-loop",
+        .name = "Hypervisor main loop and metadata",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/main.zig",
+            "hypervisor/core/metadata.zig",
+            "boot/banner.txt",
+            "boot/hypervisor.conf",
+        },
+        .summary =
+        \\M-mode main entry point, per-hart initialization, root VM
+        \\bootstrap handoff, and the native and emulated vCPU run and idle
+        \\dispatch loop.
+        ,
+        .activated_by = .{
+            "mmode-asm-entry",
+        },
+        .docs = .{
+            "docs/architecture.md#core-design-philosophy-and-rationale",
+            "docs/build.md#declarative-build-configuration",
+            "README.md#what-makes-diosix-different",
+        },
+    },
+    .{
+        .id = "mmode-fdt-discovery",
+        .name = "Host FDT probing and DTB builder",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/hardware/native/discovery.zig",
+            "hypervisor/hardware/native/fdt.zig",
+            "hypervisor/core/dt.zig",
+            "hypervisor/core/dt/blob.zig",
+            "hypervisor/core/dt/prop.zig",
+            "hypervisor/core/dt/serialize.zig",
+        },
+        .summary =
+        \\Runtime flattened device tree (FDT) parser, node editor, and
+        \\serializer used to discover host RAM, CPUs, timers, and UARTs
+        \\and to synthesize scrubbed guest DTBs.
+        ,
+        .activated_by = .{
+            "mmode-main-loop",
+        },
+        .docs = .{
+            "docs/build.md#runtime-fdt-hardware-discovery",
+            "docs/build.md#booting-on-physical-risc-v-boards",
+        },
+    },
+    .{
+        .id = "mmode-cpu-traps",
+        .name = "RISC-V trap vector, CSRs, and timers",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/hardware/native/cpu/riscv64/mod.zig",
+            "hypervisor/hardware/native/cpu/riscv64/csr.zig",
+            "hypervisor/hardware/native/cpu/riscv64/csr/guest.zig",
+            "hypervisor/hardware/native/cpu/riscv64/csr/hmode.zig",
+            "hypervisor/hardware/native/cpu/riscv64/xint.s",
+            "hypervisor/hardware/native/cpu/riscv64/xint.zig",
+            "hypervisor/hardware/native/cpu/riscv64/xint/csr.zig",
+            "hypervisor/hardware/native/cpu/riscv64/xint/exception.zig",
+            "hypervisor/hardware/native/cpu/riscv64/xint/interrupt.zig",
+            "hypervisor/hardware/native/cpu/riscv64/xint/state.zig",
+            "hypervisor/hardware/native/cpu/riscv64/mock.zig",
+            "hypervisor/hardware/native/drivers/clint.zig",
+        },
+        .summary =
+        \\M-mode trap entry, H-extension CSR accessors, floating-point and
+        \\vector context switching, hardware and CLINT timer programming,
+        \\and exception and interrupt dispatch.
+        ,
+        .activated_by = .{
+            "mmode-main-loop",
+        },
+        .docs = .{
+            "docs/architecture.md#execution-engines-and-memory-virtualization",
+            "docs/interface.md#calling-convention-and-registers",
+        },
+    },
+    .{
+        .id = "mmode-memory-isolation",
+        .name = "Physical buddy allocator and stage-2/PMP isolation",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/core/alloc.zig",
+            "hypervisor/core/atomic.zig",
+            "hypervisor/core/dsa.zig",
+            "hypervisor/core/physmem.zig",
+            "hypervisor/core/physmem/discovery.zig",
+            "hypervisor/core/vm.zig",
+            "hypervisor/core/vm/transfer.zig",
+            "hypervisor/hardware/native/cpu/riscv64/sv39x4.zig",
+            "hypervisor/hardware/native/cpu/riscv64/pmp.zig",
+        },
+        .summary =
+        \\Per-core slab heap, interrupt-safe spinlocks, physical buddy page
+        \\allocator, stage-2 Sv39x4 page tables, PMP fallback isolation,
+        \\and checked guest-memory transfer helpers.
+        ,
+        .activated_by = .{
+            "mmode-main-loop",
+            "mmode-cpu-traps",
+        },
+        .docs = .{
+            "docs/architecture.md#execution-engines-and-memory-virtualization",
+            "docs/architecture.md#memory-address-space-terminology",
+            "docs/development.md#memory-ownership-and-allocation",
+        },
+    },
+    .{
+        .id = "mmode-pcore-scheduler",
+        .name = "SMP physical cores and proportional-share scheduler",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/core/dsa/rbtree.zig",
+            "hypervisor/core/pcore.zig",
+            "hypervisor/core/pcore/dispatch.zig",
+            "hypervisor/core/vcore.zig",
+            "hypervisor/core/scheduler.zig",
+            "hypervisor/core/scheduler/quota.zig",
+        },
+        .summary =
+        \\Physical hart registry, inter-processor wakeups, virtual core
+        \\state machine, and per-core and global red-black virtual-runtime
+        \\trees enforcing physical CPU quota ceilings.
+        ,
+        .activated_by = .{
+            "mmode-main-loop",
+            "mmode-cpu-traps",
+        },
+        .docs = .{
+            "docs/architecture.md#hierarchical-vm-tree-and-relative-cids",
+            "docs/guests.md#managing-resource-quotas",
+        },
+    },
+    .{
+        .id = "mmode-debug-gdb",
+        .name = "M-mode serial console and optional GDB RSP stub",
+        .layer = .m_mode,
+        .status = .partial,
+        .files = .{
+            "hypervisor/core/debug.zig",
+            "hypervisor/core/drivers.zig",
+            "hypervisor/core/gdb/stub.zig",
+            "hypervisor/core/gdb/rsp.zig",
+            "hypervisor/core/gdb/packets.zig",
+            "hypervisor/core/gdb/breakpoints.zig",
+        },
+        .summary =
+        \\Crash-safe 8-bit 16550 debug console, SiFive test reset driver,
+        \\and optional serial RSP packet framing and UART polling (exception
+        \\trap hooks remain unwired).
+        ,
+        .activated_by = .{
+            "mmode-main-loop",
+            "mmode-rootvm-boot",
+        },
+        .docs = .{
+            "docs/build.md#remote-debugging-with-gdb",
+            "docs/build.md#debugging-over-serial-rsp",
+        },
+    },
+    .{
+        .id = "mmode-rootvm-boot",
+        .name = "Embedded root VM ELF loader and sizing",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/core/boot.zig",
+            "hypervisor/core/boot/policy.zig",
+            "hypervisor/core/loader.zig",
+            "hypervisor/core/loader/symbols.zig",
+        },
+        .summary =
+        \\Boot-hart initialization that computes root VM RAM and vCPU
+        \\limits, loads segments from the embedded root VM image, generates
+        \\the root VM DTB, and starts CID 1.
+        ,
+        .activated_by = .{
+            "mmode-main-loop",
+        },
+        .docs = .{
+            "docs/architecture.md#single-hypervisor-binary-and-guest-shim",
+            "docs/cli.md#dsx-host",
+        },
+    },
+    .{
+        .id = "mmode-guest-hierarchy",
+        .name = "Hierarchical guest tree, quotas, and failover state",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/core/guest.zig",
+            "hypervisor/core/guest/dtb.zig",
+            "hypervisor/core/guest/lineage.zig",
+            "hypervisor/core/guest/manifest.zig",
+            "hypervisor/core/guest/net.zig",
+            "hypervisor/core/guest/queues.zig",
+            "hypervisor/core/guest/quota.zig",
+            "hypervisor/core/guest/vmid.zig",
+            "hypervisor/core/guest/failover.zig",
+        },
+        .summary =
+        \\Parent-child guest tree, relative CID translation, RAM and CPU
+        \\quota accounting, child DTB synthesis, staged manifest buffers,
+        \\packet, event, and console rings, and root failover.
+        ,
+        .activated_by = .{
+            "mmode-rootvm-boot",
+            "mmode-sbi-dispatch",
+        },
+        .docs = .{
+            "docs/architecture.md#hierarchical-vm-tree-and-relative-cids",
+            "docs/security.md#hierarchical-vm-tree-and-relative-context-ids",
+            "docs/interface.md#relative-context-id-addressing",
+        },
+    },
+    .{
+        .id = "mmode-sbi-dispatch",
+        .name = "Standard SBI and Diosix hypercall dispatcher",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/core/sbi.zig",
+            "hypervisor/core/sbi/standard.zig",
+            "hypervisor/core/sbi/diosix.zig",
+            "hypervisor/core/sbi/info.zig",
+            "hypervisor/core/sbi/console.zig",
+            "hypervisor/core/sbi/ipc.zig",
+            "hypervisor/core/sbi/desktop.zig",
+            "hypervisor/core/sbi/scanout_map.zig",
+            "hypervisor/core/sbi/scanout_map/slots.zig",
+            "hypervisor/core/sbi/charter.zig",
+            "hypervisor/core/sbi/steward.zig",
+        },
+        .summary =
+        \\Standard RISC-V SBI v2.0 and legacy v0.1 extensions alongside
+        \\Diosix hypercall handlers covering VM lifecycle, networking,
+        \\consoles, guest desktop streaming, and charter quorum gates.
+        ,
+        .activated_by = .{
+            "mmode-cpu-traps",
+            "smode-emulation-bridge",
+        },
+        .docs = .{
+            "docs/interface.md#standard-sbi-extensions",
+            "docs/interface.md#diosix-custom-sbi-extension",
+            "docs/architecture.md#charter-guard-and-standby-root-failover",
+            "docs/architecture.md#unified-m-mode-console-rings",
+        },
+    },
+    .{
+        .id = "interface-abi-contracts",
+        .name = "Shared SBI, ELF, and RISC-V ABI definitions",
+        .layer = .interface,
+        .status = .active,
+        .files = .{
+            "hypervisor/interface/lib.zig",
+            "hypervisor/interface/sbi.zig",
+            "hypervisor/interface/elf.zig",
+            "hypervisor/interface/riscv.zig",
+        },
+        .summary =
+        \\Shared freestanding module defining SBI extension and function IDs,
+        \\fixed-width C-ABI hypercall payloads, capability bitmasks, 64-bit
+        \\and 32-bit ELF headers, and RISC-V CSR constants.
+        ,
+        .activated_by = .{
+            "mmode-sbi-dispatch",
+            "mmode-rootvm-boot",
+            "guest-shim-firmware",
+            "cli-core-dispatch",
+            "gui-desktop-core",
+        },
+        .docs = .{
+            "docs/interface.md#data-structure-layouts",
+            "docs/development.md#compatibility-and-internal-refactoring",
+        },
+    },
+}

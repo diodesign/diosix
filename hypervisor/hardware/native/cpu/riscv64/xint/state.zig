@@ -6,6 +6,7 @@
 const std = @import("std");
 const riscv = @import("../mod.zig");
 const interrupt = @import("interrupt.zig");
+const mmio = @import("mmio.zig");
 const pcore = @import("../../../../../core/pcore.zig");
 const vcore = @import("../../../../../core/vcore.zig");
 const scheduler = @import("../../../../../core/scheduler.zig");
@@ -240,21 +241,20 @@ pub fn runIdleLoop(pcpu: *riscv.CpuContext) void {
                 @ptrCast(@alignCast(node.contents));
 
             if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire) or
-                vc.state == .stopped or
-                vc.getGuest().state != .valid)
+                vc.getState() == .stopped or vc.getGuest().state != .valid)
             {
                 pcpu.blocked_queue.remove(node);
-                vc.blocked_on_cpu = null;
-                if (vc.getGuest().state != .valid) vc.state = .stopped;
+                vc.setBlockedCpu(null);
+                if (vc.getGuest().state != .valid) vc.setState(.stopped);
                 it = next_it;
                 continue;
             }
 
             if (checkIdleVCoreWake(vc, now_time, &min_timer)) {
                 pcpu.blocked_queue.remove(node);
-                vc.blocked_on_cpu = null;
-                @atomicStore(bool, &vc.wfi_blocked, false, .release);
-                vc.state = .ready;
+                vc.setBlockedCpu(null);
+                @atomicStore(bool, &vc.wfi_blocked, false, .seq_cst);
+                vc.setState(.ready);
                 scheduler.queue(vc);
             }
 
@@ -288,12 +288,15 @@ pub fn checkIdleVCoreWake(
     if (@atomicLoad(bool, &vc.pending_ipi, .acquire)) return true;
 
     if (vc.exec_path == .native) {
-        if (vc.guest.is_root) {
+        if (vc.guest.has_host_passthrough) {
             const blocked_mip = riscv.readMip();
             if ((blocked_mip & (riscv.MIP.SEIP | riscv.MIP.MEIP)) != 0) {
                 vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
                 return true;
             }
+        } else if (mmio.hasPendingDeviceIrqForHart(vc.guest, vc.id)) {
+            vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
+            return true;
         }
         const gs = vc.getNativeGuestState();
         const timer_armed = interrupt.isGuestTimerArmed(gs);
@@ -352,6 +355,7 @@ pub fn syncGuestStateToHardware(vc: *vcore.VirtualCore) void {
     if (@atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel)) {
         ms.hvip |= riscv.HVIP.VSSIP;
     }
+    mmio.syncVirtualIrqs(vc, vc.guest);
 
     ms.mstatus |= riscv.MSTATUS.VS_DIRTY |
         riscv.MSTATUS.FS_DIRTY |

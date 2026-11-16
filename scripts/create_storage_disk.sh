@@ -2,19 +2,24 @@
 #
 # create_storage_disk.sh: Generate ext4 storage disk image for Diosix VMs.
 #
-# Usage: create_storage_disk.sh <kernel_elf_path> <output_disk_img> [disk_size]
+# Usage: create_storage_disk.sh <kernel_elf> <out_img> [size] [extra_iso_dir]
 #
 # Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
 set -eo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/buildroot_common.sh
+. "${SCRIPT_DIR}/lib/buildroot_common.sh"
+
 KERNEL_ELF="$1"
 OUT_IMG="$2"
-DISK_SIZE="${3:-256M}"
+DISK_SIZE="${3:-1024M}"
+EXTRA_ISO_DIR="${4:-}"
 
 if [ -z "$KERNEL_ELF" ] || [ -z "$OUT_IMG" ]; then
-    echo "Usage: $0 <kernel_elf_path> <output_disk_img> [disk_size]"
+    echo "Usage: $0 <kernel_elf> <out_img> [size] [extra_iso_dir]"
     exit 1
 fi
 
@@ -47,26 +52,33 @@ done
 sort -u "$DEV_AUTH" -o "$DEV_AUTH" 2>/dev/null || true
 chmod 600 "$DEV_AUTH" "$PASS_AUTH" 2>/dev/null || true
 
-# Copy kernel image to standard locations on the storage disk.
-if [ -f "$KERNEL_ELF" ]; then
-    STRIP_TOOL="strip"
-    BR_STRIP="zig-out/buildroot-riscv64/output/host/bin"
-    BR_STRIP="${BR_STRIP}/riscv64-buildroot-linux-gnu-strip"
-    if command -v riscv64-buildroot-linux-gnu-strip >/dev/null 2>&1; then
-        STRIP_TOOL="riscv64-buildroot-linux-gnu-strip"
-    elif [ -x "$BR_STRIP" ]; then
-        STRIP_TOOL="$BR_STRIP"
-    fi
-    "$STRIP_TOOL" -s "$KERNEL_ELF" \
-        -o "$STAGING_DIR/images/diosix-base-linux.elf" 2>/dev/null || \
-        cp "$KERNEL_ELF" "$STAGING_DIR/images/diosix-base-linux.elf"
-    ln -sf diosix-base-linux.elf "$STAGING_DIR/images/default.elf"
-fi
+# Copy kernel, built-in guest images, and stamped manifests onto storage disk.
+stage_builtin_guest_images "$KERNEL_ELF" "$STAGING_DIR"
 
-# Copy system manifest to storage disk.
-if [ -f "tools/overlay-common/etc/diosix/system.toml" ]; then
-    cp "tools/overlay-common/etc/diosix/system.toml" \
-        "$STAGING_DIR/manifests/system.toml"
+# Stage optional ISO media directory into /var/lib/diosix/iso.
+CATALOG_TOML="tools/overlay-common/etc/diosix/catalog.toml"
+if [ -n "$EXTRA_ISO_DIR" ] && [ -d "$EXTRA_ISO_DIR" ]; then
+    mkdir -p "$STAGING_DIR/iso"
+    for iso_file in "$EXTRA_ISO_DIR"/*.iso; do
+        [ -f "$iso_file" ] || continue
+        iso_base="$(basename "$iso_file")"
+        if [ -f "$CATALOG_TOML" ] && command -v sha256sum >/dev/null 2>&1; then
+            exp_hash="$(awk -v fn="\"$iso_base\"" '
+                $1 == "filename" && $3 == fn { found = 1 }
+                found && $1 == "sha256" {
+                    gsub(/"/, "", $3); print $3; exit
+                }
+            ' "$CATALOG_TOML")"
+            if [ -n "$exp_hash" ]; then
+                got_hash="$(sha256sum "$iso_file" | awk '{print $1}')"
+                if [ "$got_hash" != "$exp_hash" ]; then
+                    echo "Error: SHA-256 mismatch for $iso_file" >&2
+                    exit 1
+                fi
+            fi
+        fi
+        cp "$iso_file" "$STAGING_DIR/iso/"
+    done
 fi
 
 cat <<'TXT' > "$STAGING_DIR/README.txt"
@@ -76,7 +88,9 @@ the Diosix hypervisor and Root VM (trusted host supervisor), mounted at
 /var/lib/diosix.
 
 Directory structure:
-  /var/lib/diosix/images/    - Base guest OS images (diosix-base-linux.elf)
+  /var/lib/diosix/images/    - Built-in guest OS images (diosix-base-linux.elf,
+                               linux-cli.elf, linux-desktop.elf)
+  /var/lib/diosix/iso/       - Guest OS installer and live ISO images
   /var/lib/diosix/manifests/ - Declarative domain manifests (system.toml)
   /var/lib/diosix/keys/      - Enrolled FIDO2/TPM passkeys and management keys
   /var/lib/diosix/disks/     - Persistent guest VM storage disks

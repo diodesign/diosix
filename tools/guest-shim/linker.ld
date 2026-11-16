@@ -36,7 +36,7 @@ SECTIONS
 
     . = ALIGN(4096);
     __stack_bottom = .;
-    . += 0x4000; /* 16 KiB S-mode shim stack */
+    . += 0x20000; /* 128 KiB S-mode shim stack */
     __stack_top = .;
     __shim_end = .;
 

@@ -30,9 +30,11 @@ pub fn clearClaimedExternalIrq(pcpu: *riscv.CpuContext) bool {
 
     if (pcpu.active_vcore) |opaque_vc| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-        vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSEIP);
-        if (riscv.hasHExtension()) {
-            riscv.writeHvip(vc.getNativeMachine().hvip);
+        if (vc.guest.has_host_passthrough) {
+            vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSEIP);
+            if (riscv.hasHExtension()) {
+                riscv.writeHvip(vc.getNativeMachine().hvip);
+            }
         }
     }
     if (main.global_root_vm) |g| {
@@ -94,7 +96,7 @@ fn handleTimerInterrupt(pcpu: *riscv.CpuContext) void {
         }
         const elapsed = riscv.readTime() -% active_vc.last_dispatched_time;
         const local_waiting = pcpu.run_queue_count > 0 and
-            !active_vc.guest.is_root;
+            !active_vc.guest.has_host_passthrough;
         if (local_waiting or
             (woke_any and pcpu.run_queue_count > 0) or
             elapsed >= riscv.TIMESLICE_TICKS)
@@ -145,12 +147,20 @@ pub fn wakeExpiredBlockedVCores(
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
 
         if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire) or
-            vc.state == .stopped or
+            @atomicLoad(vcore.VirtualCoreState, &vc.state, .acquire) ==
+                .stopped or
             vc.getGuest().state != .valid)
         {
             pcpu.blocked_queue.remove(node);
-            vc.blocked_on_cpu = null;
-            if (vc.getGuest().state != .valid) vc.state = .stopped;
+            vc.setBlockedCpu(null);
+            if (vc.getGuest().state != .valid) {
+                @atomicStore(
+                    vcore.VirtualCoreState,
+                    &vc.state,
+                    .stopped,
+                    .seq_cst,
+                );
+            }
             it = next_it;
             continue;
         }
@@ -191,9 +201,9 @@ pub fn wakeExpiredBlockedVCores(
 
         if (wake) {
             pcpu.blocked_queue.remove(node);
-            vc.blocked_on_cpu = null;
-            @atomicStore(bool, &vc.wfi_blocked, false, .release);
-            vc.state = .ready;
+            vc.setBlockedCpu(null);
+            @atomicStore(bool, &vc.wfi_blocked, false, .seq_cst);
+            @atomicStore(vcore.VirtualCoreState, &vc.state, .ready, .seq_cst);
             scheduler.queue(vc);
             woke_any = true;
         }
@@ -220,21 +230,29 @@ fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(node.contents));
 
         if (!@atomicLoad(bool, &vc.wfi_blocked, .acquire) or
-            vc.state == .stopped or
+            @atomicLoad(vcore.VirtualCoreState, &vc.state, .acquire) ==
+                .stopped or
             vc.getGuest().state != .valid)
         {
             pcpu.blocked_queue.remove(node);
-            vc.blocked_on_cpu = null;
-            if (vc.getGuest().state != .valid) vc.state = .stopped;
+            vc.setBlockedCpu(null);
+            if (vc.getGuest().state != .valid) {
+                @atomicStore(
+                    vcore.VirtualCoreState,
+                    &vc.state,
+                    .stopped,
+                    .seq_cst,
+                );
+            }
             it = next_it;
             continue;
         }
 
         if (@atomicLoad(bool, &vc.pending_ipi, .acquire)) {
             pcpu.blocked_queue.remove(node);
-            vc.blocked_on_cpu = null;
-            @atomicStore(bool, &vc.wfi_blocked, false, .release);
-            vc.state = .ready;
+            vc.setBlockedCpu(null);
+            @atomicStore(bool, &vc.wfi_blocked, false, .seq_cst);
+            @atomicStore(vcore.VirtualCoreState, &vc.state, .ready, .seq_cst);
             scheduler.queue(vc);
             woke_blocked = true;
         }
@@ -279,7 +297,7 @@ fn handleSoftwareInterrupt(pcpu: *riscv.CpuContext) void {
         const now = riscv.readTime();
         const elapsed = now -% active_vc.last_dispatched_time;
         const local_waiting = pcpu.run_queue_count > 0 and
-            !active_vc.guest.is_root;
+            !active_vc.guest.has_host_passthrough;
         if (woke_blocked or
             local_waiting or
             elapsed >= riscv.TIMESLICE_TICKS or
@@ -300,13 +318,13 @@ pub fn deliverRootExternalIrq(pcpu: *riscv.CpuContext) bool {
         target_vcore = g.findVcore(pcpu.hardware_hart_id);
     } else if (pcpu.active_vcore) |opaque_vc| {
         const vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-        if (vc.guest.is_root) target_vcore = vc;
+        if (vc.guest.has_host_passthrough) target_vcore = vc;
     }
 
     if (target_vcore) |tvc| {
         tvc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
         if (tvc.tryWake()) {
-            tvc.blocked_on_cpu = null;
+            tvc.setBlockedCpu(null);
             scheduler.queue(tvc);
             woke = true;
         }
@@ -323,7 +341,7 @@ pub fn deliverRootExternalIrq(pcpu: *riscv.CpuContext) bool {
             }
         }
 
-        if (tvc.running_on_cpu) |cpu| {
+        if (tvc.getRunningCpu()) |cpu| {
             if (cpu != pcpu.cpu_core_id) {
                 pcore.sendIpiToCpu(cpu);
             }
@@ -342,7 +360,7 @@ fn handleExternalInterrupt(pcpu: *riscv.CpuContext) void {
 
     if (pcpu.active_vcore) |opaque_vc| {
         const active_vc: *vcore.VirtualCore = @ptrCast(@alignCast(opaque_vc));
-        if (woke and !active_vc.guest.is_root) {
+        if (woke and !active_vc.guest.has_host_passthrough) {
             scheduler.schedule();
         }
     } else {

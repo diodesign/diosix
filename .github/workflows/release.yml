@@ -1,0 +1,86 @@
+name: Diosix release bundle
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '2*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-riscv64:
+    name: Build and package RISC-V 64-bit release bundle
+    timeout-minutes: 120
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          clean: true
+
+      - name: Build Ubuntu 26.04 release container
+        run: >-
+          docker build -f dockerfiles/ubuntu-26.04.Dockerfile
+          -t diosix-release-ubuntu .
+
+      - name: Verify formatting and unit tests
+        run: |
+          docker run --rm diosix-release-ubuntu sh -ec '
+            zig fmt --check build.zig build hypervisor tools scripts
+            ./scripts/build.sh test --summary all
+          '
+
+      - name: Build hypervisor, guest images, and standalone release bundle
+        run: |
+          docker volume rm -f diosix-release-zig-out >/dev/null 2>&1 || true
+          docker run --rm \
+            -v diosix-release-zig-out:/diosix/zig-out \
+            diosix-release-ubuntu sh -ec '
+              ./scripts/build.sh
+              ./scripts/make_live_image.sh
+              ./scripts/package_release.sh
+            '
+
+      - name: Run full-stack QEMU integration tests
+        run: |
+          docker run --rm \
+            -v diosix-release-zig-out:/diosix/zig-out \
+            diosix-release-ubuntu python3 scripts/test_manifest_integration.py
+
+      - name: Export release artifacts from container volume
+        run: |
+          rm -rf dist && mkdir -p dist
+          CID=$(docker create -v diosix-release-zig-out:/zig-out \
+            diosix-release-ubuntu)
+          docker cp "${CID}:/zig-out/release/." dist/
+          docker rm -f "$CID"
+          ls -lh dist/
+
+      - name: Publish GitHub Release assets on tag push
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" \
+              dist/*.tar.xz dist/*.tar.xz.sha256 --clobber
+          else
+            gh release create "$TAG_NAME" \
+              dist/*.tar.xz dist/*.tar.xz.sha256 \
+              --title "Diosix ${TAG_NAME}" \
+              --generate-notes
+          fi
+
+      - name: Clean up Docker image and build volume
+        if: always()
+        run: |
+          docker volume rm -f diosix-release-zig-out >/dev/null 2>&1 || true
+          docker rmi diosix-release-ubuntu || true

@@ -109,22 +109,22 @@ pub fn queryParentQuotaSummary() ParentQuotaSummary {
     var guests_buf: [host_info.MAX_RUNNING_GUESTS]host_info.RunningGuest =
         undefined;
     const count = host_info.queryRunningGuests(&guests_buf);
-    var root_max_del_pcpu: u32 = sbi.MAX_CHILD_PCPU_QUOTA_PCT;
-    var root_del_pcpu: u32 = 0;
+    var self_total_pcpu: u32 = 100;
+    var self_del_pcpu: u32 = 0;
     var sum_child_pcpu: u32 = 0;
-    var root_pool_bytes: u64 = 0;
-    var root_del_bytes: u64 = 0;
+    var self_pool_bytes: u64 = 0;
+    var self_own_bytes: u64 = 0;
+    var self_del_bytes: u64 = 0;
     var sum_child_ram_bytes: u64 = 0;
 
     for (0..count) |i| {
         const g = &guests_buf[i];
-        if (g.is_root) {
-            if (g.pcpu_quota_pct > 0 and g.pcpu_quota_pct < 100) {
-                root_max_del_pcpu = g.pcpu_quota_pct;
-            }
-            root_del_pcpu = g.delegated_pcpu_pct;
-            root_pool_bytes = g.ram_quota_bytes;
-            root_del_bytes = @max(g.delegated_ram_bytes, g.used_ram_bytes);
+        if (g.isSelf()) {
+            if (g.pcpu_quota_pct > 0) self_total_pcpu = g.pcpu_quota_pct;
+            self_del_pcpu = g.delegated_pcpu_pct;
+            self_pool_bytes = g.ram_quota_bytes;
+            self_own_bytes = g.ram_bytes;
+            self_del_bytes = @max(g.delegated_ram_bytes, g.used_ram_bytes);
         } else {
             sum_child_pcpu +|= g.pcpu_quota_pct;
             sum_child_ram_bytes +|= if (g.ram_quota_bytes > 0)
@@ -134,32 +134,40 @@ pub fn queryParentQuotaSummary() ParentQuotaSummary {
         }
     }
 
-    if (root_pool_bytes == 0) {
+    if (self_pool_bytes == 0) {
         if (host_info.getHypervisorInfo()) |hv| {
             if (hv.host_free_ram_kb >= 128 * 1024) {
-                root_pool_bytes = hv.host_free_ram_kb * mem_size.KIB;
+                self_pool_bytes = hv.host_free_ram_kb * mem_size.KIB;
             }
         }
     }
-    if (root_pool_bytes == 0) root_pool_bytes = 1536 * mem_size.MIB;
+    if (self_pool_bytes == 0) self_pool_bytes = 1536 * mem_size.MIB;
 
-    const eff_del_pcpu: u32 = @min(
-        root_max_del_pcpu,
-        @max(root_del_pcpu, sum_child_pcpu),
+    const min_ret: u32 = @min(
+        self_total_pcpu -| 1,
+        sbi.DEFAULT_RETAINED_PCPU_PCT,
     );
-    const avail_pcpu: u32 = root_max_del_pcpu -| eff_del_pcpu;
-    const eff_del_bytes: u64 = @max(root_del_bytes, sum_child_ram_bytes);
-    const avail_bytes: u64 = root_pool_bytes -| eff_del_bytes;
+    const max_del_pcpu: u32 = self_total_pcpu -| min_ret;
+    const eff_del_pcpu: u32 = @min(
+        max_del_pcpu,
+        @max(self_del_pcpu, sum_child_pcpu),
+    );
+    const avail_pcpu: u32 = max_del_pcpu -| eff_del_pcpu;
+    const eff_del_bytes: u64 = @max(
+        @max(self_own_bytes +| self_del_bytes, self_del_bytes),
+        sum_child_ram_bytes,
+    );
+    const avail_bytes: u64 = self_pool_bytes -| eff_del_bytes;
 
     return .{
         .pool_ram_mb = @intCast(
-            std.math.clamp(root_pool_bytes / mem_size.MIB, 128, 8192),
+            std.math.clamp(self_pool_bytes / mem_size.MIB, 128, 8192),
         ),
         .avail_ram_mb = @intCast(
             std.math.clamp(avail_bytes / mem_size.MIB, 0, 8192),
         ),
-        .retained_pcpu_pct = 100 -| root_max_del_pcpu,
-        .max_del_pcpu_pct = root_max_del_pcpu,
+        .retained_pcpu_pct = self_total_pcpu -| max_del_pcpu,
+        .max_del_pcpu_pct = max_del_pcpu,
         .delegated_pcpu_pct = eff_del_pcpu,
         .avail_pcpu_pct = avail_pcpu,
     };
@@ -374,8 +382,8 @@ pub fn addGuestDetailQuotaControls(
     const hdr_id = ICON_GUEST_QUOTA_HDR_ID;
     const ink = fb.Color.INK;
 
-    if (guest.is_root) {
-        const hdr = "Host resource pool";
+    if (guest.isSelf()) {
+        const hdr = "Local VM resource pool";
         try addLabel(win, hdr_id, pad_x, cur_y.*, inner_w, row_h, hdr, ink);
         cur_y.* += @intCast(row_h + self.scalePx(2));
 
@@ -393,7 +401,12 @@ pub fn addGuestDetailQuotaControls(
         try addLabel(win, sub_id, pad_x, y0, inner_w, row_h, summary_str, sec);
         cur_y.* += @intCast(row_h + self.scalePx(4));
 
-        const avail_ret: u32 = @min(99, 100 -| summary.delegated_pcpu_pct);
+        const max_self_pct = summary.max_del_pcpu_pct +|
+            summary.retained_pcpu_pct;
+        const avail_ret: u32 = @min(
+            max_self_pct -| 1,
+            max_self_pct -| summary.delegated_pcpu_pct,
+        );
         const max_ret: i32 = @intCast(@max(@as(u32, 1), avail_ret));
         const cur_ret: i32 = std.math.clamp(
             @as(i32, @intCast(summary.retained_pcpu_pct)),
@@ -408,7 +421,7 @@ pub fn addGuestDetailQuotaControls(
             .max_val = max_ret,
             .cur_val = cur_ret,
             .unit = "%",
-            .help = "Minimum host pCPU % retained for the Root VM",
+            .help = "Minimum pCPU % retained for this VM before delegating",
             .user_tag = @intCast(sbi.CID_SELF),
             .cb = onGuestPcpuQuotaSliderChanged,
         });

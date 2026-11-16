@@ -18,6 +18,10 @@ pub const FALLBACK_GUEST_ISO_PATH = sysconfig.FALLBACK_GUEST_ISO_PATH;
 pub const SHIM_HEADER_OFFSET: usize = pe.SHIM_HEADER_OFFSET;
 pub const SHIM_HEADER_MAGIC: u64 = pe.SHIM_HEADER_MAGIC;
 pub const PAGE_ALIGN: usize = pe.PAGE_ALIGN;
+pub const GuestBootExtras = pe.GuestBootExtras;
+pub const isRiscvFlatImage = pe.isRiscvFlatImage;
+pub const isPe32PlusEfi = pe.isPe32PlusEfi;
+pub const requiresShimBoot = pe.requiresShimBoot;
 
 pub const FDT_MAGIC_BE: u32 = fdt_patch.FDT_MAGIC_BE;
 pub const FDT_OFF_DT_STRUCT: usize = fdt_patch.FDT_OFF_DT_STRUCT;
@@ -137,6 +141,50 @@ pub fn loadElfViaForeignMapping(
     ram_bytes: usize,
     vcpus: usize,
 ) !usize {
+    return loadGuestImageViaForeignMapping(
+        client,
+        child_cid,
+        elf_data,
+        dtb_data,
+        shim_payload,
+        .{},
+        base_gpa,
+        ram_bytes,
+        vcpus,
+    );
+}
+
+pub fn loadGuestImageViaForeignMapping(
+    client: *api.DiosixClient,
+    child_cid: usize,
+    elf_data: []const u8,
+    dtb_data: []u8,
+    shim_payload: []const u8,
+    extras: GuestBootExtras,
+    base_gpa: usize,
+    ram_bytes: usize,
+    vcpus: usize,
+) !usize {
+    if (pe.isRiscvFlatImage(elf_data)) {
+        const entry_gpa = try pe.loadFlatImageToChildRam(
+            client,
+            child_cid,
+            elf_data,
+            base_gpa,
+            ram_bytes,
+        );
+        return pe.finalizeChildBootState(
+            client,
+            child_cid,
+            entry_gpa,
+            dtb_data,
+            shim_payload,
+            extras,
+            base_gpa,
+            ram_bytes,
+            vcpus,
+        );
+    }
     if (elf_data.len < ELF32_EHDR_SIZE) return error.InvalidElfHeader;
     if (!std.mem.eql(u8, elf_data[0..4], ELF_MAGIC)) {
         return error.InvalidElfHeader;
@@ -190,10 +238,6 @@ pub fn loadElfViaForeignMapping(
     if (entry_point < min_vaddr) return error.InvalidElfHeader;
 
     const parent_gpa: usize = DEFAULT_PARENT_MAP_GPA;
-    const dtb_offset = if (ram_bytes > 4 * 1024 * 1024)
-        ram_bytes - (3 * 1024 * 1024)
-    else
-        0;
 
     var seg_idx: usize = 0;
     i = 0;
@@ -293,71 +337,17 @@ pub fn loadElfViaForeignMapping(
     const entry_gpa = std.math.add(usize, base_gpa, entry_off) catch
         return error.SegmentOutOfBounds;
 
-    var dtb_gpa: usize = 0;
-    if (dtb_data.len > 0) {
-        const expanded = fdt_patch.expandChildDtbCpuNodes(
-            std.heap.page_allocator,
-            dtb_data,
-            vcpus,
-        );
-        defer if (expanded) |exp| std.heap.page_allocator.free(exp);
-        const eff_dtb = expanded orelse dtb_data;
-        const dtb_end = std.math.add(usize, dtb_offset, eff_dtb.len) catch
-            return error.SegmentOutOfBounds;
-        if (dtb_end > ram_bytes) return error.SegmentOutOfBounds;
-        patchChildDtb(eff_dtb, base_gpa, @intCast(ram_bytes), vcpus);
-        dtb_gpa = std.math.add(usize, base_gpa, dtb_offset) catch
-            return error.SegmentOutOfBounds;
-        const dtb_aligned = std.mem.alignBackward(usize, dtb_offset, 4096);
-        const dtb_end_aligned = std.mem.alignForward(usize, dtb_end, 4096);
-        const dtb_map_sz = dtb_end_aligned - dtb_aligned;
-        const dtb_ram = try client.mapChildMemory(
-            child_cid,
-            base_gpa + dtb_aligned,
-            parent_gpa,
-            dtb_map_sz,
-            MAP_CHILD_RW_FLAGS,
-        );
-        defer client.unmapChildMemory(dtb_ram, parent_gpa) catch {};
-        const rel_dtb = dtb_offset - dtb_aligned;
-        @memcpy(dtb_ram[rel_dtb .. rel_dtb + eff_dtb.len], eff_dtb);
-    }
-
-    if (try pe.computeShimPayloadOffset(
+    return pe.finalizeChildBootState(
+        client,
+        child_cid,
+        entry_gpa,
+        dtb_data,
+        shim_payload,
+        extras,
+        base_gpa,
         ram_bytes,
-        dtb_offset,
-        shim_payload.len,
-    )) |payload_offset| {
-        var off: usize = 0;
-        while (off < shim_payload.len) : (off += LOAD_CHUNK_BYTES) {
-            const copy_sz = @min(LOAD_CHUNK_BYTES, shim_payload.len - off);
-            const map_sz = std.mem.alignForward(usize, copy_sz, PAGE_ALIGN);
-            const chunk_ram = try client.mapChildMemory(
-                child_cid,
-                base_gpa + payload_offset + off,
-                parent_gpa,
-                map_sz,
-                MAP_CHILD_RW_FLAGS,
-            );
-            defer client.unmapChildMemory(chunk_ram, parent_gpa) catch {};
-            @memcpy(chunk_ram[0..copy_sz], shim_payload[off .. off + copy_sz]);
-        }
-        const hdr_ram = try client.mapChildMemory(
-            child_cid,
-            base_gpa + SHIM_HEADER_OFFSET,
-            parent_gpa,
-            PAGE_ALIGN,
-            MAP_CHILD_RW_FLAGS,
-        );
-        defer client.unmapChildMemory(hdr_ram, parent_gpa) catch {};
-        pe.writeShimHeader(hdr_ram, payload_offset, shim_payload.len);
-    }
-
-    console.printStr(
-        "[95%] Configuring device tree and starting guest vCPUs...\n",
+        vcpus,
     );
-    _ = try client.startGuest(child_cid, entry_gpa, dtb_gpa);
-    return entry_gpa;
 }
 
 test "loader: patchChildDtb handles malformed FDT headers safely" {

@@ -21,6 +21,7 @@ pub const DynamicCoreNode = struct {
     id: usize,
     hart_id: usize,
     run_lock: atomic.SpinLock = atomic.SpinLock.init(),
+    run_tree: vcore.SchedulerTree = .{},
     heap_mem: []u8,
     next: ?*DynamicCoreNode = null,
 };
@@ -50,7 +51,9 @@ pub var core_table: [TABLE_ROWS]TableRow = initCoreTable();
 pub var static_contexts: [TABLE_ROWS]riscv.CpuContext = undefined;
 pub var static_run_locks: [TABLE_ROWS]atomic.SpinLock =
     @splat(atomic.SpinLock.init());
-pub var next_cpu_id: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
+pub var static_run_trees: [TABLE_ROWS]vcore.SchedulerTree = @splat(.{});
+pub var online_core_count: std.atomic.Value(usize) =
+    std.atomic.Value(usize).init(0);
 pub var dynamic_heap_ready: std.atomic.Value(bool) =
     std.atomic.Value(bool).init(false);
 pub var host_stopping: std.atomic.Value(bool) =
@@ -67,8 +70,12 @@ pub fn getRunLock(ctx: *riscv.CpuContext) *atomic.SpinLock {
     return &node.run_lock;
 }
 
-pub fn claimNextCpuId() usize {
-    return next_cpu_id.fetchAdd(1, .seq_cst);
+pub fn getRunTree(ctx: *riscv.CpuContext) *vcore.SchedulerTree {
+    if (ctx.cpu_core_id < TABLE_ROWS) {
+        return &static_run_trees[ctx.cpu_core_id];
+    }
+    const node: *DynamicCoreNode = @fieldParentPtr("context", ctx);
+    return &node.run_tree;
 }
 
 pub fn setDynamicHeapReady(allocator: std.mem.Allocator) void {
@@ -90,7 +97,10 @@ pub fn registerStaticCore(
     ctx.hardware_hart_id = hart_id;
     ctx.is_parked = false;
     static_run_locks[id] = atomic.SpinLock.init();
+    static_run_trees[id].init();
+    const was_null = (core_table[id].static_ptr == null);
     core_table[id].static_ptr = ctx;
+    if (was_null) _ = online_core_count.fetchAdd(1, .release);
 }
 
 pub fn registerDynamicCore(id: usize, hart_id: usize) !*riscv.CpuContext {
@@ -110,6 +120,7 @@ pub fn registerDynamicCore(id: usize, hart_id: usize) !*riscv.CpuContext {
     node.id = id;
     node.hart_id = hart_id;
     node.run_lock = atomic.SpinLock.init();
+    node.run_tree.init();
     node.heap_mem = heap_mem;
 
     node.context.cpu_core_id = id;
@@ -130,6 +141,7 @@ pub fn registerDynamicCore(id: usize, hart_id: usize) !*riscv.CpuContext {
 
     node.next = core_table[bucket].dynamic_head;
     core_table[bucket].dynamic_head = node;
+    _ = online_core_count.fetchAdd(1, .release);
     return &node.context;
 }
 
@@ -190,18 +202,7 @@ pub fn isHostTp(tp_val: usize) bool {
 }
 
 pub fn countOnline() usize {
-    var count: usize = 0;
-    for (&core_table) |*row| {
-        if (row.static_ptr != null) count += 1;
-    }
-    const flags = table_lock.lock();
-    defer table_lock.unlock(flags);
-
-    for (&core_table) |*row| {
-        var cur = row.dynamic_head;
-        while (cur) |node| : (cur = node.next) count += 1;
-    }
-    return count;
+    return online_core_count.load(.acquire);
 }
 
 pub fn getTotalFreeHeapBytes() usize {
@@ -244,6 +245,7 @@ pub const contextSwitch = dispatch.contextSwitch;
 pub fn deinitDynamicCores() void {
     const flags = table_lock.lock();
     defer table_lock.unlock(flags);
+    var removed: usize = 0;
     if (global_allocator) |allocator| {
         for (&core_table) |*row| {
             var current_node = row.dynamic_head;
@@ -251,17 +253,20 @@ pub fn deinitDynamicCores() void {
                 const next = node.next;
                 if (node.heap_mem.len > 0) allocator.free(node.heap_mem);
                 allocator.destroy(node);
+                removed += 1;
                 current_node = next;
             }
             row.dynamic_head = null;
         }
     }
+    if (removed > 0) _ = online_core_count.fetchSub(removed, .release);
 }
 
 pub fn resetForTest() void {
     deinitDynamicCores();
     core_table = initCoreTable();
-    next_cpu_id.store(0, .seq_cst);
+    static_run_trees = @splat(.{});
+    online_core_count.store(0, .seq_cst);
     dynamic_heap_ready.store(false, .seq_cst);
     host_stopping.store(false, .seq_cst);
     global_allocator = null;
@@ -273,15 +278,14 @@ fn initStaticTestCore(id: usize, hart_id: usize) void {
     registerStaticCore(id, hart_id, &static_contexts[id]);
 }
 
-test "physical CPU: claimNextCpuId and static cores 0..31 via Column 1" {
+test "physical CPU: static cores 0..31 via Column 1 and online_core_count" {
     _ = dispatch;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
     resetForTest();
     defer resetForTest();
 
-    try testing.expectEqual(@as(usize, 0), claimNextCpuId());
-    try testing.expectEqual(@as(usize, 1), claimNextCpuId());
+    try testing.expectEqual(@as(usize, 0), countOnline());
     for (0..TABLE_ROWS) |id| initStaticTestCore(id, id * 10);
 
     const core3 = fromId(3);

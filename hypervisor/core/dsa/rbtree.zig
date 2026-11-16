@@ -1,4 +1,4 @@
-// Intrusive red-black tree providing O(log N) ordered storage.
+// Intrusive red-black tree providing O(log N) ordered storage and O(1) min.
 //
 // Copyright (c) 2024-2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -7,7 +7,7 @@ const std = @import("std");
 
 pub const RBColor = enum { red, black };
 
-// Intrusive red-black tree providing O(log N) ordered storage.
+// Intrusive red-black tree with cached leftmost minimum node.
 // compareFn returns -1 if a < b, 0 if a == b, and 1 if a > b.
 pub fn RedBlackTree(
     comptime T: type,
@@ -24,17 +24,19 @@ pub fn RedBlackTree(
             contents: T,
         };
 
-        root: ?*Node,
+        root: ?*Node = null,
+        leftmost: ?*Node = null,
 
         pub fn init(self: *Self) void {
             self.root = null;
+            self.leftmost = null;
         }
 
         inline fn isBlack(node: ?*Node) bool {
             return node == null or node.?.color == .black;
         }
 
-        // Insert the given node into the tree.
+        // Insert the given node into the tree and update cached leftmost.
         pub fn insert(self: *Self, node: *Node) void {
             node.left = null;
             node.right = null;
@@ -42,25 +44,30 @@ pub fn RedBlackTree(
 
             var y: ?*Node = null;
             var x = self.root;
+            var is_leftmost = true;
+            var go_left = true;
 
             while (x) |ptr| {
                 y = ptr;
-                if (compareFn(node.contents, ptr.contents) < 0) {
+                go_left = compareFn(node.contents, ptr.contents) < 0;
+                if (go_left) {
                     x = ptr.left;
                 } else {
                     x = ptr.right;
+                    is_leftmost = false;
                 }
             }
 
             node.parent = y;
             if (y == null) {
                 self.root = node;
-            } else if (compareFn(node.contents, y.?.contents) < 0) {
+            } else if (go_left) {
                 y.?.left = node;
             } else {
                 y.?.right = node;
             }
 
+            if (is_leftmost) self.leftmost = node;
             self.insertFixup(node);
         }
 
@@ -138,25 +145,34 @@ pub fn RedBlackTree(
             y.parent = x;
         }
 
-        // Remove the given node from the tree.
+        // Remove the given node from the tree and maintain cached leftmost.
         pub fn remove(self: *Self, z: *Node) void {
+            if (self.leftmost == z) {
+                self.leftmost = self.findNext(z);
+            }
+
             var y = z;
             var y_original_color = y.color;
             var x: ?*Node = null;
+            var x_parent: ?*Node = null;
 
             if (z.left == null) {
                 x = z.right;
+                x_parent = z.parent;
                 self.transplant(z, z.right);
             } else if (z.right == null) {
                 x = z.left;
+                x_parent = z.parent;
                 self.transplant(z, z.left);
             } else {
                 y = self.minimum(z.right.?);
                 y_original_color = y.color;
                 x = y.right;
                 if (y.parent == z) {
+                    x_parent = y;
                     if (x) |xn| xn.parent = y;
                 } else {
+                    x_parent = y.parent;
                     self.transplant(y, y.right);
                     y.right = z.right;
                     y.right.?.parent = y;
@@ -167,8 +183,12 @@ pub fn RedBlackTree(
                 y.color = z.color;
             }
 
+            z.parent = null;
+            z.left = null;
+            z.right = null;
+
             if (y_original_color == .black) {
-                self.removeFixup(x, y.parent);
+                self.removeFixup(x, x_parent);
             }
         }
 
@@ -248,20 +268,19 @@ pub fn RedBlackTree(
             if (x) |xn| xn.color = .black;
         }
 
-        // Find and return the node with the minimum value.
-        pub fn findMin(self: *Self) ?*Node {
-            if (self.root) |root| return self.minimum(root);
-            return null;
+        // Return the cached minimum node in O(1).
+        pub inline fn findMin(self: *const Self) ?*Node {
+            return self.leftmost;
         }
 
-        fn minimum(_: *Self, node: *Node) *Node {
+        fn minimum(_: *const Self, node: *Node) *Node {
             var x = node;
             while (x.left) |left| x = left;
             return x;
         }
 
         // Find and return the in-order successor of the given node.
-        pub fn findNext(_: *Self, node: *Node) ?*Node {
+        pub fn findNext(_: *const Self, node: *Node) ?*Node {
             if (node.right) |right| {
                 var x = right;
                 while (x.left) |left| x = left;
@@ -286,24 +305,103 @@ fn compareU32(a: u32, b: u32) i8 {
     };
 }
 
-test "red-black tree basics" {
+const TestTree = RedBlackTree(u32, compareU32);
+
+fn verifySubtree(
+    node_opt: ?*TestTree.Node,
+    expected_parent: ?*TestTree.Node,
+    min_bound: ?u32,
+    max_bound: ?u32,
+    count_out: *usize,
+) !usize {
+    const node = node_opt orelse return 1;
+    try std.testing.expectEqual(expected_parent, node.parent);
+    if (min_bound) |lo| try std.testing.expect(node.contents > lo);
+    if (max_bound) |hi| try std.testing.expect(node.contents < hi);
+    if (node.color == .red) {
+        try std.testing.expect(
+            node.left == null or node.left.?.color == .black,
+        );
+        try std.testing.expect(
+            node.right == null or node.right.?.color == .black,
+        );
+    }
+    count_out.* += 1;
+    const bh_left = try verifySubtree(
+        node.left,
+        node,
+        min_bound,
+        node.contents,
+        count_out,
+    );
+    const bh_right = try verifySubtree(
+        node.right,
+        node,
+        node.contents,
+        max_bound,
+        count_out,
+    );
+    try std.testing.expectEqual(bh_left, bh_right);
+    return bh_left + @as(usize, if (node.color == .black) 1 else 0);
+}
+
+fn verifyTreeInvariants(tree: *const TestTree, expected_count: usize) !void {
+    if (tree.root) |r| {
+        try std.testing.expectEqual(RBColor.black, r.color);
+        try std.testing.expectEqual(tree.minimum(r), tree.findMin().?);
+    } else {
+        try std.testing.expect(tree.findMin() == null);
+    }
+    var count: usize = 0;
+    _ = try verifySubtree(tree.root, null, null, null, &count);
+    try std.testing.expectEqual(expected_count, count);
+}
+
+test "red-black tree invariants across root, internal, and traversal removals" {
     std.testing.refAllDecls(@This());
     const testing = std.testing;
-    const Tree = RedBlackTree(u32, compareU32);
-    const Node = Tree.Node;
-    var tree: Tree = undefined;
-    tree.init();
-    try testing.expect(tree.findMin() == null);
-    const values = [_]u32{ 10, 20, 30, 15, 25, 5, 1 };
-    var nodes: [values.len]Node = undefined;
-    for (values, 0..) |v, i| {
-        nodes[i] = .{ .contents = v };
+    const n_items = 128;
+    var tree = TestTree{};
+    try verifyTreeInvariants(&tree, 0);
+
+    var nodes: [n_items]TestTree.Node = undefined;
+    for (0..n_items) |i| {
+        const key: u32 = @intCast((i * 37 + 13) % n_items);
+        nodes[i] = .{ .contents = key };
         tree.insert(&nodes[i]);
+        try verifyTreeInvariants(&tree, i + 1);
     }
-    const min = tree.findMin();
-    try testing.expect(min != null and min.?.contents == 1);
-    const next = tree.findNext(min.?);
-    try testing.expect(next != null and next.?.contents == 5);
-    for (&nodes) |*n| tree.remove(n);
-    try testing.expect(tree.root == null);
+
+    var prev: ?u32 = null;
+    var seen: usize = 0;
+    var it = tree.findMin();
+    while (it) |cur| : (it = tree.findNext(cur)) {
+        if (prev) |p| try testing.expect(p < cur.contents);
+        prev = cur.contents;
+        seen += 1;
+    }
+    try testing.expectEqual(@as(usize, n_items), seen);
+
+    // Remove every even key during an in-order findNext walk (hits root and
+    // two-child successor y.parent != z cases with black y).
+    var remaining: usize = n_items;
+    it = tree.findMin();
+    while (it) |cur| {
+        const next_it = tree.findNext(cur);
+        if ((cur.contents & 1) == 0) {
+            tree.remove(cur);
+            remaining -= 1;
+            try verifyTreeInvariants(&tree, remaining);
+        }
+        it = next_it;
+    }
+    try testing.expectEqual(@as(usize, n_items / 2), remaining);
+
+    // Remove remaining odd keys from the root repeatedly until empty.
+    while (tree.root) |r| {
+        tree.remove(r);
+        remaining -= 1;
+        try verifyTreeInvariants(&tree, remaining);
+    }
+    try testing.expectEqual(@as(usize, 0), remaining);
 }

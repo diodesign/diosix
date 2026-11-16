@@ -1,4 +1,4 @@
-// Guest Flattened Device Tree (DTB) builders for RISC-V and AArch64 Root VMs.
+// Guest Flattened Device Tree (DTB) builder for RISC-V Root VMs.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -10,13 +10,6 @@ const debug = @import("../debug.zig");
 const sbi = @import("interface").sbi;
 
 pub const MAX_DT_ITER_DEPTH: usize = 10;
-pub const AARCH64_PL011_BASE: u64 = 0x09000000;
-pub const AARCH64_PL011_SIZE: u64 = 0x1000;
-pub const AARCH64_GICD_BASE: u64 = 0x08000000;
-pub const AARCH64_GICD_SIZE: u64 = 0x10000;
-pub const AARCH64_GICC_BASE: u64 = 0x08010000;
-pub const AARCH64_GICC_SIZE: u64 = 0x10000;
-pub const AARCH64_TIMER_IRQ_FLAGS: u32 = 0x304;
 
 const BASE_RISCV_BOOTARGS =
     "console=hvc0 earlycon=sbi rootfstype=ramfs cma=32M no4lvl maxcpus={} " ++
@@ -251,22 +244,36 @@ pub fn buildRiscvGuestDtb(
     return device_tree.toBlob();
 }
 
-pub const aarch64 = @import("dtb/aarch64.zig");
-pub const buildAarch64Dtb = aarch64.buildAarch64Dtb;
-
-test "buildAarch64Dtb creates expected nodes and bootargs" {
-    _ = aarch64;
+test "buildRiscvGuestDtb rewrites memory, bootargs, and CPU nodes" {
     std.testing.refAllDecls(@This());
     const allocator = std.testing.allocator;
-    const tree = try buildAarch64Dtb(
-        allocator,
-        0x80000000,
-        0x10000000,
-        2,
-        "diosix.mode=live",
-    );
+    const P = dt.DeviceTreeProperty;
+    const tree = try dt.DeviceTree.init(allocator);
     defer tree.deinit();
 
-    const model = try tree.getProperty("/", "model");
-    try std.testing.expectEqualStrings("diosix,virt", try model.asText());
+    try tree.editProperty("/", "#address-cells", try P.fromU32(allocator, 2));
+    try tree.editProperty("/", "#size-cells", try P.fromU32(allocator, 2));
+    try tree.editProperty(
+        "/cpus/cpu@0",
+        "reg",
+        try P.fromU32(allocator, 0),
+    );
+    var hart_ids: [4]usize = @splat(99);
+    const blob = try buildRiscvGuestDtb(
+        allocator,
+        tree,
+        .riscv64,
+        0x8000_0000,
+        0x1000_0000,
+        1,
+        "diosix.mode=live",
+        &hart_ids,
+    );
+    defer allocator.free(blob);
+
+    try std.testing.expectEqual(@as(usize, 0), hart_ids[0]);
+    const bootargs = try (try tree.getProperty("/chosen", "bootargs")).asText();
+    try std.testing.expect(
+        std.mem.indexOf(u8, bootargs, "diosix.mode=live") != null,
+    );
 }

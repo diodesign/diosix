@@ -278,6 +278,115 @@ pub fn pollIntroInput(
     }
 }
 
+pub fn pollMainInput(
+    devs: []const InputDeviceInfo,
+    pfds: []const linux.pollfd,
+    display: *display_mod.Display,
+    gui: *gui_mod.DiosixGui,
+) void {
+    var coords_changed = false;
+    var pending_x = gui.cursor.x;
+    var pending_y = gui.cursor.y;
+
+    for (devs, 0..) |*dev_info, i| {
+        if ((pfds[i].revents & linux.POLL.IN) != 0) {
+            while (true) {
+                var ev_buf: [64]InputEvent = undefined;
+                const rd = linux.read(
+                    pfds[i].fd,
+                    @ptrCast(&ev_buf),
+                    @sizeOf(@TypeOf(ev_buf)),
+                );
+                const signed_rd: isize = @bitCast(rd);
+                if (signed_rd <= 0) break;
+
+                const n_bytes: usize = @intCast(signed_rd);
+                const count = n_bytes / @sizeOf(InputEvent);
+                for (ev_buf[0..count]) |ev| {
+                    switch (ev.type) {
+                        EV_KEY => {
+                            const pressed = (ev.value != 0);
+                            const code = ev.code;
+                            if (code == BTN_LEFT or code == BTN_TOUCH) {
+                                if (coords_changed) {
+                                    gui.handleMouseMove(
+                                        pending_x,
+                                        pending_y,
+                                        gui.mouse_left_down,
+                                    );
+                                    coords_changed = false;
+                                }
+                                if (pressed) {
+                                    gui.mouse_left_down = true;
+                                    gui.handleMouseClick(pending_x, pending_y);
+                                } else {
+                                    gui.mouse_left_down = false;
+                                    gui.handleMouseRelease();
+                                }
+                            } else if (code == BTN_RIGHT or
+                                code == BTN_MIDDLE)
+                            {
+                                if (coords_changed) {
+                                    gui.handleMouseMove(
+                                        pending_x,
+                                        pending_y,
+                                        gui.mouse_left_down,
+                                    );
+                                    coords_changed = false;
+                                }
+                                gui.handleAuxMouseButton(
+                                    pending_x,
+                                    pending_y,
+                                    code,
+                                    pressed,
+                                );
+                            } else {
+                                gui_mod.panes.handleEvdevKey(
+                                    gui,
+                                    code,
+                                    ev.value,
+                                );
+                            }
+                        },
+                        EV_REL => {
+                            if (ev.code == REL_WHEEL) {
+                                const dy = 0 -| ev.value;
+                                gui.handleMouseScroll(pending_x, pending_y, dy);
+                            } else {
+                                applyMotionEvent(
+                                    ev,
+                                    dev_info,
+                                    display.width,
+                                    display.height,
+                                    &pending_x,
+                                    &pending_y,
+                                    &coords_changed,
+                                );
+                            }
+                        },
+                        EV_ABS => {
+                            applyMotionEvent(
+                                ev,
+                                dev_info,
+                                display.width,
+                                display.height,
+                                &pending_x,
+                                &pending_y,
+                                &coords_changed,
+                            );
+                        },
+                        else => {},
+                    }
+                }
+            }
+        }
+    }
+
+    if (coords_changed) {
+        gui.handleMouseMove(pending_x, pending_y, gui.mouse_left_down);
+    }
+}
+
 test "display input: event path buffer fits every device index" {
     std.testing.refAllDecls(@This());
     var path_buf: [INPUT_EVENT_PATH_BUF_BYTES]u8 = undefined;

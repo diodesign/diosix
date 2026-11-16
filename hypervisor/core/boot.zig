@@ -18,6 +18,7 @@ const loader = @import("loader.zig");
 const pcore = @import("pcore.zig");
 const sv39x4 = @import("../hardware/native/cpu/riscv64/sv39x4.zig");
 const sbi = @import("sbi.zig");
+const sbi_iface = @import("interface").sbi;
 const elf_spec = @import("interface").elf;
 const emulation = @import("emulation.zig");
 const drivers = @import("drivers.zig");
@@ -172,9 +173,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         @ptrFromInt(rootvm_elf_base),
     )[0..rootvm_elf_size];
     const guest_arch = try loader.Loader.detectArch(rootvm_elf);
-    const root_vm_gpa_base: usize = if (guest_arch == .x86_64)
-        0
-    else if (rootvm_hpa_base >= sv39x4.MAX_GPA)
+    const root_vm_gpa_base: usize = if (rootvm_hpa_base >= sv39x4.MAX_GPA)
         DEFAULT_GUEST_GPA_BASE
     else
         rootvm_hpa_base;
@@ -212,37 +211,18 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         } else |_| {}
     } else |_| {}
 
-    var guest_dtb: ?[]u8 = null;
-    var guest_dtb_owned_tree: ?*dt.DeviceTree = null;
-    defer {
-        if (guest_dtb_owned_tree) |tree| tree.deinit();
-        if (guest_dtb) |dtb_slice| cpu_allocator.free(dtb_slice);
-    }
+    const guest_dtb_slice = try guest_dtb_builder.buildRiscvGuestDtb(
+        cpu_allocator,
+        device_tree,
+        guest_arch,
+        root_vm_gpa_base,
+        rootvm_ram_size,
+        cpu_count,
+        host_bootargs,
+        &guest_hart_ids,
+    );
+    defer cpu_allocator.free(guest_dtb_slice);
 
-    if (guest_arch == .aarch64) {
-        const arm_dt = try guest_dtb_builder.buildAarch64Dtb(
-            cpu_allocator,
-            root_vm_gpa_base,
-            rootvm_ram_size,
-            cpu_count,
-            host_bootargs,
-        );
-        guest_dtb_owned_tree = arm_dt;
-        guest_dtb = try arm_dt.toBlob();
-    } else {
-        guest_dtb = try guest_dtb_builder.buildRiscvGuestDtb(
-            cpu_allocator,
-            device_tree,
-            guest_arch,
-            root_vm_gpa_base,
-            rootvm_ram_size,
-            cpu_count,
-            host_bootargs,
-            &guest_hart_ids,
-        );
-    }
-
-    const guest_dtb_slice = guest_dtb.?;
     if (guest_dtb_slice.len > GUEST_DTB_TAIL_RESERVE_BYTES) {
         return error.OutOfBoundsWrite;
     }
@@ -267,7 +247,7 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
 
     const is_emulated = (guest_arch != .riscv64);
     for (0..cpu_count) |i| {
-        const vcore_id = if (guest_arch == .aarch64) i else guest_hart_ids[i];
+        const vcore_id = guest_hart_ids[i];
         const vc = try root_vm.addVcore(
             vcore_id,
             entry_point,
@@ -281,12 +261,14 @@ pub fn bootCpuInit(cpu_allocator: std.mem.Allocator, dtb: [*]u8) !void {
         }
     }
 
+    const self_pages = rootvm_ram_size / physmem.PageSize;
     const free_pool_pages = physmem.getFreeRamBytes() / physmem.PageSize;
-    if (free_pool_pages > 0) {
-        root_vm.quotas.max_ram_pages = free_pool_pages;
-    }
-    root_vm.quotas.used_ram_pages = 0;
+    root_vm.quotas.max_ram_pages = self_pages +| free_pool_pages;
+    root_vm.quotas.used_ram_pages = self_pages;
+    root_vm.quotas.max_vcpus = sbi_iface.MAX_GUEST_VCPUS;
+    root_vm.quotas.used_vcpus = cpu_count;
     root_vm.quotas.pcpu_quota_pct = 100;
+    root_vm.quotas.retained_pcpu_pct = sbi_iface.DEFAULT_RETAINED_PCPU_PCT;
     root_vm.quotas.delegated_pcpu_pct = 0;
 
     if (root_vm.vcores.start) |vc0_node| {
@@ -409,10 +391,10 @@ test "boot CPU initialization, bootargs forwarding, and resource scaling" {
     const mib: usize = 1024 * 1024;
     const gib: usize = 1024 * mib;
     try testing.expectEqual(128 * mib, computeRootVmRamBytes(512 * mib));
-    try testing.expectEqual(128 * mib, computeRootVmRamBytes(1 * gib));
-    try testing.expectEqual(192 * mib, computeRootVmRamBytes(1536 * mib));
-    try testing.expectEqual(256 * mib, computeRootVmRamBytes(2 * gib));
-    try testing.expectEqual(256 * mib, computeRootVmRamBytes(128 * gib));
+    try testing.expectEqual(256 * mib, computeRootVmRamBytes(1 * gib));
+    try testing.expectEqual(384 * mib, computeRootVmRamBytes(1536 * mib));
+    try testing.expectEqual(512 * mib, computeRootVmRamBytes(2 * gib));
+    try testing.expectEqual(512 * mib, computeRootVmRamBytes(128 * gib));
     try testing.expectEqual(@as(usize, 4), computeRootVmVcpuCount(0));
     try testing.expectEqual(@as(usize, 1), computeRootVmVcpuCount(1));
     try testing.expectEqual(@as(usize, 2), computeRootVmVcpuCount(2));

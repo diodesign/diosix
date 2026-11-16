@@ -84,6 +84,7 @@ pub fn maxMenuLabelWidth() u32 {
 pub fn getContextTitle(selected_menu_id: ?u32) []const u8 {
     const mid = selected_menu_id orelse return "Menu";
     if (mid == gui_mod.ICON_MENU_TERMINAL_ID) return "Terminal";
+    if (mid == gui_mod.ICON_MENU_DISPLAY_ID) return "Display";
     for (MENU_ITEMS) |spec| {
         if (spec.id == mid) return spec.label;
     }
@@ -186,9 +187,11 @@ pub fn contractMainMenu(self: *DiosixGui, selected_menu_id: u32) !void {
     win.active_drag_icon_idx = null;
 
     const name = getContextTitle(selected_menu_id);
-    const is_term = (selected_menu_id == gui_mod.ICON_MENU_TERMINAL_ID);
-    var help: []const u8 = if (is_term)
+    var help: []const u8 = if (selected_menu_id ==
+        gui_mod.ICON_MENU_TERMINAL_ID)
         "Interactive guest VM terminal session"
+    else if (selected_menu_id == gui_mod.ICON_MENU_DISPLAY_ID)
+        "Interactive guest VM graphical display"
     else
         "Selected menu item";
     for (MENU_ITEMS) |spec| {

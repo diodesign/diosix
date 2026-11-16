@@ -27,9 +27,8 @@ pub const FdtToken = enum(u32) {
 };
 
 const HOST_FDT_PREFIXES = [_][]const u8{
-    "virtio_mmio@",  "pci@",  "pcie@",  "serial@",
-    "uart@",         "rtc@",  "flash@", "fw-cfg@",
-    "platform-bus@", "plic@", "clint@", "aliases",
+    "pci@",    "pcie@",         "flash@",
+    "fw-cfg@", "platform-bus@", "aliases",
     "cpu-map",
 };
 
@@ -395,15 +394,17 @@ pub fn patchChildDtb(
                                 var args_buf: [256]u8 = undefined;
                                 const child_args = std.fmt.bufPrint(
                                     &args_buf,
-                                    "console=hvc0 earlycon=sbi " ++
-                                        "rootfstype=ramfs cma=0M no4lvl " ++
-                                        "maxcpus={d} lpj=50000 " ++
+                                    "console=tty0 console=hvc0 " ++
+                                        "earlycon=sbi rootfstype=ramfs " ++
+                                        "cma=0M no4lvl maxcpus={d} " ++
+                                        "lpj=50000 " ++
                                         "rcupdate.rcu_cpu_stall_suppress=1 " ++
                                         "unaligned_scalar_speed=fast",
                                     .{@max(@as(usize, 1), vcpus)},
                                 ) catch
-                                    "console=hvc0 earlycon=sbi " ++
-                                        "rootfstype=ramfs cma=0M no4lvl";
+                                    "console=tty0 console=hvc0 " ++
+                                        "earlycon=sbi rootfstype=ramfs " ++
+                                        "cma=0M no4lvl";
                                 if (prop_len > child_args.len) {
                                     const prop_slice =
                                         dtb[offset .. offset + prop_len];
@@ -429,6 +430,7 @@ pub fn patchChildDtb(
 
 test "vm/fdt_patch: patchChildDtb handles malformed FDT headers safely" {
     std.testing.refAllDecls(@This());
+    _ = @import("fdt_guest.zig");
     const malformed_dtb_len: usize = 64;
     var bad_dtb: [malformed_dtb_len]u8 = @splat(0);
     patchChildDtb(&bad_dtb, 0x8000_0000, 0x1000_0000, 1);

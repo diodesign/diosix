@@ -14,6 +14,7 @@ const text_label = @import("../label.zig");
 const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 const panes_terminal = @import("terminal.zig");
+const panes_desktop = @import("desktop.zig");
 
 const BORDER_GAP = gui_mod.BORDER_GAP;
 const WIN_OSK_ID = gui_mod.WIN_OSK_ID;
@@ -86,6 +87,10 @@ fn findFocusedInput(
     return .{ .win_id = hit.win.id, .icon = hit.icon };
 }
 
+pub fn hasFocusedTextInput(self: *DiosixGui) bool {
+    return findFocusedInput(self) != null;
+}
+
 fn syncInputField(self: *DiosixGui, win_id: u32, ic: *Icon) void {
     if (ic.id == gui_mod.ICON_CREATE_VM_NAME_INPUT_ID) {
         self.setCreateVmName(ic.getText());
@@ -104,7 +109,9 @@ pub fn handleKeyChar(self: *DiosixGui, ch: u8) void {
         const buf = [1]u8{ch};
         self.terminal.sendBytes(&buf);
         self.markWindowDirty(panes_terminal.WIN_TERMINAL_ID);
+        return;
     }
+    _ = panes_desktop.sendAsciiToDesktop(self, ch);
 }
 
 pub fn handleKeySpecial(self: *DiosixGui, cmd: KeyCommand) void {
@@ -166,10 +173,13 @@ pub fn handleKeySpecial(self: *DiosixGui, cmd: KeyCommand) void {
         };
         self.terminal.sendBytes(seq);
         self.markWindowDirty(panes_terminal.WIN_TERMINAL_ID);
+        return;
     }
+    _ = panes_desktop.sendSpecialToDesktop(self, cmd);
 }
 
 pub fn handleEvdevKey(self: *DiosixGui, code: u16, value: i32) void {
+    if (panes_desktop.handleDesktopEvdevKey(self, code, value)) return;
     if (code == 42 or code == 54) {
         shift_held = (value != 0);
         return;
@@ -251,9 +261,10 @@ pub fn handleEvdevKey(self: *DiosixGui, code: u16, value: i32) void {
 pub fn handleOskAction(self: *DiosixGui, icon_id: u32) void {
     if (icon_id >= ICON_OSK_KEY_BASE_ID) {
         const offset = icon_id - ICON_OSK_KEY_BASE_ID;
-        const term_focused = findFocusedInput(self) == null and
-            panes_terminal.isTerminalWindowOpen(self);
-        if (offset == 32 and term_focused) {
+        const capture_enter = findFocusedInput(self) == null and
+            (panes_terminal.isTerminalWindowOpen(self) or
+                panes_desktop.isDesktopWindowOpen(self));
+        if (offset == 32 and capture_enter) {
             handleKeyChar(self, '\n');
             self.osk_state.clearInput();
             buildOskWindow(self) catch {};

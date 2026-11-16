@@ -241,10 +241,7 @@ pub const Engine = struct {
                 self.trap(cause, ret_pc, ret_pc);
                 return null;
             }
-            const dec_step = decoder_rv32.decodeForArch(
-                self.vcpu.guest_arch,
-                fetch_step.val,
-            );
+            const dec_step = decoder_rv32.decode(fetch_step.val);
             if (dec_step.insn != .ecall and
                 dec_step.insn != .wfi and
                 dec_step.insn != .pause)
@@ -285,6 +282,10 @@ pub const Engine = struct {
             self.pc_history[self.history_idx & PC_HISTORY_MASK] = pc_before;
             self.history_idx += 1;
             self.last_pc = pc_before;
+
+            if (self.bus.syncDeviceIrqs()) {
+                self.vcpu.setMipBit(riscv.MIP.SEIP_BIT);
+            }
 
             // Check if supervisor interrupts can be delivered.
             const sie = (self.vcpu.mstatus & riscv.MSTATUS.SIE) != 0;
@@ -343,10 +344,7 @@ pub const Engine = struct {
                 continue;
             }
 
-            const decoded = decoder_rv32.decodeForArch(
-                self.vcpu.guest_arch,
-                fetch_res.val,
-            );
+            const decoded = decoder_rv32.decode(fetch_res.val);
             if (decoded.insn == .ecall) {
                 if (self.vcpu.privilege_mode == vcpu_mod.PRIV_SUPERVISOR) {
                     self.vcpu.pc = pc_before + decoded.len;
@@ -405,7 +403,6 @@ fn readInsnAt(buf: []const u8, offset: usize) u32 {
 
 test "Dynarec RV32A atomic and inlined SoftTLB fast-path emission" {
     std.testing.refAllDecls(@This());
-    _ = @import("regalloc.zig");
     _ = @import("tests/instruction.zig");
     _ = @import("tests/privilege.zig");
     var vcpu = vcpu_mod.VCpu{ .id = 0, .pc = 0x8000_0000 };

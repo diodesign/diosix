@@ -10,15 +10,27 @@ on:
       - devel
       - stable
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/stable' }}
+
 jobs:
   ubuntu-build:
-    name: Ubuntu 22.04 build and test
+    name: Ubuntu 26.04 build and test
+    timeout-minutes: 90
     # Use ubuntu-latest for external fork PRs; otherwise use self-hosted.
     runs-on: >-
       ${{ (github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name != github.repository) &&
       'ubuntu-latest' || 'self-hosted' }}
     steps:
+      - name: Reclaim disk space on ephemeral GitHub-hosted runners
+        if: runner.environment == 'github-hosted'
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -26,21 +38,30 @@ jobs:
 
       - name: Build Docker container
         run: >-
-          docker build -f dockerfiles/ubuntu-22.04.Dockerfile
+          docker build -f dockerfiles/ubuntu-26.04.Dockerfile
           -t diosix-ubuntu .
 
-      - name: Run unit tests
-        run: docker run --rm diosix-ubuntu ./scripts/build.sh test
-
-      - name: Verify guest Root VM boots to login shell
+      - name: Check formatting and run unit and feature-graph tests
         run: |
-          docker run --rm diosix-ubuntu sh -c ' \
-            ./scripts/build.sh run > qemu.log 2>&1 & \
-            QEMU_PID=$! && \
-            timeout 60s sh -c \
-              "until grep -q \"diosix-rootvm login:\" qemu.log; \
-              do sleep 1; done" && \
-            kill $QEMU_PID || true'
+          docker run --rm diosix-ubuntu sh -ec '
+            zig fmt --check build.zig build hypervisor tools scripts
+            ./scripts/build.sh test --summary all
+          '
+
+      - name: Build hypervisor, root VM, and live disk image
+        run: |
+          docker run --rm \
+            -v diosix-ubuntu-zig-out:/diosix/zig-out \
+            diosix-ubuntu sh -ec '
+              ./scripts/build.sh
+              ./scripts/make_live_image.sh
+            '
+
+      - name: Run full-stack QEMU integration tests
+        run: |
+          docker run --rm \
+            -v diosix-ubuntu-zig-out:/diosix/zig-out \
+            diosix-ubuntu python3 scripts/test_manifest_integration.py
 
       - name: Clean up Docker image
         if: always()
@@ -48,12 +69,17 @@ jobs:
 
   fedora-build:
     name: Fedora 44 build and test
+    timeout-minutes: 90
     # Keeps the same secure, dynamic runner logic for the Fedora pipeline.
     runs-on: >-
       ${{ (github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name != github.repository) &&
       'ubuntu-latest' || 'self-hosted' }}
     steps:
+      - name: Reclaim disk space on ephemeral GitHub-hosted runners
+        if: runner.environment == 'github-hosted'
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -64,18 +90,27 @@ jobs:
           docker build -f dockerfiles/fedora-44.Dockerfile
           -t diosix-fedora .
 
-      - name: Run unit tests
-        run: docker run --rm diosix-fedora ./scripts/build.sh test
-
-      - name: Verify guest Root VM boots to login shell
+      - name: Check formatting and run unit and feature-graph tests
         run: |
-          docker run --rm diosix-fedora sh -c ' \
-            ./scripts/build.sh run > qemu.log 2>&1 & \
-            QEMU_PID=$! && \
-            timeout 60s sh -c \
-              "until grep -q \"diosix-rootvm login:\" qemu.log; \
-              do sleep 1; done" && \
-            kill $QEMU_PID || true'
+          docker run --rm diosix-fedora sh -ec '
+            zig fmt --check build.zig build hypervisor tools scripts
+            ./scripts/build.sh test --summary all
+          '
+
+      - name: Build hypervisor, root VM, and live disk image
+        run: |
+          docker run --rm \
+            -v diosix-fedora-zig-out:/diosix/zig-out \
+            diosix-fedora sh -ec '
+              ./scripts/build.sh
+              ./scripts/make_live_image.sh
+            '
+
+      - name: Run full-stack QEMU integration tests
+        run: |
+          docker run --rm \
+            -v diosix-fedora-zig-out:/diosix/zig-out \
+            diosix-fedora python3 scripts/test_manifest_integration.py
 
       - name: Clean up Docker image
         if: always()

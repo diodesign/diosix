@@ -4,14 +4,97 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
 const physmem = @import("../physmem.zig");
 const scheduler = @import("../scheduler.zig");
 const guest_mod = @import("../guest.zig");
+const vcore = @import("../vcore.zig");
 const sbi = @import("interface").sbi;
+const pcore = @import("../pcore.zig");
+const emulation = @import("emulation");
 const quota_mod = @import("quota.zig");
+pub const net_mod = @import("net.zig");
 
 pub const MAX_STOP_SPINS: usize = 10_000_000;
 pub const STOP_IPI_RETRY_SPINS: usize = 1024;
+pub const NetPort = net_mod.NetPort;
+pub const deliverToChildUpstream = net_mod.deliverToChildUpstream;
+pub const deliverToParentDownstream = net_mod.deliverToParentDownstream;
+pub const routeEthernetFrameOnPort = net_mod.routeEthernetFrameOnPort;
+pub const routeEthernetFrame = net_mod.routeEthernetFrame;
+pub const onVirtioNetTx = net_mod.onVirtioNetTx;
+
+fn ensureGuestDramRangeMapped(
+    g: *guest_mod.Guest,
+    addr: usize,
+    len: usize,
+) bool {
+    if (len == 0 or g.space.mode != .h_paging or g.space.base_hpa != 0) {
+        return true;
+    }
+    const end = std.math.add(usize, addr, len) catch return false;
+    var page_gpa = std.mem.alignBackward(usize, addr, physmem.PageSize);
+    while (page_gpa < end) {
+        if ((g.space.translateGPA(page_gpa) catch null) == null) {
+            if (g.space.range_size == 0 or page_gpa < g.space.base_gpa or
+                (page_gpa - g.space.base_gpa) >= g.space.range_size)
+            {
+                return false;
+            }
+            if (!g.checkRamQuota(1)) return false;
+            const mapped_new = g.space.handleFault(
+                @ptrCast(g),
+                page_gpa,
+                0,
+            ) catch return false;
+            if (mapped_new) g.consumeQuota(1, 0);
+            if (!builtin.is_test) pcore.this().gstage_dirty = true;
+        }
+        page_gpa = std.math.add(usize, page_gpa, physmem.PageSize) catch break;
+    }
+    return true;
+}
+
+pub fn guestReadMemory(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
+    const g: *guest_mod.Guest = @ptrCast(@alignCast(ctx));
+    const addr: usize = std.math.cast(usize, gpa) orelse return false;
+    if (!ensureGuestDramRangeMapped(g, addr, buf.len)) return false;
+    g.space.copyFromGuest(buf, addr) catch return false;
+    return true;
+}
+
+pub fn guestWriteMemory(ctx: *anyopaque, gpa: u64, buf: []const u8) bool {
+    const g: *guest_mod.Guest = @ptrCast(@alignCast(ctx));
+    const addr: usize = std.math.cast(usize, gpa) orelse return false;
+    if (!ensureGuestDramRangeMapped(g, addr, buf.len)) return false;
+    g.space.copyToGuest(addr, buf) catch return false;
+    return true;
+}
+
+pub fn initVirtualDevices(self: *guest_mod.Guest) void {
+    const mem = emulation.MemoryAccessor{
+        .ctx = self,
+        .readFn = guestReadMemory,
+        .writeFn = guestWriteMemory,
+    };
+    self.vsock = emulation.VirtioVsock{
+        .guest_cid = self.local_cid,
+        .mem = mem,
+        .router = emulation.global_vsock_router,
+        .route_fn = guest_mod.lineage_mod.routeVsockPacket,
+    };
+    emulation.global_vsock_router.register(&self.vsock);
+    self.gpu = emulation.VirtioGpu.initWithMem(
+        self.local_cid,
+        mem,
+        self.allocator,
+    );
+    self.input = emulation.VirtioInput.initWithMem(self.local_cid, mem);
+    self.blk = emulation.VirtioBlk.init(self.space.base_gpa, mem);
+    self.net_dev = emulation.VirtioNet.init(self.local_cid, mem);
+    self.net_dev.tx_ctx = self;
+    self.net_dev.tx_fn = onVirtioNetTx;
+}
 
 pub fn setManifest(self: *guest_mod.Guest, data: []const u8) !void {
     if (data.len > guest_mod.MAX_MANIFEST_SIZE_BYTES) {
@@ -58,9 +141,7 @@ pub fn hasAnyVcoreStarted(self: *const guest_mod.Guest) bool {
 }
 
 pub fn stop(self: *guest_mod.Guest) void {
-    const builtin = @import("builtin");
     const riscv = @import("../../hardware/native/cpu/riscv64/mod.zig");
-    const pcore = @import("../pcore.zig");
     const my_cpu = if (builtin.is_test)
         0
     else
@@ -68,15 +149,15 @@ pub fn stop(self: *guest_mod.Guest) void {
     var it = self.vcores.start;
     while (it) |node| : (it = node.next) {
         const vc = node.contents;
-        vc.state = .stopped;
+        @atomicStore(vcore.VirtualCoreState, &vc.state, .stopped, .seq_cst);
         if (@atomicLoad(bool, &vc.wfi_blocked, .acquire)) {
             _ = vc.tryWake();
         }
-        vc.state = .stopped;
+        @atomicStore(vcore.VirtualCoreState, &vc.state, .stopped, .seq_cst);
         @atomicStore(bool, &vc.wfi_blocked, false, .release);
         scheduler.dequeue(vc);
         if (!builtin.is_test) {
-            if ((@as(*volatile ?usize, &vc.running_on_cpu)).*) |home_cpu| {
+            if (vc.getRunningCpu()) |home_cpu| {
                 if (home_cpu != my_cpu) pcore.sendIpiToCpu(home_cpu);
             }
         }
@@ -87,15 +168,12 @@ pub fn stop(self: *guest_mod.Guest) void {
         while (it) |node| : (it = node.next) {
             const vc = node.contents;
             var spins: usize = 0;
-            while ((@as(*volatile ?usize, &vc.running_on_cpu)).* != null and
-                spins < MAX_STOP_SPINS) : (spins += 1)
-            {
-                const cur_cpu =
-                    (@as(*volatile ?usize, &vc.running_on_cpu)).* orelse break;
-                if (cur_cpu == my_cpu) break;
+            while (vc.getRunningCpu()) |cur_cpu| {
+                if (cur_cpu == my_cpu or spins >= MAX_STOP_SPINS) break;
                 if (spins % STOP_IPI_RETRY_SPINS == 0) {
                     pcore.sendIpiToCpu(cur_cpu);
                 }
+                spins += 1;
                 std.atomic.spinLoopHint();
             }
         }
@@ -110,8 +188,12 @@ pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
         .guest_id = self.id,
         .out_ctx = self,
         .out_ctx_fn = guest_mod.Guest.guestUartOutputCtx,
+        .in_ctx_fn = guest_mod.Guest.guestUartInputCtx,
+        .peek_in_ctx_fn = guest_mod.Guest.guestUartHasInputCtx,
     };
     self.console_rx.clear();
+    self.gpu.reset();
+    self.input.reset();
     self.timer.reset();
     self.pic.reset();
     var is_primary = true;
@@ -125,6 +207,7 @@ pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
 }
 
 test "guest quota management, H-mode OOM, PMP, manifest, and VMID guard" {
+    _ = net_mod;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -274,4 +357,20 @@ test "guest quota management, H-mode OOM, PMP, manifest, and VMID guard" {
 
     child1.deinit();
     try testing.expect(quota_mod.isVmidAllocated(child2.vmid));
+
+    // 6. VirtIO DMA write/read to unmapped demand-paged child DRAM allocates
+    // and accounts physical pages within guest RAM bounds.
+    child2.space.base_gpa = 0xe000_0000;
+    child2.space.range_size = 0x0040_0000;
+    if (child2.space.paging) |*pt| {
+        pt.root_base_gpa = 0xe000_0000;
+        pt.root_range_size = 0x0040_0000;
+    }
+    const used_before = child2.quotas.used_ram_pages;
+    try testing.expect(guestWriteMemory(child2, 0xe001_0000, "DMA-DEMAND-OK"));
+    try testing.expectEqual(used_before + 1, child2.quotas.used_ram_pages);
+    var dma_out: [13]u8 = undefined;
+    try testing.expect(guestReadMemory(child2, 0xe001_0000, &dma_out));
+    try testing.expectEqualStrings("DMA-DEMAND-OK", &dma_out);
+    try testing.expect(!guestWriteMemory(child2, 0xe080_0000, "OOB"));
 }

@@ -16,7 +16,8 @@ pub const MOCK_RAM_SIZE: usize = 1024 * 1024;
 pub const MOCK_RAM_ALIGN: usize = 4096;
 
 pub var test_cpu_ctx: riscv.CpuContext = undefined;
-pub var test_heap: [MOCK_RAM_SIZE]u8 align(MOCK_RAM_ALIGN) = undefined;
+pub var test_heap: [if (is_test) MOCK_RAM_SIZE else 0]u8 align(MOCK_RAM_ALIGN) =
+    undefined;
 pub var mock_hw_fp_state: riscv.FpState = .{};
 pub var mock_hw_vec_state: riscv.VectorState = .{};
 
@@ -35,13 +36,13 @@ fn hw_dynarec_run_block_mock(_: *[32]u64, _: usize) callconv(.c) usize {
 }
 fn hw_dynarec_exit_mock() callconv(.c) void {}
 
-pub export fn hw_private_variables_mock() *riscv.CpuContext {
+fn hw_private_variables_mock() callconv(.c) *riscv.CpuContext {
     return &test_cpu_ctx;
 }
-pub export fn hw_heap_base_mock() usize {
+fn hw_heap_base_mock() callconv(.c) usize {
     return @intFromPtr(&test_heap);
 }
-pub export fn hw_heap_size_mock() usize {
+fn hw_heap_size_mock() callconv(.c) usize {
     return test_heap.len;
 }
 
@@ -98,7 +99,6 @@ comptime {
 pub fn initMockHardware() void {
     if (!is_test) return;
     @memset(std.mem.asBytes(&test_cpu_ctx), 0);
-    test_cpu_ctx.run_queue.init();
     test_cpu_ctx.blocked_queue.init();
     test_cpu_ctx.blocked_lock = atomic.SpinLock.init();
     test_cpu_ctx.in_m_mode = true;

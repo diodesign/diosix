@@ -72,7 +72,6 @@ pub const A7_REG = @backingInt(arch.Register.a7);
 
 pub fn handle(
     vc: *vcore.VirtualCore,
-    sub_idx: usize,
     context: *riscv.ThreadContext,
 ) void {
     const E = interface.EXT;
@@ -89,10 +88,10 @@ pub fn handle(
                     ((@as(u64, a1) & RV32_WORD_MASK) << RV32_HIGH_SHIFT)
             else
                 a0;
-            handleTimer(vc, sub_idx, context, stime);
+            handleTimer(vc, context, stime);
         },
         E.SRST => handleSystemReset(vc, context, function, a0, a1),
-        E.HSM => standard.handleHSM(vc, sub_idx, context, function, a0, a1, a2),
+        E.HSM => standard.handleHSM(vc, context, function, a0, a1, a2),
         E.DBCN => {
             standard.handleDebugConsole(vc, context, function, a0, a1, a2);
         },
@@ -101,12 +100,12 @@ pub fn handle(
         E.LEGACY_CONSOLE_PUTCHAR => {
             const b: u8 = @truncate(a0);
             vc.getGuest().console_tx.pushByte(b);
-            if (vc.guest.is_root) debug.putchar(b);
+            if (!vc.guest.hasParent()) debug.putchar(b);
         },
         E.LEGACY_CONSOLE_GETCHAR => {
             const ch: isize = if (vc.getGuest().console_rx.popByte()) |b|
                 @as(isize, b)
-            else if (vc.guest.is_root)
+            else if (!vc.guest.hasParent())
                 debug.getchar()
             else
                 -1;
@@ -123,9 +122,7 @@ pub fn handle(
         E.LEGACY_CLEAR_IPI => {
             if (vc.exec_path == .emulated) {
                 if (vc.exec_path.emulated.vcpu) |v| v.clearMipBit(MIP_SSIP_BIT);
-                const sub_ipi =
-                    &vc.exec_path.emulated.sub_vcores[sub_idx].pending_ipi;
-                _ = @atomicRmw(bool, sub_ipi, .Xchg, false, .acq_rel);
+                _ = @atomicRmw(bool, &vc.pending_ipi, .Xchg, false, .acq_rel);
             } else {
                 vc.getNativeMachine().hvip &= ~@as(usize, riscv.HVIP.VSSIP);
                 riscv.writeHvip(vc.getNativeMachine().hvip);
@@ -236,18 +233,12 @@ fn handleBase(
 
 fn handleTimer(
     vc: *vcore.VirtualCore,
-    sub_idx: usize,
     context: *riscv.ThreadContext,
     stime: u64,
 ) void {
     if (vc.exec_path == .emulated) {
         vc.timer_target = stime;
         vc.timer_scheduled = (stime != 0 and stime != riscv.TIMER_INFINITY);
-        if (sub_idx < vcore.max_sub_vcores) {
-            const sub = &vc.exec_path.emulated.sub_vcores[sub_idx];
-            sub.timer_target = stime;
-            sub.timer_scheduled = vc.timer_scheduled;
-        }
         if (vc.exec_path.emulated.vcpu) |v| {
             v.vstimecmp = stime;
             v.clearMipBit(MIP_STIP_BIT);
@@ -324,7 +315,7 @@ pub fn deliverToQueue(
 
 pub fn terminateOrRestart(g: *guest.Guest, exit_code: usize) void {
     const builtin = @import("builtin");
-    if (g.is_root and exit_code != 0) {
+    if (!g.hasParent() and exit_code != 0) {
         if (g.findStandbyRoot()) |standby| {
             if (guest.Guest.promoteStandbyRoot(g, standby)) |_| {
                 _ = charter.incrementFailoverEpoch();
@@ -339,7 +330,7 @@ pub fn terminateOrRestart(g: *guest.Guest, exit_code: usize) void {
         }
     }
     if (g.state != .restarting) {
-        const was_root = g.is_root;
+        const was_root = !g.hasParent();
         if (was_root) {
             if (exit_code == 0) {
                 debug.printf("Root VM exited 0. Powering off host.\n", .{});
@@ -392,6 +383,8 @@ test "parseVersionString and SBI Base extension dispatch" {
     _ = standard;
     _ = @import("sbi/ipc.zig");
     _ = @import("sbi/console.zig");
+    _ = @import("sbi/desktop.zig");
+    _ = @import("sbi/scanout_map.zig");
     _ = @import("sbi/info.zig");
     const testing = std.testing;
     try testing.expectEqual(
@@ -427,19 +420,19 @@ test "parseVersionString and SBI Base extension dispatch" {
 
     ctx[A7_REG] = interface.EXT.BASE;
     ctx[A6_REG] = interface.BASE.GET_SPEC_VERSION;
-    handle(&vc, 0, &ctx);
+    handle(&vc, &ctx);
     try testing.expectEqual(@as(usize, 0), ctx[A0_REG]);
     try testing.expectEqual(@as(usize, interface.SPEC_VERSION), ctx[A1_REG]);
 
     ctx[A6_REG] = interface.BASE.PROBE_EXTENSION;
     ctx[A0_REG] = interface.EXT.DIOSIX;
-    handle(&vc, 0, &ctx);
+    handle(&vc, &ctx);
     try testing.expectEqual(@as(usize, 0), ctx[A0_REG]);
     try testing.expectEqual(@as(usize, 1), ctx[A1_REG]);
 
     ctx[A7_REG] = 0x99999999;
     ctx[A6_REG] = 0;
-    handle(&vc, 0, &ctx);
+    handle(&vc, &ctx);
     const not_sup: usize = @bitCast(SBI_ERR_NOT_SUPPORTED);
     try testing.expectEqual(not_sup, ctx[A0_REG]);
 }

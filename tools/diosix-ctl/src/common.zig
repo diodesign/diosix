@@ -47,6 +47,7 @@ pub const MAX_POSITIONAL_ARGS: usize = 8;
 pub const MAX_IPC_BUF_LEN: usize = 4096;
 pub const MAX_PATH_LEN: usize = 4096;
 pub const MAX_ELF_FILE_SIZE: usize = 256 * 1024 * 1024;
+pub const MAX_MEDIA_FILE_SIZE: usize = 2048 * 1024 * 1024;
 pub const MAX_DTB_FILE_SIZE: usize = 2 * 1024 * 1024;
 pub const MAX_MANIFEST_SIZE: usize = 1024 * 1024;
 

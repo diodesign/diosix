@@ -108,10 +108,10 @@ test "boot policy RAM scaling, vCPU clamping, and bootargs sanitization" {
     const mib: usize = 1024 * 1024;
     const gib: usize = 1024 * mib;
     try testing.expectEqual(128 * mib, computeRootVmRamBytes(512 * mib));
-    try testing.expectEqual(128 * mib, computeRootVmRamBytes(1 * gib));
-    try testing.expectEqual(192 * mib, computeRootVmRamBytes(1536 * mib));
-    try testing.expectEqual(256 * mib, computeRootVmRamBytes(2 * gib));
-    try testing.expectEqual(256 * mib, computeRootVmRamBytes(128 * gib));
+    try testing.expectEqual(256 * mib, computeRootVmRamBytes(1 * gib));
+    try testing.expectEqual(384 * mib, computeRootVmRamBytes(1536 * mib));
+    try testing.expectEqual(512 * mib, computeRootVmRamBytes(2 * gib));
+    try testing.expectEqual(512 * mib, computeRootVmRamBytes(128 * gib));
     try testing.expectEqual(@as(usize, 4), computeRootVmVcpuCount(0));
     try testing.expectEqual(@as(usize, 1), computeRootVmVcpuCount(1));
     try testing.expectEqual(@as(usize, 2), computeRootVmVcpuCount(2));

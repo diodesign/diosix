@@ -236,6 +236,15 @@ pub fn saveGuestRegistry(
     }
 }
 
+const NAME_COL_WIDTH: usize = 20;
+const NAME_PAD_SPACES: []const u8 = "                    ";
+
+fn namePaddingSpaces(name: []const u8) []const u8 {
+    const cp_len = std.unicode.utf8CountCodepoints(name) catch name.len;
+    const pad_spaces: usize = NAME_COL_WIDTH -| cp_len;
+    return NAME_PAD_SPACES[0..pad_spaces];
+}
+
 pub fn printGuestLine(
     cid: usize,
     name: []const u8,
@@ -245,22 +254,25 @@ pub fn printGuestLine(
     trust: []const u8,
     ip: []const u8,
 ) void {
-    const ep_str = if (std.mem.eql(u8, ip, "local") or cid == 1)
-        "local"
-    else if (ip.len > 0)
+    const ep_str = if (ip.len > 0)
         ip
+    else if (cid == 1)
+        "local"
     else
         "dsx login";
 
     const display_name = if (name.len > 0) name else "guest";
+    const pad = namePaddingSpaces(display_name);
     common.printFmt(
-        "{d:<5} {s:<16} {d:<7} {s:<9} {s:<9} {s:<11} {s}\n",
-        .{ cid, display_name, vcpus, ram, status, trust, ep_str },
+        "{d:<4} {s}{s} {d:<6} {s:<8} {s:<8} {s:<9} {s}\n",
+        .{ cid, display_name, pad, vcpus, ram, status, trust, ep_str },
     );
 }
 
 test "registry: matchTarget and GuestRegistryIter" {
     std.testing.refAllDecls(@This());
+    const sample_pad = namePaddingSpaces("├─ trusted-svc");
+    try std.testing.expectEqual(@as(usize, 6), sample_pad.len);
     try std.testing.expectEqualStrings(
         "/run/diosix/guests.toml",
         GUEST_REGISTRY_PATH,

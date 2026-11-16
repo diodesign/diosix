@@ -185,7 +185,7 @@ fn dispatch(context: *riscv.ThreadContext) IRQ {
             if (cpu.active_vcore) |vc_raw| {
                 const vc_term: *vcore.VirtualCore =
                     @ptrCast(@alignCast(vc_raw));
-                if (!vc_term.getGuest().is_root) {
+                if (!vc_term.getGuest().has_host_passthrough) {
                     vc_term.getGuest().terminate();
                     vc_term.state = .stopped;
                 }
@@ -292,7 +292,7 @@ pub export fn xint_handler(context: *riscv.ThreadContext) void {
                 vc.state == .stopped or vc.getGuest().state != .valid;
             if (is_stopped) vc.state = .stopped;
             const local_waiting = pcpu.run_queue_count > 0 and
-                !vc.guest.is_root;
+                !vc.guest.has_host_passthrough;
             const slice_expired = (riscv.readTime() -%
                 @atomicLoad(u64, &vc.last_dispatched_time, .monotonic)) >=
                 riscv.TIMESLICE_TICKS;

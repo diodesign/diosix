@@ -9,41 +9,16 @@
 
 set -eo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/buildroot_common.sh
+. "${SCRIPT_DIR}/lib/buildroot_common.sh"
+
 HYPERVISOR_BIN="${1:-zig-out/guest-riscv64/bin/vmdiosix}"
 KERNEL_ELF="${2:-zig-out/guest-riscv64/bin/rootvm.elf}"
 OUT_IMG="${3:-zig-out/diosix-live-riscv64.img}"
-IMAGE_SIZE_MB="${4:-512}"
+IMAGE_SIZE_MB="${4:-640}"
 
-# Terminal Formatting.
-BOLD="\033[1m"
-DIM="\033[2m"
-GREEN="\033[32m"
-CYAN="\033[36m"
-YELLOW="\033[33m"
-BLUE="\033[34m"
-RESET="\033[0m"
-
-log_banner() {
-    echo -e "${BOLD}${BLUE}=== Diosix Live Image Builder ===${RESET}"
-}
-
-log_step() {
-    echo -e "${BOLD}${CYAN}==>${RESET} ${BOLD}$1${RESET}"
-}
-
-log_info() {
-    echo -e "    ${DIM}->${RESET} $1"
-}
-
-log_ok() {
-    echo -e "    ${GREEN}✓${RESET} $1"
-}
-
-log_warn() {
-    echo -e "    ${YELLOW}!${RESET} $1"
-}
-
-log_banner
+log_banner "Live Image Builder"
 
 # 1. Dependency checks.
 for tool in sfdisk mkfs.vfat mcopy mmd mke2fs truncate dd; do
@@ -67,7 +42,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 ESP_IMG="$TMP_DIR/esp.img"
 DATA_IMG="$TMP_DIR/data.img"
 ESP_SIZE_MB=240
-DATA_SIZE_MB=256
+DATA_SIZE_MB=384
 
 # 2. Build Partition 1: ESP / Boot (FAT32).
 log_step "[1/4] Generating EFI System Partition (FAT32, ${ESP_SIZE_MB}MB)..."
@@ -76,9 +51,12 @@ mkfs.vfat -F 32 -n "ESP_BOOT" "$ESP_IMG" >/dev/null
 
 mmd -i "$ESP_IMG" "::/extlinux" "::/boot" "::/EFI" "::/EFI/BOOT"
 
-# Create standard extlinux.conf with Live, Installer, and Persistent entries.
+# Create standard extlinux.conf with Live, Demo, Installer, and Host entries.
 EXTLINUX_CONF="$TMP_DIR/extlinux.conf"
-cat <<'EOF' > "$EXTLINUX_CONF"
+DEMO_DT_ARGS="diosix.mode=live diosix.intro=skip diosix.demo=desktop"
+DEMO_DT_ARGS="${DEMO_DT_ARGS} console=ttyS0,115200 earlycon"
+DEMO_CLI_ARGS="diosix.mode=live diosix.demo=cli console=ttyS0,115200 earlycon"
+cat <<EOF > "$EXTLINUX_CONF"
 menu title Diosix Hypervisor Boot Menu
 timeout 30
 default diosix-live
@@ -87,6 +65,16 @@ label diosix-live
     menu label Diosix Bare-Metal Hypervisor (Ephemeral Live System)
     kernel /boot/vmdiosix.elf
     append diosix.mode=live console=ttyS0,115200 earlycon
+
+label diosix-live-desktop
+    menu label Diosix Instant Wayland Desktop VM (Live Test-Drive)
+    kernel /boot/vmdiosix.elf
+    append ${DEMO_DT_ARGS}
+
+label diosix-live-cli
+    menu label Diosix Instant Linux CLI VM (Live Test-Drive)
+    kernel /boot/vmdiosix.elf
+    append ${DEMO_CLI_ARGS}
 
 label diosix-install
     menu label Diosix System Installer (Guided / Declarative)
@@ -178,25 +166,7 @@ mkdir -p "$STAGING_DIR/images" "$STAGING_DIR/manifests" \
     "$STAGING_DIR/keys" "$STAGING_DIR/disks"
 chmod 700 "$STAGING_DIR/keys"
 
-if [ -f "$KERNEL_ELF" ]; then
-    STRIP_TOOL="strip"
-    BR_STRIP="zig-out/buildroot-riscv64/output/host/bin"
-    BR_STRIP="${BR_STRIP}/riscv64-buildroot-linux-gnu-strip"
-    if command -v riscv64-buildroot-linux-gnu-strip >/dev/null 2>&1; then
-        STRIP_TOOL="riscv64-buildroot-linux-gnu-strip"
-    elif [ -x "$BR_STRIP" ]; then
-        STRIP_TOOL="$BR_STRIP"
-    fi
-    "$STRIP_TOOL" -s "$KERNEL_ELF" \
-        -o "$STAGING_DIR/images/diosix-base-linux.elf" 2>/dev/null || \
-        cp "$KERNEL_ELF" "$STAGING_DIR/images/diosix-base-linux.elf"
-    ln -sf "diosix-base-linux.elf" "$STAGING_DIR/images/default.elf"
-fi
-
-if [ -f "tools/overlay-common/etc/diosix/system.toml" ]; then
-    cp "tools/overlay-common/etc/diosix/system.toml" \
-        "$STAGING_DIR/manifests/system.toml"
-fi
+stage_builtin_guest_images "$KERNEL_ELF" "$STAGING_DIR"
 
 cat <<'EOF' > "$STAGING_DIR/README.txt"
 === Diosix Persistent Storage Datastore ===
@@ -205,7 +175,8 @@ the Diosix hypervisor and Root VM (trusted host supervisor), mounted canonically
 at /var/lib/diosix.
 
 Directory structure:
-  /var/lib/diosix/images/    - Base guest OS images (diosix-linux.elf, steward)
+  /var/lib/diosix/images/    - Built-in guest OS images (diosix-base-linux.elf,
+                               linux-cli.elf, linux-desktop.elf)
   /var/lib/diosix/manifests/ - Declarative domain manifests (system.toml)
   /var/lib/diosix/keys/      - Enrolled FIDO2/TPM passkeys and management keys
   /var/lib/diosix/disks/     - Persistent guest VM storage disks
@@ -266,10 +237,13 @@ SMP=4
 MEM="2G"
 MODE="live"
 GUI=0
+DEMO=""
 EXTRA=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --desktop) GUI=1; DEMO="desktop"; shift ;;
+        --cli) GUI=0; DEMO="cli"; shift ;;
         --gui) GUI=1; shift ;;
         --smp) SMP="$2"; shift 2 ;;
         --mem) MEM="$2"; shift 2 ;;
@@ -278,10 +252,17 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+APPEND="diosix.mode=${MODE}"
+if [ "$DEMO" = "desktop" ]; then
+    APPEND="${APPEND} diosix.intro=skip diosix.demo=desktop"
+elif [ "$DEMO" = "cli" ]; then
+    APPEND="${APPEND} diosix.demo=cli"
+fi
+
 QEMU_ARGS=(
     -M virt -cpu rv64,h=true,smstateen=true,sstc=true,v=true
     -smp "$SMP" -m "$MEM" -bios none -kernel "$KERNEL"
-    -append "diosix.mode=${MODE}"
+    -append "$APPEND"
     -drive "file=${IMG},format=raw,id=hd0,if=none"
     -device virtio-blk-device,drive=hd0
     -netdev user,id=net0 -device virtio-net-device,netdev=net0
@@ -289,7 +270,8 @@ QEMU_ARGS=(
 
 if [ "$GUI" -eq 1 ]; then
     QEMU_ARGS+=(
-        -device virtio-gpu-pci,xres=1600,yres=900
+        -display gtk,zoom-to-fit=off
+        -device virtio-gpu-pci,xres=1280,yres=800
         -device virtio-keyboard-pci -device virtio-tablet-pci
         -serial mon:stdio
     )

@@ -1,0 +1,3 @@
+# Diosix Linux CLI guest profile metadata read by S50diosix.
+hostname = "linux-cli"
+banner = "Diosix Linux CLI VM"

@@ -61,11 +61,17 @@ pub fn handleGetInfo(
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;
     };
+    if (target_cid != guest.CID_SELF and tg.parent != g) {
+        reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+        return;
+    }
 
+    const is_self = (tg == g);
+    const has_parent = tg.hasParent();
     const max_u = std.math.maxInt(usize);
     const eff_ram: usize = if (tg.space.range_size > 0)
         tg.space.range_size / physmem.PageSize
-    else if (tg.is_root)
+    else if (!has_parent)
         sbi_core.DEFAULT_ROOT_RAM_BYTES / physmem.PageSize
     else if (tg.quotas.used_ram_pages > 0 and tg.quotas.used_ram_pages != max_u)
         tg.quotas.used_ram_pages
@@ -75,6 +81,7 @@ pub fn handleGetInfo(
         sbi_core.DEFAULT_CHILD_RAM_BYTES / physmem.PageSize;
 
     const child_count = blk: {
+        if (!is_self) break :blk 0;
         const s = tg.tree_lock.lock();
         defer tg.tree_lock.unlock(s);
         break :blk tg.children.count();
@@ -91,30 +98,31 @@ pub fn handleGetInfo(
             &tvc.last_dispatched_time,
             .monotonic,
         );
-        if (tvc.running_on_cpu != null and
+        if (tvc.getRunningCpu() != null and
             !@atomicLoad(bool, &tvc.wfi_blocked, .acquire) and
             last_disp > 0 and now > last_disp)
         {
             active_ticks +|= now -| last_disp;
         }
     }
+    const self_parent_id = if (has_parent)
+        guest.CID_PARENT
+    else
+        interface.NO_PARENT_CID;
     const info = interface.GuestInfo{
-        .guest_id = if (tg == g) guest.CID_SELF else target_cid,
-        .parent_id = if (tg == g)
-            (if (g.parent != null) guest.CID_PARENT else 0)
-        else
-            guest.CID_SELF,
+        .guest_id = if (is_self) guest.CID_SELF else target_cid,
+        .parent_id = if (is_self) self_parent_id else guest.CID_SELF,
         .is_trusted = if (tg.is_trusted) 1 else 0,
-        .is_root = if (tg.is_root) 1 else 0,
+        .has_parent = if (has_parent) 1 else 0,
         .target_arch = @backingInt(tg.target_arch),
-        .assigned_cid = if (tg.is_root)
-            guest.CID_SELF
+        .assigned_cid = if (is_self)
+            @intCast(guest.CID_SELF)
         else
-            @truncate(tg.local_cid),
+            @truncate(target_cid),
         .cpu_khz_ticks = @truncate(active_ticks / 1_000),
         .vcpus = vcpus,
         .self_ram_pages = eff_ram,
-        .used_vcpus = if (tg.quotas.used_vcpus > 0)
+        .used_vcpus = if (is_self and tg.quotas.used_vcpus > 0)
             tg.quotas.used_vcpus
         else
             vcpus,
@@ -125,7 +133,7 @@ pub fn handleGetInfo(
         .used_ram_pages = if (tg.quotas.used_ram_pages > 0 and
             tg.quotas.used_ram_pages != max_u)
             tg.quotas.used_ram_pages
-        else if (!tg.is_root and tg.space.mode == .pmp_fallback)
+        else if (has_parent and tg.space.mode == .pmp_fallback)
             eff_ram
         else
             0,
@@ -137,12 +145,12 @@ pub fn handleGetInfo(
         else
             tg.quotas.max_ram_pages,
         .child_count = child_count,
-        .pcpu_quota_pct = if (tg.is_root)
-            guest.quota_mod.maxChildPcpuPct(tg)
+        .pcpu_quota_pct = tg.quotas.pcpu_quota_pct,
+        .delegated_pcpu_pct = if (is_self) tg.quotas.delegated_pcpu_pct else 0,
+        .delegated_ram_pages = if (is_self)
+            tg.quotas.delegated_ram_pages
         else
-            tg.quotas.pcpu_quota_pct,
-        .delegated_pcpu_pct = tg.quotas.delegated_pcpu_pct,
-        .delegated_ram_pages = tg.quotas.delegated_ram_pages,
+            0,
     };
 
     g.space.writeGuestStruct(interface.GuestInfo, info_gpa, info) catch {
@@ -269,4 +277,89 @@ test "formatIsaString populates expected RISC-V ISA extensions" {
     formatIsaString(arch.IsaExtension.MXL_64 | arch.IsaExtension.gc, &out);
     const s = std.mem.sliceTo(&out, 0);
     try std.testing.expectEqualStrings("RV64IMAFDC", s);
+}
+
+test "GET_INFO enforces relative CID 1 and strict child subtree opacity" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const sv39x4 = @import("../../hardware/native/cpu/riscv64/sv39x4.zig");
+    guest.quota_mod.resetGuestManagerForTest();
+    var phys_test = try physmem.initForTest(alloc, 256);
+    defer phys_test.deinit();
+
+    const rw = sv39x4.PTEFlags.leaf_rw_user;
+    const g = try guest.createGuest(
+        alloc,
+        true,
+        true,
+        null,
+        0,
+        0,
+        0,
+        .riscv64,
+    );
+    defer g.deinit();
+    const child = try g.createChild(false, .riscv64, 1);
+    defer child.deinit();
+    try g.setQuota(.{
+        .target_cid = child.local_cid,
+        .max_ram_pages = 64,
+        .pcpu_quota_pct = 50,
+    });
+    const gchild = try child.createChild(false, .riscv64, 1);
+    defer gchild.deinit();
+    try child.setQuota(.{
+        .target_cid = gchild.local_cid,
+        .max_ram_pages = 32,
+        .pcpu_quota_pct = 20,
+    });
+
+    const p_root = try physmem.allocPage();
+    try g.space.map(0x8000_0000, p_root, physmem.PageSize, rw);
+    physmem.decrementPageRef(p_root);
+    const p_child = try physmem.allocPage();
+    try child.space.map(0xe000_0000, p_child, physmem.PageSize, rw);
+    physmem.decrementPageRef(p_child);
+
+    var r_vc = vcore.VirtualCore.init(0, g, 0x8000_0000, 0, .normal);
+    var c_vc = vcore.VirtualCore.init(0, child, 0xe000_0000, 0, .normal);
+    var ctx: riscv.ThreadContext = @splat(0);
+    const ginfo_sz = @sizeOf(interface.GuestInfo);
+    const a0_idx = @backingInt(arch.Register.a0);
+
+    // 1. Child querying self always sees assigned_cid == 1 and has_parent == 1.
+    handleGetInfo(&c_vc, &ctx, child, guest.CID_SELF, 0xe000_0000, ginfo_sz);
+    try testing.expectEqual(@as(usize, 0), ctx[a0_idx]);
+    const c_self = try child.space.readGuestStruct(
+        interface.GuestInfo,
+        0xe000_0000,
+    );
+    try testing.expectEqual(@as(u64, 1), c_self.guest_id);
+    try testing.expectEqual(@as(u8, 1), c_self.assigned_cid);
+    try testing.expectEqual(@as(u8, 1), c_self.has_parent);
+    try testing.expectEqual(@as(u64, guest.CID_PARENT), c_self.parent_id);
+    try testing.expectEqual(@as(u64, 1), c_self.child_count);
+
+    // 2. Parent querying child masks grandchild subtree (child_count == 0).
+    handleGetInfo(&r_vc, &ctx, g, child.local_cid, 0x8000_0000, ginfo_sz);
+    try testing.expectEqual(@as(usize, 0), ctx[a0_idx]);
+    const c_view = try g.space.readGuestStruct(
+        interface.GuestInfo,
+        0x8000_0000,
+    );
+    try testing.expectEqual(@as(u64, child.local_cid), c_view.guest_id);
+    try testing.expectEqual(@as(u8, 1), c_view.has_parent);
+    try testing.expectEqual(@as(u64, guest.CID_SELF), c_view.parent_id);
+    try testing.expectEqual(@as(u64, 0), c_view.child_count);
+    try testing.expectEqual(@as(u32, 0), c_view.delegated_pcpu_pct);
+    try testing.expectEqual(@as(u64, 0), c_view.delegated_ram_pages);
+
+    // 3. Top-level VM sees NO_PARENT_CID and has_parent == 0.
+    handleGetInfo(&r_vc, &ctx, g, guest.CID_SELF, 0x8000_0000, ginfo_sz);
+    const r_self = try g.space.readGuestStruct(
+        interface.GuestInfo,
+        0x8000_0000,
+    );
+    try testing.expectEqual(@as(u8, 0), r_self.has_parent);
+    try testing.expectEqual(interface.NO_PARENT_CID, r_self.parent_id);
 }

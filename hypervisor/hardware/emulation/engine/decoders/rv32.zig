@@ -9,19 +9,6 @@
 const std = @import("std");
 const rv32c = @import("rv32c.zig");
 const encoding = @import("rv32/encoding.zig");
-const aarch64 = @import("aarch64.zig");
-const x86_64 = @import("x86_64.zig");
-
-pub const GUEST_ARCH_AARCH64: u8 = 2;
-pub const GUEST_ARCH_X86_64: u8 = 3;
-
-pub fn decodeForArch(guest_arch: u8, raw_code: u32) DecodedInsn {
-    return switch (guest_arch) {
-        GUEST_ARCH_AARCH64 => aarch64.decode(raw_code),
-        GUEST_ARCH_X86_64 => x86_64.decodeU32(raw_code),
-        else => decode(raw_code),
-    };
-}
 
 pub const decompressRvc = rv32c.decompressRvc;
 pub const signExtend = encoding.signExtend;

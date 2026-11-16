@@ -81,11 +81,15 @@ pub const DIOSIX = struct {
     pub const CONSOLE_WRITE = 25;
     pub const CONSOLE_READ = 26;
     pub const SET_NET_POLICY = 27;
+    pub const GPU_READ_SCANOUT = 28;
+    pub const INPUT_SEND_EVENT = 29;
+    pub const GPU_MAP_SCANOUT = 30;
 };
 
 pub const CID_PARENT: u64 = 0;
 pub const CID_SELF: u64 = 1;
 pub const CID_FIRST_CHILD: u64 = 2;
+pub const NO_PARENT_CID: u64 = std.math.maxInt(u64);
 
 pub const MAX_CHILD_PCPU_QUOTA_PCT: u32 = 90;
 pub const DEFAULT_RETAINED_PCPU_PCT: u32 = 10;
@@ -142,7 +146,7 @@ pub const GuestInfo = extern struct {
     guest_id: u64,
     parent_id: u64,
     is_trusted: u8,
-    is_root: u8,
+    has_parent: u8,
     target_arch: u8, // TargetArch enum value.
     assigned_cid: u8 = 0,
     cpu_khz_ticks: u32 = 0,
@@ -256,6 +260,75 @@ pub const ConsoleArgs = extern struct {
     actual_len: u64 = 0,
 };
 
+pub const MAX_GPU_SCANOUT_PAGES: u32 = 4096;
+pub const SCANOUT_MAP_GPA_BASE: u64 = 0x2_1000_0000;
+pub const SCANOUT_SLOT_BYTES: u64 = 16 * 1024 * 1024;
+pub const SCANOUT_SLOT_COUNT: usize = 2;
+pub const SCANOUT_APERTURE_BYTES: u64 = SCANOUT_SLOT_BYTES * SCANOUT_SLOT_COUNT;
+pub const CURSOR_MAX_PIXELS: usize = 64 * 64;
+
+pub const GpuScanoutFlags = struct {
+    pub const ACTIVE: u32 = 1 << 0;
+    pub const UPDATED: u32 = 1 << 1;
+    pub const SET_DISPLAY_SIZE: u32 = 1 << 2;
+    pub const MAPPED_ZERO_COPY: u32 = 1 << 3;
+    pub const CURSOR_VISIBLE: u32 = 1 << 4;
+    pub const CURSOR_SHAPE_UPDATED: u32 = 1 << 5;
+    pub const UNMAP: u32 = 1 << 6;
+};
+
+pub const GpuScanoutArgs = extern struct {
+    target_cid: u64,
+    pixels_ptr: u64 = 0,
+    page_count: u32 = 0,
+    first_page_offset: u32 = 0,
+    max_pixels: u32 = 0,
+    width: u32 = 0,
+    height: u32 = 0,
+    flags: u32 = 0,
+    frame_seq: u64 = 0,
+};
+
+pub const GpuMapScanoutArgs = extern struct {
+    target_cid: u64,
+    cursor_pixels_ptr: u64 = 0,
+    slot_offset_bytes: u32 = 0,
+    mapped_bytes: u32 = 0,
+    width: u32 = 0,
+    height: u32 = 0,
+    stride_pixels: u32 = 0,
+    format: u32 = 0,
+    dirty_x: u32 = 0,
+    dirty_y: u32 = 0,
+    dirty_w: u32 = 0,
+    dirty_h: u32 = 0,
+    cursor_x: i32 = 0,
+    cursor_y: i32 = 0,
+    cursor_hot_x: u32 = 0,
+    cursor_hot_y: u32 = 0,
+    cursor_w: u32 = 0,
+    cursor_h: u32 = 0,
+    flags: u32 = 0,
+    _reserved: u32 = 0,
+    frame_seq: u64 = 0,
+    cursor_seq: u64 = 0,
+};
+
+pub const MAX_INPUT_BATCH_EVENTS: usize = 32;
+
+pub const InputEventItem = extern struct {
+    type: u16 = 0,
+    code: u16 = 0,
+    value: u32 = 0,
+};
+
+pub const InputEventArgs = extern struct {
+    target_cid: u64,
+    count: u32,
+    _reserved: u32 = 0,
+    events: [MAX_INPUT_BATCH_EVENTS]InputEventItem = @splat(.{}),
+};
+
 pub const MapChildMemArgs = extern struct {
     child_id: u64,
     child_gpa: u64,
@@ -326,6 +399,10 @@ comptime {
     std.debug.assert(@sizeOf(UnmapChildMemArgs) == 16);
     std.debug.assert(@sizeOf(StartArgs) == 24);
     std.debug.assert(@sizeOf(NetPolicyArgs) == 24);
+    std.debug.assert(@sizeOf(GpuScanoutArgs) == 48);
+    std.debug.assert(@sizeOf(GpuMapScanoutArgs) == 104);
+    std.debug.assert(@sizeOf(InputEventItem) == 8);
+    std.debug.assert(@sizeOf(InputEventArgs) == 272);
 }
 
 test "SBI interface structures and extension IDs" {
@@ -351,6 +428,10 @@ test "SBI interface structures and extension IDs" {
     try testing.expectEqual(@as(usize, 16), @sizeOf(UnmapChildMemArgs));
     try testing.expectEqual(@as(usize, 24), @sizeOf(StartArgs));
     try testing.expectEqual(@as(usize, 24), @sizeOf(NetPolicyArgs));
+    try testing.expectEqual(@as(usize, 48), @sizeOf(GpuScanoutArgs));
+    try testing.expectEqual(@as(usize, 104), @sizeOf(GpuMapScanoutArgs));
+    try testing.expectEqual(@as(usize, 8), @sizeOf(InputEventItem));
+    try testing.expectEqual(@as(usize, 272), @sizeOf(InputEventArgs));
 
     // Verify Extension IDs and Function IDs.
     try testing.expectEqual(@as(usize, 0x10), EXT.BASE);
@@ -360,6 +441,7 @@ test "SBI interface structures and extension IDs" {
     try testing.expectEqual(@as(usize, 0x53525354), EXT.SRST);
     try testing.expectEqual(@as(usize, 19), DIOSIX.SEAL_CHARTER);
     try testing.expectEqual(@as(usize, 24), DIOSIX.REQUEST_ROOT_FAILOVER);
+    try testing.expectEqual(@as(usize, 30), DIOSIX.GPU_MAP_SCANOUT);
     try testing.expectEqual(@as(u64, 1 << 5), HypervisorFeature.RELEASE_STABLE);
     try testing.expectEqual(@as(u64, 1 << 6), HypervisorFeature.CHARTER_SEALED);
 }

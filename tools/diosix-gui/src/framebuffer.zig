@@ -257,7 +257,6 @@ pub const Surface = struct {
     pub const drawGraduatedBackground = backdrop.drawGraduatedBackground;
     pub const drawGlassPane = glass.drawGlassPane;
     pub const drawRoundedTranslucentBox = glass.drawRoundedTranslucentBox;
-    pub const drawWindowPane = glass.drawWindowPane;
 
     // Copy rectangular region from src surface to this surface.
     pub fn copyBoxFrom(self: *Surface, src: *const Surface, box: Box) void {

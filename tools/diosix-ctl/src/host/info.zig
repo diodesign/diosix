@@ -155,34 +155,6 @@ pub fn allocHostInfo(
     });
 }
 
-/// Buffer-based form of `allocHostInfo`. Prefer the allocating version; this
-/// remains for callers that supply their own buffer. A formatting failure or
-/// an undersized buffer is reported and yields an empty slice.
-pub fn formatHostInfo(
-    buf: []u8,
-    info: api.HypervisorInfo,
-    json_mode: bool,
-) []const u8 {
-    const allocator = std.heap.page_allocator;
-    const text = allocHostInfo(allocator, info, json_mode) catch |err| {
-        common.printFmt(
-            "Error: Cannot format host info ({s}).\n",
-            .{@errorName(err)},
-        );
-        return "";
-    };
-    defer allocator.free(text);
-    if (text.len > buf.len) {
-        common.printFmt(
-            "Error: Host info ({d} bytes) exceeds the {d}-byte buffer.\n",
-            .{ text.len, buf.len },
-        );
-        return "";
-    }
-    @memcpy(buf[0..text.len], text);
-    return buf[0..text.len];
-}
-
 test "host: formatVersionChannel formats CalVer strings" {
     std.testing.refAllDecls(@This());
     var buf: [MAX_VERSION_STR_LEN]u8 = undefined;

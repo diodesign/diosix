@@ -171,6 +171,30 @@ test "detectKernelFormat and loadRiscvFlatImage for RSC\\x05 header" {
     try testing.expectEqual(@as(usize, 0), res2.entry_offset);
     try testing.expectEqual(@as(usize, 160), res2.loaded_end_offset);
     try testing.expectEqualStrings("RISCV_FLAT_IMAGE", dest2[64..80]);
+
+    // Verify gzip-compressed RISC-V flat Image (`vmlinuz`) loads via
+    // `loadKernelAuto` into the lower half of `dest_buf`.
+    var gz_img: [10 + 5 + img_buf.len + 8]u8 = @splat(0);
+    gz_img[0] = 0x1f;
+    gz_img[1] = 0x8b;
+    gz_img[2] = 0x08;
+    gz_img[9] = 0x03;
+    gz_img[10] = 0x01; // Final stored deflate block.
+    const raw_len: u16 = @intCast(img_buf.len);
+    std.mem.writeInt(u16, gz_img[11..13], raw_len, .little);
+    std.mem.writeInt(u16, gz_img[13..15], ~raw_len, .little);
+    @memcpy(gz_img[15 .. 15 + img_buf.len], &img_buf);
+    const crc = std.hash.Crc32.hash(&img_buf);
+    const tail = 15 + img_buf.len;
+    std.mem.writeInt(u32, gz_img[tail .. tail + 4], crc, .little);
+    std.mem.writeInt(u32, gz_img[tail + 4 .. tail + 8], img_buf.len, .little);
+
+    var gz_dest: [8192]u8 = @splat(0xcc);
+    const gz_res = try loadKernelAuto(&gz_img, &gz_dest);
+    try testing.expectEqual(KernelFormat.riscv_image, gz_res.format);
+    try testing.expectEqual(@as(usize, 0), gz_res.entry_offset);
+    try testing.expectEqual(@as(usize, 160), gz_res.loaded_end_offset);
+    try testing.expectEqualStrings("RISCV_FLAT_IMAGE", gz_dest[64..80]);
 }
 
 test "detectKernelFormat and loadPe32PlusEfi for RISC-V 64 EFI binary" {
@@ -326,7 +350,8 @@ test "parseIso9660Volume and findIso9660Path with nested directories" {
     root_dir[rec2_off + 32] = @intCast(dname.len);
     @memcpy(root_dir[rec2_off + 33 .. rec2_off + 33 + dname.len], dname);
 
-    // Subdirectory /BOOT at sector 20 containing "LOADER.EFI;1" (LBA 21).
+    // Subdirectory /BOOT at sector 20 containing "LOADER.EFI;1" (LBA 21) and
+    // "VMLINUZ_LTS.;1" (LBA 21, matching "vmlinuz-lts").
     const boot_dir = iso_img[20 * ISO_SECTOR_SIZE .. 21 * ISO_SECTOR_SIZE];
     const efifname = "LOADER.EFI;1";
     const rec3_len: u8 = @intCast(33 + efifname.len);
@@ -336,6 +361,21 @@ test "parseIso9660Volume and findIso9660Path with nested directories" {
     boot_dir[25] = 0; // Regular file.
     boot_dir[32] = @intCast(efifname.len);
     @memcpy(boot_dir[33 .. 33 + efifname.len], efifname);
+
+    const vmfname = "VMLINUZ_LTS.;1";
+    const rec4_off: usize = rec3_len;
+    const rec4_len: u8 = @intCast(33 + vmfname.len);
+    boot_dir[rec4_off] = rec4_len;
+    std.mem.writeInt(u32, boot_dir[rec4_off + 2 .. rec4_off + 6], 21, .little);
+    std.mem.writeInt(
+        u32,
+        boot_dir[rec4_off + 10 .. rec4_off + 14],
+        768,
+        .little,
+    );
+    boot_dir[rec4_off + 25] = 0;
+    boot_dir[rec4_off + 32] = @intCast(vmfname.len);
+    @memcpy(boot_dir[rec4_off + 33 .. rec4_off + 33 + vmfname.len], vmfname);
 
     try testing.expectEqual(
         StorageFormat.iso9660,
@@ -357,6 +397,10 @@ test "parseIso9660Volume and findIso9660Path with nested directories" {
     const nested_ext = try findIso9660Path(&iso_img, vol, "/boot/loader.efi");
     try testing.expectEqual(@as(u32, 21), nested_ext.extent_lba);
     try testing.expectEqual(@as(u32, 1024), nested_ext.data_length);
+
+    const hyph_ext = try findIso9660Path(&iso_img, vol, "/boot/vmlinuz-lts");
+    try testing.expectEqual(@as(u32, 21), hyph_ext.extent_lba);
+    try testing.expectEqual(@as(u32, 768), hyph_ext.data_length);
 }
 
 test {

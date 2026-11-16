@@ -1,0 +1,204 @@
+// S-mode emulation, virtual devices, Root VM driver, and guest firmware nodes.
+//
+// Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+// SPDX-License-Identifier: MIT
+.{
+    .{
+        .id = "smode-mmio-trap-emulate",
+        .name = "Stage-2 MMIO trap-and-emulate decoder",
+        .layer = .s_mode_emulation,
+        .status = .active,
+        .files = .{
+            "hypervisor/hardware/native/cpu/riscv64/xint/mmio.zig",
+        },
+        .summary =
+        \\Stage-2 guest-page-fault load and store decoder routing untrusted
+        \\native 64-bit RISC-V child VM MMIO accesses to the per-guest
+        \\emulated device bus.
+        ,
+        .activated_by = .{
+            "mmode-cpu-traps",
+        },
+        .docs = .{
+            "docs/architecture.md#stage-2-mmio-trap-and-emulate",
+        },
+    },
+    .{
+        .id = "smode-emulation-bridge",
+        .name = "Emulated RV32 vCPU state and execution bridge",
+        .layer = .s_mode_emulation,
+        .status = .active,
+        .files = .{
+            "hypervisor/core/emulation.zig",
+            "hypervisor/hardware/emulation/mod.zig",
+            "hypervisor/hardware/emulation/vcpu.zig",
+            "hypervisor/hardware/emulation/vcpu/csr.zig",
+            "hypervisor/hardware/emulation/arch/riscv32/mod.zig",
+            "hypervisor/hardware/emulation/reservation.zig",
+        },
+        .summary =
+        \\Emulated 32-bit RISC-V vCPU register and CSR state, atomic
+        \\reservation sets, and the M-mode batch runner bridging dynamic
+        \\recompiler exits to timers, interrupts, and SBI calls.
+        ,
+        .activated_by = .{
+            "mmode-main-loop",
+            "mmode-sbi-dispatch",
+        },
+        .docs = .{
+            "docs/architecture.md#execution-engines-and-memory-virtualization",
+        },
+    },
+    .{
+        .id = "smode-rv32-dynarec",
+        .name = "RV32-to-RV64 JIT dynamic binary recompiler",
+        .layer = .s_mode_emulation,
+        .status = .active,
+        .files = .{
+            "hypervisor/hardware/emulation/softtlb.zig",
+            "hypervisor/hardware/emulation/softtlb/ops.zig",
+            "hypervisor/hardware/emulation/softtlb/walk.zig",
+            "hypervisor/hardware/emulation/engine/decoders/rv32.zig",
+            "hypervisor/hardware/emulation/engine/decoders/rv32/encoding.zig",
+            "hypervisor/hardware/emulation/engine/decoders/rv32c.zig",
+            "hypervisor/hardware/emulation/engine/emitters/rv64.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/block.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/cache.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/engine.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/translator.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/emit/alu.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/emit/branch.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/emit/mem.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/emit/tlb.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/interpreter.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/interpreter/mem.zig",
+            "hypervisor/hardware/emulation/engine/dynarec/interpreter/sys.zig",
+        },
+        .summary =
+        \\32-bit to 64-bit RISC-V basic-block JIT translator, Sv32 software
+        \\TLB walker, code cache, and single-instruction fallback
+        \\interpreter.
+        ,
+        .activated_by = .{
+            "smode-emulation-bridge",
+        },
+        .docs = .{
+            "docs/architecture.md#dynamic-binary-recompiler-and-interpreter",
+        },
+    },
+    .{
+        .id = "smode-virtual-mmio-bus",
+        .name = "Virtual MMIO bus and VirtIO 1.1 devices",
+        .layer = .s_mode_emulation,
+        .status = .active,
+        .files = .{
+            "hypervisor/hardware/emulation/devices/bus.zig",
+            "hypervisor/hardware/emulation/devices/vblk.zig",
+            "hypervisor/hardware/emulation/devices/vnet.zig",
+            "hypervisor/hardware/emulation/devices/vsock.zig",
+            "hypervisor/hardware/emulation/devices/vsock/queues.zig",
+            "hypervisor/hardware/emulation/devices/vsock/router.zig",
+            "hypervisor/hardware/emulation/devices/vpic.zig",
+            "hypervisor/hardware/emulation/devices/vtimer.zig",
+            "hypervisor/hardware/emulation/devices/vuart.zig",
+        },
+        .summary =
+        \\Per-guest virtual MMIO bus providing VirtIO block, network, and
+        \\socket devices alongside a Goldfish real-time clock, PLIC, CLINT,
+        \\and transmit-only 16550A UART.
+        ,
+        .activated_by = .{
+            "mmode-guest-hierarchy",
+            "smode-mmio-trap-emulate",
+            "smode-emulation-bridge",
+        },
+        .docs = .{
+            "docs/interface.md#emulated-virtual-mmio-bus",
+            "docs/architecture.md#virtual-switch-virtio-and-console-rings",
+        },
+    },
+    .{
+        .id = "smode-virtio-desktop",
+        .name = "Emulated VirtIO-GPU 2D and VirtIO-Input desktop devices",
+        .layer = .s_mode_emulation,
+        .status = .active,
+        .files = .{
+            "hypervisor/hardware/emulation/devices/vgpu.zig",
+            "hypervisor/hardware/emulation/devices/vgpu/protocol.zig",
+            "hypervisor/hardware/emulation/devices/vgpu/commands.zig",
+            "hypervisor/hardware/emulation/devices/vgpu/queue.zig",
+            "hypervisor/hardware/emulation/devices/vgpu/scanout.zig",
+            "hypervisor/hardware/emulation/devices/vgpu/damage.zig",
+            "hypervisor/hardware/emulation/devices/vinput.zig",
+        },
+        .summary =
+        \\VirtIO 2D GPU controller (scatter-gather scanouts and 64x64 alpha
+        \\cursor compositing) and VirtIO input device (keyboard, mouse,
+        \\scroll wheel, and absolute tablet).
+        ,
+        .activated_by = .{
+            "smode-virtual-mmio-bus",
+            "mmode-sbi-dispatch",
+        },
+        .docs = .{
+            "docs/interface.md#emulated-virtual-mmio-bus",
+            "docs/architecture.md#virtio-storage-socket-and-desktop-devices",
+        },
+    },
+    .{
+        .id = "rootvm-kernel-driver",
+        .name = "Linux hypervisor character and network kernel driver",
+        .layer = .rootvm_kernel,
+        .status = .active,
+        .files = .{
+            "tools/driver/diosix.h",
+            "tools/driver/diosix.c",
+            "tools/driver/desktop.c",
+            "tools/driver/governance.c",
+            "tools/driver/net.c",
+        },
+        .summary =
+        \\Built-in Linux kernel driver exposing hypercall ioctls, child RAM
+        \\mappings, guest VirtIO-GPU scanout and VirtIO-Input bridges,
+        \\charter governance calls, and the virtual Ethernet interface.
+        ,
+        .activated_by = .{
+            "mmode-rootvm-boot",
+            "buildroot-packaging",
+        },
+        .docs = .{
+            "docs/interface.md#linux-kernel-driver-interface",
+            "docs/architecture.md#dual-path-virtual-networking",
+        },
+    },
+    .{
+        .id = "guest-shim-firmware",
+        .name = "Freestanding S-mode guest bootloader shim",
+        .layer = .guest_firmware,
+        .status = .active,
+        .files = .{
+            "tools/guest-shim/linker.ld",
+            "tools/guest-shim/src/main.zig",
+            "tools/guest-shim/src/storage.zig",
+            "tools/guest-shim/src/fs.zig",
+            "tools/guest-shim/src/loader.zig",
+            "tools/guest-shim/src/gzip.zig",
+            "tools/guest-shim/src/fdt.zig",
+            "tools/guest-shim/src/efi.zig",
+        },
+        .summary =
+        \\Freestanding S-mode firmware that reads staged in-RAM media or
+        \\VirtIO block storage, scans GPT, MBR, ISO9660, FAT32, and ext4
+        \\volumes for RISC-V kernels or EFI stubs, and patches the FDT.
+        ,
+        .activated_by = .{
+            "cli-vm-lifecycle",
+            "buildroot-packaging",
+        },
+        .docs = .{
+            "docs/guests.md#choosing-a-guest-workflow",
+            "docs/guests.md#direct-kernel-boot",
+            "docs/architecture.md#freestanding-s-mode-guest-bootloader-shim",
+        },
+    },
+}

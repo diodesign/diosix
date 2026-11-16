@@ -47,9 +47,41 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_ram_mb = 512,
         .default_disk_mb = 1024,
         .filename = "diosix-base-linux.elf",
-        .url = "file:///var/lib/diosix/images/diosix-base-linux.elf",
-        .sha256 = "c148274a95f695b19b5500f895b6deb0" ++
-            "03016003332cd2aa3700ecc5657f1ae6",
+        .url = "file://" ++ sysconfig.DEFAULT_GUEST_IMAGE_PATH,
+        .sha256 = "23481c66ee9d3cdc46b972c35d9ac29c" ++
+            "428124ea7e51d1deb5904587bc86c5a3",
+    },
+    .{
+        .id = "linux-cli",
+        .alias = "cli",
+        .title = "Diosix Linux CLI",
+        .tier = "leaf",
+        .os_family = "linux",
+        .format = "elf",
+        .arch = "riscv64",
+        .default_vcpus = 2,
+        .default_ram_mb = 256,
+        .default_disk_mb = 1024,
+        .filename = "linux-cli.elf",
+        .url = "file://" ++ sysconfig.DEFAULT_CLI_IMAGE_PATH,
+        .sha256 = "1def75165762557dfbd46b86183839c1" ++
+            "62f312c9688e5545ae3ef585903ddccd",
+    },
+    .{
+        .id = "linux-desktop",
+        .alias = "desktop",
+        .title = "Diosix Linux Desktop (Weston)",
+        .tier = "leaf",
+        .os_family = "linux",
+        .format = "elf",
+        .arch = "riscv64",
+        .default_vcpus = 2,
+        .default_ram_mb = 512,
+        .default_disk_mb = 1024,
+        .filename = "linux-desktop.elf",
+        .url = "file://" ++ sysconfig.DEFAULT_DESKTOP_IMAGE_PATH,
+        .sha256 = "6a461802451bb2183fee369d783326c9" ++
+            "d6740863ee5118c300470068822b2e57",
     },
     .{
         .id = "steward",
@@ -63,9 +95,9 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_ram_mb = 512,
         .default_disk_mb = 1024,
         .filename = "steward.elf",
-        .url = "file:///var/lib/diosix/images/diosix-base-linux.elf",
-        .sha256 = "c148274a95f695b19b5500f895b6deb0" ++
-            "03016003332cd2aa3700ecc5657f1ae6",
+        .url = "file://" ++ sysconfig.DEFAULT_GUEST_IMAGE_PATH,
+        .sha256 = "23481c66ee9d3cdc46b972c35d9ac29c" ++
+            "428124ea7e51d1deb5904587bc86c5a3",
     },
     .{
         .id = "debian-riscv64",

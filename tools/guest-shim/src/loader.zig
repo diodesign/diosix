@@ -16,6 +16,9 @@ const std = @import("std");
 const interface = @import("interface");
 pub const storage = @import("storage.zig");
 pub const pe_efi = @import("efi.zig");
+pub const fdt = @import("fdt.zig");
+pub const fs = @import("fs.zig");
+pub const gzip = @import("gzip.zig");
 
 // Ordered ISO9660 boot candidate paths probed by the guest bootloader shim.
 pub const ISO_BOOT_CANDIDATES = .{
@@ -24,12 +27,34 @@ pub const ISO_BOOT_CANDIDATES = .{
     "Image",
     "boot/vmlinux.elf",
     "boot/vmlinuz",
+    "boot/vmlinuz-lts",
+    "boot/vmlinuz-virt",
     "boot/Image",
+    "casper/vmlinuz",
+    "live/vmlinuz",
+    "install/vmlinuz",
     "boot/kernel/kernel",
     "boot/loader.efi",
     "efi/boot/bootriscv64.efi",
     "bootriscv64.efi",
     "loader.efi",
+};
+
+// Ordered ISO9660 initramfs candidate paths probed by the guest bootloader.
+pub const ISO_INITRD_CANDIDATES = .{
+    "initrd.img",
+    "initramfs.img",
+    "initrd.gz",
+    "initrd",
+    "boot/initrd.img",
+    "boot/initramfs.img",
+    "boot/initrd.gz",
+    "boot/initramfs-lts",
+    "boot/initramfs-virt",
+    "boot/initrd",
+    "casper/initrd",
+    "live/initrd.img",
+    "install/initrd.gz",
 };
 
 // Re-export storage and PE32+ EFI symbols used by callers.
@@ -429,9 +454,7 @@ pub fn loadRiscvFlatImage(
     };
 }
 
-/// Automatically detects and loads an ELF64, ELF32, RISC-V flat Image, or
-/// PE32+ EFI kernel.
-pub fn loadKernelAuto(
+fn loadUncompressedKernel(
     kernel_data: []const u8,
     dest_buf: []u8,
 ) BootLoaderError!KernelLoadResult {
@@ -443,9 +466,35 @@ pub fn loadKernelAuto(
     };
 }
 
+/// Automatically detects and loads an ELF64, ELF32, RISC-V flat Image,
+/// gzip-compressed kernel (`vmlinuz`), or PE32+ EFI kernel.
+pub fn loadKernelAuto(
+    kernel_data: []const u8,
+    dest_buf: []u8,
+) BootLoaderError!KernelLoadResult {
+    if (gzip.isGzipArchive(kernel_data)) {
+        const scratch_off = (dest_buf.len / 2) & ~@as(usize, 0xfff);
+        if (scratch_off == 0 or scratch_off >= dest_buf.len) {
+            return error.DestinationOutOfBounds;
+        }
+        const decompressed = gzip.decompressIntoSlice(
+            kernel_data,
+            dest_buf[scratch_off..],
+        ) catch |err| return switch (err) {
+            error.DestinationOutOfBounds => error.DestinationOutOfBounds,
+            error.InvalidGzipStream => error.UnknownKernelFormat,
+        };
+        return loadUncompressedKernel(decompressed, dest_buf[0..scratch_off]);
+    }
+    return loadUncompressedKernel(kernel_data, dest_buf);
+}
+
 test {
     _ = pe_efi;
     _ = storage;
+    _ = fdt;
+    _ = fs;
+    _ = gzip;
     _ = @import("tests/loader.zig");
     std.testing.refAllDecls(@This());
 }

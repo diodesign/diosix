@@ -20,8 +20,33 @@ const terminal_mod = @import("../terminal.zig");
 const gui_mod = @import("../gui.zig");
 const DiosixGui = gui_mod.DiosixGui;
 const state_mod = @import("terminal_state.zig");
+const panes_desktop = @import("desktop.zig");
 
 pub const WIN_TERMINAL_ID = state_mod.WIN_TERMINAL_ID;
+
+fn readSubnetPrefix(buf: *[32]u8) []const u8 {
+    var file_buf: [2048]u8 = undefined;
+    const content = host_info.proc.readSmallFile(
+        "/etc/diosix/diosix.toml",
+        &file_buf,
+    );
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+        if (std.mem.startsWith(u8, t, "subnet_prefix")) {
+            if (std.mem.indexOfScalar(u8, t, '"')) |q1| {
+                if (std.mem.indexOfScalarPos(u8, t, q1 + 1, '"')) |q2| {
+                    const val = t[q1 + 1 .. q2];
+                    if (val.len > 0 and val.len <= buf.len) {
+                        @memcpy(buf[0..val.len], val);
+                        return buf[0..val.len];
+                    }
+                }
+            }
+        }
+    }
+    return "10.0.3.";
+}
 pub const ICON_GUEST_SSH_ID: u32 = 1248;
 pub const ICON_GUEST_CONSOLE_ID: u32 = 1249;
 pub const ICON_TERM_STATUS_ID: u32 = 1500;
@@ -85,8 +110,17 @@ pub fn addGuestDetailTerminalButtons(
     item_h: u32,
     cur_y: *i32,
 ) !void {
+    try panes_desktop.addGuestDetailDisplayButton(
+        self,
+        win,
+        guest,
+        item_x,
+        menu_w,
+        item_h,
+        cur_y,
+    );
     const has_live = hasLiveSshSession(self, guest.cid);
-    const ssh_label = if (guest.is_root)
+    const ssh_label = if (guest.isSelf())
         (if (has_live) "Reopen local terminal" else "Open new local terminal")
     else
         (if (has_live) "Reopen SSH terminal" else "Open new SSH terminal");
@@ -107,7 +141,7 @@ pub fn addGuestDetailTerminalButtons(
     _ = try win.addIcon(ssh_item);
     cur_y.* += @intCast(item_h + self.scalePx(6));
 
-    if (!guest.is_root) {
+    if (!guest.isSelf()) {
         const has_con = state_mod.hasLiveConsoleSession(self, guest.cid);
         const con_label = if (has_con)
             "Reopen serial console"
@@ -167,16 +201,6 @@ pub fn openGuestTerminal(
     }
     if (self.osk_state.visible) try self.buildOskWindow();
     self.focusWindowById(WIN_TERMINAL_ID);
-}
-
-pub fn closeTerminalWindow(self: *DiosixGui) void {
-    onTerminalNavigateBack(self);
-    if (self.active_menu_id == gui_mod.ICON_MENU_TERMINAL_ID) {
-        self.navigateBack() catch {};
-    } else {
-        _ = self.destroyWindow(WIN_TERMINAL_ID);
-        self.markFullDirty();
-    }
 }
 
 fn measureBtnW(self: *const DiosixGui, base_px: u32, lbl: []const u8) u32 {
@@ -304,13 +328,18 @@ pub fn buildTerminalWindow(self: *DiosixGui) !void {
     }
 
     var status_buf: [text_label.LABEL_BUF_BYTES]u8 = undefined;
+    var pfx_buf: [32]u8 = undefined;
     const status_str = if (self.terminal.target_cid <= 1)
-        text_label.fmtLabel(&status_buf, "Root VM (local shell)", .{})
+        text_label.fmtLabel(&status_buf, "Local VM (CID 1 shell)", .{})
     else if (self.terminal.mode == .ssh)
         text_label.fmtLabel(
             &status_buf,
-            "{s} (root@10.0.3.{d} via SSH)",
-            .{ self.terminal.getGuestName(), self.terminal.target_cid },
+            "{s} (root@{s}{d} via SSH)",
+            .{
+                self.terminal.getGuestName(),
+                readSubnetPrefix(&pfx_buf),
+                self.terminal.target_cid,
+            },
         )
     else
         text_label.fmtLabel(

@@ -183,10 +183,6 @@ pub const DiosixClient = struct {
         );
     }
 
-    pub fn exit(self: *DiosixClient, code: usize) void {
-        _ = self.terminate(0, code) catch {};
-    }
-
     pub fn setQuotaWithPcpu(
         self: *DiosixClient,
         target_cid: usize,

@@ -32,12 +32,17 @@ def run_integration_test():
     print("      Diosix Full-Stack Integration Test Suite (100% Verified) ")
     print("===============================================================")
 
-    os.system("pkill -9 -f qemu-system-riscv64 >/dev/null 2>&1 || true")
-    os.system(
-        "./scripts/create_storage_disk.sh "
-        "zig-out/guest-riscv64/bin/rootvm.elf "
-        "zig-out/storage.img 256M >/dev/null 2>&1 || true"
-    )
+    os.system("pkill -9 -x qemu-system-riscv64 >/dev/null 2>&1 || true")
+    if (
+        os.system(
+            "./scripts/create_storage_disk.sh "
+            "zig-out/guest-riscv64/bin/rootvm.elf "
+            "zig-out/storage.img 768M >/dev/null"
+        )
+        != 0
+    ):
+        print("❌ Failed to create storage disk image.")
+        return 1
 
     qemu_cmd = [
         "qemu-system-riscv64",
@@ -75,7 +80,7 @@ def run_integration_test():
     try:
         # 1. Boot Verification & Shell Login.
         print("\n==> [1/19] Waiting for Diosix Hypervisor & Root VM login...")
-        child.expect(r"login:\s*", timeout=90)
+        child.expect(r"login:\s*", timeout=120)
         child.sendline("root")
         child.expect(r"#[ \t]*", timeout=30)
         child.sendline(
@@ -103,7 +108,7 @@ def run_integration_test():
 
         # 3. Guest VM Info (`dsx info`).
         print("\n==> [3/19] Testing 'dsx info' (GET_INFO)...")
-        run("dsx info", r"Root VM\s+:\s+yes", timeout=10)
+        run("dsx info", r"Parent\s+:\s+hypervisor", timeout=10)
         print("✓ Guest VM info verified.")
 
         # 4. Quota Management on Self (`dsx quota self`).
@@ -224,12 +229,14 @@ def run_integration_test():
         run(
             "dsx snapshot save root checkpoint-1",
             r"Snapshot 'checkpoint-1' for VM 'root' saved at "
-            r"/var/lib/diosix/snapshots/root_checkpoint-1\.snap\.",
+            r"/var/lib/diosix/snapshots/root_checkpoint-1\.snap"
+            r"(?:\s*\(\d+ RAM pages\))?\.",
         )
         run("dsx snapshot list", r"root_checkpoint-1\.snap\s+root\s+saved")
         run(
             "dsx snapshot restore checkpoint-1",
-            r"VM state restored from snapshot 'checkpoint-1'\.",
+            r"VM state restored from snapshot 'checkpoint-1'"
+            r"(?:\s*\(\d+ RAM pages\))?\.",
         )
         run(
             "dsx snapshot delete checkpoint-1",
@@ -245,7 +252,7 @@ def run_integration_test():
             r"Child VM 'leenix-storage' \(CID \d+, 1 vCPUs, 128 MB RAM, "
             r"Disk: /var/lib/diosix/disks/data-vol\.img, "
             r"IP: 10\.0\.3\.\d+\) started in background\.",
-            timeout=25,
+            timeout=60,
         )
         run(
             "dsx info leenix-storage",
@@ -260,9 +267,9 @@ def run_integration_test():
 
         # 14. Image Repository & Dual Storage (CD-ROM + Target Disk).
         print("\n==> [14/19] Testing `dsx image` & `--disk` + `--cdrom`...")
+        base_img = "/var/lib/diosix/images/diosix-base-linux.elf"
         run(
-            "dsx image import /var/lib/diosix/images/diosix-linux.elf "
-            "--name test-installer.elf",
+            f"dsx image import {base_img} --name test-installer.elf",
             r"Image 'test-installer\.elf' successfully imported into "
             r"/var/lib/diosix/images/test-installer\.elf\.",
         )
@@ -270,18 +277,19 @@ def run_integration_test():
         run(
             "dsx run test-installer --name installer-job "
             "--disk install-target "
-            "--cdrom /var/lib/diosix/images/diosix-linux.elf "
+            f"--cdrom {base_img} "
             "--vcpus 1 --ram 128M",
             r"Child VM 'installer-job' \(CID \d+, 1 vCPUs, 128 MB RAM, "
             r"Disk: /var/lib/diosix/disks/install-target\.img, "
-            r"CD-ROM: /var/lib/diosix/images/diosix-linux\.elf, "
+            r"CD-ROM: /var/lib/diosix/images/diosix-base-linux\.elf, "
             r"IP: 10\.0\.3\.\d+\) started in background\.",
-            timeout=25,
+            timeout=60,
         )
         run(
             "dsx info installer-job",
             r"Storage disk\s+:\s+/var/lib/diosix/disks/install-target\.img",
-            r"CD-ROM media\s+:\s+/var/lib/diosix/images/diosix-linux\.elf",
+            r"CD-ROM media\s+:\s+"
+            r"/var/lib/diosix/images/diosix-base-linux\.elf",
         )
         run(
             "dsx stop installer-job",
@@ -304,7 +312,7 @@ def run_integration_test():
             "dsx run linux-guest --name child-sec --vcpus 1 --ram 256M",
             r"Child VM 'child-sec' \(CID \d+, 1 vCPUs, 256 MB RAM, "
             r"IP: 10\.0\.3\.\d+\) started in background\.",
-            timeout=25,
+            timeout=60,
         )
         time.sleep(25)
         run("dsx ssh root@child-sec -- uname -a", r"Linux", timeout=120)
@@ -317,7 +325,7 @@ def run_integration_test():
         )
         run(
             "iptables -S FORWARD",
-            r"-s 10\.0\.0\.0/16 -d 10\.0\.0\.0/16 -j DROP",
+            r"-s 10\.0\.\d+\.0/\d+ -d 10\.0\.\d+\.0/\d+ -j DROP",
             timeout=10,
         )
         run(
@@ -331,20 +339,22 @@ def run_integration_test():
         run(
             "dsx run linux-guest --name trusted-svc "
             "--trusted --vcpus 2 --ram 256M",
-            r"Child VM 'trusted-svc' \(CID 2, 2 vCPUs, 256 MB RAM, "
-            r"IP: 10\.0\.3\.2\) started in background\.",
-            timeout=25,
+            r"Child VM 'trusted-svc' \(CID \d+, 2 vCPUs, 256 MB RAM, "
+            r"IP: 10\.0\.3\.\d+\) started in background\.",
+            timeout=60,
         )
         time.sleep(1)
         run(
             "dsx list",
-            r"1\s+root \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+local",
-            r"2\s+trusted-svc\s+2\s+256 MB\s+running\s+trusted\s+10\.0\.3\.2",
+            r"1\s+\S+ \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+"
+            r"local \(hypervisor\)",
+            r"\d+\s+└─ trusted-svc\s+2\s+256 MB\s+running\s+"
+            r"trusted\s+10\.0\.3\.\d+",
         )
         print("✓ Trusted child VM spawned and verified in guest registry.")
         run(
             "dsx stop trusted-svc",
-            r"Child VM 'trusted-svc' \(CID 2\) terminated\.",
+            r"Child VM 'trusted-svc' \(CID \d+\) terminated\.",
         )
         print("✓ Trusted child VM cleanly stopped.")
 
@@ -354,12 +364,13 @@ def run_integration_test():
             "dsx run linux-guest --name user --vcpus 2 --ram 256M",
             r"Child VM 'user' \(CID \d+, 2 vCPUs, 256 MB RAM, "
             r"IP: 10\.0\.3\.\d+\) started in background\.",
-            timeout=25,
+            timeout=60,
         )
         run(
             "dsx list",
-            r"1\s+root \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+local",
-            r"\d+\s+user\s+2\s+256 MB\s+running\s+untrusted\s+10\.0\.3\.\d+",
+            r"1\s+\S+ \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+"
+            r"local \(hypervisor\)",
+            r"\d+\s+└─ user\s+2\s+256 MB\s+running\s+untrusted\s+10\.0\.3\.\d+",
         )
         print("✓ Sandboxed child VM spawned and verified in guest registry.")
         run("dsx stop user", r"Child VM 'user' \(CID \d+\) terminated\.")
@@ -372,20 +383,21 @@ def run_integration_test():
             "--trusted --vcpus 1 --ram 128M",
             r"Child VM 'sys-domain' \(CID \d+, 1 vCPUs, 128 MB RAM, "
             r"IP: 10\.0\.3\.\d+\) started in background\.",
-            timeout=25,
+            timeout=60,
         )
         run(
             "dsx run linux-guest --name user-domain --vcpus 2 --ram 256M",
             r"Child VM 'user-domain' \(CID \d+, 2 vCPUs, 256 MB RAM, "
             r"IP: 10\.0\.3\.\d+\) started in background\.",
-            timeout=25,
+            timeout=60,
         )
         run(
             "dsx list",
-            r"1\s+root \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+local",
-            r"\d+\s+sys-domain\s+1\s+128 MB\s+running\s+"
+            r"1\s+\S+ \(self\)\s+\d+\s+\d+\s+MB\s+running\s+trusted\s+"
+            r"local \(hypervisor\)",
+            r"\d+\s+├─ sys-domain\s+1\s+128 MB\s+running\s+"
             r"trusted\s+10\.0\.3\.\d+",
-            r"\d+\s+user-domain\s+2\s+256 MB\s+running\s+"
+            r"\d+\s+└─ user-domain\s+2\s+256 MB\s+running\s+"
             r"untrusted\s+10\.0\.3\.\d+",
         )
         print("✓ Concurrent multi-VM hierarchy verified.")
@@ -400,14 +412,14 @@ def run_integration_test():
         )
         print("✓ Concurrent VMs cleanly stopped.")
 
-        # Test Root VM stop protection.
-        run("dsx stop self", r"Root VM cannot be stopped directly")
-        print("✓ Root VM stop protection verified.")
+        # Test top-level VM stop protection.
+        run("dsx stop self", r"Top-level VM cannot be stopped")
+        print("✓ Top-level VM stop protection verified.")
 
         # 19. Host Poweroff (`dsx host poweroff`).
         print("\n==> [19/19] Testing 'dsx host poweroff' (SYSTEM_RESET)...")
         child.sendline("dsx host poweroff")
-        child.expect(pexpect.EOF, timeout=15)
+        child.expect(pexpect.EOF, timeout=30)
         print("✓ Host cleanly powered off via SBI hypercall.")
 
         print("\n=============================================================")

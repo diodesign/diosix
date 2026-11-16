@@ -18,13 +18,17 @@ pub const Cache = @import("engine/dynarec/cache.zig").Cache;
 pub const TranslationBlock =
     @import("engine/dynarec/block.zig").TranslationBlock;
 pub const Bus = @import("devices/bus.zig").Bus;
+pub const IRQ_UART0 = @import("devices/bus.zig").IRQ_UART0;
 pub const VirtualUart = @import("devices/vuart.zig").VirtualUart;
 pub const VirtualTimer = @import("devices/vtimer.zig").VirtualTimer;
 pub const VirtualPlic = @import("devices/vpic.zig").VirtualPlic;
 pub const VirtioVsock = @import("devices/vsock.zig").VirtioVsock;
 pub const VirtioVsockHdr = @import("devices/vsock.zig").VirtioVsockHdr;
+pub const MemoryAccessor = @import("devices/vsock.zig").MemoryAccessor;
 pub const VirtioGpu = @import("devices/vgpu.zig").VirtioGpu;
 pub const VirtioInput = @import("devices/vinput.zig").VirtioInput;
+pub const VirtioBlk = @import("devices/vblk.zig").VirtioBlk;
+pub const VirtioNet = @import("devices/vnet.zig").VirtioNet;
 pub const VsockRouter = @import("devices/vsock.zig").VsockRouter;
 pub const global_vsock_router =
     @import("devices/vsock.zig").global_vsock_router;
@@ -48,14 +52,15 @@ test {
     _ = @import("devices/vgpu.zig");
     _ = @import("devices/vgpu/protocol.zig");
     _ = @import("devices/vgpu/commands.zig");
+    _ = @import("devices/vgpu/queue.zig");
+    _ = @import("devices/vgpu/scanout.zig");
     _ = @import("devices/vinput.zig");
-    _ = @import("engine/decoders/aarch64.zig");
-    _ = @import("engine/decoders/x86_64.zig");
+    _ = @import("devices/vblk.zig");
+    _ = @import("devices/vnet.zig");
     _ = @import("engine/decoders/rv32/encoding.zig");
     _ = @import("engine/decoders/rv32c.zig");
     _ = @import("engine/decoders/rv32.zig");
     _ = @import("engine/emitters/rv64.zig");
-    _ = @import("engine/dynarec/regalloc.zig");
     _ = @import("engine/dynarec/block.zig");
     _ = @import("engine/dynarec/cache.zig");
     _ = @import("engine/dynarec/emit/alu.zig");

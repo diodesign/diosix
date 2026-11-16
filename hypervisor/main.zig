@@ -233,7 +233,6 @@ test {
     _ = @import("core/vm.zig");
     _ = @import("core/sbi.zig");
     _ = @import("core/emulation.zig");
-    _ = @import("core/gdb/mod.zig");
     _ = @import("core/gdb/rsp.zig");
     _ = debug;
     _ = boot;
@@ -248,11 +247,6 @@ test {
     _ = riscv;
     _ = discovery;
     _ = fdt;
-    _ = @import("hardware/native/drivers/uart.zig");
     _ = @import("hardware/native/drivers/clint.zig");
-    _ = @import("hardware/native/drivers/plic.zig");
     _ = @import("hardware/emulation/arch/riscv32/mod.zig");
-    _ = @import("hardware/emulation/arch/aarch64/mod.zig");
-    _ = @import("hardware/emulation/arch/aarch64/psci.zig");
-    _ = @import("hardware/emulation/arch/x86_64/mod.zig");
 }

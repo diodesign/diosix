@@ -1,8 +1,8 @@
 // Live Running Guest VM Discovery, Telemetry & Lifecycle Control for Diosix.
 //
-// Queries /dev/diosix (IOCTL_GET_INFO, IOCTL_TERMINATE, IOCTL_START),
+// Queries /dev/diosix (IOCTL_GET_INFO, IOCTL_SET_QUOTA, IOCTL_TERMINATE),
 // /run/diosix/guests.toml, and /proc to provide real-time guest VM metrics,
-// attached storage inventory, and restart/shutdown operations.
+// attached storage inventory, and quota/shutdown operations.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -27,7 +27,6 @@ pub const IOCTL_GET_INFO: u32 = IOCTL_BASE + 4; // 0x1004.
 pub const IOCTL_SET_QUOTA: u32 = IOCTL_BASE + 5; // 0x1005.
 pub const IOCTL_TERMINATE: u32 = IOCTL_BASE + 6; // 0x1006.
 pub const IOCTL_GET_HV_INFO: u32 = IOCTL_BASE + 11; // 0x100b.
-pub const IOCTL_START: u32 = IOCTL_BASE + 16; // 0x1010.
 
 const PAGE_SIZE_BYTES: u64 = 4096;
 const DEFAULT_ROOT_RAM_BYTES: u64 = 256 * mem_size.MIB;
@@ -44,7 +43,8 @@ pub const GuestActionRecord = struct {
 
 pub const RunningGuest = struct {
     cid: u64 = 0,
-    is_root: bool = false,
+    is_self: bool = false,
+    has_parent: bool = false,
     target_arch: u8 = @backingInt(sbi.TargetArch.riscv64),
     is_h_mode: bool = true,
     instance_name: [GUEST_NAME_BYTES]u8 = @splat(0),
@@ -65,6 +65,10 @@ pub const RunningGuest = struct {
         @splat(@splat(0)),
     storage_lens: [MAX_GUEST_STORAGE]usize = @splat(0),
     storage_count: usize = 0,
+
+    pub inline fn isSelf(self: *const RunningGuest) bool {
+        return self.is_self or self.cid == sbi.CID_SELF;
+    }
 
     pub fn getArchLabel(self: *const RunningGuest) []const u8 {
         return switch (self.target_arch) {
@@ -150,6 +154,7 @@ fn applyGuestInfo(
     hw_virt: bool,
 ) void {
     g.target_arch = info.target_arch;
+    g.has_parent = (info.has_parent != 0);
     g.is_h_mode = hw_virt and
         (info.target_arch == @backingInt(sbi.TargetArch.riscv64));
     if (info.vcpus > 0) g.vcpus = @intCast(info.vcpus);
@@ -187,7 +192,8 @@ fn flushRegistryEntry(
 
     var g = RunningGuest{
         .cid = entry.cid,
-        .is_root = false,
+        .is_self = false,
+        .has_parent = true,
         .is_h_mode = hw_virt,
         .vcpus = @max(@as(u32, 1), entry.vcpus),
         .ram_bytes = proc.parseRamStringBytes(entry.ram),
@@ -283,18 +289,19 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
     }
 
     if (builtin.is_test) {
-        var root_vm = RunningGuest{
+        var self_vm = RunningGuest{
             .cid = sbi.CID_SELF,
-            .is_root = true,
+            .is_self = true,
+            .has_parent = false,
             .vcpus = DEFAULT_ROOT_VCPUS,
             .pcpu_quota_pct = 100,
             .ram_bytes = DEFAULT_ROOT_RAM_BYTES,
             .ram_quota_bytes = DEFAULT_ROOT_QUOTA_BYTES,
         };
-        root_vm.setInstanceName("root");
-        root_vm.setImageName("rootvm");
-        root_vm.addStorageItem("initramfs (/)");
-        out[0] = root_vm;
+        self_vm.setInstanceName("self");
+        self_vm.setImageName("local-vm");
+        self_vm.addStorageItem("initramfs (/)");
+        out[0] = self_vm;
         return finalizeSampledGuests(out, 1);
     }
     const fd_rc = linux.open(paths.DEV_DIOSIX_PATH, .{ .ACCMODE = .RDWR }, 0);
@@ -306,32 +313,35 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
     var count: usize = 0;
     const root_ram = proc.queryRootMemTotalBytes() orelse
         DEFAULT_ROOT_RAM_BYTES;
-    var root_vm = RunningGuest{
+    var self_vm = RunningGuest{
         .cid = sbi.CID_SELF,
-        .is_root = true,
+        .is_self = true,
         .vcpus = DEFAULT_ROOT_VCPUS,
         .pcpu_quota_pct = 100,
         .ram_bytes = root_ram,
         .ram_quota_bytes = DEFAULT_ROOT_QUOTA_BYTES,
     };
-    root_vm.setInstanceName("root");
-    root_vm.setImageName("rootvm");
+    var hname_buf: [64]u8 = undefined;
+    const raw_hname = proc.readSmallFile("/etc/hostname", &hname_buf);
+    const trim_hname = std.mem.trim(u8, raw_hname, " \t\r\n");
+    self_vm.setInstanceName(if (trim_hname.len > 0) trim_hname else "local-vm");
+    self_vm.setImageName("local-vm");
     var host_pcpus: u32 = DEFAULT_ROOT_VCPUS;
     var hw_virt: bool = true;
     var expected_children: usize = 0;
     if (dev_fd) |fd| {
         queryHvCaps(fd, &host_pcpus, &hw_virt);
-        root_vm.is_h_mode = hw_virt;
+        self_vm.is_h_mode = hw_virt;
         if (queryGuestInfoIoctl(fd, sbi.CID_SELF)) |info| {
-            applyGuestInfo(&root_vm, info, host_pcpus, hw_virt);
+            applyGuestInfo(&self_vm, info, host_pcpus, hw_virt);
             expected_children = @intCast(info.child_count);
-        } else root_vm.pcpu_percent = proc.sampleRootProcCpuPercent();
-    } else root_vm.pcpu_percent = proc.sampleRootProcCpuPercent();
-    root_vm.storage_count = proc.collectRootStorage(
-        &root_vm.storage_items,
-        &root_vm.storage_lens,
+        } else self_vm.pcpu_percent = proc.sampleRootProcCpuPercent();
+    } else self_vm.pcpu_percent = proc.sampleRootProcCpuPercent();
+    self_vm.storage_count = proc.collectRootStorage(
+        &self_vm.storage_items,
+        &self_vm.storage_lens,
     );
-    out[0] = root_vm;
+    out[0] = self_vm;
     count = 1;
 
     var reg_buf: [proc.MAX_FILE_READ_BYTES]u8 = undefined;
@@ -355,7 +365,8 @@ pub fn sampleRunningGuests(out: *[MAX_RUNNING_GUESTS]RunningGuest) usize {
             if (queryGuestInfoIoctl(fd, cid)) |cinfo| {
                 var cg = RunningGuest{
                     .cid = cid,
-                    .is_root = false,
+                    .is_self = false,
+                    .has_parent = true,
                     .vcpus = 1,
                     .ram_bytes = DEFAULT_ROOT_RAM_BYTES,
                 };
@@ -401,17 +412,6 @@ fn invokeDevIoctl(cmd: u32, arg_ptr: usize) bool {
     defer _ = linux.close(fd);
     const rc = linux.ioctl(fd, cmd, arg_ptr);
     return @as(isize, @bitCast(rc)) >= 0;
-}
-
-pub fn restartGuestVm(cid: u64) bool {
-    if (cid < sbi.CID_FIRST_CHILD) return false;
-    if (builtin.is_test or mock_running_guests != null) {
-        mock_last_guest_action = .{ .cid = cid, .action = .restart };
-        return true;
-    }
-    if (proc.invokeDsxSubcommand("restart", cid)) return true;
-    var sargs = sbi.StartArgs{ .child_id = cid, .entry_point = 0 };
-    return invokeDevIoctl(IOCTL_START, @intFromPtr(&sargs));
 }
 
 pub fn shutdownGuestVm(cid: u64) bool {
@@ -488,12 +488,11 @@ test "guests: parseRegistryGuests and lifecycle protections" {
     try expectEq(@as(u32, 2), list[0].vcpus);
     try expectEq(@as(u64, 512 * mem_size.MIB), list[0].ram_bytes);
     try expectEq(@as(usize, 2), list[0].storage_count);
-    try std.testing.expect(!restartGuestVm(1));
     try std.testing.expect(!shutdownGuestVm(1));
     try std.testing.expect(!setGuestQuota(1, 50, 512));
-    try std.testing.expect(restartGuestVm(2));
+    try std.testing.expect(shutdownGuestVm(2));
     try expectEq(@as(u64, 2), mock_last_guest_action.?.cid);
-    try expectEq(GuestActionKind.restart, mock_last_guest_action.?.action);
+    try expectEq(GuestActionKind.shutdown, mock_last_guest_action.?.action);
     try std.testing.expect(setGuestQuota(2, 50, 1024));
     try expectEq(@as(u32, 50), mock_last_guest_action.?.pcpu_quota_pct);
     try expectEq(@as(u32, 1024), mock_last_guest_action.?.ram_quota_mb);

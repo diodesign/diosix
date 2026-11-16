@@ -145,9 +145,14 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     const disp_time = if (builtin.is_test) 0 else riscv.readTime();
     if (cpu.active_vcore) |active| {
         if (@intFromPtr(active) == @intFromPtr(to_vcore) and
-            to_vcore.running_on_cpu == cpu.cpu_core_id)
+            to_vcore.getRunningCpu() == cpu.cpu_core_id)
         {
-            to_vcore.state = .running;
+            @atomicStore(
+                vcore.VirtualCoreState,
+                &to_vcore.state,
+                .running,
+                .seq_cst,
+            );
             if (@atomicLoad(
                 u64,
                 &to_vcore.last_dispatched_time,
@@ -170,8 +175,8 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
         );
     }
     cpu.active_vcore = to_vcore;
-    to_vcore.running_on_cpu = cpu.cpu_core_id;
-    to_vcore.state = .running;
+    to_vcore.setRunningCpu(cpu.cpu_core_id);
+    @atomicStore(vcore.VirtualCoreState, &to_vcore.state, .running, .seq_cst);
     @atomicStore(u64, &to_vcore.last_dispatched_time, disp_time, .monotonic);
 
     pmp.PMPConfig.clearAllPmp();
@@ -185,9 +190,7 @@ pub fn contextSwitch(to_vcore: *vcore.VirtualCore) void {
     pmp.PMPConfig.writePmpCfg(2, pmp.PMPAccess.napot | pmp.PMPAccess.rwx);
 
     to_vcore.guest.space.apply(to_vcore.guest.vmid);
-    if (to_vcore.exec_path == .emulated and
-        !to_vcore.exec_path.emulated.emu_running)
-    {
+    if (to_vcore.exec_path == .emulated) {
         to_vcore.context[@backingInt(riscv.Register.tp)] = @intFromPtr(cpu);
         to_vcore.context[@backingInt(riscv.Register.a0)] =
             @intFromPtr(to_vcore);

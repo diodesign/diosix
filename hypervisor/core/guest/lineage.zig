@@ -25,7 +25,7 @@ pub fn routeVsockPacket(
     const dst: usize = std.math.cast(usize, hdr.dst_cid) orelse return false;
     var target: ?*guest_mod.Guest = null;
     var auth_src_cid: u64 = g.local_cid;
-    if (dst == sbi.CID_PARENT or (dst == sbi.CID_SELF and !g.is_root)) {
+    if (dst == sbi.CID_PARENT or (dst == sbi.CID_SELF and g.hasParent())) {
         if (self_upstream != 0) return false;
         target = g.parent;
     } else if (dst >= sbi.CID_FIRST_CHILD) {
@@ -225,8 +225,7 @@ pub fn createChild(
 
     const child_base_gpa: usize = switch (target_arch) {
         .riscv64, .riscv32 => guest_mod.CHILD_RV_BASE_GPA,
-        .x86_64 => 0,
-        .aarch64 => guest_mod.CHILD_ARM64_BASE_GPA,
+        .x86_64, .aarch64 => return error.UnsupportedGuestArchitecture,
     };
     const child_range_size = std.math.mul(
         usize,
@@ -254,6 +253,10 @@ pub fn createChild(
         child.deinit();
     }
 
+    const init_ret_pcpu: u32 = @min(
+        quota_mod.DEFAULT_RETAINED_PCPU_PCT,
+        @max(@as(u32, 1), init_pcpu_pct / 4),
+    );
     child.quotas = .{
         .max_ram_pages = self.quotas.max_ram_pages,
         .used_ram_pages = 0,
@@ -262,6 +265,7 @@ pub fn createChild(
         .max_vcpus = self.quotas.max_vcpus,
         .used_vcpus = 0,
         .pcpu_quota_pct = init_pcpu_pct,
+        .retained_pcpu_pct = init_ret_pcpu,
         .delegated_pcpu_pct = 0,
         .max_child_depth = self.quotas.max_child_depth -| 1,
         .current_depth = self.quotas.current_depth + 1,
@@ -307,6 +311,7 @@ pub fn terminateWithCode(self: *guest_mod.Guest, exit_code: usize) void {
     }
 
     self.stop();
+    @import("../sbi/scanout_map.zig").unmapOnGuestTeardown(self);
     self.space.deinit();
     pcore.broadcastIpi();
 

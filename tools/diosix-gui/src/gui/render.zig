@@ -164,6 +164,8 @@ fn renderWindowOnSurface(
     win.render(surface, win_alpha);
     if (win.id == gui_mod.WIN_TERMINAL_ID) {
         gui_mod.panes.renderTerminalOverlay(self, surface, win);
+    } else if (win.id == gui_mod.WIN_GUEST_DISPLAY_ID) {
+        gui_mod.panes.renderDesktopOverlay(self, surface, win);
     }
 }
 
@@ -376,6 +378,36 @@ pub fn setColorDepth(self: *DiosixGui, depth: gui_mod.ColorDepth) void {
 pub fn setUiScaleMode(self: *DiosixGui, mode: gui_mod.UiScaleMode) !void {
     self.ui_scale_mode = mode;
     try relayoutAllWindows(self);
+}
+
+pub fn setRenderMode(self: *DiosixGui, mode: gui_mod.RenderMode) void {
+    self.render_mode = mode;
+    markFullDirty(self);
+}
+
+pub fn getRenderMode(self: *const DiosixGui) gui_mod.RenderMode {
+    return self.render_mode;
+}
+
+pub fn markDirty(self: *DiosixGui, box: fb.Box) void {
+    self.dirty_box = self.dirty_box.merge(box);
+}
+
+pub fn markFullDirty(self: *DiosixGui) void {
+    self.dirty_box = fb.Box.fromPosSize(0, 0, self.width, self.height);
+}
+
+pub fn markWindowDirty(self: *DiosixGui, win_id: u32) void {
+    for (self.windows.items) |*win| {
+        if (win.id == win_id and win.is_onscreen) {
+            markDirty(self, win.getBox());
+            break;
+        }
+    }
+}
+
+pub fn isDirty(self: *const DiosixGui) bool {
+    return !self.dirty_box.isEmpty();
 }
 
 pub fn relayoutAllWindows(self: *DiosixGui) !void {

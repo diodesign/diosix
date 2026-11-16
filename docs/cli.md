@@ -1,71 +1,71 @@
-# Diosix command-line interface (`dsx` / `diosix-ctl`)
+# Diosix command-line interface
 
-The `dsx` utility (also available via the `diosix-ctl` symlink) is the primary
-command-line interface for managing guest Virtual Machines (VMs) on the Diosix
-Type-1 Machine-mode (M-mode) hypervisor. It communicates with the hypervisor
-kernel through the `/dev/diosix` character device driver using Supervisor Binary
-Interface (SBI) hypercalls.
+The `dsx` command (also installed as `diosix-ctl`) manages virtual machines
+(VMs), virtual disks, guest images, networking, passkeys, and charter
+governance on the Diosix machine-mode (M-mode) hypervisor.
 
-Running `dsx` requires superuser (`root`) privileges inside the guest operating
-system to access the `/dev/diosix` interface.
-
----
-
-## Configuration files and permissions
-
-Diosix separates implementation mechanisms (compiled into the hypervisor and
-`dsx` binaries) from policy and tunable defaults (stored in declarative
-configuration files):
-
-| File | Scope | Permissions | Purpose |
-| :--- | :--- | :--- | :--- |
-| `build/layout.zon` | Build-time (`build.zig` / `scripts/qemu.zig`) | `0644` | Declarative repository layout, module roots, QEMU paths, and host unit test suites. |
-| `boot/hypervisor.conf` | Build-time (`scripts/build.sh` / `build.zig`) | `0644` | M-mode hypervisor hardware and emulation sizing defaults (`ROOT_RAM_MIN_MB=128`, `ROOT_RAM_MAX_MB=256`, `ROOT_RAM_HOST_DIVISOR=8`, `ROOT_VCPUS_MAX=4`, `CHILD_RAM_DEFAULT_MB=256`, `MAX_EMULATED_VCORES=16`, `INSTRUCTION_BATCH_SIZE=50000`). |
-| `/etc/diosix/diosix.toml` | Runtime (`dsx` / Root VM) | `0644` (`root:root`) | Default child VM sizing (`default_vcpus`, `default_ram`, `default_disk_mb`), repository paths, and Guided Tour steps (`[[tour]]`). |
-| `/etc/diosix/catalog.toml` | Runtime (`dsx image` / `dsx install-guest`) | `0644` (`root:root`) | DNF/APT-style Guest OS and Steward VM repository catalog with pinned 64-character Secure Hash Algorithm 256 (SHA-256) digests. |
-| `/etc/diosix/install.toml` | Runtime (`dsx host install`) | `0644` (`root:root`) | Default bare-metal installation profile (`mode`, `target_disk`, `boot_part_mb`, `state_part_mb`, `enable_stewards`, `standby_root_vm`). |
-| `/etc/diosix/charter.toml` | Runtime (`dsx charter`) | `0644` (`root:root`) | Constitutional Charter defining M-of-N Steward quorum thresholds, workload units, and hardware isolation invariants. |
-| `/etc/diosix/constitution.md` | Runtime (`dsx charter`) | `0644` (`root:root`) | Human- and Steward-readable Constitutional invariants and operational rules. |
-| `/etc/diosix/system.toml` | Runtime (`dsx manifest` / `dsx run`) | `0644` (`root:root`) | Declarative multi-domain topology and capability routing policy. |
-| `/var/lib/diosix/keys/` | Runtime (persistent storage) | `0700` (`root:root`) | Enrolled operator passkeys (`authorized_passkeys`, mode `0600`) and internal cluster management keys (`id_management`, mode `0600`). |
+Running `dsx` requires root privileges inside the guest OS. For task-based
+walkthroughs and background on why each feature works the way it does, see
+[Deploying and provisioning guest VMs](guests.md) and
+[Security, networking, and governance](security.md).
 
 ---
 
-## Context ID (CID) syntax
+## Runtime configuration files and permissions
 
-Commands accepting a `<cid>` or `<target>` argument support numeric IDs,
-friendly VM names, and symbolic aliases:
+Diosix keeps runtime policy and tunable defaults in `/etc/diosix` and
+`/var/lib/diosix` rather than hardcoding them into binaries. For build-time
+configuration files, see [Build system, porting, and debugging](build.md).
 
-*   **`self`** or **`1`**: Refers to the calling VM.
-*   **`parent`** or **`0`**: Refers to the immediate parent VM.
-*   **`2..N`**: Numeric Context ID (CID) of a direct child VM.
-*   **`<name>`**: Human-friendly domain or VM name registered at creation
-    (for example, `sys`, `user`, or `debian-cloud`).
+| File | Permissions | Purpose |
+| :--- | :--- | :--- |
+| `/etc/diosix/diosix.toml` | `0644` | Default child VM sizing, repository paths, and guided tour steps. |
+| `/etc/diosix/catalog.toml` | `0644` | Guest OS and steward VM repository catalog with pinned 64-character SHA-256 digests. |
+| `/etc/diosix/install.toml` | `0644` | Default disk installation profile for expert provisioning. |
+| `/etc/diosix/charter.toml` | `0644` | Charter defining steward quorum thresholds, workload units, and isolation rules. |
+| `/etc/diosix/constitution.md` | `0644` | Human- and steward-readable charter rules and operating invariants. |
+| `/etc/diosix/system.toml` | `0644` | Declarative multi-domain topology and service routing policy. |
+| `/var/lib/diosix/keys/` | `0700` | Enrolled operator passkeys and internal management keys (files stored with mode 0600). |
+
+---
+
+## Context ID syntax
+
+Commands accepting a `<cid>` or `<target>` argument take relative context IDs
+(CIDs), friendly VM names, or symbolic aliases:
+
+| Target | Meaning |
+| :--- | :--- |
+| `self` or `1` | Refers to the calling VM. |
+| `parent` or `0` | Refers to the immediate parent VM. |
+| `2..N` | Numeric CID of a direct child VM. |
+| `<name>` | Friendly domain or VM name assigned when the VM was created. |
 
 ---
 
 ## Command reference
 
 ### `dsx info`
-Displays status, hardware trust status, architecture, active child count, and
-resource quota usage for the current VM or a target guest VM.
+Shows runtime status, hardware trust, architecture, virtual CPU (vCPU) count,
+active child count, and quota usage for the current VM, a direct child VM, or
+the host.
 
 ```bash
-dsx info [name|cid|self|host] [--host|-H] [--json]
+dsx info [name|cid|self] [--host|-h] [--json|-j]
 ```
 
-*   `name|cid|self|host` *(optional)*: Target VM to inspect. Defaults to `self`
-    (CID 1). Passing `2..N` or a registered child name queries a direct child
-    VM. Passing `host` or `--host` (`-H`) queries the physical host and M-mode
-    hypervisor (equivalent to `dsx host info`). Querying the parent VM
-    (`parent` or `0`) is strictly denied and returns an error.
-*   `--json` / `-j` *(optional)*: Emits machine-readable JSON output.
+* `name|cid|self`: Target to inspect (defaults to `self`). Passing a child CID
+  or name inspects a direct child VM; querying `parent` (`0`) is denied.
+* `--host`, `-h`: Inspects the physical host and M-mode hypervisor (same as
+  `dsx host info`).
+* `--json`, `-j`: Prints machine-readable JSON output.
 
-Example output for calling VM (`dsx info`):
+Example output for the calling VM (`dsx info`, showing `Parent : CID 0` inside
+a child VM and `Parent : hypervisor` at the top level):
 ```text
 Assigned CID   : 1
+Parent         : hypervisor
 Architecture   : riscv64
-Root VM        : yes
 Hardware trust : yes
 Logical RAM    : 256 MB (65536 pages)
 RAM quota pool : 1536 MB total / 512 MB delegated / 1024 MB available
@@ -74,7 +74,7 @@ pCPU quota     : 100% granted / 50% delegated / 50% retained
 Child VMs      : 1
 ```
 
-Example output for child VM (`dsx info user`):
+Example output for a child VM (`dsx info user`):
 ```text
 Name           : user
 Context ID     : 2
@@ -89,51 +89,40 @@ IP / Endpoint  : 10.0.3.2
 
 ---
 
-### `dsx host` (top-level aliases: `dsx reboot`, `dsx poweroff`, `dsx shutdown`)
-Inspects and manages the physical host machine, bare-metal installation, and
-hypervisor kernel. Physical reset and installation operations are restricted to
-the Root VM.
+### `dsx host`
+Inspects and manages the physical host, disk installation, and M-mode
+hypervisor. Host reset and installation commands are restricted to the top-level
+VM whose parent is the hypervisor (aliases: `dsx reboot`, `dsx poweroff`, and
+`dsx shutdown`).
 
 ```bash
 dsx host <info [--json]|install [options]|reboot|poweroff|shutdown>
 ```
 
-*   `host info [--json]`: Queries hypervisor release version and channel
-    (`stable` or `beta`), Git commit hash, Application Binary Interface (ABI)
-    version, physical host CPU core count and Instruction Set Architecture
-    (ISA), host RAM totals, hypervisor memory footprint, and hardware
-    capabilities. Pass `--json` (or `-j`) for machine-readable JSON output.
-*   `host install [--mode basic|expert] [--disk <dev>] [--config <file.toml>]`
-    `[--hostname <name>] [--stewards] [--standby-root] [--dry-run] [--json]`:
-    Partitions and installs the immutable A/B Diosix boot slots (`slot_a` and
-    `slot_b`) and persistent `/var/lib/diosix` state partition onto a bare-metal
-    Non-Volatile Memory Express (NVMe), VirtIO, or Serial Advanced Technology
-    Attachment (SATA) target disk, writing an installation receipt to
-    `/var/lib/diosix/install-receipt.toml`.
-    *   `--mode basic|expert` / `-m <mode>` *(optional)*: Installation workflow
-        (`basic` guided 3-step install or `expert` declarative `[install]`
-        profile from `/etc/diosix/install.toml`).
-    *   `--disk <dev>` / `-d <dev>` *(optional)*: Target block device (default:
-        `/dev/vda`; accepts `/dev/*`, `/tmp/*`, or `/var/lib/diosix/*` and
-        rejects paths containing `..`).
-    *   `--config <file.toml>` / `-c <file.toml>` *(optional)*: Declarative
-        unattended installation manifest (defaults to
-        `/etc/diosix/install.toml` in expert mode).
-    *   `--hostname <name>` *(optional)*: Hostname to assign to the installed
-        system (`1..64` RFC-1123 alphanumeric or hyphen characters).
-    *   `--stewards` *(optional)*: Pre-stage the 3-node Tier-1 Autonomic Steward
-        collective (`steward-sec`, `steward-ops`, `steward-gov`).
-    *   `--standby-root` *(optional)*: Pre-stage a warm Standby Root VM
-        (`CID 2`) for zero Single Point of Failure (SPOF) failover.
-    *   `--dry-run` *(optional)*: Validate target disk, partition layout, and
-        cryptographic passkey requirements without writing to disk.
-    *   `--json` / `-j` *(optional)*: Emit structured JSON installation output.
-*   `host reboot` (or `dsx reboot`): Performs a clean hardware reset of the
-    physical host machine.
-*   `host poweroff` (or `host shutdown`, `dsx poweroff`, `dsx shutdown`): Powers
-    off the physical host hardware.
+* `host info [--json]`: Shows the hypervisor version and channel, Git commit
+  hash, application binary interface (ABI) version, host CPU core count and
+  instruction set architecture (ISA), host RAM totals, hypervisor memory
+  footprint, and active capability flags. Pass `--json` (`-j`) for JSON output.
+* `host install [options]`: Partitions an NVMe, VirtIO, or SATA disk with GPT
+  boot, state, and data partitions, initializes `/var/lib/diosix` on the data
+  partition, and writes `/var/lib/diosix/install.receipt`.
+  * `--mode basic|expert`, `-m <mode>`: Selects the `basic` profile or the
+    declarative `expert` profile from `/etc/diosix/install.toml`.
+  * `--disk <dev>`, `-d <dev>`: Target block device (defaults to `/dev/vda`;
+    accepts `/dev/*`, `/tmp/*`, or `/var/lib/diosix/*` without `..`).
+  * `--config <file.toml>`, `-c <file.toml>`: Declarative installation manifest
+    (defaults to `/etc/diosix/install.toml` in expert mode).
+  * `--hostname <name>`: Hostname recorded in the installation receipt (1 to 64
+    RFC-1123 alphanumeric or hyphen characters).
+  * `--stewards`: Records steward VM enablement in the receipt.
+  * `--standby-root`: Records standby root enablement in the receipt.
+  * `--dry-run`: Checks the target disk and planned GPT partition layout
+    without writing to disk.
+  * `--json`, `-j`: Prints JSON output.
+* `host reboot`: Reboots the physical host machine.
+* `host poweroff` (or `host shutdown`): Powers off the physical host hardware.
 
-Host hypervisor info output (`dsx host info`):
+Host info output (`dsx host info`):
 ```text
 Hypervisor build : Version 26.1 (beta) devel/b3d4773 (Zig 0.17.0 riscv64)
 Footprint        : 512 KB reserved, 256 KB free
@@ -150,119 +139,117 @@ Capabilities     :
 ```
 
 > [!NOTE]
-> **Root VM resource scaling and host minimum requirements**:
-> - **Minimum host RAM**: `256 MiB` physical RAM (`512 MiB+` recommended when
->   spawning child VMs).
-> - **Root VM RAM scaling**: The M-mode hypervisor allocates **1/8th (12.5%)**
->   of discovered host physical RAM to the Root VM (aligned to 2 MiB), clamped
->   between a **minimum of `128 MiB`** (required for the embedded Linux kernel +
->   initramfs + GUI/CLI tooling) and a **hard cap of `256 MiB`**. For example,
->   a `1 GiB` host allocates `128 MiB` to the Root VM, a `2 GiB` host allocates
->   `256 MiB`, and a `128 GiB` server still caps the Root VM at `256 MiB` so
->   over 99.8% of host RAM remains in the free pool for child VMs.
-> - **Root VM Virtual CPU (vCPU) scaling**: Scales 1:1 with discovered physical
->   CPU cores, clamped between `1` and `4` vCPUs.
+> Diosix requires at least 256 MiB of physical host RAM (512 MiB or more is
+> recommended when running child VMs). At boot, M-mode allocates one-quarter
+> (25%) of host RAM to the initial top-level VM (root VM)—clamped to 128 MiB
+> through 512 MiB—and assigns 1 to 4 vCPUs matching the physical core count,
+> leaving the remaining host RAM available in the buddy pool for descendant VMs.
 
 ---
 
-### `dsx run` (alias: `dsx create`)
+### `dsx run`
 Launches an isolated child VM in the background with private SSH networking,
-Device Tree Blob (DTB) configuration, and optional manifest staging.
+device tree blob (DTB) generation, and optional manifest staging (alias:
+`dsx create`).
 
 ```bash
 dsx run <image|name> [options]
 dsx run --manifest <system.toml> --domain <domain_name> [options]
 ```
 
-*   `image|name`: Name or path of the guest Executable and Linkable Format (ELF)
-    binary (or `.iso` installer image). If a bare name is provided (such as
-    `linux-guest`), `dsx` automatically searches the current working directory
-    and `/var/lib/diosix/images/`.
-*   `--name <name>` / `-n <name>` *(optional)*: Friendly name for the VM
-    (defaults to the domain name or image name).
-*   `--vcpus <N>` *(optional)*: Logical virtual CPU cores exposed in the child's
-    Device Tree (`1 .. 4096`; default: 1).
-*   `--ram <size>` *(optional)*: Logical RAM size exposed in the child's Device
-    Tree (e.g. `256M`, `2GiB`; must be a subset of `--ram-quota`).
-*   `--pcpu <1-99>` / `--pcpu-quota <1-99>` *(optional)*: Physical CPU time
-    pool percentage granted to the child VM and its subtree (`1% .. 99%`,
-    bounded by the parent's available pCPU pool).
-*   `--ram-quota <size>` *(optional)*: Physical RAM quota pool granted to the
-    child VM and its subtree (defaults to `--ram`, and is clamped to at least
-    `--ram` so the VM's own RAM is always a subset of its RAM pool).
-*   `--disk <name|size>` / `-d <name|size>` *(optional)*: Attaches an existing
-    virtual disk by name (e.g. `--disk user-data`), or auto-provisions and
-    formats an ext4 virtual disk of the specified size (e.g. `--disk 1G`).
-    Auto-provisioned disks are formatted as ext4 and pre-seeded with guest
-    images (`/images/default.elf`) and restricted directories (`/keys` mode
-    `0700`) so child VMs can recursively deploy grandchild VMs without leaking
-    parent credentials.
-*   `--cdrom <iso|path>` (or `--iso <path>` / `--media <path>`) *(optional)*:
-    Attach a read-only installer ISO or live media.
-*   `--ip <address>` *(optional)*: Static private IP (default: `10.0.3.<cid>`).
-*   `--net <none|local|wan|router>` *(optional)*: Network access policy for the
-    child VM (default: `local`, or inferred from `--domain` capabilities in
-    `system.toml`):
-    *   `none`: Air-gaps the VM in M-mode (`RunFlags.NET_ISOLATED`); all
-        `DIOSIX_NET_SEND` hypercalls return `SBI_ERR_DENIED` and `diosix0` is
-        kept down.
-    *   `local` *(default)*: Host-only management networking (`10.0.3.1 <->
-        10.0.3.<cid>` for `dsx ssh` and port `8484` Wayland display bridge).
-        Outbound Wide Area Network (WAN) / internet forwarding and lateral
-        sibling traffic are blocked.
-    *   `wan`: Explicitly grants outbound WAN / internet NAT forwarding through
-        the parent router (`iptables FORWARD ACCEPT`).
-    *   `router`: Configures the VM as an L3 routing, filtering, and logging
-        middlebox (`ip_forward=1`, `MASQUERADE`, and WAN forwarding) that
-        downstream sibling VMs can chain through via `--net-via` or
-        `dsx net route`.
-*   `--net-via <vm|cid>` *(optional)*: Chains all network traffic from this
-    child VM through a designated sibling router/firewall/logging VM (`<vm>` or
-    `<cid>`). M-mode (`DIOSIX_SET_NET_POLICY`) permits L2 frames between the
-    VM and its designated router VM while blocking direct WAN bypass and
-    unrelated sibling traffic.
-*   `--domain <name>` *(optional)*: Extracts configuration and policies for the
-    domain from `/etc/diosix/system.toml`.
-*   `--manifest <path>` / `-m <path>` *(optional)*: System manifest path.
-*   `--dtb <path>` *(optional)*: Custom DTB file path (defaults to
-    `/sys/firmware/fdt`).
-*   `--trusted` / `--untrusted` *(optional)*: Grants or withholds physical
-    hardware trust (default: untrusted).
-*   `--steward` *(optional)*: Marks the child VM as a hardware-protected Tier-1
-    Autonomic Steward (`RunFlags.STEWARD`). Once the Constitutional Charter is
-    sealed in M-mode, the Root VM cannot unilaterally terminate or starve a
-    Steward VM without M-of-N Steward quorum ratification.
-*   `--standby-root` *(optional)*: Marks the child VM as a warm Standby Root
-    replica (`RunFlags.STANDBY_ROOT`) eligible for zero-SPOF M-mode failover if
-    the primary Root VM crashes or is replaced by Steward quorum.
-*   `--confidential` *(optional)*: Enables hardware memory confidentiality
-    (`RunFlags.CONFIDENTIAL`). Once the Constitutional Charter is sealed in
-    M-mode, `MAP_CHILD_MEM` on a confidential VM is strictly rejected by the
-    hypervisor even from the Root VM.
-*   `--arch <arch>` / `-a <arch>` *(optional)*: Target architecture (`riscv64`
-    or `riscv32`; `aarch64` and `x86_64` are recognized and report that
-    cross-architecture emulation is not yet supported).
+* `image|name`: Name or path of the guest image to boot. Accepts 64-bit or
+  32-bit ELF kernels, flat RISC-V Linux or BSD `Image` binaries, self-contained
+  portable executable (PE) `.efi` stubs, bootable ISO9660 images, and raw,
+  ext4, or FAT32 disk images. Bare names are resolved against the current
+  directory and `/var/lib/diosix/images/`.
+* `--name <name>`, `-n <name>`: Friendly name for the VM (defaults to the
+  domain name or image basename).
+* `--vcpus <N>`: Logical vCPUs advertised in the child's DTB (1 to 4,096;
+  defaults to 1).
+* `--ram <size>`: Logical RAM size advertised in the child's DTB (such as
+  `256M` or `2GiB`; must fit within `--ram-quota`).
+* `--pcpu <1-90>`, `--pcpu-quota <1-90>`: Physical CPU time percentage
+  delegated to the child VM and its subtree (1% to 90%, bounded by the parent's
+  available share).
+* `--ram-quota <size>`: Physical RAM pool granted to the child VM and its
+  subtree (defaults to `--ram`, clamped to at least `--ram`).
+* `--disk <name|size>`, `-d <name|size>`: Stages an existing virtual disk by
+  name (such as `--disk user-data`), or creates and formats a new ext4 disk up
+  to 256 MiB staged into the upper half of child RAM as `/dev/vda`. Newly
+  created disks are pre-seeded with the default guest kernel, management SSH
+  public key, and NoCloud cloud-init files.
+* `--cdrom <iso|path>` (or `--iso <path>`, `--media <path>`): Stages a
+  read-only ISO image of up to 256 MiB into child RAM (mutually exclusive with
+  `--disk` on a single boot).
+* `--initrd <path>` (or `--initramfs <path>`): Stages an external initial RAM
+  disk into child guest RAM and records its bounds in the child DTB.
+* `--cmdline <args>` (or `--append <args>`, `--bootargs <args>`): Appends
+  custom kernel command-line arguments to `/chosen/bootargs` in the child DTB.
+* `--ip <address>`: Static private IP address (defaults to the caller's virtual
+  subnet, such as `10.0.3.<cid>` at depth 0 or `10.0.<3+depth>.<cid>` in nested
+  child VMs).
+* `--net <none|local|wan|router>`: Network policy for the child VM (defaults to
+  `local`, or inferred from `--domain` capabilities in `system.toml`):
+  * `none`: Air-gaps the VM in M-mode so all network transmission and reception
+    is rejected.
+  * `local`: Enables a host-only management link to the parent VM while
+    blocking sibling traffic and wide area network (WAN) internet forwarding.
+  * `wan`: Enables outbound WAN network address translation (NAT) forwarding
+    through the parent router.
+  * `router`: Configures the VM as a layer-3 (L3) routing, filtering, and
+    logging middlebox that sibling VMs can chain through with `--net-via` or
+    `dsx net route`.
+* `--net-via <vm|cid>`: Routes all traffic from this child VM through a
+  designated sibling router VM, permitting layer-2 (L2) frames between the two
+  VMs while blocking direct WAN bypass and other sibling traffic.
+* `--domain <name>`: Loads settings and policies for `<name>` from
+  `/etc/diosix/system.toml`.
+* `--manifest <path>`, `-m <path>`: Path to `system.toml`.
+* `--dtb <path>`: Custom base DTB file (defaults to `/sys/firmware/fdt`).
+* `--trusted` / `--untrusted`: Grants or withholds physical hardware trust
+  (untrusted by default).
+* `--steward`: Marks the child VM as a steward VM. Under a sealed charter, the
+  parent VM cannot stop or lower the quotas of a steward VM without steward
+  quorum ratification.
+* `--standby-root`: Marks the child VM as a warm standby root VM eligible for
+  M-mode failover promotion.
+* `--confidential`: Enables guest memory confidentiality, blocking parent
+  foreign memory mappings once a charter is sealed.
+* `--arch <arch>`, `-a <arch>`: Guest architecture (`riscv64` or `riscv32`;
+  `aarch64` and `x86_64` are recognized and report that cross-architecture
+  emulation is not yet enabled).
 
 Examples:
 ```bash
-# Launch an OS installer attaching an ISO and a new 8 GiB target disk
-dsx run debian-installer --cdrom debian-12.iso --disk 8GiB
+# Boot a live ISO in RAM
+dsx run custom-riscv64.iso --name live-os --vcpus 2 --ram 1024M
 
-# Launch a sandboxed user VM with 1 GB persistent storage disk attached
-dsx run linux-guest --name user --vcpus 2 --ram 256M --disk 1G
+# Launch the built-in CLI VM or Weston Wayland desktop VM
+dsx run linux-cli --name cli-work --vcpus 2 --ram 256M
+dsx run linux-desktop --name desk-work --vcpus 2 --ram 512M
 
-# Launch a trusted driver domain with 1 vCPU and 128 MB RAM
+# Launch a sandboxed VM with 2 vCPUs, 512 MiB RAM, and a 128 MiB in-RAM disk
+dsx run linux-guest --name user --vcpus 2 --ram 512M --disk 128M
+
+# Launch a trusted driver domain with 1 vCPU and 128 MiB RAM
 dsx run linux-guest --name sys-domain --trusted --vcpus 1 --ram 128M
 
-# Launch using a declarative domain manifest
-dsx run --manifest /etc/diosix/system.toml --domain user
+# Boot a flat RISC-V Linux kernel with an external initrd and custom cmdline
+dsx run /var/lib/diosix/images/Image \
+    --initrd /var/lib/diosix/images/initramfs.cpio \
+    --cmdline "root=/dev/vda rw console=hvc0" \
+    --disk app-disk \
+    --ram 512M
+
+# Launch a domain defined in /etc/diosix/system.toml
+dsx run --manifest /etc/diosix/system.toml --domain sys
 ```
 
 ---
 
-### `dsx net` (alias: `dsx network`)
-Inspects and dynamically updates per-VM network access policies, M-mode air-gap
-isolation, and service-VM middlebox routing (`DIOSIX_SET_NET_POLICY`).
+### `dsx net`
+Inspects and updates per-VM network policies, M-mode air-gap isolation, and
+router-VM chaining (alias: `dsx network`).
 
 ```bash
 dsx net status
@@ -272,24 +259,25 @@ dsx net isolate <vm|cid>
 dsx net route <vm|cid> --via <router-vm|cid|root>
 ```
 
-*   `status` (or `list`): Displays each active child VM's CID, name, IP, network
-    mode (`none`, `local`, `wan`, `router`), upstream gateway, and WAN egress
-    posture.
-*   `grant <vm|cid> [wan|router|local]`: Grants outbound WAN access (`wan`,
-    default) or middlebox router role (`router`) to a running child VM.
-*   `revoke <vm|cid>`: Revokes outbound WAN access from `<vm|cid>`, reverting it
-    to `local` (host-only management SSH).
-*   `isolate <vm|cid>`: Immediately air-gaps `<vm|cid>` in M-mode
-    (`NetPolicyFlags.ISOLATED`), denying all packet transmission and reception.
-*   `route <vm|cid> --via <router-vm|cid|root>`: Dynamically chains `<vm|cid>`'s
-    network traffic through `<router-vm>` (for routing, packet filtering, or
-    logging) or restores direct parent routing (`--via root`).
+* `status` (or `list`): Lists each active child VM's CID, name, IP, mode
+  (`none`, `local`, `wan`, `router`), upstream gateway, and WAN state.
+* `grant <vm|cid> [wan|router|local]`: Grants outbound WAN access (`wan` by
+  default) or router role (`router`) to a running child VM.
+* `revoke <vm|cid>`: Revokes WAN access from `<vm|cid>`, returning it to
+  `local` (parent SSH only).
+* `isolate <vm|cid>`: Air-gaps `<vm|cid>` in M-mode, blocking all packet
+  transmission and reception.
+* `route <vm|cid> --via <router-vm|cid|root>`: Chains `<vm|cid>`'s network
+  traffic through `<router-vm>` or restores direct parent routing
+  (`--via root`).
 
 ---
 
-### `dsx list` (aliases: `dsx ps`, `dsx ls`)
-Displays a tabular list of all active VMs, including CIDs, vCPU counts, RAM
-quotas, runtime status, trust levels, and IP endpoints.
+### `dsx list`
+Lists the calling VM (`self`, CID 1) and its direct child VMs as a one-level
+tree with their CIDs, vCPU counts, RAM allocations, status, trust level, and IP
+endpoints (aliases: `dsx ps`, `dsx ls`). Because child subtrees remain opaque,
+nested grandchildren appear only inside the child's own local view.
 
 ```bash
 dsx list
@@ -299,80 +287,81 @@ dsx ls
 
 Example output:
 ```text
-CID   Name             vCPUs   RAM       Status    Trust       IP / Endpoint
-1     root (self)      4       256 MB    running   trusted     local
-2     sys-domain       1       128 MB    running   trusted     10.0.3.2
-3     user             2       256 MB    running   untrusted   10.0.3.3
+CID  Name                 vCPUs  RAM      Status   Trust     IP / Endpoint
+1    diosix-rootvm (self) 4      256 MB   running  trusted   local (hypervisor)
+2    ├─ sys-domain        1      128 MB   running  trusted   10.0.3.2
+3    └─ user              2      256 MB   running  untrusted 10.0.3.3
+
+Note: child subtrees are opaque; only direct children are visible.
 ```
 
 ---
 
-### `dsx ssh` (aliases: `dsx login`, `dsx exec`)
-Opens an interactive login shell or runs a remote command in a child VM over
-private point-to-point network channels using the cluster management Ed25519
-keypair (with only the public key provisioned in the child VM's authorized
-keys).
+### `dsx ssh`
+Opens an interactive shell or runs a command inside a child VM over SSH using
+the parent's Ed25519 management keypair, with only the public key staged inside
+the child (aliases: `dsx login`, `dsx exec`).
 
 ```bash
 dsx ssh [user@]<name|cid> [-- [command...]]
 dsx ssh [--user <username>] <name|cid> [-- [command...]]
 ```
 
-*   `[user@]target`: Optional remote username (defaults to `root`) and target
-    VM friendly name or numeric CID.
-*   `--user <username>` / `-u <username>` *(optional)*: Alternative flag to
-    specify the SSH user account.
-*   `-- [command...]` *(optional)*: Remote command string to execute
-    non-interactively.
+* `[user@]target`: Remote username (defaults to `root`) and target child VM
+  name or CID.
+* `--user <username>`, `-u <username>`: Specifies the SSH login account.
+* `-- [command...]`: Command to run non-interactively.
 
 Examples:
 ```bash
 # Open an interactive root shell on child VM 'user'
 dsx ssh user
 
-# Log in as user 'debian' on child VM 'user'
+# Log in as 'debian' on child VM 'user'
 dsx ssh debian@user
 
-# Execute a remote command non-interactively
+# Run a command non-interactively
 dsx ssh debian@user -- uname -a
 
-# Access child VM 2 directly by numeric Context ID
+# Connect to child VM 2 by CID
 dsx ssh root@2 -- cat /etc/os-release
 ```
 
 ---
 
 ### `dsx console`
-Attaches to a child VM's hypervisor serial console (`hvc0` / SBI `DBCN`),
-streaming buffered kernel boot messages and providing bidirectional raw console
-I/O even when a guest has no network stack or SSH daemon.
+Attaches to a child VM's hypervisor serial console, streaming buffered boot
+logs and bidirectional supervisor binary interface (SBI) console input/output
+(I/O) alongside transmit output from the emulated 16550A universal asynchronous
+receiver-transmitter (UART), even when a guest has no network interface or SSH
+server.
 
 ```bash
 dsx console <name|cid> [--dump|-d]
 ```
 
-*   `<name|cid>`: Friendly name or numeric Context ID (`>= 2`) of a direct
-    child VM.
-*   `--dump` / `-d` *(optional)*: Drains and prints all currently buffered
-    output from the child VM's `8 KiB` M-mode TX ring buffer and exits
-    immediately without entering interactive mode.
-*   **Detach key**: In interactive mode, press `Ctrl+]` (`0x1d`) to detach and
-    return to the parent shell without terminating the child VM.
+* `<name|cid>`: Friendly name or CID (2 or higher) of a direct child VM.
+* `--dump`, `-d`: Prints all buffered output from the child VM's 8 KiB M-mode
+  transmit ring and exits without opening an interactive session.
+
+In interactive mode, press `Ctrl+]` to detach and return to the parent shell
+without stopping the child VM.
 
 Examples:
 ```bash
 # Attach interactively to child VM 'new-guest' (press Ctrl+] to detach)
 dsx console new-guest
 
-# Dump buffered kernel boot logs from child CID 2 and exit
+# Print buffered kernel boot messages from child CID 2 and exit
 dsx console 2 --dump
 ```
 
 ---
 
-### `dsx stop` (aliases: `dsx kill`, `dsx terminate`)
-Stops and terminates a running guest VM and its descendants, reclaiming
-allocated physical memory and scheduler quotas back to the parent VM.
+### `dsx stop`
+Stops a running guest VM and all of its descendants, returning their physical
+RAM pages and CPU quotas to the parent VM (aliases: `dsx kill`,
+`dsx terminate`).
 
 ```bash
 dsx stop <name|cid|self>
@@ -380,27 +369,28 @@ dsx kill <name|cid|self>
 dsx terminate <name|cid|self>
 ```
 
-*   `name|cid`: Target child VM to terminate.
-*   `self`: Terminates the calling non-root VM. (The Root VM cannot be stopped
-    directly; use `dsx host poweroff` instead).
+* `name|cid`: Direct child VM to stop.
+* `self`: Stops the calling child VM (denied at the top-level VM whose parent is
+  the hypervisor; use `dsx host poweroff` instead).
 
 Examples:
 ```bash
-# Terminate child VM 'user'
+# Stop child VM 'user'
 dsx stop user
 
-# Terminate child VM with CID 3
+# Stop child VM 3
 dsx kill 3
 
-# Self-terminate calling child VM
+# Stop the calling child VM from inside itself
 dsx stop self
 ```
 
 ---
 
 ### `dsx restart`
-Stops a running child VM and restarts it with its configured image and quota
-parameters.
+Stops a running child VM and boots it again using the image, vCPU count, RAM
+size, attached media, IP address, and hardware trust flag recorded in
+`/run/diosix/guests.toml`.
 
 ```bash
 dsx restart <name|cid>
@@ -414,50 +404,48 @@ dsx restart user
 ---
 
 ### `dsx quota`
-Inspects or updates physical resource quotas (`--pcpu` percentage and `--ram`
-pool) on a direct child VM or lowers quotas on the calling VM (`self`). When
-invoked without modification flags, displays the current physical RAM quota
-pool, pCPU time percentages, and logical resource configuration.
+Inspects or updates physical resource quotas on a direct child VM or lowers
+quotas on the calling VM (`self`). Called without flags, it prints current RAM
+pools, physical CPU percentages, and logical limits.
 
 ```bash
 dsx quota [cid|self] [--pcpu <1-99>] [--retained-pcpu <1-99>] [--ram <MB>] \
     [--vcpus <N>] [--depth <N>] [--descendants <N>]
 ```
 
-*   `cid|self` *(optional)*: Target VM to inspect or configure
-    (default: `self`).
-*   `--pcpu <1-99>` *(optional)*: Adjusts physical CPU time pool percentage
-    granted to a direct child VM (`1% .. 99%`, bounded by the parent's
-    available pCPU pool).
-*   `--retained-pcpu <1-99>` *(optional)*: On the Root VM (`self`), adjusts the
-    physical CPU time percentage retained for the Root VM (`1% .. 99%`, default:
-    `10%`), leaving `100% - retained` in the child delegation pool.
-*   `--ram <MB>` *(optional)*: Adjusts the physical RAM quota pool in megabytes.
-    Dialing a running child VM's RAM quota below its currently in-use physical
-    memory triggers an Out-Of-Memory (OOM) termination of that child.
-*   `--vcpus <N>` *(optional)*: Sets maximum logical vCPU ceiling (`1 .. 4096`).
-*   `--depth <N>` *(optional)*: Sets maximum child nesting depth.
-*   `--descendants <N>` *(optional)*: Sets maximum descendant VM count.
+* `cid|self`: Target VM to inspect or update (defaults to `self`).
+* `--pcpu <1-99>`: Sets physical CPU time percentage granted to a direct child
+  VM (1% to 99%, within the parent's available pool).
+* `--retained-pcpu <1-99>`: On the calling VM (`self`), sets the physical CPU
+  percentage kept for itself (1% to 99%, 10% by default), leaving the
+  remainder available for children.
+* `--ram <MB>`: Updates the physical RAM quota pool in megabytes. Lowering a
+  running child VM's pool below its currently faulted pages triggers an
+  out-of-memory (OOM) stop of that child.
+* `--vcpus <N>`: Sets the logical vCPU ceiling (1 to 4,096).
+* `--depth <N>`: Sets maximum child nesting depth.
+* `--descendants <N>`: Sets maximum descendant VM count.
 
-**Self-sandboxing**: Specifying `self` allows a privileged VM to voluntarily
-lower its own resource quotas and capabilities before running untrusted code.
+Passing `self` lets a VM permanently lower its own quotas before running
+untrusted workloads.
 
 Examples:
 ```bash
-# Query active resource quotas, available RAM pool, and pCPU delegation
+# View current quotas, free RAM pool, and pCPU delegation
 dsx quota
 
-# Grant child VM 2 50% of parent pCPU time and a 512 MB physical RAM quota
+# Grant child VM 2 50% of parent pCPU time and a 512 MB RAM pool
 dsx quota 2 --pcpu 50 --ram 512
 
-# Self-sandbox calling VM to 256 MB physical RAM quota
+# Lower the calling VM's own RAM pool to 256 MB
 dsx quota self --ram 256
 ```
 
 ---
 
-### `dsx manifest` (top-level resolve alias: `dsx resolve`)
-Inspects, validates, attenuates, and stages hierarchical capability manifests.
+### `dsx manifest`
+Inspects, validates, prunes, and stages capability manifests (top-level alias
+for service lookup: `dsx resolve`).
 
 ```bash
 dsx manifest <subcmd> [options]
@@ -465,211 +453,197 @@ dsx resolve <service_alias> [--manifest <file.toml>]
 ```
 
 Subcommands:
-*   `show [--file <path>] [--hv] [--cid <cid>]`: Displays the active manifest
-    from `/etc/diosix/system.toml`, a local file, or hypervisor memory (`--hv`).
-*   `validate <file.toml>`: Validates system or child manifest syntax and
-    capability constraints.
-*   `prune <system.toml> --domain <name> [-o <out.toml>]`: Attenuates the system
-    manifest for a target child domain, filtering out unneeded domains.
-*   `resolve <service_alias> [--manifest <file.toml>]` (or `dsx resolve`):
-    Resolves a required service alias against active policy to locate target
-    CIDs and routes.
-*   `set <cid> <file.toml>`: Stages an attenuated domain manifest in hypervisor
-    memory for a child VM via the `SET_MANIFEST` SBI call.
+* `show [--file <path>] [--hv] [--cid <cid>]`: Prints the manifest from
+  `/etc/diosix/system.toml`, a file path, or hypervisor memory (`--hv`).
+* `validate <file.toml>`: Checks manifest syntax and capability rules.
+* `prune <system.toml> --domain <name> [-o <out.toml>]`: Generates a pruned
+  child manifest containing only the routes `<name>` is allowed to require.
+* `resolve <service_alias> [--manifest <file.toml>]` (or `dsx resolve`):
+  Resolves a service alias to its target CID and transport route.
+* `set <cid> <file.toml>`: Stages a manifest in hypervisor memory for `<cid>`.
 
 Examples:
 ```bash
-# Validate system bootstrap manifest
+# Validate the system manifest
 dsx manifest validate /etc/diosix/system.toml
 
-# Generate attenuated manifest for child domain 'sys'
+# Prune the manifest for child domain 'sys'
 dsx manifest prune /etc/diosix/system.toml --domain sys -o /tmp/sys-child.toml
 
-# Stage manifest in hypervisor for child VM 2
+# Stage the pruned manifest for child VM 2
 dsx manifest set 2 /tmp/sys-child.toml
 
-# Resolve a service alias across domain boundaries
-dsx manifest resolve gui.display --manifest /tmp/user-child.toml
+# Resolve a service alias
 dsx resolve gui.display -m /tmp/user-child.toml
 ```
 
 ---
 
-### `dsx disk` (alias: `dsx storage`)
-Manages persistent virtual block storage images in `/var/lib/diosix/disks/` for
-child VMs.
+### `dsx disk`
+Manages persistent virtual disk images in `/var/lib/diosix/disks/` (alias:
+`dsx storage`). When passed to `dsx run --disk`, disks up to 256 MiB are staged
+into the upper half of child RAM and exposed as `/dev/vda`.
 
 ```bash
 dsx disk <subcmd> [options]
 ```
 
 Subcommands:
-*   `create <name> [--size <size>]`: Creates an ext4-formatted virtual disk
-    image (default: `1GiB`) and pre-stages the guest image repository
-    (`/images/default.elf`) and permissions (`/keys` mode `0700`) in full parity
-    with `dsx run --disk <size>`.
-*   `list` (or `ls`): Lists all provisioned virtual disks with their capacity,
-    filesystem format (`ext4` or `raw`), currently attached VM
-    (`<name> (CID <N>)` or `-`), and image path.
-*   `info <name>`: Displays detailed properties for a virtual disk, including
-    filesystem format, capacity, path, and attached VM status.
-*   `delete <name>` (or `rm`): Deletes a virtual disk image. Rejects deletion
-    if the disk is currently attached to an active running VM to prevent
-    accidental data loss or VM corruption.
-*   `resize <name> --size <size>`: Adjusts disk image capacity.
+* `create <name> [--size <size>]`: Creates an ext4 virtual disk image (defaults
+  to `1GiB`) and seeds the default guest kernel, management SSH public key, and
+  NoCloud cloud-init files.
+* `seed <name> [--hostname <name>] [--ip <ip>] [--pubkey <file>]` (alias:
+  `provision`): Mounts an unattached virtual disk image and writes
+  `/root/.ssh/authorized_keys`, `/etc/hostname`, `/etc/network/interfaces`, and
+  NoCloud cloud-init seed files so distribution images boot ready for
+  `dsx ssh`.
+* `list` (or `ls`): Lists virtual disks with their size, format, attached VM,
+  and file path.
+* `info <name>`: Shows format, capacity, path, and attachment state for a disk.
+* `delete <name>` (or `rm`): Deletes an unattached disk image (refuses to
+  delete disks currently attached to a running VM).
+* `resize <name> --size <size>`: Resizes a disk image.
 
 Examples:
 ```bash
-# Create a 2 GB ext4-formatted virtual disk pre-seeded with guest images
-dsx disk create user-data --size 2GiB
+# Create a 128 MiB ext4 virtual disk ready for dsx run --disk
+dsx disk create user-data --size 128M
 
-# List all provisioned virtual disks, formats, and attached VM status
+# Seed SSH keys, hostname, static IP, and cloud-init onto a guest disk
+dsx disk seed debian-root --hostname debian-vm --ip 10.0.3.2
+
+# List virtual disks and attached VMs
 dsx disk list
 
-# Inspect detailed metadata for a virtual disk
+# Inspect a disk
 dsx disk info user-data
 
-# Resize a virtual disk to 4 GB
-dsx disk resize user-data --size 4GiB
+# Resize a disk to 256 MiB
+dsx disk resize user-data --size 256M
 
-# Delete an unattached virtual disk image
+# Delete an unattached disk
 dsx disk delete user-data
 ```
 
 ---
 
 ### `dsx snapshot`
-Manages VM state checkpoints and snapshots in `/var/lib/diosix/snapshots/`.
+Saves, lists, restores, and deletes live child RAM checkpoints (up to 64 MiB)
+and quota metadata in `/var/lib/diosix/snapshots/`.
 
 ```bash
 dsx snapshot <subcmd> [options]
 ```
 
 Subcommands:
-*   `save <name|cid> [snap_id]`: Saves a running VM state checkpoint.
-*   `list` (or `ls`): Lists saved snapshots and target VMs.
-*   `restore <snap_id>`: Restores VM state from a snapshot checkpoint.
-*   `delete <snap_id>` (or `rm`): Deletes a saved snapshot.
+* `save <name|cid> [snap_id]` (alias: `create`): Saves up to 64 MiB of a
+  running child VM's RAM pages and quota metadata.
+* `list [--json]` (or `ls`): Lists saved snapshots and their target VMs.
+* `restore [vm] <snap_id>`: Restores saved RAM pages and quota limits onto the
+  matching child VM.
+* `delete [vm] <snap_id>` (or `rm`): Deletes `<snap_id>` and its saved memory
+  image.
 
 Examples:
 ```bash
-# Save a snapshot checkpoint for VM 'user'
 dsx snapshot save user backup-1
-
-# List all saved VM snapshots
-dsx snapshot list
-
-# Restore VM state from a snapshot
-dsx snapshot restore backup-1
-
-# Delete a snapshot checkpoint
-dsx snapshot delete backup-1
+dsx snapshot list --json
+dsx snapshot restore user backup-1
+dsx snapshot delete user backup-1
 ```
 
-### `dsx image` (alias: `dsx iso`)
-Manages guest OS kernel binaries and Tier-1 Autonomic Steward appliances in
-`/var/lib/diosix/images/` and installer ISOs in `/var/lib/diosix/iso/`.
+---
+
+### `dsx image`
+Manages guest OS kernels and steward images in `/var/lib/diosix/images/` and
+installer ISOs in `/var/lib/diosix/iso/` (alias: `dsx iso`).
 
 ```bash
 dsx image <subcmd> [options]
 ```
 
 Subcommands:
-*   `list [--remote] [--json]` (or `ls`): Lists locally stored OS kernels,
-    Steward appliances, and installer ISOs using unified `Tier` (`leaf`,
-    `steward`, or `shim`), `OS family` (`linux`, `freebsd`, `openbsd`,
-    `netbsd`, `diosix`, `generic`), and `Format` (`elf` or `iso9660`) columns
-    matching `dsx image catalog`. Pass `--remote` (`-r`) to list the remote
-    catalog.
-*   `catalog [--json]`: Reads `/etc/diosix/catalog.toml` (falling back to the
-    built-in catalog if absent) and lists available Supervisor-mode (S-mode) and
-    User-mode (U-mode) Guest OS installer ISOs (`debian-riscv64`,
-    `alpine-riscv64`, `freebsd-riscv64`, `openbsd-riscv64`, `netbsd-riscv64`)
-    and the Tier-1 Autonomic Steward VM (`steward`). Administrators can add
-    custom or private mirror entries directly in `/etc/diosix/catalog.toml`.
-    Pass `--json` (`-j`) for machine-readable output.
-*   `pull <catalog-id|url> [--name <name>] [--sha256 <hex>]`
-    `[--allow-unverified] [--json]` (or `fetch`): Downloads an
-    image by its `Catalog ID` (or short alias) from `/etc/diosix/catalog.toml`,
-    or directly from any `https://`, `http://`, or `file://` URL pointing to an
-    S-mode ELF64 kernel (`.elf`) or bootable ISO9660 image (`.iso`).
-    *   **Fail-closed SHA-256 verification**: `dsx image pull` strictly verifies
-        downloaded catalog images against the locally pinned `sha256` digest in
-        `/etc/diosix/catalog.toml` (shipped inside the trusted Root VM) and
-        fails closed on mismatch. Pulling a raw ad-hoc URL requires
-        `--sha256 <hex>` (or `--allow-unverified` to explicitly bypass integrity
-        verification).
-*   `import <file> [--name <name>]` (or `add`): Imports a local ISO or ELF
-    kernel into the repository.
-*   `delete <name>` (or `rm`): Deletes an image or ISO from the repository.
+* `list [--remote] [--json]` (or `ls`): Lists local kernels, steward images,
+  and ISOs with their tier, OS family, and format. Pass `--remote` (`-r`) to
+  include remote catalog entries.
+* `catalog [--json]`: Lists entries from `/etc/diosix/catalog.toml` (or the
+  built-in catalog if absent), including distribution ISOs and the steward VM
+  image. You can add custom mirror entries to `/etc/diosix/catalog.toml`.
+* `pull <catalog-id|url> [--name <name>] [--sha256 <hex>]`
+  `[--allow-unverified] [--json]` (or `fetch`): Downloads an image by catalog
+  ID or from an `https://`, `http://`, or `file://` URL. Catalog pulls verify
+  the downloaded file against the pinned SHA-256 digest in
+  `/etc/diosix/catalog.toml` and reject mismatches; direct URL pulls require
+  `--sha256 <hex>` unless `--allow-unverified` is passed explicitly.
+* `import <file> [--name <name>]` (or `add`): Copies a local ISO or kernel into
+  the image repository.
+* `verify <name> [--sha256 <hex>] [--json]`: Computes the SHA-256 digest of a
+  local image or ISO and verifies it against `--sha256` or its catalog entry.
+* `delete <name>` (or `rm`): Removes an image or ISO from the repository.
 
 Examples:
 ```bash
-# List the Guest OS and Steward VM catalog (/etc/diosix/catalog.toml)
+# Browse the catalog (/etc/diosix/catalog.toml)
 dsx image catalog
 
-# Pull the Tier-1 Autonomic Steward VM appliance (verifies pinned SHA-256)
+# Pull the steward VM image (verifies pinned SHA-256)
 dsx image pull steward
 
-# Pull the official FreeBSD 14.2 RISC-V installer ISO by Catalog ID
+# Pull the FreeBSD RISC-V installer ISO
 dsx image pull freebsd-riscv64
 
-# Pull an image from a custom URL with explicit SHA-256 verification
+# Pull from a custom URL with SHA-256 verification
 dsx image pull https://mirror.example.org/diosix/custom-kernel.elf \
     --name custom.elf \
     --sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
-# Import a local installer ISO into the canonical repository
+# Import and verify a local ISO
 dsx image import debian-12.0-riscv64-netinst.iso --name debian-12.iso
+dsx image verify debian-12.iso
 
-# List local images and ISO media
+# List and delete local images
 dsx image list
-
-# Delete an image from repository
 dsx image delete debian-12.iso
 ```
 
 ---
 
 ### `dsx install-guest`
-Automates the end-to-end provisioning of an S-mode and U-mode Guest OS from an
-installer ISO into a persistent virtual disk using the freestanding S-mode Guest
-Bootloader Shim (`guest-shim-riscv64.elf`).
+Downloads and verifies an installer ISO (up to 256 MiB), creates a virtual disk
+in `/var/lib/diosix/disks/`, and boots the OS installer in RAM through the
+supervisor-mode (S-mode) guest bootloader shim.
 
 ```bash
 dsx install-guest <os-name|iso> [--name <vm>] [--disk <disk>] \
     [--size <size>] [--vcpus <N>] [--ram <size>]
 ```
 
-*   `os-name|iso`: Official catalog ID/alias (such as `debian-riscv64` or
-    `freebsd`) or path/name of an `.iso` installer image.
-*   `--name <vm>` *(optional)*: Friendly name for the guest VM.
-*   `--disk <disk>` *(optional)*: Name of the target virtual disk in
-    `/var/lib/diosix/disks/` (created automatically if it does not exist).
-*   `--size <size>` *(optional)*: Capacity for the target virtual disk
-    (default: catalog spec or `4GiB`).
-*   `--vcpus <N>` *(optional)*: vCPU count (default: catalog spec or `2`).
-*   `--ram <size>` *(optional)*: RAM allocation ceiling (default: catalog spec
-    or `1024M`).
+* `os-name|iso`: Catalog ID or alias (such as `alpine-riscv64` or `freebsd`) or
+  path/name of an `.iso` image up to 256 MiB.
+* `--name <vm>`: Friendly name for the guest VM.
+* `--disk <disk>`: Target disk name in `/var/lib/diosix/disks/` (created if
+  absent).
+* `--size <size>`: Target disk size (defaults to catalog size or `4GiB`).
+* `--vcpus <N>`: vCPU count (defaults to catalog count or 2).
+* `--ram <size>`: Logical RAM size (defaults to catalog size or `1024M`).
 
-When installation completes and `dsx restart <vm>` is invoked, `dsx`
-automatically detaches the `--cdrom` installer media and boots the VM directly
-from its persistent `--disk` via `guest-shim`.
+Because each boot stages a single 256 MiB media slot in child RAM, stop the
+installer VM after installation (`dsx stop <vm>`) and launch the installed disk
+directly with `dsx run guest-shim --name <vm> --disk <disk>`.
 
 Examples:
 ```bash
-# Verify/pull the Debian RISC-V ISO, provision a 4 GiB disk, and boot installer
-dsx install-guest debian-riscv64 --disk debian-root --size 4GiB
-
-# Install FreeBSD 14.2 RISC-V onto an 8 GiB virtual disk
-dsx install-guest freebsd-riscv64 --name bsd-db --disk bsd-data --size 8GiB
+dsx install-guest alpine-riscv64 --disk alpine-root --size 256M --ram 512M
+dsx stop alpine
+dsx run guest-shim --name alpine --disk alpine-root --ram 512M
 ```
 
-### `dsx auth` (alias: `dsx passkey`)
-Manages zero-password passkey authentication, Fast Identity Online 2 (FIDO2) and
-Trusted Platform Module (TPM) 2.0 hardware token enrollment, Quick Response (QR)
-WebAuthn pairing, and single-use Universal Asynchronous Receiver-Transmitter
-(UART) serial challenge-response verification.
+---
+
+### `dsx auth`
+Manages passkey login, fast identity online 2 (FIDO2) and trusted platform
+module (TPM) 2.0 hardware-seeded keys, QR WebAuthn pairing URIs, and serial
+challenge-response verification (alias: `dsx passkey`).
 
 ```bash
 dsx auth <subcmd> [options]
@@ -677,45 +651,35 @@ dsx passkey <subcmd> [options]
 ```
 
 Subcommands:
-*   `status [--json]`: Displays the Root VM authentication posture
-    (`Password login : disabled (passkey-only)`), boot mode (`dev`, `live`,
-    `installed`), detected seat profile (`touch-tablet`, `desktop-kbd`,
-    `headless-serial`), connected FIDO2 USB tokens (`/dev/hidraw0`), platform
-    TPM 2.0 availability (`/dev/tpmrm0`), and enrolled passkey count.
-*   `list [--json]` (or `ls`): Lists all enrolled passkeys in
-    `/var/lib/diosix/keys/authorized_passkeys` with their kind (`fido2-ed25519`,
-    `fido2-ecdsa`, `tpm2-platform`, `ssh-ed25519`, `ssh-ecdsa`), key type,
-    SHA-256 fingerprint, and label/comment.
-*   `enroll [--key <pubkey>|--file <path>|--tpm|--fido2|--qr] [--label <name>]`
-    `[--json]`: Validates and enrolls a passkey into
-    `/var/lib/diosix/keys/authorized_passkeys` and
-    `/root/.ssh/authorized_keys`, or generates a WebAuthn QR pairing URI
-    (`--qr`).
-*   `revoke <id|fingerprint|label> [--json]` (aliases: `remove`, `rm`):
-    Revokes an enrolled passkey by 1-based index, SHA-256 fingerprint prefix,
-    or label from `/var/lib/diosix/keys/authorized_passkeys` and immediately
-    removes it from `/root/.ssh/authorized_keys`.
-*   `challenge [--json]`: Generates a 256-bit cryptographic one-time challenge
-    nonce (`diosix-challenge:<64-hex>`) in `/run/diosix/auth_challenge.state`
-    for headless UART serial authentication.
-*   `verify <signature-hex> [--challenge <str>] [--json]`: Verifies a 64-byte
-    (128-hex-char) Ed25519 signature over the active challenge against all
-    enrolled passkeys and immediately consumes the stored challenge nonce to
-    prevent replay attacks.
+* `status [--json]`: Shows authentication status, boot mode, seat profile,
+  attached FIDO2 USB tokens, TPM 2.0 presence, and enrolled passkey count.
+* `list [--json]` (or `ls`): Lists enrolled passkeys in
+  `/var/lib/diosix/keys/authorized_passkeys` with their kind, key type, SHA-256
+  fingerprint, and label.
+* `enroll [--key <pubkey>|--file <path>|--tpm|--fido2|--qr] [--label <name>]`
+  `[--json]`:
+  * `--key` / `--file`: Enrolls an OpenSSH or FIDO2 public key into
+    `authorized_passkeys` and `/root/.ssh/authorized_keys`.
+  * `--tpm` / `--fido2`: Generates an Ed25519 keypair on the local VM seeded
+    from `/dev/tpmrm0` or `/dev/hidraw*`, saves the private key in
+    `/var/lib/diosix/keys/` with mode 0600, and enrolls the public key.
+  * `--qr`: Prints a WebAuthn QR pairing URI containing a fresh 256-bit nonce.
+* `revoke <id|fingerprint|label> [--json]` (aliases: `remove`, `rm`): Removes a
+  passkey by 1-based index, SHA-256 prefix, or label from both
+  `authorized_passkeys` and `/root/.ssh/authorized_keys`.
+* `challenge [--json]`: Writes a single-use 256-bit challenge nonce to
+  `/run/diosix/auth_challenge.state` for serial challenge-response
+  verification.
+* `verify <signature-hex> [--challenge <str>] [--json]`: Checks a raw 64-byte
+  (128-hex-character) Ed25519 signature against enrolled Ed25519 public keys
+  and consumes the challenge nonce so it cannot be replayed.
 
 Examples:
 ```bash
-# Inspect passkey posture, seat profile, and hardware security token status
 dsx auth status
-
-# Enroll a FIDO2 hardware security key or TPM 2.0 platform passkey
-dsx auth enroll --fido2 --label yubikey-5-nfc
+dsx auth enroll --file ~/.ssh/id_ed25519_sk.pub --label yubikey-5-nfc
 dsx auth enroll --tpm --label platform-tpm
-
-# Generate a WebAuthn QR enrollment URI for smartphone/tablet pairing
 dsx auth enroll --qr
-
-# Generate and verify a single-use UART serial cryptographic challenge
 dsx auth challenge
 dsx auth verify <128-char-ed25519-signature-hex>
 ```
@@ -723,64 +687,63 @@ dsx auth verify <128-char-ed25519-signature-hex>
 ---
 
 ### `dsx gui`
-Provides a headless semantic JSON and action control plane for the Root VM
-desktop compositor (`diosix-gui`), enabling Operator Agents and automated UI
-verifiers to inspect and drive the GUI without screen-scraping.
+Queries and drives the local VM's `diosix-gui` desktop environment from scripts
+or automated
+tests without screen-scraping.
 
 ```bash
-dsx gui <state|trigger <action>|screenshot [--out <path>]> [--json]
+dsx gui <state|trigger <action>|screenshot [path]> [--json]
 ```
 
 Subcommands:
-*   `state [--json]` (aliases: `status`, `info`): Queries
-    `/run/diosix/gui_state.json` and displays the active seat profile
-    (`touch-tablet`, `desktop-kbd`, `headless-serial`), On-Screen Keyboard
-    (OSK) visibility and layout (`qwerty` or `symbols`), Welcome/Tour modal
-    state, and visible windows.
-*   `trigger <action> [--json]` (aliases: `exec`, `action`, `click`): Sends a
-    semantic command to `/run/diosix/gui_cmd` (`open-menu`, `close-menu`,
-    `toggle-osk`, `open-welcome`, `close-welcome`, `start-tour`, `next-tour`,
-    `prev-tour`, `close-tour`, `open-fleet`, `open-software`, `open-hardware`,
-    `open-help`, `open-about`).
-*   `screenshot [--out /tmp/<file>.ppm] [--json]` (aliases: `snap`, `capture`):
-    Requests a deterministic framebuffer capture from `diosix-gui` into `/tmp/`
-    (output paths are strictly restricted to `/tmp/` with no `..` traversal).
+* `state [--json]`: Reads `/run/diosix/gui_state.json` and prints the live
+  compositor state (resolution, render mode, active pane, on-screen keyboard
+  visibility, welcome and guided tour progress, guest count, and window count).
+  Falls back to detected seat defaults if the desktop is not running.
+* `trigger <action> [--json]`: Writes an action name to `/run/diosix/gui_cmd`:
+  `menu.create_vm`, `menu.about`, `menu.status`, `menu.config`, `menu.back`,
+  `osk.toggle`, `osk.show`, `osk.hide`, `welcome.open`, `welcome.close`,
+  `welcome.try_desktop`, `welcome.try_cli`, `tour.start`, `tour.next`,
+  `tour.prev`, or `tour.close`.
+* `screenshot [path] [--json]`: Saves a raw framebuffer dump from `/dev/fb0`
+  (defaults to `/tmp/diosix-screen.raw`; custom paths must stay under `/tmp/`
+  or `/var/lib/diosix/` without `..`).
 
 Examples:
 ```bash
-# Inspect live compositor semantic state as JSON
+# Read live compositor state as JSON
 dsx gui state --json
 
-# Toggle the dockable on-screen virtual keyboard (OSK)
-dsx gui trigger toggle-osk
+# Toggle the on-screen keyboard
+dsx gui trigger osk.toggle
 
-# Start the interactive 5-step Guided Tour modal in diosix-gui
-dsx gui trigger start-tour
+# Open the 5-step guided tour window and capture /dev/fb0
+dsx gui trigger tour.start
+dsx gui screenshot /tmp/diosix-screen.raw
 ```
 
 ---
 
 ### `dsx tour`
-Displays the interactive 5-step Guided Tour of the Diosix architecture in the
-terminal (or as structured JSON for automated agents) and synchronizes the tour
-modal in `diosix-gui`.
+Prints the 5-step guided tour from `/etc/diosix/diosix.toml` (or built-in
+defaults) in the terminal or as JSON.
 
 ```bash
 dsx tour [--step <1..5>] [--json]
 ```
 
-*   `--step <1..5>` *(optional)*: Display a specific step (`1` Root VM &
-    Hardware Isolation, `2` Zero-Password Passkey Security, `3` Guest OS &
-    Image Catalog, `4` Autonomic Steward Collective & Charter, `5` Live
-    Test-Drive & Host Installation). Omit to display all 5 steps.
-*   `--json` / `-j` *(optional)*: Emit structured JSON output.
+* `--step <1..5>`, `-s <1..5>`: Prints a single step (1 for root VM and
+  hardware isolation, 2 for passkey security, 3 for the guest OS catalog, 4 for
+  steward VMs and charter governance, or 5 for live sessions and disk
+  installation). Omit to show all steps.
+* `--json`, `-j`: Prints JSON output.
 
 ---
 
-### `dsx charter` (alias: `dsx steward`)
-Manages the Constitutional Charter (`/etc/diosix/charter.toml`), M-mode
-Constitutional Guard sealing, Steward M-of-N quorum ratification, Whisper Mesh
-consensus frames, Steward resets, and Standby Root VM failover.
+### `dsx charter`
+Manages `/etc/diosix/charter.toml`, M-mode charter sealing, steward quorum
+ratification votes, whisper consensus frames, steward resets, and standby root
+VM failover (alias: `dsx steward`).
 
 ```bash
 dsx charter \
@@ -789,60 +752,53 @@ dsx charter \
 ```
 
 Subcommands:
-*   `status [--file <path>] [--json]`: Displays the parsed Constitutional
-    Charter (`/etc/diosix/charter.toml`), its SHA-256 digest, M-mode sealing
-    state, Steward quorum parameters (`M-of-N`), minimum Steward floor, Standby
-    Root replica count, and active failover epoch.
-*   `deploy [--file <path>] [--json]` (alias: `seal`): Computes the SHA-256
-    digest of `/etc/diosix/charter.toml` and seals the Constitutional Charter
-    in M-mode via `DIOSIX_SEAL_CHARTER` (`FID 19`). Once sealed, amending the
-    Charter or terminating/starving a Steward VM requires M-of-N Steward quorum
-    ratification.
-*   `propose <action> [--unit <id>] [--count <N>] [--total <M>] [--quorum]`
-    `[--file <path>] [--json]`: Deterministically evaluates a proposed action
-    (`amend-charter`, `terminate-steward`, `reset-steward`, `root-failover`,
-    `terminate-units`, `delete-volume`, `export-volume`, `enable-wan-egress`)
-    against the `[invariants]` and `[invariants.isolation]` sections of
-    `charter.toml`.
-*   `ratify [--target <cid>] [--json]`: Casts a hardware-verified Steward
-    ratification vote in M-mode (`DIOSIX_RATIFY_CHARTER`, `FID 20`) for the
-    specified target CID. Only VMs spawned with `--steward` (`CID 2..63`) can
-    cast ratification votes; the Root VM cannot forge Steward votes.
-*   `whisper <send|recv> [options] [--json]`: Formats, sends, or parses
-    deterministic Whisper Mesh Byzantine Fault Tolerant (BFT) consensus frames
-    (`whisper:v1:<type>:<sender_cid>:<target_cid>:<payload>`).
-*   `reset-steward <cid> [--json]`: Resets a compromised or drifted Steward VM
-    back to its initial M-mode entry point and clean register state
-    (`DIOSIX_RESET_STEWARD`, `FID 23`) after M-of-N Steward quorum ratification.
-*   `failover [--standby <cid>] [--json]`: Promotes a warm Standby Root VM to
-    become the active Root VM (`DIOSIX_REQUEST_ROOT_FAILOVER`, `FID 24`) after
-    M-of-N Steward quorum ratification, transferring all surviving child VMs
-    and hardware trust without rebooting the host.
-*   `audit [--file <path>] [--json]`: Verifies that `/etc/diosix/charter.toml`
-    is present on disk, sealed in M-mode, and that the M-mode SHA-256 digest
-    matches the on-disk Charter.
+* `status [--file <path>] [--json]`: Shows the parsed charter, its SHA-256
+  digest, M-mode seal status, quorum settings, minimum steward count, standby
+  root flag, and failover epoch.
+* `deploy [--file <path>] [--json]` (alias: `seal`): Hashes
+  `/etc/diosix/charter.toml` and seals its SHA-256 digest and quorum counts in
+  M-mode. Steward and standby root VMs are launched separately with
+  `dsx run --steward` and `dsx run --standby-root`. Once sealed, amending the
+  charter or stopping or lowering a steward VM requires steward quorum
+  ratification.
+* `propose <action> [--unit <id>] [--count <N>] [--total <M>] [--quorum]`
+  `[--file <path>] [--json]`: Evaluates a proposed action (`amend-charter`,
+  `terminate-steward`, `reset-steward`, `root-failover`, `terminate-units`,
+  `delete-volume`, `export-volume`, or `enable-wan-egress`) offline against the
+  invariants in `charter.toml`.
+* `ratify [--target <cid>] [--json]`: Casts a steward ratification vote in
+  M-mode. Restricted to steward VMs (CIDs 2 through 63); the top-level VM
+  cannot vote.
+* `whisper <send|recv> [options] [--json]`: Sends or reads Byzantine
+  fault-tolerant (BFT) whisper frames across M-mode steward rings:
+  * `send [--to <cid>] [--from <cid>]`
+    `[--type <heartbeat|propose|ratify|reset-vote|failover-vote>]`
+    `[--payload <str>]`: Sends a whisper frame via M-mode.
+  * `recv [--frame <str>]`: Reads the next queued whisper frame from M-mode or
+    parses `--frame`.
+* `reset-steward <cid> [--json]`: Resets steward VM `<cid>` to its initial
+  entry point after steward quorum ratification.
+* `failover [--standby <cid>] [--json]`: Promotes a standby root VM to active
+  root VM after steward quorum ratification, reparenting surviving child VMs
+  without rebooting the host.
+* `audit [--file <path>] [--json]`: Confirms `/etc/diosix/charter.toml` exists,
+  is sealed in M-mode, and matches the sealed M-mode SHA-256 digest.
 
 Examples:
 ```bash
-# Inspect the active Constitutional Charter and M-mode enforcement state
 dsx charter status
-
-# Seal /etc/diosix/charter.toml into the M-mode hypervisor
 dsx charter deploy
-
-# Evaluate whether terminating 2 of 4 instances of unit-alpha violates Charter
 dsx charter propose terminate-units --unit unit-alpha --count 2 --total 4
-
-# Audit M-mode Charter SHA-256 integrity
+dsx charter whisper send --to 3 --type propose --payload "failover:epoch=1"
 dsx charter audit --json
 ```
 
 ---
 
 ### `dsx drop-trust`
-Irrevocably revokes hardware trust for the calling VM. Once dropped, the
-hypervisor unmaps host physical Memory-Mapped Input/Output (MMIO) pages and
-disables direct interrupt routing for the VM.
+Permanently drops hardware trust for the calling VM, unmapping host physical
+memory-mapped input/output (MMIO) pages and disabling direct hardware interrupt
+routing.
 
 ```bash
 dsx drop-trust

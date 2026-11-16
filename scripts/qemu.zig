@@ -57,7 +57,10 @@ const QemuRunner = struct {
 pub const QemuConfig = struct {
     vmdiosix: *std.Build.Step.Compile,
     run_buildroot: *std.Build.Step.Run,
+    guest_images_step: ?*std.Build.Step,
     rootvm_s_file: std.Build.LazyPath,
+    cli_stamp_file: ?std.Build.LazyPath,
+    desktop_stamp_file: ?std.Build.LazyPath,
     rootvm_elf_path: []const u8,
     legacy_cpu: bool,
     pmp_fallback: bool,
@@ -89,11 +92,14 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     const create_storage_cmd = b.addSystemCommand(&.{
         "bash",                   layout.qemu.storage_script,
         cfg.rootvm_elf_path,      storage_img_path,
-        layout.qemu.storage_size,
+        layout.qemu.storage_size, layout.qemu.iso_cache_dir,
     });
     create_storage_cmd.addFileInput(b.path(layout.qemu.storage_script));
     create_storage_cmd.addFileInput(cfg.rootvm_s_file);
+    if (cfg.cli_stamp_file) |cs| create_storage_cmd.addFileInput(cs);
+    if (cfg.desktop_stamp_file) |ds| create_storage_cmd.addFileInput(ds);
     create_storage_cmd.step.dependOn(&cfg.run_buildroot.step);
+    if (cfg.guest_images_step) |gs| create_storage_cmd.step.dependOn(gs);
     b.getInstallStep().dependOn(&create_storage_cmd.step);
 
     try qemu_args.appendSlice(b.allocator, &.{
@@ -133,11 +139,26 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         run_step_args.items,
     );
 
+    var run_cli_args = ArrayList([]const u8).empty;
+    defer run_cli_args.deinit(b.allocator);
+    try run_cli_args.appendSlice(b.allocator, qemu_args.items);
+    if (cfg.qemu_tpm_opt) try appendTpmArgs(b, &run_cli_args);
+    try appendBootArgs(b, &run_cli_args, "diosix.mode=dev diosix.demo=cli");
+    qemu.add(
+        &create_storage_cmd.step,
+        opt_tpm_step,
+        "run-cli",
+        "Boot directly into an interactive RISC-V Linux CLI VM",
+        run_cli_args.items,
+    );
+
     const live_img_path = layout.qemu.live_img;
     const create_live_cmd =
         b.addSystemCommand(&.{ "bash", layout.qemu.live_script });
     create_live_cmd.addFileInput(b.path(layout.qemu.live_script));
     create_live_cmd.addFileInput(cfg.rootvm_s_file);
+    if (cfg.cli_stamp_file) |cs| create_live_cmd.addFileInput(cs);
+    if (cfg.desktop_stamp_file) |ds| create_live_cmd.addFileInput(ds);
     create_live_cmd.addFileArg(cfg.vmdiosix.getEmittedBin());
     create_live_cmd.addArgs(&.{
         cfg.rootvm_elf_path,
@@ -146,8 +167,17 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     });
     create_live_cmd.step.dependOn(b.getInstallStep());
     create_live_cmd.step.dependOn(&cfg.run_buildroot.step);
+    if (cfg.guest_images_step) |gs| create_live_cmd.step.dependOn(gs);
     b.step("live-image", "Build bootable hybrid GPT live & installer image")
         .dependOn(&create_live_cmd.step);
+
+    const release_cmd =
+        b.addSystemCommand(&.{ "bash", layout.qemu.release_script });
+    release_cmd.addFileInput(b.path(layout.qemu.release_script));
+    release_cmd.step.dependOn(&create_live_cmd.step);
+    release_cmd.stdio = .inherit;
+    b.step("release", "Build standalone release bundle with desktop & CLI VMs")
+        .dependOn(&release_cmd.step);
 
     var qemu_live_args = ArrayList([]const u8).empty;
     defer qemu_live_args.deinit(b.allocator);
@@ -187,14 +217,14 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
             DEFAULT_DISPLAY_WIDTH,
             DEFAULT_DISPLAY_HEIGHT,
         });
-    if (cfg.qemu_gl_opt) {
-        try qemu_gui_args.appendSlice(b.allocator, &.{
-            "-display", "gtk,gl=on,zoom-to-fit=off",
-            "-device",  gpu_dev,
-        });
-    } else {
-        try qemu_gui_args.appendSlice(b.allocator, &.{ "-device", gpu_dev });
-    }
+    const gtk_display = if (cfg.qemu_gl_opt)
+        "gtk,gl=on,zoom-to-fit=off"
+    else
+        "gtk,zoom-to-fit=off";
+    try qemu_gui_args.appendSlice(b.allocator, &.{
+        "-display", gtk_display,
+        "-device",  gpu_dev,
+    });
     try qemu_gui_args.appendSlice(b.allocator, &.{
         "-device", "virtio-keyboard-pci",
         "-device", "virtio-tablet-pci",
@@ -253,6 +283,23 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         "run-gui",
         "Run the hypervisor with VirtIO-GPU and GUI window",
         qemu_gui_args.items,
+    );
+
+    var qemu_desktop_args = ArrayList([]const u8).empty;
+    defer qemu_desktop_args.deinit(b.allocator);
+    for (qemu_gui_args.items) |arg| {
+        const replaced = if (std.mem.eql(u8, arg, dev_append_str))
+            "diosix.mode=dev diosix.intro=skip diosix.demo=desktop"
+        else
+            arg;
+        try qemu_desktop_args.append(b.allocator, replaced);
+    }
+    qemu.add(
+        &create_storage_cmd.step,
+        opt_tpm_step,
+        "run-desktop",
+        "Boot directly into an interactive RISC-V Wayland desktop VM",
+        qemu_desktop_args.items,
     );
 
     var qemu_live_gui_args = ArrayList([]const u8).empty;

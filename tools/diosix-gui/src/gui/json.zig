@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const gui_mod = @import("../gui.zig");
+const DiosixGui = gui_mod.DiosixGui;
 
 /// Worst-case growth when escaping one byte: '"' and '\' become two bytes.
 const MAX_ESCAPED_BYTES_PER_CHAR: usize = 2;
@@ -31,6 +33,115 @@ pub fn escapeStr(
         }
     }
     return out.toOwnedSlice(allocator);
+}
+
+pub fn triggerSemanticAction(self: *DiosixGui, action: []const u8) !bool {
+    const SemAct = gui_mod.SemanticAction;
+    const act = std.meta.stringToEnum(SemAct, action) orelse return false;
+    switch (act) {
+        .@"menu.create_vm" => {
+            try self.activateMenuItem(gui_mod.ICON_MENU_CREATE_VM_ID);
+            self.completeNavAnimation();
+        },
+        .@"menu.about", .@"menu.status" => {
+            try self.activateMenuItem(gui_mod.ICON_MENU_ABOUT_ID);
+            self.completeNavAnimation();
+        },
+        .@"menu.config" => {
+            try self.activateMenuItem(gui_mod.ICON_MENU_CONFIG_ID);
+            self.completeNavAnimation();
+        },
+        .@"menu.back" => {
+            try self.navigateBack();
+            self.completeNavAnimation();
+        },
+        .@"osk.toggle" => try self.toggleOsk(),
+        .@"osk.show" => {
+            self.osk_state.visible = true;
+            try self.buildOskWindow();
+        },
+        .@"osk.hide" => {
+            self.osk_state.visible = false;
+            _ = self.destroyWindow(gui_mod.WIN_OSK_ID);
+            self.markFullDirty();
+        },
+        .@"welcome.open" => try self.showWelcomeModal(),
+        .@"welcome.close" => {
+            self.welcome_state.closeWelcome();
+            _ = self.destroyWindow(gui_mod.WIN_WELCOME_ID);
+            self.markFullDirty();
+        },
+        .@"welcome.try_desktop" => {
+            gui_mod.demo_mod.launchDemoVm(self, .desktop);
+        },
+        .@"welcome.try_cli" => {
+            gui_mod.demo_mod.launchDemoVm(self, .cli);
+        },
+        .@"tour.start" => {
+            self.welcome_state.startTour();
+            try self.showTourModal();
+        },
+        .@"tour.next" => {
+            self.welcome_state.nextStep();
+            if (self.welcome_state.tour_visible) {
+                try self.showTourModal();
+            } else {
+                _ = self.destroyWindow(gui_mod.WIN_TOUR_ID);
+                self.markFullDirty();
+            }
+        },
+        .@"tour.prev" => {
+            self.welcome_state.prevStep();
+            if (self.welcome_state.tour_visible) {
+                try self.showTourModal();
+            }
+        },
+        .@"tour.close" => {
+            self.welcome_state.closeTour();
+            _ = self.destroyWindow(gui_mod.WIN_TOUR_ID);
+            self.markFullDirty();
+        },
+    }
+    return true;
+}
+
+pub fn exportSemanticStateJson(
+    self: *const DiosixGui,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error![]u8 {
+    const active_pane: []const u8 = if (self.active_menu_id) |mid|
+        switch (mid) {
+            gui_mod.ICON_MENU_CREATE_VM_ID => "create_vm",
+            gui_mod.ICON_MENU_ABOUT_ID => "about",
+            gui_mod.ICON_MENU_CONFIG_ID => "config",
+            gui_mod.ICON_MENU_DISPLAY_ID => "guest_display",
+            else => "submenu",
+        }
+    else
+        "main";
+
+    const esc_osk = try escapeStr(allocator, self.osk_state.getInputText());
+    defer allocator.free(esc_osk);
+    const fmt =
+        "{{\"width\":{d},\"height\":{d},\"render_mode\":\"{s}\"," ++
+        "\"active_pane\":\"{s}\",\"window_count\":{d}," ++
+        "\"osk_visible\":{s}," ++
+        "\"osk_layout\":\"{s}\",\"osk_input\":\"{s}\"," ++
+        "\"welcome_visible\":{s},\"tour_visible\":{s},\"tour_step\":{d}}}\n";
+
+    return allocator.print(fmt, .{
+        self.width,
+        self.height,
+        if (self.render_mode == .accelerated) "accelerated" else "degraded",
+        active_pane,
+        self.windows.items.len,
+        if (self.osk_state.visible) "true" else "false",
+        self.osk_state.layout.label(),
+        esc_osk,
+        if (self.welcome_state.welcome_visible) "true" else "false",
+        if (self.welcome_state.tour_visible) "true" else "false",
+        self.welcome_state.current_step + 1,
+    });
 }
 
 test "escapeStr escapes quotes and backslashes" {

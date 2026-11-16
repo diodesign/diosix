@@ -7,20 +7,20 @@ of their respective project contributions.
 ## Copyright holders
 
 Hypervisor, tooling, build infrastructure, website, documentation:
-*  Copyright &copy; 2024-2026 Chris Williams
+* Copyright &copy; 2024-2026 Chris Williams
 
 Questrial typeface (SIL Open Font License):
-*  Copyright 2011 The Questrial Project Authors
+* Copyright 2011 The Questrial Project Authors
 
 DM Mono typeface (SIL Open Font License):
-*  Copyright 2020 The DM Mono Project Authors
+* Copyright 2020 The DM Mono Project Authors
 
 ## Future contributors
 
 New contributors are invited to add their names to this list when submitting
 their first contribution. Except as expressly agreed otherwise in writing
 prior to submission, any contribution submitted by you to this project shall
-be licensed under the [MIT License](LICENSE,md). You represent that you have
+be licensed under the [MIT License](LICENSE.md). You represent that you have
 the authority to license the contribution under these terms.
 
 ## Additional credits

@@ -1,4 +1,4 @@
-// ELF binary loader and symbol table resolver for Guest VMs.
+// ELF binary segment loader for Guest VMs.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -117,8 +117,6 @@ const ProgramHeader = struct {
 };
 
 pub const Loader = struct {
-    pub const findSymbol = symbols.findSymbol;
-
     pub fn detectArchFromHeader(source: []const u8) !guest.TargetArch {
         if (source.len < elf_spec.MIN_HEADER_LEN or
             !std.mem.eql(u8, source[0..4], elf_spec.MAGIC))
@@ -207,6 +205,9 @@ pub const Loader = struct {
         var hdr_buf: [elf_spec.ELF64_EHDR_SIZE]u8 = @splat(0);
         try src.readBytes(hdr_buf[0..hdr_len], 0);
         const detected_arch = try detectArchFromHeader(hdr_buf[0..hdr_len]);
+        if (detected_arch == .aarch64 or detected_arch == .x86_64) {
+            return LoaderError.UnsupportedElfMachine;
+        }
         const lay = ElfLayout.forClass(hdr_buf[elf_spec.EI_CLASS]) orelse
             return LoaderError.UnsupportedElfClass;
         if (hdr_len < lay.ehdr_sz) return LoaderError.InvalidElfHeader;
@@ -247,16 +248,12 @@ pub const Loader = struct {
             if (ph.p_memsz < ph.p_filesz) {
                 return LoaderError.InvalidProgramHeader;
             }
-            const gpa_offset = if (target_vm.target_arch == .x86_64)
-                std.math.cast(usize, ph.p_paddr) orelse
-                    return LoaderError.InvalidProgramHeader
-            else blk: {
-                if (ph.p_vaddr < min_vaddr) {
-                    return LoaderError.InvalidProgramHeader;
-                }
-                break :blk std.math.cast(usize, ph.p_vaddr - min_vaddr) orelse
-                    return LoaderError.InvalidProgramHeader;
-            };
+            if (ph.p_vaddr < min_vaddr) {
+                return LoaderError.InvalidProgramHeader;
+            }
+            const rel_vaddr = ph.p_vaddr - min_vaddr;
+            const gpa_offset = std.math.cast(usize, rel_vaddr) orelse
+                return LoaderError.InvalidProgramHeader;
             const base_gpa = target_vm.space.base_gpa;
             const gpa = std.math.add(usize, base_gpa, gpa_offset) catch
                 return LoaderError.SegmentOutOfBounds;
@@ -309,21 +306,7 @@ pub const Loader = struct {
                 zeroed += chunk;
             }
         }
-        if (src == .slice and target_vm.target_arch != .x86_64) {
-            if (findSymbol(src.slice, "early_top_pgt")) |pgt_vaddr| {
-                if (pgt_vaddr >= min_vaddr) {
-                    if (std.math.cast(usize, pgt_vaddr - min_vaddr)) |off| {
-                        const base = target_vm.space.base_gpa;
-                        const def = target_vm.early_pgt_gpa;
-                        target_vm.early_pgt_gpa =
-                            std.math.add(usize, base, off) catch def;
-                    }
-                }
-            }
-        }
-        const entry_offset = if (target_vm.target_arch == .x86_64)
-            entry_point
-        else if (entry_point < min_vaddr) blk: {
+        const entry_offset = if (entry_point < min_vaddr) blk: {
             if (entry_point < min_paddr) return LoaderError.InvalidElfHeader;
             break :blk entry_point - min_paddr;
         } else (entry_point - min_vaddr);
@@ -334,7 +317,7 @@ pub const Loader = struct {
     }
 };
 
-test "ELF header validation, symbol resolution, and RAM quota enforcement" {
+test "ELF header validation and RAM quota enforcement" {
     _ = symbols;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
@@ -353,23 +336,6 @@ test "ELF header validation, symbol resolution, and RAM quota enforcement" {
     const det = try Loader.detectArch(&b);
     try testing.expectEqual(guest.TargetArch.riscv64, det);
     const ehdr_sz64: u64 = elf_spec.ELF64_EHDR_SIZE;
-    const shdr_sz16: u16 = @intCast(elf_spec.ELF64_SHDR_SIZE);
-    std.mem.writeInt(u64, b[E.SHOFF..][0..8], ehdr_sz64, .little);
-    std.mem.writeInt(u16, b[E.SHENTSIZE..][0..2], shdr_sz16, .little);
-    std.mem.writeInt(u16, b[E.SHNUM..][0..2], 3, .little);
-    std.mem.writeInt(u32, b[132..136], elf_spec.SHT_SYMTAB, .little);
-    std.mem.writeInt(u64, b[152..160], 256, .little);
-    std.mem.writeInt(u64, b[160..168], 48, .little);
-    std.mem.writeInt(u32, b[168..172], 2, .little);
-    std.mem.writeInt(u64, b[184..192], 24, .little);
-    std.mem.writeInt(u32, b[196..200], elf_spec.SHT_STRTAB, .little);
-    std.mem.writeInt(u64, b[216..224], 304, .little);
-    std.mem.writeInt(u64, b[224..232], 32, .little);
-    std.mem.writeInt(u32, b[280..284], 1, .little);
-    std.mem.writeInt(u64, b[288..296], 0x80200000, .little);
-    @memcpy(b[304..318], "\x00start_kernel\x00");
-    const sym = Loader.findSymbol(&b, "start_kernel");
-    try testing.expectEqual(@as(?u64, 0x80200000), sym);
     var phys_test = try physmem.initForTest(alloc, 128);
     defer phys_test.deinit();
     const g = try guest.createGuest(

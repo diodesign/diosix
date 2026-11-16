@@ -234,25 +234,6 @@ pub fn measureStringScaled(
     return measureStringAtHeight(text, target_h);
 }
 
-/// Renders antialiased Questrial text scaled by `scale_num / scale_den` using
-/// native vector outline rasterization at the target pixel height.
-pub fn drawTextScaled(
-    surface: *fb.Surface,
-    text: []const u8,
-    x: i32,
-    y: i32,
-    color: u32,
-    scale_num: u32,
-    scale_den: u32,
-) void {
-    if (scale_num == 0 or scale_den == 0) return;
-    const target_h = @max(
-        cache.MIN_LINE_HEIGHT_PX,
-        @divTrunc(active_line_height * scale_num + (scale_den / 2), scale_den),
-    );
-    drawTextAtHeightWithAlpha(surface, text, x, y, color, 255, target_h);
-}
-
 pub const MAX_WRAPPED_LINES: usize = 16;
 
 pub const LineSpan = struct {

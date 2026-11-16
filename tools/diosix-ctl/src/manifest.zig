@@ -53,6 +53,8 @@ pub const DomainSpec = struct {
     disk: []const u8 = "",
     storage_size: []const u8 = "",
     cdrom: []const u8 = "",
+    initrd: []const u8 = "",
+    cmdline: []const u8 = "",
     ip: []const u8 = "",
     pci_devices: std.ArrayList([]const u8) = .empty,
     can_provide: std.ArrayList([]const u8) = .empty,
@@ -118,6 +120,8 @@ pub const ChildManifest = struct {
     disk: []const u8 = "",
     storage_size: []const u8 = "",
     cdrom: []const u8 = "",
+    initrd: []const u8 = "",
+    cmdline: []const u8 = "",
     ip: []const u8 = "",
     required: std.ArrayList(ServiceRequirement) = .empty,
     provided: std.ArrayList(ServiceOffer) = .empty,
@@ -246,6 +250,11 @@ fn applyDomainKey(
         cdrom,
         iso,
         media,
+        initrd,
+        initramfs,
+        cmdline,
+        bootargs,
+        append,
         ip,
         address,
         pci_devices,
@@ -279,6 +288,12 @@ fn applyDomainKey(
         },
         .cdrom, .iso, .media => {
             dom.cdrom = try manifest.addString(val_tok.val);
+        },
+        .initrd, .initramfs => {
+            dom.initrd = try manifest.addString(val_tok.val);
+        },
+        .cmdline, .bootargs, .append => {
+            dom.cmdline = try manifest.addString(val_tok.val);
         },
         .ip, .address => dom.ip = try manifest.addString(val_tok.val),
         .pci_devices, .grant_devices => if (val_tok.tag == .bracket_open) {

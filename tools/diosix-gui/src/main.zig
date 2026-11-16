@@ -58,98 +58,6 @@ const DRM_DRIVER_NAME_LOG_BYTES: usize = 64;
 
 const STARTUP_MSG = "Starting Diosix Monolithic GUI (diosix-gui)...\n";
 
-fn pollMainInput(
-    devs: []const InputDeviceInfo,
-    pfds: []const linux.pollfd,
-    display: *Display,
-    gui: *DiosixGui,
-) void {
-    var coords_changed = false;
-    var pending_x = gui.cursor.x;
-    var pending_y = gui.cursor.y;
-
-    for (devs, 0..) |*dev_info, i| {
-        if ((pfds[i].revents & linux.POLL.IN) != 0) {
-            while (true) {
-                var ev_buf: [64]InputEvent = undefined;
-                const rd = linux.read(
-                    pfds[i].fd,
-                    @ptrCast(&ev_buf),
-                    @sizeOf(@TypeOf(ev_buf)),
-                );
-                const signed_rd: isize = @bitCast(rd);
-                if (signed_rd <= 0) break;
-
-                const n_bytes: usize = @intCast(signed_rd);
-                const count = n_bytes / @sizeOf(InputEvent);
-                for (ev_buf[0..count]) |ev| {
-                    switch (ev.type) {
-                        EV_KEY => {
-                            const pressed = (ev.value != 0);
-                            const code = ev.code;
-                            if (code == BTN_LEFT or code == BTN_TOUCH) {
-                                if (coords_changed) {
-                                    gui.handleMouseMove(
-                                        pending_x,
-                                        pending_y,
-                                        gui.mouse_left_down,
-                                    );
-                                    coords_changed = false;
-                                }
-                                if (pressed) {
-                                    gui.mouse_left_down = true;
-                                    gui.handleMouseClick(pending_x, pending_y);
-                                } else {
-                                    gui.mouse_left_down = false;
-                                    gui.handleMouseRelease();
-                                }
-                            } else {
-                                gui_mod.panes.handleEvdevKey(
-                                    gui,
-                                    code,
-                                    ev.value,
-                                );
-                            }
-                        },
-                        EV_REL => {
-                            if (ev.code == REL_WHEEL) {
-                                const dy = 0 -| ev.value;
-                                gui.handleMouseScroll(pending_x, pending_y, dy);
-                            } else {
-                                display_mod.applyMotionEvent(
-                                    ev,
-                                    dev_info,
-                                    display.width,
-                                    display.height,
-                                    &pending_x,
-                                    &pending_y,
-                                    &coords_changed,
-                                );
-                            }
-                        },
-                        EV_ABS => {
-                            display_mod.applyMotionEvent(
-                                ev,
-                                dev_info,
-                                display.width,
-                                display.height,
-                                &pending_x,
-                                &pending_y,
-                                &coords_changed,
-                            );
-                        },
-                        else => {},
-                    }
-                }
-            }
-        }
-    }
-
-    if (coords_changed) {
-        gui.handleMouseMove(pending_x, pending_y, gui.mouse_left_down);
-    }
-}
-
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
@@ -345,6 +253,9 @@ pub fn main() !void {
         );
     }
 
+    // 4b. Apply live/demo onboarding boot policy before the first live frame.
+    gui_mod.demo_mod.applyBootPolicy(&gui);
+
     // 5. Initial Render Frame (Full Screen Composited).
     gui.markFullDirty();
     const init_damage = gui.renderDamaged(&display.clean_buffer);
@@ -374,6 +285,8 @@ pub fn main() !void {
                 1
             else
                 FRAME_INTERVAL_MS - elapsed_since_render)
+        else if (gui.desktop.active)
+            16
         else if (gui.terminal.active or gui.task_mgr.activeCount() > 0)
             32
         else
@@ -397,6 +310,15 @@ pub fn main() !void {
         const poll_res = linux.poll(&pfds, pfd_count, poll_timeout);
         const signed_poll: isize = @bitCast(poll_res);
 
+        if (signed_poll > 0) {
+            display_mod.pollMainInput(
+                input_devs[0..input_count],
+                &pfds,
+                &display,
+                &gui,
+            );
+        }
+
         const now = getMilliTimestamp();
         const raw_dt = now - last_time;
         const dt_ms: u32 = if (raw_dt > 0) @intCast(raw_dt) else 0;
@@ -404,10 +326,6 @@ pub fn main() !void {
             last_time = now;
             // Preemptive Multitasking: Deliver CPU time to sub-programs.
             gui.tick(dt_ms);
-        }
-
-        if (signed_poll > 0) {
-            pollMainInput(input_devs[0..input_count], &pfds, &display, &gui);
         }
 
         ipc.checkSemanticIpcCommand(&gui);
@@ -473,6 +391,25 @@ pub fn main() !void {
 
                 if (!flush_box.isEmpty()) {
                     display.flushDamage(flush_box);
+                }
+
+                // Drain any evdev key-up events that arrived while blitting so
+                // guest VMs never observe artificially stretched key holds.
+                if (gui.desktop.active and input_count > 0) {
+                    var post_pfds: [MAX_INPUT_DEVICES]linux.pollfd = undefined;
+                    display_mod.fillPollFds(
+                        input_devs[0..input_count],
+                        &post_pfds,
+                    );
+                    const post_rc = linux.poll(&post_pfds, input_count, 0);
+                    if (@as(isize, @bitCast(post_rc)) > 0) {
+                        display_mod.pollMainInput(
+                            input_devs[0..input_count],
+                            &post_pfds,
+                            &display,
+                            &gui,
+                        );
+                    }
                 }
             }
         } else if (time_due) {

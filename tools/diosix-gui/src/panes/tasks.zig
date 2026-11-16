@@ -333,6 +333,7 @@ pub fn spawnCreateVmTask(
         .{name_s},
     ) catch "Creating VM";
 
+    const attach_st = st_path.len > 0 and !std.mem.eql(u8, st_path, img_path);
     const st_flag: []const u8 =
         if (std.mem.endsWith(u8, st_path, ".iso")) "--cdrom" else "--disk";
     const argv_with_st = [_][]const u8{
@@ -340,7 +341,7 @@ pub fn spawnCreateVmTask(
         "--vcpus", vcpu_s,        "--ram",  ram_s,    "--pcpu",
         pcpu_s,    "--ram-quota", rq_s,     st_flag,  st_path,
     };
-    const n_args: usize = if (st_path.len > 0) 15 else 13;
+    const n_args: usize = if (attach_st) 15 else 13;
     _ = spawnBackgroundTask(
         self,
         title_s,

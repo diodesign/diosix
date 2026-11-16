@@ -1,0 +1,128 @@
+# Diosix Linux Desktop Guest Kernel Fragment (VirtIO-GPU 2D KMS + Weston)
+# Pure RISC-V 64-bit ARCH_VIRT guest kernel with VirtIO-MMIO graphics, input,
+# block, and networking; physical board drivers disabled for fast builds.
+
+CONFIG_EXPERT=y
+CONFIG_EMBEDDED=y
+CONFIG_64BIT=y
+CONFIG_ARCH_RV64I=y
+CONFIG_RISCV=y
+CONFIG_ARCH_VIRT=y
+# CONFIG_COMPAT is not set
+
+# RCU stall timeout for virtualized guests
+CONFIG_RCU_CPU_STALL_TIMEOUT=300
+CONFIG_RCU_EXP_CPU_STALL_TIMEOUT=0
+
+# Core Virtual Filesystems & Wayland Shared Memory (memfd / POSIX shm)
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_TMPFS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_SHMEM=y
+CONFIG_MEMFD_CREATE=y
+CONFIG_INOTIFY_USER=y
+CONFIG_EPOLL=y
+CONFIG_EVENTFD=y
+CONFIG_SIGNALFD=y
+CONFIG_TIMERFD=y
+
+# VirtIO-MMIO Transport
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_MENU=y
+CONFIG_VIRTIO_MMIO=y
+
+# VirtIO-GPU 2D KMS & Framebuffer Console
+CONFIG_DRM=y
+CONFIG_DRM_KMS_HELPER=y
+CONFIG_DRM_VIRTIO_GPU=y
+CONFIG_DRM_VIRTIO_GPU_KMS=y
+CONFIG_DRM_FBDEV_EMULATION=y
+CONFIG_FB=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_DUMMY_CONSOLE=y
+# CONFIG_VGA_CONSOLE is not set
+# CONFIG_LOGO is not set
+
+# VirtIO-Input (Keyboard, Mouse, Tablet) & evdev for libinput / Weston
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_INPUT_MOUSE=y
+CONFIG_VIRTIO_INPUT=y
+# CONFIG_INPUT_MOUSEDEV is not set
+# CONFIG_INPUT_JOYSTICK is not set
+# CONFIG_SERIO is not set
+
+# VirtIO Block Storage & ext4
+CONFIG_BLOCK=y
+CONFIG_BLK_DEV=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_EXT4_FS=y
+
+# Networking & Inter-VM Sockets
+CONFIG_NET=y
+CONFIG_UNIX=y
+CONFIG_INET=y
+CONFIG_PACKET=y
+CONFIG_NETDEVICES=y
+CONFIG_ETHERNET=y
+CONFIG_NET_CORE=y
+CONFIG_VIRTIO_NET=y
+CONFIG_VSOCKETS=y
+CONFIG_VIRTIO_VSOCKETS=y
+CONFIG_VIRTIO_VSOCKETS_COMMON=y
+
+# Serial & SBI Consoles
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_HVC_RISCV_SBI=y
+
+# Disable unused physical buses, SoCs, and subsystems
+# CONFIG_PCI is not set
+# CONFIG_USB is not set
+# CONFIG_SOUND is not set
+# CONFIG_WLAN is not set
+# CONFIG_WIRELESS is not set
+# CONFIG_BT is not set
+# CONFIG_MEDIA_SUPPORT is not set
+# CONFIG_ACPI is not set
+# CONFIG_EFI is not set
+# CONFIG_SCSI is not set
+# CONFIG_ATA is not set
+# CONFIG_MMC is not set
+# CONFIG_SPI is not set
+# CONFIG_I2C is not set
+# CONFIG_MTD is not set
+# CONFIG_GPIOLIB is not set
+# CONFIG_HWMON is not set
+# CONFIG_THERMAL is not set
+# CONFIG_WATCHDOG is not set
+# CONFIG_ARCH_ANDES is not set
+# CONFIG_ARCH_ANLOGIC is not set
+# CONFIG_ARCH_MICROCHIP_POLARFIRE is not set
+# CONFIG_ARCH_MICROCHIP is not set
+# CONFIG_ARCH_SIFIVE is not set
+# CONFIG_ARCH_SOPHGO is not set
+# CONFIG_ARCH_SPACEMIT is not set
+# CONFIG_ARCH_SUNXI is not set
+# CONFIG_ARCH_TENSTORRENT is not set
+# CONFIG_ARCH_THEAD is not set
+# CONFIG_ARCH_CANAAN is not set
+# CONFIG_SOC_STARFIVE is not set
+# CONFIG_SOC_SIFIVE is not set
+# CONFIG_SOC_SUNXI is not set
+# CONFIG_SOC_THEAD is not set
+# CONFIG_SOC_CANAAN is not set
+# CONFIG_SOC_MICROCHIP_POLARFIRE is not set
+# CONFIG_PERF_EVENTS is not set
+# CONFIG_FTRACE is not set
+# CONFIG_BPF_SYSCALL is not set
+# CONFIG_DEBUG_FS is not set
+
+# Gzip initramfs compression
+CONFIG_RD_GZIP=y
+# CONFIG_INITRAMFS_COMPRESSION_NONE is not set
+CONFIG_INITRAMFS_COMPRESSION_GZIP=y

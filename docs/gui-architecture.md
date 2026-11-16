@@ -1,176 +1,129 @@
-# Diosix GUI and system configuration architecture
+# Diosix GUI architecture
 
-## 1. Overview and security model
+## Overview and execution model
 
-Diosix isolates the **presentation layer** (`sys.gui`, Context ID (CID) `2`)
-from the **host administration layer** (`sys.config`) while providing a
-zero-dependency Direct Rendering Manager (DRM) and Kernel Mode Setting (KMS)
-desktop environment (`diosix-gui`). Domains communicate over Virtual Socket
-(VSOCK) and shared-memory Inter-Process Communication (IPC) channels, rendering
-Remote Framebuffer (RFB) and Wayland client surfaces inside Windows, Icons,
-Menus, and Pointer (WIMP) frames with a dockable On-Screen Keyboard (OSK), a
-Virtual Machine (VM) management dashboard, and isolated Wide Area Network (WAN)
-rules:
+When display hardware is present on the host, the root virtual machine (VM)
+starts the Diosix desktop compositor automatically at boot unless text-only
+mode is requested on the kernel command line. Written in Zig, the compositor
+drives Linux direct rendering manager (DRM) and kernel mode setting (KMS) dumb
+buffers (with a Linux framebuffer device fallback) and reads kernel input event
+devices directly without an external display server:
 
 ```text
 +----------------------------------------------------------------------------+
-|                             PHYSICAL HARDWARE                              |
-|     Physical Display (DRM / KMS)            Keyboard, Mouse & Touch (evdev)|
+|                             Physical hardware                              |
+|      Physical display (DRM / KMS or fbdev)    Keyboard, mouse & touchscreen|
 +---------------------------------+---------------------------+--------------+
                                   |                           |
 +---------------------------------v---------------------------v--------------+
-|               GUI DOMAIN (`sys.gui` / CID 2 - Hardware Trust)              |
+|                        Any VM Node (CID 1 - Linux)                         |
 |                                                                            |
 |  +----------------------------------------------------------------------+  |
-|  |                 Monolithic Desktop Compositor (diosix-gui)           |  |
+|  |                        Host desktop compositor                       |  |
 |  |                                                                      |  |
-|  |  * Drives DRM/KMS scanout buffer & captures evdev/touch seat input   |  |
-|  |  * Optical glass panes, dynamic sky backdrop, and WIMP window frames |  |
-|  |  * Dockable on-screen virtual keyboard (OSK) & 5-step Guided Tour    |  |
-|  |  * Headless semantic JSON control plane (/run/diosix/gui_state.json) |  |
-|  +------------------^----------------------------^--------------------^-+  |
+|  |  * Top-left navigation menu (Create VM, About, Config, Power)        |  |
+|  |  * Running guest VMs pane, live quota sliders, and task status bars  |  |
+|  |  * Guest VirtIO-GPU desktop display and VirtIO-Input event bridge    |  |
+|  |  * Built-in VT100 terminal (local shell, guest SSH, serial console)  |  |
+|  |  * Dockable on-screen keyboard, welcome modal, and guided tour       |  |
+|  |  * Semantic JSON state export and command control plane              |  |
+|  +------------------+----------------------------+--------------------+--+ |
+|                     |                            |                    |    |
+|          Hypervisor driver calls          Pseudo-TTYs + SSH     CLI tasks  |
 +---------------------|----------------------------|--------------------|----+
-                      | (Wayland / VSOCK / IPC)    |                    |
-   +------------------+-------------+ +------------+----------+ +-------+----+
-   | CONFIG DOMAIN (`sys.config`)   | | APP DOMAIN (`user`)   | | VAULT VM   |
-   | * Native GUI Config App        | | * Wayland/RFB Client  | | * Isolated |
-   | * Manages VMs, Disks, Charters | | * Untrusted sandbox   | | * No WAN   |
-   +--------------------------------+ +-----------------------+ +------------+
-```
-
-### Key security properties
-
-1. **Decoupled privileges**: `sys.gui` owns display hardware and pointer,
-   keyboard, and touchscreen inputs, while delegating VM lifecycle and
-   storage management to the hypervisor control plane.
-2. **Untrusted presentation**: `sys.config` runs the configuration panes
-   without direct access to display or input hardware.
-3. **Visual provenance (trusted window frames)**: `diosix-gui` renders
-   tamper-proof window frames with domain-specific accents:
-   - **Green border**: `[sys.config]` (trusted admin domain)
-   - **Blue border**: `[user.work]` (work domain)
-   - **Red border**: `[user.web]` (untrusted sandboxed domain)
-   - **Purple border**: `[sys.net]` (system domain service)
-
----
-
-## 2. Monolithic desktop compositor (`diosix-gui`)
-
-Located in `tools/diosix-gui/src/`:
-
-*   **[`framebuffer.zig`](../tools/diosix-gui/src/framebuffer.zig),
-    [`glass.zig`](../tools/diosix-gui/src/glass.zig),
-    [`backdrop.zig`](../tools/diosix-gui/src/backdrop.zig),
-    [`blur.zig`](../tools/diosix-gui/src/backdrop/blur.zig),
-    [`noise.zig`](../tools/diosix-gui/src/noise.zig),
-    [`font.zig`](../tools/diosix-gui/src/font.zig),
-    [`banner.zig`](../tools/diosix-gui/src/font/banner.zig), and
-    [`cursor.zig`](../tools/diosix-gui/src/cursor.zig)**: Double-buffered
-    32-bit XRGB8888 software rasterizer, optical superellipse glass pane shader,
-    procedural terrain/cloud sky backdrop renderer, anti-aliased glyph
-    rasterizer, and software cursor rendering.
-*   **[`window.zig`](../tools/diosix-gui/src/window.zig) and
-    [`input.zig`](../tools/diosix-gui/src/window/input.zig)**: Window chrome,
-    titlebar hit-testing, scrollbars, and mouse/keyboard dispatch.
-*   **[`icon.zig`](../tools/diosix-gui/src/icon.zig),
-    [`render.zig`](../tools/diosix-gui/src/icon/render.zig),
-    [`text.zig`](../tools/diosix-gui/src/icon/text.zig),
-    [`widgets.zig`](../tools/diosix-gui/src/icon/widgets.zig), and
-    [`label.zig`](../tools/diosix-gui/src/label.zig)**: Widget
-    primitives (buttons, sliders, checkboxes, progress bars, menu items, and
-    bounded text formatting).
-*   **[`panes.zig`](../tools/diosix-gui/src/panes.zig),
-    [`guests.zig`](../tools/diosix-gui/src/panes/guests.zig),
-    [`terminal.zig`](../tools/diosix-gui/src/panes/terminal.zig),
-    [`terminal_state.zig`](../tools/diosix-gui/src/panes/terminal_state.zig),
-    [`modal.zig`](../tools/diosix-gui/src/panes/modal.zig), and
-    [`osk.zig`](../tools/diosix-gui/src/panes/osk.zig)**: Layout builders
-    for the host and hypervisor status pane (`About`), appearance configuration
-    pane (`Config`), running guest VMs and detail panes (showing VM
-    architecture and `H-mode` / `PMP` isolation mode, plus `Open new local
-    terminal` / `Reopen local terminal`, `Open new SSH terminal` / `Reopen SSH
-    terminal`, and `Open serial console` / `Reopen serial console`), full-width
-    VT100/ANSI terminal window with color inversion (`Invert`), power
-    confirmation modal (`Restart` / `Shutdown`), Welcome modal, 5-step Guided
-    Tour, and dockable OSK.
-*   **[`terminal.zig`](../tools/diosix-gui/src/terminal.zig) and
-    [`io.zig`](../tools/diosix-gui/src/terminal/io.zig)**: Dynamically sized
-    (up to `200x60`) fixed-width (`DMMono-Regular.ttf`) VT100/ANSI terminal
-    emulator supporting persistent per-VM Linux pseudo-terminal (`/dev/ptmx` +
-    `dsx ssh <cid>`) sessions across `<- Back` navigation and direct hypervisor
-    serial console (`hvc0` via `/dev/diosix` `IOCTL_CONSOLE_READ` /
-    `IOCTL_CONSOLE_WRITE`) streaming.
-*   **[`gui.zig`](../tools/diosix-gui/src/gui.zig),
-    [`chrome.zig`](../tools/diosix-gui/src/gui/chrome.zig),
-    [`input.zig`](../tools/diosix-gui/src/gui/input.zig),
-    [`json.zig`](../tools/diosix-gui/src/gui/json.zig),
-    [`nav.zig`](../tools/diosix-gui/src/gui/nav.zig),
-    [`render.zig`](../tools/diosix-gui/src/gui/render.zig), and
-    [`ipc.zig`](../tools/diosix-gui/src/ipc.zig)**: Core
-    compositor state machine, dirty-rectangle damage tracking, keyboard focus
-    navigation, semantic JSON state serialization, and host/VM action dispatch.
-*   **[`osk.zig`](../tools/diosix-gui/src/osk.zig),
-    [`welcome.zig`](../tools/diosix-gui/src/welcome.zig),
-    [`intro.zig`](../tools/diosix-gui/src/intro.zig),
-    [`fx.zig`](../tools/diosix-gui/src/intro/fx.zig), and
-    [`audio.zig`](../tools/diosix-gui/src/audio.zig)**: Virtual
-    keyboard state machine, Guided Tour state, boot intro sequence, and audio
-    chimes.
-*   **[`drm.zig`](../tools/diosix-gui/src/drm.zig),
-    [`display.zig`](../tools/diosix-gui/src/display.zig),
-    [`host.zig`](../tools/diosix-gui/src/host.zig),
-    [`mem.zig`](../tools/diosix-gui/src/host/mem.zig),
-    [`time.zig`](../tools/diosix-gui/src/host/time.zig),
-    [`paths.zig`](../tools/diosix-gui/src/paths.zig), and
-    [`main.zig`](../tools/diosix-gui/src/main.zig)**: Linux DRM/KMS dumb-buffer
-    and `/dev/fb0` display backends, `evdev` input polling, host telemetry,
-    canonical runtime paths, and event loop.
-
----
-
-## 3. System manifest specification (`system.toml`)
-
-```toml
-[system]
-version = "1.0"
-domain = "diosix.local"
-
-# 1. Dedicated Display & Seat Compositor Domain
-[domains.gui]
-name = "gui-domain"
-image = "/var/lib/diosix/images/gui-guest.elf"
-vcpus = 2
-ram = "512 MB"
-ip = "10.0.3.4"
-can_provide = ["gui.*", "display.*", "seat.*"]
-can_require = ["net.*", "fs.*"]
-
-provides = [
-  { service = "gui.wayland", channel = "vsock", type = "display" },
-  { service = "gui.seat", channel = "shmem", type = "input" }
-]
-
-# 2. Dedicated Graphical System Configuration Domain
-[domains.config]
-name = "config-domain"
-image = "/var/lib/diosix/images/config-guest.elf"
-vcpus = 2
-ram = "512 MB"
-ip = "10.0.3.5"
-can_provide = ["config.*", "admin.*"]
-can_require = ["gui.*", "host.manage"]
-
-routes = [
-  { require = "gui.display", resolve_to = "gui.gui.wayland" },
-  { require = "host.manage", resolve_to = "root.ctl" }
-]
+                      v                            v                    v
+            M-mode hypervisor                Child guest VMs      Image & disk
+      (Quotas, scanout, input, info)          (Guest OSes)        provisioning
 ```
 
 ---
 
-## 4. Detailed desktop implementation plan
+## Desktop layout and workflows
 
-For the historical design roadmap, window manager primitive specifications,
-RISC OS-inspired Wimp event contracts, iconbar design, and rendering
-optimizations, see
-[Desktop implementation plan](desktop-implementation-plan.md).
+* The top-left navigation menu opens panes for creating VMs, inspecting host
+  and hypervisor metrics (uptime, CPU and RAM totals, UTC clock, and M-mode
+  heap usage), adjusting display settings (transparency, backdrop animation,
+  poll rate, color scheme, resolution preset, Bayer dithering depth, and UI
+  scale), and confirming host restart or shutdown.
+* The running guest VMs pane sits beside the main menu. Selecting a guest opens
+  its detail card with a 60-sample physical CPU usage graph, live CPU share and
+  RAM pool sliders, attached disk metadata, lifecycle controls, and buttons to
+  open a terminal or graphical display.
+* Selecting **Open guest display** on a child VM opens a full-width desktop
+  window that streams the child's VirtIO-GPU 2D scanout into an
+  aspect-ratio-matched viewport at up to 60 Hz and forwards physical keystrokes,
+  on-screen keyboard input, mouse clicks, scroll-wheel ticks, and absolute
+  tablet coordinates into the child's VirtIO-Input device.
+* The **Create VM** pane browses local kernels and ISOs, configures name,
+  virtual CPU (vCPU) count, RAM, and virtual disk settings, and spawns CLI
+  provisioning jobs asynchronously while rendering progress and error bars
+  along the bottom edge.
+* The built-in VT100 terminal multiplexer maintains up to 16 concurrent
+  sessions (up to 200x60 cells) across local VM shells, key-authenticated
+  child VM SSH logins, and raw hypervisor serial consoles.
+* Contextual help and version chrome bars anchor the bottom of the screen,
+  while live boots (or `diosix.welcome=force` sessions) present the welcome
+  onboarding modal with one-click **Try Desktop VM** and **Try CLI VM**
+  launchers alongside the 5-step guided tour. Passing `diosix.demo=desktop` or
+  `diosix.demo=cli` on the kernel command line skips the intro animation,
+  launches the matching built-in guest VM automatically, and opens its
+  VirtIO-GPU 2D display or serial console pane once the guest comes online.
+
+---
+
+## Compositor internals
+
+For the exact list of source files in each subsystem, see the
+[Feature support matrix](support-matrix.md). Internally, the compositor is
+divided into six subsystems:
+
+* The entrypoint and inter-process communication (IPC) loop initializes display
+  scanout and non-blocking input polling, switches to faster 16 ms frame
+  cadence whenever an interactive terminal or guest desktop window is open, and
+  synchronizes the JSON control plane.
+* The display and input backend manages double-buffered KMS dumb buffers,
+  mode-setting presets from 800x600 up to 3840x2160, connector-aware DPI
+  scaling from 75% to 200%, 4x4 Bayer ordered dithering across 8-, 15-, 16-,
+  and 32-bit color depths, and keyboard, mouse, scroll-wheel, and calibrated
+  touchscreen input.
+* The software rasterizer and typography engine renders clipped 32-bit RGB
+  surfaces, procedural sky and terrain backdrops, superellipse frosted-glass
+  panes, 4x4 supersampled vector icons and cursors, and freestanding TrueType
+  glyph caches for proportional UI text and monospaced terminal cells.
+* The window manager and widget toolkit tracks dirty damage rectangles,
+  animates sliding sub-panes, and provides reusable buttons, sliders,
+  dropdowns, checkboxes, text fields, line graphs, and progress bars.
+* The management panes and host bridge query hypervisor state and kernel
+  telemetry, drive live quota updates, manage pseudo-terminal and serial I/O,
+  and monitor background CLI child processes.
+* The guest desktop bridge prefers read-only Stage-2 zero-copy mapping over
+  `GPU_MAP_SCANOUT` and `mmap()` when running on H-extension hardware, reading
+  only changed dirty rectangles and the 64x64 hardware cursor overlay directly
+  from mapped child pages, and falls back seamlessly to pinned page streaming
+  when required. It renders updated pixels into the sunken viewport well and
+  translates pointer coordinates into VirtIO tablet, mouse, and key events.
+* Because M-mode enforces relative CIDs and child subtree opacity everywhere,
+  `diosix-gui` operates identically inside the initial top-level VM or any
+  nested child VM, displaying a one-level tree rooted at self (`CID 1`) with
+  strictly direct children.
+
+---
+
+## Semantic JSON control plane
+
+The compositor exposes a file-based control plane under `/run/diosix/` so CLI
+commands and automated tests can inspect and drive the desktop without
+screen-scraping:
+
+* Whenever UI state changes, the compositor atomically writes
+  `/run/diosix/gui_state.json` with the current resolution, render mode, active
+  pane (`main`, `create_vm`, `about`, `config`, `guest_display`, or `submenu`),
+  window count, on-screen keyboard state, and welcome or guided tour progress.
+* Writing an action name to `/run/diosix/gui_cmd` (or running
+  `dsx gui trigger <action>`) triggers navigation and modal actions directly:
+
+| Category | Actions |
+| :--- | :--- |
+| Navigation | `menu.create_vm`, `menu.about`, `menu.status`, `menu.config`, `menu.back` |
+| On-screen keyboard | `osk.toggle`, `osk.show`, `osk.hide` |
+| Welcome and tour | `welcome.open`, `welcome.close`, `welcome.try_desktop`, `welcome.try_cli`, `tour.start`, `tour.next`, `tour.prev`, `tour.close` |

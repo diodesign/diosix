@@ -50,6 +50,9 @@
 #define DIOSIX_FUNC_CONSOLE_WRITE         25
 #define DIOSIX_FUNC_CONSOLE_READ          26
 #define DIOSIX_FUNC_SET_NET_POLICY        27
+#define DIOSIX_FUNC_GPU_READ_SCANOUT      28
+#define DIOSIX_FUNC_INPUT_SEND_EVENT      29
+#define DIOSIX_FUNC_GPU_MAP_SCANOUT       30
 
 #define IOCTL_DROP_TRUST            0x1002
 #define IOCTL_RUN                   0x1003
@@ -77,6 +80,9 @@
 #define IOCTL_SET_NET_POLICY        0x1018
 #define IOCTL_WHISPER_SEND          0x1019
 #define IOCTL_WHISPER_RECV          0x101a
+#define IOCTL_GPU_READ_SCANOUT      0x101b
+#define IOCTL_INPUT_SEND_EVENT      0x101c
+#define IOCTL_GPU_MAP_SCANOUT       0x101d
 
 #define DIOSIX_CHILD_MEM_BASE       0x200000000UL
 #define DIOSIX_CHILD_MEM_MAX_SIZE   (256UL * 1024 * 1024)
@@ -86,9 +92,26 @@
 #define DIOSIX_MAX_MANIFEST_SIZE    (1024UL * 1024)
 #define DIOSIX_MAX_CONSOLE_IO_SIZE  4096UL
 #define DIOSIX_NET_MAX_FRAME_SIZE   1536UL
+#define DIOSIX_MAX_GPU_SCANOUT_PAGES  4096UL
+#define DIOSIX_MAX_GPU_PIXELS         (4096UL * 1024UL)
+#define DIOSIX_SCANOUT_MAP_BASE       0x210000000ULL
+#define DIOSIX_SCANOUT_SLOT_SIZE      (16UL * 1024 * 1024)
+#define DIOSIX_SCANOUT_SLOT_COUNT     2UL
+#define DIOSIX_SCANOUT_APERTURE_SIZE \
+    (DIOSIX_SCANOUT_SLOT_SIZE * DIOSIX_SCANOUT_SLOT_COUNT)
+#define DIOSIX_CURSOR_MAX_BYTES       (64UL * 64UL * 4UL)
+#define DIOSIX_GPU_SCANOUT_ACTIVE     (1U << 0)
+#define DIOSIX_GPU_SCANOUT_UPDATED    (1U << 1)
+#define DIOSIX_GPU_SCANOUT_SET_SIZE   (1U << 2)
+#define DIOSIX_GPU_SCANOUT_ZERO_COPY  (1U << 3)
+#define DIOSIX_GPU_SCANOUT_CURSOR_VIS (1U << 4)
+#define DIOSIX_GPU_SCANOUT_CURSOR_UPD (1U << 5)
+#define DIOSIX_GPU_SCANOUT_UNMAP      (1U << 6)
+#define DIOSIX_MAX_INPUT_BATCH_EVENTS 32U
 
-#define DIOSIX_CID_PARENT           0UL
-#define DIOSIX_CID_SELF             1UL
+#define DIOSIX_CID_PARENT             0UL
+#define DIOSIX_CID_SELF               1UL
+#define DIOSIX_CID_NONE               (~0ULL)
 #define DIOSIX_WAIT_FLAG_NONBLOCK   0x1UL
 #define DIOSIX_EVENT_POLL_MS        50
 #define DIOSIX_CHARTER_OP_QUERY     0UL
@@ -217,6 +240,56 @@ struct console_args {
     uint64_t actual_len;
 };
 
+struct gpu_scanout_args {
+    uint64_t target_cid;
+    uint64_t pixels_ptr;
+    uint32_t page_count;
+    uint32_t first_page_offset;
+    uint32_t max_pixels;
+    uint32_t width;
+    uint32_t height;
+    uint32_t flags;
+    uint64_t frame_seq;
+};
+
+struct gpu_map_scanout_args {
+    uint64_t target_cid;
+    uint64_t cursor_pixels_ptr;
+    uint32_t slot_offset_bytes;
+    uint32_t mapped_bytes;
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride_pixels;
+    uint32_t format;
+    uint32_t dirty_x;
+    uint32_t dirty_y;
+    uint32_t dirty_w;
+    uint32_t dirty_h;
+    int32_t  cursor_x;
+    int32_t  cursor_y;
+    uint32_t cursor_hot_x;
+    uint32_t cursor_hot_y;
+    uint32_t cursor_w;
+    uint32_t cursor_h;
+    uint32_t flags;
+    uint32_t _reserved;
+    uint64_t frame_seq;
+    uint64_t cursor_seq;
+};
+
+struct input_event_item {
+    uint16_t type;
+    uint16_t code;
+    uint32_t value;
+};
+
+struct input_event_args {
+    uint64_t target_cid;
+    uint32_t count;
+    uint32_t _reserved;
+    struct input_event_item events[DIOSIX_MAX_INPUT_BATCH_EVENTS];
+};
+
 struct run_args {
     uint64_t child_id;
     uint64_t elf_ptr;
@@ -236,7 +309,7 @@ struct guest_info {
     uint64_t guest_id;
     uint64_t parent_id;
     uint8_t  is_trusted;
-    uint8_t  is_root;
+    uint8_t  has_parent;
     uint8_t  target_arch;
     uint8_t  assigned_cid;
     uint32_t cpu_khz_ticks;
@@ -278,14 +351,34 @@ _Static_assert(
 _Static_assert(sizeof(struct quota_args) == 56, "quota_args ABI size");
 _Static_assert(sizeof(struct manifest_args) == 32, "manifest_args ABI size");
 _Static_assert(sizeof(struct console_args) == 32, "console_args ABI size");
+_Static_assert(
+    sizeof(struct gpu_scanout_args) == 48,
+    "gpu_scanout_args ABI size"
+);
+_Static_assert(
+    sizeof(struct gpu_map_scanout_args) == 104,
+    "gpu_map_scanout_args ABI size"
+);
+_Static_assert(
+    sizeof(struct input_event_item) == 8,
+    "input_event_item ABI size"
+);
+_Static_assert(
+    sizeof(struct input_event_args) == 272,
+    "input_event_args ABI size"
+);
 _Static_assert(sizeof(struct run_args) == 56, "run_args ABI size");
 _Static_assert(sizeof(struct terminate_args) == 16, "terminate_args ABI size");
 _Static_assert(sizeof(struct guest_info) == 96, "guest_info ABI size");
+
+struct vm_area_struct;
 
 void diosix_child_mem_lock(void);
 void diosix_child_mem_unlock(void);
 bool diosix_child_mem_can_use(struct file *file);
 void diosix_child_mem_set_owner(struct file *file);
+int diosix_mmap_scanout(struct file *file, struct vm_area_struct *vma);
+void diosix_release_desktop(struct file *file);
 long diosix_ioctl_governance(
     struct file *file,
     unsigned int cmd,
@@ -293,6 +386,11 @@ long diosix_ioctl_governance(
 );
 long diosix_ioctl_net_policy(unsigned long arg);
 long diosix_ioctl_whisper(unsigned int cmd, unsigned long arg);
+long diosix_ioctl_desktop(
+    struct file *file,
+    unsigned int cmd,
+    unsigned long arg
+);
 int init_diosix_net(void);
 void cleanup_diosix_net(void);
 

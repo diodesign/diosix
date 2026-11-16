@@ -26,7 +26,15 @@ test "diosix-gui: surface drawing and translucent window pane" {
     var surface = fb.Surface.init(&pixel_buffer, 100, 100, 400);
 
     const test_box = fb.Box.fromPosSize(10, 10, 80, 80);
-    surface.drawWindowPane(test_box);
+    surface.drawGlassPane(
+        test_box,
+        12,
+        fb.Color.GLASS_BG,
+        fb.Color.GLASS_OPACITY,
+        fb.Color.GLASS_BORDER,
+        true,
+        true,
+    );
 
     // Check that inside client area is translucent blended with background.
     const client_pixel = surface.getPixel(50, 50);
@@ -479,6 +487,7 @@ test {
     _ = @import("display/input.zig");
     _ = @import("window/input.zig");
     _ = @import("tests/create_vm.zig");
+    _ = @import("tests/desktop.zig");
     _ = @import("tests/gui.zig");
     _ = @import("tests/nav.zig");
     _ = @import("tests/panes.zig");

@@ -12,8 +12,9 @@ const Target = std.Target;
 const RISCVextensions = Target.Cpu.Feature.Set;
 const layout = @import("build/layout.zon");
 const build_qemu = @import("scripts/qemu.zig");
+const build_features = @import("scripts/features/steps.zig");
 
-const GuestProfile = enum { rootvm, usable, minimal };
+const GuestProfile = enum { rootvm, usable, minimal, cli, desktop };
 
 const hypervisor_conf_text = @embedFile(layout.metadata.hypervisor_conf);
 
@@ -77,6 +78,36 @@ fn addRootvmInputs(b: *std.Build, cmd: *std.Build.Step.Run) !void {
     inline for (layout.rootvm.input_dirs) |dir_path| {
         try addTreeInputs(b, cmd, dir_path);
     }
+}
+
+fn addChildGuestStep(
+    b: *std.Build,
+    guest_arch: []const u8,
+    spec: anytype,
+    stamp_name: []const u8,
+    prev_step: *std.Build.Step,
+) !struct { run: *std.Build.Step.Run, stamp: std.Build.LazyPath } {
+    const cfg_file = b.fmt(
+        layout.rootvm.config_fmt,
+        .{ guest_arch, spec.profile },
+    );
+    const elf_out = b.fmt(spec.elf_out_fmt, .{guest_arch});
+    const br_dir = b.fmt(spec.buildroot_dir_fmt, .{guest_arch});
+    const cmd = b.addSystemCommand(&.{ "bash", layout.rootvm.build_script });
+    cmd.addFileArg(b.path(cfg_file));
+    cmd.addArgs(&.{ elf_out, br_dir, guest_arch });
+    const stamp = cmd.addOutputFileArg(stamp_name);
+    cmd.addArg(spec.overlay_dir);
+    inline for (layout.rootvm.input_files) |file_path| {
+        cmd.addFileInput(b.path(file_path));
+    }
+    inline for (layout.guests.common_input_dirs) |dir_path| {
+        try addTreeInputs(b, cmd, dir_path);
+    }
+    try addTreeInputs(b, cmd, spec.overlay_dir);
+    cmd.step.dependOn(prev_step);
+    cmd.stdio = .inherit;
+    return .{ .run = cmd, .stamp = stamp };
 }
 
 fn optStr(
@@ -233,6 +264,31 @@ pub fn build(b: *std.Build) !void {
     try addRootvmInputs(b, run_buildroot);
     run_buildroot.stdio = .inherit;
 
+    var guest_images_step: ?*std.Build.Step = null;
+    var cli_stamp_opt: ?std.Build.LazyPath = null;
+    var desktop_stamp_opt: ?std.Build.LazyPath = null;
+    if (std.mem.eql(u8, profile_tag, layout.default_profile) and
+        guest_config_opt == null)
+    {
+        const cli_guest = try addChildGuestStep(
+            b,
+            guest_arch_opt,
+            layout.guests.cli,
+            "linux-cli.stamp",
+            &run_buildroot.step,
+        );
+        const desktop_guest = try addChildGuestStep(
+            b,
+            guest_arch_opt,
+            layout.guests.desktop,
+            "linux-desktop.stamp",
+            &cli_guest.run.step,
+        );
+        guest_images_step = &desktop_guest.run.step;
+        cli_stamp_opt = cli_guest.stamp;
+        desktop_stamp_opt = desktop_guest.stamp;
+    }
+
     const emulation_module = b.createModule(.{
         .root_source_file = b.path(layout.modules.emulation_root),
     });
@@ -373,7 +429,10 @@ pub fn build(b: *std.Build) !void {
     try build_qemu.registerQemuSteps(b, .{
         .vmdiosix = vmdiosix,
         .run_buildroot = run_buildroot,
+        .guest_images_step = guest_images_step,
         .rootvm_s_file = rootvm_s_file,
+        .cli_stamp_file = cli_stamp_opt,
+        .desktop_stamp_file = desktop_stamp_opt,
         .rootvm_elf_path = rootvm_elf_path,
         .legacy_cpu = legacy_cpu,
         .pmp_fallback = pmp_fallback,
@@ -416,6 +475,7 @@ pub fn build(b: *std.Build) !void {
         );
         test_step.dependOn(&run_t.step);
     }
+    build_features.registerFeatureSteps(b, optimize, test_step);
 
     const run_integration = b.addSystemCommand(&.{
         layout.tests.integration_runner,

@@ -15,6 +15,8 @@ const sbi_core = @import("../sbi.zig");
 const charter = @import("charter.zig");
 const ipc = @import("ipc.zig");
 const console = @import("console.zig");
+const desktop = @import("desktop.zig");
+const scanout_map = @import("scanout_map.zig");
 const info = @import("info.zig");
 const interface = @import("interface").sbi;
 const arch = @import("interface").riscv;
@@ -95,6 +97,9 @@ pub fn handleDiosix(
         D.CONSOLE_WRITE => console.handleConsoleWrite(vc, ctx, g, a0),
         D.CONSOLE_READ => console.handleConsoleRead(vc, ctx, g, a0),
         D.SET_NET_POLICY => ipc.handleSetNetPolicy(vc, ctx, g, a0, a1, a2),
+        D.GPU_READ_SCANOUT => desktop.handleGpuReadScanout(vc, ctx, g, a0),
+        D.GPU_MAP_SCANOUT => scanout_map.handleGpuMapScanout(vc, ctx, g, a0),
+        D.INPUT_SEND_EVENT => desktop.handleInputSendEvent(vc, ctx, g, a0),
         else => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),
     }
 }
@@ -106,9 +111,7 @@ fn handleTerminate(
     target_cid: usize,
     exit_code: usize,
 ) void {
-    if (target_cid == guest.CID_SELF or
-        (target_cid == guest.CID_PARENT and g.is_root))
-    {
+    if (target_cid == guest.CID_SELF) {
         sbi_core.terminateOrRestart(g, exit_code);
     } else if (target_cid == guest.CID_PARENT) {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
@@ -139,7 +142,7 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     const want_trusted = (args.flags & interface.RunFlags.TRUSTED) != 0;
     const want_steward = (args.flags & interface.RunFlags.STEWARD) != 0;
     if ((want_trusted and !g.is_trusted) or
-        (want_steward and (!g.is_root or charter.isCharterSealed())))
+        (want_steward and (g.hasParent() or charter.isCharterSealed())))
     {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
@@ -214,7 +217,8 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     }
     child.is_steward = child.is_steward or want_steward;
     child.is_standby_root = child.is_standby_root or
-        ((args.flags & interface.RunFlags.STANDBY_ROOT) != 0 and g.is_root);
+        ((args.flags & interface.RunFlags.STANDBY_ROOT) != 0 and
+            !g.hasParent());
     child.is_confidential = child.is_confidential or child.is_steward or
         ((args.flags & interface.RunFlags.CONFIDENTIAL) != 0);
     if (created_new or (args.flags & interface.RunFlags.NET_ISOLATED) != 0) {
@@ -354,7 +358,7 @@ test "SBI Diosix hypervisor extension get info and drop trust" {
     try testing.expect(g.is_trusted);
     ctx[@backingInt(arch.Register.a7)] = interface.EXT.DIOSIX;
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.DROP_TRUST;
-    sbi_core.handle(&vc, 0, &ctx);
+    sbi_core.handle(&vc, &ctx);
     const a0_idx = @backingInt(arch.Register.a0);
     try testing.expectEqual(@as(usize, 0), ctx[a0_idx]);
     try testing.expect(!g.is_trusted);
@@ -362,7 +366,7 @@ test "SBI Diosix hypervisor extension get info and drop trust" {
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.GET_HV_INFO;
     ctx[a0_idx] = 0x80000000;
     ctx[@backingInt(arch.Register.a1)] = @sizeOf(interface.HypervisorInfo) - 1;
-    sbi_core.handle(&vc, 0, &ctx);
+    sbi_core.handle(&vc, &ctx);
     const inv_param: usize = @bitCast(sbi_core.SBI_ERR_INVALID_PARAM);
     try testing.expectEqual(inv_param, ctx[a0_idx]);
 
@@ -373,7 +377,7 @@ test "SBI Diosix hypervisor extension get info and drop trust" {
 
     ctx[a0_idx] = 0x80000000;
     ctx[@backingInt(arch.Register.a1)] = @sizeOf(interface.HypervisorInfo);
-    sbi_core.handle(&vc, 0, &ctx);
+    sbi_core.handle(&vc, &ctx);
     try testing.expectEqual(@as(usize, 0), ctx[a0_idx]);
     const HvInfo = interface.HypervisorInfo;
     const hv_info = try g.space.readGuestStruct(HvInfo, 0x80000000);

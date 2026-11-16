@@ -62,19 +62,44 @@ pub fn basenameSlice(path: []const u8) []const u8 {
     return path;
 }
 
+const KnownImageBase = enum {
+    @"diosix-base-linux.elf",
+    @"diosix-base-linux",
+    @"base-linux",
+    @"diosix-linux.elf",
+    @"diosix-linux",
+    @"default.elf",
+    default,
+    @"linux-cli.elf",
+    @"linux-cli",
+    cli,
+    @"linux-desktop.elf",
+    @"linux-desktop",
+    desktop,
+};
+
 pub fn friendlyImageName(raw_path: []const u8) []const u8 {
     const base = basenameSlice(raw_path);
-    if (std.mem.eql(u8, base, "diosix-base-linux.elf") or
-        std.mem.eql(u8, base, "diosix-base-linux") or
-        std.mem.eql(u8, base, "base-linux") or
-        std.mem.eql(u8, base, "diosix-linux.elf") or
-        std.mem.eql(u8, base, "diosix-linux") or
-        std.mem.eql(u8, base, "default.elf") or
-        std.mem.eql(u8, base, "default"))
-    {
-        return "Diosix Base Linux";
-    }
-    return base;
+    const known = std.meta.stringToEnum(KnownImageBase, base) orelse
+        return base;
+    return switch (known) {
+        .@"diosix-base-linux.elf",
+        .@"diosix-base-linux",
+        .@"base-linux",
+        .@"diosix-linux.elf",
+        .@"diosix-linux",
+        .@"default.elf",
+        .default,
+        => "Diosix Base Linux",
+        .@"linux-cli.elf",
+        .@"linux-cli",
+        .cli,
+        => "Diosix Linux CLI",
+        .@"linux-desktop.elf",
+        .@"linux-desktop",
+        .desktop,
+        => "Diosix Linux Desktop (Weston)",
+    };
 }
 
 const MIN_SAMPLE_INTERVAL_NS: u64 = 50_000_000;
@@ -419,5 +444,17 @@ test "proc: parseRamStringBytes and computeHvCpuPercent" {
     try std.testing.expectEqual(
         @as(u64, 512 * mem_size.KIB),
         parseRamStringBytes("512 KB"),
+    );
+    try std.testing.expectEqualStrings(
+        "Diosix Base Linux",
+        friendlyImageName("/var/lib/diosix/images/diosix-base-linux.elf"),
+    );
+    try std.testing.expectEqualStrings(
+        "Diosix Linux CLI",
+        friendlyImageName("/var/lib/diosix/images/linux-cli.elf"),
+    );
+    try std.testing.expectEqualStrings(
+        "Diosix Linux Desktop (Weston)",
+        friendlyImageName("/var/lib/diosix/images/linux-desktop.elf"),
     );
 }

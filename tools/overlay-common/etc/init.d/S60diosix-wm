@@ -8,6 +8,11 @@
 case "$1" in
   start)
     GUI_BIN="/usr/bin/diosix-gui"
+    # Desktop child profiles launch Weston on /dev/dri/card0 unless overridden.
+    if [ -x /etc/init.d/S70weston-desktop ] && \
+       ! grep -qw "diosix.wm=diosix-gui" /proc/cmdline 2>/dev/null; then
+        exit 0
+    fi
 
     if pidof diosix-gui >/dev/null 2>&1; then
         echo "Diosix GUI is already running."
@@ -18,6 +23,8 @@ case "$1" in
         [ -x /usr/sbin/diosix-alsa-init ] && /usr/sbin/diosix-alsa-init
         echo "Starting Diosix GUI ($GUI_BIN)..."
         "$GUI_BIN" > /var/log/diosix-gui.log 2>&1 &
+        GUI_PID=$!
+        echo -900 > "/proc/${GUI_PID}/oom_score_adj" 2>/dev/null || true
     else
         echo "Diosix GUI: Headless display mode (console login active)."
     fi

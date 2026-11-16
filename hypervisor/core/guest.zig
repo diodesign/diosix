@@ -25,6 +25,7 @@ const config = @import("config");
 pub const queues_mod = @import("guest/queues.zig");
 pub const quota_mod = @import("guest/quota.zig");
 pub const lineage_mod = @import("guest/lineage.zig");
+pub const manifest_mod = @import("guest/manifest.zig");
 
 pub const GuestID = usize;
 pub const GuestState = enum(u8) {
@@ -54,20 +55,11 @@ pub const max_vmids: u16 = quota_mod.max_vmids;
 
 pub const DEFAULT_ROOT_MAX_VCPUS: usize = max_vcores;
 pub const MAX_MANIFEST_SIZE_BYTES: usize = 1024 * 1024;
-pub const IOAPIC_PAGE_SIZE: usize = physmem.PageSize;
-pub const X86_EARLY_PGT_GPA_OFFSET: usize = 0x70000;
 pub const CHILD_RV_BASE_GPA: usize = 0xe0000000;
-pub const CHILD_ARM64_BASE_GPA: usize = 0x40000000;
 
-pub const PIT_NUM_CHANNELS: usize = queues_mod.PIT_NUM_CHANNELS;
-pub const PIT_ACCESS_LSB_MSB: u8 = queues_mod.PIT_ACCESS_LSB_MSB;
-pub const PIT_PORT61_GATE2_ENABLED: u8 = queues_mod.PIT_PORT61_GATE2_ENABLED;
-pub const PIC_ALL_IRQS_MASKED: u8 = queues_mod.PIC_ALL_IRQS_MASKED;
 pub const BITS_PER_WORD: usize = quota_mod.BITS_PER_WORD;
 pub const VMID_BITMAP_WORDS: usize = quota_mod.VMID_BITMAP_WORDS;
 
-pub const PitChannel = queues_mod.PitChannel;
-pub const PitState = queues_mod.PitState;
 pub const EventQueue = queues_mod.EventQueue;
 pub const MAX_PACKET_LEN: usize = queues_mod.MAX_PACKET_LEN;
 pub const MAX_NET_PACKETS: usize = queues_mod.MAX_NET_PACKETS;
@@ -79,10 +71,18 @@ pub const ConsoleTxRing = queues_mod.ConsoleTxRing;
 pub const ConsoleRxRing = queues_mod.ConsoleRxRing;
 
 pub const Guest = struct {
+    pub const ScanoutSlotState = struct {
+        child_guest_id: usize = 0,
+        res_id: u32 = 0,
+        backing_gen: u64 = 0,
+        page_count: u32 = 0,
+        last_used_seq: u64 = 0,
+    };
+
     id: GuestID,
     state: GuestState,
     is_trusted: bool,
-    is_root: bool,
+    has_host_passthrough: bool = false,
     is_steward: bool = false,
     is_standby_root: bool = false,
     is_confidential: bool = false,
@@ -111,20 +111,28 @@ pub const Guest = struct {
     vcores: dsa.LinkedList(*vcore.VirtualCore),
     space: vm_space.GuestSpace,
     vmid: u16,
-    early_pgt_gpa: usize,
     vcore_static: [STATIC_VCORES]?*vcore.VirtualCore = @splat(null),
     vcore_dynamic_buckets: [VCORE_HASH_BUCKETS]?*vcore.VirtualCore =
         @splat(null),
-    pit: PitState,
-    ioapic_mem: [IOAPIC_PAGE_SIZE]u8,
     manifest: ?[]u8 = null,
     manifest_lock: atomic.SpinLock = atomic.SpinLock.init(),
     tree_lock: atomic.SpinLock = atomic.SpinLock.init(),
     vsock: emulation.VirtioVsock = .{},
+    gpu: emulation.VirtioGpu = .{},
+    input: emulation.VirtioInput = .{},
+    blk: emulation.VirtioBlk = .{},
+    net_dev: emulation.VirtioNet = .{},
     uart: emulation.VirtualUart = .{},
     timer: emulation.VirtualTimer = .{},
     pic: emulation.VirtualPlic = .{},
+    scanout_map_slots: [sbi.SCANOUT_SLOT_COUNT]ScanoutSlotState = @splat(.{}),
+    scanout_map_lock: atomic.SpinLock = atomic.SpinLock.init(),
+    scanout_lru_clock: u64 = 0,
     allocator: std.mem.Allocator,
+
+    pub inline fn hasParent(self: *const Guest) bool {
+        return self.parent != null;
+    }
 
     pub const allocChildHandle = lineage_mod.allocChildHandle;
     pub const freeChildHandle = lineage_mod.freeChildHandle;
@@ -166,35 +174,33 @@ pub const Guest = struct {
         @atomicStore(usize, &self.net_upstream_cid, cid, .release);
     }
 
-    fn guestReadMemory(ctx: *anyopaque, gpa: u64, buf: []u8) bool {
-        const g: *Guest = @ptrCast(@alignCast(ctx));
-        const addr: usize = std.math.cast(usize, gpa) orelse return false;
-        g.space.copyFromGuest(buf, addr) catch return false;
-        return true;
-    }
-
-    fn guestWriteMemory(ctx: *anyopaque, gpa: u64, buf: []const u8) bool {
-        const g: *Guest = @ptrCast(@alignCast(ctx));
-        const addr: usize = std.math.cast(usize, gpa) orelse return false;
-        g.space.copyToGuest(addr, buf) catch return false;
-        return true;
-    }
-
     pub fn guestUartOutputCtx(ctx: ?*anyopaque, char: u8) void {
         if (ctx) |ptr| {
             const g: *Guest = @ptrCast(@alignCast(ptr));
             g.console_tx.pushByte(char);
-            if (g.is_root) debug.putchar(char);
+            if (!g.hasParent()) debug.putchar(char);
             return;
         }
         debug.putchar(char);
+    }
+
+    pub fn guestUartInputCtx(ctx: ?*anyopaque) ?u8 {
+        const ptr = ctx orelse return null;
+        const g: *Guest = @ptrCast(@alignCast(ptr));
+        return g.console_rx.popByte();
+    }
+
+    pub fn guestUartHasInputCtx(ctx: ?*anyopaque) bool {
+        const ptr = ctx orelse return false;
+        const g: *Guest = @ptrCast(@alignCast(ptr));
+        return g.console_rx.getCount() > 0;
     }
 
     pub fn init(
         allocator: std.mem.Allocator,
         id: GuestID,
         is_trusted: bool,
-        is_root: bool,
+        has_host_passthrough: bool,
         parent: ?*Guest,
         base_gpa: usize,
         base_hpa: usize,
@@ -220,7 +226,7 @@ pub const Guest = struct {
             .id = id,
             .state = .valid,
             .is_trusted = is_trusted,
-            .is_root = is_root,
+            .has_host_passthrough = has_host_passthrough,
             .target_arch = target_arch,
             .quotas = if (parent) |p| p.quotas else .{
                 .max_ram_pages = std.math.maxInt(usize),
@@ -235,16 +241,12 @@ pub const Guest = struct {
             .vcores = .{ .start = null, .end = null },
             .vmid = vmid,
             .space = space,
-            .early_pgt_gpa = if (target_arch == .x86_64)
-                base_gpa + X86_EARLY_PGT_GPA_OFFSET
-            else
-                0,
-            .pit = .{},
-            .ioapic_mem = @splat(0),
             .uart = .{
                 .guest_id = id,
                 .out_ctx = self,
                 .out_ctx_fn = guestUartOutputCtx,
+                .in_ctx_fn = guestUartInputCtx,
+                .peek_in_ctx_fn = guestUartHasInputCtx,
             },
             .allocator = allocator,
         };
@@ -270,19 +272,7 @@ pub const Guest = struct {
             }
         }
 
-        self.vsock = emulation.VirtioVsock{
-            .guest_cid = self.local_cid,
-            .mem = .{
-                .ctx = self,
-                .readFn = guestReadMemory,
-                .writeFn = guestWriteMemory,
-            },
-            .router = emulation.global_vsock_router,
-            .route_fn = lineage_mod.routeVsockPacket,
-        };
-        if (parent == null or parent.?.is_root) {
-            emulation.global_vsock_router.register(&self.vsock);
-        }
+        quota_mod.manifest_mod.initVirtualDevices(self);
         return self;
     }
 
@@ -296,6 +286,7 @@ pub const Guest = struct {
     }
 
     pub fn unregisterResources(self: *Guest) void {
+        @import("sbi/scanout_map.zig").unmapOnGuestTeardown(self);
         const old_manifest = blk: {
             const s = self.manifest_lock.lock();
             defer self.manifest_lock.unlock(s);
@@ -311,6 +302,7 @@ pub const Guest = struct {
             @import("sbi/charter.zig").clearStewardVote(self.local_cid);
         }
         emulation.global_vsock_router.unregisterDevice(&self.vsock);
+        self.gpu.deinit();
         if (self.vmid != 0) {
             quota_mod.freeVmid(self.vmid);
             self.vmid = 0;
@@ -332,6 +324,7 @@ pub const Guest = struct {
         self.vcore_dynamic_buckets = @splat(null);
         self.child_static_handles = @splat(null);
         self.child_dynamic_buckets = @splat(null);
+        @import("sbi/scanout_map.zig").unmapOnGuestTeardown(self);
         self.space.deinit();
 
         var it_child = self.children.start;
@@ -377,6 +370,7 @@ pub const Guest = struct {
             priority,
         );
         errdefer vc.deinit();
+        vc.scheduler_node = .{ .contents = vc };
         vc.blocked_node.contents = @ptrCast(vc);
         if (vc.exec_path == .emulated) {
             vc.context[@backingInt(riscv.Register.a0)] = @intFromPtr(vc);
@@ -405,7 +399,7 @@ pub const Guest = struct {
 pub fn createGuest(
     allocator: std.mem.Allocator,
     is_trusted: bool,
-    is_root: bool,
+    has_host_passthrough: bool,
     parent: ?*Guest,
     base_gpa: usize,
     base_hpa: usize,
@@ -417,7 +411,7 @@ pub fn createGuest(
         allocator,
         id,
         is_trusted,
-        is_root,
+        has_host_passthrough,
         parent,
         base_gpa,
         base_hpa,

@@ -8,6 +8,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
 const riscv = @import("../../hardware/native/cpu/riscv64/mod.zig");
 const sv39x4 = @import("../../hardware/native/cpu/riscv64/sv39x4.zig");
 const vcore = @import("../vcore.zig");
@@ -18,13 +19,14 @@ const pcore = @import("../pcore.zig");
 const sbi_core = @import("../sbi.zig");
 const charter = @import("charter.zig");
 const standard = @import("standard.zig");
+const emulation = @import("emulation");
 const interface = @import("interface").sbi;
 
 fn canAccessGuestConsole(
     caller: *const guest.Guest,
     target: *const guest.Guest,
 ) bool {
-    if (target != caller and target.parent != caller and !caller.is_root) {
+    if (target != caller and target.parent != caller) {
         return false;
     }
     if (target != caller) {
@@ -169,6 +171,18 @@ pub fn handleConsoleWrite(
         written += chunk;
     }
 
+    if (!target.has_host_passthrough and target.uart.hasPendingIrq()) {
+        target.pic.setPending(emulation.IRQ_UART0);
+        if (!builtin.is_test) {
+            const my_cpu = pcore.this().cpu_core_id;
+            var it = target.vcores.start;
+            while (it) |node| : (it = node.next) {
+                if (node.contents.getRunningCpu()) |cpu| {
+                    if (cpu != my_cpu) pcore.sendIpiToCpu(cpu);
+                }
+            }
+        }
+    }
     wakeTargetVcores(target);
     cargs.actual_len = written;
     g.space.writeGuestStruct(interface.ConsoleArgs, a0, cargs) catch {

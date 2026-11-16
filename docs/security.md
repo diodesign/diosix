@@ -1,211 +1,196 @@
-# Diosix security model
+# Security, networking, and governance
 
-The Diosix architecture prioritizes a minimal Trusted Computing Base (TCB)
-and enforces guest isolation through hierarchical tree segmentation,
-hardware-level memory protections, and network boundary controls.
+Diosix sets conservative security defaults out of the box. Child virtual
+machines (VMs) start isolated from the internet and from each other,
+administrative SSH uses public-key authentication without placing private keys
+inside guests, and critical workloads can be protected by a sealed charter in
+machine mode (M-mode).
 
-## Trusted computing base
+This guide explains why these mechanisms work this way and how to configure
+them with `dsx`.
 
-The hypervisor and its progenitor **Root Virtual Machine (VM)** (Unix
-`init`-equivalent) form the core of the TCB. The hypervisor enforces physical
-memory separation, Virtual CPU (vCPU) scheduling, and resource quotas. The Root
-VM manages host hardware drivers, storage volumes, and initial guest
-orchestration.
+---
 
-## Hardware-enforced isolation
+## Hierarchical VM tree and relative context IDs
 
-Diosix uses machine-level features of the RISC-V architecture to enforce
-guest sandboxing:
+### Why Diosix hides global VM IDs
+In many hypervisors, every guest has a global ID or name on a shared management
+bus. Diosix instead organizes VMs into a parent-child tree where each VM refers
+only to its immediate neighbors using relative context IDs (CIDs):
 
-*   **Second-stage (G-stage) translation**: When the RISC-V hypervisor (H)
-    extension is present, G-stage page tables translate Guest Physical
-    Addresses (GPAs) to Host Physical Addresses (HPAs). Guest VMs cannot access
-    memory outside their assigned GPA ranges or read hypervisor memory.
-*   **Physical Memory Protection (PMP)**: On target platforms lacking the
-    H-extension, Diosix configures machine-mode PMP registers to strictly bound
-    guest physical memory access to designated Dynamic RAM (DRAM) regions.
-*   **Hardware trust restriction**: Any mapping of physical Memory-Mapped
-    Input/Output (MMIO) addresses or routing of physical device interrupts
-    requires the hardware trust privilege. Untrusted guest VMs cannot access
-    host hardware peripherals.
+* `1` (`self`) refers to the calling VM itself.
+* `0` (`parent`) refers to the calling VM's immediate parent.
+* `2..N` (or friendly VM names) refer to direct children created by the caller.
 
-## Tree-based segmentation and relative context IDs
+Because M-mode resolves CIDs relative to the caller, a child VM cannot list,
+address, or probe siblings, cousins, or ancestors above its parent. Management
+operations flow strictly downward from parent to child, so querying or altering
+a parent VM's state returns a permission error.
 
-Diosix models all guest VMs as nodes in a strictly hierarchical tree. Rather
-than exposing global guest identifiers to guest software, the hypervisor
-presents relative Context IDs (CIDs):
+---
 
-*   **`CID 0` (Parent)**: Refers to the calling VM's immediate parent.
-*   **`CID 1` (Self)**: Refers to the calling VM itself.
-*   **`CID 2..N` (Children)**: Refers to the calling VM's direct child guests.
+## Network security and service-VM routing
 
-Internally, the hypervisor assigns a unique system-wide guest ID for
-bookkeeping. However, guest VMs remain completely unaware of this global
-identifier. A guest VM cannot address or discover its siblings, ancestors, or
-unrelated branches in the tree. Each guest VM is blind to the rest of the
-system unless its direct parent explicitly grants a capability route through
-manifest attenuation.
+### Why child VMs start on a local-only network
+Each child VM receives a private IP address and defaults to local-only
+networking:
 
-## Asymmetric credential management
+* The parent VM can reach its direct children over SSH for management.
+* The M-mode layer-2 (L2) switch stamps each child VM's assigned media access
+  control (MAC) address onto outgoing Ethernet frames and drops frames
+  addressed to sibling VMs unless a router link is configured.
+* The parent VM's layer-3 (L3) firewall blocks wide area network (WAN)
+  forwarding from child VMs until you explicitly grant internet or router
+  access.
 
-Administrative access between parent and child guest VMs follows a strict
-two-tier unidirectional downward hierarchy:
+### Choosing a network mode
 
-*   **Zero-password passkey operator ingress (Host -> Root VM)**: Password and
-    blank-password logins are disabled across all VMs
-    (`dropbear -r <key> -s -g -p 22`). Principals authenticate to the Root VM
-    exclusively via cryptographic passkeys enrolled in
-    `/var/lib/diosix/keys/authorized_passkeys` (`sk-ssh-ed25519@openssh.com`
-    and `sk-ecdsa-sha2-nistp256@openssh.com` Fast Identity Online 2 (FIDO2)
-    hardware tokens, Trusted Platform Module (TPM) 2.0 platform-bound passkeys,
-    Quick Response (QR) WebAuthn pairing, or single-use Ed25519 Universal
-    Asynchronous Receiver-Transmitter (UART) challenge-response via
-    `dsx auth challenge` / `dsx auth verify`). Enrolled passkeys can be revoked
-    at any time with `dsx auth revoke` and are preserved across bare-metal disk
-    installations (`dsx host install`). In developer builds (`diosix.mode=dev`),
-    `scripts/create_storage_disk.sh` stages the build machine's public keys in
-    `/var/lib/diosix/keys/dev_authorized_keys`, which `S50diosix` merges into
-    `/root/.ssh/authorized_keys` in RAM only when `diosix.mode=dev` is present
-    on `/proc/cmdline` without polluting `authorized_passkeys`.
-*   **Dynamic cluster management keys and Confidential/Steward exclusion**:
-    Each trusted supervisor VM generates an internal Dropbear management
-    keypair on first boot (`/var/lib/diosix/keys/id_management`) and stages
-    only its public key (`# diosix-authorized-key:`) in the hypervisor manifest
-    when spawning standard direct child VMs. When spawning `--confidential` or
-    `--steward` VMs, `dsx run` omits parent key injection so the parent VM
-    cannot open a `root` SSH session into confidential or Steward guests.
-    Management private keys are never committed to source control or baked into
-    release binaries.
-*   **Persistent per-instance host keys and TOFU pinning**: Dropbear server
-    Ed25519 host keys are generated uniquely per VM on first boot, persisted on
-    `/var/lib/diosix/keys/dropbear_ed25519_host_key` (`0600`) across Root VM
-    reboots, and pinned on first connection in `/root/.ssh/known_hosts` via
-    `-o StrictHostKeyChecking=accept-new`. When a child VM IP is reprovisioned,
-    its prior `known_hosts` entry is pruned automatically.
-*   **True child key exclusion**: Guest VM images contain only their parent's
-    public key in `/root/.ssh/authorized_keys`. Management private keys are
-    never written to child disk images or mapped into child address spaces,
-    ensuring a compromised guest kernel cannot extract administrative
-    credentials.
-*   **Hierarchical delegation**: When a child VM spawns a grandchild VM, the
-    child generates its own local management keypair on its own volume and
-    passes only its public key downward. A guest cannot access credentials or
-    control channels belonging to ancestors or siblings.
-*   **Downward command flow**: Administrative control channels and remote shell
-    sessions flow strictly downward from parent to child (`Parent -> Child`).
-    Child VMs cannot open administrative SSH sessions to their parent VM.
+| Mode | Flag or command | Traffic allowed | Typical use |
+| :--- | :--- | :--- | :--- |
+| Air-gapped | `--net none` or `dsx net isolate <vm>` | No network frames (blocked in M-mode). | Key vaults, offline signing, or quarantined VMs. |
+| Host-only (default) | `--net local` or `dsx net revoke <vm>` | Parent-child link only; no WAN forwarding. | Application sandboxes and internal services. |
+| Internet | `--net wan` or `dsx net grant <vm> wan` | Outbound WAN network address translation (NAT) via parent. | Package installs or web clients. |
+| Router or firewall | `--net router` or `dsx net grant <vm> router` | L3 IP forwarding and NAT for downstream VMs. | Dedicated firewall, packet-filtering, or logging VMs. |
 
-## Network firewall, M-mode L2 containment, and service-VM chaining
+### Granting or revoking internet access
 
-Network traffic traversing the virtual network device (`diosix0`) is governed
-at two independent privilege layers — Machine mode (`M-mode` in
-`hypervisor/core/sbi/ipc.zig`) and the parent router's stateful `iptables`
-firewall (`S50diosix` and `dsx net`):
+```bash
+# Start a VM with outbound internet (WAN) access enabled
+dsx run linux-guest --name builder --net wan
 
-*   **M-mode L2 sibling isolation and MAC anti-spoofing**: In `M-mode`,
-    `handleNetSend` stamps every non-root child VM's canonical source Media
-    Access Control (MAC) address (`02:00:00:00:XX:YY` matching its assigned
-    `local_cid`) and rejects direct sibling-to-sibling frame injection with
-    `SBI_ERR_DENIED` unless one VM is the explicitly designated upstream router
-    (`net_upstream_cid`) of the other. Air-gapped VMs (`RunFlags.NET_ISOLATED` /
-    `--net none`) are blocked from transmitting or receiving any frames in
-    `M-mode`.
-*   **Default-deny WAN egress (`--net local` by default)**: Child VMs spawned
-    with `dsx run` default to `--net local` (host-only management SSH between
-    `10.0.3.1` and `10.0.3.<cid>` plus the port `8484` Wayland bridge). The Root
-    VM's `FORWARD` chain policy is `DROP`; child VMs cannot ping or reach the
-    outside internet unless explicitly granted via `dsx run --net wan`,
-    `dsx net grant <vm> wan`, or a domain manifest declaring `net.wan`.
-*   **Service-VM routing, filtering, and logging (`--net router` and
-    `--net-via`)**: Operators can spawn dedicated routing/firewall/IDS VMs with
-    `dsx run <image> --name fw --net router` and chain downstream workload VMs
-    through them via `dsx run <image> --name app --net-via fw` (or dynamically
-    at runtime via `dsx net route app --via fw`). `M-mode` (`SET_NET_POLICY`,
-    Function ID `27`) restricts `app`'s upstream L2 path to `fw`, while the Root
-    VM blocks `app` from bypassing `fw` to the WAN.
-*   **Parent inbound denial**: The parent router installs packet-filter rules
-    dropping all new connection attempts originating from child VMs
-    (`-A INPUT -i diosix0 -m conntrack --ctstate NEW -j DROP` and
-    `-A INPUT -s 10.0.3.0/24 -m conntrack --ctstate NEW -j DROP`). Child VMs
-    cannot connect to parent listening services, including SSH on port 22.
-*   **Cross-guest lateral denial**: The router denies forwarding between
-    virtual child subnets (`-A FORWARD -s 10.0.3.0/24 -d 10.0.3.0/24 -j DROP`).
-    Sibling guest VMs cannot probe, port scan, or communicate laterally with
-    one another across the virtual network.
-*   **Stateful return traffic**: Established and related responses to
-    authorized connections (`--ctstate ESTABLISHED,RELATED`) are permitted.
+# Or grant and revoke WAN access on a running VM
+dsx net grant work wan
+dsx net status
+dsx net revoke work
 
-## Declarative manifests and air-gapped domains
+# Cut off all network access for a VM in M-mode
+dsx net isolate work
+```
 
-System security policies are declared in the system manifest (`system.toml`).
-The Root VM parses the manifest and generates pruned, attenuated child
-manifests upon domain startup:
+### Routing traffic through a firewall or logging VM
 
-*   **Capability attenuation**: A child VM's permissions are bounded by its
-    declared `can_require` capabilities. A parent VM can only grant
-    capabilities that the parent itself possesses.
-*   **Air-gapped domain isolation**: Domains that omit external network
-    capabilities (such as the `[domains.vault]` domain, which specifies only
-    `gui.*` display capabilities and omits `net.wan`) receive no network
-    routes or Wide Area Network (WAN) gateway forwarding. Sensitive workloads
-    remain air-gapped from external network interfaces.
+Instead of routing workload VMs straight through their parent VM to the
+internet, you can chain their traffic through a dedicated sibling router VM
+running your own firewall rules, packet capture tools, or VPN tunnel:
 
-## Least privilege lifecycle
+1. Start a sibling VM with the router role:
 
-Parent VMs control the lifecycle of their child VMs through Supervisor Binary
-Interface (SBI) hypercalls:
+   ```bash
+   dsx run linux-guest --name net-fw --net router
+   ```
 
-1.  A trusted parent VM creates a child VM with constrained RAM and vCPU quotas.
-2.  The child VM is instantiated from an isolated guest image loaded into guest
-    memory without direct host hardware access.
-3.  If hardware MMIO access is required (such as for a dedicated display or
-    storage driver), trust can be granted at startup; otherwise, guests run
-    strictly untrusted.
-4.  A trusted guest VM can permanently surrender its hardware privileges by
-    invoking the `DROP_TRUST` SBI function. This privilege revocation is
-    irreversible for the lifetime of that guest.
+2. Launch a workload VM chained through `net-fw` (or re-route an existing VM):
 
-## Constitutional Charter, Steward collective, and Standby Root failover
+   ```bash
+   dsx run linux-guest --name app-vm --net-via net-fw
+   dsx net route work --via net-fw
+   ```
 
-To eliminate single points of failure and bound administrative or autonomous
-agent authority, Diosix enforces a hardware-backed **Constitutional Charter**
-(`/etc/diosix/charter.toml` and `/etc/diosix/constitution.md`) directly in
-Machine mode (M-mode):
+3. Confirm the active gateway chain:
 
-*   **M-mode Constitutional Guard (`DIOSIX_SEAL_CHARTER`, Function ID (FID)
-    `19`)**: Once the Root VM seals the 256-bit Secure Hash Algorithm 256
-    (SHA-256) digest and quorum parameters of `charter.toml` into M-mode, the
-    Charter becomes immutable without an `M-of-N` Steward quorum ratification
-    (`DIOSIX_RATIFY_CHARTER`, `FID 20`).
-*   **Hardware-protected Steward VMs (`RunFlags.STEWARD`)**: Tier-1 Steward VMs
-    (`steward-sec`, `steward-ops`, `steward-gov`) run in isolated Stage-2
-    memory partitions. When the Charter is sealed, the M-mode hypervisor blocks
-    the Root VM from unilaterally terminating a Steward VM (`TERMINATE`) or
-    reducing its RAM/vCPU quotas (`SET_QUOTA`) without an `M-of-N` Steward
-    quorum vote. Crucially, the Root VM (`CID 1`) is forbidden from calling
-    `RATIFY_CHARTER` and cannot forge Steward votes.
-*   **Confidential guest memory (`RunFlags.CONFIDENTIAL`)**: Workload VMs
-    spawned with `--confidential` (or `confidential_memory = true` in
-    `charter.toml`) are protected by M-mode against foreign memory inspection:
-    any `MAP_CHILD_MEM` hypercall targeting a confidential VM is rejected with
-    `SBI_ERR_DENIED` once the Charter is sealed, even when invoked by the
-    Root VM.
-*   **Whisper Mesh (`DIOSIX_WHISPER_SEND` / `DIOSIX_WHISPER_RECV`)**: Steward
-    VMs communicate over a dedicated M-mode ring buffer channel (`whisper_rx`)
-    completely independent of the Root VM's virtual network switch (`diosix0`),
-    ensuring Stewards can reach Byzantine Fault Tolerant (BFT) consensus even if
-    the Root VM's network stack is unresponsive.
-*   **Zero Single Point of Failure (SPOF) Standby Root failover
-    (`RunFlags.STANDBY_ROOT`)**: A warm Standby Root VM can be pre-staged
-    alongside the active Root VM. If the primary Root VM suffers an
-    unrecoverable panic or is voted out via `DIOSIX_REQUEST_ROOT_FAILOVER`
-    (`FID 24`), M-mode atomically reparents all surviving Steward and workload
-    VMs to the Standby Root VM and transfers Root VM privileges without
-    interrupting running child workloads.
+   ```bash
+   dsx net status
+   ```
 
-## Reporting security issues <a name="reporting-security-issues"></a>
+When `app-vm` is routed through `net-fw`, M-mode permits L2 frames between the
+two VMs while preventing `app-vm` from bypassing `net-fw` to reach the parent
+VM's WAN interface or other sibling VMs.
 
-The project takes security bugs seriously. To privately and responsibly
-report a security vulnerability, email
+---
+
+## SSH passkeys and downward management
+
+### Why Diosix disables SSH passwords and keeps private keys out of guests
+
+* Dropbear SSH disables password and root-password logins across all VMs,
+  authenticating remote operators strictly against enrolled public keys while
+  keeping the local hardware or emulator serial console available for direct
+  host recovery.
+* On first boot, a parent VM generates a local Ed25519 management keypair
+  protected with owner-only file permissions. When creating or seeding a child
+  VM, only the public key is staged into the child's authorized-keys file, so a
+  compromised guest cannot SSH into sibling VMs or upward into its parent.
+* Launching a VM as a steward or confidential guest skips parent SSH key
+  injection altogether so the parent VM does not stage root SSH access inside
+  the guest.
+
+### Enrolling and verifying keys
+
+```bash
+# View authentication status, boot mode, and detected hardware tokens
+dsx auth status
+
+# Enroll an SSH Ed25519 or ECDSA public key from a file
+dsx auth enroll --file /root/operator.pub --label laptop-key
+
+# Generate a local Ed25519 key seeded by TPM 2.0 RNG or a FIDO2 token check
+dsx auth enroll --tpm --label tablet-key
+dsx auth enroll --fido2 --label usb-key
+
+# List enrolled keys and their SHA-256 hashes
+dsx auth list
+
+# Revoke a key by index, fingerprint prefix, or label
+dsx auth revoke laptop-key
+```
+
+You can also issue and verify a single-use 256-bit Ed25519 challenge nonce (or
+print a QR pairing URI with `dsx auth enroll --qr`):
+
+```bash
+# Generate a single-use 256-bit challenge nonce
+dsx auth challenge
+
+# Verify a 64-byte raw Ed25519 signature over that challenge
+dsx auth verify <128-char-signature-hex>
+```
+
+---
+
+## Declarative manifests and charter governance
+
+### Defining multi-domain topologies
+You can declare VM images, quotas, and allowed service routes in a manifest
+file. Before starting a domain from a manifest, Diosix prunes the file so each
+child VM receives only the service routes it is permitted to use:
+
+```bash
+# Check manifest syntax and capability rules
+dsx manifest validate /etc/diosix/system.toml
+
+# Prune a child manifest for a specific domain
+dsx manifest prune /etc/diosix/system.toml --domain sys -o /tmp/sys.toml
+```
+
+### Sealing a charter and running steward VMs
+To enforce M-mode governance rules on running VMs, launch your steward VMs with
+`--steward` and an optional standby root VM with `--standby-root`, then seal
+the charter into M-mode:
+
+* M-mode blocks parent console, graphical scanout, and virtual input access to
+  steward VMs, and once a charter hash is sealed, also blocks foreign memory
+  mapping and denies termination, resets, or quota reductions unless a quorum
+  of steward VMs ratifies the action.
+* M-mode blocks parent console, graphical scanout, and virtual input access to
+  confidential VMs, and blocks foreign memory mapping once a charter is sealed.
+* If the active root VM crashes or a quorum of stewards ratifies failover,
+  M-mode promotes a warm standby root VM and reparents surviving child VMs
+  without rebooting the host.
+
+```bash
+# View charter status, quorum thresholds, and M-mode seal state
+dsx charter status
+
+# Seal /etc/diosix/charter.toml's SHA-256 digest and quorum into M-mode
+dsx charter deploy
+
+# Confirm that the on-disk charter matches the sealed M-mode SHA-256 hash
+dsx charter audit
+```
+
+---
+
+## Reporting security issues
+
+To report a security vulnerability privately, email
 [security@diosix.org](mailto:security@diosix.org) with technical details.
-We investigate and respond to all reports promptly.

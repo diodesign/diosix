@@ -17,6 +17,38 @@ pub const cmdImageImport = import_mod.cmdImageImport;
 /// NUL terminator, so any validated URL fits.
 const URL_Z_BYTES: usize = catalog.MAX_URL_LEN + 1;
 
+const LocalBuiltInElfUrl = enum {
+    @"file:///var/lib/diosix/images/diosix-base-linux.elf",
+    @"file:///var/lib/diosix/images/linux-cli.elf",
+    @"file:///var/lib/diosix/images/linux-desktop.elf",
+
+    comptime {
+        const S = @This();
+        const b = @tagName(
+            S.@"file:///var/lib/diosix/images/diosix-base-linux.elf",
+        );
+        const c = @tagName(S.@"file:///var/lib/diosix/images/linux-cli.elf");
+        const d = @tagName(
+            S.@"file:///var/lib/diosix/images/linux-desktop.elf",
+        );
+        std.debug.assert(std.mem.eql(
+            u8,
+            b,
+            "file://" ++ sysconfig.DEFAULT_GUEST_IMAGE_PATH,
+        ));
+        std.debug.assert(std.mem.eql(
+            u8,
+            c,
+            "file://" ++ sysconfig.DEFAULT_CLI_IMAGE_PATH,
+        ));
+        std.debug.assert(std.mem.eql(
+            u8,
+            d,
+            "file://" ++ sysconfig.DEFAULT_DESKTOP_IMAGE_PATH,
+        ));
+    }
+};
+
 pub fn fetchRemoteFile(url: []const u8, dest_z: [*:0]const u8) !void {
     var url_z_buf: [URL_Z_BYTES]u8 = undefined;
     const url_z = common.toPathZ(url, &url_z_buf) orelse
@@ -111,21 +143,22 @@ pub fn pullRemoteOrStageImage(
 
     var sha_verified = false;
     if (expected_sha256) |sha| {
-        const is_local_root_elf = std.mem.eql(
-            u8,
-            url,
-            "file:///var/lib/diosix/images/diosix-base-linux.elf",
-        ) and content.len >= 4 and std.mem.eql(u8, content[0..4], "\x7fELF");
-        if (!catalog.verifySha256Hex(content, sha) and !is_local_root_elf) {
-            _ = linux.unlink(tmp_z.ptr);
-            return error.ChecksumMismatch;
-        }
-        sha_verified = true;
-        if (!quiet) {
-            common.printFmt(
-                "==> Verified SHA-256 checksum ({s}...)\n",
-                .{sha[0..16]},
-            );
+        if (catalog.verifySha256Hex(content, sha)) {
+            sha_verified = true;
+            if (!quiet) {
+                common.printFmt(
+                    "==> Verified SHA-256 checksum ({s}...)\n",
+                    .{sha[0..16]},
+                );
+            }
+        } else {
+            const is_local_builtin_elf =
+                std.meta.stringToEnum(LocalBuiltInElfUrl, url) != null and
+                content.len >= 4 and std.mem.eql(u8, content[0..4], "\x7fELF");
+            if (!is_local_builtin_elf) {
+                _ = linux.unlink(tmp_z.ptr);
+                return error.ChecksumMismatch;
+            }
         }
     }
 

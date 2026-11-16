@@ -27,7 +27,7 @@ pub fn handleWhisperSend(
     a2: usize,
 ) void {
     const g = vc.getGuest();
-    if (!g.is_steward and !g.is_root) {
+    if (!g.is_steward and g.hasParent()) {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
@@ -64,13 +64,13 @@ pub fn handleWhisperSend(
             reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
             return;
         };
-        if (claimed_cid != g.local_cid) {
+        if (claimed_cid != g.local_cid and claimed_cid != guest.CID_SELF) {
             reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
             return;
         }
     }
     const dest_cid = a2;
-    const root_parent: ?*guest.Guest = if (g.is_root) g else g.parent;
+    const root_parent: ?*guest.Guest = if (!g.hasParent()) g else g.parent;
 
     if (root_parent) |rp| {
         if (dest_cid == 0) {
@@ -91,7 +91,7 @@ pub fn handleWhisperSend(
             }
         } else if (dest_cid >= guest.CID_FIRST_CHILD) {
             if (rp.getGuestByCid(dest_cid)) |target| {
-                if (target.is_steward or target.is_root) {
+                if (target.is_steward or !target.hasParent()) {
                     const q = &target.whisper_rx;
                     sbi_core.deliverToQueue(target, q, msg_buf);
                 } else {
@@ -111,7 +111,7 @@ pub fn handleWhisperSend(
 
 pub fn handleWhisperRecv(vc: *VCore, ctx: *Ctx, a0: usize, a1: usize) void {
     const g = vc.getGuest();
-    if (!g.is_steward and !g.is_root) {
+    if (!g.is_steward and g.hasParent()) {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
@@ -132,7 +132,7 @@ pub fn handleResetSteward(vc: *VCore, ctx: *Ctx, a0: usize, a1: usize) void {
         return;
     }
     const root_parent: ?*guest.Guest =
-        if (g.is_root) g else if (g.is_steward) g.parent else null;
+        if (!g.hasParent()) g else if (g.is_steward) g.parent else null;
     if (root_parent == null) {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
@@ -163,8 +163,8 @@ pub fn handleRequestRootFailover(vc: *VCore, ctx: *Ctx, a0: usize) void {
     const g = vc.getGuest();
     const requested_standby_cid = a0;
     const root_vm: ?*guest.Guest =
-        if (g.is_root) g else if (g.is_steward) g.parent else null;
-    if (root_vm == null or !root_vm.?.is_root) {
+        if (!g.hasParent()) g else if (g.is_steward) g.parent else null;
+    if (root_vm == null or root_vm.?.hasParent()) {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
     }
