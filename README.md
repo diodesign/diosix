@@ -32,17 +32,22 @@ autonomous workloads.
 
 ## What makes Diosix different
 
-* **Symmetric VM tree:** Every VM starts with the same hypervisor ABI and
-  userspace tooling (`dsx`, `diosix-gui`, and `guest-shim`). The first VM booted
-  by the hypervisor starts with `parent: hypervisor`, full system quota, and
-  inheritable hardware trust, then partitions resources down the tree.
+* **Symmetric VM tree:** Every VM boots from the same unified Alpine-based
+  `diosix-node.elf` image with identical hypervisor ABIs and `dsx` tooling.
+  The initial top-level VM starts with `parent: hypervisor`, full system quota,
+  and inheritable hardware trust, then partitions resources down the tree.
+* **Anti-collusion isolation and boards:** M-mode blocks lateral sibling
+  network frames, sockets, and whispers, so agents coordinate strictly along
+  parent-child edges through parent-moderated `dsx board` message boards.
+* **Recursive package attenuation:** Children lack direct internet access by
+  default and install Alpine packages recursively from their parent via
+  `dsx pkg`, bounded monotonically by manifest allow and deny lists.
 * **Mixed RISC-V execution:** Native 64-bit RISC-V guests boot from ELF
   kernels, flat kernel images, installer ISOs, or seeded virtual disks, and
   single-core 32-bit RISC-V guests run via dynamic binary recompilation.
-* **Zero-copy guest desktops:** Parent VMs view and control child Wayland
-  desktops through Tier 1 Stage-2 read-only scanout mapping with dirty-rect
-  invalidation and hardware cursor overlays alongside virtual terminals and
-  serial consoles.
+* **Zero-copy guest desktops:** Optional CLI and Wayland desktop profiles
+  (`-Dextra-guests=true`) and custom graphical VMs render through Stage-2
+  read-only scanout mapping with dirty-rect invalidation.
 * **Default-isolated recursive networking:** Each parent runs a `diosix0`
   virtual subnet for direct children (`10.0.3.x`, `10.0.4.x`, and upward) while
   children see an upstream `eth0` interface with SSH passwords disabled and
@@ -94,15 +99,12 @@ bundle (no compilation required) or by building from source.
    git clone https://github.com/diodesign/diosix.git
    cd diosix
 
-   # Boot straight into the Wayland desktop RISC-V VM
-   ./scripts/build.sh run-desktop
-
-   # Boot straight into an interactive CLI RISC-V VM
-   ./scripts/build.sh run-cli
-
-   # Or boot the root VM graphical desktop or headless serial console
-   ./scripts/build.sh run-gui
+   # Boot headless serial console or the optional root graphical desktop
    ./scripts/build.sh run
+   ./scripts/build.sh run-gui
+
+   # Optionally build standalone CLI or Weston desktop demo profiles
+   ./scripts/build.sh -Dextra-guests=true
    ```
 
 ### Run inside Docker
@@ -128,13 +130,13 @@ your local SSH public key ready to use. Try these `dsx` commands:
 dsx tour
 dsx host info
 
-# 2. Launch an isolated CLI VM or a Wayland desktop VM
-dsx run linux-cli --name work-vm --vcpus 2 --ram 256M
-dsx run linux-desktop --name desk-vm --vcpus 2 --ram 512M
+# 2. Launch an isolated Alpine node child VM with constrained packages
+dsx run diosix-node --name worker --vcpus 2 --ram 256M --packages doas
 dsx list
 
-# 3. Run a command inside the CLI VM over key-based SSH
-dsx ssh work-vm -- uname -a
+# 3. Post to the parent board and install a permitted package over SSH
+dsx board post "begin task" --to worker --topic ops
+dsx ssh worker -- apk add doas
 
 # 4. Save an in-memory RAM checkpoint of the child VM
 dsx snapshot save work-vm clean-boot

@@ -227,9 +227,9 @@ stage_builtin_guest_images() {
         done
 
         "$strip_tool" -s "$kernel_elf" \
-            -o "$staging_dir/images/diosix-base-linux.elf" 2>/dev/null || \
-            cp "$kernel_elf" "$staging_dir/images/diosix-base-linux.elf"
-        ln -sf diosix-base-linux.elf "$staging_dir/images/default.elf"
+            -o "$staging_dir/images/diosix-node.elf" 2>/dev/null || \
+            cp "$kernel_elf" "$staging_dir/images/diosix-node.elf"
+        ln -sf diosix-node.elf "$staging_dir/images/default.elf"
 
         local kernel_dir
         kernel_dir="$(dirname "$kernel_elf")"
@@ -251,9 +251,9 @@ stage_builtin_guest_images() {
     local src_cat="tools/overlay-common/etc/diosix/catalog.toml"
     local dst_cat="$staging_dir/manifests/catalog.toml"
     if [ -f "$src_cat" ] && command -v sha256sum >/dev/null 2>&1; then
-        local h_base="" h_cli="" h_desk=""
-        if [ -f "$staging_dir/images/diosix-base-linux.elf" ]; then
-            h_base=$(sha256sum "$staging_dir/images/diosix-base-linux.elf" \
+        local h_node="" h_cli="" h_desk=""
+        if [ -f "$staging_dir/images/diosix-node.elf" ]; then
+            h_node=$(sha256sum "$staging_dir/images/diosix-node.elf" \
                 | awk '{print $1}')
         fi
         if [ -f "$staging_dir/images/linux-cli.elf" ]; then
@@ -264,10 +264,10 @@ stage_builtin_guest_images() {
             h_desk=$(sha256sum "$staging_dir/images/linux-desktop.elf" \
                 | awk '{print $1}')
         fi
-        awk -v hb="$h_base" -v hc="$h_cli" -v hd="$h_desk" '
+        awk -v hn="$h_node" -v hc="$h_cli" -v hd="$h_desk" '
             /^url = "file:\/\/\/var\/lib\/diosix\/images\// {
                 cur = ""
-                if ($0 ~ /diosix-base-linux\.elf"$/) cur = hb
+                if ($0 ~ /diosix-node\.elf"$/) cur = hn
                 else if ($0 ~ /linux-cli\.elf"$/) cur = hc
                 else if ($0 ~ /linux-desktop\.elf"$/) cur = hd
                 print
@@ -281,5 +281,40 @@ stage_builtin_guest_images() {
             /^\[\[image\]\]/ { cur = "" }
             { print }
         ' "$src_cat" > "$dst_cat"
+    fi
+
+    stage_alpine_apk_seed "$staging_dir"
+}
+
+stage_alpine_apk_seed() {
+    local staging_dir="$1"
+    local iso_dir="zig-out/dl"
+    local iso_name="alpine-standard-3.24.3-riscv64.iso"
+    local iso_path="${iso_dir}/${iso_name}"
+    local site="https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/riscv64"
+    local iso_url="${site}/${iso_name}"
+    local exp_sha
+    exp_sha="0a98ca04017494e1a19f206d4934f743b13be863aa0ec155ec47b7ab06930025"
+
+    mkdir -p "$iso_dir"
+    if [ ! -f "$iso_path" ]; then
+        log_info "Downloading ${iso_name} for offline APK repository..."
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$iso_url" -o "${iso_path}.part"
+        else
+            wget -q -O "${iso_path}.part" "$iso_url"
+        fi
+        mv -f "${iso_path}.part" "$iso_path"
+    fi
+    if ! printf "%s  %s\n" "$exp_sha" "$iso_path" | \
+         sha256sum -c - >/dev/null 2>&1; then
+        rm -f "$iso_path"
+        log_err "SHA-256 verification failed for ${iso_name}."
+        return 1
+    fi
+    if command -v python3 >/dev/null 2>&1 && \
+       [ -f "scripts/extract_iso_apks.py" ]; then
+        python3 -B "scripts/extract_iso_apks.py" "$iso_path" \
+            "$staging_dir/apk/v3.24/main/riscv64"
     fi
 }

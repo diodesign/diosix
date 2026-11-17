@@ -24,9 +24,9 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     defer host_info.mock_hypervisor_info = null;
 
     var mock_imgs: [1]host_info.VmImageEntry = .{.{}};
-    mock_imgs[0].setTitle("Diosix Base Linux");
-    mock_imgs[0].setFilename("diosix-base-linux.elf");
-    mock_imgs[0].setPath("/var/lib/diosix/images/diosix-base-linux.elf");
+    mock_imgs[0].setTitle("Diosix Node");
+    mock_imgs[0].setFilename("diosix-node.elf");
+    mock_imgs[0].setPath("/var/lib/diosix/images/diosix-node.elf");
     mock_imgs[0].size_bytes = 28 * 1024 * 1024;
     mock_imgs[0].default_vcpus = 2;
     mock_imgs[0].default_ram_mb = 512;
@@ -80,7 +80,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
         gui_mod.ICON_CREATE_VM_ITEM_BASE_ID,
     ).?;
     try testing.expect(
-        std.mem.indexOf(u8, img_item.getText(), "Diosix Base Linux") != null,
+        std.mem.indexOf(u8, img_item.getText(), "Diosix Node") != null,
     );
 
     // 3. Select the image: opens WIN_CREATE_VM_DETAIL_ID on the right.
@@ -120,7 +120,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
         gui_mod.ICON_CREATE_VM_BTN_ID,
     ).?;
 
-    try testing.expectEqualStrings("diosix-base-linux", name_in.getText());
+    try testing.expectEqualStrings("diosix-node", name_in.getText());
     try testing.expectEqual(@as(i32, 2), vcpus_sld.slider_val);
     try testing.expectEqual(@as(i32, 512), ram_sld.slider_val);
     try testing.expectEqual(@as(i32, 20), pcpu_sld.slider_val);
@@ -177,7 +177,7 @@ test "diosix-gui: Create VM menu spacing, image selection, and VM creation" {
     const created = host_info.images.mock_last_created_vm.?;
     try testing.expectEqualStrings("web-node-1", created.getName());
     try testing.expectEqualStrings(
-        "/var/lib/diosix/images/diosix-base-linux.elf",
+        "/var/lib/diosix/images/diosix-node.elf",
         created.getImagePath(),
     );
     try testing.expectEqual(@as(u32, 4), created.vcpus);

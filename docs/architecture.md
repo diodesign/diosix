@@ -67,12 +67,16 @@ This structure gives the hypervisor three properties:
 
 ### Single hypervisor binary and guest shim
 External bootloaders add large pre-boot codebases and board-specific
-configuration files. Diosix avoids external bootloaders with two in-tree
+configuration files. Diosix avoids external bootloaders with three in-tree
 components:
 
-* A position-independent M-mode hypervisor binary embeds the root VM ELF image
-  directly and discovers CPUs, memory banks, timers, and UARTs at runtime from
-  the host flattened device tree (FDT).
+* A position-independent M-mode hypervisor binary embeds the unified
+  Alpine-based `diosix-node.elf` ELF image directly and discovers CPUs, memory
+  banks, timers, and UARTs at runtime from the host flattened device tree
+  (FDT).
+* Every descendant VM uses the same `diosix-node.elf` baseline by default,
+  shipping Alpine Package Keeper (`apk`) and the `dsx` agent management suite
+  so parent and child nodes share identical primitives.
 * A freestanding S-mode guest bootloader shim runs inside untrusted child VMs
   to boot 64-bit RISC-V kernels from ISO9660 images, raw or ext4 disk images,
   and self-contained EFI binaries without exposing parsing logic in M-mode.
@@ -158,15 +162,20 @@ over a shared routing path:
 M-mode stamps outgoing child frames with the sender's assigned media access
 control (MAC) address to prevent spoofing, drops all traffic to and from
 air-gapped VMs, and blocks direct sibling-to-sibling frames unless one sibling
-is configured as the other's upstream router VM. Any parent VM automatically
-serves as a local gateway over `diosix0` (`10.0.3.1/24` at depth 0, stepping to
-`10.0.<3+depth>.1/24` in nested subtrees), routing packets across its uplink.
+is configured as the other's upstream router VM. Likewise, both VirtIO socket
+(vsock) packet routing and M-mode Whisper rings enforce strict parent-child
+tree edges so autonomous child agents cannot establish covert lateral channels.
+
+Any parent VM serves as a local gateway over `diosix0` (`10.0.3.1/24` at depth
+0, stepping to `10.0.<3+depth>.1/24` in nested subtrees), hosting both an
+attenuating `apk` package proxy (`diosix0:8080`) and a hash-chained message
+board (`diosix0:8485`) for its direct children.
 
 ### VirtIO storage, socket, and desktop devices
 * The VirtIO block device exposes a RAM-backed virtual disk attached to the
   guest's staged disk image (read-write in guest RAM) or ISO image (read-only).
-* The VirtIO socket device routes host-to-guest and parent-to-child stream
-  packets with hypervisor-verified source CID headers.
+* The VirtIO socket device routes strictly parent-child stream packets with
+  hypervisor-verified source CID headers.
 * The VirtIO 2D GPU controller tracks guest scatter-gather backing pages and
   maintains a per-resource dirty-rectangle damage ring without duplicating
   framebuffers in M-mode. Parents on H-extension hardware can map a child's

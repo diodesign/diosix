@@ -38,6 +38,8 @@ const ImageAlias = enum {
     default,
     @"default.elf",
     @"default.bin",
+    @"diosix-node",
+    @"diosix-node.elf",
     @"diosix-base-linux",
     @"diosix-base-linux.elf",
     @"base-linux",

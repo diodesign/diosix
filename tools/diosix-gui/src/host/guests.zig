@@ -467,7 +467,7 @@ test "guests: parseRegistryGuests and lifecycle protections" {
         \\[[guest]]
         \\cid = 2
         \\name = "worker-alpha"
-        \\image = "diosix-base-linux.elf"
+        \\image = "diosix-node.elf"
         \\vcpus = 2
         \\ram = "512 MB"
         \\disk = "/var/lib/diosix/disks/worker-alpha.raw"
@@ -482,7 +482,7 @@ test "guests: parseRegistryGuests and lifecycle protections" {
     try expectEq(@as(usize, 1), count);
     try expectEq(@as(u64, 2), list[0].cid);
     try expectStr("worker-alpha", list[0].getInstanceName());
-    try expectStr("Diosix Base Linux", list[0].getImageName());
+    try expectStr("Diosix Node", list[0].getImageName());
     try expectStr("RV64", list[0].getArchLabel());
     try expectStr("H-mode", list[0].getVirtModeLabel());
     try expectEq(@as(u32, 2), list[0].vcpus);

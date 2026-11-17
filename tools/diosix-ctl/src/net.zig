@@ -379,6 +379,7 @@ pub fn cmdNet(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
 test "net: parseNetMode, inferDomainNetMode, and extractManifestNetPolicy" {
     std.testing.refAllDecls(@This());
     _ = firewall;
+    _ = @import("net/http.zig");
     const testing = std.testing;
 
     try testing.expectEqual(NetMode.none, parseNetMode("none").?);

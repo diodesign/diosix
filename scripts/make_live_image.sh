@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "${SCRIPT_DIR}/lib/buildroot_common.sh"
 
 HYPERVISOR_BIN="${1:-zig-out/guest-riscv64/bin/vmdiosix}"
-KERNEL_ELF="${2:-zig-out/guest-riscv64/bin/rootvm.elf}"
+KERNEL_ELF="${2:-zig-out/guest-riscv64/bin/diosix-node.elf}"
 OUT_IMG="${3:-zig-out/diosix-live-riscv64.img}"
 IMAGE_SIZE_MB="${4:-640}"
 
@@ -175,8 +175,9 @@ the Diosix hypervisor and Root VM (trusted host supervisor), mounted canonically
 at /var/lib/diosix.
 
 Directory structure:
-  /var/lib/diosix/images/    - Built-in guest OS images (diosix-base-linux.elf,
-                               linux-cli.elf, linux-desktop.elf)
+  /var/lib/diosix/images/    - Built-in guest OS images (diosix-node.elf,
+                               optional linux-cli.elf / linux-desktop.elf)
+  /var/lib/diosix/apk/       - Offline Alpine riscv64 .apk seed mirror
   /var/lib/diosix/manifests/ - Declarative domain manifests (system.toml)
   /var/lib/diosix/keys/      - Enrolled FIDO2/TPM passkeys and management keys
   /var/lib/diosix/disks/     - Persistent guest VM storage disks

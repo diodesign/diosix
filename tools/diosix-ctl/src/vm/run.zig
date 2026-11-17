@@ -9,6 +9,7 @@ const manifest = @import("../manifest.zig");
 const common = @import("../common.zig");
 const loader = @import("../loader.zig");
 const net = @import("../net.zig");
+const pkg_policy = @import("../pkg/policy.zig");
 const vm_stage = @import("stage.zig");
 const fdt_patch = @import("fdt_patch.zig");
 const fdt_guest = @import("fdt_guest.zig");
@@ -314,6 +315,14 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         run_flags |= (upstream_cid & api.RunFlags.NET_UPSTREAM_MASK) <<
             api.RunFlags.NET_UPSTREAM_SHIFT;
     }
+    pkg_policy.checkRunPackagesCeiling(
+        allocator,
+        client,
+        opts.packages_str,
+    ) catch {
+        if (!@import("builtin").is_test) std.process.exit(1);
+        return;
+    };
     const child_cid = client.run(
         0,
         &[_]u8{},
@@ -374,6 +383,12 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         final_ip,
         eff_net_mode,
         upstream_cid,
+    );
+    pkg_policy.applyRunPackagesPolicy(
+        allocator,
+        client,
+        child_cid,
+        opts.packages_str,
     );
 
     const is_shim_boot = std.mem.eql(u8, opts.elf_path.?, "guest-shim") or

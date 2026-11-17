@@ -42,6 +42,7 @@ pub const RunOption = enum {
     @"-a",
     @"--net",
     @"--net-via",
+    @"--packages",
     @"--user",
 };
 
@@ -67,6 +68,7 @@ pub const ParsedRunOptions = struct {
     dtb_path: ?[]const u8 = null,
     net_mode: ?net.NetMode = null,
     net_via_str: ?[]const u8 = null,
+    packages_str: ?[]const u8 = null,
 };
 
 fn takeOpt(
@@ -195,6 +197,10 @@ pub fn parseRunArgs(
                 },
                 .@"--net-via" => {
                     opts.net_via_str = takeOpt(args, &i, "--net-via") orelse
+                        return null;
+                },
+                .@"--packages" => {
+                    opts.packages_str = takeOpt(args, &i, "--packages") orelse
                         return null;
                 },
                 .@"--user" => {

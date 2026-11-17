@@ -63,6 +63,8 @@ pub fn basenameSlice(path: []const u8) []const u8 {
 }
 
 const KnownImageBase = enum {
+    @"diosix-node.elf",
+    @"diosix-node",
     @"diosix-base-linux.elf",
     @"diosix-base-linux",
     @"base-linux",
@@ -83,6 +85,8 @@ pub fn friendlyImageName(raw_path: []const u8) []const u8 {
     const known = std.meta.stringToEnum(KnownImageBase, base) orelse
         return base;
     return switch (known) {
+        .@"diosix-node.elf",
+        .@"diosix-node",
         .@"diosix-base-linux.elf",
         .@"diosix-base-linux",
         .@"base-linux",
@@ -90,7 +94,7 @@ pub fn friendlyImageName(raw_path: []const u8) []const u8 {
         .@"diosix-linux",
         .@"default.elf",
         .default,
-        => "Diosix Base Linux",
+        => "Diosix Node",
         .@"linux-cli.elf",
         .@"linux-cli",
         .cli,
@@ -446,8 +450,8 @@ test "proc: parseRamStringBytes and computeHvCpuPercent" {
         parseRamStringBytes("512 KB"),
     );
     try std.testing.expectEqualStrings(
-        "Diosix Base Linux",
-        friendlyImageName("/var/lib/diosix/images/diosix-base-linux.elf"),
+        "Diosix Node",
+        friendlyImageName("/var/lib/diosix/images/diosix-node.elf"),
     );
     try std.testing.expectEqualStrings(
         "Diosix Linux CLI",

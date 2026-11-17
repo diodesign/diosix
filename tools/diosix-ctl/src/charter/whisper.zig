@@ -194,7 +194,16 @@ pub fn cmdCharterWhisper(
                 allocator.free(frame);
             }
             if (client.dev_fd != null) {
-                _ = client.whisperSend(target_cid, frame) catch {};
+                _ = client.whisperSend(target_cid, frame) catch |err| {
+                    if (err == error.PermissionDenied) {
+                        common.printStr(
+                            "Error: Whisper send denied by hypervisor.\n",
+                        );
+                    } else {
+                        common.printApiError("Whisper send", err);
+                    }
+                    std.process.exit(1);
+                };
             }
             if (json_mode) {
                 // Sanitizing only drops bytes, so the frame length bounds it.

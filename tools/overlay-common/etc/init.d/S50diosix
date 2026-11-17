@@ -5,6 +5,8 @@
 # Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
+
 STATE_DIR="/var/lib/diosix"
 ETC_DIR="/etc/diosix"
 RUN_DIR="/run/diosix"
@@ -105,10 +107,12 @@ configure_downstream_switch() {
         ! -d "$subnet" -j MASQUERADE 2>/dev/null || \
     iptables -t nat -A POSTROUTING -s "$subnet" \
         ! -d "$subnet" -j MASQUERADE 2>/dev/null || true
-    iptables -C INPUT -i diosix0 -p tcp --dport 8484 \
-        -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || \
-    iptables -A INPUT -i diosix0 -p tcp --dport 8484 \
-        -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || true
+    for dport in 8080 8484 8485; do
+        iptables -C INPUT -i diosix0 -p tcp --dport "$dport" \
+            -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || \
+        iptables -A INPUT -i diosix0 -p tcp --dport "$dport" \
+            -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || true
+    done
     iptables -C INPUT -i diosix0 -m conntrack --ctstate NEW \
         -j DROP 2>/dev/null || \
     iptables -A INPUT -i diosix0 -m conntrack --ctstate NEW \
@@ -225,11 +229,11 @@ case "$1" in
     MANIFEST_NAME=""
 
     if [ "$HAS_PARENT" -eq 0 ]; then
-        echo "Diosix top-level VM (CID 1)" > /etc/issue 2>/dev/null || true
+        echo "Diosix Node top-level VM (CID 1)" > /etc/issue 2>/dev/null || true
         configure_top_level_wan
     else
-        GUEST_HOST="diosix-base-linux"
-        GUEST_BANNER="Diosix Base Linux"
+        GUEST_HOST="diosix-node"
+        GUEST_BANNER="Diosix Node"
         if [ -f "${ETC_DIR}/guest-profile" ]; then
             PH=$(sed -n 's/^hostname[ \t]*=[ \t]*"\([^"]*\)".*/\1/p' \
                 "${ETC_DIR}/guest-profile" | head -n 1 | tr -cd 'A-Za-z0-9-')
@@ -303,9 +307,13 @@ case "$1" in
     fi
 
     HOSTS_PFX="${DOWN_PREFIX:-10.0.3}"
+    PARENT_IP="${HOSTS_PFX}.1"
+    if [ "$HAS_PARENT" -eq 1 ] && [ -n "$NET_GW" ]; then
+        PARENT_IP="$NET_GW"
+    fi
     {
         echo "127.0.0.1 localhost"
-        echo "${HOSTS_PFX}.1 diosix-parent parent"
+        echo "${PARENT_IP} diosix-parent parent"
         HIDX=2
         while [ "$HIDX" -le 32 ]; do
             echo "${HOSTS_PFX}.${HIDX} guest-${HIDX}"
@@ -339,9 +347,12 @@ case "$1" in
     rm -f "${STATE_DIR}/images/micro-guest."* \
         "${STATE_DIR}/iso/micro-guest."* 2>/dev/null || true
     OLD_ELF="${STATE_DIR}/images/diosix-linux.elf"
-    GUEST_ELF="${STATE_DIR}/images/diosix-base-linux.elf"
+    OLD_BASE="${STATE_DIR}/images/diosix-base-linux.elf"
+    GUEST_ELF="${STATE_DIR}/images/diosix-node.elf"
     [ -f "$OLD_ELF" ] && [ ! -f "$GUEST_ELF" ] && \
         mv "$OLD_ELF" "$GUEST_ELF" 2>/dev/null || true
+    [ -f "$OLD_BASE" ] && [ ! -f "$GUEST_ELF" ] && \
+        mv "$OLD_BASE" "$GUEST_ELF" 2>/dev/null || true
     [ -f "$GUEST_ELF" ] && \
         ln -sf "$GUEST_ELF" "${STATE_DIR}/images/default.elf" \
             2>/dev/null || true
@@ -383,10 +394,28 @@ case "$1" in
     fi
     sort -u "$AUTH_KEYS" -o "$AUTH_KEYS" 2>/dev/null || true
     chmod 600 "$AUTH_KEYS" 2>/dev/null || true
+
+    mkdir -p "${STATE_DIR}/apk/v3.24/main/riscv64" \
+        /var/cache/diosix/pkg/v3.24/main/riscv64 /etc/apk
+    if [ "$HAS_PARENT" -eq 0 ]; then
+        echo "${STATE_DIR}/apk/v3.24/main" > /etc/apk/repositories
+    else
+        echo "http://diosix-parent:8080/v3.24/main" > /etc/apk/repositories
+    fi
+    if [ -n "$DSX_BIN" ]; then
+        "$DSX_BIN" pkg serve --daemon >/dev/null 2>&1 || true
+        "$DSX_BIN" board serve --daemon >/dev/null 2>&1 || true
+    fi
     echo "Diosix guest services: OK"
     ;;
   stop)
     echo "Stopping Diosix guest services..."
+    for pidf in "${RUN_DIR}/board.pid" "${RUN_DIR}/pkg-proxy.pid"; do
+        if [ -r "$pidf" ]; then
+            kill "$(cat "$pidf" 2>/dev/null)" 2>/dev/null || true
+            rm -f "$pidf"
+        fi
+    done
     ;;
   restart|reload)
     "$0" stop

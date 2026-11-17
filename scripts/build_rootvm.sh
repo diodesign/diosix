@@ -21,6 +21,11 @@ ROOTVM_S_PATH="${5:-}"
 EXTRA_OVERLAY_DIR="${6:-}"
 BUILDROOT_URL="https://gitlab.com/buildroot.org/buildroot.git"
 BUILDROOT_BRANCH="2026.02.x"
+ALPINE_VER="3.24.3"
+ALPINE_TAR="alpine-minirootfs-${ALPINE_VER}-riscv64.tar.gz"
+ALPINE_SITE="https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/riscv64"
+ALPINE_URL="${ALPINE_SITE}/${ALPINE_TAR}"
+ALPINE_SHA256="9714553757e7bf645eff5dcc52bdd206f358a7bed77874842567852e8326a51d"
 
 if [ -z "$CONFIG_FILE" ] || [ -z "$OUT_FILE" ] || [ -z "$BUILDROOT_DIR" ]; then
     echo "Usage: $0 <config> <out_file> <buildroot_dir> [arch] [rootvm_s]" \
@@ -58,6 +63,7 @@ CURRENT_HASH=$(
                 tools/diosix-gui/assets/* tools/alsa-init/* 2>/dev/null
         fi
         sha256sum "$CONFIG_FILE" "$0" "${SCRIPT_DIR}/lib/buildroot_common.sh" \
+            "${SCRIPT_DIR}/assemble_alpine_rootfs.sh" \
             "$(dirname "$CONFIG_FILE")"/*.fragment tools/driver/* 2>/dev/null
     ) | awk '{print $1}' | sort | sha256sum | cut -d' ' -f1
 )
@@ -234,7 +240,42 @@ OVERLAY_LIST="${OVERLAY_LIST} ${DYNAMIC_OVERLAY}"
 SHARED_DL_DIR="$(realpath "$(dirname "$BUILDROOT_DIR")")/dl"
 mkdir -p "$SHARED_DL_DIR"
 echo "BR2_DL_DIR=\"$SHARED_DL_DIR\"" >> "$BUILDROOT_DIR/.config"
-echo "BR2_ROOTFS_OVERLAY=\"$OVERLAY_LIST\"" >> "$BUILDROOT_DIR/.config"
+
+USE_ALPINE_NODE=0
+if [ "$(basename "$CONFIG_FILE")" = "riscv64-linux-node.config" ] && \
+   [ "$GUEST_ARCH" = "riscv64" ]; then
+    USE_ALPINE_NODE=1
+fi
+
+if [ "$USE_ALPINE_NODE" -eq 1 ]; then
+    ALPINE_PATH="${SHARED_DL_DIR}/${ALPINE_TAR}"
+    if [ ! -f "$ALPINE_PATH" ]; then
+        log_info "Downloading ${ALPINE_TAR}..."
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$ALPINE_URL" -o "${ALPINE_PATH}.part"
+        else
+            wget -q -O "${ALPINE_PATH}.part" "$ALPINE_URL"
+        fi
+        mv -f "${ALPINE_PATH}.part" "$ALPINE_PATH"
+    fi
+    if ! printf "%s  %s\n" "$ALPINE_SHA256" "$ALPINE_PATH" | \
+         sha256sum -c - >/dev/null 2>&1; then
+        rm -f "$ALPINE_PATH"
+        log_err "SHA-256 verification failed for ${ALPINE_TAR}."
+        exit 1
+    fi
+    log_ok "Verified ${ALPINE_TAR} (SHA-256: ${ALPINE_SHA256:0:16}...)."
+    ASSEMBLE_SH="$(realpath "${SCRIPT_DIR}/assemble_alpine_rootfs.sh")"
+    COMMON_OV="$(realpath tools/overlay-common)"
+    ARGS_STR="${ALPINE_PATH} ${COMMON_OV} ${DYNAMIC_OVERLAY}"
+    echo "BR2_ROOTFS_OVERLAY=\"\"" >> "$BUILDROOT_DIR/.config"
+    echo "BR2_ROOTFS_POST_FAKEROOT_SCRIPT=\"${ASSEMBLE_SH}\"" \
+        >> "$BUILDROOT_DIR/.config"
+    echo "BR2_ROOTFS_POST_SCRIPT_ARGS=\"${ARGS_STR}\"" \
+        >> "$BUILDROOT_DIR/.config"
+else
+    echo "BR2_ROOTFS_OVERLAY=\"$OVERLAY_LIST\"" >> "$BUILDROOT_DIR/.config"
+fi
 
 GETTY_PORT="hvc0"
 if [ "$GUEST_ARCH" = "aarch64" ]; then
@@ -244,6 +285,18 @@ elif [ "$GUEST_ARCH" = "x86_64" ]; then
 fi
 echo "BR2_TARGET_GENERIC_GETTY_PORT=\"$GETTY_PORT\"" >> "$BUILDROOT_DIR/.config"
 echo "BR2_JLEVEL=0" >> "$BUILDROOT_DIR/.config"
+
+if [ -f "$BUILDROOT_DIR/.config.old" ]; then
+    OLD_MUSL=$(grep -E 'BR2_TOOLCHAIN_USES_MUSL=y|MUSL_STABLE=y' \
+        "$BUILDROOT_DIR/.config.old" || true)
+    NEW_MUSL=$(grep -E 'BR2_TOOLCHAIN_USES_MUSL=y|MUSL_STABLE=y' \
+        "$BUILDROOT_DIR/.config" || true)
+    if { [ -z "$OLD_MUSL" ] && [ -n "$NEW_MUSL" ]; } || \
+       { [ -n "$OLD_MUSL" ] && [ -z "$NEW_MUSL" ]; }; then
+        log_info "Toolchain libc changed. Cleaning Buildroot output..."
+        rm -rf "$BUILDROOT_DIR/output"
+    fi
+fi
 
 make -C "$BUILDROOT_DIR" olddefconfig >/dev/null
 

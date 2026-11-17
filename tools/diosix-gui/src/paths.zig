@@ -79,8 +79,9 @@ pub const VAR_IMAGES_DIR: [*:0]const u8 = "/var/lib/diosix/images";
 pub const SHARE_IMAGES_DIR: [*:0]const u8 = "/usr/share/diosix/images";
 pub const VAR_DISKS_DIR: [*:0]const u8 = "/var/lib/diosix/disks";
 pub const VAR_ISO_DIR: [*:0]const u8 = "/var/lib/diosix/iso";
-pub const DEFAULT_BASE_LINUX_IMAGE_PATH: []const u8 =
-    "/var/lib/diosix/images/diosix-base-linux.elf";
+pub const DEFAULT_NODE_IMAGE_PATH: []const u8 =
+    "/var/lib/diosix/images/diosix-node.elf";
+pub const DEFAULT_BASE_LINUX_IMAGE_PATH: []const u8 = DEFAULT_NODE_IMAGE_PATH;
 pub const DEFAULT_CLI_IMAGE_PATH: []const u8 =
     "/var/lib/diosix/images/linux-cli.elf";
 pub const DEFAULT_DESKTOP_IMAGE_PATH: []const u8 =

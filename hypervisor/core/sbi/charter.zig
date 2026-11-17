@@ -297,21 +297,48 @@ test "SBI Diosix Phase 5: Charter sealing, Steward quorum guard, and failover" {
     const denied: usize = @bitCast(sbi_core.SBI_ERR_DENIED);
     try testing.expectEqual(denied, ctx[@backingInt(arch.Register.a0)]);
 
-    const whisper_msg = "whisper:quorum-heartbeat-ok";
-    try steward1.space.copyToGuest(0x80000000, whisper_msg);
+    var up_buf: [64]u8 = undefined;
+    const up_msg = try std.fmt.bufPrint(
+        &up_buf,
+        "whisper:v1:heartbeat:{d}:0:ok",
+        .{steward1.local_cid},
+    );
+    try steward1.space.copyToGuest(0x80000000, up_msg);
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.WHISPER_SEND;
     ctx[@backingInt(arch.Register.a0)] = 0x80000000;
-    ctx[@backingInt(arch.Register.a1)] = whisper_msg.len;
-    ctx[@backingInt(arch.Register.a2)] = 0;
+    ctx[@backingInt(arch.Register.a1)] = up_msg.len;
+    ctx[@backingInt(arch.Register.a2)] = guest.CID_PARENT;
     sbi_core.handle(&s1_vc, &ctx);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
 
     ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.WHISPER_RECV;
     ctx[@backingInt(arch.Register.a0)] = 0x80000200;
     ctx[@backingInt(arch.Register.a1)] = 64;
-    sbi_core.handle(&s2_vc, &ctx);
+    sbi_core.handle(&root_vc, &ctx);
     const a1_idx = @backingInt(arch.Register.a1);
-    try testing.expectEqual(whisper_msg.len, ctx[a1_idx]);
+    try testing.expectEqual(up_msg.len, ctx[a1_idx]);
+
+    // Lateral sibling-to-sibling whisper is denied to prevent collusion.
+    ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.WHISPER_SEND;
+    ctx[@backingInt(arch.Register.a0)] = 0x80000000;
+    ctx[@backingInt(arch.Register.a1)] = up_msg.len;
+    ctx[@backingInt(arch.Register.a2)] = steward2.local_cid;
+    sbi_core.handle(&s1_vc, &ctx);
+    try testing.expectEqual(denied, ctx[@backingInt(arch.Register.a0)]);
+
+    const dn_msg = "whisper:v1:propose:0:0:ok";
+    try root_vm.space.copyToGuest(0x80000100, dn_msg);
+    ctx[@backingInt(arch.Register.a0)] = 0x80000100;
+    ctx[@backingInt(arch.Register.a1)] = dn_msg.len;
+    ctx[@backingInt(arch.Register.a2)] = steward2.local_cid;
+    sbi_core.handle(&root_vc, &ctx);
+    try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
+
+    ctx[@backingInt(arch.Register.a6)] = interface.DIOSIX.WHISPER_RECV;
+    ctx[@backingInt(arch.Register.a0)] = 0x80000200;
+    ctx[@backingInt(arch.Register.a1)] = 64;
+    sbi_core.handle(&s2_vc, &ctx);
+    try testing.expectEqual(dn_msg.len, ctx[a1_idx]);
 
     // 2-of-3 Steward ratification unlocks RESET_STEWARD even if Steward 3
     // attempts to vote for a conflicting target_cid!

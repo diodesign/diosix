@@ -329,7 +329,8 @@ pub fn runSubprocess(argv: [*:null]const ?[*:0]const u8) u32 {
             _ = linux.close(@intCast(devnull_signed));
         }
         const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-            "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            "PATH=/usr/sbin:/usr/bin:/sbin:/bin:" ++
+                "/usr/local/sbin:/usr/local/bin",
             null,
         };
         _ = linux.execve(argv[0].?, argv, envp);

@@ -38,15 +38,15 @@ pub fn applyHostFirewall(
     ) catch return;
     defer allocator.free(z_subnet);
 
-    const ipt_bin: [*:0]const u8 =
-        if (common.fileExistsPath(sysconfig.IPTABLES_BIN))
-            sysconfig.IPTABLES_BIN
-        else
-            sysconfig.IPTABLES_SBIN;
+    const ipt_bin = sysconfig.resolveFirstBin(&.{
+        sysconfig.IPTABLES_BIN,
+        sysconfig.IPTABLES_SBIN,
+        sysconfig.IPTABLES_LOCAL_BIN,
+    });
 
     const del_argv = [_:null]?[*:0]const u8{
-        ipt_bin, "-D", "FORWARD",    "-s", z_ip.ptr,
-        "!",     "-d", z_subnet.ptr, "-j", "ACCEPT",
+        ipt_bin.ptr, "-D", "FORWARD",    "-s", z_ip.ptr,
+        "!",         "-d", z_subnet.ptr, "-j", "ACCEPT",
         null,
     };
     var tries: usize = 0;
@@ -55,18 +55,18 @@ pub fn applyHostFirewall(
     }
     if ((mode == .wan or mode == .router) and upstream_cid == 0) {
         const ins_argv = [_:null]?[*:0]const u8{
-            ipt_bin, "-I", "FORWARD",    "1",  "-s",     z_ip.ptr,
-            "!",     "-d", z_subnet.ptr, "-j", "ACCEPT", null,
+            ipt_bin.ptr, "-I", "FORWARD",    "1",  "-s",     z_ip.ptr,
+            "!",         "-d", z_subnet.ptr, "-j", "ACCEPT", null,
         };
         _ = common.runSubprocess(&ins_argv);
     }
-    const ip_bin: [*:0]const u8 =
-        if (common.fileExistsPath(sysconfig.IP_BIN))
-            sysconfig.IP_BIN
-        else
-            sysconfig.IP_FALLBACK_BIN;
+    const ip_bin = sysconfig.resolveFirstBin(&.{
+        sysconfig.IP_BIN,
+        sysconfig.IP_FALLBACK_BIN,
+        sysconfig.IP_LOCAL_BIN,
+    });
     const rt_del = [_:null]?[*:0]const u8{
-        ip_bin, "route", "del", z_ip.ptr, "dev", "diosix0", null,
+        ip_bin.ptr, "route", "del", z_ip.ptr, "dev", "diosix0", null,
     };
     _ = common.runSubprocess(&rt_del);
     if (mode != .none and upstream_cid >= CID_FIRST_CHILD) {
@@ -77,10 +77,33 @@ pub fn applyHostFirewall(
         ) catch return;
         defer allocator.free(z_gw);
         const rt_add = [_:null]?[*:0]const u8{
-            ip_bin,   "route", "replace", z_ip.ptr, "via",
-            z_gw.ptr, "dev",   "diosix0", null,
+            ip_bin.ptr, "route", "replace", z_ip.ptr, "via",
+            z_gw.ptr,   "dev",   "diosix0", null,
         };
         _ = common.runSubprocess(&rt_add);
+    }
+    if (cid >= CID_FIRST_CHILD and cid <= 65535) {
+        if (mode == .none) {
+            const neigh_del = [_:null]?[*:0]const u8{
+                ip_bin.ptr, "neigh", "del", z_ip.ptr, "dev", "diosix0", null,
+            };
+            _ = common.runSubprocess(&neigh_del);
+        } else {
+            const hi: u8 = @intCast((cid >> 8) & 0xff);
+            const lo: u8 = @intCast(cid & 0xff);
+            const z_mac = allocator.printSentinel(
+                "02:00:00:00:{x:0>2}:{x:0>2}",
+                .{ hi, lo },
+                0,
+            ) catch return;
+            defer allocator.free(z_mac);
+            const neigh_rep = [_:null]?[*:0]const u8{
+                ip_bin.ptr, "neigh", "replace", z_ip.ptr, "lladdr",
+                z_mac.ptr,  "dev",   "diosix0", "nud",    "permanent",
+                null,
+            };
+            _ = common.runSubprocess(&neigh_rep);
+        }
     }
 }
 

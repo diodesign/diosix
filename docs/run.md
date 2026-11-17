@@ -55,15 +55,13 @@ installed (or are inside one of the Docker containers in `dockerfiles/`), run
 `./scripts/build.sh` to compile and boot Diosix:
 
 ```bash
-# Boot straight into the Wayland desktop RISC-V VM
-./scripts/build.sh run-desktop
-
-# Boot straight into an interactive CLI RISC-V VM
-./scripts/build.sh run-cli
-
-# Boot the root VM in headless serial mode or with the graphical desktop
+# Boot the unified Alpine node VM in headless serial mode or with GUI
 ./scripts/build.sh run
 ./scripts/build.sh run-gui
+
+# Optionally build and boot the standalone Wayland desktop or CLI demo VMs
+./scripts/build.sh run-desktop
+./scripts/build.sh run-cli
 ```
 
 ### How boot modes work

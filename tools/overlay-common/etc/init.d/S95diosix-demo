@@ -28,6 +28,7 @@ case "$1" in
     "$DSX_BIN" info --json 2>/dev/null | grep -q '"has_parent":false' || exit 0
 
     CLI_IMG="/var/lib/diosix/images/linux-cli.elf"
+    [ ! -f "$CLI_IMG" ] && CLI_IMG="/var/lib/diosix/images/diosix-node.elf"
     [ ! -f "$CLI_IMG" ] && exit 0
 
     mkdir -p /run/diosix

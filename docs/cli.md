@@ -202,6 +202,9 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
 * `--net-via <vm|cid>`: Routes all traffic from this child VM through a
   designated sibling router VM, permitting layer-2 (L2) frames between the two
   VMs while blocking direct WAN bypass and other sibling traffic.
+* `--packages <*|none|pkg1,pkg2>`: Restricts Alpine `apk` packages permitted to
+  the child VM (`*` for parent's full ceiling, `none`, or a comma-separated
+  allowlist), enforced monotonically against the caller's own ceiling.
 * `--domain <name>`: Loads settings and policies for `<name>` from
   `/etc/diosix/system.toml`.
 * `--manifest <path>`, `-m <path>`: Path to `system.toml`.
@@ -789,8 +792,70 @@ Examples:
 dsx charter status
 dsx charter deploy
 dsx charter propose terminate-units --unit unit-alpha --count 2 --total 4
-dsx charter whisper send --to 3 --type propose --payload "failover:epoch=1"
+dsx charter whisper send --to parent --type propose --payload "failover:epoch=1"
 dsx charter audit --json
+```
+
+---
+
+### `dsx pkg`
+Inspects and controls the recursive attenuating Alpine Package Keeper (`apk`)
+HTTP proxy (`diosix0:8080`, aliases: `dsx package`, `dsx apk`).
+
+```bash
+dsx pkg <status|policy|allow|deny|sync|serve> [options]
+```
+
+Subcommands:
+* `status [--json]`: Shows local proxy daemon status, port (`8080`), upstream
+  source, seed/cached `.apk` counts, and the calling VM's package ceiling.
+* `policy [<vm|cid|self>] [--json]`: Displays the effective allowlist and
+  denylist for `self` or a direct child VM.
+* `allow <vm|cid> <*|none|pkg1,pkg2>`: Sets a direct child's package allowlist,
+  rejected if it exceeds the parent's own ceiling.
+* `deny <vm|cid> <none|pkg1,pkg2>`: Adds explicit package denials to a child VM
+  (always merges and preserves parent-level denials).
+* `sync [--branch v3.24] [--repo main] [--arch riscv64] [--port P]`: Fetches
+  a fresh `APKINDEX.tar.gz` from the upstream parent proxy or Alpine CDN into
+  `/var/cache/diosix/pkg/`.
+* `serve [--port P] [--daemon]`: Starts the attenuating APK proxy server.
+
+Examples:
+```bash
+dsx pkg status --json
+dsx pkg allow child-sup chrony,doas
+dsx pkg deny child-sup chrony
+```
+
+---
+
+### `dsx board`
+Posts to and reads from the parent-moderated, SHA-256 hash-chained message
+board (`diosix0:8485`). Child VMs can only post to `target_cid = 0` (`all` or
+`parent`); any attempt by a child VM to message a sibling (`target_cid >= 2`)
+fails with HTTP `403 Forbidden`.
+
+```bash
+dsx board <post|list|status|policy|serve> [options]
+```
+
+Subcommands:
+* `post <message> [--topic T] [--to all|parent|vm|cid] [--parent|--local]`
+  `[--port P] [--json]`: Appends a message to the board.
+* `list [--topic T] [--since <seq>] [--parent|--local] [--port P] [--json]`:
+  Lists entries visible to the caller (`target_cid = 0`, addressed to the
+  caller, or authored by the caller).
+* `status [--parent|--local] [--port P] [--json]`: Queries board count and
+  hash-chain verification status.
+* `policy [--allow-topics <*|csv>] [--mute <vm|cid>] [--unmute <vm|cid>]`:
+  Updates `/run/diosix/board-policy.toml` on the calling parent VM.
+* `serve [--port P] [--daemon]`: Runs the local board HTTP server.
+
+Examples:
+```bash
+dsx board post "boot ready" --topic status --parent
+dsx board post "rotate key" --to worker --topic ops
+dsx board list --topic ops --json
 ```
 
 ---

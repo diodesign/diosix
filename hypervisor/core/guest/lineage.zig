@@ -32,16 +32,7 @@ pub fn routeVsockPacket(
         if (g.getGuestByCid(dst)) |child| {
             if (child.getNetUpstreamCid() != 0) return false;
             target = child;
-            auth_src_cid = sbi.CID_SELF;
-        } else if (g.parent) |p| {
-            if (p.getGuestByCid(dst)) |sib| {
-                if (sib != g and
-                    (dst == self_upstream or
-                        sib.getNetUpstreamCid() == g.local_cid))
-                {
-                    target = sib;
-                }
-            }
+            auth_src_cid = sbi.CID_PARENT;
         }
     }
     const tgt = target orelse return false;
@@ -364,37 +355,22 @@ test "Two-column virtual core and child handle lookup tables" {
     g.vcore_dynamic_buckets = @splat(null);
     g.vcores.init();
 
-    var vc0: vcore.VirtualCore = undefined;
-    vc0.id = 0;
-    vc0.lookup_next = null;
-    registerVcoreLookup(&g, 0, &vc0);
-
-    var vc31: vcore.VirtualCore = undefined;
-    vc31.id = 31;
-    vc31.lookup_next = null;
-    registerVcoreLookup(&g, 31, &vc31);
-
-    var vc32: vcore.VirtualCore = undefined;
-    vc32.id = 32;
-    vc32.lookup_next = null;
-    registerVcoreLookup(&g, 32, &vc32);
-
-    var vc64: vcore.VirtualCore = undefined;
-    vc64.id = 64;
-    vc64.lookup_next = null;
-    registerVcoreLookup(&g, 64, &vc64);
-
-    try testing.expectEqual(&vc0, findVcore(&g, 0));
-    try testing.expectEqual(&vc31, findVcore(&g, 31));
-    try testing.expectEqual(&vc32, findVcore(&g, 32));
-    try testing.expectEqual(&vc64, findVcore(&g, 64));
+    var vcs: [4]vcore.VirtualCore = undefined;
+    const test_vids = [_]u32{ 0, 31, 32, 64 };
+    for (test_vids, 0..) |vid, idx| {
+        vcs[idx].id = vid;
+        vcs[idx].lookup_next = null;
+        registerVcoreLookup(&g, vid, &vcs[idx]);
+        try testing.expectEqual(&vcs[idx], findVcore(&g, vid));
+    }
     try testing.expect(findVcore(&g, 1) == null);
     try testing.expect(findVcore(&g, 33) == null);
 
     var phys_test = try physmem.initForTest(allocator, 128);
     defer phys_test.deinit();
     const hpa = try physmem.allocPage();
-    const parent = try guest_mod.createGuest(
+    const cg = guest_mod.createGuest;
+    const parent = try cg(
         allocator,
         true,
         true,
@@ -462,4 +438,53 @@ test "Two-column virtual core and child handle lookup tables" {
     reused_child.child_handle_next = null;
     const hole_cid = try parent.allocChildHandle(&reused_child);
     try testing.expectEqual(allocated_cids[45], hole_cid);
+}
+
+test "lineage: routeVsockPacket strictly enforces parent-child edges" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    quota_mod.resetGuestManagerForTest();
+
+    var phys_test = try physmem.initForTest(allocator, 128);
+    defer phys_test.deinit();
+
+    const p = try guest_mod.createGuest(
+        allocator,
+        true,
+        true,
+        null,
+        0,
+        0,
+        0x1000,
+        .riscv64,
+    );
+    defer p.deinit();
+
+    const c1 = try p.createChild(false, .riscv64, 1);
+    defer c1.deinit();
+    const c2 = try p.createChild(false, .riscv64, 1);
+    defer c2.deinit();
+
+    var hdr = emulation.VirtioVsockHdr{
+        .src_cid = 999,
+        .dst_cid = c2.local_cid,
+        .src_port = 100,
+        .dst_port = 200,
+        .len = 2,
+        .type = 1, // VIRTIO_VSOCK_TYPE_STREAM
+        .op = 5, // VIRTIO_VSOCK_OP_RW
+        .flags = 0,
+        .buf_alloc = 4096,
+        .fwd_cnt = 0,
+    };
+    // Lateral child-to-child vsock delivery is blocked even if upstream set.
+    c1.setNetUpstreamCid(c2.local_cid);
+    try testing.expect(!routeVsockPacket(&c1.vsock, &hdr, "no"));
+
+    // Parent <-> direct child vsock edges pass validation.
+    c1.setNetUpstreamCid(0);
+    hdr.dst_cid = sbi.CID_PARENT;
+    _ = routeVsockPacket(&c1.vsock, &hdr, "up");
+    hdr.dst_cid = c1.local_cid;
+    _ = routeVsockPacket(&p.vsock, &hdr, "dn");
 }

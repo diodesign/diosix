@@ -131,7 +131,7 @@ pub fn runSshCommand(
         if (silence_stderr) redirectStderrToDevNull();
         const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
             "TERM=xterm",
-            "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            "PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin",
             null,
         };
         for (sysconfig.SSH_CLIENT_BINS) |bin| {

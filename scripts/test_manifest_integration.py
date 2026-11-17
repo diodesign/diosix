@@ -36,7 +36,7 @@ def run_integration_test():
     if (
         os.system(
             "./scripts/create_storage_disk.sh "
-            "zig-out/guest-riscv64/bin/rootvm.elf "
+            "zig-out/guest-riscv64/bin/diosix-node.elf "
             "zig-out/storage.img 768M >/dev/null"
         )
         != 0
@@ -267,7 +267,7 @@ def run_integration_test():
 
         # 14. Image Repository & Dual Storage (CD-ROM + Target Disk).
         print("\n==> [14/19] Testing `dsx image` & `--disk` + `--cdrom`...")
-        base_img = "/var/lib/diosix/images/diosix-base-linux.elf"
+        base_img = "/var/lib/diosix/images/diosix-node.elf"
         run(
             f"dsx image import {base_img} --name test-installer.elf",
             r"Image 'test-installer\.elf' successfully imported into "
@@ -281,7 +281,7 @@ def run_integration_test():
             "--vcpus 1 --ram 128M",
             r"Child VM 'installer-job' \(CID \d+, 1 vCPUs, 128 MB RAM, "
             r"Disk: /var/lib/diosix/disks/install-target\.img, "
-            r"CD-ROM: /var/lib/diosix/images/diosix-base-linux\.elf, "
+            r"CD-ROM: /var/lib/diosix/images/diosix-node\.elf, "
             r"IP: 10\.0\.3\.\d+\) started in background\.",
             timeout=60,
         )
@@ -289,7 +289,7 @@ def run_integration_test():
             "dsx info installer-job",
             r"Storage disk\s+:\s+/var/lib/diosix/disks/install-target\.img",
             r"CD-ROM media\s+:\s+"
-            r"/var/lib/diosix/images/diosix-base-linux\.elf",
+            r"/var/lib/diosix/images/diosix-node\.elf",
         )
         run(
             "dsx stop installer-job",
@@ -307,7 +307,7 @@ def run_integration_test():
 
         # 15. Guest VM SSH Access & Security Isolation (`dsx ssh`).
         print("\n==> [15/19] Testing VM SSH access & security hardening...")
-        run("dsx ssh root -- uname -a", r"Linux diosix-rootvm")
+        run("dsx ssh root -- uname -a", r"Linux diosix-(?:node|rootvm)")
         run(
             "dsx run linux-guest --name child-sec --vcpus 1 --ram 256M",
             r"Child VM 'child-sec' \(CID \d+, 1 vCPUs, 256 MB RAM, "

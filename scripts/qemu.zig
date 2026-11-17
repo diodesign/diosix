@@ -95,6 +95,8 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         layout.qemu.storage_size, layout.qemu.iso_cache_dir,
     });
     create_storage_cmd.addFileInput(b.path(layout.qemu.storage_script));
+    create_storage_cmd.addFileInput(b.path("scripts/lib/buildroot_common.sh"));
+    create_storage_cmd.addFileInput(b.path("scripts/extract_iso_apks.py"));
     create_storage_cmd.addFileInput(cfg.rootvm_s_file);
     if (cfg.cli_stamp_file) |cs| create_storage_cmd.addFileInput(cs);
     if (cfg.desktop_stamp_file) |ds| create_storage_cmd.addFileInput(ds);
@@ -156,6 +158,8 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     const create_live_cmd =
         b.addSystemCommand(&.{ "bash", layout.qemu.live_script });
     create_live_cmd.addFileInput(b.path(layout.qemu.live_script));
+    create_live_cmd.addFileInput(b.path("scripts/lib/buildroot_common.sh"));
+    create_live_cmd.addFileInput(b.path("scripts/extract_iso_apks.py"));
     create_live_cmd.addFileInput(cfg.rootvm_s_file);
     if (cfg.cli_stamp_file) |cs| create_live_cmd.addFileInput(cs);
     if (cfg.desktop_stamp_file) |ds| create_live_cmd.addFileInput(ds);

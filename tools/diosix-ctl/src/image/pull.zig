@@ -18,14 +18,14 @@ pub const cmdImageImport = import_mod.cmdImageImport;
 const URL_Z_BYTES: usize = catalog.MAX_URL_LEN + 1;
 
 const LocalBuiltInElfUrl = enum {
-    @"file:///var/lib/diosix/images/diosix-base-linux.elf",
+    @"file:///var/lib/diosix/images/diosix-node.elf",
     @"file:///var/lib/diosix/images/linux-cli.elf",
     @"file:///var/lib/diosix/images/linux-desktop.elf",
 
     comptime {
         const S = @This();
         const b = @tagName(
-            S.@"file:///var/lib/diosix/images/diosix-base-linux.elf",
+            S.@"file:///var/lib/diosix/images/diosix-node.elf",
         );
         const c = @tagName(S.@"file:///var/lib/diosix/images/linux-cli.elf");
         const d = @tagName(
@@ -67,8 +67,12 @@ pub fn fetchRemoteFile(url: []const u8, dest_z: [*:0]const u8) !void {
         return;
     }
 
-    const wget_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+    const wget_bin = sysconfig.resolveBin(
         sysconfig.WGET_BIN,
+        sysconfig.WGET_LOCAL_BIN,
+    );
+    const wget_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+        wget_bin.ptr,
         "-q",
         "-T",
         "5",
@@ -83,8 +87,12 @@ pub fn fetchRemoteFile(url: []const u8, dest_z: [*:0]const u8) !void {
     if (wget_rc == 0) return;
     if (wget_rc >= 128) return error.Interrupted;
 
-    const curl_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+    const curl_bin = sysconfig.resolveBin(
         sysconfig.CURL_BIN,
+        sysconfig.CURL_LOCAL_BIN,
+    );
+    const curl_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
+        curl_bin.ptr,
         "-fsSL",
         "--connect-timeout",
         "5",

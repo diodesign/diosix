@@ -229,9 +229,9 @@ pub fn queryAvailableImages(out: *[MAX_VM_IMAGES]VmImageEntry) usize {
             .default_vcpus = 2,
             .default_ram_mb = 256,
         };
-        base.setTitle("Diosix Base Linux");
-        base.setFilename("diosix-base-linux.elf");
-        base.setPath(paths.DEFAULT_BASE_LINUX_IMAGE_PATH);
+        base.setTitle("Diosix Node");
+        base.setFilename("diosix-node.elf");
+        base.setPath(paths.DEFAULT_NODE_IMAGE_PATH);
         out[0] = base;
         return 1;
     }
@@ -252,9 +252,9 @@ pub fn queryAvailableImages(out: *[MAX_VM_IMAGES]VmImageEntry) usize {
             .default_vcpus = 2,
             .default_ram_mb = 256,
         };
-        fallback.setTitle("Diosix Base Linux");
-        fallback.setFilename("diosix-base-linux.elf");
-        fallback.setPath(paths.DEFAULT_BASE_LINUX_IMAGE_PATH);
+        fallback.setTitle("Diosix Node");
+        fallback.setFilename("diosix-node.elf");
+        fallback.setPath(paths.DEFAULT_NODE_IMAGE_PATH);
         out[0] = fallback;
         count = 1;
     }
@@ -403,7 +403,7 @@ test "images: queryAvailableImages and recordCreatedVmWithQuota" {
     const count = queryAvailableImages(&imgs);
     try std.testing.expect(count >= 1);
     const expectStr = std.testing.expectEqualStrings;
-    try expectStr("Diosix Base Linux", imgs[0].getTitle());
+    try expectStr("Diosix Node", imgs[0].getTitle());
     recordCreatedVmWithQuota(
         "test-vm",
         imgs[0].getPath(),

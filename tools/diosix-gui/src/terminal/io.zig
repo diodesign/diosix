@@ -106,7 +106,8 @@ pub fn spawnPtyProcess(self: *TerminalSession) void {
 
         const envp = [_:null]?[*:0]const u8{
             "TERM=vt100",
-            "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH=/usr/sbin:/usr/bin:/sbin:/bin:" ++
+                "/usr/local/sbin:/usr/local/bin",
             "HOME=/root",
         };
         if (self.target_cid <= sbi.CID_SELF) {

@@ -88,8 +88,9 @@ the Diosix hypervisor and Root VM (trusted host supervisor), mounted at
 /var/lib/diosix.
 
 Directory structure:
-  /var/lib/diosix/images/    - Built-in guest OS images (diosix-base-linux.elf,
-                               linux-cli.elf, linux-desktop.elf)
+  /var/lib/diosix/images/    - Built-in guest OS images (diosix-node.elf,
+                               optional linux-cli.elf / linux-desktop.elf)
+  /var/lib/diosix/apk/       - Offline Alpine riscv64 .apk seed mirror
   /var/lib/diosix/iso/       - Guest OS installer and live ISO images
   /var/lib/diosix/manifests/ - Declarative domain manifests (system.toml)
   /var/lib/diosix/keys/      - Enrolled FIDO2/TPM passkeys and management keys

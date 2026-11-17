@@ -17,9 +17,9 @@
 # SPDX-License-Identifier: MIT
 
 [[image]]
-id = "diosix-base-linux"
+id = "diosix-node"
 alias = "diosix-linux"
-title = "Diosix Base Linux"
+title = "Diosix Node"
 tier = "leaf"
 os_family = "linux"
 format = "elf"
@@ -27,8 +27,8 @@ arch = "riscv64"
 default_vcpus = 2
 default_ram_mb = 512
 default_disk_mb = 1024
-filename = "diosix-base-linux.elf"
-url = "file:///var/lib/diosix/images/diosix-base-linux.elf"
+filename = "diosix-node.elf"
+url = "file:///var/lib/diosix/images/diosix-node.elf"
 sha256 = "23481c66ee9d3cdc46b972c35d9ac29c428124ea7e51d1deb5904587bc86c5a3"
 
 [[image]]
@@ -73,7 +73,7 @@ default_vcpus = 2
 default_ram_mb = 512
 default_disk_mb = 1024
 filename = "steward.elf"
-url = "file:///var/lib/diosix/images/diosix-base-linux.elf"
+url = "file:///var/lib/diosix/images/diosix-node.elf"
 sha256 = "23481c66ee9d3cdc46b972c35d9ac29c428124ea7e51d1deb5904587bc86c5a3"
 
 [[image]]

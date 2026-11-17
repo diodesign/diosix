@@ -18,6 +18,7 @@
 #include <linux/fs.h>
 #else
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #endif
 
@@ -371,6 +372,7 @@ _Static_assert(sizeof(struct run_args) == 56, "run_args ABI size");
 _Static_assert(sizeof(struct terminate_args) == 16, "terminate_args ABI size");
 _Static_assert(sizeof(struct guest_info) == 96, "guest_info ABI size");
 
+#ifdef __KERNEL__
 struct vm_area_struct;
 
 void diosix_child_mem_lock(void);
@@ -393,5 +395,6 @@ long diosix_ioctl_desktop(
 );
 int init_diosix_net(void);
 void cleanup_diosix_net(void);
+#endif /* __KERNEL__ */
 
 #endif /* DIOSIX_DRIVER_H */

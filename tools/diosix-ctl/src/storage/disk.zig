@@ -135,9 +135,12 @@ pub fn formatAndSeedDisk(
     };
     defer allocator.free(cfg_img);
 
+    const mkfs_bin = sysconfig.resolveBin(
+        sysconfig.MKFS_EXT4_BIN,
+        sysconfig.MKFS_EXT4_LOCAL_BIN,
+    );
     const mkfs_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-        sysconfig.MKFS_EXT4_BIN, "-F",        "-q", "-L",
-        label_z.ptr,             disk_path_z, null,
+        mkfs_bin.ptr, "-F", "-q", "-L", label_z.ptr, disk_path_z, null,
     };
     if (common.runSubprocess(mkfs_argv) != 0) return;
 
@@ -237,9 +240,13 @@ pub fn resizeVirtualDisk(
     if (@as(isize, @bitCast(trunc_rc)) < 0) return error.ResizeFailed;
 
     if (std.mem.eql(u8, detectDiskFormat(z_path), "ext4")) {
+        const resize_bin = sysconfig.resolveBin(
+            sysconfig.RESIZE2FS_BIN,
+            sysconfig.RESIZE2FS_LOCAL_BIN,
+        );
         const resize_argv: [*:null]const ?[*:0]const u8 =
             &[_:null]?[*:0]const u8{
-                sysconfig.RESIZE2FS_BIN,
+                resize_bin.ptr,
                 "-f",
                 z_path,
                 null,

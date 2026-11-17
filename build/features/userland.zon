@@ -158,6 +158,7 @@
         .files = .{
             "tools/diosix-ctl/src/net.zig",
             "tools/diosix-ctl/src/net/firewall.zig",
+            "tools/diosix-ctl/src/net/http.zig",
             "tools/diosix-ctl/src/ssh.zig",
             "tools/diosix-ctl/src/ssh/sync.zig",
         },
@@ -246,6 +247,55 @@
             "docs/cli.md#dsx-manifest",
             "docs/cli.md#dsx-charter",
             "docs/security.md#declarative-manifests-and-charter-governance",
+        },
+    },
+    .{
+        .id = "cli-pkg-proxy",
+        .name = "Recursive attenuating Alpine APK proxy (`dsx pkg`)",
+        .layer = .u_mode_cli,
+        .status = .active,
+        .files = .{
+            "tools/diosix-ctl/src/pkg.zig",
+            "tools/diosix-ctl/src/pkg/index.zig",
+            "tools/diosix-ctl/src/pkg/policy.zig",
+            "tools/diosix-ctl/src/pkg/server.zig",
+        },
+        .summary =
+        \\Parent-hosted Alpine APK proxy enforcing monotonic allow and deny
+        \\ceilings, transitive dependency closure evaluation, and recursive
+        \\upstream package fetching from parent VMs or signed local seeds.
+        ,
+        .activated_by = .{
+            "cli-core-dispatch",
+            "cli-net-ssh",
+        },
+        .docs = .{
+            "docs/cli.md#dsx-pkg",
+            "docs/security.md#hierarchical-package-attenuation",
+        },
+    },
+    .{
+        .id = "cli-message-board",
+        .name = "Parent-moderated anti-collusion message board (`dsx board`)",
+        .layer = .u_mode_cli,
+        .status = .active,
+        .files = .{
+            "tools/diosix-ctl/src/board.zig",
+            "tools/diosix-ctl/src/board/server.zig",
+            "tools/diosix-ctl/src/board/store.zig",
+        },
+        .summary =
+        \\Append-only SHA-256 hash-chained message board hosted by each
+        \\parent VM with MAC-authenticated child identity, visibility
+        \\filtering, and hard rejection of lateral child-to-child messages.
+        ,
+        .activated_by = .{
+            "cli-core-dispatch",
+            "cli-net-ssh",
+        },
+        .docs = .{
+            "docs/cli.md#dsx-board",
+            "docs/security.md#anti-collusion-parent-message-boards",
         },
     },
     .{

@@ -44,6 +44,21 @@ pub const DemoKind = enum {
             .cli => paths.DEFAULT_CLI_IMAGE_PATH,
         };
     }
+
+    pub fn resolveImagePath(self: DemoKind) []const u8 {
+        const preferred = self.imagePath();
+        const fd_rc = linux.open(
+            @ptrCast(preferred.ptr),
+            .{ .ACCMODE = .RDONLY },
+            0,
+        );
+        const signed_fd: isize = @bitCast(fd_rc);
+        if (signed_fd >= 0) {
+            _ = linux.close(@intCast(signed_fd));
+            return preferred;
+        }
+        return paths.DEFAULT_NODE_IMAGE_PATH;
+    }
 };
 
 pub const BootAction = enum {
@@ -229,7 +244,7 @@ pub fn launchDemoVm(self: *DiosixGui, kind: DemoKind) void {
     const argv = [_][]const u8{
         dsx_bin,
         "run",
-        kind.imagePath(),
+        kind.resolveImagePath(),
         "--name",
         kind.instanceName(),
         "--vcpus",

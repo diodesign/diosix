@@ -12,9 +12,10 @@ const Target = std.Target;
 const RISCVextensions = Target.Cpu.Feature.Set;
 const layout = @import("build/layout.zon");
 const build_qemu = @import("scripts/qemu.zig");
+const build_guests = @import("scripts/guests.zig");
 const build_features = @import("scripts/features/steps.zig");
 
-const GuestProfile = enum { rootvm, usable, minimal, cli, desktop };
+const GuestProfile = enum { node, usable, minimal, cli, desktop };
 
 const hypervisor_conf_text = @embedFile(layout.metadata.hypervisor_conf);
 
@@ -34,80 +35,6 @@ fn parseConfU32(comptime key: []const u8) u32 {
         }
     }
     @compileError("Missing key in hypervisor.conf: " ++ key);
-}
-
-fn addTreeInputs(
-    b: *std.Build,
-    cmd: *std.Build.Step.Run,
-    rel_dir: []const u8,
-) !void {
-    b.dependOnDirectoryContents(b.path(rel_dir));
-    var dir = try b.root.openDir(
-        b.graph.io,
-        rel_dir,
-        .{ .iterate = true },
-    );
-    defer dir.close(b.graph.io);
-
-    var walker = try dir.walk(b.allocator);
-    defer walker.deinit();
-
-    var paths = std.ArrayList([]const u8).empty;
-    defer paths.deinit(b.allocator);
-
-    while (try walker.next(b.graph.io)) |entry| {
-        const sub = b.fmt("{s}/{s}", .{ rel_dir, entry.path });
-        switch (entry.kind) {
-            .directory => b.dependOnDirectoryContents(b.path(sub)),
-            .file => try paths.append(b.allocator, sub),
-            else => {},
-        }
-    }
-    std.mem.sort([]const u8, paths.items, {}, struct {
-        fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.lessThan(u8, lhs, rhs);
-        }
-    }.lessThan);
-    for (paths.items) |p| cmd.addFileInput(b.path(p));
-}
-
-fn addRootvmInputs(b: *std.Build, cmd: *std.Build.Step.Run) !void {
-    inline for (layout.rootvm.input_files) |file_path| {
-        cmd.addFileInput(b.path(file_path));
-    }
-    inline for (layout.rootvm.input_dirs) |dir_path| {
-        try addTreeInputs(b, cmd, dir_path);
-    }
-}
-
-fn addChildGuestStep(
-    b: *std.Build,
-    guest_arch: []const u8,
-    spec: anytype,
-    stamp_name: []const u8,
-    prev_step: *std.Build.Step,
-) !struct { run: *std.Build.Step.Run, stamp: std.Build.LazyPath } {
-    const cfg_file = b.fmt(
-        layout.rootvm.config_fmt,
-        .{ guest_arch, spec.profile },
-    );
-    const elf_out = b.fmt(spec.elf_out_fmt, .{guest_arch});
-    const br_dir = b.fmt(spec.buildroot_dir_fmt, .{guest_arch});
-    const cmd = b.addSystemCommand(&.{ "bash", layout.rootvm.build_script });
-    cmd.addFileArg(b.path(cfg_file));
-    cmd.addArgs(&.{ elf_out, br_dir, guest_arch });
-    const stamp = cmd.addOutputFileArg(stamp_name);
-    cmd.addArg(spec.overlay_dir);
-    inline for (layout.rootvm.input_files) |file_path| {
-        cmd.addFileInput(b.path(file_path));
-    }
-    inline for (layout.guests.common_input_dirs) |dir_path| {
-        try addTreeInputs(b, cmd, dir_path);
-    }
-    try addTreeInputs(b, cmd, spec.overlay_dir);
-    cmd.step.dependOn(prev_step);
-    cmd.stdio = .inherit;
-    return .{ .run = cmd, .stamp = stamp };
 }
 
 fn optStr(
@@ -209,6 +136,12 @@ pub fn build(b: *std.Build) !void {
     const qemu_tpm_opt = optBool(b, "tpm", "Enable virtual TPM 2.0", false);
     const qemu_usb_key_opt = b.option([]const u8, "usb-key", "USB key vid:pid");
     const welcome_opt = optBool(b, "welcome", "Force welcome tour", false);
+    const extra_guests_opt = optBool(
+        b,
+        "extra-guests",
+        "Build optional linux-cli and linux-desktop guest images",
+        false,
+    );
 
     // We build primarily for riscv64 systems and expect RV64IMAC as a minimum.
     var min_cpu_features = RISCVextensions.empty;
@@ -261,33 +194,20 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addArgs(&.{ rootvm_elf_path, buildroot_dir, guest_arch_opt });
     const rootvm_s_file =
         run_buildroot.addOutputFileArg(layout.rootvm.embedded_asm_name);
-    try addRootvmInputs(b, run_buildroot);
+    try build_guests.addRootvmInputs(b, run_buildroot);
     run_buildroot.stdio = .inherit;
 
-    var guest_images_step: ?*std.Build.Step = null;
-    var cli_stamp_opt: ?std.Build.LazyPath = null;
-    var desktop_stamp_opt: ?std.Build.LazyPath = null;
-    if (std.mem.eql(u8, profile_tag, layout.default_profile) and
-        guest_config_opt == null)
-    {
-        const cli_guest = try addChildGuestStep(
-            b,
-            guest_arch_opt,
-            layout.guests.cli,
-            "linux-cli.stamp",
-            &run_buildroot.step,
-        );
-        const desktop_guest = try addChildGuestStep(
-            b,
-            guest_arch_opt,
-            layout.guests.desktop,
-            "linux-desktop.stamp",
-            &cli_guest.run.step,
-        );
-        guest_images_step = &desktop_guest.run.step;
-        cli_stamp_opt = cli_guest.stamp;
-        desktop_stamp_opt = desktop_guest.stamp;
-    }
+    const guest_build = try build_guests.registerGuestSteps(
+        b,
+        guest_arch_opt,
+        profile_tag,
+        guest_config_opt != null,
+        extra_guests_opt,
+        &run_buildroot.step,
+    );
+    const guest_images_step = guest_build.guest_images_step;
+    const cli_stamp_opt = guest_build.cli_stamp;
+    const desktop_stamp_opt = guest_build.desktop_stamp;
 
     const emulation_module = b.createModule(.{
         .root_source_file = b.path(layout.modules.emulation_root),

@@ -5,7 +5,7 @@
 .{
     .min_zig_version = "0.17.0",
     .default_arch = "riscv64",
-    .default_profile = "rootvm",
+    .default_profile = "node",
 
     .modules = .{
         .hypervisor_root = "hypervisor/main.zig",
@@ -50,12 +50,14 @@
     .rootvm = .{
         .build_script = "scripts/build_rootvm.sh",
         .config_fmt = "boot/{s}-linux-{s}.config",
-        .elf_out_fmt = "zig-out/guest-{s}/bin/rootvm.elf",
+        .elf_out_fmt = "zig-out/guest-{s}/bin/diosix-node.elf",
         .buildroot_dir_fmt = "zig-out/buildroot-{s}",
         .install_dir_fmt = "guest-{s}/bin",
         .embedded_asm_name = "rootvm.s",
         .input_files = .{
             "scripts/build_rootvm.sh",
+            "scripts/assemble_alpine_rootfs.sh",
+            "scripts/extract_iso_apks.py",
             "scripts/lib/buildroot_common.sh",
         },
         .input_dirs = .{

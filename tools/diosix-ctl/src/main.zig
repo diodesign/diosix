@@ -19,6 +19,8 @@ pub const vm = @import("vm.zig");
 pub const net = @import("net.zig");
 pub const host = @import("host.zig");
 pub const governance = @import("governance.zig");
+pub const pkg = @import("pkg.zig");
+pub const board = @import("board.zig");
 const main_tests = @import("tests/main.zig");
 
 pub const CID_PARENT = common.CID_PARENT;
@@ -76,6 +78,10 @@ pub const Command = enum {
     charter,
     steward,
     resolve,
+    pkg,
+    package,
+    apk,
+    board,
     quota,
     @"drop-trust",
     poweroff,
@@ -152,6 +158,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 }
                 try governance.cmdResolve(&client, service_name, m_path);
             },
+            .pkg, .package, .apk => try pkg.cmdPkg(&client, argv[2..]),
+            .board => try board.cmdBoard(&client, argv[2..]),
             .quota => {
                 var target_cid: usize = 1;
                 if (argv.len >= 3 and
@@ -220,6 +228,7 @@ pub fn formatUsage(
         \\      [--net-via <vm|cid>]             Route via router VM
         \\      [--manifest <file.toml>]         Stage attenuated manifest
         \\      [--domain <name>]                Extract domain from manifest
+        \\      [--packages <*|none|pkg1,pkg2>]  Restrict child APK packages
         \\      [--trusted]                      Grant hardware trust
         \\  {s} install-guest <os|iso> [options] Provision disk & boot ISO
         \\      [--name <name>]                  Assign VM name
@@ -287,6 +296,15 @@ pub fn formatUsage(
         \\      resolve <service_alias>          Resolve service route
         \\      set <cid> <file.toml>            Stage manifest for child VM
         \\
+        \\  {s} pkg <subcmd> [options]           Attenuating Alpine APK proxy
+        \\      status | policy | sync | serve   Inspect ceiling & proxy daemon
+        \\      allow <vm|cid> <*|none|csv>      Restrict allowed APK packages
+        \\      deny <vm|cid> <none|csv>         Add child APK package denials
+        \\
+        \\  {s} board <subcmd> [options]         Parent anti-collusion board
+        \\      post | list | status | policy    Post or read board messages
+        \\      serve [--port P] [--daemon]      Run board daemon for children
+        \\
         \\  {s} drop-trust                       Relinquish hardware trust
         \\  {s} help                             Show this help message
         \\
@@ -296,7 +314,7 @@ pub fn formatUsage(
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
-        exe_name, exe_name,
+        exe_name, exe_name, exe_name, exe_name,
     });
 }
 

@@ -90,7 +90,8 @@ fn runSubprocessWithStdinFile(
             _ = linux.close(@intCast(devnull_signed));
         }
         const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-            "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            "PATH=/usr/sbin:/usr/bin:/sbin:/bin:" ++
+                "/usr/local/sbin:/usr/local/bin",
             null,
         };
         _ = linux.execve(argv[0].?, argv, envp);
@@ -206,7 +207,7 @@ fn seedTargetRoot(
     common.writeFile(hostname_dst, plan.hostname) catch {};
 
     const base_elf_dst = try allocator.print(
-        "{s}/images/diosix-base-linux.elf",
+        "{s}/images/diosix-node.elf",
         .{root_dir},
     );
     defer allocator.free(base_elf_dst);
@@ -215,7 +216,7 @@ fn seedTargetRoot(
     }
 
     const slot_a_elf = try allocator.print(
-        "{s}/boot/slot_a/diosix-base-linux.elf",
+        "{s}/boot/slot_a/diosix-node.elf",
         .{root_dir},
     );
     defer allocator.free(slot_a_elf);
@@ -268,7 +269,11 @@ pub fn applyInstallPlan(
     if (common.fileExistsPath(target_z.ptr) and
         !isDiskMounted(plan.target_disk))
     {
-        if (common.fileExistsPath(sysconfig.SFDISK_BIN)) {
+        const sfdisk_bin = sysconfig.resolveBin(
+            sysconfig.SFDISK_BIN,
+            sysconfig.SFDISK_LOCAL_BIN,
+        );
+        if (common.fileExistsPath(sfdisk_bin.ptr)) {
             makeDirPath(sysconfig.RUN_DIOSIX_DIR, 0o755);
             const pid_val: u32 = @bitCast(linux.getpid());
             const script_path_z = try allocator.printSentinel(
@@ -283,7 +288,7 @@ pub fn applyInstallPlan(
                 defer _ = linux.unlink(script_path_z.ptr);
                 const sfdisk_argv: [*:null]const ?[*:0]const u8 =
                     &[_:null]?[*:0]const u8{
-                        sysconfig.SFDISK_BIN,
+                        sfdisk_bin.ptr,
                         "--quiet",
                         "--force",
                         target_z.ptr,
@@ -318,12 +323,16 @@ pub fn applyInstallPlan(
         );
         defer allocator.free(part3_z);
 
-        if (common.fileExistsPath(sysconfig.MKFS_VFAT_BIN) and
+        const mkfs_vfat_bin = sysconfig.resolveBin(
+            sysconfig.MKFS_VFAT_BIN,
+            sysconfig.MKFS_VFAT_LOCAL_BIN,
+        );
+        if (common.fileExistsPath(mkfs_vfat_bin.ptr) and
             common.fileExistsPath(part1_z.ptr))
         {
             const vfat_argv: [*:null]const ?[*:0]const u8 =
                 &[_:null]?[*:0]const u8{
-                    sysconfig.MKFS_VFAT_BIN,
+                    mkfs_vfat_bin.ptr,
                     "-n",
                     "DIOSIX_BOOT",
                     part1_z.ptr,
@@ -331,12 +340,16 @@ pub fn applyInstallPlan(
                 };
             _ = common.runSubprocess(vfat_argv);
         }
-        if (common.fileExistsPath(sysconfig.MKFS_EXT4_BIN) and
+        const mkfs_ext4_bin = sysconfig.resolveBin(
+            sysconfig.MKFS_EXT4_BIN,
+            sysconfig.MKFS_EXT4_LOCAL_BIN,
+        );
+        if (common.fileExistsPath(mkfs_ext4_bin.ptr) and
             common.fileExistsPath(part2_z.ptr))
         {
             const state_argv: [*:null]const ?[*:0]const u8 =
                 &[_:null]?[*:0]const u8{
-                    sysconfig.MKFS_EXT4_BIN,
+                    mkfs_ext4_bin.ptr,
                     "-F",
                     "-q",
                     "-L",
@@ -346,14 +359,14 @@ pub fn applyInstallPlan(
                 };
             _ = common.runSubprocess(state_argv);
         }
-        if (common.fileExistsPath(sysconfig.MKFS_EXT4_BIN)) {
+        if (common.fileExistsPath(mkfs_ext4_bin.ptr)) {
             const data_dev = if (common.fileExistsPath(part3_z.ptr))
                 part3_z.ptr
             else
                 target_z.ptr;
             const data_argv: [*:null]const ?[*:0]const u8 =
                 &[_:null]?[*:0]const u8{
-                    sysconfig.MKFS_EXT4_BIN,
+                    mkfs_ext4_bin.ptr,
                     "-F",
                     "-q",
                     "-L",

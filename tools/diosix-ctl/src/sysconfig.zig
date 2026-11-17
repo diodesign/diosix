@@ -26,11 +26,18 @@ pub const AUTH_PENDING_PATH = "/run/diosix/auth.pending";
 pub const CHALLENGE_STATE_PATH = "/run/diosix/auth_challenge.state";
 pub const TOUCH_SEAT_PATH = "/run/diosix/touch_seat";
 pub const DISK_STAGING_PREFIX = "/run/diosix/staging";
+pub const PKG_PROXY_PID_PATH = "/run/diosix/pkg-proxy.pid";
+pub const PKG_PROXY_LOG_PATH = "/var/log/diosix-pkg.log";
+pub const BOARD_STORE_PATH = "/run/diosix/board.jsonl";
+pub const BOARD_POLICY_PATH = "/run/diosix/board-policy.toml";
+pub const BOARD_PID_PATH = "/run/diosix/board.pid";
+pub const BOARD_LOG_PATH = "/var/log/diosix-board.log";
 
 // System configuration paths (/etc/diosix & /etc).
 pub const AUTH_ENROLLED_PATH = "/etc/diosix/auth.enrolled";
 pub const NETWORK_INTERFACES_PATH = "/etc/network/interfaces";
 pub const RESOLV_CONF_PATH = "/etc/resolv.conf";
+pub const ETC_HOSTS_PATH = "/etc/hosts";
 pub const DEFAULT_SYSTEM_MANIFEST_PATH = "/etc/diosix/system.toml";
 pub const DEFAULT_LOCAL_MANIFEST_PATH = "/etc/diosix/manifest.toml";
 pub const DEFAULT_CATALOG_CONFIG_PATH = "/etc/diosix/catalog.toml";
@@ -45,6 +52,8 @@ pub const VAR_LIB_DIOSIX_DIR = "/var/lib/diosix";
 pub const VAR_LIB_DIOSIX_PREFIX = "/var/lib/diosix/";
 pub const DEFAULT_IMAGES_DIR = "/var/lib/diosix/images";
 pub const DEFAULT_ISO_DIR = "/var/lib/diosix/iso";
+pub const DEFAULT_APK_SEED_DIR = "/var/lib/diosix/apk";
+pub const DEFAULT_PKG_CACHE_DIR = "/var/cache/diosix/pkg";
 pub const DEFAULT_DISKS_DIR = "/var/lib/diosix/disks";
 pub const DEFAULT_SNAPSHOTS_DIR = "/var/lib/diosix/snapshots";
 pub const DEFAULT_KEYS_DIR = "/var/lib/diosix/keys";
@@ -77,13 +86,13 @@ pub const STEWARD_DEFAULT_KERNELS = [_][]const u8{
     "/boot/Image",
 };
 pub const DEFAULT_GUEST_IMAGE_PATH =
-    "/var/lib/diosix/images/diosix-base-linux.elf";
+    "/var/lib/diosix/images/diosix-node.elf";
 pub const DEFAULT_CLI_IMAGE_PATH =
     "/var/lib/diosix/images/linux-cli.elf";
 pub const DEFAULT_DESKTOP_IMAGE_PATH =
     "/var/lib/diosix/images/linux-desktop.elf";
 pub const LEGACY_GUEST_IMAGE_PATH =
-    "/var/lib/diosix/images/diosix-linux.elf";
+    "/var/lib/diosix/images/diosix-base-linux.elf";
 pub const LINUX_GUEST_IMAGE_PATH = "/var/lib/diosix/images/Image";
 pub const FALLBACK_GUEST_IMAGE_PATH = "/boot/guest-default.bin";
 pub const FALLBACK_GUEST_ISO_PATH = "/boot/guest-default.iso";
@@ -104,6 +113,7 @@ pub const BOOT_SCRIPT_PATHS = [_][]const u8{
 pub const SYS_FIRMWARE_FDT_PATH = "/sys/firmware/fdt";
 pub const PROC_CMDLINE_PATH = "/proc/cmdline";
 pub const PROC_MOUNTS_PATH = "/proc/mounts";
+pub const PROC_NET_ARP_PATH = "/proc/net/arp";
 pub const DEV_NULL_PATH = "/dev/null";
 pub const DEV_URANDOM_PATH = "/dev/urandom";
 pub const DEV_DRI_CARD0_PATH = "/dev/dri/card0";
@@ -130,33 +140,64 @@ pub const SYSTEM_BIN_SEARCH_PATHS = [_][]const u8{
     "/usr/bin",
     "/sbin",
     "/bin",
+    "/usr/local/sbin",
+    "/usr/local/bin",
 };
-pub const MKFS_EXT4_BIN = "/sbin/mkfs.ext4";
-pub const MKFS_VFAT_BIN = "/sbin/mkfs.vfat";
-pub const SFDISK_BIN = "/sbin/sfdisk";
-pub const BLKID_BIN = "/sbin/blkid";
-pub const LOSETUP_BIN = "/sbin/losetup";
-pub const RESIZE2FS_BIN = "/sbin/resize2fs";
+pub const MKFS_EXT4_BIN: [:0]const u8 = "/sbin/mkfs.ext4";
+pub const MKFS_EXT4_LOCAL_BIN: [:0]const u8 = "/usr/local/sbin/mkfs.ext4";
+pub const MKFS_VFAT_BIN: [:0]const u8 = "/sbin/mkfs.vfat";
+pub const MKFS_VFAT_LOCAL_BIN: [:0]const u8 = "/usr/local/sbin/mkfs.vfat";
+pub const SFDISK_BIN: [:0]const u8 = "/sbin/sfdisk";
+pub const SFDISK_LOCAL_BIN: [:0]const u8 = "/usr/local/sbin/sfdisk";
+pub const BLKID_BIN: [:0]const u8 = "/sbin/blkid";
+pub const BLKID_LOCAL_BIN: [:0]const u8 = "/usr/local/sbin/blkid";
+pub const LOSETUP_BIN: [:0]const u8 = "/sbin/losetup";
+pub const LOSETUP_LOCAL_BIN: [:0]const u8 = "/usr/local/sbin/losetup";
+pub const RESIZE2FS_BIN: [:0]const u8 = "/sbin/resize2fs";
+pub const RESIZE2FS_LOCAL_BIN: [:0]const u8 = "/usr/local/sbin/resize2fs";
 pub const MOUNT_BIN = "/bin/mount";
 pub const UMOUNT_BIN = "/bin/umount";
 pub const CP_BIN = "/bin/cp";
-pub const IP_BIN = "/sbin/ip";
-pub const IP_FALLBACK_BIN = "/bin/ip";
-pub const IPTABLES_BIN = "/usr/sbin/iptables";
-pub const IPTABLES_SBIN = "/sbin/iptables";
+pub const IP_BIN: [:0]const u8 = "/sbin/ip";
+pub const IP_FALLBACK_BIN: [:0]const u8 = "/bin/ip";
+pub const IP_LOCAL_BIN: [:0]const u8 = "/usr/local/sbin/ip";
+pub const IPTABLES_BIN: [:0]const u8 = "/usr/sbin/iptables";
+pub const IPTABLES_SBIN: [:0]const u8 = "/sbin/iptables";
+pub const IPTABLES_LOCAL_BIN: [:0]const u8 = "/usr/local/sbin/iptables";
 pub const BRCTL_BIN = "/usr/sbin/brctl";
 pub const SSH_BIN = "/usr/bin/ssh";
 pub const SSH_KEYGEN_BIN = "/usr/bin/ssh-keygen";
 pub const SSH_CLIENT_BINS = [_][]const u8{
     "/usr/bin/ssh",
+    "/usr/local/bin/dbclient",
     "/usr/bin/dbclient",
     "/bin/ssh",
 };
 pub const NC_BIN = "/usr/bin/nc";
-pub const WGET_BIN = "/usr/bin/wget";
-pub const CURL_BIN = "/usr/bin/curl";
+pub const WGET_BIN: [:0]const u8 = "/usr/bin/wget";
+pub const WGET_LOCAL_BIN: [:0]const u8 = "/usr/local/bin/wget";
+pub const CURL_BIN: [:0]const u8 = "/usr/bin/curl";
+pub const CURL_LOCAL_BIN: [:0]const u8 = "/usr/local/bin/curl";
 pub const DEFAULT_SUBNET_CIDR = "10.0.3.0/24";
 pub const DEFAULT_GATEWAY_IP = "10.0.3.1";
+pub const DEFAULT_PKG_PORT: u16 = 8080;
+pub const DEFAULT_BOARD_PORT: u16 = 8485;
+pub const ALPINE_CDN_BASE_URL = "https://dl-cdn.alpinelinux.org/alpine";
+pub const DEFAULT_APK_BRANCH = "v3.24";
+pub const DEFAULT_APK_REPO = "main";
+
+pub fn resolveBin(primary: [:0]const u8, local_alt: [:0]const u8) [:0]const u8 {
+    if (common.fileExistsPath(primary.ptr)) return primary;
+    if (common.fileExistsPath(local_alt.ptr)) return local_alt;
+    return primary;
+}
+
+pub fn resolveFirstBin(candidates: []const [:0]const u8) [:0]const u8 {
+    for (candidates) |cand| {
+        if (common.fileExistsPath(cand.ptr)) return cand;
+    }
+    return candidates[0];
+}
 
 pub const MAX_TOUR_STEPS = tour.MAX_TOUR_STEPS;
 pub const TourStep = tour.TourStep;

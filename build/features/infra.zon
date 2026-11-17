@@ -12,6 +12,7 @@
             "build.zig",
             "build/layout.zon",
             "scripts/build.sh",
+            "scripts/guests.zig",
         },
         .summary =
         \\Top-level Zig build graph, declarative path and module manifest,
@@ -27,13 +28,15 @@
     },
     .{
         .id = "buildroot-packaging",
-        .name = "Buildroot root VM and guest kernel packaging",
+        .name = "Buildroot Alpine node VM and guest kernel packaging",
         .layer = .build_infra,
         .status = .active,
         .files = .{
             "scripts/build_rootvm.sh",
+            "scripts/assemble_alpine_rootfs.sh",
+            "scripts/extract_iso_apks.py",
             "scripts/lib/buildroot_common.sh",
-            "boot/riscv64-linux-rootvm.config",
+            "boot/riscv64-linux-node.config",
             "boot/riscv64-linux-cli.config",
             "boot/riscv64-linux-desktop.config",
             "boot/riscv64-linux-usable.config",
@@ -46,9 +49,10 @@
             "boot/linux-sbi-console.fragment",
         },
         .summary =
-        \\Buildroot packaging scripts and kernel defconfigs that stage
-        \\cross-compiled userland tools, build the hypervisor kernel driver,
-        \\and link the root VM, base Linux, CLI, and Wayland desktop images.
+        \\Buildroot scripts and kernel configs that compile musl tools and
+        \\the hypervisor driver, assemble the unified Alpine-based
+        \\diosix-node.elf image, stage signed APK seeds, and build optional
+        \\CLI or Weston desktop profiles.
         ,
         .activated_by = .{
             "build-zig-pipeline",

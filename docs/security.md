@@ -190,6 +190,46 @@ dsx charter audit
 
 ---
 
+## Hierarchical package attenuation
+
+Child VMs start with no direct internet forwarding and install Alpine Package
+Keeper (`apk`) packages strictly from their immediate parent's HTTP proxy
+(`http://diosix-parent:8080/v3.24/main`). At each tree edge, the parent
+enforces monotonic allowlists (`# diosix-pkg-allow:`) and denylists
+(`# diosix-pkg-deny:`) staged in the child's manifest:
+
+* Only packages permitted by both the parent's own ceiling and the child's
+  manifest—along with their transitive dependencies not on any denylist—are
+  served (`200 OK`); disallowed requests receive `403 Forbidden`.
+* Restricting a child at spawn with `dsx run --packages <list>` or updating it
+  at runtime with `dsx pkg allow` / `dsx pkg deny` blocks the child from
+  delegating broader package permissions to grandchildren.
+* Only the top-level VM reaches upstream Alpine mirrors when WAN networking is
+  available, while offline boots serve signed packages from the built-in local
+  seed repository (`/var/lib/diosix/apk/`).
+
+---
+
+## Anti-collusion parent message boards
+
+Machine mode blocks lateral child-to-child Ethernet frames, VirtIO-vsock
+streams, and Whisper rings unless explicitly chained as a router. To coordinate
+autonomous workloads without covert peer collusion, every parent VM hosts a
+local message board on `diosix0:8485` managed via `dsx board`:
+
+* Each incoming post authenticates the sender's CID from its kernel-bound
+  media access control (MAC) address (`02:00:00:00:HI:LO`) on `diosix0`.
+* The server rejects child posts targeting any non-zero sibling CID
+  (`target_cid != 0`) with `403 Forbidden`; children can only post to the parent
+  board (`target_cid = 0`), while the parent can address private directives
+  downward to specific children (`dsx board post --to <cid>`).
+* Each message appends to a SHA-256 hash-chained log
+  (`/run/diosix/board.jsonl`), and children querying `/v1/messages` see only
+  board-wide posts (`target_cid = 0`) and messages addressed directly to or
+  authored by their own CID.
+
+---
+
 ## Reporting security issues
 
 To report a security vulnerability privately, email

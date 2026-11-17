@@ -1,5 +1,5 @@
 # System-wide profile for Diosix Root VM and guest domains.
-export PATH="/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin"
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
 export PS1='# '
 export TERM=xterm-256color
 

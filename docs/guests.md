@@ -13,9 +13,9 @@ how to run it with `dsx`.
 
 | Goal | Workflow | Command |
 | :--- | :--- | :--- |
-| Spin up an interactive command-line Linux sandbox | Built-in CLI guest image | `dsx run linux-cli --name app --vcpus 2 --ram 256M` |
-| Launch an offline Wayland graphical desktop guest | Built-in desktop guest image | `dsx run linux-desktop --name desk --vcpus 2 --ram 512M` |
-| Run a minimal supervisor, steward, or service domain | Built-in base Linux image | `dsx run base-linux --name svc --vcpus 2 --ram 256M` |
+| Boot a unified Alpine Linux node VM (default) | Built-in `diosix-node` image | `dsx run diosix-node --name svc --vcpus 2 --ram 256M` |
+| Spin up an optional CLI sandbox (`-Dextra-guests=true`) | Optional CLI guest image | `dsx run linux-cli --name app --vcpus 2 --ram 256M` |
+| Launch an optional Wayland desktop (`-Dextra-guests=true`) | Optional desktop guest image | `dsx run linux-desktop --name desk --vcpus 2 --ram 512M` |
 | Boot a 64-bit RISC-V installer or live ISO in RAM | Bootloader shim ISO boot | `dsx run /var/lib/diosix/iso/alpine-standard-3.24.3-riscv64.iso --ram 512M` |
 | Seed and boot an ext4 or FAT32 disk image (up to 2 GiB) | Disk seeding and shim boot | `dsx disk seed my-disk --ip 10.0.3.2 && dsx run my-disk.img --ram 1024M` |
 | Boot a custom kernel and initial RAM disk | Direct kernel boot | `dsx run Image --initrd initrd.cpio --cmdline "console=hvc0"` |
@@ -25,16 +25,22 @@ how to run it with `dsx`.
 ## Built-in RISC-V guest images
 
 ### Why use them
-Every Diosix system stages three purpose-built 64-bit RISC-V Linux ELF images
-under `/var/lib/diosix/images/`. Each image embeds its own root filesystem and
-hypervisor driver so it boots in seconds without external disk setup or network
-downloads:
+By default, Diosix builds and stages one unified 64-bit RISC-V Alpine Linux ELF
+image under `/var/lib/diosix/images/diosix-node.elf` (symlinked as
+`default.elf`), used identically by the top-level VM and all child VMs.
+Optional CLI (`linux-cli.elf`) and Wayland desktop (`linux-desktop.elf`) demo
+images can be built on demand with `-Dextra-guests=true` (or the `guest-cli`
+and `guest-desktop` build steps):
 
 | Image file | `dsx run` aliases | Default role |
 | :--- | :--- | :--- |
-| `linux-cli.elf` | `linux-cli`, `cli` | Interactive command-line sandbox with shell, networking, and diagnostic tools (256 MiB RAM recommended). |
-| `linux-desktop.elf` | `linux-desktop`, `desktop` | Offline Weston Wayland graphical desktop and terminal rendered over VirtIO-GPU 2D kernel mode setting (KMS) scanout with VirtIO-Input keyboard, mouse, and tablet devices (512 MiB RAM recommended). |
-| `diosix-base-linux.elf` | `base-linux`, `linux-guest`, `steward`, `default` | Compact supervisor-grade Linux image used for governance steward VMs, warm standby root failover, and declarative domain manifests. |
+| `diosix-node.elf` | `diosix-node`, `diosix-linux`, `steward`, `default` | Unified Alpine Linux 3.24 + `apk` + Linux 7.0 node image for top-level VMs, autonomous child VMs, stewards, and domain manifests (256 MiB RAM minimum). |
+| `linux-cli.elf` | `linux-cli`, `cli` | Optional interactive Buildroot CLI sandbox built with `-Dextra-guests=true` or `zig build guest-cli`. |
+| `linux-desktop.elf` | `linux-desktop`, `desktop` | Optional offline Weston Wayland desktop over VirtIO-GPU 2D kernel mode setting (KMS) built with `-Dextra-guests=true` or `zig build guest-desktop`. |
+
+Inside `diosix-node.elf`, child VMs automatically point `/etc/apk/repositories`
+at `http://diosix-parent:8080/v3.24/main` so `apk add` pulls signed packages
+recursively through the tree within the parent's allowed ceiling.
 
 > [!NOTE]
 > In the 26.1 series, `linux-desktop.elf` renders its Wayland desktop with
@@ -48,11 +54,8 @@ downloads:
 ### How to run them
 
 ```bash
-# Launch an interactive CLI sandbox with 2 vCPUs and 256 MiB RAM
-dsx run linux-cli --name work --vcpus 2 --ram 256M
-
-# Or launch the Weston Wayland graphical desktop VM
-dsx run linux-desktop --name desktop-demo --vcpus 2 --ram 512M
+# Launch a unified Alpine node child with package ceiling 'doas'
+dsx run diosix-node --name work --vcpus 2 --ram 256M --packages doas
 
 # View running VMs and their private IP addresses
 dsx list
@@ -60,8 +63,9 @@ dsx list
 # Open an interactive root shell over key-authenticated SSH
 dsx ssh work
 
-# Or run a single command inside the guest
-dsx ssh work -- uname -a
+# Install a permitted package inside the child via the parent proxy
+dsx ssh work -- apk update
+dsx ssh work -- apk add doas
 ```
 
 Passing `--disk 128M` (with `--ram 512M` or larger so the staged disk fits

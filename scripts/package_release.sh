@@ -24,7 +24,7 @@ STAGE_DIR="${RELEASE_ROOT}/${BUNDLE_NAME}"
 ARCHIVE_PATH="${RELEASE_ROOT}/${BUNDLE_NAME}.tar.xz"
 
 HV_BIN="zig-out/guest-${ARCH}/bin/vmdiosix"
-ROOTVM_ELF="zig-out/guest-${ARCH}/bin/rootvm.elf"
+ROOTVM_ELF="zig-out/guest-${ARCH}/bin/diosix-node.elf"
 LIVE_IMG="zig-out/diosix-live-${ARCH}.img"
 
 log_banner "Release Packager (${BUNDLE_NAME})"
@@ -150,9 +150,8 @@ Diosix ${VERSION_STR} (${ARCH}) — Standalone Quickstart Bundle
 Contents:
   vmdiosix                  M-mode Type-1 hypervisor + embedded Root VM
   diosix-live-${ARCH}.img   Bootable GPT live & installer disk image containing:
-                              - linux-desktop.elf (Weston Wayland desktop VM)
-                              - linux-cli.elf     (Fast terminal CLI VM)
-                              - diosix-base-linux.elf (Steward & base domain VM)
+                              - diosix-node.elf (Unified Alpine node VM image)
+                              - Alpine riscv64 .apk seed mirror + manifests
   run-diosix.sh             One-command QEMU launcher
   SHA256SUMS                SHA-256 integrity manifest
 

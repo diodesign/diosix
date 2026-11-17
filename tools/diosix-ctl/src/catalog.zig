@@ -36,9 +36,9 @@ pub const MAX_CATALOG_ENTRIES: usize = 32;
 
 pub const OFFICIAL_CATALOG = [_]CatalogEntry{
     .{
-        .id = "diosix-base-linux",
+        .id = "diosix-node",
         .alias = "diosix-linux",
-        .title = "Diosix Base Linux",
+        .title = "Diosix Node",
         .tier = "leaf",
         .os_family = "linux",
         .format = "elf",
@@ -46,7 +46,7 @@ pub const OFFICIAL_CATALOG = [_]CatalogEntry{
         .default_vcpus = 2,
         .default_ram_mb = 512,
         .default_disk_mb = 1024,
-        .filename = "diosix-base-linux.elf",
+        .filename = "diosix-node.elf",
         .url = "file://" ++ sysconfig.DEFAULT_GUEST_IMAGE_PATH,
         .sha256 = "23481c66ee9d3cdc46b972c35d9ac29c" ++
             "428124ea7e51d1deb5904587bc86c5a3",

@@ -27,10 +27,6 @@ pub fn handleWhisperSend(
     a2: usize,
 ) void {
     const g = vc.getGuest();
-    if (!g.is_steward and g.hasParent()) {
-        reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
-        return;
-    }
     if (a1 == 0 or a1 > guest.MAX_PACKET_LEN) {
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;
@@ -53,6 +49,8 @@ pub fn handleWhisperSend(
         reply(vc, ctx, sbi_core.SBI_ERR_INVALID_ADDRESS, 0);
         return;
     };
+    var has_v1 = false;
+    var claimed_cid: usize = 0;
     if (std.mem.startsWith(u8, msg_buf, "whisper:v1:")) {
         var it = std.mem.splitScalar(u8, msg_buf["whisper:v1:".len..], ':');
         _ = it.next();
@@ -60,61 +58,44 @@ pub fn handleWhisperSend(
             reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
             return;
         };
-        const claimed_cid = std.fmt.parseInt(usize, sender_str, 10) catch {
+        claimed_cid = std.fmt.parseInt(usize, sender_str, 10) catch {
             reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
             return;
         };
-        if (claimed_cid != g.local_cid and claimed_cid != guest.CID_SELF) {
+        has_v1 = true;
+    }
+    const dest_cid = a2;
+    if (dest_cid == guest.CID_PARENT) {
+        const parent = g.parent orelse {
+            reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+            return;
+        };
+        if (has_v1 and claimed_cid != g.local_cid) {
             reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
             return;
         }
-    }
-    const dest_cid = a2;
-    const root_parent: ?*guest.Guest = if (!g.hasParent()) g else g.parent;
-
-    if (root_parent) |rp| {
-        if (dest_cid == 0) {
-            const s = rp.tree_lock.lock();
-            var it = rp.children.start;
-            while (it) |node| : (it = node.next) {
-                const peer = node.contents;
-                if (peer != g and peer.is_steward) {
-                    sbi_core.deliverToQueue(peer, &peer.whisper_rx, msg_buf);
-                }
-            }
-            rp.tree_lock.unlock(s);
-        } else if (dest_cid == guest.CID_SELF or
-            dest_cid == guest.CID_PARENT)
+        sbi_core.deliverToQueue(parent, &parent.whisper_rx, msg_buf);
+        reply(vc, ctx, sbi_core.SBI_SUCCESS, msg_len);
+    } else if (dest_cid >= guest.CID_FIRST_CHILD) {
+        const child = g.getGuestByCid(dest_cid) orelse {
+            reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+            return;
+        };
+        if (has_v1 and claimed_cid != guest.CID_PARENT and
+            claimed_cid != guest.CID_SELF)
         {
-            if (rp != g) {
-                sbi_core.deliverToQueue(rp, &rp.whisper_rx, msg_buf);
-            }
-        } else if (dest_cid >= guest.CID_FIRST_CHILD) {
-            if (rp.getGuestByCid(dest_cid)) |target| {
-                if (target.is_steward or !target.hasParent()) {
-                    const q = &target.whisper_rx;
-                    sbi_core.deliverToQueue(target, q, msg_buf);
-                } else {
-                    reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
-                    return;
-                }
-            } else {
-                reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
-                return;
-            }
+            reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+            return;
         }
+        sbi_core.deliverToQueue(child, &child.whisper_rx, msg_buf);
         reply(vc, ctx, sbi_core.SBI_SUCCESS, msg_len);
     } else {
-        reply(vc, ctx, sbi_core.SBI_ERR_INVALID_PARAM, 0);
+        reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
     }
 }
 
 pub fn handleWhisperRecv(vc: *VCore, ctx: *Ctx, a0: usize, a1: usize) void {
     const g = vc.getGuest();
-    if (!g.is_steward and g.hasParent()) {
-        reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
-        return;
-    }
     const max_len: usize = @min(a1, guest.MAX_PACKET_LEN);
     if (g.whisper_rx.popToGuest(&g.space, a0, max_len)) |copy_len| {
         reply(vc, ctx, sbi_core.SBI_SUCCESS, copy_len);

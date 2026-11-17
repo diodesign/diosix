@@ -155,7 +155,8 @@ pub fn copyFileOverSsh(
         }
 
         const envp: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
-            "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            "PATH=/usr/sbin:/usr/bin:/sbin:/bin:" ++
+                "/usr/local/sbin:/usr/local/bin",
             null,
         };
         for (sysconfig.SSH_CLIENT_BINS) |bin| {

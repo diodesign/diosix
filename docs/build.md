@@ -68,7 +68,7 @@ Zig:
 
 | Command | Description |
 | :--- | :--- |
-| `./scripts/build.sh` | Compiles userland tools, the guest shim, the Linux root VM, the built-in CLI and Wayland desktop guest images, and the M-mode hypervisor binary. |
+| `./scripts/build.sh` | Compiles userland tools, the guest shim, the unified Alpine `diosix-node.elf` Linux image, and the M-mode hypervisor binary (pass `-Dextra-guests=true` or target `guest-cli` / `guest-desktop` for optional demo guests). |
 | `./scripts/build.sh test --summary all` | Runs all host-native unit test suites and verifies the feature graph, Markdown links, and support matrix. |
 | `./scripts/build.sh features` | Verifies the feature graph and Markdown links and regenerates `docs/support-matrix.md`. |
 | `./scripts/build.sh test-integration` | Builds the system and runs the live 4-hart QEMU integration suite. |
@@ -206,7 +206,7 @@ wait for a GDB connection on `localhost:1234`:
 ```
 
 In a second terminal, attach `gdb` using `vmdiosix` for M-mode hypervisor
-symbols or `rootvm.elf` for Linux root VM symbols:
+symbols or `diosix-node.elf` for Linux node VM symbols:
 
 ```bash
 gdb zig-out/guest-riscv64/bin/vmdiosix -ex "target remote localhost:1234"
@@ -235,5 +235,5 @@ To dump registers and a backtrace non-interactively:
 ```bash
 gdb -batch -ex "target remote localhost:1234" \
     -ex "bt" -ex "info registers" \
-    zig-out/guest-riscv64/bin/rootvm.elf
+    zig-out/guest-riscv64/bin/diosix-node.elf
 ```

@@ -334,7 +334,8 @@ pub const TaskManager = struct {
             }
             arg_ptrs[argc] = null;
             const envp = [_:null]?[*:0]const u8{
-                "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+                "PATH=/usr/sbin:/usr/bin:/sbin:/bin:" ++
+                    "/usr/local/sbin:/usr/local/bin",
                 "HOME=/root",
             };
             if (arg_ptrs[0]) |cmd0| {

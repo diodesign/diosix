@@ -5,11 +5,32 @@
 # Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
 
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
+
+find_bin() {
+    name="$1"
+    for dir in /usr/sbin /usr/bin /sbin /bin /usr/local/sbin /usr/local/bin
+    do
+        if [ -x "${dir}/${name}" ]; then
+            printf '%s\n' "${dir}/${name}"
+            return 0
+        fi
+    done
+    command -v "$name" 2>/dev/null || return 1
+}
+
 start() {
     printf "Starting dropbear sshd: "
     mkdir -p /run/dropbear /var/run/dropbear /etc/dropbear /root/.ssh
     chmod 700 /run/dropbear /var/run/dropbear /etc/dropbear \
         /root/.ssh 2>/dev/null || true
+
+    DROPBEAR_BIN="$(find_bin dropbear || true)"
+    DROPBEARKEY_BIN="$(find_bin dropbearkey || true)"
+    if [ -z "$DROPBEAR_BIN" ]; then
+        echo "SKIP (missing binary)"
+        return 0
+    fi
 
     HOST_KEY="/etc/dropbear/dropbear_ed25519_host_key"
     PERSIST_KEY="/var/lib/diosix/keys/dropbear_ed25519_host_key"
@@ -17,8 +38,8 @@ start() {
         cp "$PERSIST_KEY" "$HOST_KEY" 2>/dev/null || true
         chmod 600 "$HOST_KEY" 2>/dev/null || true
     fi
-    if [ ! -s "$HOST_KEY" ] && [ -x /usr/bin/dropbearkey ]; then
-        /usr/bin/dropbearkey -t ed25519 -f "$HOST_KEY" >/dev/null 2>&1 || true
+    if [ ! -s "$HOST_KEY" ] && [ -n "$DROPBEARKEY_BIN" ]; then
+        "$DROPBEARKEY_BIN" -t ed25519 -f "$HOST_KEY" >/dev/null 2>&1 || true
         chmod 600 "$HOST_KEY" 2>/dev/null || true
     fi
     if [ -s "$HOST_KEY" ] && [ -d /var/lib/diosix/keys ] && \
@@ -26,8 +47,8 @@ start() {
         cp "$HOST_KEY" "$PERSIST_KEY" 2>/dev/null || true
         chmod 600 "$PERSIST_KEY" 2>/dev/null || true
     fi
-    if [ -s "$HOST_KEY" ] && [ -x /usr/bin/dropbearkey ]; then
-        HOST_PUB=$(/usr/bin/dropbearkey -y -f "$HOST_KEY" 2>/dev/null | \
+    if [ -s "$HOST_KEY" ] && [ -n "$DROPBEARKEY_BIN" ]; then
+        HOST_PUB=$("$DROPBEARKEY_BIN" -y -f "$HOST_KEY" 2>/dev/null | \
             grep "^ssh-" | awk '{print $1 " " $2}')
         if [ -n "$HOST_PUB" ]; then
             echo "$HOST_PUB" > "${HOST_KEY}.pub" 2>/dev/null || true
@@ -43,20 +64,23 @@ start() {
         fi
     fi
 
-    if pgrep dropbear >/dev/null 2>&1; then
+    if [ -r /var/run/dropbear.pid ] && \
+       kill -0 "$(cat /var/run/dropbear.pid 2>/dev/null)" 2>/dev/null; then
         echo "OK"
         return 0
     fi
 
-    start-stop-daemon -S -q -p /var/run/dropbear.pid \
-        --exec /usr/sbin/dropbear -- -r "$HOST_KEY" -s -g -p 22
+    "$DROPBEAR_BIN" -P /var/run/dropbear.pid -r "$HOST_KEY" -s -g -p 22
     [ $? = 0 ] && echo "OK" || echo "FAIL"
 }
 
 stop() {
     printf "Stopping dropbear sshd: "
-    start-stop-daemon -K -q -p /var/run/dropbear.pid 2>/dev/null || \
-        killall dropbear 2>/dev/null || true
+    if [ -s /var/run/dropbear.pid ]; then
+        kill "$(cat /var/run/dropbear.pid)" 2>/dev/null || true
+        rm -f /var/run/dropbear.pid
+    fi
+    killall dropbear 2>/dev/null || true
     echo "OK"
 }
 
