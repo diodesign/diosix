@@ -264,6 +264,8 @@
             "hypervisor/core/sbi/scanout_map.zig",
             "hypervisor/core/sbi/scanout_map/slots.zig",
             "hypervisor/core/sbi/charter.zig",
+            "hypervisor/core/sbi/mission.zig",
+            "hypervisor/core/sbi/mission/tally.zig",
             "hypervisor/core/sbi/steward.zig",
         },
         .summary =
@@ -290,6 +292,7 @@
         .files = .{
             "hypervisor/interface/lib.zig",
             "hypervisor/interface/sbi.zig",
+            "hypervisor/interface/sbi/governance.zig",
             "hypervisor/interface/elf.zig",
             "hypervisor/interface/riscv.zig",
         },

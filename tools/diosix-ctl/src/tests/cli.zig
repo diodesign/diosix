@@ -257,6 +257,8 @@ test "Command enum dispatches all CLI commands and aliases" {
         .{ "ssh", .ssh },
         .{ "charter", .charter },
         .{ "steward", .steward },
+        .{ "agent", .agent },
+        .{ "swarm", .swarm },
         .{ "drop-trust", .@"drop-trust" },
     }) |pair| {
         try testing.expectEqual(

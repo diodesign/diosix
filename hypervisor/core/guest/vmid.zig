@@ -37,6 +37,12 @@ pub fn allocGuestId() usize {
     return next;
 }
 
+pub fn peekLastGuestId() usize {
+    const guard = guest_manager.acquire();
+    defer guard.release();
+    return guard.get().guest_id_next -| 1;
+}
+
 pub fn resetGuestManagerForTest() void {
     const guard = guest_manager.acquire();
     defer guard.release();

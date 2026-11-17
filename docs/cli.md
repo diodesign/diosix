@@ -23,6 +23,7 @@ configuration files, see [Build system, porting, and debugging](build.md).
 | `/etc/diosix/catalog.toml` | `0644` | Guest OS and steward VM repository catalog with pinned 64-character SHA-256 digests. |
 | `/etc/diosix/install.toml` | `0644` | Default disk installation profile for expert provisioning. |
 | `/etc/diosix/charter.toml` | `0644` | Charter defining steward quorum thresholds, workload units, and isolation rules. |
+| `/etc/diosix/agent.toml` | `0644` | Default provider, model, polling interval, and local proxy port for `dsx agent`. |
 | `/etc/diosix/constitution.md` | `0644` | Human- and steward-readable charter rules and operating invariants. |
 | `/etc/diosix/system.toml` | `0644` | Declarative multi-domain topology and service routing policy. |
 | `/var/lib/diosix/keys/` | `0700` | Enrolled operator passkeys and internal management keys (files stored with mode 0600). |
@@ -744,26 +745,49 @@ dsx tour [--step <1..5>] [--json]
 ---
 
 ### `dsx charter`
-Manages `/etc/diosix/charter.toml`, M-mode charter sealing, steward quorum
-ratification votes, whisper consensus frames, steward resets, and standby root
-VM failover (alias: `dsx steward`).
+Manages `/etc/diosix/charter.toml`, Edwards-curve digital signature algorithm
+(Ed25519) principal signing, machine-mode (M-mode) charter and mission sealing,
+conserved RAM quota-stake voting, steward quorum ratification votes, whisper
+consensus frames, steward resets, and standby root VM failover (alias:
+`dsx steward`).
 
 ```bash
 dsx charter \
-    <status|deploy|propose|ratify|whisper|reset-steward|failover|audit> \
-    [options]
+    <status|deploy|keygen|sign|verify|disseminate|vote|propose> [options]
+dsx charter \
+    <ratify|whisper|reset-steward|failover|audit> [options]
 ```
 
 Subcommands:
-* `status [--file <path>] [--json]`: Shows the parsed charter, its SHA-256
-  digest, M-mode seal status, quorum settings, minimum steward count, standby
-  root flag, and failover epoch.
+* `status [--file <path>] [--json]`: Shows the parsed charter (`[charter]`,
+  `[spec]`, and `[invariants]`), SHA-256 digest, Ed25519 principal signature
+  state, M-mode seal status, conserved stake tally, quorum settings, minimum
+  steward count, standby root flag, and failover epoch.
 * `deploy [--file <path>] [--json]` (alias: `seal`): Hashes
-  `/etc/diosix/charter.toml` and seals its SHA-256 digest and quorum counts in
-  M-mode. Steward and standby root VMs are launched separately with
-  `dsx run --steward` and `dsx run --standby-root`. Once sealed, amending the
-  charter or stopping or lowering a steward VM requires steward quorum
-  ratification.
+  `/etc/diosix/charter.toml`, verifies any attached `[principal]` Ed25519
+  signature and `[spec]`/`[invariants]` anti-ransomware checks, and seals the
+  charter and mission in M-mode (`SEAL_CHARTER` and `SEAL_MISSION`). Amending
+  an already-sealed principal mission requires both a fresh valid Ed25519
+  signature and supermajority approval (`>= stake_quorum_pct`, default `67%`)
+  across conserved physical RAM stake.
+* `keygen [--priv <path>] [--pub <path>] [--json]`: Generates a mode `0600`
+  Ed25519 principal keypair (`/etc/diosix/keys/principal.key` and
+  `principal.pub` by default).
+* `sign [--file <path>] [--key <priv>] [--rotate-from <old_priv>]`
+  `[--out <path>] [--json]`: Stamps `[principal]`, computes the canonical
+  mission digest, writes the Ed25519 signature into `charter.toml`, and
+  optionally chains `previous_signature` when rotating principal keys.
+* `verify [--file <path>] [--against <baseline>] [--pubkey <hex>] [--json]`:
+  Verifies the attached Ed25519 signature and checks transitions against an
+  active baseline charter (rejecting zero-replica drops or unratified volume
+  encryption/wipe flags even if validly signed).
+* `disseminate [--file <path>] [--port P] [--json]`: Stages
+  `/run/diosix/charter-pending.toml` and broadcasts the signed proposal down
+  the local `dsx board` on topic `charter` for child VMs to inspect and vote.
+* `vote [--file <path>] [--approve|--reject|--auto] [--port P] [--json]`:
+  Evaluates the pending proposal (or `--file`), records the caller's conserved
+  RAM quota-stake vote in M-mode (`VOTE_MISSION`), and posts a signed vote
+  receipt to the parent board.
 * `propose <action> [--unit <id>] [--count <N>] [--total <M>] [--quorum]`
   `[--file <path>] [--json]`: Evaluates a proposed action (`amend-charter`,
   `terminate-steward`, `reset-steward`, `root-failover`, `terminate-units`,
@@ -789,11 +813,11 @@ Subcommands:
 
 Examples:
 ```bash
+dsx charter keygen --priv /tmp/p.key --pub /tmp/p.pub
+dsx charter sign --file /etc/diosix/charter.toml --key /tmp/p.key
+dsx charter deploy --json
+dsx charter vote --auto --json
 dsx charter status
-dsx charter deploy
-dsx charter propose terminate-units --unit unit-alpha --count 2 --total 4
-dsx charter whisper send --to parent --type propose --payload "failover:epoch=1"
-dsx charter audit --json
 ```
 
 ---
@@ -856,6 +880,76 @@ Examples:
 dsx board post "boot ready" --topic status --parent
 dsx board post "rotate key" --to worker --topic ops
 dsx board list --topic ops --json
+```
+
+---
+
+### `dsx agent`
+Runs and inspects the autonomous node agent and its large language model (LLM)
+inference proxy (`diosix0:8081`). Provider configuration reads
+`/etc/diosix/agent.toml` and environment overrides (`DIOSIX_LLM_PROVIDER`,
+`DIOSIX_LLM_MODEL`, `DIOSIX_LLM_BASE_URL`, `OPENROUTER_API_KEY`,
+`OPENCODE_API_KEY`, `OPENCODE_BASE_URL`), automatically selecting OpenRouter,
+OpenCode, a local OpenAI-compatible endpoint, the parent VM's proxy (`parent`
+for wide-area-network-isolated children), or a deterministic policy brain.
+
+```bash
+dsx agent <status|ask|proxy|step|run> [options]
+```
+
+Subcommands:
+* `status [--json]`: Shows resolved provider, model, endpoint, parent status,
+  and whether the LLM proxy (`:8081`) and agent daemon are running.
+* `ask <prompt> [--json]`: Sends a single chat completion prompt through the
+  resolved provider or deterministic policy engine.
+* `proxy [--port P] [--daemon]`: Starts the HTTP chat completion proxy on
+  `diosix0` (default port `8081`), authenticating direct children from kernel
+  media access control (MAC) table entries before forwarding upstream.
+* `step [--json]`: Runs one synchronous reconciliation tick: on child VMs, polls
+  the parent board for charter proposals, applies deterministic anti-ransomware
+  and LLM checks, propagates down to grandchildren, and casts `VOTE_MISSION`; on
+  top-level VMs, seals ratified amendments and reconciles sharded workload
+  units.
+* `run [--interval S] [--daemon]`: Runs `step` continuously every `S` seconds
+  (default `5`).
+
+Examples:
+```bash
+dsx agent status --json
+dsx agent ask "verify database replica health" --json
+dsx agent step --json
+```
+
+---
+
+### `dsx swarm`
+Connects peer Diosix hosts into a collaborative multi-host swarm fleet on
+transmission control protocol (TCP) port `8486` (`iptables.conf` blocks child VM
+access to port `8486` over `diosix0` to preserve strict tree isolation).
+
+```bash
+dsx swarm <status|serve|join|propose|sync> [options]
+```
+
+Subcommands:
+* `status [--json]`: Shows the host's Ed25519 node public key, active charter
+  hash, known peers, and live peer count.
+* `serve [--port P] [--daemon]`: Starts the TCP peer server (`8486` by default)
+  serving Ed25519-signed node state (`GET /v1/swarm/status`), peer handshake and
+  charter adoption (`POST /v1/swarm/join`), and fleet proposal dissemination
+  (`POST /v1/swarm/propose`).
+* `join <ip[:port]> [--json]`: Exchanges signed host identity records with a
+  peer host and adopts its sealed `v1` principal-signed charter if the local
+  host is not yet sealed.
+* `propose --file <toml> [--json]`: Evaluates a signed proposal locally and
+  disseminates it across every peer host's board and child tree.
+* `sync [--json]`: Refreshes peer liveness and state across the local peer list.
+
+Examples:
+```bash
+dsx swarm serve --daemon
+dsx swarm join 10.0.2.12 --json
+dsx swarm propose --file /etc/diosix/charter.toml --json
 ```
 
 ---

@@ -21,6 +21,8 @@ pub const host = @import("host.zig");
 pub const governance = @import("governance.zig");
 pub const pkg = @import("pkg.zig");
 pub const board = @import("board.zig");
+pub const agent = @import("agent.zig");
+pub const swarm = @import("swarm.zig");
 const main_tests = @import("tests/main.zig");
 
 pub const CID_PARENT = common.CID_PARENT;
@@ -82,6 +84,8 @@ pub const Command = enum {
     package,
     apk,
     board,
+    agent,
+    swarm,
     quota,
     @"drop-trust",
     poweroff,
@@ -160,6 +164,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
             },
             .pkg, .package, .apk => try pkg.cmdPkg(&client, argv[2..]),
             .board => try board.cmdBoard(&client, argv[2..]),
+            .agent => try agent.cmdAgent(&client, argv[2..]),
+            .swarm => try swarm.cmdSwarm(&client, argv[2..]),
             .quota => {
                 var target_cid: usize = 1;
                 if (argv.len >= 3 and
@@ -305,6 +311,14 @@ pub fn formatUsage(
         \\      post | list | status | policy    Post or read board messages
         \\      serve [--port P] [--daemon]      Run board daemon for children
         \\
+        \\  {s} agent <subcmd> [options]         Autonomous node agent & proxy
+        \\      status | ask | step | run        Inspect, query, or run agent
+        \\      proxy [--port 8081] [--daemon]   Serve child LLM proxy
+        \\
+        \\  {s} swarm <subcmd> [options]         Multi-host Ed25519 fleet mesh
+        \\      status | join | propose | sync   Coordinate multi-host swarms
+        \\      serve [--port 8486] [--daemon]   Run fleet coordination server
+        \\
         \\  {s} drop-trust                       Relinquish hardware trust
         \\  {s} help                             Show this help message
         \\
@@ -314,7 +328,8 @@ pub fn formatUsage(
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
-        exe_name, exe_name, exe_name, exe_name,
+        exe_name, exe_name, exe_name, exe_name, exe_name,
+        exe_name,
     });
 }
 

@@ -55,6 +55,22 @@ autonomous workloads.
 * **Charter governance:** Critical deployments can seal a charter hash and
   quorum policy in M-mode to protect steward VMs, confidential guest memory,
   and standby failover.
+* **Principal-signed mission consensus:** Owners sign `charter.toml`
+  deployments and runtime `[spec]` updates with Edwards-curve digital
+  signature algorithm (Ed25519) keys. Amendments require both a valid principal
+  signature and a conserved physical-RAM quota-stake supermajority across the VM
+  tree, while machine mode (M-mode) and node agents deterministically veto
+  ransomware transitions (such as dropping replicas to zero and encrypting
+  volumes).
+* **Autonomous agents and inference proxying:** Each node can run `dsx agent`
+  using OpenRouter, OpenCode, a local OpenAI-compatible server, or a
+  deterministic policy brain, while internet-isolated children query their
+  parent over a media access control (MAC)-authenticated inference proxy
+  (`diosix0:8081`).
+* **Multi-host swarm fleet:** Separate hosts collaborate over transmission
+  control protocol (TCP) port `8486` (`dsx swarm` or
+  `./scripts/build.sh run-swarm`) with Ed25519 peer identities, fleet-wide
+  mission dissemination, stake tallying, and deterministic replica sharding.
 
 ---
 
@@ -143,6 +159,10 @@ dsx snapshot save work-vm clean-boot
 
 # 5. Browse SHA-256-verified guest images in the catalog
 dsx image catalog
+
+# 6. Inspect autonomous agent and multi-host swarm tools
+dsx agent status
+dsx swarm status
 ```
 
 In a headless QEMU terminal session, press `Ctrl-a` then `x` to exit QEMU, or
@@ -166,14 +186,14 @@ Documentation is split into two tracks depending on what you want to do:
 | :--- | :--- |
 | [Getting started and running Diosix](docs/run.md) | Booting in QEMU, exploring the interactive tour and graphical desktop, and provisioning target disks. |
 | [Deploying and provisioning guest VMs](docs/guests.md) | Running built-in sandboxes, booting installer ISOs, seeding disk images, booting custom kernels, and managing quotas and RAM checkpoints. |
-| [Security, networking, and governance](docs/security.md) | Default guest network isolation, chaining VMs through a firewall VM, managing SSH passkeys, and sealing a charter. |
-| [CLI and configuration reference](docs/cli.md) | Full command reference for `dsx` and runtime configuration files in `/etc/diosix/`. |
+| [Security, networking, and governance](docs/security.md) | Default guest network isolation, chaining VMs through a firewall VM, managing SSH passkeys, Principal-signed Mission consensus, anti-ransomware vetoes, and sealing a charter. |
+| [CLI and configuration reference](docs/cli.md) | Full command reference for `dsx` (including `agent`, `swarm`, `charter`, `pkg`, and `board`) and runtime configuration files in `/etc/diosix/`. |
 
 ### Technical reference
 
 | Reference | What it covers |
 | :--- | :--- |
-| [Hypervisor architecture](docs/architecture.md) | Design rationale behind the symmetric self-organizing VM tree, M-mode resource model, Stage-2 zero-copy scanout, dynamic recompilation, and standby failover. |
+| [Hypervisor architecture](docs/architecture.md) | Design rationale behind the symmetric self-organizing VM tree, M-mode resource model, Stage-2 zero-copy scanout, dynamic recompilation, multi-host swarm collaboration, and standby failover. |
 | [Shared interface and ABI](docs/interface.md) | Supervisor binary interface (SBI) hypercalls, C application binary interface (ABI) structures, Linux kernel driver calls, and the virtual MMIO bus map. |
 | [GUI architecture](docs/gui-architecture.md) | Internals of the direct rendering manager (DRM) and kernel mode setting (KMS) host desktop, guest display windows, terminal multiplexer, and JSON control plane. |
 | [Feature support matrix](docs/support-matrix.md) | Generated map of every hypervisor, emulation, kernel driver, CLI, GUI, and build feature alongside its source files, callers, and documentation links. |

@@ -40,7 +40,9 @@ and `guest-desktop` build steps):
 
 Inside `diosix-node.elf`, child VMs automatically point `/etc/apk/repositories`
 at `http://diosix-parent:8080/v3.24/main` so `apk add` pulls signed packages
-recursively through the tree within the parent's allowed ceiling.
+recursively through the tree within the parent's allowed ceiling. Child agents
+likewise inherit parent message-board access at `http://diosix-parent:8485` and
+large language model (LLM) inference proxying at `http://diosix-parent:8081`.
 
 > [!NOTE]
 > In the 26.1 series, `linux-desktop.elf` renders its Wayland desktop with

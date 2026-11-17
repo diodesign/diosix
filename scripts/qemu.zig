@@ -183,6 +183,16 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     b.step("release", "Build standalone release bundle with desktop & CLI VMs")
         .dependOn(&release_cmd.step);
 
+    const swarm_cmd = b.addSystemCommand(&.{
+        "python3", "-B", "scripts/run_swarm.py", "--hosts", "2",
+    });
+    swarm_cmd.addFileInput(b.path("scripts/run_swarm.py"));
+    swarm_cmd.step.dependOn(&create_storage_cmd.step);
+    swarm_cmd.step.dependOn(b.getInstallStep());
+    swarm_cmd.stdio = .inherit;
+    b.step("run-swarm", "Boot a 2-host simulated swarm cluster in QEMU")
+        .dependOn(&swarm_cmd.step);
+
     var qemu_live_args = ArrayList([]const u8).empty;
     defer qemu_live_args.deinit(b.allocator);
     for (qemu_args.items) |arg| {

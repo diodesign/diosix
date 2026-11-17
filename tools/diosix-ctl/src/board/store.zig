@@ -10,7 +10,7 @@ const net_http = @import("../net/http.zig");
 const sysconfig = @import("../sysconfig.zig");
 
 pub const SHA256_HEX_LEN: usize = 64;
-pub const DEFAULT_MAX_BODY_BYTES: usize = 4096;
+pub const DEFAULT_MAX_BODY_BYTES: usize = 16384;
 const MAX_STORE_FILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_POLICY_FILE_BYTES: usize = 64 * 1024;
 const GENESIS_HASH: [SHA256_HEX_LEN]u8 = @splat('0');

@@ -68,6 +68,7 @@
         .status = .active,
         .files = .{
             "scripts/qemu.zig",
+            "scripts/run_swarm.py",
             "scripts/create_storage_disk.sh",
             "scripts/make_live_image.sh",
             "scripts/package_release.sh",

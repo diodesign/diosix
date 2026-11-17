@@ -230,6 +230,52 @@ local message board on `diosix0:8485` managed via `dsx board`:
 
 ---
 
+## Autonomous node agents and mission consensus
+
+Diosix combines cryptographic principal authority with tree-scoped multi-agent
+governance so neither a compromised owner key nor a single runaway VM can
+subvert a fleet (for instance, turning a benign deployment into a ransomware
+attack that drops database replicas from three to zero and encrypts storage):
+
+* **Principal Ed25519 signatures and anti-rollback:** Owners sign
+  `charter.toml` (`[principal]` and `[spec]`/`[invariants]`) with an
+  Edwards-curve digital signature algorithm (Ed25519) key using
+  `dsx charter keygen` and `dsx charter sign`. Machine mode (`SEAL_MISSION`)
+  verifies the 64-byte signature over the canonical 92-byte mission header and
+  rejects any rollback (`version <= active.version`). Key rotation binds a
+  `previous_signature` signed by the retiring key.
+* **Conserved RAM quota-stake consensus:** When an active sealed Mission
+  receives an amendment, every running VM active before the proposal snapshot
+  (`guest_id <= proposal_cutoff_guest_id`) votes via `VOTE_MISSION`. A VM's
+  voting weight equals its retained physical RAM pages
+  (`max_ram_pages -| delegated_ram_pages`). Because spawning child VMs transfers
+  RAM quota instead of creating weight, physical stake sums to the total host
+  RAM allocated across the tree, preventing Sybil vote amplification and
+  post-proposal child stuffing (following John R. Douceur, *"The Sybil Attack"*,
+  IPTPS 2002).
+* **Tree-based dissemination and stake aggregation:** Proposals walk down parent
+  `dsx board` instances while signed vote receipts bubble back up to parents
+  and host peers—matching the hierarchical dissemination and aggregation pattern
+  described in Ray Neiheiser, Miguel Matos, and Luís Rodrigues (*"Kauri:
+  Scalable BFT Consensus with Pipelined Tree-Based Dissemination and
+  Aggregation"*, ACM SOSP 2021) paired with Byzantine supermajority quorum
+  (`>= stake_quorum_pct`, default `67%`, following Miguel Castro and Barbara
+  Liskov, *"Practical Byzantine Fault Tolerance"*, OSDI 1999).
+* **Defense-in-depth anti-ransomware veto:** Even if an attacker compromises
+  the Principal private key and signs a hostile `v2` charter, both child U-mode
+  agents (`dsx agent step`) and M-mode (`SEAL_MISSION`) independently enforce
+  constitutional transition guards: dropping total replicas to zero under
+  `forbid_zero_replicas`, exceeding `max_stepdown_pct`, or setting volume
+  encryption or wipe flags under `forbid_unratified_encryption` is
+  deterministically rejected.
+* **Parent-proxied agent inference (`diosix0:8081`):** Direct children run
+  `dsx agent` without WAN access by default. Requests to
+  `http://diosix-parent:8081/v1/chat/completions` require a kernel-bound MAC
+  mapping in `diosix0`'s neighbor table, keeping OpenRouter or OpenCode API keys
+  strictly on the upstream parent host.
+
+---
+
 ## Reporting security issues
 
 To report a security vulnerability privately, email

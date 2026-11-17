@@ -8,6 +8,7 @@ const api = @import("../api.zig");
 const charter = @import("../charter.zig");
 const cmd_mod = @import("cmd.zig");
 const common = @import("../common.zig");
+const ops = @import("ops.zig");
 
 const MAX_MANIFEST_SIZE = common.MAX_MANIFEST_SIZE;
 const printStr = common.printStr;
@@ -50,6 +51,14 @@ pub fn cmdCharterStatus(
         hv_failover_epoch = hv_c.failover_epoch;
     } else |_| {}
 
+    var mission = std.mem.zeroes(api.MissionArgs);
+    var m_hex: [charter.SHA256_HEX_LEN]u8 = @splat('0');
+    if (client.getMission(null)) |hv_m| {
+        mission = hv_m;
+        if (hv_m.is_sealed != 0) hv_sealed = true;
+        _ = common.bytesToHex(&hv_m.charter_hash, &m_hex);
+    } else |_| {}
+
     if (json_mode) {
         const allocator = std.heap.page_allocator;
         const safe_file = common.escapeJsonAlloc(allocator, file_path) catch
@@ -63,18 +72,26 @@ pub fn cmdCharterStatus(
             "{{\"file\":\"{s}\",\"file_loaded\":{s},\"id\":\"{s}\"," ++
             "\"version\":{d},\"file_sha256\":\"{s}\"," ++
             "\"mmode_sealed\":{s},\"mmode_sha256\":\"{s}\"," ++
+            "\"mission_sealed\":{},\"mission_version\":{d}," ++
+            "\"mission_sha256\":\"{s}\",\"stake_quorum_pct\":{d}," ++
+            "\"eligible_stake_pages\":{d},\"approved_stake_pages\":{d}," ++
+            "\"rejected_stake_pages\":{d}," ++
             "\"quorum_required\":{d},\"quorum_total\":{d}," ++
             "\"min_stewards\":{d},\"standby_replicas\":{d}," ++
             "\"unit_count\":{d},\"ratified_mask\":{d}," ++
             "\"failover_epoch\":{d}}}\n";
         printFmt(json_fmt, .{
-            safe_file,               if (file_loaded) "true" else "false",
-            safe_id,                 parsed.version,
-            &parsed.sha256_hex,      if (hv_sealed) "true" else "false",
-            &hv_hash_hex,            parsed.quorum_required,
-            parsed.quorum_total,     parsed.min_stewards,
-            parsed.standby_replicas, parsed.unit_count,
-            hv_ratified_mask,        hv_failover_epoch,
+            safe_file,                    if (file_loaded) "true" else "false",
+            safe_id,                      parsed.version,
+            &parsed.sha256_hex,           if (hv_sealed) "true" else "false",
+            &hv_hash_hex,                 mission.is_sealed != 0,
+            mission.version,              &m_hex,
+            mission.stake_quorum_pct,     mission.eligible_stake_pages,
+            mission.approved_stake_pages, mission.rejected_stake_pages,
+            parsed.quorum_required,       parsed.quorum_total,
+            parsed.min_stewards,          parsed.standby_replicas,
+            parsed.unit_count,            hv_ratified_mask,
+            hv_failover_epoch,
         });
     } else {
         const seal_str = if (hv_sealed)
@@ -90,6 +107,8 @@ pub fn cmdCharterStatus(
             \\  Charter ID         : {s} (v{d})
             \\  Charter SHA-256    : {s}
             \\  M-mode enforcement : {s}
+            \\  Mission governance : sealed={} v{d} (quorum: {d}%, min_rep: {d})
+            \\  Quota stake tally  : {d}/{d} approved ({d} rejected)
             \\  Steward quorum     : {d}-of-{d} (min stewards: {d})
             \\  Standby Root VMs   : {d} (failover epoch: {d})
             \\  Workload units     : {d} (max termination: {d}%)
@@ -98,10 +117,14 @@ pub fn cmdCharterStatus(
             file_path,                     load_str,
             sys_cfg.constitutionDocPath(), parsed.id(),
             parsed.version,                &parsed.sha256_hex,
-            seal_str,                      parsed.quorum_required,
-            parsed.quorum_total,           parsed.min_stewards,
-            parsed.standby_replicas,       hv_failover_epoch,
-            parsed.unit_count,             max_term,
+            seal_str,                      mission.is_sealed != 0,
+            mission.version,               mission.stake_quorum_pct,
+            mission.min_total_replicas,    mission.approved_stake_pages,
+            mission.eligible_stake_pages,  mission.rejected_stake_pages,
+            parsed.quorum_required,        parsed.quorum_total,
+            parsed.min_stewards,           parsed.standby_replicas,
+            hv_failover_epoch,             parsed.unit_count,
+            max_term,
         });
     }
 }
@@ -120,11 +143,55 @@ pub fn cmdCharterDeploy(
         printStr("Error: Invalid Constitutional Charter TOML config.\n");
         return;
     };
+    if (parsed.hasPrincipalPubkey()) {
+        const m_args = parsed.toMissionArgs(true) catch |err| {
+            printApiError("Encode signed Mission parameters", err);
+            return;
+        };
+        const sealed_m = client.sealMission(&m_args) catch |err| {
+            printApiError("Seal signed Mission Charter in M-mode", err);
+            return;
+        };
+        ops.saveActiveCharterFile(content);
+        if (json_mode) {
+            const allocator = std.heap.page_allocator;
+            const safe_id = common.escapeJsonAlloc(
+                allocator,
+                parsed.id(),
+            ) catch return;
+            defer allocator.free(safe_id);
+            printFmt(
+                "{{\"status\":\"sealed\",\"mode\":\"mission\"," ++
+                    "\"id\":\"{s}\",\"version\":{d},\"sha256\":\"{s}\"," ++
+                    "\"stake_quorum_pct\":{d}}}\n",
+                .{
+                    safe_id,
+                    sealed_m.version,
+                    &parsed.sha256_hex,
+                    sealed_m.stake_quorum_pct,
+                },
+            );
+        } else {
+            printFmt(
+                "✓ Signed Mission '{s}' v{d} sealed in M-mode " ++
+                    "(SHA-256: {s}, stake quorum: {d}%).\n",
+                .{
+                    parsed.id(),
+                    sealed_m.version,
+                    &parsed.sha256_hex,
+                    sealed_m.stake_quorum_pct,
+                },
+            );
+        }
+        return;
+    }
+
     const c_args = parsed.toSbiArgs(true);
     client.sealCharter(&c_args) catch |err| {
         printApiError("Seal Constitutional Charter in M-mode", err);
         return;
     };
+    ops.saveActiveCharterFile(content);
     if (json_mode) {
         const allocator = std.heap.page_allocator;
         const safe_id = common.escapeJsonAlloc(allocator, parsed.id()) catch
@@ -253,11 +320,19 @@ pub fn cmdCharterAudit(
 
     var mmode_sealed = false;
     var hash_matches = false;
-    if (client.getCharter()) |hv_c| {
-        mmode_sealed = hv_c.is_sealed != 0;
-        hash_matches = mmode_sealed and
-            std.mem.eql(u8, &hv_c.charter_hash, &file_digest);
+    if (client.getMission(null)) |hv_m| {
+        if (hv_m.is_sealed != 0) {
+            mmode_sealed = true;
+            hash_matches = std.mem.eql(u8, &hv_m.charter_hash, &file_digest);
+        }
     } else |_| {}
+    if (!mmode_sealed) {
+        if (client.getCharter()) |hv_c| {
+            mmode_sealed = hv_c.is_sealed != 0;
+            hash_matches = mmode_sealed and
+                std.mem.eql(u8, &hv_c.charter_hash, &file_digest);
+        } else |_| {}
+    }
 
     if (json_mode) {
         const jfmt =

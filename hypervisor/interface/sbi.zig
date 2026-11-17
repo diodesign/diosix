@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+pub const governance = @import("sbi/governance.zig");
 
 pub const SPEC_VERSION: usize = 0x02000000; // Specification v2.0.
 
@@ -84,6 +85,8 @@ pub const DIOSIX = struct {
     pub const GPU_READ_SCANOUT = 28;
     pub const INPUT_SEND_EVENT = 29;
     pub const GPU_MAP_SCANOUT = 30;
+    pub const SEAL_MISSION = 31;
+    pub const VOTE_MISSION = 32;
 };
 
 pub const CID_PARENT: u64 = 0;
@@ -197,19 +200,17 @@ pub const NetPolicyArgs = extern struct {
     upstream_cid: u64 = 0,
 };
 
-pub const CHARTER_HASH_LEN: usize = 32;
-
-pub const CharterArgs = extern struct {
-    charter_hash: [CHARTER_HASH_LEN]u8 = @splat(0),
-    quorum_required: u16 = 2,
-    quorum_total: u16 = 3,
-    standby_replicas: u16 = 1,
-    is_sealed: u8 = 0,
-    _reserved: u8 = 0,
-    ratified_mask: u64 = 0,
-    approved_target_cid: u64 = 0,
-    failover_epoch: u64 = 0,
-};
+pub const CHARTER_HASH_LEN = governance.CHARTER_HASH_LEN;
+pub const MISSION_PUBKEY_LEN = governance.MISSION_PUBKEY_LEN;
+pub const MISSION_SIG_LEN = governance.MISSION_SIG_LEN;
+pub const MISSION_SIGN_DOMAIN = governance.MISSION_SIGN_DOMAIN;
+pub const MISSION_SIGN_MSG_LEN = governance.MISSION_SIGN_MSG_LEN;
+pub const CharterArgs = governance.CharterArgs;
+pub const MissionFlags = governance.MissionFlags;
+pub const MissionArgs = governance.MissionArgs;
+pub const MissionVoteDecision = governance.MissionVoteDecision;
+pub const MissionVoteArgs = governance.MissionVoteArgs;
+pub const buildMissionSignMessage = governance.buildMissionSignMessage;
 
 pub const RunArgs = extern struct {
     child_id: u64,
@@ -388,7 +389,6 @@ comptime {
     std.debug.assert(@sizeOf(HypervisorInfo) == 304);
     std.debug.assert(@sizeOf(GuestInfo) == 96);
     std.debug.assert(@sizeOf(Event) == 24);
-    std.debug.assert(@sizeOf(CharterArgs) == 64);
     std.debug.assert(@sizeOf(RunArgs) == 56);
     std.debug.assert(@sizeOf(TerminateArgs) == 16);
     std.debug.assert(@sizeOf(WaitEventArgs) == 40);
@@ -406,6 +406,7 @@ comptime {
 }
 
 test "SBI interface structures and extension IDs" {
+    _ = governance;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
 

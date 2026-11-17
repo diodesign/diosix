@@ -107,6 +107,8 @@ pub const Guest = struct {
     initial_entry_point: usize = 0,
     initial_dtb_ptr: usize = 0,
     steward_reset_count: usize = 0,
+    mission_vote_hash: [sbi.CHARTER_HASH_LEN]u8 = @splat(0),
+    mission_vote_decision: u8 = 0,
     exit_code: usize = 0,
     vcores: dsa.LinkedList(*vcore.VirtualCore),
     space: vm_space.GuestSpace,

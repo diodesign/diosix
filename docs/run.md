@@ -59,6 +59,9 @@ installed (or are inside one of the Docker containers in `dockerfiles/`), run
 ./scripts/build.sh run
 ./scripts/build.sh run-gui
 
+# Boot two networked QEMU hosts for multi-host swarm collaboration
+./scripts/build.sh run-swarm
+
 # Optionally build and boot the standalone Wayland desktop or CLI demo VMs
 ./scripts/build.sh run-desktop
 ./scripts/build.sh run-cli
@@ -66,8 +69,8 @@ installed (or are inside one of the Docker containers in `dockerfiles/`), run
 
 ### How boot modes work
 
-Diosix adjusts its startup behavior across three boot modes and two optional
-guest-onboarding flags:
+Diosix adjusts its startup behavior across three boot modes and runtime
+kernel command-line flags:
 
 * Developer mode stages your build machine's SSH public keys into a temporary
   overlay so you can SSH into the root VM right away during QEMU runs.
@@ -76,6 +79,10 @@ guest-onboarding flags:
   storage, and opens the graphical welcome launcher automatically on first boot.
 * Persistent mode mounts an ext4 data partition read-write to retain enrolled
   SSH keys, guest images, and virtual disks across reboots.
+* Passing `diosix.swarm_ip=<cidr>`, `diosix.swarm_peers=<ip[:port],...>`, and
+  `diosix.agent=1` configures a host's `eth0` swarm IP, peer seed list, and
+  background `dsx agent run` daemon at boot (`run-swarm` wires these
+  automatically across multiple QEMU hosts on a shared Ethernet socket switch).
 * Passing `diosix.demo=desktop` on the kernel command line skips the boot intro,
   launches the built-in Weston Wayland desktop VM in the background, and opens
   its interactive VirtIO-GPU 2D display pane automatically.

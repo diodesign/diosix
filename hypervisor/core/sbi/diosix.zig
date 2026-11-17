@@ -100,6 +100,8 @@ pub fn handleDiosix(
         D.GPU_READ_SCANOUT => desktop.handleGpuReadScanout(vc, ctx, g, a0),
         D.GPU_MAP_SCANOUT => scanout_map.handleGpuMapScanout(vc, ctx, g, a0),
         D.INPUT_SEND_EVENT => desktop.handleInputSendEvent(vc, ctx, g, a0),
+        D.SEAL_MISSION => charter.handleSealMission(vc, ctx, a0, a1),
+        D.VOTE_MISSION => charter.handleVoteMission(vc, ctx, a0),
         else => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),
     }
 }

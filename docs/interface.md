@@ -111,6 +111,8 @@ charter governance.
 | `GPU_READ_SCANOUT` | `28` | Stream child VirtIO-GPU 2D scanout into parent GPAs |
 | `INPUT_SEND_EVENT` | `29` | Inject Linux input events into child VirtIO-Input |
 | `GPU_MAP_SCANOUT` | `30` | Map child VirtIO-GPU scanout read-only into parent GPA |
+| `SEAL_MISSION` | `31` | Seal or amend Principal-signed Mission envelope (`MissionArgs`) |
+| `VOTE_MISSION` | `32` | Cast conserved RAM quota-stake vote (`MissionVoteArgs`) |
 
 ---
 
@@ -298,6 +300,25 @@ M-mode ring buffers:
   confidential or steward VMs. M-mode unmaps all referencing scanout slots
   before tearing down either child or parent guest RAM.
 
+#### `SEAL_MISSION` (`FID 31`) and `VOTE_MISSION` (`FID 32`)
+* `SEAL_MISSION`: Reads, verifies, seals, or amends a Principal-signed
+  `MissionArgs` descriptor (`176` bytes at GPA `a0`). When `a1` is `1` (seal or
+  amend), M-mode verifies the Edwards-curve digital signature algorithm
+  (Ed25519) signature over the canonical 92-byte mission header, enforces
+  monotonic anti-rollback version numbers, rejects anti-ransomware threshold
+  violations (zero-replica step-downs or unratified volume encryption/wipe
+  flags), and—when amending an existing sealed Mission—requires both a valid
+  signature and eligible physical-RAM stake supermajority approval. When `a1`
+  is `0`, writes the active Mission state and vote tally for optional proposal
+  hash `a2` into `a0`. Returns `SBI_SUCCESS` or `SBI_ERR_DENIED` on
+  policy/signature rejection.
+* `VOTE_MISSION`: Records a VM's approval or rejection against a candidate
+  `MissionVoteArgs` proposal (`72` bytes at GPA `a0`), weighted by the VM's
+  retained physical RAM pages (`max_ram_pages -| delegated_ram_pages`). Only VMs
+  whose `guest_id <= proposal_cutoff_guest_id` can vote on a given proposal,
+  preventing Sybil child-spawning attacks. Updates running stake totals in the
+  descriptor and returns `SBI_SUCCESS`.
+
 ---
 
 ## Data structure layouts
@@ -441,6 +462,34 @@ struct charter_args {
     uint64_t failover_epoch;      /* Output: standby root failover epoch */
 };
 
+struct mission_args {
+    uint8_t  charter_hash[32];     /* SHA-256 digest of canonical mission */
+    uint8_t  principal_pubkey[32]; /* Ed25519 public key of principal */
+    uint8_t  signature[64];        /* Ed25519 signature over 92-byte header */
+    uint32_t version;              /* Monotonic anti-rollback sequence */
+    uint32_t min_total_replicas;   /* Constitutional minimum total replicas */
+    uint32_t flags;                /* Bitmask: enc, wipe, zero, unratified */
+    uint8_t  stake_quorum_pct;     /* Supermajority percentage (default 67) */
+    uint8_t  max_stepdown_pct;     /* Max replica drop percentage per step */
+    uint8_t  is_sealed;            /* Output: 1 if sealed in M-mode */
+    uint8_t  has_pubkey;           /* Output: 1 if principal key pinned */
+    uint64_t eligible_stake_pages; /* Snapshot of eligible RAM stake pages */
+    uint64_t approved_stake_pages; /* Accumulated approval stake pages */
+    uint64_t rejected_stake_pages; /* Accumulated rejection stake pages */
+    uint32_t voter_count;          /* Count of distinct VMs that voted */
+    uint32_t _reserved;
+};
+
+struct mission_vote_args {
+    uint8_t  proposal_hash[32];    /* SHA-256 of candidate charter proposal */
+    uint8_t  decision;             /* 1 = approve, 2 = reject */
+    uint8_t  _reserved[7];
+    uint64_t caller_stake_pages;   /* Output: voter's conserved RAM pages */
+    uint64_t eligible_stake_pages; /* Output: proposal cutoff eligible stake */
+    uint64_t approved_stake_pages; /* Output: cumulative approval stake */
+    uint64_t rejected_stake_pages; /* Output: cumulative rejection stake */
+};
+
 struct console_args {
     uint64_t target_cid; /* 1 for self, >= 2 for direct child */
     uint64_t data_ptr;   /* GPA pointer to console I/O buffer */
@@ -543,6 +592,9 @@ hypercalls:
 | `IOCTL_GPU_READ_SCANOUT` | `0x101b` | Pins user pages and reads child VirtIO-GPU scanout |
 | `IOCTL_INPUT_SEND_EVENT` | `0x101c` | Sends batched Linux input events to child VirtIO-Input |
 | `IOCTL_GPU_MAP_SCANOUT` | `0x101d` | Maps child VirtIO-GPU scanout read-only and returns damage and cursor state |
+| `IOCTL_SEAL_MISSION` | `0x101e` | Verifies Ed25519 signature, anti-ransomware guards, and seals Mission (`SEAL_MISSION`) |
+| `IOCTL_GET_MISSION` | `0x101f` | Reads active M-mode Mission state and stake tally (`SEAL_MISSION`) |
+| `IOCTL_VOTE_MISSION` | `0x1020` | Casts caller VM's conserved RAM quota-stake vote (`VOTE_MISSION`) |
 
 To support Tier 1 zero-copy displays, `/dev/diosix` also exposes
 `IOCTL_GPU_MAP_SCANOUT` (invoking `GPU_MAP_SCANOUT`) and read-only `mmap()`

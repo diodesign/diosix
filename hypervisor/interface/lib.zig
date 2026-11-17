@@ -12,6 +12,7 @@ pub const elf = @import("elf.zig");
 test {
     _ = riscv;
     _ = sbi;
+    _ = @import("sbi/governance.zig");
     _ = elf;
     std.testing.refAllDecls(@This());
 }

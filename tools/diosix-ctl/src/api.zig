@@ -7,6 +7,7 @@ const std = @import("std");
 const linux = std.os.linux;
 const interface = @import("interface").sbi;
 const sysconfig = @import("sysconfig.zig");
+const gov = @import("api/governance.zig");
 
 // Re-export canonical SBI ABI definitions from hypervisor/interface/sbi.zig.
 pub const EXT_DIOSIX: usize = interface.EXT.DIOSIX;
@@ -45,6 +46,15 @@ pub const MapChildMemArgs = interface.MapChildMemArgs;
 pub const UnmapChildMemArgs = interface.UnmapChildMemArgs;
 pub const StartArgs = interface.StartArgs;
 pub const CharterArgs = interface.CharterArgs;
+pub const MISSION_PUBKEY_LEN = interface.MISSION_PUBKEY_LEN;
+pub const MISSION_SIG_LEN = interface.MISSION_SIG_LEN;
+pub const MISSION_SIGN_DOMAIN = interface.MISSION_SIGN_DOMAIN;
+pub const MISSION_SIGN_MSG_LEN = interface.MISSION_SIGN_MSG_LEN;
+pub const MissionFlags = interface.MissionFlags;
+pub const MissionArgs = interface.MissionArgs;
+pub const MissionVoteDecision = interface.MissionVoteDecision;
+pub const MissionVoteArgs = interface.MissionVoteArgs;
+pub const buildMissionSignMessage = interface.buildMissionSignMessage;
 pub const NetPolicyFlags = interface.NetPolicyFlags;
 pub const NetPolicyArgs = interface.NetPolicyArgs;
 
@@ -76,13 +86,16 @@ pub const IOCTL_CONSOLE_READ: u32 = IOCTL_BASE + 23;
 pub const IOCTL_SET_NET_POLICY: u32 = IOCTL_BASE + 24;
 pub const IOCTL_WHISPER_SEND: u32 = IOCTL_BASE + 25;
 pub const IOCTL_WHISPER_RECV: u32 = IOCTL_BASE + 26;
+pub const IOCTL_SEAL_MISSION: u32 = IOCTL_BASE + 30;
+pub const IOCTL_GET_MISSION: u32 = IOCTL_BASE + 31;
+pub const IOCTL_VOTE_MISSION: u32 = IOCTL_BASE + 32;
 
 const EPERM_NEG: isize = -@as(isize, @backingInt(linux.E.PERM));
 const EACCES_NEG: isize = -@as(isize, @backingInt(linux.E.ACCES));
 const EAGAIN_NEG: isize = -@as(isize, @backingInt(linux.E.AGAIN));
 const EOPNOTSUPP_NEG: isize = -@as(isize, @backingInt(linux.E.OPNOTSUPP));
 
-fn checkIoctlRc(rc: usize) !isize {
+pub fn checkIoctlRc(rc: usize) !isize {
     const signed_rc: isize = @bitCast(rc);
     if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) {
         return error.PermissionDenied;
@@ -115,7 +128,7 @@ pub const DiosixClient = struct {
         }
     }
 
-    fn getFd(self: *DiosixClient) !i32 {
+    pub fn getFd(self: *DiosixClient) !i32 {
         if (self.dev_fd) |fd| return fd;
         if (self.open_err) |err| {
             if (err == EPERM_NEG or err == EACCES_NEG) {
@@ -331,57 +344,14 @@ pub const DiosixClient = struct {
         return @intCast(signed_rc);
     }
 
-    pub fn sealCharter(
-        self: *DiosixClient,
-        args: *const CharterArgs,
-    ) !void {
-        const fd = try self.getFd();
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_SEAL_CHARTER, @intFromPtr(args)),
-        );
-    }
-
-    pub fn getCharter(self: *DiosixClient) !CharterArgs {
-        const fd = try self.getFd();
-        var args = std.mem.zeroes(CharterArgs);
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_GET_CHARTER, @intFromPtr(&args)),
-        );
-        return args;
-    }
-
-    pub fn ratifyCharter(
-        self: *DiosixClient,
-        target_cid: usize,
-    ) !usize {
-        const fd = try self.getFd();
-        const signed_rc = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_RATIFY_CHARTER, target_cid),
-        );
-        return @intCast(signed_rc);
-    }
-
-    pub fn resetSteward(
-        self: *DiosixClient,
-        target_cid: usize,
-    ) !usize {
-        const fd = try self.getFd();
-        const signed_rc = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_RESET_STEWARD, target_cid),
-        );
-        return @intCast(signed_rc);
-    }
-
-    pub fn requestRootFailover(
-        self: *DiosixClient,
-        standby_cid: usize,
-    ) !usize {
-        const fd = try self.getFd();
-        const signed_rc = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_REQUEST_ROOT_FAILOVER, standby_cid),
-        );
-        return @intCast(signed_rc);
-    }
+    pub const sealCharter = gov.sealCharter;
+    pub const getCharter = gov.getCharter;
+    pub const sealMission = gov.sealMission;
+    pub const getMission = gov.getMission;
+    pub const voteMission = gov.voteMission;
+    pub const ratifyCharter = gov.ratifyCharter;
+    pub const resetSteward = gov.resetSteward;
+    pub const requestRootFailover = gov.requestRootFailover;
 
     pub fn consoleRead(
         self: *DiosixClient,
@@ -439,42 +409,12 @@ pub const DiosixClient = struct {
         );
     }
 
-    pub fn whisperSend(
-        self: *DiosixClient,
-        target_cid: usize,
-        data: []const u8,
-    ) !usize {
-        if (data.len == 0) return 0;
-        const fd = try self.getFd();
-        var args = ConsoleArgs{
-            .target_cid = target_cid,
-            .data_ptr = @intFromPtr(data.ptr),
-            .max_len = data.len,
-            .actual_len = 0,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_WHISPER_SEND, @intFromPtr(&args)),
-        );
-        return @intCast(args.actual_len);
-    }
-
-    pub fn whisperRecv(self: *DiosixClient, buffer: []u8) !usize {
-        if (buffer.len == 0) return 0;
-        const fd = try self.getFd();
-        var args = ConsoleArgs{
-            .target_cid = 0,
-            .data_ptr = @intFromPtr(buffer.ptr),
-            .max_len = buffer.len,
-            .actual_len = 0,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_WHISPER_RECV, @intFromPtr(&args)),
-        );
-        return @min(@as(usize, @intCast(args.actual_len)), buffer.len);
-    }
+    pub const whisperSend = gov.whisperSend;
+    pub const whisperRecv = gov.whisperRecv;
 };
 
 test "api: DiosixClient error mapping and checkIoctlRc" {
+    _ = gov;
     std.testing.refAllDecls(@This());
 
     var missing_client = DiosixClient{ .dev_fd = null, .open_err = -2 };

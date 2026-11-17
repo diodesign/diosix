@@ -386,6 +386,8 @@ test "parseVersionString and SBI Base extension dispatch" {
     _ = @import("sbi/desktop.zig");
     _ = @import("sbi/scanout_map.zig");
     _ = @import("sbi/info.zig");
+    _ = @import("sbi/mission.zig");
+    _ = @import("sbi/mission/tally.zig");
     const testing = std.testing;
     try testing.expectEqual(
         ParsedVersion{ .major = 26, .minor = 1, .patch = 0 },

@@ -54,6 +54,8 @@
 #define DIOSIX_FUNC_GPU_READ_SCANOUT      28
 #define DIOSIX_FUNC_INPUT_SEND_EVENT      29
 #define DIOSIX_FUNC_GPU_MAP_SCANOUT       30
+#define DIOSIX_FUNC_SEAL_MISSION          31
+#define DIOSIX_FUNC_VOTE_MISSION          32
 
 #define IOCTL_DROP_TRUST            0x1002
 #define IOCTL_RUN                   0x1003
@@ -84,6 +86,9 @@
 #define IOCTL_GPU_READ_SCANOUT      0x101b
 #define IOCTL_INPUT_SEND_EVENT      0x101c
 #define IOCTL_GPU_MAP_SCANOUT       0x101d
+#define IOCTL_SEAL_MISSION          0x101e
+#define IOCTL_GET_MISSION           0x101f
+#define IOCTL_VOTE_MISSION          0x1020
 
 #define DIOSIX_CHILD_MEM_BASE       0x200000000UL
 #define DIOSIX_CHILD_MEM_MAX_SIZE   (256UL * 1024 * 1024)
@@ -157,6 +162,34 @@ struct charter_args {
     uint64_t ratified_mask;
     uint64_t approved_target_cid;
     uint64_t failover_epoch;
+};
+
+struct mission_args {
+    uint8_t  charter_hash[32];
+    uint8_t  principal_pubkey[32];
+    uint8_t  signature[64];
+    uint32_t version;
+    uint32_t min_total_replicas;
+    uint32_t flags;
+    uint8_t  stake_quorum_pct;
+    uint8_t  max_stepdown_pct;
+    uint8_t  is_sealed;
+    uint8_t  has_pubkey;
+    uint64_t eligible_stake_pages;
+    uint64_t approved_stake_pages;
+    uint64_t rejected_stake_pages;
+    uint32_t voter_count;
+    uint32_t _reserved;
+};
+
+struct mission_vote_args {
+    uint8_t  proposal_hash[32];
+    uint8_t  decision;
+    uint8_t  _reserved[7];
+    uint64_t caller_stake_pages;
+    uint64_t eligible_stake_pages;
+    uint64_t approved_stake_pages;
+    uint64_t rejected_stake_pages;
 };
 
 struct map_child_mem_args {
@@ -327,6 +360,11 @@ struct guest_info {
 };
 
 _Static_assert(sizeof(struct charter_args) == 64, "charter_args ABI size");
+_Static_assert(sizeof(struct mission_args) == 176, "mission_args ABI size");
+_Static_assert(
+    sizeof(struct mission_vote_args) == 72,
+    "mission_vote_args ABI size"
+);
 _Static_assert(
     sizeof(struct map_child_mem_args) == 40,
     "map_child_mem_args ABI size"
@@ -386,6 +424,7 @@ long diosix_ioctl_governance(
     unsigned int cmd,
     unsigned long arg
 );
+long diosix_ioctl_mission(unsigned int cmd, unsigned long arg);
 long diosix_ioctl_net_policy(unsigned long arg);
 long diosix_ioctl_whisper(unsigned int cmd, unsigned long arg);
 long diosix_ioctl_desktop(

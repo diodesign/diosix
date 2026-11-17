@@ -1,0 +1,13 @@
+# Diosix Autonomous Node Agent Configuration (/etc/diosix/agent.toml)
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+[agent]
+enabled = false
+poll_interval_sec = 5
+provider = "auto"
+model = "openai/gpt-4o-mini"
+endpoint = ""
+proxy_port = 8081
+max_tokens = 512

@@ -10,6 +10,7 @@
         .status = .active,
         .files = .{
             "tools/alsa-init/main.c",
+            "tools/overlay-common/etc/diosix/agent.toml",
             "tools/overlay-common/etc/diosix/catalog.toml",
             "tools/overlay-common/etc/diosix/charter.toml",
             "tools/overlay-common/etc/diosix/constitution.md",
@@ -57,6 +58,7 @@
         .files = .{
             "tools/diosix-ctl/src/main.zig",
             "tools/diosix-ctl/src/api.zig",
+            "tools/diosix-ctl/src/api/governance.zig",
             "tools/diosix-ctl/src/common.zig",
             "tools/diosix-ctl/src/common/output.zig",
             "tools/diosix-ctl/src/sysconfig.zig",
@@ -227,7 +229,11 @@
             "tools/diosix-ctl/src/manifest/lexer.zig",
             "tools/diosix-ctl/src/manifest/policy.zig",
             "tools/diosix-ctl/src/charter.zig",
+            "tools/diosix-ctl/src/charter/amend.zig",
             "tools/diosix-ctl/src/charter/cmd.zig",
+            "tools/diosix-ctl/src/charter/crypto.zig",
+            "tools/diosix-ctl/src/charter/ops.zig",
+            "tools/diosix-ctl/src/charter/sign.zig",
             "tools/diosix-ctl/src/charter/status.zig",
             "tools/diosix-ctl/src/charter/toml.zig",
             "tools/diosix-ctl/src/charter/whisper.zig",
@@ -296,6 +302,59 @@
         .docs = .{
             "docs/cli.md#dsx-board",
             "docs/security.md#anti-collusion-parent-message-boards",
+        },
+    },
+    .{
+        .id = "cli-autonomous-agent",
+        .name = "Autonomous node agent and parent LLM proxy (`dsx agent`)",
+        .layer = .u_mode_cli,
+        .status = .active,
+        .files = .{
+            "tools/diosix-ctl/src/agent.zig",
+            "tools/diosix-ctl/src/agent/config.zig",
+            "tools/diosix-ctl/src/agent/llm.zig",
+            "tools/diosix-ctl/src/agent/loop.zig",
+            "tools/diosix-ctl/src/agent/loop/vote.zig",
+            "tools/diosix-ctl/src/agent/proxy.zig",
+        },
+        .summary =
+        \\Autonomous VM reconciliation loop supporting OpenRouter, OpenCode,
+        \\local OpenAI-compatible endpoints, MAC-bound parent inference proxy
+        \\routing, deterministic policy fallback, and anti-ransomware vetoes.
+        ,
+        .activated_by = .{
+            "cli-core-dispatch",
+            "cli-net-ssh",
+            "cli-governance-auth-charter",
+        },
+        .docs = .{
+            "docs/cli.md#dsx-agent",
+            "docs/security.md#autonomous-node-agents-and-mission-consensus",
+        },
+    },
+    .{
+        .id = "cli-multihost-swarm",
+        .name = "Multi-host Ed25519 swarm fleet mesh (`dsx swarm`)",
+        .layer = .u_mode_cli,
+        .status = .active,
+        .files = .{
+            "tools/diosix-ctl/src/swarm.zig",
+            "tools/diosix-ctl/src/swarm/protocol.zig",
+            "tools/diosix-ctl/src/swarm/server.zig",
+        },
+        .summary =
+        \\Host-to-host TCP peer collaboration using Ed25519 node identities,
+        \\fleet-wide Mission dissemination, stake vote aggregation, deterministic
+        \\replica sharding, and hard firewall denial of child VM access.
+        ,
+        .activated_by = .{
+            "cli-core-dispatch",
+            "cli-net-ssh",
+            "cli-governance-auth-charter",
+        },
+        .docs = .{
+            "docs/cli.md#dsx-swarm",
+            "docs/architecture.md#multi-host-fleet-collaboration",
         },
     },
     .{

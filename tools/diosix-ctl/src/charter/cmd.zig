@@ -8,6 +8,8 @@ const api = @import("../api.zig");
 const charter = @import("../charter.zig");
 const whisper = @import("../whisper.zig");
 const common = @import("../common.zig");
+const ops = @import("ops.zig");
+const sign = @import("sign.zig");
 const status = @import("status.zig");
 
 pub const cmdCharterStatus = status.cmdCharterStatus;
@@ -26,6 +28,11 @@ const CharterSubcommand = enum {
     status,
     deploy,
     seal,
+    keygen,
+    sign,
+    verify,
+    disseminate,
+    vote,
     propose,
     ratify,
     whisper,
@@ -129,13 +136,18 @@ pub fn cmdCharter(
             \\Usage: {s} charter <subcmd> [options]
             \\
             \\Subcommands:
-            \\  status [--file <path>] [--json]      Show Charter state
+            \\  status [--file <path>] [--json]      Show Charter & M-mode state
+            \\  keygen [--priv P] [--pub Q]          Generate Principal keypair
+            \\  sign --file <path> --key <priv>      Sign Charter/Mission TOML
+            \\  verify --file <path> [--against F]   Verify sig & invariants
             \\  deploy [--file <path>] [--json]      Seal Charter in M-mode
+            \\  disseminate [--file <path>]          Post proposal down tree
+            \\  vote [--file <path>] [--auto]        Cast conserved stake vote
             \\  propose <action> [options] [--json]  Evaluate proposal
             \\      [--unit <id>]                    Target unit ID
             \\      [--count <N>] [--total <M>]      Unit/Steward counts
             \\      [--quorum]                       Mark quorum ratified
-            \\  ratify [--target <cid>] [--json]     Cast ratification vote
+            \\  ratify [--target <cid>] [--json]     Cast Steward vote
             \\  whisper <send|recv> [opts] [--json]  Whisper Protocol IPC
             \\  reset-steward <cid> [--json]         Reset Steward VM
             \\  failover [--standby <cid>] [--json]  Promote Standby Root
@@ -144,6 +156,22 @@ pub fn cmdCharter(
         , .{exe_name}),
         .status => cmdCharterStatus(client, file_path, json_mode),
         .deploy, .seal => cmdCharterDeploy(client, file_path, json_mode),
+        .keygen => sign.cmdCharterKeygen(args, arg_start, json_mode),
+        .sign => sign.cmdCharterSign(args, arg_start, file_path, json_mode),
+        .verify => sign.cmdCharterVerify(args, arg_start, file_path, json_mode),
+        .disseminate => ops.cmdCharterDisseminate(
+            args,
+            arg_start,
+            file_path,
+            json_mode,
+        ),
+        .vote => ops.cmdCharterVote(
+            client,
+            args,
+            arg_start,
+            file_path,
+            json_mode,
+        ),
         .propose => cmdCharterPropose(args, arg_start, file_path, json_mode),
         .ratify => {
             var target_cid: usize = 1;

@@ -47,6 +47,14 @@ configure_top_level_wan() {
     [ -z "$WAN_IF" ] && return 0
     ip link set "$WAN_IF" up 2>/dev/null || \
         ifconfig "$WAN_IF" up 2>/dev/null || true
+    SWARM_IP=$(sed -n 's/.*diosix\.swarm_ip=\([^ ]*\).*/\1/p' \
+        /proc/cmdline 2>/dev/null | head -n 1)
+    if [ -n "$SWARM_IP" ]; then
+        ip addr flush dev "$WAN_IF" 2>/dev/null || true
+        ip addr add "$SWARM_IP" dev "$WAN_IF" 2>/dev/null || true
+        write_dns_fallback
+        return 0
+    fi
     if [ -x /sbin/udhcpc ] || [ -x /usr/sbin/udhcpc ]; then
         udhcpc -i "$WAN_IF" -t 2 -T 1 -b -q \
             -p "/var/run/udhcpc.${WAN_IF}.pid" >/dev/null 2>&1 || true
@@ -107,7 +115,7 @@ configure_downstream_switch() {
         ! -d "$subnet" -j MASQUERADE 2>/dev/null || \
     iptables -t nat -A POSTROUTING -s "$subnet" \
         ! -d "$subnet" -j MASQUERADE 2>/dev/null || true
-    for dport in 8080 8484 8485; do
+    for dport in 8080 8081 8484 8485; do
         iptables -C INPUT -i diosix0 -p tcp --dport "$dport" \
             -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || \
         iptables -A INPUT -i diosix0 -p tcp --dport "$dport" \
@@ -404,13 +412,37 @@ case "$1" in
     fi
     if [ -n "$DSX_BIN" ]; then
         "$DSX_BIN" pkg serve --daemon >/dev/null 2>&1 || true
+        "$DSX_BIN" agent proxy --daemon >/dev/null 2>&1 || true
         "$DSX_BIN" board serve --daemon >/dev/null 2>&1 || true
+        if [ "$HAS_PARENT" -eq 0 ]; then
+            if grep -qE "diosix\.swarm_ip=|diosix\.swarm=1" /proc/cmdline \
+               2>/dev/null; then
+                "$DSX_BIN" swarm serve --daemon >/dev/null 2>&1 || true
+                SPEERS=$(sed -n 's/.*diosix\.swarm_peers=\([^ ]*\).*/\1/p' \
+                    /proc/cmdline 2>/dev/null | head -n 1)
+                if [ -n "$SPEERS" ]; then
+                    (
+                        sleep 1
+                        OLD_IFS="$IFS"; IFS=,
+                        for sp in $SPEERS; do
+                            "$DSX_BIN" swarm join "$sp" >/dev/null 2>&1 || true
+                        done
+                        IFS="$OLD_IFS"
+                    ) &
+                fi
+            fi
+            if grep -q "diosix\.agent=1" /proc/cmdline 2>/dev/null; then
+                "$DSX_BIN" agent run --daemon >/dev/null 2>&1 || true
+            fi
+        fi
     fi
     echo "Diosix guest services: OK"
     ;;
   stop)
     echo "Stopping Diosix guest services..."
-    for pidf in "${RUN_DIR}/board.pid" "${RUN_DIR}/pkg-proxy.pid"; do
+    for pidf in "${RUN_DIR}/board.pid" "${RUN_DIR}/pkg-proxy.pid" \
+                "${RUN_DIR}/llm-proxy.pid" "${RUN_DIR}/agent.pid" \
+                "${RUN_DIR}/swarm.pid"; do
         if [ -r "$pidf" ]; then
             kill "$(cat "$pidf" 2>/dev/null)" 2>/dev/null || true
             rm -f "$pidf"

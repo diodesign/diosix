@@ -155,6 +155,7 @@
             "tools/driver/diosix.c",
             "tools/driver/desktop.c",
             "tools/driver/governance.c",
+            "tools/driver/mission.c",
             "tools/driver/net.c",
         },
         .summary =

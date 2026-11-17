@@ -32,6 +32,14 @@ pub const BOARD_STORE_PATH = "/run/diosix/board.jsonl";
 pub const BOARD_POLICY_PATH = "/run/diosix/board-policy.toml";
 pub const BOARD_PID_PATH = "/run/diosix/board.pid";
 pub const BOARD_LOG_PATH = "/var/log/diosix-board.log";
+pub const CHARTER_PENDING_PATH = "/run/diosix/charter/pending.toml";
+pub const AGENT_PID_PATH = "/run/diosix/agent.pid";
+pub const AGENT_LOG_PATH = "/var/log/diosix-agent.log";
+pub const LLM_PROXY_PID_PATH = "/run/diosix/llm-proxy.pid";
+pub const LLM_PROXY_LOG_PATH = "/var/log/diosix-llm.log";
+pub const SWARM_PID_PATH = "/run/diosix/swarm.pid";
+pub const SWARM_LOG_PATH = "/var/log/diosix-swarm.log";
+pub const SWARM_PEERS_PATH = "/run/diosix/swarm-peers.json";
 
 // System configuration paths (/etc/diosix & /etc).
 pub const AUTH_ENROLLED_PATH = "/etc/diosix/auth.enrolled";
@@ -46,6 +54,9 @@ pub const DEFAULT_CONSTITUTION_DOC_PATH = "/etc/diosix/constitution.md";
 pub const DEFAULT_INSTALL_CONFIG_PATH = "/etc/diosix/install.toml";
 pub const ETC_MANAGEMENT_PRIVKEY_PATH = "/etc/diosix/management_ed25519";
 pub const ETC_MANAGEMENT_PUBKEY_PATH = "/etc/diosix/management_ed25519.pub";
+pub const DEFAULT_AGENT_CONFIG_PATH = "/etc/diosix/agent.toml";
+pub const PRINCIPAL_PRIVKEY_PATH = "/etc/diosix/keys/principal_ed25519";
+pub const PRINCIPAL_PUBKEY_PATH = "/etc/diosix/keys/principal_ed25519.pub";
 
 // Persistent storage & state paths (/var/lib/diosix).
 pub const VAR_LIB_DIOSIX_DIR = "/var/lib/diosix";
@@ -65,6 +76,8 @@ pub const AUTHORIZED_PASSKEYS_PATH =
     "/var/lib/diosix/keys/authorized_passkeys";
 pub const DEV_AUTHORIZED_KEYS_PATH =
     "/var/lib/diosix/keys/dev_authorized_keys";
+pub const NODE_PRIVKEY_PATH = "/var/lib/diosix/keys/node_ed25519";
+pub const NODE_PUBKEY_PATH = "/var/lib/diosix/keys/node_ed25519.pub";
 pub const DEFAULT_SCREENSHOT_PATH = "/var/lib/diosix/screenshot.bmp";
 pub const DEFAULT_RAW_SCREENSHOT_PATH = "/tmp/diosix-screen.raw";
 
@@ -181,7 +194,9 @@ pub const CURL_LOCAL_BIN: [:0]const u8 = "/usr/local/bin/curl";
 pub const DEFAULT_SUBNET_CIDR = "10.0.3.0/24";
 pub const DEFAULT_GATEWAY_IP = "10.0.3.1";
 pub const DEFAULT_PKG_PORT: u16 = 8080;
+pub const DEFAULT_LLM_PROXY_PORT: u16 = 8081;
 pub const DEFAULT_BOARD_PORT: u16 = 8485;
+pub const DEFAULT_SWARM_PORT: u16 = 8486;
 pub const ALPINE_CDN_BASE_URL = "https://dl-cdn.alpinelinux.org/alpine";
 pub const DEFAULT_APK_BRANCH = "v3.24";
 pub const DEFAULT_APK_REPO = "main";

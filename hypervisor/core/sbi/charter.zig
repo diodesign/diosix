@@ -57,6 +57,14 @@ pub fn isCharterSealed() bool {
     return guard.get().sealed;
 }
 
+pub fn syncCharterHashFromMission(hash: [interface.CHARTER_HASH_LEN]u8) void {
+    const guard = charter_manager.acquire();
+    defer guard.release();
+    const st = guard.get();
+    st.sealed = true;
+    st.charter_hash = hash;
+}
+
 pub fn incrementFailoverEpoch() usize {
     const guard = charter_manager.acquire();
     defer guard.release();
@@ -203,6 +211,9 @@ pub fn handleRatifyCharter(vc: *VCore, ctx: *Ctx, a0: usize) void {
 }
 
 pub const steward = @import("steward.zig");
+pub const mission = @import("mission.zig");
+pub const handleSealMission = mission.handleSealMission;
+pub const handleVoteMission = mission.handleVoteMission;
 pub const handleWhisperSend = steward.handleWhisperSend;
 pub const handleWhisperRecv = steward.handleWhisperRecv;
 pub const handleResetSteward = steward.handleResetSteward;
@@ -238,6 +249,7 @@ fn spawnTestSteward(alloc: std.mem.Allocator, root: *Guest) !*Guest {
 test "SBI Diosix Phase 5: Charter sealing, Steward quorum guard, and failover" {
     std.testing.refAllDecls(@This());
     _ = steward;
+    _ = mission;
     const testing = std.testing;
     resetCharterForTest();
     defer resetCharterForTest();

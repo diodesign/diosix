@@ -491,6 +491,6 @@ long diosix_ioctl_governance(
         return ret.error ? diosix_sbi_to_errno(ret.error) : ret.value;
 
     default:
-        return -ENOTTY;
+        return diosix_ioctl_mission(cmd, arg);
     }
 }

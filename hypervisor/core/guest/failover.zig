@@ -17,6 +17,8 @@ const sbi = @import("interface").sbi;
 pub fn resetSteward(self: *guest_mod.Guest, override_entry: usize) void {
     self.stop();
     self.steward_reset_count += 1;
+    self.mission_vote_hash = @splat(0);
+    self.mission_vote_decision = 0;
     self.events = .{};
     self.whisper_rx = .{};
     const entry = if (override_entry != 0)

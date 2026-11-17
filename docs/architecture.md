@@ -167,9 +167,10 @@ is configured as the other's upstream router VM. Likewise, both VirtIO socket
 tree edges so autonomous child agents cannot establish covert lateral channels.
 
 Any parent VM serves as a local gateway over `diosix0` (`10.0.3.1/24` at depth
-0, stepping to `10.0.<3+depth>.1/24` in nested subtrees), hosting both an
-attenuating `apk` package proxy (`diosix0:8080`) and a hash-chained message
-board (`diosix0:8485`) for its direct children.
+0, stepping to `10.0.<3+depth>.1/24` in nested subtrees), hosting an
+attenuating `apk` package proxy (`diosix0:8080`), a large language model (LLM)
+inference proxy (`diosix0:8081`), and a hash-chained message board
+(`diosix0:8485`) for its direct children.
 
 ### VirtIO storage, socket, and desktop devices
 * The VirtIO block device exposes a RAM-backed virtual disk attached to the
@@ -229,6 +230,44 @@ flowchart TD
   crashes or a quorum of stewards ratifies failover, M-mode revokes hardware
   trust from the exiting VM, promotes the standby replica as the new top-level
   VM, and reparents surviving child VMs in place.
+
+---
+
+## Multi-host fleet collaboration
+
+In fleet deployments (`dsx swarm` or `./scripts/build.sh run-swarm`), separate
+physical or virtual hosts operate autonomously while collaborating over
+transmission control protocol (TCP) port `8486`—like individual autonomous
+vehicles coordinating across a shared fleet:
+
+```mermaid
+flowchart LR
+    P["Principal (Ed25519 root key)"] ==>|"Signed Charter v1/v2"| H1["Host 1 (`dsx swarm`:8486)"]
+    P ==>|"Signed Charter v1/v2"| H2["Host 2 (`dsx swarm`:8486)"]
+    H1 <-->|"Signed peer state & proposals"| H2
+    H1 --> C1["Host 1 subtrees (`diosix0`:8485/8081/8080)"]
+    H2 --> C2["Host 2 subtrees (`diosix0`:8485/8081/8080)"]
+```
+
+* **Ed25519 host identity and child isolation:** Each host generates an Ed25519
+  node identity keypair (`/etc/diosix/keys/node.key` and `node.pub`) and signs
+  peer records with its node key, timestamp, active charter digest, and M-mode
+  conserved stake metrics. Firewall rules (`iptables.conf`) drop incoming
+  `diosix0` child traffic to TCP port `8486` so lateral host mesh connections
+  never bridge child subtrees.
+* **Deterministic replica sharding:** Top-level autonomous agents (`dsx agent`)
+  sort live peer public keys and shard `[spec]` unit counts deterministically
+  across live hosts (`computeLocalUnitTarget`), automatically rebalancing
+  capacity without a single central coordinator.
+* **Dissemination and consensus foundations:** Signed amendments disseminate
+  from the swarm port down local parent boards and collect stake votes upward
+  along tree edges (`SEAL_MISSION` and `VOTE_MISSION`), drawing on tree-based
+  dissemination and aggregation (Ray Neiheiser, Miguel Matos, and Luís
+  Rodrigues, *"Kauri: Scalable BFT Consensus with Pipelined Tree-Based
+  Dissemination and Aggregation"*, ACM SOSP 2021), Sybil-resistant quota-bound
+  weight (John R. Douceur, *"The Sybil Attack"*, IPTPS 2002), and Byzantine
+  supermajority thresholds (Miguel Castro and Barbara Liskov, *"Practical
+  Byzantine Fault Tolerance"*, OSDI 1999).
 
 ---
 
