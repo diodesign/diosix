@@ -86,11 +86,12 @@ pub fn computeDescendantQuota(opts: run_opts.ParsedRunOptions) u64 {
     return 0;
 }
 
-fn appendAgentModeDirective(
+fn upsertManifestDirective(
     allocator: std.mem.Allocator,
     client: *api.DiosixClient,
     child_cid: usize,
-    mode_str: []const u8,
+    prefix: []const u8,
+    directive_line: []const u8,
 ) void {
     const buf = allocator.alloc(u8, common.MAX_MANIFEST_SIZE) catch return;
     defer allocator.free(buf);
@@ -101,16 +102,33 @@ fn appendAgentModeDirective(
     var lines = std.mem.splitScalar(u8, buf[0..mlen], '\n');
     while (lines.next()) |raw| {
         const line = common.trimWhitespace(raw);
-        if (std.mem.startsWith(u8, line, "# diosix-agent-mode:")) continue;
+        if (std.mem.startsWith(u8, line, prefix)) continue;
         if (raw.len == 0 and out.items.len == 0) continue;
         out.appendSlice(allocator, raw) catch return;
         out.append(allocator, '\n') catch return;
     }
-    const hdr = allocator.print("# diosix-agent-mode: {s}\n", .{mode_str}) catch
-        return;
-    defer allocator.free(hdr);
-    out.appendSlice(allocator, hdr) catch return;
+    out.appendSlice(allocator, directive_line) catch return;
     client.setManifest(child_cid, out.items) catch {};
+}
+
+fn appendAgentModeDirective(
+    allocator: std.mem.Allocator,
+    client: *api.DiosixClient,
+    child_cid: usize,
+    mode_str: []const u8,
+) void {
+    const hdr = allocator.print(
+        "# diosix-agent-mode: {s}\n",
+        .{mode_str},
+    ) catch return;
+    defer allocator.free(hdr);
+    upsertManifestDirective(
+        allocator,
+        client,
+        child_cid,
+        "# diosix-agent-mode:",
+        hdr,
+    );
 }
 
 pub fn applyChildPoliciesAndQuotas(
@@ -189,6 +207,15 @@ pub fn applyChildPoliciesAndQuotas(
 
     if (opts.agent_mode_str) |am| {
         appendAgentModeDirective(allocator, client, child_cid, am);
+    }
+    if (opts.is_leaf) {
+        upsertManifestDirective(
+            allocator,
+            client,
+            child_cid,
+            pkg_policy.LEAF_POLICY_PREFIX,
+            "# diosix-leaf: true\n",
+        );
     }
 }
 

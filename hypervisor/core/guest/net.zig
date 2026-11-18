@@ -66,16 +66,18 @@ pub fn deliverToChildUpstream(
     frame: []const u8,
 ) void {
     const riscv = @import("../../hardware/native/cpu/riscv64/mod.zig");
-    if (target.net_dev.isRxReady() and target.net_dev.deliverRxFrame(frame)) {
-        target.pic.setPending(5);
-        var it = target.vcores.start;
-        while (it) |node| : (it = node.next) {
-            const vc = node.contents;
-            if (vc.exec_path == .native) {
-                vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
+    if (target.net_dev.isRxReady()) {
+        if (target.net_dev.deliverRxFrame(frame)) {
+            target.pic.setPending(5);
+            var it = target.vcores.start;
+            while (it) |node| : (it = node.next) {
+                const vc = node.contents;
+                if (vc.exec_path == .native) {
+                    vc.getNativeMachine().hvip |= riscv.HVIP.VSEIP;
+                }
             }
+            wakeNetVcores(target);
         }
-        wakeNetVcores(target);
         return;
     }
     sbi_core.deliverToQueue(target, &target.net_rx, frame);

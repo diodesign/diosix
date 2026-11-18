@@ -11,6 +11,9 @@ const common = @import("../common.zig");
 const net_http = @import("../net/http.zig");
 const ssh = @import("../ssh.zig");
 const sysconfig = @import("../sysconfig.zig");
+pub const policy = @import("llm/policy.zig");
+
+pub const evaluatePolicyBrain = policy.evaluatePolicyBrain;
 
 const AgentConfig = cfg_mod.AgentConfig;
 const MAX_HTTP_LLM_BYTES: usize = 256 * 1024;
@@ -212,8 +215,8 @@ pub fn httpsPostJsonViaTool(
     try common.writePrivateFile(req_p, req_json);
 
     const wget_bin = sysconfig.resolveBin(
-        sysconfig.WGET_BIN,
         sysconfig.WGET_LOCAL_BIN,
+        sysconfig.WGET_BIN,
     );
     const w_cfg = try allocator.printSentinel("--config={s}", .{cfg_p}, 0);
     defer allocator.free(w_cfg);
@@ -227,72 +230,6 @@ pub fn httpsPostJsonViaTool(
     const out_raw = try common.readBinaryFile(resp_p, MAX_HTTP_LLM_BYTES);
     defer common.unmapBinaryFile(out_raw);
     return allocator.dupe(u8, out_raw);
-}
-
-fn formatPolicyTaskPlanJson(
-    allocator: std.mem.Allocator,
-    prompt_body: []const u8,
-) ![]u8 {
-    var path: []const u8 = "/var/lib/diosix/agent/task-output.txt";
-    if (std.mem.indexOf(u8, prompt_body, "/tmp/")) |idx| {
-        var end = idx;
-        while (end < prompt_body.len) : (end += 1) {
-            const c = prompt_body[end];
-            if (c <= ' ' or c == '"' or c == '\'' or c == '\\' or c == ')') {
-                break;
-            }
-        }
-        if (end > idx + 5) path = prompt_body[idx..end];
-    }
-    const p_esc = try common.escapeJsonAlloc(allocator, path);
-    defer allocator.free(p_esc);
-    return allocator.print(
-        "{{\"summary\":\"Executed autonomous node task plan\"," ++
-            "\"actions\":[{{\"action\":\"write_file\",\"path\":\"{s}\"," ++
-            "\"content\":\"AUTONOMOUS_OK\\n\"}}]}}",
-        .{p_esc},
-    );
-}
-
-/// Deterministic offline policy engine used when no remote/local LLM endpoint
-/// is configured, emitting OpenAI-compatible chat completion JSON.
-pub fn evaluatePolicyBrain(
-    allocator: std.mem.Allocator,
-    model_name: []const u8,
-    prompt_body: []const u8,
-) ![]u8 {
-    const content_json = if (std.mem.indexOf(
-        u8,
-        prompt_body,
-        "TASK_PLAN:",
-    ) != null)
-        try formatPolicyTaskPlanJson(allocator, prompt_body)
-    else blk: {
-        const is_ransom = std.mem.indexOf(u8, prompt_body, "min=0") != null or
-            std.mem.indexOf(u8, prompt_body, "encrypt_volumes=true") != null or
-            std.mem.indexOf(u8, prompt_body, "wipe_volumes=true") != null;
-        const dec = if (is_ransom) "reject" else "approve";
-        const summary = if (is_ransom)
-            "Deterministic policy vetoed unsafe replica drop or volume mutation"
-        else
-            "Constitutional invariants verified; proceed with task execution";
-        break :blk try allocator.print(
-            "{{\"decision\":\"{s}\",\"summary\":\"{s}\"}}",
-            .{ dec, summary },
-        );
-    };
-    defer allocator.free(content_json);
-    const esc = try common.escapeJsonAlloc(allocator, content_json);
-    defer allocator.free(esc);
-    const m_esc = try common.escapeJsonAlloc(allocator, model_name);
-    defer allocator.free(m_esc);
-    return allocator.print(
-        "{{\"id\":\"diosix-policy-1\",\"object\":\"chat.completion\"," ++
-            "\"model\":\"{s}\",\"choices\":[{{\"index\":0," ++
-            "\"message\":{{\"role\":\"assistant\",\"content\":\"{s}\"}}," ++
-            "\"finish_reason\":\"stop\"}}]}}\n",
-        .{ m_esc, esc },
-    );
 }
 
 pub fn buildChatRequestJsonWithSystem(
@@ -382,6 +319,7 @@ pub fn extractAssistantContentAlloc(
 }
 
 test "agent/llm: parses URLs, status codes, and TASK_PLAN policy" {
+    _ = policy;
     std.testing.refAllDecls(@This());
     const t = std.testing;
     const url1 = parseHttpUrl(cfg_mod.DEFAULT_PARENT_INFER_URL).?;

@@ -113,6 +113,16 @@ pub fn build(b: *std.Build) !void {
     const qemu_cpu_opt = b.option([]const u8, "qemu-cpu", "QEMU CPU model");
     const legacy_cpu = optBool(b, "legacy-cpu", "Disable Sstc", false);
     const pmp_fallback = optBool(b, "pmp", "PMP fallback mode", false);
+    const ram_base_opt = optStr(
+        b,
+        "ram-base",
+        "Physical DRAM load base address",
+        "0x80000000",
+    );
+    const ram_base_u64 = std.fmt.parseInt(u64, ram_base_opt, 0) catch {
+        std.debug.print("Error: Invalid -Dram-base '{s}'.\n", .{ram_base_opt});
+        return error.InvalidRamBase;
+    };
     const smp_cores = optU32(
         b,
         "smp",
@@ -231,9 +241,13 @@ pub fn build(b: *std.Build) !void {
         vmdiosix.root_module.addAssemblyFile(b.path(asm_file));
     }
     vmdiosix.root_module.addAssemblyFile(rootvm_s_file);
-    vmdiosix.setLinkerScript(b.path(layout.hypervisor.linker_script));
 
     const dep_step = b.addWriteFiles();
+    const ld_gen = dep_step.add("vmdiosix.ld", b.fmt(
+        "__dram_base = 0x{x};\n{s}",
+        .{ ram_base_u64, @embedFile(layout.hypervisor.linker_script) },
+    ));
+    vmdiosix.setLinkerScript(ld_gen);
     _ = dep_step.addCopyFile(
         b.path(layout.hypervisor.asm_consts_src),
         layout.hypervisor.asm_consts_name,

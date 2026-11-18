@@ -1,0 +1,160 @@
+#!/bin/sh
+# Stage /var/lib/diosix for persistent, live, ephemeral/install, or diskless.
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
+
+STATE_DIR="/var/lib/diosix"
+RUN_DIR="/run/diosix"
+CAND_DEVS="/dev/vda3 /dev/vda2 /dev/vda /dev/sda3 /dev/sda2 /dev/sda \
+    /dev/nvme0n1p3 /dev/nvme0n1p2 /dev/nvme0n1 \
+    /dev/mmcblk0p3 /dev/mmcblk0p2 /dev/mmcblk0"
+
+mkdir -p "$STATE_DIR" "$RUN_DIR" /etc/diosix
+
+fetch_verified_file() {
+    url="$1"
+    rel_name="$2"
+    dst="$3"
+    mode="$4"
+    sha_file="$5"
+    required="$6"
+
+    exp=$(awk -v f="$rel_name" -v b="$(basename "$rel_name")" \
+        '$2==f || $2=="./"f || $2==b {print $1; exit}' \
+        "$sha_file" 2>/dev/null)
+    if [ -z "$exp" ]; then
+        if [ "$required" -eq 1 ]; then
+            echo "Error: '$rel_name' missing from SHA256SUMS" >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    tmp="${dst}.part"
+    mkdir -p "$(dirname "$dst")"
+    if ! wget -q -T 20 -O "$tmp" "$url"; then
+        rm -f "$tmp"
+        [ "$required" -eq 1 ] && echo "Error: Failed to fetch $url" >&2
+        return "$required"
+    fi
+    got=$(sha256sum "$tmp" 2>/dev/null | awk '{print $1}')
+    if [ "$got" != "$exp" ]; then
+        rm -f "$tmp"
+        echo "Error: SHA-256 mismatch for $rel_name" >&2
+        return 1
+    fi
+    chmod "$mode" "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$dst"
+    return 0
+}
+
+stage_diskless() {
+    mount -t tmpfs -o size=60% tmpfs "$STATE_DIR" 2>/dev/null || true
+    mkdir -p "${STATE_DIR}/images" "${STATE_DIR}/iso" "${STATE_DIR}/disks" \
+        "${STATE_DIR}/manifests" "${STATE_DIR}/keys" \
+        "${STATE_DIR}/apk/v3.24/main/riscv64"
+    chmod 700 "${STATE_DIR}/keys" 2>/dev/null || true
+
+    boot_srv=$(sed -n 's/.*diosix\.boot_server=\([^ ]*\).*/\1/p' \
+        /proc/cmdline 2>/dev/null | head -n 1 | sed 's:/*$::')
+    [ -z "$boot_srv" ] && {
+        echo "Staged empty RAM storage (diskless, no boot_server)."
+        return 0
+    }
+
+    sha_file="${RUN_DIR}/boot.sha256"
+    fetched=0
+    for try in 1 2 3 4 5; do
+        if wget -q -T 5 -O "$sha_file" "${boot_srv}/SHA256SUMS"; then
+            fetched=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$fetched" -eq 0 ]; then
+        rm -f "$sha_file"
+        echo "Error: Unable to fetch ${boot_srv}/SHA256SUMS" >&2
+        return 1
+    fi
+
+    fetch_verified_file \
+        "${boot_srv}/images/diosix-node.elf" \
+        "images/diosix-node.elf" \
+        "${STATE_DIR}/images/diosix-node.elf" \
+        0755 "$sha_file" 1 || return 1
+
+    if grep -qE "diosix\.mode=dev|diosix\.dev_keys=1" /proc/cmdline \
+       2>/dev/null; then
+        fetch_verified_file \
+            "${boot_srv}/keys/dev_authorized_keys" \
+            "keys/dev_authorized_keys" \
+            "${STATE_DIR}/keys/dev_authorized_keys" \
+            0600 "$sha_file" 0 || true
+    fi
+    echo "Staged SHA-256-verified diskless RAM storage from ${boot_srv}."
+}
+
+if grep -q "diosix\.mode=diskless" /proc/cmdline 2>/dev/null; then
+    stage_diskless
+    exit $?
+fi
+
+if grep -q "diosix\.mode=live" /proc/cmdline 2>/dev/null; then
+    mount -t tmpfs -o size=256M tmpfs "$STATE_DIR" 2>/dev/null || true
+    LIVE_MNT="/run/diosix-live"
+    mkdir -p "$LIVE_MNT"
+    LIVE_OK=0
+    for dev in $CAND_DEVS; do
+        if [ -b "$dev" ] && mount -t ext4 -o ro "$dev" "$LIVE_MNT" \
+           2>/dev/null; then
+            LIVE_OK=1
+            mkdir -p "${STATE_DIR}/images" "${STATE_DIR}/iso" \
+                "${STATE_DIR}/disks"
+            for item in "$LIVE_MNT"/*; do
+                [ -e "$item" ] || continue
+                base=$(basename "$item")
+                case "$base" in
+                    images|iso)
+                        for img in "$item"/*; do
+                            [ -e "$img" ] || continue
+                            ln -sf "$img" \
+                                "${STATE_DIR}/${base}/$(basename "$img")" \
+                                2>/dev/null || true
+                        done
+                        ;;
+                    lost+found) ;;
+                    *) cp -a "$item" "$STATE_DIR"/ 2>/dev/null || true ;;
+                esac
+            done
+            echo "Mounted read-only live storage from $dev."
+            break
+        fi
+    done
+    [ "$LIVE_OK" -eq 0 ] && rmdir "$LIVE_MNT" 2>/dev/null || true
+elif grep -qE "diosix\.mode=(ephemeral|install)" /proc/cmdline \
+   2>/dev/null; then
+    mount -t tmpfs -o size=768M tmpfs "$STATE_DIR" 2>/dev/null || true
+    LIVE_MNT="/run/diosix-live"
+    mkdir -p "$LIVE_MNT"
+    for dev in $CAND_DEVS; do
+        if [ -b "$dev" ] && mount -t ext4 -o ro "$dev" "$LIVE_MNT" \
+           2>/dev/null; then
+            cp -a "$LIVE_MNT"/* "$STATE_DIR"/ 2>/dev/null || true
+            umount "$LIVE_MNT" 2>/dev/null || true
+            echo "Staged ephemeral live storage from $dev into RAM."
+            break
+        fi
+    done
+    rmdir "$LIVE_MNT" 2>/dev/null || true
+else
+    for dev in $CAND_DEVS; do
+        if [ -b "$dev" ] && \
+           mount -t ext4 -o rw "$dev" "$STATE_DIR" 2>/dev/null; then
+            echo "Mounted persistent storage $dev on $STATE_DIR."
+            break
+        fi
+    done
+fi

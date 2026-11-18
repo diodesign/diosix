@@ -74,14 +74,83 @@ pub const UART = struct {
     pub const LSR_THRE = 0x20; // Transmitter Holding Register Empty.
 };
 
+const UART_MAX_TX_SPINS: usize = 100_000;
+const SIFIVE_UART_TXDATA: usize = 0x00;
+const SIFIVE_UART_RXDATA: usize = 0x04;
+const SIFIVE_UART_FULL_MASK: u32 = 0x8000_0000;
+
+fn mmioReadU8Reg(base: usize, off: usize, shift: u3, width: u8) u8 {
+    const addr = base + (off << shift);
+    if (width == 4) {
+        return @truncate(@as(*const volatile u32, @ptrFromInt(addr)).*);
+    }
+    return @as(*const volatile u8, @ptrFromInt(addr)).*;
+}
+
+fn mmioWriteU8Reg(
+    base: usize,
+    off: usize,
+    shift: u3,
+    width: u8,
+    val: u8,
+) void {
+    const addr = base + (off << shift);
+    if (width == 4) {
+        @as(*volatile u32, @ptrFromInt(addr)).* = val;
+    } else {
+        @as(*volatile u8, @ptrFromInt(addr)).* = val;
+    }
+}
+
+fn uartTxReady(base: usize, shift: u3, width: u8) bool {
+    const lsr = mmioReadU8Reg(base, UART.LSR, shift, width);
+    return (lsr & UART.LSR_THRE) != 0;
+}
+
+pub fn uartPutchar(base: usize, c: u8) void {
+    if (riscv.uart_is_sifive) {
+        const tx = @as(*volatile u32, @ptrFromInt(base + SIFIVE_UART_TXDATA));
+        var spins: usize = 0;
+        while ((tx.* & SIFIVE_UART_FULL_MASK) != 0 and
+            spins < UART_MAX_TX_SPINS) : (spins += 1)
+        {}
+        tx.* = c;
+        return;
+    }
+    const shift = riscv.uart_reg_shift;
+    const width = riscv.uart_reg_io_width;
+    var spins: usize = 0;
+    while (spins < UART_MAX_TX_SPINS) : (spins += 1) {
+        if (uartTxReady(base, shift, width)) break;
+    }
+    mmioWriteU8Reg(base, UART.THR, shift, width, c);
+}
+
+pub fn uartGetchar(base: usize) i16 {
+    if (riscv.uart_is_sifive) {
+        const rx =
+            @as(*const volatile u32, @ptrFromInt(base + SIFIVE_UART_RXDATA));
+        const val: u32 = rx.*;
+        if ((val & SIFIVE_UART_FULL_MASK) == 0) {
+            return @intCast(val & 0xff);
+        }
+        return -1;
+    }
+    const shift = riscv.uart_reg_shift;
+    const width = riscv.uart_reg_io_width;
+    if ((mmioReadU8Reg(base, UART.LSR, shift, width) & UART.LSR_DR) != 0) {
+        return @as(i16, mmioReadU8Reg(base, UART.RBR, shift, width));
+    }
+    return -1;
+}
+
 pub fn hw_putchar(c: u8) void {
     if (builtin.is_test) return;
     if (drivers.console) |drv| {
         drv.putchar(c);
     } else {
         const uart = riscv.uart_base orelse DEFAULT_UART_BASE;
-        const tx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.THR));
-        tx_reg.* = c;
+        uartPutchar(uart, c);
     }
 }
 
@@ -91,13 +160,8 @@ pub fn hw_getchar() i16 {
         return drv.getchar();
     } else {
         const uart = riscv.uart_base orelse DEFAULT_UART_BASE;
-        const status_reg = @as(*volatile u8, @ptrFromInt(uart + UART.LSR));
-        const rx_reg = @as(*volatile u8, @ptrFromInt(uart + UART.RBR));
-        if (status_reg.* & UART.LSR_DR != 0) {
-            return @as(i16, rx_reg.*);
-        }
+        return uartGetchar(uart);
     }
-    return -1;
 }
 
 fn acquireConsole() *ConsoleState {
@@ -262,4 +326,31 @@ test "debug console circular queue push, pop, capacity, and wrap-around" {
     try testing.expectEqual(@as(?u8, 'C'), q.pop());
     try testing.expectEqual(@as(?u8, 'D'), q.pop());
     try testing.expect(q.isEmpty());
+
+    const saved_sh = riscv.uart_reg_shift;
+    const saved_w = riscv.uart_reg_io_width;
+    const saved_sf = riscv.uart_is_sifive;
+    defer {
+        riscv.uart_reg_shift = saved_sh;
+        riscv.uart_reg_io_width = saved_w;
+        riscv.uart_is_sifive = saved_sf;
+    }
+
+    var dw_regs: [8]u32 align(64) = @splat(0);
+    dw_regs[UART.LSR] = UART.LSR_THRE | UART.LSR_DR;
+    riscv.uart_is_sifive = false;
+    riscv.uart_reg_shift = 2;
+    riscv.uart_reg_io_width = 4;
+    uartPutchar(@intFromPtr(&dw_regs), 'Z');
+    try testing.expectEqual(@as(u32, 'Z'), dw_regs[0]);
+    try testing.expectEqual(@as(i16, 'Z'), uartGetchar(@intFromPtr(&dw_regs)));
+
+    var sf_regs: [4]u32 align(64) = @splat(0);
+    riscv.uart_is_sifive = true;
+    uartPutchar(@intFromPtr(&sf_regs), 'Q');
+    try testing.expectEqual(@as(u32, 'Q'), sf_regs[0]);
+    sf_regs[1] = 'R';
+    try testing.expectEqual(@as(i16, 'R'), uartGetchar(@intFromPtr(&sf_regs)));
+    sf_regs[1] = SIFIVE_UART_FULL_MASK;
+    try testing.expectEqual(@as(i16, -1), uartGetchar(@intFromPtr(&sf_regs)));
 }

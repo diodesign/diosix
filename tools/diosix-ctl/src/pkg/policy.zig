@@ -9,7 +9,21 @@ const common = @import("../common.zig");
 
 pub const PKG_ALLOW_PREFIX = "# diosix-pkg-allow:";
 pub const PKG_DENY_PREFIX = "# diosix-pkg-deny:";
+pub const LEAF_POLICY_PREFIX = "# diosix-leaf:";
 const MAX_PKG_NAME_LEN: usize = 128;
+
+/// Reports whether the manifest marks the child VM as a child-free leaf.
+pub fn isLeafManifest(raw: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, raw, '\n');
+    while (lines.next()) |raw_line| {
+        const line = common.trimWhitespace(raw_line);
+        if (std.mem.startsWith(u8, line, LEAF_POLICY_PREFIX)) {
+            const val = common.trimWhitespace(line[LEAF_POLICY_PREFIX.len..]);
+            if (std.mem.eql(u8, val, "true")) return true;
+        }
+    }
+    return false;
+}
 
 pub const PkgPolicy = struct {
     allow_all: bool = true,
@@ -392,4 +406,7 @@ test "pkg/policy: header parsing, monotonic ceiling, and manifest update" {
     try t.expectEqual(@as(usize, 1), pol2.allow.items.len);
     try t.expect(containsPkg(pol2.allow.items, "doas"));
     try t.expect(containsPkg(pol2.deny.items, "nmap"));
+    try t.expect(!isLeafManifest(m));
+    try t.expect(isLeafManifest("# diosix-leaf: true\n[vm]\n"));
+    try t.expect(!isLeafManifest("# diosix-leaf: false\n[vm]\n"));
 }

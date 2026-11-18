@@ -170,7 +170,7 @@ pub fn parseHostsIpv4(hosts_text: []const u8, hostname: []const u8) ?u32 {
     return null;
 }
 
-fn readNodeEnvValue(key: []const u8, out_buf: *[64]u8) ?[]const u8 {
+pub fn readNodeEnvValue(key: []const u8, out_buf: []u8) ?[]const u8 {
     const raw = common.readBinaryFile(sysconfig.NODE_ENV_PATH, 4096) catch
         return null;
     defer common.unmapBinaryFile(raw);

@@ -93,6 +93,9 @@ Pass Zig build flags directly to `./scripts/build.sh`:
 # Target CPUs or emulators without Sstc or Smstateen extensions
 ./scripts/build.sh run -Dlegacy-cpu=true
 
+# Override DRAM base address (for example Allwinner D1 / ClockworkPi R-01)
+./scripts/build.sh -Dram-base=0x40200000 -Dpmp=true -Dlegacy-cpu=true
+
 # Build with ReleaseSafe optimizations
 ./scripts/build.sh -Doptimize=ReleaseSafe
 
@@ -145,9 +148,9 @@ rebuilds.
   can execute from any 2 MiB-aligned DRAM base address.
 * Rather than assuming hardware hart 0 is the boot processor—which fails on
   SoCs where hart 0 is a small monitor core and application cores start at hart
-  1—the reset vector runs an atomic fetch-and-add lottery so the first hart
-  claiming slot 0 initializes the system while secondary harts park until SMP
-  startup completes.
+  1—monitor harts lacking supervisor mode (`misa.S == 0`, such as SiFive E51
+  or S7 cores) park before the atomic lottery so an S-mode-capable application
+  hart claims slot 0 and brings up the hypervisor.
 
 ### Runtime FDT hardware discovery
 
@@ -155,8 +158,12 @@ During early boot, the bootstrap hart parses the host device tree blob (DTB)
 passed by firmware to locate memory-mapped input/output (MMIO) devices at
 runtime:
 
-* It discovers the host 16550-compatible or SiFive universal asynchronous
-  receiver-transmitter (UART) base address for the M-mode debug console.
+* It resolves `/chosen/stdout-path` (including `/aliases` expansion) and falls
+  back to enabled `ns16550a`, `snps,dw-apb-uart`, `mrvl,pxa-uart`, or
+  `sifive,uart0` nodes, honoring `reg-shift` and `reg-io-width` for the M-mode
+  console.
+* It accepts `/memory` nodes with or without an `@addr` unit suffix and skips
+  CPU nodes whose `status` is disabled or whose `mmu-type` is `riscv,none`.
 * It enables hardware timer comparator registers when advertised in the
   flattened device tree (FDT) instruction set architecture (ISA) string, or
   falls back to core-local interruptor (CLINT) MMIO timer registers.
@@ -183,6 +190,31 @@ Run `./scripts/build.sh live-image` to produce physical boot artifacts under
    M-mode.
 3. Pass the physical hart ID in register `a0` and the board's DTB host physical
    address (HPA) in register `a1`.
+
+### Network booting physical RISC-V boards
+
+For rapid hardware-in-the-loop (HIL) testing without reflashing SD cards, build
+`vmdiosix.bin` with the target board's dynamic random-access memory (DRAM) base
+and instruction set flags, then boot diskless over trivial file transfer
+protocol (TFTP) and HTTP:
+
+| Board | Build flags | Notes |
+| :--- | :--- | :--- |
+| SpacemiT K3 | Default | H-extension and `Sstc` enabled; `mrvl,pxa-uart` at default `0x80000000`. |
+| HiFive Unleashed | `-Dpmp=true -Dlegacy-cpu=true` | E51 monitor hart parks via `misa.S`; `sifive,uart0`. |
+| PolarFire ICICLE | `-Dpmp=true -Dlegacy-cpu=true` | E51 monitor hart parks via `misa.S`; PMP isolation. |
+| PineTab-V (JH7110) | `-Dpmp=true -Dlegacy-cpu=true` | U74 PMP isolation, `snps,dw-apb-uart`, USB-Ethernet (`usb0`). |
+| ClockworkPi R-01 | `-Dram-base=0x40200000 -Dpmp=true -Dlegacy-cpu=true` | Allwinner D1 DRAM above SPL (`0x40200000`), `/memory` DT, USB-Ethernet. |
+
+The root VM kernel config enables common USB-Ethernet adapters (`rtl8152`,
+`ax88179_178a`, `cdc_ether`, `cdc_ncm`, `smsc95xx`) alongside `usb*` interfaces
+in the network startup script. On boards whose resident U-Boot boots in S-mode
+on OpenSBI, compile the OpenSBI `mexec` domain helper in
+[`scripts/hil/uboot_mexec.c`](../scripts/hil/uboot_mexec.c) alongside the
+boot script in [`scripts/hil/boot.cmd`](../scripts/hil/boot.cmd) so the loader
+fetches `vmdiosix.bin` over TFTP, jumps back to M-mode with `(hartid, dtb_pa)`,
+and lets Diosix pull its userland payloads in RAM from
+[`scripts/hil/boot_server.py`](../scripts/hil/boot_server.py).
 
 ---
 

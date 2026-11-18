@@ -70,7 +70,8 @@
 .equ VCPU_HOST_SP_OFFSET,    280
 .equ DYNAREC_FRAME_SIZE,     128
 
-# mstatus bits.
+# mstatus and misa bits.
+.equ MISA_S_SHIFT,           18
 .equ MSTATUS_VS_DIRTY,       (3 << 9)   # Vector extension dirty state
 .equ MSTATUS_MPP_SHIFT,      11         # Previous privilege mode shift
 .equ MSTATUS_MPP_MASK_BITS,  3          # Previous privilege mode mask

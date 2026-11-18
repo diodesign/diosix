@@ -54,6 +54,13 @@ if [ -d "${TARGET_DIR}/usr/lib/xtables" ]; then
     cp -a "${TARGET_DIR}/usr/lib/xtables" "$STAGE/preserve/xtables"
 fi
 
+# Preserve Buildroot Mozilla CA certificate bundle so TLS HTTPS (OpenRouter)
+# works without waiting for an online `apk add ca-certificates`.
+if [ -f "${TARGET_DIR}/etc/ssl/certs/ca-certificates.crt" ]; then
+    cp -L "${TARGET_DIR}/etc/ssl/certs/ca-certificates.crt" \
+        "$STAGE/preserve/ca-certificates.crt"
+fi
+
 # Stage Buildroot musl utilities into /usr/local/{sbin,bin}.
 if copy_tool "dropbear" "$STAGE/usr/local/sbin"; then
     ln -sf "dropbear" "$STAGE/usr/local/sbin/dropbearkey"
@@ -125,6 +132,15 @@ if [ -d "$STAGE/preserve/xtables" ]; then
     mkdir -p "$TARGET_DIR/usr/lib"
     cp -a "$STAGE/preserve/xtables" "$TARGET_DIR/usr/lib/xtables"
 fi
+if [ -f "$STAGE/preserve/ca-certificates.crt" ]; then
+    mkdir -p "$TARGET_DIR/etc/ssl/certs"
+    cp -a "$STAGE/preserve/ca-certificates.crt" \
+        "$TARGET_DIR/etc/ssl/certs/ca-certificates.crt"
+    chmod 0644 "$TARGET_DIR/etc/ssl/certs/ca-certificates.crt"
+    if [ ! -e "$TARGET_DIR/etc/ssl/cert.pem" ]; then
+        ln -sf "certs/ca-certificates.crt" "$TARGET_DIR/etc/ssl/cert.pem"
+    fi
+fi
 
 printf "/lib\n/usr/lib\n/usr/local/lib\n" \
     > "$TARGET_DIR/etc/ld-musl-riscv64.path"
@@ -194,4 +210,4 @@ cp -a "${OVERLAY_COMMON}/." "$TARGET_DIR/"
 cp -a "${DYNAMIC_OVERLAY}/." "$TARGET_DIR/"
 chmod 0700 "$TARGET_DIR/etc/diosix/keys" 2>/dev/null || true
 chmod 0755 "$TARGET_DIR"/etc/init.d/S* 2>/dev/null || true
-chmod 0755 "$TARGET_DIR/usr/sbin/diosix-agent-start" 2>/dev/null || true
+chmod 0755 "$TARGET_DIR"/usr/sbin/diosix-* 2>/dev/null || true

@@ -35,23 +35,13 @@ pub var console: ?ConsoleDriver = null;
 pub var timer: ?TimerDriver = null;
 pub var reset: ?ResetDriver = null;
 
-// NS16550 UART driver implementation.
+// Generic MMIO UART driver implementation (16550, DW-APB 32-bit, SiFive).
 fn ns16550_putchar(c: u8) void {
-    if (riscv.uart_base) |base| {
-        const tx_reg = @as(*volatile u8, @ptrFromInt(base + debug.UART.THR));
-        tx_reg.* = c;
-    }
+    if (riscv.uart_base) |base| debug.uartPutchar(base, c);
 }
 
 fn ns16550_getchar() i16 {
-    if (riscv.uart_base) |base| {
-        const status_reg =
-            @as(*volatile u8, @ptrFromInt(base + debug.UART.LSR));
-        const rx_reg = @as(*volatile u8, @ptrFromInt(base + debug.UART.RBR));
-        if (status_reg.* & debug.UART.LSR_DR != 0) {
-            return @as(i16, rx_reg.*);
-        }
-    }
+    if (riscv.uart_base) |base| return debug.uartGetchar(base);
     return -1;
 }
 

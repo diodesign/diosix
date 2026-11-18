@@ -36,7 +36,10 @@ pub fn populateRegionsLocked(device_tree: *dt.DeviceTree) !void {
 
     var it = device_tree.iter("/", 1);
     while (it.next()) |path| {
-        if (!std.mem.startsWith(u8, std.fs.path.basename(path), "memory@")) {
+        const base_name = std.fs.path.basename(path);
+        if (!std.mem.eql(u8, base_name, "memory") and
+            !std.mem.startsWith(u8, base_name, "memory@"))
+        {
             continue;
         }
         const reg_prop = device_tree.getProperty(path, "reg") catch continue;
@@ -196,4 +199,25 @@ test "FDT cell reading and exclusion clipping" {
     clipExclusion(0x80000000, 0x80000000, 0x80002000, &next_step, &skip);
     try testing.expect(skip);
     try testing.expectEqual(@as(usize, 0x80002000), next_step);
+
+    const tree = try dt.DeviceTree.init(testing.allocator);
+    defer tree.deinit();
+    const P = dt.DeviceTreeProperty;
+    try tree.editProperty(
+        "/",
+        "#address-cells",
+        try P.fromU32(testing.allocator, 2),
+    );
+    try tree.editProperty(
+        "/",
+        "#size-cells",
+        try P.fromU32(testing.allocator, 2),
+    );
+    try tree.editProperty(
+        "/memory",
+        "reg",
+        try P.fromMultiU64(testing.allocator, &.{ 0x40000000, 0x40000000 }),
+    );
+    try discoverMemoryRegions(tree);
+    try testing.expectEqual(@as(usize, 0x40000000), getDiscoveredRamBytes());
 }

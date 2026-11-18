@@ -122,21 +122,40 @@ pub fn ensureRepoArtifact(
             return werr;
         };
     } else {
-        const url = try allocator.print(
-            "{s}/{s}/{s}/{s}/{s}",
-            .{
-                sysconfig.ALPINE_CDN_BASE_URL,
-                rp.branch,
-                rp.repo,
-                rp.arch,
-                rp.file,
-            },
-        );
-        defer allocator.free(url);
-        image.fetchRemoteFile(url, part_z.ptr) catch {
-            _ = linux.unlink(part_z.ptr);
-            return error.DownloadFailed;
-        };
+        var bs_buf: [128]u8 = undefined;
+        var fetched_boot = false;
+        if (net_http.readNodeEnvValue("BOOT_SERVER", &bs_buf)) |bs_raw| {
+            const bs = std.mem.trimEnd(u8, bs_raw, "/");
+            if (std.mem.startsWith(u8, bs, "http://")) {
+                const boot_url = try allocator.print(
+                    "{s}/apk/{s}/{s}/{s}/{s}",
+                    .{ bs, rp.branch, rp.repo, rp.arch, rp.file },
+                );
+                defer allocator.free(boot_url);
+                if (image.fetchRemoteFile(boot_url, part_z.ptr)) {
+                    fetched_boot = true;
+                } else |_| {
+                    _ = linux.unlink(part_z.ptr);
+                }
+            }
+        }
+        if (!fetched_boot) {
+            const url = try allocator.print(
+                "{s}/{s}/{s}/{s}/{s}",
+                .{
+                    sysconfig.ALPINE_CDN_BASE_URL,
+                    rp.branch,
+                    rp.repo,
+                    rp.arch,
+                    rp.file,
+                },
+            );
+            defer allocator.free(url);
+            image.fetchRemoteFile(url, part_z.ptr) catch {
+                _ = linux.unlink(part_z.ptr);
+                return error.DownloadFailed;
+            };
+        }
     }
 
     const rn: isize = @bitCast(linux.rename(part_z.ptr, cache_z.ptr));
@@ -200,6 +219,74 @@ fn checkChildPkgAccess(
     );
 }
 
+fn writeForbidden(cfd: i32, msg: []const u8) void {
+    net_http.writeHttpResponse(
+        cfd,
+        403,
+        "Forbidden",
+        "text/plain",
+        msg,
+    ) catch {};
+}
+
+fn handleServeNodeImage(
+    allocator: std.mem.Allocator,
+    client: *api.DiosixClient,
+    cfd: i32,
+    cid: usize,
+    is_head: bool,
+) void {
+    if (cid >= common.CID_FIRST_CHILD) {
+        _ = client.getInfo(cid) catch {
+            writeForbidden(cfd, "Child policy lookup failed\n");
+            return;
+        };
+        const raw_buf = allocator.alloc(u8, common.MAX_MANIFEST_SIZE) catch {
+            writeForbidden(cfd, "Child policy lookup failed\n");
+            return;
+        };
+        defer allocator.free(raw_buf);
+        const mlen = client.getManifest(cid, raw_buf) catch {
+            writeForbidden(cfd, "Child policy lookup failed\n");
+            return;
+        };
+        if (policy.isLeafManifest(raw_buf[0..mlen])) {
+            writeForbidden(cfd, "Leaf VMs cannot pull nested node images\n");
+            return;
+        }
+    }
+    const cands = [_][]const u8{
+        sysconfig.DEFAULT_GUEST_IMAGE_PATH,
+        sysconfig.AGENT_WORK_DIR ++ "/diosix-node.elf",
+    };
+    var data_opt: ?[]u8 = null;
+    for (cands) |cand| {
+        if (common.readBinaryFile(cand, common.MAX_ELF_FILE_SIZE)) |d| {
+            data_opt = d;
+            break;
+        } else |_| {}
+    }
+    const data = data_opt orelse {
+        net_http.writeHttpResponse(
+            cfd,
+            404,
+            "Not Found",
+            "text/plain",
+            "Base node image not found\n",
+        ) catch {};
+        return;
+    };
+    defer common.unmapBinaryFile(data);
+    const payload = if (is_head) "" else data;
+    net_http.writeHttpResponse(
+        cfd,
+        200,
+        "OK",
+        "application/octet-stream",
+        payload,
+    ) catch {};
+}
+
 fn handlePkgClient(
     allocator: std.mem.Allocator,
     client: *api.DiosixClient,
@@ -255,6 +342,9 @@ fn handlePkgClient(
             body,
         ) catch {};
         return;
+    }
+    if (std.mem.eql(u8, req.path, "/v1/images/diosix-node.elf")) {
+        return handleServeNodeImage(allocator, client, cfd, cid, is_head);
     }
 
     const rp = parseRepoPath(req.path) orelse {

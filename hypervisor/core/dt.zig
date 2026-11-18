@@ -315,11 +315,24 @@ pub const DeviceTree = struct {
         return self.findNodeIndex(node_path) != null;
     }
 
-    /// Counts the number of CPU nodes in the tree.
+    /// Counts enabled application CPU nodes (excluding monitor harts).
     pub fn countCpus(self: *const DeviceTree) usize {
         var count: usize = 0;
         var node_it = self.iter("/cpus", 2);
         while (node_it.next()) |path| {
+            if (self.getProperty(path, "status")) |st| {
+                if (st.asText()) |s_txt| {
+                    const tr = std.mem.trim(u8, s_txt, " \t\r\n\x00");
+                    if (!std.mem.eql(u8, tr, "okay") and
+                        !std.mem.eql(u8, tr, "ok")) continue;
+                } else |_| {}
+            } else |_| {}
+            if (self.getProperty(path, "mmu-type")) |mt| {
+                if (mt.asText()) |m_txt| {
+                    const tr = std.mem.trim(u8, m_txt, " \t\r\n\x00");
+                    if (std.mem.eql(u8, tr, "riscv,none")) continue;
+                } else |_| {}
+            } else |_| {}
             if (self.getProperty(path, "device_type")) |p| {
                 if (p.asText()) |text| {
                     if (std.mem.eql(u8, text, "cpu")) count += 1;
@@ -418,12 +431,38 @@ test "device tree manipulation, iteration, and getParent" {
     try dt.editProperty("/cpus", "#address-cells", try P.fromU32(allocator, 1));
     try dt.editProperty("/cpus", "#size-cells", try P.fromU32(allocator, 0));
     try dt.editProperty("/cpus/cpu@0", "reg", try P.fromU32(allocator, 0));
+    try dt.editProperty(
+        "/cpus/cpu@0",
+        "device_type",
+        try P.fromText(allocator, "cpu"),
+    );
+    try dt.editProperty(
+        "/cpus/cpu@0",
+        "mmu-type",
+        try P.fromText(allocator, "riscv,none"),
+    );
     try dt.editProperty("/cpus/cpu@1", "reg", try P.fromU32(allocator, 1));
+    try dt.editProperty(
+        "/cpus/cpu@1",
+        "device_type",
+        try P.fromText(allocator, "cpu"),
+    );
+    try dt.editProperty(
+        "/cpus/cpu@2",
+        "device_type",
+        try P.fromText(allocator, "cpu"),
+    );
+    try dt.editProperty(
+        "/cpus/cpu@2",
+        "status",
+        try P.fromText(allocator, "disabled"),
+    );
+    try std.testing.expectEqual(@as(usize, 1), dt.countCpus());
 
     var it = dt.iter("/cpus/cpu", 2);
     var count: usize = 0;
     while (it.next()) |_| count += 1;
-    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expectEqual(@as(usize, 3), count);
 
     try dt.editProperty("/cpus", "#address-cells", try P.fromU32(allocator, 2));
     const updated = try dt.getProperty("/cpus", "#address-cells");

@@ -27,6 +27,14 @@
 # => a0 = per-system unique CPU core ID, aka hart ID
 #    a1 = pointer to device tree describing the environment
 _start:
+    # Park monitor harts lacking Supervisor mode (e.g. E51 / S7 on FU540,
+    # MPFS250T, or JH7110) before they claim a hypervisor hart lottery ID.
+    csrr        t0, misa
+    srli        t0, t0, MISA_S_SHIFT
+    andi        t0, t0, 1
+    bnez        t0, 1f
+    j           infinite_loop
+1:
     # Atomically claim a sequential internal CPU ID starting at 0 (0, 1, 2...).
     # CPU ID 0 is the boot CPU; IDs 0..31 use contiguous static slabs;
     # IDs 32+ use dynamically allocated slabs.

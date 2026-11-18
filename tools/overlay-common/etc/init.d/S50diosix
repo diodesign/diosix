@@ -35,7 +35,7 @@ write_dns_fallback() {
 configure_top_level_wan() {
     WAN_IF=""
     for iface in /sys/class/net/eth* /sys/class/net/en* \
-        /sys/class/net/wlan*; do
+        /sys/class/net/usb* /sys/class/net/wlan*; do
         [ -d "$iface" ] || continue
         iname=$(basename "$iface")
         if [ "$iname" != "diosix0" ] && [ "$iname" != "lo" ] && \
@@ -140,65 +140,10 @@ configure_downstream_switch() {
 }
 
 stage_storage() {
-    mkdir -p "$STATE_DIR" "$ETC_DIR"
-    CAND_DEVS="/dev/vda3 /dev/vda2 /dev/vda /dev/sda3 /dev/sda2 /dev/sda \
-        /dev/nvme0n1p3 /dev/nvme0n1p2 /dev/nvme0n1 \
-        /dev/mmcblk0p3 /dev/mmcblk0p2 /dev/mmcblk0"
-    if grep -q "diosix\.mode=live" /proc/cmdline 2>/dev/null; then
-        mount -t tmpfs -o size=256M tmpfs "$STATE_DIR" 2>/dev/null || true
-        LIVE_MNT="/run/diosix-live"
-        mkdir -p "$LIVE_MNT"
-        LIVE_OK=0
-        for dev in $CAND_DEVS; do
-            if [ -b "$dev" ] && mount -t ext4 -o ro "$dev" "$LIVE_MNT" \
-               2>/dev/null; then
-                LIVE_OK=1
-                mkdir -p "${STATE_DIR}/images" "${STATE_DIR}/iso" \
-                    "${STATE_DIR}/disks"
-                for item in "$LIVE_MNT"/*; do
-                    [ -e "$item" ] || continue
-                    base=$(basename "$item")
-                    case "$base" in
-                        images|iso)
-                            for img in "$item"/*; do
-                                [ -e "$img" ] || continue
-                                ln -sf "$img" \
-                                    "${STATE_DIR}/${base}/$(basename "$img")" \
-                                    2>/dev/null || true
-                            done
-                            ;;
-                        lost+found) ;;
-                        *) cp -a "$item" "$STATE_DIR"/ 2>/dev/null || true ;;
-                    esac
-                done
-                echo "Mounted read-only live storage from $dev."
-                break
-            fi
-        done
-        [ "$LIVE_OK" -eq 0 ] && rmdir "$LIVE_MNT" 2>/dev/null || true
-    elif grep -qE "diosix\.mode=(ephemeral|install)" /proc/cmdline \
-       2>/dev/null; then
-        mount -t tmpfs -o size=768M tmpfs "$STATE_DIR" 2>/dev/null || true
-        LIVE_MNT="/run/diosix-live"
-        mkdir -p "$LIVE_MNT"
-        for dev in $CAND_DEVS; do
-            if [ -b "$dev" ] && mount -t ext4 -o ro "$dev" "$LIVE_MNT" \
-               2>/dev/null; then
-                cp -a "$LIVE_MNT"/* "$STATE_DIR"/ 2>/dev/null || true
-                umount "$LIVE_MNT" 2>/dev/null || true
-                echo "Staged ephemeral live storage from $dev into RAM."
-                break
-            fi
-        done
-        rmdir "$LIVE_MNT" 2>/dev/null || true
+    if [ -x /usr/sbin/diosix-stage-storage ]; then
+        /usr/sbin/diosix-stage-storage || true
     else
-        for dev in $CAND_DEVS; do
-            if [ -b "$dev" ] && \
-               mount -t ext4 -o rw "$dev" "$STATE_DIR" 2>/dev/null; then
-                echo "Mounted persistent storage $dev on $STATE_DIR."
-                break
-            fi
-        done
+        mkdir -p "$STATE_DIR" "$ETC_DIR"
     fi
 }
 
@@ -365,10 +310,13 @@ case "$1" in
         ln -sf "$GUEST_ELF" "${STATE_DIR}/images/default.elf" \
             2>/dev/null || true
 
+    BOOT_SRV=$(sed -n 's/.*diosix\.boot_server=\([^ ]*\).*/\1/p' \
+        /proc/cmdline 2>/dev/null | head -n 1 | sed 's:/*$::')
     mkdir -p "$KEY_DIR" "${ETC_DIR}/keys" "$RUN_DIR"
     {
         echo "HAS_PARENT=${HAS_PARENT}"
         echo "PARENT_IP=${PARENT_IP}"
+        [ -n "$BOOT_SRV" ] && echo "BOOT_SERVER=${BOOT_SRV}"
     } > "${RUN_DIR}/node-env" 2>/dev/null || true
     chmod 0644 "${RUN_DIR}/node-env" 2>/dev/null || true
     chmod 700 "$KEY_DIR" "${ETC_DIR}/keys" 2>/dev/null || true
@@ -396,8 +344,8 @@ case "$1" in
     if [ "$HAS_PARENT" -eq 0 ]; then
         [ -s "${MGT_KEY}.pub" ] && \
             cat "${MGT_KEY}.pub" >> "$AUTH_KEYS" 2>/dev/null || true
-        if grep -q "diosix.mode=dev" /proc/cmdline 2>/dev/null && \
-           [ -s "$DEV_KEYS" ]; then
+        if grep -qE "diosix\.mode=dev|diosix\.dev_keys=1" /proc/cmdline \
+           2>/dev/null && [ -s "$DEV_KEYS" ]; then
             cat "$DEV_KEYS" >> "$AUTH_KEYS" 2>/dev/null || true
         fi
     elif [ -n "$DSX_BIN" ]; then
@@ -411,7 +359,10 @@ case "$1" in
     mkdir -p "${STATE_DIR}/apk/v3.24/main/riscv64" \
         /var/cache/diosix/pkg/v3.24/main/riscv64 /etc/apk
     if [ "$HAS_PARENT" -eq 0 ]; then
-        echo "${STATE_DIR}/apk/v3.24/main" > /etc/apk/repositories
+        {
+            echo "${STATE_DIR}/apk/v3.24/main"
+            [ -n "$BOOT_SRV" ] && echo "${BOOT_SRV}/apk/v3.24/main"
+        } > /etc/apk/repositories
     else
         echo "http://diosix-parent:8080/v3.24/main" > /etc/apk/repositories
     fi

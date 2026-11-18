@@ -143,6 +143,8 @@
             "tools/diosix-gui/src/tests/panes.zig",
             "tools/diosix-gui/src/tests/visual.zig",
             "tools/guest-shim/src/tests/loader.zig",
+            "scripts/lib/llm_mock.py",
+            "scripts/test_live_llm_app.py",
             "scripts/test_manifest_integration.py",
             "scripts/demo_external_guests.py",
         },
@@ -181,6 +183,33 @@
         .docs = .{
             "docs/build.md#containerized-builds-with-docker",
             "docs/development.md#branching-workflow",
+        },
+    },
+    .{
+        .id = "hil-hardware-lab",
+        .name = "Diskless network boot and Shelly hardware-in-the-loop lab",
+        .layer = .build_infra,
+        .status = .active,
+        .files = .{
+            "scripts/hil/boot.cmd",
+            "scripts/hil/boot_server.py",
+            "scripts/hil/lab.example.toml",
+            "scripts/hil/runner.py",
+            "scripts/hil/shelly.py",
+            "scripts/hil/uboot_mexec.c",
+        },
+        .summary =
+        \\Raspberry Pi TFTP and HTTP boot server, pure-Python FDT bootargs
+        \\patcher, U-Boot OpenSBI mexec handoff helper, and Shelly Gen1/Gen2+
+        \\smart-plug automation for multi-board RV64 hardware-in-the-loop tests.
+        ,
+        .activated_by = .{
+            "build-zig-pipeline",
+            "qemu-live-media",
+        },
+        .docs = .{
+            "docs/build.md#network-booting-physical-risc-v-boards",
+            "docs/run.md#running-diskless-and-hardware-lab-tests",
         },
     },
 }

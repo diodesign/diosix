@@ -187,7 +187,7 @@ Documentation is split into two tracks depending on what you want to do:
 
 | Guide | What it covers |
 | :--- | :--- |
-| [Getting started and running Diosix](docs/run.md) | Booting in QEMU, exploring the interactive tour and graphical desktop, and provisioning target disks. |
+| [Getting started and running Diosix](docs/run.md) | Booting in QEMU, running diskless and Shelly hardware-in-the-loop (HIL) tests, exploring the interactive tour and graphical desktop, and provisioning target disks. |
 | [Deploying and provisioning guest VMs](docs/guests.md) | Running built-in sandboxes, booting installer ISOs, seeding disk images, booting custom kernels, and managing quotas and RAM checkpoints. |
 | [Security, networking, and governance](docs/security.md) | Default guest network isolation, chaining VMs through a firewall VM, managing SSH passkeys, Principal-signed Mission consensus, anti-ransomware vetoes, and sealing a charter. |
 | [CLI and configuration reference](docs/cli.md) | Full command reference for `dsx` (including `agent`, `swarm`, `charter`, `pkg`, and `board`) and runtime configuration files in `/etc/diosix/`. |
@@ -200,7 +200,7 @@ Documentation is split into two tracks depending on what you want to do:
 | [Shared interface and ABI](docs/interface.md) | Supervisor binary interface (SBI) hypercalls, C application binary interface (ABI) structures, Linux kernel driver calls, and the virtual MMIO bus map. |
 | [GUI architecture](docs/gui-architecture.md) | Internals of the direct rendering manager (DRM) and kernel mode setting (KMS) host desktop, guest display windows, terminal multiplexer, and JSON control plane. |
 | [Feature support matrix](docs/support-matrix.md) | Generated map of every hypervisor, emulation, kernel driver, CLI, GUI, and build feature alongside its source files, callers, and documentation links. |
-| [Build system, porting, and debugging](docs/build.md) | Build pipeline caching, declarative layout manifests, position-independent M-mode bootstrap, physical board deployment, and GNU debugger (GDB) remote debugging. |
+| [Build system, porting, and debugging](docs/build.md) | Build pipeline caching, declarative layout manifests, position-independent M-mode bootstrap, physical board and network deployment, and GNU debugger (GDB) remote debugging. |
 | [Contributor guide](docs/development.md) & [Style guide](docs/style-guide.md) | Memory ownership, concurrency rules, unit and integration testing, calendar versioning (CalVer), and code and prose conventions. |
 
 Community expectations are outlined in the [Code of conduct](docs/conduct.md).

@@ -49,6 +49,16 @@ pub const LOW_WORD_MASK: u64 = 0x0000_0000_ffff_ffff;
 pub const HIGH_WORD_MASK: u64 = 0xffff_ffff_0000_0000;
 pub const HIGH_WORD_SHIFT: u6 = 32;
 
+pub inline fn memoryBarrier() void {
+    const arch = @import("builtin").cpu.arch;
+    if (comptime arch == .riscv64 or arch == .riscv32) {
+        asm volatile ("fence rw, rw" ::: .{ .memory = true });
+    } else {
+        var guard: u8 = 0;
+        _ = @atomicRmw(u8, &guard, .Xchg, 1, .seq_cst);
+    }
+}
+
 pub inline fn setLow32(cur: u64, val: u32) u64 {
     return (cur & HIGH_WORD_MASK) | val;
 }
@@ -147,6 +157,7 @@ pub fn pushVirtqUsed(
     const elem_off = VIRTQ_RING_ELEMS_OFFSET +%
         (@as(u64, used_slot) *% @sizeOf(VirtqUsedElem));
     _ = mem.write(q.device_gpa +% elem_off, std.mem.asBytes(&elem));
+    memoryBarrier();
     q.last_used_idx +%= 1;
     _ = mem.write(
         q.device_gpa +% VIRTQ_RING_IDX_OFFSET,
@@ -442,31 +453,21 @@ pub const Bus = struct {
 
 test "MMIO Bus address classification and VirtIO transport probe" {
     const testing = std.testing;
+    const eq = testing.expectEqual;
     testing.refAllDecls(@This());
-    _ = vuart_mod;
-    _ = vtimer_mod;
-    _ = vpic_mod;
-    _ = vsock_mod;
-    _ = vgpu_mod;
-    _ = vinput_mod;
-    _ = vblk_mod;
-    _ = vnet_mod;
+    _ = .{ vsock_mod, vblk_mod, vnet_mod };
 
-    try testing.expect(Bus.isMmioAddr(0x10000000)); // UART.
-    try testing.expect(Bus.isMmioAddr(0x10001000)); // VirtIO slot 0 (vsock).
-    try testing.expect(Bus.isMmioAddr(0x10002000)); // VirtIO slot 1 (gpu).
-    try testing.expect(Bus.isMmioAddr(0x10003000)); // VirtIO slot 2 (input).
-    try testing.expect(Bus.isMmioAddr(0x02000000)); // CLINT.
-    try testing.expect(Bus.isMmioAddr(0x0c000000)); // PLIC.
-    try testing.expect(Bus.isMmioAddr(0x00101000)); // RTC.
-    try testing.expect(!Bus.isMmioAddr(0x80000000)); // DRAM is not MMIO.
+    for ([_]u32{
+        0x10000000, 0x10001000, 0x10002000, 0x10003000,
+        0x02000000, 0x0c000000, 0x00101000,
+    }) |addr| try testing.expect(Bus.isMmioAddr(addr));
+    try testing.expect(!Bus.isMmioAddr(0x80000000));
 
     var uart = vuart_mod.VirtualUart{};
     var timer = vtimer_mod.VirtualTimer{};
     var pic = vpic_mod.VirtualPlic{};
     var gpu = vgpu_mod.VirtioGpu.initWithMem(1, null, null);
     var input = vinput_mod.VirtioInput.initWithMem(1, null);
-
     var bus = Bus{
         .uart = &uart,
         .timer = &timer,
@@ -475,24 +476,13 @@ test "MMIO Bus address classification and VirtIO transport probe" {
         .input = &input,
     };
 
-    try testing.expectEqual(
-        VIRTIO_MMIO_MAGIC,
-        bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x000, 4),
-    );
-    try testing.expectEqual(
-        VIRTIO_MMIO_VERSION_2,
-        bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x004, 4),
-    );
-    try testing.expectEqual(
-        vgpu_mod.VIRTIO_ID_GPU,
-        bus.read(MMIO_VIRTIO_BASE + 0x1000 + 0x008, 4),
-    );
-    try testing.expectEqual(
-        vinput_mod.VIRTIO_ID_INPUT,
-        bus.read(MMIO_VIRTIO_BASE + 0x2000 + 0x008, 4),
-    );
-    try testing.expectEqual(
+    const g_base = MMIO_VIRTIO_BASE + 0x1000;
+    try eq(VIRTIO_MMIO_MAGIC, bus.read(g_base + 0x000, 4));
+    try eq(VIRTIO_MMIO_VERSION_2, bus.read(g_base + 0x004, 4));
+    try eq(vgpu_mod.VIRTIO_ID_GPU, bus.read(g_base + 0x008, 4));
+    try eq(vinput_mod.VIRTIO_ID_INPUT, bus.read(g_base + 0x1008, 4));
+    try eq(
         @as(u64, VIRTIO_MMIO_REG_SHM_NONE),
-        bus.read(MMIO_VIRTIO_BASE + 0x1000 + VIRTIO_MMIO_REG_SHM_LEN_LOW, 4),
+        bus.read(g_base + VIRTIO_MMIO_REG_SHM_LEN_LOW, 4),
     );
 }

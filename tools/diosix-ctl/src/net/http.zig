@@ -22,6 +22,7 @@ pub const isArpPeerOnDev = peer.isArpPeerOnDev;
 pub const resolvePeerChildCid = peer.resolvePeerChildCid;
 pub const isPeerFromDiosixBridge = peer.isPeerFromDiosixBridge;
 pub const parseHostsIpv4 = peer.parseHostsIpv4;
+pub const readNodeEnvValue = peer.readNodeEnvValue;
 pub const resolveParentIpv4 = peer.resolveParentIpv4;
 pub const isHasParent = peer.isHasParent;
 pub const ensureDirRecursive = peer.ensureDirRecursive;

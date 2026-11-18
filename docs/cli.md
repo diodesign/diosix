@@ -854,9 +854,11 @@ Subcommands:
 * `deny <vm|cid> <none|pkg1,pkg2>`: Adds explicit package denials to a child VM
   (always merges and preserves parent-level denials).
 * `sync [--branch v3.24] [--repo main] [--arch riscv64] [--port P]`: Fetches
-  a fresh `APKINDEX.tar.gz` from the upstream parent proxy or Alpine CDN into
-  `/var/cache/diosix/pkg/`.
-* `serve [--port P] [--daemon]`: Starts the attenuating APK proxy server.
+  a fresh `APKINDEX.tar.gz` from `BOOT_SERVER` (on diskless nodes), the
+  upstream parent proxy, or the Alpine CDN into `/var/cache/diosix/pkg/`.
+* `serve [--port P] [--daemon]`: Starts the attenuating APK proxy server, which
+  also serves `GET /v1/images/diosix-node.elf` to non-leaf child stewards and
+  returns `403 Forbidden` when `LEAF_NO_CHILDREN` is set.
 
 Examples:
 ```bash
@@ -934,9 +936,10 @@ Subcommands:
   /v1/infer`, `GET /v1/quota`, and legacy `POST /v1/chat/completions`) on
   `127.0.0.1` and `diosix0`, binding direct children via kernel MAC ARP state.
 * `step [--json]`: Runs one reconciliation tick: polls charter proposals and
-  votes via `VOTE_MISSION`, polls `topic=task` board messages to execute
-  bounded actions (`tasks_completed`), and on top-level VMs seals amendments and
-  reconciles sharded workload units.
+  votes via `VOTE_MISSION`, executes grounded `topic=task` actions (`spawn_vm`
+  with automatic parent `/v1/images/diosix-node.elf` fetch on stewards,
+  `ssh_child`, `grant_quota`), heals unread child `topic=alert` events
+  (`repair_receipt`), and seals amendments on top-level VMs.
 * `run [--interval S] [--daemon]`: Runs `step` continuously every `S` seconds
   (default `5`).
 

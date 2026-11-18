@@ -1,0 +1,82 @@
+# Example Hardware-in-the-Loop (HIL) RV64 Lab Inventory for Raspberry Pi.
+# Copy to lab.toml and fill in real MAC addresses, /dev/serial/by-id/* UART
+# paths, DTB paths, and Shelly smart plug IPs on the lab switch.
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+[lab]
+interface = "eth0"
+gateway_ip = "10.42.0.1"
+dhcp_start = "10.42.0.100"
+dhcp_end = "10.42.0.200"
+tftp_root = "/srv/tftp"
+http_port = 8088
+node_elf = "zig-out/guest-riscv64/bin/diosix-node.elf"
+dev_keys = ".zig-cache/dev_id_ed25519.pub"
+apk_dir = ".zig-cache/storage-staging/apk"
+
+[[hosts]]
+name = "spacemit-k3"
+mac = "02:42:00:00:00:11"
+ip = "10.42.0.11/24"
+serial = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_K3-if00-port0"
+ser2net_port = 7001
+plug_host = "10.42.0.51"
+plug_switch = 0
+vmdiosix_bin = "zig-out/guest-riscv64/bin/vmdiosix.bin"
+dtb = "scripts/hil/dtbs/spacemit-k3.dtb"
+build_flags = ""
+console_args = "console=ttyS0,115200 earlycon"
+
+[[hosts]]
+name = "hifive-unleashed"
+mac = "02:42:00:00:00:12"
+ip = "10.42.0.12/24"
+serial = "/dev/serial/by-id/usb-FTDI_Quad_RS232-HS_FU540-if00-port0"
+ser2net_port = 7002
+plug_host = "10.42.0.52"
+plug_switch = 0
+vmdiosix_bin = "zig-out/guest-riscv64/bin/vmdiosix-pmp.bin"
+dtb = "scripts/hil/dtbs/hifive-unleashed.dtb"
+build_flags = "-Dpmp=true -Dlegacy-cpu=true"
+console_args = "console=ttySIF0,115200 earlycon"
+
+[[hosts]]
+name = "polarfire-icicle"
+mac = "02:42:00:00:00:13"
+ip = "10.42.0.13/24"
+serial = "/dev/serial/by-id/usb-Silicon_Labs_CP2105_MPFS-if01-port0"
+ser2net_port = 7003
+plug_host = "10.42.0.53"
+plug_switch = 0
+vmdiosix_bin = "zig-out/guest-riscv64/bin/vmdiosix-pmp.bin"
+dtb = "scripts/hil/dtbs/mpfs-icicle-kit.dtb"
+build_flags = "-Dpmp=true -Dlegacy-cpu=true"
+console_args = "console=ttyS0,115200 earlycon"
+
+[[hosts]]
+name = "pinetab-v"
+mac = "02:42:00:00:00:14"
+ip = "10.42.0.14/24"
+serial = "/dev/serial/by-id/usb-Silicon_Labs_CP2102N_PINETABV-if00-port0"
+ser2net_port = 7004
+plug_host = "10.42.0.54"
+plug_switch = 0
+vmdiosix_bin = "zig-out/guest-riscv64/bin/vmdiosix-pmp.bin"
+dtb = "scripts/hil/dtbs/jh7110-pinetab-v.dtb"
+build_flags = "-Dpmp=true -Dlegacy-cpu=true"
+console_args = "console=ttyS0,115200 earlycon"
+
+[[hosts]]
+name = "clockworkpi-r01"
+mac = "02:42:00:00:00:15"
+ip = "10.42.0.15/24"
+serial = "/dev/serial/by-id/usb-WCH_CH340_R01-if00-port0"
+ser2net_port = 7005
+plug_host = "10.42.0.55"
+plug_switch = 0
+vmdiosix_bin = "zig-out/guest-riscv64/bin/vmdiosix-d1.bin"
+dtb = "scripts/hil/dtbs/sun20i-d1-clockworkpi-r01.dtb"
+build_flags = "-Dram-base=0x40200000 -Dpmp=true -Dlegacy-cpu=true"
+console_args = "console=ttyS0,115200 earlycon"

@@ -38,6 +38,7 @@ pub const AGENT_RUNTIME_DIR = "/run/diosix/agent";
 pub const AGENT_PID_PATH = "/run/diosix/agent/agent.pid";
 pub const AGENT_VOTED_PATH = "/run/diosix/agent/voted.txt";
 pub const AGENT_DONE_TASKS_PATH = "/run/diosix/agent/done-tasks.txt";
+pub const AGENT_ALERT_SEQ_PATH = "/run/diosix/agent/last-alert-seq.txt";
 pub const AGENT_LOG_PATH = "/var/log/diosix-agent.log";
 pub const GATEWAY_LEDGER_RUN_PATH = "/run/diosix/gateway-ledger.json";
 pub const LLM_PROXY_PID_PATH = "/run/diosix/llm-proxy.pid";

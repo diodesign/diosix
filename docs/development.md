@@ -56,8 +56,11 @@ integration suite after building:
 
 ```bash
 ./scripts/build.sh
-python3 scripts/test_manifest_integration.py
-python3 scripts/demo_external_guests.py --headless-verify
+python3 -B scripts/test_manifest_integration.py
+python3 -B scripts/run_swarm.py --hosts 2 --self-test
+python3 -B scripts/test_live_llm_app.py --self-test
+python3 -B scripts/hil/runner.py --self-test
+python3 -B scripts/demo_external_guests.py --headless-verify
 ```
 
 ### Live media builds and testing

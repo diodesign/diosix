@@ -59,6 +59,9 @@ pub fn probe(fdt_paddr: usize) HostHardware {
     if (hw.clint_base) |c| clint.init(c);
 
     riscv.uart_base = hw.uart_base;
+    riscv.uart_reg_shift = hw.uart_reg_shift;
+    riscv.uart_reg_io_width = hw.uart_reg_io_width;
+    riscv.uart_is_sifive = hw.uart_is_sifive;
     riscv.clint_base = hw.clint_base;
     riscv.plic_base = hw.plic_base;
     return hw;
@@ -70,6 +73,9 @@ test "discovery probe fallback on null FDT address" {
     _ = clint;
     defer {
         riscv.uart_base = null;
+        riscv.uart_reg_shift = 0;
+        riscv.uart_reg_io_width = 1;
+        riscv.uart_is_sifive = false;
         riscv.clint_base = null;
         riscv.plic_base = null;
         clint.base_address = null;

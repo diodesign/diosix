@@ -68,8 +68,8 @@ pub fn fetchRemoteFile(url: []const u8, dest_z: [*:0]const u8) !void {
     }
 
     const wget_bin = sysconfig.resolveBin(
-        sysconfig.WGET_BIN,
         sysconfig.WGET_LOCAL_BIN,
+        sysconfig.WGET_BIN,
     );
     const wget_argv: [*:null]const ?[*:0]const u8 = &[_:null]?[*:0]const u8{
         wget_bin.ptr,

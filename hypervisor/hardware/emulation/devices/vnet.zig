@@ -174,6 +174,7 @@ pub const VirtioNet = struct {
         const used_off = bus.VIRTQ_RING_ELEMS_OFFSET +%
             (@as(u64, used_slot) *% @sizeOf(VirtqUsedElem));
         _ = mem.write(q.device_gpa +% used_off, std.mem.asBytes(&used_elem));
+        bus.memoryBarrier();
         q.last_used_idx +%= 1;
         _ = mem.write(
             q.device_gpa +% bus.VIRTQ_RING_IDX_OFFSET,
@@ -206,6 +207,7 @@ pub const VirtioNet = struct {
         while (tx_q.last_avail_idx != avail_idx and
             processed < tx_q.num) : (processed += 1)
         {
+            bus.memoryBarrier();
             const slot = tx_q.last_avail_idx % tx_q.num;
             var head_idx: u16 = 0;
             const entry_off = bus.VIRTQ_RING_ELEMS_OFFSET +%
@@ -289,6 +291,7 @@ pub const VirtioNet = struct {
             std.mem.asBytes(&avail_idx),
         )) return false;
         if (rx_q.last_avail_idx == avail_idx) return false;
+        bus.memoryBarrier();
 
         const slot = rx_q.last_avail_idx % rx_q.num;
         var head_idx: u16 = 0;

@@ -9,8 +9,8 @@ ENTRY(_start)
 
 SECTIONS
 {
-  /* Execution starts at 0x80000000 (DRAM base); place entry point here. */
-  . = 0x80000000;
+  /* Execution starts at DRAM load base (override via -Dram-base). */
+  . = DEFINED(__dram_base) ? __dram_base : 0x80000000;
   __hypervisor_start = .;
 
   .text.entry : ALIGN(0x8)

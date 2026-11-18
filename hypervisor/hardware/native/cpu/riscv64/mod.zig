@@ -144,6 +144,9 @@ pub const restoreSState = guest_csr.restoreSState;
 
 pub var clint_base: ?usize = null;
 pub var uart_base: ?usize = null;
+pub var uart_reg_shift: u3 = 0;
+pub var uart_reg_io_width: u8 = 1;
+pub var uart_is_sifive: bool = false;
 pub var test_device_base: ?usize = null;
 pub var plic_base: ?usize = null;
 

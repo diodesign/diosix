@@ -195,6 +195,37 @@ boards, see [Booting on physical RISC-V boards][phys-boards].
 
 ---
 
+## Running diskless and hardware-lab tests
+
+Diskless boot keeps all guest storage in RAM so physical RISC-V boards can run
+automated test cycles without writing to local flash or SD cards. Pass these
+kernel command-line parameters from the bootloader or flattened device tree
+(FDT) `/chosen/bootargs`:
+
+* `diosix.mode=diskless`: Mounts `/var/lib/diosix` purely on `tmpfs` without
+  formatting or touching local block devices.
+* `diosix.boot_server=http://<host>:8090`: Instructs
+  `/usr/sbin/diosix-stage-storage` to download `SHA256SUMS`, strictly verify
+  payload digests, and stage `images/diosix-node.elf` into RAM before booting
+  children or serving upstream Alpine packages from `${BOOT_SERVER}/apk`.
+* `diosix.dev_keys=1`: Opts in to staging development Secure Shell (SSH) keys
+  (`keys/dev_authorized_keys`) from the boot server for unattended test runs.
+
+For Raspberry Pi and Shelly smart-plug hardware-in-the-loop (HIL) labs:
+
+1. Copy [`scripts/hil/lab.example.toml`](../scripts/hil/lab.example.toml) and
+   fill in each board's serial device, build flags, and Shelly Gen1/Gen2+ plug
+   IP address or hostnames.
+2. Start or run the orchestrator (or verify the full workflow in QEMU without
+   block devices using `--self-test`):
+
+   ```bash
+   python3 -B scripts/hil/runner.py --self-test
+   python3 -B scripts/hil/runner.py --config lab.toml --board spacemit-k3
+   ```
+
+---
+
 ## Next steps
 
 * [Deploying and provisioning guest VMs](guests.md) covers launching quick

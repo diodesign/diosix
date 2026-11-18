@@ -112,6 +112,7 @@ pub fn saveFpAndVectorState(vc: *vcore.VirtualCore) void {
             \\sd t0, 1040(a0)
             \\csrr t0, vstart
             \\sd t0, 1048(a0)
+            \\csrw vstart, zero
             \\csrr t1, vlenb
             \\slli t1, t1, 3
             \\mv t0, a0
@@ -180,6 +181,7 @@ pub fn restoreFpAndVectorState(vc: *const vcore.VirtualCore) void {
         asm volatile (
             \\.option push
             \\.option arch, +v
+            \\csrw vstart, zero
             \\csrr t1, vlenb
             \\slli t1, t1, 3
             \\mv t0, a0

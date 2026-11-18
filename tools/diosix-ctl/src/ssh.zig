@@ -208,7 +208,7 @@ pub fn execSsh(
         var attempts: usize = 0;
         var printed_waiting = false;
         var ssh_ready = false;
-        while (attempts < 25) : (attempts += 1) {
+        while (attempts < 45) : (attempts += 1) {
             if (isSshPortOpen(ip_addr)) {
                 ssh_ready = true;
                 break;
@@ -233,11 +233,13 @@ pub fn execSsh(
                 "Note: If the guest is running a minimal payload without " ++
                     "an SSH daemon, SSH connections are not supported.\n",
             );
-            return;
+            return error.SshUnreachable;
         }
     }
 
-    _ = runSshCommand(key_str, dest_str, cmd_str, false);
+    if (runSshCommand(key_str, dest_str, cmd_str, false) != 0) {
+        return error.SshCommandFailed;
+    }
 }
 
 fn joinArgs(
@@ -426,7 +428,10 @@ pub fn cmdSsh(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         );
     }
 
-    try execSsh(key_file, username, resolved_ip, remote_cmd);
+    execSsh(key_file, username, resolved_ip, remote_cmd) catch {
+        if (!@import("builtin").is_test) std.process.exit(1);
+        return;
+    };
 }
 
 test "ssh: parseIpv4, isValidSshUsername, and isValidSshIp validate inputs" {
