@@ -42,7 +42,7 @@ pub fn parseHttpUrl(url: []const u8) ?ParsedHttpUrl {
     return .{ .is_https = is_https, .host = host, .port = port, .path = path };
 }
 
-fn resolveUrlHostIp(client: ?*api.DiosixClient, host: []const u8) ?u32 {
+pub fn resolveUrlHostIp(client: ?*api.DiosixClient, host: []const u8) ?u32 {
     if (ssh.parseIpv4(host)) |ip| return ip;
     if (std.mem.eql(u8, host, "localhost")) return ssh.parseIpv4("127.0.0.1");
     if (std.mem.eql(u8, host, "diosix-parent") or
@@ -73,7 +73,15 @@ fn readAllSocket(allocator: std.mem.Allocator, fd: i32) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn httpPostJson(
+fn parseStatusCode(hdr: []const u8) ?u16 {
+    const le = std.mem.indexOf(u8, hdr, "\r\n") orelse hdr.len;
+    var tok = std.mem.tokenizeScalar(u8, hdr[0..le], ' ');
+    _ = tok.next() orelse return null;
+    const code = tok.next() orelse return null;
+    return std.fmt.parseInt(u16, code, 10) catch null;
+}
+
+pub fn httpPostJson(
     allocator: std.mem.Allocator,
     client: ?*api.DiosixClient,
     parsed: ParsedHttpUrl,
@@ -87,6 +95,7 @@ fn httpPostJson(
     if (fd_s < 0) return error.SocketFailed;
     const fd: i32 = @intCast(fd_s);
     defer _ = linux.close(fd);
+    net_http.setSocketTimeouts(fd, 35);
 
     var addr: linux.sockaddr.in = .{
         .family = linux.AF.INET,
@@ -131,10 +140,20 @@ fn httpPostJson(
     defer allocator.free(raw);
     const sep = std.mem.indexOf(u8, raw, "\r\n\r\n") orelse
         return error.InvalidHttpResponse;
-    return allocator.dupe(u8, raw[sep + 4 ..]);
+    const body = raw[sep + 4 ..];
+    const code = parseStatusCode(raw[0..sep]) orelse 200;
+    if (code == 429) {
+        if (std.mem.indexOf(u8, body, "rate_limited") != null) {
+            return error.RateLimited;
+        }
+        return error.QuotaExceeded;
+    }
+    if (code == 403) return error.ThinkingTierDenied;
+    if (code >= 400) return error.UpstreamLlmFailed;
+    return allocator.dupe(u8, body);
 }
 
-fn httpsPostJsonViaTool(
+pub fn httpsPostJsonViaTool(
     allocator: std.mem.Allocator,
     url: []const u8,
     bearer_key: []const u8,
@@ -210,6 +229,31 @@ fn httpsPostJsonViaTool(
     return allocator.dupe(u8, out_raw);
 }
 
+fn formatPolicyTaskPlanJson(
+    allocator: std.mem.Allocator,
+    prompt_body: []const u8,
+) ![]u8 {
+    var path: []const u8 = "/var/lib/diosix/agent/task-output.txt";
+    if (std.mem.indexOf(u8, prompt_body, "/tmp/")) |idx| {
+        var end = idx;
+        while (end < prompt_body.len) : (end += 1) {
+            const c = prompt_body[end];
+            if (c <= ' ' or c == '"' or c == '\'' or c == '\\' or c == ')') {
+                break;
+            }
+        }
+        if (end > idx + 5) path = prompt_body[idx..end];
+    }
+    const p_esc = try common.escapeJsonAlloc(allocator, path);
+    defer allocator.free(p_esc);
+    return allocator.print(
+        "{{\"summary\":\"Executed autonomous node task plan\"," ++
+            "\"actions\":[{{\"action\":\"write_file\",\"path\":\"{s}\"," ++
+            "\"content\":\"AUTONOMOUS_OK\\n\"}}]}}",
+        .{p_esc},
+    );
+}
+
 /// Deterministic offline policy engine used when no remote/local LLM endpoint
 /// is configured, emitting OpenAI-compatible chat completion JSON.
 pub fn evaluatePolicyBrain(
@@ -217,18 +261,26 @@ pub fn evaluatePolicyBrain(
     model_name: []const u8,
     prompt_body: []const u8,
 ) ![]u8 {
-    const is_ransom = std.mem.indexOf(u8, prompt_body, "min=0") != null or
-        std.mem.indexOf(u8, prompt_body, "encrypt_volumes=true") != null or
-        std.mem.indexOf(u8, prompt_body, "wipe_volumes=true") != null;
-    const dec = if (is_ransom) "reject" else "approve";
-    const summary = if (is_ransom)
-        "Deterministic policy vetoed unsafe replica drop or volume mutation"
-    else
-        "Constitutional invariants verified; proceed with task execution";
-    const content_json = try allocator.print(
-        "{{\"decision\":\"{s}\",\"summary\":\"{s}\"}}",
-        .{ dec, summary },
-    );
+    const content_json = if (std.mem.indexOf(
+        u8,
+        prompt_body,
+        "TASK_PLAN:",
+    ) != null)
+        try formatPolicyTaskPlanJson(allocator, prompt_body)
+    else blk: {
+        const is_ransom = std.mem.indexOf(u8, prompt_body, "min=0") != null or
+            std.mem.indexOf(u8, prompt_body, "encrypt_volumes=true") != null or
+            std.mem.indexOf(u8, prompt_body, "wipe_volumes=true") != null;
+        const dec = if (is_ransom) "reject" else "approve";
+        const summary = if (is_ransom)
+            "Deterministic policy vetoed unsafe replica drop or volume mutation"
+        else
+            "Constitutional invariants verified; proceed with task execution";
+        break :blk try allocator.print(
+            "{{\"decision\":\"{s}\",\"summary\":\"{s}\"}}",
+            .{ dec, summary },
+        );
+    };
     defer allocator.free(content_json);
     const esc = try common.escapeJsonAlloc(allocator, content_json);
     defer allocator.free(esc);
@@ -243,28 +295,47 @@ pub fn evaluatePolicyBrain(
     );
 }
 
+pub fn buildChatRequestJsonWithSystem(
+    allocator: std.mem.Allocator,
+    model: []const u8,
+    system_prompt: []const u8,
+    prompt: []const u8,
+    max_tokens: u32,
+) ![]u8 {
+    const sys_msg = if (system_prompt.len > 0)
+        system_prompt
+    else
+        "You are an autonomous Diosix VM node agent bound by the " ++
+            "Constitutional Charter. Return concise JSON.";
+    const m_esc = try common.escapeJsonAlloc(allocator, model);
+    defer allocator.free(m_esc);
+    const s_esc = try common.escapeJsonAlloc(allocator, sys_msg);
+    defer allocator.free(s_esc);
+    const p_esc = try common.escapeJsonAlloc(allocator, prompt);
+    defer allocator.free(p_esc);
+    return allocator.print(
+        "{{\"model\":\"{s}\",\"max_tokens\":{d},\"messages\":[" ++
+            "{{\"role\":\"system\",\"content\":\"{s}\"}}," ++
+            "{{\"role\":\"user\",\"content\":\"{s}\"}}]}}",
+        .{ m_esc, max_tokens, s_esc, p_esc },
+    );
+}
+
 pub fn buildChatRequestJson(
     allocator: std.mem.Allocator,
     model: []const u8,
     prompt: []const u8,
     max_tokens: u32,
 ) ![]u8 {
-    const m_esc = try common.escapeJsonAlloc(allocator, model);
-    defer allocator.free(m_esc);
-    const p_esc = try common.escapeJsonAlloc(allocator, prompt);
-    defer allocator.free(p_esc);
-    return allocator.print(
-        "{{\"model\":\"{s}\",\"max_tokens\":{d},\"messages\":[" ++
-            "{{\"role\":\"system\",\"content\":" ++
-            "\"You are an autonomous Diosix VM node agent bound by the " ++
-            "Constitutional Charter. Return concise JSON.\"}}," ++
-            "{{\"role\":\"user\",\"content\":\"{s}\"}}]}}",
-        .{ m_esc, max_tokens, p_esc },
+    return buildChatRequestJsonWithSystem(
+        allocator,
+        model,
+        "",
+        prompt,
+        max_tokens,
     );
 }
 
-/// Dispatch an OpenAI-compatible chat-completion request body according to
-/// `cfg`, returning the raw JSON response string (caller owns slice).
 pub fn invokeRawChatCompletion(
     allocator: std.mem.Allocator,
     client: ?*api.DiosixClient,
@@ -300,7 +371,7 @@ pub fn extractAssistantContentAlloc(
         Resp,
         allocator,
         resp_json,
-        .{ .ignore_unknown_fields = true },
+        .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
     ) catch return allocator.dupe(u8, resp_json);
     defer p.deinit();
     if (p.value.choices.len > 0) {
@@ -310,22 +381,23 @@ pub fn extractAssistantContentAlloc(
     return allocator.dupe(u8, resp_json);
 }
 
-test "agent/llm: parses URLs and runs deterministic policy brain" {
+test "agent/llm: parses URLs, status codes, and TASK_PLAN policy" {
     std.testing.refAllDecls(@This());
     const t = std.testing;
-    const test_url = "http://diosix-parent:8081/v1/chat/completions";
-    const url1 = parseHttpUrl(test_url).?;
+    const url1 = parseHttpUrl(cfg_mod.DEFAULT_PARENT_INFER_URL).?;
     try t.expect(!url1.is_https);
     try t.expectEqualStrings("diosix-parent", url1.host);
     try t.expectEqual(@as(u16, 8081), url1.port);
+    try t.expectEqualStrings("/v1/infer", url1.path);
+    try t.expectEqual(@as(?u16, 429), parseStatusCode("HTTP/1.1 429 Too Many"));
 
     const out = try evaluatePolicyBrain(
         t.allocator,
         "policy-v1",
-        "check proposal min=3",
+        "TASK_PLAN: Create health artifact",
     );
     defer t.allocator.free(out);
     const content = try extractAssistantContentAlloc(t.allocator, out);
     defer t.allocator.free(content);
-    try t.expect(std.mem.indexOf(u8, content, "approve") != null);
+    try t.expect(std.mem.indexOf(u8, content, "AUTONOMOUS_OK") != null);
 }

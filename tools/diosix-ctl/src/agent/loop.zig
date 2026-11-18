@@ -6,6 +6,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 const api = @import("../api.zig");
+const autonomy = @import("autonomy.zig");
 const charter = @import("../charter.zig");
 const charter_ops = @import("../charter/ops.zig");
 const common = @import("../common.zig");
@@ -20,47 +21,7 @@ const vote = @import("loop/vote.zig");
 const PAGE_BYTES: u64 = 4096;
 
 pub const StepReport = vote.StepReport;
-
-fn spawnLoggedSubprocess(argv: [*:null]const ?[*:0]const u8) usize {
-    net_http.ensureParentDir(sysconfig.AGENT_LOG_PATH);
-    const pid_s: isize = @bitCast(linux.fork());
-    if (pid_s < 0) return 1;
-    if (pid_s == 0) {
-        var lz_buf: [common.MAX_PATH_LEN]u8 = undefined;
-        if (common.toPathZ(sysconfig.AGENT_LOG_PATH, &lz_buf)) |lz| {
-            const wf: linux.O = .{
-                .ACCMODE = .WRONLY,
-                .CREAT = true,
-                .APPEND = true,
-            };
-            const fd_s: isize = @bitCast(linux.open(lz.ptr, wf, 0o600));
-            if (fd_s >= 0) {
-                const fd: i32 = @intCast(fd_s);
-                _ = linux.dup2(fd, 1);
-                _ = linux.dup2(fd, 2);
-                if (fd > 2) _ = linux.close(fd);
-            }
-        }
-        const envp = [_:null]?[*:0]const u8{
-            "PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin",
-            null,
-        };
-        const prog = argv[0] orelse "/usr/sbin/dsx";
-        _ = linux.execve(prog, argv, &envp);
-        linux.exit_group(127);
-    }
-    const child_pid: i32 = @intCast(pid_s);
-    var status: i32 = 0;
-    while (true) {
-        const w_s: isize = @bitCast(linux.waitpid(child_pid, &status, 0));
-        if (w_s >= 0) break;
-        if (w_s == -@as(isize, @backingInt(linux.E.INTR))) continue;
-        return 1;
-    }
-    const st_u: u32 = @bitCast(status);
-    if (linux.W.IFEXITED(st_u)) return linux.W.EXITSTATUS(st_u);
-    return 1;
-}
+pub const spawnLoggedSubprocess = vote.spawnLoggedSubprocess;
 
 fn resolveDsxBin() [:0]const u8 {
     const cands = [_][:0]const u8{
@@ -222,9 +183,13 @@ fn reconcileCharterUnitsOnRoot(
 
             const argv: [*:null]const ?[*:0]const u8 =
                 &[_:null]?[*:0]const u8{
-                    dsx_bin.ptr, "run",    art_z.ptr, "--name",  name_z.ptr,
-                    "--vcpus",   vc_z.ptr, "--ram",   ram_z.ptr, "--packages",
-                    pkg_z.ptr,   "--net",  net_z.ptr, null,
+                    dsx_bin.ptr,      "run",              art_z.ptr,
+                    "--name",         name_z.ptr,         "--vcpus",
+                    vc_z.ptr,         "--ram",            ram_z.ptr,
+                    "--packages",     pkg_z.ptr,          "--net",
+                    net_z.ptr,        "--delegate-stake", "--tokens",
+                    "100000",         "--budget-usd",     "1.00",
+                    "--max-thinking", "low",              null,
                 };
             if (spawnLoggedSubprocess(argv) == 0) {
                 report.replicas_spawned += 1;
@@ -242,6 +207,7 @@ pub fn runAgentStep(
     var report = StepReport{};
     if (net_http.isHasParent(client)) {
         vote.processParentBoardProposals(allocator, client, &report);
+        autonomy.processBoardTasks(allocator, client, &report);
         return report;
     }
 
@@ -267,6 +233,7 @@ pub fn runAgentStep(
 
     trySealPendingAmendmentOnRoot(allocator, client, &report);
     reconcileCharterUnitsOnRoot(allocator, client, &report);
+    autonomy.processBoardTasks(allocator, client, &report);
     return report;
 }
 
@@ -288,6 +255,7 @@ pub fn runAgentDaemon(
             return;
         }
         _ = linux.setsid();
+        vote.redirectDaemonStdio();
     }
 
     const sec: isize = @intCast(@max(@as(u32, 1), interval_sec));

@@ -236,6 +236,8 @@ pub fn handleAttachBackingSliceLocked(
 
     var total_len: usize = 0;
     for (entries) |ent| {
+        _ = std.math.add(u64, ent.addr, ent.length) catch
+            return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
         total_len = std.math.add(usize, total_len, ent.length) catch
             return proto.VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
     }

@@ -55,13 +55,32 @@ pub fn findTreeRoot(g: *Guest) *Guest {
     return cur;
 }
 
-/// Retained physical RAM stake equals pages owned minus pages delegated,
-/// conserving total voting weight across arbitrary subtree splits.
-pub fn computeRetainedStakePages(g: *const Guest) u64 {
-    const max_p = @atomicLoad(usize, &g.quotas.max_ram_pages, .monotonic);
-    const del_p = @atomicLoad(usize, &g.quotas.delegated_ram_pages, .monotonic);
-    if (max_p == std.math.maxInt(usize)) return 0;
-    return @intCast(max_p -| del_p);
+/// Retained physical RAM stake equals committed RAM minus committed RAM
+/// explicitly delegated to stake-holding direct children, conserving weight
+/// while letting parents own stake on behalf of plain workload children.
+pub fn computeRetainedStakePages(g: *Guest) u64 {
+    if (!g.hasParent() or !g.has_voting_stake) return 0;
+    const owned = @atomicLoad(
+        usize,
+        &g.quotas.committed_ram_pages,
+        .monotonic,
+    );
+    const lock_s = g.tree_lock.lock();
+    defer g.tree_lock.unlock(lock_s);
+    var stake_delegated: usize = 0;
+    var it = g.children.start;
+    while (it) |node| : (it = node.next) {
+        const ch = node.contents;
+        const st = @atomicLoad(guest.GuestState, &ch.state, .acquire);
+        if (st == .valid and ch.has_voting_stake) {
+            stake_delegated +|= @atomicLoad(
+                usize,
+                &ch.quotas.committed_ram_pages,
+                .monotonic,
+            );
+        }
+    }
+    return @intCast(owned -| stake_delegated);
 }
 
 pub fn tallyTreeMissionVotes(
@@ -82,7 +101,9 @@ pub fn tallyTreeMissionVotes(
         const st = @atomicLoad(guest.GuestState, &node.state, .acquire);
         if (st != .valid) continue;
 
-        if (node != root and (cutoff_id == 0 or node.id <= cutoff_id)) {
+        if (node != root and node.has_voting_stake and
+            (cutoff_id == 0 or node.id <= cutoff_id))
+        {
             const stake = computeRetainedStakePages(node);
             result.eligible_stake_pages +|= stake;
             if (want_hash and std.mem.eql(
@@ -186,4 +207,73 @@ test "mission/tally: zero-byte and ransomware stepdown guards" {
         .flags = interface.MissionFlags.DESTRUCTIVE_ENCRYPT,
     };
     try std.testing.expect(!passesRansomwareGuard(&st, &enc_drop));
+
+    // Verify workload children (no DELEGATE_STAKE) & 0-committed Sybils.
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const physmem = @import("../../physmem.zig");
+    const scheduler = @import("../../scheduler.zig");
+    scheduler.init();
+    scheduler.initCpu();
+    guest.quota_mod.resetGuestManagerForTest();
+    var phys = try physmem.initForTest(alloc, 128);
+    defer phys.deinit();
+
+    const rt = try guest.createGuest(
+        alloc,
+        true,
+        true,
+        null,
+        0,
+        0,
+        0,
+        .riscv64,
+    );
+    defer rt.deinit();
+    const steward = try guest.createGuest(
+        alloc,
+        false,
+        false,
+        rt,
+        0,
+        0,
+        0,
+        .riscv64,
+    );
+    defer steward.deinit();
+    steward.has_voting_stake = true;
+    steward.quotas.committed_ram_pages = 100;
+
+    const web_leaf = try guest.createGuest(
+        alloc,
+        false,
+        false,
+        steward,
+        0,
+        0,
+        0,
+        .riscv64,
+    );
+    defer web_leaf.deinit();
+    web_leaf.has_voting_stake = false;
+    web_leaf.quotas.committed_ram_pages = 64;
+
+    const sybil_zero = try guest.createGuest(
+        alloc,
+        false,
+        false,
+        steward,
+        0,
+        0,
+        0,
+        .riscv64,
+    );
+    defer sybil_zero.deinit();
+    sybil_zero.has_voting_stake = true;
+    sybil_zero.quotas.committed_ram_pages = 0;
+
+    try testing.expectEqual(@as(u64, 0), computeRetainedStakePages(rt));
+    try testing.expectEqual(@as(u64, 0), computeRetainedStakePages(web_leaf));
+    try testing.expectEqual(@as(u64, 0), computeRetainedStakePages(sybil_zero));
+    try testing.expectEqual(@as(u64, 100), computeRetainedStakePages(steward));
 }

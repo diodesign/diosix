@@ -15,7 +15,6 @@ const policy = @import("policy.zig");
 
 const MAX_HTTP_REQ_BODY: usize = 4096;
 const MAX_APK_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
-const E_INTR: isize = -@as(isize, @backingInt(linux.E.INTR));
 
 pub const RepoPath = struct {
     branch: []const u8,
@@ -347,36 +346,23 @@ pub fn runServer(client: *api.DiosixClient, port: u16, daemon: bool) !void {
             return;
         }
     }
-    const listen_fd = try net_http.bindAndListenTcp(port);
+    const listener = try net_http.DownstreamListener.open(port);
     if (daemon) {
-        const is_child = try net_http.daemonizeServer(
-            listen_fd,
+        const is_child = try net_http.daemonizeDualServer(
+            listener.lo_fd,
+            listener.br_fd,
             sysconfig.PKG_PROXY_PID_PATH,
             sysconfig.PKG_PROXY_LOG_PATH,
         );
         if (!is_child) return;
     }
-    defer _ = linux.close(listen_fd);
+    defer listener.close();
 
     const allocator = std.heap.page_allocator;
     while (true) {
-        var peer: linux.sockaddr.in = undefined;
-        var plen: linux.socklen_t = @sizeOf(linux.sockaddr.in);
-        const acc_s: isize = @bitCast(
-            linux.accept4(
-                listen_fd,
-                @ptrCast(&peer),
-                &plen,
-                linux.SOCK.CLOEXEC,
-            ),
-        );
-        if (acc_s == E_INTR) continue;
-        if (acc_s < 0) continue;
-        const cfd: i32 = @intCast(acc_s);
-        defer _ = linux.close(cfd);
-
-        const caller_cid = net_http.resolvePeerChildCid(peer.addr);
-        handlePkgClient(allocator, client, cfd, caller_cid, port);
+        const acc = listener.accept(10) orelse continue;
+        defer _ = linux.close(acc.cfd);
+        handlePkgClient(allocator, client, acc.cfd, acc.caller_cid, port);
     }
 }
 

@@ -1,0 +1,180 @@
+#!/bin/sh
+# Start or stop the Diosix node agent under root, sudoer, or non-sudoer mode.
+# Best-practice in-guest hygiene only; platform security lives in M-mode and
+# parent tree boundaries.
+#
+# Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
+# SPDX-License-Identifier: MIT
+
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
+
+RUN_AGENT="/run/diosix/agent"
+PID_FILE="${RUN_AGENT}/agent.pid"
+MODE_FILE="${RUN_AGENT}/mode"
+WORK_DIR="/var/lib/diosix/agent"
+LOG_FILE="/var/log/diosix-agent.log"
+AGENT_CONF="/etc/diosix/agent.toml"
+
+DSX_BIN=""
+for cand in /usr/sbin/dsx /usr/bin/dsx /usr/sbin/diosix-ctl; do
+    if [ -x "$cand" ]; then
+        DSX_BIN="$cand"
+        break
+    fi
+done
+
+MODE=""
+INTERVAL=""
+AUTO=0
+ACTION="start"
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --mode)
+            [ "$#" -lt 2 ] && { echo "Missing value for --mode" >&2; exit 1; }
+            MODE="$2"
+            shift 2
+            ;;
+        --interval)
+            [ "$#" -lt 2 ] && {
+                echo "Missing value for --interval" >&2
+                exit 1
+            }
+            INTERVAL="$2"
+            shift 2
+            ;;
+        --auto)
+            AUTO=1
+            shift
+            ;;
+        --stop)
+            ACTION="stop"
+            shift
+            ;;
+        --status)
+            ACTION="status"
+            shift
+            ;;
+        *)
+            echo "Usage: $0 [--mode off|root|sudoer|non-sudoer]" \
+                 "[--interval S] [--auto|--stop|--status]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+stop_agent() {
+    if [ -r "$PID_FILE" ]; then
+        OLD_PID=$(cat "$PID_FILE" 2>/dev/null || true)
+        if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+            kill "$OLD_PID" 2>/dev/null || true
+            sleep 1
+            kill -9 "$OLD_PID" 2>/dev/null || true
+        fi
+        rm -f "$PID_FILE"
+    fi
+    rm -f "$MODE_FILE"
+}
+
+if [ "$ACTION" = "stop" ]; then
+    stop_agent
+    exit 0
+fi
+
+if [ "$ACTION" = "status" ]; then
+    CUR_MODE=$(cat "$MODE_FILE" 2>/dev/null || echo "unknown")
+    if [ -r "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE" 2>/dev/null || true)
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+            UID_VAL=$(awk '/^Uid:/{print $2}' "/proc/${PID}/status" \
+                2>/dev/null || echo "?")
+            echo "agent: running pid=${PID} uid=${UID_VAL} mode=${CUR_MODE}"
+            exit 0
+        fi
+    fi
+    echo "agent: stopped mode=${CUR_MODE}"
+    exit 0
+fi
+
+[ -z "$DSX_BIN" ] && { echo "dsx binary not found" >&2; exit 1; }
+
+TOML_EN=$(sed -n 's/^[ \t]*enabled[ \t]*=[ \t]*\([a-z]*\).*/\1/p' \
+    "$AGENT_CONF" 2>/dev/null | head -n 1)
+TOML_MODE=$(sed -n 's/^[ \t]*user_mode[ \t]*=[ \t]*"\([^"]*\)".*/\1/p' \
+    "$AGENT_CONF" 2>/dev/null | head -n 1)
+TOML_INT=$(sed -n 's/^[ \t]*poll_interval_sec[ \t]*=[ \t]*\([0-9]*\).*/\1/p' \
+    "$AGENT_CONF" 2>/dev/null | head -n 1)
+
+if [ -z "$INTERVAL" ]; then
+    INTERVAL="${TOML_INT:-5}"
+fi
+
+if [ "$AUTO" -eq 1 ] && [ -z "$MODE" ]; then
+    CMD_MODE=$(sed -n 's/.*diosix\.agent_mode=\([a-z-]*\).*/\1/p' \
+        /proc/cmdline 2>/dev/null | head -n 1)
+    M_MODE=$("$DSX_BIN" manifest show --cid 1 --hv 2>/dev/null | \
+        sed -n 's/^# diosix-agent-mode: \([a-z-]*\).*/\1/p' | head -n 1)
+    if [ -n "$CMD_MODE" ]; then
+        MODE="$CMD_MODE"
+    elif [ -n "$M_MODE" ]; then
+        MODE="$M_MODE"
+    elif grep -q "diosix\.agent=1" /proc/cmdline 2>/dev/null || \
+         [ "$TOML_EN" = "true" ]; then
+        MODE="${TOML_MODE:-sudoer}"
+    else
+        MODE="off"
+    fi
+fi
+
+[ -z "$MODE" ] && MODE="${TOML_MODE:-sudoer}"
+[ "$MODE" = "off" ] && exit 0
+
+case "$MODE" in
+    root|sudoer|non-sudoer) ;;
+    *)
+        echo "Invalid --mode '$MODE' (use root|sudoer|non-sudoer|off)" >&2
+        exit 1
+        ;;
+esac
+
+stop_agent
+
+mkdir -p "$WORK_DIR" "$RUN_AGENT" /var/log
+chown 1000:1000 "$WORK_DIR" "$RUN_AGENT"
+chmod 0750 "$WORK_DIR" "$RUN_AGENT"
+touch "$LOG_FILE"
+chown 1000:1000 "$LOG_FILE"
+chmod 0640 "$LOG_FILE"
+echo "$MODE" > "$MODE_FILE"
+chmod 0644 "$MODE_FILE"
+
+if [ "$MODE" = "root" ]; then
+    rm -f /etc/doas.d/agent.conf 2>/dev/null || true
+    exec "$DSX_BIN" agent run --interval "$INTERVAL" --daemon
+fi
+
+RUN_CMD="'${DSX_BIN}' agent run --interval '${INTERVAL}' --daemon"
+
+if [ "$MODE" = "sudoer" ]; then
+    if [ ! -x /usr/bin/doas ]; then
+        apk add --no-cache doas >/dev/null 2>&1 || true
+    fi
+    [ -x /usr/bin/doas ] && chmod 4755 /usr/bin/doas 2>/dev/null || true
+    mkdir -p /etc/doas.d
+    cat <<'EOF' > /etc/doas.d/agent.conf
+permit nopass agent as root cmd /usr/sbin/dsx
+permit nopass agent as root cmd /sbin/apk
+permit nopass agent as root cmd /sbin/rc-service
+EOF
+    chown 0:0 /etc/doas.d/agent.conf
+    chmod 0600 /etc/doas.d/agent.conf
+    su -s /bin/sh agent -c "$RUN_CMD"
+    exit $?
+fi
+
+rm -f /etc/doas.d/agent.conf 2>/dev/null || true
+if setpriv --nnp true 2>/dev/null; then
+    su -s /bin/sh agent -c "exec setpriv --nnp ${RUN_CMD}"
+else
+    su -s /bin/sh agent -c "$RUN_CMD"
+fi

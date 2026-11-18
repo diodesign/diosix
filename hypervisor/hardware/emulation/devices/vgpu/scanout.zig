@@ -93,10 +93,11 @@ pub const SgCursor = struct {
             const in_ent = want_off - cur_start;
             const avail = ent_len - in_ent;
             const chunk: usize = @min(out.len - dst_pos, avail);
-            if (!mem.read(
-                ent.addr +% in_ent,
-                out[dst_pos .. dst_pos + chunk],
-            )) return false;
+            const read_gpa = std.math.add(u64, ent.addr, in_ent) catch
+                return false;
+            if (!mem.read(read_gpa, out[dst_pos .. dst_pos + chunk])) {
+                return false;
+            }
             dst_pos += chunk;
             want_off += chunk;
         }

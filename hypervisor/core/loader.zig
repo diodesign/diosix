@@ -88,10 +88,14 @@ const ElfSource = union(enum) {
                     const chunk: usize = @min(count - copied, rem);
                     const src_hpa = gs.space.translateGPA(cur_src) catch
                         return LoaderError.TranslationFailed;
-                    const dst_hpa = dst_space.translateGPA(cur_dst) catch
-                        return LoaderError.TranslationFailed;
+                    const dst_hpa = dst_space.translateGPAWritable(
+                        cur_dst,
+                    ) catch return LoaderError.TranslationFailed;
                     if (physmem.isHypervisorMemory(src_hpa, chunk) or
-                        physmem.isHypervisorMemory(dst_hpa, chunk))
+                        physmem.isHypervisorMemory(dst_hpa, chunk) or
+                        (physmem.phys_mem_state.region_count > 0 and
+                            (!physmem.isRam(src_hpa, chunk) or
+                                !physmem.isRam(dst_hpa, chunk))))
                     {
                         return LoaderError.TranslationFailed;
                     }
@@ -298,8 +302,13 @@ pub const Loader = struct {
                     return LoaderError.SegmentOutOfBounds;
                 const rem = ps - (cur_gpa % ps);
                 const chunk: usize = @min(mem_sz - zeroed, rem);
-                const cur_hpa = try target_vm.space.translateGPA(cur_gpa);
-                if (physmem.isHypervisorMemory(cur_hpa, chunk)) {
+                const cur_hpa = try target_vm.space.translateGPAWritable(
+                    cur_gpa,
+                );
+                if (physmem.isHypervisorMemory(cur_hpa, chunk) or
+                    (physmem.phys_mem_state.region_count > 0 and
+                        !physmem.isRam(cur_hpa, chunk)))
+                {
                     return LoaderError.TranslationFailed;
                 }
                 @memset(@as([*]u8, @ptrFromInt(cur_hpa))[0..chunk], 0);

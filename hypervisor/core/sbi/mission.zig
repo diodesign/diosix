@@ -228,6 +228,10 @@ pub fn handleSealMission(vc: *VCore, ctx: *Ctx, a0: usize, a1: usize) void {
 
 pub fn handleVoteMission(vc: *VCore, ctx: *Ctx, a0: usize) void {
     const g = vc.getGuest();
+    if (!g.hasParent() or !g.has_voting_stake) {
+        reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
+        return;
+    }
     const in_args = g.space.readGuestStruct(
         interface.MissionVoteArgs,
         a0,
@@ -244,15 +248,19 @@ pub fn handleVoteMission(vc: *VCore, ctx: *Ctx, a0: usize) void {
     }
 
     const root = findTreeRoot(g);
-    const caller_stake = if (g == root) 0 else computeRetainedStakePages(g);
+    const caller_stake = computeRetainedStakePages(g);
     const tally = blk: {
         const guard = mission_manager.acquire();
         defer guard.release();
         const st = guard.get();
         if (!std.mem.eql(u8, &st.pending_hash, &in_args.proposal_hash)) {
             st.pending_hash = in_args.proposal_hash;
-            st.proposal_cutoff_guest_id =
-                guest.quota_mod.vmid_mod.peekLastGuestId();
+            const peek = guest.quota_mod.vmid_mod.peekLastGuestId();
+            if (st.proposal_cutoff_guest_id == 0 or
+                peek < st.proposal_cutoff_guest_id)
+            {
+                st.proposal_cutoff_guest_id = peek;
+            }
         }
         g.mission_vote_hash = in_args.proposal_hash;
         g.mission_vote_decision = in_args.decision;
@@ -282,6 +290,7 @@ fn spawnTestMissionGuest(
     alloc: std.mem.Allocator,
     is_trusted: bool,
     parent: ?*Guest,
+    ram_pages: usize,
 ) !*Guest {
     const g = try guest.createGuest(
         alloc,
@@ -293,7 +302,10 @@ fn spawnTestMissionGuest(
         0,
         .riscv64,
     );
+    g.quotas.max_ram_pages = ram_pages;
+    g.quotas.committed_ram_pages = ram_pages;
     g.quotas.delegated_ram_pages = 0;
+    g.has_voting_stake = (parent != null);
     const rw = sv39x4.PTEFlags.leaf_rw_user;
     const page = try physmem.allocPage();
     try g.space.map(0x80000000, page, physmem.PageSize, rw);
@@ -329,27 +341,22 @@ test "mission: Ed25519 sealing, conserved stake Sybil resistance, and guards" {
     const seed: [Ed25519.KeyPair.seed_length]u8 = @splat(0x42);
     const kp = try Ed25519.KeyPair.generateDeterministic(seed);
 
-    const root = try spawnTestMissionGuest(testing.allocator, true, null);
+    const spawn = spawnTestMissionGuest;
+    const alloc_t = testing.allocator;
+    const root = try spawn(alloc_t, true, null, 512);
     defer root.deinit();
-    root.quotas.max_ram_pages = 512;
 
-    const child1 = try spawnTestMissionGuest(testing.allocator, false, root);
+    const child1 = try spawn(alloc_t, false, root, 64);
     defer child1.deinit();
-    child1.quotas.max_ram_pages = 64;
-    child1.quotas.delegated_ram_pages = 32;
-    const gc1a = try spawnTestMissionGuest(testing.allocator, false, child1);
+    const gc1a = try spawn(alloc_t, false, child1, 16);
     defer gc1a.deinit();
-    gc1a.quotas.max_ram_pages = 16;
-    const gc1b = try spawnTestMissionGuest(testing.allocator, false, child1);
+    const gc1b = try spawn(alloc_t, false, child1, 16);
     defer gc1b.deinit();
-    gc1b.quotas.max_ram_pages = 16;
 
-    const child2 = try spawnTestMissionGuest(testing.allocator, false, root);
+    const child2 = try spawn(alloc_t, false, root, 64);
     defer child2.deinit();
-    child2.quotas.max_ram_pages = 64;
-    const child3 = try spawnTestMissionGuest(testing.allocator, false, root);
+    const child3 = try spawn(alloc_t, false, root, 64);
     defer child3.deinit();
-    child3.quotas.max_ram_pages = 64;
 
     var r_vc = vcore.VirtualCore.init(0, root, 0x80000000, 0, .normal);
     var c1_vc = vcore.VirtualCore.init(0, child1, 0x80000000, 0, .normal);
@@ -450,9 +457,8 @@ test "mission: Ed25519 sealing, conserved stake Sybil resistance, and guards" {
     try testing.expectEqual(denied, ctx[a0_i]);
 
     // Reactive Sybil child spawned after proposal cutoff gets 0 eligible stake.
-    const late = try spawnTestMissionGuest(testing.allocator, false, root);
+    const late = try spawnTestMissionGuest(alloc_t, false, root, 1024);
     defer late.deinit();
-    late.quotas.max_ram_pages = 1024;
     var late_vc = vcore.VirtualCore.init(0, late, 0x80000000, 0, .normal);
     try late.space.writeGuestStruct(
         interface.MissionVoteArgs,

@@ -268,11 +268,30 @@ attack that drops database replicas from three to zero and encrypts storage):
   `forbid_zero_replicas`, exceeding `max_stepdown_pct`, or setting volume
   encryption or wipe flags under `forbid_unratified_encryption` is
   deterministically rejected.
-* **Parent-proxied agent inference (`diosix0:8081`):** Direct children run
-  `dsx agent` without WAN access by default. Requests to
-  `http://diosix-parent:8081/v1/chat/completions` require a kernel-bound MAC
-  mapping in `diosix0`'s neighbor table, keeping OpenRouter or OpenCode API keys
-  strictly on the upstream parent host.
+* **External hypervisor containment (platform security boundary):** Diosix never
+  relies on guest-internal `uid` checks or scripts to isolate workloads. Plain
+  workload VMs—such as Ubuntu web servers with normal `root` accounts or copies
+  of `dsx`—remain externally contained by Stage-2 memory permissions,
+  `RUN_FLAG_LEAF_NO_CHILDREN` (`--leaf`), `RUN_FLAG_DELEGATE_STAKE` separation
+  (M-mode denies `VOTE_MISSION` from non-stake children while preserving their
+  RAM weight on the stake-holding parent), layer-2 source MAC and Address
+  Resolution Protocol (ARP) `sha` stamping, 802.1Q virtual local area network
+  (VLAN) tag rejection, and Stage-2 read-only aperture write guards.
+* **Optional in-guest startup hygiene (`diosix-agent-start`):** The unified
+  `diosix-node.elf` image provides an unprivileged `agent` (`uid=1000`) user and
+  `/usr/sbin/diosix-agent-start` supporting `root`, `sudoer`
+  (`/etc/doas.d/agent.conf`), and `non-sudoer` (`su` + `setpriv --nnp`) modes.
+  Inside `non-sudoer` VMs, `/run/diosix/node-env` allows agent loops to discover
+  parent networking while local privilege escalation stays blocked; security for
+  the cluster still rests on M-mode quotas and parent boundaries outside the VM.
+* **Generic thinking gateway and conserved budgets (`diosix0:8081`):** Children
+  send prompt plus `minimal`, `low`, `medium`, or `high` thinking tiers to
+  `POST http://diosix-parent:8081/v1/infer` (authenticated by kernel neighbor
+  ARP MAC binding), keeping API secrets in `/var/lib/diosix/keys/llm.secret`
+  on the root VM. Unconfigured children default to zero tokens and zero USD
+  (`429 quota_exceeded`); `dsx agent grant` allocates explicit conserved token
+  and micro-USD (`cost_micros_usd`) pools with two-phase reservation, thinking
+  tier attenuation, and per-minute rate limits (`rpm`, `tpm`).
 
 ---
 

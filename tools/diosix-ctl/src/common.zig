@@ -241,31 +241,48 @@ pub fn writeFileWithMode(
     mode: usize,
 ) !void {
     var path_buf: [MAX_PATH_LEN]u8 = undefined;
-    if (path.len >= path_buf.len) return error.PathTooLong;
-    @memcpy(path_buf[0..path.len], path);
-    path_buf[path.len] = 0;
+    const zpath = toPathZ(path, &path_buf) orelse return error.PathTooLong;
+
+    var raw_tmp_buf: [MAX_PATH_LEN]u8 = undefined;
+    const pid = linux.getpid();
+    const raw_tmp = std.fmt.bufPrint(
+        &raw_tmp_buf,
+        "{s}.tmp.{d}",
+        .{ path, pid },
+    ) catch return error.PathTooLong;
+    var tmp_buf: [MAX_PATH_LEN]u8 = undefined;
+    const tmp_slice = toPathZ(raw_tmp, &tmp_buf) orelse
+        return error.PathTooLong;
 
     const flags: linux.O = .{
         .ACCMODE = .WRONLY,
         .CREAT = true,
         .TRUNC = true,
     };
-    const zpath: [*:0]const u8 = @ptrCast(path_buf[0..path.len :0]);
-    const fd_res = linux.open(zpath, flags, @intCast(mode));
+    const fd_res = linux.open(tmp_slice.ptr, flags, @intCast(mode));
     const fd_signed: isize = @bitCast(fd_res);
     if (fd_signed < 0) return error.CannotOpenFile;
     const fd: i32 = @intCast(fd_signed);
-    defer _ = linux.close(fd);
-    _ = linux.fchmod(fd, @intCast(mode));
-
-    var written: usize = 0;
-    while (written < content.len) {
-        const rem = content.len - written;
-        const rc = linux.write(fd, content.ptr + written, rem);
-        const signed_rc: isize = @bitCast(rc);
-        if (signed_rc <= 0) return error.WriteFailed;
-        written += @intCast(signed_rc);
+    var renamed = false;
+    defer if (!renamed) {
+        _ = linux.unlink(tmp_slice.ptr);
+    };
+    {
+        defer _ = linux.close(fd);
+        _ = linux.fchmod(fd, @intCast(mode));
+        var written: usize = 0;
+        while (written < content.len) {
+            const rem = content.len - written;
+            const rc = linux.write(fd, content.ptr + written, rem);
+            const signed_rc: isize = @bitCast(rc);
+            if (signed_rc <= 0) return error.WriteFailed;
+            written += @intCast(signed_rc);
+        }
+        _ = linux.fsync(fd);
     }
+    const ren_rc: isize = @bitCast(linux.rename(tmp_slice.ptr, zpath.ptr));
+    if (ren_rc < 0) return error.WriteFailed;
+    renamed = true;
 }
 
 pub fn writeFile(path: []const u8, content: []const u8) !void {

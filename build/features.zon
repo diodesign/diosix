@@ -60,6 +60,7 @@
         "build/features/hypervisor.zon",
         "build/features/emulation.zon",
         "build/features/userland.zon",
+        "build/features/gui.zon",
         "build/features/infra.zon",
     },
 }

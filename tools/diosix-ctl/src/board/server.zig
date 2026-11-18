@@ -11,7 +11,6 @@ const sysconfig = @import("../sysconfig.zig");
 const store = @import("store.zig");
 
 const MAX_POST_REQ_BYTES: usize = 64 * 1024;
-const E_INTR: isize = -@as(isize, @backingInt(linux.E.INTR));
 
 const PostPayload = struct {
     topic: []const u8 = "general",
@@ -168,6 +167,12 @@ fn handlePostMessage(
                 "Bad Request",
                 "body_too_large",
             ),
+            error.RateLimited => writeJsonErr(
+                cfd,
+                429,
+                "Too Many Requests",
+                "rate_limited",
+            ),
             else => writeJsonErr(
                 cfd,
                 500,
@@ -254,39 +259,26 @@ pub fn runServer(port: u16, daemon: bool) !void {
     if (daemon) {
         if (net_http.isPidFileRunning(sysconfig.BOARD_PID_PATH) != null) return;
     }
-    const listen_fd = try net_http.bindAndListenTcp(port);
+    const listener = try net_http.DownstreamListener.open(port);
     if (daemon) {
-        const is_child = try net_http.daemonizeServer(
-            listen_fd,
+        const is_child = try net_http.daemonizeDualServer(
+            listener.lo_fd,
+            listener.br_fd,
             sysconfig.BOARD_PID_PATH,
             sysconfig.BOARD_LOG_PATH,
         );
         if (!is_child) return;
     }
-    defer _ = linux.close(listen_fd);
+    defer listener.close();
 
     const allocator = std.heap.page_allocator;
     while (true) {
-        var peer: linux.sockaddr.in = undefined;
-        var plen: linux.socklen_t = @sizeOf(linux.sockaddr.in);
-        const acc_s: isize = @bitCast(
-            linux.accept4(
-                listen_fd,
-                @ptrCast(&peer),
-                &plen,
-                linux.SOCK.CLOEXEC,
-            ),
-        );
-        if (acc_s == E_INTR) continue;
-        if (acc_s < 0) continue;
-        const cfd: i32 = @intCast(acc_s);
-        defer _ = linux.close(cfd);
-
-        const cid = net_http.resolvePeerChildCid(peer.addr);
+        const acc = listener.accept(10) orelse continue;
+        defer _ = linux.close(acc.cfd);
         handleBoardClient(
             allocator,
-            cfd,
-            cid,
+            acc.cfd,
+            acc.caller_cid,
             sysconfig.BOARD_POLICY_PATH,
             sysconfig.BOARD_STORE_PATH,
         );

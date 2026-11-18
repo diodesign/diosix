@@ -25,3 +25,4 @@ dbus:x:81:
 netdev:x:82:
 users:x:100:
 nobody:x:65534:
+agent:x:1000:

@@ -34,8 +34,8 @@ pub fn cmdQuota(
     var pcpu_pct: usize = 0;
     var retained_pcpu_pct: usize = 0;
     var vcpus: usize = 0;
-    var depth: usize = 0;
-    var descendants: usize = 0;
+    var depth: u64 = 0;
+    var descendants: u64 = 0;
     var has_update = false;
 
     if (target_cid == CID_PARENT) {
@@ -151,8 +151,8 @@ pub fn cmdQuota(
                         return;
                     }
                     i += 1;
-                    depth = std.fmt.parseInt(
-                        usize,
+                    const parsed_d = std.fmt.parseInt(
+                        u64,
                         std.mem.span(argv[i]),
                         10,
                     ) catch {
@@ -161,6 +161,10 @@ pub fn cmdQuota(
                         );
                         return;
                     };
+                    depth = if (parsed_d == 0)
+                        api.QUOTA_ZERO_SENTINEL
+                    else
+                        parsed_d;
                     has_update = true;
                 },
                 .@"--descendants" => {
@@ -171,8 +175,8 @@ pub fn cmdQuota(
                         return;
                     }
                     i += 1;
-                    descendants = std.fmt.parseInt(
-                        usize,
+                    const parsed_desc = std.fmt.parseInt(
+                        u64,
                         std.mem.span(argv[i]),
                         10,
                     ) catch {
@@ -182,6 +186,10 @@ pub fn cmdQuota(
                         );
                         return;
                     };
+                    descendants = if (parsed_desc == 0)
+                        api.QUOTA_ZERO_SENTINEL
+                    else
+                        parsed_desc;
                     has_update = true;
                 },
             }

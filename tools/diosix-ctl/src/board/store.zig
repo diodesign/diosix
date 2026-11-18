@@ -7,12 +7,18 @@ const std = @import("std");
 const linux = std.os.linux;
 const common = @import("../common.zig");
 const net_http = @import("../net/http.zig");
-const sysconfig = @import("../sysconfig.zig");
+pub const policy = @import("store/policy.zig");
 
-pub const SHA256_HEX_LEN: usize = 64;
-pub const DEFAULT_MAX_BODY_BYTES: usize = 16384;
+pub const SHA256_HEX_LEN = policy.SHA256_HEX_LEN;
+pub const DEFAULT_MAX_BODY_BYTES = policy.DEFAULT_MAX_BODY_BYTES;
+pub const BoardPolicy = policy.BoardPolicy;
+pub const isValidTopic = policy.isValidTopic;
+pub const loadPolicy = policy.loadPolicy;
+pub const savePolicy = policy.savePolicy;
+
 const MAX_STORE_FILE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_POLICY_FILE_BYTES: usize = 64 * 1024;
+const MAX_BOARD_ENTRIES: usize = 512;
+const COMPACT_KEEP_ENTRIES: usize = 384;
 const GENESIS_HASH: [SHA256_HEX_LEN]u8 = @splat('0');
 
 pub const BoardEntry = struct {
@@ -47,161 +53,6 @@ pub const StoreResult = struct {
         self.entries.deinit(allocator);
     }
 };
-
-pub const BoardPolicy = struct {
-    max_body_bytes: usize = DEFAULT_MAX_BODY_BYTES,
-    allow_all_topics: bool = true,
-    allowed_topics: std.ArrayList([]const u8) = .empty,
-    muted_cids: std.ArrayList(usize) = .empty,
-
-    pub fn deinit(self: *BoardPolicy, allocator: std.mem.Allocator) void {
-        for (self.allowed_topics.items) |t| allocator.free(t);
-        self.allowed_topics.deinit(allocator);
-        self.muted_cids.deinit(allocator);
-    }
-
-    pub fn isTopicAllowed(self: *const BoardPolicy, topic: []const u8) bool {
-        if (self.allow_all_topics) return true;
-        for (self.allowed_topics.items) |t| {
-            if (std.mem.eql(u8, t, topic)) return true;
-        }
-        return false;
-    }
-
-    pub fn isCidMuted(self: *const BoardPolicy, cid: usize) bool {
-        for (self.muted_cids.items) |m| {
-            if (m == cid) return true;
-        }
-        return false;
-    }
-
-    pub fn muteCid(
-        self: *BoardPolicy,
-        allocator: std.mem.Allocator,
-        cid: usize,
-    ) !void {
-        if (!self.isCidMuted(cid)) try self.muted_cids.append(allocator, cid);
-    }
-
-    pub fn unmuteCid(self: *BoardPolicy, cid: usize) void {
-        var i: usize = 0;
-        while (i < self.muted_cids.items.len) {
-            if (self.muted_cids.items[i] == cid) {
-                _ = self.muted_cids.orderedRemove(i);
-            } else {
-                i += 1;
-            }
-        }
-    }
-};
-
-pub fn isValidTopic(topic: []const u8) bool {
-    if (topic.len == 0 or topic.len > 64) return false;
-    if (topic[0] == '.' or topic[0] == '-') return false;
-    for (topic) |c| {
-        const ok = std.ascii.isAlphanumeric(c) or
-            c == '.' or c == '_' or c == '-';
-        if (!ok) return false;
-    }
-    return true;
-}
-
-const PolicyKey = enum { max_body_bytes, allowed_topics, muted_cids };
-
-pub fn loadPolicy(
-    allocator: std.mem.Allocator,
-    policy_path: []const u8,
-) !BoardPolicy {
-    var pol = BoardPolicy{};
-    errdefer pol.deinit(allocator);
-    const raw = common.readBinaryFile(policy_path, MAX_POLICY_FILE_BYTES) catch
-        return pol;
-    defer common.unmapBinaryFile(raw);
-
-    var lines = std.mem.splitScalar(u8, raw, '\n');
-    while (lines.next()) |raw_line| {
-        const line = common.trimWhitespace(raw_line);
-        if (line.len == 0 or line[0] == '#') continue;
-        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-        const k = common.trimWhitespace(line[0..eq]);
-        const v = common.unquoteToml(line[eq + 1 ..]);
-        const pk = std.meta.stringToEnum(PolicyKey, k) orelse continue;
-        switch (pk) {
-            .max_body_bytes => {
-                const n = std.fmt.parseInt(usize, v, 10) catch
-                    DEFAULT_MAX_BODY_BYTES;
-                if (n >= 64 and n <= 65536) pol.max_body_bytes = n;
-            },
-            .allowed_topics => {
-                for (pol.allowed_topics.items) |t| allocator.free(t);
-                pol.allowed_topics.clearRetainingCapacity();
-                if (std.mem.eql(u8, v, "*")) {
-                    pol.allow_all_topics = true;
-                } else {
-                    pol.allow_all_topics = false;
-                    var it = std.mem.splitScalar(u8, v, ',');
-                    while (it.next()) |raw_t| {
-                        const t = common.trimWhitespace(raw_t);
-                        if (isValidTopic(t)) {
-                            try pol.allowed_topics.append(
-                                allocator,
-                                try allocator.dupe(u8, t),
-                            );
-                        }
-                    }
-                }
-            },
-            .muted_cids => {
-                pol.muted_cids.clearRetainingCapacity();
-                var it = std.mem.splitScalar(u8, v, ',');
-                while (it.next()) |raw_c| {
-                    const cs = common.trimWhitespace(raw_c);
-                    if (cs.len == 0) continue;
-                    const c = std.fmt.parseInt(usize, cs, 10) catch continue;
-                    try pol.muteCid(allocator, c);
-                }
-            },
-        }
-    }
-    return pol;
-}
-
-pub fn savePolicy(
-    allocator: std.mem.Allocator,
-    policy_path: []const u8,
-    pol: *const BoardPolicy,
-) !void {
-    net_http.ensureParentDir(policy_path);
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-    const hdr = try allocator.print("max_body_bytes = {d}\n", .{
-        pol.max_body_bytes,
-    });
-    defer allocator.free(hdr);
-    try out.appendSlice(allocator, hdr);
-
-    if (pol.allow_all_topics) {
-        try out.appendSlice(allocator, "allowed_topics = \"*\"\n");
-    } else {
-        try out.appendSlice(allocator, "allowed_topics = \"");
-        for (pol.allowed_topics.items, 0..) |t, i| {
-            if (i > 0) try out.append(allocator, ',');
-            try out.appendSlice(allocator, t);
-        }
-        try out.appendSlice(allocator, "\"\n");
-    }
-    try out.appendSlice(allocator, "muted_cids = \"");
-    for (pol.muted_cids.items, 0..) |c, i| {
-        const s = try allocator.print("{s}{d}", .{
-            if (i > 0) "," else "",
-            c,
-        });
-        defer allocator.free(s);
-        try out.appendSlice(allocator, s);
-    }
-    try out.appendSlice(allocator, "\"\n");
-    try common.writePrivateFile(policy_path, out.items);
-}
 
 fn computeEntryHash(
     allocator: std.mem.Allocator,
@@ -245,6 +96,7 @@ pub fn loadStore(
 
     var expected_seq: u64 = 1;
     var expected_prev = GENESIS_HASH;
+    var is_first = true;
     var lines = std.mem.splitScalar(u8, raw, '\n');
     while (lines.next()) |raw_line| {
         const line = common.trimWhitespace(raw_line);
@@ -260,14 +112,22 @@ pub fn loadStore(
         };
         defer parsed.deinit();
         const rec = parsed.value;
-        if (rec.seq != expected_seq or
-            rec.prev_hash.len != SHA256_HEX_LEN or
-            rec.hash.len != SHA256_HEX_LEN or
+        if (rec.prev_hash.len != SHA256_HEX_LEN or
+            rec.hash.len != SHA256_HEX_LEN)
+        {
+            res.chain_valid = false;
+            return res;
+        }
+        if (is_first and rec.seq > 1) {
+            expected_seq = rec.seq;
+            @memcpy(&expected_prev, rec.prev_hash[0..SHA256_HEX_LEN]);
+        } else if (rec.seq != expected_seq or
             !std.mem.eql(u8, rec.prev_hash, &expected_prev))
         {
             res.chain_valid = false;
             return res;
         }
+        is_first = false;
         var calc: [SHA256_HEX_LEN]u8 = undefined;
         try computeEntryHash(
             allocator,
@@ -305,6 +165,36 @@ pub fn loadStore(
     return res;
 }
 
+fn writeCompactedStore(
+    allocator: std.mem.Allocator,
+    store_path: []const u8,
+    keep_entries: []const BoardEntry,
+    new_line: []const u8,
+) !void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    for (keep_entries) |e| {
+        const t_e = try common.escapeJsonAlloc(allocator, e.topic);
+        defer allocator.free(t_e);
+        const b_e = try common.escapeJsonAlloc(allocator, e.body);
+        defer allocator.free(b_e);
+        const ln = try allocator.print(
+            "{{\"seq\":{d},\"ts\":{d},\"author_cid\":{d}," ++
+                "\"target_cid\":{d},\"topic\":\"{s}\"," ++
+                "\"prev_hash\":\"{s}\",\"hash\":\"{s}\",\"body\":\"{s}\"}}\n",
+            .{
+                e.seq,  e.ts, e.author_cid, e.target_cid, t_e, e.prev_hash,
+                e.hash, b_e,
+            },
+        );
+        defer allocator.free(ln);
+        try out.appendSlice(allocator, ln);
+    }
+    try out.appendSlice(allocator, new_line);
+    try out.append(allocator, '\n');
+    try common.writePrivateFile(store_path, out.items);
+}
+
 pub fn appendPost(
     allocator: std.mem.Allocator,
     policy_path: []const u8,
@@ -328,14 +218,19 @@ pub fn appendPost(
     if (!pol.isTopicAllowed(topic)) return error.TopicNotAllowed;
     if (body.len > pol.max_body_bytes) return error.BodyTooLarge;
 
+    var tv: linux.timespec = undefined;
+    _ = linux.clock_gettime(.REALTIME, &tv);
+    const ts: i64 = @intCast(tv.sec);
+    if (!policy.checkCidRateLimit(author_cid, ts)) return error.RateLimited;
+
     var st = try loadStore(allocator, store_path);
     defer st.deinit(allocator);
     if (!st.chain_valid) return error.ChainCorrupted;
 
-    const next_seq: u64 = @intCast(st.entries.items.len + 1);
-    var tv: linux.timespec = undefined;
-    _ = linux.clock_gettime(.REALTIME, &tv);
-    const ts: i64 = @intCast(tv.sec);
+    const next_seq: u64 = if (st.entries.items.len > 0)
+        st.entries.items[st.entries.items.len - 1].seq + 1
+    else
+        1;
     var new_hash: [SHA256_HEX_LEN]u8 = undefined;
     try computeEntryHash(
         allocator,
@@ -365,10 +260,20 @@ pub fn appendPost(
     defer allocator.free(json_line);
 
     net_http.ensureParentDir(store_path);
-    var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    const z_path = common.toPathZ(store_path, &z_buf) orelse
-        return error.PathTooLong;
-    try common.appendFileLine(z_path.ptr, json_line);
+    if (st.entries.items.len >= MAX_BOARD_ENTRIES) {
+        const drop = st.entries.items.len - (COMPACT_KEEP_ENTRIES - 1);
+        try writeCompactedStore(
+            allocator,
+            store_path,
+            st.entries.items[drop..],
+            json_line,
+        );
+    } else {
+        var z_buf: [common.MAX_PATH_LEN]u8 = undefined;
+        const z_path = common.toPathZ(store_path, &z_buf) orelse
+            return error.PathTooLong;
+        try common.appendFileLine(z_path.ptr, json_line);
+    }
     return .{
         .seq = next_seq,
         .ts = ts,
@@ -434,7 +339,9 @@ pub fn formatVisibleJson(
 }
 
 test "board/store: hash chain, lateral denial, and visibility isolation" {
+    _ = policy;
     std.testing.refAllDecls(@This());
+    policy.resetRateLimiterForTest();
     const t = std.testing;
     const alloc = t.allocator;
     const p_path = ".zig-cache/test-board-policy.toml";

@@ -33,8 +33,13 @@ pub const BOARD_POLICY_PATH = "/run/diosix/board-policy.toml";
 pub const BOARD_PID_PATH = "/run/diosix/board.pid";
 pub const BOARD_LOG_PATH = "/var/log/diosix-board.log";
 pub const CHARTER_PENDING_PATH = "/run/diosix/charter/pending.toml";
-pub const AGENT_PID_PATH = "/run/diosix/agent.pid";
+pub const NODE_ENV_PATH = "/run/diosix/node-env";
+pub const AGENT_RUNTIME_DIR = "/run/diosix/agent";
+pub const AGENT_PID_PATH = "/run/diosix/agent/agent.pid";
+pub const AGENT_VOTED_PATH = "/run/diosix/agent/voted.txt";
+pub const AGENT_DONE_TASKS_PATH = "/run/diosix/agent/done-tasks.txt";
 pub const AGENT_LOG_PATH = "/var/log/diosix-agent.log";
+pub const GATEWAY_LEDGER_RUN_PATH = "/run/diosix/gateway-ledger.json";
 pub const LLM_PROXY_PID_PATH = "/run/diosix/llm-proxy.pid";
 pub const LLM_PROXY_LOG_PATH = "/var/log/diosix-llm.log";
 pub const SWARM_PID_PATH = "/run/diosix/swarm.pid";
@@ -78,6 +83,9 @@ pub const DEV_AUTHORIZED_KEYS_PATH =
     "/var/lib/diosix/keys/dev_authorized_keys";
 pub const NODE_PRIVKEY_PATH = "/var/lib/diosix/keys/node_ed25519";
 pub const NODE_PUBKEY_PATH = "/var/lib/diosix/keys/node_ed25519.pub";
+pub const LLM_SECRET_KEY_PATH = "/var/lib/diosix/keys/llm.secret";
+pub const GATEWAY_LEDGER_PATH = "/var/lib/diosix/gateway-ledger.json";
+pub const AGENT_WORK_DIR = "/var/lib/diosix/agent";
 pub const DEFAULT_SCREENSHOT_PATH = "/var/lib/diosix/screenshot.bmp";
 pub const DEFAULT_RAW_SCREENSHOT_PATH = "/tmp/diosix-screen.raw";
 

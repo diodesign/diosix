@@ -1,4 +1,4 @@
-// Root VM init overlay, U-mode CLI, and desktop compositor feature nodes.
+// Root VM init overlay, U-mode CLI, and tool feature nodes.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
@@ -29,6 +29,7 @@
             "tools/overlay-common/etc/motd",
             "tools/overlay-common/etc/passwd",
             "tools/overlay-common/etc/profile",
+            "tools/overlay-common/usr/sbin/diosix-agent-start",
             "tools/overlay-cli/etc/diosix/guest-profile",
             "tools/overlay-cli/etc/motd",
             "tools/overlay-desktop/etc/diosix/guest-profile",
@@ -115,6 +116,7 @@
         .files = .{
             "tools/diosix-ctl/src/vm.zig",
             "tools/diosix-ctl/src/vm/run.zig",
+            "tools/diosix-ctl/src/vm/run/policy.zig",
             "tools/diosix-ctl/src/vm/run_opts.zig",
             "tools/diosix-ctl/src/vm/stage.zig",
             "tools/diosix-ctl/src/vm/bootargs.zig",
@@ -161,6 +163,7 @@
             "tools/diosix-ctl/src/net.zig",
             "tools/diosix-ctl/src/net/firewall.zig",
             "tools/diosix-ctl/src/net/http.zig",
+            "tools/diosix-ctl/src/net/http/peer.zig",
             "tools/diosix-ctl/src/ssh.zig",
             "tools/diosix-ctl/src/ssh/sync.zig",
         },
@@ -289,6 +292,7 @@
             "tools/diosix-ctl/src/board.zig",
             "tools/diosix-ctl/src/board/server.zig",
             "tools/diosix-ctl/src/board/store.zig",
+            "tools/diosix-ctl/src/board/store/policy.zig",
         },
         .summary =
         \\Append-only SHA-256 hash-chained message board hosted by each
@@ -311,7 +315,15 @@
         .status = .active,
         .files = .{
             "tools/diosix-ctl/src/agent.zig",
+            "tools/diosix-ctl/src/agent/admin.zig",
+            "tools/diosix-ctl/src/agent/admin/quota.zig",
+            "tools/diosix-ctl/src/agent/autonomy.zig",
             "tools/diosix-ctl/src/agent/config.zig",
+            "tools/diosix-ctl/src/agent/config/parser.zig",
+            "tools/diosix-ctl/src/agent/gateway.zig",
+            "tools/diosix-ctl/src/agent/gateway/backend.zig",
+            "tools/diosix-ctl/src/agent/ledger.zig",
+            "tools/diosix-ctl/src/agent/ledger/store.zig",
             "tools/diosix-ctl/src/agent/llm.zig",
             "tools/diosix-ctl/src/agent/loop.zig",
             "tools/diosix-ctl/src/agent/loop/vote.zig",
@@ -344,8 +356,8 @@
         },
         .summary =
         \\Host-to-host TCP peer collaboration using Ed25519 node identities,
-        \\fleet-wide Mission dissemination, stake vote aggregation, deterministic
-        \\replica sharding, and hard firewall denial of child VM access.
+        \\fleet-wide Mission dissemination, stake vote aggregation,
+        \\deterministic replica sharding, and firewall denial of child VMs.
         ,
         .activated_by = .{
             "cli-core-dispatch",
@@ -355,156 +367,6 @@
         .docs = .{
             "docs/cli.md#dsx-swarm",
             "docs/architecture.md#multi-host-fleet-collaboration",
-        },
-    },
-    .{
-        .id = "gui-desktop-core",
-        .name = "Desktop compositor core and semantic JSON IPC",
-        .layer = .u_mode_gui,
-        .status = .active,
-        .files = .{
-            "tools/diosix-gui/src/main.zig",
-            "tools/diosix-gui/src/paths.zig",
-            "tools/diosix-gui/src/demo.zig",
-            "tools/diosix-gui/src/gui.zig",
-            "tools/diosix-gui/src/gui/chrome.zig",
-            "tools/diosix-gui/src/gui/input.zig",
-            "tools/diosix-gui/src/gui/nav.zig",
-            "tools/diosix-gui/src/gui/render.zig",
-            "tools/diosix-gui/src/gui/json.zig",
-            "tools/diosix-gui/src/ipc.zig",
-            "tools/diosix-gui/src/window.zig",
-            "tools/diosix-gui/src/window/input.zig",
-            "tools/diosix-gui/src/icon.zig",
-            "tools/diosix-gui/src/icon/render.zig",
-            "tools/diosix-gui/src/icon/text.zig",
-            "tools/diosix-gui/src/icon/widgets.zig",
-            "tools/diosix-gui/src/label.zig",
-        },
-        .summary =
-        \\Root VM desktop event loop, window and widget tree, animated
-        \\top-left menu navigation, dirty-rectangle compositor, and semantic
-        \\JSON state export and command IPC.
-        ,
-        .activated_by = .{
-            "rootvm-init-overlay",
-        },
-        .docs = .{
-            "docs/gui-architecture.md#desktop-layout-and-workflows",
-            "docs/gui-architecture.md#semantic-json-control-plane",
-            "docs/run.md#exploring-the-interactive-tour-and-desktop",
-        },
-    },
-    .{
-        .id = "gui-display-render",
-        .name = "DRM/fbdev display, input, TrueType, and vector graphics",
-        .layer = .u_mode_gui,
-        .status = .active,
-        .files = .{
-            "tools/diosix-gui/assets/DMMono-Regular.ttf",
-            "tools/diosix-gui/assets/Questrial-Regular.ttf",
-            "tools/diosix-gui/assets/intro.wav",
-            "tools/diosix-gui/src/drm.zig",
-            "tools/diosix-gui/src/drm/abi.zig",
-            "tools/diosix-gui/src/display.zig",
-            "tools/diosix-gui/src/display/input.zig",
-            "tools/diosix-gui/src/framebuffer.zig",
-            "tools/diosix-gui/src/dither.zig",
-            "tools/diosix-gui/src/scale.zig",
-            "tools/diosix-gui/src/glass.zig",
-            "tools/diosix-gui/src/backdrop.zig",
-            "tools/diosix-gui/src/cursor.zig",
-            "tools/diosix-gui/src/vector.zig",
-            "tools/diosix-gui/src/vector/raster.zig",
-            "tools/diosix-gui/src/font.zig",
-            "tools/diosix-gui/src/font/ttf.zig",
-            "tools/diosix-gui/src/font/cache.zig",
-            "tools/diosix-gui/src/font/banner.zig",
-            "tools/diosix-gui/src/audio.zig",
-            "tools/diosix-gui/src/intro.zig",
-            "tools/diosix-gui/src/intro/fx.zig",
-        },
-        .summary =
-        \\KMS/DRM dumb-buffer and framebuffer display backend, Linux input
-        \\event reader, TrueType glyph engine, anti-aliased vector
-        \\rasterizer, frosted glass, dithering, and boot intro animation.
-        ,
-        .activated_by = .{
-            "gui-desktop-core",
-        },
-        .docs = .{
-            "docs/gui-architecture.md#overview-and-execution-model",
-            "docs/gui-architecture.md#compositor-internals",
-        },
-    },
-    .{
-        .id = "gui-panes-terminal",
-        .name = "Desktop VM panes, OSK, guided tour, and VT100 terminal",
-        .layer = .u_mode_gui,
-        .status = .active,
-        .files = .{
-            "tools/diosix-gui/src/panes.zig",
-            "tools/diosix-gui/src/panes/guests.zig",
-            "tools/diosix-gui/src/panes/guests/detail.zig",
-            "tools/diosix-gui/src/panes/quota_controls.zig",
-            "tools/diosix-gui/src/panes/create_vm.zig",
-            "tools/diosix-gui/src/panes/config.zig",
-            "tools/diosix-gui/src/panes/modal.zig",
-            "tools/diosix-gui/src/panes/welcome.zig",
-            "tools/diosix-gui/src/panes/tasks.zig",
-            "tools/diosix-gui/src/panes/osk.zig",
-            "tools/diosix-gui/src/panes/desktop.zig",
-            "tools/diosix-gui/src/panes/desktop/input.zig",
-            "tools/diosix-gui/src/panes/desktop/poll.zig",
-            "tools/diosix-gui/src/panes/desktop/render.zig",
-            "tools/diosix-gui/src/panes/terminal.zig",
-            "tools/diosix-gui/src/panes/terminal_state.zig",
-            "tools/diosix-gui/src/osk.zig",
-            "tools/diosix-gui/src/welcome.zig",
-            "tools/diosix-gui/src/tasks.zig",
-            "tools/diosix-gui/src/terminal.zig",
-            "tools/diosix-gui/src/terminal/io.zig",
-        },
-        .summary =
-        \\Interactive panes for running guest VMs and live quota sliders,
-        \\guest VirtIO-GPU desktop windows, VM creation, system telemetry,
-        \\display settings, welcome and tour modals, OSK, and VT100
-        \\terminals.
-        ,
-        .activated_by = .{
-            "gui-desktop-core",
-        },
-        .docs = .{
-            "docs/gui-architecture.md#desktop-layout-and-workflows",
-            "docs/run.md#using-the-graphical-desktop",
-        },
-    },
-    .{
-        .id = "gui-host-bridge",
-        .name = "GUI hypervisor telemetry, desktop I/O, and CLI bridge",
-        .layer = .u_mode_gui,
-        .status = .active,
-        .files = .{
-            "tools/diosix-gui/src/host.zig",
-            "tools/diosix-gui/src/host/desktop.zig",
-            "tools/diosix-gui/src/host/desktop/mapped.zig",
-            "tools/diosix-gui/src/host/guests.zig",
-            "tools/diosix-gui/src/host/images.zig",
-            "tools/diosix-gui/src/host/mem.zig",
-            "tools/diosix-gui/src/host/proc.zig",
-            "tools/diosix-gui/src/host/time.zig",
-        },
-        .summary =
-        \\Hypervisor host and guest telemetry polling, guest VirtIO-GPU
-        \\scanout and VirtIO-Input bridge, image repository scanner, live
-        \\quota and stop caller, and asynchronous CLI job spawner.
-        ,
-        .activated_by = .{
-            "gui-desktop-core",
-            "gui-panes-terminal",
-        },
-        .docs = .{
-            "docs/gui-architecture.md#compositor-internals",
         },
     },
 }

@@ -181,7 +181,13 @@ pub fn handleMapChildMem(
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
         return;
     };
+    const child_ram_end = std.math.add(
+        usize,
+        child.space.base_gpa,
+        child.space.range_size,
+    ) catch child.space.base_gpa;
     if (c_end > sv39x4.MAX_GPA or p_end > sv39x4.MAX_GPA or
+        c_gpa < child.space.base_gpa or c_end > child_ram_end or
         overlapsOwnRam(g, p_gpa, p_end))
     {
         sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
@@ -201,33 +207,40 @@ pub fn handleMapChildMem(
     while (offset < sz) : (offset += physmem.PageSize) {
         const cur_c = c_gpa + offset;
         const cur_p = p_gpa + offset;
-        const child_hpa = child.space.translateGPA(cur_c) catch blk: {
-            if (!child.checkRamQuota(1)) {
-                if (offset > 0) g.space.unmap(p_gpa, offset);
-                sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
-                return;
-            }
-            const new_page = physmem.allocPage() catch {
-                if (offset > 0) g.space.unmap(p_gpa, offset);
-                sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
-                return;
+        const child_hpa = child.space.translateGPAWritable(cur_c) catch |err|
+            blk: {
+                if (err == error.AccessDenied) {
+                    if (offset > 0) g.space.unmap(p_gpa, offset);
+                    sbi_core.setResult(vc, context, sbi_core.SBI_ERR_DENIED, 0);
+                    return;
+                }
+                if (!child.checkRamQuota(1)) {
+                    if (offset > 0) g.space.unmap(p_gpa, offset);
+                    sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
+                    return;
+                }
+                const new_page = physmem.allocPage() catch {
+                    if (offset > 0) g.space.unmap(p_gpa, offset);
+                    sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
+                    return;
+                };
+                const pg_ptr: [*]u8 = @ptrFromInt(new_page);
+                @memset(pg_ptr[0..physmem.PageSize], 0);
+                child.space.map(
+                    cur_c,
+                    new_page,
+                    physmem.PageSize,
+                    child_rwx,
+                ) catch {
+                    physmem.freePage(new_page);
+                    if (offset > 0) g.space.unmap(p_gpa, offset);
+                    sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
+                    return;
+                };
+                child.consumeQuota(1, 0);
+                physmem.decrementPageRef(new_page);
+                break :blk new_page;
             };
-            @memset(@as([*]u8, @ptrFromInt(new_page))[0..physmem.PageSize], 0);
-            child.space.map(
-                cur_c,
-                new_page,
-                physmem.PageSize,
-                child_rwx,
-            ) catch {
-                physmem.freePage(new_page);
-                if (offset > 0) g.space.unmap(p_gpa, offset);
-                sbi_core.setResult(vc, context, sbi_core.SBI_ERR_FAILED, 0);
-                return;
-            };
-            child.consumeQuota(1, 0);
-            physmem.decrementPageRef(new_page);
-            break :blk new_page;
-        };
         if (physmem.isHypervisorMemory(child_hpa, physmem.PageSize)) {
             if (offset > 0) g.space.unmap(p_gpa, offset);
             sbi_core.setResult(vc, context, sbi_core.SBI_ERR_INVALID_PARAM, 0);
@@ -403,11 +416,14 @@ test "SBI IPC manifest and network handlers" {
         sv39x4.PTEFlags.leaf_rw_user,
     );
     physmem.decrementPageRef(p_app);
-    try c_app.space.copyToGuest(0x80000000, "frame");
+    var eth_pkt: [14]u8 = @splat(0);
+    eth_pkt[12] = 0x08;
+    eth_pkt[13] = 0x00;
+    try c_app.space.copyToGuest(0x80000000, &eth_pkt);
     var vc_app = vcore.VirtualCore.init(0, c_app, 0x80000000, 0, .normal);
 
     // Direct sibling-to-sibling frame injection is denied by default.
-    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 5, c_peer.local_cid);
+    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 14, c_peer.local_cid);
     const denied: usize = @bitCast(sbi_core.SBI_ERR_DENIED);
     try testing.expectEqual(denied, ctx[@backingInt(arch.Register.a0)]);
     try testing.expectEqual(@as(usize, 0), c_peer.net_rx.getCount());
@@ -416,15 +432,15 @@ test "SBI IPC manifest and network handlers" {
     // is permitted while traffic to unrelated c_peer remains denied.
     handleSetNetPolicy(&vc, &ctx, g, c_app.local_cid, 0, c_router.local_cid);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
-    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 5, guest.CID_SELF);
+    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 14, guest.CID_SELF);
     try testing.expectEqual(denied, ctx[@backingInt(arch.Register.a0)]);
-    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 5, c_router.local_cid);
+    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 14, c_router.local_cid);
     try testing.expectEqual(@as(usize, 0), ctx[@backingInt(arch.Register.a0)]);
     try testing.expectEqual(@as(usize, 1), c_router.net_rx.getCount());
 
     // Isolate c_app completely; all outbound frames are denied.
     const iso_flag = interface.NetPolicyFlags.ISOLATED;
     handleSetNetPolicy(&vc, &ctx, g, c_app.local_cid, iso_flag, 0);
-    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 5, guest.CID_SELF);
+    handleNetSend(&vc_app, &ctx, c_app, 0x80000000, 14, guest.CID_SELF);
     try testing.expectEqual(denied, ctx[@backingInt(arch.Register.a0)]);
 }

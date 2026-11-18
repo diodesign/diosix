@@ -195,6 +195,18 @@ pub fn readVirtioCommon(
     };
 }
 
+fn isValidVirtqRings(q: anytype) bool {
+    if (q.num == 0) return false;
+    const n: u64 = q.num;
+    const desc_sz = n * @sizeOf(VirtqDesc);
+    const avail_sz = VIRTQ_RING_ELEMS_OFFSET + (n * @sizeOf(u16));
+    const used_sz = VIRTQ_RING_ELEMS_OFFSET + (n * @sizeOf(VirtqUsedElem));
+    _ = std.math.add(u64, q.desc_gpa, desc_sz) catch return false;
+    _ = std.math.add(u64, q.driver_gpa, avail_sz) catch return false;
+    _ = std.math.add(u64, q.device_gpa, used_sz) catch return false;
+    return true;
+}
+
 /// Shared handler for standard VirtIO MMIO feature and split-virtqueue
 /// configuration registers. Returns true if the register offset was handled.
 pub fn writeVirtioQueueAndFeatureReg(
@@ -226,7 +238,7 @@ pub fn writeVirtioQueueAndFeatureReg(
         VIRTIO_MMIO_REG_QUEUE_READY => {
             if (dev.queue_sel < num_queues) {
                 const q = &dev.queues[dev.queue_sel];
-                q.ready = (val & 1) != 0 and q.num > 0;
+                q.ready = (val & 1) != 0 and isValidVirtqRings(q);
             }
         },
         VIRTIO_MMIO_REG_QUEUE_DESC_LOW => {

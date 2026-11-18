@@ -183,7 +183,8 @@ EOF
 chmod 0755 "$TARGET_DIR/etc/init.d/rcK"
 
 echo "diosix-node" > "$TARGET_DIR/etc/hostname"
-printf "root::0:0:99999:7:::\n" > "$TARGET_DIR/etc/shadow"
+printf "root::0:0:99999:7:::\nagent:!:0:0:99999:7:::\n" \
+    > "$TARGET_DIR/etc/shadow"
 chmod 0600 "$TARGET_DIR/etc/shadow"
 printf "console\nhvc0\nttyS0\ntty1\n" > "$TARGET_DIR/etc/securetty"
 chmod 0644 "$TARGET_DIR/etc/securetty"
@@ -193,3 +194,4 @@ cp -a "${OVERLAY_COMMON}/." "$TARGET_DIR/"
 cp -a "${DYNAMIC_OVERLAY}/." "$TARGET_DIR/"
 chmod 0700 "$TARGET_DIR/etc/diosix/keys" 2>/dev/null || true
 chmod 0755 "$TARGET_DIR"/etc/init.d/S* 2>/dev/null || true
+chmod 0755 "$TARGET_DIR/usr/sbin/diosix-agent-start" 2>/dev/null || true

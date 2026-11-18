@@ -155,6 +155,12 @@ The `flags` bitmask in `struct run_args` accepts:
   a charter is sealed.
 * `RUN_FLAG_NET_ISOLATED` (`1 << 4`): Air-gaps the child VM in M-mode so all
   Ethernet and virtual socket (vsock) frames are rejected.
+* `RUN_FLAG_DELEGATE_STAKE` (`1 << 5`): Delegates voting stake eligibility for
+  `VOTE_MISSION` using prefix-closed attenuation (only a stake-holding parent
+  can grant stake to direct children).
+* `RUN_FLAG_LEAF_NO_CHILDREN` (`1 << 6`): Marks the child as a leaf VM whose
+  `max_descendants` and `max_child_depth` default to zero, blocking nested child
+  creation.
 * `RUN_FLAG_NET_UPSTREAM_SHIFT` (`16`, mask `0xffff`): Optional sibling router
   CID (`>= 2`) through which the child's L2 network and vsock traffic flows.
 
@@ -189,6 +195,9 @@ pointer to `struct quota_args` (`QuotaArgs`) in `a0`:
   usage—the hypervisor queues a memory-pressure event (`4`) and terminates the
   child. Under physical memory protection (PMP) fallback, RAM usage equals
   `logical_ram_pages` up front.
+* Passing `0` leaves `max_child_depth` or `max_descendants` unchanged; passing
+  `QUOTA_ZERO_SENTINEL` (`UINT64_MAX` / `DIOSIX_QUOTA_ZERO`) locks either
+  limit to `0` to prohibit nested children.
 
 #### `POLL_EVENT` (`FID 9`)
 Pops the oldest pending lifecycle event from the caller's event queue.
@@ -221,8 +230,10 @@ than 1 MiB (1,048,576 bytes).
 Map or unmap a direct child VM's physical RAM inside the parent VM's stage-2
 GPA space for image loading or shared-memory inter-process communication (IPC):
 * `MAP_CHILD_MEM`: `a0` points to `struct map_child_mem_args`
-  (`MapChildMemArgs`). Returns `SBI_SUCCESS` and mapped byte count in `a1`, or
-  `SBI_ERR_DENIED` if the child is confidential under a sealed charter.
+  (`MapChildMemArgs`), mapping writable pages inside the child's RAM bounds
+  while excluding read-only Stage-2 apertures such as `SCANOUT_MAP_GPA_BASE`.
+  Returns `SBI_SUCCESS` and mapped byte count in `a1`, or `SBI_ERR_DENIED` if
+  the child is confidential under a sealed charter or targets read-only pages.
 * `UNMAP_CHILD_MEM`: `a0` points to `struct unmap_child_mem_args`
   (`UnmapChildMemArgs`). Returns `SBI_SUCCESS` on success.
 
@@ -313,11 +324,13 @@ M-mode ring buffers:
   hash `a2` into `a0`. Returns `SBI_SUCCESS` or `SBI_ERR_DENIED` on
   policy/signature rejection.
 * `VOTE_MISSION`: Records a VM's approval or rejection against a candidate
-  `MissionVoteArgs` proposal (`72` bytes at GPA `a0`), weighted by the VM's
-  retained physical RAM pages (`max_ram_pages -| delegated_ram_pages`). Only VMs
-  whose `guest_id <= proposal_cutoff_guest_id` can vote on a given proposal,
-  preventing Sybil child-spawning attacks. Updates running stake totals in the
-  descriptor and returns `SBI_SUCCESS`.
+  `MissionVoteArgs` proposal (`72` bytes at GPA `a0`). Only VMs holding
+  `RUN_FLAG_DELEGATE_STAKE` with `guest_id <= proposal_cutoff_guest_id` can
+  vote (calls without stake return `SBI_ERR_DENIED`), weighted by retained
+  committed physical RAM pages (`committed_ram_pages -| stake_delegated_pages`).
+  RAM assigned to non-stake leaf or workload children remains in their parent's
+  voting weight so plain workloads cannot dilute or hijack quorum. Updates
+  running stake totals in the descriptor and returns `SBI_SUCCESS`.
 
 ---
 
@@ -418,8 +431,8 @@ struct quota_args {
     uint64_t target_cid;        /* 1 for self, >= 2 for child */
     uint64_t max_ram_pages;     /* Physical RAM quota in 4 KB pages */
     uint64_t max_vcpus;         /* Logical vCPU count (0 = unchanged) */
-    uint64_t max_child_depth;   /* Maximum nesting depth (0 = unchanged) */
-    uint64_t max_descendants;   /* Total descendant limit (0 = unchanged) */
+    uint64_t max_child_depth;   /* Max depth (0=keep, UINT64_MAX=lock to 0) */
+    uint64_t max_descendants;   /* Max kids (0=keep, UINT64_MAX=lock to 0) */
     uint64_t pcpu_quota_pct;    /* Physical CPU time % (1..90, 0 = unchanged) */
     uint64_t logical_ram_pages; /* Logical DTB RAM in 4 KB pages (0 = quota) */
 };

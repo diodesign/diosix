@@ -94,6 +94,7 @@
         .files = .{
             "hypervisor/hardware/emulation/devices/bus.zig",
             "hypervisor/hardware/emulation/devices/vblk.zig",
+            "hypervisor/hardware/emulation/devices/vblk/io.zig",
             "hypervisor/hardware/emulation/devices/vnet.zig",
             "hypervisor/hardware/emulation/devices/vsock.zig",
             "hypervisor/hardware/emulation/devices/vsock/queues.zig",

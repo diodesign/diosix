@@ -75,8 +75,10 @@ components:
   banks, timers, and UARTs at runtime from the host flattened device tree
   (FDT).
 * Every descendant VM uses the same `diosix-node.elf` baseline by default,
-  shipping Alpine Package Keeper (`apk`) and the `dsx` agent management suite
-  so parent and child nodes share identical primitives.
+  shipping Alpine Package Keeper (`apk`), the `dsx` agent suite, and
+  `/usr/sbin/diosix-agent-start` hygiene (`root`, `sudoer`, `non-sudoer`), while
+  M-mode containment (`--leaf`, `--no-stake`) lets arbitrary OS images run
+  safely as leaf workloads.
 * A freestanding S-mode guest bootloader shim runs inside untrusted child VMs
   to boot 64-bit RISC-V kernels from ISO9660 images, raw or ext4 disk images,
   and self-contained EFI binaries without exposing parsing logic in M-mode.
@@ -255,6 +257,10 @@ flowchart LR
   conserved stake metrics. Firewall rules (`iptables.conf`) drop incoming
   `diosix0` child traffic to TCP port `8486` so lateral host mesh connections
   never bridge child subtrees.
+* **Generic thinking gateway and conserved budgets:** Parents mediate inference
+  over `diosix0:8081` (`POST /v1/infer`) using `minimal`, `low`, `medium`, and
+  `high` tiers, conserving total tokens and micro-USD budgets across every edge
+  of the tree without placing API secrets inside child VMs.
 * **Deterministic replica sharding:** Top-level autonomous agents (`dsx agent`)
   sort live peer public keys and shard `[spec]` unit counts deterministically
   across live hosts (`computeLocalUnitTarget`), automatically rebalancing

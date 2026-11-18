@@ -258,7 +258,7 @@ pub fn createChild(
         .pcpu_quota_pct = init_pcpu_pct,
         .retained_pcpu_pct = init_ret_pcpu,
         .delegated_pcpu_pct = 0,
-        .max_child_depth = self.quotas.max_child_depth -| 1,
+        .max_child_depth = self.quotas.max_child_depth,
         .current_depth = self.quotas.current_depth + 1,
         .max_descendants = self.quotas.max_descendants -| 1,
         .used_descendants = 0,

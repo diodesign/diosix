@@ -181,6 +181,7 @@ pub fn stop(self: *guest_mod.Guest) void {
 }
 
 pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
+    @import("../sbi/scanout_map.zig").unmapOnGuestTeardown(self);
     self.state = .valid;
     self.initial_entry_point = entry;
     self.initial_dtb_ptr = dtb;

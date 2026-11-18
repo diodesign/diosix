@@ -68,6 +68,7 @@ pub fn promoteStandbyRoot(
 
     standby.parent = null;
     standby.is_standby_root = false;
+    standby.has_voting_stake = false;
     standby.is_trusted = true;
     standby.space.is_trusted = true;
     standby.local_cid = sbi.CID_SELF;

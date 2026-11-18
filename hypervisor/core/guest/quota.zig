@@ -302,19 +302,27 @@ fn applyQuotaToTarget(
         }
     }
     if (args.max_child_depth > 0) {
-        const max_d: usize = @min(
-            ceil.quotas.max_child_depth,
-            @as(usize, @intCast(args.max_child_depth)),
-        );
-        target.quotas.max_child_depth =
+        const sent = sbi.QUOTA_ZERO_SENTINEL;
+        const raw_d: usize = if (args.max_child_depth == sent)
+            target.quotas.current_depth
+        else
+            @intCast(args.max_child_depth);
+        const max_d: usize = @min(ceil.quotas.max_child_depth, raw_d);
+        target.quotas.max_child_depth = if (target != ceil)
+            max_d
+        else
             @min(target.quotas.max_child_depth, max_d);
     }
     if (args.max_descendants > 0) {
-        const max_desc: usize = @min(
-            ceil.quotas.max_descendants,
-            @as(usize, @intCast(args.max_descendants)),
-        );
-        target.quotas.max_descendants =
+        const raw_desc: usize = if (args.max_descendants ==
+            sbi.QUOTA_ZERO_SENTINEL)
+            0
+        else
+            @intCast(args.max_descendants);
+        const max_desc: usize = @min(ceil.quotas.max_descendants, raw_desc);
+        target.quotas.max_descendants = if (target != ceil)
+            max_desc
+        else
             @min(target.quotas.max_descendants, max_desc);
     }
 }

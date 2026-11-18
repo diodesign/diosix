@@ -256,8 +256,12 @@ pub const GuestSpace = struct {
         }
     }
 
-    /// Translates a Guest Physical Address (GPA) to a Host Physical Address.
-    pub fn translateGPA(self: *const GuestSpace, gpa: usize) !usize {
+    /// Translates a GPA while the caller holds `self.lock`.
+    pub fn translateGPAPermLocked(
+        self: *const GuestSpace,
+        gpa: usize,
+        require_write: bool,
+    ) !usize {
         if (self.mode == .h_paging) {
             const pt = self.paging orelse return error.TranslationFailed;
             if (pt.root_base_hpa > 0 and
@@ -271,10 +275,17 @@ pub const GuestSpace = struct {
             }
             const pte_ptr = pt.walk(gpa, false) catch
                 return error.TranslationFailed;
-            if (pte_ptr.* & sv39x4.PTEFlags.valid == 0) {
-                return error.TranslationFailed;
+            const pte = pte_ptr.*;
+            const need_rw = sv39x4.PTEFlags.valid | sv39x4.PTEFlags.read;
+            if ((pte & need_rw) != need_rw) return error.TranslationFailed;
+            if (require_write) {
+                if ((pte & sv39x4.PTEFlags.write) == 0 or
+                    (pte & sv39x4.PTEFlags.cow) != 0)
+                {
+                    return error.AccessDenied;
+                }
             }
-            const hpa = sv39x4.pteToHpa(pte_ptr.*);
+            const hpa = sv39x4.pteToHpa(pte);
             if (hpa == 0) return error.TranslationFailed;
             return std.math.add(usize, hpa, gpa % physmem.PageSize) catch
                 return error.TranslationFailed;
@@ -290,6 +301,20 @@ pub const GuestSpace = struct {
             }
             return error.TranslationFailed;
         }
+    }
+
+    /// Translates a readable Guest Physical Address (GPA) to an HPA.
+    pub fn translateGPA(self: *const GuestSpace, gpa: usize) !usize {
+        const s = @constCast(self).lock.lock();
+        defer @constCast(self).lock.unlock(s);
+        return self.translateGPAPermLocked(gpa, false);
+    }
+
+    /// Translates a writable, non-CoW Guest Physical Address (GPA) to an HPA.
+    pub fn translateGPAWritable(self: *const GuestSpace, gpa: usize) !usize {
+        const s = @constCast(self).lock.lock();
+        defer @constCast(self).lock.unlock(s);
+        return self.translateGPAPermLocked(gpa, true);
     }
 
     pub const copyToGuest = transfer.copyToGuest;

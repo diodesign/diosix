@@ -4,18 +4,19 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const linux = std.os.linux;
 const api = @import("../../api.zig");
 const cfg_mod = @import("../config.zig");
 const charter = @import("../../charter.zig");
 const charter_crypto = @import("../../charter/crypto.zig");
 const charter_ops = @import("../../charter/ops.zig");
 const common = @import("../../common.zig");
-const llm = @import("../llm.zig");
+const gateway = @import("../gateway.zig");
 const net_http = @import("../../net/http.zig");
 const ssh = @import("../../ssh.zig");
 const sysconfig = @import("../../sysconfig.zig");
 
-const AGENT_VOTED_PATH = "/run/diosix/agent-voted.txt";
+const AGENT_VOTED_PATH = sysconfig.AGENT_VOTED_PATH;
 const MAX_VOTED_FILE_BYTES: usize = 64 * 1024;
 const MAX_BOARD_LIST_BYTES: usize = 512 * 1024;
 
@@ -26,6 +27,7 @@ pub const StepReport = struct {
     votes_rejected: usize = 0,
     sealed_version: u32 = 0,
     replicas_spawned: usize = 0,
+    tasks_completed: usize = 0,
 };
 
 const BoardEntryJson = struct {
@@ -90,28 +92,19 @@ fn consultAgentBrain(
     ) catch return .approve;
     defer allocator.free(prompt);
 
-    const req = llm.buildChatRequestJson(
-        allocator,
-        cfg.model(),
-        prompt,
-        cfg.max_tokens,
-    ) catch return .approve;
-    defer allocator.free(req);
-
-    const raw = llm.invokeRawChatCompletion(
+    const res = gateway.queryLocalGatewayOrDirect(
         allocator,
         client,
-        &cfg,
-        req,
+        "",
+        prompt,
+        null,
+        cfg.max_tokens,
+        "json",
     ) catch return .approve;
-    defer allocator.free(raw);
+    defer res.deinit(allocator);
 
-    const text = llm.extractAssistantContentAlloc(allocator, raw) catch
-        return .approve;
-    defer allocator.free(text);
-
-    if (std.mem.indexOf(u8, text, "\"reject\"") != null or
-        std.mem.indexOf(u8, text, "REJECT") != null)
+    if (std.mem.indexOf(u8, res.answer, "\"reject\"") != null or
+        std.mem.indexOf(u8, res.answer, "REJECT") != null)
     {
         return .reject;
     }
@@ -228,6 +221,74 @@ pub fn processParentBoardProposals(
             report.votes_approved += 1;
         } else {
             report.votes_rejected += 1;
+        }
+    }
+}
+
+pub fn spawnLoggedSubprocess(argv: [*:null]const ?[*:0]const u8) usize {
+    net_http.ensureParentDir(sysconfig.AGENT_LOG_PATH);
+    const pid_s: isize = @bitCast(linux.fork());
+    if (pid_s < 0) return 1;
+    if (pid_s == 0) {
+        var lz_buf: [common.MAX_PATH_LEN]u8 = undefined;
+        if (common.toPathZ(sysconfig.AGENT_LOG_PATH, &lz_buf)) |lz| {
+            const wf: linux.O = .{
+                .ACCMODE = .WRONLY,
+                .CREAT = true,
+                .APPEND = true,
+            };
+            const fd_s: isize = @bitCast(linux.open(lz.ptr, wf, 0o600));
+            if (fd_s >= 0) {
+                const fd: i32 = @intCast(fd_s);
+                _ = linux.dup2(fd, 1);
+                _ = linux.dup2(fd, 2);
+                if (fd > 2) _ = linux.close(fd);
+            }
+        }
+        const envp = [_:null]?[*:0]const u8{
+            "PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin",
+            null,
+        };
+        const prog = argv[0] orelse "/usr/sbin/dsx";
+        _ = linux.execve(prog, argv, &envp);
+        linux.exit_group(127);
+    }
+    const child_pid: i32 = @intCast(pid_s);
+    var status: i32 = 0;
+    while (true) {
+        const w_s: isize = @bitCast(linux.waitpid(child_pid, &status, 0));
+        if (w_s >= 0) break;
+        if (w_s == -@as(isize, @backingInt(linux.E.INTR))) continue;
+        return 1;
+    }
+    const st_u: u32 = @bitCast(status);
+    if (linux.W.IFEXITED(st_u)) return linux.W.EXITSTATUS(st_u);
+    return 1;
+}
+
+pub fn redirectDaemonStdio() void {
+    net_http.ensureParentDir(sysconfig.AGENT_LOG_PATH);
+    const dn: isize = @bitCast(
+        linux.open(sysconfig.DEV_NULL_PATH, .{ .ACCMODE = .RDONLY }, 0),
+    );
+    if (dn >= 0) {
+        const dfd: i32 = @intCast(dn);
+        _ = linux.dup2(dfd, 0);
+        if (dfd > 2) _ = linux.close(dfd);
+    }
+    var lz_buf: [common.MAX_PATH_LEN]u8 = undefined;
+    if (common.toPathZ(sysconfig.AGENT_LOG_PATH, &lz_buf)) |lz| {
+        const wf: linux.O = .{
+            .ACCMODE = .WRONLY,
+            .CREAT = true,
+            .APPEND = true,
+        };
+        const lfd_s: isize = @bitCast(linux.open(lz.ptr, wf, 0o600));
+        if (lfd_s >= 0) {
+            const lfd: i32 = @intCast(lfd_s);
+            _ = linux.dup2(lfd, 1);
+            _ = linux.dup2(lfd, 2);
+            if (lfd > 2) _ = linux.close(lfd);
         }
     }
 }

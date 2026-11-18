@@ -206,6 +206,18 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
 * `--packages <*|none|pkg1,pkg2>`: Restricts Alpine `apk` packages permitted to
   the child VM (`*` for parent's full ceiling, `none`, or a comma-separated
   allowlist), enforced monotonically against the caller's own ceiling.
+* `--leaf`: Marks the child as a leaf VM (`RUN_FLAG_LEAF_NO_CHILDREN`, blocking
+  nested child creation cleanly at depth zero).
+* `--max-children <N>`, `--max-depth <D>`: Sets nested descendant count and
+  subtree depth ceilings (`0` locks the limit using `QUOTA_ZERO_SENTINEL`).
+* `--delegate-stake` / `--no-stake`: Explicitly grants or withholds
+  `VOTE_MISSION` governance stake delegation (`--no-stake` is the default so
+  plain workload VMs do not dilute parent stake).
+* `--tokens <N>`, `--budget-usd <USD>`, `--max-thinking <tier>`: Allocates a
+  conserved child inference allowance and maximum thinking tier (`minimal`,
+  `low`, `medium`, or `high`) in the parent's gateway ledger (`0` by default).
+* `--agent-mode <off|root|sudoer|non-sudoer>`: Stamps `# diosix-agent-mode:`
+  into the child's M-mode manifest for `/usr/sbin/diosix-agent-start --auto`.
 * `--domain <name>`: Loads settings and policies for `<name>` from
   `/etc/diosix/system.toml`.
 * `--manifest <path>`, `-m <path>`: Path to `system.toml`.
@@ -427,8 +439,10 @@ dsx quota [cid|self] [--pcpu <1-99>] [--retained-pcpu <1-99>] [--ram <MB>] \
   running child VM's pool below its currently faulted pages triggers an
   out-of-memory (OOM) stop of that child.
 * `--vcpus <N>`: Sets the logical vCPU ceiling (1 to 4,096).
-* `--depth <N>`: Sets maximum child nesting depth.
-* `--descendants <N>`: Sets maximum descendant VM count.
+* `--depth <N>`: Sets maximum child nesting depth (`0` locks to zero via
+  `QUOTA_ZERO_SENTINEL`).
+* `--descendants <N>`: Sets maximum descendant VM count (`0` locks to zero via
+  `QUOTA_ZERO_SENTINEL`).
 
 Passing `self` lets a VM permanently lower its own quotas before running
 untrusted workloads.
@@ -885,39 +899,54 @@ dsx board list --topic ops --json
 ---
 
 ### `dsx agent`
-Runs and inspects the autonomous node agent and its large language model (LLM)
-inference proxy (`diosix0:8081`). Provider configuration reads
-`/etc/diosix/agent.toml` and environment overrides (`DIOSIX_LLM_PROVIDER`,
-`DIOSIX_LLM_MODEL`, `DIOSIX_LLM_BASE_URL`, `OPENROUTER_API_KEY`,
-`OPENCODE_API_KEY`, `OPENCODE_BASE_URL`), automatically selecting OpenRouter,
-OpenCode, a local OpenAI-compatible endpoint, the parent VM's proxy (`parent`
-for wide-area-network-isolated children), or a deterministic policy brain.
+Runs and inspects the autonomous node agent and its generic thinking gateway
+(`diosix0:8081` and `127.0.0.1:8081`). Provider configuration reads
+`/etc/diosix/agent.toml`, root-only secrets (`/var/lib/diosix/keys/llm.secret`),
+and environment overrides (`DIOSIX_LLM_PROVIDER`, `DIOSIX_LLM_MODEL`,
+`DIOSIX_LLM_BASE_URL`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`,
+`OPENCODE_BASE_URL`), resolving to OpenRouter, OpenCode, a local server, the
+parent gateway (`http://diosix-parent:8081/v1/infer`), or a deterministic policy
+brain while conserving tokens and micro-USD (`cost_micros_usd`). Guests can also
+launch the daemon with in-guest user hygiene via `/usr/sbin/diosix-agent-start`.
 
 ```bash
-dsx agent <status|ask|proxy|step|run> [options]
+dsx agent <status|ask|set-key|quota|grant|proxy|step|run> [options]
 ```
 
 Subcommands:
-* `status [--json]`: Shows resolved provider, model, endpoint, parent status,
-  and whether the LLM proxy (`:8081`) and agent daemon are running.
-* `ask <prompt> [--json]`: Sends a single chat completion prompt through the
-  resolved provider or deterministic policy engine.
-* `proxy [--port P] [--daemon]`: Starts the HTTP chat completion proxy on
-  `diosix0` (default port `8081`), authenticating direct children from kernel
-  media access control (MAC) table entries before forwarding upstream.
-* `step [--json]`: Runs one synchronous reconciliation tick: on child VMs, polls
-  the parent board for charter proposals, applies deterministic anti-ransomware
-  and LLM checks, propagates down to grandchildren, and casts `VOTE_MISSION`; on
-  top-level VMs, seals ratified amendments and reconciles sharded workload
-  units.
+* `status [--json]`: Shows resolved provider, model, default thinking tier,
+  endpoint, and whether the gateway (`:8081`) and agent daemon are running.
+* `ask <prompt> [--thinking T] [--max-tokens N] [--format text|json] [--json]`:
+  Queries the local or parent thinking gateway (`POST /v1/infer`) using the
+  requested thinking level (`minimal`, `low`, `medium`, or `high`) and reports
+  exact token and micro-USD usage.
+* `set-key --provider <P> [--key <secret>] [--endpoint <url>] [--json]`: Stores
+  upstream provider credentials atomically (`0600`) on a root VM; rejected on
+  child VMs.
+* `quota [<vm|cid|self>] [--json]`: Displays conserved token, micro-USD,
+  thinking-tier, and per-minute rate limits (`rpm`, `tpm`) from `GET /v1/quota`
+  or the gateway ledger.
+* `grant <vm|cid> [--tokens N|+N] [--budget-usd USD|+USD] [--max-thinking T]
+  [--rpm N] [--tpm N] [--json]`: Delegates or tops up a direct child VM's token
+  and USD budget within the caller's available ceiling and syncs child manifest
+  directives.
+* `proxy [--port P] [--daemon]`: Starts the HTTP thinking gateway (`POST
+  /v1/infer`, `GET /v1/quota`, and legacy `POST /v1/chat/completions`) on
+  `127.0.0.1` and `diosix0`, binding direct children via kernel MAC ARP state.
+* `step [--json]`: Runs one reconciliation tick: polls charter proposals and
+  votes via `VOTE_MISSION`, polls `topic=task` board messages to execute
+  bounded actions (`tasks_completed`), and on top-level VMs seals amendments and
+  reconciles sharded workload units.
 * `run [--interval S] [--daemon]`: Runs `step` continuously every `S` seconds
   (default `5`).
 
 Examples:
 ```bash
-dsx agent status --json
-dsx agent ask "verify database replica health" --json
-dsx agent step --json
+dsx agent set-key --provider openrouter --key sk-or-...
+dsx agent grant web-leaf --tokens 4096 --budget-usd 0.05 --max-thinking low
+dsx agent ask "verify database replica health" --thinking low --json
+dsx agent quota web-leaf --json
+/usr/sbin/diosix-agent-start --mode non-sudoer --interval 5
 ```
 
 ---

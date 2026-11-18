@@ -107,9 +107,19 @@ fn mapResourceIntoSlotLocked(
             physmem.PageSize,
         ) catch return rollbackMap(base_gpa, caller, mapped_bytes);
         var pg: usize = 0;
+        const scan_end = interface.SCANOUT_MAP_GPA_BASE +
+            interface.SCANOUT_APERTURE_BYTES;
         while (pg < ent_pages) : (pg += 1) {
-            const child_gpa = ent.addr + pg * physmem.PageSize;
-            const hpa = target.space.translateGPA(child_gpa) catch {
+            const pg_off = std.math.mul(usize, pg, physmem.PageSize) catch
+                return rollbackMap(base_gpa, caller, mapped_bytes);
+            const child_gpa = std.math.add(usize, ent.addr, pg_off) catch
+                return rollbackMap(base_gpa, caller, mapped_bytes);
+            if (child_gpa >= interface.SCANOUT_MAP_GPA_BASE and
+                child_gpa < scan_end)
+            {
+                return rollbackMap(base_gpa, caller, mapped_bytes);
+            }
+            const hpa = target.space.translateGPAWritable(child_gpa) catch {
                 return rollbackMap(base_gpa, caller, mapped_bytes);
             };
             if (physmem.isHypervisorMemory(hpa, physmem.PageSize) or

@@ -8,210 +8,35 @@ const linux = std.os.linux;
 const api = @import("../api.zig");
 const common = @import("../common.zig");
 const ssh = @import("../ssh.zig");
-const sysconfig = @import("../sysconfig.zig");
+pub const peer = @import("http/peer.zig");
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
-const LISTEN_BACKLOG: u32 = 32;
 const IO_CHUNK_BYTES: usize = 8192;
-const PROC_READ_MAX: usize = 64 * 1024;
+const CLIENT_TIMEOUT_SEC: i64 = 35;
 const E_INTR: isize = -@as(isize, @backingInt(linux.E.INTR));
 
-pub fn formatIpv4(addr_be: u32, buf: *[16]u8) []const u8 {
-    const b: [4]u8 = @bitCast(addr_be);
-    return std.fmt.bufPrint(buf, "{d}.{d}.{d}.{d}", .{
-        b[0], b[1], b[2], b[3],
-    }) catch "0.0.0.0";
-}
-
-pub fn parseArpChildCid(arp_text: []const u8, peer_ip: []const u8) ?usize {
-    var lines = std.mem.splitScalar(u8, arp_text, '\n');
-    while (lines.next()) |raw_line| {
-        const line = common.trimWhitespace(raw_line);
-        if (line.len == 0) continue;
-        var tok = std.mem.tokenizeAny(u8, line, " \t");
-        const ip = tok.next() orelse continue;
-        _ = tok.next() orelse continue;
-        const flags = tok.next() orelse continue;
-        const mac = tok.next() orelse continue;
-        _ = tok.next() orelse continue;
-        const dev = tok.next() orelse continue;
-        if (!std.mem.eql(u8, ip, peer_ip) or !std.mem.eql(u8, dev, "diosix0"))
-            continue;
-        if (!std.mem.startsWith(u8, flags, "0x") or
-            std.mem.eql(u8, flags, "0x0")) continue;
-        if (mac.len != 17 or mac[14] != ':') continue;
-        if (!std.ascii.eqlIgnoreCase(mac[0..12], "02:00:00:00:")) continue;
-        const hi = std.fmt.parseInt(u8, mac[12..14], 16) catch continue;
-        const lo = std.fmt.parseInt(u8, mac[15..17], 16) catch continue;
-        const cid = (@as(usize, hi) << 8) | @as(usize, lo);
-        if (cid >= common.CID_FIRST_CHILD) return cid;
-    }
-    return null;
-}
-
-pub fn resolvePeerChildCid(peer_addr_be: u32) ?usize {
-    if (peer_addr_be == (ssh.parseIpv4("127.0.0.1") orelse 0)) return 0;
-    var ip_buf: [16]u8 = undefined;
-    const ip_str = formatIpv4(peer_addr_be, &ip_buf);
-    const arp_raw = common.readBinaryFile(
-        sysconfig.PROC_NET_ARP_PATH,
-        PROC_READ_MAX,
-    ) catch return null;
-    defer common.unmapBinaryFile(arp_raw);
-    return parseArpChildCid(arp_raw, ip_str);
-}
-
-pub fn parseHostsIpv4(hosts_text: []const u8, hostname: []const u8) ?u32 {
-    var lines = std.mem.splitScalar(u8, hosts_text, '\n');
-    while (lines.next()) |raw_line| {
-        const nc = if (std.mem.indexOfScalar(u8, raw_line, '#')) |c|
-            raw_line[0..c]
-        else
-            raw_line;
-        const line = common.trimWhitespace(nc);
-        if (line.len == 0) continue;
-        var tok = std.mem.tokenizeAny(u8, line, " \t");
-        const ip_str = tok.next() orelse continue;
-        const ip_be = ssh.parseIpv4(ip_str) orelse continue;
-        while (tok.next()) |alias| {
-            if (std.mem.eql(u8, alias, hostname)) return ip_be;
-        }
-    }
-    return null;
-}
-
-pub fn resolveParentIpv4(client: ?*api.DiosixClient) u32 {
-    if (client) |cl| {
-        const alloc = std.heap.page_allocator;
-        if (alloc.alloc(u8, common.MAX_MANIFEST_SIZE)) |buf| {
-            defer alloc.free(buf);
-            if (cl.getManifest(common.CID_SELF, buf)) |mlen| {
-                var lines = std.mem.splitScalar(u8, buf[0..mlen], '\n');
-                while (lines.next()) |raw| {
-                    const line = common.trimWhitespace(raw);
-                    const pfx = "# diosix-net-gateway:";
-                    if (std.mem.startsWith(u8, line, pfx)) {
-                        const gw = common.trimWhitespace(line[pfx.len..]);
-                        if (ssh.parseIpv4(gw)) |ip_be| return ip_be;
-                    }
-                }
-            } else |_| {}
-        } else |_| {}
-    }
-    if (common.readBinaryFile(sysconfig.ETC_HOSTS_PATH, PROC_READ_MAX)) |h| {
-        defer common.unmapBinaryFile(h);
-        if (parseHostsIpv4(h, "diosix-parent")) |ip_be| return ip_be;
-    } else |_| {}
-    return ssh.parseIpv4(sysconfig.DEFAULT_GATEWAY_IP) orelse 0;
-}
-
-pub fn isHasParent(client: *api.DiosixClient) bool {
-    const info = client.getInfo(common.CID_SELF) catch return false;
-    return info.has_parent != 0;
-}
-
-pub fn ensureDirRecursive(path: []const u8) void {
-    if (path.len == 0 or path.len >= common.MAX_PATH_LEN) return;
-    var buf: [common.MAX_PATH_LEN]u8 = undefined;
-    var i: usize = 1;
-    while (i <= path.len) : (i += 1) {
-        if (i == path.len or path[i] == '/') {
-            @memcpy(buf[0..i], path[0..i]);
-            buf[i] = 0;
-            const z: [*:0]const u8 = @ptrCast(buf[0..i :0]);
-            _ = linux.mkdir(z, 0o755);
-        }
-    }
-}
-
-pub fn ensureParentDir(file_path: []const u8) void {
-    if (std.mem.lastIndexOfScalar(u8, file_path, '/')) |slash| {
-        if (slash > 0) ensureDirRecursive(file_path[0..slash]);
-    }
-}
-
-pub fn bindAndListenTcp(port: u16) !i32 {
-    const stype = linux.SOCK.STREAM | linux.SOCK.CLOEXEC;
-    const fd_s: isize = @bitCast(linux.socket(linux.AF.INET, stype, 0));
-    if (fd_s < 0) return error.SocketFailed;
-    const fd: i32 = @intCast(fd_s);
-    errdefer _ = linux.close(fd);
-    const enable: c_int = 1;
-    _ = linux.setsockopt(
-        fd,
-        linux.SOL.SOCKET,
-        linux.SO.REUSEADDR,
-        @ptrCast(&enable),
-        @sizeOf(c_int),
-    );
-    var addr: linux.sockaddr.in = .{
-        .family = linux.AF.INET,
-        .port = std.mem.nativeToBig(u16, port),
-        .addr = 0,
-        .zero = @splat(0),
-    };
-    const b: isize = @bitCast(
-        linux.bind(fd, @ptrCast(&addr), @sizeOf(linux.sockaddr.in)),
-    );
-    if (b < 0) return error.BindFailed;
-    const l: isize = @bitCast(linux.listen(fd, LISTEN_BACKLOG));
-    if (l < 0) return error.ListenFailed;
-    return fd;
-}
-
-pub fn isPidFileRunning(pid_path: []const u8) ?i32 {
-    const raw = common.readBinaryFile(pid_path, 128) catch return null;
-    defer common.unmapBinaryFile(raw);
-    const pid = std.fmt.parseInt(i32, common.trimWhitespace(raw), 10) catch
-        return null;
-    if (pid <= 1) return null;
-    const rc: isize = @bitCast(linux.kill(pid, @fromBackingInt(@intCast(0))));
-    return if (rc == 0) pid else null;
-}
-
-fn redirectStdioFd(
-    path: [*:0]const u8,
-    flags: linux.O,
-    fd1: i32,
-    fd2: ?i32,
-) void {
-    const rc: isize = @bitCast(linux.open(path, flags, 0o600));
-    if (rc < 0) return;
-    const fd: i32 = @intCast(rc);
-    _ = linux.dup2(fd, fd1);
-    if (fd2) |other| _ = linux.dup2(fd, other);
-    if (fd > 2) _ = linux.close(fd);
-}
+pub const setSocketTimeouts = peer.setSocketTimeouts;
+pub const formatIpv4 = peer.formatIpv4;
+pub const parseArpChildCid = peer.parseArpChildCid;
+pub const isArpPeerOnDev = peer.isArpPeerOnDev;
+pub const resolvePeerChildCid = peer.resolvePeerChildCid;
+pub const isPeerFromDiosixBridge = peer.isPeerFromDiosixBridge;
+pub const parseHostsIpv4 = peer.parseHostsIpv4;
+pub const resolveParentIpv4 = peer.resolveParentIpv4;
+pub const isHasParent = peer.isHasParent;
+pub const ensureDirRecursive = peer.ensureDirRecursive;
+pub const ensureParentDir = peer.ensureParentDir;
+pub const bindAndListenTcp = peer.bindAndListenTcp;
+pub const DownstreamListener = peer.DownstreamListener;
+pub const isPidFileRunning = peer.isPidFileRunning;
+pub const daemonizeDualServer = peer.daemonizeServer;
 
 pub fn daemonizeServer(
     listen_fd: i32,
     pid_path: []const u8,
     log_path: []const u8,
 ) !bool {
-    ensureParentDir(pid_path);
-    ensureParentDir(log_path);
-    const pid_s: isize = @bitCast(linux.fork());
-    if (pid_s < 0) return error.ForkFailed;
-    if (pid_s > 0) {
-        var pid_buf: [32]u8 = undefined;
-        const ps = std.fmt.bufPrint(&pid_buf, "{d}\n", .{pid_s}) catch
-            return false;
-        common.writePrivateFile(pid_path, ps) catch {};
-        _ = linux.close(listen_fd);
-        return false;
-    }
-    _ = linux.setsid();
-    redirectStdioFd(sysconfig.DEV_NULL_PATH, .{ .ACCMODE = .RDONLY }, 0, null);
-    var lz_buf: [common.MAX_PATH_LEN]u8 = undefined;
-    if (common.toPathZ(log_path, &lz_buf)) |lz| {
-        const wf: linux.O = .{
-            .ACCMODE = .WRONLY,
-            .CREAT = true,
-            .APPEND = true,
-        };
-        redirectStdioFd(lz.ptr, wf, 1, 2);
-    }
-    return true;
+    return peer.daemonizeServer(listen_fd, -1, pid_path, log_path);
 }
 
 pub const HttpRequest = struct {
@@ -399,6 +224,7 @@ pub fn httpClientRequest(
     if (fd_s < 0) return error.SocketFailed;
     const fd: i32 = @intCast(fd_s);
     defer _ = linux.close(fd);
+    setSocketTimeouts(fd, CLIENT_TIMEOUT_SEC);
     var addr: linux.sockaddr.in = .{
         .family = linux.AF.INET,
         .port = std.mem.nativeToBig(u16, port),
@@ -454,6 +280,7 @@ pub fn httpClientRequest(
 }
 
 test "net/http: ARP MAC-to-CID, /etc/hosts, and HTTP framing" {
+    _ = peer;
     std.testing.refAllDecls(@This());
     const t = std.testing;
     const arp =

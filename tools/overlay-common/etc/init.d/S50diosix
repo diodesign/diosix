@@ -366,6 +366,11 @@ case "$1" in
             2>/dev/null || true
 
     mkdir -p "$KEY_DIR" "${ETC_DIR}/keys" "$RUN_DIR"
+    {
+        echo "HAS_PARENT=${HAS_PARENT}"
+        echo "PARENT_IP=${PARENT_IP}"
+    } > "${RUN_DIR}/node-env" 2>/dev/null || true
+    chmod 0644 "${RUN_DIR}/node-env" 2>/dev/null || true
     chmod 700 "$KEY_DIR" "${ETC_DIR}/keys" 2>/dev/null || true
     if [ ! -f "$MGT_KEY" ] && command -v dropbearkey >/dev/null 2>&1; then
         dropbearkey -t ed25519 -f "$MGT_KEY" >/dev/null 2>&1 || true
@@ -415,7 +420,7 @@ case "$1" in
         "$DSX_BIN" agent proxy --daemon >/dev/null 2>&1 || true
         "$DSX_BIN" board serve --daemon >/dev/null 2>&1 || true
         if [ "$HAS_PARENT" -eq 0 ]; then
-            if grep -qE "diosix\.swarm_ip=|diosix\.swarm=1" /proc/cmdline \
+            if grep -q "diosix\.swarm=1\|diosix\.swarm_ip=" /proc/cmdline \
                2>/dev/null; then
                 "$DSX_BIN" swarm serve --daemon >/dev/null 2>&1 || true
                 SPEERS=$(sed -n 's/.*diosix\.swarm_peers=\([^ ]*\).*/\1/p' \
@@ -431,17 +436,18 @@ case "$1" in
                     ) &
                 fi
             fi
-            if grep -q "diosix\.agent=1" /proc/cmdline 2>/dev/null; then
-                "$DSX_BIN" agent run --daemon >/dev/null 2>&1 || true
-            fi
         fi
+        [ -x /usr/sbin/diosix-agent-start ] && \
+            /usr/sbin/diosix-agent-start --auto >/dev/null 2>&1 || true
     fi
     echo "Diosix guest services: OK"
     ;;
   stop)
     echo "Stopping Diosix guest services..."
+    [ -x /usr/sbin/diosix-agent-start ] && \
+        /usr/sbin/diosix-agent-start --stop >/dev/null 2>&1 || true
     for pidf in "${RUN_DIR}/board.pid" "${RUN_DIR}/pkg-proxy.pid" \
-                "${RUN_DIR}/llm-proxy.pid" "${RUN_DIR}/agent.pid" \
+                "${RUN_DIR}/llm-proxy.pid" "${RUN_DIR}/agent/agent.pid" \
                 "${RUN_DIR}/swarm.pid"; do
         if [ -r "$pidf" ]; then
             kill "$(cat "$pidf" 2>/dev/null)" 2>/dev/null || true

@@ -43,6 +43,15 @@ pub const RunOption = enum {
     @"--net",
     @"--net-via",
     @"--packages",
+    @"--leaf",
+    @"--max-children",
+    @"--max-depth",
+    @"--delegate-stake",
+    @"--no-stake",
+    @"--tokens",
+    @"--budget-usd",
+    @"--max-thinking",
+    @"--agent-mode",
     @"--user",
 };
 
@@ -69,6 +78,14 @@ pub const ParsedRunOptions = struct {
     net_mode: ?net.NetMode = null,
     net_via_str: ?[]const u8 = null,
     packages_str: ?[]const u8 = null,
+    is_leaf: bool = false,
+    max_children: ?usize = null,
+    max_depth: ?usize = null,
+    delegate_stake: bool = false,
+    tokens_str: ?[]const u8 = null,
+    budget_usd_str: ?[]const u8 = null,
+    max_thinking_str: ?[]const u8 = null,
+    agent_mode_str: ?[]const u8 = null,
 };
 
 fn takeOpt(
@@ -203,6 +220,46 @@ pub fn parseRunArgs(
                     opts.packages_str = takeOpt(args, &i, "--packages") orelse
                         return null;
                 },
+                .@"--leaf" => {
+                    opts.is_leaf = true;
+                    opts.max_children = 0;
+                },
+                .@"--max-children" => {
+                    const v = takeOpt(args, &i, "--max-children") orelse
+                        return null;
+                    const n = std.fmt.parseInt(usize, v, 10) catch {
+                        common.printStr("Error: Invalid '--max-children'.\n");
+                        return null;
+                    };
+                    opts.max_children = n;
+                    if (n == 0) opts.is_leaf = true;
+                },
+                .@"--max-depth" => {
+                    const v = takeOpt(args, &i, "--max-depth") orelse
+                        return null;
+                    opts.max_depth = std.fmt.parseInt(usize, v, 10) catch {
+                        common.printStr("Error: Invalid '--max-depth'.\n");
+                        return null;
+                    };
+                },
+                .@"--delegate-stake" => opts.delegate_stake = true,
+                .@"--no-stake" => opts.delegate_stake = false,
+                .@"--tokens" => {
+                    opts.tokens_str = takeOpt(args, &i, "--tokens") orelse
+                        return null;
+                },
+                .@"--budget-usd" => {
+                    opts.budget_usd_str =
+                        takeOpt(args, &i, "--budget-usd") orelse return null;
+                },
+                .@"--max-thinking" => {
+                    opts.max_thinking_str =
+                        takeOpt(args, &i, "--max-thinking") orelse return null;
+                },
+                .@"--agent-mode" => {
+                    opts.agent_mode_str =
+                        takeOpt(args, &i, "--agent-mode") orelse return null;
+                },
                 .@"--user" => {
                     common.printStr(
                         "Error: Unrecognized option '--user'. " ++
@@ -240,14 +297,18 @@ pub fn copyDomainBootExtras(
     }
 }
 
-test "vm/run_opts: RunOption enum parses --initrd and --cmdline" {
+test "vm/run_opts: parses Phase 3 leaf, stake, and LLM budget flags" {
     std.testing.refAllDecls(@This());
     try std.testing.expectEqual(
-        RunOption.@"--initrd",
-        std.meta.stringToEnum(RunOption, "--initrd").?,
+        RunOption.@"--leaf",
+        std.meta.stringToEnum(RunOption, "--leaf").?,
     );
     try std.testing.expectEqual(
-        RunOption.@"--cmdline",
-        std.meta.stringToEnum(RunOption, "--cmdline").?,
+        RunOption.@"--delegate-stake",
+        std.meta.stringToEnum(RunOption, "--delegate-stake").?,
+    );
+    try std.testing.expectEqual(
+        RunOption.@"--budget-usd",
+        std.meta.stringToEnum(RunOption, "--budget-usd").?,
     );
 }

@@ -62,11 +62,14 @@ autonomous workloads.
   tree, while machine mode (M-mode) and node agents deterministically veto
   ransomware transitions (such as dropping replicas to zero and encrypting
   volumes).
-* **Autonomous agents and inference proxying:** Each node can run `dsx agent`
-  using OpenRouter, OpenCode, a local OpenAI-compatible server, or a
-  deterministic policy brain, while internet-isolated children query their
-  parent over a media access control (MAC)-authenticated inference proxy
-  (`diosix0:8081`).
+* **Autonomous agents and thinking gateway:** Nodes run `dsx agent` (with
+  optional `diosix-agent-start` root, `sudoer`, or `non-sudoer` startup hygiene)
+  against a generic thinking gateway (`POST /v1/infer` on `diosix0:8081` with
+  `minimal`, `low`, `medium`, and `high` tiers). Upstream application
+  programming interface (API) keys remain strictly on the root VM while parents
+  enforce conserved token and micro-USD (`cost_micros_usd`) budgets, M-mode
+  contains arbitrary leaf workload VMs (`--leaf`) externally, and children
+  authenticate over media access control (MAC)-bound bridges.
 * **Multi-host swarm fleet:** Separate hosts collaborate over transmission
   control protocol (TCP) port `8486` (`dsx swarm` or
   `./scripts/build.sh run-swarm`) with Ed25519 peer identities, fleet-wide

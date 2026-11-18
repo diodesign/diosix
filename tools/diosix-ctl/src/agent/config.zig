@@ -1,14 +1,17 @@
-// Autonomous Agent Configuration Parser & Provider Resolver.
+// Autonomous Agent Configuration Types, Tier Rates & Provider Resolver.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const linux = std.os.linux;
-const api = @import("../api.zig");
 const common = @import("../common.zig");
-const net_http = @import("../net/http.zig");
 const sysconfig = @import("../sysconfig.zig");
+pub const parser = @import("config/parser.zig");
+
+pub const parseAgentToml = parser.parseAgentToml;
+pub const applySecretFileContent = parser.applySecretFileContent;
+pub const writeSecretKeyFile = parser.writeSecretKeyFile;
+pub const applyEnvironBufferWithPolicy = parser.applyEnvironBufferWithPolicy;
 
 pub const AgentProvider = enum {
     auto,
@@ -19,18 +22,56 @@ pub const AgentProvider = enum {
     local,
 };
 
+pub const ThinkingLevel = enum(u8) {
+    minimal = 0,
+    low = 1,
+    medium = 2,
+    high = 3,
+};
+
+pub const AgentUserMode = enum {
+    off,
+    root,
+    sudoer,
+    @"non-sudoer",
+};
+
 pub const DEFAULT_OPENROUTER_URL =
     "https://openrouter.ai/api/v1/chat/completions";
 pub const DEFAULT_OPENCODE_URL =
     "https://api.opencode.ai/v1/chat/completions";
 pub const DEFAULT_PARENT_LLM_URL =
     "http://diosix-parent:8081/v1/chat/completions";
+pub const DEFAULT_PARENT_INFER_URL =
+    "http://diosix-parent:8081/v1/infer";
+pub const DEFAULT_LOCAL_LLM_URL =
+    "http://10.0.2.2:11434/v1/chat/completions";
+
+pub const TierSpec = struct {
+    model_buf: [128]u8 = @splat(0),
+    model_len: usize = 0,
+    in_micros_1k: u64 = 150,
+    out_micros_1k: u64 = 600,
+
+    pub fn model(self: *const TierSpec) []const u8 {
+        if (self.model_len == 0) return "openai/gpt-4o-mini";
+        return self.model_buf[0..self.model_len];
+    }
+};
+
+fn initTierSpec(m: []const u8, in_u: u64, out_u: u64) TierSpec {
+    var spec = TierSpec{ .in_micros_1k = in_u, .out_micros_1k = out_u };
+    common.setFixedBuf(&spec.model_buf, &spec.model_len, m);
+    return spec;
+}
 
 pub const AgentConfig = struct {
     enabled: bool = false,
+    user_mode: AgentUserMode = .sudoer,
     poll_interval_sec: u32 = 5,
     provider: AgentProvider = .auto,
     resolved_provider: AgentProvider = .policy,
+    default_thinking: ThinkingLevel = .low,
     model_buf: [128]u8 = @splat(0),
     model_len: usize = 0,
     endpoint_buf: [256]u8 = @splat(0),
@@ -39,17 +80,21 @@ pub const AgentConfig = struct {
     api_key_len: usize = 0,
     proxy_port: u16 = sysconfig.DEFAULT_LLM_PROXY_PORT,
     max_tokens: u32 = 512,
+    root_token_budget: u64 = 10_000_000,
+    root_cost_budget_micros: u64 = 50_000_000,
+    tokens_per_min: u32 = 120_000,
+    requests_per_min: u32 = 60,
+    tiers: [4]TierSpec = .{
+        initTierSpec("openai/gpt-4o-mini", 150, 600),
+        initTierSpec("openai/gpt-4o-mini", 150, 600),
+        initTierSpec("anthropic/claude-3.5-sonnet", 3000, 15000),
+        initTierSpec("openai/o3", 10000, 40000),
+    },
     has_openrouter_key: bool = false,
     has_opencode_key: bool = false,
 
     pub fn initDefaults() AgentConfig {
-        var cfg = AgentConfig{};
-        common.setFixedBuf(
-            &cfg.model_buf,
-            &cfg.model_len,
-            "openai/gpt-4o-mini",
-        );
-        return cfg;
+        return .{};
     }
 
     pub fn deinit(self: *AgentConfig) void {
@@ -58,8 +103,38 @@ pub const AgentConfig = struct {
     }
 
     pub fn model(self: *const AgentConfig) []const u8 {
-        if (self.model_len == 0) return "openai/gpt-4o-mini";
-        return self.model_buf[0..self.model_len];
+        if (self.model_len > 0) return self.model_buf[0..self.model_len];
+        return self.tiers[@backingInt(self.default_thinking)].model();
+    }
+
+    pub fn tierSpec(self: *const AgentConfig, lvl: ThinkingLevel) TierSpec {
+        var spec = self.tiers[@backingInt(lvl)];
+        if (self.model_len > 0) {
+            common.setFixedBuf(
+                &spec.model_buf,
+                &spec.model_len,
+                self.model_buf[0..self.model_len],
+            );
+        }
+        return spec;
+    }
+
+    pub fn computeCostMicros(
+        self: *const AgentConfig,
+        lvl: ThinkingLevel,
+        in_tok: u64,
+        out_tok: u64,
+    ) u64 {
+        const spec = self.tierSpec(lvl);
+        const in_cost = if (in_tok == 0 or spec.in_micros_1k == 0)
+            0
+        else
+            ((in_tok *| spec.in_micros_1k) +| 999) / 1000;
+        const out_cost = if (out_tok == 0 or spec.out_micros_1k == 0)
+            0
+        else
+            ((out_tok *| spec.out_micros_1k) +| 999) / 1000;
+        return in_cost +| out_cost;
     }
 
     pub fn endpoint(self: *const AgentConfig) []const u8 {
@@ -71,138 +146,21 @@ pub const AgentConfig = struct {
     }
 };
 
-const TomlKey = enum {
-    enabled,
-    poll_interval_sec,
-    provider,
-    model,
-    endpoint,
-    proxy_port,
-    max_tokens,
-};
-
-pub fn parseAgentToml(content: []const u8) AgentConfig {
-    var cfg = AgentConfig.initDefaults();
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |raw_line| {
-        const line = common.trimWhitespace(raw_line);
-        if (line.len == 0 or line[0] == '#' or line[0] == '[') continue;
-        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-        const key = common.trimWhitespace(line[0..eq]);
-        const val = common.unquoteToml(line[eq + 1 ..]);
-        const k = std.meta.stringToEnum(TomlKey, key) orelse continue;
-        switch (k) {
-            .enabled => cfg.enabled = std.mem.eql(u8, val, "true"),
-            .poll_interval_sec => {
-                const s = std.fmt.parseInt(u32, val, 10) catch 5;
-                cfg.poll_interval_sec = std.math.clamp(s, 1, 3600);
-            },
-            .provider => {
-                cfg.provider =
-                    std.meta.stringToEnum(AgentProvider, val) orelse .auto;
-            },
-            .model => common.setFixedBuf(&cfg.model_buf, &cfg.model_len, val),
-            .endpoint => {
-                common.setFixedBuf(&cfg.endpoint_buf, &cfg.endpoint_len, val);
-            },
-            .proxy_port => {
-                const p = std.fmt.parseInt(u16, val, 10) catch
-                    sysconfig.DEFAULT_LLM_PROXY_PORT;
-                if (p > 0) cfg.proxy_port = p;
-            },
-            .max_tokens => {
-                const t = std.fmt.parseInt(u32, val, 10) catch 512;
-                cfg.max_tokens = std.math.clamp(t, 32, 8192);
-            },
-        }
-    }
-    return cfg;
+pub fn parseThinkingLevel(str: []const u8) ?ThinkingLevel {
+    return std.meta.stringToEnum(ThinkingLevel, common.trimWhitespace(str));
 }
-
-fn readProcEnvironAlloc(allocator: std.mem.Allocator) ![]u8 {
-    const rc: isize = @bitCast(
-        linux.open("/proc/self/environ", .{ .ACCMODE = .RDONLY }, 0),
-    );
-    if (rc < 0) return error.EnvironUnavailable;
-    const fd: i32 = @intCast(rc);
-    defer _ = linux.close(fd);
-    var out: std.ArrayList(u8) = .empty;
-    errdefer {
-        std.crypto.secureZero(u8, out.items);
-        out.deinit(allocator);
-    }
-    var buf: [4096]u8 = undefined;
-    defer std.crypto.secureZero(u8, &buf);
-    while (true) {
-        const rr: isize = @bitCast(linux.read(fd, &buf, buf.len));
-        if (rr <= 0) break;
-        const n: usize = @intCast(rr);
-        if (out.items.len + n > 256 * 1024) break;
-        try out.appendSlice(allocator, buf[0..n]);
-    }
-    return out.toOwnedSlice(allocator);
-}
-
-const EnvVarKey = enum {
-    DIOSIX_LLM_PROVIDER,
-    DIOSIX_LLM_MODEL,
-    DIOSIX_LLM_BASE_URL,
-    OPENROUTER_API_KEY,
-    OPENCODE_API_KEY,
-    OPENCODE_BASE_URL,
-};
 
 pub fn applyEnvironBuffer(cfg: *AgentConfig, env_bytes: []const u8) void {
-    var it = std.mem.splitScalar(u8, env_bytes, 0);
-    while (it.next()) |entry| {
-        if (entry.len == 0) continue;
-        const eq = std.mem.indexOfScalar(u8, entry, '=') orelse continue;
-        const name = entry[0..eq];
-        const val = entry[eq + 1 ..];
-        if (val.len == 0) continue;
-        const ek = std.meta.stringToEnum(EnvVarKey, name) orelse continue;
-        switch (ek) {
-            .DIOSIX_LLM_PROVIDER => {
-                if (std.meta.stringToEnum(AgentProvider, val)) |p| {
-                    cfg.provider = p;
-                }
-            },
-            .DIOSIX_LLM_MODEL => {
-                common.setFixedBuf(&cfg.model_buf, &cfg.model_len, val);
-            },
-            .DIOSIX_LLM_BASE_URL => {
-                common.setFixedBuf(&cfg.endpoint_buf, &cfg.endpoint_len, val);
-            },
-            .OPENROUTER_API_KEY => {
-                cfg.has_openrouter_key = true;
-                common.setFixedBuf(&cfg.api_key_buf, &cfg.api_key_len, val);
-            },
-            .OPENCODE_API_KEY => {
-                cfg.has_opencode_key = true;
-                if (cfg.api_key_len == 0) {
-                    common.setFixedBuf(&cfg.api_key_buf, &cfg.api_key_len, val);
-                }
-            },
-            .OPENCODE_BASE_URL => {
-                if (cfg.endpoint_len == 0) {
-                    common.setFixedBuf(
-                        &cfg.endpoint_buf,
-                        &cfg.endpoint_len,
-                        val,
-                    );
-                }
-            },
-        }
-    }
+    applyEnvironBufferWithPolicy(cfg, env_bytes, true);
 }
 
 pub fn resolveProvider(cfg: *AgentConfig, has_parent: bool) void {
     const eff: AgentProvider = switch (cfg.provider) {
         .auto => blk: {
+            if (has_parent) break :blk .parent;
             if (cfg.has_openrouter_key) break :blk .openrouter;
             if (cfg.has_opencode_key) break :blk .opencode;
             if (cfg.endpoint_len > 0) break :blk .local;
-            if (has_parent) break :blk .parent;
             break :blk .policy;
         },
         else => |explicit| explicit,
@@ -212,8 +170,8 @@ pub fn resolveProvider(cfg: *AgentConfig, has_parent: bool) void {
         const def_ep: []const u8 = switch (eff) {
             .openrouter => DEFAULT_OPENROUTER_URL,
             .opencode => DEFAULT_OPENCODE_URL,
-            .parent => DEFAULT_PARENT_LLM_URL,
-            .local => "http://10.0.2.2:11434/v1/chat/completions",
+            .parent => DEFAULT_PARENT_INFER_URL,
+            .local => DEFAULT_LOCAL_LLM_URL,
             .policy, .auto => "",
         };
         if (def_ep.len > 0) {
@@ -234,39 +192,59 @@ pub fn loadAgentConfig(
         defer common.unmapBinaryFile(raw);
         break :blk parseAgentToml(raw);
     };
-    if (readProcEnvironAlloc(allocator)) |env_buf| {
+    if (!has_parent) {
+        if (common.readBinaryFile(sysconfig.LLM_SECRET_KEY_PATH, 4096)) |sr| {
+            defer {
+                if (sr.len > 0) std.crypto.secureZero(u8, sr);
+                common.unmapBinaryFile(sr);
+            }
+            applySecretFileContent(&cfg, sr);
+        } else |_| {}
+    }
+    if (parser.readProcEnvironAlloc(allocator)) |env_buf| {
         defer {
             std.crypto.secureZero(u8, env_buf);
             allocator.free(env_buf);
         }
-        applyEnvironBuffer(&cfg, env_buf);
+        applyEnvironBufferWithPolicy(&cfg, env_buf, !has_parent);
     } else |_| {}
     resolveProvider(&cfg, has_parent);
     return cfg;
 }
 
-test "agent/config: parses agent.toml and resolves providers" {
+test "agent/config: parses tiers, secret files, and cost math" {
+    _ = parser;
     std.testing.refAllDecls(@This());
     const t = std.testing;
     const toml =
         \\[agent]
         \\enabled = true
-        \\poll_interval_sec = 7
-        \\provider = "auto"
-        \\model = "anthropic/claude-3.5-sonnet"
-        \\proxy_port = 8081
+        \\user_mode = "non-sudoer"
+        \\default_thinking = "medium"
+        \\[tiers]
+        \\low_model = "test/mini"
+        \\low_in_micros_1k = 200
+        \\low_out_micros_1k = 800
     ;
     var cfg = parseAgentToml(toml);
     defer cfg.deinit();
+    try t.expectEqual(AgentUserMode.@"non-sudoer", cfg.user_mode);
+    try t.expectEqual(ThinkingLevel.medium, cfg.default_thinking);
+    try t.expectEqual(@as(u64, 1), cfg.computeCostMicros(.low, 1, 0));
+    try t.expectEqual(@as(u64, 0), cfg.computeCostMicros(.low, 0, 0));
+    try t.expectEqual(@as(u64, 1000), cfg.computeCostMicros(.low, 1000, 1000));
+
     resolveProvider(&cfg, true);
     try t.expectEqual(AgentProvider.parent, cfg.resolved_provider);
-    try t.expectEqualStrings(DEFAULT_PARENT_LLM_URL, cfg.endpoint());
+    try t.expectEqualStrings(DEFAULT_PARENT_INFER_URL, cfg.endpoint());
 
     var cfg2 = parseAgentToml(toml);
     defer cfg2.deinit();
-    applyEnvironBuffer(&cfg2, "OPENROUTER_API_KEY=sk-test\x00");
+    applySecretFileContent(
+        &cfg2,
+        "provider = \"openrouter\"\napi_key = \"sk\"\n",
+    );
     resolveProvider(&cfg2, false);
     try t.expectEqual(AgentProvider.openrouter, cfg2.resolved_provider);
-    try t.expectEqualStrings(DEFAULT_OPENROUTER_URL, cfg2.endpoint());
-    try t.expectEqualStrings("sk-test", cfg2.apiKey());
+    try t.expectEqualStrings("sk", cfg2.apiKey());
 }

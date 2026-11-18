@@ -241,11 +241,10 @@ pub fn handleSwarmClient(
     port: u16,
     peer_ip_be: u32,
 ) void {
+    net_http.setSocketTimeouts(cfd, 10);
     // Child VMs on diosix0 must never access host fleet governance.
-    if (net_http.resolvePeerChildCid(peer_ip_be)) |cid| {
-        if (cid >= common.CID_FIRST_CHILD) {
-            return writeJsonErr(cfd, 403, "Forbidden", "child_vm_denied");
-        }
+    if (net_http.isPeerFromDiosixBridge(peer_ip_be)) {
+        return writeJsonErr(cfd, 403, "Forbidden", "child_vm_denied");
     }
 
     const req = net_http.readHttpRequest(

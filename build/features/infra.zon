@@ -69,6 +69,7 @@
         .files = .{
             "scripts/qemu.zig",
             "scripts/run_swarm.py",
+            "scripts/lib/swarm_harness.py",
             "scripts/create_storage_disk.sh",
             "scripts/make_live_image.sh",
             "scripts/package_release.sh",
@@ -98,6 +99,7 @@
             "build/features/hypervisor.zon",
             "build/features/emulation.zon",
             "build/features/userland.zon",
+            "build/features/gui.zon",
             "build/features/infra.zon",
             "scripts/features.zig",
             "scripts/features/model.zig",

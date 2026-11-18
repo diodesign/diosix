@@ -20,6 +20,7 @@ pub const DEFAULT_RETAINED_PCPU_PCT: u32 = interface.DEFAULT_RETAINED_PCPU_PCT;
 pub const DEFAULT_CHILD_PCPU_QUOTA_PCT: u32 =
     interface.DEFAULT_CHILD_PCPU_QUOTA_PCT;
 pub const MAX_GUEST_VCPUS: u32 = interface.MAX_GUEST_VCPUS;
+pub const QUOTA_ZERO_SENTINEL: u64 = interface.QUOTA_ZERO_SENTINEL;
 
 pub const TargetArch = interface.TargetArch;
 pub const DIOSIX_FUNC = interface.DIOSIX;
@@ -201,8 +202,8 @@ pub const DiosixClient = struct {
         target_cid: usize,
         ram_pages: usize,
         vcpus: usize,
-        depth: usize,
-        descendants: usize,
+        depth: u64,
+        descendants: u64,
         pcpu_quota_pct: usize,
         logical_ram_pages: usize,
     ) !void {

@@ -56,14 +56,18 @@ large language model (LLM) inference proxying at `http://diosix-parent:8081`.
 ### How to run them
 
 ```bash
-# Launch a unified Alpine node child with package ceiling 'doas'
-dsx run diosix-node --name work --vcpus 2 --ram 256M --packages doas
+# Launch a unified node child with package ceiling 'doas' and stake
+dsx run diosix-node --name work --vcpus 2 --ram 256M --packages doas \
+    --delegate-stake --tokens 100000 --budget-usd 1.00
+
+# Launch an externally contained leaf workload VM (no children, no stake)
+dsx run diosix-node --name web-leaf --ram 256M --leaf
 
 # View running VMs and their private IP addresses
 dsx list
 
-# Open an interactive root shell over key-authenticated SSH
-dsx ssh work
+# Optionally start the unprivileged in-guest agent daemon on a child node
+dsx ssh work -- /usr/sbin/diosix-agent-start --mode non-sudoer --interval 5
 
 # Install a permitted package inside the child via the parent proxy
 dsx ssh work -- apk update

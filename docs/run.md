@@ -79,10 +79,10 @@ kernel command-line flags:
   storage, and opens the graphical welcome launcher automatically on first boot.
 * Persistent mode mounts an ext4 data partition read-write to retain enrolled
   SSH keys, guest images, and virtual disks across reboots.
-* Passing `diosix.swarm_ip=<cidr>`, `diosix.swarm_peers=<ip[:port],...>`, and
-  `diosix.agent=1` configures a host's `eth0` swarm IP, peer seed list, and
-  background `dsx agent run` daemon at boot (`run-swarm` wires these
-  automatically across multiple QEMU hosts on a shared Ethernet socket switch).
+* Passing `diosix.swarm_ip=<cidr>`, `diosix.swarm_peers=<ip[:port],...>`,
+  `diosix.agent=1`, and `diosix.agent_mode=<off|root|sudoer|non-sudoer>`
+  configures a host's `eth0` swarm IP, peer seed list, and `diosix-agent-start`
+  mode at boot (`run-swarm` wires these cleanly across peer QEMU hosts).
 * Passing `diosix.demo=desktop` on the kernel command line skips the boot intro,
   launches the built-in Weston Wayland desktop VM in the background, and opens
   its interactive VirtIO-GPU 2D display pane automatically.

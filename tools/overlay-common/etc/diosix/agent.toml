@@ -5,9 +5,28 @@
 
 [agent]
 enabled = false
+user_mode = "sudoer"
 poll_interval_sec = 5
 provider = "auto"
-model = "openai/gpt-4o-mini"
+default_thinking = "low"
 endpoint = ""
 proxy_port = 8081
 max_tokens = 512
+root_token_budget = 10000000
+root_cost_budget_micros = 50000000
+tokens_per_min = 120000
+requests_per_min = 60
+
+[tiers]
+minimal_model = "openai/gpt-4o-mini"
+minimal_in_micros_1k = 150
+minimal_out_micros_1k = 600
+low_model = "openai/gpt-4o-mini"
+low_in_micros_1k = 150
+low_out_micros_1k = 600
+medium_model = "anthropic/claude-3.5-sonnet"
+medium_in_micros_1k = 3000
+medium_out_micros_1k = 15000
+high_model = "openai/o3"
+high_in_micros_1k = 10000
+high_out_micros_1k = 40000

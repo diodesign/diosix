@@ -186,9 +186,13 @@ pub const RunFlags = struct {
     pub const STANDBY_ROOT: u64 = 1 << 2;
     pub const CONFIDENTIAL: u64 = 1 << 3;
     pub const NET_ISOLATED: u64 = 1 << 4;
+    pub const DELEGATE_STAKE: u64 = 1 << 5;
+    pub const LEAF_NO_CHILDREN: u64 = 1 << 6;
     pub const NET_UPSTREAM_SHIFT: u6 = 16;
     pub const NET_UPSTREAM_MASK: u64 = 0xffff;
 };
+
+pub const QUOTA_ZERO_SENTINEL: u64 = std.math.maxInt(u64);
 
 pub const NetPolicyFlags = struct {
     pub const ISOLATED: u64 = 1 << 0;

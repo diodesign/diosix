@@ -143,8 +143,11 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     };
     const want_trusted = (args.flags & interface.RunFlags.TRUSTED) != 0;
     const want_steward = (args.flags & interface.RunFlags.STEWARD) != 0;
+    const want_stake = want_steward or
+        (args.flags & interface.RunFlags.DELEGATE_STAKE) != 0;
     if ((want_trusted and !g.is_trusted) or
-        (want_steward and (g.hasParent() or charter.isCharterSealed())))
+        (want_steward and (g.hasParent() or charter.isCharterSealed())) or
+        (want_stake and g.hasParent() and !g.has_voting_stake))
     {
         reply(vc, ctx, sbi_core.SBI_ERR_DENIED, 0);
         return;
@@ -218,6 +221,11 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         child.dropTrust();
     }
     child.is_steward = child.is_steward or want_steward;
+    child.has_voting_stake = child.has_voting_stake or want_stake;
+    if ((args.flags & interface.RunFlags.LEAF_NO_CHILDREN) != 0) {
+        child.quotas.max_descendants = 0;
+        child.quotas.max_child_depth = child.quotas.current_depth;
+    }
     child.is_standby_root = child.is_standby_root or
         ((args.flags & interface.RunFlags.STANDBY_ROOT) != 0 and
             !g.hasParent());

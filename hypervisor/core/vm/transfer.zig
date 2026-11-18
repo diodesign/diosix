@@ -5,10 +5,12 @@
 
 const std = @import("std");
 const physmem = @import("../physmem.zig");
+const sv39x4 = @import("../../hardware/native/cpu/riscv64/sv39x4.zig");
 const vm = @import("../vm.zig");
 
-/// Safely copies data from a host buffer to guest physical memory space.
-/// Pre-validates the entire GPA range to avoid partial writes.
+/// Safely copies data from a host buffer to writable guest physical memory.
+/// Pre-validates the entire GPA range under `self.lock` to avoid partial
+/// writes or read-only Stage-2 aperture overwrites.
 pub fn copyToGuest(
     self: *const vm.GuestSpace,
     dst_gpa: usize,
@@ -18,11 +20,14 @@ pub fn copyToGuest(
     _ = std.math.add(usize, dst_gpa, src.len) catch
         return error.TranslationFailed;
 
-    // Pass 1: Pre-validate all target pages.
+    const s = @constCast(self).lock.lock();
+    defer @constCast(self).lock.unlock(s);
+
+    // Pass 1: Pre-validate all target pages as writable RAM.
     var check_off: usize = 0;
     while (check_off < src.len) {
         const cur_gpa = dst_gpa + check_off;
-        const cur_hpa = try self.translateGPA(cur_gpa);
+        const cur_hpa = try self.translateGPAPermLocked(cur_gpa, true);
         const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
         const chunk: usize = @min(src.len - check_off, page_rem);
         if (physmem.isHypervisorMemory(cur_hpa, chunk) or
@@ -34,11 +39,11 @@ pub fn copyToGuest(
         check_off += chunk;
     }
 
-    // Pass 2: Transfer data page by page.
+    // Pass 2: Transfer data page by page while still holding `self.lock`.
     var transferred: usize = 0;
     while (transferred < src.len) {
         const cur_gpa = dst_gpa + transferred;
-        const cur_hpa = try self.translateGPA(cur_gpa);
+        const cur_hpa = try self.translateGPAPermLocked(cur_gpa, true);
         const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
         const chunk: usize = @min(src.len - transferred, page_rem);
         if (physmem.isHypervisorMemory(cur_hpa, chunk) or
@@ -56,7 +61,7 @@ pub fn copyToGuest(
 }
 
 /// Safely copies data from guest physical memory space into a host buffer.
-/// Pre-validates the entire GPA range to avoid partial reads.
+/// Pre-validates the entire GPA range under `self.lock`.
 pub fn copyFromGuest(
     self: *const vm.GuestSpace,
     dst: []u8,
@@ -66,11 +71,14 @@ pub fn copyFromGuest(
     _ = std.math.add(usize, src_gpa, dst.len) catch
         return error.TranslationFailed;
 
+    const s = @constCast(self).lock.lock();
+    defer @constCast(self).lock.unlock(s);
+
     // Pass 1: Pre-validate all source pages.
     var check_off: usize = 0;
     while (check_off < dst.len) {
         const cur_gpa = src_gpa + check_off;
-        const cur_hpa = try self.translateGPA(cur_gpa);
+        const cur_hpa = try self.translateGPAPermLocked(cur_gpa, false);
         const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
         const chunk: usize = @min(dst.len - check_off, page_rem);
         if (physmem.isHypervisorMemory(cur_hpa, chunk) or
@@ -86,7 +94,7 @@ pub fn copyFromGuest(
     var transferred: usize = 0;
     while (transferred < dst.len) {
         const cur_gpa = src_gpa + transferred;
-        const cur_hpa = try self.translateGPA(cur_gpa);
+        const cur_hpa = try self.translateGPAPermLocked(cur_gpa, false);
         const page_rem = physmem.PageSize - (cur_gpa % physmem.PageSize);
         const chunk: usize = @min(dst.len - transferred, page_rem);
         if (physmem.isHypervisorMemory(cur_hpa, chunk) or
@@ -198,4 +206,29 @@ test "GuestSpace safe copy and struct transfer across page boundaries" {
             poisoned_space.copyFromGuest(&dummy_buf, 0x1000),
         );
     }
+
+    // Verify `copyToGuest` refuses read-only Stage-2 mappings while allowing
+    // `copyFromGuest`.
+    var ro_space = try vm.GuestSpace.initPaging(
+        testing.allocator,
+        false,
+        base_gpa,
+        0,
+        0,
+    );
+    defer ro_space.deinit();
+    const ro_hpa = try physmem.allocPage();
+    defer physmem.decrementPageRef(ro_hpa);
+    try ro_space.map(
+        0x90000000,
+        ro_hpa,
+        physmem.PageSize,
+        sv39x4.PTEFlags.leaf_ro_user,
+    );
+    var msg: [8]u8 = @splat(0x55);
+    try testing.expectError(
+        error.AccessDenied,
+        ro_space.copyToGuest(0x90000000, &msg),
+    );
+    try ro_space.copyFromGuest(&msg, 0x90000000);
 }

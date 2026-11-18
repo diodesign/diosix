@@ -10,9 +10,9 @@ const common = @import("../common.zig");
 const loader = @import("../loader.zig");
 const net = @import("../net.zig");
 const pkg_policy = @import("../pkg/policy.zig");
+const run_policy = @import("run/policy.zig");
 const vm_stage = @import("stage.zig");
 const fdt_patch = @import("fdt_patch.zig");
-const fdt_guest = @import("fdt_guest.zig");
 const sysconfig = @import("../sysconfig.zig");
 const owned = @import("owned.zig");
 const run_opts = @import("run_opts.zig");
@@ -46,6 +46,10 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             \\       [--disk <disk>] [--cdrom <iso>] [--initrd <path>]
             \\       [--cmdline <args>] [--ip <ip>]
             \\       [--net <none|local|wan|router>] [--net-via <vm|cid>]
+            \\       [--leaf] [--max-children <N>] [--max-depth <D>]
+            \\       [--delegate-stake|--no-stake] [--tokens <N>]
+            \\       [--budget-usd <USD>] [--max-thinking <tier>]
+            \\       [--agent-mode <off|root|sudoer|non-sudoer>]
             \\       [--manifest <path>] [--domain <domain>] [--trusted]
             \\       [--arch <arch>]
             \\
@@ -61,6 +65,10 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         sys_cfg.defaultArch(),
         exe_name,
     ) orelse return;
+    if (!run_policy.validateRunPolicyOpts(opts)) {
+        if (!@import("builtin").is_test) std.process.exit(1);
+        return;
+    }
 
     var domain_strings = OwnedStrings.init(allocator);
     defer domain_strings.deinit();
@@ -306,15 +314,11 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     else
         0;
 
-    var run_flags: usize = if (opts.trusted) api.RunFlags.TRUSTED else 0;
-    if (opts.is_steward) run_flags |= api.RunFlags.STEWARD;
-    if (opts.is_standby_root) run_flags |= api.RunFlags.STANDBY_ROOT;
-    if (opts.is_confidential) run_flags |= api.RunFlags.CONFIDENTIAL;
-    if (eff_net_mode == .none) run_flags |= api.RunFlags.NET_ISOLATED;
-    if (upstream_cid > 0) {
-        run_flags |= (upstream_cid & api.RunFlags.NET_UPSTREAM_MASK) <<
-            api.RunFlags.NET_UPSTREAM_SHIFT;
-    }
+    const run_flags = run_policy.buildRunFlags(
+        opts,
+        eff_net_mode,
+        upstream_cid,
+    );
     pkg_policy.checkRunPackagesCeiling(
         allocator,
         client,
@@ -341,8 +345,8 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
         child_cid,
         ram_quota_pages,
         opts.vcpus,
-        0,
-        0,
+        run_policy.computeDepthQuota(opts),
+        run_policy.computeDescendantQuota(opts),
         eff_pcpu,
         ram_pages,
     ) catch |err| {
@@ -366,61 +370,33 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     defer if (default_ip) |ip| allocator.free(ip);
     const final_ip: []const u8 = default_ip orelse opts.ip_str;
 
-    const inject_key = !opts.is_confidential and !opts.is_steward;
-    vm_stage.stageChildVmManifest(
+    run_policy.applyChildPoliciesAndQuotas(
         allocator,
         client,
         child_cid,
-        opts.vm_name.?,
-        opts.domain_name,
-        opts.manifest_path,
-        inject_key,
-    );
-    net.applyVmNetConfig(
-        allocator,
-        client,
-        child_cid,
+        opts,
         final_ip,
         eff_net_mode,
         upstream_cid,
-    );
-    pkg_policy.applyRunPackagesPolicy(
-        allocator,
-        client,
-        child_cid,
-        opts.packages_str,
-    );
+    ) catch |err| {
+        printApiError("Configure child VM LLM/agent policy", err);
+        _ = client.terminate(child_cid, 1) catch {};
+        if (!@import("builtin").is_test) std.process.exit(1);
+        return;
+    };
 
     const is_shim_boot = std.mem.eql(u8, opts.elf_path.?, "guest-shim") or
         swapped_shim_data != null;
-    var ip_autoconfig: ?[]u8 = null;
+    const ip_autoconfig = run_policy.buildIpAutoconfig(
+        allocator,
+        is_shim_boot,
+        eff_net_mode,
+        final_ip,
+        upstream_cid,
+        sys_cfg,
+        opts.vm_name.?,
+    );
     defer if (ip_autoconfig) |ipa| allocator.free(ipa);
-    if (is_shim_boot and eff_net_mode != .none and final_ip.len > 0) {
-        const gw_host: usize = if (upstream_cid >= common.CID_FIRST_CHILD)
-            upstream_cid
-        else
-            1;
-        const resolv_raw = readBinaryFile(
-            sysconfig.RESOLV_CONF_PATH,
-            4096,
-        ) catch &[_]u8{};
-        defer unmapBinaryFile(resolv_raw);
-        const dns_sfx = fdt_guest.formatDnsSuffixFromResolv(
-            allocator,
-            resolv_raw,
-        ) catch null;
-        defer if (dns_sfx) |d| allocator.free(d);
-        ip_autoconfig = allocator.print(
-            "{s}::{s}{d}:255.255.255.0:{s}:eth0:off{s}",
-            .{
-                final_ip,
-                sys_cfg.subnetPrefix(),
-                gw_host,
-                opts.vm_name.?,
-                dns_sfx orelse "",
-            },
-        ) catch null;
-    }
 
     const base_gpa: usize = switch (arch_enum) {
         .x86_64 => 0,
@@ -477,9 +453,10 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     );
 }
 
-test "vm_run: RunOption enum parses expected CLI flags" {
+test "vm_run: RunOption enum and run_policy compile cleanly" {
     std.testing.refAllDecls(@This());
     _ = run_opts;
+    _ = run_policy;
     try std.testing.expectEqual(
         run_opts.RunOption.@"--domain",
         std.meta.stringToEnum(run_opts.RunOption, "--domain").?,
