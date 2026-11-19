@@ -115,7 +115,7 @@ configure_downstream_switch() {
         ! -d "$subnet" -j MASQUERADE 2>/dev/null || \
     iptables -t nat -A POSTROUTING -s "$subnet" \
         ! -d "$subnet" -j MASQUERADE 2>/dev/null || true
-    for dport in 8080 8081 8484 8485; do
+    for dport in 8080 8081 8485; do
         iptables -C INPUT -i diosix0 -p tcp --dport "$dport" \
             -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || \
         iptables -A INPUT -i diosix0 -p tcp --dport "$dport" \
@@ -160,6 +160,11 @@ case "$1" in
         /root/.ssh "$ETC_DIR/keys" 2>/dev/null || true
 
     HAS_PARENT=0
+    EDITION="core"
+    if [ -r "${ETC_DIR}/edition" ]; then
+        EDITION=$(head -n 1 "${ETC_DIR}/edition" | tr -cd 'a-z')
+        [ -z "$EDITION" ] && EDITION="core"
+    fi
     DSX_BIN=""
     for cand in /usr/sbin/dsx /usr/bin/dsx /usr/sbin/diosix-ctl; do
         if [ -x "$cand" ]; then
@@ -182,7 +187,8 @@ case "$1" in
     MANIFEST_NAME=""
 
     if [ "$HAS_PARENT" -eq 0 ]; then
-        echo "Diosix Node top-level VM (CID 1)" > /etc/issue 2>/dev/null || true
+        echo "Diosix (${EDITION}) top-level VM (CID 1)" \
+            > /etc/issue 2>/dev/null || true
         configure_top_level_wan
     else
         GUEST_HOST="diosix-node"
@@ -314,6 +320,7 @@ case "$1" in
         /proc/cmdline 2>/dev/null | head -n 1 | sed 's:/*$::')
     mkdir -p "$KEY_DIR" "${ETC_DIR}/keys" "$RUN_DIR"
     {
+        echo "DIOSIX_EDITION=${EDITION}"
         echo "HAS_PARENT=${HAS_PARENT}"
         echo "PARENT_IP=${PARENT_IP}"
         [ -n "$BOOT_SRV" ] && echo "BOOT_SERVER=${BOOT_SRV}"
@@ -368,10 +375,17 @@ case "$1" in
     fi
     if [ -n "$DSX_BIN" ]; then
         "$DSX_BIN" pkg serve --daemon >/dev/null 2>&1 || true
-        "$DSX_BIN" agent proxy --daemon >/dev/null 2>&1 || true
-        "$DSX_BIN" board serve --daemon >/dev/null 2>&1 || true
-        if [ "$HAS_PARENT" -eq 0 ]; then
-            if grep -q "diosix\.swarm=1\|diosix\.swarm_ip=" /proc/cmdline \
+        IS_SWARM_MODE=0
+        if [ "$EDITION" = "swarm" ] || \
+           grep -q "diosix\.swarm=1\|diosix\.swarm_ip=" /proc/cmdline \
+           2>/dev/null; then
+            IS_SWARM_MODE=1
+        fi
+        if [ "$IS_SWARM_MODE" -eq 1 ]; then
+            "$DSX_BIN" agent proxy --daemon >/dev/null 2>&1 || true
+            "$DSX_BIN" board serve --daemon >/dev/null 2>&1 || true
+            if [ "$HAS_PARENT" -eq 0 ] && \
+               grep -q "diosix\.swarm=1\|diosix\.swarm_ip=" /proc/cmdline \
                2>/dev/null; then
                 "$DSX_BIN" swarm serve --daemon >/dev/null 2>&1 || true
                 SPEERS=$(sed -n 's/.*diosix\.swarm_peers=\([^ ]*\).*/\1/p' \
@@ -381,15 +395,16 @@ case "$1" in
                         sleep 1
                         OLD_IFS="$IFS"; IFS=,
                         for sp in $SPEERS; do
-                            "$DSX_BIN" swarm join "$sp" >/dev/null 2>&1 || true
+                            "$DSX_BIN" swarm join "$sp" \
+                                >/dev/null 2>&1 || true
                         done
                         IFS="$OLD_IFS"
                     ) &
                 fi
             fi
+            [ -x /usr/sbin/diosix-agent-start ] && \
+                /usr/sbin/diosix-agent-start --auto >/dev/null 2>&1 || true
         fi
-        [ -x /usr/sbin/diosix-agent-start ] && \
-            /usr/sbin/diosix-agent-start --auto >/dev/null 2>&1 || true
     fi
     echo "Diosix guest services: OK"
     ;;

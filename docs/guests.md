@@ -15,7 +15,6 @@ how to run it with `dsx`.
 | :--- | :--- | :--- |
 | Boot a unified Alpine Linux node VM (default) | Built-in `diosix-node` image | `dsx run diosix-node --name svc --vcpus 2 --ram 256M` |
 | Spin up an optional CLI sandbox (`-Dextra-guests=true`) | Optional CLI guest image | `dsx run linux-cli --name app --vcpus 2 --ram 256M` |
-| Launch an optional Wayland desktop (`-Dextra-guests=true`) | Optional desktop guest image | `dsx run linux-desktop --name desk --vcpus 2 --ram 512M` |
 | Boot a 64-bit RISC-V installer or live ISO in RAM | Bootloader shim ISO boot | `dsx run /var/lib/diosix/iso/alpine-standard-3.24.3-riscv64.iso --ram 512M` |
 | Seed and boot an ext4 or FAT32 disk image (up to 2 GiB) | Disk seeding and shim boot | `dsx disk seed my-disk --ip 10.0.3.2 && dsx run my-disk.img --ram 1024M` |
 | Boot a custom kernel and initial RAM disk | Direct kernel boot | `dsx run Image --initrd initrd.cpio --cmdline "console=hvc0"` |
@@ -27,31 +26,27 @@ how to run it with `dsx`.
 ### Why use them
 By default, Diosix builds and stages one unified 64-bit RISC-V Alpine Linux ELF
 image under `/var/lib/diosix/images/diosix-node.elf` (symlinked as
-`default.elf`), used identically by the top-level VM and all child VMs.
-Optional CLI (`linux-cli.elf`) and Wayland desktop (`linux-desktop.elf`) demo
-images can be built on demand with `-Dextra-guests=true` (or the `guest-cli`
-and `guest-desktop` build steps):
+`default.elf`), used identically by the top-level VM and all child VMs. An
+optional CLI demo image (`linux-cli.elf`) can be built on demand with
+`-Dextra-guests=true` (or the `guest-cli` build step):
 
 | Image file | `dsx run` aliases | Default role |
 | :--- | :--- | :--- |
 | `diosix-node.elf` | `diosix-node`, `diosix-linux`, `steward`, `default` | Unified Alpine Linux 3.24 + `apk` + Linux 7.0 node image for top-level VMs, autonomous child VMs, stewards, and domain manifests (256 MiB RAM minimum). |
 | `linux-cli.elf` | `linux-cli`, `cli` | Optional interactive Buildroot CLI sandbox built with `-Dextra-guests=true` or `zig build guest-cli`. |
-| `linux-desktop.elf` | `linux-desktop`, `desktop` | Optional offline Weston Wayland desktop over VirtIO-GPU 2D kernel mode setting (KMS) built with `-Dextra-guests=true` or `zig build guest-desktop`. |
 
 Inside `diosix-node.elf`, child VMs automatically point `/etc/apk/repositories`
 at `http://diosix-parent:8080/v3.24/main` so `apk add` pulls signed packages
-recursively through the tree within the parent's allowed ceiling. Child agents
-likewise inherit parent message-board access at `http://diosix-parent:8485` and
-large language model (LLM) inference proxying at `http://diosix-parent:8081`.
+recursively through the tree within the parent's allowed ceiling. In
+**Diosix Swarm** builds, child agents likewise inherit parent message-board
+access at `http://diosix-parent:8485` and large language model (LLM) inference
+proxying at `http://diosix-parent:8081`.
 
 > [!NOTE]
-> In the 26.1 series, `linux-desktop.elf` renders its Wayland desktop with
-> software Pixman rasterization over a VirtIO-GPU 2D KMS scanout streamed
-> zero-copy into the parent VM desktop viewport at 1:1 native pixel resolution,
-> including `weston-terminal`, Wayland test clients (`weston-simple-shm`,
-> `weston-simple-damage`), `tmux`, `htop`, `vi`, `ssh`, `ip`, and `dsx`.
-> Hardware 3D GPU passthrough and VirGL acceleration are planned for future
-> releases.
+> Mainline editions are headless and SSH-first; guests needing user interfaces
+> serve web apps or network services. Graphical desktop profiles using native
+> VirtIO-GPU emulation live on the `gui` branch, while direct hardware desktop
+> workflows target [Diosix Personal](editions.md#comparing-diosix-editions).
 
 ### How to run them
 

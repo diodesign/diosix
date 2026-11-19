@@ -71,14 +71,6 @@ pub const ConsoleTxRing = queues_mod.ConsoleTxRing;
 pub const ConsoleRxRing = queues_mod.ConsoleRxRing;
 
 pub const Guest = struct {
-    pub const ScanoutSlotState = struct {
-        child_guest_id: usize = 0,
-        res_id: u32 = 0,
-        backing_gen: u64 = 0,
-        page_count: u32 = 0,
-        last_used_seq: u64 = 0,
-    };
-
     id: GuestID,
     state: GuestState,
     is_trusted: bool,
@@ -121,16 +113,11 @@ pub const Guest = struct {
     manifest_lock: atomic.SpinLock = atomic.SpinLock.init(),
     tree_lock: atomic.SpinLock = atomic.SpinLock.init(),
     vsock: emulation.VirtioVsock = .{},
-    gpu: emulation.VirtioGpu = .{},
-    input: emulation.VirtioInput = .{},
     blk: emulation.VirtioBlk = .{},
     net_dev: emulation.VirtioNet = .{},
     uart: emulation.VirtualUart = .{},
     timer: emulation.VirtualTimer = .{},
     pic: emulation.VirtualPlic = .{},
-    scanout_map_slots: [sbi.SCANOUT_SLOT_COUNT]ScanoutSlotState = @splat(.{}),
-    scanout_map_lock: atomic.SpinLock = atomic.SpinLock.init(),
-    scanout_lru_clock: u64 = 0,
     allocator: std.mem.Allocator,
 
     pub inline fn hasParent(self: *const Guest) bool {
@@ -289,7 +276,6 @@ pub const Guest = struct {
     }
 
     pub fn unregisterResources(self: *Guest) void {
-        @import("sbi/scanout_map.zig").unmapOnGuestTeardown(self);
         const old_manifest = blk: {
             const s = self.manifest_lock.lock();
             defer self.manifest_lock.unlock(s);
@@ -305,7 +291,6 @@ pub const Guest = struct {
             @import("sbi/charter.zig").clearStewardVote(self.local_cid);
         }
         emulation.global_vsock_router.unregisterDevice(&self.vsock);
-        self.gpu.deinit();
         if (self.vmid != 0) {
             quota_mod.freeVmid(self.vmid);
             self.vmid = 0;
@@ -327,7 +312,6 @@ pub const Guest = struct {
         self.vcore_dynamic_buckets = @splat(null);
         self.child_static_handles = @splat(null);
         self.child_dynamic_buckets = @splat(null);
-        @import("sbi/scanout_map.zig").unmapOnGuestTeardown(self);
         self.space.deinit();
 
         var it_child = self.children.start;

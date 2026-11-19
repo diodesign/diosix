@@ -1,5 +1,11 @@
 # Diosix GUI architecture
 
+> [!NOTE]
+> Mainline Diosix uses an SSH-first workflow and headless guest images. The
+> native `diosix-gui` compositor and M-mode VirtIO-GPU and VirtIO-Input
+> emulation described here are preserved on the `gui` branch (`git checkout
+> gui`).
+
 ## Overview and execution model
 
 When display hardware is present on the host, the root virtual machine (VM)

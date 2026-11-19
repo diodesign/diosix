@@ -76,8 +76,9 @@ Diosix implements seven RISC-V SBI v2.0 extensions alongside legacy SBI v0.1
 
 Extension `0x0a000005` provides VM lifecycle control, ELF and device tree blob
 (DTB) loading, memory-mapped input/output (MMIO) trust management, subtree
-quotas, inter-VM networking, console rings, guest desktop streaming, and M-mode
-charter governance.
+quotas, inter-VM networking, console rings, and M-mode charter governance.
+Legacy scanout and input forwarding functions (`FID 28`–`30`) remain reserved
+for the optional `gui` branch and return `SBI_ERR_NOT_SUPPORTED` on mainline.
 
 ### Function summary
 
@@ -108,9 +109,9 @@ charter governance.
 | `CONSOLE_WRITE` | `25` | Write input bytes into child console RX ring |
 | `CONSOLE_READ` | `26` | Read output bytes from VM console TX ring |
 | `SET_NET_POLICY` | `27` | Configure child layer-2 (L2) isolation and router CID |
-| `GPU_READ_SCANOUT` | `28` | Stream child VirtIO-GPU 2D scanout into parent GPAs |
-| `INPUT_SEND_EVENT` | `29` | Inject Linux input events into child VirtIO-Input |
-| `GPU_MAP_SCANOUT` | `30` | Map child VirtIO-GPU scanout read-only into parent GPA |
+| `GPU_READ_SCANOUT` | `28` | Reserved for `gui` branch (returns `SBI_ERR_NOT_SUPPORTED`) |
+| `INPUT_SEND_EVENT` | `29` | Reserved for `gui` branch (returns `SBI_ERR_NOT_SUPPORTED`) |
+| `GPU_MAP_SCANOUT` | `30` | Reserved for `gui` branch (returns `SBI_ERR_NOT_SUPPORTED`) |
 | `SEAL_MISSION` | `31` | Seal or amend Principal-signed Mission envelope (`MissionArgs`) |
 | `VOTE_MISSION` | `32` | Cast conserved RAM quota-stake vote (`MissionVoteArgs`) |
 
@@ -278,7 +279,7 @@ M-mode ring buffers:
   reparenting surviving child VMs without rebooting the host. Returns
   incremented `failover_epoch` in `a1`.
 
-#### Console rings, network policy, and guest desktop
+#### Console rings and network policy
 * `CONSOLE_WRITE` (`FID 25`) and `CONSOLE_READ` (`FID 26`): Transfer serial
   console bytes between a parent VM and direct child VMs via per-guest M-mode
   rings (8 KiB transmit, 512-byte receive). `a0` points to
@@ -288,28 +289,10 @@ M-mode ring buffers:
   for child `a0` (`>= 2`), with `a1` holding `NetPolicyFlags` (`1 << 0`
   isolates the VM) and `a2` holding the upstream sibling router CID (`0` for
   direct parent routing).
-* `GPU_READ_SCANOUT` (`FID 28`): Probes or streams a direct child VM's active
-  VirtIO-GPU 2D scanout (`XRGB8888`, including an alpha-composited 64x64
-  hardware cursor) into an array of pinned parent GPAs (up to 4,096 pages), and
-  optionally negotiates the child's preferred scanout resolution when
-  `GpuScanoutFlags.SET_DISPLAY_SIZE` (`1 << 2`) is set. `a0` points to
-  `struct gpu_scanout_args` (`GpuScanoutArgs`); returns `1` in `a1` when a new
-  frame is available or copied (`0` if unchanged), or `SBI_ERR_DENIED` on
-  confidential or steward VMs.
-* `INPUT_SEND_EVENT` (`FID 29`): Pushes up to 32 Linux input events (`EV_KEY`,
-  `EV_REL`, `EV_ABS`, `EV_SYN`) into a direct child VM's VirtIO-Input queue,
-  asserts platform-level interrupt controller (PLIC) interrupt 3, and wakes
-  idle vCPUs. `a0` points to `struct input_event_args` (`InputEventArgs`);
-  returns delivered event count in `a1`, or `SBI_ERR_DENIED` on confidential or
-  steward VMs.
-* `GPU_MAP_SCANOUT` (`FID 30`): Maps a direct child VM's active VirtIO-GPU 2D
-  scanout backing pages read-only (`Sv39x4` leaf PTEs without write, execute, or
-  dirty bits) into one of two 16 MiB-per-slot Stage-2 aperture slots starting at
-  GPA `0x2_1000_0000` (`SCANOUT_MAP_GPA_BASE`). `a0` points to a 104-byte
-  `GpuMapScanoutArgs` descriptor; returns the frame sequence, dirty bounds,
-  and extracted 64x64 hardware cursor pixels when active, or `SBI_ERR_DENIED` on
-  confidential or steward VMs. M-mode unmaps all referencing scanout slots
-  before tearing down either child or parent guest RAM.
+* `GPU_READ_SCANOUT` (`FID 28`), `INPUT_SEND_EVENT` (`FID 29`), and
+  `GPU_MAP_SCANOUT` (`FID 30`): Reserved for the `gui` branch's optional
+  VirtIO-GPU and VirtIO-Input scanout forwarding; mainline hypervisor builds
+  return `SBI_ERR_NOT_SUPPORTED`.
 
 #### `SEAL_MISSION` (`FID 31`) and `VOTE_MISSION` (`FID 32`)
 * `SEAL_MISSION`: Reads, verifies, seals, or amends a Principal-signed
@@ -602,18 +585,46 @@ hypercalls:
 | `IOCTL_SET_NET_POLICY` | `0x1018` | Updates child VM M-mode L2 network policy |
 | `IOCTL_WHISPER_SEND` | `0x1019` | Sends steward whisper frame (up to 1,536 bytes) |
 | `IOCTL_WHISPER_RECV` | `0x101a` | Reads steward whisper frame (up to 1,536 bytes) |
-| `IOCTL_GPU_READ_SCANOUT` | `0x101b` | Pins user pages and reads child VirtIO-GPU scanout |
-| `IOCTL_INPUT_SEND_EVENT` | `0x101c` | Sends batched Linux input events to child VirtIO-Input |
-| `IOCTL_GPU_MAP_SCANOUT` | `0x101d` | Maps child VirtIO-GPU scanout read-only and returns damage and cursor state |
 | `IOCTL_SEAL_MISSION` | `0x101e` | Verifies Ed25519 signature, anti-ransomware guards, and seals Mission (`SEAL_MISSION`) |
 | `IOCTL_GET_MISSION` | `0x101f` | Reads active M-mode Mission state and stake tally (`SEAL_MISSION`) |
 | `IOCTL_VOTE_MISSION` | `0x1020` | Casts caller VM's conserved RAM quota-stake vote (`VOTE_MISSION`) |
 
-To support Tier 1 zero-copy displays, `/dev/diosix` also exposes
-`IOCTL_GPU_MAP_SCANOUT` (invoking `GPU_MAP_SCANOUT`) and read-only `mmap()`
-access to the Stage-2 scanout aperture at `DIOSIX_SCANOUT_MAP_BASE`
-(`0x2_1000_0000`), releasing desktop ownership cleanly when the file descriptor
-closes.
+Legacy desktop scanout and input ioctls (`0x101b`–`0x101d`) remain reserved
+and return `-EOPNOTSUPP` on mainline Linux guest kernels.
+
+---
+
+## Userland C and Zig library (libdiosix)
+
+The `libdiosix` library wraps `/dev/diosix` ioctls behind a standalone C99
+header ([`diosix.h`](../tools/libdiosix/include/diosix.h)), static and shared
+libraries (`libdiosix.a` and `libdiosix.so`), a `pkg-config` manifest
+(`diosix.pc`), and a reusable Zig module (`DiosixClient`).
+
+Key C API functions:
+
+| Category | Functions |
+| :--- | :--- |
+| Context lifecycle | `diosix_open()`, `diosix_open_path()`, `diosix_open_status()`, `diosix_close()`, `diosix_fd()`, `diosix_strerror()` |
+| Telemetry and events | `diosix_get_hv_info()`, `diosix_get_guest_info()`, `diosix_wait_event()`, `diosix_yield()`, `diosix_drop_trust()` |
+| Child VM control | `diosix_run_guest()`, `diosix_start_guest()`, `diosix_terminate()`, `diosix_set_quota()`, `diosix_get_manifest()`, `diosix_set_manifest()`, `diosix_console_read()`, `diosix_console_write()`, `diosix_set_net_policy()`, `diosix_map_child_mem()`, `diosix_unmap_child_mem()` |
+| Charter and missions | `diosix_seal_charter()`, `diosix_get_charter()`, `diosix_ratify_charter()`, `diosix_reset_steward()`, `diosix_request_root_failover()`, `diosix_seal_mission()`, `diosix_get_mission()`, `diosix_vote_mission()`, `diosix_whisper_send()`, `diosix_whisper_recv()` |
+
+See [`vm_info.c`](../tools/libdiosix/examples/vm_info.c) for a complete
+example:
+
+```c
+diosix_ctx_t *ctx = diosix_open();
+diosix_hv_info_t hv;
+if (ctx && diosix_get_hv_info(ctx, &hv) == DIOSIX_OK) {
+    printf("Cores: %u\n", hv.host_physical_cores);
+}
+diosix_close(ctx);
+```
+
+Compile userland programs inside `diosix-node.elf` with
+`pkg-config --cflags --libs diosix`, or cross-compile against the SDK tarball
+produced by `./scripts/build.sh sdk`.
 
 ---
 
@@ -621,8 +632,7 @@ closes.
 
 For native and dynamically recompiled VMs running without host hardware
 passthrough, the hypervisor exposes a standard virtual MMIO bus (unused
-VirtIO slots 5, 6, and 7 in `0x10006000` through `0x10009000` return `0` for
-`DEVICE_ID`):
+VirtIO slots 1, 2, and 5–7 return `0` for `DEVICE_ID`):
 
 | Base GPA | Size | IRQ | Device | Description |
 | :--- | :--- | :--- | :--- | :--- |
@@ -631,7 +641,7 @@ VirtIO slots 5, 6, and 7 in `0x10006000` through `0x10009000` return `0` for
 | `0x0c000000` | `0x04000000` | - | `PLIC` | Platform-level interrupt controller (interrupts 1..63) |
 | `0x10000000` | `0x100` | - | `UART0` | Universal asynchronous receiver-transmitter (16550A, transmit-only) |
 | `0x10001000` | `0x1000` | `1` | `VirtioVsock` | VirtIO 1.1 socket device (`VIRTIO_ID_VSOCK = 19`) |
-| `0x10002000` | `0x1000` | `2` | `VirtioGpu` | VirtIO 1.1 2D GPU scanout and cursor (`VIRTIO_ID_GPU = 16`) |
-| `0x10003000` | `0x1000` | `3` | `VirtioInput` | VirtIO 1.1 keyboard, mouse, and tablet (`VIRTIO_ID_INPUT = 18`) |
+| `0x10002000` | `0x1000` | `2` | Reserved | Reserved slot (`VirtioGpu` on `gui` branch) |
+| `0x10003000` | `0x1000` | `3` | Reserved | Reserved slot (`VirtioInput` on `gui` branch) |
 | `0x10004000` | `0x1000` | `4` | `VirtioBlk` | VirtIO 1.1 RAM-backed block device (`VIRTIO_ID_BLK = 2`) |
 | `0x10005000` | `0x1000` | `5` | `VirtioNet` | VirtIO 1.1 Ethernet NIC (`VIRTIO_ID_NET = 1`) |

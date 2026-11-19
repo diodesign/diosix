@@ -1,9 +1,9 @@
 # Build system, porting, and debugging
 
 The Diosix build pipeline pairs the Zig build system with a cached Buildroot
-workspace to compile the machine-mode (M-mode) hypervisor, userland management
-and desktop tools, the guest bootloader shim, and the embedded Linux root
-virtual machine (VM) from source.
+workspace to compile the machine-mode (M-mode) hypervisor, the `libdiosix`
+userland library, `diosix-ctl`, the guest bootloader shim, and the embedded
+Linux root virtual machine (VM) from source.
 
 This reference covers host dependencies, build-time configuration files,
 incremental caching, physical board deployment, and remote GNU debugger (GDB)
@@ -26,7 +26,7 @@ sudo apt update
 sudo apt install -y \
     bc bison build-essential cpio dosfstools e2fsprogs fdisk file \
     findutils flex gawk git libelf-dev libssl-dev mtools openssh-client \
-    procps python3 python3-pexpect qemu-system-gui qemu-system-riscv \
+    procps python3 python3-pexpect qemu-system-misc \
     rsync u-boot-tools unzip util-linux wget xz-utils
 ```
 
@@ -68,18 +68,17 @@ Zig:
 
 | Command | Description |
 | :--- | :--- |
-| `./scripts/build.sh` | Compiles userland tools, the guest shim, the unified Alpine `diosix-node.elf` Linux image, and the M-mode hypervisor binary (pass `-Dextra-guests=true` or target `guest-cli` / `guest-desktop` for optional demo guests). |
+| `./scripts/build.sh` | Compiles `libdiosix`, userland tools, the guest shim, the unified Alpine `diosix-node.elf` image, and the M-mode hypervisor binary (pass `-Dedition=core|swarm|personal` to pick an edition, or `-Dextra-guests=true` for optional `linux-cli.elf`). |
+| `./scripts/build.sh sdk` | Cross-compiles `libdiosix.a`, `libdiosix.so`, `diosix.h`, and `diosix.pc` into `zig-out/sdk-riscv64/`. |
 | `./scripts/build.sh test --summary all` | Runs all host-native unit test suites and verifies the feature graph, Markdown links, and support matrix. |
 | `./scripts/build.sh features` | Verifies the feature graph and Markdown links and regenerates `docs/support-matrix.md`. |
 | `./scripts/build.sh test-integration` | Builds the system and runs the live 4-hart QEMU integration suite. |
-| `./scripts/build.sh run` | Builds and boots Diosix in QEMU headless serial mode. |
-| `./scripts/build.sh run-gui` | Builds and boots Diosix in QEMU with the graphical desktop. |
-| `./scripts/build.sh run-desktop` | Builds and boots straight into the built-in Weston Wayland desktop RISC-V guest VM. |
+| `./scripts/build.sh run` | Builds and boots Diosix headless with serial console and SSH forwarded on host port `2222`. |
 | `./scripts/build.sh run-cli` | Builds and boots straight into an interactive CLI RISC-V guest VM over the serial console. |
-| `./scripts/build.sh run-tpm` | Builds and boots the graphical desktop in QEMU with an emulated trusted platform module (TPM) 2.0. |
+| `./scripts/build.sh run-tpm` | Builds and boots Diosix headless in QEMU with an emulated trusted platform module (TPM) 2.0. |
 | `./scripts/build.sh live-image` | Builds the 640 MiB hybrid GPT live disk image, flat M-mode binary, U-Boot image source, and `zig-out/run-qemu.sh`. |
-| `./scripts/build.sh run-live` / `run-live-gui` | Builds and boots the hybrid GPT live image in QEMU (serial or graphical). |
-| `./scripts/build.sh release` | Packages `zig-out/release/diosix-26.1-riscv64.tar.xz` with `vmdiosix`, the hybrid GPT live image, `run-diosix.sh`, quickstart notes, and `SHA256SUMS`. |
+| `./scripts/build.sh run-live` | Builds and boots the hybrid GPT live image in headless QEMU with SSH on port `2222`. |
+| `./scripts/build.sh release` | Packages edition and `libdiosix` SDK release tarballs (`diosix-26.1-<edition>-riscv64.tar.xz` and `libdiosix-26.1-riscv64.tar.xz`) with `SHA256SUMS`. |
 | `./scripts/build.sh -h` | Lists all build targets and build-time `-D` options. |
 
 ### Build-time configuration options
@@ -87,6 +86,10 @@ Zig:
 Pass Zig build flags directly to `./scripts/build.sh`:
 
 ```bash
+# Build Diosix Core (headless non-swarm) or Personal (management + desktop)
+./scripts/build.sh -Dedition=core
+./scripts/build.sh -Dedition=personal
+
 # Test physical memory protection (PMP) fallback (disable H-extension)
 ./scripts/build.sh run -Dpmp=true
 

@@ -51,10 +51,8 @@ mkfs.vfat -F 32 -n "ESP_BOOT" "$ESP_IMG" >/dev/null
 
 mmd -i "$ESP_IMG" "::/extlinux" "::/boot" "::/EFI" "::/EFI/BOOT"
 
-# Create standard extlinux.conf with Live, Demo, Installer, and Host entries.
+# Create standard extlinux.conf with Live, CLI, Installer, and Host entries.
 EXTLINUX_CONF="$TMP_DIR/extlinux.conf"
-DEMO_DT_ARGS="diosix.mode=live diosix.intro=skip diosix.demo=desktop"
-DEMO_DT_ARGS="${DEMO_DT_ARGS} console=ttyS0,115200 earlycon"
 DEMO_CLI_ARGS="diosix.mode=live diosix.demo=cli console=ttyS0,115200 earlycon"
 cat <<EOF > "$EXTLINUX_CONF"
 menu title Diosix Hypervisor Boot Menu
@@ -65,11 +63,6 @@ label diosix-live
     menu label Diosix Bare-Metal Hypervisor (Ephemeral Live System)
     kernel /boot/vmdiosix.elf
     append diosix.mode=live console=ttyS0,115200 earlycon
-
-label diosix-live-desktop
-    menu label Diosix Instant Wayland Desktop VM (Live Test-Drive)
-    kernel /boot/vmdiosix.elf
-    append ${DEMO_DT_ARGS}
 
 label diosix-live-cli
     menu label Diosix Instant Linux CLI VM (Live Test-Drive)
@@ -176,7 +169,7 @@ at /var/lib/diosix.
 
 Directory structure:
   /var/lib/diosix/images/    - Built-in guest OS images (diosix-node.elf,
-                               optional linux-cli.elf / linux-desktop.elf)
+                               optional linux-cli.elf)
   /var/lib/diosix/apk/       - Offline Alpine riscv64 .apk seed mirror
   /var/lib/diosix/manifests/ - Declarative domain manifests (system.toml)
   /var/lib/diosix/keys/      - Enrolled FIDO2/TPM passkeys and management keys
@@ -237,15 +230,14 @@ IMG="${DIR}/diosix-live-riscv64.img"
 SMP=4
 MEM="2G"
 MODE="live"
-GUI=0
+SSH_PORT="2222"
 DEMO=""
 EXTRA=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --desktop) GUI=1; DEMO="desktop"; shift ;;
-        --cli) GUI=0; DEMO="cli"; shift ;;
-        --gui) GUI=1; shift ;;
+        --cli) DEMO="cli"; shift ;;
+        --ssh-port) SSH_PORT="$2"; shift 2 ;;
         --smp) SMP="$2"; shift 2 ;;
         --mem) MEM="$2"; shift 2 ;;
         --mode) MODE="$2"; shift 2 ;;
@@ -254,33 +246,18 @@ while [ $# -gt 0 ]; do
 done
 
 APPEND="diosix.mode=${MODE}"
-if [ "$DEMO" = "desktop" ]; then
-    APPEND="${APPEND} diosix.intro=skip diosix.demo=desktop"
-elif [ "$DEMO" = "cli" ]; then
+if [ "$DEMO" = "cli" ]; then
     APPEND="${APPEND} diosix.demo=cli"
 fi
 
-QEMU_ARGS=(
-    -M virt -cpu rv64,h=true,smstateen=true,sstc=true,v=true
-    -smp "$SMP" -m "$MEM" -bios none -kernel "$KERNEL"
-    -append "$APPEND"
-    -drive "file=${IMG},format=raw,id=hd0,if=none"
-    -device virtio-blk-device,drive=hd0
-    -netdev user,id=net0 -device virtio-net-device,netdev=net0
-)
-
-if [ "$GUI" -eq 1 ]; then
-    QEMU_ARGS+=(
-        -display gtk,zoom-to-fit=off
-        -device virtio-gpu-pci,xres=1280,yres=800
-        -device virtio-keyboard-pci -device virtio-tablet-pci
-        -serial mon:stdio
-    )
-else
-    QEMU_ARGS+=(-nographic)
-fi
-
-exec qemu-system-riscv64 "${QEMU_ARGS[@]}" "${EXTRA[@]}"
+exec qemu-system-riscv64 \
+    -M virt -cpu rv64,h=true,smstateen=true,sstc=true,v=true \
+    -smp "$SMP" -m "$MEM" -nographic -bios none -kernel "$KERNEL" \
+    -append "$APPEND" \
+    -drive "file=${IMG},format=raw,id=hd0,if=none" \
+    -device virtio-blk-device,drive=hd0 \
+    -netdev "user,id=net0,hostfwd=tcp::${SSH_PORT}-:22" \
+    -device virtio-net-device,netdev=net0 "${EXTRA[@]}"
 EOF
 chmod +x "$RUN_QEMU_SH"
 

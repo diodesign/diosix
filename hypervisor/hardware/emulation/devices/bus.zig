@@ -8,8 +8,6 @@ const vuart_mod = @import("vuart.zig");
 const vtimer_mod = @import("vtimer.zig");
 const vpic_mod = @import("vpic.zig");
 const vsock_mod = @import("vsock.zig");
-const vgpu_mod = @import("vgpu.zig");
-const vinput_mod = @import("vinput.zig");
 const vblk_mod = @import("vblk.zig");
 const vnet_mod = @import("vnet.zig");
 const vcpu_mod = @import("../vcpu.zig");
@@ -29,14 +27,10 @@ pub const MMIO_TEST_RTC_END: u32 = 0x00102000;
 pub const VIRTIO_SLOT_STRIDE: u32 = 0x1000;
 pub const VIRTIO_SLOT_OFFSET_MASK: u32 = VIRTIO_SLOT_STRIDE - 1;
 pub const VIRTIO_SLOT_VSOCK: u32 = 0;
-pub const VIRTIO_SLOT_GPU: u32 = 1;
-pub const VIRTIO_SLOT_INPUT: u32 = 2;
 pub const VIRTIO_SLOT_BLK: u32 = 3;
 pub const VIRTIO_SLOT_NET: u32 = 4;
 
 pub const IRQ_VIRTIO_VSOCK: u32 = 1;
-pub const IRQ_VIRTIO_GPU: u32 = 2;
-pub const IRQ_VIRTIO_INPUT: u32 = 3;
 pub const IRQ_VIRTIO_BLK: u32 = 4;
 pub const IRQ_VIRTIO_NET: u32 = 5;
 pub const IRQ_UART0: u32 = 10;
@@ -295,14 +289,10 @@ pub fn writeVirtioQueueAndFeatureReg(
 }
 
 pub const Bus = struct {
-    pub const IRQ_GPU: u32 = IRQ_VIRTIO_GPU;
-    pub const IRQ_INPUT: u32 = IRQ_VIRTIO_INPUT;
     uart: *vuart_mod.VirtualUart,
     timer: *vtimer_mod.VirtualTimer,
     pic: *vpic_mod.VirtualPlic,
     vsock: ?*vsock_mod.VirtioVsock = null,
-    gpu: ?*vgpu_mod.VirtioGpu = null,
-    input: ?*vinput_mod.VirtioInput = null,
     blk: ?*vblk_mod.VirtioBlk = null,
     net: ?*vnet_mod.VirtioNet = null,
 
@@ -335,10 +325,6 @@ pub const Bus = struct {
                 (addr - MMIO_VIRTIO_BASE) & VIRTIO_SLOT_OFFSET_MASK;
             if (slot_idx == VIRTIO_SLOT_VSOCK) {
                 if (self.vsock) |v| return v.readReg(reg_offset);
-            } else if (slot_idx == VIRTIO_SLOT_GPU) {
-                if (self.gpu) |g| return g.readReg(reg_offset);
-            } else if (slot_idx == VIRTIO_SLOT_INPUT) {
-                if (self.input) |i| return i.readReg(reg_offset);
             } else if (slot_idx == VIRTIO_SLOT_BLK) {
                 if (self.blk) |b| return b.readReg(reg_offset);
             } else if (slot_idx == VIRTIO_SLOT_NET) {
@@ -382,18 +368,6 @@ pub const Bus = struct {
                 @atomicLoad(u32, &v.interrupt_status, .seq_cst) != 0,
             );
         }
-        if (self.gpu) |g| {
-            self.syncIrqLine(
-                IRQ_VIRTIO_GPU,
-                g.interrupt_status.load(.acquire) != 0,
-            );
-        }
-        if (self.input) |i| {
-            self.syncIrqLine(
-                IRQ_VIRTIO_INPUT,
-                i.interrupt_status.load(.acquire) != 0,
-            );
-        }
         if (self.blk) |b| {
             self.syncIrqLine(
                 IRQ_VIRTIO_BLK,
@@ -409,7 +383,7 @@ pub const Bus = struct {
         return self.pic.hasDeliverableIrq();
     }
 
-    pub fn write(self: *Bus, addr: u32, val: u32, size: u8) void {
+    pub fn write(self: *Bus, addr: u32, val: u32, _: u8) void {
         if (addr >= MMIO_UART_BASE and
             addr < MMIO_UART_BASE + MMIO_UART_SIZE)
         {
@@ -421,18 +395,6 @@ pub const Bus = struct {
                 (addr - MMIO_VIRTIO_BASE) & VIRTIO_SLOT_OFFSET_MASK;
             if (slot_idx == VIRTIO_SLOT_VSOCK) {
                 if (self.vsock) |v| v.writeReg(reg_offset, val);
-            } else if (slot_idx == VIRTIO_SLOT_GPU) {
-                if (self.gpu) |g| g.writeReg(reg_offset, val);
-            } else if (slot_idx == VIRTIO_SLOT_INPUT) {
-                if (self.input) |i| {
-                    if (reg_offset == vinput_mod.REG_INPUT_CFG_SELECT or
-                        reg_offset == vinput_mod.REG_INPUT_CFG_SUBSEL)
-                    {
-                        i.writeConfigReg(reg_offset, val, size);
-                    } else {
-                        i.writeReg(reg_offset, val);
-                    }
-                }
             } else if (slot_idx == VIRTIO_SLOT_BLK) {
                 if (self.blk) |b| b.writeReg(reg_offset, val);
             } else if (slot_idx == VIRTIO_SLOT_NET) {
@@ -466,23 +428,27 @@ test "MMIO Bus address classification and VirtIO transport probe" {
     var uart = vuart_mod.VirtualUart{};
     var timer = vtimer_mod.VirtualTimer{};
     var pic = vpic_mod.VirtualPlic{};
-    var gpu = vgpu_mod.VirtioGpu.initWithMem(1, null, null);
-    var input = vinput_mod.VirtioInput.initWithMem(1, null);
+    var vsock = vsock_mod.VirtioVsock{};
+    var net = vnet_mod.VirtioNet{};
     var bus = Bus{
         .uart = &uart,
         .timer = &timer,
         .pic = &pic,
-        .gpu = &gpu,
-        .input = &input,
+        .vsock = &vsock,
+        .net = &net,
     };
 
-    const g_base = MMIO_VIRTIO_BASE + 0x1000;
-    try eq(VIRTIO_MMIO_MAGIC, bus.read(g_base + 0x000, 4));
-    try eq(VIRTIO_MMIO_VERSION_2, bus.read(g_base + 0x004, 4));
-    try eq(vgpu_mod.VIRTIO_ID_GPU, bus.read(g_base + 0x008, 4));
-    try eq(vinput_mod.VIRTIO_ID_INPUT, bus.read(g_base + 0x1008, 4));
+    try eq(VIRTIO_MMIO_MAGIC, bus.read(MMIO_VIRTIO_BASE + 0x000, 4));
+    try eq(VIRTIO_MMIO_VERSION_2, bus.read(MMIO_VIRTIO_BASE + 0x004, 4));
+    try eq(VIRTIO_MMIO_DEVICE_NONE, bus.read(MMIO_VIRTIO_BASE + 0x1008, 4));
+    try testing.expect(
+        bus.read(MMIO_VIRTIO_BASE + 0x008, 4) != VIRTIO_MMIO_DEVICE_NONE,
+    );
+    try testing.expect(
+        bus.read(MMIO_VIRTIO_BASE + 0x4008, 4) != VIRTIO_MMIO_DEVICE_NONE,
+    );
     try eq(
         @as(u64, VIRTIO_MMIO_REG_SHM_NONE),
-        bus.read(g_base + VIRTIO_MMIO_REG_SHM_LEN_LOW, 4),
+        bus.read(MMIO_VIRTIO_BASE + VIRTIO_MMIO_REG_SHM_LEN_LOW, 4),
     );
 }

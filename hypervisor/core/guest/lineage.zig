@@ -302,7 +302,6 @@ pub fn terminateWithCode(self: *guest_mod.Guest, exit_code: usize) void {
     }
 
     self.stop();
-    @import("../sbi/scanout_map.zig").unmapOnGuestTeardown(self);
     self.space.deinit();
     pcore.broadcastIpi();
 

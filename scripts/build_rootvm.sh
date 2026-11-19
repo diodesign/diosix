@@ -54,13 +54,12 @@ CURRENT_HASH=$(
             find "$EXTRA_OVERLAY_DIR" -type f \
                 -exec sha256sum {} + 2>/dev/null
         fi
-        find tools/diosix-ctl/src hypervisor/interface -name '*.zig' \
+        find tools/diosix-ctl/src tools/libdiosix hypervisor/interface \
+            -type f \( -name '*.zig' -o -name '*.h' \) \
             | sort | xargs cat | sha256sum
         if [ "$IS_ROOT_VM" -eq 1 ]; then
-            find tools/diosix-gui/src tools/guest-shim -name '*.zig' \
-                | sort | xargs cat | sha256sum
-            sha256sum tools/guest-shim/linker.ld \
-                tools/diosix-gui/assets/* tools/alsa-init/* 2>/dev/null
+            find tools/guest-shim -name '*.zig' | sort | xargs cat | sha256sum
+            sha256sum tools/guest-shim/linker.ld 2>/dev/null
         fi
         sha256sum "$CONFIG_FILE" "$0" "${SCRIPT_DIR}/lib/buildroot_common.sh" \
             "${SCRIPT_DIR}/assemble_alpine_rootfs.sh" \
@@ -115,18 +114,52 @@ log_step "[1/5] Cross-compiling guest management tools..."
 mkdir -p "$BUILDROOT_DIR"
 DYNAMIC_OVERLAY="$(realpath "$BUILDROOT_DIR")/overlay-dynamic"
 rm -rf "$DYNAMIC_OVERLAY"
-mkdir -p "$DYNAMIC_OVERLAY/usr/sbin" "$DYNAMIC_OVERLAY/usr/bin"
+mkdir -p "$DYNAMIC_OVERLAY/usr/sbin" "$DYNAMIC_OVERLAY/usr/bin" \
+    "$DYNAMIC_OVERLAY/usr/lib/pkgconfig" "$DYNAMIC_OVERLAY/usr/include" \
+    "$DYNAMIC_OVERLAY/usr/share/licenses/diosix"
 
 ZIG_TARGET="${GUEST_ARCH}-linux-musl"
 log_info "Compiling diosix-ctl for ${BOLD}${ZIG_TARGET}${RESET}..."
 zig build-exe -target "$ZIG_TARGET" -O ReleaseSmall -fstrip \
-    --dep interface -Mroot=tools/diosix-ctl/src/main.zig \
+    --dep interface --dep libdiosix \
+    -Mroot=tools/diosix-ctl/src/main.zig \
+    --dep interface \
+    -Mlibdiosix=tools/libdiosix/src/lib.zig \
     -Minterface=hypervisor/interface/lib.zig \
     --name diosix-ctl \
     -femit-bin="$DYNAMIC_OVERLAY/usr/sbin/diosix-ctl" >/dev/null 2>&1
 ln -sf diosix-ctl "$DYNAMIC_OVERLAY/usr/sbin/dsx"
 ln -sf ../sbin/diosix-ctl "$DYNAMIC_OVERLAY/usr/bin/dsx"
+cp -f LICENSE.md "$DYNAMIC_OVERLAY/usr/share/licenses/diosix/LICENSE.md"
 log_ok "Installed diosix-ctl and 'dsx' symlink in overlay."
+
+if [ -d "tools/libdiosix" ]; then
+    log_info "Compiling libdiosix for ${BOLD}${ZIG_TARGET}${RESET}..."
+    LIB_ARGS=(
+        -target "$ZIG_TARGET" -O ReleaseSmall -fPIC
+        --dep interface -Mroot=tools/libdiosix/src/c_abi.zig
+        -Minterface=hypervisor/interface/lib.zig --name diosix
+    )
+    zig build-lib "${LIB_ARGS[@]}" -static \
+        -femit-bin="$DYNAMIC_OVERLAY/usr/lib/libdiosix.a" >/dev/null 2>&1
+    zig build-lib "${LIB_ARGS[@]}" -dynamic \
+        -femit-bin="$DYNAMIC_OVERLAY/usr/lib/libdiosix.so" >/dev/null 2>&1
+    cp -f tools/libdiosix/include/diosix.h \
+        "$DYNAMIC_OVERLAY/usr/include/diosix.h"
+    SDK_VER=$(tr -d ' \t\r\n' < VERSION)
+    cat <<EOF > "$DYNAMIC_OVERLAY/usr/lib/pkgconfig/diosix.pc"
+prefix=/usr
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: libdiosix
+Description: Diosix hypervisor userland control library
+Version: ${SDK_VER}
+Libs: -L\${libdir} -ldiosix
+Cflags: -I\${includedir}
+EOF
+    log_ok "Installed libdiosix (.a, .so, diosix.h, diosix.pc) in overlay."
+fi
 
 if [ -d "tools/guest-shim" ]; then
     log_info "Compiling freestanding S-mode guest bootloader shim..."
@@ -147,39 +180,6 @@ if [ -d "tools/guest-shim" ]; then
     fi
 fi
 
-if [ -d "tools/diosix-gui" ]; then
-    log_info "Compiling diosix-gui for ${BOLD}${ZIG_TARGET}${RESET}..."
-    if zig build-exe -target "$ZIG_TARGET" -O ReleaseFast -fstrip \
-        --dep interface --dep questrial_ttf \
-        --dep dm_mono_ttf --dep intro_wav \
-        -Mroot=tools/diosix-gui/src/main.zig \
-        -Minterface=hypervisor/interface/lib.zig \
-        -Mquestrial_ttf=tools/diosix-gui/assets/Questrial-Regular.ttf \
-        -Mdm_mono_ttf=tools/diosix-gui/assets/DMMono-Regular.ttf \
-        -Mintro_wav=tools/diosix-gui/assets/intro.wav \
-        --name diosix-gui \
-        -femit-bin="$DYNAMIC_OVERLAY/usr/bin/diosix-gui"; then
-        ln -sf diosix-gui "$DYNAMIC_OVERLAY/usr/bin/diosix-wm"
-        mkdir -p "$DYNAMIC_OVERLAY/usr/share/licenses/diosix"
-        cp -f LICENSE.md \
-            "$DYNAMIC_OVERLAY/usr/share/licenses/diosix/LICENSE.md"
-        log_ok "Installed diosix-gui and 'diosix-wm' symlink in overlay."
-    else
-        log_err "Failed to cross-compile diosix-gui for ${ZIG_TARGET}."
-        exit 1
-    fi
-fi
-
-if [ -f "tools/alsa-init/main.c" ]; then
-    log_info "Compiling diosix-alsa-init for ${ZIG_TARGET}..."
-    ALSA_BIN="$DYNAMIC_OVERLAY/usr/sbin/diosix-alsa-init"
-    if zig cc -target "$ZIG_TARGET" -Os -s \
-        tools/alsa-init/main.c -o "$ALSA_BIN" 2>/dev/null; then
-        chmod +x "$ALSA_BIN"
-        log_ok "Installed diosix-alsa-init in overlay (/usr/sbin/)."
-    fi
-fi
-
 # Clean lingering private keys from previous target builds and set permissions.
 if [ -d "$BUILDROOT_DIR/output/target/etc/diosix/keys" ]; then
     rm -f "$BUILDROOT_DIR"/output/target/etc/diosix/keys/id_*
@@ -193,6 +193,9 @@ if [ -d "tools/overlay-common/etc/diosix/keys" ]; then
 fi
 if [ -n "$EXTRA_OVERLAY_DIR" ] && [ -d "$EXTRA_OVERLAY_DIR" ]; then
     chmod 0755 "$EXTRA_OVERLAY_DIR"/etc/init.d/S* 2>/dev/null || true
+    chmod 0755 "$EXTRA_OVERLAY_DIR"/usr/sbin/diosix-* 2>/dev/null || true
+    chmod 0644 "$EXTRA_OVERLAY_DIR"/etc/diosix/*.toml \
+        "$EXTRA_OVERLAY_DIR"/etc/diosix/*.md 2>/dev/null || true
 fi
 
 # 3. Buildroot Workspace Setup.
@@ -267,7 +270,11 @@ if [ "$USE_ALPINE_NODE" -eq 1 ]; then
     log_ok "Verified ${ALPINE_TAR} (SHA-256: ${ALPINE_SHA256:0:16}...)."
     ASSEMBLE_SH="$(realpath "${SCRIPT_DIR}/assemble_alpine_rootfs.sh")"
     COMMON_OV="$(realpath tools/overlay-common)"
-    ARGS_STR="${ALPINE_PATH} ${COMMON_OV} ${DYNAMIC_OVERLAY}"
+    EXTRA_OV=""
+    if [ -n "$EXTRA_OVERLAY_DIR" ] && [ -d "$EXTRA_OVERLAY_DIR" ]; then
+        EXTRA_OV="$(realpath "$EXTRA_OVERLAY_DIR")"
+    fi
+    ARGS_STR="${ALPINE_PATH} ${COMMON_OV} ${DYNAMIC_OVERLAY} ${EXTRA_OV}"
     echo "BR2_ROOTFS_OVERLAY=\"\"" >> "$BUILDROOT_DIR/.config"
     echo "BR2_ROOTFS_POST_FAKEROOT_SCRIPT=\"${ASSEMBLE_SH}\"" \
         >> "$BUILDROOT_DIR/.config"

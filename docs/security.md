@@ -295,6 +295,40 @@ attack that drops database replicas from three to zero and encrypts storage):
 
 ---
 
+## Direct device passthrough and DMA security
+
+Mainline Diosix removes M-mode VirtIO-GPU and VirtIO-Input emulation in favor
+of SSH management and guest-hosted web interfaces. When running desktop
+workloads under **Diosix Personal** (`-Dedition=personal`) on boards with a
+built-in screen or High-Definition Multimedia Interface (HDMI) output, the
+preferred model passes a physical display controller and input hardware
+directly to a single desktop guest VM while keeping a small management VM for
+lifecycle swaps over SSH.
+
+Direct hardware delegation carries a critical architectural boundary around
+direct memory access (DMA):
+
+* When M-mode programs a RISC-V input-output memory management unit (IOMMU) page
+  table for a passed-through device, DMA writes initiated by that device stay
+  confined to the desktop VM's Stage-2 physical RAM ranges.
+* Many first-generation 64-bit RISC-V boards—including PineTab-V (StarFive
+  JH7110), HiFive Unleashed (SiFive FU540), PolarFire SoC Icicle, and
+  ClockworkPi DevTerm R-01 (Allwinner D1)—lack a hardware IOMMU protecting
+  platform DMA masters in M-mode. On that silicon, a guest kernel with direct
+  register access to a GPU, display engine, or bus-mastering USB controller can
+  program DMA transfers into arbitrary physical RAM, bypassing Stage-2 page
+  tables and physical memory protection (PMP).
+* Without an IOMMU, treat any VM holding direct DMA device access
+  (`dma_trusted = true` in `/etc/diosix/personal.toml`) as part of the host's
+  trusted hardware perimeter. Swapping desktop VMs from the management VM
+  provides clean crash recovery and environment separation, not hardware
+  security containment against a malicious desktop kernel.
+* **Diosix Core** and **Diosix Swarm** never assign display or bus-mastering GPU
+  hardware to guests and keep VirtIO-GPU emulation disabled by default,
+  preserving strict Stage-2 and PMP isolation across untrusted child workloads.
+
+---
+
 ## Reporting security issues
 
 To report a security vulnerability privately, email

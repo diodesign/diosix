@@ -8,11 +8,7 @@ const api = @import("api.zig");
 const installer = @import("installer.zig");
 const common = @import("common.zig");
 const sysconfig = @import("sysconfig.zig");
-const gui_cmd = @import("gui.zig");
 const host_info = @import("host/info.zig");
-
-pub const cmdGui = gui_cmd.cmdGui;
-pub const cmdTour = gui_cmd.cmdTour;
 
 pub const MAX_VERSION_STR_LEN = host_info.MAX_VERSION_STR_LEN;
 pub const formatVersionChannel = host_info.formatVersionChannel;
@@ -314,6 +310,5 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
 
 test "host: submodules are wired in" {
     std.testing.refAllDecls(@This());
-    _ = gui_cmd;
     _ = host_info;
 }

@@ -73,7 +73,6 @@ static int diosix_release(struct inode *inode, struct file *file)
         diosix_child_mem_owner = NULL;
     }
     diosix_child_mem_unlock();
-    diosix_release_desktop(file);
     return 0;
 }
 
@@ -374,7 +373,7 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     case IOCTL_GPU_READ_SCANOUT:
     case IOCTL_GPU_MAP_SCANOUT:
     case IOCTL_INPUT_SEND_EVENT:
-        return diosix_ioctl_desktop(file, cmd, arg);
+        return -EOPNOTSUPP;
 
     default:
         return diosix_ioctl_governance(file, cmd, arg);
@@ -385,9 +384,6 @@ static int diosix_mmap(struct file *file, struct vm_area_struct *vma)
 {
     unsigned long size;
     unsigned long pfn = vma->vm_pgoff;
-    unsigned long scan_base = DIOSIX_SCANOUT_MAP_BASE >> PAGE_SHIFT;
-    unsigned long scan_end =
-        (DIOSIX_SCANOUT_MAP_BASE + DIOSIX_SCANOUT_APERTURE_SIZE) >> PAGE_SHIFT;
     unsigned long base_pfn = DIOSIX_CHILD_MEM_BASE >> PAGE_SHIFT;
     unsigned long max_pfn =
         (DIOSIX_CHILD_MEM_BASE + DIOSIX_CHILD_MEM_MAX_SIZE) >> PAGE_SHIFT;
@@ -397,9 +393,6 @@ static int diosix_mmap(struct file *file, struct vm_area_struct *vma)
 
     if (vma->vm_end <= vma->vm_start)
         return -EINVAL;
-
-    if (pfn >= scan_base && pfn < scan_end)
-        return diosix_mmap_scanout(file, vma);
 
     size = vma->vm_end - vma->vm_start;
 

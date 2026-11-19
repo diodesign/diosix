@@ -6,8 +6,7 @@
 const std = @import("std");
 
 pub const SHIM_DEFAULT_MODULES =
-    "loop,squashfs,sd-mod,isofs,virtio_mmio,virtio_blk,virtio_net," ++
-    "virtio-gpu,virtio_input";
+    "loop,squashfs,sd-mod,isofs,virtio_mmio,virtio_blk,virtio_net";
 
 pub const BootargsOptions = struct {
     vcpus: usize = 1,

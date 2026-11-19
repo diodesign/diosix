@@ -425,8 +425,6 @@ void diosix_child_mem_lock(void);
 void diosix_child_mem_unlock(void);
 bool diosix_child_mem_can_use(struct file *file);
 void diosix_child_mem_set_owner(struct file *file);
-int diosix_mmap_scanout(struct file *file, struct vm_area_struct *vma);
-void diosix_release_desktop(struct file *file);
 long diosix_ioctl_governance(
     struct file *file,
     unsigned int cmd,
@@ -435,11 +433,6 @@ long diosix_ioctl_governance(
 long diosix_ioctl_mission(unsigned int cmd, unsigned long arg);
 long diosix_ioctl_net_policy(unsigned long arg);
 long diosix_ioctl_whisper(unsigned int cmd, unsigned long arg);
-long diosix_ioctl_desktop(
-    struct file *file,
-    unsigned int cmd,
-    unsigned long arg
-);
 int init_diosix_net(void);
 void cleanup_diosix_net(void);
 #endif /* __KERNEL__ */

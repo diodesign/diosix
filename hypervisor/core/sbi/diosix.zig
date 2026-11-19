@@ -15,8 +15,6 @@ const sbi_core = @import("../sbi.zig");
 const charter = @import("charter.zig");
 const ipc = @import("ipc.zig");
 const console = @import("console.zig");
-const desktop = @import("desktop.zig");
-const scanout_map = @import("scanout_map.zig");
 const info = @import("info.zig");
 const interface = @import("interface").sbi;
 const arch = @import("interface").riscv;
@@ -97,9 +95,10 @@ pub fn handleDiosix(
         D.CONSOLE_WRITE => console.handleConsoleWrite(vc, ctx, g, a0),
         D.CONSOLE_READ => console.handleConsoleRead(vc, ctx, g, a0),
         D.SET_NET_POLICY => ipc.handleSetNetPolicy(vc, ctx, g, a0, a1, a2),
-        D.GPU_READ_SCANOUT => desktop.handleGpuReadScanout(vc, ctx, g, a0),
-        D.GPU_MAP_SCANOUT => scanout_map.handleGpuMapScanout(vc, ctx, g, a0),
-        D.INPUT_SEND_EVENT => desktop.handleInputSendEvent(vc, ctx, g, a0),
+        D.GPU_READ_SCANOUT,
+        D.GPU_MAP_SCANOUT,
+        D.INPUT_SEND_EVENT,
+        => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),
         D.SEAL_MISSION => charter.handleSealMission(vc, ctx, a0, a1),
         D.VOTE_MISSION => charter.handleVoteMission(vc, ctx, a0),
         else => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),

@@ -97,15 +97,15 @@ CONFIG_HIDRAW=y
 CONFIG_HID_GENERIC=y
 # CONFIG_THERMAL is not set
 
-# Input & Seat Devices (evdev, VirtIO tablet/kbd/mouse, Touchscreen & uinput)
+# FIDO2 / U2F Hardware Token Support (raw HID only, headless)
 CONFIG_INPUT=y
-CONFIG_INPUT_EVDEV=y
-CONFIG_INPUT_KEYBOARD=y
-CONFIG_INPUT_MOUSE=y
-CONFIG_INPUT_TOUCHSCREEN=y
-CONFIG_INPUT_UINPUT=y
-CONFIG_HID_MULTITOUCH=y
-CONFIG_VIRTIO_INPUT=y
+# CONFIG_INPUT_MOUSEDEV is not set
+# CONFIG_INPUT_JOYSTICK is not set
+# CONFIG_INPUT_KEYBOARD is not set
+# CONFIG_INPUT_MOUSE is not set
+# CONFIG_INPUT_TOUCHSCREEN is not set
+# CONFIG_INPUT_UINPUT is not set
+# CONFIG_VIRTIO_INPUT is not set
 
 # Networking & Packet Routing (VirtIO-Net, DesignWare GMAC, Cadence MACB)
 CONFIG_NET=y
@@ -151,28 +151,12 @@ CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
 CONFIG_IP_NF_MANGLE=y
 CONFIG_IP_NF_RAW=y
 
-# Sound & Audio (Intel HDA, VirtIO Sound, and ALSA OSS emulation)
-CONFIG_SOUND=y
-CONFIG_SND=y
-CONFIG_SND_HRTIMER=y
-CONFIG_SND_OSSEMUL=y
-CONFIG_SND_PCM_OSS=y
-CONFIG_SND_PCM_OSS_PLUGINS=y
-CONFIG_SND_PCI=y
-CONFIG_SND_HDA_INTEL=y
-CONFIG_SND_HDA_GENERIC=y
-CONFIG_SND_HDA_CODEC_REALTEK=y
-CONFIG_SND_VIRTIO=y
+# Sound & Audio (Disabled in headless root VM; audio lives on gui branch)
+# CONFIG_SOUND is not set
 
-# Graphics, Framebuffers & Displays (VirtIO-GPU, SimpleDRM & Framebuffer)
-CONFIG_DRM=y
-CONFIG_DRM_KMS_HELPER=y
-CONFIG_DRM_VIRTIO_GPU=y
-CONFIG_DRM_SIMPLEDRM=y
-CONFIG_DRM_FBDEV_EMULATION=y
-CONFIG_FB=y
-CONFIG_FB_DEFERRED_IO=y
-CONFIG_FRAMEBUFFER_CONSOLE=y
+# Graphics, Framebuffers & Displays (Disabled in headless root VM)
+# CONFIG_DRM is not set
+# CONFIG_FB is not set
 # CONFIG_VGA_CONSOLE is not set
 # CONFIG_LOGO is not set
 

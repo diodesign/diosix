@@ -75,8 +75,6 @@ pub const Command = enum {
     network,
     auth,
     passkey,
-    gui,
-    tour,
     charter,
     steward,
     resolve,
@@ -136,8 +134,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
             .manifest => try governance.cmdManifest(&client, argv[2..]),
             .net, .network => try net.cmdNet(&client, argv[2..]),
             .auth, .passkey => try governance.cmdAuth(&client, argv[2..]),
-            .gui => try host.cmdGui(&client, argv[2..]),
-            .tour => try host.cmdTour(argv[2..]),
             .charter, .steward => {
                 try governance.cmdCharter(&client, argv[2..]);
             },
@@ -292,9 +288,6 @@ pub fn formatUsage(
         \\      failover [--standby <cid>]       Promote Standby Root VM
         \\      audit [--json]                   Audit constitutional compliance
         \\
-        \\  {s} gui <subcmd> [options]           Manage graphical seat & OSK
-        \\  {s} tour [--step <1..5>] [--json]    Interactive guided tour
-        \\
         \\  {s} manifest <subcmd> [options]      Manage system & VM manifests
         \\      show [--file <path>] [--hv]      Display active or file manifest
         \\      validate <file.toml>             Validate manifest syntax
@@ -328,8 +321,7 @@ pub fn formatUsage(
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
-        exe_name, exe_name, exe_name, exe_name, exe_name,
-        exe_name,
+        exe_name, exe_name, exe_name, exe_name,
     });
 }
 

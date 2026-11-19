@@ -84,12 +84,6 @@ pub fn initVirtualDevices(self: *guest_mod.Guest) void {
         .route_fn = guest_mod.lineage_mod.routeVsockPacket,
     };
     emulation.global_vsock_router.register(&self.vsock);
-    self.gpu = emulation.VirtioGpu.initWithMem(
-        self.local_cid,
-        mem,
-        self.allocator,
-    );
-    self.input = emulation.VirtioInput.initWithMem(self.local_cid, mem);
     self.blk = emulation.VirtioBlk.init(self.space.base_gpa, mem);
     self.net_dev = emulation.VirtioNet.init(self.local_cid, mem);
     self.net_dev.tx_ctx = self;
@@ -181,7 +175,6 @@ pub fn stop(self: *guest_mod.Guest) void {
 }
 
 pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
-    @import("../sbi/scanout_map.zig").unmapOnGuestTeardown(self);
     self.state = .valid;
     self.initial_entry_point = entry;
     self.initial_dtb_ptr = dtb;
@@ -193,8 +186,6 @@ pub fn resetForRun(self: *guest_mod.Guest, entry: usize, dtb: usize) void {
         .peek_in_ctx_fn = guest_mod.Guest.guestUartHasInputCtx,
     };
     self.console_rx.clear();
-    self.gpu.reset();
-    self.input.reset();
     self.timer.reset();
     self.pic.reset();
     var is_primary = true;

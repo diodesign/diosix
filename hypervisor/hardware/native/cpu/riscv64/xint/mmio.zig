@@ -229,8 +229,6 @@ fn guestBus(g: *guest_mod.Guest) emulation.Bus {
         .timer = &g.timer,
         .pic = &g.pic,
         .vsock = &g.vsock,
-        .gpu = &g.gpu,
-        .input = &g.input,
         .blk = &g.blk,
         .net = &g.net_dev,
     };

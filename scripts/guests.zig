@@ -10,7 +10,6 @@ pub const GuestBuildResult = struct {
     extra_guests: bool,
     guest_images_step: ?*std.Build.Step,
     cli_stamp: ?std.Build.LazyPath,
-    desktop_stamp: ?std.Build.LazyPath,
 };
 
 pub fn addTreeInputs(
@@ -105,21 +104,10 @@ pub fn registerGuestSteps(
     b.step("guest-cli", "Build optional linux-cli.elf guest image")
         .dependOn(&on_demand_cli.run.step);
 
-    const on_demand_desktop = try addChildGuestStep(
-        b,
-        guest_arch,
-        layout.guests.desktop,
-        "guest-desktop.stamp",
-        null,
-    );
-    b.step("guest-desktop", "Build optional linux-desktop.elf guest image")
-        .dependOn(&on_demand_desktop.run.step);
-
     var res = GuestBuildResult{
         .extra_guests = extra_guests,
         .guest_images_step = null,
         .cli_stamp = null,
-        .desktop_stamp = null,
     };
 
     if (extra_guests and
@@ -133,18 +121,112 @@ pub fn registerGuestSteps(
             "linux-cli.stamp",
             base_step,
         );
-        const desktop_guest = try addChildGuestStep(
-            b,
-            guest_arch,
-            layout.guests.desktop,
-            "linux-desktop.stamp",
-            &cli_guest.run.step,
-        );
-        res.guest_images_step = &desktop_guest.run.step;
+        res.guest_images_step = &cli_guest.run.step;
         res.cli_stamp = cli_guest.stamp;
-        res.desktop_stamp = desktop_guest.stamp;
     }
     return res;
+}
+
+pub fn registerSdkStep(
+    b: *std.Build,
+    arch_str: []const u8,
+    optimize: std.builtin.OptimizeMode,
+    iface: *std.Build.Module,
+) *std.Build.Step {
+    const Target = std.Target;
+    const cpu_arch = std.meta.stringToEnum(
+        Target.Cpu.Arch,
+        arch_str,
+    ) orelse .riscv64;
+    const sdk_target = b.resolveTargetQuery(.{
+        .cpu_arch = cpu_arch,
+        .os_tag = .linux,
+        .abi = .musl,
+    });
+    const sdk_dir: std.Build.InstallDir = .{
+        .custom = b.fmt("sdk-{s}", .{arch_str}),
+    };
+    const lib_dir: std.Build.InstallDir = .{
+        .custom = b.fmt("sdk-{s}/lib", .{arch_str}),
+    };
+
+    const static_mod = b.createModule(.{
+        .root_source_file = b.path(layout.modules.libdiosix_c_abi),
+        .optimize = optimize,
+        .target = sdk_target,
+        .pic = true,
+    });
+    static_mod.addImport("interface", iface);
+    const lib_static = b.addLibrary(.{
+        .linkage = .static,
+        .name = layout.libdiosix.name,
+        .root_module = static_mod,
+    });
+
+    const shared_mod = b.createModule(.{
+        .root_source_file = b.path(layout.modules.libdiosix_c_abi),
+        .optimize = optimize,
+        .target = sdk_target,
+        .pic = true,
+    });
+    shared_mod.addImport("interface", iface);
+    const lib_shared = b.addLibrary(.{
+        .linkage = .dynamic,
+        .name = layout.libdiosix.name,
+        .root_module = shared_mod,
+    });
+
+    const ver = std.mem.trim(
+        u8,
+        @embedFile("../" ++ layout.metadata.version_file),
+        " \t\r\n",
+    );
+    const pc_files = b.addWriteFiles();
+    const pc_path = pc_files.add("diosix.pc", b.fmt(
+        \\prefix=/usr
+        \\libdir=${{prefix}}/lib
+        \\includedir=${{prefix}}/include
+        \\
+        \\Name: libdiosix
+        \\Description: Diosix hypervisor userland control library
+        \\Version: {s}
+        \\Libs: -L${{libdir}} -ldiosix
+        \\Cflags: -I${{includedir}}
+        \\
+    , .{ver}));
+
+    const sdk_step = b.step(
+        "sdk",
+        "Build cross-compiled libdiosix static and shared SDK",
+    );
+    for ([_]*std.Build.Step{
+        &b.addInstallArtifact(
+            lib_static,
+            .{ .dest_dir = .{ .override = lib_dir } },
+        ).step,
+        &b.addInstallArtifact(
+            lib_shared,
+            .{ .dest_dir = .{ .override = lib_dir } },
+        ).step,
+        &b.addInstallFileWithDir(
+            b.path(layout.libdiosix.header),
+            sdk_dir,
+            "include/diosix.h",
+        ).step,
+        &b.addInstallFileWithDir(
+            pc_path,
+            sdk_dir,
+            "lib/pkgconfig/diosix.pc",
+        ).step,
+        &b.addInstallFileWithDir(
+            b.path(layout.libdiosix.example),
+            sdk_dir,
+            "examples/vm_info.c",
+        ).step,
+    }) |st| {
+        sdk_step.dependOn(st);
+    }
+    return sdk_step;
 }
 
 test {

@@ -1,0 +1,16 @@
+# Diosix Personal Desktop Management Profile (/etc/diosix/personal.toml)
+#
+# Configures the small SSH-first management VM to launch and swap a primary
+# desktop guest VM. On RISC-V silicon without an active hardware IOMMU (e.g.
+# StarFive JH7110 / PineTab-V, SiFive FU540, PolarFire ICICLE, Allwinner D1),
+# direct MMIO/GPU/input device passthrough requires `dma_trusted = true` once
+# Phase 4 M-mode passthrough support is enabled, because the desktop guest can
+# initiate DMA outside Stage-2 translations. Keep `dma_trusted = false` unless
+# you explicitly trust the desktop guest kernel as part of your hardware TCB.
+
+[desktop]
+name = "desktop"
+ram_mb = 1024
+vcpus = 2
+dma_trusted = false
+auto_start = false

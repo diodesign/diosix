@@ -12,6 +12,8 @@
         .interface_root = "hypervisor/interface/lib.zig",
         .emulation_root = "hypervisor/hardware/emulation/mod.zig",
         .metadata_root = "hypervisor/core/metadata.zig",
+        .libdiosix_root = "tools/libdiosix/src/lib.zig",
+        .libdiosix_c_abi = "tools/libdiosix/src/c_abi.zig",
     },
 
     .hypervisor = .{
@@ -41,10 +43,10 @@
         .linker_script = "tools/guest-shim/linker.ld",
     },
 
-    .gui_assets = .{
-        .questrial_ttf = "tools/diosix-gui/assets/Questrial-Regular.ttf",
-        .dm_mono_ttf = "tools/diosix-gui/assets/DMMono-Regular.ttf",
-        .intro_wav = "tools/diosix-gui/assets/intro.wav",
+    .libdiosix = .{
+        .name = "diosix",
+        .header = "tools/libdiosix/include/diosix.h",
+        .example = "tools/libdiosix/examples/vm_info.c",
     },
 
     .rootvm = .{
@@ -61,12 +63,10 @@
             "scripts/lib/buildroot_common.sh",
         },
         .input_dirs = .{
-            "tools/alsa-init",
             "tools/diosix-ctl/src",
-            "tools/diosix-gui/assets",
-            "tools/diosix-gui/src",
             "tools/driver",
             "tools/guest-shim",
+            "tools/libdiosix",
             "tools/overlay-common",
         },
     },
@@ -78,19 +78,11 @@
             .buildroot_dir_fmt = "zig-out/buildroot-cli-{s}",
             .overlay_dir = "tools/overlay-cli",
         },
-        .desktop = .{
-            .profile = "desktop",
-            .elf_out_fmt = "zig-out/guest-{s}/bin/linux-desktop.elf",
-            .buildroot_dir_fmt = "zig-out/buildroot-desktop-{s}",
-            .overlay_dir = "tools/overlay-desktop",
-        },
         .common_input_dirs = .{
-            "tools/alsa-init",
             "tools/diosix-ctl/src",
-            "tools/diosix-gui/assets",
-            "tools/diosix-gui/src",
             "tools/driver",
             "tools/guest-shim",
+            "tools/libdiosix",
             "tools/overlay-common",
         },
     },
@@ -109,9 +101,6 @@
         .swtpm_socket = "/tmp/diosix-tpm/swtpm-sock",
         .default_smp = 4,
         .default_mem = "2G",
-        .default_audio = "auto",
-        .display_width = 1280,
-        .display_height = 800,
     },
 
     .features = .{
@@ -141,8 +130,8 @@
                 .with_interface = true,
             },
             .{
-                .name = "diosix-gui-unit-tests",
-                .root = "tools/diosix-gui/src/main.zig",
+                .name = "libdiosix-unit-tests",
+                .root = "tools/libdiosix/src/tests.zig",
                 .with_interface = true,
             },
             .{

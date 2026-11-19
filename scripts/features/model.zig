@@ -14,7 +14,7 @@ pub const Layer = enum {
     rootvm_init,
     guest_firmware,
     u_mode_cli,
-    u_mode_gui,
+    u_mode_sdk,
     build_infra,
 
     pub fn heading(self: Layer) []const u8 {
@@ -27,7 +27,7 @@ pub const Layer = enum {
             .rootvm_init => "Root VM init and runtime configuration",
             .guest_firmware => "Guest bootloader firmware",
             .u_mode_cli => "User-mode management CLI",
-            .u_mode_gui => "User-mode desktop compositor",
+            .u_mode_sdk => "User-mode client library (libdiosix)",
             .build_infra => "Build, image, and test infrastructure",
         };
     }

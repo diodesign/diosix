@@ -1,3 +1,0 @@
-# Diosix Linux Desktop guest profile metadata read by S50diosix.
-hostname = "linux-desktop"
-banner = "Diosix Linux Desktop VM (Weston Wayland)"

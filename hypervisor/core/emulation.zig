@@ -160,8 +160,6 @@ pub fn init(vc: *vcore.VirtualCore) !void {
     bus_ptr.timer = &vc.guest.timer;
     bus_ptr.pic = &vc.guest.pic;
     bus_ptr.vsock = &vc.guest.vsock;
-    bus_ptr.gpu = &vc.guest.gpu;
-    bus_ptr.input = &vc.guest.input;
     bus_ptr.blk = &vc.guest.blk;
     bus_ptr.net = &vc.guest.net_dev;
     engine_ptr.initOnPtr(

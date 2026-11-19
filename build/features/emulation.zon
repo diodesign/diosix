@@ -119,34 +119,6 @@
         },
     },
     .{
-        .id = "smode-virtio-desktop",
-        .name = "Emulated VirtIO-GPU 2D and VirtIO-Input desktop devices",
-        .layer = .s_mode_emulation,
-        .status = .active,
-        .files = .{
-            "hypervisor/hardware/emulation/devices/vgpu.zig",
-            "hypervisor/hardware/emulation/devices/vgpu/protocol.zig",
-            "hypervisor/hardware/emulation/devices/vgpu/commands.zig",
-            "hypervisor/hardware/emulation/devices/vgpu/queue.zig",
-            "hypervisor/hardware/emulation/devices/vgpu/scanout.zig",
-            "hypervisor/hardware/emulation/devices/vgpu/damage.zig",
-            "hypervisor/hardware/emulation/devices/vinput.zig",
-        },
-        .summary =
-        \\VirtIO 2D GPU controller (scatter-gather scanouts and 64x64 alpha
-        \\cursor compositing) and VirtIO input device (keyboard, mouse,
-        \\scroll wheel, and absolute tablet).
-        ,
-        .activated_by = .{
-            "smode-virtual-mmio-bus",
-            "mmode-sbi-dispatch",
-        },
-        .docs = .{
-            "docs/interface.md#emulated-virtual-mmio-bus",
-            "docs/architecture.md#virtio-storage-socket-and-desktop-devices",
-        },
-    },
-    .{
         .id = "rootvm-kernel-driver",
         .name = "Linux hypervisor character and network kernel driver",
         .layer = .rootvm_kernel,
@@ -154,15 +126,14 @@
         .files = .{
             "tools/driver/diosix.h",
             "tools/driver/diosix.c",
-            "tools/driver/desktop.c",
             "tools/driver/governance.c",
             "tools/driver/mission.c",
             "tools/driver/net.c",
         },
         .summary =
         \\Built-in Linux kernel driver exposing hypercall ioctls, child RAM
-        \\mappings, guest VirtIO-GPU scanout and VirtIO-Input bridges,
-        \\charter governance calls, and the virtual Ethernet interface.
+        \\mappings, charter governance calls, and the virtual Ethernet
+        \\interface.
         ,
         .activated_by = .{
             "mmode-rootvm-boot",

@@ -215,7 +215,7 @@ test "parseProposalAction and shipped TOML configs parse cleanly" {
     );
 
     const shipped_charter = try readBinaryFile(
-        "tools/overlay-common/etc/diosix/charter.toml",
+        "tools/overlay-swarm/etc/diosix/charter.toml",
         MAX_MANIFEST_SIZE,
     );
     defer unmapBinaryFile(shipped_charter);
@@ -233,7 +233,6 @@ test "parseProposalAction and shipped TOML configs parse cleanly" {
     const sys_parsed = sysconfig.parseSystemConfigToml(shipped_sys);
     try testing.expectEqual(@as(usize, 1), sys_parsed.default_vcpus);
     try testing.expectEqualStrings("256 MB", sys_parsed.defaultRam());
-    try testing.expectEqual(@as(usize, 5), sys_parsed.tour_count);
 
     const shipped_install = try readBinaryFile(
         "tools/overlay-common/etc/diosix/install.toml",

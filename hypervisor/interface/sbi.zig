@@ -82,6 +82,7 @@ pub const DIOSIX = struct {
     pub const CONSOLE_WRITE = 25;
     pub const CONSOLE_READ = 26;
     pub const SET_NET_POLICY = 27;
+    // Reserved for optional `gui` branch VirtIO-GPU/Input scanout forwarding.
     pub const GPU_READ_SCANOUT = 28;
     pub const INPUT_SEND_EVENT = 29;
     pub const GPU_MAP_SCANOUT = 30;

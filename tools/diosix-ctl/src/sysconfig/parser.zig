@@ -8,45 +8,25 @@ const common = @import("../common.zig");
 const sysconfig = @import("../sysconfig.zig");
 
 const SystemConfig = sysconfig.SystemConfig;
-const MAX_TOUR_STEPS = sysconfig.MAX_TOUR_STEPS;
 const setChecked = sysconfig.setChecked;
 
 /// Parses `/etc/diosix/diosix.toml` content into a `SystemConfig`, falling back
 /// to safe defaults for any omitted keys.
 pub fn parseSystemConfigToml(content: []const u8) SystemConfig {
     var cfg = SystemConfig.initDefaults();
-    var has_custom_tour = false;
 
     const Section = enum {
         none,
         vm_defaults,
         paths,
         storage,
-        tour,
     };
     var section: Section = .none;
-    var active_tour_idx: ?usize = null;
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |raw_line| {
         const line = common.trimAscii(raw_line);
         if (line.len == 0 or line[0] == '#') continue;
-
-        if (std.mem.eql(u8, line, "[[tour]]")) {
-            section = .tour;
-            if (!has_custom_tour) {
-                has_custom_tour = true;
-                cfg.tour_count = 0;
-            }
-            if (cfg.tour_count < MAX_TOUR_STEPS) {
-                active_tour_idx = cfg.tour_count;
-                cfg.tour_steps[cfg.tour_count] = .{};
-                cfg.tour_count += 1;
-            } else {
-                active_tour_idx = null;
-            }
-            continue;
-        }
 
         if (line[0] == '[' and line[line.len - 1] == ']') {
             const hdr = common.trimAscii(line[1 .. line.len - 1]);
@@ -181,26 +161,13 @@ pub fn parseSystemConfigToml(content: []const u8) SystemConfig {
                     }
                 }
             },
-            .tour => {
-                const TourKey = enum { title, summary, cli_hint };
-                if (active_tour_idx) |idx| {
-                    var step = &cfg.tour_steps[idx];
-                    if (std.meta.stringToEnum(TourKey, key)) |k| {
-                        switch (k) {
-                            .title => step.setTitle(val),
-                            .summary => step.setSummary(val),
-                            .cli_hint => step.setHint(val),
-                        }
-                    }
-                }
-            },
         }
     }
 
     return cfg;
 }
 
-test "sysconfig/parser: parses vm_defaults, paths, and tour steps" {
+test "sysconfig/parser: parses vm_defaults and paths" {
     std.testing.refAllDecls(@This());
     const testing = std.testing;
     const sample =
@@ -220,11 +187,6 @@ test "sysconfig/parser: parses vm_defaults, paths, and tour steps" {
         \\keys_dir = "/custom/keys"
         \\catalog_config = "/etc/diosix/custom-catalog.toml"
         \\charter_config = "/etc/diosix/custom-charter.toml"
-        \\
-        \\[[tour]]
-        \\title = "Custom Step 1"
-        \\summary = "Custom tour summary"
-        \\cli_hint = "dsx host info"
     ;
 
     const cfg = parseSystemConfigToml(sample);
@@ -245,15 +207,5 @@ test "sysconfig/parser: parses vm_defaults, paths, and tour steps" {
     try testing.expectEqualStrings(
         "/etc/diosix/custom-charter.toml",
         cfg.charterConfigPath(),
-    );
-    try testing.expectEqual(@as(usize, 1), cfg.tour_count);
-    try testing.expectEqualStrings("Custom Step 1", cfg.tour_steps[0].title());
-    try testing.expectEqualStrings(
-        "Custom tour summary",
-        cfg.tour_steps[0].summary(),
-    );
-    try testing.expectEqualStrings(
-        "dsx host info",
-        cfg.tour_steps[0].cliHint(),
     );
 }

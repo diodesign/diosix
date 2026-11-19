@@ -2,14 +2,13 @@
 //
 // Separates implementation mechanisms from user- and maintainer-tunable policy
 // defaults: default VM vCPUs/RAM/disk/subnet, repository directory paths,
-// configuration file locations, system binaries, and Guided Tour steps.
+// configuration file locations, and system binaries.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
 const common = @import("common.zig");
-const tour = @import("sysconfig/tour.zig");
 const parser = @import("sysconfig/parser.zig");
 
 pub const DEFAULT_SYSCONFIG_PATH = "/etc/diosix/diosix.toml";
@@ -18,8 +17,6 @@ pub const DEFAULT_DEVICE_PATH = "/dev/diosix";
 // Ephemeral runtime state paths (/run/diosix).
 pub const RUN_DIOSIX_DIR = "/run/diosix";
 pub const GUEST_REGISTRY_PATH = "/run/diosix/guests.toml";
-pub const GUI_CMD_PATH = "/run/diosix/gui_cmd";
-pub const GUI_STATE_PATH = "/run/diosix/gui_state.json";
 pub const CHARTER_SECRETS_DIR = "/run/diosix/charter";
 pub const STEWARD_CONSENSUS_PATH = "/run/diosix/steward_consensus";
 pub const AUTH_PENDING_PATH = "/run/diosix/auth.pending";
@@ -87,8 +84,6 @@ pub const NODE_PUBKEY_PATH = "/var/lib/diosix/keys/node_ed25519.pub";
 pub const LLM_SECRET_KEY_PATH = "/var/lib/diosix/keys/llm.secret";
 pub const GATEWAY_LEDGER_PATH = "/var/lib/diosix/gateway-ledger.json";
 pub const AGENT_WORK_DIR = "/var/lib/diosix/agent";
-pub const DEFAULT_SCREENSHOT_PATH = "/var/lib/diosix/screenshot.bmp";
-pub const DEFAULT_RAW_SCREENSHOT_PATH = "/tmp/diosix-screen.raw";
 
 // Root SSH key paths.
 pub const ROOT_SSH_DIR = "/root/.ssh";
@@ -140,7 +135,6 @@ pub const DEV_NULL_PATH = "/dev/null";
 pub const DEV_URANDOM_PATH = "/dev/urandom";
 pub const DEV_DRI_CARD0_PATH = "/dev/dri/card0";
 pub const DEV_TOUCHSCREEN0_PATH = "/dev/input/touchscreen0";
-pub const DEV_FB0_PATH = "/dev/fb0";
 pub const DEV_HIDRAW0_PATH = "/dev/hidraw0";
 pub const DEV_HIDRAW1_PATH = "/dev/hidraw1";
 pub const DEV_TPMRM0_PATH = "/dev/tpmrm0";
@@ -223,8 +217,6 @@ pub fn resolveFirstBin(candidates: []const [:0]const u8) [:0]const u8 {
     return candidates[0];
 }
 
-pub const MAX_TOUR_STEPS = tour.MAX_TOUR_STEPS;
-pub const TourStep = tour.TourStep;
 pub const Config = SystemConfig;
 pub const parseSystemConfigToml = parser.parseSystemConfigToml;
 
@@ -285,10 +277,6 @@ pub const SystemConfig = struct {
     install_config_buf: [CONFIG_PATH_MAX]u8 = @splat(0),
     install_config_len: usize = 0,
 
-    // [[tour]].
-    tour_steps: [MAX_TOUR_STEPS]TourStep = @splat(.{}),
-    tour_count: usize = 0,
-
     pub fn initDefaults() SystemConfig {
         var cfg = SystemConfig{};
         setBuf(&cfg.default_ram_buf, &cfg.default_ram_len, "256 MB");
@@ -329,7 +317,6 @@ pub const SystemConfig = struct {
             DEFAULT_INSTALL_CONFIG_PATH,
         );
 
-        cfg.tour_count = tour.initDefaultTourSteps(&cfg.tour_steps);
         return cfg;
     }
 
@@ -388,7 +375,6 @@ pub const SystemConfig = struct {
 
 test "sysconfig: defaults and parser re-exports" {
     std.testing.refAllDecls(@This());
-    _ = tour;
     _ = parser;
     const cfg = SystemConfig.initDefaults();
     try std.testing.expectEqual(@as(usize, 1), cfg.default_vcpus);
@@ -396,10 +382,5 @@ test "sysconfig: defaults and parser re-exports" {
     try std.testing.expectEqualStrings(
         DEFAULT_SYSTEM_MANIFEST_PATH,
         cfg.systemManifestPath(),
-    );
-    try std.testing.expectEqual(@as(usize, 5), cfg.tour_count);
-    try std.testing.expectEqualStrings(
-        "1. Root VM & Hardware Partitioning",
-        cfg.tour_steps[0].title(),
     );
 }

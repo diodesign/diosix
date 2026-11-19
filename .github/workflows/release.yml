@@ -37,15 +37,17 @@ jobs:
             ./scripts/build.sh test --summary all
           '
 
-      - name: Build hypervisor, guest images, and standalone release bundle
+      - name: Build editions, live images, and standalone release bundles
         run: |
           docker volume rm -f diosix-release-zig-out >/dev/null 2>&1 || true
           docker run --rm \
             -v diosix-release-zig-out:/diosix/zig-out \
             diosix-release-ubuntu sh -ec '
-              ./scripts/build.sh
-              ./scripts/make_live_image.sh
-              ./scripts/package_release.sh
+              for ed in core personal swarm; do
+                ./scripts/build.sh -Dedition="$ed"
+                ./scripts/make_live_image.sh
+                ./scripts/package_release.sh riscv64 "$ed"
+              done
             '
 
       - name: Run full-stack QEMU integration tests

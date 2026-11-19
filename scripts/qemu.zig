@@ -7,17 +7,32 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 const layout = @import("../build/layout.zon");
 
-const AudioBackend = enum { auto, pipewire, pa, alsa, sdl, wav, none };
-
-pub const DEFAULT_DISPLAY_WIDTH: u32 = layout.qemu.display_width;
-pub const DEFAULT_DISPLAY_HEIGHT: u32 = layout.qemu.display_height;
-
 fn appendTpmArgs(b: *std.Build, args: *ArrayList([]const u8)) !void {
     const sock_arg = "socket,id=chrtpm,path=" ++ layout.qemu.swtpm_socket;
     try args.appendSlice(b.allocator, &.{
         "-chardev", sock_arg,
         "-tpmdev",  "emulator,id=tpm0,chardev=chrtpm",
         "-device",  "tpm-tis-device,tpmdev=tpm0",
+    });
+}
+
+fn appendUsbKeyArgs(
+    b: *std.Build,
+    args: *ArrayList([]const u8),
+    usb_key_opt: ?[]const u8,
+) !void {
+    const key = usb_key_opt orelse return;
+    const dev_arg = if (std.mem.indexOfScalar(u8, key, ':')) |colon_idx|
+        b.fmt(
+            "usb-host,bus=xhci.0,vendorid=0x{s},productid=0x{s}",
+            .{ key[0..colon_idx], key[colon_idx + 1 ..] },
+        )
+    else if (std.mem.startsWith(u8, key, "/dev/hidraw"))
+        b.fmt("u2f-passthru,bus=xhci.0,hidraw={s}", .{key})
+    else
+        b.fmt("usb-host,bus=xhci.0,hostdevice={s}", .{key});
+    try args.appendSlice(b.allocator, &.{
+        "-device", "qemu-xhci,id=xhci", "-device", dev_arg,
     });
 }
 
@@ -60,19 +75,16 @@ pub const QemuConfig = struct {
     guest_images_step: ?*std.Build.Step,
     rootvm_s_file: std.Build.LazyPath,
     cli_stamp_file: ?std.Build.LazyPath,
-    desktop_stamp_file: ?std.Build.LazyPath,
     rootvm_elf_path: []const u8,
+    edition: []const u8,
     legacy_cpu: bool,
     pmp_fallback: bool,
     smp_cores: u32,
     mem_size: []const u8,
     qemu_cpu_opt: ?[]const u8,
-    qemu_gl_opt: bool,
-    qemu_audio_opt: []const u8,
     qemu_extra_opt: ?[]const u8,
     qemu_tpm_opt: bool,
     qemu_usb_key_opt: ?[]const u8,
-    welcome_opt: bool,
 };
 
 pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
@@ -99,21 +111,29 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     create_storage_cmd.addFileInput(b.path("scripts/extract_iso_apks.py"));
     create_storage_cmd.addFileInput(cfg.rootvm_s_file);
     if (cfg.cli_stamp_file) |cs| create_storage_cmd.addFileInput(cs);
-    if (cfg.desktop_stamp_file) |ds| create_storage_cmd.addFileInput(ds);
     create_storage_cmd.step.dependOn(&cfg.run_buildroot.step);
     if (cfg.guest_images_step) |gs| create_storage_cmd.step.dependOn(gs);
     b.getInstallStep().dependOn(&create_storage_cmd.step);
 
     try qemu_args.appendSlice(b.allocator, &.{
-        layout.qemu.system_bin,          "-nographic",
-        "-s",                            "-machine",
-        "virt",                          "-cpu",
-        cpu_arg,                         "-smp",
-        b.fmt("{d}", .{cfg.smp_cores}),  "-m",
-        cfg.mem_size,                    "-drive",
-        storage_drive_arg,               "-device",
-        "virtio-blk-device,drive=hd0",   "-netdev",
-        "user,id=net0",                  "-device",
+        layout.qemu.system_bin,
+        "-nographic",
+        "-s",
+        "-machine",
+        "virt",
+        "-cpu",
+        cpu_arg,
+        "-smp",
+        b.fmt("{d}", .{cfg.smp_cores}),
+        "-m",
+        cfg.mem_size,
+        "-drive",
+        storage_drive_arg,
+        "-device",
+        "virtio-blk-device,drive=hd0",
+        "-netdev",
+        "user,id=net0,hostfwd=tcp::2222-:22",
+        "-device",
         "virtio-net-device,netdev=net0",
     });
 
@@ -122,22 +142,23 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     );
     const opt_tpm_step: ?*std.Build.Step =
         if (cfg.qemu_tpm_opt) &setup_tpm_cmd.step else null;
-    const dev_append_str = if (cfg.welcome_opt)
-        "diosix.mode=dev diosix.welcome=force"
-    else
-        "diosix.mode=dev";
 
     const qemu = QemuRunner{ .b = b, .kernel = cfg.vmdiosix };
     var run_step_args = ArrayList([]const u8).empty;
     defer run_step_args.deinit(b.allocator);
     try run_step_args.appendSlice(b.allocator, qemu_args.items);
+    try appendUsbKeyArgs(b, &run_step_args, cfg.qemu_usb_key_opt);
     if (cfg.qemu_tpm_opt) try appendTpmArgs(b, &run_step_args);
-    try appendBootArgs(b, &run_step_args, dev_append_str);
+    if (cfg.qemu_extra_opt) |extra| {
+        var it = std.mem.tokenizeScalar(u8, extra, ' ');
+        while (it.next()) |tok| try run_step_args.append(b.allocator, tok);
+    }
+    try appendBootArgs(b, &run_step_args, "diosix.mode=dev");
     qemu.add(
         &create_storage_cmd.step,
         opt_tpm_step,
         "run",
-        "Run the hypervisor",
+        "Run the hypervisor (SSH forwarded on host port 2222)",
         run_step_args.items,
     );
 
@@ -162,7 +183,6 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     create_live_cmd.addFileInput(b.path("scripts/extract_iso_apks.py"));
     create_live_cmd.addFileInput(cfg.rootvm_s_file);
     if (cfg.cli_stamp_file) |cs| create_live_cmd.addFileInput(cs);
-    if (cfg.desktop_stamp_file) |ds| create_live_cmd.addFileInput(ds);
     create_live_cmd.addFileArg(cfg.vmdiosix.getEmittedBin());
     create_live_cmd.addArgs(&.{
         cfg.rootvm_elf_path,
@@ -175,12 +195,16 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
     b.step("live-image", "Build bootable hybrid GPT live & installer image")
         .dependOn(&create_live_cmd.step);
 
-    const release_cmd =
-        b.addSystemCommand(&.{ "bash", layout.qemu.release_script });
+    const release_cmd = b.addSystemCommand(&.{
+        "bash",
+        layout.qemu.release_script,
+        layout.default_arch,
+        cfg.edition,
+    });
     release_cmd.addFileInput(b.path(layout.qemu.release_script));
     release_cmd.step.dependOn(&create_live_cmd.step);
     release_cmd.stdio = .inherit;
-    b.step("release", "Build standalone release bundle with desktop & CLI VMs")
+    b.step("release", "Build edition release bundle and libdiosix SDK")
         .dependOn(&release_cmd.step);
 
     const swarm_cmd = b.addSystemCommand(&.{
@@ -211,143 +235,21 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         qemu_live_args.items,
     );
 
-    var qemu_gui_args = ArrayList([]const u8).empty;
-    defer qemu_gui_args.deinit(b.allocator);
-    for (qemu_args.items) |arg| {
-        if (std.mem.eql(u8, arg, "-nographic")) {
-            try qemu_gui_args.appendSlice(
-                b.allocator,
-                &.{ "-serial", "mon:stdio" },
-            );
-        } else try qemu_gui_args.append(b.allocator, arg);
-    }
-    const gpu_dev = if (cfg.qemu_gl_opt)
-        b.fmt("virtio-gpu-gl-pci,xres={d},yres={d}", .{
-            DEFAULT_DISPLAY_WIDTH,
-            DEFAULT_DISPLAY_HEIGHT,
-        })
-    else
-        b.fmt("virtio-gpu-pci,xres={d},yres={d}", .{
-            DEFAULT_DISPLAY_WIDTH,
-            DEFAULT_DISPLAY_HEIGHT,
-        });
-    const gtk_display = if (cfg.qemu_gl_opt)
-        "gtk,gl=on,zoom-to-fit=off"
-    else
-        "gtk,zoom-to-fit=off";
-    try qemu_gui_args.appendSlice(b.allocator, &.{
-        "-display", gtk_display,
-        "-device",  gpu_dev,
-    });
-    try qemu_gui_args.appendSlice(b.allocator, &.{
-        "-device", "virtio-keyboard-pci",
-        "-device", "virtio-tablet-pci",
-    });
-
-    const parsed_audio = std.meta.stringToEnum(
-        AudioBackend,
-        cfg.qemu_audio_opt,
-    );
-    const audio_backend: []const u8 = if (parsed_audio) |backend|
-        switch (backend) {
-            .auto => blk: {
-                if (b.graph.environ_map.get("XDG_RUNTIME_DIR")) |xdg| {
-                    const pw_path = b.fmt("{s}/pipewire-0", .{xdg});
-                    if (std.Io.Dir.cwd().access(b.graph.io, pw_path, .{})) |_| {
-                        break :blk "pipewire";
-                    } else |_| {}
-                }
-                break :blk "pa";
-            },
-            else => @tagName(backend),
-        }
-    else
-        cfg.qemu_audio_opt;
-
-    if (parsed_audio == null or parsed_audio.? != .none) {
-        try qemu_gui_args.appendSlice(b.allocator, &.{
-            "-audiodev", b.fmt("{s},id=audio0", .{audio_backend}),
-            "-device",   "intel-hda",
-            "-device",   "hda-duplex,audiodev=audio0",
-        });
-    }
-    if (cfg.qemu_usb_key_opt) |key| {
-        const dev_arg = if (std.mem.indexOfScalar(u8, key, ':')) |colon_idx|
-            b.fmt(
-                "usb-host,bus=xhci.0,vendorid=0x{s},productid=0x{s}",
-                .{ key[0..colon_idx], key[colon_idx + 1 ..] },
-            )
-        else if (std.mem.startsWith(u8, key, "/dev/hidraw"))
-            b.fmt("u2f-passthru,bus=xhci.0,hidraw={s}", .{key})
-        else
-            b.fmt("usb-host,bus=xhci.0,hostdevice={s}", .{key});
-        try qemu_gui_args.appendSlice(b.allocator, &.{
-            "-device", "qemu-xhci,id=xhci", "-device", dev_arg,
-        });
-    }
-    if (cfg.qemu_tpm_opt) try appendTpmArgs(b, &qemu_gui_args);
-    if (cfg.qemu_extra_opt) |extra| {
-        var it = std.mem.tokenizeScalar(u8, extra, ' ');
-        while (it.next()) |tok| try qemu_gui_args.append(b.allocator, tok);
-    }
-    try appendBootArgs(b, &qemu_gui_args, dev_append_str);
-    qemu.add(
-        &create_storage_cmd.step,
-        opt_tpm_step,
-        "run-gui",
-        "Run the hypervisor with VirtIO-GPU and GUI window",
-        qemu_gui_args.items,
-    );
-
-    var qemu_desktop_args = ArrayList([]const u8).empty;
-    defer qemu_desktop_args.deinit(b.allocator);
-    for (qemu_gui_args.items) |arg| {
-        const replaced = if (std.mem.eql(u8, arg, dev_append_str))
-            "diosix.mode=dev diosix.intro=skip diosix.demo=desktop"
-        else
-            arg;
-        try qemu_desktop_args.append(b.allocator, replaced);
-    }
-    qemu.add(
-        &create_storage_cmd.step,
-        opt_tpm_step,
-        "run-desktop",
-        "Boot directly into an interactive RISC-V Wayland desktop VM",
-        qemu_desktop_args.items,
-    );
-
-    var qemu_live_gui_args = ArrayList([]const u8).empty;
-    defer qemu_live_gui_args.deinit(b.allocator);
-    for (qemu_gui_args.items) |arg| {
-        const replaced = if (std.mem.eql(u8, arg, storage_drive_arg))
-            "file=" ++ live_img_path ++ ",if=none,format=raw,id=hd0"
-        else if (std.mem.eql(u8, arg, dev_append_str))
-            "diosix.mode=live"
-        else
-            arg;
-        try qemu_live_gui_args.append(b.allocator, replaced);
-    }
-    qemu.add(
-        &create_live_cmd.step,
-        opt_tpm_step,
-        "run-live-gui",
-        "Run the hypervisor GUI with the live GPT disk image",
-        qemu_live_gui_args.items,
-    );
-
     var qemu_tpm_args = ArrayList([]const u8).empty;
     defer qemu_tpm_args.deinit(b.allocator);
-    for (qemu_gui_args.items) |arg| {
-        if (std.mem.eql(u8, arg, "-bios") and !cfg.qemu_tpm_opt) {
-            try appendTpmArgs(b, &qemu_tpm_args);
-        }
-        try qemu_tpm_args.append(b.allocator, arg);
+    try qemu_tpm_args.appendSlice(b.allocator, qemu_args.items);
+    try appendUsbKeyArgs(b, &qemu_tpm_args, cfg.qemu_usb_key_opt);
+    try appendTpmArgs(b, &qemu_tpm_args);
+    if (cfg.qemu_extra_opt) |extra| {
+        var it = std.mem.tokenizeScalar(u8, extra, ' ');
+        while (it.next()) |tok| try qemu_tpm_args.append(b.allocator, tok);
     }
+    try appendBootArgs(b, &qemu_tpm_args, "diosix.mode=dev");
     qemu.add(
         &create_storage_cmd.step,
         &setup_tpm_cmd.step,
         "run-tpm",
-        "Run the hypervisor GUI with virtual TPM 2.0 (swtpm)",
+        "Run the hypervisor with virtual TPM 2.0 (swtpm)",
         qemu_tpm_args.items,
     );
 }

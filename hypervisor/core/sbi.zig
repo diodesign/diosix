@@ -383,8 +383,6 @@ test "parseVersionString and SBI Base extension dispatch" {
     _ = standard;
     _ = @import("sbi/ipc.zig");
     _ = @import("sbi/console.zig");
-    _ = @import("sbi/desktop.zig");
-    _ = @import("sbi/scanout_map.zig");
     _ = @import("sbi/info.zig");
     _ = @import("sbi/mission.zig");
     _ = @import("sbi/mission/tally.zig");

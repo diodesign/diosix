@@ -45,9 +45,11 @@ autonomous workloads.
 * **Mixed RISC-V execution:** Native 64-bit RISC-V guests boot from ELF
   kernels, flat kernel images, installer ISOs, or seeded virtual disks, and
   single-core 32-bit RISC-V guests run via dynamic binary recompilation.
-* **Zero-copy guest desktops:** Optional CLI and Wayland desktop profiles
-  (`-Dextra-guests=true`) and custom graphical VMs render through Stage-2
-  read-only scanout mapping with dirty-rect invalidation.
+* **Headless editions and C/Zig SDK:** Build **Diosix Core**
+  (`-Dedition=core`), **Diosix Swarm** (`-Dedition=swarm`), or **Diosix
+  Personal** (`-Dedition=personal`), manage guests over SSH and serial consoles
+  (or web services hosted inside VMs), and link userland tools against
+  `libdiosix`. The legacy `diosix-gui` compositor lives on the `gui` branch.
 * **Default-isolated recursive networking:** Each parent runs a `diosix0`
   virtual subnet for direct children (`10.0.3.x`, `10.0.4.x`, and upward) while
   children see an upstream `eth0` interface with SSH passwords disabled and
@@ -85,23 +87,20 @@ bundle (no compilation required) or by building from source.
 ### Run a prebuilt release bundle
 
 1. Install QEMU 10.0 or later (`qemu-system-riscv64`) on your Linux machine.
-2. Download and unpack the standalone release archive from GitHub Releases and
-   launch a graphical Wayland desktop VM, an interactive CLI VM, or the root VM
-   desktop supervisor:
+2. Download and unpack an edition release archive (`core`, `swarm`, or
+   `personal`) from GitHub Releases and boot it with QEMU's SSH port forwarded
+   to host port `2222`:
 
    ```bash
-   tar -xf diosix-26.1-riscv64.tar.xz
-   cd diosix-26.1-riscv64
+   tar -xf diosix-26.1-swarm-riscv64.tar.xz
+   cd diosix-26.1-swarm-riscv64
    sha256sum -c SHA256SUMS
 
-   # Boot straight into the Wayland desktop RISC-V VM
-   ./run-diosix.sh --desktop
+   # Boot the hypervisor and root VM headless (SSH forwarded on localhost:2222)
+   ./run-diosix.sh
 
-   # Boot straight into an interactive CLI RISC-V VM
+   # Or boot straight into an interactive CLI RISC-V VM
    ./run-diosix.sh --cli
-
-   # Or open the root VM graphical desktop and welcome launcher
-   ./run-diosix.sh --gui
    ```
 
 ### Build and run from source
@@ -111,19 +110,19 @@ bundle (no compilation required) or by building from source.
 
 [build-deps]: docs/build.md#build-process-and-dependencies
 
-2. Clone the repository and launch a graphical Wayland desktop VM, an
-   interactive CLI VM, or the root VM supervisor:
+2. Clone the repository, select an edition (`core`, `swarm`, or `personal`),
+   and boot headless in QEMU:
 
    ```bash
    git clone https://github.com/diodesign/diosix.git
    cd diosix
 
-   # Boot headless serial console or the optional root graphical desktop
+   # Boot the default swarm edition over headless serial console + SSH :2222
    ./scripts/build.sh run
-   ./scripts/build.sh run-gui
 
-   # Optionally build standalone CLI or Weston desktop demo profiles
-   ./scripts/build.sh -Dextra-guests=true
+   # Or build Diosix Core or Diosix Personal and build the C/Zig libdiosix SDK
+   ./scripts/build.sh -Dedition=core
+   ./scripts/build.sh sdk
    ```
 
 ### Run inside Docker
@@ -145,8 +144,7 @@ When QEMU finishes booting in developer mode, it logs into the root VM with
 your local SSH public key ready to use. Try these `dsx` commands:
 
 ```bash
-# 1. Run the 5-step interactive tour and check host capabilities
-dsx tour
+# 1. Inspect host hardware and running hypervisor state
 dsx host info
 
 # 2. Launch an isolated Alpine node child VM with constrained packages
@@ -187,19 +185,19 @@ Documentation is split into two tracks depending on what you want to do:
 
 | Guide | What it covers |
 | :--- | :--- |
-| [Getting started and running Diosix](docs/run.md) | Booting in QEMU, running diskless and Shelly hardware-in-the-loop (HIL) tests, exploring the interactive tour and graphical desktop, and provisioning target disks. |
+| [Diosix editions](docs/editions.md) | SSH-first workflows and choosing between Diosix Core, Diosix Swarm, and Diosix Personal editions. |
+| [Getting started and running Diosix](docs/run.md) | Booting in QEMU, managing hosts and guests over SSH, running diskless and Shelly hardware-in-the-loop (HIL) tests, and provisioning target disks. |
 | [Deploying and provisioning guest VMs](docs/guests.md) | Running built-in sandboxes, booting installer ISOs, seeding disk images, booting custom kernels, and managing quotas and RAM checkpoints. |
-| [Security, networking, and governance](docs/security.md) | Default guest network isolation, chaining VMs through a firewall VM, managing SSH passkeys, Principal-signed Mission consensus, anti-ransomware vetoes, and sealing a charter. |
+| [Security, networking, and governance](docs/security.md) | Default guest network isolation, chaining VMs through a firewall VM, DMA passthrough security, managing SSH passkeys, Principal-signed Mission consensus, and sealing a charter. |
 | [CLI and configuration reference](docs/cli.md) | Full command reference for `dsx` (including `agent`, `swarm`, `charter`, `pkg`, and `board`) and runtime configuration files in `/etc/diosix/`. |
 
 ### Technical reference
 
 | Reference | What it covers |
 | :--- | :--- |
-| [Hypervisor architecture](docs/architecture.md) | Design rationale behind the symmetric self-organizing VM tree, M-mode resource model, Stage-2 zero-copy scanout, dynamic recompilation, multi-host swarm collaboration, and standby failover. |
-| [Shared interface and ABI](docs/interface.md) | Supervisor binary interface (SBI) hypercalls, C application binary interface (ABI) structures, Linux kernel driver calls, and the virtual MMIO bus map. |
-| [GUI architecture](docs/gui-architecture.md) | Internals of the direct rendering manager (DRM) and kernel mode setting (KMS) host desktop, guest display windows, terminal multiplexer, and JSON control plane. |
-| [Feature support matrix](docs/support-matrix.md) | Generated map of every hypervisor, emulation, kernel driver, CLI, GUI, and build feature alongside its source files, callers, and documentation links. |
+| [Hypervisor architecture](docs/architecture.md) | Design rationale behind the symmetric self-organizing VM tree, M-mode resource model, headless VirtIO devices, dynamic recompilation, multi-host swarm collaboration, and standby failover. |
+| [Shared interface and ABI](docs/interface.md) | Supervisor binary interface (SBI) hypercalls, C and Zig `libdiosix` API, Linux kernel driver calls, and the virtual MMIO bus map. |
+| [Feature support matrix](docs/support-matrix.md) | Generated map of every hypervisor, emulation, kernel driver, CLI, SDK, and build feature alongside its source files, callers, and documentation links. |
 | [Build system, porting, and debugging](docs/build.md) | Build pipeline caching, declarative layout manifests, position-independent M-mode bootstrap, physical board and network deployment, and GNU debugger (GDB) remote debugging. |
 | [Contributor guide](docs/development.md) & [Style guide](docs/style-guide.md) | Memory ownership, concurrency rules, unit and integration testing, calendar versioning (CalVer), and code and prose conventions. |
 

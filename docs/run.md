@@ -2,11 +2,12 @@
 
 When Diosix boots, the machine-mode (M-mode) hypervisor sets up hardware memory
 and CPU isolation and starts a privileged Linux virtual machine (VM) called the
-root VM. From the root VM, you can launch and manage isolated child VMs over
-the serial console, SSH, or the built-in graphical desktop.
+root VM. From the root VM, you launch and manage isolated child VMs over SSH
+and the serial console (while guests needing user interfaces serve web or
+network services over the virtual switch).
 
-This guide walks through booting Diosix in QEMU, exploring the interactive tour
-and desktop, and provisioning a target disk.
+This guide walks through booting Diosix in QEMU, connecting over SSH, and
+provisioning a target disk.
 
 ---
 
@@ -26,26 +27,21 @@ and desktop, and provisioning a target disk.
 
 ### Running a prebuilt release bundle
 
-If you downloaded the standalone `diosix-26.1-riscv64.tar.xz` bundle from
-GitHub Releases, unpack it and run `run-diosix.sh` directly without installing
-any compiler or Buildroot packages:
+If you downloaded an edition archive such as
+`diosix-26.1-swarm-riscv64.tar.xz` (`core`, `swarm`, or `personal`) from GitHub
+Releases, unpack it and run `run-diosix.sh` directly without installing any
+compiler or Buildroot packages:
 
 ```bash
-tar -xf diosix-26.1-riscv64.tar.xz
-cd diosix-26.1-riscv64
+tar -xf diosix-26.1-swarm-riscv64.tar.xz
+cd diosix-26.1-swarm-riscv64
 sha256sum -c SHA256SUMS
 
-# Boot straight into the Wayland desktop RISC-V VM
-./run-diosix.sh --desktop
-
-# Boot straight into an interactive CLI RISC-V VM
-./run-diosix.sh --cli
-
-# Open the root VM graphical desktop with the welcome launcher
-./run-diosix.sh --gui
-
-# Or auto-select --gui on desktop hosts or --cli on headless terminals
+# Boot the hypervisor and root VM headless (SSH forwarded on localhost:2222)
 ./run-diosix.sh
+
+# Or boot straight into an interactive CLI RISC-V VM
+./run-diosix.sh --cli
 ```
 
 ### Building and booting from source
@@ -55,49 +51,45 @@ installed (or are inside one of the Docker containers in `dockerfiles/`), run
 `./scripts/build.sh` to compile and boot Diosix:
 
 ```bash
-# Boot the unified Alpine node VM in headless serial mode or with GUI
+# Boot headless serial console with SSH forwarded on host port 2222
 ./scripts/build.sh run
-./scripts/build.sh run-gui
+
+# Select a different edition before building or booting (core|swarm|personal)
+./scripts/build.sh -Dedition=core
 
 # Boot two networked QEMU hosts for multi-host swarm collaboration
 ./scripts/build.sh run-swarm
 
-# Optionally build and boot the standalone Wayland desktop or CLI demo VMs
-./scripts/build.sh run-desktop
+# Optionally build and boot the standalone CLI demo VM
 ./scripts/build.sh run-cli
 ```
 
 ### How boot modes work
 
-Diosix adjusts its startup behavior across three boot modes and runtime
-kernel command-line flags:
+Diosix adjusts its startup behavior across three boot modes, three editions
+(`/etc/diosix/edition`), and runtime kernel command-line flags:
 
 * Developer mode stages your build machine's SSH public keys into a temporary
-  overlay so you can SSH into the root VM right away during QEMU runs.
-* Live mode copies pre-loaded guest images into a 768 MiB RAM-backed filesystem,
-  leaves the boot media unmounted so you can partition and install onto target
-  storage, and opens the graphical welcome launcher automatically on first boot.
+  overlay so you can SSH into the root VM on host port `2222` right away during
+  QEMU runs.
+* Live mode copies pre-loaded guest images into a 768 MiB RAM-backed filesystem
+  and leaves the boot media unmounted so you can partition and install onto
+  target storage.
 * Persistent mode mounts an ext4 data partition read-write to retain enrolled
   SSH keys, guest images, and virtual disks across reboots.
-* Passing `diosix.swarm_ip=<cidr>`, `diosix.swarm_peers=<ip[:port],...>`,
-  `diosix.agent=1`, and `diosix.agent_mode=<off|root|sudoer|non-sudoer>`
-  configures a host's `eth0` swarm IP, peer seed list, and `diosix-agent-start`
-  mode at boot (`run-swarm` wires these cleanly across peer QEMU hosts).
-* Passing `diosix.demo=desktop` on the kernel command line skips the boot intro,
-  launches the built-in Weston Wayland desktop VM in the background, and opens
-  its interactive VirtIO-GPU 2D display pane automatically.
-* Passing `diosix.demo=cli` spawns the built-in interactive CLI VM at boot,
-  attaching to its console automatically in headless serial sessions or opening
-  its built-in terminal pane in graphical sessions.
+* Selecting `Diosix Swarm` (`-Dedition=swarm`) or passing `diosix.swarm=1` or
+  `diosix.swarm_ip=<cidr>` activates the parent message board (`diosix0:8485`),
+  large language model (LLM) proxy (`diosix0:8081`), `dsx agent`, and
+  multi-host `dsx swarm` daemons alongside optional `diosix.swarm_peers=` and
+  `diosix.agent_mode=<off|root|sudoer|non-sudoer>` flags.
+* Passing `diosix.demo=cli` spawns the built-in interactive CLI VM at boot and
+  attaches directly to its serial console.
 
 To try the 640 MiB hybrid GPT live image in QEMU:
 
 ```bash
-# Headless serial live session
+# Headless serial live session with SSH forwarded on port 2222
 ./scripts/build.sh run-live
-
-# Graphical desktop live session (opens the welcome launcher)
-./scripts/build.sh run-live-gui
 ```
 
 Building the live image with `./scripts/build.sh live-image` also generates a
@@ -105,7 +97,7 @@ standalone launcher script so you can re-run the packaged image without
 invoking the build system:
 
 ```bash
-./zig-out/run-qemu.sh [--desktop|--cli|--gui] [--smp 4] [--mem 2G] \
+./zig-out/run-qemu.sh [--cli] [--ssh-port 2222] [--smp 4] [--mem 2G] \
     [--mode live|install|persistent|dev]
 ```
 
@@ -117,56 +109,28 @@ to return to the Diosix console).
 
 ---
 
-## Exploring the interactive tour and desktop
+## Managing hosts and guests over SSH
 
-After logging into the root VM, run the 5-step guided tour for an overview of
-hardware isolation, SSH passkey management, and guest workflows:
-
-```bash
-# View all 5 steps of the guided tour
-dsx tour
-
-# Or view a single step (1..5)
-dsx tour --step 1
-```
-
-### Using the graphical desktop
-
-Booting with `./scripts/build.sh run-gui` or `./scripts/build.sh run-live-gui`
-starts the Diosix desktop environment directly on the Linux direct rendering
-manager (DRM) and kernel mode setting (KMS) display stack:
-
-* Live sessions open the welcome dialog automatically with one-click
-  **Try Desktop VM** and **Try CLI VM** buttons alongside **Start guided tour**.
-* The top-left menu opens panes for creating VMs, viewing host and hypervisor
-  telemetry, tuning display settings, and restarting or shutting down the host.
-* Selecting any guest in the running VMs pane lets you adjust its CPU and RAM
-  quotas on the fly, open its VirtIO-GPU 2D graphical guest display (for child
-  VMs), or open a built-in VT100 terminal over SSH or the serial console.
-* The built-in Wayland desktop guest uses software Pixman rasterization over a
-  VirtIO-GPU 2D KMS scanout streamed zero-copy to the host display; 3D GPU
-  passthrough and VirGL acceleration are planned beyond the 26.1 series.
-* The dockable on-screen keyboard provides QWERTY and symbol layouts for
-  pointer or touchscreen text entry across both host widgets and guest windows.
-
-You can also inspect or drive the desktop from a terminal or script with
-`dsx gui`:
+Mainline Diosix runs headless so the hypervisor and root VM expose only a
+minimal control surface:
 
 ```bash
-# Check active pane, resolution, keyboard state, and tour progress
-dsx gui state --json
+# Connect from your host machine once QEMU boots in developer mode
+ssh -p 2222 root@127.0.0.1
 
-# Launch the built-in Wayland desktop VM or CLI VM from the welcome workflow
-dsx gui trigger welcome.try_desktop
-dsx gui trigger welcome.try_cli
+# Inspect host telemetry and launch a child node VM
+dsx host info
+dsx run diosix-node --name worker --vcpus 2 --ram 256M
 
-# Start the guided tour or toggle the on-screen keyboard
-dsx gui trigger tour.start
-dsx gui trigger osk.toggle
-
-# Save a raw framebuffer capture when fbdev scanout is active
-dsx gui screenshot /tmp/diosix-screen.raw
+# Jump into the child over SSH or run a single remote command
+dsx ssh worker -- apk info
 ```
+
+Any guest VM requiring a user interface can bind a web server or remote service
+inside its own isolated virtual network (`10.0.3.x`), and `dsx port` / parent
+routing policies control which ports reach the host LAN. Teams needing the
+legacy local VirtIO-GPU compositor (`diosix-gui`) can check out the `gui`
+branch (`git checkout gui`).
 
 ---
 

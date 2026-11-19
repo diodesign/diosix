@@ -260,9 +260,6 @@
             "hypervisor/core/sbi/info.zig",
             "hypervisor/core/sbi/console.zig",
             "hypervisor/core/sbi/ipc.zig",
-            "hypervisor/core/sbi/desktop.zig",
-            "hypervisor/core/sbi/scanout_map.zig",
-            "hypervisor/core/sbi/scanout_map/slots.zig",
             "hypervisor/core/sbi/charter.zig",
             "hypervisor/core/sbi/mission.zig",
             "hypervisor/core/sbi/mission/tally.zig",
@@ -271,7 +268,7 @@
         .summary =
         \\Standard RISC-V SBI v2.0 and legacy v0.1 extensions alongside
         \\Diosix hypercall handlers covering VM lifecycle, networking,
-        \\consoles, guest desktop streaming, and charter quorum gates.
+        \\consoles, and charter quorum gates.
         ,
         .activated_by = .{
             "mmode-cpu-traps",
@@ -305,8 +302,8 @@
             "mmode-sbi-dispatch",
             "mmode-rootvm-boot",
             "guest-shim-firmware",
+            "libdiosix-userland-sdk",
             "cli-core-dispatch",
-            "gui-desktop-core",
         },
         .docs = .{
             "docs/interface.md#data-structure-layouts",

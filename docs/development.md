@@ -56,11 +56,11 @@ integration suite after building:
 
 ```bash
 ./scripts/build.sh
+./scripts/build.sh sdk
 python3 -B scripts/test_manifest_integration.py
 python3 -B scripts/run_swarm.py --hosts 2 --self-test
 python3 -B scripts/test_live_llm_app.py --self-test
 python3 -B scripts/hil/runner.py --self-test
-python3 -B scripts/demo_external_guests.py --headless-verify
 ```
 
 ### Live media builds and testing
@@ -160,8 +160,9 @@ optional patch number (such as 26.1, 26.2, or 26.2.1):
 ### Branching workflow
 
 Development uses two long-lived branches—`devel` for ongoing integration and
-`stable` for tagged releases—plus short-lived topic branches for individual
-tasks:
+`stable` for tagged releases—alongside dedicated topic and flavor branches (for
+example, `gui` preserves the legacy native desktop compositor and VirtIO-GPU
+emulation stack) plus short-lived task branches:
 
 1. Branch off `devel` for your feature or fix.
 2. Implement your change, add or update tests, and run

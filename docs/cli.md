@@ -19,7 +19,9 @@ configuration files, see [Build system, porting, and debugging](build.md).
 
 | File | Permissions | Purpose |
 | :--- | :--- | :--- |
-| `/etc/diosix/diosix.toml` | `0644` | Default child VM sizing, repository paths, and guided tour steps. |
+| `/etc/diosix/diosix.toml` | `0644` | Default child VM sizing and runtime policy paths. |
+| `/etc/diosix/edition` | `0644` | Selected edition identifier (`core`, `swarm`, or `personal`). |
+| `/etc/diosix/personal.toml` | `0644` | Desktop guest profile template included in Diosix Personal (`-Dedition=personal`). |
 | `/etc/diosix/catalog.toml` | `0644` | Guest OS and steward VM repository catalog with pinned 64-character SHA-256 digests. |
 | `/etc/diosix/install.toml` | `0644` | Default disk installation profile for expert provisioning. |
 | `/etc/diosix/charter.toml` | `0644` | Charter defining steward quorum thresholds, workload units, and isolation rules. |
@@ -240,9 +242,8 @@ Examples:
 # Boot a live ISO in RAM
 dsx run custom-riscv64.iso --name live-os --vcpus 2 --ram 1024M
 
-# Launch the built-in CLI VM or Weston Wayland desktop VM
+# Launch the built-in CLI VM (when built with -Dextra-guests=true)
 dsx run linux-cli --name cli-work --vcpus 2 --ram 256M
-dsx run linux-desktop --name desk-work --vcpus 2 --ram 512M
 
 # Launch a sandboxed VM with 2 vCPUs, 512 MiB RAM, and a 128 MiB in-RAM disk
 dsx run linux-guest --name user --vcpus 2 --ram 512M --disk 128M
@@ -701,60 +702,6 @@ dsx auth enroll --qr
 dsx auth challenge
 dsx auth verify <128-char-ed25519-signature-hex>
 ```
-
----
-
-### `dsx gui`
-Queries and drives the local VM's `diosix-gui` desktop environment from scripts
-or automated
-tests without screen-scraping.
-
-```bash
-dsx gui <state|trigger <action>|screenshot [path]> [--json]
-```
-
-Subcommands:
-* `state [--json]`: Reads `/run/diosix/gui_state.json` and prints the live
-  compositor state (resolution, render mode, active pane, on-screen keyboard
-  visibility, welcome and guided tour progress, guest count, and window count).
-  Falls back to detected seat defaults if the desktop is not running.
-* `trigger <action> [--json]`: Writes an action name to `/run/diosix/gui_cmd`:
-  `menu.create_vm`, `menu.about`, `menu.status`, `menu.config`, `menu.back`,
-  `osk.toggle`, `osk.show`, `osk.hide`, `welcome.open`, `welcome.close`,
-  `welcome.try_desktop`, `welcome.try_cli`, `tour.start`, `tour.next`,
-  `tour.prev`, or `tour.close`.
-* `screenshot [path] [--json]`: Saves a raw framebuffer dump from `/dev/fb0`
-  (defaults to `/tmp/diosix-screen.raw`; custom paths must stay under `/tmp/`
-  or `/var/lib/diosix/` without `..`).
-
-Examples:
-```bash
-# Read live compositor state as JSON
-dsx gui state --json
-
-# Toggle the on-screen keyboard
-dsx gui trigger osk.toggle
-
-# Open the 5-step guided tour window and capture /dev/fb0
-dsx gui trigger tour.start
-dsx gui screenshot /tmp/diosix-screen.raw
-```
-
----
-
-### `dsx tour`
-Prints the 5-step guided tour from `/etc/diosix/diosix.toml` (or built-in
-defaults) in the terminal or as JSON.
-
-```bash
-dsx tour [--step <1..5>] [--json]
-```
-
-* `--step <1..5>`, `-s <1..5>`: Prints a single step (1 for root VM and
-  hardware isolation, 2 for passkey security, 3 for the guest OS catalog, 4 for
-  steward VMs and charter governance, or 5 for live sessions and disk
-  installation). Omit to show all steps.
-* `--json`, `-j`: Prints JSON output.
 
 ---
 

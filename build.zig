@@ -15,7 +15,8 @@ const build_qemu = @import("scripts/qemu.zig");
 const build_guests = @import("scripts/guests.zig");
 const build_features = @import("scripts/features/steps.zig");
 
-const GuestProfile = enum { node, usable, minimal, cli, desktop };
+const Edition = enum { core, swarm, personal };
+const GuestProfile = enum { node, usable, minimal, cli };
 
 const hypervisor_conf_text = @embedFile(layout.metadata.hypervisor_conf);
 
@@ -77,6 +78,7 @@ fn addHostTestStep(
     with_interface: bool,
     optimize: std.builtin.OptimizeMode,
     iface: *std.Build.Module,
+    libdiosix_mod: *std.Build.Module,
 ) *std.Build.Step.Run {
     const mod = b.createModule(.{
         .root_source_file = b.path(root_path),
@@ -86,16 +88,17 @@ fn addHostTestStep(
     if (with_interface) {
         mod.addImport("interface", iface);
     }
-    if (std.mem.eql(u8, name, "diosix-gui-unit-tests")) {
-        mod.addAnonymousImport("questrial_ttf", .{
-            .root_source_file = b.path(layout.gui_assets.questrial_ttf),
+    if (std.mem.eql(u8, name, "diosix-ctl-unit-tests")) {
+        mod.addImport("libdiosix", libdiosix_mod);
+    }
+    if (std.mem.eql(u8, name, "libdiosix-unit-tests")) {
+        const tc = b.addTranslateC(.{
+            .root_source_file = b.path(layout.libdiosix.header),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .link_libc = true,
         });
-        mod.addAnonymousImport("dm_mono_ttf", .{
-            .root_source_file = b.path(layout.gui_assets.dm_mono_ttf),
-        });
-        mod.addAnonymousImport("intro_wav", .{
-            .root_source_file = b.path(layout.gui_assets.intro_wav),
-        });
+        mod.addImport("c_diosix", tc.createModule());
     }
     return b.addRunArtifact(b.addTest(.{ .root_module = mod, .name = name }));
 }
@@ -135,21 +138,31 @@ pub fn build(b: *std.Build) !void {
         "Emulator memory size (e.g. 2G)",
         layout.qemu.default_mem,
     );
-    const qemu_gl_opt = optBool(b, "gl", "Enable OpenGL virgl for GUI", true);
-    const qemu_audio_opt = optStr(
+    const edition_opt = optStr(
         b,
-        "qemu-audio",
-        "Audio backend",
-        layout.qemu.default_audio,
+        "edition",
+        "Diosix edition: core | swarm | personal",
+        "swarm",
     );
+    const edition = std.meta.stringToEnum(Edition, edition_opt) orelse {
+        std.debug.print(
+            "Error: Invalid -Dedition '{s}' (expected core|swarm|personal).\n",
+            .{edition_opt},
+        );
+        return error.InvalidEdition;
+    };
+    const edition_overlay: []const u8 = switch (edition) {
+        .core => "",
+        .swarm => "tools/overlay-swarm",
+        .personal => "tools/overlay-personal",
+    };
     const qemu_extra_opt = b.option([]const u8, "qemu-extra", "Extra args");
     const qemu_tpm_opt = optBool(b, "tpm", "Enable virtual TPM 2.0", false);
     const qemu_usb_key_opt = b.option([]const u8, "usb-key", "USB key vid:pid");
-    const welcome_opt = optBool(b, "welcome", "Force welcome tour", false);
     const extra_guests_opt = optBool(
         b,
         "extra-guests",
-        "Build optional linux-cli and linux-desktop guest images",
+        "Build optional linux-cli guest image",
         false,
     );
 
@@ -172,6 +185,10 @@ pub fn build(b: *std.Build) !void {
     const interface_module = b.createModule(.{
         .root_source_file = b.path(layout.modules.interface_root),
     });
+    const libdiosix_module = b.createModule(.{
+        .root_source_file = b.path(layout.modules.libdiosix_root),
+    });
+    libdiosix_module.addImport("interface", interface_module);
 
     const guest_arch_opt = optStr(
         b,
@@ -204,6 +221,10 @@ pub fn build(b: *std.Build) !void {
     run_buildroot.addArgs(&.{ rootvm_elf_path, buildroot_dir, guest_arch_opt });
     const rootvm_s_file =
         run_buildroot.addOutputFileArg(layout.rootvm.embedded_asm_name);
+    if (edition_overlay.len > 0) {
+        run_buildroot.addArg(edition_overlay);
+        try build_guests.addTreeInputs(b, run_buildroot, edition_overlay);
+    }
     try build_guests.addRootvmInputs(b, run_buildroot);
     run_buildroot.stdio = .inherit;
 
@@ -217,7 +238,6 @@ pub fn build(b: *std.Build) !void {
     );
     const guest_images_step = guest_build.guest_images_step;
     const cli_stamp_opt = guest_build.cli_stamp;
-    const desktop_stamp_opt = guest_build.desktop_stamp;
 
     const emulation_module = b.createModule(.{
         .root_source_file = b.path(layout.modules.emulation_root),
@@ -360,25 +380,30 @@ pub fn build(b: *std.Build) !void {
         &b.addInstallArtifact(guest_shim, install_opts).step,
     );
 
+    const sdk_step = build_guests.registerSdkStep(
+        b,
+        guest_arch_opt,
+        optimize,
+        interface_module,
+    );
+    b.getInstallStep().dependOn(sdk_step);
+
     try build_qemu.registerQemuSteps(b, .{
         .vmdiosix = vmdiosix,
         .run_buildroot = run_buildroot,
         .guest_images_step = guest_images_step,
         .rootvm_s_file = rootvm_s_file,
         .cli_stamp_file = cli_stamp_opt,
-        .desktop_stamp_file = desktop_stamp_opt,
         .rootvm_elf_path = rootvm_elf_path,
+        .edition = @tagName(edition),
         .legacy_cpu = legacy_cpu,
         .pmp_fallback = pmp_fallback,
         .smp_cores = smp_cores,
         .mem_size = mem_size,
         .qemu_cpu_opt = qemu_cpu_opt,
-        .qemu_gl_opt = qemu_gl_opt,
-        .qemu_audio_opt = qemu_audio_opt,
         .qemu_extra_opt = qemu_extra_opt,
         .qemu_tpm_opt = qemu_tpm_opt,
         .qemu_usb_key_opt = qemu_usb_key_opt,
-        .welcome_opt = welcome_opt,
     });
 
     // Run all unit tests on the host system.
@@ -406,6 +431,7 @@ pub fn build(b: *std.Build) !void {
             suite.with_interface,
             optimize,
             interface_module,
+            libdiosix_module,
         );
         test_step.dependOn(&run_t.step);
     }

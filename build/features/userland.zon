@@ -5,41 +5,38 @@
 .{
     .{
         .id = "rootvm-init-overlay",
-        .name = "Root VM init scripts, ALSA setup, and runtime config",
+        .name = "Root VM init scripts, edition overlays, and runtime config",
         .layer = .rootvm_init,
         .status = .active,
         .files = .{
-            "tools/alsa-init/main.c",
-            "tools/overlay-common/etc/diosix/agent.toml",
             "tools/overlay-common/etc/diosix/catalog.toml",
-            "tools/overlay-common/etc/diosix/charter.toml",
-            "tools/overlay-common/etc/diosix/constitution.md",
             "tools/overlay-common/etc/diosix/diosix.toml",
+            "tools/overlay-common/etc/diosix/edition",
             "tools/overlay-common/etc/diosix/install.toml",
             "tools/overlay-common/etc/diosix/keys/.gitkeep",
             "tools/overlay-common/etc/diosix/system.toml",
             "tools/overlay-common/etc/group",
-            "tools/overlay-common/etc/init.d/S45alsa-init",
             "tools/overlay-common/etc/init.d/S50diosix",
             "tools/overlay-common/etc/init.d/S50dropbear",
-            "tools/overlay-common/etc/init.d/S60diosix-wm",
-            "tools/overlay-common/etc/init.d/S95diosix-demo",
             "tools/overlay-common/etc/iptables.conf",
             "tools/overlay-common/etc/issue",
             "tools/overlay-common/etc/motd",
             "tools/overlay-common/etc/passwd",
             "tools/overlay-common/etc/profile",
-            "tools/overlay-common/usr/sbin/diosix-agent-start",
             "tools/overlay-common/usr/sbin/diosix-stage-storage",
+            "tools/overlay-swarm/etc/diosix/agent.toml",
+            "tools/overlay-swarm/etc/diosix/charter.toml",
+            "tools/overlay-swarm/etc/diosix/constitution.md",
+            "tools/overlay-swarm/etc/diosix/edition",
+            "tools/overlay-swarm/usr/sbin/diosix-agent-start",
+            "tools/overlay-personal/etc/diosix/edition",
+            "tools/overlay-personal/etc/diosix/personal.toml",
             "tools/overlay-cli/etc/diosix/guest-profile",
             "tools/overlay-cli/etc/motd",
-            "tools/overlay-desktop/etc/diosix/guest-profile",
-            "tools/overlay-desktop/etc/init.d/S70weston-desktop",
-            "tools/overlay-desktop/root/.config/weston.ini",
         },
         .summary =
-        \\Root VM and child guest BusyBox init scripts, ALSA HDA codec setup,
-        \\boot-mode storage mounting, CLI and Weston desktop guest overlays,
+        \\Root VM and child guest BusyBox init scripts, composable edition
+        \\overlays (core, swarm, personal), boot-mode storage mounting,
         \\key-only SSH daemon config, firewall NAT rules, and TOML manifests.
         ,
         .activated_by = .{
@@ -48,8 +45,37 @@
         },
         .docs = .{
             "docs/run.md#how-boot-modes-work",
+            "docs/editions.md#ssh-first-interaction-model",
+            "docs/editions.md#comparing-diosix-editions",
+            "docs/editions.md#direct-hardware-access-and-desktop-workloads",
+            "docs/security.md#direct-device-passthrough-and-dma-security",
             "docs/cli.md#runtime-configuration-files-and-permissions",
             "docs/security.md#ssh-passkeys-and-downward-management",
+        },
+    },
+    .{
+        .id = "libdiosix-userland-sdk",
+        .name = "Userland C and Zig hypervisor control library (libdiosix)",
+        .layer = .u_mode_sdk,
+        .status = .active,
+        .files = .{
+            "tools/libdiosix/include/diosix.h",
+            "tools/libdiosix/src/lib.zig",
+            "tools/libdiosix/src/governance.zig",
+            "tools/libdiosix/src/c_abi.zig",
+            "tools/libdiosix/examples/vm_info.c",
+        },
+        .summary =
+        \\Reusable Zig client and C99 ABI library (libdiosix.a / libdiosix.so)
+        \\wrapping /dev/diosix ioctls for guest lifecycle, memory, console,
+        \\networking, and governance calls.
+        ,
+        .activated_by = .{
+            "build-zig-pipeline",
+            "rootvm-kernel-driver",
+        },
+        .docs = .{
+            "docs/interface.md#userland-c-and-zig-library-libdiosix",
         },
     },
     .{
@@ -60,22 +86,20 @@
         .files = .{
             "tools/diosix-ctl/src/main.zig",
             "tools/diosix-ctl/src/api.zig",
-            "tools/diosix-ctl/src/api/governance.zig",
             "tools/diosix-ctl/src/common.zig",
             "tools/diosix-ctl/src/common/output.zig",
             "tools/diosix-ctl/src/sysconfig.zig",
             "tools/diosix-ctl/src/sysconfig/parser.zig",
-            "tools/diosix-ctl/src/sysconfig/tour.zig",
             "tools/diosix-ctl/src/registry.zig",
         },
         .summary =
-        \\Top-level CLI command dispatcher, hypervisor character-device
-        \\client wrapper, runtime configuration loader, JSON and text output
+        \\Top-level CLI command dispatcher, libdiosix client re-export
+        \\wrapper, runtime configuration loader, JSON and text output
         \\helpers, and active guest registry.
         ,
         .activated_by = .{
             "rootvm-init-overlay",
-            "gui-host-bridge",
+            "libdiosix-userland-sdk",
         },
         .docs = .{
             "docs/cli.md#context-id-syntax",
@@ -83,8 +107,8 @@
         },
     },
     .{
-        .id = "cli-host-gui-tour",
-        .name = "Host management, disk installer, GUI, and tour commands",
+        .id = "cli-host-install",
+        .name = "Host management, telemetry, and disk installer commands",
         .layer = .u_mode_cli,
         .status = .active,
         .files = .{
@@ -92,20 +116,17 @@
             "tools/diosix-ctl/src/host/info.zig",
             "tools/diosix-ctl/src/installer.zig",
             "tools/diosix-ctl/src/installer/apply.zig",
-            "tools/diosix-ctl/src/gui.zig",
         },
         .summary =
-        \\Host inspection, GPT target-disk installer, host reboot and
-        \\poweroff, guided tour viewer, and semantic desktop control
-        \\commands.
+        \\Host inspection, SSH-first workflows, GPT target-disk installer,
+        \\and host reboot and poweroff commands.
         ,
         .activated_by = .{
             "cli-core-dispatch",
         },
         .docs = .{
             "docs/cli.md#dsx-host",
-            "docs/cli.md#dsx-gui",
-            "docs/cli.md#dsx-tour",
+            "docs/run.md#managing-hosts-and-guests-over-ssh",
             "docs/run.md#provisioning-a-target-disk",
         },
     },

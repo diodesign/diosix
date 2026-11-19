@@ -4,6 +4,7 @@
 #
 # Usage: assemble_alpine_rootfs.sh <target_dir> <alpine_tar>
 #                                  <overlay_common> <dynamic_overlay>
+#                                  [edition_overlay]
 #
 # Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 # SPDX-License-Identifier: MIT
@@ -14,6 +15,7 @@ TARGET_DIR="$1"
 ALPINE_TAR="$2"
 OVERLAY_COMMON="$3"
 DYNAMIC_OVERLAY="$4"
+EDITION_OVERLAY="${5:-}"
 
 if [ ! -f "$ALPINE_TAR" ]; then
     echo "Error: Missing Alpine minirootfs tarball '$ALPINE_TAR'" >&2
@@ -205,8 +207,11 @@ chmod 0600 "$TARGET_DIR/etc/shadow"
 printf "console\nhvc0\nttyS0\ntty1\n" > "$TARGET_DIR/etc/securetty"
 chmod 0644 "$TARGET_DIR/etc/securetty"
 
-# Apply Diosix common overlay and cross-compiled Zig dynamic overlay.
+# Apply Diosix common, optional edition, and cross-compiled dynamic overlays.
 cp -a "${OVERLAY_COMMON}/." "$TARGET_DIR/"
+if [ -n "$EDITION_OVERLAY" ] && [ -d "$EDITION_OVERLAY" ]; then
+    cp -a "${EDITION_OVERLAY}/." "$TARGET_DIR/"
+fi
 cp -a "${DYNAMIC_OVERLAY}/." "$TARGET_DIR/"
 chmod 0700 "$TARGET_DIR/etc/diosix/keys" 2>/dev/null || true
 chmod 0755 "$TARGET_DIR"/etc/init.d/S* 2>/dev/null || true

@@ -174,21 +174,14 @@ attenuating `apk` package proxy (`diosix0:8080`), a large language model (LLM)
 inference proxy (`diosix0:8081`), and a hash-chained message board
 (`diosix0:8485`) for its direct children.
 
-### VirtIO storage, socket, and desktop devices
+### VirtIO storage and socket devices
 * The VirtIO block device exposes a RAM-backed virtual disk attached to the
   guest's staged disk image (read-write in guest RAM) or ISO image (read-only).
 * The VirtIO socket device routes strictly parent-child stream packets with
   hypervisor-verified source CID headers.
-* The VirtIO 2D GPU controller tracks guest scatter-gather backing pages and
-  maintains a per-resource dirty-rectangle damage ring without duplicating
-  framebuffers in M-mode. Parents on H-extension hardware can map a child's
-  active scanout read-only into a two-slot, 16 MiB-per-slot Sv39x4 aperture at
-  GPA `0x2_1000_0000` (cleanly unmapped before guest RAM reclamation) and read
-  only damaged regions plus the 64x64 cursor overlay, or stream chunks into
-  pinned pages when needed.
-* The VirtIO input device exposes keyboard, mouse button, scroll wheel, and
-  absolute tablet capabilities and delivers batched host input events into the
-  guest's event queue via direct memory access (DMA).
+* Mainline M-mode omits VirtIO-GPU and VirtIO-Input emulation so hosts stay
+  minimal and SSH-first; the legacy zero-copy scanout bridge lives on the `gui`
+  branch while userland tools link directly against `libdiosix`.
 
 ### Unified M-mode console rings
 Each guest owns an interrupt-safe 8 KiB transmit ring and 512-byte receive ring

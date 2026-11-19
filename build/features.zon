@@ -31,8 +31,8 @@
 
     .checked_docs = .{
         "docs/architecture.md",
+        "docs/editions.md",
         "docs/interface.md",
-        "docs/gui-architecture.md",
         "docs/build.md",
         "docs/run.md",
         "docs/guests.md",
@@ -53,14 +53,13 @@
         "README.md",
         "CONTRIBUTORS.md",
         "LICENSE.md",
-        "tools/overlay-common/etc/diosix/constitution.md",
+        "tools/overlay-swarm/etc/diosix/constitution.md",
     },
 
     .feature_files = .{
         "build/features/hypervisor.zon",
         "build/features/emulation.zon",
         "build/features/userland.zon",
-        "build/features/gui.zon",
         "build/features/infra.zon",
     },
 }

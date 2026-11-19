@@ -38,27 +38,26 @@
             "scripts/lib/buildroot_common.sh",
             "boot/riscv64-linux-node.config",
             "boot/riscv64-linux-cli.config",
-            "boot/riscv64-linux-desktop.config",
             "boot/riscv64-linux-usable.config",
             "boot/riscv32-linux-minimal.config",
             "boot/linux-rootvm-hardware.fragment",
             "boot/linux-cli.fragment",
-            "boot/linux-desktop.fragment",
             "boot/linux-minimal.fragment",
             "boot/linux-riscv32.fragment",
             "boot/linux-sbi-console.fragment",
         },
         .summary =
-        \\Buildroot scripts and kernel configs that compile musl tools and
-        \\the hypervisor driver, assemble the unified Alpine-based
-        \\diosix-node.elf image, stage signed APK seeds, and build optional
-        \\CLI or Weston desktop profiles.
+        \\Buildroot scripts and kernel configs that compile musl tools,
+        \\libdiosix, and the hypervisor driver, assemble the unified
+        \\diosix-node.elf edition images, stage APK seeds, and build CLI
+        \\demo profiles.
         ,
         .activated_by = .{
             "build-zig-pipeline",
         },
         .docs = .{
             "docs/build.md#metadata-injection-and-multi-tier-caching",
+            "docs/editions.md#building-and-selecting-an-edition",
         },
     },
     .{
@@ -76,9 +75,9 @@
             "scripts/setup_swtpm.sh",
         },
         .summary =
-        \\QEMU runner step builder for serial, graphical, desktop/CLI demo,
-        \\live, and TPM sessions, ext4 developer disk creator, hybrid GPT
-        \\live-image builder, and standalone release tarball packager.
+        \\QEMU runner step builder for headless SSH-first, CLI demo, live,
+        \\and TPM sessions, ext4 developer disk creator, hybrid GPT
+        \\live-image builder, and edition + libdiosix SDK release packager.
         ,
         .activated_by = .{
             "build-zig-pipeline",
@@ -99,7 +98,6 @@
             "build/features/hypervisor.zon",
             "build/features/emulation.zon",
             "build/features/userland.zon",
-            "build/features/gui.zon",
             "build/features/infra.zon",
             "scripts/features.zig",
             "scripts/features/model.zig",
@@ -135,13 +133,7 @@
             "tools/diosix-ctl/src/tests/cli.zig",
             "tools/diosix-ctl/src/tests/main.zig",
             "tools/diosix-ctl/src/tests/manifest.zig",
-            "tools/diosix-gui/src/tests.zig",
-            "tools/diosix-gui/src/tests/create_vm.zig",
-            "tools/diosix-gui/src/tests/desktop.zig",
-            "tools/diosix-gui/src/tests/gui.zig",
-            "tools/diosix-gui/src/tests/nav.zig",
-            "tools/diosix-gui/src/tests/panes.zig",
-            "tools/diosix-gui/src/tests/visual.zig",
+            "tools/libdiosix/src/tests.zig",
             "tools/guest-shim/src/tests/loader.zig",
             "scripts/lib/llm_mock.py",
             "scripts/test_live_llm_app.py",
@@ -150,8 +142,8 @@
         },
         .summary =
         \\Dedicated multi-component host test suites covering dynamic
-        \\recompilation, FDT parsing, CLI commands, GUI rendering, and the
-        \\guest shim alongside the live QEMU integration harness.
+        \\recompilation, FDT parsing, libdiosix ABI parity, CLI commands,
+        \\and the guest shim alongside the live QEMU integration harness.
         ,
         .activated_by = .{
             "build-zig-pipeline",

@@ -1,435 +1,95 @@
-// Diosix Guest Control API and ABI definitions.
+// Diosix Guest Control API wrapper re-exporting shared libdiosix.
 //
 // Copyright (c) 2026 Chris Williams <chrisw@diosix.org>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
-const linux = std.os.linux;
-const interface = @import("interface").sbi;
-const sysconfig = @import("sysconfig.zig");
-const gov = @import("api/governance.zig");
+const lib = @import("libdiosix");
 
-// Re-export canonical SBI ABI definitions from hypervisor/interface/sbi.zig.
-pub const EXT_DIOSIX: usize = interface.EXT.DIOSIX;
+pub const DEFAULT_DEVICE_PATH = lib.DEFAULT_DEVICE_PATH;
+pub const EXT_DIOSIX = lib.EXT_DIOSIX;
+pub const CID_PARENT = lib.CID_PARENT;
+pub const CID_SELF = lib.CID_SELF;
+pub const CID_FIRST_CHILD = lib.CID_FIRST_CHILD;
+pub const MAX_CHILD_PCPU_QUOTA_PCT = lib.MAX_CHILD_PCPU_QUOTA_PCT;
+pub const DEFAULT_RETAINED_PCPU_PCT = lib.DEFAULT_RETAINED_PCPU_PCT;
+pub const DEFAULT_CHILD_PCPU_QUOTA_PCT = lib.DEFAULT_CHILD_PCPU_QUOTA_PCT;
+pub const MAX_GUEST_VCPUS = lib.MAX_GUEST_VCPUS;
+pub const QUOTA_ZERO_SENTINEL = lib.QUOTA_ZERO_SENTINEL;
 
-pub const CID_PARENT: usize = interface.CID_PARENT;
-pub const CID_SELF: usize = interface.CID_SELF;
-pub const CID_FIRST_CHILD: usize = interface.CID_FIRST_CHILD;
-pub const MAX_CHILD_PCPU_QUOTA_PCT: u32 = interface.MAX_CHILD_PCPU_QUOTA_PCT;
-pub const DEFAULT_RETAINED_PCPU_PCT: u32 = interface.DEFAULT_RETAINED_PCPU_PCT;
-pub const DEFAULT_CHILD_PCPU_QUOTA_PCT: u32 =
-    interface.DEFAULT_CHILD_PCPU_QUOTA_PCT;
-pub const MAX_GUEST_VCPUS: u32 = interface.MAX_GUEST_VCPUS;
-pub const QUOTA_ZERO_SENTINEL: u64 = interface.QUOTA_ZERO_SENTINEL;
+pub const TargetArch = lib.TargetArch;
+pub const DIOSIX_FUNC = lib.DIOSIX_FUNC;
+pub const BUILD_COMMIT_LEN = lib.BUILD_COMMIT_LEN;
+pub const HOST_CPU_ISA_LEN = lib.HOST_CPU_ISA_LEN;
+pub const BUILD_DESC_LEN = lib.BUILD_DESC_LEN;
+pub const HypervisorFeature = lib.HypervisorFeature;
+pub const HypervisorInfo = lib.HypervisorInfo;
+pub const EventType = lib.EventType;
+pub const Event = lib.Event;
+pub const DiosixEvent = lib.DiosixEvent;
+pub const WAIT_EVENT_FLAG_NOHANG = lib.WAIT_EVENT_FLAG_NOHANG;
+pub const WaitEventArgs = lib.WaitEventArgs;
+pub const SbiResult = lib.SbiResult;
+pub const GuestInfo = lib.GuestInfo;
+pub const RunFlags = lib.RunFlags;
+pub const SpawnFlags = lib.SpawnFlags;
+pub const RunArgs = lib.RunArgs;
+pub const TerminateArgs = lib.TerminateArgs;
+pub const QuotaArgs = lib.QuotaArgs;
+pub const ManifestArgs = lib.ManifestArgs;
+pub const ConsoleArgs = lib.ConsoleArgs;
+pub const MAX_CONSOLE_IO_BYTES = lib.MAX_CONSOLE_IO_BYTES;
+pub const MapChildMemArgs = lib.MapChildMemArgs;
+pub const UnmapChildMemArgs = lib.UnmapChildMemArgs;
+pub const StartArgs = lib.StartArgs;
+pub const CharterArgs = lib.CharterArgs;
+pub const MISSION_PUBKEY_LEN = lib.MISSION_PUBKEY_LEN;
+pub const MISSION_SIG_LEN = lib.MISSION_SIG_LEN;
+pub const MISSION_SIGN_DOMAIN = lib.MISSION_SIGN_DOMAIN;
+pub const MISSION_SIGN_MSG_LEN = lib.MISSION_SIGN_MSG_LEN;
+pub const MissionFlags = lib.MissionFlags;
+pub const MissionArgs = lib.MissionArgs;
+pub const MissionVoteDecision = lib.MissionVoteDecision;
+pub const MissionVoteArgs = lib.MissionVoteArgs;
+pub const buildMissionSignMessage = lib.buildMissionSignMessage;
+pub const NetPolicyFlags = lib.NetPolicyFlags;
+pub const NetPolicyArgs = lib.NetPolicyArgs;
 
-pub const TargetArch = interface.TargetArch;
-pub const DIOSIX_FUNC = interface.DIOSIX;
-pub const BUILD_COMMIT_LEN = interface.BUILD_COMMIT_LEN;
-pub const HOST_CPU_ISA_LEN = interface.HOST_CPU_ISA_LEN;
-pub const BUILD_DESC_LEN = interface.BUILD_DESC_LEN;
-pub const HypervisorFeature = interface.HypervisorFeature;
-pub const HypervisorInfo = interface.HypervisorInfo;
-pub const EventType = interface.EventType;
-pub const Event = interface.Event;
-pub const DiosixEvent = interface.Event;
-pub const WaitEventArgs = interface.WaitEventArgs;
-pub const SbiResult = interface.Result;
-pub const GuestInfo = interface.GuestInfo;
-pub const RunFlags = interface.RunFlags;
-pub const SpawnFlags = interface.RunFlags;
-pub const RunArgs = interface.RunArgs;
-pub const TerminateArgs = interface.TerminateArgs;
-pub const QuotaArgs = interface.QuotaArgs;
-pub const ManifestArgs = interface.ManifestArgs;
-pub const ConsoleArgs = interface.ConsoleArgs;
-pub const MAX_CONSOLE_IO_BYTES = interface.MAX_CONSOLE_IO_BYTES;
-pub const MapChildMemArgs = interface.MapChildMemArgs;
-pub const UnmapChildMemArgs = interface.UnmapChildMemArgs;
-pub const StartArgs = interface.StartArgs;
-pub const CharterArgs = interface.CharterArgs;
-pub const MISSION_PUBKEY_LEN = interface.MISSION_PUBKEY_LEN;
-pub const MISSION_SIG_LEN = interface.MISSION_SIG_LEN;
-pub const MISSION_SIGN_DOMAIN = interface.MISSION_SIGN_DOMAIN;
-pub const MISSION_SIGN_MSG_LEN = interface.MISSION_SIGN_MSG_LEN;
-pub const MissionFlags = interface.MissionFlags;
-pub const MissionArgs = interface.MissionArgs;
-pub const MissionVoteDecision = interface.MissionVoteDecision;
-pub const MissionVoteArgs = interface.MissionVoteArgs;
-pub const buildMissionSignMessage = interface.buildMissionSignMessage;
-pub const NetPolicyFlags = interface.NetPolicyFlags;
-pub const NetPolicyArgs = interface.NetPolicyArgs;
+pub const IOCTL_BASE = lib.IOCTL_BASE;
+pub const IOCTL_DROP_TRUST = lib.IOCTL_DROP_TRUST;
+pub const IOCTL_RUN = lib.IOCTL_RUN;
+pub const IOCTL_SPAWN = lib.IOCTL_SPAWN;
+pub const IOCTL_GET_INFO = lib.IOCTL_GET_INFO;
+pub const IOCTL_SET_QUOTA = lib.IOCTL_SET_QUOTA;
+pub const IOCTL_TERMINATE = lib.IOCTL_TERMINATE;
+pub const IOCTL_EXIT = lib.IOCTL_EXIT;
+pub const IOCTL_KILL = lib.IOCTL_KILL;
+pub const IOCTL_YIELD = lib.IOCTL_YIELD;
+pub const IOCTL_WAIT_EVENT = lib.IOCTL_WAIT_EVENT;
+pub const IOCTL_GET_HV_INFO = lib.IOCTL_GET_HV_INFO;
+pub const IOCTL_GET_MANIFEST = lib.IOCTL_GET_MANIFEST;
+pub const IOCTL_SET_MANIFEST = lib.IOCTL_SET_MANIFEST;
+pub const IOCTL_MAP_CHILD_MEM = lib.IOCTL_MAP_CHILD_MEM;
+pub const IOCTL_UNMAP_CHILD_MEM = lib.IOCTL_UNMAP_CHILD_MEM;
+pub const IOCTL_START = lib.IOCTL_START;
+pub const IOCTL_SEAL_CHARTER = lib.IOCTL_SEAL_CHARTER;
+pub const IOCTL_GET_CHARTER = lib.IOCTL_GET_CHARTER;
+pub const IOCTL_RATIFY_CHARTER = lib.IOCTL_RATIFY_CHARTER;
+pub const IOCTL_RESET_STEWARD = lib.IOCTL_RESET_STEWARD;
+pub const IOCTL_REQUEST_ROOT_FAILOVER = lib.IOCTL_REQUEST_ROOT_FAILOVER;
+pub const IOCTL_CONSOLE_WRITE = lib.IOCTL_CONSOLE_WRITE;
+pub const IOCTL_CONSOLE_READ = lib.IOCTL_CONSOLE_READ;
+pub const IOCTL_SET_NET_POLICY = lib.IOCTL_SET_NET_POLICY;
+pub const IOCTL_WHISPER_SEND = lib.IOCTL_WHISPER_SEND;
+pub const IOCTL_WHISPER_RECV = lib.IOCTL_WHISPER_RECV;
+pub const IOCTL_SEAL_MISSION = lib.IOCTL_SEAL_MISSION;
+pub const IOCTL_GET_MISSION = lib.IOCTL_GET_MISSION;
+pub const IOCTL_VOTE_MISSION = lib.IOCTL_VOTE_MISSION;
 
-// IOCTL command definitions for /dev/diosix.
-pub const IOCTL_BASE: u32 = 0x1000;
-pub const IOCTL_DROP_TRUST: u32 = IOCTL_BASE + 2;
-pub const IOCTL_RUN: u32 = IOCTL_BASE + 3;
-pub const IOCTL_SPAWN: u32 = IOCTL_RUN;
-pub const IOCTL_GET_INFO: u32 = IOCTL_BASE + 4;
-pub const IOCTL_SET_QUOTA: u32 = IOCTL_BASE + 5;
-pub const IOCTL_TERMINATE: u32 = IOCTL_BASE + 6;
-pub const IOCTL_EXIT: u32 = IOCTL_TERMINATE;
-pub const IOCTL_KILL: u32 = IOCTL_TERMINATE;
-pub const IOCTL_YIELD: u32 = IOCTL_BASE + 7;
-pub const IOCTL_WAIT_EVENT: u32 = IOCTL_BASE + 8;
-pub const IOCTL_GET_HV_INFO: u32 = IOCTL_BASE + 11;
-pub const IOCTL_GET_MANIFEST: u32 = IOCTL_BASE + 12;
-pub const IOCTL_SET_MANIFEST: u32 = IOCTL_BASE + 13;
-pub const IOCTL_MAP_CHILD_MEM: u32 = IOCTL_BASE + 14;
-pub const IOCTL_UNMAP_CHILD_MEM: u32 = IOCTL_BASE + 15;
-pub const IOCTL_START: u32 = IOCTL_BASE + 16;
-pub const IOCTL_SEAL_CHARTER: u32 = IOCTL_BASE + 17;
-pub const IOCTL_GET_CHARTER: u32 = IOCTL_BASE + 18;
-pub const IOCTL_RATIFY_CHARTER: u32 = IOCTL_BASE + 19;
-pub const IOCTL_RESET_STEWARD: u32 = IOCTL_BASE + 20;
-pub const IOCTL_REQUEST_ROOT_FAILOVER: u32 = IOCTL_BASE + 21;
-pub const IOCTL_CONSOLE_WRITE: u32 = IOCTL_BASE + 22;
-pub const IOCTL_CONSOLE_READ: u32 = IOCTL_BASE + 23;
-pub const IOCTL_SET_NET_POLICY: u32 = IOCTL_BASE + 24;
-pub const IOCTL_WHISPER_SEND: u32 = IOCTL_BASE + 25;
-pub const IOCTL_WHISPER_RECV: u32 = IOCTL_BASE + 26;
-pub const IOCTL_SEAL_MISSION: u32 = IOCTL_BASE + 30;
-pub const IOCTL_GET_MISSION: u32 = IOCTL_BASE + 31;
-pub const IOCTL_VOTE_MISSION: u32 = IOCTL_BASE + 32;
+pub const checkIoctlRc = lib.checkIoctlRc;
+pub const DiosixClient = lib.DiosixClient;
 
-const EPERM_NEG: isize = -@as(isize, @backingInt(linux.E.PERM));
-const EACCES_NEG: isize = -@as(isize, @backingInt(linux.E.ACCES));
-const EAGAIN_NEG: isize = -@as(isize, @backingInt(linux.E.AGAIN));
-const EOPNOTSUPP_NEG: isize = -@as(isize, @backingInt(linux.E.OPNOTSUPP));
-
-pub fn checkIoctlRc(rc: usize) !isize {
-    const signed_rc: isize = @bitCast(rc);
-    if (signed_rc == EPERM_NEG or signed_rc == EACCES_NEG) {
-        return error.PermissionDenied;
-    }
-    if (signed_rc == EOPNOTSUPP_NEG) {
-        return error.NotSupported;
-    }
-    if (signed_rc < 0) return error.HypercallFailed;
-    return signed_rc;
-}
-
-pub const DiosixClient = struct {
-    dev_fd: ?i32,
-    open_err: ?isize,
-
-    pub fn init() DiosixClient {
-        const path = sysconfig.DEFAULT_DEVICE_PATH;
-        const rc = linux.open(path, .{ .ACCMODE = .RDWR }, 0);
-        const signed_rc: isize = @bitCast(rc);
-        if (signed_rc >= 0) {
-            return .{ .dev_fd = @intCast(signed_rc), .open_err = null };
-        }
-        return .{ .dev_fd = null, .open_err = signed_rc };
-    }
-
-    pub fn deinit(self: *DiosixClient) void {
-        if (self.dev_fd) |fd| {
-            _ = linux.close(fd);
-            self.dev_fd = null;
-        }
-    }
-
-    pub fn getFd(self: *DiosixClient) !i32 {
-        if (self.dev_fd) |fd| return fd;
-        if (self.open_err) |err| {
-            if (err == EPERM_NEG or err == EACCES_NEG) {
-                return error.PermissionDenied;
-            }
-        }
-        return error.DeviceNotFound;
-    }
-
-    pub fn dropTrust(self: *DiosixClient) !void {
-        const fd = try self.getFd();
-        _ = try checkIoctlRc(linux.ioctl(fd, IOCTL_DROP_TRUST, 0));
-    }
-
-    pub fn getInfo(self: *DiosixClient, target_cid: usize) !GuestInfo {
-        const fd = try self.getFd();
-        var info: GuestInfo = undefined;
-        @memset(std.mem.asBytes(&info), 0);
-        info.guest_id = target_cid;
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_GET_INFO, @intFromPtr(&info)),
-        );
-        return info;
-    }
-
-    pub fn run(
-        self: *DiosixClient,
-        child_id: usize,
-        elf_data: []const u8,
-        dtb_data: []const u8,
-        arch: usize,
-        flags: usize,
-    ) !usize {
-        const fd = try self.getFd();
-        var args = RunArgs{
-            .child_id = child_id,
-            .elf_ptr = @intFromPtr(elf_data.ptr),
-            .elf_size = elf_data.len,
-            .dtb_ptr = if (dtb_data.len > 0) @intFromPtr(dtb_data.ptr) else 0,
-            .dtb_size = dtb_data.len,
-            .target_arch = arch,
-            .flags = flags,
-        };
-        const signed_rc = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_RUN, @intFromPtr(&args)),
-        );
-        return if (args.child_id > 0)
-            @intCast(args.child_id)
-        else
-            @intCast(signed_rc);
-    }
-
-    pub fn terminate(
-        self: *DiosixClient,
-        target_id: usize,
-        exit_code: usize,
-    ) !void {
-        const fd = try self.getFd();
-        var args = TerminateArgs{
-            .target_id = target_id,
-            .exit_code = exit_code,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_TERMINATE, @intFromPtr(&args)),
-        );
-    }
-
-    pub fn setQuotaWithPcpu(
-        self: *DiosixClient,
-        target_cid: usize,
-        ram_pages: usize,
-        vcpus: usize,
-        depth: u64,
-        descendants: u64,
-        pcpu_quota_pct: usize,
-        logical_ram_pages: usize,
-    ) !void {
-        const fd = try self.getFd();
-        var args = QuotaArgs{
-            .target_cid = target_cid,
-            .max_ram_pages = ram_pages,
-            .max_vcpus = vcpus,
-            .max_child_depth = depth,
-            .max_descendants = descendants,
-            .pcpu_quota_pct = pcpu_quota_pct,
-            .logical_ram_pages = logical_ram_pages,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_SET_QUOTA, @intFromPtr(&args)),
-        );
-    }
-
-    pub fn getHypervisorInfo(self: *DiosixClient) !HypervisorInfo {
-        const fd = try self.getFd();
-        var info = std.mem.zeroes(HypervisorInfo);
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_GET_HV_INFO, @intFromPtr(&info)),
-        );
-        return info;
-    }
-
-    pub fn getManifest(
-        self: *DiosixClient,
-        target_cid: usize,
-        buffer: []u8,
-    ) !usize {
-        const fd = try self.getFd();
-        var args = ManifestArgs{
-            .target_cid = target_cid,
-            .data_ptr = @intFromPtr(buffer.ptr),
-            .max_len = buffer.len,
-            .actual_len = 0,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_GET_MANIFEST, @intFromPtr(&args)),
-        );
-        return @min(@as(usize, @intCast(args.actual_len)), buffer.len);
-    }
-
-    pub fn setManifest(
-        self: *DiosixClient,
-        target_cid: usize,
-        data: []const u8,
-    ) !void {
-        const fd = try self.getFd();
-        var args = ManifestArgs{
-            .target_cid = target_cid,
-            .data_ptr = @intFromPtr(data.ptr),
-            .max_len = data.len,
-            .actual_len = 0,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_SET_MANIFEST, @intFromPtr(&args)),
-        );
-    }
-
-    pub fn mapChildMemory(
-        self: *DiosixClient,
-        target_cid: usize,
-        child_gpa: usize,
-        parent_gpa: usize,
-        size: usize,
-        flags: usize,
-    ) ![]u8 {
-        const fd = try self.getFd();
-        var args = MapChildMemArgs{
-            .child_id = target_cid,
-            .child_gpa = child_gpa,
-            .parent_gpa = parent_gpa,
-            .size = size,
-            .flags = flags,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_MAP_CHILD_MEM, @intFromPtr(&args)),
-        );
-
-        const mmap_res = linux.mmap(
-            null,
-            size,
-            .{ .READ = true, .WRITE = true },
-            .{ .TYPE = .SHARED },
-            fd,
-            @intCast(args.parent_gpa),
-        );
-        const mmap_signed: isize = @bitCast(mmap_res);
-        if (mmap_signed < 0) {
-            var unmap_args = UnmapChildMemArgs{
-                .parent_gpa = args.parent_gpa,
-                .size = size,
-            };
-            _ = linux.ioctl(
-                fd,
-                IOCTL_UNMAP_CHILD_MEM,
-                @intFromPtr(&unmap_args),
-            );
-            return error.OutOfMemory;
-        }
-        const ptr: [*]u8 = @ptrFromInt(mmap_res);
-        return ptr[0..size];
-    }
-
-    pub fn unmapChildMemory(
-        self: *DiosixClient,
-        mapped_slice: []u8,
-        parent_gpa: usize,
-    ) !void {
-        _ = linux.munmap(mapped_slice.ptr, mapped_slice.len);
-        const fd = try self.getFd();
-        var args = UnmapChildMemArgs{
-            .parent_gpa = parent_gpa,
-            .size = mapped_slice.len,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_UNMAP_CHILD_MEM, @intFromPtr(&args)),
-        );
-    }
-
-    pub fn startGuest(
-        self: *DiosixClient,
-        target_cid: usize,
-        entry_point: usize,
-        dtb_ptr: usize,
-    ) !usize {
-        const fd = try self.getFd();
-        var args = StartArgs{
-            .child_id = target_cid,
-            .entry_point = entry_point,
-            .dtb_ptr = dtb_ptr,
-        };
-        const signed_rc = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_START, @intFromPtr(&args)),
-        );
-        return @intCast(signed_rc);
-    }
-
-    pub const sealCharter = gov.sealCharter;
-    pub const getCharter = gov.getCharter;
-    pub const sealMission = gov.sealMission;
-    pub const getMission = gov.getMission;
-    pub const voteMission = gov.voteMission;
-    pub const ratifyCharter = gov.ratifyCharter;
-    pub const resetSteward = gov.resetSteward;
-    pub const requestRootFailover = gov.requestRootFailover;
-
-    pub fn consoleRead(
-        self: *DiosixClient,
-        target_cid: usize,
-        buffer: []u8,
-    ) !usize {
-        const fd = try self.getFd();
-        const req_len: usize = @min(buffer.len, MAX_CONSOLE_IO_BYTES);
-        var args = ConsoleArgs{
-            .target_cid = target_cid,
-            .data_ptr = if (req_len > 0) @intFromPtr(buffer.ptr) else 0,
-            .max_len = req_len,
-            .actual_len = 0,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_CONSOLE_READ, @intFromPtr(&args)),
-        );
-        return @min(@as(usize, @intCast(args.actual_len)), req_len);
-    }
-
-    pub fn consoleWrite(
-        self: *DiosixClient,
-        target_cid: usize,
-        data: []const u8,
-    ) !usize {
-        if (data.len == 0) return 0;
-        const fd = try self.getFd();
-        const req_len: usize = @min(data.len, MAX_CONSOLE_IO_BYTES);
-        var args = ConsoleArgs{
-            .target_cid = target_cid,
-            .data_ptr = @intFromPtr(data.ptr),
-            .max_len = req_len,
-            .actual_len = 0,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_CONSOLE_WRITE, @intFromPtr(&args)),
-        );
-        return @min(@as(usize, @intCast(args.actual_len)), req_len);
-    }
-
-    pub fn setNetPolicy(
-        self: *DiosixClient,
-        target_cid: usize,
-        flags: u64,
-        upstream_cid: usize,
-    ) !void {
-        const fd = try self.getFd();
-        var args = NetPolicyArgs{
-            .target_cid = target_cid,
-            .flags = flags,
-            .upstream_cid = upstream_cid,
-        };
-        _ = try checkIoctlRc(
-            linux.ioctl(fd, IOCTL_SET_NET_POLICY, @intFromPtr(&args)),
-        );
-    }
-
-    pub const whisperSend = gov.whisperSend;
-    pub const whisperRecv = gov.whisperRecv;
-};
-
-test "api: DiosixClient error mapping and checkIoctlRc" {
-    _ = gov;
+test "api: re-exports libdiosix client and ABI" {
     std.testing.refAllDecls(@This());
-
-    var missing_client = DiosixClient{ .dev_fd = null, .open_err = -2 };
-    try std.testing.expectError(
-        error.DeviceNotFound,
-        missing_client.dropTrust(),
-    );
-
-    var denied_client = DiosixClient{
-        .dev_fd = null,
-        .open_err = EPERM_NEG,
-    };
-    try std.testing.expectError(
-        error.PermissionDenied,
-        denied_client.dropTrust(),
-    );
+    try std.testing.expectEqual(@as(u32, 0x101e), IOCTL_SEAL_MISSION);
 }
