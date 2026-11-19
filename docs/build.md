@@ -74,6 +74,7 @@ Zig:
 | `./scripts/build.sh features` | Verifies the feature graph and Markdown links and regenerates `docs/support-matrix.md`. |
 | `./scripts/build.sh test-integration` | Builds the system and runs the live 4-hart QEMU integration suite. |
 | `./scripts/build.sh run` | Builds and boots Diosix headless with serial console and SSH forwarded on host port `2222`. |
+| `./scripts/build.sh run-personal` | Builds and boots **Diosix Personal** headless with serial console, storage volume, and SSH forwarded on host port `2222`. |
 | `./scripts/build.sh run-cli` | Builds and boots straight into an interactive CLI RISC-V guest VM over the serial console. |
 | `./scripts/build.sh run-tpm` | Builds and boots Diosix headless in QEMU with an emulated trusted platform module (TPM) 2.0. |
 | `./scripts/build.sh live-image` | Builds the 640 MiB hybrid GPT live disk image, flat M-mode binary, U-Boot image source, and `zig-out/run-qemu.sh`. |

@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const passthrough = @import("../passthrough.zig");
 const vcore = @import("../vcore.zig");
 const physmem = @import("../physmem.zig");
 const pcore = @import("../pcore.zig");
@@ -302,6 +303,7 @@ pub fn terminateWithCode(self: *guest_mod.Guest, exit_code: usize) void {
     }
 
     self.stop();
+    passthrough.releaseAllForGuest(self);
     self.space.deinit();
     pcore.broadcastIpi();
 

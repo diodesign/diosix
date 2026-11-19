@@ -249,4 +249,5 @@ test {
     _ = fdt;
     _ = @import("hardware/native/drivers/clint.zig");
     _ = @import("hardware/emulation/arch/riscv32/mod.zig");
+    _ = @import("core/passthrough.zig");
 }

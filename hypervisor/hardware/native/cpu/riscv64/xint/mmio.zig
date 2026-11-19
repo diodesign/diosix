@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const passthrough = @import("../../../../../core/passthrough.zig");
 const riscv = @import("../mod.zig");
 const xint = @import("../xint.zig");
 const csr_emu = @import("csr.zig");
@@ -353,6 +354,7 @@ pub fn emulateStage2MmioFault(
             },
             else => return false,
         }
+        passthrough.maybeNotifyGuestPlicWrite(g, gpa32, @truncate(val));
     }
 
     syncVirtualIrqs(vc, g);

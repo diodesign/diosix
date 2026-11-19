@@ -23,6 +23,7 @@ pub const pkg = @import("pkg.zig");
 pub const board = @import("board.zig");
 pub const agent = @import("agent.zig");
 pub const swarm = @import("swarm.zig");
+pub const personal = @import("personal.zig");
 const main_tests = @import("tests/main.zig");
 
 pub const CID_PARENT = common.CID_PARENT;
@@ -84,6 +85,7 @@ pub const Command = enum {
     board,
     agent,
     swarm,
+    personal,
     quota,
     @"drop-trust",
     poweroff,
@@ -162,6 +164,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             .board => try board.cmdBoard(&client, argv[2..]),
             .agent => try agent.cmdAgent(&client, argv[2..]),
             .swarm => try swarm.cmdSwarm(&client, argv[2..]),
+            .personal => try personal.cmdPersonal(&client, argv[2..]),
             .quota => {
                 var target_cid: usize = 1;
                 if (argv.len >= 3 and
@@ -232,6 +235,12 @@ pub fn formatUsage(
         \\      [--domain <name>]                Extract domain from manifest
         \\      [--packages <*|none|pkg1,pkg2>]  Restrict child APK packages
         \\      [--trusted]                      Grant hardware trust
+        \\      [--dma-trusted]                  Allow writable DMA passthrough
+        \\      [--mmio <hpa:size[:ro]>]         Map MMIO window to child
+        \\      [--irq <phys[:virt]>]            Delegate PLIC IRQ to child
+        \\      [--keep-fdt <prefix>]            Preserve host DTB node prefix
+        \\  {s} personal <status|start|stop|switch|configure>
+        \\                                       Manage Personal desktop VMs
         \\  {s} install-guest <os|iso> [options] Provision disk & boot ISO
         \\      [--name <name>]                  Assign VM name
         \\      [--disk <name>]                  Target virtual disk name
@@ -321,7 +330,7 @@ pub fn formatUsage(
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
         exe_name, exe_name, exe_name, exe_name, exe_name,
-        exe_name, exe_name, exe_name, exe_name,
+        exe_name, exe_name, exe_name, exe_name, exe_name,
     });
 }
 

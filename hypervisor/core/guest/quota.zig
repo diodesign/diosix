@@ -171,6 +171,17 @@ fn applyQuotaToTarget(
             if ((!started or grown) and req_ram > avail) {
                 return error.AccessDenied;
             }
+            if (target.is_dma_trusted and started and
+                req_ram != target.quotas.committed_ram_pages)
+            {
+                return error.AccessDenied;
+            }
+        }
+        if (target.is_dma_trusted and !started and
+            args.logical_ram_pages > 0 and args.max_ram_pages > 0 and
+            args.logical_ram_pages > args.max_ram_pages)
+        {
+            return error.AccessDenied;
         }
         if (target.space.mode == .pmp_fallback and !started) {
             const log_p: usize = if (args.logical_ram_pages > 0)
@@ -187,7 +198,9 @@ fn applyQuotaToTarget(
         }
     }
 
-    if (!target.hasAnyVcoreStarted() and args.logical_ram_pages > 0) {
+    if (!target.is_dma_trusted and !target.hasAnyVcoreStarted() and
+        args.logical_ram_pages > 0)
+    {
         const log_bytes = std.math.mul(
             usize,
             @intCast(args.logical_ram_pages),
@@ -216,13 +229,46 @@ fn applyQuotaToTarget(
                 target.space.setRangeSize(max_bytes);
             }
         } else {
+            if (target.is_dma_trusted and !target.hasAnyVcoreStarted() and
+                target.space.mode == .h_paging)
+            {
+                if (target.space.is_ram_allocated and
+                    target.space.allocated_pages != req_ram)
+                {
+                    target.releaseQuota(target.space.allocated_pages, 0);
+                    target.space.releaseIdentityRam();
+                }
+                if (!target.space.is_ram_allocated) {
+                    const hpa_base = physmem.allocContiguousPages(
+                        req_ram,
+                    ) catch return error.OutOfMemory;
+                    target.space.configureIdentityRam(
+                        hpa_base,
+                        req_ram,
+                    ) catch |err| {
+                        for (0..req_ram) |i| {
+                            physmem.decrementPageRef(
+                                hpa_base + (i * physmem.PageSize),
+                            );
+                        }
+                        return if (err == error.OutOfMemory)
+                            error.OutOfMemory
+                        else
+                            error.InvalidParam;
+                    };
+                    target.consumeQuota(req_ram, 0);
+                }
+            }
+
             const old_com = target.quotas.committed_ram_pages;
             ceil.quotas.delegated_ram_pages =
                 (ceil.quotas.delegated_ram_pages -| old_com) +| req_ram;
             target.quotas.committed_ram_pages = req_ram;
             target.quotas.max_ram_pages = req_ram;
 
-            if (!target.hasAnyVcoreStarted() and args.logical_ram_pages == 0) {
+            if (!target.is_dma_trusted and !target.hasAnyVcoreStarted() and
+                args.logical_ram_pages == 0)
+            {
                 const max_bytes = std.math.mul(
                     usize,
                     req_ram,

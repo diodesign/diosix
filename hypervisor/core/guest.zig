@@ -8,6 +8,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const passthrough = @import("passthrough.zig");
 const builtin = @import("builtin");
 const atomic = @import("atomic.zig");
 const vcore = @import("vcore.zig");
@@ -75,6 +76,7 @@ pub const Guest = struct {
     state: GuestState,
     is_trusted: bool,
     has_host_passthrough: bool = false,
+    is_dma_trusted: bool = false,
     is_steward: bool = false,
     is_standby_root: bool = false,
     is_confidential: bool = false,
@@ -312,6 +314,7 @@ pub const Guest = struct {
         self.vcore_dynamic_buckets = @splat(null);
         self.child_static_handles = @splat(null);
         self.child_dynamic_buckets = @splat(null);
+        passthrough.releaseAllForGuest(self);
         self.space.deinit();
 
         var it_child = self.children.start;

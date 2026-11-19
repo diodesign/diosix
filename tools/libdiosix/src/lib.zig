@@ -7,6 +7,7 @@ const std = @import("std");
 const linux = std.os.linux;
 const interface = @import("interface").sbi;
 const gov = @import("governance.zig");
+const pt = @import("passthrough.zig");
 
 pub const DEFAULT_DEVICE_PATH: [*:0]const u8 = "/dev/diosix";
 
@@ -60,6 +61,12 @@ pub const MissionVoteArgs = interface.MissionVoteArgs;
 pub const buildMissionSignMessage = interface.buildMissionSignMessage;
 pub const NetPolicyFlags = interface.NetPolicyFlags;
 pub const NetPolicyArgs = interface.NetPolicyArgs;
+pub const MAX_CHILD_MMIO_SIZE_BYTES = interface.MAX_CHILD_MMIO_SIZE_BYTES;
+pub const MmioPassFlags = interface.MmioPassFlags;
+pub const MapChildMmioArgs = interface.MapChildMmioArgs;
+pub const IrqPassFlags = interface.IrqPassFlags;
+pub const DelegateChildIrqArgs = interface.DelegateChildIrqArgs;
+pub const ChildRamRange = pt.ChildRamRange;
 
 // IOCTL command definitions for /dev/diosix.
 pub const IOCTL_BASE: u32 = 0x1000;
@@ -92,6 +99,8 @@ pub const IOCTL_WHISPER_RECV: u32 = IOCTL_BASE + 26;
 pub const IOCTL_SEAL_MISSION: u32 = IOCTL_BASE + 30;
 pub const IOCTL_GET_MISSION: u32 = IOCTL_BASE + 31;
 pub const IOCTL_VOTE_MISSION: u32 = IOCTL_BASE + 32;
+pub const IOCTL_MAP_CHILD_MMIO: u32 = IOCTL_BASE + 33;
+pub const IOCTL_DELEGATE_CHILD_IRQ: u32 = IOCTL_BASE + 34;
 
 const EPERM_NEG: isize = -@as(isize, @backingInt(linux.E.PERM));
 const EACCES_NEG: isize = -@as(isize, @backingInt(linux.E.ACCES));
@@ -441,10 +450,14 @@ pub const DiosixClient = struct {
 
     pub const whisperSend = gov.whisperSend;
     pub const whisperRecv = gov.whisperRecv;
+    pub const mapChildMmio = pt.mapChildMmio;
+    pub const queryChildRam = pt.queryChildRam;
+    pub const delegateChildIrq = pt.delegateChildIrq;
 };
 
 test "api: DiosixClient error mapping and checkIoctlRc" {
     _ = gov;
+    _ = pt;
     std.testing.refAllDecls(@This());
 
     var missing_client = DiosixClient{ .dev_fd = null, .open_err = -2 };

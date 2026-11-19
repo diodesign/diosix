@@ -54,6 +54,12 @@ pub const MissionVoteArgs = lib.MissionVoteArgs;
 pub const buildMissionSignMessage = lib.buildMissionSignMessage;
 pub const NetPolicyFlags = lib.NetPolicyFlags;
 pub const NetPolicyArgs = lib.NetPolicyArgs;
+pub const MAX_CHILD_MMIO_SIZE_BYTES = lib.MAX_CHILD_MMIO_SIZE_BYTES;
+pub const MmioPassFlags = lib.MmioPassFlags;
+pub const MapChildMmioArgs = lib.MapChildMmioArgs;
+pub const IrqPassFlags = lib.IrqPassFlags;
+pub const DelegateChildIrqArgs = lib.DelegateChildIrqArgs;
+pub const ChildRamRange = lib.ChildRamRange;
 
 pub const IOCTL_BASE = lib.IOCTL_BASE;
 pub const IOCTL_DROP_TRUST = lib.IOCTL_DROP_TRUST;
@@ -85,6 +91,8 @@ pub const IOCTL_WHISPER_RECV = lib.IOCTL_WHISPER_RECV;
 pub const IOCTL_SEAL_MISSION = lib.IOCTL_SEAL_MISSION;
 pub const IOCTL_GET_MISSION = lib.IOCTL_GET_MISSION;
 pub const IOCTL_VOTE_MISSION = lib.IOCTL_VOTE_MISSION;
+pub const IOCTL_MAP_CHILD_MMIO = lib.IOCTL_MAP_CHILD_MMIO;
+pub const IOCTL_DELEGATE_CHILD_IRQ = lib.IOCTL_DELEGATE_CHILD_IRQ;
 
 pub const checkIoctlRc = lib.checkIoctlRc;
 pub const DiosixClient = lib.DiosixClient;

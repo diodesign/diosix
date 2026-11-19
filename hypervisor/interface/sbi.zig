@@ -5,6 +5,7 @@
 
 const std = @import("std");
 pub const governance = @import("sbi/governance.zig");
+pub const passthrough = @import("sbi/passthrough.zig");
 
 pub const SPEC_VERSION: usize = 0x02000000; // Specification v2.0.
 
@@ -88,6 +89,8 @@ pub const DIOSIX = struct {
     pub const GPU_MAP_SCANOUT = 30;
     pub const SEAL_MISSION = 31;
     pub const VOTE_MISSION = 32;
+    pub const MAP_CHILD_MMIO = 33;
+    pub const DELEGATE_CHILD_IRQ = 34;
 };
 
 pub const CID_PARENT: u64 = 0;
@@ -189,6 +192,7 @@ pub const RunFlags = struct {
     pub const NET_ISOLATED: u64 = 1 << 4;
     pub const DELEGATE_STAKE: u64 = 1 << 5;
     pub const LEAF_NO_CHILDREN: u64 = 1 << 6;
+    pub const DMA_TRUSTED: u64 = 1 << 7;
     pub const NET_UPSTREAM_SHIFT: u6 = 16;
     pub const NET_UPSTREAM_MASK: u64 = 0xffff;
 };
@@ -216,6 +220,12 @@ pub const MissionArgs = governance.MissionArgs;
 pub const MissionVoteDecision = governance.MissionVoteDecision;
 pub const MissionVoteArgs = governance.MissionVoteArgs;
 pub const buildMissionSignMessage = governance.buildMissionSignMessage;
+pub const MAX_CHILD_MMIO_SIZE_BYTES = passthrough.MAX_CHILD_MMIO_SIZE_BYTES;
+pub const MAX_DELEGATED_IRQS = passthrough.MAX_DELEGATED_IRQS;
+pub const MmioPassFlags = passthrough.MmioPassFlags;
+pub const MapChildMmioArgs = passthrough.MapChildMmioArgs;
+pub const IrqPassFlags = passthrough.IrqPassFlags;
+pub const DelegateChildIrqArgs = passthrough.DelegateChildIrqArgs;
 
 pub const RunArgs = extern struct {
     child_id: u64,
@@ -412,6 +422,7 @@ comptime {
 
 test "SBI interface structures and extension IDs" {
     _ = governance;
+    _ = passthrough;
     std.testing.refAllDecls(@This());
     const testing = std.testing;
 
@@ -448,6 +459,9 @@ test "SBI interface structures and extension IDs" {
     try testing.expectEqual(@as(usize, 19), DIOSIX.SEAL_CHARTER);
     try testing.expectEqual(@as(usize, 24), DIOSIX.REQUEST_ROOT_FAILOVER);
     try testing.expectEqual(@as(usize, 30), DIOSIX.GPU_MAP_SCANOUT);
+    try testing.expectEqual(@as(usize, 33), DIOSIX.MAP_CHILD_MMIO);
+    try testing.expectEqual(@as(usize, 34), DIOSIX.DELEGATE_CHILD_IRQ);
+    try testing.expectEqual(@as(u64, 1 << 7), RunFlags.DMA_TRUSTED);
     try testing.expectEqual(@as(u64, 1 << 5), HypervisorFeature.RELEASE_STABLE);
     try testing.expectEqual(@as(u64, 1 << 6), HypervisorFeature.CHARTER_SEALED);
 }

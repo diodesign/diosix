@@ -114,6 +114,8 @@ for the optional `gui` branch and return `SBI_ERR_NOT_SUPPORTED` on mainline.
 | `GPU_MAP_SCANOUT` | `30` | Reserved for `gui` branch (returns `SBI_ERR_NOT_SUPPORTED`) |
 | `SEAL_MISSION` | `31` | Seal or amend Principal-signed Mission envelope (`MissionArgs`) |
 | `VOTE_MISSION` | `32` | Cast conserved RAM quota-stake vote (`MissionVoteArgs`) |
+| `MAP_CHILD_MMIO` | `33` | Map scoped host physical MMIO or query contiguous identity RAM |
+| `DELEGATE_CHILD_IRQ` | `34` | Delegate or release a physical PLIC IRQ to a child VM |
 
 ---
 
@@ -162,6 +164,9 @@ The `flags` bitmask in `struct run_args` accepts:
 * `RUN_FLAG_LEAF_NO_CHILDREN` (`1 << 6`): Marks the child as a leaf VM whose
   `max_descendants` and `max_child_depth` default to zero, blocking nested child
   creation.
+* `RUN_FLAG_DMA_TRUSTED` (`1 << 7`): Allocates contiguous identity-mapped
+  (`GPA == HPA`) child RAM so hardware DMA writes without an IOMMU target valid
+  guest physical memory cleanly.
 * `RUN_FLAG_NET_UPSTREAM_SHIFT` (`16`, mask `0xffff`): Optional sibling router
   CID (`>= 2`) through which the child's L2 network and vsock traffic flows.
 
@@ -314,6 +319,38 @@ M-mode ring buffers:
   RAM assigned to non-stake leaf or workload children remains in their parent's
   voting weight so plain workloads cannot dilute or hijack quorum. Updates
   running stake totals in the descriptor and returns `SBI_SUCCESS`.
+
+#### Device passthrough hypercalls
+Only callers holding physical hardware trust (`is_trusted` or
+`has_host_passthrough`) may invoke `MAP_CHILD_MMIO` or `DELEGATE_CHILD_IRQ` on
+direct `riscv64` H-paging child VMs (other callers receive `SBI_ERR_DENIED`).
+M-mode automatically unmaps delegated MMIO and releases delegated interrupt
+requests (IRQs) when a child VM exits or is terminated.
+* `MAP_CHILD_MMIO` (`FID 33`): Reads a 40-byte `MapChildMmioArgs` descriptor at
+  GPA `a0` and executes one of two modes based on `flags`:
+  * `MMIO_PASS_QUERY_RAM` (`1 << 2`): Writes the child's base GPA (`child_gpa`),
+    allocated RAM size (`size`), and HPA (`host_pa`, populated only when the
+    child holds `RUN_FLAG_DMA_TRUSTED` and committed RAM) back into the
+    descriptor.
+  * Device MMIO mapping: Maps `[host_pa, host_pa + size)` (page-aligned,
+    maximum 256 MiB) at `child_gpa` inside the child's stage-2 page table. When
+    `MMIO_PASS_READ_ONLY` (`1 << 0`) is clear and no hardware IOMMU is active,
+    M-mode requires both `RUN_FLAG_DMA_TRUSTED` on the child and
+    `MMIO_PASS_DMA_TRUSTED` (`1 << 1`) on the call. M-mode blocks mappings
+    overlapping hypervisor code or data, system RAM, root VM RAM, physical core
+    local interruptor (CLINT), platform-level interrupt controller (PLIC), UART,
+    test/poweroff device, or virtual child bus windows, and enforces exclusive
+    ownership across guests for writable regions.
+* `DELEGATE_CHILD_IRQ` (`FID 34`): Reads a 24-byte `DelegateChildIrqArgs`
+  descriptor at GPA `a0` (physical PLIC source `1..1023`, virtual PLIC source
+  `16..127` with `0` defaulting to `phys_irq`).
+  * Without `IRQ_PASS_RELEASE` (`1 << 0`), reserves `phys_irq` exclusively,
+    masks it in root S-mode PLIC contexts, enables it in M-mode, and routes
+    claimed M-mode interrupts to the child's virtual PLIC via `HVIP.VSEIP`,
+    completing physical PLIC end-of-interrupt (EOI) when the child writes EOI
+    to its virtual PLIC. Returns the assigned virtual IRQ in `a1`.
+  * With `IRQ_PASS_RELEASE` (`1 << 0`), disables M-mode routing and releases the
+    delegation entry.
 
 ---
 
@@ -548,6 +585,21 @@ struct input_event_args {
     uint32_t                _reserved;
     struct input_event_item events[32]; /* Batched evdev events */
 };
+
+struct map_child_mmio_args {
+    uint64_t child_id;  /* Target direct child CID (>= 2) */
+    uint64_t host_pa;   /* Host physical MMIO address or out HPA */
+    uint64_t child_gpa; /* Target child GPA or out RAM base GPA */
+    uint64_t size;      /* Region bytes (<= 256 MiB) or out RAM bytes */
+    uint64_t flags;     /* MmioPassFlags bitmask */
+};
+
+struct delegate_child_irq_args {
+    uint64_t child_id; /* Target direct child CID (>= 2) */
+    uint32_t phys_irq; /* Physical PLIC IRQ source (1..1023) */
+    uint32_t virt_irq; /* Virtual PLIC IRQ (16..127, 0 = match phys) */
+    uint64_t flags;    /* IrqPassFlags (bit 0 = RELEASE) */
+};
 ```
 
 ---
@@ -588,6 +640,8 @@ hypercalls:
 | `IOCTL_SEAL_MISSION` | `0x101e` | Verifies Ed25519 signature, anti-ransomware guards, and seals Mission (`SEAL_MISSION`) |
 | `IOCTL_GET_MISSION` | `0x101f` | Reads active M-mode Mission state and stake tally (`SEAL_MISSION`) |
 | `IOCTL_VOTE_MISSION` | `0x1020` | Casts caller VM's conserved RAM quota-stake vote (`VOTE_MISSION`) |
+| `IOCTL_MAP_CHILD_MMIO` | `0x1021` | Maps scoped host MMIO or queries child identity RAM (`MAP_CHILD_MMIO`) |
+| `IOCTL_DELEGATE_CHILD_IRQ` | `0x1022` | Delegates or releases a physical PLIC IRQ to a child (`DELEGATE_CHILD_IRQ`) |
 
 Legacy desktop scanout and input ioctls (`0x101b`–`0x101d`) remain reserved
 and return `-EOPNOTSUPP` on mainline Linux guest kernels.
@@ -607,7 +661,7 @@ Key C API functions:
 | :--- | :--- |
 | Context lifecycle | `diosix_open()`, `diosix_open_path()`, `diosix_open_status()`, `diosix_close()`, `diosix_fd()`, `diosix_strerror()` |
 | Telemetry and events | `diosix_get_hv_info()`, `diosix_get_guest_info()`, `diosix_wait_event()`, `diosix_yield()`, `diosix_drop_trust()` |
-| Child VM control | `diosix_run_guest()`, `diosix_start_guest()`, `diosix_terminate()`, `diosix_set_quota()`, `diosix_get_manifest()`, `diosix_set_manifest()`, `diosix_console_read()`, `diosix_console_write()`, `diosix_set_net_policy()`, `diosix_map_child_mem()`, `diosix_unmap_child_mem()` |
+| Child VM control | `diosix_run_guest()`, `diosix_start_guest()`, `diosix_terminate()`, `diosix_set_quota()`, `diosix_get_manifest()`, `diosix_set_manifest()`, `diosix_console_read()`, `diosix_console_write()`, `diosix_set_net_policy()`, `diosix_map_child_mem()`, `diosix_unmap_child_mem()`, `diosix_map_child_mmio()`, `diosix_query_child_ram()`, `diosix_delegate_child_irq()` |
 | Charter and missions | `diosix_seal_charter()`, `diosix_get_charter()`, `diosix_ratify_charter()`, `diosix_reset_steward()`, `diosix_request_root_failover()`, `diosix_seal_mission()`, `diosix_get_mission()`, `diosix_vote_mission()`, `diosix_whisper_send()`, `diosix_whisper_recv()` |
 
 See [`vm_info.c`](../tools/libdiosix/examples/vm_info.c) for a complete

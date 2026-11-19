@@ -38,6 +38,7 @@ pub const GuestBootExtras = struct {
     cmdline: ?[]const u8 = null,
     is_shim_boot: bool = false,
     ip_autoconfig: ?[]const u8 = null,
+    keep_fdt_prefixes: []const []const u8 = &.{},
 };
 
 pub fn isRiscvFlatImage(data: []const u8) bool {
@@ -288,7 +289,13 @@ pub fn finalizeChildBootState(
         );
         defer if (expanded) |exp| std.heap.page_allocator.free(exp);
         const cpu_dtb = expanded orelse dtb_data;
-        fdt_patch.patchChildDtb(cpu_dtb, base_gpa, @intCast(ram_bytes), vcpus);
+        fdt_patch.patchChildDtbWithExclusions(
+            cpu_dtb,
+            base_gpa,
+            @intCast(ram_bytes),
+            vcpus,
+            extras.keep_fdt_prefixes,
+        );
 
         var rsv_entries: [2]fdt_guest.MemReserveEntry = @splat(
             .{ .address = 0, .size = 0 },

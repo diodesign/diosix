@@ -111,12 +111,21 @@ dsx host <info [--json]|install [options]|reboot|poweroff|shutdown>
   partition, and writes `/var/lib/diosix/install.receipt`.
   * `--mode basic|expert`, `-m <mode>`: Selects the `basic` profile or the
     declarative `expert` profile from `/etc/diosix/install.toml`.
-  * `--disk <dev>`, `-d <dev>`: Target block device (defaults to `/dev/vda`;
-    accepts `/dev/*`, `/tmp/*`, or `/var/lib/diosix/*` without `..`).
+  * `--disk <dev>`, `--target <dev>`, `-d <dev>`: Target block device (defaults
+    to `/dev/vda`; accepts `/dev/*`, `/tmp/*`, or `/var/lib/diosix/*` without
+    `..`).
   * `--config <file.toml>`, `-c <file.toml>`: Declarative installation manifest
     (defaults to `/etc/diosix/install.toml` in expert mode).
   * `--hostname <name>`: Hostname recorded in the installation receipt (1 to 64
     RFC-1123 alphanumeric or hyphen characters).
+  * `--edition <core|swarm|personal>`: Persists the installed host edition in
+    `/var/lib/diosix/state/edition` (adopted on persistent boots).
+  * `--personal-image <path>`: Configures the desktop image path stored in
+    `/var/lib/diosix/etc/personal.toml` for Personal edition hosts.
+  * `--dma-trusted`: Enables `dma_trusted = true` direct memory access (DMA)
+    trust in the written Personal profile configuration.
+  * `--auto-start`: Enables `auto_start = true` so `S50diosix` starts the
+    configured desktop profile automatically on boot.
   * `--stewards`: Records steward VM enablement in the receipt.
   * `--standby-root`: Records standby root enablement in the receipt.
   * `--dry-run`: Checks the target disk and planned GPT partition layout
@@ -226,6 +235,16 @@ dsx run --manifest <system.toml> --domain <domain_name> [options]
 * `--dtb <path>`: Custom base DTB file (defaults to `/sys/firmware/fdt`).
 * `--trusted` / `--untrusted`: Grants or withholds physical hardware trust
   (untrusted by default).
+* `--dma-trusted`: Allocates contiguous identity-mapped child RAM for DMA-safe
+  hardware passthrough and authorizes writable device mappings when no
+  input-output memory management unit (IOMMU) is present.
+* `--mmio <hpa:size[:ro|rw]>`: Maps a page-aligned host memory-mapped
+  input/output (MMIO) window into the child VM (`rw` by default; writable
+  ranges require `--dma-trusted` unless an IOMMU is active).
+* `--irq <phys[:virt]>`: Delegates a physical interrupt request (IRQ) line to
+  the child's virtual interrupt controller (optional `virt` index `16..127`).
+* `--keep-fdt <prefix>`: Preserves matching host flattened device tree (FDT)
+  nodes (such as `pci@`) in the patched child DTB alongside delegated hardware.
 * `--steward`: Marks the child VM as a steward VM. Under a sealed charter, the
   parent VM cannot stop or lower the quotas of a steward VM without steward
   quorum ratification.
@@ -933,10 +952,43 @@ dsx swarm propose --file /etc/diosix/charter.toml --json
 
 ---
 
+### `dsx personal`
+Manages the desktop guest VM lifecycle and hardware passthrough profiles on
+**Diosix Personal** hosts using `/etc/diosix/personal.toml` (and persistent
+overrides in `/var/lib/diosix/etc/personal.toml`):
+
+* `status [--json]`: Shows active desktop VM status, active/default profile
+  names, `auto_start` state, and `dma_trusted` status.
+* `start [profile] [overrides]`: Unbinds any configured platform host driver,
+  launches the selected profile (or `default_profile`), and records the running
+  context ID in `/run/diosix/personal-desktop.cid`. Supports runtime overrides
+  `--image`, `--ram`, `--vcpus`, `--pcpu`, `--cmdline`, `--unbind`,
+  `--dma-trusted`, `--mmio`, `--irq`, and `--keep-fdt`.
+* `stop`: Gracefully stops and reaps the currently running desktop VM and
+  releases its delegated MMIO and IRQ assignments.
+* `switch <profile> [overrides]`: Stops any active desktop VM, waits for M-mode
+  passthrough resource teardown, and boots `<profile>`.
+* `configure [--profile <name>] [options]`: Updates `/etc/diosix/personal.toml`
+  (and `/var/lib/diosix/etc/personal.toml` when persistent storage is mounted)
+  with `--default <profile>`, `--auto-start <true|false>`, `--image <path>`,
+  `--ram <mb>`, `--vcpus <n>`, `--cpu-pct <pct>`, `--dma-trusted <true|false>`,
+  `--unbind <drv:dev>`, `--mmio <csv>`, `--irq <csv>`, `--keep-fdt <csv>`, or
+  `--cmdline <str>`.
+
+Examples:
+```bash
+dsx personal status --json
+dsx personal configure --profile desktop --image desktop.img --ram 2048
+dsx personal configure --profile desktop --dma-trusted true --auto-start true
+dsx personal start desktop
+dsx personal switch workstation
+```
+
+---
+
 ### `dsx drop-trust`
 Permanently drops hardware trust for the calling VM, unmapping host physical
-memory-mapped input/output (MMIO) pages and disabling direct hardware interrupt
-routing.
+MMIO pages and disabling direct hardware interrupt routing.
 
 ```bash
 dsx drop-trust

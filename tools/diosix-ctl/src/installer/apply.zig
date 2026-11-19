@@ -176,6 +176,7 @@ fn seedTargetRoot(
         "boot",
         "boot/slot_a",
         "boot/slot_b",
+        "etc",
         "state",
         "charter",
         "images",
@@ -205,6 +206,36 @@ fn seedTargetRoot(
     );
     defer allocator.free(hostname_dst);
     common.writeFile(hostname_dst, plan.hostname) catch {};
+
+    const ed_dst = try allocator.print("{s}/state/edition", .{root_dir});
+    defer allocator.free(ed_dst);
+    const ed_line = try allocator.print("{s}\n", .{plan.edition});
+    defer allocator.free(ed_line);
+    common.writeFile(ed_dst, ed_line) catch {};
+
+    if (std.mem.eql(u8, plan.edition, "personal")) {
+        const pt_dst = try allocator.print(
+            "{s}/etc/personal.toml",
+            .{root_dir},
+        );
+        defer allocator.free(pt_dst);
+        const img = if (plan.personal_image.len > 0)
+            plan.personal_image
+        else
+            "diosix-node";
+        const pt_txt = try allocator.print(
+            "[desktop]\nname = \"desktop\"\ndefault_profile = \"desktop\"\n" ++
+                "image = \"{s}\"\nram_mb = 1024\nvcpus = 2\n" ++
+                "dma_trusted = {s}\nauto_start = {s}\n",
+            .{
+                img,
+                if (plan.personal_dma_trusted) "true" else "false",
+                if (plan.personal_auto_start) "true" else "false",
+            },
+        );
+        defer allocator.free(pt_txt);
+        common.writeFile(pt_dst, pt_txt) catch {};
+    }
 
     const base_elf_dst = try allocator.print(
         "{s}/images/diosix-node.elf",

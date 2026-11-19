@@ -375,6 +375,10 @@ static long diosix_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     case IOCTL_INPUT_SEND_EVENT:
         return -EOPNOTSUPP;
 
+    case IOCTL_MAP_CHILD_MMIO:
+    case IOCTL_DELEGATE_CHILD_IRQ:
+        return diosix_ioctl_passthrough(cmd, arg);
+
     default:
         return diosix_ioctl_governance(file, cmd, arg);
     }

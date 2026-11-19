@@ -8,6 +8,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
 const atomic = @import("atomic.zig");
 const pcore = @import("pcore.zig");
 const physmem = @import("physmem.zig");
@@ -28,6 +29,7 @@ pub const GuestSpace = struct {
     base_hpa: usize,
     range_size: usize,
     is_ram_allocated: bool,
+    allocated_pages: usize = 0,
     allocator: std.mem.Allocator,
 
     pub fn init(
@@ -119,6 +121,15 @@ pub const GuestSpace = struct {
                 p.deinit();
                 self.paging = null;
             }
+            if (self.is_ram_allocated and self.allocated_pages > 0) {
+                for (0..self.allocated_pages) |i| {
+                    physmem.decrementPageRef(
+                        self.base_hpa + (i * physmem.PageSize),
+                    );
+                }
+                self.allocated_pages = 0;
+                self.is_ram_allocated = false;
+            }
         } else {
             if (self.pmp_config) |*p| {
                 p.deinit();
@@ -129,6 +140,124 @@ pub const GuestSpace = struct {
                 self.is_ram_allocated = false;
             }
         }
+    }
+
+    /// Configures and eagerly identity-maps (`GPA == HPA`) contiguous child
+    /// RAM pages previously allocated via `physmem.allocContiguousPages`.
+    pub fn configureIdentityRam(
+        self: *GuestSpace,
+        base_hpa: usize,
+        num_pages: usize,
+    ) !void {
+        if (num_pages == 0 or (base_hpa & (physmem.PageSize - 1)) != 0)
+            return error.InvalidAddress;
+        const size = std.math.mul(usize, num_pages, physmem.PageSize) catch
+            return error.InvalidAddress;
+        const end = std.math.add(usize, base_hpa, size) catch
+            return error.InvalidAddress;
+        if (!builtin.is_test and end > sv39x4.MAX_GPA)
+            return error.InvalidAddress;
+        const gpa_base: usize = if (builtin.is_test and end > sv39x4.MAX_GPA)
+            0x8000_0000
+        else
+            base_hpa;
+
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        if (self.mode != .h_paging or self.paging == null)
+            return error.UnsupportedMode;
+
+        const p = &self.paging.?;
+        self.base_gpa = gpa_base;
+        self.base_hpa = base_hpa;
+        self.range_size = size;
+        self.allocated_pages = num_pages;
+        self.is_ram_allocated = true;
+        p.root_base_gpa = gpa_base;
+        p.root_base_hpa = base_hpa;
+        p.root_range_size = size;
+
+        var mapped_pages: usize = 0;
+        errdefer {
+            for (0..mapped_pages) |j|
+                p.unmapPage(gpa_base + (j * physmem.PageSize));
+            p.root_base_gpa = 0;
+            p.root_base_hpa = 0;
+            p.root_range_size = 0;
+            self.allocated_pages = 0;
+            self.is_ram_allocated = false;
+            self.range_size = 0;
+            self.base_hpa = 0;
+        }
+
+        const rwx = sv39x4.PTEFlags.leaf_rwx_user;
+        for (0..num_pages) |i| {
+            const off = i * physmem.PageSize;
+            try p.mapPage(gpa_base + off, base_hpa + off, rwx, false);
+            mapped_pages += 1;
+        }
+        if (riscv.hasHExtension()) riscv.hfenceGvma();
+    }
+
+    /// Unmaps and releases a contiguous identity RAM allocation prior to boot.
+    pub fn releaseIdentityRam(self: *GuestSpace) void {
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        if (self.mode != .h_paging or !self.is_ram_allocated) return;
+        if (self.paging) |*p| {
+            for (0..self.allocated_pages) |i|
+                p.unmapPage(self.base_gpa + (i * physmem.PageSize));
+            p.root_base_gpa = 0;
+            p.root_base_hpa = 0;
+            p.root_range_size = 0;
+        }
+        for (0..self.allocated_pages) |i|
+            physmem.decrementPageRef(self.base_hpa + (i * physmem.PageSize));
+        self.allocated_pages = 0;
+        self.is_ram_allocated = false;
+        self.range_size = 0;
+        self.base_hpa = 0;
+        if (riscv.hasHExtension()) riscv.hfenceGvma();
+    }
+
+    /// Maps an explicit host physical MMIO window `[host_pa, host_pa + size)`
+    /// into Stage-2 at `child_gpa` with execute disabled (`X=0`).
+    pub fn mapPassthroughMmio(
+        self: *GuestSpace,
+        child_gpa: usize,
+        host_pa: usize,
+        size: usize,
+        read_only: bool,
+    ) !void {
+        if (size == 0 or (child_gpa & (physmem.PageSize - 1)) != 0 or
+            (host_pa & (physmem.PageSize - 1)) != 0 or
+            (size & (physmem.PageSize - 1)) != 0) return error.InvalidAddress;
+        const gpa_end = std.math.add(usize, child_gpa, size) catch
+            return error.InvalidAddress;
+        _ = std.math.add(usize, host_pa, size) catch
+            return error.InvalidAddress;
+        if (gpa_end > sv39x4.MAX_GPA) return error.InvalidAddress;
+
+        const s = self.lock.lock();
+        defer self.lock.unlock(s);
+        if (self.mode != .h_paging or self.paging == null)
+            return error.UnsupportedMode;
+
+        const flags = if (read_only)
+            sv39x4.PTEFlags.leaf_ro_user
+        else
+            sv39x4.PTEFlags.leaf_rw_user;
+        const p = &self.paging.?;
+
+        var mapped: usize = 0;
+        errdefer {
+            var r: usize = 0;
+            while (r < mapped) : (r += physmem.PageSize)
+                p.unmapPage(child_gpa + r);
+        }
+        while (mapped < size) : (mapped += physmem.PageSize)
+            try p.mapPage(child_gpa + mapped, host_pa + mapped, flags, true);
+        if (riscv.hasHExtension()) riscv.hfenceGvma();
     }
 
     /// Maps physical memory into the guest address space.

@@ -76,7 +76,9 @@ Diosix adjusts its startup behavior across three boot modes, three editions
   and leaves the boot media unmounted so you can partition and install onto
   target storage.
 * Persistent mode mounts an ext4 data partition read-write to retain enrolled
-  SSH keys, guest images, and virtual disks across reboots.
+  SSH keys, guest images, virtual disks, persistent edition overrides in
+  `/var/lib/diosix/state/edition`, and Personal profiles in
+  `/var/lib/diosix/etc/personal.toml` across reboots.
 * Selecting `Diosix Swarm` (`-Dedition=swarm`) or passing `diosix.swarm=1` or
   `diosix.swarm_ip=<cidr>` activates the parent message board (`diosix0:8485`),
   large language model (LLM) proxy (`diosix0:8081`), `dsx agent`, and
@@ -154,6 +156,9 @@ boards, see [Booting on physical RISC-V boards][phys-boards].
 
    ```bash
    dsx host install --mode basic --disk /dev/vda --hostname my-diosix-host
+   dsx host install --mode basic --disk /dev/vda --edition personal \
+       --personal-image /var/lib/diosix/images/desktop.img --dma-trusted \
+       --auto-start
    dsx host install --mode expert --config /etc/diosix/install.toml --json
    ```
 

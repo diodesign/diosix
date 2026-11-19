@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const passthrough = @import("../passthrough.zig");
 const riscv = @import("../../hardware/native/cpu/riscv64/mod.zig");
 const sv39x4 = @import("../../hardware/native/cpu/riscv64/sv39x4.zig");
 const vcore = @import("../vcore.zig");
@@ -101,6 +102,10 @@ pub fn handleDiosix(
         => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),
         D.SEAL_MISSION => charter.handleSealMission(vc, ctx, a0, a1),
         D.VOTE_MISSION => charter.handleVoteMission(vc, ctx, a0),
+        D.MAP_CHILD_MMIO => passthrough.handleMapChildMmio(vc, ctx, a0),
+        D.DELEGATE_CHILD_IRQ => {
+            passthrough.handleDelegateChildIrq(vc, ctx, a0);
+        },
         else => reply(vc, ctx, sbi_core.SBI_ERR_NOT_SUPPORTED, 0),
     }
 }
@@ -141,10 +146,13 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
         return;
     };
     const want_trusted = (args.flags & interface.RunFlags.TRUSTED) != 0;
+    const want_dma_trusted =
+        (args.flags & interface.RunFlags.DMA_TRUSTED) != 0;
     const want_steward = (args.flags & interface.RunFlags.STEWARD) != 0;
     const want_stake = want_steward or
         (args.flags & interface.RunFlags.DELEGATE_STAKE) != 0;
     if ((want_trusted and !g.is_trusted) or
+        (want_dma_trusted and !g.is_trusted and !g.has_host_passthrough) or
         (want_steward and (g.hasParent() or charter.isCharterSealed())) or
         (want_stake and g.hasParent() and !g.has_voting_stake))
     {
@@ -219,6 +227,7 @@ fn handleRun(vc: *VCore, ctx: *ThreadCtx, g: *Guest, a0: usize) void {
     } else {
         child.dropTrust();
     }
+    child.is_dma_trusted = want_dma_trusted;
     child.is_steward = child.is_steward or want_steward;
     child.has_voting_stake = child.has_voting_stake or want_stake;
     if ((args.flags & interface.RunFlags.LEAF_NO_CHILDREN) != 0) {

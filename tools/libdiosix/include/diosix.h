@@ -55,8 +55,14 @@ extern "C" {
 #define DIOSIX_RUN_FLAG_NET_ISOLATED     (1ULL << 4)
 #define DIOSIX_RUN_FLAG_DELEGATE_STAKE   (1ULL << 5)
 #define DIOSIX_RUN_FLAG_LEAF_NO_CHILDREN (1ULL << 6)
+#define DIOSIX_RUN_FLAG_DMA_TRUSTED      (1ULL << 7)
 #define DIOSIX_RUN_NET_UPSTREAM_SHIFT    16
 #define DIOSIX_RUN_NET_UPSTREAM_MASK     0xffffULL
+
+#define DIOSIX_MMIO_FLAG_READ_ONLY   (1ULL << 0)
+#define DIOSIX_MMIO_FLAG_DMA_TRUSTED (1ULL << 1)
+#define DIOSIX_MMIO_FLAG_QUERY_RAM   (1ULL << 2)
+#define DIOSIX_IRQ_FLAG_RELEASE      (1ULL << 0)
 
 #define DIOSIX_NET_POLICY_ISOLATED (1ULL << 0)
 
@@ -235,6 +241,15 @@ int diosix_map_child_mem(diosix_ctx_t *ctx, uint64_t target_cid,
                          size_t size, uint64_t flags, void **out_ptr);
 int diosix_unmap_child_mem(diosix_ctx_t *ctx, void *ptr, size_t size,
                            uint64_t parent_gpa);
+int diosix_map_child_mmio(diosix_ctx_t *ctx, uint64_t target_cid,
+                          uint64_t host_pa, uint64_t child_gpa,
+                          size_t size, uint64_t flags);
+int diosix_query_child_ram(diosix_ctx_t *ctx, uint64_t target_cid,
+                           uint64_t *out_gpa_base, uint64_t *out_hpa_base,
+                           size_t *out_size);
+int diosix_delegate_child_irq(diosix_ctx_t *ctx, uint64_t target_cid,
+                              uint32_t phys_irq, uint32_t virt_irq,
+                              uint64_t flags);
 
 int diosix_seal_charter(diosix_ctx_t *ctx,
                         const diosix_charter_args_t *args);

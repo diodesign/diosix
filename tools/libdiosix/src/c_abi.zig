@@ -41,7 +41,7 @@ fn freeSlot(slot: *CtxSlot) void {
     slot.in_use.store(false, .release);
 }
 
-fn getClient(ctx_raw: ?*anyopaque) ?*lib.DiosixClient {
+pub fn getClient(ctx_raw: ?*anyopaque) ?*lib.DiosixClient {
     const raw = ctx_raw orelse return null;
     const addr = @intFromPtr(raw);
     const base = @intFromPtr(&ctx_pool[0]);
@@ -65,7 +65,7 @@ fn sliceConst(raw: ?*const anyopaque, len: usize) ?[]const u8 {
     return p[0..len];
 }
 
-fn mapErr(err: anyerror) c_int {
+pub fn mapErr(err: anyerror) c_int {
     return switch (err) {
         error.DeviceNotFound => ERR_NO_DEVICE,
         error.PermissionDenied => ERR_DENIED,
@@ -485,4 +485,11 @@ pub export fn diosix_whisper_recv(
     const n = c.whisperRecv(buf) catch |err| return mapErr(err);
     if (out_len) |out| out.* = n;
     return OK;
+}
+
+pub const pt = @import("c_abi_passthrough.zig");
+comptime {
+    _ = &pt.diosix_map_child_mmio;
+    _ = &pt.diosix_query_child_ram;
+    _ = &pt.diosix_delegate_child_irq;
 }

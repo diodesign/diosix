@@ -327,6 +327,28 @@ direct memory access (DMA):
   hardware to guests and keep VirtIO-GPU emulation disabled by default,
   preserving strict Stage-2 and PMP isolation across untrusted child workloads.
 
+### Machine-mode passthrough safeguards
+When delegating host memory-mapped input/output (MMIO) controllers or
+interrupts to a child VM, M-mode enforces five containment and teardown rules:
+
+* Without an IOMMU, writable host MMIO mappings fail with `SBI_ERR_DENIED`
+  unless the caller creates the child with DMA trust enabled and also passes the
+  per-mapping DMA-trust flag. Read-only MMIO mappings remain permitted without
+  DMA trust for inspect-only hardware windows.
+* DMA-trusted child VMs allocate a single contiguous block mapped at matching
+  guest physical addresses (GPAs) and host physical addresses (HPAs) so
+  scatter-gather DMA descriptors target valid guest RAM directly.
+* M-mode rejects MMIO passthrough requests overlapping hypervisor code or data,
+  physical system RAM, root VM RAM, core local interruptor (CLINT),
+  platform-level interrupt controller (PLIC), UART, the test/poweroff device,
+  child RAM, or virtual child bus windows.
+* Only one VM may hold any writable host MMIO window or physical PLIC interrupt
+  request (IRQ) at a time.
+* M-mode claims delegated physical IRQs, injects external interrupts into the
+  child's virtual PLIC, forwards the child's end-of-interrupt (EOI) write back
+  to the physical PLIC, and automatically unmaps MMIO windows, masks or
+  completes IRQs, and frees identity RAM when the child exits.
+
 ---
 
 ## Reporting security issues

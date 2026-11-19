@@ -62,7 +62,9 @@
             "tools/libdiosix/include/diosix.h",
             "tools/libdiosix/src/lib.zig",
             "tools/libdiosix/src/governance.zig",
+            "tools/libdiosix/src/passthrough.zig",
             "tools/libdiosix/src/c_abi.zig",
+            "tools/libdiosix/src/c_abi_passthrough.zig",
             "tools/libdiosix/examples/vm_info.c",
         },
         .summary =
@@ -150,6 +152,7 @@
             "tools/diosix-ctl/src/vm/console.zig",
             "tools/diosix-ctl/src/vm/quota.zig",
             "tools/diosix-ctl/src/vm/owned.zig",
+            "tools/diosix-ctl/src/vm/passthrough.zig",
             "tools/diosix-ctl/src/console.zig",
             "tools/diosix-ctl/src/loader.zig",
             "tools/diosix-ctl/src/loader/pe.zig",
@@ -392,6 +395,32 @@
         .docs = .{
             "docs/cli.md#dsx-swarm",
             "docs/architecture.md#multi-host-fleet-collaboration",
+        },
+    },
+    .{
+        .id = "cli-personal-desktop",
+        .name = "Personal desktop profile and passthrough CLI (`dsx personal`)",
+        .layer = .u_mode_cli,
+        .status = .active,
+        .files = .{
+            "tools/diosix-ctl/src/personal.zig",
+            "tools/diosix-ctl/src/personal/config.zig",
+            "tools/diosix-ctl/src/personal/launch.zig",
+        },
+        .summary =
+        \\Manages Diosix Personal desktop VM profiles, exclusive MMIO and IRQ
+        \\passthrough binding, host platform driver unbinding, and desktop
+        \\VM switching.
+        ,
+        .activated_by = .{
+            "cli-core-dispatch",
+            "cli-vm-lifecycle",
+            "rootvm-init-overlay",
+        },
+        .docs = .{
+            "docs/cli.md#dsx-personal",
+            "docs/editions.md#direct-hardware-access-and-desktop-workloads",
+            "docs/security.md#direct-device-passthrough-and-dma-security",
         },
     },
 }

@@ -13,6 +13,7 @@ test {
     _ = riscv;
     _ = sbi;
     _ = @import("sbi/governance.zig");
+    _ = @import("sbi/passthrough.zig");
     _ = elf;
     std.testing.refAllDecls(@This());
 }

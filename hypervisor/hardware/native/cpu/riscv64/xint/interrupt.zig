@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
+const builtin = @import("builtin");
+const passthrough = @import("../../../../../core/passthrough.zig");
 const main = @import("../../../../../main.zig");
 const debug = @import("../../../../../core/debug.zig");
 const riscv = @import("../mod.zig");
@@ -54,9 +56,17 @@ pub fn handleInterrupt(irq: xint.IRQ, context: *riscv.ThreadContext) void {
     switch (irq.cause) {
         .machine_timer, .supervisor_timer => handleTimerInterrupt(pcpu),
         .machine_swi => handleSoftwareInterrupt(pcpu),
-        .machine_interrupt, .supervisor_interrupt => {
-            handleExternalInterrupt(pcpu);
+        .machine_interrupt => {
+            const res = passthrough.handleMachineExternalIrq(pcpu);
+            if (!res.handled) {
+                handleExternalInterrupt(pcpu);
+            } else if (!builtin.is_test and res.woke_child and
+                pcpu.active_vcore == null)
+            {
+                scheduler.schedule();
+            }
         },
+        .supervisor_interrupt => handleExternalInterrupt(pcpu),
         else => {
             debug.printf(
                 "Unhandled interrupt: 0x{x}\n",
@@ -348,8 +358,11 @@ pub fn deliverRootExternalIrq(pcpu: *riscv.CpuContext) bool {
         }
     }
 
-    // Mask MEIE and SEIE in M-mode until the guest claims the PLIC interrupt.
-    const ext_mask = ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
+    // Mask SEIE (and MEIE when no passthrough IRQs exist) until handled.
+    const ext_mask: usize = if (passthrough.hasActiveDelegatedIrqs())
+        ~@as(usize, riscv.MIE.SEIE)
+    else
+        ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
     riscv.writeMie(riscv.readMie() & ext_mask);
     return woke;
 }
@@ -382,8 +395,14 @@ pub fn programHardwareTimerAndMie(
             }
         }
     }
-    if (!ext_irq_pending and (hvip_val.* & riscv.HVIP.VSEIP) == 0) {
+    const root_ext_pending = ext_irq_pending or
+        (vc.guest.has_host_passthrough and
+            (hvip_val.* & riscv.HVIP.VSEIP) != 0);
+    if (!root_ext_pending) {
         riscv.writeMie(riscv.MIE.ALL_PHYSICAL);
+    } else if (passthrough.hasActiveDelegatedIrqs()) {
+        const mask = ~@as(usize, riscv.MIE.SEIE);
+        riscv.writeMie(riscv.MIE.ALL_PHYSICAL & mask);
     } else {
         const mask = ~@as(usize, riscv.MIE.MEIE | riscv.MIE.SEIE);
         riscv.writeMie(riscv.MIE.ALL_PHYSICAL & mask);

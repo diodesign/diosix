@@ -138,6 +138,7 @@
             "scripts/lib/llm_mock.py",
             "scripts/test_live_llm_app.py",
             "scripts/test_manifest_integration.py",
+            "scripts/test_personal_passthrough.py",
             "scripts/demo_external_guests.py",
         },
         .summary =

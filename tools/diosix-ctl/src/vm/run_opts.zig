@@ -9,6 +9,7 @@ const common = @import("../common.zig");
 const net = @import("../net.zig");
 const manifest = @import("../manifest.zig");
 const owned = @import("owned.zig");
+const passthrough = @import("passthrough.zig");
 
 pub const RunOption = enum {
     @"--name",
@@ -52,6 +53,10 @@ pub const RunOption = enum {
     @"--budget-usd",
     @"--max-thinking",
     @"--agent-mode",
+    @"--dma-trusted",
+    @"--mmio",
+    @"--irq",
+    @"--keep-fdt",
     @"--user",
 };
 
@@ -86,6 +91,15 @@ pub const ParsedRunOptions = struct {
     budget_usd_str: ?[]const u8 = null,
     max_thinking_str: ?[]const u8 = null,
     agent_mode_str: ?[]const u8 = null,
+    dma_trusted: bool = false,
+    mmios: [passthrough.MAX_PASSTHROUGH_RANGES]passthrough.MmioRangeSpec =
+        undefined,
+    mmio_count: usize = 0,
+    irqs: [passthrough.MAX_PASSTHROUGH_IRQS]passthrough.IrqSpec = undefined,
+    irq_count: usize = 0,
+    keep_fdt_prefixes: [passthrough.MAX_KEEP_FDT_PREFIXES][]const u8 =
+        undefined,
+    keep_fdt_count: usize = 0,
 };
 
 fn takeOpt(
@@ -260,6 +274,56 @@ pub fn parseRunArgs(
                     opts.agent_mode_str =
                         takeOpt(args, &i, "--agent-mode") orelse return null;
                 },
+                .@"--dma-trusted" => opts.dma_trusted = true,
+                .@"--mmio" => {
+                    const spec_s = takeOpt(args, &i, "--mmio") orelse
+                        return null;
+                    if (opts.mmio_count >= opts.mmios.len) {
+                        common.printStr("Error: Too many '--mmio' ranges.\n");
+                        return null;
+                    }
+                    opts.mmios[opts.mmio_count] = passthrough.parseMmioSpec(
+                        spec_s,
+                    ) catch {
+                        common.printFmt(
+                            "Error: Invalid '--mmio' '{s}' " ++
+                                "(<hpa:size[:ro]>).\n",
+                            .{spec_s},
+                        );
+                        return null;
+                    };
+                    opts.mmio_count += 1;
+                },
+                .@"--irq" => {
+                    const spec_s = takeOpt(args, &i, "--irq") orelse
+                        return null;
+                    if (opts.irq_count >= opts.irqs.len) {
+                        common.printStr("Error: Too many '--irq' bindings.\n");
+                        return null;
+                    }
+                    opts.irqs[opts.irq_count] = passthrough.parseIrqSpec(
+                        spec_s,
+                    ) catch {
+                        common.printFmt(
+                            "Error: Invalid '--irq' '{s}' (<phys[:virt]>).\n",
+                            .{spec_s},
+                        );
+                        return null;
+                    };
+                    opts.irq_count += 1;
+                },
+                .@"--keep-fdt" => {
+                    const pfx = takeOpt(args, &i, "--keep-fdt") orelse
+                        return null;
+                    if (opts.keep_fdt_count >= opts.keep_fdt_prefixes.len) {
+                        common.printStr(
+                            "Error: Too many '--keep-fdt' prefixes.\n",
+                        );
+                        return null;
+                    }
+                    opts.keep_fdt_prefixes[opts.keep_fdt_count] = pfx;
+                    opts.keep_fdt_count += 1;
+                },
                 .@"--user" => {
                     common.printStr(
                         "Error: Unrecognized option '--user'. " ++
@@ -310,5 +374,21 @@ test "vm/run_opts: parses Phase 3 leaf, stake, and LLM budget flags" {
     try std.testing.expectEqual(
         RunOption.@"--budget-usd",
         std.meta.stringToEnum(RunOption, "--budget-usd").?,
+    );
+    try std.testing.expectEqual(
+        RunOption.@"--dma-trusted",
+        std.meta.stringToEnum(RunOption, "--dma-trusted").?,
+    );
+    try std.testing.expectEqual(
+        RunOption.@"--mmio",
+        std.meta.stringToEnum(RunOption, "--mmio").?,
+    );
+    try std.testing.expectEqual(
+        RunOption.@"--irq",
+        std.meta.stringToEnum(RunOption, "--irq").?,
+    );
+    try std.testing.expectEqual(
+        RunOption.@"--keep-fdt",
+        std.meta.stringToEnum(RunOption, "--keep-fdt").?,
     );
 }

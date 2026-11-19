@@ -56,6 +56,8 @@
 #define DIOSIX_FUNC_GPU_MAP_SCANOUT       30
 #define DIOSIX_FUNC_SEAL_MISSION          31
 #define DIOSIX_FUNC_VOTE_MISSION          32
+#define DIOSIX_FUNC_MAP_CHILD_MMIO        33
+#define DIOSIX_FUNC_DELEGATE_CHILD_IRQ    34
 
 #define IOCTL_DROP_TRUST            0x1002
 #define IOCTL_RUN                   0x1003
@@ -89,6 +91,8 @@
 #define IOCTL_SEAL_MISSION          0x101e
 #define IOCTL_GET_MISSION           0x101f
 #define IOCTL_VOTE_MISSION          0x1020
+#define IOCTL_MAP_CHILD_MMIO        0x1021
+#define IOCTL_DELEGATE_CHILD_IRQ    0x1022
 
 #define DIOSIX_CHILD_MEM_BASE       0x200000000UL
 #define DIOSIX_CHILD_MEM_MAX_SIZE   (256UL * 1024 * 1024)
@@ -126,6 +130,11 @@
 #define DIOSIX_RUN_FLAG_NET_ISOLATED  (1ULL << 4)
 #define DIOSIX_RUN_FLAG_DELEGATE_STAKE (1ULL << 5)
 #define DIOSIX_RUN_FLAG_LEAF          (1ULL << 6)
+#define DIOSIX_RUN_FLAG_DMA_TRUSTED   (1ULL << 7)
+#define DIOSIX_MMIO_FLAG_READ_ONLY    (1ULL << 0)
+#define DIOSIX_MMIO_FLAG_DMA_TRUSTED  (1ULL << 1)
+#define DIOSIX_MMIO_FLAG_QUERY_RAM    (1ULL << 2)
+#define DIOSIX_IRQ_FLAG_RELEASE       (1ULL << 0)
 #define DIOSIX_WAIT_FLAG_NONBLOCK     0x1UL
 #define DIOSIX_EVENT_POLL_MS        50
 #define DIOSIX_CHARTER_OP_QUERY     0UL
@@ -342,6 +351,21 @@ struct run_args {
     uint64_t flags;
 };
 
+struct map_child_mmio_args {
+    uint64_t child_id;
+    uint64_t host_pa;
+    uint64_t child_gpa;
+    uint64_t size;
+    uint64_t flags;
+};
+
+struct delegate_child_irq_args {
+    uint64_t child_id;
+    uint32_t phys_irq;
+    uint32_t virt_irq;
+    uint64_t flags;
+};
+
 struct terminate_args {
     uint64_t target_id;
     uint64_t exit_code;
@@ -415,6 +439,14 @@ _Static_assert(
     "input_event_args ABI size"
 );
 _Static_assert(sizeof(struct run_args) == 56, "run_args ABI size");
+_Static_assert(
+    sizeof(struct map_child_mmio_args) == 40,
+    "map_child_mmio_args ABI size"
+);
+_Static_assert(
+    sizeof(struct delegate_child_irq_args) == 24,
+    "delegate_child_irq_args ABI size"
+);
 _Static_assert(sizeof(struct terminate_args) == 16, "terminate_args ABI size");
 _Static_assert(sizeof(struct guest_info) == 96, "guest_info ABI size");
 
@@ -433,6 +465,7 @@ long diosix_ioctl_governance(
 long diosix_ioctl_mission(unsigned int cmd, unsigned long arg);
 long diosix_ioctl_net_policy(unsigned long arg);
 long diosix_ioctl_whisper(unsigned int cmd, unsigned long arg);
+long diosix_ioctl_passthrough(unsigned int cmd, unsigned long arg);
 int init_diosix_net(void);
 void cleanup_diosix_net(void);
 #endif /* __KERNEL__ */

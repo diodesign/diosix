@@ -59,6 +59,7 @@ pub fn buildRunFlags(
     if (opts.is_standby_root) run_flags |= api.RunFlags.STANDBY_ROOT;
     if (opts.is_confidential) run_flags |= api.RunFlags.CONFIDENTIAL;
     if (opts.is_leaf) run_flags |= api.RunFlags.LEAF_NO_CHILDREN;
+    if (opts.dma_trusted) run_flags |= api.RunFlags.DMA_TRUSTED;
     if (opts.delegate_stake or opts.is_steward) {
         run_flags |= api.RunFlags.DELEGATE_STAKE;
     }

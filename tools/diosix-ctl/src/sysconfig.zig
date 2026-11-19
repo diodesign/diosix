@@ -43,9 +43,13 @@ pub const LLM_PROXY_LOG_PATH = "/var/log/diosix-llm.log";
 pub const SWARM_PID_PATH = "/run/diosix/swarm.pid";
 pub const SWARM_LOG_PATH = "/var/log/diosix-swarm.log";
 pub const SWARM_PEERS_PATH = "/run/diosix/swarm-peers.json";
+pub const PERSONAL_CID_PATH = "/run/diosix/personal.cid";
+pub const PERSONAL_LOG_PATH = "/var/log/diosix-personal.log";
 
 // System configuration paths (/etc/diosix & /etc).
 pub const AUTH_ENROLLED_PATH = "/etc/diosix/auth.enrolled";
+pub const EDITION_ETC_PATH = "/etc/diosix/edition";
+pub const PERSONAL_CONFIG_PATH = "/etc/diosix/personal.toml";
 pub const NETWORK_INTERFACES_PATH = "/etc/network/interfaces";
 pub const RESOLV_CONF_PATH = "/etc/resolv.conf";
 pub const ETC_HOSTS_PATH = "/etc/hosts";
@@ -84,6 +88,8 @@ pub const NODE_PUBKEY_PATH = "/var/lib/diosix/keys/node_ed25519.pub";
 pub const LLM_SECRET_KEY_PATH = "/var/lib/diosix/keys/llm.secret";
 pub const GATEWAY_LEDGER_PATH = "/var/lib/diosix/gateway-ledger.json";
 pub const AGENT_WORK_DIR = "/var/lib/diosix/agent";
+pub const EDITION_STATE_PATH = "/var/lib/diosix/state/edition";
+pub const PERSONAL_STATE_CONFIG_PATH = "/var/lib/diosix/etc/personal.toml";
 
 // Root SSH key paths.
 pub const ROOT_SSH_DIR = "/root/.ssh";

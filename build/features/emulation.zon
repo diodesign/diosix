@@ -129,6 +129,7 @@
             "tools/driver/governance.c",
             "tools/driver/mission.c",
             "tools/driver/net.c",
+            "tools/driver/passthrough.c",
         },
         .summary =
         \\Built-in Linux kernel driver exposing hypercall ioctls, child RAM

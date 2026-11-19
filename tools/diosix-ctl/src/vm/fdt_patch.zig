@@ -278,6 +278,16 @@ pub fn patchChildDtb(
     ram_bytes: u64,
     vcpus: usize,
 ) void {
+    patchChildDtbWithExclusions(dtb, base_gpa, ram_bytes, vcpus, &.{});
+}
+
+pub fn patchChildDtbWithExclusions(
+    dtb: []u8,
+    base_gpa: u64,
+    ram_bytes: u64,
+    vcpus: usize,
+    keep_prefixes: []const []const u8,
+) void {
     if (dtb.len < FDT_MIN_HEADER_SIZE) return;
     if (readBeU32(dtb, 0) != FDT_MAGIC_BE) return;
 
@@ -319,6 +329,16 @@ pub fn patchChildDtb(
                     {
                         should_nop_node = true;
                         break;
+                    }
+                }
+                if (should_nop_node) {
+                    for (keep_prefixes) |kp| {
+                        if (kp.len > 0 and (std.mem.startsWith(u8, name, kp) or
+                            std.mem.eql(u8, name, kp)))
+                        {
+                            should_nop_node = false;
+                            break;
+                        }
                     }
                 }
                 if (!should_nop_node and std.mem.startsWith(u8, name, "cpu@")) {
@@ -446,4 +466,32 @@ test "vm/fdt_patch: patchChildDtb handles malformed FDT headers safely" {
     );
     std.mem.writeInt(u32, bad_dtb[36..40], 0xffff_ffff, .big);
     patchChildDtb(&bad_dtb, 0x8000_0000, 0x1000_0000, 1);
+
+    // Minimal valid FDT with `pci@30000000` node to test `keep_prefixes`.
+    const min_fdt = [_]u8{
+        0xd0, 0x0d, 0xfe, 0xed, 0x00, 0x00, 0x00, 0x60,
+        0x00, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x54,
+        0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x11,
+        0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28,
+        0,    0,    0,    0,    0,    0,    0,    0,
+        0,    0,    0,    0,    0,    0,    0,    0,
+        0x00, 0x00, 0x00, 0x01, 'p',  'c',  'i',  '@',
+        '3',  '0',  '0',  '0',  '0',  '0',  '0',  '0',
+        0,    0,    0,    0,    0x00, 0x00, 0x00, 0x02,
+        0x00, 0x00, 0x00, 0x09, 0,    0,    0,    0,
+        0,    0,    0,    0,    0,    0,    0,    0,
+    };
+    var kept = min_fdt;
+    patchChildDtbWithExclusions(
+        &kept,
+        0x8000_0000,
+        0x1000_0000,
+        1,
+        &.{"pci@"},
+    );
+    try std.testing.expectEqual(@as(u32, 1), readBeU32(&kept, 56));
+    var stripped = min_fdt;
+    patchChildDtb(&stripped, 0x8000_0000, 0x1000_0000, 1);
+    try std.testing.expectEqual(@as(u32, 4), readBeU32(&stripped, 56));
 }

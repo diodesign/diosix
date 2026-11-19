@@ -7,15 +7,19 @@ const std = @import("std");
 const c = @import("c_diosix");
 const lib = @import("lib.zig");
 const gov = @import("governance.zig");
+const pt = @import("passthrough.zig");
 const c_abi = @import("c_abi.zig");
 
 test "libdiosix: wire submodules" {
     _ = lib;
     _ = gov;
+    _ = pt;
     _ = c_abi;
     std.testing.refAllDecls(lib);
     std.testing.refAllDecls(gov);
+    std.testing.refAllDecls(pt);
     std.testing.refAllDecls(c_abi);
+    std.testing.refAllDecls(c_abi.pt);
 }
 
 test "libdiosix: C header ABI sizes and offsets match Zig ABI" {
@@ -81,5 +85,32 @@ test "libdiosix: C ABI error guards and strerror" {
     try std.testing.expectEqualStrings(
         "would block",
         std.mem.span(c_abi.diosix_strerror(c_abi.ERR_WOULD_BLOCK)),
+    );
+    try std.testing.expectEqual(
+        lib.RunFlags.DMA_TRUSTED,
+        @as(u64, c.DIOSIX_RUN_FLAG_DMA_TRUSTED),
+    );
+    try std.testing.expectEqual(
+        lib.MmioPassFlags.QUERY_RAM,
+        @as(u64, c.DIOSIX_MMIO_FLAG_QUERY_RAM),
+    );
+    try std.testing.expectEqual(
+        c_abi.ERR_INVALID_ARG,
+        c_abi.pt.diosix_map_child_mmio(
+            null,
+            2,
+            0x3000_0000,
+            0x3000_0000,
+            4096,
+            0,
+        ),
+    );
+    try std.testing.expectEqual(
+        c_abi.ERR_INVALID_ARG,
+        c_abi.pt.diosix_query_child_ram(null, 2, null, null, null),
+    );
+    try std.testing.expectEqual(
+        c_abi.ERR_INVALID_ARG,
+        c_abi.pt.diosix_delegate_child_irq(null, 2, 32, 32, 0),
     );
 }

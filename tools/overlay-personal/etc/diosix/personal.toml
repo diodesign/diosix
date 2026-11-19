@@ -1,16 +1,30 @@
 # Diosix Personal Desktop Management Profile (/etc/diosix/personal.toml)
 #
-# Configures the small SSH-first management VM to launch and swap a primary
-# desktop guest VM. On RISC-V silicon without an active hardware IOMMU (e.g.
-# StarFive JH7110 / PineTab-V, SiFive FU540, PolarFire ICICLE, Allwinner D1),
-# direct MMIO/GPU/input device passthrough requires `dma_trusted = true` once
-# Phase 4 M-mode passthrough support is enabled, because the desktop guest can
+# Configures the small SSH-first management VM to launch and swap desktop guest
+# VMs (`dsx personal start|stop|switch|configure`). On RISC-V silicon without an
+# active hardware IOMMU (e.g. StarFive JH7110 / PineTab-V, SiFive FU540,
+# PolarFire ICICLE, Allwinner D1, QEMU virt), writable MMIO/PCIe/GPU device
+# passthrough requires `dma_trusted = true`, because the desktop guest can
 # initiate DMA outside Stage-2 translations. Keep `dma_trusted = false` unless
 # you explicitly trust the desktop guest kernel as part of your hardware TCB.
 
 [desktop]
 name = "desktop"
+default_profile = "desktop"
+image = "diosix-node"
 ram_mb = 1024
 vcpus = 2
+cpu_pct = 0
 dma_trusted = false
 auto_start = false
+
+# Example named hardware-passthrough profile:
+# [profile.workstation]
+# image = "desktop.img"
+# ram_mb = 2048
+# vcpus = 4
+# dma_trusted = true
+# unbind_platform = "pci-host-generic:30000000.pci"
+# mmio = ["0x30000000:0x100000", "0x40000000:0x200000"]
+# irq = ["32", "33", "34", "35"]
+# keep_fdt = ["pci@"]

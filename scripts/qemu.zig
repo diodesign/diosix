@@ -252,6 +252,29 @@ pub fn registerQemuSteps(b: *std.Build, cfg: QemuConfig) !void {
         "Run the hypervisor with virtual TPM 2.0 (swtpm)",
         qemu_tpm_args.items,
     );
+
+    const pt_disk_path = "zig-out/personal-pt-disk.img";
+    const mk_pt_disk = b.addSystemCommand(&.{
+        "truncate", "-s", "16M", pt_disk_path,
+    });
+    var qemu_personal_args = ArrayList([]const u8).empty;
+    defer qemu_personal_args.deinit(b.allocator);
+    for (qemu_args.items) |arg| {
+        const rep = if (std.mem.eql(u8, arg, cfg.mem_size)) "2G" else arg;
+        try qemu_personal_args.append(b.allocator, rep);
+    }
+    try qemu_personal_args.appendSlice(b.allocator, &.{
+        "-drive",  "file=" ++ pt_disk_path ++ ",if=none,format=raw,id=ptdisk",
+        "-device", "virtio-blk-pci,drive=ptdisk,disable-legacy=on",
+    });
+    try appendBootArgs(b, &qemu_personal_args, "diosix.mode=dev");
+    qemu.add(
+        &mk_pt_disk.step,
+        &create_storage_cmd.step,
+        "run-personal",
+        "Run Personal edition with a PCIe VirtIO block passthrough device",
+        qemu_personal_args.items,
+    );
 }
 
 test {

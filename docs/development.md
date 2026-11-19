@@ -58,6 +58,7 @@ integration suite after building:
 ./scripts/build.sh
 ./scripts/build.sh sdk
 python3 -B scripts/test_manifest_integration.py
+python3 -B scripts/test_personal_passthrough.py
 python3 -B scripts/run_swarm.py --hosts 2 --self-test
 python3 -B scripts/test_live_llm_app.py --self-test
 python3 -B scripts/hil/runner.py --self-test

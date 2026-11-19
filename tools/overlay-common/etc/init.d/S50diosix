@@ -286,6 +286,30 @@ case "$1" in
     configure_downstream_switch "$DOWN_PREFIX"
     stage_storage
 
+    if [ -s "${STATE_DIR}/state/edition" ]; then
+        ST_ED=$(head -n 1 "${STATE_DIR}/state/edition" | tr -cd 'a-z')
+        case "$ST_ED" in
+            core|swarm|personal)
+                EDITION="$ST_ED"
+                if [ "$HAS_PARENT" -eq 0 ]; then
+                    echo "Diosix (${EDITION}) top-level VM (CID 1)" \
+                        > /etc/issue 2>/dev/null || true
+                fi
+                ;;
+        esac
+    fi
+    if [ -f "${STATE_DIR}/etc/personal.toml" ]; then
+        ln -sf "${STATE_DIR}/etc/personal.toml" "${ETC_DIR}/personal.toml" \
+            2>/dev/null || true
+    elif [ "$EDITION" = "personal" ] && [ -d "$STATE_DIR" ] && \
+         [ -f "${ETC_DIR}/personal.toml" ]; then
+        mkdir -p "${STATE_DIR}/etc" 2>/dev/null || true
+        cp "${ETC_DIR}/personal.toml" "${STATE_DIR}/etc/personal.toml" \
+            2>/dev/null || true
+        ln -sf "${STATE_DIR}/etc/personal.toml" "${ETC_DIR}/personal.toml" \
+            2>/dev/null || true
+    fi
+
     SYS_TOML="${STATE_DIR}/manifests/system.toml"
     if [ -f "$SYS_TOML" ] && [ ! -f "${ETC_DIR}/system.toml" ]; then
         ln -sf "$SYS_TOML" "${ETC_DIR}/system.toml" 2>/dev/null || true
@@ -404,6 +428,11 @@ case "$1" in
             fi
             [ -x /usr/sbin/diosix-agent-start ] && \
                 /usr/sbin/diosix-agent-start --auto >/dev/null 2>&1 || true
+        fi
+        if [ "$HAS_PARENT" -eq 0 ] && [ "$EDITION" = "personal" ] && \
+           grep -Eq '^[[:space:]]*auto_start[[:space:]]*=[[:space:]]*true' \
+               "${ETC_DIR}/personal.toml" 2>/dev/null; then
+            "$DSX_BIN" personal start >> /var/log/diosix-personal.log 2>&1 &
         fi
     fi
     echo "Diosix guest services: OK"

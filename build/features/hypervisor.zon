@@ -282,6 +282,31 @@
         },
     },
     .{
+        .id = "mmode-device-passthrough",
+        .name = "Scoped MMIO passthrough, DMA-trust gate, & PLIC delegation",
+        .layer = .m_mode,
+        .status = .active,
+        .files = .{
+            "hypervisor/core/passthrough.zig",
+            "hypervisor/core/passthrough/plic.zig",
+        },
+        .summary =
+        \\Scoped Stage-2 MMIO window mapping with non-IOMMU DMA-trust gating,
+        \\contiguous identity-mapped DMA RAM, and physical PLIC IRQ claiming
+        \\and EOI forwarding for direct device passthrough guests.
+        ,
+        .activated_by = .{
+            "mmode-cpu-traps",
+            "mmode-memory-isolation",
+            "mmode-sbi-dispatch",
+        },
+        .docs = .{
+            "docs/security.md#direct-device-passthrough-and-dma-security",
+            "docs/editions.md#direct-hardware-access-and-desktop-workloads",
+            "docs/interface.md#device-passthrough-hypercalls",
+        },
+    },
+    .{
         .id = "interface-abi-contracts",
         .name = "Shared SBI, ELF, and RISC-V ABI definitions",
         .layer = .interface,
@@ -290,6 +315,7 @@
             "hypervisor/interface/lib.zig",
             "hypervisor/interface/sbi.zig",
             "hypervisor/interface/sbi/governance.zig",
+            "hypervisor/interface/sbi/passthrough.zig",
             "hypervisor/interface/elf.zig",
             "hypervisor/interface/riscv.zig",
         },

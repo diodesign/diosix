@@ -12,6 +12,7 @@ const net = @import("../net.zig");
 const pkg_policy = @import("../pkg/policy.zig");
 const run_policy = @import("run/policy.zig");
 const vm_stage = @import("stage.zig");
+const vm_passthrough = @import("passthrough.zig");
 const fdt_patch = @import("fdt_patch.zig");
 const sysconfig = @import("../sysconfig.zig");
 const owned = @import("owned.zig");
@@ -398,10 +399,23 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
     );
     defer if (ip_autoconfig) |ipa| allocator.free(ipa);
 
-    const base_gpa: usize = switch (arch_enum) {
+    const default_base_gpa: usize = switch (arch_enum) {
         .x86_64 => 0,
         .aarch64 => 0x40000000,
         .riscv64, .riscv32 => 0xe0000000,
+    };
+    const base_gpa = vm_passthrough.configureChildPassthrough(
+        client,
+        child_cid,
+        opts.dma_trusted,
+        opts.mmios[0..opts.mmio_count],
+        opts.irqs[0..opts.irq_count],
+        default_base_gpa,
+    ) catch |err| {
+        vm_passthrough.reportPassthroughError(err);
+        _ = client.terminate(child_cid, 1) catch {};
+        if (!@import("builtin").is_test) std.process.exit(1);
+        return;
     };
     _ = loader.loadGuestImageViaForeignMapping(
         client,
@@ -414,6 +428,7 @@ pub fn cmdRun(client: *api.DiosixClient, args: []const [*:0]const u8) !void {
             .cmdline = opts.cmdline_str,
             .is_shim_boot = is_shim_boot,
             .ip_autoconfig = ip_autoconfig,
+            .keep_fdt_prefixes = opts.keep_fdt_prefixes[0..opts.keep_fdt_count],
         },
         base_gpa,
         ram_mb << MIB_SHIFT,

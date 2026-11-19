@@ -43,7 +43,7 @@ pub const PageFlags = struct {
 
 pub const PageDescriptor = struct { refcount: u32, flags: u8, order: u8 };
 pub const max_regions = 16;
-pub const max_order = 16; // Up to 2^15 pages = 128 MiB contiguous.
+pub const max_order = 20; // Up to 2^19 pages = 2 GiB contiguous.
 const PageStackNode = struct { next: ?*PageStackNode };
 
 pub const PhysMemState = struct {
@@ -412,4 +412,57 @@ test "buddy allocator, refcounting, overflow safety, and discoverRegions" {
     try testing.expectEqual(expected_size, getHvRegion().size);
     const reg = try findContiguousRegion(2 * 1024 * 1024);
     try testing.expect(!isHypervisorMemory(reg.base, reg.size));
+
+    phys_test.deinit();
+    phys_test = try initForTest(alloc, 8);
+    const c_base = try allocContiguousPages(3);
+    try testing.expect(overlapsRam(c_base, 3 * PageSize));
+    try testing.expectEqual(@as(usize, 5), phys_mem_state.free_pages);
+    for (0..3) |idx| decrementPageRef(c_base + (idx * PageSize));
+    try testing.expectEqual(@as(usize, 8), phys_mem_state.free_pages);
+}
+
+/// Allocates `num_pages` physically contiguous 4 KiB pages split into
+/// individual order-0 pages with refcount = 1, returning unused tail pages
+/// to the buddy allocator.
+pub fn allocContiguousPages(num_pages: usize) PhysMemError!usize {
+    if (num_pages == 0) return PhysMemError.OutOfMemory;
+    if (num_pages == 1) return allocPage();
+
+    var order: u8 = 0;
+    while ((@as(usize, 1) << @intCast(order)) < num_pages) : (order += 1) {
+        if (order + 1 >= max_order) return PhysMemError.OutOfMemory;
+    }
+
+    const base = try allocPageSelection(order);
+    const total_pages: usize = @as(usize, 1) << @intCast(order);
+
+    for (0..total_pages) |i| {
+        const desc = getPageDescriptor(base + (i * PageSize));
+        desc.order = 0;
+        desc.flags = 0;
+        desc.refcount = 1;
+    }
+
+    for (num_pages..total_pages) |j| {
+        decrementPageRef(base + (j * PageSize));
+    }
+
+    return base;
+}
+
+/// Returns true if `[addr, addr + size)` overlaps any buddy-managed or
+/// FDT-discovered physical RAM region.
+pub fn overlapsRam(addr: usize, size: usize) bool {
+    if (size == 0) return false;
+    _ = std.math.add(usize, addr, size) catch return true;
+    const probe = Region{ .base = addr, .size = size };
+    if (probe.overlaps(.{
+        .base = phys_mem_state.ram_base,
+        .size = phys_mem_state.ram_size,
+    })) return true;
+    for (0..phys_mem_state.region_count) |i| {
+        if (probe.overlaps(phys_mem_state.regions[i])) return true;
+    }
+    return false;
 }

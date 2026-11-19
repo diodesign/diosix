@@ -52,7 +52,17 @@ pub const InstallPlan = struct {
     standby_root_vm: bool = false,
     passkey_enrolled: bool = true,
     dry_run: bool = false,
+    edition: []const u8 = "core",
+    personal_image: []const u8 = "",
+    personal_dma_trusted: bool = false,
+    personal_auto_start: bool = false,
 };
+
+pub fn isValidEdition(edition: []const u8) bool {
+    return std.mem.eql(u8, edition, "core") or
+        std.mem.eql(u8, edition, "swarm") or
+        std.mem.eql(u8, edition, "personal");
+}
 
 fn trimAscii(s: []const u8) []const u8 {
     return std.mem.trim(u8, s, " \t\r\n");
@@ -122,6 +132,10 @@ pub fn parseInstallConfigToml(content: []const u8) InstallPlan {
         enable_stewards,
         standby_root,
         standby_root_vm,
+        edition,
+        personal_image,
+        personal_dma_trusted,
+        personal_auto_start,
     };
 
     var plan = InstallPlan{ .mode = .expert };
@@ -168,6 +182,20 @@ pub fn parseInstallConfigToml(content: []const u8) InstallPlan {
                     .standby_root, .standby_root_vm => {
                         plan.standby_root_vm = std.mem.eql(u8, val, "true");
                     },
+                    .edition => if (isValidEdition(val)) {
+                        plan.edition = val;
+                    },
+                    .personal_image => if (val.len > 0) {
+                        plan.personal_image = val;
+                    },
+                    .personal_dma_trusted => {
+                        plan.personal_dma_trusted =
+                            std.mem.eql(u8, val, "true");
+                    },
+                    .personal_auto_start => {
+                        plan.personal_auto_start =
+                            std.mem.eql(u8, val, "true");
+                    },
                 }
             }
         }
@@ -194,6 +222,10 @@ pub fn allocInstallReceiptToml(
         \\standby_slot = "{s}"
         \\enable_stewards = {s}
         \\standby_root_vm = {s}
+        \\edition = "{s}"
+        \\personal_image = "{s}"
+        \\personal_dma_trusted = {s}
+        \\personal_auto_start = {s}
         \\
     ,
         .{
@@ -207,6 +239,10 @@ pub fn allocInstallReceiptToml(
             plan.standby_slot,
             if (plan.enable_stewards) "true" else "false",
             if (plan.standby_root_vm) "true" else "false",
+            plan.edition,
+            plan.personal_image,
+            if (plan.personal_dma_trusted) "true" else "false",
+            if (plan.personal_auto_start) "true" else "false",
         },
     );
 }
@@ -235,7 +271,9 @@ pub fn allocInstallPlanOutput(
             "\"size_mb\":{d}}}," ++
             "{{\"label\":\"DIOSIX_DATA\",\"dev\":\"{s}{s}3\"," ++
             "\"size_mb\":\"remaining\"}}]," ++
-            "\"enable_stewards\":{s},\"standby_root_vm\":{s}}}\n";
+            "\"enable_stewards\":{s},\"standby_root_vm\":{s}," ++
+            "\"edition\":\"{s}\",\"personal_image\":\"{s}\"," ++
+            "\"personal_dma_trusted\":{s},\"personal_auto_start\":{s}}}\n";
         return allocator.print(
             json_fmt,
             .{
@@ -256,6 +294,10 @@ pub fn allocInstallPlanOutput(
                 p_sep,
                 if (plan.enable_stewards) "true" else "false",
                 if (plan.standby_root_vm) "true" else "false",
+                plan.edition,
+                plan.personal_image,
+                if (plan.personal_dma_trusted) "true" else "false",
+                if (plan.personal_auto_start) "true" else "false",
             },
         );
     }
@@ -374,5 +416,25 @@ test "parseInstallConfigToml and formatInstallPlanOutput support modes" {
     defer testing.allocator.free(receipt);
     try testing.expect(
         std.mem.indexOf(u8, receipt, "boot_part_mb = 512") != null,
+    );
+
+    const personal_toml =
+        \\[install]
+        \\edition = "personal"
+        \\personal_image = "/var/lib/diosix/images/desktop.img"
+        \\personal_dma_trusted = true
+        \\personal_auto_start = true
+    ;
+    const pplan = parseInstallConfigToml(personal_toml);
+    try testing.expectEqualStrings("personal", pplan.edition);
+    try testing.expect(pplan.personal_dma_trusted);
+    try testing.expect(pplan.personal_auto_start);
+    const pjson = try allocInstallPlanOutput(testing.allocator, pplan, true);
+    defer testing.allocator.free(pjson);
+    try testing.expect(
+        std.mem.indexOf(u8, pjson, "\"edition\":\"personal\"") != null,
+    );
+    try testing.expect(
+        std.mem.indexOf(u8, pjson, "\"personal_auto_start\":true") != null,
     );
 }

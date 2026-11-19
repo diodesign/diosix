@@ -36,10 +36,15 @@ const HostInstallOption = enum {
     @"--mode",
     @"-m",
     @"--disk",
+    @"--target",
     @"-d",
     @"--config",
     @"-c",
     @"--hostname",
+    @"--edition",
+    @"--personal-image",
+    @"--dma-trusted",
+    @"--auto-start",
     @"--stewards",
     @"--standby-root",
     @"--dry-run",
@@ -145,6 +150,10 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
     var disk_opt: ?[]const u8 = null;
     var config_opt: ?[]const u8 = null;
     var hostname_opt: ?[]const u8 = null;
+    var edition_opt: ?[]const u8 = null;
+    var personal_img_opt: ?[]const u8 = null;
+    var personal_dma_trusted = false;
+    var personal_auto_start = false;
     var enable_stewards = false;
     var standby_root = false;
     var dry_run = false;
@@ -173,7 +182,7 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
                         return;
                     };
                 },
-                .@"--disk", .@"-d" => {
+                .@"--disk", .@"--target", .@"-d" => {
                     if (i + 1 >= args.len) {
                         printStr(
                             "Error: Option '--disk' requires a block " ++
@@ -207,6 +216,37 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
                     i += 1;
                     hostname_opt = std.mem.span(args[i]);
                 },
+                .@"--edition" => {
+                    if (i + 1 >= args.len) {
+                        printStr(
+                            "Error: Option '--edition' requires " ++
+                                "'core', 'swarm', or 'personal'.\n",
+                        );
+                        return;
+                    }
+                    i += 1;
+                    const ed = std.mem.span(args[i]);
+                    if (!installer.isValidEdition(ed)) {
+                        printStr(
+                            "Error: '--edition' must be core|swarm|personal.\n",
+                        );
+                        return;
+                    }
+                    edition_opt = ed;
+                },
+                .@"--personal-image" => {
+                    if (i + 1 >= args.len) {
+                        printStr(
+                            "Error: Option '--personal-image' requires " ++
+                                "an image path.\n",
+                        );
+                        return;
+                    }
+                    i += 1;
+                    personal_img_opt = std.mem.span(args[i]);
+                },
+                .@"--dma-trusted" => personal_dma_trusted = true,
+                .@"--auto-start" => personal_auto_start = true,
                 .@"--stewards" => enable_stewards = true,
                 .@"--standby-root" => standby_root = true,
                 .@"--dry-run" => dry_run = true,
@@ -215,7 +255,10 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
                     common.printFmt(
                         \\Usage: {s} host install [--mode basic|expert]
                         \\  [--disk <dev>] [--config <diosix-install.toml>]
-                        \\  [--stewards] [--standby-root] [--dry-run] [--json]
+                        \\  [--edition core|swarm|personal]
+                        \\  [--personal-image <path>] [--dma-trusted]
+                        \\  [--auto-start] [--stewards] [--standby-root]
+                        \\  [--dry-run] [--json]
                         \\
                     , .{exe_name});
                     return;
@@ -292,6 +335,10 @@ pub fn cmdHostInstall(args: []const [*:0]const u8) !void {
         }
         plan.hostname = hn;
     }
+    if (edition_opt) |ed| plan.edition = ed;
+    if (personal_img_opt) |img| plan.personal_image = img;
+    if (personal_dma_trusted) plan.personal_dma_trusted = true;
+    if (personal_auto_start) plan.personal_auto_start = true;
 
     if (!plan.dry_run) {
         const rec_toml = try installer.allocInstallReceiptToml(allocator, plan);
