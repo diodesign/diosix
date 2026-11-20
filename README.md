@@ -10,125 +10,76 @@
 # Diosix
 
 Diosix is a bare-metal type-1 hypervisor written in Zig for multi-core 64-bit
-RISC-V systems. It organizes guests into a self-organizing, symmetric tree of
-hardware-isolated virtual machines (VMs) while keeping the machine-mode
-(M-mode) hypervisor core small, leaving device drivers, filesystems, and
-network stacks inside guest VMs.
+RISC-V systems. It organizes guests into symmetric, hardware-isolated virtual
+machine (VM) trees while keeping the machine-mode (M-mode) hypervisor core
+small and confining device drivers, filesystems, and network stacks inside
+guests.
 
-```text
-M-mode Hypervisor (Stage-2 / PMP isolation, quotas, L2 virtual switch)
- `-- Top-level VM (CID 1, parent: hypervisor, initial hardware passthrough)
-      |-- Child VM (CID 2 to parent -> sees self as CID 1, parent as CID 0)
-      |    `-- Grandchild VM (opaque to grandparents; own nested switch)
-      `-- Child VM (CID 3 to parent -> sees self as CID 1, parent as CID 0)
-```
-
-Every VM runs with the same structural interfaces: it inspects its device tree
-for its hardware environment and its manifest for role and capability bounds,
-addresses its parent as `CID 0`, itself as `CID 1`, and its direct children as
-`CID 2..N`, and delegates slices of its own CPU and RAM quota downward. Child
-subtrees remain opaque to ancestors, providing a recursive foundation for
-autonomous workloads.
-
-## What makes Diosix different
-
-* **Symmetric VM tree:** Every VM boots from the same unified Alpine-based
-  `diosix-node.elf` image with identical hypervisor ABIs and `dsx` tooling.
-  The initial top-level VM starts with `parent: hypervisor`, full system quota,
-  and inheritable hardware trust, then partitions resources down the tree.
-* **Anti-collusion isolation and boards:** M-mode blocks lateral sibling
-  network frames, sockets, and whispers, so agents coordinate strictly along
-  parent-child edges through parent-moderated `dsx board` message boards.
-* **Recursive package attenuation:** Children lack direct internet access by
-  default and install Alpine packages recursively from their parent via
-  `dsx pkg`, bounded monotonically by manifest allow and deny lists.
-* **Mixed RISC-V execution:** Native 64-bit RISC-V guests boot from ELF
-  kernels, flat kernel images, installer ISOs, or seeded virtual disks, and
-  single-core 32-bit RISC-V guests run via dynamic binary recompilation.
-* **Headless editions and C/Zig SDK:** Build **Diosix Core**
-  (`-Dedition=core`), **Diosix Swarm** (`-Dedition=swarm`), or **Diosix
-  Personal** (`-Dedition=personal`), manage guests over SSH and serial consoles
-  (or web services hosted inside VMs), and link userland tools against
-  `libdiosix`. The legacy `diosix-gui` compositor lives on the `gui` branch.
-* **Default-isolated recursive networking:** Each parent runs a `diosix0`
-  virtual subnet for direct children (`10.0.3.x`, `10.0.4.x`, and upward) while
-  children see an upstream `eth0` interface with SSH passwords disabled and
-  outbound access gated by parent firewall rules.
-* **Charter governance:** Critical deployments can seal a charter hash and
-  quorum policy in M-mode to protect steward VMs, confidential guest memory,
-  and standby failover.
-* **Principal-signed mission consensus:** Owners sign `charter.toml`
-  deployments and runtime `[spec]` updates with Edwards-curve digital
-  signature algorithm (Ed25519) keys. Amendments require both a valid principal
-  signature and a conserved physical-RAM quota-stake supermajority across the VM
-  tree, while machine mode (M-mode) and node agents deterministically veto
-  ransomware transitions (such as dropping replicas to zero and encrypting
-  volumes).
-* **Autonomous agents and thinking gateway:** Nodes run `dsx agent` (with
-  optional `diosix-agent-start` root, `sudoer`, or `non-sudoer` startup hygiene)
-  against a generic thinking gateway (`POST /v1/infer` on `diosix0:8081` with
-  `minimal`, `low`, `medium`, and `high` tiers). Upstream application
-  programming interface (API) keys remain strictly on the root VM while parents
-  enforce conserved token and micro-USD (`cost_micros_usd`) budgets, M-mode
-  contains arbitrary leaf workload VMs (`--leaf`) externally, and children
-  authenticate over media access control (MAC)-bound bridges.
-* **Multi-host swarm fleet:** Separate hosts collaborate over transmission
-  control protocol (TCP) port `8486` (`dsx swarm` or
-  `./scripts/build.sh run-swarm`) with Ed25519 peer identities, fleet-wide
-  mission dissemination, stake tallying, and deterministic replica sharding.
+For an architectural overview, interactive edition comparison, and direct live
+media downloads, visit [diosix.org](https://diosix.org).
 
 ---
 
 ## Quickstart
 
-You can try Diosix in QEMU on Linux either by downloading a prebuilt release
-bundle (no compilation required) or by building from source.
+Boot Diosix immediately using a prebuilt edition archive or compile from source
+on Linux (or inside the provided Docker build containers).
 
-### Run a prebuilt release bundle
+### Obtain and run a live image
 
-1. Install QEMU 10.0 or later (`qemu-system-riscv64`) on your Linux machine.
-2. Download and unpack an edition release archive (`core`, `swarm`, or
-   `personal`) from GitHub Releases and boot it with QEMU's SSH port forwarded
-   to host port `2222`:
+1. Install QEMU 10.0 or later (`qemu-system-riscv64`).
+2. Download one of the three edition archives (`core`, `personal`, or `swarm`)
+   from [GitHub Releases][releases], verify its digest, and boot in QEMU or
+   flash `diosix-live-riscv64.img` to removable media:
+
+[releases]: https://github.com/diodesign/diosix/releases/latest
 
    ```bash
    tar -xf diosix-26.1-swarm-riscv64.tar.xz
    cd diosix-26.1-swarm-riscv64
    sha256sum -c SHA256SUMS
 
-   # Boot the hypervisor and root VM headless (SSH forwarded on localhost:2222)
+   # Run the Emulated / Live QEMU launcher (SSH forwarded on localhost:2222)
    ./run-diosix.sh
 
-   # Or boot straight into an interactive CLI RISC-V VM
+   # Or boot directly into an interactive CLI RISC-V VM
    ./run-diosix.sh --cli
+
+   # Or flash the 640 MiB hybrid GPT live image to a USB drive or SD card
+   sudo dd if=diosix-live-riscv64.img of=/dev/sdX bs=4M status=progress \
+       conv=fsync
    ```
 
-### Build and run from source
+### Fetch and build from source
 
 1. Install the [build dependencies][build-deps] (Zig 0.17 or later, QEMU 10.0
    or later, and standard Buildroot host packages).
 
 [build-deps]: docs/build.md#build-process-and-dependencies
 
-2. Clone the repository, select an edition (`core`, `swarm`, or `personal`),
-   and boot headless in QEMU:
+2. Clone the repository, run host unit and feature-graph checks, build your
+   chosen edition (`core`, `personal`, or `swarm`), and boot in QEMU:
 
    ```bash
    git clone https://github.com/diodesign/diosix.git
    cd diosix
 
-   # Boot the default swarm edition over headless serial console + SSH :2222
+   # Verify formatting, unit tests, and feature-to-doc links
+   zig fmt --check build.zig build hypervisor tools scripts
+   ./scripts/build.sh test --summary all
+
+   # Build and boot the default Swarm edition in Emulated (QEMU) mode
    ./scripts/build.sh run
 
-   # Or build Diosix Core or Diosix Personal and build the C/Zig libdiosix SDK
+   # Or target Core / Personal editions, live images, and the C/Zig SDK
    ./scripts/build.sh -Dedition=core
+   ./scripts/build.sh run-personal
+   ./scripts/build.sh live-image
    ./scripts/build.sh sdk
    ```
 
-### Run inside Docker
-
-If you prefer not to install build packages on your machine, use the included
-Docker build environment:
+If you prefer a reproducible container environment instead of installing host
+packages, use the included Dockerfiles:
 
 ```bash
 git clone https://github.com/diodesign/diosix.git
@@ -138,10 +89,26 @@ docker build -f dockerfiles/ubuntu-26.04.Dockerfile -t diosix-ubuntu .
 docker run -it --rm diosix-ubuntu ./scripts/build.sh run
 ```
 
+### Editions and boot modes
+
+Diosix separates **what role the system runs** (edition) from **how the host
+boots** (boot mode):
+
+| Boot mode | Kernel flag | Storage and provisioning lifecycle | Core | Personal | Swarm |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Emulated** | `diosix.mode=dev` | QEMU evaluation with developer SSH keys and host-backed `storage.img` | Sandboxed VMs over SSH | `dsx personal` desktop swaps | Parent boards, thinking gateway, peer tests |
+| **Live** | `diosix.mode=live` | Removable media running in RAM (run `dsx host install` to provision disks) | Live appliance recovery | Hardware discovery & desktop install | Live multi-host onboarding |
+| **Installed** | `diosix.mode=persistent` | Post-install disk boot (`DIOSIX_BOOT` A/B, `DIOSIX_STATE`, `DIOSIX_DATA`) | Embedded or single-host hypervisor | `personal.toml` & `auto_start` desktop | Persistent autonomous fleet nodes |
+| **Diskless** | `diosix.mode=diskless` | Stateless RAM netboot over HTTP from a boot server (no local disk writes) | Stateless embedded hardware tests | Diskless hardware passthrough tests | Ephemeral cluster & hardware-lab workers |
+
+See [Diosix editions](docs/editions.md) and
+[Getting started and running Diosix](docs/run.md) for full details.
+
 ### First commands to try inside Diosix
 
-When QEMU finishes booting in developer mode, it logs into the root VM with
-your local SSH public key ready to use. Try these `dsx` commands:
+When QEMU finishes booting in Emulated (`dev`) mode, log in to the root VM as
+`root` (or connect via `ssh -p 2222 root@127.0.0.1` with your staged host SSH
+key) and inspect the tree with `dsx`:
 
 ```bash
 # 1. Inspect host hardware and running hypervisor state
@@ -156,7 +123,7 @@ dsx board post "begin task" --to worker --topic ops
 dsx ssh worker -- apk add doas
 
 # 4. Save an in-memory RAM checkpoint of the child VM
-dsx snapshot save work-vm clean-boot
+dsx snapshot save worker clean-boot
 
 # 5. Browse SHA-256-verified guest images in the catalog
 dsx image catalog
@@ -174,6 +141,62 @@ Here is a terminal recording ([play the local cast](docs/diosix-demo.cast) with
 guest VMs, quotas, and snapshots:
 
 [![asciicast of Diosix running](https://asciinema.org/a/1214657.svg)](https://asciinema.org/a/1214657)
+
+---
+
+## What makes Diosix different
+
+Every VM runs with the same structural interfaces: it reads its device tree for
+virtual hardware and its manifest for role bounds, addresses its immediate
+parent as context ID (CID) `0`, itself as `CID 1`, and direct children as
+`CID 2..N`, and delegates slices of its own CPU and RAM quota downward. Child
+subtrees remain opaque to ancestors.
+
+```text
+M-mode Hypervisor (Stage-2 / PMP isolation, quotas, L2 virtual switch)
+ `-- Top-level VM (CID 1, parent: hypervisor, initial hardware passthrough)
+      |-- Child VM (CID 2 to parent -> sees self as CID 1, parent as CID 0)
+      |    `-- Grandchild VM (opaque to grandparents; own nested switch)
+      `-- Child VM (CID 3 to parent -> sees self as CID 1, parent as CID 0)
+```
+
+* Every VM boots from the same unified Alpine-based `diosix-node.elf` image with
+  identical hypervisor application binary interfaces (ABIs) and `dsx` tooling,
+  partitioning full system physical memory protection (PMP) or Stage-2 quotas
+  and layer-2 (L2) virtual switching down the hierarchy.
+* Machine mode (M-mode) blocks lateral sibling network frames, sockets, and
+  whispers, so autonomous agents coordinate strictly along parent-child edges
+  through parent-moderated `dsx board` message boards.
+* Child VMs start without internet access by default and install Alpine
+  packages recursively from their immediate parent via `dsx pkg`, attenuated
+  monotonically by manifest allow and deny lists.
+* Native 64-bit RISC-V guests boot from ELF kernels, flat kernel images,
+  installer ISOs, or seeded virtual disks, while single-core 32-bit RISC-V
+  guests execute via dynamic binary recompilation.
+* **Diosix Core** (`-Dedition=core`), **Diosix Swarm** (`-Dedition=swarm`), and
+  **Diosix Personal** (`-Dedition=personal`) share a headless M-mode core
+  managed over SSH and serial consoles alongside the C99 and Zig `libdiosix`
+  software development kit (SDK). Personal adds scoped host hardware
+  passthrough with contiguous direct memory access (DMA) allocation and physical
+  interrupt forwarding gated on explicit DMA trust when no input-output memory
+  management unit (IOMMU) is present; the legacy `diosix-gui` compositor lives
+  on the `gui` branch.
+* Each parent runs an isolated `diosix0` virtual switch (`10.0.3.x`, `10.0.4.x`,
+  and upward) with passwordless SSH key distribution, private-key isolation,
+  and parent-gated firewall policies.
+* Operators seal `charter.toml` deployments and runtime `[spec]` updates with
+  Edwards-curve digital signature algorithm (Ed25519) principal keys. Runtime
+  amendments require both a valid principal signature and conserved
+  physical-RAM quota-stake supermajority approval, while M-mode and node agents
+  deterministically veto ransomware transitions such as zero-replica step-downs
+  or unratified volume encryption.
+* Nodes run `dsx agent` against a generic thinking gateway (`POST /v1/infer` on
+  `diosix0:8081`) that isolates upstream application programming interface (API)
+  keys strictly inside the root VM while parents enforce conserved token and
+  micro-USD budgets over media access control (MAC)-authenticated links.
+* Separate hosts collaborate over transmission control protocol (TCP) port
+  `8486` (`dsx swarm`) with Ed25519 peer identities, fleet-wide mission
+  dissemination, stake tallying, and deterministic replica sharding.
 
 ---
 

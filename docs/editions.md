@@ -50,6 +50,19 @@ flowchart TD
     Q2 -->|"No"| CORE
 ```
 
+### Editions and boot modes
+
+Every edition runs across four boot modes configured by `diosix.mode=`.
+Installation (`dsx host install`) transitions a host from **Live** media to an
+**Installed** disk layout while preserving the selected edition and profiles:
+
+| Boot mode | Kernel flag | Storage behavior | Core | Personal | Swarm |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Emulated** | `diosix.mode=dev` | QEMU evaluation with developer SSH keys and host `storage.img` | Sandboxed VM dev & tests | Headless dev & device passthrough tests | Single- or multi-host swarm dev |
+| **Live** | `diosix.mode=live` | Removable media in RAM; target disks remain unmounted until `dsx host install` | Rescue & appliance staging | Hardware inspection & desktop install | Live fleet node onboarding |
+| **Installed** | `diosix.mode=persistent` | Persistent GPT `DIOSIX_BOOT` (A/B), `DIOSIX_STATE`, and `DIOSIX_DATA` volumes | Dedicated embedded/appliance host | `personal.toml` & `auto_start` workstation | Production autonomous cluster host |
+| **Diskless** | `diosix.mode=diskless` | Stateless RAM boot staged over HTTP from a network boot server | Automated board testing | Diskless passthrough verification | Ephemeral compute nodes |
+
 ---
 
 ## Building and selecting an edition
@@ -101,19 +114,19 @@ firmware payload. Operators supply or download their own desktop image into
 and start, stop, or switch desktop guests with `dsx personal start`,
 `dsx personal stop`, and `dsx personal switch`.
 
-All four Diosix runtime workflows support the edition model:
+All four Diosix boot modes support the edition model:
 
-1. Immediate QEMU evaluation: Run `./scripts/build.sh run-personal` (or pass
-   `-Dedition=personal`) for a persistent RAM-plus-disk development session.
-2. Removable live media: Flash `./scripts/make_live_image.sh` output to a
-   removable drive; live boot keeps `/etc/diosix/edition` and runs entirely
-   in RAM so target disks remain unmounted.
-3. Target installation: Run `dsx host install --edition personal` (with
+1. Emulated (`dev`): Run `./scripts/build.sh run-personal` (or pass
+   `-Dedition=personal`) in QEMU for a RAM-plus-disk development session.
+2. Live (`live`): Flash `./scripts/make_live_image.sh` output to a removable
+   drive; live boot keeps `/etc/diosix/edition` and runs in RAM so target
+   disks remain unmounted until you run `dsx host install`.
+3. Installed (`persistent`): Run `dsx host install --edition personal` (with
    optional `--personal-image`, `--dma-trusted`, and `--auto-start`) to persist
-   `/var/lib/diosix/state/edition` and `/var/lib/diosix/etc/personal.toml`.
-4. Persistent post-install boot: On reboot, `S50diosix` adopts the stored
-   edition override and `/var/lib/diosix/etc/personal.toml`, auto-starting the
-   default desktop profile when `auto_start = true`.
+   `/var/lib/diosix/state/edition` and `/var/lib/diosix/etc/personal.toml`,
+   so `S50diosix` restores the desktop profile automatically on reboot.
+4. Diskless (`diskless`): Boot over the network into RAM from a boot server to
+   validate physical board passthrough without writing to local flash.
 
 Direct device passthrough for graphics, USB, or input peripherals changes the
 hardware isolation boundary on processors lacking an input-output memory

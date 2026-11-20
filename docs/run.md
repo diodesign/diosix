@@ -66,19 +66,19 @@ installed (or are inside one of the Docker containers in `dockerfiles/`), run
 
 ### How boot modes work
 
-Diosix adjusts its startup behavior across three boot modes, three editions
-(`/etc/diosix/edition`), and runtime kernel command-line flags:
+Diosix adjusts its startup behavior across four boot modes (`diosix.mode=`),
+three editions (`/etc/diosix/edition`), and runtime kernel command-line flags:
 
-* Developer mode stages your build machine's SSH public keys into a temporary
-  overlay so you can SSH into the root VM on host port `2222` right away during
-  QEMU runs.
-* Live mode copies pre-loaded guest images into a 768 MiB RAM-backed filesystem
-  and leaves the boot media unmounted so you can partition and install onto
-  target storage.
-* Persistent mode mounts an ext4 data partition read-write to retain enrolled
-  SSH keys, guest images, virtual disks, persistent edition overrides in
-  `/var/lib/diosix/state/edition`, and Personal profiles in
-  `/var/lib/diosix/etc/personal.toml` across reboots.
+| Boot mode | Kernel flag | Root & storage lifecycle |
+| :--- | :--- | :--- |
+| **Emulated** | `diosix.mode=dev` | Stages your build machine's SSH public keys into a temporary overlay and mounts `zig-out/storage.img` read-write for immediate QEMU SSH access on port `2222`. |
+| **Live** | `diosix.mode=live` | Copies pre-loaded guest images into a 768 MiB RAM-backed filesystem and leaves physical disks unmounted so you can run `dsx host install`. |
+| **Installed** | `diosix.mode=persistent` | Mounts the ext4 `DIOSIX_DATA` and `DIOSIX_STATE` volumes read-write to retain SSH keys, guest images, virtual disks, `/var/lib/diosix/state/edition`, and `/var/lib/diosix/etc/personal.toml` across reboots. |
+| **Diskless** | `diosix.mode=diskless` | Stages verified payloads into `tmpfs` over HTTP from a Trivial File Transfer Protocol (TFTP) or HTTP boot server without touching local storage. |
+
+* Installing onto storage (`dsx host install`) transitions a **Live** host to
+  **Installed**, partitioning the target disk and writing the persistent edition
+  override and Personal profile configuration.
 * Selecting `Diosix Swarm` (`-Dedition=swarm`) or passing `diosix.swarm=1` or
   `diosix.swarm_ip=<cidr>` activates the parent message board (`diosix0:8485`),
   large language model (LLM) proxy (`diosix0:8081`), `dsx agent`, and
