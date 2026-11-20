@@ -1,0 +1,485 @@
+/* Stage 02: Interactive Symmetric Tree & Pillars */
+.tree-frame {
+  border-top: 1px solid var(--rule-strong);
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 2rem 0 1.4rem;
+}
+
+.tree-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.tree-hv-bar {
+  fill: var(--surface);
+  stroke: var(--rule-strong);
+  stroke-width: 1;
+}
+
+.tree-hv-text {
+  fill: var(--ink-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.tree-edge {
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  fill: none;
+  transition: opacity 0.18s ease, stroke 0.18s ease;
+}
+
+.tree-edge.is-dim {
+  opacity: 0.22;
+}
+
+.tree-edge.is-active {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.tree-lateral {
+  stroke: var(--ink-faint);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.5;
+}
+
+.tree-lateral-label {
+  fill: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.tree-node {
+  cursor: pointer;
+  outline: none;
+  transition: opacity 0.18s ease;
+}
+
+.tree-node rect {
+  fill: var(--bg);
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  transition: stroke 0.16s ease, fill 0.16s ease;
+}
+
+.tree-node .node-name {
+  fill: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tree-node .node-cid {
+  fill: var(--ink-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.tree-node.is-self rect {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.tree-node.is-self .node-cid {
+  fill: var(--accent);
+  font-weight: 600;
+}
+
+.tree-node.is-parent rect,
+.tree-node.is-child rect {
+  stroke: var(--ink);
+}
+
+.tree-node.is-opaque {
+  opacity: 0.38;
+}
+
+.tree-node:focus-visible rect {
+  stroke: var(--accent);
+  stroke-dasharray: 3 2;
+}
+
+.perspective-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem 1.5rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.perspective-hint {
+  color: var(--ink-faint);
+  font-size: 0.76rem;
+}
+
+.pillars {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2.5rem 3.5rem;
+  margin-top: 3.25rem;
+}
+
+.pillar {
+  border-top: 1px solid var(--rule);
+  padding-top: 1.1rem;
+}
+
+.pillar-index {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  margin-bottom: 0.5rem;
+}
+
+.pillar p {
+  margin: 0.55rem 0 0;
+  color: var(--ink-muted);
+  font-size: 0.94rem;
+}
+
+/* Stage 03: Editions */
+.release-pill {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  padding: 0.32rem 0.7rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  color: var(--ink-muted);
+}
+
+.editions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2.75rem 2.25rem;
+}
+
+.edition-col {
+  border-top: 2px solid var(--ink);
+  padding-top: 1.35rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.edition-col.is-default {
+  border-top-color: var(--accent);
+}
+
+.edition-kicker {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  margin-bottom: 0.4rem;
+}
+
+.edition-col.is-default .edition-kicker {
+  color: var(--accent);
+}
+
+.edition-desc {
+  margin: 0.75rem 0 1.25rem;
+  color: var(--ink-muted);
+  font-size: 0.94rem;
+}
+
+.edition-facts {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.75rem;
+  font-size: 0.87rem;
+  color: var(--ink-muted);
+}
+
+.edition-facts li {
+  padding: 0.42rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.edition-note {
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+  margin: -0.75rem 0 1.35rem;
+}
+
+.edition-actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.edition-links {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-muted);
+}
+
+.edition-links a:hover {
+  color: var(--accent);
+}
+
+.sdk-bar {
+  margin-top: 3rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem 2.5rem;
+  font-size: 0.88rem;
+  color: var(--ink-muted);
+}
+
+.sdk-bar span {
+  flex: 1 1 480px;
+  max-width: 72ch;
+}
+
+.sdk-bar a {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* Stage 04: Boot Modes & Composer */
+.modes-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1.5rem 2rem;
+  margin-bottom: 2.75rem;
+}
+
+.mode-step {
+  border-top: 1px solid var(--rule);
+  padding-top: 0.95rem;
+}
+
+.mode-step .mono {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.mode-step p {
+  margin: 0.45rem 0 0;
+  font-size: 0.88rem;
+  color: var(--ink-muted);
+}
+
+.composer {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1.35rem 1.5rem;
+}
+
+.composer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  margin-bottom: 1.15rem;
+}
+
+.seg-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.seg-label {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  margin-right: 0.4rem;
+}
+
+.seg-btn {
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 0.32rem 0.7rem;
+  font-size: 0.82rem;
+  font-family: var(--sans);
+  cursor: pointer;
+}
+
+.seg-btn[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--ink);
+  border-color: var(--ink);
+  font-weight: 600;
+}
+
+.composer-code {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 0.95rem 1.1rem;
+}
+
+.composer-code pre {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+
+.copy-btn {
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 0.28rem 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.copy-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
+.composer-note {
+  margin: 0.85rem 0 0;
+  font-size: 0.86rem;
+  color: var(--ink-muted);
+}
+
+/* Stage 05: Source & Docs */
+.docs-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2.5rem 3.5rem;
+}
+
+.doc-group h3 {
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.doc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.doc-list li {
+  border-top: 1px solid var(--rule);
+}
+
+.doc-list a {
+  display: grid;
+  grid-template-columns: minmax(145px, auto) 1fr auto;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  padding: 0.72rem 0;
+}
+
+.doc-list a:hover .doc-file,
+.doc-list a:hover .doc-arrow {
+  color: var(--accent);
+}
+
+.doc-file {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.doc-summary {
+  font-size: 0.88rem;
+  color: var(--ink-muted);
+}
+
+.doc-arrow {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+}
+
+.site-footer {
+  border-top: 1px solid var(--rule);
+  padding: 2.25rem 0;
+  font-size: 0.84rem;
+  color: var(--ink-faint);
+}
+
+.footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+}
+
+.footer-links {
+  display: flex;
+  gap: 1.25rem;
+}
+
+.footer-links a:hover {
+  color: var(--ink);
+}
+
+@media (max-width: 860px) {
+  .hero-grid,
+  .editions-grid,
+  .modes-strip,
+  .pillars,
+  .docs-grid {
+    grid-template-columns: 1fr;
+  }
+  .hero-mark {
+    max-width: 240px;
+    margin: 0 auto;
+  }
+  .stage-readout {
+    display: none;
+  }
+  .site-nav {
+    gap: 1rem;
+    font-size: 0.84rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .site-nav a[href="#symmetry"],
+  .site-nav a[href="#boot-modes"] {
+    display: none;
+  }
+  .doc-list a {
+    grid-template-columns: 1fr auto;
+  }
+  .doc-summary {
+    grid-column: 1 / -1;
+  }
+}
