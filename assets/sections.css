@@ -25,11 +25,26 @@
   letter-spacing: 0.03em;
 }
 
+.tree-scene {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+
+.tree-scene.is-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .tree-edge {
   stroke: var(--rule-strong);
   stroke-width: 1.5;
   fill: none;
   transition: opacity 0.2s ease, stroke 0.2s ease, stroke-dashoffset 0.3s ease-out;
+}
+
+.tree-edge-hw {
+  stroke-dasharray: 5 3;
 }
 
 .tree-edge.is-dim {
@@ -80,6 +95,11 @@
   stroke: var(--rule-strong);
   stroke-width: 1.5;
   transition: stroke 0.16s ease, fill 0.16s ease;
+}
+
+.tree-hw-node rect {
+  fill: var(--surface);
+  stroke-dasharray: 5 3;
 }
 
 .tree-node .node-name {

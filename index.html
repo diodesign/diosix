@@ -74,6 +74,11 @@
               to ancestors; siblings cannot probe sideways.
             </p>
           </div>
+          <div class="seg-track seg-track-surface" data-seg-track role="group" aria-label="Use case">
+            <span class="seg-thumb" aria-hidden="true"></span>
+            <button class="seg-btn" type="button" data-tree-case="swarm" aria-pressed="true">Agentic swarm</button>
+            <button class="seg-btn" type="button" data-tree-case="personal" aria-pressed="false">Personal device</button>
+          </div>
         </div>
 
         <div class="tree-frame">
@@ -82,45 +87,90 @@
             <rect class="tree-hv-bar" x="20" y="10" width="840" height="36" rx="4"/>
             <text class="tree-hv-text" x="440" y="32" text-anchor="middle">M-mode hypervisor</text>
 
-            <path id="e-root-steward" class="tree-edge" d="M 440 46 V 66 M 440 124 V 146 H 265 V 164"/>
-            <path id="e-root-desktop" class="tree-edge" d="M 440 146 H 615 V 164"/>
-            <path id="e-steward-wa" class="tree-edge" d="M 265 222 V 242 H 150 V 262"/>
-            <path id="e-steward-wb" class="tree-edge" d="M 265 242 H 380 V 262"/>
+            <g class="tree-scene is-active" data-scene="swarm">
+              <path id="e-s-root-steward" class="tree-edge" d="M 440 46 V 66 M 440 124 V 146 H 235 V 164"/>
+              <path id="e-s-root-service" class="tree-edge" d="M 440 146 H 645 V 164"/>
+              <path id="e-s-steward-wa" class="tree-edge" d="M 235 222 V 242 H 130 V 262"/>
+              <path id="e-s-steward-wb" class="tree-edge" d="M 235 242 H 340 V 262"/>
+              <path id="e-s-service-leaf" class="tree-edge" d="M 645 222 V 262"/>
 
-            <g class="tree-barrier" id="tree-barrier" aria-hidden="true">
-              <line class="tree-lateral" x1="378" y1="193" x2="502" y2="193"/>
-              <circle class="tree-cut-bg" cx="440" cy="193" r="10"/>
-              <path class="tree-cut-mark" d="M 435 188 L 445 198 M 445 188 L 435 198"/>
+              <g class="tree-barrier" data-barrier="swarm" aria-hidden="true">
+                <line class="tree-lateral" x1="352" y1="193" x2="528" y2="193"/>
+                <circle class="tree-cut-bg" cx="440" cy="193" r="10"/>
+                <path class="tree-cut-mark" d="M 435 188 L 445 198 M 445 188 L 435 198"/>
+              </g>
+
+              <g class="tree-node" data-node="root" tabindex="0" role="button" aria-pressed="true">
+                <rect x="340" y="66" width="200" height="58" rx="6"/>
+                <text class="node-name" x="440" y="90" text-anchor="middle">Root VM</text>
+                <text class="node-cid" x="440" y="110" text-anchor="middle">CID 1 · self</text>
+              </g>
+
+              <g class="tree-node" data-node="steward" tabindex="0" role="button" aria-pressed="false">
+                <rect x="135" y="164" width="200" height="58" rx="6"/>
+                <text class="node-name" x="235" y="188" text-anchor="middle">Steward</text>
+                <text class="node-cid" x="235" y="208" text-anchor="middle">CID 2 · child</text>
+              </g>
+
+              <g class="tree-node" data-node="service" tabindex="0" role="button" aria-pressed="false">
+                <rect x="545" y="164" width="200" height="58" rx="6"/>
+                <text class="node-name" x="645" y="188" text-anchor="middle">Service Steward</text>
+                <text class="node-cid" x="645" y="208" text-anchor="middle">CID 3 · child</text>
+              </g>
+
+              <g class="tree-node" data-node="worker-a" tabindex="0" role="button" aria-pressed="false">
+                <rect x="40" y="262" width="180" height="58" rx="6"/>
+                <text class="node-name" x="130" y="286" text-anchor="middle">Worker A</text>
+                <text class="node-cid" x="130" y="306" text-anchor="middle">opaque</text>
+              </g>
+
+              <g class="tree-node" data-node="worker-b" tabindex="0" role="button" aria-pressed="false">
+                <rect x="250" y="262" width="180" height="58" rx="6"/>
+                <text class="node-name" x="340" y="286" text-anchor="middle">Worker B</text>
+                <text class="node-cid" x="340" y="306" text-anchor="middle">opaque</text>
+              </g>
+
+              <g class="tree-node" data-node="web-leaf" tabindex="0" role="button" aria-pressed="false">
+                <rect x="555" y="262" width="180" height="58" rx="6"/>
+                <text class="node-name" x="645" y="286" text-anchor="middle">Web Leaf</text>
+                <text class="node-cid" x="645" y="306" text-anchor="middle">opaque</text>
+              </g>
             </g>
 
-            <g class="tree-node" data-node="root" tabindex="0" role="button" aria-pressed="true">
-              <rect x="340" y="66" width="200" height="58" rx="6"/>
-              <text class="node-name" x="440" y="90" text-anchor="middle">Root VM</text>
-              <text class="node-cid" x="440" y="110" text-anchor="middle">CID 1 · self</text>
-            </g>
+            <g class="tree-scene" data-scene="personal">
+              <path id="e-p-mgmt-desktop" class="tree-edge" d="M 440 46 V 66 M 440 124 V 146 H 240 V 164"/>
+              <path id="e-p-mgmt-sandbox" class="tree-edge" d="M 440 146 H 640 V 164"/>
+              <path id="e-p-desktop-hw" class="tree-edge tree-edge-hw" d="M 240 222 V 262"/>
 
-            <g class="tree-node" data-node="steward" tabindex="0" role="button" aria-pressed="false">
-              <rect x="165" y="164" width="200" height="58" rx="6"/>
-              <text class="node-name" x="265" y="188" text-anchor="middle">Steward</text>
-              <text class="node-cid" x="265" y="208" text-anchor="middle">CID 2 · child</text>
-            </g>
+              <g class="tree-barrier" data-barrier="personal" aria-hidden="true">
+                <line class="tree-lateral" x1="376" y1="193" x2="504" y2="193"/>
+                <circle class="tree-cut-bg" cx="440" cy="193" r="10"/>
+                <path class="tree-cut-mark" d="M 435 188 L 445 198 M 445 188 L 435 198"/>
+              </g>
 
-            <g class="tree-node" data-node="desktop" tabindex="0" role="button" aria-pressed="false">
-              <rect x="515" y="164" width="200" height="58" rx="6"/>
-              <text class="node-name" x="615" y="188" text-anchor="middle">Desktop</text>
-              <text class="node-cid" x="615" y="208" text-anchor="middle">CID 3 · child</text>
-            </g>
+              <g class="tree-node" data-node="mgmt" tabindex="-1" role="button" aria-pressed="false">
+                <rect x="340" y="66" width="200" height="58" rx="6"/>
+                <text class="node-name" x="440" y="90" text-anchor="middle">Management VM</text>
+                <text class="node-cid" x="440" y="110" text-anchor="middle">CID 1 · self</text>
+              </g>
 
-            <g class="tree-node" data-node="worker-a" tabindex="0" role="button" aria-pressed="false">
-              <rect x="50" y="262" width="200" height="58" rx="6"/>
-              <text class="node-name" x="150" y="286" text-anchor="middle">Worker A</text>
-              <text class="node-cid" x="150" y="306" text-anchor="middle">opaque</text>
-            </g>
+              <g class="tree-node" data-node="desktop" tabindex="-1" role="button" aria-pressed="false">
+                <rect x="120" y="164" width="240" height="58" rx="6"/>
+                <text class="node-name" x="240" y="188" text-anchor="middle">Active Desktop</text>
+                <text class="node-cid" x="240" y="208" text-anchor="middle">CID 2 · child</text>
+              </g>
 
-            <g class="tree-node" data-node="worker-b" tabindex="0" role="button" aria-pressed="false">
-              <rect x="280" y="262" width="200" height="58" rx="6"/>
-              <text class="node-name" x="380" y="286" text-anchor="middle">Worker B</text>
-              <text class="node-cid" x="380" y="306" text-anchor="middle">opaque</text>
+              <g class="tree-node" data-node="sandbox" tabindex="-1" role="button" aria-pressed="false">
+                <rect x="520" y="164" width="240" height="58" rx="6"/>
+                <text class="node-name" x="640" y="188" text-anchor="middle">Isolated Sandbox</text>
+                <text class="node-cid" x="640" y="208" text-anchor="middle">CID 3 · child</text>
+              </g>
+
+              <g class="tree-node tree-hw-node" data-node="hardware" tabindex="-1" role="button" aria-pressed="false">
+                <rect x="120" y="262" width="240" height="58" rx="6"/>
+                <text class="node-name" x="240" y="286" text-anchor="middle">GPU · USB · Input</text>
+                <text class="node-cid" x="240" y="306" text-anchor="middle">exclusive DMA / IRQ</text>
+              </g>
             </g>
           </svg>
 
@@ -380,6 +430,7 @@
     </div>
   </footer>
 
+  <script src="assets/tree-data.js" defer></script>
   <script src="assets/app.js" defer></script>
 </body>
 </html>

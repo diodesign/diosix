@@ -6,109 +6,12 @@
     "(prefers-reduced-motion: reduce)",
   ).matches;
 
-  /* 01. Relative CID perspective explorer */
-  const PERSPECTIVES = {
-    root: {
-      cids: {
-        root: "CID 1 · self",
-        steward: "CID 2 · child",
-        desktop: "CID 3 · child",
-        "worker-a": "opaque",
-        "worker-b": "opaque",
-      },
-      roles: {
-        root: "is-self",
-        steward: "is-child",
-        desktop: "is-child",
-        "worker-a": "is-opaque",
-        "worker-b": "is-opaque",
-      },
-      edges: ["e-root-steward", "e-root-desktop"],
-      barrier: false,
-      text: "root  →  self CID 1  ·  children CID 2, CID 3  ·  grandchildren opaque",
-    },
-    steward: {
-      cids: {
-        root: "CID 0 · parent",
-        steward: "CID 1 · self",
-        desktop: "hidden · sibling",
-        "worker-a": "CID 2 · child",
-        "worker-b": "CID 3 · child",
-      },
-      roles: {
-        root: "is-parent",
-        steward: "is-self",
-        desktop: "is-opaque",
-        "worker-a": "is-child",
-        "worker-b": "is-child",
-      },
-      edges: ["e-root-steward", "e-steward-wa", "e-steward-wb"],
-      barrier: true,
-      text: "steward  →  parent CID 0  ·  self CID 1  ·  children CID 2, CID 3  ·  sibling hidden",
-    },
-    desktop: {
-      cids: {
-        root: "CID 0 · parent",
-        steward: "hidden · sibling",
-        desktop: "CID 1 · self",
-        "worker-a": "opaque",
-        "worker-b": "opaque",
-      },
-      roles: {
-        root: "is-parent",
-        steward: "is-opaque",
-        desktop: "is-self",
-        "worker-a": "is-opaque",
-        "worker-b": "is-opaque",
-      },
-      edges: ["e-root-desktop"],
-      barrier: true,
-      text: "desktop  →  parent CID 0  ·  self CID 1  ·  siblings & cousins hidden",
-    },
-    "worker-a": {
-      cids: {
-        root: "opaque",
-        steward: "CID 0 · parent",
-        desktop: "opaque",
-        "worker-a": "CID 1 · self",
-        "worker-b": "hidden · sibling",
-      },
-      roles: {
-        root: "is-opaque",
-        steward: "is-parent",
-        desktop: "is-opaque",
-        "worker-a": "is-self",
-        "worker-b": "is-opaque",
-      },
-      edges: ["e-steward-wa"],
-      barrier: false,
-      text: "worker-a  →  parent CID 0 (steward)  ·  self CID 1  ·  lateral traffic blocked",
-    },
-    "worker-b": {
-      cids: {
-        root: "opaque",
-        steward: "CID 0 · parent",
-        desktop: "opaque",
-        "worker-a": "hidden · sibling",
-        "worker-b": "CID 1 · self",
-      },
-      roles: {
-        root: "is-opaque",
-        steward: "is-parent",
-        desktop: "is-opaque",
-        "worker-a": "is-opaque",
-        "worker-b": "is-self",
-      },
-      edges: ["e-steward-wb"],
-      barrier: false,
-      text: "worker-b  →  parent CID 0 (steward)  ·  self CID 1  ·  coordinates via board",
-    },
-  };
-
-  const nodes = document.querySelectorAll(".tree-node[data-node]");
-  const edges = document.querySelectorAll(".tree-edge[id]");
-  const barrier = document.getElementById("tree-barrier");
+  /* 01. Relative CID & use-case explorer */
+  const SCENES = window.DIOSIX_SCENES || {};
+  const sceneEls = document.querySelectorAll(".tree-scene[data-scene]");
+  const caseBtns = document.querySelectorAll("[data-tree-case]");
   const readout = document.getElementById("cid-readout");
+  let curScene = "swarm";
 
   function traceEdge(edge) {
     if (reducedMotion || typeof edge.getTotalLength !== "function") return;
@@ -120,9 +23,15 @@
   }
 
   function selectNode(id, animate = true) {
-    const view = PERSPECTIVES[id];
+    const sceneData = SCENES[curScene];
+    const activeScene = document.querySelector(
+      `.tree-scene[data-scene="${curScene}"]`,
+    );
+    if (!sceneData || !activeScene) return;
+    const view = sceneData.perspectives[id];
     if (!view) return;
-    nodes.forEach((el) => {
+
+    activeScene.querySelectorAll(".tree-node[data-node]").forEach((el) => {
       const nid = el.dataset.node;
       el.classList.remove("is-self", "is-parent", "is-child", "is-opaque");
       el.classList.add(view.roles[nid]);
@@ -130,7 +39,7 @@
       const label = el.querySelector(".node-cid");
       if (label) label.textContent = view.cids[nid];
     });
-    edges.forEach((edge) => {
+    activeScene.querySelectorAll(".tree-edge[id]").forEach((edge) => {
       const active = view.edges.includes(edge.id);
       edge.classList.toggle("is-active", active);
       edge.classList.toggle("is-dim", !active);
@@ -141,19 +50,43 @@
         edge.style.strokeDashoffset = "";
       }
     });
+    const barrier = activeScene.querySelector(".tree-barrier");
     if (barrier) barrier.classList.toggle("is-highlighted", view.barrier);
     if (readout) readout.textContent = view.text;
   }
 
-  nodes.forEach((node) => {
-    node.addEventListener("click", () => selectNode(node.dataset.node, true));
-    node.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") {
-        ev.preventDefault();
-        selectNode(node.dataset.node, true);
-      }
+  function setTreeScene(name, syncThumbs = true) {
+    if (!SCENES[name]) return;
+    curScene = name;
+    sceneEls.forEach((sc) => {
+      const active = sc.dataset.scene === name;
+      sc.classList.toggle("is-active", active);
+      sc.querySelectorAll(".tree-node[data-node]").forEach((node) => {
+        node.setAttribute("tabindex", active ? "0" : "-1");
+      });
+    });
+    caseBtns.forEach((btn) =>
+      btn.setAttribute("aria-pressed", String(btn.dataset.treeCase === name)),
+    );
+    if (syncThumbs) syncAllThumbs();
+    selectNode(SCENES[name].defaultNode, false);
+  }
+
+  sceneEls.forEach((sc) => {
+    sc.querySelectorAll(".tree-node[data-node]").forEach((node) => {
+      node.addEventListener("click", () => selectNode(node.dataset.node, true));
+      node.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          selectNode(node.dataset.node, true);
+        }
+      });
     });
   });
+
+  caseBtns.forEach((btn) =>
+    btn.addEventListener("click", () => setTreeScene(btn.dataset.treeCase)),
+  );
 
   /* 02. Sliding thumb helper for segmented tracks */
   function moveSegThumb(track) {
@@ -429,7 +362,8 @@
     syncNavIndicator();
   });
 
-  selectNode("root", false);
+  const initCase = new URLSearchParams(window.location.search).get("case");
+  setTreeScene(SCENES[initCase] ? initCase : "swarm", false);
   renderComposer(false);
   requestAnimationFrame(syncAllThumbs);
   if (document.fonts && document.fonts.ready) {
