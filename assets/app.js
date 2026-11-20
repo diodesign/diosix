@@ -1,15 +1,20 @@
 (() => {
-  const REPO = "https://github.com/diodesign/diosix";
+  document.documentElement.classList.add("js-ready");
 
-  /* 01. Relative CID perspective explorer in SVG */
+  const REPO = "https://github.com/diodesign/diosix";
+  const reducedMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+
+  /* 01. Relative CID perspective explorer */
   const PERSPECTIVES = {
     root: {
       cids: {
         root: "CID 1 · self",
         steward: "CID 2 · child",
         desktop: "CID 3 · child",
-        "worker-a": "opaque · grandchild",
-        "worker-b": "opaque · grandchild",
+        "worker-a": "opaque",
+        "worker-b": "opaque",
       },
       roles: {
         root: "is-self",
@@ -19,7 +24,8 @@
         "worker-b": "is-opaque",
       },
       edges: ["e-root-steward", "e-root-desktop"],
-      text: "Root VM sees self (CID 1) and direct children Steward (CID 2) & Desktop (CID 3). Grandchildren stay opaque.",
+      barrier: false,
+      text: "root  →  self CID 1  ·  children CID 2, CID 3  ·  grandchildren opaque",
     },
     steward: {
       cids: {
@@ -37,15 +43,16 @@
         "worker-b": "is-child",
       },
       edges: ["e-root-steward", "e-steward-wa", "e-steward-wb"],
-      text: "Steward sees Parent (CID 0), self (CID 1), and Workers (CID 2..3) on its private switch. Sibling Desktop is invisible.",
+      barrier: true,
+      text: "steward  →  parent CID 0  ·  self CID 1  ·  children CID 2, CID 3  ·  sibling hidden",
     },
     desktop: {
       cids: {
         root: "CID 0 · parent",
         steward: "hidden · sibling",
         desktop: "CID 1 · self",
-        "worker-a": "hidden · cousin",
-        "worker-b": "hidden · cousin",
+        "worker-a": "opaque",
+        "worker-b": "opaque",
       },
       roles: {
         root: "is-parent",
@@ -55,13 +62,14 @@
         "worker-b": "is-opaque",
       },
       edges: ["e-root-desktop"],
-      text: "Desktop sees only Parent (CID 0) and self (CID 1). Steward and Workers cannot be probed or messaged.",
+      barrier: true,
+      text: "desktop  →  parent CID 0  ·  self CID 1  ·  siblings & cousins hidden",
     },
     "worker-a": {
       cids: {
-        root: "hidden · ancestor",
+        root: "opaque",
         steward: "CID 0 · parent",
-        desktop: "hidden · aunt",
+        desktop: "opaque",
         "worker-a": "CID 1 · self",
         "worker-b": "hidden · sibling",
       },
@@ -73,13 +81,14 @@
         "worker-b": "is-opaque",
       },
       edges: ["e-steward-wa"],
-      text: "Worker A treats Steward identically as CID 0. Lateral frames to Worker B and upward probes to Root are blocked by M-mode.",
+      barrier: false,
+      text: "worker-a  →  parent CID 0 (steward)  ·  self CID 1  ·  lateral traffic blocked",
     },
     "worker-b": {
       cids: {
-        root: "hidden · ancestor",
+        root: "opaque",
         steward: "CID 0 · parent",
-        desktop: "hidden · aunt",
+        desktop: "opaque",
         "worker-a": "hidden · sibling",
         "worker-b": "CID 1 · self",
       },
@@ -91,15 +100,26 @@
         "worker-b": "is-self",
       },
       edges: ["e-steward-wb"],
-      text: "Worker B coordinates solely through Steward (CID 0) boards (`dsx board`) and inherits attenuated RAM, CPU, and package quotas.",
+      barrier: false,
+      text: "worker-b  →  parent CID 0 (steward)  ·  self CID 1  ·  coordinates via board",
     },
   };
 
   const nodes = document.querySelectorAll(".tree-node[data-node]");
   const edges = document.querySelectorAll(".tree-edge[id]");
+  const barrier = document.getElementById("tree-barrier");
   const readout = document.getElementById("cid-readout");
 
-  function selectNode(id) {
+  function traceEdge(edge) {
+    if (reducedMotion || typeof edge.getTotalLength !== "function") return;
+    const len = edge.getTotalLength();
+    edge.style.strokeDasharray = String(len);
+    edge.style.strokeDashoffset = String(len);
+    edge.getBoundingClientRect();
+    edge.style.strokeDashoffset = "0";
+  }
+
+  function selectNode(id, animate = true) {
     const view = PERSPECTIVES[id];
     if (!view) return;
     nodes.forEach((el) => {
@@ -114,21 +134,42 @@
       const active = view.edges.includes(edge.id);
       edge.classList.toggle("is-active", active);
       edge.classList.toggle("is-dim", !active);
+      if (active && animate) {
+        traceEdge(edge);
+      } else {
+        edge.style.strokeDasharray = "";
+        edge.style.strokeDashoffset = "";
+      }
     });
+    if (barrier) barrier.classList.toggle("is-highlighted", view.barrier);
     if (readout) readout.textContent = view.text;
   }
 
   nodes.forEach((node) => {
-    node.addEventListener("click", () => selectNode(node.dataset.node));
+    node.addEventListener("click", () => selectNode(node.dataset.node, true));
     node.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" || ev.key === " ") {
         ev.preventDefault();
-        selectNode(node.dataset.node);
+        selectNode(node.dataset.node, true);
       }
     });
   });
 
-  /* 02. Edition x Boot Mode command composer */
+  /* 02. Sliding thumb helper for segmented tracks */
+  function moveSegThumb(track) {
+    const thumb = track.querySelector(".seg-thumb");
+    const active = track.querySelector("[aria-pressed='true']");
+    if (!thumb || !active) return;
+    thumb.style.width = `${active.offsetWidth}px`;
+    thumb.style.transform = `translateX(${active.offsetLeft}px)`;
+  }
+
+  const segTracks = document.querySelectorAll("[data-seg-track]");
+  function syncAllThumbs() {
+    segTracks.forEach(moveSegThumb);
+  }
+
+  /* 03. Edition x Boot Mode command composer */
   const COMMANDS = {
     core: {
       emulated: {
@@ -191,32 +232,43 @@
   const edBtns = document.querySelectorAll("[data-select-ed]");
   const modeBtns = document.querySelectorAll("[data-select-mode]");
   const cmdOut = document.getElementById("composer-cmd");
+  const cmdPre = cmdOut ? cmdOut.parentElement : null;
   const noteOut = document.getElementById("composer-note");
   const copyBtn = document.getElementById("composer-copy");
 
-  function renderComposer() {
+  function renderComposer(flash = true) {
     const entry = COMMANDS[curEd][curMode];
-    if (cmdOut) cmdOut.textContent = entry.cmd;
-    if (noteOut) noteOut.textContent = entry.note;
     edBtns.forEach((b) =>
       b.setAttribute("aria-pressed", String(b.dataset.selectEd === curEd)),
     );
     modeBtns.forEach((b) =>
       b.setAttribute("aria-pressed", String(b.dataset.selectMode === curMode)),
     );
+    syncAllThumbs();
+    if (cmdPre && flash && !reducedMotion) {
+      cmdPre.classList.add("is-updating");
+      setTimeout(() => {
+        if (cmdOut) cmdOut.textContent = entry.cmd;
+        if (noteOut) noteOut.textContent = entry.note;
+        cmdPre.classList.remove("is-updating");
+      }, 90);
+    } else {
+      if (cmdOut) cmdOut.textContent = entry.cmd;
+      if (noteOut) noteOut.textContent = entry.note;
+    }
   }
 
   edBtns.forEach((btn) =>
     btn.addEventListener("click", () => {
       curEd = btn.dataset.selectEd;
-      renderComposer();
+      renderComposer(true);
     }),
   );
 
   modeBtns.forEach((btn) =>
     btn.addEventListener("click", () => {
       curMode = btn.dataset.selectMode;
-      renderComposer();
+      renderComposer(true);
     }),
   );
 
@@ -228,7 +280,7 @@
         await navigator.clipboard.writeText(text);
         copyBtn.textContent = "Copied";
       } catch {
-        copyBtn.textContent = "Select to copy";
+        copyBtn.textContent = "Select";
       }
       setTimeout(() => {
         copyBtn.textContent = "Copy";
@@ -236,7 +288,7 @@
     });
   }
 
-  /* 03. stable / devel branch switcher for GitHub docs links */
+  /* 04. stable / devel branch switcher for GitHub docs */
   const branchBtns = document.querySelectorAll("[data-doc-branch]");
   const docLinks = document.querySelectorAll("a[data-doc-path]");
 
@@ -245,45 +297,102 @@
       b.setAttribute("aria-pressed", String(b.dataset.docBranch === branch)),
     );
     docLinks.forEach((a) => {
-      const rel = a.dataset.docPath;
-      a.href = `${REPO}/blob/${branch}/${rel}`;
+      a.href = `${REPO}/blob/${branch}/${a.dataset.docPath}`;
     });
+    syncAllThumbs();
   }
 
   branchBtns.forEach((btn) =>
     btn.addEventListener("click", () => setDocBranch(btn.dataset.docBranch)),
   );
 
-  /* 04. Scroll-stage indicator via IntersectionObserver (0% CPU when idle) */
-  const stageReadout = document.getElementById("stage-readout");
-  const stages = document.querySelectorAll("section[data-stage]");
-  if (stageReadout && "IntersectionObserver" in window) {
-    const io = new IntersectionObserver(
+  /* 05. Adaptive masthead theme, nav hairline, & one-shot reveals */
+  const header = document.getElementById("site-header");
+  const hero = document.getElementById("welcome");
+  const nav = document.querySelector(".site-nav");
+  const navInd = document.getElementById("nav-indicator");
+  const navLinks = nav ? nav.querySelectorAll("a[href^='#']") : [];
+  let activeNavId = "";
+
+  function syncNavIndicator() {
+    if (!navInd || !activeNavId) {
+      if (navInd) navInd.classList.remove("is-visible");
+      return;
+    }
+    const target = nav.querySelector(`a[href="#${activeNavId}"]`);
+    navLinks.forEach((a) => a.classList.toggle("is-current", a === target));
+    if (!target || target.offsetParent === null) {
+      navInd.classList.remove("is-visible");
+      return;
+    }
+    navInd.classList.add("is-visible");
+    navInd.style.transform =
+      `translateX(${target.offsetLeft}px) scaleX(${target.offsetWidth})`;
+  }
+
+  if ("IntersectionObserver" in window) {
+    if (header && hero) {
+      new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            header.classList.toggle("is-on-hero", entry.isIntersecting);
+            if (entry.isIntersecting && entry.intersectionRatio > 0.45) {
+              activeNavId = "";
+              syncNavIndicator();
+            }
+          });
+        },
+        { rootMargin: "-64px 0px 0px 0px", threshold: [0.05, 0.45] },
+      ).observe(hero);
+    }
+
+    const tracked = ["symmetry", "editions", "boot-modes", "docs"]
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
+    const navIo = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
-            stageReadout.textContent = entry.target.dataset.stage;
+            activeNavId = entry.target.id;
+            syncNavIndicator();
           }
         });
       },
       { rootMargin: "-35% 0px -50% 0px", threshold: 0 },
     );
-    stages.forEach((s) => io.observe(s));
+    tracked.forEach((el) => navIo.observe(el));
+
+    const revealIo = new IntersectionObserver(
+      (entries, observer) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            observer.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.08 },
+    );
+    document
+      .querySelectorAll(".stage-reveal")
+      .forEach((el) => revealIo.observe(el));
+  } else {
+    document
+      .querySelectorAll(".stage-reveal")
+      .forEach((el) => el.classList.add("is-visible"));
   }
 
-  /* 05. Hydrate live asset links from GitHub Releases with zero-JS fallback */
+  /* 06. GitHub Releases asset hydration */
   async function hydrateReleases() {
     try {
-      const res = await fetch(
-        "https://api.github.com/repos/diodesign/diosix/releases/latest",
-        { headers: { Accept: "application/vnd.github+json" } },
-      );
+      const res = await fetch(`${REPO.replace("github.com", "api.github.com/repos")}/releases/latest`, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
       if (!res.ok) return;
       const data = await res.json();
       const assets = Array.isArray(data.assets) ? data.assets : [];
-      const tag = data.tag_name;
       const pill = document.getElementById("release-pill");
-      if (pill && tag) pill.textContent = `${tag} · riscv64`;
+      if (pill && data.tag_name) pill.textContent = `${data.tag_name} · riscv64`;
 
       ["core", "personal", "swarm"].forEach((ed) => {
         const tar = assets.find((a) =>
@@ -291,9 +400,7 @@
           a.name.includes(`-${ed}-`) &&
           a.name.endsWith(".tar.xz"),
         );
-        const sha = assets.find((a) =>
-          tar && a.name === `${tar.name}.sha256`,
-        );
+        const sha = assets.find((a) => tar && a.name === `${tar.name}.sha256`);
         const dlEl = document.querySelector(`[data-dl="${ed}"]`);
         const shaEl = document.querySelector(`[data-sha="${ed}"]`);
         if (dlEl && tar) {
@@ -301,9 +408,7 @@
           const mib = Math.round(tar.size / (1024 * 1024));
           dlEl.textContent = `Download ${ed} (${mib} MiB)`;
         }
-        if (shaEl && sha) {
-          shaEl.href = sha.browser_download_url;
-        }
+        if (shaEl && sha) shaEl.href = sha.browser_download_url;
       });
 
       const sdk = assets.find((a) =>
@@ -312,15 +417,26 @@
       const sdkEl = document.querySelector("[data-dl='sdk']");
       if (sdkEl && sdk) {
         sdkEl.href = sdk.browser_download_url;
-        const mib = (sdk.size / (1024 * 1024)).toFixed(1);
-        sdkEl.textContent = `${sdk.name} (${mib} MiB)`;
+        sdkEl.textContent = `${sdk.name} (${(sdk.size / (1024 * 1024)).toFixed(1)} MiB)`;
       }
     } catch {
-      /* Network offline or rate-limited: preserve /releases/latest fallbacks. */
+      /* Fallback /releases/latest URLs remain intact. */
     }
   }
 
-  selectNode("root");
-  renderComposer();
+  window.addEventListener("resize", () => {
+    syncAllThumbs();
+    syncNavIndicator();
+  });
+
+  selectNode("root", false);
+  renderComposer(false);
+  requestAnimationFrame(syncAllThumbs);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => {
+      syncAllThumbs();
+      syncNavIndicator();
+    });
+  }
   hydrateReleases();
 })();
