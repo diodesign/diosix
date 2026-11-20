@@ -102,60 +102,60 @@
     segTracks.forEach(moveSegThumb);
   }
 
-  /* 03. Edition x Boot Mode command composer */
+  /* 03. Edition and Boot Mode command composer */
   const COMMANDS = {
     core: {
       emulated: {
         cmd: "./scripts/build.sh -Dedition=core run",
-        note: "Boots headless Diosix Core in QEMU with developer SSH keys on localhost:2222.",
+        note: "Boots headless Diosix Core in QEMU with developer SSH keys on localhost port 2222.",
       },
       live: {
         cmd: "tar -xf diosix-26.1-core-riscv64.tar.xz && ./diosix-26.1-core-riscv64/run-diosix.sh",
-        note: "Or flash diosix-live-riscv64.img to removable media and run `dsx host install --edition core`.",
+        note: "Unpacks the release bundle for QEMU, or flash the live image to removable media and install with dsx.",
       },
       installed: {
         cmd: "dsx host install --disk /dev/nvme0n1 --edition core --hostname core-01",
-        note: "Writes GPT partitions (BOOT A/B, STATE, DATA) and persists `core` in /var/lib/diosix/state/edition.",
+        note: "Writes GPT boot, state, and data partitions and records Core as the persistent edition.",
       },
       diskless: {
         cmd: "python3 -B scripts/hil/runner.py --self-test",
-        note: "Stages verified Core payloads over HTTP into tmpfs without touching local storage.",
+        note: "Stages verified Diosix Core payloads over HTTP into RAM without writing to local storage.",
       },
     },
     personal: {
       emulated: {
         cmd: "./scripts/build.sh run-personal",
-        note: "Boots Diosix Personal in QEMU with passthrough profile tools ready over SSH (`dsx personal`).",
+        note: "Boots Diosix Personal in QEMU with desktop profile controls ready over SSH.",
       },
       live: {
         cmd: "tar -xf diosix-26.1-personal-riscv64.tar.xz && ./diosix-26.1-personal-riscv64/run-diosix.sh",
-        note: "Inspect host hardware live in RAM, then install your desktop profile onto disk.",
+        note: "Inspects hardware live in RAM before installing your desktop profile onto internal storage.",
       },
       installed: {
         cmd: "dsx host install --disk /dev/nvme0n1 --edition personal --personal-image desktop.img --dma-trusted --auto-start",
-        note: "Persists `personal` edition and `/var/lib/diosix/etc/personal.toml` across reboots.",
+        note: "Saves Personal as the persistent edition and retains desktop profiles across reboots.",
       },
       diskless: {
         cmd: "python3 -B scripts/test_personal_passthrough.py",
-        note: "Verifies QEMU PCIe BAR/MMIO passthrough, contiguous DMA identity RAM, and PLIC IRQ forwarding.",
+        note: "Verifies hardware register mapping, contiguous RAM allocation, and interrupt forwarding in QEMU.",
       },
     },
     swarm: {
       emulated: {
         cmd: "./scripts/build.sh run-swarm",
-        note: "Launches two networked QEMU Swarm hosts running boards, thinking gateway, and peering.",
+        note: "Launches two networked QEMU Swarm hosts running message boards, the AI gateway, and peer discovery.",
       },
       live: {
         cmd: "tar -xf diosix-26.1-swarm-riscv64.tar.xz && ./diosix-26.1-swarm-riscv64/run-diosix.sh",
-        note: "Boots the default Swarm live bundle; flash diosix-live-riscv64.img onto hardware nodes via `dd`.",
+        note: "Boots the default Swarm live bundle, or flash the GPT live image directly onto hardware nodes.",
       },
       installed: {
         cmd: "dsx host install --disk /dev/nvme0n1 --edition swarm --stewards --standby-root",
-        note: "Provisions persistent Swarm storage with charter governance and warm standby root tracking.",
+        note: "Provisions persistent Swarm storage with charter governance and standby failover configuration.",
       },
       diskless: {
         cmd: "python3 -B scripts/run_swarm.py --hosts 2 --self-test",
-        note: "Boots stateless multi-host Swarm nodes over RAM boot with zero persistent disk writes.",
+        note: "Boots stateless multi-host Swarm nodes over RAM boot with zero local disk writes.",
       },
     },
   };
@@ -279,7 +279,7 @@
       ).observe(hero);
     }
 
-    const tracked = ["symmetry", "editions", "boot-modes", "docs"]
+    const tracked = ["architecture", "editions", "boot-modes", "docs"]
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     const navIo = new IntersectionObserver(
@@ -325,7 +325,7 @@
       const data = await res.json();
       const assets = Array.isArray(data.assets) ? data.assets : [];
       const pill = document.getElementById("release-pill");
-      if (pill && data.tag_name) pill.textContent = `${data.tag_name} · riscv64`;
+      if (pill && data.tag_name) pill.textContent = `${data.tag_name} (riscv64)`;
 
       ["core", "personal", "swarm"].forEach((ed) => {
         const tar = assets.find((a) =>

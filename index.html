@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Diosix — Bare-metal VM trees for RISC-V</title>
-  <meta name="description" content="Diosix is a bare-metal type-1 hypervisor written in Zig for multi-core 64-bit RISC-V systems, built around symmetric VM trees and minimal M-mode isolation.">
-  <meta property="og:title" content="Diosix Hypervisor">
-  <meta property="og:description" content="Hardware-isolated symmetric VM trees for bare-metal RISC-V, written in Zig.">
+  <title>Diosix — Bare-metal virtual machine trees for RISC-V</title>
+  <meta name="description" content="Diosix is a bare-metal type-1 hypervisor written in Zig for multi-core 64-bit RISC-V systems, built around symmetric virtual machine trees and minimal machine-mode isolation.">
+  <meta property="og:title" content="Diosix hypervisor">
+  <meta property="og:description" content="Hardware-isolated symmetric virtual machine trees for bare-metal RISC-V, written in Zig.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://diosix.org/">
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
@@ -30,10 +30,10 @@
         <span>diosix</span>
       </a>
       <nav class="site-nav" aria-label="Primary navigation">
-        <a href="#symmetry">Symmetry</a>
+        <a href="#architecture">Architecture</a>
         <a href="#editions">Editions</a>
         <a href="#boot-modes">Boot</a>
-        <a href="#docs">Docs</a>
+        <a href="#docs">Documentation</a>
         <a href="https://github.com/diodesign/diosix">GitHub ↗</a>
         <span class="nav-indicator" id="nav-indicator" aria-hidden="true"></span>
       </nav>
@@ -44,16 +44,16 @@
     <section class="stage stage-hero" id="welcome">
       <div class="wrap hero-grid">
         <div>
-          <h1>Hardware-isolated VM trees for bare-metal RISC-V.</h1>
+          <h1>Hardware-isolated virtual machine trees for bare-metal RISC-V.</h1>
           <p class="lead">
-            Diosix replaces flat VM pools with a self-organizing hierarchy of
-            hardware-isolated virtual machines. Machine mode stays minimal while
-            drivers, filesystems, autonomous agents, and optional desktop
-            controllers run strictly inside guests.
+            Diosix replaces flat virtualization pools with a self-organizing
+            hierarchy of hardware-isolated virtual machines (VMs). Machine mode
+            (M-mode) stays small while device drivers, filesystems, autonomous
+            agents, and optional desktop controllers run inside guests.
           </p>
           <div class="hero-actions">
             <a class="btn btn-primary" href="#editions">Download live media</a>
-            <a class="btn btn-ghost" href="#docs">Source &amp; docs</a>
+            <a class="btn btn-ghost" href="#docs">Source and documentation</a>
           </div>
         </div>
         <div class="hero-mark">
@@ -62,16 +62,16 @@
       </div>
     </section>
 
-    <section class="stage stage-reveal" id="symmetry">
+    <section class="stage stage-reveal" id="architecture">
       <div class="wrap">
         <div class="section-head">
           <div>
             <h2>Every VM sees the same local contract.</h2>
             <p class="lead">
-              Every node boots with identical hypercall interfaces and relative
-              Context IDs: <code>0</code> for parent, <code>1</code> for self,
-              and <code>2..N</code> for direct children. Grandchildren stay opaque
-              to ancestors; siblings cannot probe sideways.
+              Each VM boots with identical hypervisor calls and relative
+              context IDs (CIDs): 0 for its parent, 1 for itself, and 2 onward
+              for direct children. Ancestors cannot inspect grandchild subtrees,
+              and siblings cannot probe sideways.
             </p>
           </div>
           <div class="seg-track seg-track-surface" data-seg-track role="group" aria-label="Use case">
@@ -103,37 +103,37 @@
               <g class="tree-node" data-node="root" tabindex="0" role="button" aria-pressed="true">
                 <rect x="340" y="66" width="200" height="58" rx="6"/>
                 <text class="node-name" x="440" y="90" text-anchor="middle">Root VM</text>
-                <text class="node-cid" x="440" y="110" text-anchor="middle">CID 1 · self</text>
+                <text class="node-cid" x="440" y="110" text-anchor="middle">CID 1 (self)</text>
               </g>
 
               <g class="tree-node" data-node="steward" tabindex="0" role="button" aria-pressed="false">
                 <rect x="135" y="164" width="200" height="58" rx="6"/>
                 <text class="node-name" x="235" y="188" text-anchor="middle">Steward</text>
-                <text class="node-cid" x="235" y="208" text-anchor="middle">CID 2 · child</text>
+                <text class="node-cid" x="235" y="208" text-anchor="middle">CID 2 (child)</text>
               </g>
 
               <g class="tree-node" data-node="service" tabindex="0" role="button" aria-pressed="false">
                 <rect x="545" y="164" width="200" height="58" rx="6"/>
-                <text class="node-name" x="645" y="188" text-anchor="middle">Service Steward</text>
-                <text class="node-cid" x="645" y="208" text-anchor="middle">CID 3 · child</text>
+                <text class="node-name" x="645" y="188" text-anchor="middle">Service steward</text>
+                <text class="node-cid" x="645" y="208" text-anchor="middle">CID 3 (child)</text>
               </g>
 
               <g class="tree-node" data-node="worker-a" tabindex="0" role="button" aria-pressed="false">
                 <rect x="40" y="262" width="180" height="58" rx="6"/>
                 <text class="node-name" x="130" y="286" text-anchor="middle">Worker A</text>
-                <text class="node-cid" x="130" y="306" text-anchor="middle">opaque</text>
+                <text class="node-cid" x="130" y="306" text-anchor="middle">Opaque</text>
               </g>
 
               <g class="tree-node" data-node="worker-b" tabindex="0" role="button" aria-pressed="false">
                 <rect x="250" y="262" width="180" height="58" rx="6"/>
                 <text class="node-name" x="340" y="286" text-anchor="middle">Worker B</text>
-                <text class="node-cid" x="340" y="306" text-anchor="middle">opaque</text>
+                <text class="node-cid" x="340" y="306" text-anchor="middle">Opaque</text>
               </g>
 
               <g class="tree-node" data-node="web-leaf" tabindex="0" role="button" aria-pressed="false">
                 <rect x="555" y="262" width="180" height="58" rx="6"/>
-                <text class="node-name" x="645" y="286" text-anchor="middle">Web Leaf</text>
-                <text class="node-cid" x="645" y="306" text-anchor="middle">opaque</text>
+                <text class="node-name" x="645" y="286" text-anchor="middle">Web leaf</text>
+                <text class="node-cid" x="645" y="306" text-anchor="middle">Opaque</text>
               </g>
             </g>
 
@@ -151,67 +151,68 @@
               <g class="tree-node" data-node="mgmt" tabindex="-1" role="button" aria-pressed="false">
                 <rect x="340" y="66" width="200" height="58" rx="6"/>
                 <text class="node-name" x="440" y="90" text-anchor="middle">Management VM</text>
-                <text class="node-cid" x="440" y="110" text-anchor="middle">CID 1 · self</text>
+                <text class="node-cid" x="440" y="110" text-anchor="middle">CID 1 (self)</text>
               </g>
 
               <g class="tree-node" data-node="desktop" tabindex="-1" role="button" aria-pressed="false">
                 <rect x="120" y="164" width="240" height="58" rx="6"/>
-                <text class="node-name" x="240" y="188" text-anchor="middle">Active Desktop</text>
-                <text class="node-cid" x="240" y="208" text-anchor="middle">CID 2 · child</text>
+                <text class="node-name" x="240" y="188" text-anchor="middle">Active desktop</text>
+                <text class="node-cid" x="240" y="208" text-anchor="middle">CID 2 (child)</text>
               </g>
 
               <g class="tree-node" data-node="sandbox" tabindex="-1" role="button" aria-pressed="false">
                 <rect x="520" y="164" width="240" height="58" rx="6"/>
-                <text class="node-name" x="640" y="188" text-anchor="middle">Isolated Sandbox</text>
-                <text class="node-cid" x="640" y="208" text-anchor="middle">CID 3 · child</text>
+                <text class="node-name" x="640" y="188" text-anchor="middle">Isolated sandbox</text>
+                <text class="node-cid" x="640" y="208" text-anchor="middle">CID 3 (child)</text>
               </g>
 
               <g class="tree-node tree-hw-node" data-node="hardware" tabindex="-1" role="button" aria-pressed="false">
                 <rect x="120" y="262" width="240" height="58" rx="6"/>
-                <text class="node-name" x="240" y="286" text-anchor="middle">GPU · USB · Input</text>
-                <text class="node-cid" x="240" y="306" text-anchor="middle">exclusive DMA / IRQ</text>
+                <text class="node-name" x="240" y="286" text-anchor="middle">GPU, USB, and input</text>
+                <text class="node-cid" x="240" y="306" text-anchor="middle">Exclusive device access</text>
               </g>
             </g>
           </svg>
 
           <div class="perspective-bar">
-            <span id="cid-readout">root  →  self CID 1  ·  children CID 2, CID 3  ·  grandchildren opaque</span>
-            <span class="perspective-hint">Click any node</span>
+            <span id="cid-readout">The root VM sees itself as CID 1 and its direct children as CID 2 and CID 3; grandchildren stay opaque.</span>
+            <span class="perspective-hint">Select a node</span>
           </div>
         </div>
 
         <div class="pillars">
           <div class="pillar">
-            <h3>SSH-first M-mode core</h3>
+            <h3>Minimal M-mode core</h3>
             <p>
-              Paravirtual framebuffers and desktop compositors stay out of
-              machine mode. Hosts operate over key-only SSH and serial while
-              user interfaces run inside guest web services or delegated
-              Personal hardware.
+              Display drivers and compositors stay outside M-mode. Hosts operate
+              over key-only SSH and serial consoles, while graphical interfaces
+              run inside guest web services or a delegated desktop VM.
             </p>
           </div>
           <div class="pillar">
-            <h3>Anti-collusion &amp; attenuation</h3>
+            <h3>Vertical containment and package filtering</h3>
             <p>
-              M-mode drops lateral sibling Ethernet frames, vsock links, and
-              whispers. Children coordinate vertically through parent message
-              boards and install Alpine packages filtered down by allowlists.
+              M-mode drops lateral Ethernet frames, virtual sockets, and
+              messages between sibling VMs. Children coordinate strictly through
+              parent message boards and install Alpine packages filtered down by
+              parent allowlists.
             </p>
           </div>
           <div class="pillar">
             <h3>Isolated-key AI gateway</h3>
             <p>
-              Autonomous nodes query an internal gateway without ever holding
-              provider API keys. Parents enforce conserved RAM, CPU, token, and
-              micro-USD budgets down the hierarchy.
+              Autonomous agents query an internal gateway without holding
+              upstream API keys. Parent VMs enforce conserved RAM, CPU, token,
+              and currency budgets down the hierarchy.
             </p>
           </div>
           <div class="pillar">
-            <h3>Ed25519 mission consensus</h3>
+            <h3>Signed mission consensus</h3>
             <p>
-              Principals sign mission updates cleanly. Runtime changes require
-              conserved physical-RAM stake supermajority approval while M-mode
-              blocks zero-replica tears and unratified volume encryption.
+              Operators sign charter updates with cryptographic principal keys.
+              Runtime changes require both a valid signature and conserved
+              RAM-stake approval, while M-mode blocks zero-replica tears and
+              unratified volume encryption.
             </p>
           </div>
         </div>
@@ -224,21 +225,21 @@
           <div>
             <h2>One hypervisor core, three editions.</h2>
           </div>
-          <span class="release-pill" id="release-pill">Latest release · riscv64</span>
+          <span class="release-pill" id="release-pill">Latest release</span>
         </div>
 
         <div class="editions-grid">
           <article class="edition-col">
             <h3>Diosix Core</h3>
             <p class="edition-desc">
-              Minimal headless hypervisor for appliances, embedded targets, and
+              A minimal headless hypervisor for appliances, embedded boards, and
               single-host sandboxes.
             </p>
             <ul class="edition-facts">
-              <li>M-mode isolation &amp; recursive quotas</li>
-              <li>Key-only SSH &amp; internal <code>diosix0</code> switch</li>
-              <li><code>dsx pkg</code> package attenuation server</li>
-              <li>Zero autonomous agent or display daemons</li>
+              <li>Stage-2 and physical memory protection isolation with conserved quotas.</li>
+              <li>Key-only SSH management and an isolated virtual switch per parent VM.</li>
+              <li>Recursive Alpine package proxy bounded by parent allowlists.</li>
+              <li>No autonomous agent or desktop passthrough services.</li>
             </ul>
             <div class="edition-actions">
               <a class="btn btn-ghost" data-dl="core" href="https://github.com/diodesign/diosix/releases/latest">Download Core live media</a>
@@ -252,18 +253,19 @@
           <article class="edition-col">
             <h3>Diosix Personal</h3>
             <p class="edition-desc">
-              A small SSH management VM paired with a swappable, direct
-              hardware-passthrough desktop guest.
+              A small SSH management VM paired with a swappable direct-hardware
+              desktop VM.
             </p>
             <ul class="edition-facts">
-              <li>Core runtime + <code>dsx personal</code> profile manager</li>
-              <li>Scoped MMIO bars, PLIC IRQ forwarding &amp; FDT filters</li>
-              <li>Contiguous identity-mapped RAM for device DMA</li>
-              <li>Bring-your-own or fetched desktop image</li>
+              <li>Desktop profile controls for starting, stopping, and switching environments.</li>
+              <li>Scoped device register mapping, interrupt forwarding, and device-tree filters.</li>
+              <li>Contiguous identity-mapped RAM for direct hardware transfers.</li>
+              <li>Works with desktop images that you supply or fetch into local storage.</li>
             </ul>
             <p class="edition-note">
-              Without an IOMMU, passed-through devices can DMA outside Stage-2
-              translations; requires explicit DMA trust.
+              On hardware without an input-output memory management unit (IOMMU),
+              delegated controllers perform direct memory access (DMA) outside
+              page translations and require explicit DMA trust.
             </p>
             <div class="edition-actions">
               <a class="btn btn-ghost" data-dl="personal" href="https://github.com/diodesign/diosix/releases/latest">Download Personal live media</a>
@@ -277,14 +279,14 @@
           <article class="edition-col is-default">
             <h3>Diosix Swarm</h3>
             <p class="edition-desc">
-              Autonomous, self-orchestrating multi-VM and multi-host fleet
-              coordination with M-mode governance.
+              Self-orchestrating multi-VM and multi-host fleets guarded by
+              M-mode consensus.
             </p>
             <ul class="edition-facts">
-              <li>Core runtime + parent boards (<code>dsx board</code>)</li>
-              <li>Isolated thinking gateway (<code>dsx agent</code> proxy)</li>
-              <li>Ed25519 charters &amp; conserved RAM-stake voting</li>
-              <li>Multi-host discovery &amp; sharding (<code>dsx swarm</code>)</li>
+              <li>Parent message boards that prevent direct sibling agent collusion.</li>
+              <li>Local AI gateway keeping upstream API keys inside the root VM.</li>
+              <li>Signed charters with physical-RAM stake supermajority voting.</li>
+              <li>Peer discovery and replica sharding across networked RISC-V hosts.</li>
             </ul>
             <div class="edition-actions">
               <a class="btn btn-primary" data-dl="swarm" href="https://github.com/diodesign/diosix/releases/latest">Download Swarm live media</a>
@@ -298,12 +300,12 @@
 
         <div class="sdk-bar">
           <span>
-            Archives bundle <code>vmdiosix</code>, a 640 MiB hybrid GPT
-            <code>diosix-live-riscv64.img</code>, and <code>run-diosix.sh</code>
-            for QEMU 10+. Tested boards: Spacemit K3, HiFive Unleashed,
-            PineTab-V, PolarFire ICICLE, ClockworkPi R-01.
+            Each archive includes the hypervisor binary, a 640 MiB hybrid GPT
+            live image, and a QEMU launcher script. Tested hardware targets
+            include QEMU, Spacemit K3, SiFive HiFive Unleashed, PineTab-V,
+            PolarFire SoC Icicle, and ClockworkPi DevTerm R-01.
           </span>
-          <a data-dl="sdk" href="https://github.com/diodesign/diosix/releases/latest">libdiosix C99/Zig SDK ↗</a>
+          <a data-dl="sdk" href="https://github.com/diodesign/diosix/releases/latest">libdiosix C and Zig library ↗</a>
         </div>
       </div>
     </section>
@@ -314,9 +316,9 @@
           <div>
             <h2>From QEMU to persistent silicon.</h2>
             <p class="lead">
-              Every edition separates what roles it runs from how it boots.
-              Installing onto storage transitions Live media into an Installed
-              host while preserving your edition and profiles.
+              Each edition separates what role the system runs from how the host
+              boots. Installing to internal storage turns live media into an
+              installed host while preserving your chosen edition and profiles.
             </p>
           </div>
         </div>
@@ -324,19 +326,19 @@
         <div class="modes-strip">
           <div class="mode-step">
             <h3>Emulated</h3>
-            <p>Instant QEMU boot with developer SSH keys and host storage.</p>
+            <p>Instant QEMU evaluation with staged SSH keys and local disk storage.</p>
           </div>
           <div class="mode-step">
             <h3>Live</h3>
-            <p>Removable USB/SD boot in RAM; disks stay untouched until install.</p>
+            <p>Removable USB or SD card boot in RAM while target disks stay untouched until install.</p>
           </div>
           <div class="mode-step">
             <h3>Installed</h3>
-            <p>GPT A/B boot slots, state volume, keys, edition, and profiles.</p>
+            <p>Persistent GPT A/B boot slots, state store, keys, edition, and desktop profiles.</p>
           </div>
           <div class="mode-step">
             <h3>Diskless</h3>
-            <p>Stateless HTTP netboot into tmpfs for hardware labs and clusters.</p>
+            <p>Stateless HTTP network boot into RAM for hardware labs and ephemeral clusters.</p>
           </div>
         </div>
 
@@ -367,7 +369,7 @@
             <pre><code id="composer-cmd">./scripts/build.sh run-swarm</code></pre>
             <button class="copy-btn" type="button" id="composer-copy">Copy</button>
           </div>
-          <p class="composer-note" id="composer-note">Launches two networked QEMU Swarm hosts running boards, thinking gateway, and peering.</p>
+          <p class="composer-note" id="composer-note">Launches two networked QEMU Swarm hosts running message boards, the AI gateway, and peer discovery.</p>
         </div>
       </div>
     </section>
@@ -378,9 +380,10 @@
           <div>
             <h2>Documentation lives with the code.</h2>
             <p class="lead">
-              Usage runbooks, ABI specs, and design rationale live in Markdown
-              alongside the hypervisor source on GitHub so humans and coding
-              agents read one verified source of truth.
+              Usage guides, application binary interface (ABI) specifications,
+              and architecture notes live in Markdown alongside the hypervisor
+              source on GitHub so engineers and agents read one verified
+              reference.
             </p>
           </div>
           <div class="seg-track seg-track-surface" data-seg-track role="group" aria-label="Documentation branch">
@@ -394,23 +397,23 @@
           <div class="doc-group">
             <h3>Guides</h3>
             <ul class="doc-list">
-              <li><a data-doc-path="README.md" href="https://github.com/diodesign/diosix/blob/stable/README.md"><span class="doc-file">README.md</span><span class="doc-summary">Fetch &amp; build source, live image quickstart, &amp; dsx commands</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/editions.md" href="https://github.com/diodesign/diosix/blob/stable/docs/editions.md"><span class="doc-file">docs/editions.md</span><span class="doc-summary">Core, Personal, Swarm &amp; four-boot-mode matrix</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/run.md" href="https://github.com/diodesign/diosix/blob/stable/docs/run.md"><span class="doc-file">docs/run.md</span><span class="doc-summary">QEMU launch, SSH management, disk install, &amp; HIL tests</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/guests.md" href="https://github.com/diodesign/diosix/blob/stable/docs/guests.md"><span class="doc-file">docs/guests.md</span><span class="doc-summary">Sandboxes, installer ISOs, quotas, &amp; RAM checkpoints</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/security.md" href="https://github.com/diodesign/diosix/blob/stable/docs/security.md"><span class="doc-file">docs/security.md</span><span class="doc-summary">Network isolation, passkeys, DMA safety, &amp; charters</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/cli.md" href="https://github.com/diodesign/diosix/blob/stable/docs/cli.md"><span class="doc-file">docs/cli.md</span><span class="doc-summary">Complete dsx CLI &amp; /etc/diosix/*.toml reference</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="README.md" href="https://github.com/diodesign/diosix/blob/stable/README.md"><span class="doc-file">README.md</span><span class="doc-summary">Build instructions, live image setup, and essential CLI commands</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/editions.md" href="https://github.com/diodesign/diosix/blob/stable/docs/editions.md"><span class="doc-file">docs/editions.md</span><span class="doc-summary">Comparison of Core, Personal, Swarm, and all four boot modes</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/run.md" href="https://github.com/diodesign/diosix/blob/stable/docs/run.md"><span class="doc-file">docs/run.md</span><span class="doc-summary">QEMU workflows, SSH management, disk installation, and hardware labs</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/guests.md" href="https://github.com/diodesign/diosix/blob/stable/docs/guests.md"><span class="doc-file">docs/guests.md</span><span class="doc-summary">Sandboxes, installer ISOs, resource quotas, and RAM checkpoints</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/security.md" href="https://github.com/diodesign/diosix/blob/stable/docs/security.md"><span class="doc-file">docs/security.md</span><span class="doc-summary">Network isolation, passkeys, DMA safety, and charter governance</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/cli.md" href="https://github.com/diodesign/diosix/blob/stable/docs/cli.md"><span class="doc-file">docs/cli.md</span><span class="doc-summary">Command reference for runtime tools and configuration files</span><span class="doc-arrow">↗</span></a></li>
             </ul>
           </div>
 
           <div class="doc-group">
             <h3>Reference</h3>
             <ul class="doc-list">
-              <li><a data-doc-path="docs/architecture.md" href="https://github.com/diodesign/diosix/blob/stable/docs/architecture.md"><span class="doc-file">docs/architecture.md</span><span class="doc-summary">Symmetric tree internals, M-mode scheduler, &amp; swarm design</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/interface.md" href="https://github.com/diodesign/diosix/blob/stable/docs/interface.md"><span class="doc-file">docs/interface.md</span><span class="doc-summary">SBI FIDs 0–34, /dev/diosix ioctls, &amp; libdiosix C/Zig API</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/support-matrix.md" href="https://github.com/diodesign/diosix/blob/stable/docs/support-matrix.md"><span class="doc-file">docs/support-matrix.md</span><span class="doc-summary">Generated map linking every feature node to source &amp; docs</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/build.md" href="https://github.com/diodesign/diosix/blob/stable/docs/build.md"><span class="doc-file">docs/build.md</span><span class="doc-summary">Zig build graph, caching, board porting, &amp; GDB debugging</span><span class="doc-arrow">↗</span></a></li>
-              <li><a data-doc-path="docs/development.md" href="https://github.com/diodesign/diosix/blob/stable/docs/development.md"><span class="doc-file">docs/development.md</span><span class="doc-summary">Memory discipline, integration suites, &amp; contribution guide</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/architecture.md" href="https://github.com/diodesign/diosix/blob/stable/docs/architecture.md"><span class="doc-file">docs/architecture.md</span><span class="doc-summary">Symmetric VM tree design, M-mode internals, and swarm clustering</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/interface.md" href="https://github.com/diodesign/diosix/blob/stable/docs/interface.md"><span class="doc-file">docs/interface.md</span><span class="doc-summary">Hypercall ABI, Linux kernel driver calls, and the userland C library</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/support-matrix.md" href="https://github.com/diodesign/diosix/blob/stable/docs/support-matrix.md"><span class="doc-file">docs/support-matrix.md</span><span class="doc-summary">Generated map linking every feature node to source code and guides</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/build.md" href="https://github.com/diodesign/diosix/blob/stable/docs/build.md"><span class="doc-file">docs/build.md</span><span class="doc-summary">Zig build graph, caching, board porting, and remote debugging</span><span class="doc-arrow">↗</span></a></li>
+              <li><a data-doc-path="docs/development.md" href="https://github.com/diodesign/diosix/blob/stable/docs/development.md"><span class="doc-file">docs/development.md</span><span class="doc-summary">Memory discipline, test suites, and contribution guidelines</span><span class="doc-arrow">↗</span></a></li>
             </ul>
           </div>
         </div>
@@ -420,7 +423,7 @@
 
   <footer class="site-footer">
     <div class="wrap footer-inner">
-      <span>Diosix Hypervisor · MIT License · diosix.org</span>
+      <span>Diosix hypervisor, MIT License</span>
       <div class="footer-links">
         <a href="https://github.com/diodesign/diosix">Repository</a>
         <a href="https://github.com/diodesign/diosix/releases">Releases</a>
