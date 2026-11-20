@@ -208,7 +208,12 @@ h1, h2, h3 {
 
 h1 {
   font-size: clamp(2.45rem, 4.9vw, 3.9rem);
-  max-width: 14ch;
+  max-width: 17ch;
+  text-wrap: balance;
+}
+
+.nowrap {
+  white-space: nowrap;
 }
 
 h2 {
