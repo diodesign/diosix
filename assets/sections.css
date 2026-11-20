@@ -183,17 +183,6 @@
   border-top-color: var(--accent);
 }
 
-.edition-kicker {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  color: var(--ink-faint);
-  margin-bottom: 0.4rem;
-}
-
-.edition-col.is-default .edition-kicker {
-  color: var(--accent);
-}
-
 .edition-desc {
   margin: 0.75rem 0 1.25rem;
   color: var(--ink-muted);
@@ -273,14 +262,7 @@
 
 .mode-step {
   border-top: 1px solid var(--rule);
-  padding-top: 0.95rem;
-}
-
-.mode-step .mono {
-  font-size: 0.75rem;
-  color: var(--ink-faint);
-  display: block;
-  margin-bottom: 0.35rem;
+  padding-top: 1.05rem;
 }
 
 .mode-step p {
@@ -419,12 +401,11 @@
 
 .doc-group h3 {
   margin-bottom: 1rem;
-  font-size: 0.92rem;
-  font-family: var(--mono);
-  font-weight: 500;
-  color: var(--ink-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 0.95rem;
+  font-family: var(--sans);
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.01em;
 }
 
 .doc-list {

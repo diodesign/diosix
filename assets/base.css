@@ -199,16 +199,6 @@ html.js-ready .stage-reveal.is-visible {
   transform: translateY(0);
 }
 
-.eyebrow {
-  display: inline-block;
-  font-family: var(--mono);
-  font-size: 0.76rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin-bottom: 1.1rem;
-}
-
 h1, h2, h3 {
   margin: 0;
   font-weight: 650;
@@ -254,10 +244,6 @@ h3 {
   border-bottom: 1px solid rgba(24, 24, 34, 0.1);
   padding-top: clamp(4.75rem, 11vh, 8.25rem);
   padding-bottom: clamp(5.25rem, 12vh, 8.75rem);
-}
-
-.stage-hero .eyebrow {
-  color: #1442a8;
 }
 
 .stage-hero .lead {

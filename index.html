@@ -44,7 +44,6 @@
     <section class="stage stage-hero" id="welcome">
       <div class="wrap hero-grid">
         <div>
-          <span class="eyebrow">Zig · RISC-V 64</span>
           <h1>Hardware-isolated VM trees for bare-metal RISC-V.</h1>
           <p class="lead">
             Diosix replaces flat VM pools with a self-organizing hierarchy of
@@ -67,7 +66,6 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <span class="eyebrow">Symmetric tree</span>
             <h2>Every VM sees the same local contract.</h2>
             <p class="lead">
               Every node boots with identical hypercall interfaces and relative
@@ -82,7 +80,7 @@
           <svg class="tree-svg" viewBox="0 0 880 340" role="img" aria-labelledby="tree-title">
             <title id="tree-title">Interactive symmetric Diosix VM hierarchy diagram</title>
             <rect class="tree-hv-bar" x="20" y="10" width="840" height="36" rx="4"/>
-            <text class="tree-hv-text" x="440" y="32" text-anchor="middle">M-mode hypervisor · Stage-2 / PMP isolation · Conserved quotas</text>
+            <text class="tree-hv-text" x="440" y="32" text-anchor="middle">M-mode hypervisor</text>
 
             <path id="e-root-steward" class="tree-edge" d="M 440 46 V 66 M 440 124 V 146 H 265 V 164"/>
             <path id="e-root-desktop" class="tree-edge" d="M 440 146 H 615 V 164"/>
@@ -174,7 +172,6 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <span class="eyebrow">Editions</span>
             <h2>One hypervisor core, three editions.</h2>
           </div>
           <span class="release-pill" id="release-pill">Latest release · riscv64</span>
@@ -182,7 +179,6 @@
 
         <div class="editions-grid">
           <article class="edition-col">
-            <span class="edition-kicker">-Dedition=core</span>
             <h3>Diosix Core</h3>
             <p class="edition-desc">
               Minimal headless hypervisor for appliances, embedded targets, and
@@ -204,7 +200,6 @@
           </article>
 
           <article class="edition-col">
-            <span class="edition-kicker">-Dedition=personal</span>
             <h3>Diosix Personal</h3>
             <p class="edition-desc">
               A small SSH management VM paired with a swappable, direct
@@ -230,7 +225,6 @@
           </article>
 
           <article class="edition-col is-default">
-            <span class="edition-kicker">-Dedition=swarm · Default</span>
             <h3>Diosix Swarm</h3>
             <p class="edition-desc">
               Autonomous, self-orchestrating multi-VM and multi-host fleet
@@ -268,7 +262,6 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <span class="eyebrow">Boot modes</span>
             <h2>From QEMU to persistent silicon.</h2>
             <p class="lead">
               Every edition separates what roles it runs from how it boots.
@@ -280,22 +273,18 @@
 
         <div class="modes-strip">
           <div class="mode-step">
-            <span class="mono">diosix.mode=dev</span>
             <h3>Emulated</h3>
             <p>Instant QEMU boot with developer SSH keys and host storage.</p>
           </div>
           <div class="mode-step">
-            <span class="mono">diosix.mode=live</span>
             <h3>Live</h3>
             <p>Removable USB/SD boot in RAM; disks stay untouched until install.</p>
           </div>
           <div class="mode-step">
-            <span class="mono">diosix.mode=persistent</span>
             <h3>Installed</h3>
             <p>GPT A/B boot slots, state volume, keys, edition, and profiles.</p>
           </div>
           <div class="mode-step">
-            <span class="mono">diosix.mode=diskless</span>
             <h3>Diskless</h3>
             <p>Stateless HTTP netboot into tmpfs for hardware labs and clusters.</p>
           </div>
@@ -337,7 +326,6 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <span class="eyebrow">Source &amp; documentation</span>
             <h2>Documentation lives with the code.</h2>
             <p class="lead">
               Usage runbooks, ABI specs, and design rationale live in Markdown
@@ -354,7 +342,7 @@
 
         <div class="docs-grid">
           <div class="doc-group">
-            <h3>Operator &amp; user guides</h3>
+            <h3>Guides</h3>
             <ul class="doc-list">
               <li><a data-doc-path="README.md" href="https://github.com/diodesign/diosix/blob/stable/README.md"><span class="doc-file">README.md</span><span class="doc-summary">Fetch &amp; build source, live image quickstart, &amp; dsx commands</span><span class="doc-arrow">↗</span></a></li>
               <li><a data-doc-path="docs/editions.md" href="https://github.com/diodesign/diosix/blob/stable/docs/editions.md"><span class="doc-file">docs/editions.md</span><span class="doc-summary">Core, Personal, Swarm &amp; four-boot-mode matrix</span><span class="doc-arrow">↗</span></a></li>
@@ -366,7 +354,7 @@
           </div>
 
           <div class="doc-group">
-            <h3>Hypervisor internals &amp; ABI</h3>
+            <h3>Reference</h3>
             <ul class="doc-list">
               <li><a data-doc-path="docs/architecture.md" href="https://github.com/diodesign/diosix/blob/stable/docs/architecture.md"><span class="doc-file">docs/architecture.md</span><span class="doc-summary">Symmetric tree internals, M-mode scheduler, &amp; swarm design</span><span class="doc-arrow">↗</span></a></li>
               <li><a data-doc-path="docs/interface.md" href="https://github.com/diodesign/diosix/blob/stable/docs/interface.md"><span class="doc-file">docs/interface.md</span><span class="doc-summary">SBI FIDs 0–34, /dev/diosix ioctls, &amp; libdiosix C/Zig API</span><span class="doc-arrow">↗</span></a></li>
